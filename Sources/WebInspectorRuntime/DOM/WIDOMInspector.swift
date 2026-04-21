@@ -355,17 +355,26 @@ public final class WIDOMInspector {
     public func beginSelectionMode() async throws {
         let _ = try requirePageWebView()
         applyRecoverableError(nil)
+        let selectedContextID = currentContext?.contextID
+        let hadSelectedNode = document.selectedNode != nil
         try? await hideHighlight()
 
-        activatePageWindowForSelectionIfPossible()
+        do {
+            activatePageWindowForSelectionIfPossible()
 #if canImport(UIKit)
-        try await requestPageWindowActivationIfNeeded()
-        try ensureNativeInspectorSelectionAvailableIfNeeded()
+            try await requestPageWindowActivationIfNeeded()
+            try ensureNativeInspectorSelectionAvailableIfNeeded()
 #endif
 
-        let targetIdentifier = try requireCurrentTargetIdentifier()
-        try await setInspectModeEnabled(true, targetIdentifier: targetIdentifier)
-        beginInspectMode(targetIdentifier: targetIdentifier)
+            let targetIdentifier = try requireCurrentTargetIdentifier()
+            try await setInspectModeEnabled(true, targetIdentifier: targetIdentifier)
+            beginInspectMode(targetIdentifier: targetIdentifier)
+        } catch {
+            if hadSelectedNode, let selectedContextID {
+                await syncSelectedNodeHighlight(contextID: selectedContextID)
+            }
+            throw error
+        }
     }
 
     package func requestSelectionModeToggle() {
@@ -1200,15 +1209,14 @@ private extension WIDOMInspector {
         switch envelope.method {
         case "Target.targetCreated":
             let observedTargetIdentifier = sharedTransport.currentObservedPageTargetIdentifier()
-            let targetIdentifier = observedTargetIdentifier
-                ?? sharedTransport.currentPageTargetIdentifier()
-                ?? envelope.targetIdentifier
-            guard let targetIdentifier
-            else {
-                return
-            }
             switch phase {
             case let .waitingForTarget(context):
+                guard let targetIdentifier = observedTargetIdentifier
+                    ?? sharedTransport.currentPageTargetIdentifier()
+                    ?? envelope.targetIdentifier
+                else {
+                    return
+                }
                 startLoadingDocument(
                     for: context,
                     targetIdentifier: targetIdentifier,
@@ -1216,10 +1224,12 @@ private extension WIDOMInspector {
                     isFreshDocument: true
                 )
             case let .loadingDocument(context, activeTargetIdentifier):
-                let shouldRestartForObservedReplacement =
-                    observedTargetIdentifier == targetIdentifier
-                    && observedTargetIdentifier != activeTargetIdentifier
-                guard activeTargetIdentifier == targetIdentifier || shouldRestartForObservedReplacement else {
+                let targetIdentifier: String
+                if let observedTargetIdentifier {
+                    targetIdentifier = observedTargetIdentifier
+                } else if envelope.targetIdentifier == activeTargetIdentifier {
+                    targetIdentifier = activeTargetIdentifier
+                } else {
                     return
                 }
                 startLoadingDocument(
