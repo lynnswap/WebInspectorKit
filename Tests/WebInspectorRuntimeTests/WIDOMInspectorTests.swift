@@ -397,7 +397,7 @@ struct WIDOMInspectorTests {
     }
 
     @Test
-    func readyFrontendReopenDoesNotReloadDocumentWhenFrontendWasAlreadyReady() async throws {
+    func readyFrontendReopenReloadsDocumentForSameContextAfterRebootstrap() async throws {
         var getDocumentCallCount = 0
         let backend = FakeDOMTransportBackend(
             pageResultProvider: { method, _, _ in
@@ -427,7 +427,7 @@ struct WIDOMInspectorTests {
 
         #expect(inspector.testCurrentContextID == contextID)
         #expect(inspector.testCurrentDocumentURL == "https://example.com/a")
-        #expect(getDocumentCallCount == initialGetDocumentCallCount)
+        #expect(getDocumentCallCount == initialGetDocumentCallCount + 1)
     }
 
     @Test

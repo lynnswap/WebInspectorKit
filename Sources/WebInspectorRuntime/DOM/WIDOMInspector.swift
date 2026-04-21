@@ -239,6 +239,7 @@ public final class WIDOMInspector {
     }
 
     package func makeInspectorWebView() -> WKWebView {
+        frontendReadyContextID = nil
         let inspectorWebView = inspectorBridge.makeInspectorWebView(bootstrapPayload: bootstrapPayload())
 #if canImport(UIKit)
         installPointerDisconnectObserverIfNeeded()
