@@ -973,23 +973,51 @@ private extension WIDOMInspector {
             return
         }
 
-        let candidates = initiallyExpandedIncompleteNodes()
-        guard !candidates.isEmpty else {
-            return
-        }
+        var requestedNodeIDs = Set<DOMNodeModel.ID>()
 
-        for node in candidates {
-            guard let transportNodeID = try? transportNodeID(for: node) else {
-                continue
+        while currentContext?.contextID == contextID {
+            let candidates = initiallyExpandedIncompleteNodes().filter {
+                requestedNodeIDs.insert($0.id).inserted
             }
-            _ = try? await sendDOMCommand(
-                WITransportMethod.DOM.requestChildNodes,
-                targetIdentifier: targetIdentifier,
-                parameters: DOMRequestChildNodesParameters(
-                    nodeId: transportNodeID,
-                    depth: max(1, depth)
-                )
-            )
+            guard !candidates.isEmpty else {
+                return
+            }
+
+            var requestedAnyChildren = false
+            for node in candidates {
+                guard let transportNodeID = try? transportNodeID(for: node) else {
+                    continue
+                }
+                do {
+                    _ = try await sendDOMCommand(
+                        WITransportMethod.DOM.requestChildNodes,
+                        targetIdentifier: targetIdentifier,
+                        parameters: DOMRequestChildNodesParameters(
+                            nodeId: transportNodeID,
+                            depth: max(1, depth)
+                        )
+                    )
+                    requestedAnyChildren = true
+                } catch {
+                    continue
+                }
+            }
+
+            if requestedAnyChildren {
+                await awaitTransportMessagesToDrain()
+                for _ in 0..<8 {
+                    guard currentContext?.contextID == contextID else {
+                        return
+                    }
+                    let hasUnrequestedCandidates = initiallyExpandedIncompleteNodes().contains {
+                        requestedNodeIDs.contains($0.id) == false
+                    }
+                    if hasUnrequestedCandidates {
+                        break
+                    }
+                    await Task.yield()
+                }
+            }
         }
     }
 

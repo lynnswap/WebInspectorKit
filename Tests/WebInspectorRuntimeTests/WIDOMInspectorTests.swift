@@ -1750,14 +1750,20 @@ struct WIDOMInspectorTests {
 }
 
 @MainActor
-private func makeInspector(using backend: FakeDOMTransportBackend) -> WIDOMInspector {
+private func makeInspector(
+    configuration: DOMConfiguration = .init(),
+    using backend: FakeDOMTransportBackend
+) -> WIDOMInspector {
     let sharedTransport = WISharedInspectorTransport(sessionFactory: {
         WITransportSession(
             configuration: .init(responseTimeout: .seconds(1)),
             backendFactory: { _ in backend }
         )
     })
-    return WIDOMInspector(sharedTransport: sharedTransport)
+    return WIDOMInspector(
+        configuration: configuration,
+        sharedTransport: sharedTransport
+    )
 }
 
 @MainActor
