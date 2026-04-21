@@ -317,6 +317,48 @@ struct WIDOMInspectorTests {
     }
 
     @Test
+    func targetCreatedRestartsLoadingWhenObservedTargetReplacesDerivedSeed() async throws {
+        let backend = FakeDOMTransportBackend(
+            emitsInitialPageTargetCreatedOnAttach: false,
+            pageResultProvider: { method, _, targetIdentifier in
+                guard method == WITransportMethod.DOM.getDocument else {
+                    return [:]
+                }
+                return makeDocumentResult(url: targetIdentifier == "page-B" ? "https://example.com/b" : "https://example.com/a")
+            }
+        )
+        let inspector = makeInspector(
+            using: backend,
+            derivedPageTargetIdentifier: "page-A"
+        )
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let contextID = try #require(inspector.testCurrentContextID)
+        inspector.testSetLoadingPhase(targetIdentifier: "page-A")
+
+        backend.emitRootEvent(
+            method: "Target.targetCreated",
+            params: [
+                "targetInfo": [
+                    "targetId": "page-B",
+                    "type": "page",
+                    "isProvisional": false,
+                ],
+            ]
+        )
+
+        let restartedWithObservedTarget = await waitForCondition {
+            inspector.testIsReady
+                && inspector.document.rootNode != nil
+                && inspector.testCurrentContextID == contextID
+                && inspector.testCurrentDocumentURL == "https://example.com/b"
+        }
+        #expect(restartedWithObservedTarget)
+    }
+
+    @Test
     func documentUpdatedInvalidatesAndReloadsFreshDocument() async throws {
         let backend = FakeDOMTransportBackend(
             pageResultProvider: { method, _, _ in

@@ -1200,9 +1200,11 @@ private extension WIDOMInspector {
     func handleTransportEvent(_ envelope: WITransportEventEnvelope) async {
         switch envelope.method {
         case "Target.targetCreated":
-            guard let targetIdentifier = sharedTransport.currentObservedPageTargetIdentifier()
+            let observedTargetIdentifier = sharedTransport.currentObservedPageTargetIdentifier()
+            let targetIdentifier = observedTargetIdentifier
                 ?? sharedTransport.currentPageTargetIdentifier()
                 ?? envelope.targetIdentifier
+            guard let targetIdentifier
             else {
                 return
             }
@@ -1215,7 +1217,10 @@ private extension WIDOMInspector {
                     isFreshDocument: true
                 )
             case let .loadingDocument(context, activeTargetIdentifier):
-                guard activeTargetIdentifier == targetIdentifier else {
+                let shouldRestartForObservedReplacement =
+                    observedTargetIdentifier == targetIdentifier
+                    && observedTargetIdentifier != activeTargetIdentifier
+                guard activeTargetIdentifier == targetIdentifier || shouldRestartForObservedReplacement else {
                     return
                 }
                 startLoadingDocument(
@@ -3057,6 +3062,13 @@ extension WIDOMInspector {
 
     package func testWaitForBootstrap() async {
         await bootstrapTask?.value
+    }
+
+    package func testSetLoadingPhase(targetIdentifier: String) {
+        guard let currentContext else {
+            return
+        }
+        phase = .loadingDocument(currentContext, targetIdentifier: targetIdentifier)
     }
 
     package func testBeginFreshContext(
