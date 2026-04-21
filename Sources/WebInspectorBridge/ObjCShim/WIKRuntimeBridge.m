@@ -88,18 +88,23 @@ NSErrorDomain const WIKRuntimeBridgeErrorDomain = @"WebInspectorBridge.WIKRuntim
 
 + (BOOL)canEnableInspectorNodeSearchForWebView:(WKWebView *)webView
 {
-    UIView *contentView = [self wi_firstContentViewInView:webView];
-    return contentView && [contentView respondsToSelector:@selector(_enableInspectorNodeSearch)];
+    for (UIView *contentView in [self wi_contentViewsForWebView:webView]) {
+        if ([contentView respondsToSelector:@selector(_enableInspectorNodeSearch)])
+            return YES;
+    }
+    return NO;
 }
 
 + (BOOL)enableInspectorNodeSearchForWebView:(WKWebView *)webView
 {
-    UIView *contentView = [self wi_firstContentViewInView:webView];
-    if (!contentView || ![contentView respondsToSelector:@selector(_enableInspectorNodeSearch)])
-        return NO;
-
-    [contentView _enableInspectorNodeSearch];
-    return YES;
+    BOOL didEnable = NO;
+    for (UIView *contentView in [self wi_contentViewsForWebView:webView]) {
+        if (![contentView respondsToSelector:@selector(_enableInspectorNodeSearch)])
+            continue;
+        [contentView _enableInspectorNodeSearch];
+        didEnable = YES;
+    }
+    return didEnable;
 }
 
 + (BOOL)disableInspectorNodeSearchForWebView:(WKWebView *)webView

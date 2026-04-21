@@ -588,12 +588,17 @@ function shouldCollapseByDefault(node: DOMNode): boolean {
 }
 
 /** Set node expanded state */
-export function setNodeExpanded(nodeId: number, expanded: boolean): void {
+export function setNodeExpanded(
+    nodeId: number,
+    expanded: boolean,
+    options: { requestChildren?: boolean } = {}
+): void {
     const node = treeState.nodes.get(nodeId);
+    const { requestChildren: shouldRequestChildren = false } = options;
     treeState.openState.set(nodeId, expanded);
     const element = treeState.elements.get(nodeId);
     if (!element) {
-        if (expanded && node && node.childCount > node.children.length) {
+        if (expanded && shouldRequestChildren && node && node.childCount > node.children.length) {
             void requestChildren(node);
         }
         return;
@@ -625,7 +630,7 @@ export function setNodeExpanded(nodeId: number, expanded: boolean): void {
         }
     }
 
-    if (expanded && node && node.childCount > node.children.length) {
+    if (expanded && shouldRequestChildren && node && node.childCount > node.children.length) {
         void requestChildren(node);
     }
 }
@@ -638,7 +643,7 @@ export function toggleNode(nodeId: number): void {
     }
     const current = nodeShouldBeExpanded(node);
     const next = !current;
-    setNodeExpanded(nodeId, next);
+    setNodeExpanded(nodeId, next, { requestChildren: next });
 }
 
 // =============================================================================
