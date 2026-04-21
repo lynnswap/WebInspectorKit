@@ -300,7 +300,7 @@ describe("dom-tree-view", () => {
         });
     });
 
-    it("does not request children for nodes expanded only by default depth rules", async () => {
+    it("requests children for nodes expanded by default depth rules when the subtree is incomplete", async () => {
         const { protocolState, treeState } = await import("../UI/DOMTree/dom-tree-state");
         await import("../UI/DOMTree/dom-tree-view");
 
@@ -328,7 +328,11 @@ describe("dom-tree-view", () => {
         await Promise.resolve();
 
         const requestHandler = window.webkit?.messageHandlers?.webInspectorDomRequestChildren?.postMessage as ReturnType<typeof vi.fn>;
-        expect(requestHandler).not.toHaveBeenCalled();
+        expect(requestHandler).toHaveBeenCalledWith({
+            nodeId: 2,
+            depth: 3,
+            contextID: protocolState.contextID,
+        });
     });
 
     it("drops inspector overlay nodes from the rendered tree", async () => {

@@ -292,7 +292,7 @@ export function buildNode(node: DOMNode): HTMLElement {
 
     const expanded = nodeShouldBeExpanded(node);
     treeState.deferredChildRenders.add(node.id);
-    setNodeExpanded(node.id, expanded);
+    setNodeExpanded(node.id, expanded, { requestChildren: expanded });
 
     return container;
 }
@@ -426,7 +426,7 @@ export function refreshNodeElement(node: DOMNode, options: NodeRefreshOptions = 
         treeState.deferredChildRenders.add(node.id);
     }
 
-    setNodeExpanded(node.id, expanded);
+    setNodeExpanded(node.id, expanded, { requestChildren: expanded });
 }
 
 // =============================================================================
@@ -955,7 +955,7 @@ export function selectNode(nodeId: number, options: SelectionOptions = {}): bool
         syncNodeSelectionState(element, nodeId);
     }
 
-    setNodeExpanded(nodeId, true);
+    setNodeExpanded(nodeId, true, { requestChildren: true });
     const node = treeState.nodes.get(nodeId);
     if (notifyNative) {
         updateDetails(node ?? null);
@@ -1000,7 +1000,7 @@ export function reopenSelectionAncestors(): void {
             break;
         }
         nextChain.push(nodeId);
-        setNodeExpanded(nodeId, true);
+        setNodeExpanded(nodeId, true, { requestChildren: true });
     }
     treeState.selectionChain = nextChain;
 }
@@ -1009,7 +1009,7 @@ export function reopenSelectionAncestors(): void {
 export function revealAncestors(nodeId: number): void {
     let current = treeState.nodes.get(nodeId);
     while (current && current.parentId) {
-        setNodeExpanded(current.parentId, true);
+        setNodeExpanded(current.parentId, true, { requestChildren: true });
         current = treeState.nodes.get(current.parentId);
     }
 }

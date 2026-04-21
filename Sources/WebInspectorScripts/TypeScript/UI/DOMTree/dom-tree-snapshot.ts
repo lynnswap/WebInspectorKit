@@ -838,7 +838,7 @@ export function applySubtree(
         });
 
         scheduleNodeRender(target);
-        setNodeExpanded(target.id, true);
+        setNodeExpanded(target.id, true, { requestChildren: true });
 
         if (previousSelectionId) {
             treeState.styleRevision += 1;
@@ -914,7 +914,7 @@ function applySetChildNodes(params: {
     });
 
     scheduleNodeRender(parent);
-    setNodeExpanded(parent.id, true);
+    setNodeExpanded(parent.id, true, { requestChildren: true });
 
     if (previousSelectionId) {
         treeState.styleRevision += 1;
