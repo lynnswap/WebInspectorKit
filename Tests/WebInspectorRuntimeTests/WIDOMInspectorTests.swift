@@ -145,6 +145,38 @@ struct WIDOMInspectorTests {
     }
 
     @Test
+    func sameWebViewAttachFailureClearsStaleDOMState() async {
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, _, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        await inspector.testDetachSharedTransportOnly()
+        backend.attachError = WITransportError.attachFailed("simulated attach failure")
+        await inspector.attach(to: webView)
+
+        #expect(inspector.hasPageWebView)
+        #expect(inspector.testIsPageReadyForSelection == false)
+        #expect(inspector.testCurrentContextID == nil)
+        #expect(inspector.document.rootNode == nil)
+    }
+
+    @Test
     func attachWithoutResolvedTargetKeepsAttachmentButLeavesSelectionUnavailable() async {
         let backend = FakeDOMTransportBackend(emitsInitialPageTargetCreatedOnAttach: false)
         let inspector = makeInspector(using: backend)

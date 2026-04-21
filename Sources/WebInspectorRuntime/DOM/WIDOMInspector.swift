@@ -259,6 +259,9 @@ public final class WIDOMInspector {
             await sharedTransport.attach(client: .dom, to: webView)
             setDOMTransportAttached(await sharedTransport.attachedSession() != nil)
             guard isDOMTransportAttached else {
+                cancelBootstrap()
+                clearContextState()
+                updateInspectorBootstrap()
                 return
             }
             await installPageBridgeBootstrap(contextID: currentContext?.contextID ?? 0)
@@ -3213,6 +3216,11 @@ extension WIDOMInspector {
         } else {
             setPhase(.waitingForTarget(context))
         }
+    }
+
+    package func testDetachSharedTransportOnly() async {
+        await sharedTransport.detach(client: .dom)
+        setDOMTransportAttached(false)
     }
 
     package func testBeginFreshContext(
