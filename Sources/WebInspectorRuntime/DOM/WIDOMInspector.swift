@@ -1325,22 +1325,11 @@ private extension WIDOMInspector {
 
             await awaitTransportMessagesToDrain()
 
-            guard pendingChildRequests.contains(nodeID) else {
-                return
-            }
-
-            if let node = document.node(localID: UInt64(nodeID)),
-               node.childCount == node.children.count {
-                pendingChildRequests.remove(nodeID)
-                await inspectorBridge.applySubtreePayload(
-                    nodePayloadDictionary(from: node),
-                    contextID: contextID
-                )
-                await inspectorBridge.finishChildNodeRequest(
-                    nodeID: nodeID,
-                    success: true,
-                    contextID: contextID
-                )
+            let resolved = await awaitChildRequestCompletion(
+                nodeID: nodeID,
+                contextID: contextID
+            )
+            guard resolved == false else {
                 return
             }
 
@@ -1358,6 +1347,36 @@ private extension WIDOMInspector {
                 contextID: contextID
             )
         }
+    }
+
+    private func awaitChildRequestCompletion(
+        nodeID: Int,
+        contextID: DOMContextID
+    ) async -> Bool {
+        for _ in 0..<25 {
+            guard currentContext?.contextID == contextID else {
+                return true
+            }
+            guard pendingChildRequests.contains(nodeID) else {
+                return true
+            }
+            if let node = document.node(localID: UInt64(nodeID)),
+               node.childCount == node.children.count {
+                pendingChildRequests.remove(nodeID)
+                await inspectorBridge.applySubtreePayload(
+                    nodePayloadDictionary(from: node),
+                    contextID: contextID
+                )
+                await inspectorBridge.finishChildNodeRequest(
+                    nodeID: nodeID,
+                    success: true,
+                    contextID: contextID
+                )
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        return false
     }
 
     func highlightNode(_ nodeID: Int) async throws {
