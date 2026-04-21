@@ -1239,14 +1239,14 @@ private final class WITransportPageTargetTracker {
     func didCreatePageTarget(identifier: String, isProvisional: Bool) {
         hasObservedLifecycleEvents = true
         if hasDerivedCommittedSeed,
-           let committedIdentifierStorage,
-           committedIdentifierStorage != identifier {
-            targetsByIdentifier.removeValue(forKey: committedIdentifierStorage)
-            self.committedIdentifierStorage = nil
-            hasDerivedCommittedSeed = false
-        } else if hasDerivedCommittedSeed,
-                  committedIdentifierStorage == identifier {
-            hasDerivedCommittedSeed = false
+           let committedIdentifierStorage {
+            if committedIdentifierStorage == identifier {
+                hasDerivedCommittedSeed = false
+            } else if isProvisional == false {
+                targetsByIdentifier.removeValue(forKey: committedIdentifierStorage)
+                self.committedIdentifierStorage = nil
+                hasDerivedCommittedSeed = false
+            }
         }
         targetsByIdentifier[identifier] = KnownPageTarget(
             identifier: identifier,

@@ -749,6 +749,43 @@ struct WITransportSessionTests {
     }
 
     @Test
+    func provisionalTargetCreationDoesNotDiscardDerivedCommittedSeedBeforeCommit() async throws {
+        let backend = FakeSessionBackend(attachHandler: { _ in })
+        let session = WITransportSession(
+            configuration: .init(responseTimeout: .seconds(1)),
+            backendFactory: { _ in backend }
+        )
+        session.derivedPageTargetIdentifierProviderForTesting = { _ in "page-derived" }
+        let webView = makeIsolatedTestWebView()
+
+        backend.onSendPageMessage = { message, targetIdentifier, outerIdentifier in
+            let identifier = try Self.identifier(from: message)
+            #expect(identifier == outerIdentifier)
+            #expect(targetIdentifier == "page-derived")
+            backend.emitPageMessage(
+                Self.jsonString([
+                    "id": identifier,
+                    "result": [:],
+                ]),
+                targetIdentifier: targetIdentifier
+            )
+        }
+
+        try await session.attach(to: webView)
+        #expect(session.currentPageTargetIdentifier() == "page-derived")
+
+        backend.emitRootMessage(
+            #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-provisional","type":"page","isProvisional":true}}}"#
+        )
+        await backend.waitForPendingMessages()
+
+        _ = try await session.sendPageData(method: WITransportMethod.DOM.enable)
+
+        #expect(session.currentPageTargetIdentifier() == "page-derived")
+        #expect(session.pageTargetIdentifiers() == ["page-derived", "page-provisional"])
+    }
+
+    @Test
     func supportedSnapshotFactoryPreservesBackendCapabilitiesAndFailureReason() {
         let snapshot = WITransportSupportSnapshot.supported(
             backendKind: .iOSNativeInspector,
