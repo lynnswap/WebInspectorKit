@@ -1,5 +1,6 @@
 import OSLog
 import Observation
+import ObjectiveC
 import WebKit
 import WebInspectorEngine
 import WebInspectorTransport
@@ -10,6 +11,23 @@ import UIKit
 
 private let domViewLogger = Logger(subsystem: "WebInspectorKit", category: "WIDOMInspector")
 private let domDeleteUndoHistoryLimit = 128
+nonisolated(unsafe) private let pageWebViewLifetimeObserverAssociationKey = malloc(1)!
+
+@MainActor
+private final class WIPageWebViewLifetimeObserver {
+    private let onDeinit: @MainActor () -> Void
+
+    init(onDeinit: @escaping @MainActor () -> Void) {
+        self.onDeinit = onDeinit
+    }
+
+    deinit {
+        let onDeinit = self.onDeinit
+        Task { @MainActor in
+            onDeinit()
+        }
+    }
+}
 
 @MainActor
 @Observable
@@ -97,6 +115,7 @@ public final class WIDOMInspector {
     @ObservationIgnored private var acceptsInspectEvents = false
     @ObservationIgnored private var pendingInspectSelection: PendingInspectSelection?
     @ObservationIgnored var pointerDisconnectObserver: NSObjectProtocol?
+    @ObservationIgnored private var pageWebViewAttachmentGeneration: UInt64 = 0
 
 #if canImport(UIKit)
     @ObservationIgnored package weak var sceneActivationRequestingScene: UIScene?
@@ -152,7 +171,11 @@ public final class WIDOMInspector {
     }
 
     package func attach(to webView: WKWebView) async {
+#if canImport(UIKit)
+        installPointerDisconnectObserverIfNeeded()
+#endif
         if pageWebView === webView, currentContext != nil {
+            installPageWebViewLifetimeObserver(on: webView)
             hasPageWebView = true
             await sharedTransport.attach(client: .dom, to: webView)
             await installPageBridgeBootstrap(contextID: currentContext?.contextID ?? 0)
@@ -164,6 +187,7 @@ public final class WIDOMInspector {
             await pageBridge.detach()
         }
         pageWebView = webView
+        installPageWebViewLifetimeObserver(on: webView)
         hasPageWebView = true
         pageBridge.attach(to: webView)
         await sharedTransport.attach(client: .dom, to: webView)
@@ -2632,6 +2656,31 @@ private extension WIDOMInspector {
             }
         }
         return error.localizedDescription
+    }
+
+    private func installPageWebViewLifetimeObserver(on webView: WKWebView) {
+        pageWebViewAttachmentGeneration &+= 1
+        let expectedGeneration = pageWebViewAttachmentGeneration
+        let observer = WIPageWebViewLifetimeObserver { [weak self] in
+            guard let self else {
+                return
+            }
+            self.handleAttachedPageWebViewReleased(expectedGeneration: expectedGeneration)
+        }
+        objc_setAssociatedObject(
+            webView,
+            pageWebViewLifetimeObserverAssociationKey,
+            observer,
+            .OBJC_ASSOCIATION_RETAIN_NONATOMIC
+        )
+    }
+
+    private func handleAttachedPageWebViewReleased(expectedGeneration: UInt64) {
+        guard pageWebViewAttachmentGeneration == expectedGeneration,
+              pageWebView == nil else {
+            return
+        }
+        hasPageWebView = false
     }
 }
 

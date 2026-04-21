@@ -74,6 +74,49 @@ struct WIDOMInspectorTests {
     }
 
     @Test
+    func attachedPageWebViewDeallocationClearsAttachmentState() async {
+        let backend = FakeDOMTransportBackend()
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        weak var releasedWebView: WKWebView?
+
+        do {
+            let webView = makeTestWebView()
+            releasedWebView = webView
+            await inspector.attach(to: webView)
+            #expect(inspector.hasPageWebView)
+        }
+
+        let released = await waitForCondition(
+            maxAttempts: 120,
+            intervalNanoseconds: 20_000_000
+        ) {
+            releasedWebView == nil && inspector.hasPageWebView == false
+        }
+        #expect(released)
+    }
+
+#if canImport(UIKit)
+    @Test
+    func attachReinstallsPointerDisconnectObserverAfterSuspend() async {
+        let backend = FakeDOMTransportBackend()
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        #expect(inspector.pointerDisconnectObserver != nil)
+
+        await inspector.suspend()
+        #expect(inspector.pointerDisconnectObserver == nil)
+
+        let reattachedWebView = makeTestWebView()
+        await inspector.attach(to: reattachedWebView)
+        #expect(inspector.pointerDisconnectObserver != nil)
+    }
+#endif
+
+    @Test
     func attachBootstrapsCurrentDocumentFromTransport() async {
         let backend = FakeDOMTransportBackend(
             pageResultProvider: { method, _, targetIdentifier in
