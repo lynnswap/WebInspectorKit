@@ -138,6 +138,161 @@ struct WISessionStateTests {
     }
 
     @Test
+    func visibleUIHostKeepsLifecycleActiveWhenDirectHostBecomesHidden() async {
+        let controller = WIInspectorController()
+        let uiHostID = controller.registerHost(preferredRole: .primary)
+        let webView = makeTestWebView()
+
+        controller.setTabs([.dom(), .network()])
+        await controller.applyHostState(pageWebView: webView, visibility: .visible)
+
+        controller.updateHost(
+            uiHostID,
+            pageWebView: webView,
+            visibility: .visible,
+            isAttached: true
+        )
+        await controller.waitForRuntimeApplyForTesting()
+        #expect(controller.lifecycle == .active)
+
+        let initialRuntimeReady = await waitForDOMRuntimeReady(controller.dom)
+        #expect(initialRuntimeReady)
+        seedSelectedDocument(into: controller.dom)
+        let initialDocumentIdentity = controller.dom.document.documentIdentity
+        let initialSelectedNodeID = controller.dom.document.selectedNode?.id
+        controller.dom.resetFreshContextDiagnosticsForTesting()
+
+        await controller.applyHostState(pageWebView: webView, visibility: .hidden)
+        await controller.waitForRuntimeApplyForTesting()
+
+        #expect(controller.lifecycle == .active)
+        #expect(controller.dom.hasPageWebView)
+        #expect(controller.dom.document.documentIdentity == initialDocumentIdentity)
+        #expect(controller.dom.document.selectedNode?.id == initialSelectedNodeID)
+        #expect(controller.dom.freshContextDiagnosticsForTesting.isEmpty)
+    }
+
+    @Test
+    func hidingOrRemovingLastUIHostAllowsLifecycleToSuspendThenDisconnect() async {
+        let controller = WIInspectorController()
+        let uiHostID = controller.registerHost(preferredRole: .primary)
+        let webView = makeTestWebView()
+
+        controller.setTabs([.dom(), .network()])
+        await controller.applyHostState(pageWebView: webView, visibility: .visible)
+        controller.updateHost(
+            uiHostID,
+            pageWebView: webView,
+            visibility: .visible,
+            isAttached: true
+        )
+        await controller.waitForRuntimeApplyForTesting()
+
+        await controller.applyHostState(pageWebView: webView, visibility: .hidden)
+        controller.updateHost(
+            uiHostID,
+            pageWebView: webView,
+            visibility: .hidden,
+            isAttached: true
+        )
+        await controller.waitForRuntimeApplyForTesting()
+        #expect(controller.lifecycle == .suspended)
+
+        controller.unregisterHost(uiHostID)
+        await controller.waitForRuntimeApplyForTesting()
+        #expect(controller.lifecycle == .suspended)
+
+        await controller.applyHostState(pageWebView: nil, visibility: .finalizing)
+        #expect(controller.lifecycle == .disconnected)
+    }
+
+    @Test
+    func preparedHiddenHostKeepsDocumentIdentityAndSelectionForSameWebViewHandoff() async {
+        let controller = WIInspectorController()
+        let uiHostID = controller.registerHost(preferredRole: .primary)
+        let webView = makeTestWebView()
+
+        controller.setTabs([.dom(), .network()])
+        await controller.applyHostState(pageWebView: webView, visibility: .visible)
+        let initialRuntimeReady = await waitForDOMRuntimeReady(controller.dom)
+        #expect(initialRuntimeReady)
+        seedSelectedDocument(into: controller.dom)
+        let initialDocumentIdentity = controller.dom.document.documentIdentity
+        let initialSelectedNodeID = controller.dom.document.selectedNode?.id
+        controller.dom.resetFreshContextDiagnosticsForTesting()
+        controller.prepareHiddenHostForSameWebViewHandoff(uiHostID)
+        controller.updateHost(
+            uiHostID,
+            pageWebView: webView,
+            visibility: .hidden,
+            isAttached: true
+        )
+
+        await controller.applyHostState(pageWebView: webView, visibility: .hidden)
+        await controller.waitForRuntimeApplyForTesting()
+
+        #expect(controller.lifecycle == .active)
+        #expect(controller.dom.document.documentIdentity == initialDocumentIdentity)
+        #expect(controller.dom.document.selectedNode?.id == initialSelectedNodeID)
+        #expect(controller.dom.freshContextDiagnosticsForTesting.isEmpty)
+
+        controller.updateHost(
+            uiHostID,
+            pageWebView: webView,
+            visibility: .visible,
+            isAttached: true
+        )
+        await controller.waitForRuntimeApplyForTesting()
+
+        #expect(controller.lifecycle == .active)
+        #expect(controller.dom.document.documentIdentity == initialDocumentIdentity)
+        #expect(controller.dom.document.selectedNode?.id == initialSelectedNodeID)
+        #expect(controller.dom.freshContextDiagnosticsForTesting.isEmpty)
+    }
+
+    @Test
+    func preparedHiddenHostDoesNotRetargetDifferentWebViewUntilVisible() async {
+        let controller = WIInspectorController()
+        let uiHostID = controller.registerHost(preferredRole: .primary)
+        let currentWebView = makeTestWebView()
+        let replacementWebView = makeTestWebView()
+
+        controller.setTabs([.dom(), .network()])
+        await controller.applyHostState(pageWebView: currentWebView, visibility: .visible)
+        seedSelectedDocument(into: controller.dom)
+        let initialDocumentIdentity = controller.dom.document.documentIdentity
+        let initialSelectedNodeID = controller.dom.document.selectedNode?.id
+        controller.dom.resetFreshContextDiagnosticsForTesting()
+        controller.prepareHiddenHostForSameWebViewHandoff(uiHostID)
+        controller.updateHost(
+            uiHostID,
+            pageWebView: replacementWebView,
+            visibility: .hidden,
+            isAttached: true
+        )
+
+        await controller.applyHostState(pageWebView: currentWebView, visibility: .hidden)
+        await controller.waitForRuntimeApplyForTesting()
+
+        #expect(controller.lifecycle == .active)
+        #expect(controller.testPrimaryHostPageWebViewIdentity == ObjectIdentifier(currentWebView))
+        #expect(controller.dom.document.documentIdentity == initialDocumentIdentity)
+        #expect(controller.dom.document.selectedNode?.id == initialSelectedNodeID)
+        #expect(controller.dom.freshContextDiagnosticsForTesting.isEmpty)
+
+        controller.updateHost(
+            uiHostID,
+            pageWebView: replacementWebView,
+            visibility: .visible,
+            isAttached: true
+        )
+        await controller.waitForRuntimeApplyForTesting()
+
+        #expect(controller.lifecycle == .active)
+        #expect(controller.testPrimaryHostPageWebViewIdentity == ObjectIdentifier(replacementWebView))
+    }
+
+    @Test
     func rapidSelectedTabChangesResolveToLatestRuntimeMode() async {
         let controller = WIInspectorController()
         let hostID = controller.registerHost(preferredRole: .primary)
@@ -270,6 +425,65 @@ struct WISessionStateTests {
         configuration.websiteDataStore = .nonPersistent()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
         return WKWebView(frame: .zero, configuration: configuration)
+    }
+
+    private func waitForDOMRuntimeReady(_ inspector: WIDOMInspector) async -> Bool {
+        for _ in 0..<120 {
+            if inspector.testCurrentContextID != nil,
+               inspector.testIsPageReadyForSelection,
+               inspector.document.rootNode != nil {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        return false
+    }
+
+    private func seedSelectedDocument(into inspector: WIDOMInspector) {
+        let selectedLocalID: UInt64 = 42
+        let attributes = [DOMAttribute(nodeId: Int(selectedLocalID), name: "id", value: "selected")]
+
+        inspector.document.replaceDocument(
+            with: .init(
+                root: DOMGraphNodeDescriptor(
+                    localID: 1,
+                    backendNodeID: 1,
+                    nodeType: 1,
+                    nodeName: "HTML",
+                    localName: "html",
+                    nodeValue: "",
+                    attributes: [],
+                    childCount: 1,
+                    layoutFlags: [],
+                    isRendered: true,
+                    children: [
+                        DOMGraphNodeDescriptor(
+                            localID: selectedLocalID,
+                            backendNodeID: Int(selectedLocalID),
+                            nodeType: 1,
+                            nodeName: "DIV",
+                            localName: "div",
+                            nodeValue: "",
+                            attributes: attributes,
+                            childCount: 0,
+                            layoutFlags: [],
+                            isRendered: true,
+                            children: []
+                        )
+                    ]
+                )
+            )
+        )
+        inspector.document.applySelectionSnapshot(
+            .init(
+                localID: selectedLocalID,
+                preview: "<div id=\"selected\"></div>",
+                attributes: attributes,
+                path: ["html", "body", "div"],
+                selectorPath: "#selected",
+                styleRevision: 0
+            )
+        )
     }
 
     private func selectTab(_ identifier: String, in controller: WIInspectorController) {

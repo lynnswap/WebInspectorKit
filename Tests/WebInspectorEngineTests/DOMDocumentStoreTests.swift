@@ -102,6 +102,49 @@ struct DOMDocumentModelTests {
     }
 
     @Test
+    func sameContextSnapshotReplaceRebindsSelectionByStableBackendNodeID() {
+        let model = DOMDocumentModel()
+        model.replaceDocument(
+            with: .init(
+                root: makeNode(
+                    localID: 1,
+                    children: [
+                        makeNode(
+                            localID: 7,
+                            backendNodeID: 77,
+                            backendNodeIDIsStable: true,
+                            attributes: [.init(nodeId: 77, name: "class", value: "before")]
+                        )
+                    ]
+                ),
+                selectedLocalID: 7
+            )
+        )
+
+        model.replaceDocument(
+            with: .init(
+                root: makeNode(
+                    localID: 1,
+                    children: [
+                        makeNode(
+                            localID: 70,
+                            backendNodeID: 77,
+                            backendNodeIDIsStable: true,
+                            attributes: [.init(nodeId: 77, name: "class", value: "after")]
+                        )
+                    ]
+                )
+            ),
+            isFreshDocument: false
+        )
+
+        let reprojected = try! #require(model.selectedNode)
+        #expect(reprojected.localID == 70)
+        #expect(reprojected.backendNodeID == 77)
+        #expect(reprojected.attributes.first(where: { $0.name == "class" })?.value == "after")
+    }
+
+    @Test
     func replaceSubtreeSeedsRootWhenDocumentIsEmpty() {
         let model = DOMDocumentModel()
 

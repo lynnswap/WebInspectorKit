@@ -202,19 +202,75 @@ extension WIDOMInspector {
             } else {
                 removeSelectionHitTestOverlay()
             }
+#if DEBUG
+            recordInspectSelectionDiagnostic(
+                InspectSelectionDiagnosticEvent.nativeNodeSearch(
+                    enabled: enabled,
+                    contextID: currentContextIDForSelectionDiagnostics(),
+                    succeeded: true,
+                    summary: nativeInspectorInteractionStateSummaryForDiagnostics()
+                )
+            )
+#endif
             return true
         }
 
         guard let pageWebView else {
+#if DEBUG
+            recordInspectSelectionDiagnostic(
+                InspectSelectionDiagnosticEvent.nativeNodeSearch(
+                    enabled: enabled,
+                    contextID: currentContextIDForSelectionDiagnostics(),
+                    succeeded: false,
+                    summary: nil as String?
+                )
+            )
+#endif
             return false
         }
 
-        guard WIDOMUIKitInspectorSelectionEnvironment.nodeSearchSetter(pageWebView, enabled) else {
+        if enabled {
+            let alreadyActive =
+                (isNativeInspectorElementSelectionActive(on: pageWebView) ?? false)
+                || hasActiveNativeInspectorNodeSearch(in: pageWebView)
+            if alreadyActive {
+#if DEBUG
+                recordInspectSelectionDiagnostic(
+                    InspectSelectionDiagnosticEvent.nativeNodeSearch(
+                        enabled: enabled,
+                        contextID: currentContextIDForSelectionDiagnostics(),
+                        succeeded: true,
+                        summary: nativeInspectorInteractionStateSummaryForDiagnostics()
+                    )
+                )
+#endif
+                domWindowActivationLogger.debug(
+                    "native inspector node search enable skipped because it is already active contextID=\(self.currentContextIDForSelectionDiagnostics() ?? 0, privacy: .public) state=\(self.nativeInspectorInteractionStateSummaryForDiagnostics() ?? "nil", privacy: .public)"
+                )
+                return true
+            }
+        }
+
+        let didEnable = WIDOMUIKitInspectorSelectionEnvironment.nodeSearchSetter(pageWebView, enabled)
+#if DEBUG
+        recordInspectSelectionDiagnostic(
+            InspectSelectionDiagnosticEvent.nativeNodeSearch(
+                enabled: enabled,
+                contextID: currentContextIDForSelectionDiagnostics(),
+                succeeded: didEnable,
+                summary: nativeInspectorInteractionStateSummaryForDiagnostics()
+            )
+        )
+#endif
+        guard didEnable else {
             domWindowActivationLogger.error(
-                "native inspector node search \(enabled ? "enable" : "disable", privacy: .public) unavailable"
+                "native inspector node search \(enabled ? "enable" : "disable", privacy: .public) unavailable contextID=\(self.currentContextIDForSelectionDiagnostics() ?? 0, privacy: .public) state=\(self.nativeInspectorInteractionStateSummaryForDiagnostics() ?? "nil", privacy: .public)"
             )
             return false
         }
+        domWindowActivationLogger.debug(
+            "native inspector node search \(enabled ? "enable" : "disable", privacy: .public) contextID=\(self.currentContextIDForSelectionDiagnostics() ?? 0, privacy: .public) state=\(self.nativeInspectorInteractionStateSummaryForDiagnostics() ?? "nil", privacy: .public)"
+        )
         return true
     }
 
@@ -346,6 +402,18 @@ extension WIDOMInspector {
 
     private func isNativeInspectorElementSelectionActive(on webView: WKWebView) -> Bool? {
         WIDOMUIKitInspectorSelectionEnvironment.selectionActiveProvider(webView)
+    }
+
+    func resetNativeInspectorSelectionStateForFreshContext(
+        reason: String,
+        contextID: DOMContextID
+    ) async {
+        let beforeState = nativeInspectorInteractionStateSummaryForDiagnostics()
+        await awaitInspectModeInactive()
+        let afterState = nativeInspectorInteractionStateSummaryForDiagnostics()
+        domWindowActivationLogger.debug(
+            "native inspector node search reset reason=\(reason, privacy: .public) contextID=\(contextID, privacy: .public) before=\(beforeState ?? "nil", privacy: .public) after=\(afterState ?? "nil", privacy: .public)"
+        )
     }
 
     func installPointerDisconnectObserverIfNeeded() {

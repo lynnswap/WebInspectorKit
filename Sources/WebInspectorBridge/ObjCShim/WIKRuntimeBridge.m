@@ -34,6 +34,20 @@ NSErrorDomain const WIKRuntimeBridgeErrorDomain = @"WebInspectorBridge.WIKRuntim
     return recognizerClass;
 }
 
++ (BOOL)wi_contentViewHasInspectorNodeSearchRecognizer:(UIView *)contentView
+{
+    Class recognizerClass = [self wi_inspectorNodeSearchRecognizerClass];
+    if (!recognizerClass)
+        return NO;
+
+    for (UIGestureRecognizer *recognizer in contentView.gestureRecognizers) {
+        if ([recognizer isKindOfClass:recognizerClass])
+            return YES;
+    }
+
+    return NO;
+}
+
 + (nullable UIView *)wi_firstContentViewInView:(UIView *)view
 {
     Class contentViewClass = [self wi_contentViewClass];
@@ -66,6 +80,20 @@ NSErrorDomain const WIKRuntimeBridgeErrorDomain = @"WebInspectorBridge.WIKRuntim
     return [contentViews copy];
 }
 
++ (nullable UIView *)wi_preferredContentViewForWebView:(WKWebView *)webView
+{
+    NSArray<UIView *> *contentViews = [self wi_contentViewsForWebView:webView];
+    if (contentViews.count == 0)
+        return nil;
+
+    for (UIView *contentView in [contentViews reverseObjectEnumerator]) {
+        if (!CGRectIsEmpty(contentView.bounds) && !contentView.hidden && contentView.alpha > 0.0)
+            return contentView;
+    }
+
+    return contentViews.lastObject;
+}
+
 + (nullable NSObject *)inspectorForWebView:(WKWebView *)webView
 {
     if (![webView respondsToSelector:@selector(_inspector)])
@@ -88,23 +116,28 @@ NSErrorDomain const WIKRuntimeBridgeErrorDomain = @"WebInspectorBridge.WIKRuntim
 
 + (BOOL)canEnableInspectorNodeSearchForWebView:(WKWebView *)webView
 {
-    for (UIView *contentView in [self wi_contentViewsForWebView:webView]) {
-        if ([contentView respondsToSelector:@selector(_enableInspectorNodeSearch)])
-            return YES;
-    }
-    return NO;
+    UIView *contentView = [self wi_preferredContentViewForWebView:webView];
+    return contentView && [contentView respondsToSelector:@selector(_enableInspectorNodeSearch)];
 }
 
 + (BOOL)enableInspectorNodeSearchForWebView:(WKWebView *)webView
 {
-    BOOL didEnable = NO;
+    UIView *preferredContentView = [self wi_preferredContentViewForWebView:webView];
+    if (!preferredContentView || ![preferredContentView respondsToSelector:@selector(_enableInspectorNodeSearch)])
+        return NO;
+
     for (UIView *contentView in [self wi_contentViewsForWebView:webView]) {
-        if (![contentView respondsToSelector:@selector(_enableInspectorNodeSearch)])
+        if (contentView == preferredContentView)
             continue;
-        [contentView _enableInspectorNodeSearch];
-        didEnable = YES;
+        if ([contentView respondsToSelector:@selector(_disableInspectorNodeSearch)])
+            [contentView _disableInspectorNodeSearch];
     }
-    return didEnable;
+
+    if ([self wi_contentViewHasInspectorNodeSearchRecognizer:preferredContentView])
+        return YES;
+
+    [preferredContentView _enableInspectorNodeSearch];
+    return YES;
 }
 
 + (BOOL)disableInspectorNodeSearchForWebView:(WKWebView *)webView

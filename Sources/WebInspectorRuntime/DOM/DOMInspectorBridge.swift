@@ -31,13 +31,12 @@ final class DOMInspectorBridge: NSObject {
     var onMessage: (@MainActor (IncomingMessage) -> Void)?
 
     private(set) var inspectorWebView: InspectorWebView?
+    private(set) var generation: UInt64 = 0
     private var bootstrapPayload: [String: Any] = DOMInspectorBridge.defaultBootstrapPayload()
 
     func makeInspectorWebView(bootstrapPayload: [String: Any]) -> InspectorWebView {
         self.bootstrapPayload = bootstrapPayload
         if let inspectorWebView {
-            attachInspectorWebView(to: inspectorWebView)
-            applyBootstrap(on: inspectorWebView)
             return inspectorWebView
         }
 
@@ -46,6 +45,7 @@ final class DOMInspectorBridge: NSObject {
         attachInspectorWebView(to: inspectorWebView)
         loadInspector(in: inspectorWebView)
         self.inspectorWebView = inspectorWebView
+        generation &+= 1
         return inspectorWebView
     }
 

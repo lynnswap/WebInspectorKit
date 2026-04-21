@@ -71,7 +71,7 @@ public final class WIDOMTreeViewController: UIViewController {
     }
 
     private func attachInspectorWebViewIfNeeded() {
-        let inspectorWebView = inspector.makeInspectorWebView()
+        let inspectorWebView = inspector.inspectorWebViewForPresentation()
         guard inspectorWebView.superview !== inspectorWebViewContainer else {
             attachedInspectorWebView = inspectorWebView
             return
@@ -149,6 +149,25 @@ extension WIDOMTreeViewController {
             contentWorld: .page
         )
         return rawValue as? String
+    }
+
+    func renderedTagNamesForTesting() async -> [String] {
+        guard let attachedInspectorWebView,
+              attachedInspectorWebView.superview === inspectorWebViewContainer
+        else {
+            return []
+        }
+        let rawValue = try? await attachedInspectorWebView.callAsyncJavaScriptCompat(
+            """
+            return Array.from(document.querySelectorAll('.tree-node__name'))
+                .map((element) => element.textContent ?? '')
+                .filter((value) => value.length > 0);
+            """,
+            arguments: [:],
+            in: nil,
+            contentWorld: .page
+        )
+        return rawValue as? [String] ?? []
     }
 
     func selectedNodeTextForTesting() async -> String? {

@@ -687,12 +687,16 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     }
 
     private func requestSnapshotUpdate(animatingDifferences: Bool, force: Bool = false) {
-        guard isCollectionViewVisible else {
+        guard isViewLoaded else {
             needsSnapshotReloadOnNextAppearance = true
             return
         }
         needsSnapshotReloadOnNextAppearance = false
         let snapshot = makeSnapshot()
+        if !isCollectionViewVisible {
+            applySnapshotUsingReloadData(snapshot)
+            return
+        }
         guard force || snapshotStructureDiffers(from: dataSource.snapshot(), to: snapshot) else {
             return
         }
@@ -1522,6 +1526,67 @@ private final class DOMObservingListCell: UICollectionViewListCell {
 
 #if DEBUG
 extension WIDOMDetailViewController {
+    var isShowingEmptyStateForTesting: Bool {
+        contentUnavailableConfiguration != nil && collectionView.isHidden
+    }
+
+    func renderedPreviewTextForTesting() -> String? {
+        guard
+            let item = dataSource.snapshot().itemIdentifiers.first(where: {
+                if case .element = $0.stableID.key {
+                    return true
+                }
+                return false
+            }),
+            case let .element(preview)? = payload(for: item.stableID)
+        else {
+            return nil
+        }
+        return preview
+    }
+
+    func renderedSelectorTextForTesting() -> String? {
+        guard
+            let item = dataSource.snapshot().itemIdentifiers.first(where: {
+                if case .selector = $0.stableID.key {
+                    return true
+                }
+                return false
+            }),
+            case let .selector(path)? = payload(for: item.stableID)
+        else {
+            return nil
+        }
+        return path
+    }
+
+    func renderedAttributeNamesForTesting() -> [String] {
+        dataSource.snapshot().itemIdentifiers.compactMap { item in
+            guard case let .attribute(_, name) = item.stableID.key else {
+                return nil
+            }
+            return name
+        }
+    }
+
+    func renderedAttributeValueForTesting(
+        nodeID: DOMNodeModel.ID,
+        name: String
+    ) -> String? {
+        guard
+            let item = dataSource.snapshot().itemIdentifiers.first(where: {
+                guard case let .attribute(itemNodeID, itemName) = $0.stableID.key else {
+                    return false
+                }
+                return itemNodeID == nodeID && itemName == name
+            }),
+            case let .attribute(_, _, value)? = payload(for: item.stableID)
+        else {
+            return nil
+        }
+        return value
+    }
+
     func inlineDraftPhaseForTesting(
         nodeID: DOMNodeModel.ID,
         name: String

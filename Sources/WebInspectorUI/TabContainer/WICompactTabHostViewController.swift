@@ -1,7 +1,10 @@
 #if canImport(UIKit)
+import OSLog
 import UIKit
 import ObservationBridge
 import WebInspectorRuntime
+
+private let compactTabHostLogger = Logger(subsystem: "WebInspectorKit", category: "WICompactTabs")
 
 @MainActor
 final class WICompactTabHostViewController: UITabBarController, UITabBarControllerDelegate {
@@ -41,12 +44,14 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
         view.backgroundColor = .clear
         delegate = self
         tabBar.scrollEdgeAppearance = tabBar.standardAppearance
+        logCompactTabDiagnostics("viewDidLoad", level: .debug)
         rebuildNativeTabsIfPossible()
         bindModel()
     }
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        logCompactTabDiagnostics("viewWillAppear animated=\(animated)", level: .debug)
         restoreModelSelectionIfNeeded(displayTabs: displayTabs)
         syncNativeSelection(with: inspector.selectedTab)
     }
@@ -63,6 +68,13 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
 
     var currentUITabsForTesting: [UITab] {
         tabs
+    }
+
+    func rootViewControllerForTesting(tabIdentifier: String) -> UIViewController? {
+        guard let tab = displayTabs.first(where: { $0.identifier == tabIdentifier }) else {
+            return nil
+        }
+        return renderCache.rootViewController(for: tab)
     }
 
     private var displayTabs: [WITab] {
@@ -97,6 +109,10 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
 
     private func rebuildNativeTabsIfPossible() {
         let resolvedDisplayTabs = displayTabs
+        logCompactTabDiagnostics(
+            "rebuildNativeTabsIfPossible displayTabs=\(resolvedDisplayTabs.map(\.identifier))",
+            level: .debug
+        )
         restoreModelSelectionIfNeeded(displayTabs: resolvedDisplayTabs)
         renderCache.prune(activeTabs: resolvedDisplayTabs)
         let desiredTabs = resolvedDisplayTabs.map { makeNativeTab(for: $0) }
@@ -132,6 +148,11 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
 
         let contentViewController = makeTabRootViewController(for: tab) ?? UIViewController()
         let wrappedViewController = wrappedInNavigationControllerIfNeeded(contentViewController)
+        prewarmSyntheticElementTabIfNeeded(
+            rootViewController: contentViewController,
+            wrappedViewController: wrappedViewController,
+            for: tab
+        )
         let nativeTab = UITab(
             title: tab.title,
             image: tab.image,
@@ -141,6 +162,18 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
         }
         renderCache.setCompactTab(nativeTab, for: tab)
         return nativeTab
+    }
+
+    private func prewarmSyntheticElementTabIfNeeded(
+        rootViewController: UIViewController,
+        wrappedViewController: UIViewController,
+        for tab: WITab
+    ) {
+        guard tab.identifier == WITab.elementTabID else {
+            return
+        }
+        rootViewController.loadViewIfNeeded()
+        wrappedViewController.loadViewIfNeeded()
     }
 
     private func syncNativeSelection(with tab: WITab?, displayTabs: [WITab]? = nil) {
@@ -160,6 +193,10 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
             return
         }
 
+        logCompactTabDiagnostics(
+            "syncNativeSelection requested=\(tab?.identifier ?? "nil") resolvedModel=\(targetModelTab.identifier) targetNative=\(targetTab.identifier) previousNative=\(selectedTab?.identifier ?? "nil")",
+            level: .debug
+        )
         isApplyingSelectionFromModel = true
         selectedTab = targetTab
         isApplyingSelectionFromModel = false
@@ -177,6 +214,9 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
         didSelectTab selectedTab: UITab,
         previousTab: UITab?
     ) {
+        logCompactTabDiagnostics(
+            "didSelectTab selected=\(selectedTab.identifier) previous=\(previousTab?.identifier ?? "nil") applyingFromModel=\(isApplyingSelectionFromModel)"
+        )
         _ = previousTab
         guard isApplyingSelectionFromModel == false else {
             return
@@ -189,6 +229,7 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
     }
 
     private func applyUserSelection(selectedTab: WITab) {
+        logCompactTabDiagnostics("applyUserSelection modelTab=\(selectedTab.identifier)")
         inspector.setSelectedTab(selectedTab)
         inspector.setPreferredCompactSelectedTabIdentifier(selectedTab.identifier)
     }
@@ -297,6 +338,22 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
         isApplyingSelectionFromModel = true
         setTabs([], animated: false)
         isApplyingSelectionFromModel = false
+    }
+
+    private func logCompactTabDiagnostics(
+        _ message: String,
+        level: OSLogType = .default
+    ) {
+        let state = "modelSelected=\(inspector.selectedTab?.identifier ?? "nil") nativeSelected=\(selectedTab?.identifier ?? "nil") displayTabs=\(displayTabs.map(\.identifier)) nativeTabs=\(tabs.map(\.identifier))"
+        let composed = "\(message) \(state)"
+        switch level {
+        case .error, .fault:
+            compactTabHostLogger.error("\(composed, privacy: .public)")
+        case .debug:
+            compactTabHostLogger.debug("\(composed, privacy: .public)")
+        default:
+            compactTabHostLogger.notice("\(composed, privacy: .public)")
+        }
     }
 }
 

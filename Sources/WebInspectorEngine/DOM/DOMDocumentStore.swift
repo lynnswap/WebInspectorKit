@@ -1,5 +1,8 @@
 import Foundation
 import Observation
+import OSLog
+
+private let domDocumentLogger = Logger(subsystem: "WebInspectorKit", category: "DOMDocumentModel")
 
 @MainActor
 @Observable
@@ -9,6 +12,7 @@ public final class DOMDocumentModel {
     public private(set) var errorMessage: String?
 
     package private(set) var documentIdentity = UUID()
+    package private(set) var projectionRevision: UInt64 = 0
 
     private var nodesByLocalID: [UInt64: DOMNodeModel] = [:]
 
@@ -22,14 +26,35 @@ public final class DOMDocumentModel {
     }
 
     package func clearSelection() {
+        let previousSelectedNode = selectedNode
         selectedNode = nil
+        projectionRevision &+= 1
+        guard previousSelectedNode != nil else {
+            return
+        }
+        logSelectionDiagnostics(
+            "clearSelection",
+            previous: previousSelectedNode,
+            next: selectedNode
+        )
     }
 
     package func clearDocument(isFreshDocument: Bool = true) {
+        let previousDocumentIdentity = documentIdentity
+        let previousSelectedNode = selectedNode
+        let previousRootNode = rootNode
         if isFreshDocument {
             documentIdentity = UUID()
         }
         clearContents()
+        projectionRevision &+= 1
+        guard previousSelectedNode != nil || previousRootNode != nil else {
+            return
+        }
+        logDocumentDiagnostics(
+            "clearDocument",
+            extra: "isFreshDocument=\(isFreshDocument) previousDocumentIdentity=\(compactDocumentIdentity(previousDocumentIdentity)) nextDocumentIdentity=\(compactDocumentIdentity(documentIdentity)) previousRoot=\(selectionNodeSummary(previousRootNode))"
+        )
     }
 
     package func replaceDocument(
@@ -40,10 +65,15 @@ public final class DOMDocumentModel {
             documentIdentity = UUID()
         }
         let previousSelectedLocalID = selectedLocalID
+        let previousSelectedStableBackendNodeID = stableBackendNodeID(for: selectedNode)
         let nextSelectedLocalID = snapshot.selectedLocalID ?? previousSelectedLocalID
-        replaceContents(selectedLocalID: nextSelectedLocalID) {
+        replaceContents(
+            selectedLocalID: nextSelectedLocalID,
+            selectedStableBackendNodeID: previousSelectedStableBackendNodeID
+        ) {
             rootNode = buildSubtree(from: snapshot.root, parent: nil)
         }
+        projectionRevision &+= 1
     }
 
     package func applyMutationBundle(_ bundle: DOMGraphMutationBundle) {
@@ -52,6 +82,7 @@ public final class DOMDocumentModel {
         }
 
         let previousSelectedLocalID = selectedLocalID
+        let previousSelectedNode = selectedNode
         for event in bundle.events {
             switch event {
             case let .childNodeInserted(parentLocalID, previousLocalID, node):
@@ -100,14 +131,33 @@ public final class DOMDocumentModel {
         if selectedNode == nil, let previousSelectedLocalID {
             selectedNode = node(forLocalID: previousSelectedLocalID)
         }
+        if selectedNode == nil,
+           let stableBackendNodeID = stableBackendNodeID(for: previousSelectedNode) {
+            selectedNode = node(stableBackendNodeID: stableBackendNodeID)
+        }
+        projectionRevision &+= 1
+        logSelectionTransitionIfNeeded(
+            action: "applyMutationBundle",
+            previous: previousSelectedNode,
+            next: selectedNode,
+            extra: "eventCount=\(bundle.events.count)"
+        )
     }
 
     package func applySelectionSnapshot(_ payload: DOMSelectionSnapshotPayload?) {
+        let previousSelectedNode = selectedNode
         if let previousSelectedNode = selectedNode, payload?.localID == nil {
             previousSelectedNode.clearSelectionProjectionState()
         }
         guard let payload, let localID = payload.localID else {
             selectedNode = nil
+            projectionRevision &+= 1
+            logSelectionTransitionIfNeeded(
+                action: "applySelectionSnapshot",
+                previous: previousSelectedNode,
+                next: selectedNode,
+                extra: "payload=nil"
+            )
             return
         }
 
@@ -138,6 +188,13 @@ public final class DOMDocumentModel {
             with: normalizeAttributes(payload.attributes, backendNodeID: node.backendNodeID)
         )
         selectedNode = node
+        projectionRevision &+= 1
+        logSelectionTransitionIfNeeded(
+            action: "applySelectionSnapshot",
+            previous: previousSelectedNode,
+            next: selectedNode,
+            extra: "payloadLocalID=\(localID) backendNodeID=\(payload.backendNodeID.map(String.init) ?? "nil") selector=\(payload.selectorPath ?? "nil")"
+        )
     }
 
     package func applySelectorPath(_ payload: DOMSelectorPathPayload) {
@@ -269,12 +326,17 @@ public final class DOMDocumentModel {
 private extension DOMDocumentModel {
     func replaceContents(
         selectedLocalID: UInt64?,
+        selectedStableBackendNodeID: Int? = nil,
         build: () -> Void
     ) {
         clearContents()
         build()
         if let selectedLocalID {
             selectedNode = node(forLocalID: selectedLocalID)
+        }
+        if selectedNode == nil,
+           let selectedStableBackendNodeID {
+            selectedNode = node(stableBackendNodeID: selectedStableBackendNodeID)
         }
         reconcileSelectedNode()
     }
@@ -631,7 +693,13 @@ private extension DOMDocumentModel {
         }
 
         if selectedNode === root {
+            logSelectionDiagnostics(
+                "removeSubtree cleared selected root",
+                previous: selectedNode,
+                next: nil
+            )
             selectedNode = nil
+            projectionRevision &+= 1
         }
         if rootNode === root {
             rootNode = nil
@@ -649,11 +717,79 @@ private extension DOMDocumentModel {
             return
         }
         guard let resolvedNode = nodesByLocalID[currentSelection.localID] else {
+            logSelectionDiagnostics(
+                "reconcileSelectedNode dropped missing selection",
+                previous: currentSelection,
+                next: nil
+            )
             selectedNode = nil
+            projectionRevision &+= 1
             return
         }
         if resolvedNode !== currentSelection {
+            logSelectionDiagnostics(
+                "reconcileSelectedNode rebound selection",
+                previous: currentSelection,
+                next: resolvedNode
+            )
             selectedNode = resolvedNode
+            projectionRevision &+= 1
         }
+    }
+}
+
+private extension DOMDocumentModel {
+    func logSelectionTransitionIfNeeded(
+        action: String,
+        previous: DOMNodeModel?,
+        next: DOMNodeModel?,
+        extra: String? = nil
+    ) {
+        guard selectionNodeSummary(previous) != selectionNodeSummary(next) else {
+            return
+        }
+        logSelectionDiagnostics(action, previous: previous, next: next, extra: extra)
+    }
+
+    func logSelectionDiagnostics(
+        _ action: String,
+        previous: DOMNodeModel?,
+        next: DOMNodeModel?,
+        extra: String? = nil
+    ) {
+        let extraPart = extra.map { " \($0)" } ?? ""
+        let previousSummary = self.selectionNodeSummary(previous)
+        let nextSummary = self.selectionNodeSummary(next)
+        let identitySummary = self.compactDocumentIdentity(self.documentIdentity)
+        domDocumentLogger.notice(
+            "\(action, privacy: .public) previous=\(previousSummary, privacy: .public) next=\(nextSummary, privacy: .public)\(extraPart, privacy: .public) documentIdentity=\(identitySummary, privacy: .public)"
+        )
+    }
+
+    func logDocumentDiagnostics(_ action: String, extra: String) {
+        domDocumentLogger.notice(
+            "\(action, privacy: .public) \(extra, privacy: .public)"
+        )
+    }
+
+    func selectionNodeSummary(_ node: DOMNodeModel?) -> String {
+        guard let node else {
+            return "nil"
+        }
+        let nodeName = node.localName.isEmpty ? node.nodeName : node.localName
+        return "\(nodeName)#local=\(node.localID)#backend=\(node.backendNodeID.map(String.init) ?? "nil")#children=\(node.children.count)/\(node.childCount)#selector=\(node.selectorPath)"
+    }
+
+    func compactDocumentIdentity(_ documentIdentity: UUID) -> String {
+        String(documentIdentity.uuidString.prefix(8))
+    }
+
+    func stableBackendNodeID(for node: DOMNodeModel?) -> Int? {
+        guard let node,
+              node.backendNodeIDIsStable,
+              let backendNodeID = node.backendNodeID else {
+            return nil
+        }
+        return backendNodeID
     }
 }

@@ -8,6 +8,9 @@ import AppKit
 @MainActor
 public final class WIDOMTreeViewController: NSViewController {
     private let inspector: WIDOMInspector
+    private let inspectorWebViewContainer = NSView()
+    private weak var attachedInspectorWebView: WKWebView?
+    private var inspectorWebViewConstraints: [NSLayoutConstraint] = []
     private var contextMenuNodeID: Int?
     private var contextMenuNodeIdentity: DOMNodeModel.ID?
     private var contextMenuBackendNodeID: Int?
@@ -29,8 +32,15 @@ public final class WIDOMTreeViewController: NSViewController {
     public override func viewDidLoad() {
         super.viewDidLoad()
 
-        let inspectorWebView = inspector.makeInspectorWebView()
-        inspectorWebView.translatesAutoresizingMaskIntoConstraints = false
+        inspectorWebViewContainer.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(inspectorWebViewContainer)
+        NSLayoutConstraint.activate([
+            inspectorWebViewContainer.topAnchor.constraint(equalTo: view.topAnchor),
+            inspectorWebViewContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            inspectorWebViewContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            inspectorWebViewContainer.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+
         inspector.setDOMContextMenuProvider { [weak self] nodeID in
             guard let self else {
                 return nil
@@ -52,14 +62,19 @@ public final class WIDOMTreeViewController: NSViewController {
             return self.makeTreeContextMenu()
         }
 
-        view.addSubview(inspectorWebView)
+        attachInspectorWebViewIfNeeded()
+    }
 
-        NSLayoutConstraint.activate([
-            inspectorWebView.topAnchor.constraint(equalTo: view.topAnchor),
-            inspectorWebView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            inspectorWebView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            inspectorWebView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-        ])
+    public override func viewDidAppear() {
+        super.viewDidAppear()
+        attachInspectorWebViewIfNeeded()
+    }
+
+    public override func viewDidDisappear() {
+        super.viewDidDisappear()
+        if view.window == nil {
+            detachInspectorWebViewIfNeeded()
+        }
     }
 
     private func makeCopyMenu() -> NSMenu {
@@ -201,6 +216,43 @@ public final class WIDOMTreeViewController: NSViewController {
 
     private var contextActionNodeIdentity: DOMNodeModel.ID? {
         contextMenuNodeIdentity
+    }
+
+    private func attachInspectorWebViewIfNeeded() {
+        let inspectorWebView = inspector.inspectorWebViewForPresentation()
+        inspectorWebView.translatesAutoresizingMaskIntoConstraints = false
+        guard inspectorWebView.superview !== inspectorWebViewContainer else {
+            attachedInspectorWebView = inspectorWebView
+            return
+        }
+
+        NSLayoutConstraint.deactivate(inspectorWebViewConstraints)
+        inspectorWebViewConstraints.removeAll(keepingCapacity: true)
+        inspectorWebView.removeFromSuperview()
+        inspectorWebViewContainer.addSubview(inspectorWebView)
+        let constraints = [
+            inspectorWebView.topAnchor.constraint(equalTo: inspectorWebViewContainer.topAnchor),
+            inspectorWebView.leadingAnchor.constraint(equalTo: inspectorWebViewContainer.leadingAnchor),
+            inspectorWebView.trailingAnchor.constraint(equalTo: inspectorWebViewContainer.trailingAnchor),
+            inspectorWebView.bottomAnchor.constraint(equalTo: inspectorWebViewContainer.bottomAnchor),
+        ]
+        NSLayoutConstraint.activate(constraints)
+        inspectorWebViewConstraints = constraints
+        attachedInspectorWebView = inspectorWebView
+    }
+
+    private func detachInspectorWebViewIfNeeded() {
+        guard let attachedInspectorWebView,
+              attachedInspectorWebView.superview === inspectorWebViewContainer else {
+            self.attachedInspectorWebView = nil
+            NSLayoutConstraint.deactivate(inspectorWebViewConstraints)
+            inspectorWebViewConstraints.removeAll(keepingCapacity: true)
+            return
+        }
+        NSLayoutConstraint.deactivate(inspectorWebViewConstraints)
+        inspectorWebViewConstraints.removeAll(keepingCapacity: true)
+        attachedInspectorWebView.removeFromSuperview()
+        self.attachedInspectorWebView = nil
     }
 
     func invokeContextMenuCopyForTesting(
