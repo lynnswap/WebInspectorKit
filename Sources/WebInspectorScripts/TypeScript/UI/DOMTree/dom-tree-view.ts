@@ -22,7 +22,12 @@ import {
     registerTreeHandlers,
     setSnapshot,
 } from "./dom-tree-snapshot";
-import { selectNode, selectNodeByPath, setSearchTerm } from "./dom-tree-view-support";
+import {
+    clearPointerHoverState,
+    selectNode,
+    selectNodeByPath,
+    setSearchTerm,
+} from "./dom-tree-view-support";
 
 function readBootstrap(): DOMFrontendBootstrapState {
     const globalBootstrap = (window as Window & {
@@ -151,6 +156,7 @@ function installWebInspectorKit(): void {
         setSearchTerm,
         updateConfig,
         adoptDocumentContext,
+        clearPointerHoverState,
         __installed: true,
     };
 

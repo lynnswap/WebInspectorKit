@@ -5,13 +5,15 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
     private enum AccessibilityID {
         static let currentURL = "Monocly.diagnostics.currentURL"
         static let openInspector = "Monocly.inspectorHarness.openInspector"
-        static let pickButton = "WI.DOM.PickButton"
+        static let beginNativeSelection = "Monocly.inspectorHarness.beginNativeSelection"
         static let browserURL = "Monocly.inspectorHarness.browserURL"
         static let domDocumentURL = "Monocly.inspectorHarness.domDocumentURL"
         static let domContextID = "Monocly.inspectorHarness.domContextID"
         static let domIsSelecting = "Monocly.inspectorHarness.domIsSelecting"
         static let domSelectedPreview = "Monocly.inspectorHarness.domSelectedPreview"
         static let domSelectedSelector = "Monocly.inspectorHarness.domSelectedSelector"
+        static let domTreeSelectedPreview = "Monocly.inspectorHarness.domTreeSelectedPreview"
+        static let domTreeSelectedVisible = "Monocly.inspectorHarness.domTreeSelectedVisible"
         static let domRootState = "Monocly.inspectorHarness.domRootState"
         static let domError = "Monocly.inspectorHarness.domError"
         static let loadPage1 = "Monocly.inspectorHarness.loadPage1"
@@ -184,9 +186,9 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
             canGoForward: false
         )
 
-        let pickButton = app.buttons[AccessibilityID.pickButton]
-        XCTAssertTrue(pickButton.waitForExistence(timeout: 10))
-        pickButton.tap()
+        let beginNativeSelectionButton = app.buttons[AccessibilityID.beginNativeSelection]
+        XCTAssertTrue(beginNativeSelectionButton.waitForExistence(timeout: 10))
+        beginNativeSelectionButton.tap()
 
         let selectingLabel = app.staticTexts[AccessibilityID.domIsSelecting]
         XCTAssertTrue(
@@ -199,11 +201,15 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.22)).tap()
 
         let domSelectedPreviewLabel = app.staticTexts[AccessibilityID.domSelectedPreview]
+        let domTreeSelectedPreviewLabel = app.staticTexts[AccessibilityID.domTreeSelectedPreview]
+        let domTreeSelectedVisibleLabel = app.staticTexts[AccessibilityID.domTreeSelectedVisible]
         let domErrorLabel = app.staticTexts[AccessibilityID.domError]
         let resolved = waitForCondition(timeout: 15) {
             domSelectedPreviewLabel.exists
                 && domSelectedPreviewLabel.label != "domSelectedPreview=n/a"
                 && domSelectedPreviewLabel.label.contains("<")
+                && domTreeSelectedPreviewLabel.label != "domTreeSelectedPreview=n/a"
+                && domTreeSelectedVisibleLabel.label == "domTreeSelectedVisible=1"
                 && domErrorLabel.label == "domError=n/a"
                 && selectingLabel.label == "domIsSelecting=0"
         }
@@ -213,6 +219,8 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
             """
             Page tap did not resolve a real DOM selection.
             selectedPreview=\(domSelectedPreviewLabel.label)
+            treeSelectedPreview=\(domTreeSelectedPreviewLabel.label)
+            treeSelectedVisible=\(domTreeSelectedVisibleLabel.label)
             selecting=\(selectingLabel.label)
             domError=\(domErrorLabel.label)
             """
@@ -244,9 +252,9 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
             canGoForward: false
         )
 
-        let pickButton = app.buttons[AccessibilityID.pickButton]
-        XCTAssertTrue(pickButton.waitForExistence(timeout: 10))
-        pickButton.tap()
+        let beginNativeSelectionButton = app.buttons[AccessibilityID.beginNativeSelection]
+        XCTAssertTrue(beginNativeSelectionButton.waitForExistence(timeout: 10))
+        beginNativeSelectionButton.tap()
 
         let selectingLabel = app.staticTexts[AccessibilityID.domIsSelecting]
         XCTAssertTrue(
@@ -266,8 +274,12 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
             }
         )
 
-        // Tap the fixture link that sits to the left of the medium sheet.
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.11, dy: 0.33)).tap()
+        let page2Link = tappablePageLink(in: app, label: "Go to Page 2")
+        XCTAssertTrue(
+            page2Link.waitForExistence(timeout: 10),
+            "Fixture link did not expose an accessibility element."
+        )
+        page2Link.tap()
 
         _ = try waitForHarnessState(
             in: app,
@@ -275,6 +287,74 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
             canGoBack: true,
             canGoForward: false
         )
+    }
+
+    @MainActor
+    func testDOMInspectorNativeSelectionRemainsStableAcrossRepeatedSelections() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["MONOCLY_UI_TEST_SCENARIO"] = "domOpenInspectorAfterInitialLoad"
+        app.launch()
+
+        let currentURLLabel = app.staticTexts[AccessibilityID.currentURL]
+        XCTAssertTrue(currentURLLabel.waitForExistence(timeout: 10))
+        XCTAssertTrue(
+            waitForCondition(timeout: 15) {
+                currentURLLabel.label.contains("dom-page-1.html")
+            }
+        )
+
+        let openInspectorButton = app.buttons[AccessibilityID.openInspector]
+        XCTAssertTrue(openInspectorButton.waitForExistence(timeout: 10))
+        openInspectorButton.tap()
+
+        _ = try waitForHarnessState(
+            in: app,
+            pageFilename: "dom-page-1.html",
+            canGoBack: false,
+            canGoForward: false
+        )
+
+        let selectingLabel = app.staticTexts[AccessibilityID.domIsSelecting]
+        let domSelectedPreviewLabel = app.staticTexts[AccessibilityID.domSelectedPreview]
+        let domTreeSelectedPreviewLabel = app.staticTexts[AccessibilityID.domTreeSelectedPreview]
+        let domTreeSelectedVisibleLabel = app.staticTexts[AccessibilityID.domTreeSelectedVisible]
+        let domErrorLabel = app.staticTexts[AccessibilityID.domError]
+        let beginNativeSelectionButton = app.buttons[AccessibilityID.beginNativeSelection]
+        XCTAssertTrue(beginNativeSelectionButton.waitForExistence(timeout: 10))
+
+        for _ in 0..<3 {
+            beginNativeSelectionButton.tap()
+
+            XCTAssertTrue(
+                waitForCondition(timeout: 15) {
+                    selectingLabel.exists && selectingLabel.label == "domIsSelecting=1"
+                }
+            )
+
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.22)).tap()
+
+            let resolved = waitForCondition(timeout: 15) {
+                domSelectedPreviewLabel.exists
+                    && domSelectedPreviewLabel.label != "domSelectedPreview=n/a"
+                    && domSelectedPreviewLabel.label.contains("<")
+                    && domTreeSelectedPreviewLabel.label != "domTreeSelectedPreview=n/a"
+                    && domTreeSelectedVisibleLabel.label == "domTreeSelectedVisible=1"
+                    && domErrorLabel.label == "domError=n/a"
+                    && selectingLabel.label == "domIsSelecting=0"
+            }
+
+            XCTAssertTrue(
+                resolved,
+                """
+                Repeated native selection became unstable.
+                selectedPreview=\(domSelectedPreviewLabel.label)
+                treeSelectedPreview=\(domTreeSelectedPreviewLabel.label)
+                treeSelectedVisible=\(domTreeSelectedVisibleLabel.label)
+                selecting=\(selectingLabel.label)
+                domError=\(domErrorLabel.label)
+                """
+            )
+        }
     }
 
     @MainActor
@@ -343,6 +423,9 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
         let browserURLLabel = app.staticTexts[AccessibilityID.browserURL]
         let domDocumentURLLabel = app.staticTexts[AccessibilityID.domDocumentURL]
         let domContextIDLabel = app.staticTexts[AccessibilityID.domContextID]
+        let domNativeSelectionStateLabel = app.staticTexts["Monocly.inspectorHarness.domNativeSelectionState"]
+        let domTreeSelectedPreviewLabel = app.staticTexts[AccessibilityID.domTreeSelectedPreview]
+        let domTreeSelectedVisibleLabel = app.staticTexts[AccessibilityID.domTreeSelectedVisible]
         let domRootStateLabel = app.staticTexts[AccessibilityID.domRootState]
         let domErrorLabel = app.staticTexts[AccessibilityID.domError]
         let backButton = app.buttons[AccessibilityID.goBack]
@@ -352,8 +435,11 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
             browserURLLabel.exists
                 && domDocumentURLLabel.exists
                 && domContextIDLabel.exists
+                && domTreeSelectedPreviewLabel.exists
+                && domTreeSelectedVisibleLabel.exists
                 && domRootStateLabel.exists
                 && domErrorLabel.exists
+                && domNativeSelectionStateLabel.exists
                 && browserURLLabel.label.contains(pageFilename)
                 && domDocumentURLLabel.label.contains(pageFilename)
                 && domRootStateLabel.label == "domRootReady=1"
@@ -370,6 +456,9 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
             browserURL=\(browserURLLabel.label)
             domDocumentURL=\(domDocumentURLLabel.label)
             domContextID=\(domContextIDLabel.label)
+            domTreeSelectedPreview=\(domTreeSelectedPreviewLabel.label)
+            domTreeSelectedVisible=\(domTreeSelectedVisibleLabel.label)
+            domNativeSelectionState=\(domNativeSelectionStateLabel.label)
             domRootState=\(domRootStateLabel.label)
             domError=\(domErrorLabel.label)
             backEnabled=\(backButton.isEnabled)
@@ -378,6 +467,21 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
         )
 
         return domContextIDLabel.label
+    }
+
+    @MainActor
+    private func tappablePageLink(in app: XCUIApplication, label: String) -> XCUIElement {
+        let link = app.links[label]
+        if link.exists {
+            return link
+        }
+
+        let button = app.buttons[label]
+        if button.exists {
+            return button
+        }
+
+        return link
     }
 
     @MainActor

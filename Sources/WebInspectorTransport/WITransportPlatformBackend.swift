@@ -30,7 +30,7 @@ protocol WITransportBackendMessageSink: AnyObject, Sendable {
     func didReceiveRootMessage(_ message: String)
     func didReceivePageMessage(_ message: String, targetIdentifier: String)
     func didReceiveFatalFailure(_ message: String)
-    func waitForPendingMessagesForTesting() async
+    func waitForPendingMessages() async
 }
 
 @MainActor
@@ -232,7 +232,28 @@ final class WITransportNativeInspectorMessageEndpoint: WITransportMessageEndpoin
             )
         } catch {
             let reason = (error as? WITransportError)?.errorDescription ?? error.localizedDescription
-            configuration.logHandler?("[WebInspectorTransport] attach failed: \(reason)")
+            let errorDiagnostics: String?
+            if let nsError = error as NSError?,
+               let debugDescription = nsError.userInfo[NSDebugDescriptionErrorKey] as? String,
+               !debugDescription.isEmpty {
+                errorDiagnostics = debugDescription
+            } else {
+                errorDiagnostics = nil
+            }
+            let resolutionDiagnostics = resolution.diagnosticsSummary
+            let diagnostics = [resolutionDiagnostics, errorDiagnostics]
+                .compactMap { value in
+                    guard let value, !value.isEmpty else {
+                        return nil
+                    }
+                    return value
+                }
+                .joined(separator: " | ")
+            if diagnostics.isEmpty {
+                configuration.logHandler?("[WebInspectorTransport] attach failed: \(reason)")
+            } else {
+                configuration.logHandler?("[WebInspectorTransport] attach failed: \(reason) | \(diagnostics)")
+            }
             throw error
         }
 

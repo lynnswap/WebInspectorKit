@@ -24,9 +24,9 @@ import {
     renderState,
     ensureDomElements,
     childRequestDepth,
-    protocolState,
     RENDER_BATCH_LIMIT,
     RENDER_TIME_BUDGET,
+    protocolState,
 } from "./dom-tree-state";
 import {
     clampIndentDepth,
@@ -47,17 +47,157 @@ import {
 // =============================================================================
 
 let treeEventHandlersInstalled = false;
+let treeScrollMetricsObserverInstalled = false;
 let hoveredNodeId: number | null = null;
+let pendingSelectionRevealNodeId: number | null = null;
+
+type TreeViewportMetrics = {
+    top: number;
+    left: number;
+    width: number;
+    height: number;
+    safeAreaTop: number;
+    safeAreaRight: number;
+    safeAreaBottom: number;
+    safeAreaLeft: number;
+    inlineStartMargin: number;
+    blockMargin: number;
+};
+
+function treeScrollElement(): HTMLElement {
+    if (document.scrollingElement instanceof HTMLElement) {
+        return document.scrollingElement;
+    }
+    if (document.documentElement instanceof HTMLElement) {
+        return document.documentElement;
+    }
+    return document.body;
+}
+
+function setRootCSSPixelVariable(name: string, value: number): void {
+    document.documentElement.style.setProperty(name, `${Math.max(0, value)}px`);
+}
+
+export function syncTreeScrollMetrics(): void {
+    setRootCSSPixelVariable("--wi-tree-scroll-left", treeScrollElement().scrollLeft);
+}
+
+export function hoverInteractionsEnabled(): boolean {
+    if (typeof window.matchMedia !== "function") {
+        return true;
+    }
+    return window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+}
+
+function handleTreeViewportScroll(): void {
+    syncTreeScrollMetrics();
+}
+
+function ensureTreeScrollMetricsObserver(): void {
+    if (treeScrollMetricsObserverInstalled) {
+        return;
+    }
+    window.addEventListener("scroll", handleTreeViewportScroll, { passive: true });
+    treeScrollMetricsObserverInstalled = true;
+}
+
+export function resetTreeInteractionStateForTesting(): void {
+    treeEventHandlersInstalled = false;
+    if (treeScrollMetricsObserverInstalled) {
+        window.removeEventListener("scroll", handleTreeViewportScroll);
+        treeScrollMetricsObserverInstalled = false;
+    }
+    hoveredNodeId = null;
+    pendingSelectionRevealNodeId = null;
+    document.documentElement.style.removeProperty("--wi-tree-scroll-left");
+    (window as Window & {
+        __wiLastDOMTreeHoveredNodeId?: number | null;
+        __wiLastDOMTreeContextNodeId?: number | null;
+    }).__wiLastDOMTreeHoveredNodeId = null;
+    (window as Window & {
+        __wiLastDOMTreeContextNodeId?: number | null;
+    }).__wiLastDOMTreeContextNodeId = null;
+}
+
+function cssPixelValue(variableName: string, fallback = 0): number {
+    const rawValue = getComputedStyle(document.documentElement).getPropertyValue(variableName).trim();
+    if (!rawValue) {
+        return fallback;
+    }
+    const value = Number.parseFloat(rawValue);
+    return Number.isFinite(value) ? value : fallback;
+}
+
+function viewportMetrics(): TreeViewportMetrics {
+    const scrollElement = treeScrollElement();
+    const visualViewport = window.visualViewport;
+    return {
+        top: visualViewport?.pageTop ?? window.scrollY ?? scrollElement.scrollTop ?? 0,
+        left: visualViewport?.pageLeft ?? window.scrollX ?? scrollElement.scrollLeft ?? 0,
+        width: visualViewport?.width ?? window.innerWidth ?? document.documentElement.clientWidth ?? 0,
+        height: visualViewport?.height ?? window.innerHeight ?? document.documentElement.clientHeight ?? 0,
+        safeAreaTop: cssPixelValue("--wi-safe-area-top"),
+        safeAreaRight: cssPixelValue("--wi-safe-area-right"),
+        safeAreaBottom: cssPixelValue("--wi-safe-area-bottom"),
+        safeAreaLeft: cssPixelValue("--wi-safe-area-left"),
+        inlineStartMargin: cssPixelValue("--wi-selection-reveal-inline-start", 12),
+        blockMargin: cssPixelValue("--wi-selection-reveal-block-margin", 8),
+    };
+}
+
+function clampScrollOffset(offset: number, contentExtent: number, viewportExtent: number): number {
+    if (contentExtent > viewportExtent) {
+        return Math.min(Math.max(0, offset), contentExtent - viewportExtent);
+    }
+    return Math.max(0, offset);
+}
+
+function syncNodeSelectionState(element: HTMLElement, nodeId: number): void {
+    const isSelected = treeState.selectedNodeId === nodeId;
+    element.classList.toggle("is-selected", isSelected);
+    const row = element.querySelector(":scope > .tree-node__row");
+    if (row) {
+        row.setAttribute("aria-selected", isSelected ? "true" : "false");
+    }
+}
+
+function queueSelectionReveal(nodeId: number): void {
+    if (!nodeId) {
+        return;
+    }
+    pendingSelectionRevealNodeId = nodeId;
+    if (renderState.frameId !== null || renderState.isProcessing) {
+        return;
+    }
+    flushPendingSelectionReveal();
+}
+
+function flushPendingSelectionReveal(): void {
+    if (
+        pendingSelectionRevealNodeId === null ||
+        renderState.frameId !== null ||
+        renderState.isProcessing
+    ) {
+        return;
+    }
+    const nodeId = pendingSelectionRevealNodeId;
+    pendingSelectionRevealNodeId = null;
+    scheduleSelectionScroll(nodeId);
+}
 
 /** Ensure delegated event handlers are installed */
 export function ensureTreeEventHandlers(): void {
     if (treeEventHandlersInstalled) {
+        ensureTreeScrollMetricsObserver();
+        syncTreeScrollMetrics();
         return;
     }
     ensureDomElements();
     if (!dom.tree) {
         return;
     }
+    ensureTreeScrollMetricsObserver();
+    syncTreeScrollMetrics();
     dom.tree.addEventListener("click", handleTreeClick);
     dom.tree.addEventListener("contextmenu", handleTreeContextMenu);
     dom.tree.addEventListener("mouseover", handleTreeMouseOver);
@@ -72,22 +212,36 @@ export function ensureTreeEventHandlers(): void {
 
 /** Capture current tree scroll position */
 export function captureTreeScrollPosition(): ScrollPosition | null {
-    if (!dom.tree) {
-        return null;
-    }
+    const scrollElement = treeScrollElement();
     return {
-        top: dom.tree.scrollTop,
-        left: dom.tree.scrollLeft,
+        top: scrollElement.scrollTop,
+        left: scrollElement.scrollLeft,
     };
 }
 
 /** Restore tree scroll position */
 export function restoreTreeScrollPosition(position: ScrollPosition | null): void {
-    if (!position || !dom.tree) {
+    if (!position) {
         return;
     }
-    dom.tree.scrollTop = position.top;
-    dom.tree.scrollLeft = position.left;
+    const scrollElement = treeScrollElement();
+    scrollElement.scrollTop = position.top;
+    scrollElement.scrollLeft = position.left;
+    syncTreeScrollMetrics();
+}
+
+/** Capture current tree vertical scroll position */
+export function captureTreeScrollTop(): number | null {
+    return treeScrollElement().scrollTop;
+}
+
+/** Restore tree vertical scroll position */
+export function restoreTreeScrollTop(top: number | null): void {
+    if (top === null) {
+        return;
+    }
+    treeScrollElement().scrollTop = top;
+    syncTreeScrollMetrics();
 }
 
 // =============================================================================
@@ -134,15 +288,10 @@ export function buildNode(node: DOMNode): HTMLElement {
     childrenContainer.className = "tree-node__children";
     container.appendChild(childrenContainer);
     treeState.elements.set(node.id, container);
+    syncNodeSelectionState(container, node.id);
 
     const expanded = nodeShouldBeExpanded(node);
-    if (expanded) {
-        renderChildren(childrenContainer, node, { initialRender: true });
-        treeState.deferredChildRenders.delete(node.id);
-    } else {
-        treeState.deferredChildRenders.add(node.id);
-    }
-
+    treeState.deferredChildRenders.add(node.id);
     setNodeExpanded(node.id, expanded);
 
     return container;
@@ -155,6 +304,7 @@ function createNodeRow(node: DOMNode, options: NodeRenderOptions = {}): HTMLElem
     row.className = "tree-node__row";
     row.setAttribute("role", "treeitem");
     row.setAttribute("aria-level", String(displayDepthForNode(node) + 1));
+    row.setAttribute("aria-selected", treeState.selectedNodeId === node.id ? "true" : "false");
 
     const hasChildren = node.childCount > 0 || (Array.isArray(node.children) && node.children.length > 0);
 
@@ -164,7 +314,7 @@ function createNodeRow(node: DOMNode, options: NodeRenderOptions = {}): HTMLElem
         disclosure.type = "button";
         disclosure.setAttribute("aria-label", "Expand or collapse child nodes");
         row.appendChild(disclosure);
-    } else {
+    } else if (node.nodeType !== NODE_TYPES.DOCUMENT_TYPE_NODE) {
         const spacer = document.createElement("span");
         spacer.className = "tree-node__disclosure-spacer";
         spacer.setAttribute("aria-hidden", "true");
@@ -255,6 +405,7 @@ export function refreshNodeElement(node: DOMNode, options: NodeRefreshOptions = 
     element.style.setProperty("--depth", String(displayDepth));
     element.style.setProperty("--indent-depth", String(clampIndentDepth(displayDepth)));
     updateNodeElementState(element, node);
+    syncNodeSelectionState(element, node.id);
 
     const newRow = createNodeRow(node, { modifiedAttributes });
     const existingRow = element.querySelector(":scope > .tree-node__row");
@@ -272,12 +423,7 @@ export function refreshNodeElement(node: DOMNode, options: NodeRefreshOptions = 
     }
     const expanded = nodeShouldBeExpanded(node);
     if (updateChildren) {
-        if (expanded) {
-            renderChildren(childrenContainer, node);
-            treeState.deferredChildRenders.delete(node.id);
-        } else {
-            treeState.deferredChildRenders.add(node.id);
-        }
+        treeState.deferredChildRenders.add(node.id);
     }
 
     setNodeExpanded(node.id, expanded);
@@ -308,6 +454,21 @@ function mergeModifiedAttributes(
     return merged;
 }
 
+function requestPendingNodeRenderPass(): void {
+    renderState.frameId = requestAnimationFrame(() => processPendingNodeRenders());
+    window.setTimeout(() => {
+        if (renderState.frameId === null || renderState.isProcessing || renderState.pendingNodes.size === 0) {
+            return;
+        }
+        const pendingFrameId = renderState.frameId;
+        renderState.frameId = null;
+        if (pendingFrameId !== null) {
+            cancelAnimationFrame(pendingFrameId);
+        }
+        processPendingNodeRenders();
+    }, 32);
+}
+
 /** Schedule a node for re-rendering */
 export function scheduleNodeRender(node: DOMNode, options: NodeRefreshOptions = {}): void {
     if (!node || typeof node.id === "undefined") {
@@ -334,7 +495,7 @@ export function scheduleNodeRender(node: DOMNode, options: NodeRefreshOptions = 
     if (renderState.frameId !== null) {
         return;
     }
-    renderState.frameId = requestAnimationFrame(() => processPendingNodeRenders());
+    requestPendingNodeRenderPass();
 }
 
 /** Process pending node renders */
@@ -344,9 +505,11 @@ export function processPendingNodeRenders(): void {
     renderState.pendingNodes.clear();
 
     if (!pending.length) {
+        flushPendingSelectionReveal();
         return;
     }
 
+    renderState.isProcessing = true;
     pending.sort((a, b) => (a.node.depth || 0) - (b.node.depth || 0));
 
     let index = 0;
@@ -391,8 +554,13 @@ export function processPendingNodeRenders(): void {
                 modifiedAttributes: mergedAttributes,
             });
         }
-        renderState.frameId = requestAnimationFrame(() => processPendingNodeRenders());
+        renderState.isProcessing = false;
+        requestPendingNodeRenderPass();
+        return;
     }
+
+    renderState.isProcessing = false;
+    flushPendingSelectionReveal();
 }
 
 // =============================================================================
@@ -420,10 +588,19 @@ function shouldCollapseByDefault(node: DOMNode): boolean {
 }
 
 /** Set node expanded state */
-export function setNodeExpanded(nodeId: number, expanded: boolean): void {
+export function setNodeExpanded(
+    nodeId: number,
+    expanded: boolean,
+    options: { requestChildren?: boolean } = {}
+): void {
+    const node = treeState.nodes.get(nodeId);
+    const { requestChildren: shouldRequestChildren = false } = options;
     treeState.openState.set(nodeId, expanded);
     const element = treeState.elements.get(nodeId);
     if (!element) {
+        if (expanded && shouldRequestChildren && node && node.childCount > node.children.length) {
+            void requestChildren(node);
+        }
         return;
     }
 
@@ -443,7 +620,6 @@ export function setNodeExpanded(nodeId: number, expanded: boolean): void {
     }
 
     if (expanded && treeState.deferredChildRenders.has(nodeId)) {
-        const node = treeState.nodes.get(nodeId);
         const childrenContainer = element.querySelector(":scope > .tree-node__children") as HTMLElement | null;
         if (node && childrenContainer) {
             renderChildren(childrenContainer, node);
@@ -452,6 +628,10 @@ export function setNodeExpanded(nodeId: number, expanded: boolean): void {
         if (treeState.filter) {
             applyFilter();
         }
+    }
+
+    if (expanded && shouldRequestChildren && node && node.childCount > node.children.length) {
+        void requestChildren(node);
     }
 }
 
@@ -463,10 +643,7 @@ export function toggleNode(nodeId: number): void {
     }
     const current = nodeShouldBeExpanded(node);
     const next = !current;
-    setNodeExpanded(nodeId, next);
-    if (next && node.childCount > node.children.length) {
-        void requestChildren(node);
-    }
+    setNodeExpanded(nodeId, next, { requestChildren: next });
 }
 
 // =============================================================================
@@ -540,6 +717,9 @@ function handleTreeContextMenu(event: MouseEvent): void {
 
 /** Handle delegated row hover */
 function handleTreeMouseOver(event: MouseEvent): void {
+    if (!hoverInteractionsEnabled()) {
+        return;
+    }
     const target = event.target instanceof Element ? event.target : null;
     if (!target) {
         return;
@@ -559,6 +739,9 @@ function handleTreeMouseOver(event: MouseEvent): void {
 
 /** Handle delegated row leave */
 function handleTreeMouseOut(event: MouseEvent): void {
+    if (!hoverInteractionsEnabled()) {
+        return;
+    }
     const target = event.target instanceof Element ? event.target : null;
     if (!target) {
         return;
@@ -578,6 +761,9 @@ function handleTreeMouseOut(event: MouseEvent): void {
 
 /** Handle leaving the tree container */
 function handleTreeMouseLeave(): void {
+    if (!hoverInteractionsEnabled()) {
+        return;
+    }
     hoveredNodeId = null;
     (window as any).__wiLastDOMTreeHoveredNodeId = null;
     handleRowLeave();
@@ -631,13 +817,19 @@ function handleRowLeave(): void {
     clearPageHighlight();
 }
 
+/** Clear transient hover state after native pointer disconnect */
+export function clearPointerHoverState(): void {
+    hoveredNodeId = null;
+    (window as Window & { __wiLastDOMTreeHoveredNodeId?: number | null }).__wiLastDOMTreeHoveredNodeId = null;
+}
+
 // =============================================================================
 // Selection
 // =============================================================================
 
 /** Schedule selection scroll */
 function scheduleSelectionScroll(nodeId: number): void {
-    if (!nodeId || !dom.tree) {
+    if (!nodeId) {
         return;
     }
     requestAnimationFrame(() => {
@@ -647,9 +839,8 @@ function scheduleSelectionScroll(nodeId: number): void {
 
 /** Scroll selection into view */
 export function scrollSelectionIntoView(nodeId: number): boolean {
-    const container = dom.tree;
     const element = treeState.elements.get(nodeId);
-    if (!container || !element) {
+    if (!element) {
         return false;
     }
     if (treeState.selectedNodeId !== nodeId) {
@@ -657,78 +848,87 @@ export function scrollSelectionIntoView(nodeId: number): boolean {
     }
 
     const row = element.querySelector(".tree-node__row") || element;
-    const containerRect = container.getBoundingClientRect();
     const targetRect = row.getBoundingClientRect();
-    const margin = 8;
-    const relativeTop = targetRect.top - containerRect.top;
-    const relativeBottom = targetRect.bottom - containerRect.top;
-    const relativeLeft = targetRect.left - containerRect.left;
-    const relativeRight = targetRect.right - containerRect.left;
-
-    const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
-    const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
-    const visibleHeight = Math.max(
-        1,
-        Math.min(containerRect.bottom, viewportHeight) - Math.max(0, containerRect.top)
+    const viewport = viewportMetrics();
+    const absoluteTop = viewport.top + targetRect.top;
+    const absoluteBottom = absoluteTop + targetRect.height;
+    const absoluteLeft = viewport.left + targetRect.left;
+    const absoluteRight = absoluteLeft + targetRect.width;
+    const visibleTop = viewport.top + viewport.safeAreaTop + viewport.blockMargin;
+    const visibleBottom = viewport.top + viewport.height - viewport.safeAreaBottom - viewport.blockMargin;
+    const visibleLeft = viewport.left + viewport.safeAreaLeft + viewport.inlineStartMargin;
+    const visibleRight = viewport.left + viewport.width - viewport.safeAreaRight - viewport.inlineStartMargin;
+    const availableHeight = Math.max(
+        0,
+        viewport.height - viewport.safeAreaTop - viewport.safeAreaBottom - (viewport.blockMargin * 2)
     );
-    const visibleWidth = Math.max(
-        1,
-        Math.min(containerRect.right, viewportWidth) - Math.max(0, containerRect.left)
+    const availableWidth = Math.max(
+        0,
+        viewport.width - viewport.safeAreaLeft - viewport.safeAreaRight - (viewport.inlineStartMargin * 2)
     );
+    let nextTop = viewport.top;
+    let nextLeft = viewport.left;
+    let needsScroll = false;
 
-    const contentTop = container.scrollTop + relativeTop;
-    const contentBottom = container.scrollTop + relativeBottom;
-    const contentLeft = container.scrollLeft + relativeLeft;
-    const contentRight = container.scrollLeft + relativeRight;
+    if (absoluteLeft < visibleLeft || absoluteLeft > visibleRight) {
+        nextLeft = absoluteLeft - viewport.safeAreaLeft - viewport.inlineStartMargin;
+        needsScroll = true;
+    } else if (targetRect.width < availableWidth && absoluteRight > visibleRight) {
+        nextLeft = absoluteRight - viewport.width + viewport.safeAreaRight + viewport.inlineStartMargin;
+        needsScroll = true;
+    }
 
-    const visibleTop = container.scrollTop;
-    const visibleBottom = container.scrollTop + visibleHeight;
-    const visibleLeft = container.scrollLeft;
-    const visibleRight = container.scrollLeft + visibleWidth;
+    if (targetRect.height >= availableHeight) {
+        if (absoluteTop < visibleTop || absoluteBottom > visibleBottom) {
+            nextTop = absoluteTop - viewport.safeAreaTop - viewport.blockMargin;
+            needsScroll = true;
+        }
+    } else if (absoluteTop < visibleTop) {
+        nextTop = absoluteTop - viewport.safeAreaTop - viewport.blockMargin;
+        needsScroll = true;
+    } else if (absoluteBottom > visibleBottom) {
+        nextTop = absoluteBottom - viewport.height + viewport.safeAreaBottom + viewport.blockMargin;
+        needsScroll = true;
+    }
 
-    const isContainerScrollableV = Math.abs(container.scrollHeight - container.clientHeight) > 1;
-    const isContainerScrollableH = Math.abs(container.scrollWidth - container.clientWidth) > 1;
-    const visibleInViewportV = targetRect.bottom > margin && targetRect.top < viewportHeight - margin;
-    const visibleInViewportH = targetRect.right > margin && targetRect.left < viewportWidth - margin;
-    const verticallyVisible = contentBottom > visibleTop + margin && contentTop < visibleBottom - margin;
-    const horizontallyVisible = contentRight > visibleLeft + margin && contentLeft < visibleRight - margin;
-
-    if (verticallyVisible && horizontallyVisible) {
+    if (!needsScroll) {
         return true;
     }
 
-    let nextTop = container.scrollTop;
-    if (!verticallyVisible) {
-        if (isContainerScrollableV) {
-            const desiredTop = contentTop - visibleHeight / 3;
-            const maxTop = Math.max(0, container.scrollHeight - visibleHeight);
-            nextTop = Math.min(Math.max(0, desiredTop), maxTop);
-        } else if (!visibleInViewportV) {
-            const desiredPageTop = (window.scrollY || 0) + targetRect.top - viewportHeight / 3;
-            window.scrollTo({ top: Math.max(0, desiredPageTop), behavior: "auto" });
-        }
-    }
-
-    let nextLeft = container.scrollLeft;
-    if (!horizontallyVisible) {
-        if (isContainerScrollableH) {
-            const desiredLeft = contentLeft - visibleWidth / 5;
-            const maxLeft = Math.max(0, container.scrollWidth - visibleWidth);
-            nextLeft = Math.min(Math.max(0, desiredLeft), maxLeft);
-        } else if (!visibleInViewportH) {
-            const desiredPageLeft = (window.scrollX || 0) + targetRect.left - viewportWidth / 5;
-            window.scrollTo({ left: Math.max(0, desiredPageLeft), behavior: "auto" });
-        }
-    }
-
-    const alreadyAtTarget =
-        Math.abs(container.scrollTop - nextTop) < 0.5 &&
-        Math.abs(container.scrollLeft - nextLeft) < 0.5;
-    if (alreadyAtTarget) {
-        return true;
-    }
-    container.scrollTo({ top: nextTop, left: nextLeft, behavior: "auto" });
+    const scrollElement = treeScrollElement();
+    const maxVerticalExtent = Math.max(
+        scrollElement.scrollHeight,
+        document.documentElement.scrollHeight,
+        document.body.scrollHeight
+    );
+    const maxHorizontalExtent = Math.max(
+        scrollElement.scrollWidth,
+        document.documentElement.scrollWidth,
+        document.body.scrollWidth
+    );
+    window.scrollTo({
+        top: clampScrollOffset(nextTop, maxVerticalExtent, viewport.height),
+        left: clampScrollOffset(nextLeft, maxHorizontalExtent, viewport.width),
+        behavior: "auto",
+    });
+    syncTreeScrollMetrics();
     return false;
+}
+
+function materializeSelectionElementIfNeeded(nodeId: number): HTMLElement | null {
+    let node = treeState.nodes.get(nodeId);
+    while (node) {
+        const ancestorElement = treeState.elements.get(node.id);
+        if (ancestorElement) {
+            refreshNodeElement(node, { updateChildren: true });
+            return treeState.elements.get(nodeId) ?? null;
+        }
+        if (!node.parentId) {
+            break;
+        }
+        node = treeState.nodes.get(node.parentId);
+    }
+    return null;
 }
 
 /** Select a node by ID */
@@ -740,17 +940,21 @@ export function selectNode(nodeId: number, options: SelectionOptions = {}): bool
     const { shouldHighlight = true, autoScroll = false, notifyNative = true } = options;
     revealAncestors(nodeId);
 
-    const previous = treeState.elements.get(treeState.selectedNodeId ?? -1);
-    if (previous) {
-        previous.classList.remove("is-selected");
-    }
-
-    const element = treeState.elements.get(nodeId);
-    if (element) {
-        element.classList.add("is-selected");
-    }
-
+    const previousNodeId = treeState.selectedNodeId;
     treeState.selectedNodeId = nodeId;
+
+    if (previousNodeId !== null && previousNodeId !== nodeId) {
+        const previous = treeState.elements.get(previousNodeId);
+        if (previous) {
+            syncNodeSelectionState(previous, previousNodeId);
+        }
+    }
+
+    const element = treeState.elements.get(nodeId) ?? materializeSelectionElementIfNeeded(nodeId);
+    if (element) {
+        syncNodeSelectionState(element, nodeId);
+    }
+
     setNodeExpanded(nodeId, true);
     const node = treeState.nodes.get(nodeId);
     if (notifyNative) {
@@ -763,7 +967,7 @@ export function selectNode(nodeId: number, options: SelectionOptions = {}): bool
     }
 
     if (autoScroll) {
-        scheduleSelectionScroll(nodeId);
+        queueSelectionReveal(nodeId);
     }
 
     return true;

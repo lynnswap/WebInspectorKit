@@ -172,6 +172,7 @@ export interface RefreshAttempt {
 export interface RenderState {
     pendingNodes: Map<number, PendingRenderItem>;
     frameId: number | null;
+    isProcessing: boolean;
 }
 
 /** Pending render item */
@@ -357,5 +358,6 @@ export interface WebInspectorDOMFrontend {
     setSearchTerm(value: string): void;
     updateConfig(partial: ProtocolConfig): void;
     adoptDocumentContext(context: DOMDocumentContext): boolean;
+    clearPointerHoverState(): void;
     __installed?: boolean;
 }

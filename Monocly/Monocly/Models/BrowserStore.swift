@@ -298,15 +298,19 @@ private enum BrowserStoreSPI {
         reverseTokens.reversed().joined()
     }
 
+    // browsingContextController
     static let browsingContextControllerSelector = NSSelectorFromString(
         deobfuscate(["Controller", "Context", "browsing"])
     )
+    // backForwardList
     static let backForwardListSelector = NSSelectorFromString(
         deobfuscate(["List", "Forward", "back"])
     )
+    // goToBackForwardListItem:
     static let goToBackForwardListItemSelector = NSSelectorFromString(
         deobfuscate([":", "Item", "List", "Forward", "Back", "To", "go"])
     )
+    // _setHistoryDelegate:
     static let setHistoryDelegateSelector = NSSelectorFromString(
         deobfuscate([":", "Delegate", "History", "_set"])
     )

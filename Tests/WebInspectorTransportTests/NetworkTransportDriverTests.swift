@@ -353,7 +353,7 @@ struct NetworkTransportDriverTests {
                 messageSink.didReceiveRootMessage(
                     #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-B","type":"page","isProvisional":false}}}"#
                 )
-                await messageSink.waitForPendingMessagesForTesting()
+                await messageSink.waitForPendingMessages()
             }
         )
         let driver = NetworkTransportDriver(transportSessionFactory: makeTransportSessionFactory(using: backend))
@@ -1281,10 +1281,12 @@ private extension NetworkTransportDriverTests {
         configuration: WITransportConfiguration = .init(responseTimeout: .seconds(1))
     ) -> @MainActor () -> WITransportSession {
         {
-            WITransportSession(
+            let session = WITransportSession(
                 configuration: configuration,
                 backendFactory: { _ in backend }
             )
+            session.derivedPageTargetIdentifierProviderForTesting = { _ in nil }
+            return session
         }
     }
 
@@ -1382,7 +1384,7 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
             messageSink.didReceiveRootMessage(
                 #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-A","type":"page","isProvisional":false}}}"#
             )
-            await messageSink.waitForPendingMessagesForTesting()
+            await messageSink.waitForPendingMessages()
         }
     }
 

@@ -7,12 +7,14 @@ import {
     requestChildNodes,
 } from "../UI/DOMTree/dom-tree-protocol";
 import { applyMutationBundle, setSnapshot } from "../UI/DOMTree/dom-tree-snapshot";
-import { protocolState, renderState, treeState } from "../UI/DOMTree/dom-tree-state";
+import { dom, protocolState, renderState, treeState } from "../UI/DOMTree/dom-tree-state";
 
 let nextContextID = 1;
 
 function resetState(): void {
     document.body.innerHTML = "<div id=\"dom-tree\"></div><div id=\"dom-empty\"></div>";
+    dom.tree = null;
+    dom.empty = null;
     treeState.snapshot = null;
     treeState.nodes.clear();
     treeState.elements.clear();
@@ -117,6 +119,9 @@ describe("dom-tree-protocol", () => {
                 children: [],
             }
         });
+        const tree = document.getElementById("dom-tree") as HTMLElement;
+        document.documentElement.scrollTop = 40;
+        document.documentElement.scrollLeft = 55;
 
         applyMutationBundle({
             version: 1,
@@ -127,5 +132,8 @@ describe("dom-tree-protocol", () => {
 
         expect(treeState.snapshot).toBeNull();
         expect(treeState.selectedNodeId).toBeNull();
+        expect(tree.childElementCount).toBe(0);
+        expect(document.documentElement.scrollTop).toBe(0);
+        expect(document.documentElement.scrollLeft).toBe(0);
     });
 });

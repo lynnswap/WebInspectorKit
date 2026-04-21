@@ -473,6 +473,13 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
         }
         .store(in: &toolbarObservationHandles)
         inspectorController.dom.observe(
+            \.isPageReadyForSelection,
+            options: [.removeDuplicates]
+        ) { [weak self] _ in
+            self?.updateToolbarState()
+        }
+        .store(in: &toolbarObservationHandles)
+        inspectorController.dom.observe(
             \.isSelectingElement,
             options: [.removeDuplicates]
         ) { [weak self] _ in
@@ -570,14 +577,14 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
         }
 
         if let pickItem = toolbar.items.first(where: { $0.itemIdentifier == .wiDOMPick }) {
-            pickItem.isEnabled = inspectorController.dom.hasPageWebView
+            pickItem.isEnabled = inspectorController.dom.isPageReadyForSelection
             pickItem.image = Self.pickToolbarImage(
                 isSelecting: inspectorController.dom.isSelectingElement
             )
         }
 
         if let reloadItem = toolbar.items.first(where: { $0.itemIdentifier == .wiDOMReload }) {
-            reloadItem.isEnabled = inspectorController.dom.hasPageWebView
+            reloadItem.isEnabled = inspectorController.dom.isPageReadyForSelection
         }
 
         if let filterItem = toolbar.items.first(where: { $0.itemIdentifier == .wiNetworkFilter }) as? NSMenuToolbarItem {
@@ -940,7 +947,7 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
             item.label = wiLocalized("dom.controls.pick")
             item.paletteLabel = item.label
             item.toolTip = item.label
-            item.isEnabled = inspectorController.dom.hasPageWebView
+            item.isEnabled = inspectorController.dom.isPageReadyForSelection
             item.image = Self.pickToolbarImage(isSelecting: inspectorController.dom.isSelectingElement)
             item.action = #selector(handleDOMPickToolbarAction(_:))
             return item
@@ -951,6 +958,7 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
             item.label = wiLocalized("reload")
             item.paletteLabel = item.label
             item.toolTip = item.label
+            item.isEnabled = inspectorController.dom.isPageReadyForSelection
             item.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: item.label)
             item.action = #selector(handleDOMReloadToolbarAction(_:))
             return item

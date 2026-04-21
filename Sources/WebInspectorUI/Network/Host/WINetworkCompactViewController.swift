@@ -32,6 +32,7 @@ final class WINetworkCompactViewController: UINavigationController, UINavigation
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        view.backgroundColor = .clear
         wiApplyClearNavigationBarStyle(to: self)
         delegate = self
     }

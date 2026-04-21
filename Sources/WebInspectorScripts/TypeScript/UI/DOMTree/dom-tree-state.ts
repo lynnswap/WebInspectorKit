@@ -83,6 +83,7 @@ export const treeState: TreeState = {
 export const renderState: RenderState = {
     pendingNodes: new Map(),
     frameId: null,
+    isProcessing: false,
 };
 
 export function subtreeDepth(): number {
@@ -99,4 +100,5 @@ export function clearRenderState(): void {
         renderState.frameId = null;
     }
     renderState.pendingNodes.clear();
+    renderState.isProcessing = false;
 }

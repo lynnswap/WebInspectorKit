@@ -8,7 +8,7 @@ import SwiftUI
 
 private protocol DiffableStableID: Hashable, Sendable {}
 
-private struct ElementAttributeEditingKey: Hashable {
+private struct ElementAttributeEditingKey: Hashable, Sendable {
     let nodeID: DOMNodeModel.ID
     let name: String
 }
@@ -43,6 +43,37 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     private struct PendingInlineCommitMarker: Equatable {
         let key: ElementAttributeEditingKey
         let generation: UInt64
+    }
+
+    @MainActor
+    private final class InlineEditingEndWaiter {
+        private var didFinish = false
+        private var continuations: [CheckedContinuation<Void, Never>] = []
+
+        func wait() async {
+            guard didFinish == false else {
+                return
+            }
+
+            await withCheckedContinuation { continuation in
+                if didFinish {
+                    continuation.resume()
+                } else {
+                    continuations.append(continuation)
+                }
+            }
+        }
+
+        func finish() {
+            guard didFinish == false else {
+                return
+            }
+
+            didFinish = true
+            let continuations = self.continuations
+            self.continuations.removeAll(keepingCapacity: false)
+            continuations.forEach { $0.resume() }
+        }
     }
 
     private struct SectionIdentifier: Hashable, Sendable {
@@ -122,6 +153,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     private var isInlineEditingActive = false
     private var pendingInlineSelectionClearTask: Task<Void, Never>?
     private var pendingInlineEditingRefreshTask: Task<Void, Never>?
+    private var pendingInlineEditingEndWaiters: [ElementAttributeEditingKey: InlineEditingEndWaiter] = [:]
     private var pendingForcedProjectionRefresh = false
     private var pendingFocusRestoreKey: ElementAttributeEditingKey?
     private var pendingFocusRestoreGeneration: UInt64?
@@ -219,6 +251,13 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         }
         .store(in: &stateObservationHandles)
         inspector.observe(
+            \.isPageReadyForSelection,
+            options: [.removeDuplicates]
+        ) { [weak self] _ in
+            self?.scheduleNavigationControlsUpdate()
+        }
+        .store(in: &stateObservationHandles)
+        inspector.observe(
             \.isSelectingElement,
             options: [.removeDuplicates]
         ) { [weak self] _ in
@@ -253,6 +292,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         return DOMSecondaryMenuBuilder.makeMenu(
             hasSelection: hasSelection,
             hasPageWebView: hasPageWebView,
+            canReloadInspector: inspector.isPageReadyForSelection,
             onCopyHTML: { [weak self] in
                 self?.copySelectedHTML()
             },
@@ -303,7 +343,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
             navigationItem.additionalOverflowItems = UIDeferredMenuElement.uncached { [weak self] completion in
                 completion((self?.makeSecondaryMenu() ?? UIMenu()).children)
             }
-            pickItem.isEnabled = inspector.hasPageWebView
+            pickItem.isEnabled = inspector.isPageReadyForSelection
             pickItem.image = UIImage(systemName: pickSymbolName)
             pickItem.tintColor = inspector.isSelectingElement ? .systemBlue : .label
         } else {
@@ -890,6 +930,9 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     private func clearInlineEditingState() {
         let clearedKey = editingAttributeKey
         editingAttributeKey = nil
+        if let clearedKey {
+            finishInlineEditingEndWaiter(for: clearedKey)
+        }
         if pendingFocusRestoreKey == clearedKey {
             pendingFocusRestoreKey = nil
             pendingFocusRestoreGeneration = nil
@@ -1187,6 +1230,7 @@ extension WIDOMDetailViewController: ElementAttributeEditorCellDelegate {
            !shouldKeepCleanSession {
             attributeDraftSession = nil
         }
+        finishInlineEditingEndWaiter(for: key)
         sections = makeSections()
         scheduleDeferredInlineEditingRefresh()
     }
@@ -1548,55 +1592,83 @@ extension WIDOMDetailViewController {
             return
         }
         let cachedEditingKey = editingAttributeKey
+        let endEditingWaiter = installInlineEditingEndWaiter(for: cachedEditingKey)
         pendingForcedProjectionRefresh = true
-        _ = suppressInlineCommitAndEndEditing(for: cachedEditingKey, forceViewFallback: true)
+        var didRequestEndEditing = suppressInlineCommitAndEndEditing(
+            for: cachedEditingKey,
+            forceViewFallback: true
+        )
         if let editorCell = visibleAttributeEditorCell(for: cachedEditingKey) {
-            _ = editorCell.suppressNextCommitAndEndEditing()
-            suppressedInlineCommitKey = cachedEditingKey
+            didRequestEndEditing = editorCell.suppressNextCommitAndEndEditing() || didRequestEndEditing
+            if didRequestEndEditing {
+                suppressedInlineCommitKey = cachedEditingKey
+            }
         }
         attributeDraftSession = nil
+        guard didRequestEndEditing else {
+            pendingInlineEditingEndWaiters.removeValue(forKey: cachedEditingKey)
+            endEditingWaiter.finish()
+            finishDiscardInlineEditingStateUsingViewFallback(for: cachedEditingKey)
+            return
+        }
+
         Task { @MainActor [weak self] in
-            await Task.yield()
             guard let self else {
                 return
             }
-            self.pendingInlineEditingRefreshTask?.cancel()
-            self.pendingInlineEditingRefreshTask = nil
-            self.clearInlineEditingState()
-            self.suppressedInlineCommitKey = cachedEditingKey
-            self.pendingFocusRestoreKey = nil
-            self.pendingFocusRestoreFromModelUpdate = false
-            if let liveValue = self.attributeValue(for: cachedEditingKey),
-               let selectedEntry = self.inspector.document.selectedNode,
-               let editorCell = self.visibleAttributeEditorCell(for: cachedEditingKey)
-            {
-                editorCell.configure(
-                    key: cachedEditingKey,
-                    name: cachedEditingKey.name,
-                    value: liveValue,
-                    entry: selectedEntry,
-                    activateEditor: false,
-                    preserveFocusedText: false
-                )
-                _ = editorCell.suppressNextCommitAndEndEditing()
-            }
-            self.pendingForcedProjectionRefresh = false
-            self.collectionView?.layoutIfNeeded()
-            Task { @MainActor [weak self] in
-                try? await Task.sleep(nanoseconds: 100_000_000)
-                guard let self else { return }
-                self.pendingFocusRestoreKey = nil
-                self.pendingFocusRestoreFromModelUpdate = false
-                _ = self.visibleAttributeEditorCell(for: cachedEditingKey)?.suppressNextCommitAndEndEditing()
-            }
-            Task { @MainActor [weak self] in
-                try? await Task.sleep(nanoseconds: 700_000_000)
-                guard let self else { return }
-                self.pendingFocusRestoreKey = nil
-                self.pendingFocusRestoreFromModelUpdate = false
-                _ = self.visibleAttributeEditorCell(for: cachedEditingKey)?.suppressNextCommitAndEndEditing()
-            }
+            await self.waitForInlineEditingEnd(for: cachedEditingKey)
+            self.finishDiscardInlineEditingStateUsingViewFallback(for: cachedEditingKey)
         }
+    }
+
+    private func installInlineEditingEndWaiter(
+        for key: ElementAttributeEditingKey
+    ) -> InlineEditingEndWaiter {
+        if let existing = pendingInlineEditingEndWaiters[key] {
+            return existing
+        }
+
+        let waiter = InlineEditingEndWaiter()
+        pendingInlineEditingEndWaiters[key] = waiter
+        return waiter
+    }
+
+    private func finishInlineEditingEndWaiter(for key: ElementAttributeEditingKey) {
+        pendingInlineEditingEndWaiters.removeValue(forKey: key)?.finish()
+    }
+
+    private func waitForInlineEditingEnd(for key: ElementAttributeEditingKey) async {
+        guard let waiter = pendingInlineEditingEndWaiters[key] else {
+            return
+        }
+        await waiter.wait()
+    }
+
+    private func finishDiscardInlineEditingStateUsingViewFallback(
+        for cachedEditingKey: ElementAttributeEditingKey
+    ) {
+        pendingInlineEditingRefreshTask?.cancel()
+        pendingInlineEditingRefreshTask = nil
+        clearInlineEditingState()
+        suppressedInlineCommitKey = cachedEditingKey
+        pendingFocusRestoreKey = nil
+        pendingFocusRestoreFromModelUpdate = false
+        if let liveValue = attributeValue(for: cachedEditingKey),
+           let selectedEntry = inspector.document.selectedNode,
+           let editorCell = visibleAttributeEditorCell(for: cachedEditingKey)
+        {
+            editorCell.configure(
+                key: cachedEditingKey,
+                name: cachedEditingKey.name,
+                value: liveValue,
+                entry: selectedEntry,
+                activateEditor: false,
+                preserveFocusedText: false
+            )
+            _ = editorCell.suppressNextCommitAndEndEditing()
+        }
+        pendingForcedProjectionRefresh = false
+        collectionView?.layoutIfNeeded()
     }
 }
 #endif
@@ -1644,12 +1716,21 @@ private final class ElementAttributeEditorCell: UICollectionViewListCell, UIText
 
     override func prepareForReuse() {
         super.prepareForReuse()
+        let reusedEditingKey = editingKey
+        let shouldSignalEditingEnd = suppressNextCommit && reusedEditingKey != nil
         if valueTextView.isFirstResponder {
             valueTextView.resignFirstResponder()
         }
         suppressNextCommit = false
         debounceTask?.cancel()
         debounceTask = nil
+        if shouldSignalEditingEnd, let reusedEditingKey {
+            delegate?.elementAttributeEditorCellDidEndEditing(
+                self,
+                key: reusedEditingKey,
+                value: valueTextView.text ?? ""
+            )
+        }
         editingKey = nil
     }
 

@@ -196,6 +196,104 @@ extension WIDOMTreeViewController {
         }
         return nil
     }
+
+    func selectedNodeIsVisibleForTesting() async -> Bool? {
+        guard let attachedInspectorWebView,
+              attachedInspectorWebView.superview === inspectorWebViewContainer
+        else {
+            return nil
+        }
+        let rawValue = try? await attachedInspectorWebView.callAsyncJavaScriptCompat(
+            """
+            const tree = document.getElementById('dom-tree');
+            const row = document.querySelector('.tree-node.is-selected .tree-node__row');
+            if (!tree || !row)
+                return null;
+            const rootStyle = getComputedStyle(document.documentElement);
+            const safeTop = Number.parseFloat(rootStyle.getPropertyValue('--wi-safe-area-top')) || 0;
+            const safeBottom = Number.parseFloat(rootStyle.getPropertyValue('--wi-safe-area-bottom')) || 0;
+            const treeRect = tree.getBoundingClientRect();
+            const rowRect = row.getBoundingClientRect();
+            const margin = 8;
+            const visibleTop = treeRect.top + safeTop + margin;
+            const visibleBottom = treeRect.bottom - safeBottom - margin;
+            return rowRect.bottom > visibleTop && rowRect.top < visibleBottom;
+            """,
+            arguments: [:],
+            in: nil,
+            contentWorld: .page
+        )
+        if let value = rawValue as? Bool {
+            return value
+        }
+        if let value = rawValue as? NSNumber {
+            return value.boolValue
+        }
+        return nil
+    }
+
+    func selectedNodeReachesViewportRightEdgeForTesting() async -> Bool? {
+        guard let attachedInspectorWebView,
+              attachedInspectorWebView.superview === inspectorWebViewContainer
+        else {
+            return nil
+        }
+        let rawValue = try? await attachedInspectorWebView.callAsyncJavaScriptCompat(
+            """
+            const tree = document.getElementById('dom-tree');
+            const row = document.querySelector('.tree-node.is-selected .tree-node__row');
+            if (!tree || !row)
+                return null;
+            const treeRect = tree.getBoundingClientRect();
+            const rowRect = row.getBoundingClientRect();
+            return rowRect.right >= treeRect.right - 1;
+            """,
+            arguments: [:],
+            in: nil,
+            contentWorld: .page
+        )
+        if let value = rawValue as? Bool {
+            return value
+        }
+        if let value = rawValue as? NSNumber {
+            return value.boolValue
+        }
+        return nil
+    }
+
+    func setTreeScrollPositionForTesting(left: Double? = nil, top: Double? = nil) async -> Bool {
+        guard let attachedInspectorWebView,
+              attachedInspectorWebView.superview === inspectorWebViewContainer
+        else {
+            return false
+        }
+        let rawValue = try? await attachedInspectorWebView.callAsyncJavaScriptCompat(
+            """
+            const scrollElement = document.scrollingElement || document.documentElement || document.body;
+            if (!scrollElement)
+                return false;
+            if (typeof left === 'number')
+                scrollElement.scrollLeft = left;
+            if (typeof top === 'number')
+                scrollElement.scrollTop = top;
+            window.dispatchEvent(new Event('scroll'));
+            return true;
+            """,
+            arguments: [
+                "left": left.map { NSNumber(value: $0) } ?? NSNull(),
+                "top": top.map { NSNumber(value: $0) } ?? NSNull(),
+            ],
+            in: nil,
+            contentWorld: .page
+        )
+        if let value = rawValue as? Bool {
+            return value
+        }
+        if let value = rawValue as? NSNumber {
+            return value.boolValue
+        }
+        return false
+    }
 }
 #endif
 

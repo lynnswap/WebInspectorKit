@@ -93,6 +93,22 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
         return isShowing(.inspector)
     }
 
+#if DEBUG
+    @_spi(Monocly) public func selectedTreeNodePreviewForDiagnostics() async -> String? {
+        let treeViewController = activeHostKindForTesting == "compact"
+            ? compactRootViewController
+            : domTreeViewController
+        return await treeViewController.selectedNodeTextForTesting()
+    }
+
+    @_spi(Monocly) public func selectedTreeNodeIsVisibleForDiagnostics() async -> Bool? {
+        let treeViewController = activeHostKindForTesting == "compact"
+            ? compactRootViewController
+            : domTreeViewController
+        return await treeViewController.selectedNodeIsVisibleForTesting()
+    }
+#endif
+
     private lazy var pickItem: UIBarButtonItem = {
         let item = UIBarButtonItem(
             image: UIImage(systemName: pickSymbolName),
@@ -151,6 +167,7 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
 
     public override func viewDidLoad() {
         super.viewDidLoad()
+        view.backgroundColor = .clear
 
         registerForTraitChanges([UITraitHorizontalSizeClass.self]) { (self: Self, _) in
             if self.traitCollection.horizontalSizeClass == .compact {
@@ -192,7 +209,7 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
     }
 
     private func updatePickItemAppearance() {
-        pickItem.isEnabled = inspector.hasPageWebView
+        pickItem.isEnabled = inspector.isPageReadyForSelection
         pickItem.image = UIImage(systemName: pickSymbolName)
         pickItem.tintColor = inspector.isSelectingElement ? .systemBlue : .label
     }
@@ -332,6 +349,13 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
         }
         .store(in: &pickItemObservationHandles)
         inspector.observe(
+            \.isPageReadyForSelection,
+            options: [.removeDuplicates]
+        ) { [weak self] _ in
+            self?.updatePickItemAppearance()
+        }
+        .store(in: &pickItemObservationHandles)
+        inspector.observe(
             \.isSelectingElement,
             options: [.removeDuplicates]
         ) { [weak self] _ in
@@ -377,6 +401,7 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
         DOMSecondaryMenuBuilder.makeMenu(
             hasSelection: inspector.document.selectedNode != nil,
             hasPageWebView: inspector.hasPageWebView,
+            canReloadInspector: inspector.isPageReadyForSelection,
             onCopyHTML: { [weak self] in
                 self?.copySelectedHTML()
             },

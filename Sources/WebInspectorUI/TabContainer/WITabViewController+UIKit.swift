@@ -210,6 +210,7 @@ public final class WITabViewController: UIViewController {
 
     public override func viewDidLoad() {
         super.viewDidLoad()
+        view.backgroundColor = .clear
 
         rebuildLayout(forceHostReplacement: true)
 

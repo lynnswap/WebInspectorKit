@@ -43,11 +43,9 @@ import {
 } from "./dom-tree-model";
 import {
     applyFilter,
-    captureTreeScrollPosition,
     reopenSelectionAncestors,
     scheduleNodeRender,
     updateDetails,
-    restoreTreeScrollPosition,
 } from "./dom-tree-view-support";
 
 // =============================================================================
@@ -412,8 +410,6 @@ function refreshTreeAfterDomUpdates(
         return;
     }
 
-    const preservedScrollPosition = hasNodeRefreshes ? captureTreeScrollPosition() : null;
-
     if (hasNodeRefreshes && nodesToRefresh) {
         nodesToRefresh.forEach((entry) => {
             if (entry && entry.node) {
@@ -478,10 +474,6 @@ function refreshTreeAfterDomUpdates(
 
     if (hasNodeRefreshes && treeState.filter) {
         applyFilter();
-    }
-
-    if (hasNodeRefreshes && preservedScrollPosition) {
-        restoreTreeScrollPosition(preservedScrollPosition);
     }
 }
 

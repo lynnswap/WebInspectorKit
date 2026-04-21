@@ -50,7 +50,7 @@ final class BrowserRootViewController: UINavigationController {
         super.viewDidLoad()
         navigationBar.prefersLargeTitles = false
         setNavigationBarHidden(false, animated: false)
-        view.backgroundColor = .systemBackground
+        view.backgroundColor = .clear
     }
 
     override func viewWillAppear(_ animated: Bool) {

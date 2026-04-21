@@ -4,7 +4,8 @@ import {
     DOMTreeUpdater,
     setReloadHandler
 } from "../UI/DOMTree/dom-tree-updates";
-import { renderState, treeState } from "../UI/DOMTree/dom-tree-state";
+import { setSnapshot } from "../UI/DOMTree/dom-tree-snapshot";
+import { dom, renderState, treeState } from "../UI/DOMTree/dom-tree-state";
 import type { DOMEventEntry, DOMNode } from "../UI/DOMTree/dom-tree-types";
 
 function makeNode(id: number, children: DOMNode[] = []): DOMNode {
@@ -27,6 +28,9 @@ function makeNode(id: number, children: DOMNode[] = []): DOMNode {
 }
 
 function resetTreeState() {
+    document.body.innerHTML = "<div id=\"dom-tree\"></div><div id=\"dom-empty\"></div>";
+    dom.tree = null;
+    dom.empty = null;
     treeState.snapshot = null;
     treeState.nodes.clear();
     treeState.elements.clear();
@@ -346,5 +350,44 @@ describe("dom-tree-updates", () => {
 
         vi.advanceTimersByTime(16);
         expect(treeState.styleRevision).toBe(1);
+    });
+
+    it("does not change horizontal scroll position during mutation refresh", () => {
+        setSnapshot({
+            root: {
+                nodeId: 1,
+                nodeType: 1,
+                nodeName: "DIV",
+                localName: "div",
+                attributes: [],
+                childNodeCount: 1,
+                children: [{
+                    nodeId: 2,
+                    nodeType: 1,
+                    nodeName: "SPAN",
+                    localName: "span",
+                    attributes: ["class", "before"],
+                    childNodeCount: 0,
+                    children: [],
+                }],
+            },
+        });
+
+        const tree = document.getElementById("dom-tree") as HTMLDivElement;
+        dom.tree = tree;
+        tree.scrollLeft = 63;
+
+        const updater = new DOMTreeUpdater();
+        updater.enqueueEvents([{
+            method: "DOM.attributeModified",
+            params: {
+                nodeId: 2,
+                name: "class",
+                value: "after",
+            },
+        }]);
+
+        vi.advanceTimersByTime(16);
+        expect(tree.scrollLeft).toBe(63);
     });
 });

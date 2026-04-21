@@ -90,17 +90,18 @@ final class BrowserNavigationChromeTests: XCTestCase {
         XCTAssertTrue(toolbarItems.contains { $0 === pageViewController.backButtonItemForTesting })
         XCTAssertTrue(toolbarItems.contains { $0 === pageViewController.forwardButtonItemForTesting })
         XCTAssertTrue(toolbarItems.contains { $0 === pageViewController.inspectorButtonItemForTesting })
-        XCTAssertTrue(pageViewController.backButtonItemForTesting.customView === pageViewController.backButtonForTesting)
-        XCTAssertTrue(pageViewController.forwardButtonItemForTesting.customView === pageViewController.forwardButtonForTesting)
-        XCTAssertFalse(pageViewController.backButtonForTesting.showsMenuAsPrimaryAction)
-        XCTAssertFalse(pageViewController.forwardButtonForTesting.showsMenuAsPrimaryAction)
-        XCTAssertNil(pageViewController.backButtonForTesting.menu)
-        XCTAssertNil(pageViewController.forwardButtonForTesting.menu)
+        XCTAssertNil(pageViewController.backButtonItemForTesting.customView)
+        XCTAssertNil(pageViewController.forwardButtonItemForTesting.customView)
+        XCTAssertNotNil(pageViewController.backButtonItemForTesting.primaryAction)
+        XCTAssertNotNil(pageViewController.forwardButtonItemForTesting.primaryAction)
+        XCTAssertNil(pageViewController.backButtonItemForTesting.menu)
+        XCTAssertNil(pageViewController.forwardButtonItemForTesting.menu)
         XCTAssertEqual(pageViewController.backButtonItemForTesting.accessibilityIdentifier, "Monocly.navigation.back.compact")
         XCTAssertEqual(pageViewController.forwardButtonItemForTesting.accessibilityIdentifier, "Monocly.navigation.forward.compact")
         XCTAssertEqual(pageViewController.inspectorButtonItemForTesting.accessibilityIdentifier, "Monocly.openInspectorButton.compact")
     }
 
+    @MainActor
     func testViewportChromeTopOverlapRequiresHostTopEdgeIntersection() {
         let hostFrame = CGRect(x: 40, y: 120, width: 320, height: 480)
         let chromeBelowHost = CGRect(x: 40, y: 620, width: 320, height: 44)
@@ -122,6 +123,7 @@ final class BrowserNavigationChromeTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testViewportChromeBottomOverlapRequiresFrameIntersection() {
         let hostFrame = CGRect(x: 40, y: 120, width: 320, height: 480)
         let chromeInDifferentColumn = CGRect(x: 420, y: 560, width: 320, height: 88)
@@ -163,10 +165,10 @@ final class BrowserNavigationChromeTests: XCTestCase {
         XCTAssertTrue(leadingItems.contains { $0 === pageViewController.backButtonItemForTesting })
         XCTAssertTrue(leadingItems.contains { $0 === pageViewController.forwardButtonItemForTesting })
         XCTAssertTrue(trailingItems.contains { $0 === pageViewController.inspectorButtonItemForTesting })
-        XCTAssertTrue(pageViewController.backButtonItemForTesting.customView === pageViewController.backButtonForTesting)
-        XCTAssertTrue(pageViewController.forwardButtonItemForTesting.customView === pageViewController.forwardButtonForTesting)
-        XCTAssertFalse(pageViewController.backButtonForTesting.showsMenuAsPrimaryAction)
-        XCTAssertFalse(pageViewController.forwardButtonForTesting.showsMenuAsPrimaryAction)
+        XCTAssertNil(pageViewController.backButtonItemForTesting.customView)
+        XCTAssertNil(pageViewController.forwardButtonItemForTesting.customView)
+        XCTAssertNotNil(pageViewController.backButtonItemForTesting.primaryAction)
+        XCTAssertNotNil(pageViewController.forwardButtonItemForTesting.primaryAction)
         XCTAssertEqual(pageViewController.backButtonItemForTesting.accessibilityIdentifier, "Monocly.navigation.back.regular")
         XCTAssertEqual(pageViewController.forwardButtonItemForTesting.accessibilityIdentifier, "Monocly.navigation.forward.regular")
         XCTAssertEqual(pageViewController.inspectorButtonItemForTesting.accessibilityIdentifier, "Monocly.openInspectorButton.regular")
@@ -331,6 +333,65 @@ final class BrowserNavigationChromeTests: XCTestCase {
         XCTAssertNotNil(inspectorContainer.presentationController?.delegate)
 
         dismissPresentedInspector(from: rootViewController)
+    }
+
+    @MainActor
+    func testInspectorSheetHostingControllerUsesClearBackground() {
+        let browserStore = BrowserStore(
+            url: URL(string: "about:blank")!,
+            automaticallyLoadsInitialRequest: false
+        )
+        let controller = BrowserInspectorSheetHostingController(
+            browserStore: browserStore,
+            inspectorController: WIInspectorController(),
+            launchConfiguration: BrowserLaunchConfiguration(
+                initialURL: URL(string: "about:blank")!,
+                shouldShowDiagnostics: true,
+                uiTestScenario: .domOpenInspectorAfterInitialLoad
+            ),
+            tabs: [.dom()]
+        )
+
+        controller.loadViewIfNeeded()
+
+        XCTAssertEqual(controller.view.backgroundColor, .clear)
+    }
+
+    @MainActor
+    func testBrowserControllersUseClearBackgroundWithoutSystemFallback() throws {
+        let fixture = try makeHostedRootViewController()
+
+        XCTAssertEqual(fixture.rootViewController.view.backgroundColor, .clear)
+        XCTAssertEqual(
+            fixture.pageViewController.view.backgroundColor,
+            fixture.rootViewController.store.underPageBackgroundColor
+        )
+
+        let inspectorWindowController = BrowserInspectorWindowHostingController()
+        inspectorWindowController.loadViewIfNeeded()
+
+        XCTAssertEqual(inspectorWindowController.view.backgroundColor, .clear)
+    }
+
+    @MainActor
+    func testPageViewControllerUsesUnderPageBackgroundColorWhenProvided() {
+        let store = BrowserStore(
+            url: URL(string: "about:blank")!,
+            automaticallyLoadsInitialRequest: false
+        )
+        store.underPageBackgroundColor = .systemRed
+
+        let controller = BrowserPageViewController(
+            store: store,
+            inspectorController: WIInspectorController(),
+            launchConfiguration: BrowserLaunchConfiguration(
+                initialURL: URL(string: "about:blank")!
+            )
+        )
+
+        controller.loadViewIfNeeded()
+
+        XCTAssertEqual(controller.view.backgroundColor, .systemRed)
     }
 
     @MainActor
@@ -771,7 +832,7 @@ final class BrowserNavigationChromeTests: XCTestCase {
         XCTAssertEqual(store.currentURL, firstURL)
         XCTAssertFalse(store.canGoBack)
         XCTAssertTrue(store.canGoForward)
-        XCTAssertTrue(pageViewController.forwardButtonForTesting.menu != nil)
+        XCTAssertTrue(pageViewController.forwardButtonItemForTesting.menu != nil)
     }
 
     @MainActor

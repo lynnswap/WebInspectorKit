@@ -63,6 +63,16 @@ typedef NS_ERROR_ENUM(WIKRuntimeBridgeErrorDomain, WIKRuntimeBridgeErrorCode) {
                             name:(NSString *)name
                     contentWorld:(WKContentWorld *)contentWorld;
 
+#if TARGET_OS_IPHONE
++ (nullable NSObject *)inspectorForWebView:(WKWebView *)webView;
++ (nullable NSNumber *)inspectorElementSelectionActiveForWebView:(WKWebView *)webView;
++ (BOOL)canEnableInspectorNodeSearchForWebView:(WKWebView *)webView;
++ (BOOL)enableInspectorNodeSearchForWebView:(WKWebView *)webView;
++ (BOOL)disableInspectorNodeSearchForWebView:(WKWebView *)webView;
++ (BOOL)hasInspectorNodeSearchRecognizerForWebView:(WKWebView *)webView;
++ (BOOL)removeInspectorNodeSearchRecognizersFromWebView:(WKWebView *)webView;
+#endif
+
 #if TARGET_OS_OSX
 + (nullable NSWindow *)windowForView:(NSView *)view;
 + (nullable NSView *)menuToolbarControlFromItem:(NSMenuToolbarItem *)item;

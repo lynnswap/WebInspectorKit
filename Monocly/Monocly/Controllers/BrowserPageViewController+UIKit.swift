@@ -39,10 +39,10 @@ final class BrowserPageViewController: UIViewController {
         target: nil,
         action: nil
     )
-    private lazy var backButton = makeNavigationHistoryButton(systemImageName: "chevron.left") { [weak self] in
+    private lazy var backNavigationAction = UIAction { [weak self] _ in
         self?.store.goBack()
     }
-    private lazy var forwardButton = makeNavigationHistoryButton(systemImageName: "chevron.right") { [weak self] in
+    private lazy var forwardNavigationAction = UIAction { [weak self] _ in
         self?.store.goForward()
     }
     private lazy var diagnosticsPanel = BrowserDiagnosticsOverlayView()
@@ -146,7 +146,7 @@ final class BrowserPageViewController: UIViewController {
     }
 
     private func configureViewHierarchy() {
-        view.backgroundColor = .systemBackground
+        view.backgroundColor = store.underPageBackgroundColor ?? .clear
 
         let webView = store.webView
         webView.translatesAutoresizingMaskIntoConstraints = false
@@ -199,39 +199,16 @@ final class BrowserPageViewController: UIViewController {
 
         configureNavigationHistoryButtonItem(
             backButtonItem,
-            button: backButton
+            action: backNavigationAction
         )
         configureNavigationHistoryButtonItem(
             forwardButtonItem,
-            button: forwardButton
+            action: forwardNavigationAction
         )
         configureNavigationButtonItem(inspectorButtonItem)
         refreshChromeControls()
 
         applyChromePlacement(force: true)
-    }
-
-    private func makeNavigationHistoryButton(
-        systemImageName: String,
-        action: @escaping () -> Void
-    ) -> UIButton {
-        var configuration = UIButton.Configuration.plain()
-        configuration.image = UIImage(systemName: systemImageName)
-        configuration.contentInsets = NSDirectionalEdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 8)
-        configuration.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 17, weight: .regular)
-
-        let button = UIButton(type: .system)
-        button.configuration = configuration
-        button.bounds.size = CGSize(width: 32, height: 32)
-        button.showsMenuAsPrimaryAction = false
-        button.preferredMenuElementOrder = .fixed
-        button.addAction(
-            UIAction { _ in
-                action()
-            },
-            for: .primaryActionTriggered
-        )
-        return button
     }
 
     private func configureNavigationButtonItem(
@@ -252,13 +229,14 @@ final class BrowserPageViewController: UIViewController {
 
     private func configureNavigationHistoryButtonItem(
         _ item: UIBarButtonItem,
-        button: UIButton
+        action: UIAction
     ) {
         item.target = nil
         item.action = nil
-        item.primaryAction = nil
+        item.primaryAction = action
         item.menu = nil
-        item.customView = button
+        item.customView = nil
+        item.preferredMenuElementOrder = .fixed
         item.accessibilityIdentifier = nil
     }
 
@@ -275,18 +253,16 @@ final class BrowserPageViewController: UIViewController {
 
         let backIdentifier = "Monocly.navigation.back.\(suffix)"
         backButtonItem.accessibilityIdentifier = backIdentifier
-        backButton.accessibilityIdentifier = backIdentifier
 
         let forwardIdentifier = "Monocly.navigation.forward.\(suffix)"
         forwardButtonItem.accessibilityIdentifier = forwardIdentifier
-        forwardButton.accessibilityIdentifier = forwardIdentifier
 
         inspectorButtonItem.accessibilityIdentifier = "Monocly.openInspectorButton.\(suffix)"
     }
 
     private func refreshNavigationHistoryMenus(for placement: ChromePlacement) {
-        backButton.menu = makeHistoryMenu(direction: .back, placement: placement)
-        forwardButton.menu = makeHistoryMenu(direction: .forward, placement: placement)
+        backButtonItem.menu = makeHistoryMenu(direction: .back, placement: placement)
+        forwardButtonItem.menu = makeHistoryMenu(direction: .forward, placement: placement)
     }
 
     private func makeHistoryMenu(direction: BrowserHistoryDirection, placement: ChromePlacement) -> UIMenu? {
@@ -450,8 +426,6 @@ final class BrowserPageViewController: UIViewController {
 
         backButtonItem.isEnabled = canGoBack
         forwardButtonItem.isEnabled = canGoForward
-        backButton.isEnabled = canGoBack
-        forwardButton.isEnabled = canGoForward
         inspectorButtonItem.isEnabled = canOpenInspector
     }
 
@@ -468,7 +442,7 @@ final class BrowserPageViewController: UIViewController {
         progressView.isHidden = progressIsVisible == false
         progressHeightConstraint?.constant = progressIsVisible ? 2 : 0
 
-        view.backgroundColor = store.underPageBackgroundColor ?? .systemBackground
+        view.backgroundColor = store.underPageBackgroundColor ?? .clear
 
         if launchConfiguration.shouldShowDiagnostics {
             diagnosticsPanel.update(with: store)
@@ -568,16 +542,8 @@ final class BrowserPageViewController: UIViewController {
         backButtonItem
     }
 
-    var backButtonForTesting: UIButton {
-        backButton
-    }
-
     var forwardButtonItemForTesting: UIBarButtonItem {
         forwardButtonItem
-    }
-
-    var forwardButtonForTesting: UIButton {
-        forwardButton
     }
 
     var inspectorButtonItemForTesting: UIBarButtonItem {
@@ -585,27 +551,27 @@ final class BrowserPageViewController: UIViewController {
     }
 
     var backMenuActionTitlesForTesting: [String] {
-        backButton.menu?.children.compactMap { ($0 as? UIAction)?.title } ?? []
+        backButtonItem.menu?.children.compactMap { ($0 as? UIAction)?.title } ?? []
     }
 
     var backMenuForTesting: UIMenu? {
-        backButton.menu
+        backButtonItem.menu
     }
 
     var backMenuActionSubtitlesForTesting: [String?] {
-        backButton.menu?.children.compactMap { ($0 as? UIAction)?.subtitle } ?? []
+        backButtonItem.menu?.children.compactMap { ($0 as? UIAction)?.subtitle } ?? []
     }
 
     var forwardMenuActionTitlesForTesting: [String] {
-        forwardButton.menu?.children.compactMap { ($0 as? UIAction)?.title } ?? []
+        forwardButtonItem.menu?.children.compactMap { ($0 as? UIAction)?.title } ?? []
     }
 
     var forwardMenuForTesting: UIMenu? {
-        forwardButton.menu
+        forwardButtonItem.menu
     }
 
     var forwardMenuActionSubtitlesForTesting: [String?] {
-        forwardButton.menu?.children.compactMap { ($0 as? UIAction)?.subtitle } ?? []
+        forwardButtonItem.menu?.children.compactMap { ($0 as? UIAction)?.subtitle } ?? []
     }
 
     var inspectorMenuActionTitlesForTesting: [String] {

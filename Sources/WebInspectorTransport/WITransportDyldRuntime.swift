@@ -22,14 +22,17 @@ import MachO
         fallbackHandle,
     ]
 
+    // _dyld_get_shared_cache_range
     private static let sharedCacheRangeFunction = unsafe resolveSymbol(
         named: deobfuscate(["_range", "_cache", "_shared", "_get", "dyld", "_"]),
         as: SharedCacheRangeFunction.self
     )
+    // dyld_image_header_containing_address
     private static let imageHeaderContainingAddressFunction = unsafe resolveSymbol(
         named: deobfuscate(["_address", "_containing", "_header", "_image", "dyld"]),
         as: ImageHeaderContainingAddressFunction.self
     )
+    // dyld_shared_cache_file_path
     private static let sharedCacheFilePathFunction = unsafe resolveSymbol(
         named: deobfuscate(["_path", "_file", "_cache", "_shared", "dyld"]),
         as: SharedCacheFilePathFunction.self
@@ -71,6 +74,18 @@ import MachO
             return nil
         }
         return unsafe String(cString: path)
+    }
+
+    static func symbolAddress(named symbolName: String) -> UInt64? {
+        var iterator = unsafe symbolSearchHandles.makeIterator()
+        while let candidate = unsafe iterator.next() {
+            guard let handle = unsafe candidate,
+                  let symbol = unsafe dlsym(handle, symbolName) else {
+                continue
+            }
+            return UInt64(UInt(bitPattern: symbol))
+        }
+        return nil
     }
 
     private static func deobfuscate(_ reverseTokens: [String]) -> String {

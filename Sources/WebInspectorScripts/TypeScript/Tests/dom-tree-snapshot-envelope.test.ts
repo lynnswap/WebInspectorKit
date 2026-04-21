@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { setSnapshot } from "../UI/DOMTree/dom-tree-snapshot";
-import { protocolState, treeState } from "../UI/DOMTree/dom-tree-state";
+import { dom, protocolState, treeState } from "../UI/DOMTree/dom-tree-state";
 
 function resetState(): void {
     document.body.innerHTML = "<div id=\"dom-tree\"></div><div id=\"dom-empty\"></div>";
+    dom.tree = null;
+    dom.empty = null;
     treeState.snapshot = null;
     treeState.nodes.clear();
     treeState.elements.clear();
@@ -60,5 +62,49 @@ describe("dom-tree-snapshot-envelope", () => {
 
         expect(didApply).toBe(false);
         expect(treeState.snapshot).toBeNull();
+    });
+
+    it("preserves vertical scroll only when applying a preserved snapshot", () => {
+        setSnapshot({
+            root: {
+                nodeId: 11,
+                nodeType: 1,
+                nodeName: "MAIN",
+                localName: "main",
+                attributes: ["id", "root"],
+                childNodeCount: 0,
+                children: [],
+            },
+        });
+
+        const tree = document.getElementById("dom-tree") as HTMLDivElement;
+        document.documentElement.scrollTop = 120;
+        document.documentElement.scrollLeft = 75;
+
+        const originalAppendChild = tree.appendChild.bind(tree);
+        tree.appendChild = ((node: Node) => {
+            document.documentElement.scrollTop = 7;
+            document.documentElement.scrollLeft = 5;
+            return originalAppendChild(node);
+        }) as typeof tree.appendChild;
+
+        try {
+            setSnapshot({
+                root: {
+                    nodeId: 22,
+                    nodeType: 1,
+                    nodeName: "SECTION",
+                    localName: "section",
+                    attributes: ["id", "next"],
+                    childNodeCount: 0,
+                    children: [],
+                },
+            }, { preserveState: true });
+        } finally {
+            tree.appendChild = originalAppendChild;
+        }
+
+        expect(document.documentElement.scrollTop).toBe(120);
+        expect(document.documentElement.scrollLeft).toBe(75);
     });
 });

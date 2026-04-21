@@ -36,6 +36,7 @@ struct DOMTreeRenderTests {
         #expect(!treeText.contains("#document"))
         #expect(treeText.localizedCaseInsensitiveContains("<!DOCTYPE html>"))
         #expect(treeText.localizedCaseInsensitiveContains("html"))
+
     }
 
     @Test
@@ -133,6 +134,50 @@ struct DOMTreeRenderTests {
         #expect(selectedTreeText.localizedCaseInsensitiveContains("body"))
         #expect(detailPreview == "<body>")
     }
+
+    @Test
+    func selectedRowBackgroundReachesViewportTrailingEdgeAfterHorizontalScroll() async throws {
+        let inspector = WIDOMInspector()
+        let (viewController, window) = makeHostedTreeViewController(inspector: inspector)
+        defer { tearDown(window: window) }
+
+        let ready = await waitUntilAsync {
+            await viewController.frontendIsReadyForTesting()
+        }
+        #expect(ready)
+
+        inspector.inspectorBridge.updateBootstrap(makeBootstrapPayload(contextID: 1))
+        await inspector.inspectorBridge.applyFullSnapshot(
+            makeScrollableDocumentPayload(
+                nodeCount: 8,
+                wideNodeID: 108
+            ),
+            contextID: 1
+        )
+
+        let rendered = await waitUntilAsync {
+            guard let text = await viewController.treeTextContentForTesting() else {
+                return false
+            }
+            return text.contains("node-8")
+        }
+        #expect(rendered)
+
+        await inspector.inspectorBridge.applySelectionPayload(["id": 108], contextID: 1)
+        let selected = await waitUntilAsync {
+            await viewController.selectedNodeIDForTesting() == 108
+        }
+        #expect(selected)
+
+        let scrolled = await viewController.setTreeScrollPositionForTesting(left: 180)
+        #expect(scrolled)
+
+        let reachesViewportEdge = await waitUntilAsync {
+            await viewController.selectedNodeReachesViewportRightEdgeForTesting() == true
+        }
+        #expect(reachesViewportEdge)
+    }
+
 }
 
 @MainActor
@@ -265,6 +310,66 @@ private extension DOMTreeRenderTests {
         ]
     }
 
+    func makeScrollableDocumentPayload(
+        nodeCount: Int,
+        wideNodeID: Int?
+    ) -> [String: Any] {
+        let bodyChildren: [[String: Any]] = (0..<nodeCount).map { index in
+            let nodeID = 101 + index
+            let attributes: [String]
+            if nodeID == wideNodeID {
+                attributes = [
+                    "class",
+                    "node-\(index + 1) viewport-width-selection-background-check " + String(repeating: "wide-token-", count: 18),
+                ]
+            } else {
+                attributes = [
+                    "class",
+                    "node-\(index + 1)",
+                ]
+            }
+            return [
+                "nodeId": nodeID,
+                "nodeType": 1,
+                "nodeName": "DIV",
+                "localName": "div",
+                "nodeValue": "",
+                "attributes": attributes,
+                "childNodeCount": 0,
+                "children": [],
+            ]
+        }
+
+        return [
+            "root": [
+                "nodeId": 1,
+                "nodeType": 9,
+                "nodeName": "#document",
+                "localName": "",
+                "nodeValue": "",
+                "documentURL": "https://example.com/scrollable",
+                "childNodeCount": 1,
+                "children": [[
+                    "nodeId": 2,
+                    "nodeType": 1,
+                    "nodeName": "HTML",
+                    "localName": "html",
+                    "nodeValue": "",
+                    "childNodeCount": 1,
+                    "children": [[
+                        "nodeId": 3,
+                        "nodeType": 1,
+                        "nodeName": "BODY",
+                        "localName": "body",
+                        "nodeValue": "",
+                        "childNodeCount": bodyChildren.count,
+                        "children": bodyChildren,
+                    ]],
+                ]],
+            ],
+        ]
+    }
+
     func makeGraphSnapshot() -> DOMGraphSnapshot {
         .init(
             root: .init(
@@ -337,6 +442,75 @@ private extension DOMTreeRenderTests {
             ),
             selectedLocalID: 6
         )
+    }
+
+    func makeShallowDocumentPayload(bodyChildCount: Int) -> [String: Any] {
+        [
+            "root": [
+                "nodeId": 1,
+                "nodeType": 9,
+                "nodeName": "#document",
+                "localName": "",
+                "nodeValue": "",
+                "childNodeCount": 1,
+                "children": [
+                    [
+                        "nodeId": 2,
+                        "nodeType": 1,
+                        "nodeName": "HTML",
+                        "localName": "html",
+                        "nodeValue": "",
+                        "attributes": ["lang", "en"],
+                        "childNodeCount": 2,
+                        "children": [
+                            [
+                                "nodeId": 3,
+                                "nodeType": 1,
+                                "nodeName": "HEAD",
+                                "localName": "head",
+                                "nodeValue": "",
+                                "childNodeCount": 0,
+                                "children": [],
+                            ],
+                            [
+                                "nodeId": 4,
+                                "nodeType": 1,
+                                "nodeName": "BODY",
+                                "localName": "body",
+                                "nodeValue": "",
+                                "childNodeCount": bodyChildCount,
+                                "children": [],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+        ]
+    }
+
+    func makeBodySubtreePayload(childCount: Int) -> [String: Any] {
+        let children = (0..<childCount).map { index in
+            [
+                "nodeId": 200 + index,
+                "nodeType": 1,
+                "nodeName": "DIV",
+                "localName": "div",
+                "nodeValue": "",
+                "attributes": ["id", "item-\(index)"],
+                "childNodeCount": 0,
+                "children": [],
+            ]
+        }
+
+        return [
+            "nodeId": 4,
+            "nodeType": 1,
+            "nodeName": "BODY",
+            "localName": "body",
+            "nodeValue": "",
+            "childNodeCount": childCount,
+            "children": children,
+        ]
     }
 
     func makeSelectionPayload(

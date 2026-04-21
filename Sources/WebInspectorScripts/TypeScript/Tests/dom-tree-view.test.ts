@@ -1,8 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+let nextContextID = 1;
+
 async function resetEnvironment(): Promise<typeof import("../UI/DOMTree/dom-tree-state")> {
     const state = await import("../UI/DOMTree/dom-tree-state");
     const { dom, protocolState, treeState } = state;
+    const contextID = nextContextID;
+    nextContextID += 1;
+    const frontend =
+        window.webInspectorDOMFrontend as ({ updateBootstrap?: (bootstrap: unknown) => void } | undefined);
     document.body.innerHTML = "<div id=\"dom-tree\"></div><div id=\"dom-empty\"></div>";
     dom.tree = null;
     dom.empty = null;
@@ -20,7 +26,9 @@ async function resetEnvironment(): Promise<typeof import("../UI/DOMTree/dom-tree
     treeState.selectionRecoveryRequestKeys.clear();
     protocolState.snapshotDepth = 4;
     protocolState.subtreeDepth = 3;
-    protocolState.contextID = 1;
+    if (!frontend?.updateBootstrap) {
+        protocolState.contextID = contextID;
+    }
     window.webkit = {
         messageHandlers: {
             webInspectorReady: { postMessage: vi.fn() },
@@ -32,12 +40,11 @@ async function resetEnvironment(): Promise<typeof import("../UI/DOMTree/dom-tree
         },
     } as never;
     const bootstrap = {
-        context: { contextID: 1 },
+        context: { contextID },
         config: { snapshotDepth: 4, subtreeDepth: 3 },
     };
     (window as Window & { __wiDOMFrontendBootstrap?: unknown }).__wiDOMFrontendBootstrap = bootstrap;
-    (window.webInspectorDOMFrontend as { updateBootstrap?: (bootstrap: unknown) => void } | undefined)
-        ?.updateBootstrap?.(bootstrap);
+    frontend?.updateBootstrap?.(bootstrap);
     return state;
 }
 
@@ -53,7 +60,7 @@ describe("dom-tree-view", () => {
     });
 
     it("applies a same-context full snapshot", async () => {
-        const { treeState } = await import("../UI/DOMTree/dom-tree-state");
+        const { protocolState, treeState } = await import("../UI/DOMTree/dom-tree-state");
         await import("../UI/DOMTree/dom-tree-view");
 
         window.webInspectorDOMFrontend?.applyFullSnapshot?.({
@@ -65,7 +72,7 @@ describe("dom-tree-view", () => {
                 attributes: ["class", "ready"],
                 children: [],
             }
-        }, 1);
+        }, protocolState.contextID);
 
         expect(treeState.snapshot?.root?.attributes?.find((attribute) => attribute.name === "class")?.value).toBe("ready");
     });
@@ -89,7 +96,7 @@ describe("dom-tree-view", () => {
     });
 
     it("renders document snapshots without a #document row", async () => {
-        const { treeState } = await import("../UI/DOMTree/dom-tree-state");
+        const { protocolState, treeState } = await import("../UI/DOMTree/dom-tree-state");
         await import("../UI/DOMTree/dom-tree-view");
 
         window.webInspectorDOMFrontend?.applyFullSnapshot?.({
@@ -146,7 +153,7 @@ describe("dom-tree-view", () => {
                     },
                 ],
             },
-        }, 1);
+        }, protocolState.contextID);
 
         expect(treeState.snapshot?.root?.nodeName).toBe("#document");
         expect(document.getElementById("dom-tree")?.textContent).not.toContain("#document");
@@ -156,12 +163,15 @@ describe("dom-tree-view", () => {
         expect(names).toContain("<html");
         expect(names).toContain("<body");
         expect(names).toContain("<main");
+        expect(document.querySelector(".tree-node[data-node-id='10'] .tree-node__disclosure-spacer")).toBeNull();
+        expect(document.querySelector(".tree-node[data-node-id='10'] .tree-node__disclosure")).toBeNull();
         expect(document.querySelector(".tree-node__attribute")?.textContent).toBe(" lang");
         expect(document.querySelector(".tree-node__value")?.textContent).toBe("=\"ja\"");
         expect(document.querySelector(".tree-node.is-unrendered")).toBeNull();
     });
 
     it("does not render placeholder rows for partially loaded nodes", async () => {
+        const { protocolState } = await import("../UI/DOMTree/dom-tree-state");
         await import("../UI/DOMTree/dom-tree-view");
 
         window.webInspectorDOMFrontend?.applyFullSnapshot?.({
@@ -183,7 +193,7 @@ describe("dom-tree-view", () => {
                     },
                 ],
             },
-        }, 1);
+        }, protocolState.contextID);
 
         const treeText = document.getElementById("dom-tree")?.textContent ?? "";
         expect(treeText).not.toContain("Load");
@@ -201,12 +211,43 @@ describe("dom-tree-view", () => {
         expect(requestHandler).toHaveBeenCalledWith({
             nodeId: 2,
             depth: 3,
-            contextID: 1,
+            contextID: protocolState.contextID,
         });
     });
 
+    it("does not request children for nodes expanded only by default depth rules", async () => {
+        const { protocolState, treeState } = await import("../UI/DOMTree/dom-tree-state");
+        await import("../UI/DOMTree/dom-tree-view");
+
+        window.webInspectorDOMFrontend?.applyFullSnapshot?.({
+            root: {
+                nodeId: 1,
+                nodeType: 9,
+                nodeName: "#document",
+                localName: "",
+                childNodeCount: 1,
+                children: [
+                    {
+                        nodeId: 2,
+                        nodeType: 1,
+                        nodeName: "HTML",
+                        localName: "html",
+                        attributes: ["lang", "ja"],
+                        childNodeCount: 1,
+                        children: [],
+                    },
+                ],
+            },
+        }, protocolState.contextID);
+
+        await Promise.resolve();
+
+        const requestHandler = window.webkit?.messageHandlers?.webInspectorDomRequestChildren?.postMessage as ReturnType<typeof vi.fn>;
+        expect(requestHandler).not.toHaveBeenCalled();
+    });
+
     it("drops inspector overlay nodes from the rendered tree", async () => {
-        const { treeState } = await import("../UI/DOMTree/dom-tree-state");
+        const { protocolState, treeState } = await import("../UI/DOMTree/dom-tree-state");
         await import("../UI/DOMTree/dom-tree-view");
 
         window.webInspectorDOMFrontend?.applyFullSnapshot?.({
@@ -245,7 +286,7 @@ describe("dom-tree-view", () => {
                     },
                 ],
             },
-        }, 1);
+        }, protocolState.contextID);
 
         expect(treeState.nodes.has(90)).toBe(false);
         expect(document.getElementById("dom-tree")?.textContent).not.toContain("data-web-inspector-overlay");
@@ -273,5 +314,17 @@ describe("dom-tree-view", () => {
 
         expect(readyHandler).toHaveBeenCalledTimes(1);
         expect(readyHandler).toHaveBeenCalledWith({ contextID: 9 });
+    });
+
+    it("clears transient hover state when native pointer disconnect is reported", async () => {
+        await import("../UI/DOMTree/dom-tree-view");
+
+        (window as Window & { __wiLastDOMTreeHoveredNodeId?: number | null }).__wiLastDOMTreeHoveredNodeId = 7;
+        const hideHighlightHandler = window.webkit?.messageHandlers?.webInspectorDomHideHighlight?.postMessage as ReturnType<typeof vi.fn>;
+
+        window.webInspectorDOMFrontend?.clearPointerHoverState?.();
+
+        expect((window as Window & { __wiLastDOMTreeHoveredNodeId?: number | null }).__wiLastDOMTreeHoveredNodeId).toBeNull();
+        expect(hideHighlightHandler).not.toHaveBeenCalled();
     });
 });

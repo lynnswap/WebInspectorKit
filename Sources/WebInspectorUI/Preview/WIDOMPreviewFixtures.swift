@@ -352,4 +352,5 @@ private final class WIDOMPreviewPageLoader: NSObject, WKNavigationDelegate {
     </html>
     """
 }
+
 #endif

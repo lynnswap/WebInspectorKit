@@ -38,6 +38,7 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        view.backgroundColor = .clear
         delegate = self
         tabBar.scrollEdgeAppearance = tabBar.standardAppearance
         rebuildNativeTabsIfPossible()
@@ -188,8 +189,8 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
     }
 
     private func applyUserSelection(selectedTab: WITab) {
-        inspector.setPreferredCompactSelectedTabIdentifier(selectedTab.identifier)
         inspector.setSelectedTab(selectedTab)
+        inspector.setPreferredCompactSelectedTabIdentifier(selectedTab.identifier)
     }
 
     private func restoreModelSelectionIfNeeded(displayTabs: [WITab]) {
