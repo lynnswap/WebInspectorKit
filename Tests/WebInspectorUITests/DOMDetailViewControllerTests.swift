@@ -615,6 +615,47 @@ struct DOMDetailViewControllerTests {
     }
 
     @Test
+    func detailViewDiscardFallbackCompletesWhenEditedCellIsReused() async throws {
+        let inspector = makeInspector(
+            selectedLocalID: 42,
+            preview: "<div>",
+            selectorPath: "#target",
+            attributes: [DOMAttribute(nodeId: 42, name: "class", value: "before")],
+            extraTreeChildren: [makeNode(localID: 77, attributes: [DOMAttribute(nodeId: 77, name: "class", value: "other")])]
+        )
+        let (viewController, window) = makeHostedDetailViewController(inspector: inspector)
+        defer { tearDown(window: window) }
+
+        let collectionView = try #require(viewController.collectionView)
+        let textView = try #require(await waitForVisibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)))
+
+        let didBeginEditing = await beginEditing(textView)
+        #expect(didBeginEditing)
+
+        textView.text = "draft"
+        textView.delegate?.textViewDidChange?(textView)
+
+        viewController.discardInlineEditingStateUsingViewFallbackForTesting()
+        inspector.document.applySelectionSnapshot(
+            makeSelectionSnapshot(
+                localID: 77,
+                preview: "<div class=\"other\">",
+                attributes: [DOMAttribute(nodeId: 77, name: "class", value: "other")],
+                selectorPath: "#other"
+            )
+        )
+
+        let rebuiltStateSettles = await waitUntil {
+            guard let currentTextView = self.visibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)) else {
+                return false
+            }
+            return currentTextView.text == "other" && currentTextView.isFirstResponder == false
+        }
+
+        #expect(rebuiltStateSettles)
+    }
+
+    @Test
     func detailViewClearsStaleInlineEditingFlagWhenVisibleEditorIsNotFirstResponder() async throws {
         let inspector = makeInspector(
             selectedLocalID: 42,

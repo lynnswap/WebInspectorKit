@@ -1907,6 +1907,7 @@ private extension WIDOMInspector {
         guard currentContext?.contextID == contextID else {
             return
         }
+        acceptsInspectEvents = false
         logSelectionDiagnostics(
             "handleInspectEvent received transport inspect",
             extra: "nodeID=\(nodeID) contextID=\(contextID) generation=\(selectionGeneration)"
@@ -1933,6 +1934,7 @@ private extension WIDOMInspector {
             return
         }
 
+        acceptsInspectEvents = false
         await completeInspectModeAfterBackendSelection()
         guard let transaction = selectionTransaction(for: contextID) else {
             return

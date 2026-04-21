@@ -930,6 +930,9 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     private func clearInlineEditingState() {
         let clearedKey = editingAttributeKey
         editingAttributeKey = nil
+        if let clearedKey {
+            finishInlineEditingEndWaiter(for: clearedKey)
+        }
         if pendingFocusRestoreKey == clearedKey {
             pendingFocusRestoreKey = nil
             pendingFocusRestoreGeneration = nil
@@ -1713,12 +1716,21 @@ private final class ElementAttributeEditorCell: UICollectionViewListCell, UIText
 
     override func prepareForReuse() {
         super.prepareForReuse()
+        let reusedEditingKey = editingKey
+        let shouldSignalEditingEnd = suppressNextCommit && reusedEditingKey != nil
         if valueTextView.isFirstResponder {
             valueTextView.resignFirstResponder()
         }
         suppressNextCommit = false
         debounceTask?.cancel()
         debounceTask = nil
+        if shouldSignalEditingEnd, let reusedEditingKey {
+            delegate?.elementAttributeEditorCellDidEndEditing(
+                self,
+                key: reusedEditingKey,
+                value: valueTextView.text ?? ""
+            )
+        }
         editingKey = nil
     }
 

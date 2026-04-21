@@ -1144,6 +1144,73 @@ struct WIDOMInspectorTests {
     }
 
     @Test
+    func laterInspectCallbacksAreIgnoredAfterFirstBackendHit() async throws {
+        var requestedObjectIDs: [String] = []
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, payload, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(
+                        url: "https://example.com/a",
+                        mainChildren: [[
+                            "nodeId": 6,
+                            "backendNodeId": 6,
+                            "nodeType": 1,
+                            "nodeName": "A",
+                            "localName": "a",
+                            "nodeValue": "",
+                            "attributes": ["href", "/target"],
+                            "childNodeCount": 0,
+                            "children": [],
+                        ]]
+                    )
+                case WITransportMethod.DOM.setInspectModeEnabled:
+                    return [:]
+                case WITransportMethod.DOM.requestNode:
+                    let params = runtimeTestDictionaryValue(payload["params"])
+                    if let objectID = params?["objectId"] as? String {
+                        requestedObjectIDs.append(objectID)
+                    }
+                    return [:]
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        try await inspector.beginSelectionMode()
+        backend.emitPageEvent(method: "DOM.inspect", params: ["nodeId": 6])
+        backend.emitRootEvent(
+            method: "Inspector.inspect",
+            params: [
+                "object": [
+                    "type": "object",
+                    "subtype": "node",
+                    "objectId": "bad-node-object",
+                ],
+                "hints": [:],
+            ]
+        )
+
+        let selected = await waitForCondition {
+            inspector.document.selectedNode?.localID == 6
+                && inspector.document.errorMessage == nil
+                && inspector.isSelectingElement == false
+        }
+        #expect(selected)
+        #expect(requestedObjectIDs.isEmpty)
+    }
+
+    @Test
     func inspectorInspectMaterializesSelectedNodeFromRequestedNode() async throws {
         let backend = FakeDOMTransportBackend()
         backend.pageResultProvider = { method, _, _ in
@@ -1466,7 +1533,7 @@ struct WIDOMInspectorTests {
     }
 
     @Test
-    func domAndInspectorInspectSharePendingResolutionWithoutDuplicatingChildRequests() async throws {
+    func laterInspectorInspectCallbacksAreIgnoredWhileDOMInspectMaterializesSelection() async throws {
         var requestedNodeIDs: [Int] = []
         var requestedObjectIDs: [String] = []
         let backend = FakeDOMTransportBackend()
@@ -1530,10 +1597,10 @@ struct WIDOMInspectorTests {
             ]
         )
 
-        let didResolveRemoteObject = await waitForCondition {
-            requestedObjectIDs == ["node-object-6"] && requestedNodeIDs == [3]
+        let ignoredLaterInspectCallback = await waitForCondition {
+            requestedObjectIDs.isEmpty && requestedNodeIDs == [3]
         }
-        #expect(didResolveRemoteObject)
+        #expect(ignoredLaterInspectCallback)
 
         backend.emitPageEvent(
             method: "DOM.setChildNodes",
@@ -1559,6 +1626,7 @@ struct WIDOMInspectorTests {
                 && inspector.document.errorMessage == nil
         }
         #expect(selected)
+        #expect(requestedObjectIDs.isEmpty)
         #expect(requestedNodeIDs == [3])
     }
 
