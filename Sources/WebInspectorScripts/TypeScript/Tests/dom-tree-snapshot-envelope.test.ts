@@ -105,6 +105,6 @@ describe("dom-tree-snapshot-envelope", () => {
         }
 
         expect(document.documentElement.scrollTop).toBe(120);
-        expect(document.documentElement.scrollLeft).toBe(5);
+        expect(document.documentElement.scrollLeft).toBe(75);
     });
 });

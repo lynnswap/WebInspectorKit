@@ -864,21 +864,23 @@ private enum WITransportNativeInspectorResolver {
         javaScriptCoreText: SegmentCommand64,
         symbols: WITransportNativeInspectorSymbolNames
     ) -> WITransportResolvedConnectDisconnectFallbackResult {
-        let connectMissing: Bool
-        if case .missing = resolvedSymbols.connectFrontend {
-            connectMissing = true
-        } else {
-            connectMissing = false
+        let connectNeedsFallback: Bool
+        switch resolvedSymbols.connectFrontend {
+        case .missing, .outsideText:
+            connectNeedsFallback = true
+        case .found:
+            connectNeedsFallback = false
         }
 
-        let disconnectMissing: Bool
-        if case .missing = resolvedSymbols.disconnectFrontend {
-            disconnectMissing = true
-        } else {
-            disconnectMissing = false
+        let disconnectNeedsFallback: Bool
+        switch resolvedSymbols.disconnectFrontend {
+        case .missing, .outsideText:
+            disconnectNeedsFallback = true
+        case .found:
+            disconnectNeedsFallback = false
         }
 
-        guard connectMissing || disconnectMissing else {
+        guard connectNeedsFallback || disconnectNeedsFallback else {
             return .init(
                 symbols: resolvedSymbols,
                 usedFallback: false
@@ -957,14 +959,16 @@ private enum WITransportNativeInspectorResolver {
         #endif
 
         let resolvedWrapperSymbols = WITransportNativeInspectorResolvedSymbols(
-            connectFrontend: connectMissing ? resolvedConnect : resolvedSymbols.connectFrontend,
-            disconnectFrontend: disconnectMissing ? resolvedDisconnect : resolvedSymbols.disconnectFrontend,
+            connectFrontend: connectNeedsFallback && isFound(resolvedConnect) ? resolvedConnect : resolvedSymbols.connectFrontend,
+            disconnectFrontend: disconnectNeedsFallback && isFound(resolvedDisconnect) ? resolvedDisconnect : resolvedSymbols.disconnectFrontend,
             stringFromUTF8: resolvedSymbols.stringFromUTF8,
             stringImplToNSString: resolvedSymbols.stringImplToNSString,
             destroyStringImpl: resolvedSymbols.destroyStringImpl,
             backendDispatcherDispatch: resolvedSymbols.backendDispatcherDispatch
         )
-        let usedWrapperFallback = (connectMissing && isFound(resolvedConnect)) || (disconnectMissing && isFound(resolvedDisconnect))
+        let usedWrapperFallback =
+            (connectNeedsFallback && isFound(resolvedConnect))
+            || (disconnectNeedsFallback && isFound(resolvedDisconnect))
 
         return .init(
             symbols: resolvedWrapperSymbols,

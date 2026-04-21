@@ -51,9 +51,11 @@ import {
 import {
     applyFilter,
     buildNode,
+    captureTreeScrollPosition,
     captureTreeScrollTop,
     ensureTreeEventHandlers,
     reopenSelectionAncestors,
+    restoreTreeScrollPosition,
     restoreTreeScrollTop,
     scheduleNodeRender,
     selectNode,
@@ -569,6 +571,7 @@ export function setSnapshot(
         const previousSelectionId = treeState.selectedNodeId;
         const previousFilter = treeState.filter;
         const preservedOpenState = preserveState ? new Map(treeState.openState) : new Map();
+        const preservedScrollPosition = preserveState ? captureTreeScrollPosition() : null;
         const preservedScrollTop = preserveState ? captureTreeScrollTop() : null;
 
         domTreeUpdater.reset();
@@ -708,7 +711,9 @@ export function setSnapshot(
         }
         treeState.selectedNodeId = didSelect ? treeState.selectedNodeId : null;
 
-        if (preservedScrollTop !== null) {
+        if (preservedScrollPosition !== null) {
+            restoreTreeScrollPosition(preservedScrollPosition);
+        } else if (preservedScrollTop !== null) {
             restoreTreeScrollTop(preservedScrollTop);
         }
         return true;
