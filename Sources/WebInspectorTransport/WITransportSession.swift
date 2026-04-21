@@ -208,6 +208,10 @@ public final class WITransportSession {
         pageTargetTracker.observedCurrentIdentifier
     }
 
+    package var responseTimeout: Duration {
+        configuration.responseTimeout
+    }
+
     package func pageTargetIdentifiers() -> [String] {
         if pageTargetTracker.allowsDerivedCommittedSeed {
             _ = refreshDerivedPageTargetIdentifierIfNeeded()

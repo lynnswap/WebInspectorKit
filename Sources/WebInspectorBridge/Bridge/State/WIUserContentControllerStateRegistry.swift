@@ -1,15 +1,10 @@
 import Foundation
+import ObjectiveC
 import WebKit
 
 @MainActor
 package final class WIUserContentControllerStateRegistry {
     package static let shared = WIUserContentControllerStateRegistry()
-    private static let compactionIntervalNanoseconds: UInt64 = 5_000_000_000
-
-    private struct Entry {
-        weak var controller: WKUserContentController?
-        let state: StateBox
-    }
 
     private final class StateBox {
         var domBridgeScriptInstalled = false
@@ -18,14 +13,7 @@ package final class WIUserContentControllerStateRegistry {
         var networkTokenBootstrapSignature: String?
     }
 
-    private var storage: [ObjectIdentifier: Entry] = [:]
-    private var compactionTask: Task<Void, Never>?
-
     private init() {}
-
-    isolated deinit {
-        compactionTask?.cancel()
-    }
 
     package func domBridgeScriptInstalled(on controller: WKUserContentController) -> Bool {
         stateBox(for: controller)?.domBridgeScriptInstalled ?? false
@@ -72,10 +60,16 @@ package final class WIUserContentControllerStateRegistry {
     }
 
     package func clearState(for controller: WKUserContentController) {
-        storage.removeValue(forKey: ObjectIdentifier(controller))
-        stopCompactionLoopIfNeeded()
+        unsafe objc_setAssociatedObject(
+            controller,
+            userContentControllerStateAssociationKey,
+            nil,
+            .OBJC_ASSOCIATION_RETAIN_NONATOMIC
+        )
     }
 }
+
+nonisolated(unsafe) private let userContentControllerStateAssociationKey = unsafe malloc(1)!
 
 @MainActor
 private extension WIUserContentControllerStateRegistry {
@@ -83,55 +77,24 @@ private extension WIUserContentControllerStateRegistry {
         for controller: WKUserContentController,
         createIfNeeded: Bool = false
     ) -> StateBox? {
-        compactStorage()
-        let key = ObjectIdentifier(controller)
-        if let existing = storage[key], existing.controller != nil {
-            return existing.state
+        if let existing = unsafe objc_getAssociatedObject(
+            controller,
+            userContentControllerStateAssociationKey
+        ) as? StateBox {
+            return existing
         }
 
         guard createIfNeeded else {
             return nil
         }
+
         let created = StateBox()
-        storage[key] = Entry(controller: controller, state: created)
-        startCompactionLoopIfNeeded()
+        unsafe objc_setAssociatedObject(
+            controller,
+            userContentControllerStateAssociationKey,
+            created,
+            .OBJC_ASSOCIATION_RETAIN_NONATOMIC
+        )
         return created
-    }
-
-    private func compactStorage() {
-        if storage.isEmpty {
-            stopCompactionLoopIfNeeded()
-            return
-        }
-        storage = storage.filter { _, entry in
-            entry.controller != nil
-        }
-        stopCompactionLoopIfNeeded()
-    }
-
-    private func startCompactionLoopIfNeeded() {
-        guard compactionTask == nil else {
-            return
-        }
-        compactionTask = Task { @MainActor [weak self] in
-            while let self {
-                try? await Task.sleep(nanoseconds: Self.compactionIntervalNanoseconds)
-                guard !Task.isCancelled else {
-                    return
-                }
-                self.compactStorage()
-                if self.storage.isEmpty {
-                    return
-                }
-            }
-        }
-    }
-
-    private func stopCompactionLoopIfNeeded() {
-        guard storage.isEmpty else {
-            return
-        }
-        compactionTask?.cancel()
-        compactionTask = nil
     }
 }

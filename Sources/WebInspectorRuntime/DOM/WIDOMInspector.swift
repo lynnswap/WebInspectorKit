@@ -87,6 +87,82 @@ public final class WIDOMInspector {
         var outstandingMaterializationNodeIDs: Set<DOMNodeModel.ID> = []
     }
 
+    private struct PendingChildRequestKey: Hashable {
+        let nodeID: Int
+        let contextID: DOMContextID
+    }
+
+    @MainActor
+    private final class PendingChildRequestRecord {
+        let key: PendingChildRequestKey
+        private(set) var reportsToFrontend: Bool
+
+        private var result: Bool?
+        private var waiters: [CheckedContinuation<Bool, Never>] = []
+        private var timeoutTask: Task<Void, Never>?
+
+        init(key: PendingChildRequestKey, reportsToFrontend: Bool) {
+            self.key = key
+            self.reportsToFrontend = reportsToFrontend
+        }
+
+        func upgradeToFrontendRequest() -> Bool {
+            guard reportsToFrontend == false, result == nil else {
+                return false
+            }
+            reportsToFrontend = true
+            return true
+        }
+
+        func wait(
+            timeout: Duration,
+            onTimeout: @escaping @MainActor () async -> Void
+        ) async -> Bool {
+            if let result {
+                return result
+            }
+
+            if timeoutTask == nil {
+                timeoutTask = Task { @MainActor [weak self] in
+                    do {
+                        try await ContinuousClock().sleep(for: timeout)
+                    } catch {
+                        return
+                    }
+
+                    guard let self, self.result == nil else {
+                        return
+                    }
+                    await onTimeout()
+                }
+            }
+
+            return await withCheckedContinuation { continuation in
+                if let result {
+                    continuation.resume(returning: result)
+                } else {
+                    waiters.append(continuation)
+                }
+            }
+        }
+
+        func finish(_ result: Bool) {
+            guard self.result == nil else {
+                return
+            }
+
+            self.result = result
+            timeoutTask?.cancel()
+            timeoutTask = nil
+
+            let waiters = self.waiters
+            self.waiters.removeAll(keepingCapacity: false)
+            for waiter in waiters {
+                waiter.resume(returning: result)
+            }
+        }
+    }
+
     @ObservationIgnored package let pageBridge: DOMPageBridge
     @ObservationIgnored private let sharedTransport: WISharedInspectorTransport
     @ObservationIgnored let inspectorBridge: DOMInspectorBridge
@@ -109,7 +185,7 @@ public final class WIDOMInspector {
     @ObservationIgnored private var externalRecoverableErrorHandler: (@MainActor (String?) -> Void)?
     @ObservationIgnored private var inspectModeTargetIdentifier: String?
     @ObservationIgnored private weak var deleteUndoManager: UndoManager?
-    @ObservationIgnored private var pendingChildRequests: Set<Int> = []
+    @ObservationIgnored private var pendingChildRequests: [PendingChildRequestKey: PendingChildRequestRecord] = [:]
     @ObservationIgnored private var lastSelectionDiagnosticMessage: String?
     @ObservationIgnored private var selectionGeneration: UInt64 = 0
     @ObservationIgnored private var acceptsInspectEvents = false
@@ -280,9 +356,12 @@ public final class WIDOMInspector {
         applyRecoverableError(nil)
         try? await hideHighlight()
 
+#if canImport(UIKit)
+        try ensureNativeInspectorSelectionAvailableIfNeeded()
+#endif
         activatePageWindowForSelectionIfPossible()
 #if canImport(UIKit)
-        await requestPageWindowActivationIfNeeded()
+        try await requestPageWindowActivationIfNeeded()
 #endif
 
         let targetIdentifier = try requireCurrentTargetIdentifier()
@@ -325,7 +404,7 @@ public final class WIDOMInspector {
         currentContext = nil
         phase = .idle
         frontendReadyContextID = nil
-        pendingChildRequests.removeAll(keepingCapacity: true)
+        cancelPendingChildRequestRecords()
         document.setErrorMessage(nil)
         inspectorBridge.detachInspectorWebView()
         clearDeleteUndoHistory()
@@ -455,18 +534,23 @@ public final class WIDOMInspector {
         }
 
         do {
-            _ = try await sendDOMCommand(
-                WITransportMethod.DOM.requestChildNodes,
+            let didComplete = await requestTestingChildNodesAndWaitForCompletion(
+                transportNodeID: try transportNodeID(for: rootNode),
+                frontendNodeID: Int(rootNode.id.localID),
                 targetIdentifier: targetIdentifier,
-                parameters: DOMRequestChildNodesParameters(
-                    nodeId: try transportNodeID(for: rootNode),
-                    depth: max(configuration.snapshotDepth, 128)
-                )
+                contextID: context.contextID,
+                depth: max(configuration.snapshotDepth, 128)
             )
             logSelectionDiagnostics(
                 "selectNodeForTesting requested child nodes",
                 selector: cssSelector
             )
+            if !didComplete {
+                logSelectionDiagnostics(
+                    "selectNodeForTesting child-node request did not complete",
+                    selector: cssSelector
+                )
+            }
         } catch {
             logSelectionDiagnostics(
                 "selectNodeForTesting requestChildNodes failed",
@@ -476,7 +560,7 @@ public final class WIDOMInspector {
             )
         }
 
-        if let node = await waitForTestingSelectorNode(cssSelector) {
+        if let node = resolveTestingSelectorNode(cssSelector) {
             logSelectionDiagnostics(
                 "selectNodeForTesting matched fallback node",
                 selector: cssSelector,
@@ -530,16 +614,15 @@ public final class WIDOMInspector {
             isFreshDocument: false
         )
 
-        _ = try? await sendDOMCommand(
-            WITransportMethod.DOM.requestChildNodes,
+        _ = await requestTestingChildNodesAndWaitForCompletion(
+            transportNodeID: (try? transportNodeID(for: rootNode)) ?? Int(rootNode.id.localID),
+            frontendNodeID: Int(rootNode.id.localID),
             targetIdentifier: targetIdentifier,
-            parameters: DOMRequestChildNodesParameters(
-                nodeId: try transportNodeID(for: rootNode),
-                depth: max(configuration.snapshotDepth, 128)
-            )
+            contextID: context.contextID,
+            depth: max(configuration.snapshotDepth, 128)
         )
 
-        if let node = await waitForTestingPreviewNode(preview) {
+        if let node = resolveTestingPreviewNode(preview) {
             await applySelection(
                 to: node,
                 selectorPath: selectorPath,
@@ -774,7 +857,7 @@ private extension WIDOMInspector {
         pendingInspectSelection = nil
         isSelectingElement = false
         selectionGeneration &+= 1
-        pendingChildRequests.removeAll(keepingCapacity: true)
+        cancelPendingChildRequestRecords()
         payloadNormalizer.resetForDocumentUpdate()
         document.clearDocument(isFreshDocument: true)
     }
@@ -807,8 +890,8 @@ private extension WIDOMInspector {
         if document.selectedNode != nil {
             try? await hideHighlight()
         }
+        await failPendingChildRequests()
         cancelBootstrap()
-        pendingChildRequests.removeAll(keepingCapacity: true)
         payloadNormalizer.resetForDocumentUpdate()
         frontendReadyContextID = nil
 
@@ -1280,18 +1363,11 @@ private extension WIDOMInspector {
     ) async {
         let completedNodeIDs = completedChildRequestNodeIDs(from: bundle)
 
-        for nodeID in completedNodeIDs where pendingChildRequests.contains(nodeID) {
-            pendingChildRequests.remove(nodeID)
-            if let node = document.node(localID: UInt64(nodeID)) {
-                await inspectorBridge.applySubtreePayload(
-                    nodePayloadDictionary(from: node),
-                    contextID: contextID
-                )
-            }
-            await inspectorBridge.finishChildNodeRequest(
+        for nodeID in completedNodeIDs {
+            await completePendingChildRequest(
                 nodeID: nodeID,
-                success: true,
-                contextID: contextID
+                contextID: contextID,
+                success: true
             )
         }
     }
@@ -1310,75 +1386,140 @@ private extension WIDOMInspector {
     }
 
     func performChildRequest(nodeID: Int, depth: Int, contextID: DOMContextID) async {
-        guard pendingChildRequests.insert(nodeID).inserted else {
+        guard let registration = registerPendingChildRequest(
+            nodeID: nodeID,
+            contextID: contextID,
+            reportsToFrontend: true
+        ) else {
             return
         }
+
         do {
-            let targetIdentifier = try requireCurrentTargetIdentifier()
-            let transportNodeID = try transportNodeID(forFrontendNodeID: nodeID)
-            _ = try await sendDOMCommand(
-                WITransportMethod.DOM.requestChildNodes,
-                targetIdentifier: targetIdentifier,
-                parameters: DOMRequestChildNodesParameters(
-                    nodeId: transportNodeID,
-                    depth: max(1, depth)
+            if registration.shouldSendRequest {
+                let targetIdentifier = try requireCurrentTargetIdentifier()
+                let transportNodeID = try transportNodeID(forFrontendNodeID: nodeID)
+                _ = try await sendDOMCommand(
+                    WITransportMethod.DOM.requestChildNodes,
+                    targetIdentifier: targetIdentifier,
+                    parameters: DOMRequestChildNodesParameters(
+                        nodeId: transportNodeID,
+                        depth: max(1, depth)
+                    )
                 )
-            )
-
-            await awaitTransportMessagesToDrain()
-
-            let resolved = await awaitChildRequestCompletion(
-                nodeID: nodeID,
-                contextID: contextID
-            )
-            guard resolved == false else {
-                return
             }
 
-            pendingChildRequests.remove(nodeID)
-            await inspectorBridge.finishChildNodeRequest(
+            _ = await waitForPendingChildRequestCompletion(
+                registration.record,
                 nodeID: nodeID,
-                success: false,
                 contextID: contextID
             )
         } catch {
-            pendingChildRequests.remove(nodeID)
-            await inspectorBridge.finishChildNodeRequest(
+            await completePendingChildRequest(
                 nodeID: nodeID,
-                success: false,
-                contextID: contextID
+                contextID: contextID,
+                success: false
             )
         }
     }
 
-    private func awaitChildRequestCompletion(
+    private func registerPendingChildRequest(
+        nodeID: Int,
+        contextID: DOMContextID,
+        reportsToFrontend: Bool
+    ) -> (record: PendingChildRequestRecord, shouldSendRequest: Bool)? {
+        let key = PendingChildRequestKey(nodeID: nodeID, contextID: contextID)
+        if let existing = pendingChildRequests[key] {
+            if reportsToFrontend, existing.upgradeToFrontendRequest() == false {
+                return nil
+            }
+            return (existing, false)
+        }
+
+        let record = PendingChildRequestRecord(key: key, reportsToFrontend: reportsToFrontend)
+        pendingChildRequests[key] = record
+        return (record, true)
+    }
+
+    private func waitForPendingChildRequestCompletion(
+        _ record: PendingChildRequestRecord,
         nodeID: Int,
         contextID: DOMContextID
     ) async -> Bool {
-        for _ in 0..<25 {
-            guard currentContext?.contextID == contextID else {
-                return true
+        let timeout = await sharedTransport.attachedSession()?.responseTimeout ?? .seconds(15)
+        return await record.wait(timeout: timeout) { [weak self] in
+            guard let self else {
+                return
             }
-            guard pendingChildRequests.contains(nodeID) else {
-                return true
-            }
-            if let node = document.node(localID: UInt64(nodeID)),
-               node.childCount == node.children.count {
-                pendingChildRequests.remove(nodeID)
-                await inspectorBridge.applySubtreePayload(
-                    nodePayloadDictionary(from: node),
-                    contextID: contextID
-                )
-                await inspectorBridge.finishChildNodeRequest(
-                    nodeID: nodeID,
-                    success: true,
-                    contextID: contextID
-                )
-                return true
-            }
-            try? await Task.sleep(nanoseconds: 20_000_000)
+            await self.completePendingChildRequest(
+                nodeID: nodeID,
+                contextID: contextID,
+                success: false
+            )
         }
-        return false
+    }
+
+    private func completePendingChildRequest(
+        nodeID: Int,
+        contextID: DOMContextID,
+        success: Bool
+    ) async {
+        let key = PendingChildRequestKey(nodeID: nodeID, contextID: contextID)
+        guard let record = pendingChildRequests.removeValue(forKey: key) else {
+            return
+        }
+
+        let shouldNotifyFrontend = record.reportsToFrontend
+        record.finish(success)
+
+        guard shouldNotifyFrontend else {
+            return
+        }
+
+        if success, let node = document.node(localID: UInt64(nodeID)) {
+            await inspectorBridge.applySubtreePayload(
+                nodePayloadDictionary(from: node),
+                contextID: contextID
+            )
+        }
+
+        await inspectorBridge.finishChildNodeRequest(
+            nodeID: nodeID,
+            success: success,
+            contextID: contextID
+        )
+    }
+
+    private func failPendingChildRequests(contextID: DOMContextID? = nil) async {
+        let keysToFail = pendingChildRequests.keys.filter {
+            contextID == nil || $0.contextID == contextID
+        }
+        guard !keysToFail.isEmpty else {
+            return
+        }
+
+        let failedRecords = keysToFail.compactMap { key in
+            pendingChildRequests.removeValue(forKey: key).map { (key, $0) }
+        }
+
+        for (key, record) in failedRecords {
+            let shouldNotifyFrontend = record.reportsToFrontend
+            record.finish(false)
+            if shouldNotifyFrontend {
+                await inspectorBridge.finishChildNodeRequest(
+                    nodeID: key.nodeID,
+                    success: false,
+                    contextID: key.contextID
+                )
+            }
+        }
+    }
+
+    private func cancelPendingChildRequestRecords() {
+        let records = Array(pendingChildRequests.values)
+        pendingChildRequests.removeAll(keepingCapacity: true)
+        for record in records {
+            record.finish(false)
+        }
     }
 
     func highlightNode(_ nodeID: Int) async throws {
@@ -1581,7 +1722,7 @@ private extension WIDOMInspector {
         }
 
 #if canImport(UIKit)
-        await awaitInspectModeInactive(forceDisable: true)
+        await awaitInspectModeInactive()
         isSelectingElement = false
 #else
         isSelectingElement = false
@@ -1604,7 +1745,7 @@ private extension WIDOMInspector {
         )
 
 #if canImport(UIKit)
-        await awaitInspectModeInactive(forceDisable: false)
+        await awaitInspectModeInactive()
         isSelectingElement = false
 #else
         isSelectingElement = false
@@ -2308,16 +2449,6 @@ private extension WIDOMInspector {
         }
     }
 
-    func waitForTestingSelectorNode(_ cssSelector: String) async -> DOMNodeModel? {
-        for _ in 0..<50 {
-            if let node = resolveTestingSelectorNode(cssSelector) {
-                return node
-            }
-            try? await Task.sleep(nanoseconds: 20_000_000)
-        }
-        return resolveTestingSelectorNode(cssSelector)
-    }
-
     func resolveTestingPreviewNode(_ preview: String) -> DOMNodeModel? {
         let normalizedPreview = preview.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedPreview.isEmpty else {
@@ -2328,14 +2459,46 @@ private extension WIDOMInspector {
         }
     }
 
-    func waitForTestingPreviewNode(_ preview: String) async -> DOMNodeModel? {
-        for _ in 0..<50 {
-            if let node = resolveTestingPreviewNode(preview) {
-                return node
-            }
-            try? await Task.sleep(nanoseconds: 20_000_000)
+    private func requestTestingChildNodesAndWaitForCompletion(
+        transportNodeID: Int,
+        frontendNodeID: Int,
+        targetIdentifier: String,
+        contextID: DOMContextID,
+        depth: Int
+    ) async -> Bool {
+        guard let registration = registerPendingChildRequest(
+            nodeID: frontendNodeID,
+            contextID: contextID,
+            reportsToFrontend: false
+        ) else {
+            return false
         }
-        return resolveTestingPreviewNode(preview)
+
+        if registration.shouldSendRequest {
+            do {
+                _ = try await sendDOMCommand(
+                    WITransportMethod.DOM.requestChildNodes,
+                    targetIdentifier: targetIdentifier,
+                    parameters: DOMRequestChildNodesParameters(
+                        nodeId: transportNodeID,
+                        depth: max(1, depth)
+                    )
+                )
+            } catch {
+                await completePendingChildRequest(
+                    nodeID: frontendNodeID,
+                    contextID: contextID,
+                    success: false
+                )
+                return false
+            }
+        }
+
+        return await waitForPendingChildRequestCompletion(
+            registration.record,
+            nodeID: frontendNodeID,
+            contextID: contextID
+        )
     }
 #endif
 
@@ -2696,6 +2859,7 @@ private extension WIDOMInspector {
 
     func resetInteractionState() async {
         await cancelSelectionMode()
+        await failPendingChildRequests()
         clearDeleteUndoHistory()
     }
 
@@ -2881,6 +3045,10 @@ extension WIDOMInspector {
         await handleTransportEvent(envelope)
     }
 
+    func testHandleInspectorMessage(_ message: DOMInspectorBridge.IncomingMessage) {
+        handleInspectorMessage(message)
+    }
+
     package func testHandleReadyMessage(contextID: DOMContextID) {
         handleInspectorMessage(.ready(contextID: contextID))
     }
@@ -2920,6 +3088,12 @@ extension WIDOMInspector {
 
     package var testHasPendingInspectSelection: Bool {
         pendingInspectSelection != nil
+    }
+
+    package var testPendingChildRequestNodeIDs: [Int] {
+        pendingChildRequests.keys
+            .map(\.nodeID)
+            .sorted()
     }
 
     package func testFinishPendingInspectMaterialization(

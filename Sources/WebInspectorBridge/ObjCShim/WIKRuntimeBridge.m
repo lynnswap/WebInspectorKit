@@ -1,4 +1,5 @@
 #import "WIKRuntimeBridge.h"
+#import "WIKPrivateWebKitInspector.h"
 #import "WKWebView+EvaluateJavaScriptCompat.h"
 
 #if TARGET_OS_OSX
@@ -11,6 +12,142 @@ typedef const struct OpaqueWKPage *WKPageRef;
 NSErrorDomain const WIKRuntimeBridgeErrorDomain = @"WebInspectorBridge.WIKRuntimeBridge";
 
 @implementation WIKRuntimeBridge
+
+#if TARGET_OS_IPHONE
++ (nullable Class)wi_contentViewClass
+{
+    static Class contentViewClass;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        contentViewClass = NSClassFromString(@"WKContentView");
+    });
+    return contentViewClass;
+}
+
++ (nullable Class)wi_inspectorNodeSearchRecognizerClass
+{
+    static Class recognizerClass;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        recognizerClass = NSClassFromString(@"WKInspectorNodeSearchGestureRecognizer");
+    });
+    return recognizerClass;
+}
+
++ (nullable UIView *)wi_firstContentViewInView:(UIView *)view
+{
+    Class contentViewClass = [self wi_contentViewClass];
+    if (contentViewClass && [view isKindOfClass:contentViewClass])
+        return view;
+
+    for (UIView *subview in view.subviews) {
+        UIView *contentView = [self wi_firstContentViewInView:subview];
+        if (contentView)
+            return contentView;
+    }
+
+    return nil;
+}
+
++ (void)wi_appendContentViewsInView:(UIView *)view toArray:(NSMutableArray<UIView *> *)contentViews
+{
+    Class contentViewClass = [self wi_contentViewClass];
+    if (contentViewClass && [view isKindOfClass:contentViewClass])
+        [contentViews addObject:view];
+
+    for (UIView *subview in view.subviews)
+        [self wi_appendContentViewsInView:subview toArray:contentViews];
+}
+
++ (NSArray<UIView *> *)wi_contentViewsForWebView:(WKWebView *)webView
+{
+    NSMutableArray<UIView *> *contentViews = [NSMutableArray array];
+    [self wi_appendContentViewsInView:webView toArray:contentViews];
+    return [contentViews copy];
+}
+
++ (nullable NSObject *)inspectorForWebView:(WKWebView *)webView
+{
+    if (![webView respondsToSelector:@selector(_inspector)])
+        return nil;
+
+    _WKInspector *inspector = webView._inspector;
+    return inspector ?: nil;
+}
+
++ (nullable NSNumber *)inspectorElementSelectionActiveForWebView:(WKWebView *)webView
+{
+    if (![webView respondsToSelector:@selector(_inspector)])
+        return nil;
+
+    _WKInspector *inspector = webView._inspector;
+    if (!inspector || ![inspector respondsToSelector:@selector(isElementSelectionActive)])
+        return nil;
+    return @(inspector.isElementSelectionActive);
+}
+
++ (BOOL)canEnableInspectorNodeSearchForWebView:(WKWebView *)webView
+{
+    UIView *contentView = [self wi_firstContentViewInView:webView];
+    return contentView && [contentView respondsToSelector:@selector(_enableInspectorNodeSearch)];
+}
+
++ (BOOL)enableInspectorNodeSearchForWebView:(WKWebView *)webView
+{
+    UIView *contentView = [self wi_firstContentViewInView:webView];
+    if (!contentView || ![contentView respondsToSelector:@selector(_enableInspectorNodeSearch)])
+        return NO;
+
+    [contentView _enableInspectorNodeSearch];
+    return YES;
+}
+
++ (BOOL)disableInspectorNodeSearchForWebView:(WKWebView *)webView
+{
+    BOOL didDisable = NO;
+    for (UIView *contentView in [self wi_contentViewsForWebView:webView]) {
+        if (![contentView respondsToSelector:@selector(_disableInspectorNodeSearch)])
+            continue;
+        [contentView _disableInspectorNodeSearch];
+        didDisable = YES;
+    }
+    return didDisable;
+}
+
++ (BOOL)hasInspectorNodeSearchRecognizerForWebView:(WKWebView *)webView
+{
+    Class recognizerClass = [self wi_inspectorNodeSearchRecognizerClass];
+    if (!recognizerClass)
+        return NO;
+
+    for (UIView *contentView in [self wi_contentViewsForWebView:webView]) {
+        for (UIGestureRecognizer *recognizer in contentView.gestureRecognizers) {
+            if ([recognizer isKindOfClass:recognizerClass])
+                return YES;
+        }
+    }
+    return NO;
+}
+
++ (BOOL)removeInspectorNodeSearchRecognizersFromWebView:(WKWebView *)webView
+{
+    Class recognizerClass = [self wi_inspectorNodeSearchRecognizerClass];
+    if (!recognizerClass)
+        return NO;
+
+    BOOL didRemoveRecognizer = NO;
+    for (UIView *contentView in [self wi_contentViewsForWebView:webView]) {
+        for (UIGestureRecognizer *recognizer in [contentView.gestureRecognizers copy]) {
+            if (![recognizer isKindOfClass:recognizerClass])
+                continue;
+            recognizer.enabled = NO;
+            [contentView removeGestureRecognizer:recognizer];
+            didRemoveRecognizer = YES;
+        }
+    }
+    return didRemoveRecognizer;
+}
+#endif
 
 + (NSObject *)objectResultFromTarget:(NSObject *)target selectorName:(NSString *)selectorName {
     SEL selector = NSSelectorFromString(selectorName);

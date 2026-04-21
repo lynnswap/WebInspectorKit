@@ -11,8 +11,41 @@ import UIKit
 @Suite(.serialized)
 struct WIDOMInspectorTests {
 #if canImport(UIKit)
-    final class FakeElementSelectionInspector: NSObject {
-        @objc dynamic var isElementSelectionActive = true
+    final class FakeSceneActivationTarget: NSObject, WIDOMUIKitSceneActivationTarget {
+        var activationState: UIScene.ActivationState
+        var sceneSession: UISceneSession?
+
+        init(
+            activationState: UIScene.ActivationState,
+            sceneSession: UISceneSession? = nil
+        ) {
+            self.activationState = activationState
+            self.sceneSession = sceneSession
+        }
+    }
+
+    final class FakeSceneActivationRequester: WIDOMUIKitSceneActivationRequesting {
+        var requestCount = 0
+        var requestError: Error?
+        var onRequest: (@MainActor (any WIDOMUIKitSceneActivationTarget) async -> Void)?
+
+        func requestActivation(
+            of target: any WIDOMUIKitSceneActivationTarget,
+            requestingScene _: UIScene?,
+            errorHandler: ((any Error) -> Void)?
+        ) {
+            requestCount += 1
+            if let requestError {
+                errorHandler?(requestError)
+                return
+            }
+
+            if let onRequest {
+                Task { @MainActor in
+                    await onRequest(target)
+                }
+            }
+        }
     }
 #endif
 
@@ -321,38 +354,213 @@ struct WIDOMInspectorTests {
 
 #if canImport(UIKit)
     @Test
-    func inspectorElementSelectionWaitPollsUntilInactiveWithoutKVOTransition() async {
-        let inspector = WIDOMInspector()
-        let nativeInspector = FakeElementSelectionInspector()
+    func beginSelectionModeWaitsForSceneActivationBeforeEnablingInspectMode() async throws {
+        let requester = FakeSceneActivationRequester()
+        let targetScene = FakeSceneActivationTarget(activationState: .foregroundInactive)
+        let requestGate = AsyncGate()
+        let activationGate = AsyncGate()
+        var inspectModePayload: [String: Any]?
 
-        Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(40))
-            nativeInspector.isElementSelectionActive = false
+        let previousRequester = WIDOMUIKitSceneActivationEnvironment.requester
+        let previousSceneProvider = WIDOMUIKitSceneActivationEnvironment.sceneProvider
+        let previousRequestingSceneProvider = WIDOMUIKitSceneActivationEnvironment.requestingSceneProvider
+        let previousActivationTimeout = WIDOMUIKitSceneActivationEnvironment.activationTimeout
+        defer {
+            WIDOMUIKitSceneActivationEnvironment.requester = previousRequester
+            WIDOMUIKitSceneActivationEnvironment.sceneProvider = previousSceneProvider
+            WIDOMUIKitSceneActivationEnvironment.requestingSceneProvider = previousRequestingSceneProvider
+            WIDOMUIKitSceneActivationEnvironment.activationTimeout = previousActivationTimeout
         }
 
-        let didSettle = await inspector.waitForInspectorElementSelectionInactive(
-            nativeInspector,
-            keyPath: "isElementSelectionActive",
-            timeout: .milliseconds(200),
-            pollInterval: .milliseconds(10)
-        )
+        WIDOMUIKitSceneActivationEnvironment.requester = requester
+        WIDOMUIKitSceneActivationEnvironment.sceneProvider = { _ in targetScene }
+        WIDOMUIKitSceneActivationEnvironment.requestingSceneProvider = { _ in nil }
+        WIDOMUIKitSceneActivationEnvironment.activationTimeout = .milliseconds(200)
 
-        #expect(didSettle)
+        requester.onRequest = { target in
+            await requestGate.open()
+            await activationGate.wait()
+            targetScene.activationState = .foregroundActive
+            NotificationCenter.default.post(
+                name: UIScene.didActivateNotification,
+                object: target
+            )
+        }
+
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, payload, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                case WITransportMethod.DOM.setInspectModeEnabled:
+                    inspectModePayload = runtimeTestDictionaryValue(payload["params"])
+                    return [:]
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+        let window = hostWebViewInWindow(webView)
+        defer { window.isHidden = true }
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        let beginSelectionTask = Task {
+            try await inspector.beginSelectionMode()
+        }
+
+        await requestGate.wait()
+        #expect(inspectModePayload == nil)
+
+        await activationGate.open()
+        try await beginSelectionTask.value
+
+        #expect(requester.requestCount == 1)
+        #expect((inspectModePayload?["enabled"] as? Bool) == true)
+        #expect(inspector.isSelectingElement)
     }
 
     @Test
-    func inspectorElementSelectionWaitTimesOutWhenSelectionStaysActive() async {
-        let inspector = WIDOMInspector()
-        let nativeInspector = FakeElementSelectionInspector()
-
-        let didSettle = await inspector.waitForInspectorElementSelectionInactive(
-            nativeInspector,
-            keyPath: "isElementSelectionActive",
-            timeout: .milliseconds(30),
-            pollInterval: .milliseconds(10)
+    func beginSelectionModeFailsWhenSceneActivationRequestErrors() async {
+        let requester = FakeSceneActivationRequester()
+        let targetScene = FakeSceneActivationTarget(activationState: .background)
+        requester.requestError = NSError(
+            domain: "WIDOMInspectorTests",
+            code: 7,
+            userInfo: [NSLocalizedDescriptionKey: "scene activation failed"]
         )
+        let previousRequester = WIDOMUIKitSceneActivationEnvironment.requester
+        let previousSceneProvider = WIDOMUIKitSceneActivationEnvironment.sceneProvider
+        let previousRequestingSceneProvider = WIDOMUIKitSceneActivationEnvironment.requestingSceneProvider
+        let previousActivationTimeout = WIDOMUIKitSceneActivationEnvironment.activationTimeout
+        defer {
+            WIDOMUIKitSceneActivationEnvironment.requester = previousRequester
+            WIDOMUIKitSceneActivationEnvironment.sceneProvider = previousSceneProvider
+            WIDOMUIKitSceneActivationEnvironment.requestingSceneProvider = previousRequestingSceneProvider
+            WIDOMUIKitSceneActivationEnvironment.activationTimeout = previousActivationTimeout
+        }
 
-        #expect(didSettle == false)
+        WIDOMUIKitSceneActivationEnvironment.requester = requester
+        WIDOMUIKitSceneActivationEnvironment.sceneProvider = { _ in targetScene }
+        WIDOMUIKitSceneActivationEnvironment.requestingSceneProvider = { _ in nil }
+        WIDOMUIKitSceneActivationEnvironment.activationTimeout = .milliseconds(100)
+
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, _, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+        let window = hostWebViewInWindow(webView)
+        defer { window.isHidden = true }
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        await #expect(throws: DOMOperationError.scriptFailure("scene activation failed")) {
+            try await inspector.beginSelectionMode()
+        }
+    }
+
+    @Test
+    func beginSelectionModeFailsWhenSceneActivationTimesOut() async {
+        let requester = FakeSceneActivationRequester()
+        let targetScene = FakeSceneActivationTarget(activationState: .background)
+        let previousRequester = WIDOMUIKitSceneActivationEnvironment.requester
+        let previousSceneProvider = WIDOMUIKitSceneActivationEnvironment.sceneProvider
+        let previousRequestingSceneProvider = WIDOMUIKitSceneActivationEnvironment.requestingSceneProvider
+        let previousActivationTimeout = WIDOMUIKitSceneActivationEnvironment.activationTimeout
+        defer {
+            WIDOMUIKitSceneActivationEnvironment.requester = previousRequester
+            WIDOMUIKitSceneActivationEnvironment.sceneProvider = previousSceneProvider
+            WIDOMUIKitSceneActivationEnvironment.requestingSceneProvider = previousRequestingSceneProvider
+            WIDOMUIKitSceneActivationEnvironment.activationTimeout = previousActivationTimeout
+        }
+
+        WIDOMUIKitSceneActivationEnvironment.requester = requester
+        WIDOMUIKitSceneActivationEnvironment.sceneProvider = { _ in targetScene }
+        WIDOMUIKitSceneActivationEnvironment.requestingSceneProvider = { _ in nil }
+        WIDOMUIKitSceneActivationEnvironment.activationTimeout = .milliseconds(50)
+
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, _, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+        let window = hostWebViewInWindow(webView)
+        defer { window.isHidden = true }
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        await #expect(throws: DOMOperationError.scriptFailure("Page scene activation timed out.")) {
+            try await inspector.beginSelectionMode()
+        }
+    }
+
+    @Test
+    func beginSelectionModeFailsWhenNativeInspectorPrivateAPIUnavailable() async {
+        let previousAvailabilityProvider = WIDOMUIKitInspectorSelectionEnvironment.availabilityProvider
+        let previousOverlayOverride = WIDOMUIKitInspectorSelectionEnvironment.customSelectionOverlayOverride
+        defer {
+            WIDOMUIKitInspectorSelectionEnvironment.availabilityProvider = previousAvailabilityProvider
+            WIDOMUIKitInspectorSelectionEnvironment.customSelectionOverlayOverride = previousOverlayOverride
+        }
+
+        WIDOMUIKitInspectorSelectionEnvironment.availabilityProvider = { _ in false }
+        WIDOMUIKitInspectorSelectionEnvironment.customSelectionOverlayOverride = false
+
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, _, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        await #expect(throws: DOMOperationError.scriptFailure("Native inspector selection private API unavailable.")) {
+            try await inspector.beginSelectionMode()
+        }
     }
 #endif
 
@@ -803,6 +1011,58 @@ struct WIDOMInspectorTests {
         }
         #expect(selected)
         #expect(inspector.document.errorMessage == nil)
+    }
+
+    @Test
+    func pendingChildRequestClearsWhenReloadStartsFreshContext() async throws {
+        var requestedNodeIDs: [Int] = []
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, payload, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a", bodyChildren: [])
+                case WITransportMethod.DOM.requestChildNodes:
+                    let params = runtimeTestDictionaryValue(payload["params"])
+                    let requestedNodeID = params.flatMap {
+                        runtimeTestIntValue($0["nodeId"]) ?? ($0["nodeId"] as? NSNumber)?.intValue
+                    }
+                    if let requestedNodeID {
+                        requestedNodeIDs.append(requestedNodeID)
+                    }
+                    return [:]
+                default:
+                    return [:]
+                }
+            }
+        )
+
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        let initialContextID = try #require(inspector.testCurrentContextID)
+        inspector.testHandleInspectorMessage(
+            .requestChildren(nodeID: 3, depth: 1, contextID: initialContextID)
+        )
+
+        let requested = await waitForCondition {
+            requestedNodeIDs == [3] && inspector.testPendingChildRequestNodeIDs == [3]
+        }
+        #expect(requested)
+
+        try await inspector.reloadDocument()
+
+        let cleared = await waitForCondition {
+            inspector.testPendingChildRequestNodeIDs.isEmpty
+                && inspector.testCurrentContextID != initialContextID
+        }
+        #expect(cleared)
     }
 
     @Test
@@ -1354,6 +1614,93 @@ struct WIDOMInspectorTests {
     }
 
     @Test
+    func selectNodeForTestingPreviewWaitsForRequestedChildNodesBeforeFallbackResolution() async throws {
+        var didRequestChildNodes = false
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, payload, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a", bodyChildren: [])
+                case WITransportMethod.DOM.requestChildNodes:
+                    let params = runtimeTestDictionaryValue(payload["params"])
+                    let requestedNodeID = params.flatMap {
+                        runtimeTestIntValue($0["nodeId"]) ?? ($0["nodeId"] as? NSNumber)?.intValue
+                    }
+                    didRequestChildNodes = requestedNodeID == 1
+                    return [:]
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        let selectionTask = Task {
+            try await inspector.selectNodeForTesting(
+                preview: "<h1>",
+                selectorPath: "h1"
+            )
+        }
+
+        let requested = await waitForCondition {
+            didRequestChildNodes && inspector.document.selectedNode == nil
+        }
+        #expect(requested)
+
+        backend.emitPageEvent(
+            method: "DOM.setChildNodes",
+            params: [
+                "parentId": 1,
+                "nodes": [[
+                    "nodeId": 2,
+                    "backendNodeId": 2,
+                    "nodeType": 1,
+                    "nodeName": "HTML",
+                    "localName": "html",
+                    "nodeValue": "",
+                    "attributes": [],
+                    "childNodeCount": 1,
+                    "children": [[
+                        "nodeId": 3,
+                        "backendNodeId": 3,
+                        "nodeType": 1,
+                        "nodeName": "BODY",
+                        "localName": "body",
+                        "nodeValue": "",
+                        "attributes": [],
+                        "childNodeCount": 1,
+                        "children": [[
+                            "nodeId": 6,
+                            "backendNodeId": 6,
+                            "nodeType": 1,
+                            "nodeName": "H1",
+                            "localName": "h1",
+                            "nodeValue": "",
+                            "attributes": ["id", "title"],
+                            "childNodeCount": 0,
+                            "children": [],
+                        ]],
+                    ]],
+                ]],
+            ]
+        )
+
+        try await selectionTask.value
+
+        #expect(inspector.document.selectedNode?.localID == 6)
+        #expect(inspector.document.selectedNode?.selectorPath == "h1")
+        #expect(inspector.document.errorMessage == nil)
+    }
+
+    @Test
     func selectNodeForTestingClearsSelectionWhenSelectorDoesNotResolve() async throws {
         let backend = FakeDOMTransportBackend(
             pageResultProvider: { method, _, _ in
@@ -1772,6 +2119,51 @@ private func makeTestWebView() -> WKWebView {
     configuration.websiteDataStore = .nonPersistent()
     return WKWebView(frame: .zero, configuration: configuration)
 }
+
+#if canImport(UIKit)
+@MainActor
+private func hostWebViewInWindow(_ webView: WKWebView) -> UIWindow {
+    let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+    let viewController = UIViewController()
+    viewController.view.frame = window.bounds
+    webView.frame = viewController.view.bounds
+    webView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+    viewController.view.addSubview(webView)
+    window.rootViewController = viewController
+    window.isHidden = false
+    return window
+}
+
+private actor AsyncGate {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        guard isOpen == false else {
+            return
+        }
+
+        await withCheckedContinuation { continuation in
+            if isOpen {
+                continuation.resume()
+            } else {
+                waiters.append(continuation)
+            }
+        }
+    }
+
+    func open() {
+        guard isOpen == false else {
+            return
+        }
+
+        isOpen = true
+        let waiters = self.waiters
+        self.waiters.removeAll(keepingCapacity: false)
+        waiters.forEach { $0.resume() }
+    }
+}
+#endif
 
 @MainActor
 private func waitForCondition(
