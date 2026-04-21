@@ -140,7 +140,7 @@ extension WIDOMInspector {
         pageWindow.makeKey()
     }
 
-    func requestPageWindowActivationIfNeeded() {
+    func requestPageWindowActivationIfNeeded() async {
         guard let pageWindow = pageWebView?.window else {
             return
         }
@@ -160,6 +160,13 @@ extension WIDOMInspector {
             Task { @MainActor in
                 domWindowActivationLogger.error("page scene activation failed: \(error.localizedDescription, privacy: .public)")
             }
+        }
+
+        for _ in 0..<50 {
+            guard pageScene.activationState != .foregroundActive else {
+                return
+            }
+            try? await Task.sleep(nanoseconds: 20_000_000)
         }
     }
 

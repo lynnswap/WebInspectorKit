@@ -282,7 +282,7 @@ public final class WIDOMInspector {
 
         activatePageWindowForSelectionIfPossible()
 #if canImport(UIKit)
-        requestPageWindowActivationIfNeeded()
+        await requestPageWindowActivationIfNeeded()
 #endif
 
         let targetIdentifier = try requireCurrentTargetIdentifier()
