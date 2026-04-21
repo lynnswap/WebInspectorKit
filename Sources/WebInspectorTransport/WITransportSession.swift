@@ -26,11 +26,15 @@ public final class WITransportSession {
     private var backendMessageSink: WITransportSessionMessageSink?
 
     private var queuedPageEvents: [WITransportEventEnvelope] = []
+    private var queuedPageEventSequences: [UInt64] = []
     private var pageEventStreamContinuation: AsyncStream<WITransportEventEnvelope>.Continuation?
     private var pageEventQueueClosed = true
     private var hasAttachedPageEventConsumer = false
-    private var enqueuedPageEventCount: UInt64 = 0
-    private var deliveredPageEventCount: UInt64 = 0
+    private var nextPageEventSequence: UInt64 = 0
+    private var pendingPageEventDeliverySequences: [UInt64] = []
+    private var activePageEventDeliverySequence: UInt64?
+    private var settledPageEventSequence: UInt64 = 0
+    private var outOfOrderSettledPageEventSequences: Set<UInt64> = []
     private var activePageEventDeliveryCount: UInt64 = 0
     private var pageEventDrainWaiters: [PageEventDrainWaiter] = []
     private var stableNetworkBootstrapAvailability: StableNetworkBootstrapAvailability = .unknown
@@ -286,15 +290,15 @@ public final class WITransportSession {
     }
 
     package func waitForPostActivePageEventsToDrain() async {
-        let targetDeliveredCount = enqueuedPageEventCount
-        guard targetDeliveredCount > deliveredPageEventCount else {
+        let targetSequence = nextPageEventSequence
+        guard targetSequence > settledPageEventSequence else {
             return
         }
 
         await withCheckedContinuation { continuation in
             pageEventDrainWaiters.append(
                 PageEventDrainWaiter(
-                    targetDeliveredCount: targetDeliveredCount,
+                    targetSequence: targetSequence,
                     continuation: continuation
                 )
             )
@@ -306,12 +310,15 @@ public final class WITransportSession {
         precondition(pageEventStreamContinuation == nil, "pageEvents() supports only a single consumer.")
 
         let bufferedEvents = queuedPageEvents
+        let bufferedEventSequences = queuedPageEventSequences
         queuedPageEvents.removeAll(keepingCapacity: true)
+        queuedPageEventSequences.removeAll(keepingCapacity: true)
         let isClosed = pageEventQueueClosed
         hasAttachedPageEventConsumer = true
 
         return AsyncStream(bufferingPolicy: .bufferingNewest(configuration.eventBufferLimit)) { continuation in
             self.pageEventStreamContinuation = continuation
+            self.pendingPageEventDeliverySequences = bufferedEventSequences
             continuation.onTermination = { [weak self] _ in
                 guard let self else {
                     return
@@ -380,7 +387,7 @@ public final class WITransportSession {
 }
 
 private struct PageEventDrainWaiter {
-    let targetDeliveredCount: UInt64
+    let targetSequence: UInt64
     let continuation: CheckedContinuation<Void, Never>
 }
 
@@ -839,15 +846,22 @@ extension WITransportSession {
             targetIdentifier: targetIdentifier,
             paramsData: dataForJSONObject(paramsObject)
         )
+        nextPageEventSequence &+= 1
+        let sequence = nextPageEventSequence
 
         if let pageEventStreamContinuation {
             switch pageEventStreamContinuation.yield(envelope) {
             case .enqueued:
-                enqueuedPageEventCount &+= 1
+                pendingPageEventDeliverySequences.append(sequence)
                 return
             case .dropped:
-                enqueuedPageEventCount &+= 1
-                deliveredPageEventCount &+= 1
+                if let droppedSequence = pendingPageEventDeliverySequences.first {
+                    pendingPageEventDeliverySequences.removeFirst()
+                    markPageEventSequenceSettled(droppedSequence)
+                    pendingPageEventDeliverySequences.append(sequence)
+                } else {
+                    markPageEventSequenceSettled(sequence)
+                }
                 resumePageEventDrainWaitersIfNeeded()
                 return
             case .terminated:
@@ -858,16 +872,12 @@ extension WITransportSession {
         }
 
         if !hasAttachedPageEventConsumer || !configuration.dropEventsWithoutSubscribers {
-            enqueuedPageEventCount &+= 1
             queuedPageEvents.append(envelope)
+            queuedPageEventSequences.append(sequence)
             if queuedPageEvents.count > configuration.eventBufferLimit {
                 let droppedCount = queuedPageEvents.count - configuration.eventBufferLimit
                 queuedPageEvents.removeFirst(droppedCount)
-                if enqueuedPageEventCount >= UInt64(droppedCount) {
-                    enqueuedPageEventCount &-= UInt64(droppedCount)
-                } else {
-                    enqueuedPageEventCount = deliveredPageEventCount
-                }
+                queuedPageEventSequences.removeFirst(droppedCount)
             }
         }
     }
@@ -876,11 +886,15 @@ extension WITransportSession {
         replyRegistry.reset()
         pageTargetTracker.reset()
         queuedPageEvents.removeAll(keepingCapacity: true)
+        queuedPageEventSequences.removeAll(keepingCapacity: true)
         pageEventStreamContinuation = nil
         pageEventQueueClosed = false
         hasAttachedPageEventConsumer = false
-        enqueuedPageEventCount = 0
-        deliveredPageEventCount = 0
+        nextPageEventSequence = 0
+        pendingPageEventDeliverySequences.removeAll(keepingCapacity: true)
+        activePageEventDeliverySequence = nil
+        settledPageEventSequence = 0
+        outOfOrderSettledPageEventSequences.removeAll(keepingCapacity: true)
         activePageEventDeliveryCount = 0
         pageEventDrainWaiters.removeAll(keepingCapacity: true)
     }
@@ -899,6 +913,10 @@ extension WITransportSession {
 
         pageEventQueueClosed = true
         queuedPageEvents.removeAll(keepingCapacity: false)
+        queuedPageEventSequences.removeAll(keepingCapacity: false)
+        pendingPageEventDeliverySequences.removeAll(keepingCapacity: false)
+        activePageEventDeliverySequence = nil
+        outOfOrderSettledPageEventSequences.removeAll(keepingCapacity: true)
         let drainWaiters = pageEventDrainWaiters
         pageEventDrainWaiters.removeAll(keepingCapacity: true)
         let continuation = pageEventStreamContinuation
@@ -911,13 +929,19 @@ extension WITransportSession {
 
     package func beginPageEventDelivery() {
         activePageEventDeliveryCount &+= 1
+        if activePageEventDeliverySequence == nil, !pendingPageEventDeliverySequences.isEmpty {
+            activePageEventDeliverySequence = pendingPageEventDeliverySequences.removeFirst()
+        }
     }
 
     package func finishPageEventDelivery() {
         if activePageEventDeliveryCount > 0 {
             activePageEventDeliveryCount &-= 1
         }
-        deliveredPageEventCount &+= 1
+        if let activePageEventDeliverySequence {
+            markPageEventSequenceSettled(activePageEventDeliverySequence)
+            self.activePageEventDeliverySequence = nil
+        }
         resumePageEventDrainWaitersIfNeeded()
     }
 
@@ -926,17 +950,36 @@ extension WITransportSession {
             return
         }
         let readyWaiters = pageEventDrainWaiters.filter {
-            deliveredPageEventCount >= $0.targetDeliveredCount
+            settledPageEventSequence >= $0.targetSequence
         }
         guard !readyWaiters.isEmpty else {
             return
         }
         pageEventDrainWaiters.removeAll {
-            deliveredPageEventCount >= $0.targetDeliveredCount
+            settledPageEventSequence >= $0.targetSequence
         }
         for waiter in readyWaiters {
             waiter.continuation.resume()
         }
+    }
+
+    private func markPageEventSequenceSettled(_ sequence: UInt64) {
+        guard sequence > 0 else {
+            return
+        }
+        guard sequence > settledPageEventSequence else {
+            return
+        }
+
+        if sequence == settledPageEventSequence + 1 {
+            settledPageEventSequence = sequence
+            while outOfOrderSettledPageEventSequences.remove(settledPageEventSequence + 1) != nil {
+                settledPageEventSequence &+= 1
+            }
+            return
+        }
+
+        outOfOrderSettledPageEventSequences.insert(sequence)
     }
 
     func parseMessage(

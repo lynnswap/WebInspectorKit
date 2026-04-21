@@ -129,6 +129,36 @@ struct WIDOMInspectorTests {
         #expect(released)
     }
 
+    @Test
+    func attachFailureKeepsPageAttachmentButLeavesSelectionUnavailable() async {
+        let backend = FakeDOMTransportBackend()
+        backend.attachError = WITransportError.attachFailed("simulated attach failure")
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+
+        #expect(inspector.hasPageWebView)
+        #expect(inspector.testIsPageReadyForSelection == false)
+        #expect(inspector.testCurrentContextID == nil)
+    }
+
+    @Test
+    func attachWithoutResolvedTargetKeepsAttachmentButLeavesSelectionUnavailable() async {
+        let backend = FakeDOMTransportBackend(emitsInitialPageTargetCreatedOnAttach: false)
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+
+        #expect(inspector.hasPageWebView)
+        #expect(inspector.testCurrentContextID != nil)
+        #expect(inspector.testIsReady == false)
+        #expect(inspector.testIsPageReadyForSelection == false)
+    }
+
 #if canImport(UIKit)
     @Test
     func attachReinstallsPointerDisconnectObserverAfterSuspend() async {
@@ -676,13 +706,16 @@ struct WIDOMInspectorTests {
     @Test
     func beginSelectionModeFailsWhenNativeInspectorPrivateAPIUnavailable() async {
         let previousAvailabilityProvider = WIDOMUIKitInspectorSelectionEnvironment.availabilityProvider
+        let previousNodeSearchSetter = WIDOMUIKitInspectorSelectionEnvironment.nodeSearchSetter
         let previousOverlayOverride = WIDOMUIKitInspectorSelectionEnvironment.customSelectionOverlayOverride
         defer {
             WIDOMUIKitInspectorSelectionEnvironment.availabilityProvider = previousAvailabilityProvider
+            WIDOMUIKitInspectorSelectionEnvironment.nodeSearchSetter = previousNodeSearchSetter
             WIDOMUIKitInspectorSelectionEnvironment.customSelectionOverlayOverride = previousOverlayOverride
         }
 
         WIDOMUIKitInspectorSelectionEnvironment.availabilityProvider = { _ in false }
+        WIDOMUIKitInspectorSelectionEnvironment.nodeSearchSetter = { _, _ in true }
         WIDOMUIKitInspectorSelectionEnvironment.customSelectionOverlayOverride = false
 
         let backend = FakeDOMTransportBackend(
@@ -708,6 +741,57 @@ struct WIDOMInspectorTests {
         await #expect(throws: DOMOperationError.scriptFailure("Native inspector selection private API unavailable.")) {
             try await inspector.beginSelectionMode()
         }
+    }
+
+    @Test
+    func beginSelectionModeRollsBackWhenNativeNodeSearchEnableFails() async {
+        var inspectModeEnabledValues: [Bool] = []
+        let previousAvailabilityProvider = WIDOMUIKitInspectorSelectionEnvironment.availabilityProvider
+        let previousNodeSearchSetter = WIDOMUIKitInspectorSelectionEnvironment.nodeSearchSetter
+        let previousOverlayOverride = WIDOMUIKitInspectorSelectionEnvironment.customSelectionOverlayOverride
+        defer {
+            WIDOMUIKitInspectorSelectionEnvironment.availabilityProvider = previousAvailabilityProvider
+            WIDOMUIKitInspectorSelectionEnvironment.nodeSearchSetter = previousNodeSearchSetter
+            WIDOMUIKitInspectorSelectionEnvironment.customSelectionOverlayOverride = previousOverlayOverride
+        }
+
+        WIDOMUIKitInspectorSelectionEnvironment.availabilityProvider = { _ in true }
+        WIDOMUIKitInspectorSelectionEnvironment.nodeSearchSetter = { _, enabled in
+            enabled == false
+        }
+        WIDOMUIKitInspectorSelectionEnvironment.customSelectionOverlayOverride = false
+
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, payload, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                case WITransportMethod.DOM.setInspectModeEnabled:
+                    let params = runtimeTestDictionaryValue(payload["params"])
+                    if let enabled = params?["enabled"] as? Bool {
+                        inspectModeEnabledValues.append(enabled)
+                    }
+                    return [:]
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        await #expect(throws: DOMOperationError.scriptFailure("Native inspector node search unavailable.")) {
+            try await inspector.beginSelectionMode()
+        }
+        #expect(inspector.isSelectingElement == false)
+        #expect(inspectModeEnabledValues == [true, false])
     }
 #endif
 
@@ -1168,12 +1252,53 @@ struct WIDOMInspectorTests {
 
     @Test
     func pendingChildRequestClearsWhenReloadStartsFreshContext() async throws {
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, _, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                default:
+                    return [:]
+                }
+            }
+        )
+
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        let initialContextID = try #require(inspector.testCurrentContextID)
+        inspector.testRegisterPendingChildRequest(
+            nodeID: 3,
+            contextID: initialContextID,
+            reportsToFrontend: true
+        )
+
+        #expect(inspector.testPendingChildRequestNodeIDs == [3])
+
+        try await inspector.reloadDocument()
+
+        let cleared = await waitForCondition {
+            inspector.testPendingChildRequestNodeIDs.isEmpty
+                && inspector.testCurrentContextID != initialContextID
+        }
+        #expect(cleared)
+    }
+
+    @Test
+    func childRequestCompletesImmediatelyWhenRequestedSubtreeIsAlreadyLoaded() async throws {
         var requestedNodeIDs: [Int] = []
         let backend = FakeDOMTransportBackend(
             pageResultProvider: { method, payload, _ in
                 switch method {
                 case WITransportMethod.DOM.getDocument:
-                    return makeDocumentResult(url: "https://example.com/a", bodyChildren: [])
+                    return makeDocumentResult(url: "https://example.com/a")
                 case WITransportMethod.DOM.requestChildNodes:
                     let params = runtimeTestDictionaryValue(payload["params"])
                     let requestedNodeID = params.flatMap {
@@ -1199,23 +1324,19 @@ struct WIDOMInspectorTests {
         }
         #expect(ready)
 
-        let initialContextID = try #require(inspector.testCurrentContextID)
+        let contextID = try #require(inspector.testCurrentContextID)
         inspector.testHandleInspectorMessage(
-            .requestChildren(nodeID: 3, depth: 1, contextID: initialContextID)
+            .requestChildren(nodeID: 3, depth: 1, contextID: contextID)
         )
 
-        let requested = await waitForCondition {
-            requestedNodeIDs == [3] && inspector.testPendingChildRequestNodeIDs == [3]
-        }
-        #expect(requested)
-
-        try await inspector.reloadDocument()
-
-        let cleared = await waitForCondition {
+        let completedImmediately = await waitForCondition(
+            maxAttempts: 10,
+            intervalNanoseconds: 20_000_000
+        ) {
             inspector.testPendingChildRequestNodeIDs.isEmpty
-                && inspector.testCurrentContextID != initialContextID
         }
-        #expect(cleared)
+        #expect(completedImmediately)
+        #expect(requestedNodeIDs.isEmpty)
     }
 
     @Test
@@ -1773,7 +1894,19 @@ struct WIDOMInspectorTests {
             pageResultProvider: { method, payload, _ in
                 switch method {
                 case WITransportMethod.DOM.getDocument:
-                    return makeDocumentResult(url: "https://example.com/a", bodyChildren: [])
+                    return [
+                        "root": [
+                            "nodeId": 1,
+                            "backendNodeId": 1,
+                            "nodeType": 9,
+                            "nodeName": "#document",
+                            "localName": "",
+                            "nodeValue": "",
+                            "documentURL": "https://example.com/a",
+                            "childNodeCount": 1,
+                            "children": [],
+                        ]
+                    ]
                 case WITransportMethod.DOM.requestChildNodes:
                     let params = runtimeTestDictionaryValue(payload["params"])
                     let requestedNodeID = params.flatMap {
@@ -2445,6 +2578,7 @@ private func runtimeTestDictionaryValue(_ value: Any?) -> [String: Any]? {
 private final class FakeDOMTransportBackend: WITransportPlatformBackend {
     var supportSnapshot: WITransportSupportSnapshot
     var pageResultProvider: ((String, [String: Any], String) throws -> [String: Any])?
+    var attachError: Error?
 
     private var messageSink: (any WITransportBackendMessageSink)?
     private var currentTargetIdentifier = "page-A"
@@ -2465,6 +2599,9 @@ private final class FakeDOMTransportBackend: WITransportPlatformBackend {
 
     func attach(to webView: WKWebView, messageSink: any WITransportBackendMessageSink) async throws {
         _ = webView
+        if let attachError {
+            throw attachError
+        }
         self.messageSink = messageSink
         if emitsInitialPageTargetCreatedOnAttach {
             messageSink.didReceiveRootMessage(

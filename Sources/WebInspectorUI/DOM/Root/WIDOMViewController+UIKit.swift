@@ -209,7 +209,7 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
     }
 
     private func updatePickItemAppearance() {
-        pickItem.isEnabled = inspector.hasPageWebView
+        pickItem.isEnabled = inspector.isPageReadyForSelection
         pickItem.image = UIImage(systemName: pickSymbolName)
         pickItem.tintColor = inspector.isSelectingElement ? .systemBlue : .label
     }
@@ -349,6 +349,13 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
         }
         .store(in: &pickItemObservationHandles)
         inspector.observe(
+            \.isPageReadyForSelection,
+            options: [.removeDuplicates]
+        ) { [weak self] _ in
+            self?.updatePickItemAppearance()
+        }
+        .store(in: &pickItemObservationHandles)
+        inspector.observe(
             \.isSelectingElement,
             options: [.removeDuplicates]
         ) { [weak self] _ in
@@ -394,6 +401,7 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
         DOMSecondaryMenuBuilder.makeMenu(
             hasSelection: inspector.document.selectedNode != nil,
             hasPageWebView: inspector.hasPageWebView,
+            canReloadInspector: inspector.isPageReadyForSelection,
             onCopyHTML: { [weak self] in
                 self?.copySelectedHTML()
             },

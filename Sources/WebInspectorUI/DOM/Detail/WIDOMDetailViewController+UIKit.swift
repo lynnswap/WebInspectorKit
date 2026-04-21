@@ -251,6 +251,13 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         }
         .store(in: &stateObservationHandles)
         inspector.observe(
+            \.isPageReadyForSelection,
+            options: [.removeDuplicates]
+        ) { [weak self] _ in
+            self?.scheduleNavigationControlsUpdate()
+        }
+        .store(in: &stateObservationHandles)
+        inspector.observe(
             \.isSelectingElement,
             options: [.removeDuplicates]
         ) { [weak self] _ in
@@ -285,6 +292,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         return DOMSecondaryMenuBuilder.makeMenu(
             hasSelection: hasSelection,
             hasPageWebView: hasPageWebView,
+            canReloadInspector: inspector.isPageReadyForSelection,
             onCopyHTML: { [weak self] in
                 self?.copySelectedHTML()
             },
@@ -335,7 +343,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
             navigationItem.additionalOverflowItems = UIDeferredMenuElement.uncached { [weak self] completion in
                 completion((self?.makeSecondaryMenu() ?? UIMenu()).children)
             }
-            pickItem.isEnabled = inspector.hasPageWebView
+            pickItem.isEnabled = inspector.isPageReadyForSelection
             pickItem.image = UIImage(systemName: pickSymbolName)
             pickItem.tintColor = inspector.isSelectingElement ? .systemBlue : .label
         } else {

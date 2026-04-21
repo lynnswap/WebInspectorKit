@@ -115,6 +115,24 @@ struct WITransportNativeInspectorSymbolResolverTests {
     }
 
     @Test
+    func imagePathSuffixesMatchExpectedFrameworkLocations() {
+        let suffixes = WITransportNativeInspectorSymbolResolver.imagePathSuffixesForTesting()
+
+        #expect(suffixes.webKit == [
+            "/System/Library/Frameworks/WebKit.framework/WebKit",
+            "/System/Library/Frameworks/WebKit.framework/Versions/A/WebKit",
+        ])
+        #expect(suffixes.javaScriptCore == [
+            "/System/Library/Frameworks/JavaScriptCore.framework/JavaScriptCore",
+            "/System/Library/Frameworks/JavaScriptCore.framework/Versions/A/JavaScriptCore",
+        ])
+        #expect(suffixes.webCore == [
+            "/System/Library/PrivateFrameworks/WebCore.framework/WebCore",
+            "/System/Library/PrivateFrameworks/WebCore.framework/Versions/A/WebCore",
+        ])
+    }
+
+    @Test
     func resolvedAddressHeaderValidationAcceptsMatchingImageAndRejectsUnexpectedImage() throws {
         let resolution = WITransportNativeInspectorSymbolResolver.currentAttachResolution()
         #if os(iOS) && !targetEnvironment(simulator)

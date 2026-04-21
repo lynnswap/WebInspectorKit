@@ -1994,6 +1994,18 @@ enum WITransportNativeInspectorSymbolResolver {
         )
     }
 
+    static func imagePathSuffixesForTesting() -> (
+        webKit: [String],
+        javaScriptCore: [String],
+        webCore: [String]
+    ) {
+        (
+            webKit: WITransportNativeInspectorResolver.webKitImagePathSuffixes,
+            javaScriptCore: WITransportNativeInspectorResolver.javaScriptCoreImagePathSuffixes,
+            webCore: WITransportNativeInspectorResolver.webCoreImagePathSuffixes
+        )
+    }
+
     static func connectSymbolsForTesting() -> [String] {
         [WITransportNativeInspectorResolver.connectFrontendSymbol]
     }

@@ -100,7 +100,7 @@ extension UIApplication: WIDOMUIKitSceneActivationRequesting {
 @MainActor
 package enum WIDOMUIKitInspectorSelectionEnvironment {
     package static var availabilityProvider: @MainActor (WKWebView) -> Bool = {
-        WIInspectorSelectionPrivateBridge.canControlSelection(in: $0)
+        WIInspectorSelectionPrivateBridge.hasPrivateInspectorAccess(in: $0)
     }
     package static var nodeSearchSetter: @MainActor (WKWebView, Bool) -> Bool = { webView, enabled in
         WIInspectorSelectionPrivateBridge.setNodeSearchEnabled(enabled, in: webView)
@@ -194,26 +194,28 @@ extension WIDOMInspector {
         }
     }
 
-    func setNativeInspectorNodeSearchEnabled(_ enabled: Bool) {
+    @discardableResult
+    func setNativeInspectorNodeSearchEnabled(_ enabled: Bool) -> Bool {
         if usesCustomSelectionHitTestOverlay {
             if enabled {
                 installSelectionHitTestOverlay()
             } else {
                 removeSelectionHitTestOverlay()
             }
-            return
+            return true
         }
 
         guard let pageWebView else {
-            return
+            return false
         }
 
         guard WIDOMUIKitInspectorSelectionEnvironment.nodeSearchSetter(pageWebView, enabled) else {
             domWindowActivationLogger.error(
                 "native inspector node search \(enabled ? "enable" : "disable", privacy: .public) unavailable"
             )
-            return
+            return false
         }
+        return true
     }
 
     private func installSelectionHitTestOverlay() {

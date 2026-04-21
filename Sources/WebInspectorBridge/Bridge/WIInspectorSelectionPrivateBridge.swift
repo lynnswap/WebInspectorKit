@@ -4,9 +4,8 @@ import WebKit
 
 @MainActor
 package enum WIInspectorSelectionPrivateBridge {
-    package static func canControlSelection(in webView: WKWebView) -> Bool {
+    package static func hasPrivateInspectorAccess(in webView: WKWebView) -> Bool {
         WIKRuntimeBridge.inspector(for: webView) != nil
-            && WIKRuntimeBridge.canEnableInspectorNodeSearch(for: webView)
     }
 
     package static func isElementSelectionActive(in webView: WKWebView) -> Bool? {

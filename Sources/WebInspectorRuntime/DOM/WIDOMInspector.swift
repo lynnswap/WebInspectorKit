@@ -171,6 +171,7 @@ public final class WIDOMInspector {
     public let document: DOMDocumentModel
     public private(set) var isSelectingElement = false
     public private(set) var hasPageWebView = false
+    package private(set) var isPageReadyForSelection = false
 
     @ObservationIgnored private var configuration: DOMConfiguration
     @ObservationIgnored package weak var pageWebView: WKWebView?
@@ -192,6 +193,7 @@ public final class WIDOMInspector {
     @ObservationIgnored private var pendingInspectSelection: PendingInspectSelection?
     @ObservationIgnored var pointerDisconnectObserver: NSObjectProtocol?
     @ObservationIgnored private var pageWebViewAttachmentGeneration: UInt64 = 0
+    @ObservationIgnored private var isDOMTransportAttached = false
 
 #if canImport(UIKit)
     @ObservationIgnored package weak var sceneActivationRequestingScene: UIScene?
@@ -253,9 +255,10 @@ public final class WIDOMInspector {
 #endif
         if pageWebView === webView, currentContext != nil {
             installPageWebViewLifetimeObserver(on: webView)
+            setDOMTransportAttached(false)
             await sharedTransport.attach(client: .dom, to: webView)
-            hasPageWebView = await sharedTransport.attachedSession() != nil
-            guard hasPageWebView else {
+            setDOMTransportAttached(await sharedTransport.attachedSession() != nil)
+            guard isDOMTransportAttached else {
                 return
             }
             await installPageBridgeBootstrap(contextID: currentContext?.contextID ?? 0)
@@ -263,15 +266,22 @@ public final class WIDOMInspector {
         }
 
         await resetInteractionState()
-        if pageWebView !== webView, pageBridge.attachedWebView != nil {
+        let isSwitchingAttachedPage = pageWebView !== webView
+        if isSwitchingAttachedPage, pageBridge.attachedWebView != nil {
             await pageBridge.detach()
         }
-        pageWebView = webView
+        setPageWebView(webView)
         installPageWebViewLifetimeObserver(on: webView)
         pageBridge.attach(to: webView)
+        setDOMTransportAttached(false)
         await sharedTransport.attach(client: .dom, to: webView)
-        hasPageWebView = await sharedTransport.attachedSession() != nil
-        guard hasPageWebView else {
+        setDOMTransportAttached(await sharedTransport.attachedSession() != nil)
+        guard isDOMTransportAttached else {
+            if isSwitchingAttachedPage {
+                cancelBootstrap()
+                clearContextState()
+                updateInspectorBootstrap()
+            }
             return
         }
         await installPageBridgeBootstrap(contextID: currentContext?.contextID ?? 0)
@@ -288,14 +298,14 @@ public final class WIDOMInspector {
         await resetInteractionState()
         try? await hideHighlight()
         await sharedTransport.suspend(client: .dom)
+        setDOMTransportAttached(false)
 #if canImport(UIKit)
         removePointerDisconnectObserver()
 #endif
         if pageBridge.attachedWebView != nil {
             await pageBridge.detach()
         }
-        pageWebView = nil
-        hasPageWebView = false
+        setPageWebView(nil)
         cancelBootstrap()
         clearContextState()
         updateInspectorBootstrap()
@@ -305,14 +315,14 @@ public final class WIDOMInspector {
         await resetInteractionState()
         try? await hideHighlight()
         await sharedTransport.detach(client: .dom)
+        setDOMTransportAttached(false)
 #if canImport(UIKit)
         removePointerDisconnectObserver()
 #endif
         if pageBridge.attachedWebView != nil {
             await pageBridge.detach()
         }
-        pageWebView = nil
-        hasPageWebView = false
+        setPageWebView(nil)
         cancelBootstrap()
         clearContextState()
         updateInspectorBootstrap()
@@ -363,7 +373,6 @@ public final class WIDOMInspector {
         applyRecoverableError(nil)
         let selectedContextID = currentContext?.contextID
         let hadSelectedNode = document.selectedNode != nil
-        try? await hideHighlight()
 
         do {
             activatePageWindowForSelectionIfPossible()
@@ -373,6 +382,9 @@ public final class WIDOMInspector {
 #endif
 
             let targetIdentifier = try requireCurrentTargetIdentifier()
+            if hadSelectedNode {
+                try? await hideHighlight()
+            }
             try await setInspectModeEnabled(true, targetIdentifier: targetIdentifier)
             beginInspectMode(targetIdentifier: targetIdentifier)
         } catch {
@@ -381,6 +393,30 @@ public final class WIDOMInspector {
             }
             throw error
         }
+    }
+
+    private func setPageWebView(_ webView: WKWebView?) {
+        pageWebView = webView
+        hasPageWebView = webView != nil
+        updateSelectionAvailability()
+    }
+
+    private func setDOMTransportAttached(_ isAttached: Bool) {
+        isDOMTransportAttached = isAttached
+        updateSelectionAvailability()
+    }
+
+    private func setPhase(_ phase: Phase) {
+        self.phase = phase
+        updateSelectionAvailability()
+    }
+
+    private func updateSelectionAvailability() {
+        isPageReadyForSelection =
+            hasPageWebView
+            && isDOMTransportAttached
+            && currentContext != nil
+            && phase.targetIdentifier != nil
     }
 
     package func requestSelectionModeToggle() {
@@ -415,8 +451,10 @@ public final class WIDOMInspector {
 #endif
         pageWebView = nil
         hasPageWebView = false
+        isPageReadyForSelection = false
+        isDOMTransportAttached = false
         currentContext = nil
-        phase = .idle
+        setPhase(.idle)
         frontendReadyContextID = nil
         cancelPendingChildRequestRecords()
         document.setErrorMessage(nil)
@@ -863,7 +901,7 @@ private extension WIDOMInspector {
 
     func clearContextState() {
         currentContext = nil
-        phase = .idle
+        setPhase(.idle)
         documentURL = nil
         frontendReadyContextID = nil
         inspectModeTargetIdentifier = nil
@@ -925,7 +963,7 @@ private extension WIDOMInspector {
         )
 
         guard loadImmediately, let targetIdentifier else {
-            phase = .waitingForTarget(context)
+            setPhase(.waitingForTarget(context))
             logBootstrapDiagnostics("phase waitingForTarget context=\(context.contextID)")
             return
         }
@@ -945,7 +983,7 @@ private extension WIDOMInspector {
         isFreshDocument: Bool
     ) {
         cancelBootstrap()
-        phase = .loadingDocument(context, targetIdentifier: targetIdentifier)
+        setPhase(.loadingDocument(context, targetIdentifier: targetIdentifier))
         logBootstrapDiagnostics(
             "startLoadingDocument context=\(context.contextID) target=\(targetIdentifier) depth=\(depth)"
         )
@@ -967,7 +1005,7 @@ private extension WIDOMInspector {
                 guard let self, self.currentContext?.contextID == context.contextID else {
                     return
                 }
-                self.phase = .waitingForTarget(context)
+                self.setPhase(.waitingForTarget(context))
                 self.applyRecoverableError(self.errorMessage(from: error))
             }
         }
@@ -983,7 +1021,7 @@ private extension WIDOMInspector {
               activeContext.contextID == contextID else {
             throw DOMOperationError.contextInvalidated
         }
-        phase = .loadingDocument(activeContext, targetIdentifier: targetIdentifier)
+        setPhase(.loadingDocument(activeContext, targetIdentifier: targetIdentifier))
         logBootstrapDiagnostics(
             "refreshCurrentDocumentFromTransport begin context=\(contextID) target=\(targetIdentifier)"
         )
@@ -1012,7 +1050,7 @@ private extension WIDOMInspector {
         let resolvedContext = DOMContext(contextID: contextID, documentURL: resolvedURL)
         self.currentContext = resolvedContext
         self.documentURL = resolvedURL
-        phase = .ready(resolvedContext, targetIdentifier: targetIdentifier)
+        setPhase(.ready(resolvedContext, targetIdentifier: targetIdentifier))
         applyRecoverableError(nil)
         logBootstrapDiagnostics(
             "refreshCurrentDocumentFromTransport ready context=\(contextID) target=\(targetIdentifier) root=\(snapshot.root.nodeName)"
@@ -1230,17 +1268,13 @@ private extension WIDOMInspector {
                     isFreshDocument: true
                 )
             case let .loadingDocument(context, activeTargetIdentifier):
-                let targetIdentifier: String
-                if let observedTargetIdentifier {
-                    targetIdentifier = observedTargetIdentifier
-                } else if envelope.targetIdentifier == activeTargetIdentifier {
-                    targetIdentifier = activeTargetIdentifier
-                } else {
+                guard let observedTargetIdentifier,
+                      observedTargetIdentifier != activeTargetIdentifier else {
                     return
                 }
                 startLoadingDocument(
                     for: context,
-                    targetIdentifier: targetIdentifier,
+                    targetIdentifier: observedTargetIdentifier,
                     depth: configuration.snapshotDepth,
                     isFreshDocument: true
                 )
@@ -1248,7 +1282,8 @@ private extension WIDOMInspector {
                 return
             }
         case "Target.didCommitProvisionalTarget":
-            let targetIdentifier = envelope.targetIdentifier ?? sharedTransport.currentObservedPageTargetIdentifier()
+            let targetIdentifier = sharedTransport.currentPageTargetIdentifier()
+                ?? envelope.targetIdentifier
             await beginFreshContext(
                 documentURL: normalizedDocumentURL(pageWebView?.url?.absoluteString),
                 targetIdentifier: targetIdentifier,
@@ -1417,6 +1452,13 @@ private extension WIDOMInspector {
         }
 
         do {
+            if await completePendingChildRequestIfAlreadySatisfied(
+                nodeID: nodeID,
+                contextID: contextID
+            ) {
+                return
+            }
+
             if registration.shouldSendRequest {
                 let targetIdentifier = try requireCurrentTargetIdentifier()
                 let transportNodeID = try transportNodeID(forFrontendNodeID: nodeID)
@@ -1428,6 +1470,13 @@ private extension WIDOMInspector {
                         depth: max(1, depth)
                     )
                 )
+            }
+
+            if await completePendingChildRequestIfAlreadySatisfied(
+                nodeID: nodeID,
+                contextID: contextID
+            ) {
+                return
             }
 
             _ = await waitForPendingChildRequestCompletion(
@@ -1460,6 +1509,29 @@ private extension WIDOMInspector {
         let record = PendingChildRequestRecord(key: key, reportsToFrontend: reportsToFrontend)
         pendingChildRequests[key] = record
         return (record, true)
+    }
+
+    private func completePendingChildRequestIfAlreadySatisfied(
+        nodeID: Int,
+        contextID: DOMContextID
+    ) async -> Bool {
+        guard childRequestIsAlreadySatisfied(nodeID: nodeID) else {
+            return false
+        }
+
+        await completePendingChildRequest(
+            nodeID: nodeID,
+            contextID: contextID,
+            success: true
+        )
+        return true
+    }
+
+    private func childRequestIsAlreadySatisfied(nodeID: Int) -> Bool {
+        guard let node = document.node(localID: UInt64(nodeID)) else {
+            return false
+        }
+        return node.childCount <= node.children.count
     }
 
     private func waitForPendingChildRequestCompletion(
@@ -1798,7 +1870,22 @@ private extension WIDOMInspector {
                 parameters: DOMSetInspectModeEnabledParameters.enabled
             )
 #if canImport(UIKit)
-            setNativeInspectorNodeSearchEnabled(true)
+            guard setNativeInspectorNodeSearchEnabled(true) else {
+                do {
+                    _ = try await sendDOMCommand(
+                        WITransportMethod.DOM.setInspectModeEnabled,
+                        targetIdentifier: targetIdentifier,
+                        parameters: DOMSetInspectModeEnabledParameters.disabled
+                    )
+                } catch {
+                    logSelectionDiagnostics(
+                        "setInspectModeEnabled failed to roll back inspect mode after native node-search enable failure",
+                        extra: error.localizedDescription,
+                        level: .error
+                    )
+                }
+                throw DOMOperationError.scriptFailure("Native inspector node search unavailable.")
+            }
 #endif
         } else {
             _ = try await sendDOMCommand(
@@ -2942,6 +3029,7 @@ private extension WIDOMInspector {
             return
         }
         hasPageWebView = false
+        updateSelectionAvailability()
     }
 }
 
@@ -3092,11 +3180,39 @@ extension WIDOMInspector {
         await bootstrapTask?.value
     }
 
+    package var testIsPageReadyForSelection: Bool {
+        isPageReadyForSelection
+    }
+
     package func testSetLoadingPhase(targetIdentifier: String) {
         guard let currentContext else {
             return
         }
-        phase = .loadingDocument(currentContext, targetIdentifier: targetIdentifier)
+        setPhase(.loadingDocument(currentContext, targetIdentifier: targetIdentifier))
+    }
+
+    package func testSetSelectionAvailability(
+        pageWebView: WKWebView?,
+        transportAttached: Bool,
+        contextID: DOMContextID?,
+        targetIdentifier: String?
+    ) {
+        setPageWebView(pageWebView)
+        setDOMTransportAttached(transportAttached)
+
+        guard let contextID else {
+            currentContext = nil
+            setPhase(.idle)
+            return
+        }
+
+        let context = DOMContext(contextID: contextID, documentURL: nil)
+        currentContext = context
+        if let targetIdentifier {
+            setPhase(.ready(context, targetIdentifier: targetIdentifier))
+        } else {
+            setPhase(.waitingForTarget(context))
+        }
     }
 
     package func testBeginFreshContext(
@@ -3150,6 +3266,18 @@ extension WIDOMInspector {
         pendingChildRequests.keys
             .map(\.nodeID)
             .sorted()
+    }
+
+    package func testRegisterPendingChildRequest(
+        nodeID: Int,
+        contextID: DOMContextID,
+        reportsToFrontend: Bool
+    ) {
+        _ = registerPendingChildRequest(
+            nodeID: nodeID,
+            contextID: contextID,
+            reportsToFrontend: reportsToFrontend
+        )
     }
 
     package func testFinishPendingInspectMaterialization(

@@ -8,6 +8,7 @@ enum DOMSecondaryMenuBuilder {
     static func makeMenu(
         hasSelection: Bool,
         hasPageWebView: Bool,
+        canReloadInspector: Bool,
         onCopyHTML: @escaping () -> Void,
         onCopySelectorPath: @escaping () -> Void,
         onCopyXPath: @escaping () -> Void,
@@ -35,7 +36,7 @@ enum DOMSecondaryMenuBuilder {
             title: wiLocalized("reload"),
             image: UIImage(systemName: "arrow.clockwise"),
             children: [
-                UIAction(title: wiLocalized("reload.target.inspector"), attributes: hasPageWebView ? [] : [.disabled]) { _ in
+                UIAction(title: wiLocalized("reload.target.inspector"), attributes: canReloadInspector ? [] : [.disabled]) { _ in
                     onReloadInspector()
                 },
                 UIAction(title: wiLocalized("reload.target.page"), attributes: hasPageWebView ? [] : [.disabled]) { _ in

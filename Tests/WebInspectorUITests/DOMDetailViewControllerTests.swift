@@ -688,9 +688,10 @@ struct DOMDetailViewControllerTests {
     }
 
     @Test
-    func detailViewPickControlEnablesAfterLateAttach() async {
+    func detailViewPickControlWaitsForLateSelectionReadiness() async {
         let controller = WIInspectorController()
         let inspector = controller.dom
+        let webView = makeTestWebView()
         let (viewController, window) = makeHostedDetailViewController(inspector: inspector)
         defer { tearDown(window: window) }
 
@@ -701,12 +702,30 @@ struct DOMDetailViewControllerTests {
 
         #expect(pickItem.isEnabled == false)
 
-        await inspector.attach(to: makeTestWebView())
+        inspector.testSetSelectionAvailability(
+            pageWebView: webView,
+            transportAttached: false,
+            contextID: nil,
+            targetIdentifier: nil
+        )
 
-        let enabledAfterAttach = await waitUntil {
+        let stillDisabledAfterAttachment = await waitUntil {
+            inspector.hasPageWebView
+                && pickItem.isEnabled == false
+        }
+        #expect(stillDisabledAfterAttachment)
+
+        inspector.testSetSelectionAvailability(
+            pageWebView: webView,
+            transportAttached: true,
+            contextID: 1,
+            targetIdentifier: "page-A"
+        )
+
+        let enabledAfterReadiness = await waitUntil {
             pickItem.isEnabled && pickItem.tintColor == .label
         }
-        #expect(enabledAfterAttach)
+        #expect(enabledAfterReadiness)
     }
 
     private func makeInspector(
