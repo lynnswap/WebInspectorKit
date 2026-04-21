@@ -1577,6 +1577,96 @@ struct WIDOMInspectorTests {
     }
 
     @Test
+    func inspectorInspectMaterializesNodeInsideKnownNestedDocument() async throws {
+        var requestedNodeIDs: [Int] = []
+        let backend = FakeDOMTransportBackend()
+        backend.pageResultProvider = { method, payload, _ in
+            switch method {
+            case WITransportMethod.DOM.getDocument:
+                return makeIFrameDocumentResultWithEmptyNestedDocument(url: "https://example.com/a")
+            case WITransportMethod.DOM.setInspectModeEnabled:
+                return [:]
+            case WITransportMethod.DOM.requestNode:
+                let params = runtimeTestDictionaryValue(payload["params"])
+                if params?["objectId"] as? String == "node-object-iframe-target" {
+                    return ["nodeId": 26]
+                }
+                return [:]
+            case WITransportMethod.DOM.requestChildNodes:
+                let params = runtimeTestDictionaryValue(payload["params"])
+                let requestedNodeID = params.flatMap {
+                    runtimeTestIntValue($0["nodeId"]) ?? ($0["nodeId"] as? NSNumber)?.intValue
+                }
+                if let requestedNodeID {
+                    requestedNodeIDs.append(requestedNodeID)
+                }
+                if requestedNodeID == 24 {
+                    backend.emitPageEvent(
+                        method: "DOM.setChildNodes",
+                        params: [
+                            "parentId": 24,
+                            "nodes": [[
+                                "nodeId": 25,
+                                "backendNodeId": 25,
+                                "nodeType": 1,
+                                "nodeName": "HTML",
+                                "localName": "html",
+                                "nodeValue": "",
+                                "childNodeCount": 1,
+                                "children": [[
+                                    "nodeId": 26,
+                                    "backendNodeId": 26,
+                                    "nodeType": 1,
+                                    "nodeName": "BUTTON",
+                                    "localName": "button",
+                                    "nodeValue": "",
+                                    "attributes": ["id", "frame-target"],
+                                    "childNodeCount": 0,
+                                    "children": [],
+                                ]],
+                            ]],
+                        ]
+                    )
+                }
+                return [:]
+            default:
+                return [:]
+            }
+        }
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        try await inspector.beginSelectionMode()
+        backend.emitRootEvent(
+            method: "Inspector.inspect",
+            params: [
+                "object": [
+                    "type": "object",
+                    "subtype": "node",
+                    "objectId": "node-object-iframe-target",
+                ],
+                "hints": [:],
+            ]
+        )
+
+        let selected = await waitForCondition {
+            inspector.document.selectedNode?.localID == 26
+                && inspector.document.selectedNode?.attributes.contains(where: { $0.name == "id" && $0.value == "frame-target" }) == true
+                && inspector.isSelectingElement == false
+        }
+        #expect(selected)
+        #expect(requestedNodeIDs.first == 24)
+        #expect(inspector.document.errorMessage == nil)
+    }
+
+    @Test
     func laterInspectCallbacksAreIgnoredAfterFirstBackendHit() async throws {
         var requestedObjectIDs: [String] = []
         let backend = FakeDOMTransportBackend(
@@ -3382,6 +3472,35 @@ private func makeIFrameDocumentResult(url: String) -> [String: Any] {
                         "children": [],
                     ]],
                 ]],
+            ],
+        ]]
+    )
+}
+
+private func makeIFrameDocumentResultWithEmptyNestedDocument(url: String) -> [String: Any] {
+    makeDocumentResult(
+        url: url,
+        mainChildren: [[
+            "nodeId": 20,
+            "backendNodeId": 20,
+            "nodeType": 1,
+            "nodeName": "IFRAME",
+            "localName": "iframe",
+            "nodeValue": "",
+            "attributes": ["id", "frame-owner"],
+            "frameId": "frame-child",
+            "childNodeCount": 1,
+            "contentDocument": [
+                "nodeId": 24,
+                "backendNodeId": 24,
+                "nodeType": 9,
+                "nodeName": "#document",
+                "localName": "",
+                "nodeValue": "",
+                "documentURL": "https://example.com/frame",
+                "frameId": "frame-child",
+                "childNodeCount": 0,
+                "children": [],
             ],
         ]]
     )

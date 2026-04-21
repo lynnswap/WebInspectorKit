@@ -1091,6 +1091,26 @@ private extension WIDOMInspector {
         )
     }
 
+    func projectCurrentDocumentToFrontend(
+        contextID: DOMContextID,
+        selectionPayload: DOMSelectionSnapshotPayload?,
+        reason: String
+    ) async {
+        let snapshotPayload = frontendFullSnapshotPayload() ?? ["root": NSNull()]
+        await inspectorBridge.applyFullSnapshot(snapshotPayload, contextID: contextID)
+        await inspectorBridge.applySelectionPayload(
+            selectionPayloadDictionary(from: selectionPayload),
+            contextID: contextID
+        )
+        if frontendReadyContextID == contextID {
+            markReadyFrontendProjectionCurrent(contextID: contextID)
+        }
+        logSelectionDiagnostics(
+            "projectCurrentDocumentToFrontend",
+            extra: "reason=\(reason) contextID=\(contextID)"
+        )
+    }
+
     func requirePageWebView() throws -> WKWebView {
         guard let pageWebView else {
             applyRecoverableError("Web view unavailable.")
@@ -1855,9 +1875,17 @@ private extension WIDOMInspector {
     private func waitForPendingChildRequestCompletion(
         _ record: PendingChildRequestRecord,
         nodeID: Int,
-        contextID: DOMContextID
+        contextID: DOMContextID,
+        timeout overrideTimeout: Duration? = nil
     ) async -> Bool {
-        let timeout = await sharedTransport.attachedSession()?.responseTimeout ?? .seconds(15)
+        let timeout: Duration
+        if let overrideTimeout {
+            timeout = overrideTimeout
+        } else if let responseTimeout = await sharedTransport.attachedSession()?.responseTimeout {
+            timeout = responseTimeout
+        } else {
+            timeout = .seconds(15)
+        }
         return await record.wait(timeout: timeout) { [weak self] in
             guard let self else {
                 return
@@ -1868,6 +1896,50 @@ private extension WIDOMInspector {
                 success: false
             )
         }
+    }
+
+    private func requestChildNodesAndWaitForCompletion(
+        transportNodeID: Int,
+        frontendNodeID: Int,
+        targetIdentifier: String,
+        contextID: DOMContextID,
+        depth: Int,
+        timeout: Duration? = nil
+    ) async -> Bool {
+        guard let registration = registerPendingChildRequest(
+            nodeID: frontendNodeID,
+            contextID: contextID,
+            reportsToFrontend: false
+        ) else {
+            return false
+        }
+
+        if registration.shouldSendRequest {
+            do {
+                _ = try await sendDOMCommand(
+                    WITransportMethod.DOM.requestChildNodes,
+                    targetIdentifier: targetIdentifier,
+                    parameters: DOMRequestChildNodesParameters(
+                        nodeId: transportNodeID,
+                        depth: max(1, depth)
+                    )
+                )
+            } catch {
+                await completePendingChildRequest(
+                    nodeID: frontendNodeID,
+                    contextID: contextID,
+                    success: false
+                )
+                return false
+            }
+        }
+
+        return await waitForPendingChildRequestCompletion(
+            registration.record,
+            nodeID: frontendNodeID,
+            contextID: contextID,
+            timeout: timeout
+        )
     }
 
     private func completePendingChildRequest(
@@ -2568,6 +2640,11 @@ private extension WIDOMInspector {
             return incompleteCandidates
         }
 
+        let nestedDocumentRoots = knownDocumentRoots().filter { $0.parent != nil }
+        if nestedDocumentRoots.isEmpty == false {
+            return nestedDocumentRoots
+        }
+
         if let bodyNode = firstNode(in: root, where: {
             ($0.localName.isEmpty ? $0.nodeName.lowercased() : $0.localName.lowercased()) == "body"
         }) {
@@ -2588,6 +2665,26 @@ private extension WIDOMInspector {
         }
 
         return [root]
+    }
+
+    private func knownDocumentRoots() -> [DOMNodeModel] {
+        guard let root = document.rootNode else {
+            return []
+        }
+
+        var roots: [DOMNodeModel] = []
+        var seen = Set<DOMNodeModel.ID>()
+        var queue: [DOMNodeModel] = [root]
+
+        while let node = queue.first {
+            queue.removeFirst()
+            if node.nodeType == 9, seen.insert(node.id).inserted {
+                roots.append(node)
+            }
+            queue.append(contentsOf: node.children)
+        }
+
+        return roots
     }
 
     func applySelection(
@@ -2616,10 +2713,13 @@ private extension WIDOMInspector {
                 contextID: contextID
             )
             markReadyFrontendProjectionCurrent(contextID: contextID)
-        } else if frontendReadyContextID == contextID {
-            await hydrateReadyFrontendFromCurrentDocument(
+        } else {
+            await projectCurrentDocumentToFrontend(
                 contextID: contextID,
-                reason: "applySelection.initialHydration"
+                selectionPayload: payload,
+                reason: frontendReadyContextID == contextID
+                    ? "applySelection.initialHydration"
+                    : "applySelection.proactiveProjection"
             )
         }
         await syncSelectedNodeHighlight(contextID: contextID)
@@ -2801,38 +2901,12 @@ private extension WIDOMInspector {
         contextID: DOMContextID,
         depth: Int
     ) async -> Bool {
-        guard let registration = registerPendingChildRequest(
-            nodeID: frontendNodeID,
+        await requestChildNodesAndWaitForCompletion(
+            transportNodeID: transportNodeID,
+            frontendNodeID: frontendNodeID,
+            targetIdentifier: targetIdentifier,
             contextID: contextID,
-            reportsToFrontend: false
-        ) else {
-            return false
-        }
-
-        if registration.shouldSendRequest {
-            do {
-                _ = try await sendDOMCommand(
-                    WITransportMethod.DOM.requestChildNodes,
-                    targetIdentifier: targetIdentifier,
-                    parameters: DOMRequestChildNodesParameters(
-                        nodeId: transportNodeID,
-                        depth: max(1, depth)
-                    )
-                )
-            } catch {
-                await completePendingChildRequest(
-                    nodeID: frontendNodeID,
-                    contextID: contextID,
-                    success: false
-                )
-                return false
-            }
-        }
-
-        return await waitForPendingChildRequestCompletion(
-            registration.record,
-            nodeID: frontendNodeID,
-            contextID: contextID
+            depth: depth
         )
     }
 

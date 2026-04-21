@@ -255,6 +255,162 @@ describe("dom-tree-view", () => {
         expect(treeText).toContain("button");
     });
 
+    it("bootstraps the tree from a root subtree payload when the tree is empty", async () => {
+        const { protocolState, treeState } = await import("../UI/DOMTree/dom-tree-state");
+        await import("../UI/DOMTree/dom-tree-view");
+
+        window.webInspectorDOMFrontend?.applySubtreePayload?.({
+            nodeId: 1,
+            nodeType: 9,
+            nodeName: "#document",
+            localName: "",
+            childNodeCount: 1,
+            children: [
+                {
+                    nodeId: 2,
+                    nodeType: 1,
+                    nodeName: "HTML",
+                    localName: "html",
+                    childNodeCount: 1,
+                    children: [
+                        {
+                            nodeId: 3,
+                            nodeType: 1,
+                            nodeName: "BODY",
+                            localName: "body",
+                            childNodeCount: 1,
+                            children: [
+                                {
+                                    nodeId: 20,
+                                    nodeType: 1,
+                                    nodeName: "IFRAME",
+                                    localName: "iframe",
+                                    frameId: "frame-child",
+                                    childNodeCount: 1,
+                                    contentDocument: {
+                                        nodeId: 24,
+                                        nodeType: 9,
+                                        nodeName: "#document",
+                                        localName: "",
+                                        frameId: "frame-child",
+                                        childNodeCount: 1,
+                                        children: [
+                                            {
+                                                nodeId: 25,
+                                                nodeType: 1,
+                                                nodeName: "HTML",
+                                                localName: "html",
+                                                childNodeCount: 1,
+                                                children: [
+                                                    {
+                                                        nodeId: 26,
+                                                        nodeType: 1,
+                                                        nodeName: "BUTTON",
+                                                        localName: "button",
+                                                        attributes: ["id", "frame-target"],
+                                                        childNodeCount: 0,
+                                                        children: [],
+                                                    },
+                                                ],
+                                            },
+                                        ],
+                                    },
+                                },
+                            ],
+                        },
+                    ],
+                },
+            ],
+        }, protocolState.contextID);
+
+        expect(treeState.snapshot?.root?.id).toBe(1);
+        const { toggleNode } = await import("../UI/DOMTree/dom-tree-view-support");
+        toggleNode(20);
+        toggleNode(24);
+        toggleNode(25);
+
+        const treeText = document.getElementById("dom-tree")?.textContent ?? "";
+        expect(treeText).toContain("iframe");
+        expect(treeText).toContain("#document");
+        expect(treeText).toContain("button");
+    });
+
+    it("rebinds to a replaced tree container before applying subtree updates", async () => {
+        const { dom, protocolState } = await import("../UI/DOMTree/dom-tree-state");
+        await import("../UI/DOMTree/dom-tree-view");
+
+        window.webInspectorDOMFrontend?.applyFullSnapshot?.({
+            root: {
+                nodeId: 1,
+                nodeType: 9,
+                nodeName: "#document",
+                localName: "",
+                childNodeCount: 1,
+                children: [
+                    {
+                        nodeId: 2,
+                        nodeType: 1,
+                        nodeName: "HTML",
+                        localName: "html",
+                        childNodeCount: 1,
+                        children: [
+                            {
+                                nodeId: 3,
+                                nodeType: 1,
+                                nodeName: "BODY",
+                                localName: "body",
+                                childNodeCount: 0,
+                                children: [],
+                            },
+                        ],
+                    },
+                ],
+            },
+        }, protocolState.contextID);
+
+        const previousTree = dom.tree;
+        document.body.innerHTML = "<div id=\"dom-tree\"></div><div id=\"dom-empty\"></div>";
+
+        window.webInspectorDOMFrontend?.applySubtreePayload?.({
+            nodeId: 1,
+            nodeType: 9,
+            nodeName: "#document",
+            localName: "",
+            childNodeCount: 1,
+            children: [
+                {
+                    nodeId: 2,
+                    nodeType: 1,
+                    nodeName: "HTML",
+                    localName: "html",
+                    childNodeCount: 1,
+                    children: [
+                        {
+                            nodeId: 3,
+                            nodeType: 1,
+                            nodeName: "BODY",
+                            localName: "body",
+                            childNodeCount: 1,
+                            children: [
+                                {
+                                    nodeId: 4,
+                                    nodeType: 1,
+                                    nodeName: "MAIN",
+                                    localName: "main",
+                                    childNodeCount: 0,
+                                    children: [],
+                                },
+                            ],
+                        },
+                    ],
+                },
+            ],
+        }, protocolState.contextID);
+
+        expect(dom.tree).not.toBe(previousTree);
+        expect(document.getElementById("dom-tree")?.textContent).toContain("main");
+    });
+
     it("does not render placeholder rows for partially loaded nodes", async () => {
         const { protocolState } = await import("../UI/DOMTree/dom-tree-state");
         await import("../UI/DOMTree/dom-tree-view");

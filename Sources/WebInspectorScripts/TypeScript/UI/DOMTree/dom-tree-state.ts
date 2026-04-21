@@ -51,10 +51,10 @@ export const dom: DOMElements = {
 };
 
 export function ensureDomElements(): void {
-    if (!dom.tree) {
+    if (!dom.tree || !dom.tree.isConnected || dom.tree.id !== "dom-tree") {
         dom.tree = document.getElementById("dom-tree");
     }
-    if (!dom.empty) {
+    if (!dom.empty || !dom.empty.isConnected || dom.empty.id !== "dom-empty") {
         dom.empty = document.getElementById("dom-empty");
     }
 }

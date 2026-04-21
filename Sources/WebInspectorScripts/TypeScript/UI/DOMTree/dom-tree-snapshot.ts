@@ -55,6 +55,7 @@ import {
     captureTreeScrollTop,
     ensureTreeEventHandlers,
     reopenSelectionAncestors,
+    processPendingNodeRenders,
     restoreTreeScrollPosition,
     restoreTreeScrollTop,
     scheduleNodeRender,
@@ -817,8 +818,27 @@ export function applySubtree(
             return false;
         }
 
+        const snapshotRootID = treeState.snapshot?.root?.id ?? null;
+        if (
+            dom.tree
+            && dom.tree.childElementCount === 0
+            && (
+                normalized.nodeType === NODE_TYPES.DOCUMENT_NODE
+                || snapshotRootID === normalized.id
+            )
+        ) {
+            return setSnapshot({ root: subtree }, { preserveState: false });
+        }
+
         const target = treeState.nodes.get(normalized.id);
         if (!target) {
+            const canBootstrapFromSubtree =
+                normalized.nodeType === NODE_TYPES.DOCUMENT_NODE
+                || snapshotRootID === normalized.id
+                || treeState.nodes.size === 0;
+            if (canBootstrapFromSubtree) {
+                return setSnapshot({ root: subtree }, { preserveState: false });
+            }
             markChildNodesRequestCompleted(normalized.id);
             return false;
         }
@@ -837,7 +857,12 @@ export function applySubtree(
             treeState.openState.set(key, value);
         });
 
+        const shouldForceRender = !!dom.tree && dom.tree.childElementCount === 0;
         scheduleNodeRender(target);
+        ensureRenderedSnapshotIfNeeded();
+        if (shouldForceRender) {
+            processPendingNodeRenders();
+        }
         setNodeExpanded(target.id, true, { requestChildren: true });
 
         if (previousSelectionId) {
@@ -913,7 +938,12 @@ function applySetChildNodes(params: {
         treeState.openState.set(key, value);
     });
 
+    const shouldForceRender = !!dom.tree && dom.tree.childElementCount === 0;
     scheduleNodeRender(parent);
+    ensureRenderedSnapshotIfNeeded();
+    if (shouldForceRender) {
+        processPendingNodeRenders();
+    }
     setNodeExpanded(parent.id, true, { requestChildren: true });
 
     if (previousSelectionId) {
