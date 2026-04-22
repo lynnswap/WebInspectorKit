@@ -1823,12 +1823,6 @@ private extension WIDOMInspector {
                     level: .error
                 )
             }
-            recordPendingInspectProgressIfNeeded(
-                from: bundle,
-                contextID: context.contextID,
-                reason: "transport.mutation",
-                rejectedStructuralMutationParentLocalIDs: rejectedStructuralMutationParentLocalIDs
-            )
             if mirrorInvariantViolationReason == nil, frontendCanAcceptIncrementalProjection(contextID: context.contextID) {
                 await inspectorBridge.applyMutationBundles(payload, contextID: context.contextID)
                 markReadyFrontendProjectionCurrent(contextID: context.contextID)
@@ -1849,21 +1843,9 @@ private extension WIDOMInspector {
                 contextID: context.contextID,
                 rejectedStructuralMutationParentLocalIDs: rejectedStructuralMutationParentLocalIDs
             )
-            await finishPendingInspectMaterialization(
-                from: bundle,
-                contextID: context.contextID,
-                rejectedStructuralMutationParentLocalIDs: rejectedStructuralMutationParentLocalIDs
-            )
-            await advancePendingInspectMaterializationIfIdle(contextID: context.contextID)
         case let .replaceSubtree(root):
             let bundle = DOMGraphMutationBundle(events: [.replaceSubtree(root: root)])
             document.applyMutationBundle(bundle)
-            recordPendingInspectProgressIfNeeded(
-                from: bundle,
-                contextID: context.contextID,
-                reason: "transport.replaceSubtree",
-                rejectedStructuralMutationParentLocalIDs: []
-            )
             if frontendCanAcceptIncrementalProjection(contextID: context.contextID) == false,
                frontendReadyContextID == context.contextID {
                 await hydrateReadyFrontendFromCurrentDocument(
@@ -1877,12 +1859,6 @@ private extension WIDOMInspector {
                 contextID: context.contextID,
                 rejectedStructuralMutationParentLocalIDs: []
             )
-            await finishPendingInspectMaterialization(
-                from: bundle,
-                contextID: context.contextID,
-                rejectedStructuralMutationParentLocalIDs: []
-            )
-            await advancePendingInspectMaterializationIfIdle(contextID: context.contextID)
         case let .selection(selection):
             let previousSelection = selectionNodeSummary(document.selectedNode)
             document.applySelectionSnapshot(selection)
@@ -1945,7 +1921,11 @@ private extension WIDOMInspector {
             from: bundle,
             rejectedStructuralMutationParentLocalIDs: rejectedStructuralMutationParentLocalIDs
         )
-        if !completedNodeIDs.isEmpty {
+        let shouldLogCompletion = !completedNodeIDs.isEmpty && (
+            !pendingChildRequests.isEmpty
+                || pendingInspectSelection != nil
+        )
+        if shouldLogCompletion {
             logSelectionDiagnostics(
                 "finishPendingChildRequests completed child nodes",
                 extra: "contextID=\(contextID) completedNodeIDs=\(completedNodeIDs) mutation=\(mutationBundleSummary(bundle)) pendingInspectOutstanding=\(pendingInspectSelection?.outstandingMaterializationNodeIDs.map { $0.localID }.sorted() ?? []) pendingChildRequests=\(pendingChildRequestDiagnosticsSummary())",
@@ -2326,11 +2306,13 @@ private extension WIDOMInspector {
                 return
             }
             guard selection.localID != nil else {
-                logSelectionDiagnostics(
-                    "handleInspectorSelection ignored frontend selection without localID",
-                    selector: selection.selectorPath,
-                    extra: "payload=\(selectionPayloadSummary(selection)) previous=\(previousSelection)"
-                )
+                if inspectSelectionArm != nil || pendingInspectSelection != nil {
+                    logSelectionDiagnostics(
+                        "handleInspectorSelection ignored frontend selection without localID",
+                        selector: selection.selectorPath,
+                        extra: "payload=\(selectionPayloadSummary(selection)) previous=\(previousSelection)"
+                    )
+                }
                 return
             }
             guard let resolvedSelection = resolveFrontendSelectionPayloadForCurrentDocument(selection) else {
@@ -2698,6 +2680,15 @@ private extension WIDOMInspector {
             ),
             level: .debug
         )
+        if resolvedAttachedInspectedNodeFromCurrentDocument(nodeID: nodeID) == nil {
+            _ = upsertPendingInspectSelection(
+                nodeID: nodeID,
+                contextID: contextID,
+                selectorPath: nil,
+                resolutionTargetIdentifier: resolutionTargetIdentifier,
+                transaction: transaction
+            )
+        }
         scheduleInspectSelectionResolutionAfterTransportDrain(
             objectID: nil,
             nodeID: nodeID,
@@ -2785,7 +2776,7 @@ private extension WIDOMInspector {
                 targetIdentifier: resolutionTargetIdentifier,
                 transaction: transaction,
                 showErrorOnFailure: true,
-                allowMaterialization: true
+                allowMaterialization: false
             )
         } catch {
             await completeInspectModeAfterBackendSelection()
@@ -2854,7 +2845,7 @@ private extension WIDOMInspector {
 
         if let node = resolvedAttachedInspectedNodeFromCurrentDocument(nodeID: nodeID) {
             logSelectionDiagnostics(
-                "resolveInspectSelectionAfterTransportDrain resolved node before seeding materialization",
+                "resolveInspectSelectionAfterTransportDrain resolved attached node before drain",
                 selector: selectorPath,
                 extra: selectionNodeSummary(node)
             )
@@ -2870,55 +2861,6 @@ private extension WIDOMInspector {
             return
         }
 
-        if sharedTransport.targetKind(for: targetIdentifier) == .frame {
-            _ = await mergeFrameTargetDocumentIfNeeded(
-                targetIdentifier: targetIdentifier,
-                contextID: contextID,
-                transaction: transaction
-            )
-            if let node = resolvedAttachedInspectedNodeFromCurrentDocument(nodeID: nodeID) {
-                logSelectionDiagnostics(
-                    "resolveInspectSelectionAfterTransportDrain resolved node after frame merge before seeding materialization",
-                    selector: selectorPath,
-                    extra: selectionNodeSummary(node)
-                )
-                await commitInspectedNodeIfPossible(
-                    nodeID: nodeID,
-                    contextID: contextID,
-                    selectorPath: selectorPath,
-                    targetIdentifier: targetIdentifier,
-                    transaction: transaction,
-                    showErrorOnFailure: showErrorOnFailure,
-                    allowMaterialization: false
-                )
-                return
-            }
-        }
-
-        if allowMaterialization {
-            _ = await materializePendingInspectSelection(
-                nodeID: nodeID,
-                selectorPath: selectorPath,
-                contextID: contextID,
-                targetIdentifier: targetIdentifier,
-                transaction: transaction
-            )
-            writeInspectSelectionSnapshot(
-                reason: "resolveInspectSelectionAfterTransportDrain.seededMaterialization",
-                objectID: objectID,
-                nodeID: nodeID,
-                contextID: contextID,
-                eventTargetIdentifier: nil,
-                resolutionTargetIdentifier: targetIdentifier
-            )
-            await applyPendingInspectSelectionIfPossible()
-        }
-
-        guard currentContext?.contextID == contextID,
-              selectionTransactionIsCurrent(transaction) else {
-            return
-        }
-
         await awaitTransportMessagesToDrain()
 
         guard currentContext?.contextID == contextID,
@@ -2927,6 +2869,30 @@ private extension WIDOMInspector {
         }
 
         await applyPendingInspectSelectionIfPossible()
+
+        if pendingInspectSelection == nil,
+           resolvedAttachedInspectedNodeFromCurrentDocument(nodeID: nodeID) != nil {
+            return
+        }
+
+        if sharedTransport.targetKind(for: targetIdentifier) == .frame {
+            _ = await mergeFrameTargetDocumentIfNeeded(
+                targetIdentifier: targetIdentifier,
+                contextID: contextID,
+                transaction: transaction
+            )
+            await applyPendingInspectSelectionIfPossible()
+
+            guard currentContext?.contextID == contextID,
+                  selectionTransactionIsCurrent(transaction) else {
+                return
+            }
+
+            if pendingInspectSelection == nil,
+               resolvedAttachedInspectedNodeFromCurrentDocument(nodeID: nodeID) != nil {
+                return
+            }
+        }
 
         guard currentContext?.contextID == contextID,
               selectionTransactionIsCurrent(transaction) else {
@@ -3079,19 +3045,6 @@ private extension WIDOMInspector {
             finishInspectSelectionResolution(transaction: transaction)
             applyRecoverableError(nil)
             return
-        }
-
-        if allowMaterialization {
-            let materializationOutcome = await materializePendingInspectSelection(
-                nodeID: nodeID,
-                selectorPath: selectorPath,
-                contextID: contextID,
-                targetIdentifier: targetIdentifier,
-                transaction: transaction
-            )
-            if materializationOutcome != .exhausted {
-                return
-            }
         }
 
         guard selectionTransactionIsCurrent(transaction) else {
@@ -6174,23 +6127,6 @@ extension WIDOMInspector {
         pendingInspectSelection?.scopedMaterializationRootNodeIDs.map(\.localID) ?? []
     }
 
-    package var testPendingInspectOutstandingLocalIDs: [UInt64] {
-        guard let pendingInspectSelection else {
-            return []
-        }
-        return pendingInspectSelection.outstandingMaterializationNodeIDs
-            .map(\.localID)
-            .sorted()
-    }
-
-    package var testSelectionMaterializationCandidateLocalIDs: [UInt64] {
-        selectionMaterializationCandidates(for: pendingInspectSelection).candidates.map(\.localID)
-    }
-
-    package var testSelectionMaterializationStrategy: String {
-        selectionMaterializationCandidates(for: pendingInspectSelection).strategy.rawValue
-    }
-
     package var testFrontendSnapshotRootLocalID: UInt64? {
         document.rootNode?.localID
     }
@@ -6204,10 +6140,6 @@ extension WIDOMInspector {
             }
             return nil
         }
-    }
-
-    package var testPendingInspectProgressRevision: UInt64 {
-        pendingInspectSelection?.progressRevision ?? 0
     }
 
     package var testHasPendingInspectSelection: Bool {
@@ -6232,39 +6164,18 @@ extension WIDOMInspector {
         )
     }
 
-    package func testFinishPendingInspectMaterialization(
-        parentLocalID: UInt64,
-        contextID: DOMContextID
-    ) async {
-        await finishPendingInspectMaterialization(
-            from: DOMGraphMutationBundle(
-                events: [
-                    .setChildNodes(parentLocalID: parentLocalID, nodes: [])
-                ]
-            ),
-            contextID: contextID,
-            rejectedStructuralMutationParentLocalIDs: []
-        )
-    }
-
     package func testApplyMutationBundleAndFinishPendingInspectMaterialization(
         _ bundle: DOMGraphMutationBundle,
         contextID: DOMContextID
     ) async {
         document.applyMutationBundle(bundle)
         let rejectedStructuralMutationParentLocalIDs = document.consumeRejectedStructuralMutationParentLocalIDs()
-        recordPendingInspectProgressIfNeeded(
-            from: bundle,
-            contextID: contextID,
-            reason: "test.mutation",
-            rejectedStructuralMutationParentLocalIDs: rejectedStructuralMutationParentLocalIDs
-        )
-        await finishPendingInspectMaterialization(
+        await applyPendingInspectSelectionIfPossible()
+        await finishPendingChildRequests(
             from: bundle,
             contextID: contextID,
             rejectedStructuralMutationParentLocalIDs: rejectedStructuralMutationParentLocalIDs
         )
-        await advancePendingInspectMaterializationIfIdle(contextID: contextID)
     }
 
     package func testHandleMutationBundleThroughTransportPath(
@@ -6273,44 +6184,12 @@ extension WIDOMInspector {
     ) async {
         document.applyMutationBundle(bundle)
         let rejectedStructuralMutationParentLocalIDs = document.consumeRejectedStructuralMutationParentLocalIDs()
-        recordPendingInspectProgressIfNeeded(
-            from: bundle,
-            contextID: contextID,
-            reason: "test.transportMutation",
-            rejectedStructuralMutationParentLocalIDs: rejectedStructuralMutationParentLocalIDs
-        )
         await applyPendingInspectSelectionIfPossible()
         await finishPendingChildRequests(
             from: bundle,
             contextID: contextID,
             rejectedStructuralMutationParentLocalIDs: rejectedStructuralMutationParentLocalIDs
         )
-        await finishPendingInspectMaterialization(
-            from: bundle,
-            contextID: contextID,
-            rejectedStructuralMutationParentLocalIDs: rejectedStructuralMutationParentLocalIDs
-        )
-        await advancePendingInspectMaterializationIfIdle(contextID: contextID)
-    }
-
-    package func testRecordPendingInspectProgressAndAdvance(
-        contextID: DOMContextID,
-        reason: String = "test.progress"
-    ) async {
-        recordPendingInspectProgressIfNeeded(
-            from: DOMGraphMutationBundle(events: []),
-            contextID: contextID,
-            reason: reason,
-            rejectedStructuralMutationParentLocalIDs: []
-        )
-        await applyPendingInspectSelectionIfPossible()
-        await advancePendingInspectMaterializationIfIdle(contextID: contextID)
-    }
-
-    package func testAdvancePendingInspectMaterializationIfIdle(
-        contextID: DOMContextID
-    ) async {
-        await advancePendingInspectMaterializationIfIdle(contextID: contextID)
     }
 }
 #endif
