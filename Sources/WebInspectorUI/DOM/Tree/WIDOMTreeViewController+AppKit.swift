@@ -220,18 +220,18 @@ public final class WIDOMTreeViewController: NSViewController {
     ) async throws {
         if let nodeIdentity {
             do {
-                try await inspector.deleteNodeThrowing(nodeID: nodeIdentity, undoManager: undoManager)
+                try await inspector.deleteNode(nodeID: nodeIdentity, undoManager: undoManager)
                 return
             } catch DOMOperationError.invalidSelection, DOMOperationError.contextInvalidated {
                 guard let backendNodeID else {
                     throw DOMOperationError.invalidSelection
                 }
-                try await inspector.deleteNodeThrowing(nodeId: backendNodeID, undoManager: undoManager)
+                try await inspector.deleteNode(nodeId: backendNodeID, undoManager: undoManager)
                 return
             }
         }
         if let backendNodeID {
-            try await inspector.deleteNodeThrowing(nodeId: backendNodeID, undoManager: undoManager)
+            try await inspector.deleteNode(nodeId: backendNodeID, undoManager: undoManager)
             return
         }
         if let nodeID,
@@ -239,13 +239,13 @@ public final class WIDOMTreeViewController: NSViewController {
                 ? inspector.document.node(localID: UInt64(nodeID))?.id
                 : nil
         {
-            try await inspector.deleteNodeThrowing(nodeID: resolvedIdentity, undoManager: undoManager)
+            try await inspector.deleteNode(nodeID: resolvedIdentity, undoManager: undoManager)
             return
         }
         if let nodeID,
            let resolvedIdentity = inspector.document.node(stableBackendNodeID: nodeID)?.id
         {
-            try await inspector.deleteNodeThrowing(nodeID: resolvedIdentity, undoManager: undoManager)
+            try await inspector.deleteNode(nodeID: resolvedIdentity, undoManager: undoManager)
             return
         }
         throw DOMOperationError.invalidSelection

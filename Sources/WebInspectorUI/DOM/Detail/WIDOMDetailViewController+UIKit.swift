@@ -309,7 +309,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
                 guard let self else { return }
                 Task {
                     do {
-                        try await self.inspector.reloadPageThrowing()
+                        try await self.inspector.reloadPage()
                     } catch {
                     }
                 }
@@ -900,7 +900,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         Task { @MainActor [weak self] in
             let didFail: Bool
             do {
-                try await inspector.removeAttributeThrowing(nodeID: key.nodeID, name: key.name)
+                try await inspector.removeAttribute(nodeID: key.nodeID, name: key.name)
                 didFail = false
             } catch {
                 didFail = true
@@ -1030,7 +1030,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     private func reloadDocument() {
         let inspector = inspector
         Task {
-            try? await inspector.reloadDocumentThrowing()
+            try? await inspector.reloadDocument()
         }
     }
 
@@ -1144,7 +1144,7 @@ extension WIDOMDetailViewController: ElementAttributeEditorCellDelegate {
         Task {
             let didApply: Bool
             do {
-                try await inspector.setAttributeThrowing(
+                try await inspector.setAttribute(
                     nodeID: key.nodeID,
                     name: key.name,
                     value: submittedValue

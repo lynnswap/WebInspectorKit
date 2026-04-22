@@ -155,7 +155,7 @@ struct WIDOMInspectorTests {
         let inspector = WIDOMInspector()
 
         await #expect(throws: DOMOperationError.pageUnavailable) {
-            try await inspector.reloadDocumentThrowing()
+            try await inspector.reloadDocument()
         }
     }
 
@@ -2347,7 +2347,7 @@ struct WIDOMInspectorTests {
 
         #expect(inspector.testPendingChildRequestNodeIDs == [3])
 
-        try await inspector.reloadDocumentThrowing()
+        try await inspector.reloadDocument()
 
         let cleared = await waitForCondition {
             inspector.testPendingChildRequestNodeIDs.isEmpty
@@ -3984,7 +3984,7 @@ struct WIDOMInspectorTests {
             isFreshDocument: true
         )
 
-        try await inspector.deleteNodeThrowing(nodeId: 42, undoManager: nil)
+        try await inspector.deleteNode(nodeId: 42, undoManager: nil)
 
         #expect(removedNodeID == 42)
         #expect(inspector.document.node(localID: 42) != nil)
@@ -4011,7 +4011,7 @@ struct WIDOMInspectorTests {
         let webView = makeTestWebView()
         await inspector.attach(to: webView)
 
-        try await inspector.deleteNodeThrowing(nodeId: 777, undoManager: nil)
+        try await inspector.deleteNode(nodeId: 777, undoManager: nil)
 
         #expect(removedNodeID == 777)
     }
@@ -4318,7 +4318,7 @@ struct WIDOMInspectorTests {
         }
         #expect(selected)
 
-        try await inspector.reloadDocumentThrowing()
+        try await inspector.reloadDocument()
 
         let reloaded = await waitForCondition {
             inspector.document.selectedNode == nil
