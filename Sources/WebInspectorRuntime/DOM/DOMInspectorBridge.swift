@@ -65,14 +65,17 @@ final class DOMInspectorBridge: NSObject {
         self.inspectorWebView = nil
     }
 
-    func applyFullSnapshot(_ payload: Any, contextID: DOMContextID) async {
-        await evaluateVoid(
-            "window.webInspectorDOMFrontend?.applyFullSnapshot?.(payload, contextID)",
-            arguments: [
-                "payload": payload,
-                "contextID": contextID,
-            ]
-        )
+    @discardableResult
+    func applyFullSnapshot(_ payload: Any, contextID: DOMContextID) async -> Bool {
+        parseBool(
+            await evaluate(
+                "return window.webInspectorDOMFrontend?.applyFullSnapshot?.(payload, contextID) ?? false;",
+                arguments: [
+                    "payload": payload,
+                    "contextID": contextID,
+                ]
+            )
+        ) ?? false
     }
 
     func applyMutationBundles(_ payload: Any, contextID: DOMContextID) async {
@@ -85,24 +88,30 @@ final class DOMInspectorBridge: NSObject {
         )
     }
 
-    func applySubtreePayload(_ payload: Any, contextID: DOMContextID) async {
-        await evaluateVoid(
-            "window.webInspectorDOMFrontend?.applySubtreePayload?.(payload, contextID)",
-            arguments: [
-                "payload": payload,
-                "contextID": contextID,
-            ]
-        )
+    @discardableResult
+    func applySubtreePayload(_ payload: Any, contextID: DOMContextID) async -> Bool {
+        parseBool(
+            await evaluate(
+                "return window.webInspectorDOMFrontend?.applySubtreePayload?.(payload, contextID) ?? false;",
+                arguments: [
+                    "payload": payload,
+                    "contextID": contextID,
+                ]
+            )
+        ) ?? false
     }
 
-    func applySelectionPayload(_ payload: Any, contextID: DOMContextID) async {
-        await evaluateVoid(
-            "window.webInspectorDOMFrontend?.applySelectionPayload?.(payload, contextID)",
-            arguments: [
-                "payload": payload,
-                "contextID": contextID,
-            ]
-        )
+    @discardableResult
+    func applySelectionPayload(_ payload: Any, contextID: DOMContextID) async -> Bool {
+        parseBool(
+            await evaluate(
+                "return window.webInspectorDOMFrontend?.applySelectionPayload?.(payload, contextID) ?? false;",
+                arguments: [
+                    "payload": payload,
+                    "contextID": contextID,
+                ]
+            )
+        ) ?? false
     }
 
     func finishChildNodeRequest(nodeID: Int, success: Bool, contextID: DOMContextID) async {
@@ -121,6 +130,15 @@ final class DOMInspectorBridge: NSObject {
             "window.webInspectorDOMFrontend?.clearPointerHoverState?.()",
             arguments: [:]
         )
+    }
+
+    func frontendIsReady() async -> Bool {
+        parseBool(
+            await evaluate(
+                "return Boolean(window.webInspectorDOMFrontend && document.getElementById('dom-tree'));",
+                arguments: [:]
+            )
+        ) ?? false
     }
 
 #if canImport(AppKit)
@@ -214,6 +232,23 @@ private extension DOMInspectorBridge {
             )
         } catch {
             domInspectorBridgeLogger.error("bridge dispatch failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    func evaluate(_ script: String, arguments: [String: Any]) async -> Any? {
+        guard let inspectorWebView else {
+            return nil
+        }
+        do {
+            return try await inspectorWebView.callAsyncJavaScriptCompat(
+                script,
+                arguments: normalizedJavaScriptArguments(arguments),
+                in: nil,
+                contentWorld: .page
+            )
+        } catch {
+            domInspectorBridgeLogger.error("bridge dispatch failed: \(error.localizedDescription, privacy: .public)")
+            return nil
         }
     }
 

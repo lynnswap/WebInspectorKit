@@ -65,6 +65,9 @@ final class BrowserRootViewController: UINavigationController {
 
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
+        if launchConfiguration.uiTestScenario == .domRemoteURL {
+            return
+        }
         requestInspectorSessionState(.suspended)
     }
 

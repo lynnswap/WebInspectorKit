@@ -314,7 +314,10 @@ private extension DOMPayloadNormalizer {
         return looksLikeNodeDescriptor(object) ? object : nil
     }
 
-    private func normalizeNodeDescriptor(_ payload: Any, fallbackState: inout FallbackState) -> DOMGraphNodeDescriptor? {
+    private func normalizeNodeDescriptor(
+        _ payload: Any,
+        fallbackState: inout FallbackState
+    ) -> DOMGraphNodeDescriptor? {
         guard let object = dictionaryValue(payload) else {
             return nil
         }
@@ -365,7 +368,10 @@ private extension DOMPayloadNormalizer {
                 omittedChildren += 1
                 continue
             }
-            guard let child = normalizeNodeDescriptor(childPayload, fallbackState: &fallbackState) else {
+            guard let child = normalizeNodeDescriptor(
+                childPayload,
+                fallbackState: &fallbackState
+            ) else {
                 continue
             }
             children.append(child)
@@ -495,12 +501,18 @@ private extension DOMPayloadNormalizer {
                 )
 
             case "setChildNodes":
-                guard let parentLocalID = uint64Value(params["parentNodeId"]) ?? uint64Value(params["parentId"]) else {
+                let nodesPayload = arrayValue(params["nodes"]) ?? []
+                if let parentLocalID = uint64Value(params["parentNodeId"]) ?? uint64Value(params["parentId"]) {
+                    let nodes = nodesPayload.compactMap { normalizeNodeDescriptor($0, fallbackState: &fallbackState) }
+                    normalized.append(.setChildNodes(parentLocalID: parentLocalID, nodes: nodes))
+                } else {
+                    let nodes = nodesPayload.compactMap { normalizeNodeDescriptor($0, fallbackState: &fallbackState) }
+                    guard !nodes.isEmpty else {
+                        continue
+                    }
+                    normalized.append(.setDetachedRoots(nodes: nodes))
                     continue
                 }
-                let nodesPayload = arrayValue(params["nodes"]) ?? []
-                let nodes = nodesPayload.compactMap { normalizeNodeDescriptor($0, fallbackState: &fallbackState) }
-                normalized.append(.setChildNodes(parentLocalID: parentLocalID, nodes: nodes))
 
             case "documentUpdated":
                 normalized.append(.documentUpdated)

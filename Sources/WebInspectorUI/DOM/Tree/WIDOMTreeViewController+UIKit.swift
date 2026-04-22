@@ -40,6 +40,18 @@ public final class WIDOMTreeViewController: UIViewController {
         applyInspectorWebViewActivityIfNeeded()
     }
 
+    public override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        applyInspectorWebViewActivityIfNeeded()
+    }
+
+    public override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        if view.window == nil {
+            detachInspectorWebViewIfNeeded()
+        }
+    }
+
     func setInspectorWebViewActive(_ active: Bool) {
         guard isInspectorWebViewActive != active else {
             applyInspectorWebViewActivityIfNeeded()
@@ -91,6 +103,12 @@ public final class WIDOMTreeViewController: UIViewController {
         NSLayoutConstraint.activate(constraints)
         inspectorWebViewConstraints = constraints
         attachedInspectorWebView = inspectorWebView
+        Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+            await self.inspector.frontendHostDidAttach(reason: "treeViewController.attachInspectorWebView")
+        }
     }
 
     private func detachInspectorWebViewIfNeeded() {
@@ -249,6 +267,35 @@ extension WIDOMTreeViewController {
             return value.boolValue
         }
         return nil
+    }
+
+    func selectedNodeLineageTextForTesting() async -> String? {
+        guard let attachedInspectorWebView,
+              attachedInspectorWebView.superview === inspectorWebViewContainer
+        else {
+            return nil
+        }
+        let rawValue = try? await attachedInspectorWebView.callAsyncJavaScriptCompat(
+            """
+            const selectedNode = document.querySelector('.tree-node.is-selected');
+            if (!selectedNode)
+                return null;
+            const labels = [];
+            let current = selectedNode;
+            while (current) {
+                const row = current.querySelector(':scope > .tree-node__row');
+                const text = row?.textContent?.trim();
+                if (text)
+                    labels.unshift(text);
+                current = current.parentElement?.closest('.tree-node') ?? null;
+            }
+            return labels.join(' > ');
+            """,
+            arguments: [:],
+            in: nil,
+            contentWorld: .page
+        )
+        return rawValue as? String
     }
 
     func selectedNodeReachesViewportRightEdgeForTesting() async -> Bool? {

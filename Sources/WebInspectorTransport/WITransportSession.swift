@@ -212,6 +212,10 @@ public final class WITransportSession {
         pageTargetTracker.observedCurrentIdentifier
     }
 
+    package func targetKind(for identifier: String?) -> WITransportTargetKind? {
+        pageTargetTracker.targetKind(for: identifier)
+    }
+
     package var responseTimeout: Duration {
         configuration.responseTimeout
     }
@@ -491,6 +495,10 @@ package final class WISharedInspectorTransport {
     package func currentObservedPageTargetIdentifier() -> String? {
         session?.currentObservedPageTargetIdentifier()
     }
+
+    package func targetKind(for identifier: String?) -> WITransportTargetKind? {
+        session?.targetKind(for: identifier)
+    }
 }
 
 private extension WISharedInspectorTransport {
@@ -697,14 +705,16 @@ extension WITransportSession {
             return
         }
 
-        if method.hasPrefix("Target.") || method == "DOM.inspect" || method == "Inspector.inspect" {
+        if method.hasPrefix("Target.") || method.hasPrefix("DOM.") || method == "Inspector.inspect" {
             log("received root event method=\(method)")
         }
 
-        if method == "DOM.inspect" || method == "Inspector.inspect" {
+        if method.hasPrefix("DOM.") || method == "Inspector.inspect" {
             enqueuePageEvent(
                 method: method,
-                targetIdentifier: pageTargetTracker.currentIdentifier,
+                targetIdentifier: inspectEventTargetIdentifier(from: parsed.params)
+                    ?? currentPageTargetIdentifier()
+                    ?? refreshDerivedPageTargetIdentifierIfNeeded(),
                 paramsObject: parsed.params
             )
             return
@@ -765,19 +775,23 @@ extension WITransportSession {
             guard
                 let targetInfo = params["targetInfo"] as? [String: Any],
                 let targetIdentifier = stringValue(targetInfo["targetId"]),
-                stringValue(targetInfo["type"]) == "page"
+                let targetType = stringValue(targetInfo["type"])
             else {
                 return
             }
 
-            pageTargetTracker.didCreatePageTarget(
+            let targetKind = pageTargetTracker.didCreateTarget(
                 identifier: targetIdentifier,
+                type: targetType,
                 isProvisional: boolValue(targetInfo["isProvisional"]) == true
             )
+            guard targetKind == .page || targetKind == .frame else {
+                return
+            }
             let isProvisional = boolValue(targetInfo["isProvisional"]) == true
             let currentIdentifier = pageTargetTracker.currentIdentifier ?? "nil"
             log(
-                "page target created target=\(targetIdentifier) provisional=\(isProvisional) current=\(currentIdentifier)"
+                "\(targetKind.rawValue) target created target=\(targetIdentifier) provisional=\(isProvisional) current=\(currentIdentifier)"
             )
             enqueuePageEvent(
                 method: method,
@@ -790,18 +804,21 @@ extension WITransportSession {
                 return
             }
 
-            let effectiveOldTargetIdentifier = pageTargetTracker.didCommitPageTarget(
+            let committedTarget = pageTargetTracker.didCommitTarget(
                 oldIdentifier: stringValue(params["oldTargetId"]),
                 newIdentifier: newTargetIdentifier
             )
+            guard committedTarget.kind == .page || committedTarget.kind == .frame else {
+                return
+            }
             let currentIdentifier = pageTargetTracker.currentIdentifier ?? "nil"
-            let oldIdentifierDescription = effectiveOldTargetIdentifier ?? "nil"
+            let oldIdentifierDescription = committedTarget.effectiveOldIdentifier ?? "nil"
             log(
-                "page target committed old=\(oldIdentifierDescription) new=\(newTargetIdentifier) current=\(currentIdentifier)"
+                "\(committedTarget.kind.rawValue) target committed old=\(oldIdentifierDescription) new=\(newTargetIdentifier) current=\(currentIdentifier)"
             )
 
             var normalizedParams: [String: Any] = ["newTargetId": newTargetIdentifier]
-            if let effectiveOldTargetIdentifier {
+            if let effectiveOldTargetIdentifier = committedTarget.effectiveOldIdentifier {
                 normalizedParams["oldTargetId"] = effectiveOldTargetIdentifier
             }
 
@@ -815,11 +832,12 @@ extension WITransportSession {
             guard let targetIdentifier = stringValue(params["targetId"]) else {
                 return
             }
-            guard pageTargetTracker.didDestroyPageTarget(identifier: targetIdentifier) else {
+            guard let targetKind = pageTargetTracker.didDestroyTarget(identifier: targetIdentifier),
+                  targetKind == .page || targetKind == .frame else {
                 return
             }
             let currentIdentifier = pageTargetTracker.currentIdentifier ?? "nil"
-            log("page target destroyed target=\(targetIdentifier) current=\(currentIdentifier)")
+            log("\(targetKind.rawValue) target destroyed target=\(targetIdentifier) current=\(currentIdentifier)")
 
             enqueuePageEvent(
                 method: method,
@@ -1089,6 +1107,15 @@ extension WITransportSession {
         configuration.logHandler?("[WebInspectorTransport] \(message)")
     }
 
+    func inspectEventTargetIdentifier(from paramsObject: Any?) -> String? {
+        guard let params = paramsObject as? [String: Any] else {
+            return nil
+        }
+        return stringValue(params["targetId"])
+            ?? stringValue(params["targetIdentifier"])
+            ?? stringValue((params["target"] as? [String: Any])?["targetId"])
+    }
+
     func refreshDerivedPageTargetIdentifierIfNeeded() -> String? {
         guard pageTargetTracker.allowsDerivedCommittedSeed,
               let webView,
@@ -1246,12 +1273,26 @@ private final class WITransportPageTargetTracker {
         let creationOrder: Int
     }
 
+    private struct KnownTarget {
+        let identifier: String
+        let kind: WITransportTargetKind
+        let isProvisional: Bool
+        let creationOrder: Int
+    }
+
+    struct CommitResult {
+        let effectiveOldIdentifier: String?
+        let kind: WITransportTargetKind
+    }
+
     private struct AvailabilityWaiter {
         let excludedIdentifier: String?
         let continuation: CheckedContinuation<String, Error>
     }
 
     private var targetsByIdentifier: [String: KnownPageTarget] = [:]
+    private var knownTargetsByIdentifier: [String: KnownTarget] = [:]
+    private var recentlyDestroyedTargetKinds: [String: WITransportTargetKind] = [:]
     private var hasObservedLifecycleEvents = false
     private var hasDerivedCommittedSeed = false
     private var currentIdentifierStorage: String?
@@ -1288,8 +1329,30 @@ private final class WITransportPageTargetTracker {
             .map(\.identifier)
     }
 
-    func didCreatePageTarget(identifier: String, isProvisional: Bool) {
+    func targetKind(for identifier: String?) -> WITransportTargetKind? {
+        guard let identifier else {
+            return nil
+        }
+        return knownTargetsByIdentifier[identifier]?.kind
+            ?? recentlyDestroyedTargetKinds[identifier]
+    }
+
+    @discardableResult
+    func didCreateTarget(identifier: String, type: String, isProvisional: Bool) -> WITransportTargetKind {
+        let kind = targetKind(forType: type)
+        recentlyDestroyedTargetKinds.removeValue(forKey: identifier)
+        let creationOrder = knownTargetsByIdentifier[identifier]?.creationOrder ?? nextCreationOrderValue()
+        knownTargetsByIdentifier[identifier] = KnownTarget(
+            identifier: identifier,
+            kind: kind,
+            isProvisional: isProvisional,
+            creationOrder: creationOrder
+        )
+
         hasObservedLifecycleEvents = true
+        guard kind == .page else {
+            return kind
+        }
         if hasDerivedCommittedSeed,
            let committedIdentifierStorage {
             if committedIdentifierStorage == identifier {
@@ -1303,15 +1366,49 @@ private final class WITransportPageTargetTracker {
         targetsByIdentifier[identifier] = KnownPageTarget(
             identifier: identifier,
             isProvisional: isProvisional,
-            creationOrder: nextCreationOrderValue()
+            creationOrder: creationOrder
         )
         refreshCurrentIdentifier()
+        return kind
     }
 
-    func didCommitPageTarget(oldIdentifier: String?, newIdentifier: String) -> String? {
+    func didCommitTarget(oldIdentifier: String?, newIdentifier: String) -> CommitResult {
+        recentlyDestroyedTargetKinds.removeValue(forKey: newIdentifier)
+        let effectiveOldIdentifier = oldIdentifier ?? inferredCommittedOldIdentifier(excluding: newIdentifier)
+        let kind = knownTargetsByIdentifier[newIdentifier]?.kind
+            ?? effectiveOldIdentifier.flatMap { knownTargetsByIdentifier[$0]?.kind }
+            ?? .page
+
+        if let effectiveOldIdentifier,
+           let previousTarget = knownTargetsByIdentifier.removeValue(forKey: effectiveOldIdentifier) {
+            knownTargetsByIdentifier[newIdentifier] = KnownTarget(
+                identifier: newIdentifier,
+                kind: previousTarget.kind,
+                isProvisional: false,
+                creationOrder: previousTarget.creationOrder
+            )
+        } else if let existingTarget = knownTargetsByIdentifier[newIdentifier] {
+            knownTargetsByIdentifier[newIdentifier] = KnownTarget(
+                identifier: newIdentifier,
+                kind: existingTarget.kind,
+                isProvisional: false,
+                creationOrder: existingTarget.creationOrder
+            )
+        } else {
+            knownTargetsByIdentifier[newIdentifier] = KnownTarget(
+                identifier: newIdentifier,
+                kind: kind,
+                isProvisional: false,
+                creationOrder: nextCreationOrderValue()
+            )
+        }
+
+        guard kind == .page else {
+            return CommitResult(effectiveOldIdentifier: effectiveOldIdentifier, kind: kind)
+        }
+
         hasObservedLifecycleEvents = true
         hasDerivedCommittedSeed = false
-        let effectiveOldIdentifier = oldIdentifier ?? inferredCommittedOldIdentifier(excluding: newIdentifier)
         if let effectiveOldIdentifier,
            let previous = targetsByIdentifier.removeValue(forKey: effectiveOldIdentifier) {
             targetsByIdentifier[newIdentifier] = KnownPageTarget(
@@ -1335,25 +1432,42 @@ private final class WITransportPageTargetTracker {
 
         committedIdentifierStorage = newIdentifier
         refreshCurrentIdentifier()
-        return effectiveOldIdentifier
+        return CommitResult(effectiveOldIdentifier: effectiveOldIdentifier, kind: kind)
     }
 
-    func didDestroyPageTarget(identifier: String) -> Bool {
+    func didDestroyTarget(identifier: String) -> WITransportTargetKind? {
+        let kind = knownTargetsByIdentifier.removeValue(forKey: identifier)?.kind
+        guard let kind else {
+            return nil
+        }
+        recentlyDestroyedTargetKinds[identifier] = kind
+
+        guard kind == .page else {
+            return kind
+        }
+
         hasObservedLifecycleEvents = true
         if committedIdentifierStorage == identifier {
             hasDerivedCommittedSeed = false
         }
         guard targetsByIdentifier.removeValue(forKey: identifier) != nil else {
-            return false
+            return nil
         }
         if committedIdentifierStorage == identifier {
             committedIdentifierStorage = nil
         }
         refreshCurrentIdentifier()
-        return true
+        return kind
     }
 
     func seedCommittedPageTarget(identifier: String) {
+        let creationOrder = knownTargetsByIdentifier[identifier]?.creationOrder ?? targetsByIdentifier[identifier]?.creationOrder ?? nextCreationOrderValue()
+        knownTargetsByIdentifier[identifier] = KnownTarget(
+            identifier: identifier,
+            kind: .page,
+            isProvisional: false,
+            creationOrder: creationOrder
+        )
         if let existing = targetsByIdentifier[identifier] {
             targetsByIdentifier[identifier] = KnownPageTarget(
                 identifier: identifier,
@@ -1364,7 +1478,7 @@ private final class WITransportPageTargetTracker {
             targetsByIdentifier[identifier] = KnownPageTarget(
                 identifier: identifier,
                 isProvisional: false,
-                creationOrder: nextCreationOrderValue()
+                creationOrder: creationOrder
             )
         }
 
@@ -1419,6 +1533,8 @@ private final class WITransportPageTargetTracker {
 
     func reset() {
         targetsByIdentifier.removeAll(keepingCapacity: true)
+        knownTargetsByIdentifier.removeAll(keepingCapacity: true)
+        recentlyDestroyedTargetKinds.removeAll(keepingCapacity: true)
         hasObservedLifecycleEvents = false
         hasDerivedCommittedSeed = false
         currentIdentifierStorage = nil
@@ -1468,6 +1584,17 @@ private final class WITransportPageTargetTracker {
             return nil
         }
         return provisionalTargets.first?.identifier
+    }
+
+    private func targetKind(forType type: String) -> WITransportTargetKind {
+        switch type {
+        case "page":
+            return .page
+        case "frame":
+            return .frame
+        default:
+            return .other
+        }
     }
 
     private func nextCreationOrderValue() -> Int {

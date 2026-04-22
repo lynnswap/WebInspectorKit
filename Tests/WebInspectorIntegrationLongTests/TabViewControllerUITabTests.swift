@@ -1737,6 +1737,221 @@ struct TabViewControllerUITabTests {
     }
 
     @Test
+    func compactDelayedIFrameInsertionProjectsIntoTreeAndDetail() async throws {
+        let controller = WIInspectorController()
+        let webView = makeTestWebView()
+        await loadHTML(
+            """
+            <!doctype html>
+            <html>
+            <body>
+                <main id="page">
+                    <div class="gw-shell">
+                        <ul id="generic-list">
+                            <li>one</li>
+                            <li>two</li>
+                            <li>three</li>
+                        </ul>
+                        <div id="delayed-slot"></div>
+                    </div>
+                </main>
+                <script>
+                    setTimeout(() => {
+                        const slot = document.getElementById("delayed-slot");
+                        slot.innerHTML = `
+                            <div class="ad-container">
+                                <iframe
+                                    id="delayed-frame-owner"
+                                    title="delayed-frame"
+                                    srcdoc="<!doctype html><html><body><button id='delayed-frame-target' data-role='nested-delayed'>Late Frame</button></body></html>">
+                                </iframe>
+                            </div>
+                        `;
+                    }, 150);
+                </script>
+            </body>
+            </html>
+            """,
+            in: webView
+        )
+
+        let requestedTabs: [WITab] = [.dom(), .network()]
+        let container = WITabViewController(
+            controller,
+            webView: webView,
+            tabs: requestedTabs
+        )
+        let window = UIWindow(frame: UIScreen.main.bounds)
+        window.rootViewController = container
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        container.loadViewIfNeeded()
+        drainMainQueue()
+        configureSizeClass(.compact, for: container, requestedTabs: requestedTabs)
+        drainMainQueue()
+        await waitForControllerLifecycles(
+            in: container,
+            states: [(controller, .active)]
+        )
+
+        guard let compactHost = container.activeHostViewControllerForTesting as? WICompactTabHostViewController else {
+            Issue.record("Expected compact host")
+            return
+        }
+        guard let domViewController = compactHost.rootViewControllerForTesting(tabIdentifier: WITab.domTabID) as? WIDOMViewController else {
+            Issue.record("Expected DOM root view controller")
+            return
+        }
+        guard let elementViewController = compactHost.rootViewControllerForTesting(tabIdentifier: WITab.elementTabID) as? WIDOMDetailViewController else {
+            Issue.record("Expected Element detail view controller")
+            return
+        }
+
+        let iframeContentReady = await waitForPageCondition(
+            "document.getElementById('delayed-frame-owner')?.contentDocument?.getElementById('delayed-frame-target')",
+            in: webView,
+            attempts: 600
+        )
+        #expect(iframeContentReady)
+        guard iframeContentReady else {
+            return
+        }
+
+        let selectedNodeID = try await selectNodeAndWaitForCompactProjection(
+            cssSelector: "#delayed-frame-target",
+            expectedAttributes: [
+                "id": "delayed-frame-target",
+                "data-role": "nested-delayed",
+            ],
+            in: controller,
+            domViewController: domViewController,
+            elementViewController: elementViewController,
+            requiresTreeSelection: true
+        )
+
+        let treeReady = await waitForCondition(attempts: 600) {
+            let treeText = await domViewController.compactTreeViewControllerForTesting.treeTextContentForTesting() ?? ""
+            return treeText.contains("#document")
+                && treeText.contains("iframe")
+                && treeText.contains("delayed-frame-target")
+        }
+        #expect(treeReady)
+
+        let treeText = await domViewController.compactTreeViewControllerForTesting.treeTextContentForTesting() ?? ""
+        #expect(treeText.contains("#document"))
+        #expect(treeText.contains("iframe"))
+        #expect(treeText.contains("delayed-frame-target"))
+        #expect(controller.dom.document.selectedNode?.id == selectedNodeID)
+    }
+
+    @Test
+    func compactDelayedAdLikeIFrameOwnerSelectionProjectsIntoTreeAndDetail() async throws {
+        let controller = WIInspectorController()
+        let webView = makeTestWebView()
+        await loadHTML(
+            """
+            <!doctype html>
+            <html>
+            <body>
+                <section id="page">
+                    <div id="ad-slot"></div>
+                </section>
+                <script>
+                    setTimeout(() => {
+                        const slot = document.getElementById("ad-slot");
+                        const iframe = document.createElement("iframe");
+                        iframe.id = "delayed-ad-frame";
+                        iframe.title = "ad-frame";
+                        iframe.loading = "lazy";
+                        iframe.src = "about:blank";
+                        slot.appendChild(iframe);
+                    }, 120);
+                </script>
+            </body>
+            </html>
+            """,
+            in: webView
+        )
+
+        let requestedTabs: [WITab] = [.dom(), .network()]
+        let container = WITabViewController(
+            controller,
+            webView: webView,
+            tabs: requestedTabs
+        )
+        let window = UIWindow(frame: UIScreen.main.bounds)
+        window.rootViewController = container
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        container.loadViewIfNeeded()
+        drainMainQueue()
+        configureSizeClass(.compact, for: container, requestedTabs: requestedTabs)
+        drainMainQueue()
+        await waitForControllerLifecycles(
+            in: container,
+            states: [(controller, .active)]
+        )
+
+        guard let compactHost = container.activeHostViewControllerForTesting as? WICompactTabHostViewController else {
+            Issue.record("Expected compact host")
+            return
+        }
+        guard let domViewController = compactHost.rootViewControllerForTesting(tabIdentifier: WITab.domTabID) as? WIDOMViewController else {
+            Issue.record("Expected DOM root view controller")
+            return
+        }
+        guard let elementViewController = compactHost.rootViewControllerForTesting(tabIdentifier: WITab.elementTabID) as? WIDOMDetailViewController else {
+            Issue.record("Expected Element detail view controller")
+            return
+        }
+
+        let iframeReady = await waitForPageCondition(
+            "document.getElementById('delayed-ad-frame')",
+            in: webView,
+            attempts: 600
+        )
+        #expect(iframeReady)
+        guard iframeReady else {
+            return
+        }
+
+        let selectedNodeID = try await selectNodeAndWaitForCompactProjection(
+            cssSelector: "#delayed-ad-frame",
+            expectedAttributes: [
+                "id": "delayed-ad-frame",
+                "loading": "lazy",
+                "src": "about:blank",
+                "title": "ad-frame",
+            ],
+            in: controller,
+            domViewController: domViewController,
+            elementViewController: elementViewController,
+            requiresTreeSelection: true
+        )
+
+        let treeReady = await waitForCondition(attempts: 600) {
+            let treeText = await domViewController.compactTreeViewControllerForTesting.treeTextContentForTesting() ?? ""
+            return treeText.contains("iframe")
+                && treeText.contains("delayed-ad-frame")
+        }
+        #expect(treeReady)
+
+        let treeText = await domViewController.compactTreeViewControllerForTesting.treeTextContentForTesting() ?? ""
+        #expect(treeText.contains("iframe"))
+        #expect(treeText.contains("delayed-ad-frame"))
+        #expect(controller.dom.document.selectedNode?.id == selectedNodeID)
+        #expect(elementViewController.renderedSelectorTextForTesting() == "#delayed-ad-frame")
+    }
+
+    @Test
     func sameWebViewHandoffKeepsSelectedNodeUntilContainerCloses() async throws {
         let controller = WIInspectorController()
         let webView = makeTestWebView()

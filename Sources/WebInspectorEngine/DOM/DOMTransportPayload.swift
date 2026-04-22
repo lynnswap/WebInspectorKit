@@ -113,6 +113,7 @@ package enum DOMGraphMutationEvent: Sendable {
     case characterDataModified(nodeLocalID: UInt64, value: String, layoutFlags: [String]?, isRendered: Bool?)
     case childNodeCountUpdated(nodeLocalID: UInt64, childCount: Int, layoutFlags: [String]?, isRendered: Bool?)
     case setChildNodes(parentLocalID: UInt64, nodes: [DOMGraphNodeDescriptor])
+    case setDetachedRoots(nodes: [DOMGraphNodeDescriptor])
     case replaceSubtree(root: DOMGraphNodeDescriptor)
     case documentUpdated
 }

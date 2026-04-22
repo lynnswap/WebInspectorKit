@@ -65,6 +65,26 @@ function attachEventListeners(): void {
     notifyReady();
 }
 
+function ensureFrontendContext(contextID: number | undefined): boolean {
+    if (matchesCurrentDocumentContext(contextID)) {
+        return true;
+    }
+    const bootstrapContextID = readBootstrap().context?.contextID;
+    if (
+        typeof contextID === "number"
+        && Number.isFinite(contextID)
+        && bootstrapContextID === contextID
+        && (
+            treeState.snapshot === null
+            || treeState.nodes.size === 0
+        )
+    ) {
+        adoptDocumentContext({ contextID });
+        return true;
+    }
+    return false;
+}
+
 function normalizeSelectionSyncPayload(
     payload: number | DOMSelectionSyncPayload
 ): { nodeId: number | null; selectedNodePath: number[] | null } {
@@ -117,19 +137,19 @@ function installWebInspectorKit(): void {
             notifyReady();
         },
         applyFullSnapshot: (snapshot, contextID = protocolState.contextID) => {
-            if (!matchesCurrentDocumentContext(contextID)) {
-                return;
+            if (!ensureFrontendContext(contextID)) {
+                return false;
             }
-            setSnapshot(snapshot as never);
+            return setSnapshot(snapshot as never);
         },
         applySubtreePayload: (payload, contextID = protocolState.contextID) => {
-            if (!matchesCurrentDocumentContext(contextID)) {
-                return;
+            if (!ensureFrontendContext(contextID)) {
+                return false;
             }
-            applySubtree(payload as never);
+            return applySubtree(payload as never);
         },
         applySelectionPayload: (payload, contextID = protocolState.contextID) => {
-            if (!matchesCurrentDocumentContext(contextID)) {
+            if (!ensureFrontendContext(contextID)) {
                 return false;
             }
             const selection = normalizeSelectionSyncPayload(payload);
@@ -148,6 +168,9 @@ function installWebInspectorKit(): void {
             return false;
         },
         finishChildNodeRequest: (nodeId, success, contextID = protocolState.contextID) => {
+            if (!ensureFrontendContext(contextID)) {
+                return;
+            }
             finishChildNodeRequest(nodeId, success, contextID);
         },
         applyMutationBundle,

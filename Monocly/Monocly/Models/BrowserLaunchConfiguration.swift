@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import WebInspectorKit
 
@@ -17,6 +18,8 @@ struct BrowserUITestSelectionTarget {
 enum BrowserUITestScenario: String {
     case domNavigationBackForward = "domNavigationBackForward"
     case domOpenInspectorAfterInitialLoad = "domOpenInspectorAfterInitialLoad"
+    case domAdFixture = "domAdFixture"
+    case domRemoteURL = "domRemoteURL"
 
     struct FixtureDefinition {
         struct SelectionTargetDefinition {
@@ -38,6 +41,10 @@ enum BrowserUITestScenario: String {
             [.dom()]
         case .domOpenInspectorAfterInitialLoad:
             [.dom()]
+        case .domAdFixture:
+            [.dom()]
+        case .domRemoteURL:
+            [.dom()]
         }
     }
 
@@ -47,6 +54,10 @@ enum BrowserUITestScenario: String {
             true
         case .domOpenInspectorAfterInitialLoad:
             false
+        case .domAdFixture:
+            true
+        case .domRemoteURL:
+            true
         }
     }
 
@@ -56,12 +67,16 @@ enum BrowserUITestScenario: String {
             true
         case .domOpenInspectorAfterInitialLoad:
             true
+        case .domAdFixture:
+            true
+        case .domRemoteURL:
+            true
         }
     }
 
     var showsInspectorHarnessPanel: Bool {
         switch self {
-        case .domNavigationBackForward, .domOpenInspectorAfterInitialLoad:
+        case .domNavigationBackForward, .domOpenInspectorAfterInitialLoad, .domAdFixture, .domRemoteURL:
             true
         }
     }
@@ -130,6 +145,155 @@ enum BrowserUITestScenario: String {
                     ]
                 )
             ]
+        case .domAdFixture:
+            [
+                .init(
+                    identifier: "ad-fixture",
+                    filename: "dom-ad-fixture.html",
+                    html: """
+                    <!doctype html>
+                    <html lang="en">
+                    <head>
+                        <meta charset="utf-8">
+                        <meta name="viewport" content="width=device-width, initial-scale=1">
+                        <title>DOM Ad Fixture</title>
+                        <style>
+                            :root {
+                                color-scheme: light;
+                            }
+                            body {
+                                margin: 0;
+                                font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+                                background: #f5f7fb;
+                                color: #101828;
+                            }
+                            main {
+                                padding: 20px 16px 120px;
+                            }
+                            h1 {
+                                margin: 0 0 12px;
+                                font-size: 28px;
+                            }
+                            .fixture-note {
+                                margin: 0 0 20px;
+                                color: #d92d20;
+                                font-size: 22px;
+                                line-height: 1.35;
+                            }
+                            .ad-shell {
+                                position: relative;
+                                width: min(100%, 360px);
+                                margin: 0 auto;
+                                border-radius: 18px;
+                                overflow: hidden;
+                                box-shadow: 0 18px 44px rgba(16, 24, 40, 0.22);
+                                background: #d7e7ff;
+                            }
+                            .ad-frame {
+                                display: block;
+                                width: 100%;
+                                height: 132px;
+                                border: 0;
+                                background: #0f2742;
+                            }
+                            .utility-frame {
+                                position: absolute;
+                                left: -9999px;
+                                top: -9999px;
+                                width: 0;
+                                height: 0;
+                                border: 0;
+                                visibility: hidden;
+                            }
+                            .footer-copy {
+                                margin: 20px 0 0;
+                                color: #475467;
+                            }
+                        </style>
+                    </head>
+                    <body>
+                        <iframe id="fixture-utility-uspapi" class="utility-frame" title="utility uspapi"></iframe>
+                        <iframe id="fixture-utility-googlefc" class="utility-frame" title="utility googlefc"></iframe>
+                        <main id="fixture-root">
+                            <h1>DOM Ad Fixture</h1>
+                            <p class="fixture-note">
+                                <span id="fixture-warning">Fixture red text above the ad banner.</span>
+                            </p>
+                            <section id="fixture-ad-shell" class="ad-shell">
+                                <iframe
+                                    id="fixture-ad-slot"
+                                    class="ad-frame"
+                                    title="fixture ad slot"
+                                    scrolling="no"
+                                    loading="eager"
+                                    referrerpolicy="no-referrer"
+                                ></iframe>
+                            </section>
+                            <p class="footer-copy">Footer copy after the fixture banner.</p>
+                        </main>
+                        <script>
+                            document.getElementById("fixture-utility-uspapi").srcdoc = `
+                            <!doctype html>
+                            <html lang="en">
+                            <body>
+                                <div id="__uspapiLocator">utility uspapi</div>
+                            </body>
+                            </html>`;
+
+                            document.getElementById("fixture-utility-googlefc").srcdoc = `
+                            <!doctype html>
+                            <html lang="en">
+                            <body>
+                                <div id="googlefcPresent">utility googlefc</div>
+                            </body>
+                            </html>`;
+
+                            document.getElementById("fixture-ad-slot").srcdoc = `
+                            <!doctype html>
+                            <html lang="en">
+                            <body style="margin:0;background:#0f2742;">
+                                <style>
+                                    body {
+                                        margin: 0;
+                                        background: #0f2742;
+                                        display: flex;
+                                        align-items: stretch;
+                                        gap: 8px;
+                                        padding: 10px;
+                                        box-sizing: border-box;
+                                        height: 132px;
+                                    }
+                                    #fixture-ad-cta {
+                                        display: block;
+                                        width: 112px;
+                                        height: 100%;
+                                        flex: 0 0 112px;
+                                        margin: 0;
+                                        border: 0;
+                                        border-radius: 12px;
+                                        background: rgba(255,255,255,0.96);
+                                        color: #1ea88f;
+                                        font: 700 15px -apple-system, BlinkMacSystemFont, sans-serif;
+                                    }
+                                </style>
+                                <img
+                                    id="fixture-ad-image"
+                                    alt="Fixture Ad"
+                                    style="display:block;flex:1 1 auto;width:0;height:100%;object-fit:cover;border-radius:12px;"
+                                    src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 360 132'><rect width='360' height='132' fill='%230c7be8'/><rect x='12' y='12' width='336' height='108' rx='16' fill='%23112a45'/><text x='28' y='58' font-family='-apple-system,BlinkMacSystemFont,sans-serif' font-size='28' fill='white'>Fixture Banner</text><text x='28' y='88' font-family='-apple-system,BlinkMacSystemFont,sans-serif' font-size='16' fill='%23c8ddff'>Native pick target inside iframe</text></svg>"
+                                />
+                                <button id="fixture-ad-cta" type="button">Tap CTA</button>
+                            </body>
+                            </html>`;
+                        </script>
+                    </body>
+                    </html>
+                    """,
+                    selectionTargets: []
+                )
+            ]
+        case .domRemoteURL:
+            []
         }
     }
 }
@@ -142,6 +306,8 @@ struct BrowserLaunchConfiguration {
     let shouldShowDiagnostics: Bool
     let uiTestScenario: BrowserUITestScenario?
     let uiTestFixturePages: [BrowserUITestFixturePage]
+    let uiTestRemoteURL: URL?
+    let uiTestRemoteTap: CGVector?
 
     init(
         initialURL: URL,
@@ -150,7 +316,9 @@ struct BrowserLaunchConfiguration {
         shouldAutoStartDOMSelection: Bool = false,
         shouldShowDiagnostics: Bool = false,
         uiTestScenario: BrowserUITestScenario? = nil,
-        uiTestFixturePages: [BrowserUITestFixturePage] = []
+        uiTestFixturePages: [BrowserUITestFixturePage] = [],
+        uiTestRemoteURL: URL? = nil,
+        uiTestRemoteTap: CGVector? = nil
     ) {
         self.initialURL = initialURL
         self.autoOpenInspectorTabs = autoOpenInspectorTabs
@@ -159,17 +327,25 @@ struct BrowserLaunchConfiguration {
         self.shouldShowDiagnostics = shouldShowDiagnostics
         self.uiTestScenario = uiTestScenario
         self.uiTestFixturePages = uiTestFixturePages
+        self.uiTestRemoteURL = uiTestRemoteURL
+        self.uiTestRemoteTap = uiTestRemoteTap
     }
 
     static func current(processInfo: ProcessInfo = .processInfo) -> BrowserLaunchConfiguration {
         let environment = processInfo.environment
         let uiTestScenario = resolveUITestScenario(from: environment)
         let uiTestFixturePages = resolveUITestFixturePages(for: uiTestScenario)
+        let uiTestRemoteURL = resolveUITestRemoteURL(
+            from: environment,
+            scenario: uiTestScenario
+        )
+        let uiTestRemoteTap = resolveUITestRemoteTap(from: environment)
 
         return BrowserLaunchConfiguration(
             initialURL: resolveInitialURL(
                 from: environment,
-                uiTestFixturePages: uiTestFixturePages
+                uiTestFixturePages: uiTestFixturePages,
+                uiTestRemoteURL: uiTestRemoteURL
             ),
             autoOpenInspectorTabs: resolveAutoOpenInspectorTabs(
                 from: environment,
@@ -181,17 +357,24 @@ struct BrowserLaunchConfiguration {
             shouldShowDiagnostics: environment["WEBSPECTOR_UI_TEST_DIAGNOSTICS"] == "1"
                 || uiTestScenario?.shouldShowDiagnostics == true,
             uiTestScenario: uiTestScenario,
-            uiTestFixturePages: uiTestFixturePages
+            uiTestFixturePages: uiTestFixturePages,
+            uiTestRemoteURL: uiTestRemoteURL,
+            uiTestRemoteTap: uiTestRemoteTap
         )
     }
 
     private static func resolveInitialURL(
         from environment: [String: String],
-        uiTestFixturePages: [BrowserUITestFixturePage]
+        uiTestFixturePages: [BrowserUITestFixturePage],
+        uiTestRemoteURL: URL?
     ) -> URL {
         if let configuredURLString = environment["WEBSPECTOR_INITIAL_URL"],
            let configuredURL = URL(string: configuredURLString) {
             return configuredURL
+        }
+
+        if let uiTestRemoteURL {
+            return uiTestRemoteURL
         }
 
         if let fixtureURL = uiTestFixturePages.first?.url {
@@ -243,6 +426,29 @@ struct BrowserLaunchConfiguration {
             return nil
         }
         return BrowserUITestScenario(rawValue: rawValue)
+    }
+
+    private static func resolveUITestRemoteURL(
+        from environment: [String: String],
+        scenario: BrowserUITestScenario?
+    ) -> URL? {
+        guard scenario == .domRemoteURL,
+              let rawValue = environment["MONOCLY_UI_TEST_REMOTE_URL"] else {
+            return nil
+        }
+        return URL(string: rawValue)
+    }
+
+    private static func resolveUITestRemoteTap(
+        from environment: [String: String]
+    ) -> CGVector? {
+        guard let rawX = environment["MONOCLY_UI_TEST_REMOTE_TAP_X"],
+              let rawY = environment["MONOCLY_UI_TEST_REMOTE_TAP_Y"],
+              let x = Double(rawX),
+              let y = Double(rawY) else {
+            return nil
+        }
+        return CGVector(dx: x, dy: y)
     }
 
     private static func resolveUITestFixturePages(

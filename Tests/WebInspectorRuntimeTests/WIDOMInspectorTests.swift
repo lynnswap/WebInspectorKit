@@ -100,6 +100,57 @@ struct WIDOMInspectorTests {
     }
 
     @Test
+    func payloadNormalizerPreservesProtocolNodeIDsForDetachedRoots() throws {
+        let normalizer = DOMPayloadNormalizer()
+        let delta = try #require(
+            normalizer.normalizeBundlePayload([
+                "version": 2,
+                "kind": "mutation",
+                "events": [[
+                    "method": "DOM.setChildNodes",
+                    "params": [
+                        "nodes": [[
+                            "nodeId": 900,
+                            "backendNodeId": 900,
+                            "nodeType": 9,
+                            "nodeName": "#document",
+                            "localName": "",
+                            "nodeValue": "",
+                            "childNodeCount": 1,
+                            "children": [[
+                                "nodeId": 1093,
+                                "backendNodeId": 1093,
+                                "nodeType": 1,
+                                "nodeName": "IMG",
+                                "localName": "img",
+                                "nodeValue": "",
+                                "attributes": ["id", "detached-target"],
+                                "childNodeCount": 0,
+                                "children": [],
+                            ]],
+                        ]]
+                    ],
+                ]],
+            ])
+        )
+
+        guard case let .mutations(bundle) = delta else {
+            Issue.record("Expected mutation bundle")
+            return
+        }
+        guard case let .setDetachedRoots(nodes) = try #require(bundle.events.first) else {
+            Issue.record("Expected detached roots mutation")
+            return
+        }
+
+        #expect(nodes.count == 1)
+        #expect(nodes.first?.localID == 900)
+        #expect(nodes.first?.backendNodeID == 900)
+        #expect(nodes.first?.children.first?.localID == 1093)
+        #expect(nodes.first?.children.first?.backendNodeID == 1093)
+    }
+
+    @Test
     func reloadDocumentWithoutPageThrowsPageUnavailable() async {
         let inspector = WIDOMInspector()
 
@@ -709,6 +760,16 @@ struct WIDOMInspectorTests {
         #expect(advancedToFreshContext)
 
         let currentContextID = try #require(inspector.testCurrentContextID)
+        let refreshedDocumentReady = await waitForCondition {
+            inspector.testCurrentContextID == currentContextID
+                && inspector.document.rootNode != nil
+                && inspector.testCurrentDocumentURL == "https://example.com/b"
+        }
+        #expect(refreshedDocumentReady)
+        let frontendReady = await waitForCondition {
+            await inspector.testFrontendIsReady()
+        }
+        #expect(frontendReady)
         inspector.testHandleReadyMessage(contextID: currentContextID)
 
         let hydrationCompleted = await waitForCondition {
@@ -766,6 +827,10 @@ struct WIDOMInspectorTests {
         #expect(advancedToNewContext)
 
         let currentContextID = try #require(inspector.testCurrentContextID)
+        let frontendReady = await waitForCondition {
+            await inspector.testFrontendIsReady()
+        }
+        #expect(frontendReady)
         inspector.testHandleReadyMessage(contextID: currentContextID)
 
         let frontendHydratedForNewContext = await waitForCondition {
@@ -816,6 +881,10 @@ struct WIDOMInspectorTests {
         inspector.resetFrontendHydrationDiagnosticsForTesting()
 
         _ = inspector.makeInspectorWebView()
+        let frontendReady = await waitForCondition {
+            await inspector.testFrontendIsReady()
+        }
+        #expect(frontendReady)
         inspector.testHandleReadyMessage(contextID: contextID)
         let frontendHydratedWithoutReload = await waitForCondition {
             inspector.frontendHydrationDiagnosticsForTesting.contains {
@@ -1370,83 +1439,16 @@ struct WIDOMInspectorTests {
     }
 
     @Test
-    func domInspectMaterializesSelectedNodeFromRequestedChildNodes() async throws {
-        var requestedNodeIDs: [Int] = []
+    func domInspectWaitsForQueuedPathEventsBeforeResolvingExactNode() async throws {
         let backend = FakeDOMTransportBackend()
-        backend.pageResultProvider = { method, payload, _ in
+        backend.pageResultProvider = { method, _, _ in
             switch method {
             case WITransportMethod.DOM.getDocument:
                 return makeDocumentResult(
                     url: "https://example.com/a",
-                    bodyChildren: [[
-                        "nodeId": 10,
-                        "backendNodeId": 10,
-                        "nodeType": 1,
-                        "nodeName": "SECTION",
-                        "localName": "section",
-                        "nodeValue": "",
-                        "attributes": ["id", "branch"],
-                        "childNodeCount": 1,
-                        "children": [],
-                    ]]
+                    bodyChildren: []
                 )
             case WITransportMethod.DOM.setInspectModeEnabled:
-                return [:]
-            case WITransportMethod.DOM.requestChildNodes:
-                if let params = runtimeTestDictionaryValue(payload["params"]) {
-                    let nodeID = (params["nodeId"] as? NSNumber)?.intValue
-                        ?? runtimeTestIntValue(params["nodeId"])
-                    if let nodeID {
-                        requestedNodeIDs.append(nodeID)
-                        if nodeID == 10 {
-                            backend.emitPageEvent(
-                                method: "DOM.setChildNodes",
-                                params: [
-                                    "parentId": 10,
-                                    "nodes": [[
-                                        "nodeId": 6,
-                                        "backendNodeId": 6,
-                                        "nodeType": 1,
-                                        "nodeName": "A",
-                                        "localName": "a",
-                                        "nodeValue": "",
-                                        "attributes": ["href", "/target"],
-                                        "childNodeCount": 0,
-                                        "children": [],
-                                    ]],
-                                ]
-                            )
-                        } else if nodeID == 3 {
-                            backend.emitPageEvent(
-                                method: "DOM.setChildNodes",
-                                params: [
-                                    "parentId": 3,
-                                    "nodes": [[
-                                        "nodeId": 10,
-                                        "backendNodeId": 10,
-                                        "nodeType": 1,
-                                        "nodeName": "SECTION",
-                                        "localName": "section",
-                                        "nodeValue": "",
-                                        "attributes": ["id", "branch"],
-                                        "childNodeCount": 1,
-                                        "children": [[
-                                            "nodeId": 6,
-                                            "backendNodeId": 6,
-                                            "nodeType": 1,
-                                            "nodeName": "A",
-                                            "localName": "a",
-                                            "nodeValue": "",
-                                            "attributes": ["href", "/target"],
-                                            "childNodeCount": 0,
-                                            "children": [],
-                                        ]],
-                                    ]],
-                                ]
-                            )
-                        }
-                    }
-                }
                 return [:]
             default:
                 return [:]
@@ -1464,6 +1466,23 @@ struct WIDOMInspectorTests {
 
         try await inspector.beginSelectionMode()
         backend.emitPageEvent(method: "DOM.inspect", params: ["nodeId": 6])
+        backend.emitPageEvent(
+            method: "DOM.setChildNodes",
+            params: [
+                "parentId": 3,
+                "nodes": [[
+                    "nodeId": 6,
+                    "backendNodeId": 6,
+                    "nodeType": 1,
+                    "nodeName": "A",
+                    "localName": "a",
+                    "nodeValue": "",
+                    "attributes": ["href", "/target"],
+                    "childNodeCount": 0,
+                    "children": [],
+                ]],
+            ]
+        )
 
         let selected = await waitForCondition(
             maxAttempts: 120,
@@ -1474,7 +1493,64 @@ struct WIDOMInspectorTests {
                 && inspector.isSelectingElement == false
         }
         #expect(selected)
-        #expect(requestedNodeIDs.contains(10) || requestedNodeIDs.contains(3))
+        #expect(inspector.document.errorMessage == nil)
+    }
+
+    @Test
+    func domInspectConsumesRootScopePathEventsBeforeResolvingExactNode() async throws {
+        let backend = FakeDOMTransportBackend()
+        backend.pageResultProvider = { method, _, _ in
+            switch method {
+            case WITransportMethod.DOM.getDocument:
+                return makeDocumentResult(
+                    url: "https://example.com/a",
+                    bodyChildren: []
+                )
+            case WITransportMethod.DOM.setInspectModeEnabled:
+                return [:]
+            default:
+                return [:]
+            }
+        }
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        try await inspector.beginSelectionMode()
+        backend.emitRootEvent(method: "DOM.inspect", params: ["nodeId": 6])
+        backend.emitRootEvent(
+            method: "DOM.setChildNodes",
+            params: [
+                "parentId": 3,
+                "nodes": [[
+                    "nodeId": 6,
+                    "backendNodeId": 6,
+                    "nodeType": 1,
+                    "nodeName": "A",
+                    "localName": "a",
+                    "nodeValue": "",
+                    "attributes": ["href", "/target"],
+                    "childNodeCount": 0,
+                    "children": [],
+                ]],
+            ]
+        )
+
+        let selected = await waitForCondition(
+            maxAttempts: 120,
+            intervalNanoseconds: 20_000_000
+        ) {
+            inspector.document.selectedNode?.localID == 6
+                && inspector.document.selectedNode?.nodeName == "A"
+                && inspector.isSelectingElement == false
+        }
+        #expect(selected)
         #expect(inspector.document.errorMessage == nil)
     }
 
@@ -1537,6 +1613,400 @@ struct WIDOMInspectorTests {
     }
 
     @Test
+    func inspectorInspectWritesLatestSelectionSnapshotJSON() async throws {
+        let snapshotDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WebInspectorKitDiagnostics", isDirectory: true)
+            .appendingPathComponent("DOMInspectSelection", isDirectory: true)
+        try? FileManager.default.removeItem(at: snapshotDirectoryURL)
+
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, _, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(
+                        url: "https://example.com/a",
+                        mainChildren: [[
+                            "nodeId": 6,
+                            "backendNodeId": 6,
+                            "nodeType": 1,
+                            "nodeName": "A",
+                            "localName": "a",
+                            "nodeValue": "",
+                            "attributes": ["href", "/target"],
+                            "childNodeCount": 0,
+                            "children": [],
+                        ]]
+                    )
+                case WITransportMethod.DOM.setInspectModeEnabled:
+                    return [:]
+                case WITransportMethod.DOM.requestNode:
+                    return ["nodeId": 6]
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        try await inspector.beginSelectionMode()
+        backend.emitRootEvent(
+            method: "Inspector.inspect",
+            params: [
+                "object": [
+                    "type": "object",
+                    "subtype": "node",
+                    "objectId": "node-object-6",
+                ],
+                "hints": [:],
+            ]
+        )
+
+        let selected = await waitForCondition {
+            inspector.document.selectedNode?.localID == 6 && inspector.isSelectingElement == false
+        }
+        #expect(selected)
+
+        let latestSnapshotURL = try #require(inspector.latestInspectSelectionSnapshotURLForDiagnostics())
+        #expect(FileManager.default.fileExists(atPath: latestSnapshotURL.path))
+
+        let snapshotData = try Data(contentsOf: latestSnapshotURL)
+        let snapshotObject = try #require(
+            JSONSerialization.jsonObject(with: snapshotData) as? [String: Any]
+        )
+        let requestNode = try #require(snapshotObject["requestNode"] as? [String: Any])
+        let frontendSnapshot = try #require(snapshotObject["frontendSnapshot"] as? [String: Any])
+        let root = try #require(frontendSnapshot["root"] as? [String: Any])
+
+        #expect(snapshotObject["reason"] as? String == "handleInspectorInspectEvent.resolvedRequestNode")
+        #expect(requestNode["nodeID"] as? Int == 6)
+        #expect(root["nodeName"] as? String == "#document")
+        #expect(root["childCount"] as? Int == 1)
+    }
+
+    @Test
+    func inspectorInspectDoesNotSelectDetachedRootPathWithoutCanonicalFrameDocument() async throws {
+        let backend = FakeDOMTransportBackend()
+        backend.pageResultProvider = { method, payload, targetIdentifier in
+            switch method {
+            case WITransportMethod.DOM.getDocument:
+                return makeDocumentResult(url: "https://example.com/a")
+            case WITransportMethod.DOM.setInspectModeEnabled:
+                return [:]
+            case WITransportMethod.DOM.requestNode:
+                let params = runtimeTestDictionaryValue(payload["params"])
+                if params?["objectId"] as? String == "node-object-detached" {
+                    backend.emitPageEvent(
+                        method: "DOM.setChildNodes",
+                        params: [
+                            "nodes": [
+                                [
+                                    "nodeId": 9000,
+                                    "backendNodeId": 9000,
+                                    "nodeType": 9,
+                                    "nodeName": "#document",
+                                    "localName": "",
+                                    "nodeValue": "",
+                                    "documentURL": "https://ads.example.com/frame",
+                                    "childNodeCount": 1,
+                                    "children": [[
+                                        "nodeId": 1093,
+                                        "backendNodeId": 1093,
+                                        "nodeType": 1,
+                                        "nodeName": "IMG",
+                                        "localName": "img",
+                                        "nodeValue": "",
+                                        "attributes": ["id", "detached-target"],
+                                        "childNodeCount": 0,
+                                        "children": [],
+                                    ]],
+                                ]
+                            ]
+                        ],
+                        targetIdentifier: targetIdentifier
+                    )
+                    return ["nodeId": 1093]
+                }
+                return [:]
+            default:
+                return [:]
+            }
+        }
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        try await inspector.beginSelectionMode()
+        backend.emitRootEvent(
+            method: "Inspector.inspect",
+            params: [
+                "object": [
+                    "type": "object",
+                    "subtype": "node",
+                    "objectId": "node-object-detached",
+                ],
+                "hints": [:],
+            ]
+        )
+
+        let remainedPending = await waitForCondition {
+            inspector.document.selectedNode == nil
+                && inspector.testHasPendingInspectSelection
+                && inspector.document.node(backendNodeID: 1093)?.localName == "img"
+                && inspector.document.errorMessage == nil
+                && inspector.isSelectingElement == false
+        }
+        #expect(remainedPending)
+    }
+
+    @Test
+    func inspectorInspectKeepsDetachedTargetUnselectedWhenOnlyDetachedRootsArrive() async throws {
+        let backend = FakeDOMTransportBackend()
+        backend.pageResultProvider = { method, payload, targetIdentifier in
+            switch method {
+            case WITransportMethod.DOM.getDocument:
+                return makeDocumentResult(url: "https://example.com/a", bodyChildren: [])
+            case WITransportMethod.DOM.setInspectModeEnabled:
+                return [:]
+            case WITransportMethod.DOM.requestNode:
+                let params = runtimeTestDictionaryValue(payload["params"])
+                if params?["objectId"] as? String == "node-object-detached-later-root" {
+                    backend.emitPageEvent(
+                        method: "DOM.setChildNodes",
+                        params: [
+                            "nodes": [[
+                                "nodeId": 900,
+                                "backendNodeId": 900,
+                                "nodeType": 9,
+                                "nodeName": "#document",
+                                "localName": "",
+                                "nodeValue": "",
+                                "childNodeCount": 1,
+                                "children": [[
+                                    "nodeId": 1093,
+                                    "backendNodeId": 1093,
+                                    "nodeType": 1,
+                                    "nodeName": "IMG",
+                                    "localName": "img",
+                                    "nodeValue": "",
+                                    "attributes": ["id", "detached-target"],
+                                    "childNodeCount": 0,
+                                    "children": [],
+                                ]],
+                            ]]
+                        ],
+                        targetIdentifier: targetIdentifier
+                    )
+                    backend.emitPageEvent(
+                        method: "DOM.setChildNodes",
+                        params: [
+                            "nodes": [[
+                                "nodeId": 910,
+                                "backendNodeId": 910,
+                                "nodeType": 9,
+                                "nodeName": "#document",
+                                "localName": "",
+                                "nodeValue": "",
+                                "childNodeCount": 1,
+                                "children": [[
+                                    "nodeId": 2093,
+                                    "backendNodeId": 2093,
+                                    "nodeType": 1,
+                                    "nodeName": "DIV",
+                                    "localName": "div",
+                                    "nodeValue": "",
+                                    "attributes": ["id", "second-detached-target"],
+                                    "childNodeCount": 0,
+                                    "children": [],
+                                ]],
+                            ]]
+                        ],
+                        targetIdentifier: targetIdentifier
+                    )
+                    return ["nodeId": 1093]
+                }
+                return [:]
+            default:
+                return [:]
+            }
+        }
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        try await inspector.beginSelectionMode()
+        backend.emitRootEvent(
+            method: "Inspector.inspect",
+            params: [
+                "object": [
+                    "type": "object",
+                    "subtype": "node",
+                    "objectId": "node-object-detached-later-root",
+                ],
+                "hints": [:],
+            ]
+        )
+
+        let remainedPending = await waitForCondition {
+            inspector.document.selectedNode == nil
+                && inspector.testHasPendingInspectSelection
+                && inspector.document.node(backendNodeID: 1093)?.localID == 1093
+                && inspector.document.node(backendNodeID: 2093)?.localID == 2093
+                && inspector.document.errorMessage == nil
+                && inspector.isSelectingElement == false
+        }
+        #expect(remainedPending)
+    }
+
+    @Test
+    func detachedRootEventsDoNotCompletePendingChildRequests() async throws {
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, _, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a", bodyChildren: [])
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        let contextID = try #require(inspector.testCurrentContextID)
+        inspector.testRegisterPendingChildRequest(
+            nodeID: 900,
+            contextID: contextID,
+            reportsToFrontend: true
+        )
+
+        backend.emitPageEvent(
+            method: "DOM.setChildNodes",
+            params: [
+                "nodes": [[
+                    "nodeId": 900,
+                    "backendNodeId": 900,
+                    "nodeType": 9,
+                    "nodeName": "#document",
+                    "localName": "",
+                    "nodeValue": "",
+                    "childNodeCount": 1,
+                    "children": [[
+                        "nodeId": 1093,
+                        "backendNodeId": 1093,
+                        "nodeType": 1,
+                        "nodeName": "IMG",
+                        "localName": "img",
+                        "nodeValue": "",
+                        "attributes": ["id", "detached-target"],
+                        "childNodeCount": 0,
+                        "children": [],
+                    ]],
+                ]]
+            ]
+        )
+
+        let stillPending = await waitForCondition(
+            maxAttempts: 20,
+            intervalNanoseconds: 20_000_000
+        ) {
+            inspector.testPendingChildRequestNodeIDs == [900]
+        }
+        #expect(stillPending)
+    }
+
+    @Test
+    func inspectorInspectUsesFrameSourceTargetForRequestNode() async throws {
+        var requestNodeTargets: [String] = []
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, payload, targetIdentifier in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeIFrameDocumentResult(url: "https://example.com/a")
+                case WITransportMethod.DOM.setInspectModeEnabled:
+                    return [:]
+                case WITransportMethod.DOM.requestNode:
+                    let params = runtimeTestDictionaryValue(payload["params"])
+                    if params?["objectId"] as? String == "node-object-frame-target" {
+                        requestNodeTargets.append(targetIdentifier)
+                        return ["nodeId": 26]
+                    }
+                    return [:]
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        backend.emitRootEvent(
+            method: "Target.targetCreated",
+            params: [
+                "targetInfo": [
+                    "targetId": "frame-target-A",
+                    "type": "frame",
+                    "isProvisional": false,
+                ],
+            ]
+        )
+        await backend.waitForPendingMessages()
+
+        try await inspector.beginSelectionMode()
+        backend.emitPageEvent(
+            method: "Inspector.inspect",
+            params: [
+                "object": [
+                    "type": "object",
+                    "subtype": "node",
+                    "objectId": "node-object-frame-target",
+                ],
+                "hints": [:],
+            ],
+            targetIdentifier: "frame-target-A"
+        )
+
+        let selected = await waitForCondition {
+            inspector.document.selectedNode?.localID == 26 && inspector.isSelectingElement == false
+        }
+        #expect(selected)
+        #expect(requestNodeTargets == ["frame-target-A"])
+    }
+
+    @Test
     func domInspectSelectsNodeInsideContentDocument() async throws {
         let backend = FakeDOMTransportBackend(
             pageResultProvider: { method, payload, _ in
@@ -1564,6 +2034,7 @@ struct WIDOMInspectorTests {
         let nestedDocument = try #require(iframeNode.children.first)
         #expect(nestedDocument.nodeType == 9)
         #expect(nestedDocument.frameID == "frame-child")
+        #expect(nestedDocument.parent?.localID == iframeNode.localID)
 
         try await inspector.beginSelectionMode()
         backend.emitPageEvent(method: "DOM.inspect", params: ["nodeId": 26])
@@ -1577,45 +2048,35 @@ struct WIDOMInspectorTests {
     }
 
     @Test
-    func inspectorInspectMaterializesNodeInsideKnownNestedDocument() async throws {
-        var requestedNodeIDs: [Int] = []
+    func inspectorInspectMergesFrameTargetDocumentIntoKnownNestedDocument() async throws {
+        var requestNodeTargets: [String] = []
         let backend = FakeDOMTransportBackend()
-        backend.pageResultProvider = { method, payload, _ in
+        backend.pageResultProvider = { method, payload, targetIdentifier in
             switch method {
             case WITransportMethod.DOM.getDocument:
-                return makeIFrameDocumentResultWithEmptyNestedDocument(url: "https://example.com/a")
-            case WITransportMethod.DOM.setInspectModeEnabled:
-                return [:]
-            case WITransportMethod.DOM.requestNode:
-                let params = runtimeTestDictionaryValue(payload["params"])
-                if params?["objectId"] as? String == "node-object-iframe-target" {
-                    return ["nodeId": 26]
-                }
-                return [:]
-            case WITransportMethod.DOM.requestChildNodes:
-                let params = runtimeTestDictionaryValue(payload["params"])
-                let requestedNodeID = params.flatMap {
-                    runtimeTestIntValue($0["nodeId"]) ?? ($0["nodeId"] as? NSNumber)?.intValue
-                }
-                if let requestedNodeID {
-                    requestedNodeIDs.append(requestedNodeID)
-                }
-                if requestedNodeID == 24 {
-                    backend.emitPageEvent(
-                        method: "DOM.setChildNodes",
-                        params: [
-                            "parentId": 24,
-                            "nodes": [[
-                                "nodeId": 25,
-                                "backendNodeId": 25,
+                if targetIdentifier == "frame-target-A" {
+                    return [
+                        "root": [
+                            "nodeId": 240,
+                            "backendNodeId": 240,
+                            "nodeType": 9,
+                            "nodeName": "#document",
+                            "localName": "",
+                            "nodeValue": "",
+                            "documentURL": "https://example.com/frame",
+                            "frameId": "frame-child",
+                            "childNodeCount": 1,
+                            "children": [[
+                                "nodeId": 241,
+                                "backendNodeId": 241,
                                 "nodeType": 1,
                                 "nodeName": "HTML",
                                 "localName": "html",
                                 "nodeValue": "",
                                 "childNodeCount": 1,
                                 "children": [[
-                                    "nodeId": 26,
-                                    "backendNodeId": 26,
+                                    "nodeId": 260,
+                                    "backendNodeId": 260,
                                     "nodeType": 1,
                                     "nodeName": "BUTTON",
                                     "localName": "button",
@@ -1625,8 +2086,17 @@ struct WIDOMInspectorTests {
                                     "children": [],
                                 ]],
                             ]],
-                        ]
-                    )
+                        ],
+                    ]
+                }
+                return makeIFrameDocumentResultWithEmptyNestedDocument(url: "https://example.com/a")
+            case WITransportMethod.DOM.setInspectModeEnabled:
+                return [:]
+            case WITransportMethod.DOM.requestNode:
+                let params = runtimeTestDictionaryValue(payload["params"])
+                if params?["objectId"] as? String == "node-object-frame-target" {
+                    requestNodeTargets.append(targetIdentifier)
+                    return ["nodeId": 260]
                 }
                 return [:]
             default:
@@ -1643,27 +2113,43 @@ struct WIDOMInspectorTests {
         }
         #expect(ready)
 
-        try await inspector.beginSelectionMode()
         backend.emitRootEvent(
+            method: "Target.targetCreated",
+            params: [
+                "targetInfo": [
+                    "targetId": "frame-target-A",
+                    "type": "frame",
+                    "isProvisional": false,
+                ],
+            ]
+        )
+        await backend.waitForPendingMessages()
+
+        try await inspector.beginSelectionMode()
+        backend.emitPageEvent(
             method: "Inspector.inspect",
             params: [
                 "object": [
                     "type": "object",
                     "subtype": "node",
-                    "objectId": "node-object-iframe-target",
+                    "objectId": "node-object-frame-target",
                 ],
                 "hints": [:],
-            ]
+            ],
+            targetIdentifier: "frame-target-A"
         )
 
         let selected = await waitForCondition {
-            inspector.document.selectedNode?.localID == 26
+            inspector.document.selectedNode?.backendNodeID == 260
                 && inspector.document.selectedNode?.attributes.contains(where: { $0.name == "id" && $0.value == "frame-target" }) == true
                 && inspector.isSelectingElement == false
         }
         #expect(selected)
-        #expect(requestedNodeIDs.first == 24)
-        #expect(inspector.document.errorMessage == nil)
+        #expect(inspector.document.selectedNode?.localID != 20)
+        #expect(requestNodeTargets == ["frame-target-A"])
+        let nestedDocument = try #require(inspector.document.node(localID: 24))
+        #expect(nestedDocument.children.first?.localID == 241)
+        #expect(inspector.document.node(localID: 260)?.backendNodeID == 260)
     }
 
     @Test
@@ -1734,7 +2220,7 @@ struct WIDOMInspectorTests {
     }
 
     @Test
-    func inspectorInspectMaterializesSelectedNodeFromRequestedNode() async throws {
+    func inspectorInspectWaitsForRequestNodeSideEffectEventsBeforeResolvingExactNode() async throws {
         let backend = FakeDOMTransportBackend()
         backend.pageResultProvider = { method, _, _ in
             switch method {
@@ -1802,29 +2288,31 @@ struct WIDOMInspectorTests {
     }
 
     @Test
-    func domInspectWaitsForDelayedChildNodesBeforeFailingSelection() async throws {
-        var didRequestChildNodes = false
-        let backend = FakeDOMTransportBackend()
-        backend.pageResultProvider = { method, payload, _ in
-            switch method {
-            case WITransportMethod.DOM.getDocument:
-                return makeDocumentResult(
-                    url: "https://example.com/a",
-                    bodyChildren: []
-                )
-            case WITransportMethod.DOM.setInspectModeEnabled:
-                return [:]
-            case WITransportMethod.DOM.requestChildNodes:
-                let params = runtimeTestDictionaryValue(payload["params"])
-                let requestedNodeID = params.flatMap {
-                    runtimeTestIntValue($0["nodeId"]) ?? ($0["nodeId"] as? NSNumber)?.intValue
+    func inspectorInspectMaterializesFrameCandidatesWhenRequestNodeReturnsUnresolvedNode() async throws {
+        var requestedChildNodeIDs: [Int] = []
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, payload, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                case WITransportMethod.DOM.setInspectModeEnabled:
+                    return [:]
+                case WITransportMethod.DOM.requestNode:
+                    return ["nodeId": 908]
+                case WITransportMethod.DOM.requestChildNodes:
+                    let params = runtimeTestDictionaryValue(payload["params"])
+                    let requestedNodeID = params.flatMap {
+                        runtimeTestIntValue($0["nodeId"]) ?? ($0["nodeId"] as? NSNumber)?.intValue
+                    }
+                    if let requestedNodeID {
+                        requestedChildNodeIDs.append(requestedNodeID)
+                    }
+                    return [:]
+                default:
+                    return [:]
                 }
-                didRequestChildNodes = requestedNodeID == 3
-                return [:]
-            default:
-                return [:]
             }
-        }
+        )
 
         let inspector = makeInspector(using: backend)
         _ = inspector.makeInspectorWebView()
@@ -1836,40 +2324,178 @@ struct WIDOMInspectorTests {
         }
         #expect(ready)
 
-        try await inspector.beginSelectionMode()
-        backend.emitPageEvent(method: "DOM.inspect", params: ["nodeId": 6])
+        inspector.document.replaceDocument(
+            with: makeMainDocumentSnapshot(
+                mainChildren: [
+                    makeFrameOwnerDescriptor(
+                        localID: 20,
+                        backendNodeID: 20,
+                        frameID: "frame-a",
+                        idAttribute: "frame-owner-a",
+                        childCount: 1,
+                        children: [
+                            makeFrameDocumentDescriptor(
+                                localID: 24,
+                                backendNodeID: 24,
+                                frameID: "frame-a",
+                                childCount: 2
+                            )
+                        ]
+                    ),
+                    makeFrameOwnerDescriptor(
+                        localID: 30,
+                        backendNodeID: 30,
+                        frameID: "frame-b",
+                        idAttribute: "frame-owner-b",
+                        childCount: 1
+                    ),
+                ]
+            ),
+            isFreshDocument: true
+        )
 
-        let requestedChildren = await waitForCondition {
-            didRequestChildNodes && inspector.document.selectedNode == nil
+        try await inspector.beginSelectionMode()
+        backend.emitRootEvent(
+            method: "Inspector.inspect",
+            params: [
+                "object": [
+                    "type": "object",
+                    "subtype": "node",
+                    "objectId": "node-object-908",
+                ],
+                "hints": [:],
+            ]
+        )
+
+        let materializing = await waitForCondition {
+            requestedChildNodeIDs == [24]
+                && inspector.testHasPendingInspectSelection
+                && inspector.testPendingInspectOutstandingLocalIDs == [24]
+                && inspector.document.selectedNode == nil
+                && inspector.document.errorMessage == nil
+                && inspector.isSelectingElement == false
         }
-        #expect(requestedChildren)
-        #expect(inspector.document.errorMessage == nil)
-        #expect(inspector.isSelectingElement == false)
+        #expect(materializing)
+    }
+
+    @Test
+    func inspectorInspectResolvesAfterFrameCandidateMaterializationCompletes() async throws {
+        var requestedChildNodeIDs: [Int] = []
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, payload, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                case WITransportMethod.DOM.setInspectModeEnabled:
+                    return [:]
+                case WITransportMethod.DOM.requestNode:
+                    return ["nodeId": 908]
+                case WITransportMethod.DOM.requestChildNodes:
+                    let params = runtimeTestDictionaryValue(payload["params"])
+                    let requestedNodeID = params.flatMap {
+                        runtimeTestIntValue($0["nodeId"]) ?? ($0["nodeId"] as? NSNumber)?.intValue
+                    }
+                    if let requestedNodeID {
+                        requestedChildNodeIDs.append(requestedNodeID)
+                    }
+                    return [:]
+                default:
+                    return [:]
+                }
+            }
+        )
+
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        inspector.document.replaceDocument(
+            with: makeMainDocumentSnapshot(
+                mainChildren: [
+                    makeFrameOwnerDescriptor(
+                        localID: 20,
+                        backendNodeID: 20,
+                        frameID: "frame-a",
+                        idAttribute: "frame-owner-a",
+                        childCount: 1,
+                        children: [
+                            makeFrameDocumentDescriptor(
+                                localID: 24,
+                                backendNodeID: 24,
+                                frameID: "frame-a",
+                                childCount: 1
+                            )
+                        ]
+                    ),
+                ]
+            ),
+            isFreshDocument: true
+        )
+
+        try await inspector.beginSelectionMode()
+        backend.emitRootEvent(
+            method: "Inspector.inspect",
+            params: [
+                "object": [
+                    "type": "object",
+                    "subtype": "node",
+                    "objectId": "node-object-908",
+                ],
+                "hints": [:],
+            ]
+        )
+
+        let requested = await waitForCondition {
+            requestedChildNodeIDs == [24]
+                && inspector.testHasPendingInspectSelection
+                && inspector.document.selectedNode == nil
+                && inspector.document.errorMessage == nil
+        }
+        #expect(requested)
 
         backend.emitPageEvent(
             method: "DOM.setChildNodes",
             params: [
-                "parentId": 3,
+                "parentId": 24,
                 "nodes": [[
-                    "nodeId": 6,
-                    "backendNodeId": 6,
+                    "nodeId": 100,
+                    "backendNodeId": 100,
+                    "frameId": "frame-a",
                     "nodeType": 1,
-                    "nodeName": "A",
-                    "localName": "a",
+                    "nodeName": "HTML",
+                    "localName": "html",
                     "nodeValue": "",
-                    "attributes": ["href", "/target"],
-                    "childNodeCount": 0,
-                    "children": [],
+                    "childNodeCount": 1,
+                    "children": [[
+                        "nodeId": 908,
+                        "backendNodeId": 908,
+                        "frameId": "frame-a",
+                        "nodeType": 1,
+                        "nodeName": "BUTTON",
+                        "localName": "button",
+                        "nodeValue": "",
+                        "attributes": ["id", "resolved-target"],
+                        "childNodeCount": 0,
+                        "children": [],
+                    ]],
                 ]],
             ]
         )
 
         let selected = await waitForCondition {
-            inspector.document.selectedNode?.localID == 6
-                && inspector.document.selectedNode?.nodeName == "A"
+            inspector.document.selectedNode?.localID == 908
+                && inspector.document.selectedNode?.nodeName == "BUTTON"
+                && inspector.testHasPendingInspectSelection == false
+                && inspector.document.errorMessage == nil
+                && inspector.isSelectingElement == false
         }
         #expect(selected)
-        #expect(inspector.document.errorMessage == nil)
     }
 
     @Test
@@ -1984,31 +2610,6 @@ struct WIDOMInspectorTests {
                     return [:]
                 }
                 return ["nodeId": 6]
-            case WITransportMethod.DOM.requestChildNodes:
-                let params = runtimeTestDictionaryValue(payload["params"])
-                let requestedNodeID = params.flatMap {
-                    runtimeTestIntValue($0["nodeId"]) ?? ($0["nodeId"] as? NSNumber)?.intValue
-                }
-                if requestedNodeID == 3 {
-                    backend.emitPageEvent(
-                        method: "DOM.setChildNodes",
-                        params: [
-                            "parentId": 3,
-                            "nodes": [[
-                                "nodeId": 6,
-                                "backendNodeId": 6,
-                                "nodeType": 1,
-                                "nodeName": "A",
-                                "localName": "a",
-                                "nodeValue": "",
-                                "attributes": ["href", "/target"],
-                                "childNodeCount": 0,
-                                "children": [],
-                            ]],
-                        ]
-                    )
-                }
-                return [:]
             default:
                 return [:]
             }
@@ -2047,6 +2648,23 @@ struct WIDOMInspectorTests {
 
         try await inspector.beginSelectionMode()
         backend.emitPageEvent(method: "DOM.inspect", params: ["nodeId": 6])
+        backend.emitPageEvent(
+            method: "DOM.setChildNodes",
+            params: [
+                "parentId": 3,
+                "nodes": [[
+                    "nodeId": 6,
+                    "backendNodeId": 6,
+                    "nodeType": 1,
+                    "nodeName": "A",
+                    "localName": "a",
+                    "nodeValue": "",
+                    "attributes": ["href", "/target"],
+                    "childNodeCount": 0,
+                    "children": [],
+                ]],
+            ]
+        )
         let selected = await waitForCondition {
             inspector.document.selectedNode?.localID == 6
                 && inspector.document.selectedNode?.nodeName == "A"
@@ -2056,8 +2674,7 @@ struct WIDOMInspectorTests {
     }
 
     @Test
-    func laterInspectorInspectCallbacksAreIgnoredWhileDOMInspectMaterializesSelection() async throws {
-        var requestedNodeIDs: [Int] = []
+    func laterInspectorInspectCallbacksAreIgnoredWhileDOMInspectResolutionIsPending() async throws {
         var requestedObjectIDs: [String] = []
         let backend = FakeDOMTransportBackend()
         backend.pageResultProvider = { method, payload, _ in
@@ -2075,15 +2692,6 @@ struct WIDOMInspectorTests {
                     requestedObjectIDs.append(objectID)
                 }
                 return ["nodeId": 6]
-            case WITransportMethod.DOM.requestChildNodes:
-                let params = runtimeTestDictionaryValue(payload["params"])
-                let requestedNodeID = params.flatMap {
-                    runtimeTestIntValue($0["nodeId"]) ?? ($0["nodeId"] as? NSNumber)?.intValue
-                }
-                if let requestedNodeID {
-                    requestedNodeIDs.append(requestedNodeID)
-                }
-                return [:]
             default:
                 return [:]
             }
@@ -2102,12 +2710,6 @@ struct WIDOMInspectorTests {
         try await inspector.beginSelectionMode()
         backend.emitPageEvent(method: "DOM.inspect", params: ["nodeId": 6])
 
-        let requestedFromDOMInspect = await waitForCondition {
-            requestedNodeIDs == [3]
-        }
-        #expect(requestedFromDOMInspect)
-        #expect(inspector.document.errorMessage == nil)
-
         backend.emitRootEvent(
             method: "Inspector.inspect",
             params: [
@@ -2121,7 +2723,7 @@ struct WIDOMInspectorTests {
         )
 
         let ignoredLaterInspectCallback = await waitForCondition {
-            requestedObjectIDs.isEmpty && requestedNodeIDs == [3]
+            requestedObjectIDs.isEmpty
         }
         #expect(ignoredLaterInspectCallback)
 
@@ -2150,37 +2752,20 @@ struct WIDOMInspectorTests {
         }
         #expect(selected)
         #expect(requestedObjectIDs.isEmpty)
-        #expect(requestedNodeIDs == [3])
     }
 
     @Test
     func frontendSelectionIsIgnoredWhileInspectorInspectMaterializesSelection() async throws {
-        var requestedNodeIDs: [Int] = []
-        let backend = FakeDOMTransportBackend()
-        backend.pageResultProvider = { method, payload, _ in
-            switch method {
-            case WITransportMethod.DOM.getDocument:
-                return makeDocumentResult(
-                    url: "https://example.com/a",
-                    bodyChildren: []
-                )
-            case WITransportMethod.DOM.setInspectModeEnabled:
-                return [:]
-            case WITransportMethod.DOM.requestNode:
-                return ["nodeId": 6]
-            case WITransportMethod.DOM.requestChildNodes:
-                let params = runtimeTestDictionaryValue(payload["params"])
-                let requestedNodeID = params.flatMap {
-                    runtimeTestIntValue($0["nodeId"]) ?? ($0["nodeId"] as? NSNumber)?.intValue
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, _, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                default:
+                    return [:]
                 }
-                if let requestedNodeID {
-                    requestedNodeIDs.append(requestedNodeID)
-                }
-                return [:]
-            default:
-                return [:]
             }
-        }
+        )
 
         let inspector = makeInspector(using: backend)
         _ = inspector.makeInspectorWebView()
@@ -2192,24 +2777,12 @@ struct WIDOMInspectorTests {
         }
         #expect(ready)
 
-        try await inspector.beginSelectionMode()
-        backend.emitRootEvent(
-            method: "Inspector.inspect",
-            params: [
-                "object": [
-                    "type": "object",
-                    "subtype": "node",
-                    "objectId": "node-object-6",
-                ],
-                "hints": [:],
-            ]
+        let contextID = try #require(inspector.testCurrentContextID)
+        inspector.testSetPendingInspectSelection(
+            nodeID: 3,
+            contextID: contextID,
+            outstandingLocalIDs: []
         )
-
-        let pending = await waitForCondition {
-            requestedNodeIDs == [3] && inspector.testHasPendingInspectSelection
-        }
-        #expect(pending)
-        #expect(inspector.document.selectedNode == nil)
 
         let competingSelection = DOMSelectionSnapshotPayload(
             localID: 3,
@@ -2224,32 +2797,221 @@ struct WIDOMInspectorTests {
         inspector.testHandleInspectorSelection(competingSelection)
 
         #expect(inspector.document.selectedNode == nil)
+        #expect(inspector.testHasPendingInspectSelection)
+        #expect(inspector.document.errorMessage == nil)
+    }
 
-        backend.emitPageEvent(
-            method: "DOM.setChildNodes",
+    @Test
+    func frontendSelectionRefinesPendingInspectSelectionWhenDifferentNodeArrives() async throws {
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, _, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(
+                        url: "https://example.com/a",
+                        bodyChildren: [[
+                            "nodeId": 6,
+                            "backendNodeId": 6,
+                            "nodeType": 1,
+                            "nodeName": "A",
+                            "localName": "a",
+                            "nodeValue": "",
+                            "attributes": ["id", "refined"],
+                            "childNodeCount": 0,
+                            "children": [],
+                        ]]
+                    )
+                default:
+                    return [:]
+                }
+            }
+        )
+
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        let contextID = try #require(inspector.testCurrentContextID)
+        inspector.testSetPendingInspectSelection(
+            nodeID: 3,
+            contextID: contextID,
+            outstandingLocalIDs: []
+        )
+
+        inspector.testHandleInspectorSelection(
+            DOMSelectionSnapshotPayload(
+                localID: 6,
+                backendNodeID: 6,
+                backendNodeIDIsStable: true,
+                preview: "<a>",
+                attributes: [DOMAttribute(nodeId: 6, name: "id", value: "refined")],
+                path: ["html", "body", "a"],
+                selectorPath: "#refined",
+                styleRevision: 0
+            )
+        )
+
+        let refined = await waitForCondition {
+            inspector.document.selectedNode?.localID == 6
+                && inspector.document.selectedNode?.attributes.contains(where: { $0.name == "id" && $0.value == "refined" }) == true
+                && inspector.testHasPendingInspectSelection == false
+                && inspector.document.errorMessage == nil
+        }
+        #expect(refined)
+    }
+
+    @Test
+    func frontendSelectionDoesNotOverrideCurrentSelectionWhilePendingInspectSelectionExists() async throws {
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, _, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(
+                        url: "https://example.com/a",
+                        bodyChildren: [[
+                            "nodeId": 6,
+                            "backendNodeId": 6,
+                            "nodeType": 1,
+                            "nodeName": "A",
+                            "localName": "a",
+                            "nodeValue": "",
+                            "attributes": ["id", "refined"],
+                            "childNodeCount": 0,
+                            "children": [],
+                        ]]
+                    )
+                default:
+                    return [:]
+                }
+            }
+        )
+
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        let contextID = try #require(inspector.testCurrentContextID)
+        let existingNode = try #require(inspector.document.rootNode?.children.first)
+        inspector.document.applySelectionSnapshot(
+            .init(
+                localID: existingNode.localID,
+                backendNodeID: existingNode.backendNodeID,
+                backendNodeIDIsStable: existingNode.backendNodeIDIsStable,
+                preview: "<\(existingNode.localName)>",
+                attributes: existingNode.attributes,
+                path: [existingNode.localName],
+                selectorPath: existingNode.localName,
+                styleRevision: existingNode.styleRevision
+            )
+        )
+        inspector.testSetPendingInspectSelection(
+            nodeID: 3,
+            contextID: contextID,
+            outstandingLocalIDs: []
+        )
+
+        inspector.testHandleInspectorSelection(
+            DOMSelectionSnapshotPayload(
+                localID: 6,
+                backendNodeID: 6,
+                backendNodeIDIsStable: true,
+                preview: "<a>",
+                attributes: [DOMAttribute(nodeId: 6, name: "id", value: "refined")],
+                path: ["html", "body", "a"],
+                selectorPath: "#refined",
+                styleRevision: 0
+            )
+        )
+
+        #expect(inspector.document.selectedNode?.localID == existingNode.localID)
+        #expect(inspector.testHasPendingInspectSelection)
+        #expect(inspector.document.errorMessage == nil)
+    }
+
+    @Test
+    func unresolvedInspectDoesNotTreatPreviousSelectionAsSuccess() async throws {
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, payload, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                case WITransportMethod.DOM.setInspectModeEnabled:
+                    return [:]
+                case WITransportMethod.DOM.requestNode:
+                    let params = runtimeTestDictionaryValue(payload["params"])
+                    if params?["objectId"] as? String == "node-object-missing" {
+                        return ["nodeId": 999]
+                    }
+                    return [:]
+                case WITransportMethod.DOM.requestChildNodes:
+                    throw WITransportError.remoteError(
+                        scope: .page,
+                        method: WITransportMethod.DOM.requestChildNodes,
+                        message: "child materialization failed"
+                    )
+                default:
+                    return [:]
+                }
+            }
+        )
+
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        let existingNode = try #require(inspector.document.node(localID: 4))
+        inspector.document.applySelectionSnapshot(
+            .init(
+                localID: existingNode.localID,
+                backendNodeID: existingNode.backendNodeID,
+                backendNodeIDIsStable: existingNode.backendNodeIDIsStable,
+                preview: "<main>",
+                attributes: existingNode.attributes,
+                path: ["html", "body", "main"],
+                selectorPath: "#root",
+                styleRevision: existingNode.styleRevision
+            )
+        )
+        #expect(inspector.document.selectedNode?.localID == 4)
+
+        try await inspector.beginSelectionMode()
+        backend.emitRootEvent(
+            method: "Inspector.inspect",
             params: [
-                "parentId": 3,
-                "nodes": [[
-                    "nodeId": 6,
-                    "backendNodeId": 6,
-                    "nodeType": 1,
-                    "nodeName": "A",
-                    "localName": "a",
-                    "nodeValue": "",
-                    "attributes": ["href", "/target"],
-                    "childNodeCount": 0,
-                    "children": [],
-                ]],
+                "object": [
+                    "type": "object",
+                    "subtype": "node",
+                    "objectId": "node-object-missing",
+                ],
+                "hints": [:],
             ]
         )
 
-        let selected = await waitForCondition {
-            inspector.document.selectedNode?.localID == 6
-                && inspector.document.selectedNode?.nodeName == "A"
+        let remainedPending = await waitForCondition {
+            inspector.document.selectedNode?.localID == 4
                 && inspector.document.errorMessage == nil
+                && inspector.testHasPendingInspectSelection
                 && inspector.isSelectingElement == false
         }
-        #expect(selected)
+        #expect(remainedPending)
     }
 
     @Test
@@ -2331,30 +3093,17 @@ struct WIDOMInspectorTests {
     }
 
     @Test
-    func domInspectFailsAfterFinalMaterializationReplyDoesNotResolveNode() async throws {
-        var didRequestChildNodes = false
-        let backend = FakeDOMTransportBackend()
-        backend.pageResultProvider = { method, payload, _ in
-            switch method {
-            case WITransportMethod.DOM.getDocument:
-                return makeDocumentResult(
-                    url: "https://example.com/a",
-                    bodyChildren: []
-                )
-            case WITransportMethod.DOM.setInspectModeEnabled:
-                return [:]
-            case WITransportMethod.DOM.requestChildNodes:
-                let params = runtimeTestDictionaryValue(payload["params"])
-                let requestedNodeID = params.flatMap {
-                    runtimeTestIntValue($0["nodeId"]) ?? ($0["nodeId"] as? NSNumber)?.intValue
+    func pendingInspectMaterializationDoesNotSelectFrameOwnerFallbackUntilFrameDocumentCompletes() async throws {
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, _, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                default:
+                    return [:]
                 }
-                didRequestChildNodes = requestedNodeID == 3
-                return [:]
-            default:
-                return [:]
             }
-        }
-
+        )
         let inspector = makeInspector(using: backend)
         _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
@@ -2365,38 +3114,2107 @@ struct WIDOMInspectorTests {
         }
         #expect(ready)
 
-        try await inspector.beginSelectionMode()
-        backend.emitPageEvent(method: "DOM.inspect", params: ["nodeId": 999])
+        inspector.document.replaceDocument(
+            with: makeMainDocumentSnapshot(
+                mainChildren: [
+                    DOMGraphNodeDescriptor(
+                        localID: 681,
+                        backendNodeID: 681,
+                        nodeType: 9,
+                        nodeName: "#document",
+                        localName: "",
+                        nodeValue: "",
+                        attributes: [],
+                        childCount: 0,
+                        layoutFlags: [],
+                        isRendered: true,
+                        children: []
+                    ),
+                    makeFrameOwnerDescriptor(
+                        localID: 774,
+                        backendNodeID: 774,
+                        frameID: "frame-owner",
+                        idAttribute: "frame-owner",
+                        childCount: 1,
+                        children: [
+                            makeFrameDocumentDescriptor(
+                                localID: 775,
+                                backendNodeID: 775,
+                                frameID: "frame-owner",
+                                childCount: 0,
+                                children: []
+                            )
+                        ]
+                    ),
+                ]
+            ),
+            isFreshDocument: true
+        )
 
-        let requestedChildren = await waitForCondition {
-            didRequestChildNodes && inspector.document.selectedNode == nil
+        let contextID = try #require(inspector.testCurrentContextID)
+        inspector.testSetPendingInspectSelection(
+            nodeID: 999,
+            contextID: contextID,
+            outstandingLocalIDs: [681, 775]
+        )
+
+        await inspector.testFinishPendingInspectMaterialization(
+            parentLocalID: 681,
+            contextID: contextID
+        )
+
+        #expect(inspector.testHasPendingInspectSelection)
+        #expect(inspector.testPendingInspectOutstandingLocalIDs == [775])
+        #expect(inspector.document.selectedNode == nil)
+        #expect(inspector.document.errorMessage == nil)
+    }
+
+    @Test
+    func pendingInspectMaterializationRequestsDeeperEmbeddedNodeBeforeFrameOwnerFallback() async throws {
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, _, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
         }
-        #expect(requestedChildren)
+        #expect(ready)
 
-        backend.emitPageEvent(
-            method: "DOM.setChildNodes",
-            params: [
-                "parentId": 3,
-                "nodes": [[
-                    "nodeId": 7,
-                    "backendNodeId": 7,
-                    "nodeType": 1,
-                    "nodeName": "DIV",
-                    "localName": "div",
-                    "nodeValue": "",
-                    "attributes": ["id", "other"],
-                    "childNodeCount": 0,
-                    "children": [],
-                ]],
+        inspector.document.replaceDocument(
+            with: makeMainDocumentSnapshot(
+                mainChildren: [
+                    makeFrameOwnerDescriptor(
+                        localID: 774,
+                        backendNodeID: 774,
+                        frameID: "frame-owner",
+                        idAttribute: "frame-owner",
+                        childCount: 1,
+                        children: [
+                            makeFrameDocumentDescriptor(
+                                localID: 775,
+                                backendNodeID: 775,
+                                frameID: "frame-owner",
+                                childCount: 1,
+                                children: []
+                            )
+                        ]
+                    )
+                ]
+            ),
+            isFreshDocument: true
+        )
+
+        let contextID = try #require(inspector.testCurrentContextID)
+        inspector.testSetPendingInspectSelection(
+            nodeID: 999,
+            contextID: contextID,
+            outstandingLocalIDs: [775]
+        )
+
+        let htmlNode = DOMGraphNodeDescriptor(
+            localID: 956,
+            backendNodeID: 956,
+            nodeType: 1,
+            nodeName: "HTML",
+            localName: "html",
+            nodeValue: "",
+            attributes: [],
+            childCount: 2,
+            layoutFlags: [],
+            isRendered: true,
+            children: [
+                DOMGraphNodeDescriptor(
+                    localID: 957,
+                    backendNodeID: 957,
+                    nodeType: 1,
+                    nodeName: "HEAD",
+                    localName: "head",
+                    nodeValue: "",
+                    attributes: [],
+                    childCount: 0,
+                    layoutFlags: [],
+                    isRendered: true,
+                    children: []
+                ),
+                DOMGraphNodeDescriptor(
+                    localID: 958,
+                    backendNodeID: 958,
+                    nodeType: 1,
+                    nodeName: "BODY",
+                    localName: "body",
+                    nodeValue: "",
+                    attributes: [],
+                    childCount: 1,
+                    layoutFlags: [],
+                    isRendered: true,
+                    children: []
+                ),
             ]
         )
 
-        let failed = await waitForCondition {
+        await inspector.testApplyMutationBundleAndFinishPendingInspectMaterialization(
+            DOMGraphMutationBundle(
+                events: [
+                    .setChildNodes(parentLocalID: 775, nodes: [htmlNode])
+                ]
+            ),
+            contextID: contextID
+        )
+
+        #expect(inspector.testHasPendingInspectSelection)
+        #expect(inspector.testPendingInspectOutstandingLocalIDs == [958])
+        #expect(inspector.document.selectedNode == nil)
+        #expect(inspector.document.errorMessage == nil)
+    }
+
+    @Test
+    func inspectorInspectDefersGenericDispatchWhileAwaitingFrameDocumentCandidates() async throws {
+        var requestedChildNodeIDs: [Int] = []
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, payload, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                case WITransportMethod.DOM.setInspectModeEnabled:
+                    return [:]
+                case WITransportMethod.DOM.requestNode:
+                    return ["nodeId": 1095]
+                case WITransportMethod.DOM.requestChildNodes:
+                    let params = runtimeTestDictionaryValue(payload["params"])
+                    let requestedNodeID = params.flatMap {
+                        runtimeTestIntValue($0["nodeId"]) ?? ($0["nodeId"] as? NSNumber)?.intValue
+                    }
+                    if let requestedNodeID {
+                        requestedChildNodeIDs.append(requestedNodeID)
+                    }
+                    return [:]
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        inspector.document.replaceDocument(
+            with: makeMainDocumentSnapshot(
+                mainChildren: [
+                    DOMGraphNodeDescriptor(
+                        localID: 20,
+                        backendNodeID: 20,
+                        nodeType: 1,
+                        nodeName: "DIV",
+                        localName: "div",
+                        nodeValue: "",
+                        attributes: [.init(name: "id", value: "generic-incomplete")],
+                        childCount: 2,
+                        layoutFlags: [],
+                        isRendered: true,
+                        children: []
+                    ),
+                    makeFrameOwnerDescriptor(
+                        localID: 774,
+                        backendNodeID: 774,
+                        frameID: "frame-owner",
+                        idAttribute: "frame-owner",
+                        childCount: 1,
+                        children: []
+                    ),
+                ]
+            ),
+            isFreshDocument: true
+        )
+
+        try await inspector.beginSelectionMode()
+        backend.emitRootEvent(
+            method: "Inspector.inspect",
+            params: [
+                "object": [
+                    "type": "object",
+                    "subtype": "node",
+                    "objectId": "node-object-1095",
+                ],
+                "hints": [:],
+            ]
+        )
+
+        let deferred = await waitForCondition {
+            requestedChildNodeIDs.isEmpty
+                && inspector.testHasPendingInspectSelection
+        }
+        #expect(deferred)
+
+        let contextID = try #require(inspector.testCurrentContextID)
+        await inspector.testHandleMutationBundleThroughTransportPath(
+            DOMGraphMutationBundle(
+                events: [
+                    .setChildNodes(
+                        parentLocalID: 774,
+                        nodes: [
+                            makeFrameDocumentDescriptor(
+                                localID: 775,
+                                backendNodeID: 775,
+                                frameID: "frame-owner",
+                                childCount: 1,
+                                children: []
+                            )
+                        ]
+                    )
+                ]
+            ),
+            contextID: contextID
+        )
+
+        #expect(requestedChildNodeIDs == [775])
+        #expect(inspector.testSelectionMaterializationStrategy == "frame-related")
+        #expect(inspector.testPendingInspectScopedMaterializationRootLocalIDs == [775])
+        #expect(inspector.testPendingInspectOutstandingLocalIDs == [775])
+    }
+
+    @Test
+    func pendingInspectPreemptsGenericOutstandingWhenFrameDocumentAppears() async throws {
+        var requestedChildNodeIDs: [Int] = []
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, payload, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                case WITransportMethod.DOM.requestChildNodes:
+                    let params = runtimeTestDictionaryValue(payload["params"])
+                    let requestedNodeID = params.flatMap {
+                        runtimeTestIntValue($0["nodeId"]) ?? ($0["nodeId"] as? NSNumber)?.intValue
+                    }
+                    if let requestedNodeID {
+                        requestedChildNodeIDs.append(requestedNodeID)
+                    }
+                    return [:]
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        inspector.document.replaceDocument(
+            with: makeMainDocumentSnapshot(
+                mainChildren: [
+                    DOMGraphNodeDescriptor(
+                        localID: 20,
+                        backendNodeID: 20,
+                        nodeType: 1,
+                        nodeName: "DIV",
+                        localName: "div",
+                        nodeValue: "",
+                        attributes: [.init(name: "id", value: "generic-incomplete")],
+                        childCount: 2,
+                        layoutFlags: [],
+                        isRendered: true,
+                        children: []
+                    )
+                ]
+            ),
+            isFreshDocument: true
+        )
+
+        let contextID = try #require(inspector.testCurrentContextID)
+        inspector.testSetPendingInspectSelection(
+            nodeID: 1095,
+            contextID: contextID,
+            outstandingLocalIDs: [20],
+            scopedRootLocalIDs: [],
+            activeStrategy: "generic-incomplete",
+            activeRequestGeneration: 1
+        )
+
+        await inspector.testHandleMutationBundleThroughTransportPath(
+            DOMGraphMutationBundle(
+                events: [
+                    .childNodeInserted(
+                        parentLocalID: 4,
+                        previousLocalID: 20,
+                        node: makeFrameOwnerDescriptor(
+                            localID: 774,
+                            backendNodeID: 774,
+                            frameID: "frame-owner",
+                            idAttribute: "frame-owner",
+                            childCount: 1,
+                            children: [
+                                makeFrameDocumentDescriptor(
+                                    localID: 775,
+                                    backendNodeID: 775,
+                                    frameID: "frame-owner",
+                                    childCount: 1,
+                                    children: []
+                                )
+                            ]
+                        )
+                    )
+                ]
+            ),
+            contextID: contextID
+        )
+
+        #expect(requestedChildNodeIDs == [775])
+        #expect(inspector.testSelectionMaterializationStrategy == "frame-related")
+        #expect(inspector.testPendingInspectScopedMaterializationRootLocalIDs == [775])
+        #expect(inspector.testPendingInspectOutstandingLocalIDs == [775])
+
+        await inspector.testFinishPendingInspectMaterialization(
+            parentLocalID: 20,
+            contextID: contextID
+        )
+
+        #expect(inspector.testPendingInspectOutstandingLocalIDs == [775])
+    }
+
+    @Test
+    func inspectorInspectKeepsMaterializationScopedToEmbeddedSubtree() async throws {
+        var requestedChildNodeIDs: [Int] = []
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, payload, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                case WITransportMethod.DOM.setInspectModeEnabled:
+                    return [:]
+                case WITransportMethod.DOM.requestNode:
+                    return ["nodeId": 928]
+                case WITransportMethod.DOM.requestChildNodes:
+                    let params = runtimeTestDictionaryValue(payload["params"])
+                    let requestedNodeID = params.flatMap {
+                        runtimeTestIntValue($0["nodeId"]) ?? ($0["nodeId"] as? NSNumber)?.intValue
+                    }
+                    if let requestedNodeID {
+                        requestedChildNodeIDs.append(requestedNodeID)
+                    }
+                    return [:]
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        inspector.document.replaceDocument(
+            with: makeMainDocumentSnapshot(
+                mainChildren: [
+                    DOMGraphNodeDescriptor(
+                        localID: 20,
+                        backendNodeID: 20,
+                        nodeType: 1,
+                        nodeName: "DIV",
+                        localName: "div",
+                        nodeValue: "",
+                        attributes: [.init(name: "id", value: "unrelated-incomplete")],
+                        childCount: 2,
+                        layoutFlags: [],
+                        isRendered: true,
+                        children: []
+                    ),
+                    makeFrameOwnerDescriptor(
+                        localID: 774,
+                        backendNodeID: 774,
+                        frameID: "frame-owner",
+                        idAttribute: "frame-owner",
+                        childCount: 1,
+                        children: [
+                            makeFrameDocumentDescriptor(
+                                localID: 775,
+                                backendNodeID: 775,
+                                frameID: "frame-owner",
+                                childCount: 1,
+                                children: []
+                            )
+                        ]
+                    ),
+                ]
+            ),
+            isFreshDocument: true
+        )
+
+        try await inspector.beginSelectionMode()
+        backend.emitRootEvent(
+            method: "Inspector.inspect",
+            params: [
+                "object": [
+                    "type": "object",
+                    "subtype": "node",
+                    "objectId": "node-object-928",
+                ],
+                "hints": [:],
+            ]
+        )
+
+        let seeded = await waitForCondition {
+            requestedChildNodeIDs == [775]
+                && inspector.testPendingInspectScopedMaterializationRootLocalIDs == [775]
+                && inspector.testHasPendingInspectSelection
+        }
+        #expect(seeded)
+
+        let contextID = try #require(inspector.testCurrentContextID)
+        let htmlNode = DOMGraphNodeDescriptor(
+            localID: 956,
+            backendNodeID: 956,
+            nodeType: 1,
+            nodeName: "HTML",
+            localName: "html",
+            nodeValue: "",
+            attributes: [],
+            childCount: 1,
+            layoutFlags: [],
+            isRendered: true,
+            children: [
+                DOMGraphNodeDescriptor(
+                    localID: 958,
+                    backendNodeID: 958,
+                    nodeType: 1,
+                    nodeName: "BODY",
+                    localName: "body",
+                    nodeValue: "",
+                    attributes: [],
+                    childCount: 1,
+                    layoutFlags: [],
+                    isRendered: true,
+                    children: []
+                )
+            ]
+        )
+
+        await inspector.testApplyMutationBundleAndFinishPendingInspectMaterialization(
+            DOMGraphMutationBundle(
+                events: [
+                    .setChildNodes(parentLocalID: 775, nodes: [htmlNode])
+                ]
+            ),
+            contextID: contextID
+        )
+
+        #expect(requestedChildNodeIDs == [775, 958])
+        #expect(inspector.testSelectionMaterializationStrategy == "frame-related")
+        #expect(inspector.testSelectionMaterializationCandidateLocalIDs == [958])
+        #expect(inspector.testPendingInspectScopedMaterializationRootLocalIDs == [775])
+    }
+
+    @Test
+    func inspectorInspectContinuesWithinNestedEmbeddedScope() async throws {
+        var requestedChildNodeIDs: [Int] = []
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, payload, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                case WITransportMethod.DOM.setInspectModeEnabled:
+                    return [:]
+                case WITransportMethod.DOM.requestNode:
+                    return ["nodeId": 928]
+                case WITransportMethod.DOM.requestChildNodes:
+                    let params = runtimeTestDictionaryValue(payload["params"])
+                    let requestedNodeID = params.flatMap {
+                        runtimeTestIntValue($0["nodeId"]) ?? ($0["nodeId"] as? NSNumber)?.intValue
+                    }
+                    if let requestedNodeID {
+                        requestedChildNodeIDs.append(requestedNodeID)
+                    }
+                    return [:]
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        inspector.document.replaceDocument(
+            with: makeMainDocumentSnapshot(
+                mainChildren: [
+                    makeFrameOwnerDescriptor(
+                        localID: 774,
+                        backendNodeID: 774,
+                        frameID: "frame-owner",
+                        idAttribute: "frame-owner",
+                        childCount: 1,
+                        children: [
+                            makeFrameDocumentDescriptor(
+                                localID: 775,
+                                backendNodeID: 775,
+                                frameID: "frame-owner",
+                                childCount: 1,
+                                children: []
+                            )
+                        ]
+                    )
+                ]
+            ),
+            isFreshDocument: true
+        )
+
+        try await inspector.beginSelectionMode()
+        backend.emitRootEvent(
+            method: "Inspector.inspect",
+            params: [
+                "object": [
+                    "type": "object",
+                    "subtype": "node",
+                    "objectId": "node-object-928",
+                ],
+                "hints": [:],
+            ]
+        )
+
+        let requestedOuterDocument = await waitForCondition {
+            requestedChildNodeIDs == [775]
+                && inspector.testPendingInspectScopedMaterializationRootLocalIDs == [775]
+        }
+        #expect(requestedOuterDocument)
+
+        let contextID = try #require(inspector.testCurrentContextID)
+        let htmlNode = DOMGraphNodeDescriptor(
+            localID: 956,
+            backendNodeID: 956,
+            nodeType: 1,
+            nodeName: "HTML",
+            localName: "html",
+            nodeValue: "",
+            attributes: [],
+            childCount: 1,
+            layoutFlags: [],
+            isRendered: true,
+            children: [
+                DOMGraphNodeDescriptor(
+                    localID: 958,
+                    backendNodeID: 958,
+                    nodeType: 1,
+                    nodeName: "IFRAME",
+                    localName: "iframe",
+                    nodeValue: "",
+                    attributes: [],
+                    childCount: 1,
+                    layoutFlags: [],
+                    isRendered: true,
+                    children: [
+                        DOMGraphNodeDescriptor(
+                            localID: 959,
+                            backendNodeID: 959,
+                            nodeType: 9,
+                            nodeName: "#document",
+                            localName: "",
+                            nodeValue: "",
+                            attributes: [],
+                            childCount: 1,
+                            layoutFlags: [],
+                            isRendered: true,
+                            children: []
+                        )
+                    ]
+                )
+            ]
+        )
+
+        await inspector.testApplyMutationBundleAndFinishPendingInspectMaterialization(
+            DOMGraphMutationBundle(
+                events: [
+                    .setChildNodes(parentLocalID: 775, nodes: [htmlNode])
+                ]
+            ),
+            contextID: contextID
+        )
+
+        let requestedInnerDocument = await waitForCondition {
+            requestedChildNodeIDs == [775, 959]
+                && inspector.testSelectionMaterializationCandidateLocalIDs == [959]
+                && inspector.testPendingInspectScopedMaterializationRootLocalIDs == [775]
+        }
+        #expect(requestedInnerDocument)
+    }
+
+    @Test
+    func pendingInspectMaterializationDropsStaleOutstandingRootsAndReseedsCurrentEmbeddedCandidates() async throws {
+        var requestedChildNodeIDs: [Int] = []
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, payload, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                case WITransportMethod.DOM.requestChildNodes:
+                    let params = runtimeTestDictionaryValue(payload["params"])
+                    let requestedNodeID = params.flatMap {
+                        runtimeTestIntValue($0["nodeId"]) ?? ($0["nodeId"] as? NSNumber)?.intValue
+                    }
+                    if let requestedNodeID {
+                        requestedChildNodeIDs.append(requestedNodeID)
+                    }
+                    return [:]
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        inspector.document.replaceDocument(
+            with: makeMainDocumentSnapshot(
+                mainChildren: [
+                    makeFrameOwnerDescriptor(
+                        localID: 774,
+                        backendNodeID: 774,
+                        frameID: "frame-owner",
+                        idAttribute: "frame-owner",
+                        childCount: 1,
+                        children: [
+                            makeFrameDocumentDescriptor(
+                                localID: 775,
+                                backendNodeID: 775,
+                                frameID: "frame-owner",
+                                childCount: 1,
+                                children: [
+                                    DOMGraphNodeDescriptor(
+                                        localID: 971,
+                                        backendNodeID: 971,
+                                        nodeType: 1,
+                                        nodeName: "HTML",
+                                        localName: "html",
+                                        nodeValue: "",
+                                        attributes: [],
+                                        childCount: 2,
+                                        layoutFlags: [],
+                                        isRendered: true,
+                                        children: []
+                                    )
+                                ]
+                            )
+                        ]
+                    )
+                ]
+            ),
+            isFreshDocument: true
+        )
+
+        let contextID = try #require(inspector.testCurrentContextID)
+        inspector.testSetPendingInspectSelection(
+            nodeID: 999,
+            contextID: contextID,
+            outstandingLocalIDs: [971],
+            scopedRootLocalIDs: [971]
+        )
+
+        inspector.document.replaceDocument(
+            with: makeMainDocumentSnapshot(
+                mainChildren: [
+                    makeFrameOwnerDescriptor(
+                        localID: 1800,
+                        backendNodeID: 1800,
+                        frameID: "frame-a",
+                        idAttribute: "frame-a",
+                        childCount: 1,
+                        children: [
+                            makeFrameDocumentDescriptor(
+                                localID: 1825,
+                                backendNodeID: 1825,
+                                frameID: "frame-a",
+                                childCount: 1,
+                                children: []
+                            )
+                        ]
+                    ),
+                    makeFrameOwnerDescriptor(
+                        localID: 2000,
+                        backendNodeID: 2000,
+                        frameID: "frame-b",
+                        idAttribute: "frame-b",
+                        childCount: 1,
+                        children: [
+                            makeFrameDocumentDescriptor(
+                                localID: 2047,
+                                backendNodeID: 2047,
+                                frameID: "frame-b",
+                                childCount: 1,
+                                children: []
+                            )
+                        ]
+                    ),
+                ]
+            ),
+            isFreshDocument: true
+        )
+
+        await inspector.testRecordPendingInspectProgressAndAdvance(
+            contextID: contextID,
+            reason: "test.documentReplace"
+        )
+
+        #expect(requestedChildNodeIDs == [1825, 2047])
+        #expect(inspector.testSelectionMaterializationStrategy == "frame-related")
+        #expect(inspector.testSelectionMaterializationCandidateLocalIDs == [1825, 2047])
+        #expect(inspector.testPendingInspectScopedMaterializationRootLocalIDs == [1825, 2047])
+        #expect(inspector.testPendingInspectOutstandingLocalIDs == [1825, 2047])
+        #expect(inspector.testHasPendingInspectSelection)
+    }
+
+    @Test
+    func pendingInspectMaterializationKeepsPendingSelectionWhenOnlyFullyLoadedBodyFallbackRemains() async throws {
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, _, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        inspector.document.replaceDocument(
+            with: makeMainDocumentSnapshot(
+                mainChildren: [
+                    makeFrameOwnerDescriptor(
+                        localID: 774,
+                        backendNodeID: 774,
+                        frameID: "frame-owner",
+                        idAttribute: "frame-owner",
+                        childCount: 1,
+                        children: [
+                            makeFrameDocumentDescriptor(
+                                localID: 775,
+                                backendNodeID: 775,
+                                frameID: "frame-owner",
+                                childCount: 1,
+                                children: []
+                            )
+                        ]
+                    )
+                ]
+            ),
+            isFreshDocument: true
+        )
+
+        let contextID = try #require(inspector.testCurrentContextID)
+        inspector.testSetPendingInspectSelection(
+            nodeID: 999,
+            contextID: contextID,
+            outstandingLocalIDs: [775]
+        )
+
+        let htmlNode = DOMGraphNodeDescriptor(
+            localID: 956,
+            backendNodeID: 956,
+            nodeType: 1,
+            nodeName: "HTML",
+            localName: "html",
+            nodeValue: "",
+            attributes: [],
+            childCount: 2,
+            layoutFlags: [],
+            isRendered: true,
+            children: [
+                DOMGraphNodeDescriptor(
+                    localID: 957,
+                    backendNodeID: 957,
+                    nodeType: 1,
+                    nodeName: "HEAD",
+                    localName: "head",
+                    nodeValue: "",
+                    attributes: [],
+                    childCount: 0,
+                    layoutFlags: [],
+                    isRendered: true,
+                    children: []
+                ),
+                DOMGraphNodeDescriptor(
+                    localID: 958,
+                    backendNodeID: 958,
+                    nodeType: 1,
+                    nodeName: "BODY",
+                    localName: "body",
+                    nodeValue: "",
+                    attributes: [],
+                    childCount: 2,
+                    layoutFlags: [],
+                    isRendered: true,
+                    children: [
+                        DOMGraphNodeDescriptor(
+                            localID: 959,
+                            backendNodeID: 959,
+                            nodeType: 1,
+                            nodeName: "DIV",
+                            localName: "div",
+                            nodeValue: "",
+                            attributes: [],
+                            childCount: 0,
+                            layoutFlags: [],
+                            isRendered: true,
+                            children: []
+                        ),
+                        DOMGraphNodeDescriptor(
+                            localID: 960,
+                            backendNodeID: 960,
+                            nodeType: 1,
+                            nodeName: "P",
+                            localName: "p",
+                            nodeValue: "",
+                            attributes: [],
+                            childCount: 0,
+                            layoutFlags: [],
+                            isRendered: true,
+                            children: []
+                        ),
+                    ]
+                ),
+            ]
+        )
+
+        await inspector.testApplyMutationBundleAndFinishPendingInspectMaterialization(
+            DOMGraphMutationBundle(
+                events: [
+                    .setChildNodes(parentLocalID: 775, nodes: [htmlNode])
+                ]
+            ),
+            contextID: contextID
+        )
+
+        #expect(inspector.testSelectionMaterializationStrategy == "body")
+        #expect(inspector.testSelectionMaterializationCandidateLocalIDs == [958])
+        #expect(inspector.testPendingInspectScopedMaterializationRootLocalIDs == [775])
+        #expect(inspector.testHasPendingInspectSelection)
+        #expect(inspector.testPendingInspectOutstandingLocalIDs.isEmpty)
+        #expect(inspector.document.selectedNode == nil)
+        #expect(inspector.document.errorMessage == nil)
+    }
+
+    @Test
+    func pendingInspectMaterializationDoesNotLoopWhenScopedBodyIsFullyLoaded() async throws {
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, _, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        inspector.document.replaceDocument(
+            with: makeMainDocumentSnapshot(
+                mainChildren: [
+                    makeFrameOwnerDescriptor(
+                        localID: 774,
+                        backendNodeID: 774,
+                        frameID: "frame-owner",
+                        idAttribute: "frame-owner",
+                        childCount: 1,
+                        children: [
+                            makeFrameDocumentDescriptor(
+                                localID: 775,
+                                backendNodeID: 775,
+                                frameID: "frame-owner",
+                                childCount: 1,
+                                children: []
+                            )
+                        ]
+                    )
+                ]
+            ),
+            isFreshDocument: true
+        )
+
+        let contextID = try #require(inspector.testCurrentContextID)
+        inspector.testSetPendingInspectSelection(
+            nodeID: 999,
+            contextID: contextID,
+            outstandingLocalIDs: [775],
+            scopedRootLocalIDs: [775]
+        )
+
+        let htmlNode = DOMGraphNodeDescriptor(
+            localID: 956,
+            backendNodeID: 956,
+            nodeType: 1,
+            nodeName: "HTML",
+            localName: "html",
+            nodeValue: "",
+            attributes: [],
+            childCount: 1,
+            layoutFlags: [],
+            isRendered: true,
+            children: [
+                DOMGraphNodeDescriptor(
+                    localID: 958,
+                    backendNodeID: 958,
+                    nodeType: 1,
+                    nodeName: "BODY",
+                    localName: "body",
+                    nodeValue: "",
+                    attributes: [],
+                    childCount: 2,
+                    layoutFlags: [],
+                    isRendered: true,
+                    children: [
+                        DOMGraphNodeDescriptor(
+                            localID: 959,
+                            backendNodeID: 959,
+                            nodeType: 1,
+                            nodeName: "DIV",
+                            localName: "div",
+                            nodeValue: "",
+                            attributes: [],
+                            childCount: 0,
+                            layoutFlags: [],
+                            isRendered: true,
+                            children: []
+                        ),
+                        DOMGraphNodeDescriptor(
+                            localID: 960,
+                            backendNodeID: 960,
+                            nodeType: 1,
+                            nodeName: "P",
+                            localName: "p",
+                            nodeValue: "",
+                            attributes: [],
+                            childCount: 0,
+                            layoutFlags: [],
+                            isRendered: true,
+                            children: []
+                        ),
+                    ]
+                )
+            ]
+        )
+
+        await inspector.testApplyMutationBundleAndFinishPendingInspectMaterialization(
+            DOMGraphMutationBundle(
+                events: [
+                    .setChildNodes(parentLocalID: 775, nodes: [htmlNode])
+                ]
+            ),
+            contextID: contextID
+        )
+
+        let initialProgressRevision = inspector.testPendingInspectProgressRevision
+        await inspector.testAdvancePendingInspectMaterializationIfIdle(contextID: contextID)
+        await inspector.testAdvancePendingInspectMaterializationIfIdle(contextID: contextID)
+        await inspector.testAdvancePendingInspectMaterializationIfIdle(contextID: contextID)
+
+        #expect(inspector.testPendingInspectProgressRevision == initialProgressRevision)
+        #expect(inspector.testSelectionMaterializationStrategy == "body")
+        #expect(inspector.testSelectionMaterializationCandidateLocalIDs == [958])
+        #expect(inspector.testPendingInspectScopedMaterializationRootLocalIDs == [775])
+        #expect(inspector.testHasPendingInspectSelection)
+        #expect(inspector.testPendingInspectOutstandingLocalIDs.isEmpty)
+        #expect(inspector.document.selectedNode == nil)
+        #expect(inspector.document.errorMessage == nil)
+    }
+
+    @Test
+    func pendingInspectSelectionSurvivesEmptyFrameOwnerSetChildNodesAndResolvesInsideContentDocument() async throws {
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, _, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        inspector.document.replaceDocument(
+            with: makeMainDocumentSnapshot(
+                mainChildren: [
+                    makeFrameOwnerDescriptor(
+                        localID: 800,
+                        backendNodeID: 800,
+                        frameID: "frame-owner",
+                        idAttribute: "frame-owner",
+                        childCount: 1,
+                        children: [
+                            makeFrameDocumentDescriptor(
+                                localID: 801,
+                                backendNodeID: 801,
+                                frameID: "frame-owner",
+                                childCount: 0,
+                                children: []
+                            )
+                        ]
+                    )
+                ]
+            ),
+            isFreshDocument: true
+        )
+
+        let contextID = try #require(inspector.testCurrentContextID)
+        inspector.testSetPendingInspectSelection(
+            nodeID: 928,
+            contextID: contextID,
+            outstandingLocalIDs: [801],
+            scopedRootLocalIDs: [801]
+        )
+
+        let htmlNode = DOMGraphNodeDescriptor(
+            localID: 951,
+            backendNodeID: 951,
+            nodeType: 1,
+            nodeName: "HTML",
+            localName: "html",
+            nodeValue: "",
+            attributes: [],
+            childCount: 1,
+            layoutFlags: [],
+            isRendered: true,
+            children: [
+                DOMGraphNodeDescriptor(
+                    localID: 955,
+                    backendNodeID: 955,
+                    nodeType: 1,
+                    nodeName: "BODY",
+                    localName: "body",
+                    nodeValue: "",
+                    attributes: [],
+                    childCount: 1,
+                    layoutFlags: [],
+                    isRendered: true,
+                    children: [
+                        DOMGraphNodeDescriptor(
+                            localID: 928,
+                            backendNodeID: 928,
+                            backendNodeIDIsStable: true,
+                            frameID: "frame-owner",
+                            nodeType: 1,
+                            nodeName: "IMG",
+                            localName: "img",
+                            nodeValue: "",
+                            attributes: [.init(name: "id", value: "frame-target")],
+                            childCount: 0,
+                            layoutFlags: [],
+                            isRendered: true,
+                            children: []
+                        )
+                    ]
+                )
+            ]
+        )
+
+        await inspector.testHandleMutationBundleThroughTransportPath(
+            .init(
+                events: [
+                    .setChildNodes(parentLocalID: 800, nodes: []),
+                    .setChildNodes(parentLocalID: 801, nodes: [htmlNode])
+                ]
+            ),
+            contextID: contextID
+        )
+
+        let selectedNode = try #require(inspector.document.selectedNode)
+        #expect(selectedNode.localID == 928)
+        #expect(selectedNode.backendNodeID == 928)
+        #expect(selectedNode.parent?.localID == 955)
+        #expect(inspector.testHasPendingInspectSelection == false)
+        #expect(inspector.document.errorMessage == nil)
+    }
+
+    @Test
+    func pendingInspectSelectionSurvivesEmptyFrameOwnerSetChildNodesWhenNodeTypesAreMissing() async throws {
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, _, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        inspector.document.replaceDocument(
+            with: makeMainDocumentSnapshot(
+                mainChildren: [
+                    DOMGraphNodeDescriptor(
+                        localID: 800,
+                        backendNodeID: 800,
+                        backendNodeIDIsStable: true,
+                        frameID: "frame-owner",
+                        nodeType: 0,
+                        nodeName: "IFRAME",
+                        localName: "iframe",
+                        nodeValue: "",
+                        attributes: [.init(name: "id", value: "frame-owner")],
+                        childCount: 1,
+                        layoutFlags: [],
+                        isRendered: true,
+                        children: [
+                            DOMGraphNodeDescriptor(
+                                localID: 801,
+                                backendNodeID: 801,
+                                backendNodeIDIsStable: true,
+                                frameID: "frame-owner",
+                                nodeType: 0,
+                                nodeName: "#document",
+                                localName: "",
+                                nodeValue: "",
+                                attributes: [],
+                                childCount: 0,
+                                layoutFlags: [],
+                                isRendered: true,
+                                children: []
+                            )
+                        ]
+                    )
+                ]
+            ),
+            isFreshDocument: true
+        )
+
+        let contextID = try #require(inspector.testCurrentContextID)
+        inspector.testSetPendingInspectSelection(
+            nodeID: 928,
+            contextID: contextID,
+            outstandingLocalIDs: [801],
+            scopedRootLocalIDs: [801]
+        )
+
+        let htmlNode = DOMGraphNodeDescriptor(
+            localID: 951,
+            backendNodeID: 951,
+            backendNodeIDIsStable: true,
+            nodeType: 0,
+            nodeName: "HTML",
+            localName: "html",
+            nodeValue: "",
+            attributes: [],
+            childCount: 1,
+            layoutFlags: [],
+            isRendered: true,
+            children: [
+                DOMGraphNodeDescriptor(
+                    localID: 955,
+                    backendNodeID: 955,
+                    backendNodeIDIsStable: true,
+                    nodeType: 0,
+                    nodeName: "BODY",
+                    localName: "body",
+                    nodeValue: "",
+                    attributes: [],
+                    childCount: 1,
+                    layoutFlags: [],
+                    isRendered: true,
+                    children: [
+                        DOMGraphNodeDescriptor(
+                            localID: 928,
+                            backendNodeID: 928,
+                            backendNodeIDIsStable: true,
+                            frameID: "frame-owner",
+                            nodeType: 0,
+                            nodeName: "IMG",
+                            localName: "img",
+                            nodeValue: "",
+                            attributes: [.init(name: "id", value: "frame-target")],
+                            childCount: 0,
+                            layoutFlags: [],
+                            isRendered: true,
+                            children: []
+                        )
+                    ]
+                )
+            ]
+        )
+
+        await inspector.testHandleMutationBundleThroughTransportPath(
+            .init(
+                events: [
+                    .setChildNodes(parentLocalID: 800, nodes: []),
+                    .setChildNodes(parentLocalID: 801, nodes: [htmlNode])
+                ]
+            ),
+            contextID: contextID
+        )
+
+        let selectedNode = try #require(inspector.document.selectedNode)
+        #expect(selectedNode.localID == 928)
+        #expect(selectedNode.parent?.localID == 955)
+        #expect(inspector.testHasPendingInspectSelection == false)
+        #expect(inspector.document.errorMessage == nil)
+    }
+
+    @Test
+    func pendingInspectMaterializationDoesNotSelectIframeOwnerWhenScopedResolutionIsUnresolved() async throws {
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, _, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        inspector.document.replaceDocument(
+            with: makeMainDocumentSnapshot(
+                mainChildren: [
+                    makeFrameOwnerDescriptor(
+                        localID: 774,
+                        backendNodeID: 774,
+                        frameID: "frame-owner",
+                        idAttribute: "frame-owner",
+                        childCount: 1,
+                        children: [
+                            makeFrameDocumentDescriptor(
+                                localID: 775,
+                                backendNodeID: 775,
+                                frameID: "frame-owner",
+                                childCount: 1,
+                                children: []
+                            )
+                        ]
+                    )
+                ]
+            ),
+            isFreshDocument: true
+        )
+
+        let contextID = try #require(inspector.testCurrentContextID)
+        inspector.testSetPendingInspectSelection(
+            nodeID: 999,
+            contextID: contextID,
+            outstandingLocalIDs: [775],
+            scopedRootLocalIDs: [775]
+        )
+
+        let htmlNode = DOMGraphNodeDescriptor(
+            localID: 956,
+            backendNodeID: 956,
+            nodeType: 1,
+            nodeName: "HTML",
+            localName: "html",
+            nodeValue: "",
+            attributes: [],
+            childCount: 1,
+            layoutFlags: [],
+            isRendered: true,
+            children: [
+                DOMGraphNodeDescriptor(
+                    localID: 958,
+                    backendNodeID: 958,
+                    nodeType: 1,
+                    nodeName: "BODY",
+                    localName: "body",
+                    nodeValue: "",
+                    attributes: [],
+                    childCount: 1,
+                    layoutFlags: [],
+                    isRendered: true,
+                    children: [
+                        DOMGraphNodeDescriptor(
+                            localID: 959,
+                            backendNodeID: 959,
+                            nodeType: 1,
+                            nodeName: "DIV",
+                            localName: "div",
+                            nodeValue: "",
+                            attributes: [],
+                            childCount: 0,
+                            layoutFlags: [],
+                            isRendered: true,
+                            children: []
+                        )
+                    ]
+                )
+            ]
+        )
+
+        await inspector.testApplyMutationBundleAndFinishPendingInspectMaterialization(
+            DOMGraphMutationBundle(
+                events: [
+                    .setChildNodes(parentLocalID: 775, nodes: [htmlNode])
+                ]
+            ),
+            contextID: contextID
+        )
+
+        #expect(inspector.document.selectedNode == nil)
+        #expect(inspector.document.selectedNode?.localID != 774)
+        #expect(inspector.testHasPendingInspectSelection)
+        #expect(inspector.testPendingInspectScopedMaterializationRootLocalIDs == [775])
+        #expect(inspector.document.errorMessage == nil)
+    }
+
+    @Test
+    func pendingInspectSelectionResolvesExactNodeFromUnknownParentSetChildNodesEvent() async throws {
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, _, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        inspector.document.replaceDocument(
+            with: makeMainDocumentSnapshot(
+                mainChildren: [
+                    makeFrameOwnerDescriptor(
+                        localID: 774,
+                        backendNodeID: 774,
+                        frameID: "frame-owner",
+                        idAttribute: "frame-owner",
+                        childCount: 1,
+                        children: [
+                            makeFrameDocumentDescriptor(
+                                localID: 775,
+                                backendNodeID: 775,
+                                frameID: "frame-owner",
+                                childCount: 1,
+                                children: []
+                            )
+                        ]
+                    )
+                ]
+            ),
+            isFreshDocument: true
+        )
+
+        let contextID = try #require(inspector.testCurrentContextID)
+        inspector.testSetPendingInspectSelection(
+            nodeID: 7574,
+            contextID: contextID,
+            outstandingLocalIDs: [],
+            scopedRootLocalIDs: [775]
+        )
+
+        await inspector.testHandleMutationBundleThroughTransportPath(
+            DOMGraphMutationBundle(
+                events: [
+                    .setChildNodes(
+                        parentLocalID: 7572,
+                        nodes: [
+                            DOMGraphNodeDescriptor(
+                                localID: 7573,
+                                backendNodeID: 7573,
+                                nodeType: 1,
+                                nodeName: "HTML",
+                                localName: "html",
+                                nodeValue: "",
+                                attributes: [],
+                                childCount: 1,
+                                layoutFlags: [],
+                                isRendered: true,
+                                children: [
+                                    DOMGraphNodeDescriptor(
+                                        localID: 7575,
+                                        backendNodeID: 7575,
+                                        nodeType: 1,
+                                        nodeName: "BODY",
+                                        localName: "body",
+                                        nodeValue: "",
+                                        attributes: [],
+                                        childCount: 1,
+                                        layoutFlags: [],
+                                        isRendered: true,
+                                        children: [
+                                            DOMGraphNodeDescriptor(
+                                                localID: 7574,
+                                                backendNodeID: 7574,
+                                                nodeType: 1,
+                                                nodeName: "IMG",
+                                                localName: "img",
+                                                nodeValue: "",
+                                                attributes: [.init(name: "src", value: "https://example.com/ad.png")],
+                                                childCount: 0,
+                                                layoutFlags: [],
+                                                isRendered: true,
+                                                children: []
+                                            )
+                                        ]
+                                    )
+                                ]
+                            )
+                        ]
+                    )
+                ]
+            ),
+            contextID: contextID
+        )
+
+        #expect(inspector.document.selectedNode == nil)
+        #expect(inspector.document.node(localID: 7574) == nil)
+        #expect(inspector.testHasPendingInspectSelection)
+        #expect(inspector.document.errorMessage == nil)
+        #expect(inspector.document.topLevelRoots().map(\.localID) == [1])
+    }
+
+    @Test
+    func inspectorInspectKeepsDetachedNodePendingUntilCanonicalFrameDocumentExists() async throws {
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, payload, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                case WITransportMethod.DOM.setInspectModeEnabled:
+                    return [:]
+                case WITransportMethod.DOM.requestNode:
+                    let params = runtimeTestDictionaryValue(payload["params"])
+                    if params?["objectId"] as? String == "detached-node-object" {
+                        return ["nodeId": 664]
+                    }
+                    return [:]
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        let contextID = try #require(inspector.testCurrentContextID)
+        await inspector.testHandleMutationBundleThroughTransportPath(
+            DOMGraphMutationBundle(
+                events: [
+                    .setChildNodes(
+                        parentLocalID: 646,
+                        nodes: [
+                            DOMGraphNodeDescriptor(
+                                localID: 647,
+                                backendNodeID: 647,
+                                nodeType: 1,
+                                nodeName: "DIV",
+                                localName: "div",
+                                nodeValue: "",
+                                attributes: [],
+                                childCount: 1,
+                                layoutFlags: [],
+                                isRendered: true,
+                                children: []
+                            )
+                        ]
+                    ),
+                    .setChildNodes(
+                        parentLocalID: 647,
+                        nodes: [
+                            DOMGraphNodeDescriptor(
+                                localID: 664,
+                                backendNodeID: 664,
+                                nodeType: 1,
+                                nodeName: "VIDEO",
+                                localName: "video",
+                                nodeValue: "",
+                                attributes: [.init(name: "id", value: "detached-video")],
+                                childCount: 0,
+                                layoutFlags: [],
+                                isRendered: true,
+                                children: []
+                            )
+                        ]
+                    ),
+                ]
+            ),
+            contextID: contextID
+        )
+
+        #expect(inspector.document.node(localID: 664) == nil)
+
+        try await inspector.beginSelectionMode()
+        backend.emitPageEvent(
+            method: "Inspector.inspect",
+            params: [
+                "object": [
+                    "type": "object",
+                    "subtype": "node",
+                    "objectId": "detached-node-object",
+                ],
+                "hints": [:],
+            ]
+        )
+
+        let remainedPending = await waitForCondition {
             inspector.document.selectedNode == nil
+                && inspector.testHasPendingInspectSelection
+                && inspector.document.node(localID: 664) == nil
+        }
+        #expect(remainedPending)
+        #expect(inspector.document.errorMessage == nil)
+    }
+
+    @Test
+    func inspectorInspectFailsWhenOnlyDetachedFrameDocumentMutationArrives() async throws {
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, payload, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                case WITransportMethod.DOM.setInspectModeEnabled:
+                    return [:]
+                case WITransportMethod.DOM.requestNode:
+                    let params = runtimeTestDictionaryValue(payload["params"])
+                    if params?["objectId"] as? String == "detached-node-object" {
+                        return ["nodeId": 664]
+                    }
+                    return [:]
+                case WITransportMethod.DOM.requestChildNodes:
+                    return [:]
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        inspector.document.replaceDocument(
+            with: makeMainDocumentSnapshot(
+                mainChildren: [
+                    makeFrameOwnerDescriptor(
+                        localID: 774,
+                        backendNodeID: 774,
+                        frameID: "frame-owner",
+                        idAttribute: "frame-owner",
+                        childCount: 1,
+                        children: [
+                            makeFrameDocumentDescriptor(
+                                localID: 775,
+                                backendNodeID: 775,
+                                frameID: "frame-owner",
+                                childCount: 1,
+                                children: []
+                            )
+                        ]
+                    )
+                ]
+            ),
+            isFreshDocument: true
+        )
+
+        try await inspector.beginSelectionMode()
+        backend.emitRootEvent(
+            method: "Inspector.inspect",
+            params: [
+                "object": [
+                    "type": "object",
+                    "subtype": "node",
+                    "objectId": "detached-node-object",
+                ],
+                "hints": [:],
+            ]
+        )
+
+        let pendingSelectionSeeded = await waitForCondition {
+            inspector.testHasPendingInspectSelection
+                && inspector.testPendingInspectScopedMaterializationRootLocalIDs == [775]
+        }
+        #expect(pendingSelectionSeeded)
+
+        let contextID = try #require(inspector.testCurrentContextID)
+        await inspector.testHandleMutationBundleThroughTransportPath(
+            DOMGraphMutationBundle(
+                events: [
+                    .setChildNodes(
+                        parentLocalID: 646,
+                        nodes: [
+                            DOMGraphNodeDescriptor(
+                                localID: 647,
+                                backendNodeID: 647,
+                                nodeType: 1,
+                                nodeName: "HTML",
+                                localName: "html",
+                                nodeValue: "",
+                                attributes: [],
+                                childCount: 1,
+                                layoutFlags: [],
+                                isRendered: true,
+                                children: [
+                                    DOMGraphNodeDescriptor(
+                                        localID: 648,
+                                        backendNodeID: 648,
+                                        nodeType: 1,
+                                        nodeName: "BODY",
+                                        localName: "body",
+                                        nodeValue: "",
+                                        attributes: [],
+                                        childCount: 1,
+                                        layoutFlags: [],
+                                        isRendered: true,
+                                        children: [
+                                            DOMGraphNodeDescriptor(
+                                                localID: 664,
+                                                backendNodeID: 664,
+                                                nodeType: 1,
+                                                nodeName: "IMG",
+                                                localName: "img",
+                                                nodeValue: "",
+                                                attributes: [.init(name: "id", value: "detached-image")],
+                                                childCount: 0,
+                                                layoutFlags: [],
+                                                isRendered: true,
+                                                children: []
+                                            )
+                                        ]
+                                    )
+                                ]
+                            )
+                        ]
+                    )
+                ]
+            ),
+            contextID: contextID
+        )
+
+        let failed = await waitForCondition(maxAttempts: 300) {
+            inspector.document.selectedNode == nil
+                && inspector.testHasPendingInspectSelection == false
                 && inspector.document.errorMessage == "Failed to resolve selected element."
-                && inspector.isSelectingElement == false
+                && inspector.document.topLevelRoots().map(\.localID) == [1]
         }
         #expect(failed)
+
+        #expect(inspector.document.node(localID: 775) == nil)
+        #expect(inspector.document.node(localID: 664) == nil)
+    }
+
+    @Test
+    func frontendSnapshotDoesNotInjectDetachedSelectionSubtreeIntoMainRoot() async throws {
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, _, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        let contextID = try #require(inspector.testCurrentContextID)
+        await inspector.testHandleMutationBundleThroughTransportPath(
+            DOMGraphMutationBundle(
+                events: [
+                    .setDetachedRoots(
+                        nodes: [
+                            DOMGraphNodeDescriptor(
+                                localID: 647,
+                                backendNodeID: 647,
+                                nodeType: 9,
+                                nodeName: "#document",
+                                localName: "",
+                                nodeValue: "",
+                                attributes: [],
+                                childCount: 1,
+                                layoutFlags: [],
+                                isRendered: true,
+                                children: [
+                                    DOMGraphNodeDescriptor(
+                                        localID: 664,
+                                        backendNodeID: 664,
+                                        nodeType: 1,
+                                        nodeName: "CANVAS",
+                                        localName: "canvas",
+                                        nodeValue: "",
+                                        attributes: [],
+                                        childCount: 0,
+                                        layoutFlags: [],
+                                        isRendered: true,
+                                        children: []
+                                    )
+                                ]
+                            )
+                        ]
+                    )
+                ]
+            ),
+            contextID: contextID
+        )
+
+        let detachedNode = try #require(inspector.document.node(localID: 664))
+        inspector.document.applySelectionSnapshot(
+            .init(
+                localID: detachedNode.localID,
+                backendNodeID: detachedNode.backendNodeID,
+                backendNodeIDIsStable: detachedNode.backendNodeIDIsStable,
+                preview: "",
+                attributes: detachedNode.attributes,
+                path: [],
+                selectorPath: nil,
+                styleRevision: detachedNode.styleRevision
+            )
+        )
+
+        #expect(inspector.testFrontendSnapshotRootLocalID == 1)
+        #expect(inspector.testFrontendSnapshotRootChildLocalIDs.contains(647) == false)
+        #expect(inspector.document.topLevelRoots().map(\.localID) == [1])
+    }
+
+    @Test
+    func selectionMaterializationIgnoresDetachedDocumentRootsWhenChoosingNestedDocumentCandidates() async throws {
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, _, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        let contextID = try #require(inspector.testCurrentContextID)
+        inspector.testSetPendingInspectSelection(
+            nodeID: 913,
+            contextID: contextID,
+            outstandingLocalIDs: [],
+            scopedRootLocalIDs: []
+        )
+
+        inspector.document.applyMutationBundle(
+            .init(
+                events: [
+                    .setDetachedRoots(
+                        nodes: [
+                            makeFrameDocumentDescriptor(
+                                localID: 945,
+                                backendNodeID: 945,
+                                frameID: "detached-frame",
+                                childCount: 1,
+                                children: [
+                                    DOMGraphNodeDescriptor(
+                                        localID: 913,
+                                        backendNodeID: 913,
+                                        nodeType: 1,
+                                        nodeName: "IMG",
+                                        localName: "img",
+                                        nodeValue: "",
+                                        attributes: [.init(name: "id", value: "detached-target")],
+                                        childCount: 0,
+                                        layoutFlags: [],
+                                        isRendered: true,
+                                        children: []
+                                    )
+                                ]
+                            )
+                        ]
+                    )
+                ]
+            )
+        )
+
+        #expect(inspector.testSelectionMaterializationCandidateLocalIDs.contains(945) == false)
+        #expect(inspector.testSelectionMaterializationStrategy != "nested-document-roots")
+    }
+
+    @Test
+    func selectionMaterializationCandidatesPreferFrameRelatedNodesOverGenericIncompleteNodes() {
+        let inspector = WIDOMInspector()
+        inspector.document.replaceDocument(
+            with: .init(
+                root: DOMGraphNodeDescriptor(
+                    localID: 1,
+                    backendNodeID: 1,
+                    nodeType: 9,
+                    nodeName: "#document",
+                    localName: "",
+                    nodeValue: "",
+                    attributes: [],
+                    childCount: 1,
+                    layoutFlags: [],
+                    isRendered: true,
+                    children: [
+                        DOMGraphNodeDescriptor(
+                            localID: 2,
+                            backendNodeID: 2,
+                            nodeType: 1,
+                            nodeName: "html",
+                            localName: "html",
+                            nodeValue: "",
+                            attributes: [],
+                            childCount: 1,
+                            layoutFlags: [],
+                            isRendered: true,
+                            children: [
+                                DOMGraphNodeDescriptor(
+                                    localID: 3,
+                                    backendNodeID: 3,
+                                    nodeType: 1,
+                                    nodeName: "body",
+                                    localName: "body",
+                                    nodeValue: "",
+                                    attributes: [],
+                                    childCount: 1,
+                                    layoutFlags: [],
+                                    isRendered: true,
+                                    children: [
+                                        DOMGraphNodeDescriptor(
+                                            localID: 4,
+                                            backendNodeID: 4,
+                                            nodeType: 1,
+                                            nodeName: "main",
+                                            localName: "main",
+                                            nodeValue: "",
+                                            attributes: [],
+                                            childCount: 3,
+                                            layoutFlags: [],
+                                            isRendered: true,
+                                            children: [
+                                                DOMGraphNodeDescriptor(
+                                                    localID: 10,
+                                                    backendNodeID: 10,
+                                                    nodeType: 1,
+                                                    nodeName: "div",
+                                                    localName: "div",
+                                                    nodeValue: "",
+                                                    attributes: [.init(name: "id", value: "generic-incomplete")],
+                                                    childCount: 2,
+                                                    layoutFlags: [],
+                                                    isRendered: true,
+                                                    children: []
+                                                ),
+                                                DOMGraphNodeDescriptor(
+                                                    localID: 20,
+                                                    backendNodeID: 20,
+                                                    frameID: "frame-a",
+                                                    nodeType: 1,
+                                                    nodeName: "iframe",
+                                                    localName: "iframe",
+                                                    nodeValue: "",
+                                                    attributes: [.init(name: "id", value: "frame-owner-a")],
+                                                    childCount: 1,
+                                                    layoutFlags: [],
+                                                    isRendered: true,
+                                                    children: []
+                                                ),
+                                                DOMGraphNodeDescriptor(
+                                                    localID: 30,
+                                                    backendNodeID: 30,
+                                                    frameID: "frame-b",
+                                                    nodeType: 1,
+                                                    nodeName: "iframe",
+                                                    localName: "iframe",
+                                                    nodeValue: "",
+                                                    attributes: [.init(name: "id", value: "frame-owner-b")],
+                                                    childCount: 1,
+                                                    layoutFlags: [],
+                                                    isRendered: true,
+                                                    children: [
+                                                        DOMGraphNodeDescriptor(
+                                                            localID: 34,
+                                                            backendNodeID: 34,
+                                                            frameID: "frame-b",
+                                                            nodeType: 9,
+                                                            nodeName: "#document",
+                                                            localName: "",
+                                                            nodeValue: "",
+                                                            attributes: [],
+                                                            childCount: 2,
+                                                            layoutFlags: [],
+                                                            isRendered: true,
+                                                            children: []
+                                                        )
+                                                    ]
+                                                ),
+                                            ]
+                                        )
+                                    ]
+                                )
+                            ]
+                        )
+                    ]
+                )
+            ),
+            isFreshDocument: true
+        )
+
+        #expect(inspector.testSelectionMaterializationStrategy == "frame-related")
+        #expect(inspector.testSelectionMaterializationCandidateLocalIDs == [34])
+    }
+
+    @Test
+    func selectionMaterializationCandidatesInferFrameRelatedNodesWhenNodeTypeIsMissing() {
+        let inspector = WIDOMInspector()
+        inspector.document.replaceDocument(
+            with: makeMainDocumentSnapshot(
+                mainChildren: [
+                    DOMGraphNodeDescriptor(
+                        localID: 10,
+                        backendNodeID: 10,
+                        nodeType: 0,
+                        nodeName: "div",
+                        localName: "",
+                        nodeValue: "",
+                        attributes: [.init(name: "id", value: "generic-incomplete")],
+                        childCount: 2,
+                        layoutFlags: [],
+                        isRendered: true,
+                        children: []
+                    ),
+                    DOMGraphNodeDescriptor(
+                        localID: 20,
+                        backendNodeID: 20,
+                        frameID: "frame-a",
+                        nodeType: 0,
+                        nodeName: "iframe",
+                        localName: "",
+                        nodeValue: "",
+                        attributes: [.init(name: "id", value: "frame-owner-a")],
+                        childCount: 2,
+                        layoutFlags: [],
+                        isRendered: true,
+                        children: [
+                            DOMGraphNodeDescriptor(
+                                localID: 24,
+                                backendNodeID: 24,
+                                frameID: "frame-a",
+                                nodeType: 0,
+                                nodeName: "#document",
+                                localName: "",
+                                nodeValue: "",
+                                attributes: [],
+                                childCount: 2,
+                                layoutFlags: [],
+                                isRendered: true,
+                                children: []
+                            )
+                        ]
+                    ),
+                ]
+            ),
+            isFreshDocument: true
+        )
+
+        #expect(inspector.testSelectionMaterializationStrategy == "frame-related")
+        #expect(inspector.testSelectionMaterializationCandidateLocalIDs == [24])
     }
 
     @Test
@@ -3364,6 +6182,20 @@ private func waitForCondition(
     return condition()
 }
 
+private func waitForCondition(
+    maxAttempts: Int = 200,
+    intervalNanoseconds: UInt64 = 20_000_000,
+    _ condition: @escaping @MainActor () async -> Bool
+) async -> Bool {
+    for _ in 0..<maxAttempts {
+        if await condition() {
+            return true
+        }
+        try? await Task.sleep(nanoseconds: intervalNanoseconds)
+    }
+    return await condition()
+}
+
 private func makeDocumentResult(
     url: String,
     bodyChildren: [[String: Any]]? = nil,
@@ -3506,6 +6338,120 @@ private func makeIFrameDocumentResultWithEmptyNestedDocument(url: String) -> [St
     )
 }
 
+private func makeMainDocumentSnapshot(
+    mainChildren: [DOMGraphNodeDescriptor]
+) -> DOMGraphSnapshot {
+    DOMGraphSnapshot(
+        root: DOMGraphNodeDescriptor(
+            localID: 1,
+            backendNodeID: 1,
+            nodeType: 9,
+            nodeName: "#document",
+            localName: "",
+            nodeValue: "",
+            attributes: [],
+            childCount: 1,
+            layoutFlags: [],
+            isRendered: true,
+            children: [
+                DOMGraphNodeDescriptor(
+                    localID: 2,
+                    backendNodeID: 2,
+                    nodeType: 1,
+                    nodeName: "html",
+                    localName: "html",
+                    nodeValue: "",
+                    attributes: [],
+                    childCount: 1,
+                    layoutFlags: [],
+                    isRendered: true,
+                    children: [
+                        DOMGraphNodeDescriptor(
+                            localID: 3,
+                            backendNodeID: 3,
+                            nodeType: 1,
+                            nodeName: "body",
+                            localName: "body",
+                            nodeValue: "",
+                            attributes: [],
+                            childCount: 1,
+                            layoutFlags: [],
+                            isRendered: true,
+                            children: [
+                                DOMGraphNodeDescriptor(
+                                    localID: 4,
+                                    backendNodeID: 4,
+                                    nodeType: 1,
+                                    nodeName: "main",
+                                    localName: "main",
+                                    nodeValue: "",
+                                    attributes: [],
+                                    childCount: mainChildren.count,
+                                    layoutFlags: [],
+                                    isRendered: true,
+                                    children: mainChildren
+                                )
+                            ]
+                        )
+                    ]
+                )
+            ]
+        )
+    )
+}
+
+private func makeFrameOwnerDescriptor(
+    localID: UInt64,
+    backendNodeID: Int,
+    frameID: String,
+    idAttribute: String,
+    titleAttribute: String? = nil,
+    childCount: Int,
+    children: [DOMGraphNodeDescriptor] = []
+) -> DOMGraphNodeDescriptor {
+    var attributes = [DOMAttribute(name: "id", value: idAttribute)]
+    if let titleAttribute {
+        attributes.append(.init(name: "title", value: titleAttribute))
+    }
+    return DOMGraphNodeDescriptor(
+        localID: localID,
+        backendNodeID: backendNodeID,
+        frameID: frameID,
+        nodeType: 1,
+        nodeName: "iframe",
+        localName: "iframe",
+        nodeValue: "",
+        attributes: attributes,
+        childCount: childCount,
+        layoutFlags: [],
+        isRendered: true,
+        children: children
+    )
+}
+
+private func makeFrameDocumentDescriptor(
+    localID: UInt64,
+    backendNodeID: Int,
+    frameID: String,
+    childCount: Int,
+    children: [DOMGraphNodeDescriptor] = []
+) -> DOMGraphNodeDescriptor {
+    DOMGraphNodeDescriptor(
+        localID: localID,
+        backendNodeID: backendNodeID,
+        frameID: frameID,
+        nodeType: 9,
+        nodeName: "#document",
+        localName: "",
+        nodeValue: "",
+        attributes: [],
+        childCount: childCount,
+        layoutFlags: [],
+        isRendered: true,
+        children: children
+    )
+}
+
 private func runtimeTestIntValue(_ value: Any?) -> Int? {
     if value is Bool {
         return nil
@@ -3609,6 +6555,10 @@ private final class FakeDOMTransportBackend: WITransportPlatformBackend {
             return Data("{}".utf8)
         }
         return nil
+    }
+
+    func waitForPendingMessages() async {
+        await messageSink?.waitForPendingMessages()
     }
 
     func emitPageEvent(method: String, params: [String: Any], targetIdentifier: String? = nil) {

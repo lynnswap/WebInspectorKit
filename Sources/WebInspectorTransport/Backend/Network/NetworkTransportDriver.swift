@@ -406,6 +406,9 @@ private extension NetworkTransportDriver {
     }
 
     func handlePageEvent(_ envelope: WITransportEventEnvelope, session: WITransportSession) async {
+        if transportLifecycleEventIsForFrame(envelope, session: session) {
+            return
+        }
         switch envelope.method {
         case "Target.targetCreated", "Target.didCommitProvisionalTarget":
             try? await enableNetworkIfNeeded(for: envelope.targetIdentifier, session: session)
@@ -429,6 +432,23 @@ private extension NetworkTransportDriver {
             method: WITransportMethod.Network.enable,
             targetIdentifier: targetIdentifier
         )
+    }
+
+    func transportLifecycleEventIsForFrame(
+        _ envelope: WITransportEventEnvelope,
+        session: WITransportSession
+    ) -> Bool {
+        switch envelope.method {
+        case "Target.targetCreated":
+            guard let params = decodeParams(NetworkWire.Transport.Event.TargetCreated.self, from: envelope) else {
+                return false
+            }
+            return params.targetInfo.type == "frame"
+        case "Target.didCommitProvisionalTarget", "Target.targetDestroyed":
+            return session.targetKind(for: envelope.targetIdentifier) == .frame
+        default:
+            return false
+        }
     }
 
     func resetStoreState() {

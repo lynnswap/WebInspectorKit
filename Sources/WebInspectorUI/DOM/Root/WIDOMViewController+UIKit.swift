@@ -107,6 +107,13 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
             : domTreeViewController
         return await treeViewController.selectedNodeIsVisibleForTesting()
     }
+
+    @_spi(Monocly) public func selectedTreeNodeLineageForDiagnostics() async -> String? {
+        let treeViewController = activeHostKindForTesting == "compact"
+            ? compactRootViewController
+            : domTreeViewController
+        return await treeViewController.selectedNodeLineageTextForTesting()
+    }
 #endif
 
     private lazy var pickItem: UIBarButtonItem = {
@@ -322,6 +329,7 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
 
     private func updateVisibleTreeHost() {
         let visibleTreeViewController = resolveVisibleTreeViewController()
+        visibleTreeViewController.loadViewIfNeeded()
         if compactRootViewController !== visibleTreeViewController {
             compactRootViewController.setInspectorWebViewActive(false)
         }

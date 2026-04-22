@@ -348,12 +348,12 @@ export const REFRESH_RETRY_WINDOW = 2000;
 
 /** Public frontend API */
 export interface WebInspectorDOMFrontend {
-    applyFullSnapshot(snapshot: unknown, contextID?: number): void;
+    applyFullSnapshot(snapshot: unknown, contextID?: number): boolean;
     applySelectionPayload(
         payload: number | DOMSelectionSyncPayload,
         contextID?: number
     ): boolean;
-    applySubtreePayload(payload: unknown, contextID?: number): void;
+    applySubtreePayload(payload: unknown, contextID?: number): boolean;
     finishChildNodeRequest(nodeId: number, success: boolean, contextID?: number): void;
     applyMutationBundle(bundle: string | MutationBundle, contextID?: number): void;
     applyMutationBundles(bundles: string | MutationBundle | MutationBundle[], contextID?: number): void;

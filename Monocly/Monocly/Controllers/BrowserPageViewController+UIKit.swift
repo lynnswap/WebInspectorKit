@@ -1,7 +1,8 @@
 #if canImport(UIKit)
 import OSLog
 import UIKit
-import WebInspectorKit
+import WebKit
+@_spi(Monocly) import WebInspectorKit
 #if os(iOS)
 import WKViewportCoordinator
 #endif
@@ -11,6 +12,11 @@ final class BrowserPageViewController: UIViewController {
     private enum ChromePlacement {
         case compactToolbar
         case regularNavigationBar
+    }
+
+    private struct RemoteTapTargetDiagnostics {
+        let normalizedTap: CGVector
+        let summary: String
     }
 
     private let store: BrowserStore
@@ -56,6 +62,8 @@ final class BrowserPageViewController: UIViewController {
     private var progressHeightConstraint: NSLayoutConstraint?
     private var currentChromePlacement: ChromePlacement?
     private var supportsMultipleScenesOverrideForTesting: Bool?
+    private var diagnosticsPollTask: Task<Void, Never>?
+    private var latestRemoteTapTargetDiagnostics: RemoteTapTargetDiagnostics?
 
     init(
         store: BrowserStore,
@@ -77,6 +85,7 @@ final class BrowserPageViewController: UIViewController {
     }
 
     isolated deinit {
+        diagnosticsPollTask?.cancel()
         viewportCoordinator?.invalidate()
         if let storeObserverID {
             store.removeStateObserver(storeObserverID)
@@ -117,6 +126,7 @@ final class BrowserPageViewController: UIViewController {
         registerForTraitChanges([UITraitHorizontalSizeClass.self]) { (self: Self, _) in
             self.applyChromePlacement()
         }
+        startDiagnosticsPollingIfNeeded()
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -173,12 +183,37 @@ final class BrowserPageViewController: UIViewController {
         }
 
         if launchConfiguration.shouldShowDiagnostics {
-            if launchConfiguration.uiTestScenario == .domOpenInspectorAfterInitialLoad {
+            if launchConfiguration.uiTestScenario != nil {
                 diagnosticsPanel.configureInspectorOpenAction { [weak self] in
                     guard let self else {
                         return
                     }
                     _ = self.openInspectorAsSheet(tabs: [.dom()])
+                }
+                diagnosticsPanel.configureBeginNativeSelectionAction { [weak self] in
+                    Task { @MainActor [weak self] in
+                        guard let self else {
+                            return
+                        }
+                        try? await self.inspectorController.dom.beginSelectionMode()
+                        self.updateDiagnosticsOverlay()
+                    }
+                }
+                diagnosticsPanel.configureFocusRemoteTapTargetAction { [weak self] in
+                    Task { @MainActor [weak self] in
+                        guard let self else {
+                            return
+                        }
+                        self.latestRemoteTapTargetDiagnostics = nil
+                        for _ in 0..<50 {
+                            if let diagnostics = try? await self.resolvePreferredRemoteTapTargetForTesting() {
+                                self.latestRemoteTapTargetDiagnostics = diagnostics
+                                break
+                            }
+                            try? await Task.sleep(nanoseconds: 100_000_000)
+                        }
+                        self.updateDiagnosticsOverlay()
+                    }
                 }
             }
             diagnosticsPanel.translatesAutoresizingMaskIntoConstraints = false
@@ -445,8 +480,43 @@ final class BrowserPageViewController: UIViewController {
         view.backgroundColor = store.underPageBackgroundColor ?? .clear
 
         if launchConfiguration.shouldShowDiagnostics {
-            diagnosticsPanel.update(with: store)
+            updateDiagnosticsOverlay()
         }
+    }
+
+    private func startDiagnosticsPollingIfNeeded() {
+        guard launchConfiguration.uiTestScenario != nil else {
+            return
+        }
+        diagnosticsPollTask?.cancel()
+        diagnosticsPollTask = Task { @MainActor [weak self] in
+            while let self, !Task.isCancelled {
+                if self.launchConfiguration.uiTestScenario == .domRemoteURL,
+                   self.latestRemoteTapTargetDiagnostics == nil {
+                    self.latestRemoteTapTargetDiagnostics = try? await self.resolvePreferredRemoteTapTargetForTesting()
+                }
+                self.updateDiagnosticsOverlay()
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+        }
+    }
+
+    private func updateDiagnosticsOverlay() {
+        diagnosticsPanel.update(
+            with: store,
+            uiTestState: .init(
+                domIsSelecting: inspectorController.dom.isSelectingElement,
+                domSelectedPreview: inspectorController.dom.currentSelectedNodePreviewForDiagnostics() ?? "n/a",
+                domSelectedLineage: inspectorController.dom.currentSelectedNodeLineageForDiagnostics() ?? "n/a",
+                domSelectionDebug: inspectorController.dom.lastSelectionDiagnosticForDiagnostics() ?? "n/a",
+                domError: inspectorController.dom.document.errorMessage ?? "n/a",
+                latestInspectSelectionSnapshotPath: inspectorController.dom.latestInspectSelectionSnapshotURLForDiagnostics()?.path ?? "n/a",
+                remoteTapTargetSummary: latestRemoteTapTargetDiagnostics?.summary ?? "n/a",
+                remoteTapPoint: latestRemoteTapTargetDiagnostics.map {
+                    String(format: "%.4f,%.4f", $0.normalizedTap.dx, $0.normalizedTap.dy)
+                } ?? "n/a"
+            )
+        )
     }
 
     private func maybeAutoPresentInspectorIfNeeded() {
@@ -625,14 +695,142 @@ final class BrowserPageViewController: UIViewController {
         }
         refreshChromeControls()
     }
+
+    private func resolvePreferredRemoteTapTargetForTesting() async throws -> RemoteTapTargetDiagnostics? {
+        let rawValue = try await store.webView.callAsyncJavaScriptCompat(
+            """
+            return (function() {
+                const clamp = (value, minimum, maximum) => Math.min(maximum, Math.max(minimum, value));
+                const hitTestPointForIframe = (element, rect, viewportWidth, viewportHeight) => {
+                    const xFractions = [0.5, 0.25, 0.75, 0.12, 0.88];
+                    const yFractions = [0.5, 0.35, 0.65, 0.2, 0.8];
+                    for (const yFraction of yFractions) {
+                        for (const xFraction of xFractions) {
+                            const x = clamp(rect.left + (rect.width * xFraction), 1, viewportWidth - 1);
+                            const y = clamp(rect.top + (rect.height * yFraction), 1, viewportHeight - 1);
+                            const hit = document.elementFromPoint(x, y);
+                            if (hit === element)
+                                return {x, y, hitSummary: element.tagName.toLowerCase()};
+                        }
+                    }
+                    return {
+                        x: clamp(rect.left + (rect.width / 2), 1, viewportWidth - 1),
+                        y: clamp(rect.top + (rect.height / 2), 1, viewportHeight - 1),
+                        hitSummary: "fallback-center",
+                    };
+                };
+                const viewportWidth = Math.max(window.innerWidth || 0, document.documentElement.clientWidth || 0, 1);
+                const viewportHeight = Math.max(window.innerHeight || 0, document.documentElement.clientHeight || 0, 1);
+                const utilityPattern = /(__uspapiLocator|__gppLocator|googlefc|google_ads_iframe|google_ads_top_frame|recaptcha|googlefcPresent|googlefcLoaded|googlefcInactive)/i;
+                const elements = Array.from(document.querySelectorAll("iframe"));
+                const candidates = elements.map((element, index) => {
+                    const rect = element.getBoundingClientRect();
+                    const style = window.getComputedStyle(element);
+                    const summary = `<iframe${element.id ? `#${element.id}` : ""}${element.name ? `[name="${element.name}"]` : ""}>`;
+                    const utility = utilityPattern.test(element.id || "")
+                        || utilityPattern.test(element.name || "")
+                        || utilityPattern.test(element.title || "")
+                        || utilityPattern.test(element.getAttribute("src") || "");
+                    const visible = style.display !== "none"
+                        && style.visibility !== "hidden"
+                        && Number.parseFloat(style.opacity || "1") > 0
+                        && rect.width >= 80
+                        && rect.height >= 40
+                        && rect.bottom > 0
+                        && rect.right > 0
+                        && rect.left < viewportWidth
+                        && rect.top < viewportHeight;
+                    return {
+                        index,
+                        summary,
+                        utility,
+                        visible,
+                        area: rect.width * rect.height,
+                        centerY: rect.top + (rect.height / 2),
+                    };
+                }).filter((candidate) => candidate.visible && !candidate.utility);
+
+                candidates.sort((lhs, rhs) => {
+                    if (rhs.area !== lhs.area)
+                        return rhs.area - lhs.area;
+                    return Math.abs(lhs.centerY - (viewportHeight * 0.30)) - Math.abs(rhs.centerY - (viewportHeight * 0.30));
+                });
+
+                const candidate = candidates[0];
+                if (!candidate)
+                    return null;
+
+                const element = elements[candidate.index];
+                element.scrollIntoView({block: "center", inline: "center", behavior: "auto"});
+                let rect = element.getBoundingClientRect();
+                const desiredCenterY = viewportHeight * 0.30;
+                const currentCenterY = rect.top + (rect.height / 2);
+                const deltaY = currentCenterY - desiredCenterY;
+                if (Math.abs(deltaY) > 8) {
+                    window.scrollBy(0, deltaY);
+                    rect = element.getBoundingClientRect();
+                }
+
+                const tapPoint = hitTestPointForIframe(element, rect, viewportWidth, viewportHeight);
+
+                return {
+                    summary: `${candidate.summary} hit=${tapPoint.hitSummary}`,
+                    viewportX: clamp(tapPoint.x, viewportWidth * 0.10, viewportWidth * 0.90),
+                    viewportY: clamp(tapPoint.y, viewportHeight * 0.12, viewportHeight * 0.46),
+                };
+            })();
+            """,
+            arguments: [:],
+            in: nil,
+            contentWorld: .page
+        )
+
+        guard let payload = rawValue as? NSDictionary,
+              let viewportX = (payload["viewportX"] as? NSNumber)?.doubleValue,
+              let viewportY = (payload["viewportY"] as? NSNumber)?.doubleValue,
+              let window = store.webView.window else {
+            return nil
+        }
+        let pointInWindow = store.webView.convert(
+            CGPoint(x: viewportX, y: viewportY),
+            to: window
+        )
+        let normalizedX = pointInWindow.x / max(window.bounds.width, 1)
+        let normalizedY = pointInWindow.y / max(window.bounds.height, 1)
+        return RemoteTapTargetDiagnostics(
+            normalizedTap: CGVector(dx: normalizedX, dy: normalizedY),
+            summary: (payload["summary"] as? String) ?? "<iframe>"
+        )
+    }
 }
 
 private final class BrowserDiagnosticsOverlayView: UIVisualEffectView {
+    struct UITestState {
+        let domIsSelecting: Bool
+        let domSelectedPreview: String
+        let domSelectedLineage: String
+        let domSelectionDebug: String
+        let domError: String
+        let latestInspectSelectionSnapshotPath: String
+        let remoteTapTargetSummary: String
+        let remoteTapPoint: String
+    }
+
     private let terminationCountLabel = UILabel()
     private let didFinishCountLabel = UILabel()
     private let currentURLLabel = UILabel()
     private let lastErrorLabel = UILabel()
     private let openInspectorButton = UIButton(type: .system)
+    private let beginNativeSelectionButton = UIButton(type: .system)
+    private let focusRemoteTapTargetButton = UIButton(type: .system)
+    private let domIsSelectingLabel = UILabel()
+    private let domSelectedPreviewLabel = UILabel()
+    private let domSelectedLineageLabel = UILabel()
+    private let domSelectionDebugLabel = UILabel()
+    private let domErrorLabel = UILabel()
+    private let latestInspectSelectionSnapshotPathLabel = UILabel()
+    private let remoteTapTargetSummaryLabel = UILabel()
+    private let remoteTapPointLabel = UILabel()
 
     init() {
         super.init(effect: UIBlurEffect(style: .systemThinMaterial))
@@ -641,17 +839,37 @@ private final class BrowserDiagnosticsOverlayView: UIVisualEffectView {
         clipsToBounds = true
         accessibilityIdentifier = "Monocly.diagnostics.panel"
 
-        var arrangedSubviews: [UIView] = [
+        openInspectorButton.configuration = .tinted()
+        openInspectorButton.configuration?.title = "Open Inspector"
+        openInspectorButton.accessibilityIdentifier = "Monocly.inspectorHarness.openInspector"
+        openInspectorButton.isHidden = true
+
+        beginNativeSelectionButton.configuration = .tinted()
+        beginNativeSelectionButton.configuration?.title = "Native Pick"
+        beginNativeSelectionButton.accessibilityIdentifier = "Monocly.diagnostics.beginNativeSelection"
+        beginNativeSelectionButton.isHidden = true
+
+        focusRemoteTapTargetButton.configuration = .tinted()
+        focusRemoteTapTargetButton.configuration?.title = "Focus Iframe"
+        focusRemoteTapTargetButton.accessibilityIdentifier = "Monocly.diagnostics.focusRemoteTapTarget"
+        focusRemoteTapTargetButton.isHidden = true
+
+        let buttonStack = UIStackView(arrangedSubviews: [
+            openInspectorButton,
+            beginNativeSelectionButton
+        ])
+        buttonStack.axis = .horizontal
+        buttonStack.alignment = .fill
+        buttonStack.distribution = .fillEqually
+        buttonStack.spacing = 6
+
+        let arrangedSubviews: [UIView] = [
+            buttonStack,
             terminationCountLabel,
             didFinishCountLabel,
             currentURLLabel,
             lastErrorLabel
         ]
-        openInspectorButton.configuration = .tinted()
-        openInspectorButton.configuration?.title = "Open Inspector"
-        openInspectorButton.accessibilityIdentifier = "Monocly.inspectorHarness.openInspector"
-        openInspectorButton.isHidden = true
-        arrangedSubviews.append(openInspectorButton)
 
         let stackView = UIStackView(arrangedSubviews: arrangedSubviews)
         stackView.axis = .vertical
@@ -665,10 +883,43 @@ private final class BrowserDiagnosticsOverlayView: UIVisualEffectView {
             label.numberOfLines = 2
         }
 
+        for label in [
+            domIsSelectingLabel,
+            domSelectedPreviewLabel,
+            domSelectedLineageLabel,
+            domSelectionDebugLabel,
+            domErrorLabel,
+            latestInspectSelectionSnapshotPathLabel,
+            remoteTapTargetSummaryLabel,
+            remoteTapPointLabel,
+        ] {
+            label.font = .monospacedSystemFont(ofSize: 6, weight: .regular)
+            label.numberOfLines = 1
+            label.textColor = .clear
+            label.alpha = 0.01
+            label.isAccessibilityElement = true
+            label.translatesAutoresizingMaskIntoConstraints = false
+            contentView.addSubview(label)
+            NSLayoutConstraint.activate([
+                label.topAnchor.constraint(equalTo: contentView.topAnchor),
+                label.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+                label.widthAnchor.constraint(equalToConstant: 1),
+                label.heightAnchor.constraint(equalToConstant: 1)
+            ])
+        }
+
         terminationCountLabel.accessibilityIdentifier = "Monocly.diagnostics.terminationCount"
         didFinishCountLabel.accessibilityIdentifier = "Monocly.diagnostics.didFinishCount"
         currentURLLabel.accessibilityIdentifier = "Monocly.diagnostics.currentURL"
         lastErrorLabel.accessibilityIdentifier = "Monocly.diagnostics.lastNavigationError"
+        domIsSelectingLabel.accessibilityIdentifier = "Monocly.diagnostics.domIsSelecting"
+        domSelectedPreviewLabel.accessibilityIdentifier = "Monocly.diagnostics.domSelectedPreview"
+        domSelectedLineageLabel.accessibilityIdentifier = "Monocly.diagnostics.domSelectedLineage"
+        domSelectionDebugLabel.accessibilityIdentifier = "Monocly.diagnostics.domSelectionDebug"
+        domErrorLabel.accessibilityIdentifier = "Monocly.diagnostics.domError"
+        latestInspectSelectionSnapshotPathLabel.accessibilityIdentifier = "Monocly.diagnostics.latestInspectSelectionSnapshotPath"
+        remoteTapTargetSummaryLabel.accessibilityIdentifier = "Monocly.diagnostics.remoteTapTargetSummary"
+        remoteTapPointLabel.accessibilityIdentifier = "Monocly.diagnostics.remoteTapPoint"
 
         NSLayoutConstraint.activate([
             stackView.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 8),
@@ -683,17 +934,47 @@ private final class BrowserDiagnosticsOverlayView: UIVisualEffectView {
         nil
     }
 
-    func update(with store: BrowserStore) {
+    func update(with store: BrowserStore, uiTestState: UITestState? = nil) {
         terminationCountLabel.text = "terminationCount=\(store.webContentTerminationCount)"
         didFinishCountLabel.text = "didFinishCount=\(store.didFinishNavigationCount)"
         currentURLLabel.text = "currentURL=\(store.currentURL?.absoluteString ?? "n/a")"
         lastErrorLabel.text = "lastError=\(store.lastNavigationErrorDescription ?? "n/a")"
+        domIsSelectingLabel.text = "domIsSelecting=\(uiTestState?.domIsSelecting == true ? 1 : 0)"
+        domSelectedPreviewLabel.text = "domSelectedPreview=\(uiTestState?.domSelectedPreview ?? "n/a")"
+        domSelectedLineageLabel.text = "domSelectedLineage=\(uiTestState?.domSelectedLineage ?? "n/a")"
+        domSelectionDebugLabel.text = "domSelectionDebug=\(uiTestState?.domSelectionDebug ?? "n/a")"
+        domErrorLabel.text = "domError=\(uiTestState?.domError ?? "n/a")"
+        latestInspectSelectionSnapshotPathLabel.text = "latestInspectSelectionSnapshotPath=\(uiTestState?.latestInspectSelectionSnapshotPath ?? "n/a")"
+        remoteTapTargetSummaryLabel.text = "remoteTapTargetSummary=\(uiTestState?.remoteTapTargetSummary ?? "n/a")"
+        remoteTapPointLabel.text = "remoteTapPoint=\(uiTestState?.remoteTapPoint ?? "n/a")"
     }
 
     func configureInspectorOpenAction(_ action: @escaping () -> Void) {
         openInspectorButton.isHidden = false
         openInspectorButton.removeTarget(nil, action: nil, for: .primaryActionTriggered)
         openInspectorButton.addAction(
+            UIAction { _ in
+                action()
+            },
+            for: .primaryActionTriggered
+        )
+    }
+
+    func configureBeginNativeSelectionAction(_ action: @escaping () -> Void) {
+        beginNativeSelectionButton.isHidden = false
+        beginNativeSelectionButton.removeTarget(nil, action: nil, for: .primaryActionTriggered)
+        beginNativeSelectionButton.addAction(
+            UIAction { _ in
+                action()
+            },
+            for: .primaryActionTriggered
+        )
+    }
+
+    func configureFocusRemoteTapTargetAction(_ action: @escaping () -> Void) {
+        focusRemoteTapTargetButton.isHidden = false
+        focusRemoteTapTargetButton.removeTarget(nil, action: nil, for: .primaryActionTriggered)
+        focusRemoteTapTargetButton.addAction(
             UIAction { _ in
                 action()
             },

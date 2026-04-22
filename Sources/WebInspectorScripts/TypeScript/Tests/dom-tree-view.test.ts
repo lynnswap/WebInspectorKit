@@ -243,6 +243,8 @@ describe("dom-tree-view", () => {
         expect(treeState.nodes.get(24)?.parentId).toBe(20);
         expect(treeState.nodes.get(24)?.nodeType).toBe(9);
         expect(treeState.nodes.get(24)?.frameId).toBe("frame-child");
+        expect(treeState.snapshot?.root?.children.map((child) => child.id)).toEqual([2]);
+        expect(treeState.snapshot?.root?.children.some((child) => child.id === 24)).toBe(false);
 
         const { toggleNode } = await import("../UI/DOMTree/dom-tree-view-support");
         toggleNode(20);
@@ -559,6 +561,40 @@ describe("dom-tree-view", () => {
 
         expect(readyHandler).toHaveBeenCalledTimes(1);
         expect(readyHandler).toHaveBeenCalledWith({ contextID: 9 });
+    });
+
+    it("adopts the incoming context for the first full snapshot when the tree is empty", async () => {
+        const { protocolState, treeState } = await import("../UI/DOMTree/dom-tree-state");
+        await import("../UI/DOMTree/dom-tree-view");
+
+        protocolState.contextID = 0;
+        treeState.snapshot = null;
+        treeState.nodes.clear();
+        (window.webInspectorDOMFrontend as { updateBootstrap?: (bootstrap: unknown) => void } | undefined)
+            ?.updateBootstrap?.({ context: { contextID: 7 } });
+
+        window.webInspectorDOMFrontend?.applyFullSnapshot?.({
+            root: {
+                nodeId: 1,
+                nodeType: 9,
+                nodeName: "#document",
+                localName: "",
+                childNodeCount: 1,
+                children: [
+                    {
+                        nodeId: 2,
+                        nodeType: 1,
+                        nodeName: "HTML",
+                        localName: "html",
+                        childNodeCount: 0,
+                        children: [],
+                    },
+                ],
+            },
+        }, 7);
+
+        expect(protocolState.contextID).toBe(7);
+        expect(document.getElementById("dom-tree")?.textContent).toContain("html");
     });
 
     it("clears transient hover state when native pointer disconnect is reported", async () => {

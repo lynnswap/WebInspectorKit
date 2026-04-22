@@ -6,6 +6,12 @@ public enum WITransportTargetScope: String, Sendable {
     case page
 }
 
+package enum WITransportTargetKind: String, Sendable {
+    case page
+    case frame
+    case other
+}
+
 package enum WITransportBackendKind: String, Sendable {
     case iOSNativeInspector
     case macOSNativeInspector
