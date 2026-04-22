@@ -510,7 +510,6 @@ final class BrowserPageViewController: UIViewController {
                 domSelectedLineage: inspectorController.dom.currentSelectedNodeLineageForDiagnostics() ?? "n/a",
                 domSelectionDebug: inspectorController.dom.lastSelectionDiagnosticForDiagnostics() ?? "n/a",
                 domError: inspectorController.dom.document.errorMessage ?? "n/a",
-                latestInspectSelectionSnapshotPath: inspectorController.dom.latestInspectSelectionSnapshotURLForDiagnostics()?.path ?? "n/a",
                 remoteTapTargetSummary: latestRemoteTapTargetDiagnostics?.summary ?? "n/a",
                 remoteTapPoint: latestRemoteTapTargetDiagnostics.map {
                     String(format: "%.4f,%.4f", $0.normalizedTap.dx, $0.normalizedTap.dy)
@@ -811,7 +810,6 @@ private final class BrowserDiagnosticsOverlayView: UIVisualEffectView {
         let domSelectedLineage: String
         let domSelectionDebug: String
         let domError: String
-        let latestInspectSelectionSnapshotPath: String
         let remoteTapTargetSummary: String
         let remoteTapPoint: String
     }
@@ -828,7 +826,6 @@ private final class BrowserDiagnosticsOverlayView: UIVisualEffectView {
     private let domSelectedLineageLabel = UILabel()
     private let domSelectionDebugLabel = UILabel()
     private let domErrorLabel = UILabel()
-    private let latestInspectSelectionSnapshotPathLabel = UILabel()
     private let remoteTapTargetSummaryLabel = UILabel()
     private let remoteTapPointLabel = UILabel()
 
@@ -889,7 +886,6 @@ private final class BrowserDiagnosticsOverlayView: UIVisualEffectView {
             domSelectedLineageLabel,
             domSelectionDebugLabel,
             domErrorLabel,
-            latestInspectSelectionSnapshotPathLabel,
             remoteTapTargetSummaryLabel,
             remoteTapPointLabel,
         ] {
@@ -917,7 +913,6 @@ private final class BrowserDiagnosticsOverlayView: UIVisualEffectView {
         domSelectedLineageLabel.accessibilityIdentifier = "Monocly.diagnostics.domSelectedLineage"
         domSelectionDebugLabel.accessibilityIdentifier = "Monocly.diagnostics.domSelectionDebug"
         domErrorLabel.accessibilityIdentifier = "Monocly.diagnostics.domError"
-        latestInspectSelectionSnapshotPathLabel.accessibilityIdentifier = "Monocly.diagnostics.latestInspectSelectionSnapshotPath"
         remoteTapTargetSummaryLabel.accessibilityIdentifier = "Monocly.diagnostics.remoteTapTargetSummary"
         remoteTapPointLabel.accessibilityIdentifier = "Monocly.diagnostics.remoteTapPoint"
 
@@ -944,7 +939,6 @@ private final class BrowserDiagnosticsOverlayView: UIVisualEffectView {
         domSelectedLineageLabel.text = "domSelectedLineage=\(uiTestState?.domSelectedLineage ?? "n/a")"
         domSelectionDebugLabel.text = "domSelectionDebug=\(uiTestState?.domSelectionDebug ?? "n/a")"
         domErrorLabel.text = "domError=\(uiTestState?.domError ?? "n/a")"
-        latestInspectSelectionSnapshotPathLabel.text = "latestInspectSelectionSnapshotPath=\(uiTestState?.latestInspectSelectionSnapshotPath ?? "n/a")"
         remoteTapTargetSummaryLabel.text = "remoteTapTargetSummary=\(uiTestState?.remoteTapTargetSummary ?? "n/a")"
         remoteTapPointLabel.text = "remoteTapPoint=\(uiTestState?.remoteTapPoint ?? "n/a")"
     }

@@ -11,7 +11,6 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
         static let diagnosticsDomSelectedLineage = "Monocly.diagnostics.domSelectedLineage"
         static let diagnosticsDomSelectionDebug = "Monocly.diagnostics.domSelectionDebug"
         static let diagnosticsDomError = "Monocly.diagnostics.domError"
-        static let diagnosticsLatestInspectSelectionSnapshotPath = "Monocly.diagnostics.latestInspectSelectionSnapshotPath"
         static let beginNativeSelection = "Monocly.inspectorHarness.beginNativeSelection"
         static let browserURL = "Monocly.inspectorHarness.browserURL"
         static let domDocumentURL = "Monocly.inspectorHarness.domDocumentURL"
@@ -26,7 +25,6 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
         static let domSelectionDebug = "Monocly.inspectorHarness.domSelectionDebug"
         static let domRootState = "Monocly.inspectorHarness.domRootState"
         static let domError = "Monocly.inspectorHarness.domError"
-        static let latestInspectSelectionSnapshotPath = "Monocly.inspectorHarness.latestInspectSelectionSnapshotPath"
         static let loadPage1 = "Monocly.inspectorHarness.loadPage1"
         static let loadPage2 = "Monocly.inspectorHarness.loadPage2"
         static let selectNode1 = "Monocly.inspectorHarness.selectNode1"
@@ -624,7 +622,7 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
         in app: XCUIApplication,
         tap: CGVector,
         timeout: TimeInterval = 15
-    ) throws -> (selectedPreview: String, treeSelectedPreview: String, treeSelectedLineage: String, treeSelectedVisible: Bool, selectionDebug: String, snapshotPath: String, error: String) {
+    ) throws -> (selectedPreview: String, treeSelectedPreview: String, treeSelectedLineage: String, treeSelectedVisible: Bool, selectionDebug: String, error: String) {
         let beginNativeSelectionButton = app.buttons[AccessibilityID.beginNativeSelection]
         XCTAssertTrue(beginNativeSelectionButton.waitForExistence(timeout: 10))
         beginNativeSelectionButton.tap()
@@ -644,7 +642,6 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
         let domTreeSelectedLineageLabel = app.staticTexts[AccessibilityID.domTreeSelectedLineage]
         let domTreeSelectedVisibleLabel = app.staticTexts[AccessibilityID.domTreeSelectedVisible]
         let domSelectionDebugLabel = app.staticTexts[AccessibilityID.domSelectionDebug]
-        let snapshotPathLabel = app.staticTexts[AccessibilityID.latestInspectSelectionSnapshotPath]
         let domErrorLabel = app.staticTexts[AccessibilityID.domError]
 
         let resolved = waitForCondition(timeout: timeout) {
@@ -664,7 +661,6 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
             treeSelectedLineage=\(domTreeSelectedLineageLabel.label)
             treeSelectedVisible=\(domTreeSelectedVisibleLabel.label)
             domSelectionDebug=\(domSelectionDebugLabel.label)
-            snapshotPath=\(snapshotPathLabel.label)
             domError=\(domErrorLabel.label)
             selecting=\(selectingLabel.label)
             """
@@ -676,7 +672,6 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
             treeSelectedLineage: domTreeSelectedLineageLabel.label,
             treeSelectedVisible: domTreeSelectedVisibleLabel.label == "domTreeSelectedVisible=1",
             selectionDebug: domSelectionDebugLabel.label,
-            snapshotPath: snapshotPathLabel.label,
             error: domErrorLabel.label
         )
     }

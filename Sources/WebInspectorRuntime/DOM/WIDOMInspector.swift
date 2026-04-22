@@ -302,7 +302,6 @@ public final class WIDOMInspector {
     @ObservationIgnored private var acceptsInspectEvents = false
     @ObservationIgnored private var pendingInspectSelection: PendingInspectSelection?
     @ObservationIgnored private var pendingInspectMaterializationTimeoutTask: Task<Void, Never>?
-    @ObservationIgnored private var lastInspectSelectionSnapshotURL: URL?
     @ObservationIgnored var pointerDisconnectObserver: NSObjectProtocol?
     @ObservationIgnored private var pageWebViewAttachmentGeneration: UInt64 = 0
     @ObservationIgnored private var isDOMTransportAttached = false
@@ -670,10 +669,6 @@ public final class WIDOMInspector {
 #if DEBUG
     @_spi(Monocly) public func currentDocumentURLForDiagnostics() -> String? {
         currentContext?.documentURL
-    }
-
-    @_spi(Monocly) public func latestInspectSelectionSnapshotURLForDiagnostics() -> URL? {
-        lastInspectSelectionSnapshotURL
     }
 
     @_spi(Monocly) public func currentContextIDForDiagnostics() -> DOMContextID? {
@@ -2760,14 +2755,6 @@ private extension WIDOMInspector {
                     transaction: transaction
                 )
             }
-            writeInspectSelectionSnapshot(
-                reason: "handleInspectorInspectEvent.resolvedRequestNode",
-                objectID: objectID,
-                nodeID: nodeID,
-                contextID: contextID,
-                eventTargetIdentifier: eventTargetIdentifier,
-                resolutionTargetIdentifier: resolutionTargetIdentifier
-            )
             scheduleInspectSelectionResolutionAfterTransportDrain(
                 objectID: objectID,
                 nodeID: nodeID,
@@ -4344,14 +4331,6 @@ private extension WIDOMInspector {
             selector: pendingInspectSelection.selectorPath,
             extra: selectionNodeSummary(node)
         )
-        writeInspectSelectionSnapshot(
-            reason: "applyPendingInspectSelectionIfPossible.resolvedTransportNode",
-            objectID: nil,
-            nodeID: pendingInspectSelection.nodeID,
-            contextID: pendingInspectSelection.contextID,
-            eventTargetIdentifier: nil,
-            resolutionTargetIdentifier: pendingInspectSelection.resolutionTargetIdentifier
-        )
         await applySelection(
             to: node,
             selectorPath: pendingInspectSelection.selectorPath,
@@ -5115,176 +5094,6 @@ private extension WIDOMInspector {
             "frameOwnerFallbackCount=\(frameOwnerFallbackCount)",
             "targets=requested=\(targetIdentifier) current=\(phase.targetIdentifier ?? "nil") observedPage=\(sharedTransport.currentObservedPageTargetIdentifier() ?? "nil") page=\(sharedTransport.currentPageTargetIdentifier() ?? "nil") contextID=\(contextID) projectionRevision=\(document.projectionRevision)"
         ].joined(separator: " ")
-    }
-
-    private func inspectSelectionSnapshotDirectoryURL() -> URL {
-        FileManager.default.temporaryDirectory
-            .appendingPathComponent("WebInspectorKitDiagnostics", isDirectory: true)
-            .appendingPathComponent("DOMInspectSelection", isDirectory: true)
-    }
-
-    private func jsonValue(_ value: Any?) -> Any {
-        value ?? NSNull()
-    }
-
-    private func nodeReferencePayload(_ node: DOMNodeModel?) -> Any {
-        guard let node else {
-            return NSNull()
-        }
-        return [
-            "localID": Int(node.localID),
-            "backendNodeID": jsonValue(node.backendNodeID),
-            "backendNodeIDIsStable": node.backendNodeIDIsStable,
-            "frameID": jsonValue(node.frameID),
-            "nodeType": node.nodeType,
-            "nodeName": node.nodeName,
-            "localName": node.localName,
-            "childCount": node.childCount,
-            "loadedChildCount": node.children.count,
-            "preview": selectionPreview(for: node),
-            "selectorPath": jsonValue(node.selectorPath.nilIfEmpty),
-            "attributes": node.attributes.map { ["name": $0.name, "value": $0.value] },
-        ]
-    }
-
-    private func pendingInspectSelectionPayload(_ pendingSelection: PendingInspectSelection?) -> Any {
-        guard let pendingSelection else {
-            return NSNull()
-        }
-        return [
-            "nodeID": pendingSelection.nodeID,
-            "contextID": pendingSelection.contextID,
-            "selectorPath": jsonValue(pendingSelection.selectorPath),
-            "resolutionTargetIdentifier": pendingSelection.resolutionTargetIdentifier,
-            "transaction": [
-                "contextID": jsonValue(pendingSelection.transaction?.contextID),
-                "generation": jsonValue(pendingSelection.transaction?.generation),
-            ],
-            "scopedMaterializationRootLocalIDs": pendingSelection.scopedMaterializationRootNodeIDs.map(\.localID),
-            "materializedAncestorLocalIDs": pendingSelection.materializedAncestorNodeIDs.map(\.localID).sorted(),
-            "outstandingMaterializationLocalIDs": pendingSelection.outstandingMaterializationNodeIDs.map(\.localID).sorted(),
-            "activeMaterializationStrategy": pendingSelection.activeMaterializationStrategy.rawValue,
-            "activeRequestGeneration": pendingSelection.activeRequestGeneration,
-            "genericDispatchDeferralCount": pendingSelection.genericDispatchDeferralCount,
-            "observedMaterializationStrategy": pendingSelection.observedMaterializationStrategy.rawValue,
-            "observedMaterializationCandidateLocalIDs": pendingSelection.observedMaterializationCandidateNodeIDs.map(\.localID).sorted(),
-            "observedDocumentBackedFrameIDs": pendingSelection.observedDocumentBackedFrameIDs.sorted(),
-            "lastExhaustedScopedCandidateLocalIDs": pendingSelection.lastExhaustedScopedCandidateNodeIDs.map(\.localID).sorted(),
-            "lastExhaustedScopedStrategy": jsonValue(pendingSelection.lastExhaustedScopedStrategy?.rawValue),
-            "progressRevision": pendingSelection.progressRevision,
-        ]
-    }
-
-    private func selectionMaterializationPlanPayload(
-        _ plan: SelectionMaterializationPlan
-    ) -> [String: Any] {
-        [
-            "strategy": plan.strategy.rawValue,
-            "candidates": plan.candidates.map { nodeReferencePayload($0) },
-            "frameOwnerCandidates": plan.frameOwnerCandidates.map { nodeReferencePayload($0) },
-            "frameDocumentCandidates": plan.frameDocumentCandidates.map { nodeReferencePayload($0) },
-            "canonicalEmbeddedCandidates": plan.canonicalEmbeddedCandidates.map { nodeReferencePayload($0) },
-            "genericIncompleteCandidates": plan.genericIncompleteCandidates.map { nodeReferencePayload($0) },
-        ]
-    }
-
-    private func inspectSelectionSnapshotPayload(
-        reason: String,
-        objectID: String?,
-        nodeID: Int,
-        contextID: DOMContextID,
-        eventTargetIdentifier: String?,
-        resolutionTargetIdentifier: String
-    ) -> [String: Any] {
-        let materializationPlan = selectionMaterializationCandidates(
-            for: pendingInspectSelection
-        )
-        return [
-            "capturedAt": Date().ISO8601Format(),
-            "reason": reason,
-            "documentURL": jsonValue(documentURL),
-            "contextID": contextID,
-            "projectionRevision": document.projectionRevision,
-            "selectionGeneration": selectionGeneration,
-            "objectID": jsonValue(objectID),
-            "requestNode": [
-                "nodeID": nodeID,
-                "eventTargetIdentifier": jsonValue(eventTargetIdentifier),
-                "resolutionTargetIdentifier": resolutionTargetIdentifier,
-                "localMatch": nodeReferencePayload(document.node(localID: UInt64(nodeID))),
-                "backendMatch": nodeReferencePayload(document.node(backendNodeID: nodeID)),
-                "stableBackendMatch": nodeReferencePayload(document.node(stableBackendNodeID: nodeID)),
-                "resolvedMatch": nodeReferencePayload(resolvedInspectedNodeFromCurrentDocument(nodeID: nodeID)),
-            ],
-            "selection": selectionPayloadDictionary(from: document.selectedNode.map(selectionPayload(for:))),
-            "pendingInspectSelection": pendingInspectSelectionPayload(pendingInspectSelection),
-            "pendingChildRequests": pendingChildRequestDiagnosticsSummary(),
-            "topLevelRoots": document.topLevelRoots().map { nodeReferencePayload($0) },
-            "detachedRoots": document.detachedRootsForDiagnostics().map { nodeReferencePayload($0) },
-            "knownDocumentRoots": knownDocumentRoots().map { nodeReferencePayload($0) },
-            "materializationPlan": selectionMaterializationPlanPayload(materializationPlan),
-            "frontendSnapshot": frontendFullSnapshotPayload() ?? ["root": NSNull()],
-        ]
-    }
-
-    private func writeInspectSelectionSnapshot(
-        reason: String,
-        objectID: String?,
-        nodeID: Int,
-        contextID: DOMContextID,
-        eventTargetIdentifier: String?,
-        resolutionTargetIdentifier: String
-    ) {
-        let payload = inspectSelectionSnapshotPayload(
-            reason: reason,
-            objectID: objectID,
-            nodeID: nodeID,
-            contextID: contextID,
-            eventTargetIdentifier: eventTargetIdentifier,
-            resolutionTargetIdentifier: resolutionTargetIdentifier
-        )
-        guard JSONSerialization.isValidJSONObject(payload) else {
-            logSelectionDiagnostics(
-                "writeInspectSelectionSnapshot skipped invalid JSON payload",
-                extra: "reason=\(reason) nodeID=\(nodeID) directoryPath=\(inspectSelectionSnapshotDirectoryURL().path)",
-                level: .error
-            )
-            return
-        }
-
-        do {
-            let directoryURL = inspectSelectionSnapshotDirectoryURL()
-            try FileManager.default.createDirectory(
-                at: directoryURL,
-                withIntermediateDirectories: true,
-                attributes: nil
-            )
-
-            let fileSafeTimestamp = Date().ISO8601Format()
-                .replacingOccurrences(of: ":", with: "-")
-            let timestampedFileURL = directoryURL.appendingPathComponent(
-                "inspect-selection-\(fileSafeTimestamp)-node-\(nodeID).json"
-            )
-            let latestFileURL = directoryURL.appendingPathComponent("inspect-selection-latest.json")
-            let data = try JSONSerialization.data(
-                withJSONObject: payload,
-                options: [.prettyPrinted, .sortedKeys]
-            )
-            try data.write(to: timestampedFileURL, options: .atomic)
-            try data.write(to: latestFileURL, options: .atomic)
-            lastInspectSelectionSnapshotURL = latestFileURL
-            logSelectionDiagnostics(
-                "INSPECT_SELECTION_SNAPSHOT_PATH",
-                extra: "reason=\(reason) nodeID=\(nodeID) latestPath=\(latestFileURL.path) archivePath=\(timestampedFileURL.path)",
-                level: .default
-            )
-        } catch {
-            logSelectionDiagnostics(
-                "writeInspectSelectionSnapshot failed",
-                extra: "reason=\(reason) nodeID=\(nodeID) directoryPath=\(inspectSelectionSnapshotDirectoryURL().path) error=\(error.localizedDescription)",
-                level: .error
-            )
-        }
     }
 
     func firstNode(

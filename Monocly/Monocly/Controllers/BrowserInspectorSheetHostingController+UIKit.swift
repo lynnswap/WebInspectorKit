@@ -184,7 +184,6 @@ final class BrowserInspectorSheetHostingController: UIViewController {
                 domNativeSelectionState: inspectorController.dom.nativeInspectorInteractionStateForDiagnostics() ?? "n/a",
                 domRootReady: inspectorController.dom.document.rootNode != nil,
                 domError: inspectorController.dom.document.errorMessage ?? "n/a",
-                latestInspectSelectionSnapshotPath: inspectorController.dom.latestInspectSelectionSnapshotURLForDiagnostics()?.path ?? "n/a",
                 remoteTapTargetSummary: latestRemoteTapTargetDiagnostics?.summary ?? "n/a",
                 remoteTapPoint: latestRemoteTapTargetDiagnostics.map {
                     String(format: "%.4f,%.4f", $0.normalizedTap.dx, $0.normalizedTap.dy)
@@ -396,7 +395,6 @@ private struct BrowserInspectorUITestHarnessState {
     let domNativeSelectionState: String
     let domRootReady: Bool
     let domError: String
-    let latestInspectSelectionSnapshotPath: String
     let remoteTapTargetSummary: String
     let remoteTapPoint: String
     let canGoBack: Bool
@@ -418,7 +416,6 @@ private final class BrowserInspectorUITestHarnessPanel: UIVisualEffectView {
     private let domNativeSelectionStateLabel = UILabel()
     private let domRootStateLabel = UILabel()
     private let domErrorLabel = UILabel()
-    private let latestInspectSelectionSnapshotPathLabel = UILabel()
     private let remoteTapTargetSummaryLabel = UILabel()
     private let remoteTapPointLabel = UILabel()
     private let focusRemoteTapTargetButton = UIButton(type: .system)
@@ -441,7 +438,6 @@ private final class BrowserInspectorUITestHarnessPanel: UIVisualEffectView {
         domNativeSelectionStateLabel,
         domRootStateLabel,
         domErrorLabel,
-        latestInspectSelectionSnapshotPathLabel,
         remoteTapTargetSummaryLabel,
         remoteTapPointLabel,
     ]
@@ -581,7 +577,6 @@ private final class BrowserInspectorUITestHarnessPanel: UIVisualEffectView {
         domNativeSelectionStateLabel.accessibilityIdentifier = "Monocly.inspectorHarness.domNativeSelectionState"
         domRootStateLabel.accessibilityIdentifier = "Monocly.inspectorHarness.domRootState"
         domErrorLabel.accessibilityIdentifier = "Monocly.inspectorHarness.domError"
-        latestInspectSelectionSnapshotPathLabel.accessibilityIdentifier = "Monocly.inspectorHarness.latestInspectSelectionSnapshotPath"
         remoteTapTargetSummaryLabel.accessibilityIdentifier = "Monocly.inspectorHarness.remoteTapTargetSummary"
         remoteTapPointLabel.accessibilityIdentifier = "Monocly.inspectorHarness.remoteTapPoint"
 
@@ -631,7 +626,6 @@ private final class BrowserInspectorUITestHarnessPanel: UIVisualEffectView {
         domNativeSelectionStateLabel.text = "domNativeSelectionState=\(state.domNativeSelectionState)"
         domRootStateLabel.text = "domRootReady=\(state.domRootReady ? 1 : 0)"
         domErrorLabel.text = "domError=\(state.domError)"
-        latestInspectSelectionSnapshotPathLabel.text = "latestInspectSelectionSnapshotPath=\(state.latestInspectSelectionSnapshotPath)"
         remoteTapTargetSummaryLabel.text = "remoteTapTargetSummary=\(state.remoteTapTargetSummary)"
         remoteTapPointLabel.text = "remoteTapPoint=\(state.remoteTapPoint)"
         backButton.isEnabled = state.canGoBack
