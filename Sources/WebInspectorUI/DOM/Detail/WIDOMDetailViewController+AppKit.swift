@@ -206,7 +206,7 @@ private struct ElementDetailsMacRootView: View {
         Task {
             let didApply: Bool
             do {
-                try await inspector.removeAttribute(nodeID: selectedNode.id, name: attribute.name)
+                try await inspector.removeAttributeThrowing(nodeID: selectedNode.id, name: attribute.name)
                 didApply = true
             } catch {
                 didApply = false
@@ -239,7 +239,7 @@ private struct ElementDetailsMacRootView: View {
         Task {
             let didApply: Bool
             do {
-                try await inspector.setAttribute(
+                try await inspector.setAttributeThrowing(
                     nodeID: key.nodeID,
                     name: key.attributeName,
                     value: submittedValue

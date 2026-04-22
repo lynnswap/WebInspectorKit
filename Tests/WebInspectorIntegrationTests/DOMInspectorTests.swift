@@ -19,7 +19,7 @@ struct DOMInspectorTests {
         let inspector = WIInspectorController().dom
 
         await #expect(throws: DOMOperationError.pageUnavailable) {
-            try await inspector.reloadDocument()
+            try await inspector.reloadDocumentThrowing()
         }
     }
 

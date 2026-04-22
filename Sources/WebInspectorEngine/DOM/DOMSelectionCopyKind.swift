@@ -7,4 +7,15 @@ package enum DOMSelectionCopyKind: String, CaseIterable, Sendable {
     case xpath = "XPath"
 
     var logLabel: String { rawValue }
+
+    package var jsFunction: String {
+        switch self {
+        case .html:
+            return "outerHTMLForNode"
+        case .selectorPath:
+            return "selectorPathForNode"
+        case .xpath:
+            return "xpathForNode"
+        }
+    }
 }

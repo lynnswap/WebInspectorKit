@@ -767,7 +767,7 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
     @objc
     private func handleDOMReloadToolbarAction(_ sender: Any?) {
         let inspector = inspectorController.dom
-        Task { try? await inspector.reloadDocument() }
+        Task { try? await inspector.reloadDocumentThrowing() }
     }
 
     @objc

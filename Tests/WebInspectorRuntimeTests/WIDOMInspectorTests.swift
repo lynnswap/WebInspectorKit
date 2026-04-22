@@ -155,7 +155,7 @@ struct WIDOMInspectorTests {
         let inspector = WIDOMInspector()
 
         await #expect(throws: DOMOperationError.pageUnavailable) {
-            try await inspector.reloadDocument()
+            try await inspector.reloadDocumentThrowing()
         }
     }
 
@@ -246,18 +246,35 @@ struct WIDOMInspectorTests {
     }
 
     @Test
-    func attachWithoutResolvedTargetKeepsAttachmentButLeavesSelectionUnavailable() async {
-        let backend = FakeDOMTransportBackend(emitsInitialPageTargetCreatedOnAttach: false)
-        let inspector = makeInspector(using: backend)
+    func attachUsesDerivedCommittedPageTargetWhenObservedTargetIsMissing() async {
+        let backend = FakeDOMTransportBackend(
+            emitsInitialPageTargetCreatedOnAttach: false,
+            pageResultProvider: { method, _, targetIdentifier in
+                guard method == WITransportMethod.DOM.getDocument else {
+                    return [:]
+                }
+                return makeDocumentResult(
+                    url: targetIdentifier == "page-A"
+                        ? "https://example.com/a"
+                        : "https://example.com/other"
+                )
+            }
+        )
+        let inspector = makeInspector(
+            using: backend,
+            derivedPageTargetIdentifier: "page-A"
+        )
         _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
 
-        #expect(inspector.hasPageWebView)
-        #expect(inspector.testCurrentContextID != nil)
-        #expect(inspector.testIsReady == false)
-        #expect(inspector.testIsPageReadyForSelection == false)
+        let loadedDocument = await waitForCondition {
+            inspector.testIsReady
+                && inspector.document.rootNode != nil
+                && inspector.testCurrentDocumentURL == "https://example.com/a"
+        }
+        #expect(loadedDocument)
     }
 
 #if canImport(UIKit)
@@ -448,7 +465,7 @@ struct WIDOMInspectorTests {
     }
 
     @Test
-    func targetCreatedRestartsLoadingWhenObservedTargetReplacesDerivedSeed() async throws {
+    func targetCreatedDoesNotReplaceAlreadyLoadedDerivedDocumentWithoutLifecycleTransition() async throws {
         let backend = FakeDOMTransportBackend(
             emitsInitialPageTargetCreatedOnAttach: false,
             pageResultProvider: { method, _, targetIdentifier in
@@ -466,8 +483,12 @@ struct WIDOMInspectorTests {
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
-        let contextID = try #require(inspector.testCurrentContextID)
-        inspector.testSetLoadingPhase(targetIdentifier: "page-A")
+        let loadedDerivedDocument = await waitForCondition {
+            inspector.testIsReady
+                && inspector.document.rootNode != nil
+                && inspector.testCurrentDocumentURL == "https://example.com/a"
+        }
+        #expect(loadedDerivedDocument)
 
         backend.emitRootEvent(
             method: "Target.targetCreated",
@@ -480,13 +501,12 @@ struct WIDOMInspectorTests {
             ]
         )
 
-        let restartedWithObservedTarget = await waitForCondition {
+        let stayedOnDerivedDocument = await waitForCondition {
             inspector.testIsReady
                 && inspector.document.rootNode != nil
-                && inspector.testCurrentContextID == contextID
-                && inspector.testCurrentDocumentURL == "https://example.com/b"
+                && inspector.testCurrentDocumentURL == "https://example.com/a"
         }
-        #expect(restartedWithObservedTarget)
+        #expect(stayedOnDerivedDocument)
     }
 
     @Test
@@ -2327,7 +2347,7 @@ struct WIDOMInspectorTests {
 
         #expect(inspector.testPendingChildRequestNodeIDs == [3])
 
-        try await inspector.reloadDocument()
+        try await inspector.reloadDocumentThrowing()
 
         let cleared = await waitForCondition {
             inspector.testPendingChildRequestNodeIDs.isEmpty
@@ -3964,7 +3984,7 @@ struct WIDOMInspectorTests {
             isFreshDocument: true
         )
 
-        try await inspector.deleteNode(nodeId: 42, undoManager: nil)
+        try await inspector.deleteNodeThrowing(nodeId: 42, undoManager: nil)
 
         #expect(removedNodeID == 42)
         #expect(inspector.document.node(localID: 42) != nil)
@@ -3991,7 +4011,7 @@ struct WIDOMInspectorTests {
         let webView = makeTestWebView()
         await inspector.attach(to: webView)
 
-        try await inspector.deleteNode(nodeId: 777, undoManager: nil)
+        try await inspector.deleteNodeThrowing(nodeId: 777, undoManager: nil)
 
         #expect(removedNodeID == 777)
     }
@@ -4298,7 +4318,7 @@ struct WIDOMInspectorTests {
         }
         #expect(selected)
 
-        try await inspector.reloadDocument()
+        try await inspector.reloadDocumentThrowing()
 
         let reloaded = await waitForCondition {
             inspector.document.selectedNode == nil

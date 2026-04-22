@@ -13,6 +13,15 @@ private let domViewLogger = Logger(subsystem: "WebInspectorKit", category: "WIDO
 private let domDeleteUndoHistoryLimit = 128
 nonisolated(unsafe) private let pageWebViewLifetimeObserverAssociationKey = unsafe malloc(1)!
 
+@available(*, deprecated, renamed: "WIDOMInspector", message: "Use WIDOMInspector.")
+public typealias WIDOMModel = WIDOMInspector
+
+public enum DOMMutationResult: Sendable, Equatable {
+    case applied
+    case ignoredStaleContext
+    case failed
+}
+
 @MainActor
 private final class WIPageWebViewLifetimeObserver {
     private let onDeinit: @MainActor () -> Void
@@ -468,6 +477,7 @@ public final class WIDOMInspector {
             return
         }
         let targetIdentifier = sharedTransport.currentObservedPageTargetIdentifier()
+            ?? sharedTransport.currentPageTargetIdentifier()
         await beginFreshContext(
             documentURL: normalizedDocumentURL(webView.url?.absoluteString),
             targetIdentifier: targetIdentifier,
@@ -518,7 +528,7 @@ public final class WIDOMInspector {
         _ = enabled
     }
 
-    public func reloadPage() async throws {
+    package func reloadPageThrowing() async throws {
         let webView = try requirePageWebView()
         await resetInteractionState()
         await beginFreshContext(
@@ -531,7 +541,32 @@ public final class WIDOMInspector {
         webView.reload()
     }
 
-    public func reloadDocument() async throws {
+    @available(*, deprecated, message: "Use try await reloadPage().")
+    public func reloadPage() async -> DOMMutationResult {
+        await mutationResult {
+            try await self.reloadPageThrowing()
+        }
+    }
+
+    package func reloadDocumentThrowing() async throws {
+        try await reloadDocument(isFreshDocument: true)
+    }
+
+    @available(*, deprecated, message: "Use try await reloadDocument().")
+    public func reloadDocument() async -> DOMMutationResult {
+        await mutationResult {
+            try await self.reloadDocumentThrowing()
+        }
+    }
+
+    @available(*, deprecated, message: "Use try await reloadDocument() or explicit UI-state preserving APIs.")
+    public func reloadDocumentPreservingInspectorState() async -> DOMMutationResult {
+        await mutationResult {
+            try await self.reloadDocument(isFreshDocument: false)
+        }
+    }
+
+    private func reloadDocument(isFreshDocument: Bool) async throws {
         _ = try requirePageWebView()
         await resetInteractionState()
         let targetIdentifier = try requireCurrentTargetIdentifier()
@@ -539,7 +574,7 @@ public final class WIDOMInspector {
             documentURL: normalizedDocumentURL(pageWebView?.url?.absoluteString),
             targetIdentifier: targetIdentifier,
             loadImmediately: true,
-            isFreshDocument: true,
+            isFreshDocument: isFreshDocument,
             reason: "reloadDocument"
         )
     }
@@ -871,6 +906,9 @@ public final class WIDOMInspector {
         if let node = nodeForBackendAction(backendNodeID: nodeId) {
             return try await copyText(for: node, kind: kind)
         }
+        if let text = try await copyTextForLiveBackendNode(backendNodeID: nodeId, kind: kind) {
+            return text
+        }
         if kind == .html {
             let response = try await sendDOMCommand(
                 WITransportMethod.DOM.getOuterHTML,
@@ -890,21 +928,43 @@ public final class WIDOMInspector {
         if let node = nodeForBackendAction(backendNodeID: nodeId) {
             return try await copyText(for: node, kind: kind)
         }
-        throw DOMOperationError.invalidSelection
+        return ""
     }
 
-    public func deleteSelection() async throws {
-        try await deleteSelection(undoManager: nil)
+    package func deleteSelectionThrowing() async throws {
+        try await performDeleteSelection(undoManager: nil)
     }
 
-    public func deleteSelection(undoManager: UndoManager?) async throws {
+    @available(*, deprecated, message: "Use try await deleteSelection().")
+    public func deleteSelection() async -> DOMMutationResult {
+        await mutationResult {
+            try await self.deleteSelectionThrowing()
+        }
+    }
+
+    package func deleteSelectionThrowing(undoManager: UndoManager?) async throws {
+        try await performDeleteSelection(undoManager: undoManager)
+    }
+    
+    private func performDeleteSelection(undoManager: UndoManager?) async throws {
         guard let nodeID = document.selectedNode?.id else {
             throw DOMOperationError.invalidSelection
         }
-        try await deleteNode(nodeID: nodeID, undoManager: undoManager)
+        try await deleteNodeThrowing(nodeID: nodeID, undoManager: undoManager)
     }
 
-    public func deleteNode(nodeID: DOMNodeModel.ID?, undoManager: UndoManager?) async throws {
+    @available(*, deprecated, message: "Use try await deleteSelection(undoManager:).")
+    public func deleteSelection(undoManager: UndoManager?) async -> DOMMutationResult {
+        await mutationResult {
+            try await self.deleteSelectionThrowing(undoManager: undoManager)
+        }
+    }
+
+    package func deleteNodeThrowing(nodeID: DOMNodeModel.ID?, undoManager: UndoManager?) async throws {
+        try await performDeleteNode(nodeID: nodeID, undoManager: undoManager)
+    }
+
+    private func performDeleteNode(nodeID: DOMNodeModel.ID?, undoManager: UndoManager?) async throws {
         guard let nodeID,
               let node = document.node(id: nodeID) else {
             throw DOMOperationError.invalidSelection
@@ -916,18 +976,36 @@ public final class WIDOMInspector {
         )
     }
 
-    public func deleteNode(nodeId: Int?, undoManager: UndoManager?) async throws {
+    @available(*, deprecated, message: "Use try await deleteNode(nodeID:undoManager:).")
+    public func deleteNode(nodeID: DOMNodeModel.ID?, undoManager: UndoManager?) async -> DOMMutationResult {
+        await mutationResult {
+            try await self.deleteNodeThrowing(nodeID: nodeID, undoManager: undoManager)
+        }
+    }
+
+    package func deleteNodeThrowing(nodeId: Int?, undoManager: UndoManager?) async throws {
+        try await performDeleteNode(nodeId: nodeId, undoManager: undoManager)
+    }
+
+    private func performDeleteNode(nodeId: Int?, undoManager: UndoManager?) async throws {
         guard let nodeId else {
             throw DOMOperationError.invalidSelection
         }
         if let node = nodeForBackendAction(backendNodeID: nodeId) {
-            try await deleteNode(nodeID: node.id, undoManager: undoManager)
+            try await deleteNodeThrowing(nodeID: node.id, undoManager: undoManager)
             return
         }
         try await deleteNode(nodeID: nodeId, nodeLocalID: nil, undoManager: undoManager)
     }
 
-    public func setAttribute(
+    @available(*, deprecated, message: "Use try await deleteNode(nodeId:undoManager:).")
+    public func deleteNode(nodeId: Int?, undoManager: UndoManager?) async -> DOMMutationResult {
+        await mutationResult {
+            try await self.deleteNodeThrowing(nodeId: nodeId, undoManager: undoManager)
+        }
+    }
+
+    package func setAttributeThrowing(
         nodeID: DOMNodeModel.ID,
         name: String,
         value: String
@@ -958,7 +1036,18 @@ public final class WIDOMInspector {
         }
     }
 
-    public func removeAttribute(
+    @available(*, deprecated, message: "Use try await setAttribute(nodeID:name:value:).")
+    public func setAttribute(
+        nodeID: DOMNodeModel.ID,
+        name: String,
+        value: String
+    ) async -> DOMMutationResult {
+        await mutationResult {
+            try await self.setAttributeThrowing(nodeID: nodeID, name: name, value: value)
+        }
+    }
+
+    package func removeAttributeThrowing(
         nodeID: DOMNodeModel.ID,
         name: String
     ) async throws {
@@ -986,18 +1075,42 @@ public final class WIDOMInspector {
         }
     }
 
-    public func updateSelectedAttribute(name: String, value: String) async throws {
-        guard let nodeID = document.selectedNode?.id else {
-            throw DOMOperationError.invalidSelection
+    @available(*, deprecated, message: "Use try await removeAttribute(nodeID:name:).")
+    public func removeAttribute(
+        nodeID: DOMNodeModel.ID,
+        name: String
+    ) async -> DOMMutationResult {
+        await mutationResult {
+            try await self.removeAttributeThrowing(nodeID: nodeID, name: name)
         }
-        try await setAttribute(nodeID: nodeID, name: name, value: value)
     }
 
-    public func removeSelectedAttribute(name: String) async throws {
+    package func updateSelectedAttributeThrowing(name: String, value: String) async throws {
         guard let nodeID = document.selectedNode?.id else {
             throw DOMOperationError.invalidSelection
         }
-        try await removeAttribute(nodeID: nodeID, name: name)
+        try await setAttributeThrowing(nodeID: nodeID, name: name, value: value)
+    }
+
+    @available(*, deprecated, message: "Use try await updateSelectedAttribute(name:value:).")
+    public func updateSelectedAttribute(name: String, value: String) async -> DOMMutationResult {
+        await mutationResult {
+            try await self.updateSelectedAttributeThrowing(name: name, value: value)
+        }
+    }
+
+    package func removeSelectedAttributeThrowing(name: String) async throws {
+        guard let nodeID = document.selectedNode?.id else {
+            throw DOMOperationError.invalidSelection
+        }
+        try await removeAttributeThrowing(nodeID: nodeID, name: name)
+    }
+
+    @available(*, deprecated, message: "Use try await removeSelectedAttribute(name:).")
+    public func removeSelectedAttribute(name: String) async -> DOMMutationResult {
+        await mutationResult {
+            try await self.removeSelectedAttributeThrowing(name: name)
+        }
     }
 }
 
@@ -1274,9 +1387,42 @@ private extension WIDOMInspector {
         return targetIdentifier
     }
 
+    func mutationResult(
+        for operation: () async throws -> Void
+    ) async -> DOMMutationResult {
+        do {
+            try await operation()
+            return .applied
+        } catch DOMOperationError.contextInvalidated {
+            return .ignoredStaleContext
+        } catch {
+            return .failed
+        }
+    }
+
     func nodeForBackendAction(backendNodeID: Int) -> DOMNodeModel? {
         document.node(stableBackendNodeID: backendNodeID)
             ?? document.node(backendNodeID: backendNodeID)
+    }
+
+    func copyTextForLiveBackendNode(
+        backendNodeID: Int,
+        kind: DOMSelectionCopyKind
+    ) async throws -> String? {
+        guard let pageWebView else {
+            return nil
+        }
+        let target = NSDictionary(dictionary: [
+            "kind": "backend",
+            "value": NSNumber(value: backendNodeID),
+        ])
+        let rawValue = try await pageWebView.callAsyncJavaScriptCompat(
+            "return window.webInspectorDOM?.\(kind.jsFunction)?.(target) ?? null;",
+            arguments: ["target": target],
+            in: nil,
+            contentWorld: .page
+        )
+        return rawValue as? String
     }
 
     func transportNodeID(for node: DOMNodeModel) throws -> Int {

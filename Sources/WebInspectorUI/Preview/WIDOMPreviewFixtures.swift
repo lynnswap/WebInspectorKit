@@ -330,7 +330,7 @@ private final class WIDOMPreviewPageLoader: NSObject, WKNavigationDelegate {
             guard let inspector else {
                 return
             }
-            try? await inspector.reloadDocument()
+            try? await inspector.reloadDocumentThrowing()
         }
     }
 
