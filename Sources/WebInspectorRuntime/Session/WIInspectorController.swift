@@ -634,7 +634,7 @@ private extension WIInspectorController {
         let directHost = hostRegistry[directHostID]
         guard directHost?.isAttached == true,
               directHost?.visibility == .hidden,
-              directHost?.pageWebView != nil else {
+              let directHostPageWebViewIdentity = directHost?.pageWebView.map(ObjectIdentifier.init) else {
             return nil
         }
 
@@ -642,6 +642,7 @@ private extension WIInspectorController {
             host.id != directHostID
                 && host.isAttached
                 && host.keepsDirectHostActiveDuringHiddenHandoff
+                && host.pageWebView.map(ObjectIdentifier.init) == directHostPageWebViewIdentity
         }
         guard hasPreparedHiddenUIHost else {
             return nil

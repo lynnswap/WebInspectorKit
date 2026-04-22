@@ -3867,6 +3867,136 @@ struct WIDOMInspectorTests {
     }
 
     @Test
+    func copyNodeByBackendIDPrefersBackendNodeOverLocalIDCollision() async throws {
+        let backend = FakeDOMTransportBackend()
+        let inspector = makeInspector(using: backend)
+        let webView = makeTestWebView()
+        await inspector.attach(to: webView)
+
+        inspector.document.replaceDocument(
+            with: makeMainDocumentSnapshot(
+                mainChildren: [
+                    makeElementDescriptor(
+                        localID: 42,
+                        backendNodeID: 900,
+                        localName: "div",
+                        idAttribute: "local-collision"
+                    ),
+                    makeElementDescriptor(
+                        localID: 7,
+                        backendNodeID: 42,
+                        localName: "section",
+                        idAttribute: "backend-target"
+                    ),
+                ]
+            ),
+            isFreshDocument: true
+        )
+
+        let selectorPath = try await inspector.copyNode(nodeId: 42, kind: .selectorPath)
+
+        #expect(selectorPath == "#backend-target")
+    }
+
+    @Test
+    func copyNodeByBackendIDFallsBackToDirectBackendHTMLWhenMirrorNodeIsMissing() async throws {
+        var requestedNodeID: Int?
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, payload, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com")
+                case WITransportMethod.DOM.getOuterHTML:
+                    requestedNodeID = runtimeTestIntValue((payload["params"] as? [String: Any])?["nodeId"])
+                    return ["outerHTML": "<div id=\"backend-only\"></div>"]
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        let webView = makeTestWebView()
+        await inspector.attach(to: webView)
+
+        let html = try await inspector.copyNode(nodeId: 777, kind: .html)
+
+        #expect(requestedNodeID == 777)
+        #expect(html == "<div id=\"backend-only\"></div>")
+    }
+
+    @Test
+    func deleteNodeByBackendIDPrefersBackendNodeOverLocalIDCollision() async throws {
+        var removedNodeID: Int?
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, payload, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com")
+                case WITransportMethod.DOM.removeNode:
+                    removedNodeID = runtimeTestIntValue((payload["params"] as? [String: Any])?["nodeId"])
+                    return [:]
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        let webView = makeTestWebView()
+        await inspector.attach(to: webView)
+
+        inspector.document.replaceDocument(
+            with: makeMainDocumentSnapshot(
+                mainChildren: [
+                    makeElementDescriptor(
+                        localID: 42,
+                        backendNodeID: 900,
+                        localName: "div",
+                        idAttribute: "local-collision"
+                    ),
+                    makeElementDescriptor(
+                        localID: 7,
+                        backendNodeID: 42,
+                        localName: "section",
+                        idAttribute: "backend-target"
+                    ),
+                ]
+            ),
+            isFreshDocument: true
+        )
+
+        try await inspector.deleteNode(nodeId: 42, undoManager: nil)
+
+        #expect(removedNodeID == 42)
+        #expect(inspector.document.node(localID: 42) != nil)
+        #expect(inspector.document.node(backendNodeID: 42) == nil)
+    }
+
+    @Test
+    func deleteNodeByBackendIDFallsBackToDirectBackendDeleteWhenMirrorNodeIsMissing() async throws {
+        var removedNodeID: Int?
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, payload, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com")
+                case WITransportMethod.DOM.removeNode:
+                    removedNodeID = runtimeTestIntValue((payload["params"] as? [String: Any])?["nodeId"])
+                    return [:]
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        let webView = makeTestWebView()
+        await inspector.attach(to: webView)
+
+        try await inspector.deleteNode(nodeId: 777, undoManager: nil)
+
+        #expect(removedNodeID == 777)
+    }
+
+    @Test
     func selectNodeForTestingPreviewSelectsVisibleNode() async throws {
         let backend = FakeDOMTransportBackend(
             pageResultProvider: { method, _, _ in
@@ -4809,6 +4939,32 @@ private func makeFrameOwnerDescriptor(
         nodeValue: "",
         attributes: attributes,
         childCount: childCount,
+        layoutFlags: [],
+        isRendered: true,
+        children: children
+    )
+}
+
+private func makeElementDescriptor(
+    localID: UInt64,
+    backendNodeID: Int,
+    localName: String,
+    idAttribute: String? = nil,
+    children: [DOMGraphNodeDescriptor] = []
+) -> DOMGraphNodeDescriptor {
+    var attributes: [DOMAttribute] = []
+    if let idAttribute {
+        attributes.append(.init(name: "id", value: idAttribute))
+    }
+    return DOMGraphNodeDescriptor(
+        localID: localID,
+        backendNodeID: backendNodeID,
+        nodeType: 1,
+        nodeName: localName.uppercased(),
+        localName: localName,
+        nodeValue: "",
+        attributes: attributes,
+        childCount: children.count,
         layoutFlags: [],
         isRendered: true,
         children: children

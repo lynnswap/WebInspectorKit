@@ -868,10 +868,26 @@ public final class WIDOMInspector {
     }
 
     package func copyNode(nodeId: Int, kind: DOMSelectionCopyKind) async throws -> String {
-        if let node = document.node(localID: UInt64(nodeId)) {
+        if let node = nodeForBackendAction(backendNodeID: nodeId) {
             return try await copyText(for: node, kind: kind)
         }
-        if let node = document.node(stableBackendNodeID: nodeId) {
+        if kind == .html {
+            let response = try await sendDOMCommand(
+                WITransportMethod.DOM.getOuterHTML,
+                targetIdentifier: try requireCurrentTargetIdentifier(),
+                parameters: DOMNodeIdentifierParameters(nodeId: nodeId)
+            )
+            return stringValue(response["outerHTML"]) ?? ""
+        }
+        let context = try requireCurrentContext()
+        let targetIdentifier = try requireCurrentTargetIdentifier()
+        try await refreshCurrentDocumentFromTransport(
+            contextID: context.contextID,
+            targetIdentifier: targetIdentifier,
+            depth: configuration.snapshotDepth,
+            isFreshDocument: false
+        )
+        if let node = nodeForBackendAction(backendNodeID: nodeId) {
             return try await copyText(for: node, kind: kind)
         }
         throw DOMOperationError.invalidSelection
@@ -904,15 +920,11 @@ public final class WIDOMInspector {
         guard let nodeId else {
             throw DOMOperationError.invalidSelection
         }
-        if let node = document.node(localID: UInt64(nodeId)) {
+        if let node = nodeForBackendAction(backendNodeID: nodeId) {
             try await deleteNode(nodeID: node.id, undoManager: undoManager)
             return
         }
-        if let node = document.node(stableBackendNodeID: nodeId) {
-            try await deleteNode(nodeID: node.id, undoManager: undoManager)
-            return
-        }
-        throw DOMOperationError.invalidSelection
+        try await deleteNode(nodeID: nodeId, nodeLocalID: nil, undoManager: undoManager)
     }
 
     public func setAttribute(
@@ -1260,6 +1272,11 @@ private extension WIDOMInspector {
             throw DOMOperationError.contextInvalidated
         }
         return targetIdentifier
+    }
+
+    func nodeForBackendAction(backendNodeID: Int) -> DOMNodeModel? {
+        document.node(stableBackendNodeID: backendNodeID)
+            ?? document.node(backendNodeID: backendNodeID)
     }
 
     func transportNodeID(for node: DOMNodeModel) throws -> Int {

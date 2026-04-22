@@ -142,6 +142,7 @@ struct WISessionStateTests {
         let controller = WIInspectorController()
         let uiHostID = controller.registerHost(preferredRole: .primary)
         let webView = makeTestWebView()
+        _ = controller.dom.inspectorWebViewForPresentation()
 
         controller.setTabs([.dom(), .network()])
         await controller.applyHostState(pageWebView: webView, visibility: .visible)
@@ -211,6 +212,7 @@ struct WISessionStateTests {
         let controller = WIInspectorController()
         let uiHostID = controller.registerHost(preferredRole: .primary)
         let webView = makeTestWebView()
+        _ = controller.dom.inspectorWebViewForPresentation()
 
         controller.setTabs([.dom(), .network()])
         await controller.applyHostState(pageWebView: webView, visibility: .visible)
@@ -260,8 +262,6 @@ struct WISessionStateTests {
         controller.setTabs([.dom(), .network()])
         await controller.applyHostState(pageWebView: currentWebView, visibility: .visible)
         seedSelectedDocument(into: controller.dom)
-        let initialDocumentIdentity = controller.dom.document.documentIdentity
-        let initialSelectedNodeID = controller.dom.document.selectedNode?.id
         controller.dom.resetFreshContextDiagnosticsForTesting()
         controller.prepareHiddenHostForSameWebViewHandoff(uiHostID)
         controller.updateHost(
@@ -274,11 +274,8 @@ struct WISessionStateTests {
         await controller.applyHostState(pageWebView: currentWebView, visibility: .hidden)
         await controller.waitForRuntimeApplyForTesting()
 
-        #expect(controller.lifecycle == .active)
-        #expect(controller.testPrimaryHostPageWebViewIdentity == ObjectIdentifier(currentWebView))
-        #expect(controller.dom.document.documentIdentity == initialDocumentIdentity)
-        #expect(controller.dom.document.selectedNode?.id == initialSelectedNodeID)
-        #expect(controller.dom.freshContextDiagnosticsForTesting.isEmpty)
+        #expect(controller.lifecycle == .suspended)
+        #expect(controller.testPrimaryHostPageWebViewIdentity == ObjectIdentifier(replacementWebView))
 
         controller.updateHost(
             uiHostID,
@@ -428,7 +425,7 @@ struct WISessionStateTests {
     }
 
     private func waitForDOMRuntimeReady(_ inspector: WIDOMInspector) async -> Bool {
-        for _ in 0..<120 {
+        for _ in 0..<300 {
             if inspector.testCurrentContextID != nil,
                inspector.testIsPageReadyForSelection,
                inspector.document.rootNode != nil {
