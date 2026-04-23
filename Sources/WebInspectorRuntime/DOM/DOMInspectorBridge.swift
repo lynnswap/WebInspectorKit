@@ -409,4 +409,21 @@ extension DOMInspectorBridge: WKScriptMessageHandler {
     }
 }
 
-extension DOMInspectorBridge: WKNavigationDelegate {}
+extension DOMInspectorBridge {
+    private func reapplyBootstrapIfNeeded(for webView: WKWebView) {
+        guard let inspectorWebView, webView === inspectorWebView else {
+            return
+        }
+        applyBootstrap(on: inspectorWebView)
+    }
+}
+
+extension DOMInspectorBridge: WKNavigationDelegate {
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        reapplyBootstrapIfNeeded(for: webView)
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        reapplyBootstrapIfNeeded(for: webView)
+    }
+}

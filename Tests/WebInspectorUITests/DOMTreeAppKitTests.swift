@@ -8,6 +8,28 @@ import Testing
 @MainActor
 struct DOMTreeAppKitTests {
     @Test
+    func treeViewInstallsContextMenuProviderAfterAttachingInspectorWebView() async throws {
+        let inspector = WIDOMInspector()
+        let controller = WIDOMTreeViewController(inspector: inspector)
+        let window = NSWindow(contentViewController: controller)
+        defer {
+            window.orderOut(nil)
+            window.close()
+        }
+
+        controller.loadViewIfNeeded()
+        window.makeKeyAndOrderFront(nil)
+
+        let hasProvider = await waitUntilAppKitCondition {
+            guard let inspectorWebView = inspector.inspectorWebViewForPresentation() as? InspectorWebView else {
+                return false
+            }
+            return inspectorWebView.domContextMenuProvider != nil
+        }
+        #expect(hasProvider)
+    }
+
+    @Test
     func treeViewShowsAndClearsDocumentErrorMessage() async throws {
         let inspector = WIDOMInspector()
         let controller = WIDOMTreeViewController(inspector: inspector)

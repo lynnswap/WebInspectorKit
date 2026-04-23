@@ -52,27 +52,6 @@ public final class WIDOMTreeViewController: NSViewController {
             errorLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
         ])
 
-        inspector.setDOMContextMenuProvider { [weak self] nodeID in
-            guard let self else {
-                return nil
-            }
-            self.contextMenuNodeID = nodeID
-            if let nodeID,
-               nodeID >= 0,
-               let node = self.inspector.document.node(localID: UInt64(nodeID)) {
-                self.contextMenuNodeIdentity = node.id
-                self.contextMenuBackendNodeID = node.backendNodeIDIsStable ? node.backendNodeID : nil
-            } else if let nodeID,
-                      let node = self.inspector.document.node(stableBackendNodeID: nodeID) {
-                self.contextMenuNodeIdentity = node.id
-                self.contextMenuBackendNodeID = node.backendNodeID
-            } else {
-                self.contextMenuNodeIdentity = nil
-                self.contextMenuBackendNodeID = nil
-            }
-            return self.makeTreeContextMenu()
-        }
-
         attachInspectorWebViewIfNeeded()
         observeState()
         updateErrorLabel(errorMessage: inspector.document.errorMessage)
@@ -264,6 +243,7 @@ public final class WIDOMTreeViewController: NSViewController {
         inspectorWebView.translatesAutoresizingMaskIntoConstraints = false
         guard inspectorWebView.superview !== inspectorWebViewContainer else {
             attachedInspectorWebView = inspectorWebView
+            installContextMenuProvider()
             return
         }
 
@@ -280,6 +260,7 @@ public final class WIDOMTreeViewController: NSViewController {
         NSLayoutConstraint.activate(constraints)
         inspectorWebViewConstraints = constraints
         attachedInspectorWebView = inspectorWebView
+        installContextMenuProvider()
     }
 
     private func detachInspectorWebViewIfNeeded() {
@@ -294,6 +275,29 @@ public final class WIDOMTreeViewController: NSViewController {
         inspectorWebViewConstraints.removeAll(keepingCapacity: true)
         attachedInspectorWebView.removeFromSuperview()
         self.attachedInspectorWebView = nil
+    }
+
+    private func installContextMenuProvider() {
+        inspector.setDOMContextMenuProvider { [weak self] nodeID in
+            guard let self else {
+                return nil
+            }
+            self.contextMenuNodeID = nodeID
+            if let nodeID,
+               nodeID >= 0,
+               let node = self.inspector.document.node(localID: UInt64(nodeID)) {
+                self.contextMenuNodeIdentity = node.id
+                self.contextMenuBackendNodeID = node.backendNodeIDIsStable ? node.backendNodeID : nil
+            } else if let nodeID,
+                      let node = self.inspector.document.node(stableBackendNodeID: nodeID) {
+                self.contextMenuNodeIdentity = node.id
+                self.contextMenuBackendNodeID = node.backendNodeID
+            } else {
+                self.contextMenuNodeIdentity = nil
+                self.contextMenuBackendNodeID = nil
+            }
+            return self.makeTreeContextMenu()
+        }
     }
 
     func invokeContextMenuCopyForTesting(

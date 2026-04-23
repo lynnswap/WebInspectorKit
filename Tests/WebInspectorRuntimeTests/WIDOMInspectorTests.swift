@@ -4444,6 +4444,62 @@ struct WIDOMInspectorTests {
     }
 
     @Test
+    func inspectorBridgeReappliesCurrentBootstrapAfterNavigationReload() async throws {
+        let bridge = DOMInspectorBridge()
+        let webView = bridge.makeInspectorWebView(
+            bootstrapPayload: [
+                "config": [
+                    "snapshotDepth": 4,
+                ],
+                "context": [
+                    "contextID": 1,
+                ],
+            ]
+        )
+
+        let frontendReady = await waitForCondition {
+            await bridge.frontendIsReady()
+        }
+        #expect(frontendReady)
+
+        bridge.updateBootstrap([
+            "config": [
+                "snapshotDepth": 7,
+            ],
+            "context": [
+                "contextID": 99,
+            ],
+        ])
+
+        try await webView.callAsyncVoidJavaScript(
+            """
+            window.__wiDOMFrontendBootstrap = { context: { contextID: -1 }, config: { snapshotDepth: 1 } };
+            """,
+            arguments: [:],
+            contentWorld: .page
+        )
+
+        bridge.webView(webView, didCommit: nil)
+        bridge.webView(webView, didFinish: nil)
+
+        let bootstrapContextID = try await webView.callAsyncJavaScriptCompat(
+            "return window.__wiDOMFrontendBootstrap?.context?.contextID ?? null;",
+            arguments: [:],
+            in: nil,
+            contentWorld: .page
+        ) as? NSNumber
+        let snapshotDepth = try await webView.callAsyncJavaScriptCompat(
+            "return window.__wiDOMFrontendBootstrap?.config?.snapshotDepth ?? null;",
+            arguments: [:],
+            in: nil,
+            contentWorld: .page
+        ) as? NSNumber
+
+        #expect(bootstrapContextID?.intValue == 99)
+        #expect(snapshotDepth?.intValue == 7)
+    }
+
+    @Test
     func successfulInspectReappliesPersistentHighlightAfterInspectModeTeardown() async throws {
         var pageCalls: [(method: String, inspectModeEnabled: Bool?)] = []
         let backend = FakeDOMTransportBackend(
