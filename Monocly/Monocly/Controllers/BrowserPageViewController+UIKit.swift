@@ -853,7 +853,8 @@ private final class BrowserDiagnosticsOverlayView: UIVisualEffectView {
 
         let buttonStack = UIStackView(arrangedSubviews: [
             openInspectorButton,
-            beginNativeSelectionButton
+            beginNativeSelectionButton,
+            focusRemoteTapTargetButton
         ])
         buttonStack.axis = .horizontal
         buttonStack.alignment = .fill

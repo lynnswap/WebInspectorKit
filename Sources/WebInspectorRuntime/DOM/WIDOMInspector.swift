@@ -1320,9 +1320,6 @@ private extension WIDOMInspector {
     }
 
     func transportNodeID(for node: DOMNodeModel) throws -> Int {
-        if let backendNodeID = node.backendNodeID {
-            return backendNodeID
-        }
         guard node.localID <= UInt64(Int.max) else {
             throw DOMOperationError.invalidSelection
         }

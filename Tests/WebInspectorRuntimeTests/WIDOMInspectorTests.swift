@@ -4017,6 +4017,46 @@ struct WIDOMInspectorTests {
     }
 
     @Test
+    func setAttributeUsesFrontendNodeIDWhenBackendNodeIDDiffers() async throws {
+        var requestedNodeID: Int?
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, payload, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com")
+                case WITransportMethod.DOM.setAttributeValue:
+                    requestedNodeID = runtimeTestIntValue((payload["params"] as? [String: Any])?["nodeId"])
+                    return [:]
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        let webView = makeTestWebView()
+        await inspector.attach(to: webView)
+
+        inspector.document.replaceDocument(
+            with: makeMainDocumentSnapshot(
+                mainChildren: [
+                    makeElementDescriptor(
+                        localID: 7,
+                        backendNodeID: 700,
+                        localName: "section",
+                        idAttribute: "target"
+                    ),
+                ]
+            ),
+            isFreshDocument: true
+        )
+
+        let nodeID = try #require(inspector.document.node(localID: 7)?.id)
+        try await inspector.setAttribute(nodeID: nodeID, name: "data-test", value: "1")
+
+        #expect(requestedNodeID == 7)
+    }
+
+    @Test
     func selectNodeForTestingPreviewSelectsVisibleNode() async throws {
         let backend = FakeDOMTransportBackend(
             pageResultProvider: { method, _, _ in
