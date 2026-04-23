@@ -1,10 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import "../UI/DOMTree/dom-tree-view";
-import { adoptDocumentContext, updateConfig } from "../UI/DOMTree/dom-tree-protocol";
-import { dom, protocolState, renderState, transitionState, treeState } from "../UI/DOMTree/dom-tree-state";
+let nextContextID = 1;
 
-function resetTreeState() {
+async function resetEnvironment(): Promise<typeof import("../UI/DOMTree/dom-tree-state")> {
+    const state = await import("../UI/DOMTree/dom-tree-state");
+    const { dom, protocolState, treeState } = state;
+    const contextID = nextContextID;
+    nextContextID += 1;
+    const frontend =
+        window.webInspectorDOMFrontend as ({ updateBootstrap?: (bootstrap: unknown) => void } | undefined);
+    document.body.innerHTML = "<div id=\"dom-tree\"></div><div id=\"dom-empty\"></div>";
+    dom.tree = null;
+    dom.empty = null;
     treeState.snapshot = null;
     treeState.nodes.clear();
     treeState.elements.clear();
@@ -19,388 +26,586 @@ function resetTreeState() {
     treeState.selectionRecoveryRequestKeys.clear();
     protocolState.snapshotDepth = 4;
     protocolState.subtreeDepth = 3;
-    protocolState.pageEpoch = -1;
-    protocolState.documentScopeID = 0;
-    adoptDocumentContext({ pageEpoch: 0, documentScopeID: 0 });
-    dom.tree = null;
-    dom.empty = null;
-    if (renderState.frameId !== null) {
-        cancelAnimationFrame(renderState.frameId);
+    if (!frontend?.updateBootstrap) {
+        protocolState.contextID = contextID;
     }
-    renderState.frameId = null;
-    renderState.pendingNodes.clear();
-    transitionState.pendingFreshSnapshotContext = null;
+    window.webkit = {
+        messageHandlers: {
+            webInspectorReady: { postMessage: vi.fn() },
+            webInspectorDomRequestChildren: { postMessage: vi.fn() },
+            webInspectorDomHighlight: { postMessage: vi.fn() },
+            webInspectorDomHideHighlight: { postMessage: vi.fn() },
+            webInspectorDomSelection: { postMessage: vi.fn() },
+            webInspectorLog: { postMessage: vi.fn() },
+        },
+    } as never;
+    const bootstrap = {
+        context: { contextID },
+        config: { snapshotDepth: 4, subtreeDepth: 3 },
+    };
+    (window as Window & { __wiDOMFrontendBootstrap?: unknown }).__wiDOMFrontendBootstrap = bootstrap;
+    frontend?.updateBootstrap?.(bootstrap);
+    return state;
 }
 
 describe("dom-tree-view", () => {
-    beforeEach(() => {
-        document.body.innerHTML = "<div id=\"dom-tree\"></div><div id=\"dom-empty\"></div>";
-        window.webkit = {
-            messageHandlers: {
-                webInspectorDomRequestDocument: { postMessage: vi.fn() },
-                webInspectorReady: { postMessage: vi.fn() },
-                webInspectorLog: { postMessage: vi.fn() },
-                webInspectorDomSelection: { postMessage: vi.fn() },
-            }
-        } as never;
-        resetTreeState();
+    beforeEach(async () => {
+        await resetEnvironment();
     });
 
-    it("adopts newer transport context before applying a full snapshot", () => {
-        adoptDocumentContext({ documentScopeID: 1 });
+    it("installs the frontend API", async () => {
+        await import("../UI/DOMTree/dom-tree-view");
 
-        window.webInspectorDOMFrontend?.applyFullSnapshot?.(
-            {
-                root: {
+        expect(window.webInspectorDOMFrontend?.applyFullSnapshot).toBeTypeOf("function");
+    });
+
+    it("applies a same-context full snapshot", async () => {
+        const { protocolState, treeState } = await import("../UI/DOMTree/dom-tree-state");
+        await import("../UI/DOMTree/dom-tree-view");
+
+        window.webInspectorDOMFrontend?.applyFullSnapshot?.({
+            root: {
+                nodeId: 1,
+                nodeType: 1,
+                nodeName: "DIV",
+                localName: "div",
+                attributes: ["class", "ready"],
+                children: [],
+            }
+        }, protocolState.contextID);
+
+        expect(treeState.snapshot?.root?.attributes?.find((attribute) => attribute.name === "class")?.value).toBe("ready");
+    });
+
+    it("ignores a stale full snapshot", async () => {
+        const { treeState } = await import("../UI/DOMTree/dom-tree-state");
+        await import("../UI/DOMTree/dom-tree-view");
+
+        window.webInspectorDOMFrontend?.applyFullSnapshot?.({
+            root: {
+                nodeId: 1,
+                nodeType: 1,
+                nodeName: "DIV",
+                localName: "div",
+                attributes: ["class", "ready"],
+                children: [],
+            }
+        }, 999);
+
+        expect(treeState.snapshot).toBeNull();
+    });
+
+    it("renders document snapshots without a #document row", async () => {
+        const { protocolState, treeState } = await import("../UI/DOMTree/dom-tree-state");
+        await import("../UI/DOMTree/dom-tree-view");
+
+        window.webInspectorDOMFrontend?.applyFullSnapshot?.({
+            root: {
+                nodeId: 1,
+                nodeType: 9,
+                nodeName: "#document",
+                localName: "",
+                childNodeCount: 2,
+                children: [
+                    {
+                        nodeId: 10,
+                        nodeType: 10,
+                        nodeName: "html",
+                        localName: "html",
+                        nodeValue: "",
+                        childNodeCount: 0,
+                        children: [],
+                    },
+                    {
+                        nodeId: 2,
+                        nodeType: 1,
+                        nodeName: "HTML",
+                        localName: "html",
+                        attributes: ["lang", "ja"],
+                        childNodeCount: 2,
+                        children: [
+                            {
+                                nodeId: 3,
+                                nodeType: 1,
+                                nodeName: "HEAD",
+                                localName: "head",
+                                childNodeCount: 0,
+                                children: [],
+                            },
+                            {
+                                nodeId: 4,
+                                nodeType: 1,
+                                nodeName: "BODY",
+                                localName: "body",
+                                childNodeCount: 1,
+                                children: [
+                                    {
+                                        nodeId: 5,
+                                        nodeType: 1,
+                                        nodeName: "MAIN",
+                                        localName: "main",
+                                        childNodeCount: 0,
+                                        children: [],
+                                    },
+                                ],
+                            },
+                        ],
+                    },
+                ],
+            },
+        }, protocolState.contextID);
+
+        expect(treeState.snapshot?.root?.nodeName).toBe("#document");
+        expect(document.getElementById("dom-tree")?.textContent).not.toContain("#document");
+        const names = Array.from(document.querySelectorAll(".tree-node__name"))
+            .map((element) => element.textContent);
+        expect(names).toContain("<!DOCTYPE html>");
+        expect(names).toContain("<html");
+        expect(names).toContain("<body");
+        expect(names).toContain("<main");
+        expect(document.querySelector(".tree-node[data-node-id='10'] .tree-node__disclosure-spacer")).toBeNull();
+        expect(document.querySelector(".tree-node[data-node-id='10'] .tree-node__disclosure")).toBeNull();
+        expect(document.querySelector(".tree-node__attribute")?.textContent).toBe(" lang");
+        expect(document.querySelector(".tree-node__value")?.textContent).toBe("=\"ja\"");
+        expect(document.querySelector(".tree-node.is-unrendered")).toBeNull();
+    });
+
+    it("renders nested iframe documents without flattening them away", async () => {
+        const { protocolState, treeState } = await import("../UI/DOMTree/dom-tree-state");
+        await import("../UI/DOMTree/dom-tree-view");
+
+        window.webInspectorDOMFrontend?.applyFullSnapshot?.({
+            root: {
+                nodeId: 1,
+                nodeType: 9,
+                nodeName: "#document",
+                localName: "",
+                childNodeCount: 1,
+                children: [
+                    {
+                        nodeId: 2,
+                        nodeType: 1,
+                        nodeName: "HTML",
+                        localName: "html",
+                        childNodeCount: 1,
+                        children: [
+                            {
+                                nodeId: 3,
+                                nodeType: 1,
+                                nodeName: "BODY",
+                                localName: "body",
+                                childNodeCount: 1,
+                                children: [
+                                    {
+                                        nodeId: 20,
+                                        nodeType: 1,
+                                        nodeName: "IFRAME",
+                                        localName: "iframe",
+                                        frameId: "frame-child",
+                                        childNodeCount: 1,
+                                        contentDocument: {
+                                            nodeId: 24,
+                                            nodeType: 9,
+                                            nodeName: "#document",
+                                            localName: "",
+                                            frameId: "frame-child",
+                                            childNodeCount: 1,
+                                            children: [
+                                                {
+                                                    nodeId: 25,
+                                                    nodeType: 1,
+                                                    nodeName: "HTML",
+                                                    localName: "html",
+                                                    childNodeCount: 1,
+                                                    children: [
+                                                        {
+                                                            nodeId: 26,
+                                                            nodeType: 1,
+                                                            nodeName: "BUTTON",
+                                                            localName: "button",
+                                                            attributes: ["id", "frame-target"],
+                                                            childNodeCount: 0,
+                                                            children: [],
+                                                        },
+                                                    ],
+                                                },
+                                            ],
+                                        },
+                                    },
+                                ],
+                            },
+                        ],
+                    },
+                ],
+            },
+        }, protocolState.contextID);
+
+        expect(treeState.nodes.get(24)?.parentId).toBe(20);
+        expect(treeState.nodes.get(24)?.nodeType).toBe(9);
+        expect(treeState.nodes.get(24)?.frameId).toBe("frame-child");
+        expect(treeState.snapshot?.root?.children.map((child) => child.id)).toEqual([2]);
+        expect(treeState.snapshot?.root?.children.some((child) => child.id === 24)).toBe(false);
+
+        const { toggleNode } = await import("../UI/DOMTree/dom-tree-view-support");
+        toggleNode(20);
+        toggleNode(24);
+        toggleNode(25);
+
+        const treeText = document.getElementById("dom-tree")?.textContent ?? "";
+        expect(treeText).toContain("iframe");
+        expect(treeText).toContain("#document");
+        expect(treeText).toContain("button");
+    });
+
+    it("bootstraps the tree from a root subtree payload when the tree is empty", async () => {
+        const { protocolState, treeState } = await import("../UI/DOMTree/dom-tree-state");
+        await import("../UI/DOMTree/dom-tree-view");
+
+        window.webInspectorDOMFrontend?.applySubtreePayload?.({
+            nodeId: 1,
+            nodeType: 9,
+            nodeName: "#document",
+            localName: "",
+            childNodeCount: 1,
+            children: [
+                {
                     nodeId: 2,
                     nodeType: 1,
-                    nodeName: "DIV",
-                    localName: "div",
-                    attributes: ["class", "after"],
-                    children: [],
-                },
-            },
-            "fresh",
-            protocolState.pageEpoch,
-            2
-        );
-
-        expect(protocolState.documentScopeID).toBe(2);
-        expect(treeState.snapshot?.root?.id).toBe(2);
-        expect(treeState.snapshot?.root?.attributes?.find((attribute) => attribute.name === "class")?.value).toBe("after");
-    });
-
-    it("does not advance protocol context when an incoming snapshot payload is rejected", () => {
-        adoptDocumentContext({ documentScopeID: 1 });
-        window.webInspectorDOMFrontend?.applyFullSnapshot?.(
-            "{",
-            "fresh",
-            protocolState.pageEpoch,
-            2
-        );
-
-        expect(protocolState.documentScopeID).toBe(1);
-        expect(treeState.snapshot).toBeNull();
-        expect(transitionState.pendingFreshSnapshotContext).toEqual({
-            pageEpoch: 0,
-            documentScopeID: 1,
-        });
-    });
-
-    it("exposes document context adoption on the public frontend API", () => {
-        const didAdopt = window.webInspectorDOMFrontend?.adoptDocumentContext?.({
-            pageEpoch: 4,
-            documentScopeID: 6,
-        });
-
-        expect(didAdopt).toBe(true);
-        expect(protocolState.pageEpoch).toBe(4);
-        expect(protocolState.documentScopeID).toBe(6);
-        expect(transitionState.pendingFreshSnapshotContext).toEqual({
-            pageEpoch: 4,
-            documentScopeID: 6,
-        });
-    });
-
-    it("forces the next same-context snapshot bundle to apply fresh after public context adoption", () => {
-        window.webInspectorDOMFrontend?.applyFullSnapshot?.(
-            {
-                root: {
-                    nodeId: 1,
-                    nodeType: 1,
-                    nodeName: "DIV",
-                    localName: "div",
-                    attributes: ["id", "stale-root"],
+                    nodeName: "HTML",
+                    localName: "html",
+                    childNodeCount: 1,
                     children: [
                         {
-                            nodeId: 2,
+                            nodeId: 3,
                             nodeType: 1,
-                            nodeName: "SPAN",
-                            localName: "span",
-                            attributes: ["id", "stale-child"],
-                            children: [],
-                        },
-                    ],
-                },
-            },
-            "fresh",
-            protocolState.pageEpoch,
-            protocolState.documentScopeID
-        );
-        treeState.selectedNodeId = 2;
-
-        const didAdopt = window.webInspectorDOMFrontend?.adoptDocumentContext?.({
-            pageEpoch: 4,
-            documentScopeID: 6,
-        });
-        expect(didAdopt).toBe(true);
-
-        window.webInspectorDOMFrontend?.applyMutationBundle?.({
-            kind: "snapshot",
-            pageEpoch: 4,
-            documentScopeID: 6,
-            snapshot: {
-                root: {
-                    nodeId: 10,
-                    nodeType: 1,
-                    nodeName: "SECTION",
-                    localName: "section",
-                    attributes: ["id", "fresh-root"],
-                    children: [],
-                },
-            },
-        });
-
-        expect(treeState.snapshot?.root?.id).toBe(10);
-        expect(treeState.selectedNodeId).toBeNull();
-        expect(transitionState.pendingFreshSnapshotContext).toBeNull();
-    });
-
-    it("forces the next same-context direct full snapshot to apply fresh after public context adoption", () => {
-        window.webInspectorDOMFrontend?.applyFullSnapshot?.(
-            {
-                root: {
-                    nodeId: 1,
-                    nodeType: 1,
-                    nodeName: "DIV",
-                    localName: "div",
-                    attributes: ["id", "stale-root"],
-                    children: [
-                        {
-                            nodeId: 2,
-                            nodeType: 1,
-                            nodeName: "SPAN",
-                            localName: "span",
-                            attributes: ["id", "stale-child"],
-                            children: [],
-                        },
-                    ],
-                },
-            },
-            "fresh",
-            protocolState.pageEpoch,
-            protocolState.documentScopeID
-        );
-        treeState.selectedNodeId = 2;
-
-        const didAdopt = window.webInspectorDOMFrontend?.adoptDocumentContext?.({
-            pageEpoch: 8,
-            documentScopeID: 9,
-        });
-        expect(didAdopt).toBe(true);
-
-        window.webInspectorDOMFrontend?.applyFullSnapshot?.(
-            {
-                root: {
-                    nodeId: 20,
-                    nodeType: 1,
-                    nodeName: "ARTICLE",
-                    localName: "article",
-                    attributes: ["id", "fresh-root"],
-                    children: [],
-                },
-            },
-            "preserve-ui-state",
-            8,
-            9
-        );
-
-        expect(treeState.snapshot?.root?.id).toBe(20);
-        expect(treeState.selectedNodeId).toBeNull();
-        expect(transitionState.pendingFreshSnapshotContext).toBeNull();
-    });
-
-    it("applies selection directly without requiring a full snapshot", () => {
-        window.webInspectorDOMFrontend?.applyFullSnapshot?.(
-            {
-                root: {
-                    nodeId: 1,
-                    nodeType: 1,
-                    nodeName: "DIV",
-                    localName: "div",
-                    attributes: ["id", "root"],
-                    children: [
-                        {
-                            nodeId: 2,
-                            nodeType: 1,
-                            nodeName: "SPAN",
-                            localName: "span",
-                            attributes: ["id", "target"],
-                            children: [],
-                        },
-                    ],
-                },
-            },
-            "fresh",
-            protocolState.pageEpoch,
-            protocolState.documentScopeID
-        );
-
-        const didSelect = window.webInspectorDOMFrontend?.applySelectionPayload?.(
-            2,
-            protocolState.pageEpoch,
-            protocolState.documentScopeID
-        );
-
-        expect(didSelect).toBe(true);
-        expect(treeState.selectedNodeId).toBe(2);
-        expect(
-            (
-                window.webkit?.messageHandlers?.webInspectorDomSelection as {
-                    postMessage: ReturnType<typeof vi.fn>;
-                }
-            ).postMessage
-        ).toHaveBeenCalled();
-    });
-
-    it("falls back to selectedNodePath when the payload node id is not indexed", () => {
-        window.webInspectorDOMFrontend?.applyFullSnapshot?.(
-            {
-                root: {
-                    nodeId: 1,
-                    nodeType: 1,
-                    nodeName: "DIV",
-                    localName: "div",
-                    attributes: ["id", "root"],
-                    children: [
-                        {
-                            nodeId: 2,
-                            nodeType: 1,
-                            nodeName: "SPAN",
-                            localName: "span",
-                            attributes: ["id", "target"],
-                            children: [],
-                        },
-                    ],
-                },
-            },
-            "fresh",
-            protocolState.pageEpoch,
-            protocolState.documentScopeID
-        );
-
-        const didSelect = window.webInspectorDOMFrontend?.applySelectionPayload?.(
-            {
-                selectedLocalId: 999,
-                selectedNodePath: [0],
-            },
-            protocolState.pageEpoch,
-            protocolState.documentScopeID
-        );
-
-        expect(didSelect).toBe(true);
-        expect(treeState.selectedNodeId).toBe(2);
-    });
-
-    it("requests a preserve-ui-state snapshot with a selection restore target when selection is missing from the current tree", () => {
-        const requestDocumentHandler = window.webkit?.messageHandlers?.webInspectorDomRequestDocument as {
-            postMessage: ReturnType<typeof vi.fn>;
-        };
-        const rafSpy = vi.spyOn(globalThis, "requestAnimationFrame");
-
-        window.webInspectorDOMFrontend?.applyFullSnapshot?.(
-            {
-                root: {
-                    nodeId: 1,
-                    nodeType: 1,
-                    nodeName: "DIV",
-                    localName: "div",
-                    attributes: ["id", "root"],
-                    children: [
-                        {
-                            nodeId: 2,
-                            nodeType: 1,
-                            nodeName: "SECTION",
-                            localName: "section",
-                            attributes: ["id", "branch"],
-                            children: [],
-                        },
-                    ],
-                },
-            },
-            "fresh",
-            protocolState.pageEpoch,
-            protocolState.documentScopeID
-        );
-
-        const firstAttempt = window.webInspectorDOMFrontend?.applySelectionPayload?.(
-            {
-                selectedLocalId: 99,
-                backendNodeId: 9001,
-                selectedNodePath: [0, 0],
-            },
-            protocolState.pageEpoch,
-            protocolState.documentScopeID
-        );
-        const duplicateAttempt = window.webInspectorDOMFrontend?.applySelectionPayload?.(
-            {
-                selectedLocalId: 99,
-                backendNodeId: 9001,
-                selectedNodePath: [0, 0],
-            },
-            protocolState.pageEpoch,
-            protocolState.documentScopeID
-        );
-
-        expect(firstAttempt).toBe(false);
-        expect(duplicateAttempt).toBe(false);
-        expect(requestDocumentHandler.postMessage).toHaveBeenCalledTimes(1);
-        expect(requestDocumentHandler.postMessage.mock.calls[0]?.[0]).toMatchObject({
-            depth: protocolState.snapshotDepth,
-            mode: "preserve-ui-state",
-            pageEpoch: protocolState.pageEpoch,
-            documentScopeID: protocolState.documentScopeID,
-            selectionRestoreTarget: {
-                selectedLocalId: 99,
-                selectedBackendNodeId: 9001,
-                selectedNodePath: [0, 0],
-            },
-        });
-
-        rafSpy.mockClear();
-
-        window.webInspectorDOMFrontend?.applyFullSnapshot?.(
-            {
-                root: {
-                    nodeId: 1,
-                    nodeType: 1,
-                    nodeName: "DIV",
-                    localName: "div",
-                    attributes: ["id", "root"],
-                    children: [
-                        {
-                            nodeId: 2,
-                            nodeType: 1,
-                            nodeName: "SECTION",
-                            localName: "section",
-                            attributes: ["id", "branch"],
+                            nodeName: "BODY",
+                            localName: "body",
+                            childNodeCount: 1,
                             children: [
                                 {
-                                    nodeId: 99,
+                                    nodeId: 20,
                                     nodeType: 1,
-                                    nodeName: "SPAN",
-                                    localName: "span",
-                                    attributes: ["id", "target"],
+                                    nodeName: "IFRAME",
+                                    localName: "iframe",
+                                    frameId: "frame-child",
+                                    childNodeCount: 1,
+                                    contentDocument: {
+                                        nodeId: 24,
+                                        nodeType: 9,
+                                        nodeName: "#document",
+                                        localName: "",
+                                        frameId: "frame-child",
+                                        childNodeCount: 1,
+                                        children: [
+                                            {
+                                                nodeId: 25,
+                                                nodeType: 1,
+                                                nodeName: "HTML",
+                                                localName: "html",
+                                                childNodeCount: 1,
+                                                children: [
+                                                    {
+                                                        nodeId: 26,
+                                                        nodeType: 1,
+                                                        nodeName: "BUTTON",
+                                                        localName: "button",
+                                                        attributes: ["id", "frame-target"],
+                                                        childNodeCount: 0,
+                                                        children: [],
+                                                    },
+                                                ],
+                                            },
+                                        ],
+                                    },
+                                },
+                            ],
+                        },
+                    ],
+                },
+            ],
+        }, protocolState.contextID);
+
+        expect(treeState.snapshot?.root?.id).toBe(1);
+        const { toggleNode } = await import("../UI/DOMTree/dom-tree-view-support");
+        toggleNode(20);
+        toggleNode(24);
+        toggleNode(25);
+
+        const treeText = document.getElementById("dom-tree")?.textContent ?? "";
+        expect(treeText).toContain("iframe");
+        expect(treeText).toContain("#document");
+        expect(treeText).toContain("button");
+    });
+
+    it("rebinds to a replaced tree container before applying subtree updates", async () => {
+        const { dom, protocolState } = await import("../UI/DOMTree/dom-tree-state");
+        await import("../UI/DOMTree/dom-tree-view");
+
+        window.webInspectorDOMFrontend?.applyFullSnapshot?.({
+            root: {
+                nodeId: 1,
+                nodeType: 9,
+                nodeName: "#document",
+                localName: "",
+                childNodeCount: 1,
+                children: [
+                    {
+                        nodeId: 2,
+                        nodeType: 1,
+                        nodeName: "HTML",
+                        localName: "html",
+                        childNodeCount: 1,
+                        children: [
+                            {
+                                nodeId: 3,
+                                nodeType: 1,
+                                nodeName: "BODY",
+                                localName: "body",
+                                childNodeCount: 0,
+                                children: [],
+                            },
+                        ],
+                    },
+                ],
+            },
+        }, protocolState.contextID);
+
+        const previousTree = dom.tree;
+        document.body.innerHTML = "<div id=\"dom-tree\"></div><div id=\"dom-empty\"></div>";
+
+        window.webInspectorDOMFrontend?.applySubtreePayload?.({
+            nodeId: 1,
+            nodeType: 9,
+            nodeName: "#document",
+            localName: "",
+            childNodeCount: 1,
+            children: [
+                {
+                    nodeId: 2,
+                    nodeType: 1,
+                    nodeName: "HTML",
+                    localName: "html",
+                    childNodeCount: 1,
+                    children: [
+                        {
+                            nodeId: 3,
+                            nodeType: 1,
+                            nodeName: "BODY",
+                            localName: "body",
+                            childNodeCount: 1,
+                            children: [
+                                {
+                                    nodeId: 4,
+                                    nodeType: 1,
+                                    nodeName: "MAIN",
+                                    localName: "main",
+                                    childNodeCount: 0,
                                     children: [],
                                 },
                             ],
                         },
                     ],
-                    selectedLocalId: 99,
-                    selectedNodePath: [0, 0],
                 },
-                selectedLocalId: 99,
-                selectedNodePath: [0, 0],
-            },
-            "fresh",
-            protocolState.pageEpoch,
-            protocolState.documentScopeID
-        );
+            ],
+        }, protocolState.contextID);
 
-        expect(treeState.selectedNodeId).toBe(99);
-        expect(treeState.openState.get(1)).toBe(true);
-        expect(treeState.openState.get(2)).toBe(true);
-        expect(rafSpy).toHaveBeenCalled();
-        rafSpy.mockRestore();
+        expect(dom.tree).not.toBe(previousTree);
+        expect(document.getElementById("dom-tree")?.textContent).toContain("main");
+    });
+
+    it("does not render placeholder rows for partially loaded nodes", async () => {
+        const { protocolState } = await import("../UI/DOMTree/dom-tree-state");
+        await import("../UI/DOMTree/dom-tree-view");
+
+        window.webInspectorDOMFrontend?.applyFullSnapshot?.({
+            root: {
+                nodeId: 1,
+                nodeType: 9,
+                nodeName: "#document",
+                localName: "",
+                childNodeCount: 1,
+                children: [
+                    {
+                        nodeId: 2,
+                        nodeType: 1,
+                        nodeName: "HTML",
+                        localName: "html",
+                        attributes: ["lang", "ja"],
+                        childNodeCount: 2,
+                        children: [],
+                    },
+                ],
+            },
+        }, protocolState.contextID);
+
+        const treeText = document.getElementById("dom-tree")?.textContent ?? "";
+        expect(treeText).not.toContain("Load");
+        expect(treeText).not.toContain("more nodes");
+        expect(document.querySelector("[data-role='load-placeholder']")).toBeNull();
+
+        const disclosure = document.querySelector(".tree-node[data-node-id='2'] .tree-node__disclosure") as HTMLButtonElement | null;
+        expect(disclosure).not.toBeNull();
+
+        const { toggleNode } = await import("../UI/DOMTree/dom-tree-view-support");
+        toggleNode(2);
+        toggleNode(2);
+
+        const requestHandler = window.webkit?.messageHandlers?.webInspectorDomRequestChildren?.postMessage as ReturnType<typeof vi.fn>;
+        expect(requestHandler).toHaveBeenCalledWith({
+            nodeId: 2,
+            depth: 3,
+            contextID: protocolState.contextID,
+        });
+    });
+
+    it("requests children for nodes expanded by default depth rules when the subtree is incomplete", async () => {
+        const { protocolState, treeState } = await import("../UI/DOMTree/dom-tree-state");
+        await import("../UI/DOMTree/dom-tree-view");
+
+        window.webInspectorDOMFrontend?.applyFullSnapshot?.({
+            root: {
+                nodeId: 1,
+                nodeType: 9,
+                nodeName: "#document",
+                localName: "",
+                childNodeCount: 1,
+                children: [
+                    {
+                        nodeId: 2,
+                        nodeType: 1,
+                        nodeName: "HTML",
+                        localName: "html",
+                        attributes: ["lang", "ja"],
+                        childNodeCount: 1,
+                        children: [],
+                    },
+                ],
+            },
+        }, protocolState.contextID);
+
+        await Promise.resolve();
+
+        const requestHandler = window.webkit?.messageHandlers?.webInspectorDomRequestChildren?.postMessage as ReturnType<typeof vi.fn>;
+        expect(requestHandler).toHaveBeenCalledWith({
+            nodeId: 2,
+            depth: 3,
+            contextID: protocolState.contextID,
+        });
+    });
+
+    it("drops inspector overlay nodes from the rendered tree", async () => {
+        const { protocolState, treeState } = await import("../UI/DOMTree/dom-tree-state");
+        await import("../UI/DOMTree/dom-tree-view");
+
+        window.webInspectorDOMFrontend?.applyFullSnapshot?.({
+            root: {
+                nodeId: 1,
+                nodeType: 9,
+                nodeName: "#document",
+                localName: "",
+                childNodeCount: 1,
+                children: [
+                    {
+                        nodeId: 2,
+                        nodeType: 1,
+                        nodeName: "HTML",
+                        localName: "html",
+                        childNodeCount: 2,
+                        children: [
+                            {
+                                nodeId: 90,
+                                nodeType: 1,
+                                nodeName: "DIV",
+                                localName: "div",
+                                attributes: ["data-web-inspector-overlay", "true"],
+                                childNodeCount: 0,
+                                children: [],
+                            },
+                            {
+                                nodeId: 3,
+                                nodeType: 1,
+                                nodeName: "BODY",
+                                localName: "body",
+                                childNodeCount: 0,
+                                children: [],
+                            },
+                        ],
+                    },
+                ],
+            },
+        }, protocolState.contextID);
+
+        expect(treeState.nodes.has(90)).toBe(false);
+        expect(document.getElementById("dom-tree")?.textContent).not.toContain("data-web-inspector-overlay");
+    });
+
+    it("updates bootstrap by adopting a new context", async () => {
+        const { protocolState } = await import("../UI/DOMTree/dom-tree-state");
+        await import("../UI/DOMTree/dom-tree-view");
+
+        (window.webInspectorDOMFrontend as { updateBootstrap?: (bootstrap: unknown) => void } | undefined)
+            ?.updateBootstrap?.({ context: { contextID: 7 } });
+
+        expect(protocolState.contextID).toBe(7);
+    });
+
+    it("re-emits ready when bootstrap updates after install", async () => {
+        await import("../UI/DOMTree/dom-tree-view");
+
+        const readyHandler = window.webkit?.messageHandlers?.webInspectorReady?.postMessage as ReturnType<typeof vi.fn>;
+        expect(readyHandler).toBeTypeOf("function");
+        readyHandler.mockClear();
+
+        (window.webInspectorDOMFrontend as { updateBootstrap?: (bootstrap: unknown) => void } | undefined)
+            ?.updateBootstrap?.({ context: { contextID: 9 } });
+
+        expect(readyHandler).toHaveBeenCalledTimes(1);
+        expect(readyHandler).toHaveBeenCalledWith({ contextID: 9 });
+    });
+
+    it("adopts the incoming context for the first full snapshot when the tree is empty", async () => {
+        const { protocolState, treeState } = await import("../UI/DOMTree/dom-tree-state");
+        await import("../UI/DOMTree/dom-tree-view");
+
+        protocolState.contextID = 0;
+        treeState.snapshot = null;
+        treeState.nodes.clear();
+        (window.webInspectorDOMFrontend as { updateBootstrap?: (bootstrap: unknown) => void } | undefined)
+            ?.updateBootstrap?.({ context: { contextID: 7 } });
+
+        window.webInspectorDOMFrontend?.applyFullSnapshot?.({
+            root: {
+                nodeId: 1,
+                nodeType: 9,
+                nodeName: "#document",
+                localName: "",
+                childNodeCount: 1,
+                children: [
+                    {
+                        nodeId: 2,
+                        nodeType: 1,
+                        nodeName: "HTML",
+                        localName: "html",
+                        childNodeCount: 0,
+                        children: [],
+                    },
+                ],
+            },
+        }, 7);
+
+        expect(protocolState.contextID).toBe(7);
+        expect(document.getElementById("dom-tree")?.textContent).toContain("html");
+    });
+
+    it("clears transient hover state when native pointer disconnect is reported", async () => {
+        await import("../UI/DOMTree/dom-tree-view");
+
+        (window as Window & { __wiLastDOMTreeHoveredNodeId?: number | null }).__wiLastDOMTreeHoveredNodeId = 7;
+        const hideHighlightHandler = window.webkit?.messageHandlers?.webInspectorDomHideHighlight?.postMessage as ReturnType<typeof vi.fn>;
+
+        window.webInspectorDOMFrontend?.clearPointerHoverState?.();
+
+        expect((window as Window & { __wiLastDOMTreeHoveredNodeId?: number | null }).__wiLastDOMTreeHoveredNodeId).toBeNull();
+        expect(hideHighlightHandler).not.toHaveBeenCalled();
     });
 });

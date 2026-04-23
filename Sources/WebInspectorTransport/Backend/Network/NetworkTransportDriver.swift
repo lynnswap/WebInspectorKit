@@ -11,32 +11,35 @@ final class NetworkTransportDriver: WINetworkBackend, InspectorTransportCapabili
     private let logger = Logger(subsystem: "WebInspectorKit", category: "NetworkTransportDriver")
     private let decoder = JSONDecoder()
     private let transportClient = NetworkTransportClient()
-    private let transportSessionFactory: @MainActor () -> WITransportSession
+    private let sharedTransport: WISharedInspectorTransport
     private let resolver = NetworkTimelineResolver()
     private let initialSupport: WIBackendSupport
     private var deferredEnvelopesByTargetIdentifier: [String: [WITransportEventEnvelope]] = [:]
-    private var transportSession: WITransportSession?
     private var attachTask: Task<Void, Never>?
     private var bootstrapRecoveryTask: Task<Void, Never>?
-    private var pageEventTask: Task<Void, Never>?
 
     private var loggingMode: NetworkLoggingMode = .buffering
 
     init(
+        sharedTransport: WISharedInspectorTransport? = nil,
         transportSessionFactory: @escaping @MainActor () -> WITransportSession = { WITransportSession() },
         initialSupport: WIBackendSupport = WITransportSession().supportSnapshot.backendSupport
     ) {
-        self.transportSessionFactory = transportSessionFactory
+        self.sharedTransport = sharedTransport ?? WISharedInspectorTransport(sessionFactory: transportSessionFactory)
         self.initialSupport = initialSupport
         store.setRecording(true)
+        self.sharedTransport.setEventHandler({ [weak self] envelope in
+            await self?.handleSharedTransportEvent(envelope)
+        }, for: .network)
     }
 
     isolated deinit {
-        tearDownLifecycle()
+        attachTask?.cancel()
+        bootstrapRecoveryTask?.cancel()
     }
 
     package var inspectorTransportCapabilities: Set<InspectorTransportCapability> {
-        guard let supportSnapshot = transportSession?.supportSnapshot else {
+        guard let supportSnapshot = inspectorTransportSupportSnapshot else {
             return []
         }
 
@@ -50,18 +53,15 @@ final class NetworkTransportDriver: WINetworkBackend, InspectorTransportCapabili
         if supportSnapshot.capabilities.contains(.pageTargetRouting) {
             mapped.insert(.pageTargetRouting)
         }
-        if supportSnapshot.capabilities.contains(.networkBootstrapSnapshot) {
-            mapped.insert(.networkBootstrapSnapshot)
-        }
         return mapped
     }
 
     package var inspectorTransportSupportSnapshot: WITransportSupportSnapshot? {
-        transportSession?.supportSnapshot
+        sharedTransport.supportSnapshot.isSupported ? sharedTransport.supportSnapshot : nil
     }
 
     var support: WIBackendSupport {
-        transportSession?.supportSnapshot.backendSupport ?? initialSupport
+        inspectorTransportSupportSnapshot?.backendSupport ?? initialSupport
     }
 
     package func supportsDeferredLoading(for role: NetworkBody.Role) -> Bool {
@@ -80,12 +80,14 @@ final class NetworkTransportDriver: WINetworkBackend, InspectorTransportCapabili
     }
 
     func attachPageWebView(_ newWebView: WKWebView?) async {
-        guard webView !== newWebView || transportSession == nil else {
+        if webView === newWebView,
+           attachTask == nil,
+           await sharedTransport.attachedSession() != nil {
             return
         }
 
         let previousWebView = webView
-        detachTransportSession()
+        detachBootstrapTasks()
         webView = newWebView
 
         if previousWebView !== newWebView {
@@ -93,6 +95,7 @@ final class NetworkTransportDriver: WINetworkBackend, InspectorTransportCapabili
         }
 
         guard let newWebView else {
+            await sharedTransport.suspend(client: .network)
             return
         }
 
@@ -108,7 +111,8 @@ final class NetworkTransportDriver: WINetworkBackend, InspectorTransportCapabili
             }
         }
 
-        detachTransportSession()
+        detachBootstrapTasks()
+        await sharedTransport.suspend(client: .network)
         webView = nil
     }
 
@@ -120,19 +124,23 @@ final class NetworkTransportDriver: WINetworkBackend, InspectorTransportCapabili
         loggingMode = .stopped
         store.setRecording(false)
         resetStoreState()
-        tearDownLifecycle()
+        detachBootstrapTasks()
+        Task { @MainActor [sharedTransport] in
+            await sharedTransport.detach(client: .network)
+        }
         webView = nil
     }
 
     package func waitForAttachForTesting() async {
         await attachTask?.value
+        await sharedTransport.waitForAttachForTesting()
     }
 
     package func fetchBodyResult(
         locator: NetworkDeferredBodyLocator,
         role: NetworkBody.Role
     ) async -> WINetworkBodyFetchResult {
-        guard let transportSession else {
+        guard let transportSession = await sharedTransport.attachedSession() else {
             return .agentUnavailable
         }
         return await transportClient.fetchBodyResult(
@@ -147,7 +155,7 @@ extension NetworkTransportDriver {
     func prepareForNavigationReconnect() {
         resolver.clearCommittedTargetTransitions()
         deferredEnvelopesByTargetIdentifier.removeAll(keepingCapacity: true)
-        detachTransportSession()
+        detachBootstrapTasks()
     }
 
     func resumeAfterNavigationReconnect(to webView: WKWebView) {
@@ -157,49 +165,31 @@ extension NetworkTransportDriver {
 }
 
 private extension NetworkTransportDriver {
-    func tearDownLifecycle() {
-        detachTransportSession()
-    }
-
-    func detachTransportSession() {
+    func detachBootstrapTasks() {
         attachTask?.cancel()
         attachTask = nil
         bootstrapRecoveryTask?.cancel()
         bootstrapRecoveryTask = nil
-        pageEventTask?.cancel()
-        pageEventTask = nil
-        transportSession?.detach()
-        transportSession = nil
     }
 
     func startTransportSessionAttachment(for webView: WKWebView) {
-        detachTransportSession()
+        detachBootstrapTasks()
         let bootstrapContextID = UUID()
         resolver.begin(contextID: bootstrapContextID)
-        let transportSession = transportSessionFactory()
-        self.transportSession = transportSession
 
-        attachTask = Task { @MainActor [weak self, weak transportSession] in
-            guard let self, let transportSession else {
+        attachTask = Task { @MainActor [weak self] in
+            guard let self else {
                 return
             }
             defer {
                 self.attachTask = nil
             }
 
-            do {
-                try await transportSession.attach(to: webView)
-            } catch {
-                self.handleStartupFailure(
-                    error,
-                    session: transportSession,
-                    contextID: bootstrapContextID,
-                    allowRecovery: false
-                )
+            await self.sharedTransport.attach(client: .network, to: webView)
+            guard let transportSession = await self.sharedTransport.attachedSession() else {
                 return
             }
 
-            self.startPageEventLoop(using: transportSession)
             await self.performInitialBootstrap(
                 using: transportSession,
                 contextID: bootstrapContextID
@@ -246,7 +236,7 @@ private extension NetworkTransportDriver {
                 self.bootstrapRecoveryTask = nil
             }
 
-            while self.transportSession === transportSession,
+            while await self.sharedTransport.attachedSession() === transportSession,
                   self.resolver.matches(contextID: contextID) {
                 do {
                     _ = try await self.prepareInitialPageTarget(using: transportSession)
@@ -290,26 +280,18 @@ private extension NetworkTransportDriver {
 
         finishBootstrap(contextID: contextID)
         guard shouldLogAttachFailure(error, session: session) else {
-            if transportSession === session {
-                bootstrapRecoveryTask?.cancel()
-                bootstrapRecoveryTask = nil
-                pageEventTask?.cancel()
-                pageEventTask = nil
-                transportSession = nil
-            }
             return
         }
 
         logger.error("network transport attach failed: \(error.localizedDescription, privacy: .public)")
-        discardTransportSessionIfCurrent(session)
     }
 
     func shouldRetryBootstrapStartup(
         after error: Error,
         session: WITransportSession
     ) -> Bool {
-        guard transportSession === session,
-              !(error is CancellationError),
+        _ = session
+        guard !(error is CancellationError),
               let transportError = error as? WITransportError else {
             return false
         }
@@ -323,38 +305,6 @@ private extension NetworkTransportDriver {
             scope == .root && method == "Target.sendMessageToTarget"
         default:
             false
-        }
-    }
-
-    func discardTransportSessionIfCurrent(_ transportSession: WITransportSession) {
-        guard self.transportSession === transportSession else {
-            return
-        }
-        bootstrapRecoveryTask?.cancel()
-        bootstrapRecoveryTask = nil
-        pageEventTask?.cancel()
-        pageEventTask = nil
-        transportSession.detach()
-        self.transportSession = nil
-    }
-
-    func startPageEventLoop(using transportSession: WITransportSession) {
-        pageEventTask?.cancel()
-        let stream = transportSession.pageEvents()
-        pageEventTask = Task { @MainActor [weak self, weak transportSession] in
-            guard let self, let transportSession else {
-                return
-            }
-
-            for await envelope in stream {
-                guard self.transportSession === transportSession else {
-                    break
-                }
-                await self.handlePageEvent(envelope, session: transportSession)
-            }
-            if self.transportSession === transportSession {
-                self.pageEventTask = nil
-            }
         }
     }
 
@@ -418,9 +368,7 @@ private extension NetworkTransportDriver {
     }
 
     func shouldLogAttachFailure(_ error: Error, session: WITransportSession) -> Bool {
-        if session !== self.transportSession {
-            return false
-        }
+        _ = session
         if error is CancellationError {
             return false
         }
@@ -460,15 +408,25 @@ private extension NetworkTransportDriver {
     }
 
     func handlePageEvent(_ envelope: WITransportEventEnvelope, session: WITransportSession) async {
-        switch envelope.method {
-        case "Target.targetCreated", "Target.didCommitProvisionalTarget":
-            try? await enableNetworkIfNeeded(for: envelope.targetIdentifier, session: session)
-        case "Target.targetDestroyed":
-            try? await enableNetworkIfNeeded(for: session.currentPageTargetIdentifier(), session: session)
-        default:
-            break
+        let frameLifecycleEvent = transportLifecycleEventIsForFrame(envelope, session: session)
+        if !frameLifecycleEvent {
+            switch envelope.method {
+            case "Target.targetCreated", "Target.didCommitProvisionalTarget":
+                try? await enableNetworkIfNeeded(for: envelope.targetIdentifier, session: session)
+            case "Target.targetDestroyed":
+                try? await enableNetworkIfNeeded(for: session.currentPageTargetIdentifier(), session: session)
+            default:
+                break
+            }
         }
         handle(envelope)
+    }
+
+    func handleSharedTransportEvent(_ envelope: WITransportEventEnvelope) async {
+        guard let session = await sharedTransport.attachedSession() else {
+            return
+        }
+        await handlePageEvent(envelope, session: session)
     }
 
     func enableNetworkIfNeeded(for targetIdentifier: String?, session: WITransportSession) async throws {
@@ -476,6 +434,23 @@ private extension NetworkTransportDriver {
             method: WITransportMethod.Network.enable,
             targetIdentifier: targetIdentifier
         )
+    }
+
+    func transportLifecycleEventIsForFrame(
+        _ envelope: WITransportEventEnvelope,
+        session: WITransportSession
+    ) -> Bool {
+        switch envelope.method {
+        case "Target.targetCreated":
+            guard let params = decodeParams(NetworkWire.Transport.Event.TargetCreated.self, from: envelope) else {
+                return false
+            }
+            return params.targetInfo.type == "frame"
+        case "Target.didCommitProvisionalTarget", "Target.targetDestroyed":
+            return session.targetKind(for: envelope.targetIdentifier) == .frame
+        default:
+            return false
+        }
     }
 
     func resetStoreState() {

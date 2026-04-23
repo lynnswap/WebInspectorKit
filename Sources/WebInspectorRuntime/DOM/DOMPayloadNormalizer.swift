@@ -33,7 +33,7 @@ final class DOMPayloadNormalizer {
             return nil
         }
 
-        if let version = intValue(object["version"]), version != 1 {
+        if let version = intValue(object["version"]), version != 2 {
             return nil
         }
 
@@ -314,7 +314,10 @@ private extension DOMPayloadNormalizer {
         return looksLikeNodeDescriptor(object) ? object : nil
     }
 
-    private func normalizeNodeDescriptor(_ payload: Any, fallbackState: inout FallbackState) -> DOMGraphNodeDescriptor? {
+    private func normalizeNodeDescriptor(
+        _ payload: Any,
+        fallbackState: inout FallbackState
+    ) -> DOMGraphNodeDescriptor? {
         guard let object = dictionaryValue(payload) else {
             return nil
         }
@@ -323,6 +326,10 @@ private extension DOMPayloadNormalizer {
            let resolved = resolveSerializedNodeEnvelope(object),
            let root = resolved["root"] {
             return normalizeNodeDescriptor(root, fallbackState: &fallbackState)
+        }
+
+        if isInternalOverlayNodePayload(object) {
+            return nil
         }
 
         let explicitBackendNodeID = intValue(object["backendNodeId"])
@@ -338,32 +345,50 @@ private extension DOMPayloadNormalizer {
             ?? uint64Value(object["id"])
             ?? fallbackState.allocate()
         let nodeType = intValue(object["nodeType"]) ?? 0
-        let nodeName = stringValue(object["nodeName"]) ?? ""
-        let localName = stringValue(object["localName"]) ?? ""
+        let rawNodeName = stringValue(object["nodeName"]) ?? ""
+        let rawLocalName = stringValue(object["localName"]) ?? ""
+        let frameID = stringValue(object["frameId"]) ?? stringValue(object["frameID"])
+        let nodeName = nodeType == 1 ? rawNodeName.lowercased() : rawNodeName
+        let localName = nodeType == 1
+            ? (rawLocalName.isEmpty ? rawNodeName : rawLocalName).lowercased()
+            : rawLocalName
         let nodeValue = stringValue(object["nodeValue"]) ?? ""
 
         let attributes = normalizeNodeAttributes(object["attributes"], backendNodeID: backendNodeID)
-        let childPayloads = arrayValue(object["children"]) ?? []
+        let contentDocumentPayload = object["contentDocument"].flatMap(resolveNodePayload)
+        let childPayloads = contentDocumentPayload.map { [$0] } ?? (arrayValue(object["children"]) ?? [])
         let layoutFlags = normalizeLayoutFlags(object["layoutFlags"])
         let isRendered = boolValue(object["isRendered"]) ?? true
 
         var children: [DOMGraphNodeDescriptor] = []
         children.reserveCapacity(childPayloads.count)
+        var omittedChildren = 0
         for childPayload in childPayloads {
-            guard let child = normalizeNodeDescriptor(childPayload, fallbackState: &fallbackState) else {
+            if isInternalOverlayNodePayload(childPayload) {
+                omittedChildren += 1
+                continue
+            }
+            guard let child = normalizeNodeDescriptor(
+                childPayload,
+                fallbackState: &fallbackState
+            ) else {
                 continue
             }
             children.append(child)
         }
 
-        let childCount = intValue(object["childNodeCount"])
+        let explicitChildCount = intValue(object["childNodeCount"])
             ?? intValue(object["childCount"])
-            ?? children.count
+        let minimumChildCount = max(children.count, contentDocumentPayload == nil ? 0 : 1)
+        let childCount = explicitChildCount.map {
+            max(max(0, $0 - omittedChildren), minimumChildCount)
+        } ?? minimumChildCount
 
         return DOMGraphNodeDescriptor(
             localID: localID,
             backendNodeID: backendNodeID,
             backendNodeIDIsStable: backendNodeIDIsStable,
+            frameID: frameID,
             nodeType: nodeType,
             nodeName: nodeName,
             localName: localName,
@@ -476,12 +501,18 @@ private extension DOMPayloadNormalizer {
                 )
 
             case "setChildNodes":
-                guard let parentLocalID = uint64Value(params["parentNodeId"]) ?? uint64Value(params["parentId"]) else {
+                let nodesPayload = arrayValue(params["nodes"]) ?? []
+                if let parentLocalID = uint64Value(params["parentNodeId"]) ?? uint64Value(params["parentId"]) {
+                    let nodes = nodesPayload.compactMap { normalizeNodeDescriptor($0, fallbackState: &fallbackState) }
+                    normalized.append(.setChildNodes(parentLocalID: parentLocalID, nodes: nodes))
+                } else {
+                    let nodes = nodesPayload.compactMap { normalizeNodeDescriptor($0, fallbackState: &fallbackState) }
+                    guard !nodes.isEmpty else {
+                        continue
+                    }
+                    normalized.append(.setDetachedRoots(nodes: nodes))
                     continue
                 }
-                let nodesPayload = arrayValue(params["nodes"]) ?? []
-                let nodes = nodesPayload.compactMap { normalizeNodeDescriptor($0, fallbackState: &fallbackState) }
-                normalized.append(.setChildNodes(parentLocalID: parentLocalID, nodes: nodes))
 
             case "documentUpdated":
                 normalized.append(.documentUpdated)
@@ -546,6 +577,31 @@ private extension DOMPayloadNormalizer {
         }
     }
 
+    func containsInternalOverlayMarker(_ payload: Any?) -> Bool {
+        guard let values = arrayValue(payload) else {
+            return false
+        }
+
+        if values.allSatisfy({ $0 is String || $0 is NSString }) {
+            var index = 0
+            while index + 1 < values.count {
+                if stringValue(values[index]) == "data-web-inspector-overlay" {
+                    return stringValue(values[index + 1]) == "true"
+                }
+                index += 2
+            }
+            return false
+        }
+
+        return values.contains { entry in
+            guard let object = dictionaryValue(entry) else {
+                return false
+            }
+            return stringValue(object["name"]) == "data-web-inspector-overlay"
+                && stringValue(object["value"]) == "true"
+        }
+    }
+
     func normalizeLayoutFlags(_ payload: Any?) -> [String]? {
         guard let values = arrayValue(payload) else {
             return nil
@@ -572,6 +628,20 @@ private extension DOMPayloadNormalizer {
         stringValue(object["type"]) == "serialized-node-envelope"
     }
 
+    func isInternalOverlayNodePayload(_ payload: Any?) -> Bool {
+        guard let object = dictionaryValue(payload) else {
+            return false
+        }
+
+        if isSerializedNodeEnvelope(object),
+           let resolved = resolveSerializedNodeEnvelope(object),
+           let root = resolved["root"] {
+            return isInternalOverlayNodePayload(root)
+        }
+
+        return containsInternalOverlayMarker(object["attributes"])
+    }
+
     func looksLikeNodeDescriptor(_ object: [String: Any]) -> Bool {
         object["nodeId"] != nil
             || object["id"] != nil
@@ -589,6 +659,10 @@ private extension DOMPayloadNormalizer {
             || uint64Value(object["backendNodeID"]) != nil
         else {
             return false
+        }
+
+        if let contentDocument = object["contentDocument"] {
+            return nodeDescriptorHasStableIDs(contentDocument)
         }
 
         guard let children = arrayValue(object["children"]) else {
@@ -615,6 +689,10 @@ private extension DOMPayloadNormalizer {
             || uint64Value(object["id"]) != nil
         else {
             return false
+        }
+
+        if let contentDocument = object["contentDocument"] {
+            return nodeDescriptorHasLocalIDs(contentDocument)
         }
 
         guard let children = arrayValue(object["children"]) else {

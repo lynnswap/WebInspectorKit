@@ -6,16 +6,7 @@ type WebKitMessageHandler = {
 
 declare global {
     interface Window {
-        __wiDOMFrontendInitialPageEpoch?: number;
-        __wiDOMAgentBootstrap?: {
-            pageEpoch?: number;
-            documentScopeID?: number;
-            autoSnapshot?: {
-                enabled?: boolean;
-                maxDepth?: number;
-                debounce?: number;
-            };
-        };
+        __wiDOMFrontendInitialContextID?: number;
         __wiDOMFrontendBootstrap?: {
             config?: {
                 snapshotDepth?: number;
@@ -23,34 +14,8 @@ declare global {
                 autoUpdateDebounce?: number;
             };
             context?: {
-                pageEpoch?: number;
-                documentScopeID?: number;
-            };
-            preferredDepth?: number;
-            pendingDocumentRequest?: {
-                depth?: number;
-                mode?: "fresh" | "preserve-ui-state";
-                pageEpoch?: number;
+                contextID?: number;
             } | null;
-        };
-        webInspectorDOM?: {
-            __installed?: boolean;
-            detach?: () => void;
-            setPageEpoch?: (epoch: number) => void;
-            setPendingSelectionRestoreTarget?: (
-                path: number[] | null,
-                localId?: number | null,
-                backendNodeId?: number | null
-            ) => boolean;
-            bootstrap?: (bootstrap?: {
-                pageEpoch?: number;
-                documentScopeID?: number;
-                autoSnapshot?: {
-                    enabled?: boolean;
-                    maxDepth?: number;
-                    debounce?: number;
-                };
-            } | null) => boolean;
         };
         webInspectorNetworkAgent?: {
             __installed?: boolean;
@@ -62,10 +27,8 @@ declare global {
             serializeNode?: (node: Node) => unknown;
             buffers?: Record<string, unknown>;
             messageHandlers?: {
-                webInspectorDOMSnapshot?: WebKitMessageHandler;
-                webInspectorDOMMutations?: WebKitMessageHandler;
-                webInspectorDomRequestDocument?: WebKitMessageHandler;
                 webInspectorDomRequestChildren?: WebKitMessageHandler;
+                webInspectorDomReloadSnapshot?: WebKitMessageHandler;
                 webInspectorDomHighlight?: WebKitMessageHandler;
                 webInspectorDomHideHighlight?: WebKitMessageHandler;
                 webInspectorLog?: WebKitMessageHandler;

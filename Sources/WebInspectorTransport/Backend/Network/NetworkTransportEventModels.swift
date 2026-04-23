@@ -56,6 +56,16 @@ package extension NetworkWire.Transport {
             let targetId: String
         }
 
+        struct TargetCreated: Decodable {
+            struct TargetInfo: Decodable {
+                let targetId: String
+                let type: String
+                let isProvisional: Bool?
+            }
+
+            let targetInfo: TargetInfo
+        }
+
         struct TargetDidCommitProvisionalTarget: Decodable {
             let oldTargetId: String?
             let newTargetId: String

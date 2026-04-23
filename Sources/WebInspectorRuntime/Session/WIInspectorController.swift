@@ -1,8 +1,13 @@
 import Foundation
 import Observation
+import OSLog
 import WebKit
 import WebInspectorEngine
 import WebInspectorTransport
+
+private let inspectorControllerLogger = Logger(subsystem: "WebInspectorKit", category: "WIInspectorController")
+private let verboseConsoleDiagnosticsEnabled =
+    ProcessInfo.processInfo.environment["WEBSPECTOR_VERBOSE_CONSOLE_LOGS"] == "1"
 
 public enum WIHostVisibility: Sendable {
     case visible
@@ -73,6 +78,7 @@ public final class WIInspectorController {
         weak var pageWebView: WKWebView?
         var visibility: WIHostVisibility = .hidden
         var isAttached = false
+        var keepsDirectHostActiveDuringHiddenHandoff = false
         weak var sceneActivationRequestingScene: WIInspectorHostActivationScene?
 
         init(
@@ -104,21 +110,23 @@ public final class WIInspectorController {
     @ObservationIgnored private var runtimeApplyTask: Task<Void, Never>?
     @ObservationIgnored private var isTearingDown = false
     @ObservationIgnored private var suppressesDirectHostActivation = false
+    @ObservationIgnored private let sharedTransport: WISharedInspectorTransport
 #if DEBUG
     @ObservationIgnored var testRuntimeLifecycleCommitHook: (@MainActor (WISessionLifecycle) async -> Void)?
 #endif
 
     public init(configuration: WIModelConfiguration = .init()) {
-        let domSession = DOMSession(configuration: configuration.dom)
+        sharedTransport = WISharedInspectorTransport()
         let networkBackend = WIBackendFactory.makeNetworkBackend(
-            configuration: configuration.network
+            configuration: configuration.network,
+            sharedTransport: sharedTransport
         )
         let networkSession = NetworkSession(
             configuration: configuration.network,
             backend: networkBackend
         )
 
-        dom = WIDOMInspector(session: domSession)
+        dom = WIDOMInspector(configuration: configuration.dom, sharedTransport: sharedTransport)
         network = WINetworkModel(session: networkSession)
 
         dom.setRecoverableErrorHandler { [weak self] message in
@@ -213,15 +221,23 @@ public final class WIInspectorController {
         _ tabs: [WITab],
         marksExplicitConfiguration: Bool = true
     ) {
+        let previousTabIdentifiers = state.tabs.map(\.identifier)
         state.setTabs(tabs, marksExplicitConfiguration: marksExplicitConfiguration)
         syncObservedState()
+        logControllerDiagnostics(
+            "setTabsFromUI previous=\(previousTabIdentifiers) next=\(tabs.map(\.identifier)) explicit=\(marksExplicitConfiguration)"
+        )
         scheduleRuntimeApply()
     }
 
     @discardableResult
     package func projectSelectedTabFromUI(_ tab: WITab?) -> Bool {
+        let previousSelectedTab = state.selectedTab
         let wasAccepted = state.projectSelectedTab(tab)
         syncObservedState()
+        logControllerDiagnostics(
+            "projectSelectedTabFromUI requested=\(tabIdentifierSummary(tab)) accepted=\(wasAccepted) previous=\(tabIdentifierSummary(previousSelectedTab)) next=\(tabIdentifierSummary(state.selectedTab))"
+        )
         if wasAccepted {
             scheduleRuntimeApply()
         }
@@ -233,8 +249,12 @@ public final class WIInspectorController {
     }
 
     package func setPreferredCompactSelectedTabIdentifierFromUI(_ identifier: String?) {
+        let previousIdentifier = state.preferredCompactSelectedTabIdentifier
         state.setPreferredCompactSelectedTabIdentifier(identifier)
         syncObservedState()
+        logControllerDiagnostics(
+            "setPreferredCompactSelectedTabIdentifierFromUI previous=\(previousIdentifier ?? "nil") next=\(identifier ?? "nil")"
+        )
         scheduleRuntimeApply()
     }
 
@@ -249,6 +269,10 @@ public final class WIInspectorController {
             preferredRole: resolvedRole,
             registrationOrder: nextHostRegistrationOrder
         )
+        logControllerDiagnostics(
+            "registerHost host=\(hostSummary(hostRegistry[hostID])) hosts=\(hostRegistrySummary())",
+            level: .debug
+        )
         updateSceneActivationRequestingSceneIfNeeded()
         scheduleRuntimeApply()
         return hostID
@@ -256,17 +280,23 @@ public final class WIInspectorController {
 
     package func unregisterHost(_ hostID: WIInspectorHostID) {
         let previousVisibleUIHostCount = visibleUIHostCount()
+        let removedHostSummary = hostSummary(hostRegistry[hostID])
         hostRegistry.removeValue(forKey: hostID)
         updateDirectHostActivationSuppression(
             afterMutatingHost: hostID,
             previousVisibleUIHostCount: previousVisibleUIHostCount,
             newVisibility: nil
         )
+        logControllerDiagnostics(
+            "unregisterHost removed=\(removedHostSummary) hosts=\(hostRegistrySummary())",
+            level: .debug
+        )
         updateSceneActivationRequestingSceneIfNeeded()
         scheduleRuntimeApply()
     }
 
     package func finalizeForControllerSwap() {
+        logControllerDiagnostics("finalizeForControllerSwap directHost=\(hostSummary(hostRegistry[directHostID]))")
         updateHost(
             directHostID,
             pageWebView: nil,
@@ -277,6 +307,18 @@ public final class WIInspectorController {
 
     package func preferredRole(for hostID: WIInspectorHostID) -> WIInspectorHostRole? {
         hostRegistry[hostID]?.preferredRole
+    }
+
+    package func prepareHiddenHostForSameWebViewHandoff(_ hostID: WIInspectorHostID) {
+        hostRegistry[hostID]?.keepsDirectHostActiveDuringHiddenHandoff = true
+        logControllerDiagnostics(
+            "prepareHiddenHostForSameWebViewHandoff host=\(hostSummary(hostRegistry[hostID]))"
+        )
+        scheduleRuntimeApply()
+    }
+
+    package var testPrimaryHostPageWebViewIdentity: ObjectIdentifier? {
+        makeRuntimeTarget().primaryHostPageWebViewIdentity
     }
 
     package func updateHost(
@@ -291,14 +333,22 @@ public final class WIInspectorController {
         }
 
         let previousVisibleUIHostCount = visibleUIHostCount()
+        let previousHostSummary = hostSummary(hostRegistry[hostID])
         host.pageWebView = pageWebView
         host.visibility = visibility
         host.isAttached = isAttached
+        if visibility == .visible {
+            host.keepsDirectHostActiveDuringHiddenHandoff = false
+        }
         host.sceneActivationRequestingScene = sceneActivationRequestingScene
         updateDirectHostActivationSuppression(
             afterMutatingHost: hostID,
             previousVisibleUIHostCount: previousVisibleUIHostCount,
             newVisibility: visibility
+        )
+        logControllerDiagnostics(
+            "updateHost previous=\(previousHostSummary) next=\(hostSummary(host)) hosts=\(hostRegistrySummary())",
+            level: .debug
         )
         updateSceneActivationRequestingSceneIfNeeded()
         scheduleRuntimeApply()
@@ -428,7 +478,14 @@ private extension WIInspectorController {
         guard isTearingDown == false else {
             return
         }
-        desiredRuntimeTarget = makeRuntimeTarget()
+        let nextTarget = makeRuntimeTarget()
+        if desiredRuntimeTarget != nextTarget {
+            logControllerDiagnostics(
+                "scheduleRuntimeApply previousTarget=\(runtimeTargetSummary(desiredRuntimeTarget)) nextTarget=\(runtimeTargetSummary(nextTarget)) hosts=\(hostRegistrySummary())",
+                level: .debug
+            )
+        }
+        desiredRuntimeTarget = nextTarget
         runtimeReconcileRequested = true
 
         guard runtimeApplyTask == nil else {
@@ -463,6 +520,9 @@ private extension WIInspectorController {
             return
         }
         let plan = runtimePlan(for: target)
+        logControllerDiagnostics(
+            "applyRuntimeTarget lifecycle=\(lifecycleSummary(lifecycle))->\(lifecycleSummary(target.lifecycle)) plan=\(runtimePlanSummary(plan)) target=\(runtimeTargetSummary(target)) domSelected=\(domSelectionSummary()) hosts=\(hostRegistrySummary())"
+        )
 
         switch target.lifecycle {
         case .active:
@@ -495,11 +555,13 @@ private extension WIInspectorController {
         let visiblePrimaryHost = effectiveVisiblePrimaryHost(
             suppressingDirectHostActivation: suppressesDirectHostActivation
         )
+        let hiddenPrimaryHostForWarmup = hiddenPrimaryHostDuringPreparedHandoff()
         let retainedPrimaryHost = retainedPrimaryHostCandidate()
-        let primaryHost = visiblePrimaryHost ?? retainedPrimaryHost
+        let activePrimaryHost = visiblePrimaryHost ?? hiddenPrimaryHostForWarmup
+        let primaryHost = activePrimaryHost ?? retainedPrimaryHost
 
         let lifecycle: WISessionLifecycle
-        if let visiblePrimaryHost, visiblePrimaryHost.pageWebView != nil {
+        if let activePrimaryHost, activePrimaryHost.pageWebView != nil {
             lifecycle = .active
         } else if primaryHost != nil {
             lifecycle = .suspended
@@ -512,7 +574,7 @@ private extension WIInspectorController {
             selectedTab: state.selectedTab,
             preferredCompactSelectedTabIdentifier: state.preferredCompactSelectedTabIdentifier,
             hasExplicitTabsConfiguration: state.hasExplicitTabsConfiguration,
-            primaryHostVisibility: visiblePrimaryHost == nil ? .hidden : .visible,
+            primaryHostVisibility: activePrimaryHost?.visibility ?? .hidden,
             primaryHostPageWebViewIdentity: primaryHost?.pageWebView.map(ObjectIdentifier.init),
             primaryHostPageWebView: primaryHost?.pageWebView,
             lifecycle: lifecycle
@@ -568,6 +630,27 @@ private extension WIInspectorController {
             return secondaryHost
         }
         return attachedDirectHosts.first
+    }
+
+    private func hiddenPrimaryHostDuringPreparedHandoff() -> WIHostRecord? {
+        let directHost = hostRegistry[directHostID]
+        guard directHost?.isAttached == true,
+              directHost?.visibility == .hidden,
+              let directHostPageWebViewIdentity = directHost?.pageWebView.map(ObjectIdentifier.init) else {
+            return nil
+        }
+
+        let hasPreparedHiddenUIHost = hostRegistry.values.contains { host in
+            host.id != directHostID
+                && host.isAttached
+                && host.keepsDirectHostActiveDuringHiddenHandoff
+                && host.pageWebView.map(ObjectIdentifier.init) == directHostPageWebViewIdentity
+        }
+        guard hasPreparedHiddenUIHost else {
+            return nil
+        }
+
+        return directHost
     }
 
     private func runtimePlan(for target: WIRuntimeTarget) -> WIRuntimePlan {
@@ -675,5 +758,127 @@ private extension WIInspectorController {
         suppressesDirectHostActivation = false
         updateSceneActivationRequestingSceneIfNeeded()
         scheduleRuntimeApply()
+    }
+
+    private func logControllerDiagnostics(
+        _ message: String,
+        level: OSLogType = .default
+    ) {
+        if verboseConsoleDiagnosticsEnabled == false,
+           level != .error,
+           level != .fault {
+            return
+        }
+        switch level {
+        case .error, .fault:
+            inspectorControllerLogger.error("\(message, privacy: .public)")
+        case .debug:
+            inspectorControllerLogger.debug("\(message, privacy: .public)")
+        default:
+            inspectorControllerLogger.notice("\(message, privacy: .public)")
+        }
+    }
+
+    private func tabIdentifierSummary(_ tab: WITab?) -> String {
+        tab?.identifier ?? "nil"
+    }
+
+    private func lifecycleSummary(_ lifecycle: WISessionLifecycle) -> String {
+        switch lifecycle {
+        case .active:
+            return "active"
+        case .suspended:
+            return "suspended"
+        case .disconnected:
+            return "disconnected"
+        }
+    }
+
+    private func visibilitySummary(_ visibility: WIHostVisibility) -> String {
+        switch visibility {
+        case .visible:
+            return "visible"
+        case .hidden:
+            return "hidden"
+        case .finalizing:
+            return "finalizing"
+        }
+    }
+
+    private func hostRoleSummary(_ role: WIInspectorHostRole) -> String {
+        switch role {
+        case .primary:
+            return "primary"
+        case .secondary:
+            return "secondary"
+        }
+    }
+
+    private func webViewSummary(_ webView: WKWebView?) -> String {
+        guard let webView else {
+            return "nil"
+        }
+        return String(describing: ObjectIdentifier(webView))
+    }
+
+    private func compactHostID(_ hostID: WIInspectorHostID?) -> String {
+        guard let hostID else {
+            return "nil"
+        }
+        return String(hostID.rawValue.uuidString.prefix(8))
+    }
+
+    private func hostSummary(_ host: WIHostRecord?) -> String {
+        guard let host else {
+            return "nil"
+        }
+        let kind = host.id == directHostID ? "direct" : "ui"
+        return "id=\(compactHostID(host.id)) kind=\(kind) role=\(hostRoleSummary(host.preferredRole)) visibility=\(visibilitySummary(host.visibility)) attached=\(host.isAttached) handoff=\(host.keepsDirectHostActiveDuringHiddenHandoff) webView=\(webViewSummary(host.pageWebView))"
+    }
+
+    private func hostRegistrySummary() -> String {
+        let hosts = hostRegistry.values
+            .sorted { $0.registrationOrder < $1.registrationOrder }
+            .map { hostSummary($0) }
+        return hosts.isEmpty ? "[]" : "[\(hosts.joined(separator: ", "))]"
+    }
+
+    private func runtimeTargetSummary(_ target: WIRuntimeTarget?) -> String {
+        guard let target else {
+            return "nil"
+        }
+        return "lifecycle=\(lifecycleSummary(target.lifecycle)) selectedTab=\(tabIdentifierSummary(target.selectedTab)) preferredCompact=\(target.preferredCompactSelectedTabIdentifier ?? "nil") primaryVisibility=\(visibilitySummary(target.primaryHostVisibility)) primaryWebView=\(webViewSummary(target.primaryHostPageWebView)) tabs=\(target.tabs.map(\.identifier))"
+    }
+
+    private func runtimePlanSummary(_ plan: WIRuntimePlan) -> String {
+        let domPlan: String
+        switch plan.dom {
+        case let .attach(autoSnapshot):
+            domPlan = "attach(autoSnapshot=\(autoSnapshot))"
+        case .suspend:
+            domPlan = "suspend"
+        case .detach:
+            domPlan = "detach"
+        }
+
+        let networkPlan: String
+        switch plan.network {
+        case let .attach(mode):
+            networkPlan = "attach(mode=\(String(describing: mode)))"
+        case .suspend:
+            networkPlan = "suspend"
+        case .detach:
+            networkPlan = "detach"
+        }
+
+        return "dom=\(domPlan) network=\(networkPlan)"
+    }
+
+    private func domSelectionSummary() -> String {
+        guard let node = dom.document.selectedNode else {
+            return "nil"
+        }
+        let nodeName = node.localName.isEmpty ? node.nodeName : node.localName
+        return "\(nodeName)#local=\(node.localID)#backend=\(node.backendNodeID.map(String.init) ?? "nil")#selector=\(node.selectorPath)"
     }
 }

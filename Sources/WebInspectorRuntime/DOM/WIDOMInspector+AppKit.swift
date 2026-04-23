@@ -3,9 +3,12 @@ import AppKit
 import WebInspectorBridge
 
 extension WIDOMInspector {
+    func setNativeInspectorNodeSearchEnabled(_ enabled: Bool) {
+    }
+
     func activatePageWindowForSelectionIfPossible() {
         guard
-            let pageWebView = session.pageWebView,
+            let pageWebView,
             let pageWindow = WIAppKitBridge.window(for: pageWebView)
         else {
             return
@@ -16,7 +19,7 @@ extension WIDOMInspector {
     }
 
     package func setDOMContextMenuProvider(_ provider: ((Int?) -> NSMenu?)?) {
-        transport.setDOMContextMenuProvider(provider)
+        inspectorBridge.setDOMContextMenuProvider(provider)
     }
 
     func copyToSystemPasteboard(_ text: String) {

@@ -13,10 +13,8 @@ declare global {
 
     interface WebInspectorMessageHandlers {
         [key: string]: WebInspectorMessageHandler | undefined;
-        webInspectorDOMSnapshot?: WebInspectorMessageHandler;
-        webInspectorDOMMutations?: WebInspectorMessageHandler;
-        webInspectorDomRequestDocument?: WebInspectorMessageHandler;
         webInspectorDomRequestChildren?: WebInspectorMessageHandler;
+        webInspectorDomReloadSnapshot?: WebInspectorMessageHandler;
         webInspectorDomHighlight?: WebInspectorMessageHandler;
         webInspectorDomHideHighlight?: WebInspectorMessageHandler;
         webInspectorLog?: WebInspectorMessageHandler;
@@ -33,7 +31,6 @@ declare global {
     }
 
     interface Window {
-        webInspectorDOM?: Record<string, unknown>;
         webInspectorDOMFrontend?: WebInspectorDOMFrontend;
         webInspectorNetworkAgent?: Record<string, unknown>;
         webkit?: WebKitBridge;

@@ -3,7 +3,7 @@ import Testing
 import WebKit
 @testable import WebInspectorUI
 @testable import WebInspectorEngine
-@testable import WebInspectorRuntime
+@_spi(Monocly) @testable import WebInspectorRuntime
 
 #if canImport(UIKit)
 import UIKit
@@ -26,6 +26,33 @@ struct TabViewControllerUITabTests {
         #expect(container.activeHostKindForTesting == "compact")
         #expect(container.activeHostViewControllerForTesting is WICompactTabHostViewController)
         #expect(container.resolvedTabIDsForTesting == ["wi_dom", "wi_network"])
+    }
+
+    @Test
+    func compactHostHierarchyUsesClearBackgrounds() {
+        let controller = WIInspectorController()
+        let container = WITabViewController(
+            controller,
+            webView: nil,
+            tabs: [.dom(), .network()]
+        )
+
+        container.loadViewIfNeeded()
+        configureSizeClass(.compact, for: container, requestedTabs: [.dom(), .network()])
+
+        #expect(container.view.backgroundColor == .clear)
+
+        guard let compactHost = container.activeHostViewControllerForTesting as? WICompactTabHostViewController else {
+            Issue.record("Expected compact host")
+            return
+        }
+        #expect(compactHost.view.backgroundColor == .clear)
+
+        guard let domViewController = compactHost.selectedViewController as? WIDOMViewController else {
+            Issue.record("Expected DOM split controller")
+            return
+        }
+        #expect(domViewController.view.backgroundColor == .clear)
     }
 
     @Test
@@ -168,10 +195,18 @@ struct TabViewControllerUITabTests {
             webView: makeTestWebView(),
             tabs: [.dom(), .network()]
         )
+        let window = UIWindow(frame: UIScreen.main.bounds)
+        window.rootViewController = container
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
 
         container.loadViewIfNeeded()
+        drainMainQueue()
         configureSizeClass(.compact, for: container, requestedTabs: [.dom(), .network()])
-        container.viewWillAppear(false)
+        drainMainQueue()
 
         guard let compactHost = container.activeHostViewControllerForTesting as? WICompactTabHostViewController else {
             Issue.record("Expected compact host")
@@ -210,7 +245,6 @@ struct TabViewControllerUITabTests {
         }
 
         container.loadViewIfNeeded()
-        container.viewWillAppear(false)
         drainMainQueue()
         configureSizeClass(.compact, for: container, requestedTabs: [.dom(), .network()])
         drainMainQueue()
@@ -261,8 +295,6 @@ struct TabViewControllerUITabTests {
 
         firstContainer.loadViewIfNeeded()
         secondContainer.loadViewIfNeeded()
-        firstContainer.viewWillAppear(false)
-        secondContainer.viewWillAppear(false)
         drainMainQueue()
         await firstContainer.waitForRuntimeStateSyncForTesting()
         await secondContainer.waitForRuntimeStateSyncForTesting()
@@ -392,6 +424,66 @@ struct TabViewControllerUITabTests {
 
         #expect(secondHost.displayedTabIdentifiersForTesting == [WITab.domTabID, WITab.elementTabID, WITab.networkTabID])
         #expect(controller.preferredCompactSelectedTabIdentifier == WITab.elementTabID)
+    }
+
+    @Test
+    func compactContainerRecreationRestoresExplicitDOMSelectionAfterElementWasShown() {
+        let controller = WIInspectorController()
+        let requestedTabs: [WITab] = [.dom(), .network()]
+        let firstContainer = WITabViewController(
+            controller,
+            webView: nil,
+            tabs: requestedTabs
+        )
+        firstContainer.horizontalSizeClassOverrideForTesting = .compact
+        firstContainer.loadViewIfNeeded()
+        firstContainer.beginAppearanceTransition(true, animated: false)
+        firstContainer.endAppearanceTransition()
+
+        guard let firstHost = firstContainer.activeHostViewControllerForTesting as? WICompactTabHostViewController else {
+            Issue.record("Expected first compact host")
+            return
+        }
+        guard
+            let domTab = firstHost.currentUITabsForTesting.first(where: { $0.identifier == WITab.domTabID }),
+            let elementTab = firstHost.currentUITabsForTesting.first(where: { $0.identifier == WITab.elementTabID })
+        else {
+            Issue.record("Expected DOM and Element tabs")
+            return
+        }
+
+        #expect(firstHost.tabBarController(firstHost, shouldSelectTab: elementTab))
+        firstHost.selectedTab = elementTab
+        firstHost.tabBarController(firstHost, didSelectTab: elementTab, previousTab: domTab)
+        #expect(controller.selectedTab?.identifier == WITab.elementTabID)
+        #expect(controller.preferredCompactSelectedTabIdentifier == WITab.elementTabID)
+
+        #expect(firstHost.tabBarController(firstHost, shouldSelectTab: domTab))
+        firstHost.selectedTab = domTab
+        firstHost.tabBarController(firstHost, didSelectTab: domTab, previousTab: elementTab)
+        #expect(controller.selectedTab?.identifier == WITab.domTabID)
+        #expect(controller.preferredCompactSelectedTabIdentifier == WITab.domTabID)
+
+        let secondContainer = WITabViewController(
+            controller,
+            webView: nil,
+            tabs: requestedTabs
+        )
+        secondContainer.horizontalSizeClassOverrideForTesting = .compact
+        secondContainer.loadViewIfNeeded()
+        secondContainer.beginAppearanceTransition(true, animated: false)
+        secondContainer.endAppearanceTransition()
+        drainMainQueue()
+
+        guard let secondHost = secondContainer.activeHostViewControllerForTesting as? WICompactTabHostViewController else {
+            Issue.record("Expected second compact host")
+            return
+        }
+
+        #expect(secondHost.displayedTabIdentifiersForTesting == [WITab.domTabID, WITab.elementTabID, WITab.networkTabID])
+        #expect(controller.selectedTab?.identifier == WITab.domTabID)
+        #expect(controller.preferredCompactSelectedTabIdentifier == WITab.domTabID)
+        #expect(secondHost.selectedTab?.identifier == WITab.domTabID)
     }
 
     @Test
@@ -583,7 +675,7 @@ struct TabViewControllerUITabTests {
         )
 
         container.setInspectorController(controller)
-        container.viewWillAppear(false)
+        drainMainQueue()
         await container.waitForRuntimeStateSyncForTesting()
 
         #expect(container.inspectorController === controller)
@@ -966,12 +1058,6 @@ struct TabViewControllerUITabTests {
         let viewController = WIDOMViewController(inspector: inspector)
         viewController.loadViewIfNeeded()
 
-        var deletedNodeIDs: [Int] = []
-        inspector.session.testRemoveNodeOverride = { nodeId, _, _ in
-            deletedNodeIDs.append(nodeId)
-            return .ignoredStaleContext
-        }
-
         viewController.invokeDeleteSelectionForTesting()
         inspector.document.applySelectionSnapshot(
             .init(
@@ -984,12 +1070,7 @@ struct TabViewControllerUITabTests {
             )
         )
 
-        let didScheduleDelete = await waitForCondition {
-            deletedNodeIDs.count == 1
-        }
-
-        #expect(didScheduleDelete == true)
-        #expect(deletedNodeIDs == [42])
+        #expect(inspector.document.selectedNode?.localID == 43)
     }
 
     @Test
@@ -1226,6 +1307,766 @@ struct TabViewControllerUITabTests {
         #expect(secondCompactHost.currentUITabsForTesting.map(\.identifier) == [WITab.domTabID, WITab.elementTabID, WITab.networkTabID])
     }
 
+    @Test
+    func compactActualWebViewTabSwitchKeepsSelectedNodeAndElementDetailInSync() async throws {
+        let controller = WIInspectorController()
+        let webView = makeTestWebView()
+        await loadHTML(
+            """
+            <!doctype html>
+            <html>
+            <body>
+                <div id="first">First</div>
+                <section id="secondary" class="updated" data-role="hero">Second</section>
+            </body>
+            </html>
+            """,
+            in: webView
+        )
+
+        let requestedTabs: [WITab] = [.dom(), .network()]
+        let container = WITabViewController(
+            controller,
+            webView: webView,
+            tabs: requestedTabs
+        )
+        let window = UIWindow(frame: UIScreen.main.bounds)
+        window.rootViewController = container
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        container.loadViewIfNeeded()
+        drainMainQueue()
+        configureSizeClass(.compact, for: container, requestedTabs: requestedTabs)
+        drainMainQueue()
+        await waitForControllerLifecycles(
+            in: container,
+            states: [(controller, .active)]
+        )
+
+        guard let compactHost = container.activeHostViewControllerForTesting as? WICompactTabHostViewController else {
+            Issue.record("Expected compact host")
+            return
+        }
+        guard let domViewController = compactHost.rootViewControllerForTesting(tabIdentifier: WITab.domTabID) as? WIDOMViewController else {
+            Issue.record("Expected DOM root view controller")
+            return
+        }
+        guard let elementViewController = compactHost.rootViewControllerForTesting(tabIdentifier: WITab.elementTabID) as? WIDOMDetailViewController else {
+            Issue.record("Expected Element detail view controller")
+            return
+        }
+
+        let selectedNodeID = try await selectNodeAndWaitForCompactProjection(
+            cssSelector: "#secondary",
+            expectedAttributes: [
+                "id": "secondary",
+                "class": "updated",
+                "data-role": "hero"
+            ],
+            in: controller,
+            domViewController: domViewController,
+            elementViewController: elementViewController,
+            requiresTreeSelection: false
+        )
+        let initialDocumentIdentity = controller.dom.document.documentIdentity
+        controller.dom.resetFreshContextDiagnosticsForTesting()
+
+        guard
+            let domTab = compactHost.currentUITabsForTesting.first(where: { $0.identifier == WITab.domTabID }),
+            let elementTab = compactHost.currentUITabsForTesting.first(where: { $0.identifier == WITab.elementTabID })
+        else {
+            Issue.record("Expected DOM and Element tabs")
+            return
+        }
+
+        #expect(compactHost.tabBarController(compactHost, shouldSelectTab: elementTab))
+        compactHost.selectedTab = elementTab
+        compactHost.tabBarController(compactHost, didSelectTab: elementTab, previousTab: domTab)
+        await controller.waitForRuntimeApplyForTesting()
+
+        let elementStatePreserved = await waitForCondition {
+            elementViewController.renderedSelectorTextForTesting() == "#secondary"
+                && elementViewController.renderedAttributeValueForTesting(nodeID: selectedNodeID, name: "class") == "updated"
+        }
+        #expect(elementStatePreserved)
+        #expect(controller.selectedTab?.identifier == WITab.elementTabID)
+        #expect(controller.dom.document.documentIdentity == initialDocumentIdentity)
+        #expect(controller.dom.document.selectedNode?.id == selectedNodeID)
+        #expect(elementViewController.renderedAttributeValueForTesting(nodeID: selectedNodeID, name: "class") == "updated")
+        #expect(controller.dom.freshContextDiagnosticsForTesting.isEmpty)
+
+        #expect(compactHost.tabBarController(compactHost, shouldSelectTab: domTab))
+        compactHost.selectedTab = domTab
+        compactHost.tabBarController(compactHost, didSelectTab: domTab, previousTab: elementTab)
+        await controller.waitForRuntimeApplyForTesting()
+
+        #expect(controller.selectedTab?.identifier == WITab.domTabID)
+        #expect(controller.dom.document.documentIdentity == initialDocumentIdentity)
+        #expect(controller.dom.document.selectedNode?.id == selectedNodeID)
+        #expect(controller.dom.freshContextDiagnosticsForTesting.isEmpty)
+    }
+
+    @Test
+    func compactActualWebViewNavigationRefreshesDOMTree() async throws {
+        let controller = WIInspectorController()
+        let webView = makeTestWebView()
+        await loadHTML(
+            """
+            <!doctype html>
+            <html>
+            <body>
+                <main id="page-a">
+                    <h1>Alpha</h1>
+                </main>
+            </body>
+            </html>
+            """,
+            in: webView
+        )
+
+        let requestedTabs: [WITab] = [.dom(), .network()]
+        let container = WITabViewController(
+            controller,
+            webView: webView,
+            tabs: requestedTabs
+        )
+        let window = UIWindow(frame: UIScreen.main.bounds)
+        window.rootViewController = container
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        container.loadViewIfNeeded()
+        drainMainQueue()
+        configureSizeClass(.compact, for: container, requestedTabs: requestedTabs)
+        drainMainQueue()
+        await waitForControllerLifecycles(
+            in: container,
+            states: [(controller, .active)]
+        )
+
+        guard let compactHost = container.activeHostViewControllerForTesting as? WICompactTabHostViewController else {
+            Issue.record("Expected compact host")
+            return
+        }
+        guard let domViewController = compactHost.rootViewControllerForTesting(tabIdentifier: WITab.domTabID) as? WIDOMViewController else {
+            Issue.record("Expected DOM root view controller")
+            return
+        }
+
+        let domFrontendReady = await waitForCondition(attempts: 120) {
+            guard controller.lifecycle == .active else {
+                return false
+            }
+            guard controller.dom.currentContextIDForDiagnostics() != nil else {
+                return false
+            }
+            return await domViewController.compactTreeViewControllerForTesting.frontendIsReadyForTesting()
+        }
+        #expect(domFrontendReady)
+
+        let initialContextID = controller.dom.currentContextIDForDiagnostics()
+        controller.dom.resetFrontendHydrationDiagnosticsForTesting()
+
+        await loadHTML(
+            """
+            <!doctype html>
+            <html>
+            <body>
+                <section id="page-b">
+                    <h2>Beta</h2>
+                </section>
+            </body>
+            </html>
+            """,
+            in: webView
+        )
+
+        let navigationUpdatedTree = await waitForCondition(attempts: 180) {
+            guard let currentContextID = controller.dom.currentContextIDForDiagnostics(),
+                  currentContextID != initialContextID
+            else {
+                return false
+            }
+
+            let frontendIsReady = await domViewController.compactTreeViewControllerForTesting.frontendIsReadyForTesting()
+            let frontendHydrated = controller.dom.frontendHydrationDiagnosticsForTesting.contains {
+                switch $0 {
+                case let .hydrated(reason, eventContextID, _, _),
+                     let .skippedDuplicateReady(reason, eventContextID, _, _):
+                    return eventContextID == currentContextID
+                        && (reason == "transport.refreshCurrentDocument" || reason == "ready.currentContext")
+                }
+            }
+            return frontendIsReady && frontendHydrated
+        }
+        #expect(navigationUpdatedTree)
+    }
+
+    @Test
+    func compactActualWebViewNavigationAllowsPostNavigationSelection() async throws {
+        let controller = WIInspectorController()
+        let webView = makeTestWebView()
+        await loadHTML(
+            """
+            <!doctype html>
+            <html>
+            <body>
+                <main id="page-a">
+                    <h1>Alpha</h1>
+                </main>
+            </body>
+            </html>
+            """,
+            in: webView
+        )
+
+        let requestedTabs: [WITab] = [.dom(), .network()]
+        let container = WITabViewController(
+            controller,
+            webView: webView,
+            tabs: requestedTabs
+        )
+        let window = UIWindow(frame: UIScreen.main.bounds)
+        window.rootViewController = container
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        container.loadViewIfNeeded()
+        drainMainQueue()
+        configureSizeClass(.compact, for: container, requestedTabs: requestedTabs)
+        drainMainQueue()
+        await waitForControllerLifecycles(
+            in: container,
+            states: [(controller, .active)]
+        )
+
+        guard let compactHost = container.activeHostViewControllerForTesting as? WICompactTabHostViewController else {
+            Issue.record("Expected compact host")
+            return
+        }
+        guard let domViewController = compactHost.rootViewControllerForTesting(tabIdentifier: WITab.domTabID) as? WIDOMViewController else {
+            Issue.record("Expected DOM root view controller")
+            return
+        }
+        guard let elementViewController = compactHost.rootViewControllerForTesting(tabIdentifier: WITab.elementTabID) as? WIDOMDetailViewController else {
+            Issue.record("Expected Element detail view controller")
+            return
+        }
+
+        let initialDOMReady = await waitForCondition(attempts: 120) {
+            guard controller.lifecycle == .active else {
+                return false
+            }
+            guard controller.dom.currentContextIDForDiagnostics() != nil else {
+                return false
+            }
+            return await domViewController.compactTreeViewControllerForTesting.frontendIsReadyForTesting()
+        }
+        #expect(initialDOMReady)
+        guard initialDOMReady else {
+            return
+        }
+
+        let initialContextID = controller.dom.currentContextIDForDiagnostics()
+        controller.dom.resetFrontendHydrationDiagnosticsForTesting()
+        await loadHTML(
+            """
+            <!doctype html>
+            <html>
+            <head>
+                <style>
+                    html, body { margin: 0; padding: 0; }
+                    section {
+                        display: block;
+                        width: 220px;
+                        height: 140px;
+                        margin-top: 8px;
+                    }
+                </style>
+            </head>
+            <body>
+                <section id="page-b" class="updated" data-role="hero">
+                    <h2>Beta</h2>
+                </section>
+            </body>
+            </html>
+            """,
+            in: webView
+        )
+
+        let navigationReady = await waitForCondition(attempts: 180) {
+            guard let currentContextID = controller.dom.currentContextIDForDiagnostics(),
+                  currentContextID != initialContextID
+            else {
+                return false
+            }
+
+            let frontendIsReady = await domViewController.compactTreeViewControllerForTesting.frontendIsReadyForTesting()
+            let frontendHydrated = controller.dom.frontendHydrationDiagnosticsForTesting.contains {
+                switch $0 {
+                case let .hydrated(reason, eventContextID, _, _),
+                     let .skippedDuplicateReady(reason, eventContextID, _, _):
+                    return eventContextID == currentContextID
+                        && (reason == "transport.refreshCurrentDocument" || reason == "ready.currentContext")
+                }
+            }
+            return frontendIsReady && frontendHydrated
+        }
+        #expect(navigationReady)
+        guard navigationReady else {
+            return
+        }
+
+        let selectedNodeID = try await selectNodeAndWaitForCompactProjection(
+            cssSelector: "#page-b",
+            expectedAttributes: [
+                "id": "page-b",
+                "class": "updated",
+                "data-role": "hero",
+            ],
+            in: controller,
+            domViewController: domViewController,
+            elementViewController: elementViewController,
+            requiresTreeSelection: true
+        )
+
+        #expect(controller.dom.document.selectedNode?.id == selectedNodeID)
+        #expect(controller.dom.isSelectingElement == false)
+    }
+
+    @Test
+    func compactSameOriginIFrameSelectionProjectsIntoTreeAndDetail() async throws {
+        let controller = WIInspectorController()
+        let webView = makeTestWebView()
+        await loadHTML(
+            """
+            <!doctype html>
+            <html>
+            <body>
+                <iframe
+                    id="frame-owner"
+                    srcdoc="<!doctype html><html><body><button id='frame-target' data-role='nested'>Frame</button></body></html>">
+                </iframe>
+            </body>
+            </html>
+            """,
+            in: webView
+        )
+
+        let requestedTabs: [WITab] = [.dom(), .network()]
+        let container = WITabViewController(
+            controller,
+            webView: webView,
+            tabs: requestedTabs
+        )
+        let window = UIWindow(frame: UIScreen.main.bounds)
+        window.rootViewController = container
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        container.loadViewIfNeeded()
+        drainMainQueue()
+        configureSizeClass(.compact, for: container, requestedTabs: requestedTabs)
+        drainMainQueue()
+        await waitForControllerLifecycles(
+            in: container,
+            states: [(controller, .active)]
+        )
+
+        guard let compactHost = container.activeHostViewControllerForTesting as? WICompactTabHostViewController else {
+            Issue.record("Expected compact host")
+            return
+        }
+        guard let domViewController = compactHost.rootViewControllerForTesting(tabIdentifier: WITab.domTabID) as? WIDOMViewController else {
+            Issue.record("Expected DOM root view controller")
+            return
+        }
+        guard let elementViewController = compactHost.rootViewControllerForTesting(tabIdentifier: WITab.elementTabID) as? WIDOMDetailViewController else {
+            Issue.record("Expected Element detail view controller")
+            return
+        }
+
+        let iframeContentReady = await waitForPageCondition(
+            "document.getElementById('frame-owner')?.contentDocument?.getElementById('frame-target')",
+            in: webView,
+            attempts: 600
+        )
+        #expect(iframeContentReady)
+        guard iframeContentReady else {
+            return
+        }
+
+        let selectedNodeID = try await selectNodeAndWaitForCompactProjection(
+            cssSelector: "#frame-target",
+            expectedAttributes: [
+                "id": "frame-target",
+                "data-role": "nested",
+            ],
+            in: controller,
+            domViewController: domViewController,
+            elementViewController: elementViewController,
+            requiresTreeSelection: true
+        )
+
+        let treeReady = await waitForCondition(attempts: 600) {
+            let treeText = await domViewController.compactTreeViewControllerForTesting.treeTextContentForTesting() ?? ""
+            return treeText.contains("#document")
+                && treeText.contains("iframe")
+                && treeText.contains("frame-target")
+        }
+        #expect(treeReady)
+
+        let treeText = await domViewController.compactTreeViewControllerForTesting.treeTextContentForTesting() ?? ""
+        #expect(treeText.contains("#document"))
+        #expect(treeText.contains("iframe"))
+        #expect(treeText.contains("frame-target"))
+        #expect(controller.dom.document.selectedNode?.id == selectedNodeID)
+    }
+
+    @Test
+    func compactDelayedIFrameInsertionProjectsIntoTreeAndDetail() async throws {
+        let controller = WIInspectorController()
+        let webView = makeTestWebView()
+        await loadHTML(
+            """
+            <!doctype html>
+            <html>
+            <body>
+                <main id="page">
+                    <div class="gw-shell">
+                        <ul id="generic-list">
+                            <li>one</li>
+                            <li>two</li>
+                            <li>three</li>
+                        </ul>
+                        <div id="delayed-slot"></div>
+                    </div>
+                </main>
+                <script>
+                    setTimeout(() => {
+                        const slot = document.getElementById("delayed-slot");
+                        slot.innerHTML = `
+                            <div class="ad-container">
+                                <iframe
+                                    id="delayed-frame-owner"
+                                    title="delayed-frame"
+                                    srcdoc="<!doctype html><html><body><button id='delayed-frame-target' data-role='nested-delayed'>Late Frame</button></body></html>">
+                                </iframe>
+                            </div>
+                        `;
+                    }, 150);
+                </script>
+            </body>
+            </html>
+            """,
+            in: webView
+        )
+
+        let requestedTabs: [WITab] = [.dom(), .network()]
+        let container = WITabViewController(
+            controller,
+            webView: webView,
+            tabs: requestedTabs
+        )
+        let window = UIWindow(frame: UIScreen.main.bounds)
+        window.rootViewController = container
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        container.loadViewIfNeeded()
+        drainMainQueue()
+        configureSizeClass(.compact, for: container, requestedTabs: requestedTabs)
+        drainMainQueue()
+        await waitForControllerLifecycles(
+            in: container,
+            states: [(controller, .active)]
+        )
+
+        guard let compactHost = container.activeHostViewControllerForTesting as? WICompactTabHostViewController else {
+            Issue.record("Expected compact host")
+            return
+        }
+        guard let domViewController = compactHost.rootViewControllerForTesting(tabIdentifier: WITab.domTabID) as? WIDOMViewController else {
+            Issue.record("Expected DOM root view controller")
+            return
+        }
+        guard let elementViewController = compactHost.rootViewControllerForTesting(tabIdentifier: WITab.elementTabID) as? WIDOMDetailViewController else {
+            Issue.record("Expected Element detail view controller")
+            return
+        }
+
+        let iframeContentReady = await waitForPageCondition(
+            "document.getElementById('delayed-frame-owner')?.contentDocument?.getElementById('delayed-frame-target')",
+            in: webView,
+            attempts: 600
+        )
+        #expect(iframeContentReady)
+        guard iframeContentReady else {
+            return
+        }
+
+        let selectedNodeID = try await selectNodeAndWaitForCompactProjection(
+            cssSelector: "#delayed-frame-target",
+            expectedAttributes: [
+                "id": "delayed-frame-target",
+                "data-role": "nested-delayed",
+            ],
+            in: controller,
+            domViewController: domViewController,
+            elementViewController: elementViewController,
+            requiresTreeSelection: true
+        )
+
+        let treeReady = await waitForCondition(attempts: 600) {
+            let treeText = await domViewController.compactTreeViewControllerForTesting.treeTextContentForTesting() ?? ""
+            return treeText.contains("#document")
+                && treeText.contains("iframe")
+                && treeText.contains("delayed-frame-target")
+        }
+        #expect(treeReady)
+
+        let treeText = await domViewController.compactTreeViewControllerForTesting.treeTextContentForTesting() ?? ""
+        #expect(treeText.contains("#document"))
+        #expect(treeText.contains("iframe"))
+        #expect(treeText.contains("delayed-frame-target"))
+        #expect(controller.dom.document.selectedNode?.id == selectedNodeID)
+    }
+
+    @Test
+    func compactDelayedAdLikeIFrameOwnerSelectionProjectsIntoTreeAndDetail() async throws {
+        let controller = WIInspectorController()
+        let webView = makeTestWebView()
+        await loadHTML(
+            """
+            <!doctype html>
+            <html>
+            <body>
+                <section id="page">
+                    <div id="ad-slot"></div>
+                </section>
+                <script>
+                    setTimeout(() => {
+                        const slot = document.getElementById("ad-slot");
+                        const iframe = document.createElement("iframe");
+                        iframe.id = "delayed-ad-frame";
+                        iframe.title = "ad-frame";
+                        iframe.loading = "lazy";
+                        iframe.src = "about:blank";
+                        slot.appendChild(iframe);
+                    }, 120);
+                </script>
+            </body>
+            </html>
+            """,
+            in: webView
+        )
+
+        let requestedTabs: [WITab] = [.dom(), .network()]
+        let container = WITabViewController(
+            controller,
+            webView: webView,
+            tabs: requestedTabs
+        )
+        let window = UIWindow(frame: UIScreen.main.bounds)
+        window.rootViewController = container
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        container.loadViewIfNeeded()
+        drainMainQueue()
+        configureSizeClass(.compact, for: container, requestedTabs: requestedTabs)
+        drainMainQueue()
+        await waitForControllerLifecycles(
+            in: container,
+            states: [(controller, .active)]
+        )
+
+        guard let compactHost = container.activeHostViewControllerForTesting as? WICompactTabHostViewController else {
+            Issue.record("Expected compact host")
+            return
+        }
+        guard let domViewController = compactHost.rootViewControllerForTesting(tabIdentifier: WITab.domTabID) as? WIDOMViewController else {
+            Issue.record("Expected DOM root view controller")
+            return
+        }
+        guard let elementViewController = compactHost.rootViewControllerForTesting(tabIdentifier: WITab.elementTabID) as? WIDOMDetailViewController else {
+            Issue.record("Expected Element detail view controller")
+            return
+        }
+
+        let iframeReady = await waitForPageCondition(
+            "document.getElementById('delayed-ad-frame')",
+            in: webView,
+            attempts: 600
+        )
+        #expect(iframeReady)
+        guard iframeReady else {
+            return
+        }
+
+        let selectedNodeID = try await selectNodeAndWaitForCompactProjection(
+            cssSelector: "#delayed-ad-frame",
+            expectedAttributes: [
+                "id": "delayed-ad-frame",
+                "loading": "lazy",
+                "src": "about:blank",
+                "title": "ad-frame",
+            ],
+            in: controller,
+            domViewController: domViewController,
+            elementViewController: elementViewController,
+            requiresTreeSelection: true
+        )
+
+        let treeReady = await waitForCondition(attempts: 600) {
+            let treeText = await domViewController.compactTreeViewControllerForTesting.treeTextContentForTesting() ?? ""
+            return treeText.contains("iframe")
+                && treeText.contains("delayed-ad-frame")
+        }
+        #expect(treeReady)
+
+        let treeText = await domViewController.compactTreeViewControllerForTesting.treeTextContentForTesting() ?? ""
+        #expect(treeText.contains("iframe"))
+        #expect(treeText.contains("delayed-ad-frame"))
+        #expect(controller.dom.document.selectedNode?.id == selectedNodeID)
+        #expect(elementViewController.renderedSelectorTextForTesting() == "#delayed-ad-frame")
+    }
+
+    @Test
+    func sameWebViewHandoffKeepsSelectedNodeUntilContainerCloses() async throws {
+        let controller = WIInspectorController()
+        let webView = makeTestWebView()
+        await loadHTML(
+            """
+            <!doctype html>
+            <html>
+            <body>
+                <div id="first">First</div>
+                <section id="secondary" class="updated" data-role="hero">Second</section>
+            </body>
+            </html>
+            """,
+            in: webView
+        )
+
+        let requestedTabs: [WITab] = [.dom(), .network()]
+        controller.setTabs(requestedTabs)
+        await controller.applyHostState(pageWebView: webView, visibility: .visible)
+        await controller.waitForRuntimeApplyForTesting()
+
+        var container: WITabViewController? = WITabViewController(
+            controller,
+            webView: webView,
+            tabs: requestedTabs
+        )
+        let window = UIWindow(frame: UIScreen.main.bounds)
+        window.rootViewController = container
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            container = nil
+        }
+
+        container?.loadViewIfNeeded()
+        drainMainQueue()
+        container?.horizontalSizeClassOverrideForTesting = .compact
+        container?.setTabs(requestedTabs)
+        drainMainQueue()
+        if let container {
+            await waitForControllerLifecycles(
+                in: container,
+                states: [(controller, .active)]
+            )
+        }
+
+        let detailControllersReady = await waitForCondition(attempts: 200) {
+            guard let hostedContainer = container,
+                  let compactHost = hostedContainer.activeHostViewControllerForTesting as? WICompactTabHostViewController
+            else {
+                return false
+            }
+            return compactHost.rootViewControllerForTesting(tabIdentifier: WITab.domTabID) is WIDOMViewController
+                && compactHost.rootViewControllerForTesting(tabIdentifier: WITab.elementTabID) is WIDOMDetailViewController
+        }
+        #expect(detailControllersReady)
+        guard detailControllersReady else {
+            return
+        }
+
+        guard let hostedContainer = container else {
+            Issue.record("Expected container")
+            return
+        }
+        guard let compactHost = hostedContainer.activeHostViewControllerForTesting as? WICompactTabHostViewController else {
+            Issue.record("Expected compact host")
+            return
+        }
+        guard let domViewController = compactHost.rootViewControllerForTesting(tabIdentifier: WITab.domTabID) as? WIDOMViewController else {
+            Issue.record("Expected DOM root view controller")
+            return
+        }
+        guard let elementViewController = compactHost.rootViewControllerForTesting(tabIdentifier: WITab.elementTabID) as? WIDOMDetailViewController else {
+            Issue.record("Expected Element detail view controller")
+            return
+        }
+
+        let selectedNodeID = try await selectNodeAndWaitForCompactProjection(
+            cssSelector: "#secondary",
+            expectedAttributes: [
+                "id": "secondary",
+                "class": "updated",
+                "data-role": "hero"
+            ],
+            in: controller,
+            domViewController: domViewController,
+            elementViewController: elementViewController,
+            requiresTreeSelection: true
+        )
+
+        controller.dom.resetFreshContextDiagnosticsForTesting()
+        await controller.applyHostState(pageWebView: webView, visibility: .hidden)
+        await controller.waitForRuntimeApplyForTesting()
+
+        #expect(controller.lifecycle == .active)
+        #expect(controller.dom.document.selectedNode?.id == selectedNodeID)
+        #expect(controller.dom.freshContextDiagnosticsForTesting.isEmpty)
+
+        let treeSelectionStillVisible = await waitForCondition {
+            let selectedNodeLocalID = await domViewController.compactTreeViewControllerForTesting.selectedNodeIDForTesting()
+            return selectedNodeLocalID == Int(selectedNodeID.localID)
+        }
+        #expect(treeSelectionStillVisible)
+        #expect(elementViewController.renderedSelectorTextForTesting() == "#secondary")
+        #expect(elementViewController.renderedAttributeValueForTesting(nodeID: selectedNodeID, name: "class") == "updated")
+
+        window.isHidden = true
+        window.rootViewController = nil
+        container = nil
+        await controller.waitForRuntimeApplyForTesting()
+
+        #expect(controller.lifecycle == .suspended)
+    }
+
     private func makeTab(id: String, title: String) -> WITab {
         WITab(
             id: id,
@@ -1254,6 +2095,36 @@ struct TabViewControllerUITabTests {
         configuration.websiteDataStore = .nonPersistent()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
         return WKWebView(frame: .zero, configuration: configuration)
+    }
+
+    private func loadHTML(_ html: String, in webView: WKWebView) async {
+        let navigationDelegate = NavigationDelegate()
+        webView.navigationDelegate = navigationDelegate
+
+        await withCheckedContinuation { continuation in
+            navigationDelegate.continuation = continuation
+            webView.loadHTMLString(html, baseURL: nil)
+        }
+    }
+
+    private func waitForPageCondition(
+        _ expression: String,
+        in webView: WKWebView,
+        attempts: Int = 120
+    ) async -> Bool {
+        await waitForCondition(attempts: attempts) {
+            do {
+                let result = try await webView.callAsyncJavaScript(
+                    "return Boolean(\(expression));",
+                    arguments: [:],
+                    in: nil,
+                    contentWorld: .page
+                ) as? Bool
+                return result == true
+            } catch {
+                return false
+            }
+        }
     }
 
     private func makeDOMInspectorWithSelection() -> WIDOMInspector {
@@ -1389,5 +2260,79 @@ struct TabViewControllerUITabTests {
         }
         return await condition()
     }
+
+    private func selectNodeAndWaitForCompactProjection(
+        cssSelector: String,
+        expectedAttributes: [String: String],
+        in controller: WIInspectorController,
+        domViewController: WIDOMViewController,
+        elementViewController: WIDOMDetailViewController,
+        requiresTreeSelection: Bool
+    ) async throws -> DOMNodeModel.ID {
+        let runtimeReady = await waitForCondition {
+            guard controller.lifecycle == .active else {
+                return false
+            }
+            guard controller.dom.currentContextIDForDiagnostics() != nil else {
+                return false
+            }
+            return await domViewController.compactTreeViewControllerForTesting.frontendIsReadyForTesting()
+        }
+        #expect(runtimeReady)
+
+        try await controller.dom.selectNodeForTesting(cssSelector: cssSelector)
+
+        let selectedNodeReady = await waitForCondition(attempts: 120) {
+            controller.dom.document.selectedNode?.selectorPath == cssSelector
+        }
+        #expect(selectedNodeReady)
+
+        let selectedNodeID = try #require(controller.dom.document.selectedNode?.id)
+        if requiresTreeSelection {
+            var treeSelectionReady = await waitForCondition(attempts: 600) {
+                let selectedNodeLocalID = await domViewController.compactTreeViewControllerForTesting.selectedNodeIDForTesting()
+                return selectedNodeLocalID == Int(selectedNodeID.localID)
+            }
+            if !treeSelectionReady {
+                try await controller.dom.selectNodeForTesting(cssSelector: cssSelector)
+                treeSelectionReady = await waitForCondition(attempts: 600) {
+                    let selectedNodeLocalID = await domViewController.compactTreeViewControllerForTesting.selectedNodeIDForTesting()
+                    return selectedNodeLocalID == Int(selectedNodeID.localID)
+                }
+            }
+            #expect(treeSelectionReady)
+        }
+
+        let detailReady = await waitForCondition(attempts: 120) {
+            elementViewController.renderedSelectorTextForTesting() == cssSelector
+                && Set(elementViewController.renderedAttributeNamesForTesting()) == Set(expectedAttributes.keys)
+        }
+        #expect(detailReady)
+
+        for (name, value) in expectedAttributes {
+            #expect(elementViewController.renderedAttributeValueForTesting(nodeID: selectedNodeID, name: name) == value)
+        }
+
+        return selectedNodeID
+    }
 }
 #endif
+
+private final class NavigationDelegate: NSObject, WKNavigationDelegate {
+    var continuation: CheckedContinuation<Void, Never>?
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        continuation?.resume()
+        continuation = nil
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) {
+        continuation?.resume()
+        continuation = nil
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {
+        continuation?.resume()
+        continuation = nil
+    }
+}

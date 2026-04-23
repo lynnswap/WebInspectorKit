@@ -21,6 +21,7 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
     private var hasAppliedInitialRegularColumnWidth = false
     private var hasStartedObservingPickItemState = false
     private var pickItemObservationHandles: Set<ObservationHandle> = []
+    private var documentObservationHandles: Set<ObservationHandle> = []
 
     var regularLayoutModeOverrideForTesting: RegularLayoutMode = .automatic {
         didSet {
@@ -93,6 +94,29 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
         return isShowing(.inspector)
     }
 
+#if DEBUG
+    @_spi(Monocly) public func selectedTreeNodePreviewForDiagnostics() async -> String? {
+        let treeViewController = activeHostKindForTesting == "compact"
+            ? compactRootViewController
+            : domTreeViewController
+        return await treeViewController.selectedNodeTextForTesting()
+    }
+
+    @_spi(Monocly) public func selectedTreeNodeIsVisibleForDiagnostics() async -> Bool? {
+        let treeViewController = activeHostKindForTesting == "compact"
+            ? compactRootViewController
+            : domTreeViewController
+        return await treeViewController.selectedNodeIsVisibleForTesting()
+    }
+
+    @_spi(Monocly) public func selectedTreeNodeLineageForDiagnostics() async -> String? {
+        let treeViewController = activeHostKindForTesting == "compact"
+            ? compactRootViewController
+            : domTreeViewController
+        return await treeViewController.selectedNodeLineageTextForTesting()
+    }
+#endif
+
     private lazy var pickItem: UIBarButtonItem = {
         let item = UIBarButtonItem(
             image: UIImage(systemName: pickSymbolName),
@@ -101,6 +125,16 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
             action: #selector(toggleSelectionMode)
         )
         item.accessibilityIdentifier = "WI.DOM.PickButton"
+        return item
+    }()
+    private lazy var errorItem: UIBarButtonItem = {
+        let item = UIBarButtonItem(
+            image: UIImage(systemName: "exclamationmark.circle"),
+            style: .plain,
+            target: self,
+            action: #selector(presentCurrentErrorMessage)
+        )
+        item.accessibilityIdentifier = "WI.DOM.ErrorButton"
         return item
     }()
     private lazy var deferredSecondaryOverflowItems = makeDeferredDOMSecondaryOverflowItems()
@@ -151,6 +185,7 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
 
     public override func viewDidLoad() {
         super.viewDidLoad()
+        view.backgroundColor = .clear
 
         registerForTraitChanges([UITraitHorizontalSizeClass.self]) { (self: Self, _) in
             if self.traitCollection.horizontalSizeClass == .compact {
@@ -192,9 +227,10 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
     }
 
     private func updatePickItemAppearance() {
-        pickItem.isEnabled = inspector.hasPageWebView
+        pickItem.isEnabled = inspector.isPageReadyForSelection
         pickItem.image = UIImage(systemName: pickSymbolName)
         pickItem.tintColor = inspector.isSelectingElement ? .systemBlue : .label
+        errorItem.tintColor = .systemOrange
     }
 
     private func applyNavigationPlacement() {
@@ -210,7 +246,7 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
         navigationItem.preferredSearchBarPlacement = .automatic
         navigationItem.hidesSearchBarWhenScrolling = false
         navigationItem.setLeftBarButtonItems(nil, animated: false)
-        navigationItem.setRightBarButtonItems([pickItem], animated: false)
+        navigationItem.setRightBarButtonItems(currentRightBarButtonItems(), animated: false)
         navigationItem.additionalOverflowItems = deferredSecondaryOverflowItems
     }
 
@@ -225,6 +261,15 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
 
     private var pickSymbolName: String {
         traitCollection.horizontalSizeClass == .compact ? "viewfinder.circle" : "scope"
+    }
+
+    private func currentRightBarButtonItems() -> [UIBarButtonItem] {
+        var items = [pickItem]
+        if let errorMessage = inspector.document.errorMessage,
+           !errorMessage.isEmpty {
+            items.append(errorItem)
+        }
+        return items
     }
 
     private var resolvedRegularLayoutMode: RegularLayoutMode {
@@ -305,6 +350,7 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
 
     private func updateVisibleTreeHost() {
         let visibleTreeViewController = resolveVisibleTreeViewController()
+        visibleTreeViewController.loadViewIfNeeded()
         if compactRootViewController !== visibleTreeViewController {
             compactRootViewController.setInspectorWebViewActive(false)
         }
@@ -328,16 +374,43 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
             \.hasPageWebView,
             options: [.removeDuplicates]
         ) { [weak self] _ in
-            self?.updatePickItemAppearance()
+            self?.refreshNavigationControls()
+        }
+        .store(in: &pickItemObservationHandles)
+        inspector.observe(
+            \.isPageReadyForSelection,
+            options: [.removeDuplicates]
+        ) { [weak self] _ in
+            self?.refreshNavigationControls()
         }
         .store(in: &pickItemObservationHandles)
         inspector.observe(
             \.isSelectingElement,
             options: [.removeDuplicates]
         ) { [weak self] _ in
-            self?.updatePickItemAppearance()
+            self?.refreshNavigationControls()
         }
         .store(in: &pickItemObservationHandles)
+        inspector.observe(\.document) { [weak self] document in
+            guard let self else {
+                return
+            }
+            self.documentObservationHandles.removeAll()
+            document.observe(
+                \.errorMessage,
+                options: [.removeDuplicates]
+            ) { [weak self] _ in
+                self?.refreshNavigationControls()
+            }
+            .store(in: &self.documentObservationHandles)
+            self.refreshNavigationControls()
+        }
+        .store(in: &pickItemObservationHandles)
+    }
+
+    private func refreshNavigationControls() {
+        updatePickItemAppearance()
+        applyNavigationPlacement()
     }
 
     private func resolveActiveNavigationItem() -> UINavigationItem {
@@ -377,6 +450,7 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
         DOMSecondaryMenuBuilder.makeMenu(
             hasSelection: inspector.document.selectedNode != nil,
             hasPageWebView: inspector.hasPageWebView,
+            canReloadInspector: inspector.isPageReadyForSelection,
             onCopyHTML: { [weak self] in
                 self?.copySelectedHTML()
             },
@@ -388,11 +462,11 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
             },
             onReloadInspector: { [weak self] in
                 guard let self else { return }
-                Task { _ = await self.inspector.reloadDocument() }
+                Task { try? await self.inspector.reloadDocument() }
             },
             onReloadPage: { [weak self] in
                 guard let self else { return }
-                Task { _ = await self.inspector.reloadPage() }
+                Task { try? await self.inspector.reloadPage() }
             },
             onDeleteNode: { [weak self] in
                 self?.deleteSelection()
@@ -406,12 +480,25 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
         updatePickItemAppearance()
     }
 
+    @objc
+    private func presentCurrentErrorMessage() {
+        guard let errorMessage = inspector.document.errorMessage,
+              !errorMessage.isEmpty else {
+            return
+        }
+        WIDOMRuntimeErrorPresenter.present(
+            message: errorMessage,
+            from: errorItem,
+            in: self
+        )
+    }
+
     private func deleteSelection() {
         let inspector = inspector
         let undoManager = undoManager
         let selectedNodeID = inspector.document.selectedNode?.id
         Task {
-            _ = await inspector.deleteNode(nodeID: selectedNodeID, undoManager: undoManager)
+            try? await inspector.deleteNode(nodeID: selectedNodeID, undoManager: undoManager)
         }
     }
 
@@ -473,6 +560,14 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
         return .compact
     }
 }
+
+#if DEBUG
+extension WIDOMViewController {
+    var activeNavigationRightBarButtonItemsForTesting: [UIBarButtonItem]? {
+        resolveActiveNavigationItem().rightBarButtonItems
+    }
+}
+#endif
 
 #if DEBUG && canImport(SwiftUI)
 import SwiftUI

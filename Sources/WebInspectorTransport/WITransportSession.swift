@@ -26,9 +26,22 @@ public final class WITransportSession {
     private var backendMessageSink: WITransportSessionMessageSink?
 
     private var queuedPageEvents: [WITransportEventEnvelope] = []
+    private var queuedPageEventSequences: [UInt64] = []
     private var pageEventStreamContinuation: AsyncStream<WITransportEventEnvelope>.Continuation?
     private var pageEventQueueClosed = true
     private var hasAttachedPageEventConsumer = false
+    private var nextPageEventSequence: UInt64 = 0
+    private var pendingPageEventDeliverySequences: [UInt64] = []
+    private var activePageEventDeliverySequence: UInt64?
+    private var settledPageEventSequence: UInt64 = 0
+    private var outOfOrderSettledPageEventSequences: Set<UInt64> = []
+    private var activePageEventDeliveryCount: UInt64 = 0
+    private var pageEventDrainWaiters: [PageEventDrainWaiter] = []
+    private var stableNetworkBootstrapAvailability: StableNetworkBootstrapAvailability = .unknown
+
+#if DEBUG
+    package var derivedPageTargetIdentifierProviderForTesting: (@MainActor (WKWebView) -> String?)?
+#endif
 
     public convenience init(configuration: WITransportConfiguration = .init()) {
         self.init(configuration: configuration, backendFactory: WITransportPlatformBackendFactory.makeDefaultBackend)
@@ -65,6 +78,7 @@ public final class WITransportSession {
         self.webView = webView
         self.backend = backend
         resetTransportStateForAttach()
+        stableNetworkBootstrapAvailability = .unknown
 
         let messageSink = WITransportSessionMessageSink(session: self)
         backendMessageSink = messageSink
@@ -76,6 +90,12 @@ public final class WITransportSession {
                 throw WITransportError.transportClosed
             }
 
+            if pageTargetTracker.allowsDerivedCommittedSeed,
+               let derivedTargetIdentifier = refreshDerivedPageTargetIdentifierIfNeeded() {
+                log("derived current page target target=\(derivedTargetIdentifier)")
+            } else {
+                log("derived current page target unavailable")
+            }
             transition(to: .attached)
             log("attached")
         } catch {
@@ -134,6 +154,11 @@ public final class WITransportSession {
             throw WITransportError.notAttached
         }
 
+        if let derivedTargetIdentifier = refreshDerivedPageTargetIdentifierIfNeeded(),
+           derivedTargetIdentifier != excludedTargetIdentifier {
+            return derivedTargetIdentifier
+        }
+
         let resolvedTimeout = timeout ?? configuration.responseTimeout
         let timeoutError = WITransportError.requestTimedOut(
             scope: .root,
@@ -174,11 +199,32 @@ public final class WITransportSession {
     }
 
     package func currentPageTargetIdentifier() -> String? {
-        pageTargetTracker.currentIdentifier
+        if let currentIdentifier = pageTargetTracker.currentIdentifier {
+            return currentIdentifier
+        }
+        if pageTargetTracker.allowsDerivedCommittedSeed {
+            return refreshDerivedPageTargetIdentifierIfNeeded()
+        }
+        return nil
+    }
+
+    package func currentObservedPageTargetIdentifier() -> String? {
+        pageTargetTracker.observedCurrentIdentifier
+    }
+
+    package func targetKind(for identifier: String?) -> WITransportTargetKind? {
+        pageTargetTracker.targetKind(for: identifier)
+    }
+
+    package var responseTimeout: Duration {
+        configuration.responseTimeout
     }
 
     package func pageTargetIdentifiers() -> [String] {
-        pageTargetTracker.orderedIdentifiers
+        if pageTargetTracker.allowsDerivedCommittedSeed {
+            _ = refreshDerivedPageTargetIdentifierIfNeeded()
+        }
+        return pageTargetTracker.orderedIdentifiers
     }
 
     package func sendRootData(
@@ -220,7 +266,7 @@ public final class WITransportSession {
         let resolvedTargetIdentifier: String
         if let targetIdentifier {
             resolvedTargetIdentifier = targetIdentifier
-        } else if let currentTargetIdentifier = pageTargetTracker.currentIdentifier {
+        } else if let currentTargetIdentifier = refreshDerivedPageTargetIdentifierIfNeeded() ?? pageTargetTracker.currentIdentifier {
             resolvedTargetIdentifier = currentTargetIdentifier
         } else {
             resolvedTargetIdentifier = try await waitForPageTarget(timeout: configuration.responseTimeout)
@@ -243,16 +289,40 @@ public final class WITransportSession {
         }
     }
 
+    package func waitForPendingMessages() async {
+        await backendMessageSink?.waitForPendingMessages()
+    }
+
+    package func waitForPostActivePageEventsToDrain() async {
+        let targetSequence = nextPageEventSequence
+        guard targetSequence > settledPageEventSequence else {
+            return
+        }
+
+        await withCheckedContinuation { continuation in
+            pageEventDrainWaiters.append(
+                PageEventDrainWaiter(
+                    targetSequence: targetSequence,
+                    continuation: continuation
+                )
+            )
+            resumePageEventDrainWaitersIfNeeded()
+        }
+    }
+
     package func pageEvents() -> AsyncStream<WITransportEventEnvelope> {
         precondition(pageEventStreamContinuation == nil, "pageEvents() supports only a single consumer.")
 
         let bufferedEvents = queuedPageEvents
+        let bufferedEventSequences = queuedPageEventSequences
         queuedPageEvents.removeAll(keepingCapacity: true)
+        queuedPageEventSequences.removeAll(keepingCapacity: true)
         let isClosed = pageEventQueueClosed
         hasAttachedPageEventConsumer = true
 
         return AsyncStream(bufferingPolicy: .bufferingNewest(configuration.eventBufferLimit)) { continuation in
             self.pageEventStreamContinuation = continuation
+            self.pendingPageEventDeliverySequences = bufferedEventSequences
             continuation.onTermination = { [weak self] _ in
                 guard let self else {
                     return
@@ -303,9 +373,248 @@ public final class WITransportSession {
         transition(to: .detached)
         originalInspectability = nil
     }
+
+    package func shouldAttemptStableNetworkBootstrap() -> Bool {
+        supportSnapshot.capabilities.contains(.networkBootstrapSnapshot)
+            && stableNetworkBootstrapAvailability != .unavailable
+    }
+
+    @discardableResult
+    package func markStableNetworkBootstrapUnavailable() -> Bool {
+        let wasUnavailable = stableNetworkBootstrapAvailability == .unavailable
+        stableNetworkBootstrapAvailability = .unavailable
+        return !wasUnavailable
+    }
+
+    package func markStableNetworkBootstrapAvailable() {
+        stableNetworkBootstrapAvailability = .available
+    }
 }
 
-private extension WITransportSession {
+private struct PageEventDrainWaiter {
+    let targetSequence: UInt64
+    let continuation: CheckedContinuation<Void, Never>
+}
+
+extension WITransportSession {
+    enum StableNetworkBootstrapAvailability {
+        case unknown
+        case available
+        case unavailable
+    }
+}
+
+package enum WISharedInspectorTransportClient: Hashable, Sendable {
+    case dom
+    case network
+}
+
+package typealias WISharedInspectorTransportEventHandler = @MainActor (WITransportEventEnvelope) async -> Void
+
+@MainActor
+package final class WISharedInspectorTransport {
+    private enum ClientDemand {
+        case attached
+        case suspended
+    }
+
+    private struct ClientState {
+        weak var webView: WKWebView?
+        let demand: ClientDemand
+        let sequence: Int
+    }
+
+    private let sessionFactory: @MainActor () -> WITransportSession
+    private var clientStates: [WISharedInspectorTransportClient: ClientState] = [:]
+    private var eventHandlers: [WISharedInspectorTransportClient: WISharedInspectorTransportEventHandler] = [:]
+    private var session: WITransportSession?
+    private var attachTask: Task<Void, Never>?
+    private var eventTask: Task<Void, Never>?
+    private weak var attachedWebView: WKWebView?
+    private var nextSequence = 1
+
+    package private(set) var supportSnapshot: WITransportSupportSnapshot
+
+    package init(
+        sessionFactory: @escaping @MainActor () -> WITransportSession = { WITransportSession() }
+    ) {
+        self.sessionFactory = sessionFactory
+        self.supportSnapshot = sessionFactory().supportSnapshot
+    }
+
+    isolated deinit {
+        attachTask?.cancel()
+        eventTask?.cancel()
+    }
+
+    package func setEventHandler(
+        _ handler: WISharedInspectorTransportEventHandler?,
+        for client: WISharedInspectorTransportClient
+    ) {
+        eventHandlers[client] = handler
+    }
+
+    package func attach(
+        client: WISharedInspectorTransportClient,
+        to webView: WKWebView,
+        forceReattach: Bool = false
+    ) async {
+        clientStates[client] = ClientState(
+            webView: webView,
+            demand: .attached,
+            sequence: nextDemandSequence()
+        )
+        await reconcileAttachment(forceReattach: forceReattach)
+    }
+
+    package func suspend(client: WISharedInspectorTransportClient) async {
+        clientStates[client] = ClientState(
+            webView: nil,
+            demand: .suspended,
+            sequence: nextDemandSequence()
+        )
+        await reconcileAttachment()
+    }
+
+    package func detach(client: WISharedInspectorTransportClient) async {
+        clientStates.removeValue(forKey: client)
+        await reconcileAttachment()
+    }
+
+    package func attachedSession() async -> WITransportSession? {
+        await attachTask?.value
+        return session
+    }
+
+    package func waitForAttachForTesting() async {
+        await attachTask?.value
+    }
+
+    package func currentPageTargetIdentifier() -> String? {
+        session?.currentPageTargetIdentifier()
+    }
+
+    package func currentObservedPageTargetIdentifier() -> String? {
+        session?.currentObservedPageTargetIdentifier()
+    }
+
+    package func targetKind(for identifier: String?) -> WITransportTargetKind? {
+        session?.targetKind(for: identifier)
+    }
+}
+
+private extension WISharedInspectorTransport {
+    func nextDemandSequence() -> Int {
+        defer { nextSequence += 1 }
+        return nextSequence
+    }
+
+    func reconcileAttachment(forceReattach: Bool = false) async {
+        let desiredWebView = desiredAttachedWebView()
+
+        guard let desiredWebView else {
+            attachTask?.cancel()
+            attachTask = nil
+            eventTask?.cancel()
+            eventTask = nil
+            session?.detach()
+            session = nil
+            attachedWebView = nil
+            supportSnapshot = sessionFactory().supportSnapshot
+            return
+        }
+
+        if attachedWebView === desiredWebView,
+           session != nil,
+           attachTask == nil,
+           forceReattach == false {
+            return
+        }
+
+        attachTask?.cancel()
+        attachTask = nil
+        eventTask?.cancel()
+        eventTask = nil
+        session?.detach()
+
+        let session = sessionFactory()
+        self.session = session
+        attachedWebView = desiredWebView
+        supportSnapshot = session.supportSnapshot
+
+        attachTask = Task { @MainActor [weak self, weak session] in
+            guard let self, let session else {
+                return
+            }
+
+            do {
+                try await session.attach(to: desiredWebView)
+            } catch {
+                guard self.session === session else {
+                    return
+                }
+                let message: String
+                if let localizedError = error as? LocalizedError,
+                   let description = localizedError.errorDescription,
+                   !description.isEmpty {
+                    message = description
+                } else {
+                    message = error.localizedDescription
+                }
+                NSLog("[WebInspectorTransport] shared transport attach failed: %@", message)
+                self.session = nil
+                self.attachedWebView = nil
+                self.supportSnapshot = self.sessionFactory().supportSnapshot
+                return
+            }
+
+            guard self.session === session else {
+                session.detach()
+                return
+            }
+
+            self.supportSnapshot = session.supportSnapshot
+            self.startEventLoop(using: session)
+            self.attachTask = nil
+        }
+    }
+
+    func desiredAttachedWebView() -> WKWebView? {
+        clientStates
+            .values
+            .filter { $0.demand == .attached && $0.webView != nil }
+            .max(by: { $0.sequence < $1.sequence })?
+            .webView
+    }
+
+    func startEventLoop(using session: WITransportSession) {
+        eventTask?.cancel()
+        let stream = session.pageEvents()
+        eventTask = Task { @MainActor [weak self, weak session] in
+            guard let self, let session else {
+                return
+            }
+            for await envelope in stream {
+                guard self.session === session else {
+                    break
+                }
+                session.beginPageEventDelivery()
+                for client in [WISharedInspectorTransportClient.network, .dom] {
+                    guard let handler = self.eventHandlers[client] else {
+                        continue
+                    }
+                    await handler(envelope)
+                }
+                session.finishPageEventDelivery()
+            }
+            if self.session === session {
+                self.eventTask = nil
+            }
+        }
+    }
+}
+
+extension WITransportSession {
     func awaitReply(
         id: Int,
         scope: WITransportTargetScope,
@@ -399,6 +708,21 @@ private extension WITransportSession {
             return
         }
 
+        if method.hasPrefix("Target.") || method.hasPrefix("DOM.") || method == "Inspector.inspect" {
+            log("received root event method=\(method)")
+        }
+
+        if method.hasPrefix("DOM.") || method == "Inspector.inspect" {
+            enqueuePageEvent(
+                method: method,
+                targetIdentifier: inspectEventTargetIdentifier(from: parsed.params)
+                    ?? currentPageTargetIdentifier()
+                    ?? refreshDerivedPageTargetIdentifierIfNeeded(),
+                paramsObject: parsed.params
+            )
+            return
+        }
+
         emitSyntheticPageEventIfNeeded(method: method, paramsObject: parsed.params)
     }
 
@@ -433,6 +757,10 @@ private extension WITransportSession {
             return
         }
 
+        if method.hasPrefix("DOM.") || method.hasPrefix("Target.") {
+            log("received page event method=\(method) target=\(targetIdentifier)")
+        }
+
         enqueuePageEvent(
             method: method,
             targetIdentifier: targetIdentifier,
@@ -450,14 +778,23 @@ private extension WITransportSession {
             guard
                 let targetInfo = params["targetInfo"] as? [String: Any],
                 let targetIdentifier = stringValue(targetInfo["targetId"]),
-                stringValue(targetInfo["type"]) == "page"
+                let targetType = stringValue(targetInfo["type"])
             else {
                 return
             }
 
-            pageTargetTracker.didCreatePageTarget(
+            let targetKind = pageTargetTracker.didCreateTarget(
                 identifier: targetIdentifier,
+                type: targetType,
                 isProvisional: boolValue(targetInfo["isProvisional"]) == true
+            )
+            guard targetKind == .page || targetKind == .frame else {
+                return
+            }
+            let isProvisional = boolValue(targetInfo["isProvisional"]) == true
+            let currentIdentifier = pageTargetTracker.currentIdentifier ?? "nil"
+            log(
+                "\(targetKind.rawValue) target created target=\(targetIdentifier) provisional=\(isProvisional) current=\(currentIdentifier)"
             )
             enqueuePageEvent(
                 method: method,
@@ -470,13 +807,21 @@ private extension WITransportSession {
                 return
             }
 
-            let effectiveOldTargetIdentifier = pageTargetTracker.didCommitPageTarget(
+            let committedTarget = pageTargetTracker.didCommitTarget(
                 oldIdentifier: stringValue(params["oldTargetId"]),
                 newIdentifier: newTargetIdentifier
             )
+            guard committedTarget.kind == .page || committedTarget.kind == .frame else {
+                return
+            }
+            let currentIdentifier = pageTargetTracker.currentIdentifier ?? "nil"
+            let oldIdentifierDescription = committedTarget.effectiveOldIdentifier ?? "nil"
+            log(
+                "\(committedTarget.kind.rawValue) target committed old=\(oldIdentifierDescription) new=\(newTargetIdentifier) current=\(currentIdentifier)"
+            )
 
             var normalizedParams: [String: Any] = ["newTargetId": newTargetIdentifier]
-            if let effectiveOldTargetIdentifier {
+            if let effectiveOldTargetIdentifier = committedTarget.effectiveOldIdentifier {
                 normalizedParams["oldTargetId"] = effectiveOldTargetIdentifier
             }
 
@@ -490,9 +835,12 @@ private extension WITransportSession {
             guard let targetIdentifier = stringValue(params["targetId"]) else {
                 return
             }
-            guard pageTargetTracker.didDestroyPageTarget(identifier: targetIdentifier) else {
+            guard let targetKind = pageTargetTracker.didDestroyTarget(identifier: targetIdentifier),
+                  targetKind == .page || targetKind == .frame else {
                 return
             }
+            let currentIdentifier = pageTargetTracker.currentIdentifier ?? "nil"
+            log("\(targetKind.rawValue) target destroyed target=\(targetIdentifier) current=\(currentIdentifier)")
 
             enqueuePageEvent(
                 method: method,
@@ -519,10 +867,23 @@ private extension WITransportSession {
             targetIdentifier: targetIdentifier,
             paramsData: dataForJSONObject(paramsObject)
         )
+        nextPageEventSequence &+= 1
+        let sequence = nextPageEventSequence
 
         if let pageEventStreamContinuation {
             switch pageEventStreamContinuation.yield(envelope) {
-            case .enqueued, .dropped:
+            case .enqueued:
+                pendingPageEventDeliverySequences.append(sequence)
+                return
+            case .dropped:
+                if let droppedSequence = pendingPageEventDeliverySequences.first {
+                    pendingPageEventDeliverySequences.removeFirst()
+                    markPageEventSequenceSettled(droppedSequence)
+                    pendingPageEventDeliverySequences.append(sequence)
+                } else {
+                    markPageEventSequenceSettled(sequence)
+                }
+                resumePageEventDrainWaitersIfNeeded()
                 return
             case .terminated:
                 self.pageEventStreamContinuation = nil
@@ -533,8 +894,15 @@ private extension WITransportSession {
 
         if !hasAttachedPageEventConsumer || !configuration.dropEventsWithoutSubscribers {
             queuedPageEvents.append(envelope)
+            queuedPageEventSequences.append(sequence)
             if queuedPageEvents.count > configuration.eventBufferLimit {
-                queuedPageEvents.removeFirst(queuedPageEvents.count - configuration.eventBufferLimit)
+                let droppedCount = queuedPageEvents.count - configuration.eventBufferLimit
+                queuedPageEvents.removeFirst(droppedCount)
+                let droppedSequences = Array(queuedPageEventSequences.prefix(droppedCount))
+                queuedPageEventSequences.removeFirst(droppedCount)
+                for droppedSequence in droppedSequences {
+                    markPageEventSequenceSettled(droppedSequence)
+                }
             }
         }
     }
@@ -543,9 +911,17 @@ private extension WITransportSession {
         replyRegistry.reset()
         pageTargetTracker.reset()
         queuedPageEvents.removeAll(keepingCapacity: true)
+        queuedPageEventSequences.removeAll(keepingCapacity: true)
         pageEventStreamContinuation = nil
         pageEventQueueClosed = false
         hasAttachedPageEventConsumer = false
+        nextPageEventSequence = 0
+        pendingPageEventDeliverySequences.removeAll(keepingCapacity: true)
+        activePageEventDeliverySequence = nil
+        settledPageEventSequence = 0
+        outOfOrderSettledPageEventSequences.removeAll(keepingCapacity: true)
+        activePageEventDeliveryCount = 0
+        pageEventDrainWaiters.removeAll(keepingCapacity: true)
     }
 
     func disconnectTransportState() {
@@ -562,9 +938,73 @@ private extension WITransportSession {
 
         pageEventQueueClosed = true
         queuedPageEvents.removeAll(keepingCapacity: false)
+        queuedPageEventSequences.removeAll(keepingCapacity: false)
+        pendingPageEventDeliverySequences.removeAll(keepingCapacity: false)
+        activePageEventDeliverySequence = nil
+        outOfOrderSettledPageEventSequences.removeAll(keepingCapacity: true)
+        let drainWaiters = pageEventDrainWaiters
+        pageEventDrainWaiters.removeAll(keepingCapacity: true)
         let continuation = pageEventStreamContinuation
         pageEventStreamContinuation = nil
         continuation?.finish()
+        for waiter in drainWaiters {
+            waiter.continuation.resume()
+        }
+    }
+
+    package func beginPageEventDelivery() {
+        activePageEventDeliveryCount &+= 1
+        if activePageEventDeliverySequence == nil, !pendingPageEventDeliverySequences.isEmpty {
+            activePageEventDeliverySequence = pendingPageEventDeliverySequences.removeFirst()
+        }
+    }
+
+    package func finishPageEventDelivery() {
+        if activePageEventDeliveryCount > 0 {
+            activePageEventDeliveryCount &-= 1
+        }
+        if let activePageEventDeliverySequence {
+            markPageEventSequenceSettled(activePageEventDeliverySequence)
+            self.activePageEventDeliverySequence = nil
+        }
+        resumePageEventDrainWaitersIfNeeded()
+    }
+
+    func resumePageEventDrainWaitersIfNeeded() {
+        guard !pageEventDrainWaiters.isEmpty else {
+            return
+        }
+        let readyWaiters = pageEventDrainWaiters.filter {
+            settledPageEventSequence >= $0.targetSequence
+        }
+        guard !readyWaiters.isEmpty else {
+            return
+        }
+        pageEventDrainWaiters.removeAll {
+            settledPageEventSequence >= $0.targetSequence
+        }
+        for waiter in readyWaiters {
+            waiter.continuation.resume()
+        }
+    }
+
+    private func markPageEventSequenceSettled(_ sequence: UInt64) {
+        guard sequence > 0 else {
+            return
+        }
+        guard sequence > settledPageEventSequence else {
+            return
+        }
+
+        if sequence == settledPageEventSequence + 1 {
+            settledPageEventSequence = sequence
+            while outOfOrderSettledPageEventSequences.remove(settledPageEventSequence + 1) != nil {
+                settledPageEventSequence &+= 1
+            }
+            return
+        }
+
+        outOfOrderSettledPageEventSequences.insert(sequence)
     }
 
     func parseMessage(
@@ -668,6 +1108,50 @@ private extension WITransportSession {
 
     func log(_ message: String) {
         configuration.logHandler?("[WebInspectorTransport] \(message)")
+    }
+
+    func inspectEventTargetIdentifier(from paramsObject: Any?) -> String? {
+        guard let params = paramsObject as? [String: Any] else {
+            return nil
+        }
+        return stringValue(params["targetId"])
+            ?? stringValue(params["targetIdentifier"])
+            ?? stringValue((params["target"] as? [String: Any])?["targetId"])
+    }
+
+    func refreshDerivedPageTargetIdentifierIfNeeded() -> String? {
+        guard pageTargetTracker.allowsDerivedCommittedSeed,
+              let webView,
+              let targetIdentifier = derivedPageTargetIdentifier(from: webView) else {
+            return nil
+        }
+        pageTargetTracker.seedCommittedPageTarget(identifier: targetIdentifier)
+        return targetIdentifier
+    }
+
+    func derivedPageTargetIdentifier(from webView: WKWebView) -> String? {
+#if DEBUG
+        if let derivedPageTargetIdentifierProviderForTesting {
+            return derivedPageTargetIdentifierProviderForTesting(webView)
+        }
+#endif
+        let handleSelector = NSSelectorFromString("_handle")
+        guard webView.responds(to: handleSelector),
+              let handle = (webView.value(forKey: "_handle") as AnyObject?) else {
+            return nil
+        }
+
+        let pageIDSelector = NSSelectorFromString("webPageID")
+        let legacyPageIDSelector = NSSelectorFromString("_webPageID")
+        let pageIDValue =
+            (handle.responds(to: pageIDSelector) ? handle.value(forKey: "webPageID") as? NSNumber : nil)
+            ?? (handle.responds(to: legacyPageIDSelector) ? handle.value(forKey: "_webPageID") as? NSNumber : nil)
+
+        guard let pageIDValue else {
+            return nil
+        }
+
+        return "page-\(pageIDValue.uint64Value)"
     }
 
     func prepareInspectability(for webView: WKWebView) -> Bool? {
@@ -792,12 +1276,28 @@ private final class WITransportPageTargetTracker {
         let creationOrder: Int
     }
 
+    private struct KnownTarget {
+        let identifier: String
+        let kind: WITransportTargetKind
+        let isProvisional: Bool
+        let creationOrder: Int
+    }
+
+    struct CommitResult {
+        let effectiveOldIdentifier: String?
+        let kind: WITransportTargetKind
+    }
+
     private struct AvailabilityWaiter {
         let excludedIdentifier: String?
         let continuation: CheckedContinuation<String, Error>
     }
 
     private var targetsByIdentifier: [String: KnownPageTarget] = [:]
+    private var knownTargetsByIdentifier: [String: KnownTarget] = [:]
+    private var recentlyDestroyedTargetKinds: [String: WITransportTargetKind] = [:]
+    private var hasObservedLifecycleEvents = false
+    private var hasDerivedCommittedSeed = false
     private var currentIdentifierStorage: String?
     private var committedIdentifierStorage: String?
     private var nextCreationOrder = 0
@@ -805,6 +1305,17 @@ private final class WITransportPageTargetTracker {
 
     var currentIdentifier: String? {
         currentIdentifierStorage
+    }
+
+    var observedCurrentIdentifier: String? {
+        guard hasDerivedCommittedSeed == false else {
+            return nil
+        }
+        return currentIdentifierStorage
+    }
+
+    var allowsDerivedCommittedSeed: Bool {
+        !hasObservedLifecycleEvents && currentIdentifierStorage == nil
     }
 
     var orderedIdentifiers: [String] {
@@ -821,17 +1332,86 @@ private final class WITransportPageTargetTracker {
             .map(\.identifier)
     }
 
-    func didCreatePageTarget(identifier: String, isProvisional: Bool) {
+    func targetKind(for identifier: String?) -> WITransportTargetKind? {
+        guard let identifier else {
+            return nil
+        }
+        return knownTargetsByIdentifier[identifier]?.kind
+            ?? recentlyDestroyedTargetKinds[identifier]
+    }
+
+    @discardableResult
+    func didCreateTarget(identifier: String, type: String, isProvisional: Bool) -> WITransportTargetKind {
+        let kind = targetKind(forType: type)
+        recentlyDestroyedTargetKinds.removeValue(forKey: identifier)
+        let creationOrder = knownTargetsByIdentifier[identifier]?.creationOrder ?? nextCreationOrderValue()
+        knownTargetsByIdentifier[identifier] = KnownTarget(
+            identifier: identifier,
+            kind: kind,
+            isProvisional: isProvisional,
+            creationOrder: creationOrder
+        )
+
+        hasObservedLifecycleEvents = true
+        guard kind == .page else {
+            return kind
+        }
+        if hasDerivedCommittedSeed,
+           let committedIdentifierStorage {
+            if committedIdentifierStorage == identifier {
+                hasDerivedCommittedSeed = false
+            } else if isProvisional == false {
+                targetsByIdentifier.removeValue(forKey: committedIdentifierStorage)
+                self.committedIdentifierStorage = nil
+                hasDerivedCommittedSeed = false
+            }
+        }
         targetsByIdentifier[identifier] = KnownPageTarget(
             identifier: identifier,
             isProvisional: isProvisional,
-            creationOrder: nextCreationOrderValue()
+            creationOrder: creationOrder
         )
         refreshCurrentIdentifier()
+        return kind
     }
 
-    func didCommitPageTarget(oldIdentifier: String?, newIdentifier: String) -> String? {
+    func didCommitTarget(oldIdentifier: String?, newIdentifier: String) -> CommitResult {
+        recentlyDestroyedTargetKinds.removeValue(forKey: newIdentifier)
         let effectiveOldIdentifier = oldIdentifier ?? inferredCommittedOldIdentifier(excluding: newIdentifier)
+        let kind = knownTargetsByIdentifier[newIdentifier]?.kind
+            ?? effectiveOldIdentifier.flatMap { knownTargetsByIdentifier[$0]?.kind }
+            ?? .page
+
+        if let effectiveOldIdentifier,
+           let previousTarget = knownTargetsByIdentifier.removeValue(forKey: effectiveOldIdentifier) {
+            knownTargetsByIdentifier[newIdentifier] = KnownTarget(
+                identifier: newIdentifier,
+                kind: previousTarget.kind,
+                isProvisional: false,
+                creationOrder: previousTarget.creationOrder
+            )
+        } else if let existingTarget = knownTargetsByIdentifier[newIdentifier] {
+            knownTargetsByIdentifier[newIdentifier] = KnownTarget(
+                identifier: newIdentifier,
+                kind: existingTarget.kind,
+                isProvisional: false,
+                creationOrder: existingTarget.creationOrder
+            )
+        } else {
+            knownTargetsByIdentifier[newIdentifier] = KnownTarget(
+                identifier: newIdentifier,
+                kind: kind,
+                isProvisional: false,
+                creationOrder: nextCreationOrderValue()
+            )
+        }
+
+        guard kind == .page else {
+            return CommitResult(effectiveOldIdentifier: effectiveOldIdentifier, kind: kind)
+        }
+
+        hasObservedLifecycleEvents = true
+        hasDerivedCommittedSeed = false
         if let effectiveOldIdentifier,
            let previous = targetsByIdentifier.removeValue(forKey: effectiveOldIdentifier) {
             targetsByIdentifier[newIdentifier] = KnownPageTarget(
@@ -855,18 +1435,59 @@ private final class WITransportPageTargetTracker {
 
         committedIdentifierStorage = newIdentifier
         refreshCurrentIdentifier()
-        return effectiveOldIdentifier
+        return CommitResult(effectiveOldIdentifier: effectiveOldIdentifier, kind: kind)
     }
 
-    func didDestroyPageTarget(identifier: String) -> Bool {
+    func didDestroyTarget(identifier: String) -> WITransportTargetKind? {
+        let kind = knownTargetsByIdentifier.removeValue(forKey: identifier)?.kind
+        guard let kind else {
+            return nil
+        }
+        recentlyDestroyedTargetKinds[identifier] = kind
+
+        guard kind == .page else {
+            return kind
+        }
+
+        hasObservedLifecycleEvents = true
+        if committedIdentifierStorage == identifier {
+            hasDerivedCommittedSeed = false
+        }
         guard targetsByIdentifier.removeValue(forKey: identifier) != nil else {
-            return false
+            return nil
         }
         if committedIdentifierStorage == identifier {
             committedIdentifierStorage = nil
         }
         refreshCurrentIdentifier()
-        return true
+        return kind
+    }
+
+    func seedCommittedPageTarget(identifier: String) {
+        let creationOrder = knownTargetsByIdentifier[identifier]?.creationOrder ?? targetsByIdentifier[identifier]?.creationOrder ?? nextCreationOrderValue()
+        knownTargetsByIdentifier[identifier] = KnownTarget(
+            identifier: identifier,
+            kind: .page,
+            isProvisional: false,
+            creationOrder: creationOrder
+        )
+        if let existing = targetsByIdentifier[identifier] {
+            targetsByIdentifier[identifier] = KnownPageTarget(
+                identifier: identifier,
+                isProvisional: false,
+                creationOrder: existing.creationOrder
+            )
+        } else {
+            targetsByIdentifier[identifier] = KnownPageTarget(
+                identifier: identifier,
+                isProvisional: false,
+                creationOrder: creationOrder
+            )
+        }
+
+        committedIdentifierStorage = identifier
+        hasDerivedCommittedSeed = true
+        refreshCurrentIdentifier()
     }
 
     func waitUntilAvailable(excluding excludedIdentifier: String? = nil) async throws -> String {
@@ -915,6 +1536,10 @@ private final class WITransportPageTargetTracker {
 
     func reset() {
         targetsByIdentifier.removeAll(keepingCapacity: true)
+        knownTargetsByIdentifier.removeAll(keepingCapacity: true)
+        recentlyDestroyedTargetKinds.removeAll(keepingCapacity: true)
+        hasObservedLifecycleEvents = false
+        hasDerivedCommittedSeed = false
         currentIdentifierStorage = nil
         committedIdentifierStorage = nil
         nextCreationOrder = 0
@@ -962,6 +1587,17 @@ private final class WITransportPageTargetTracker {
             return nil
         }
         return provisionalTargets.first?.identifier
+    }
+
+    private func targetKind(forType type: String) -> WITransportTargetKind {
+        switch type {
+        case "page":
+            return .page
+        case "frame":
+            return .frame
+        default:
+            return .other
+        }
     }
 
     private func nextCreationOrderValue() -> Int {
@@ -1015,7 +1651,7 @@ private final class WITransportSessionMessageSink: WITransportBackendMessageSink
         }
     }
 
-    func waitForPendingMessagesForTesting() async {
+    func waitForPendingMessages() async {
         await inboundPump.waitUntilDrained()
     }
 

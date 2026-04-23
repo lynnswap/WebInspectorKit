@@ -14,6 +14,8 @@ export const NODE_TYPES = {
     ELEMENT_NODE: 1,
     TEXT_NODE: 3,
     COMMENT_NODE: 8,
+    DOCUMENT_NODE: 9,
+    DOCUMENT_TYPE_NODE: 10,
 } as const;
 
 export type NodeTypeValue = (typeof NODE_TYPES)[keyof typeof NODE_TYPES];
@@ -33,6 +35,7 @@ export interface DOMNode {
     nodeName: string;
     displayName: string;
     nodeType: number;
+    frameId?: string | null;
     attributes: NodeAttribute[];
     textContent: string | null;
     layoutFlags: LayoutFlag[];
@@ -40,7 +43,6 @@ export interface DOMNode {
     isRendered: boolean;
     children: DOMNode[];
     childCount: number;
-    placeholderParentId: number | null;
     depth?: number;
     parentId?: number | null;
     childIndex?: number;
@@ -53,6 +55,7 @@ export interface RawNodeDescriptor {
     nodeType?: number;
     nodeName?: string;
     localName?: string;
+    frameId?: string;
     attributes?: (string | undefined)[];
     nodeValue?: string;
     documentURL?: string;
@@ -64,6 +67,7 @@ export interface RawNodeDescriptor {
     childNodeCount?: number;
     childCount?: number;
     children?: RawNodeDescriptor[];
+    contentDocument?: RawNodeDescriptor;
     layoutFlags?: unknown[];
     isRendered?: boolean;
 }
@@ -122,13 +126,11 @@ export interface DOMSelectionRestoreTarget {
 export interface ProtocolState {
     snapshotDepth: number;
     subtreeDepth: number;
-    pageEpoch: number;
-    documentScopeID: number;
+    contextID: number;
 }
 
 export interface DOMDocumentContext {
-    pageEpoch?: number;
-    documentScopeID?: number;
+    contextID?: number;
 }
 
 /** Protocol configuration options */
@@ -141,8 +143,6 @@ export interface ProtocolConfig {
 export interface DOMFrontendBootstrapState {
     config?: ProtocolConfig;
     context?: DOMDocumentContext;
-    preferredDepth?: number;
-    pendingDocumentRequest?: RequestDocumentOptions | null;
 }
 
 // =============================================================================
@@ -175,6 +175,7 @@ export interface RefreshAttempt {
 export interface RenderState {
     pendingNodes: Map<number, PendingRenderItem>;
     frameId: number | null;
+    isProcessing: boolean;
 }
 
 /** Pending render item */
@@ -293,7 +294,6 @@ export interface WebKitMessageHandler {
 
 /** WebKit message handlers collection */
 export interface WebKitMessageHandlers {
-    webInspectorDomRequestDocument?: WebKitMessageHandler;
     webInspectorDomRequestChildren?: WebKitMessageHandler;
     webInspectorDomHighlight?: WebKitMessageHandler;
     webInspectorDomHideHighlight?: WebKitMessageHandler;
@@ -319,23 +319,9 @@ export interface MutationBundle {
     version?: number;
     kind?: "snapshot" | "mutation";
     snapshot?: string | RawNodeDescriptor | SerializedNodeEnvelope | DOMSnapshotEnvelopePayload | null;
-    snapshotMode?: RequestDocumentMode;
     events?: DOMEventEntry[];
     bundle?: string | MutationBundle;
-    mode?: RequestDocumentMode;
-    pageEpoch?: number;
-    documentScopeID?: number;
-}
-
-export type RequestDocumentMode = "fresh" | "preserve-ui-state";
-
-/** Request document options */
-export interface RequestDocumentOptions {
-    depth?: number;
-    mode?: RequestDocumentMode;
-    pageEpoch?: number;
-    documentScopeID?: number;
-    selectionRestoreTarget?: DOMSelectionRestoreTarget | null;
+    contextID?: number;
 }
 
 // =============================================================================
@@ -362,31 +348,20 @@ export const REFRESH_RETRY_WINDOW = 2000;
 
 /** Public frontend API */
 export interface WebInspectorDOMFrontend {
-    applyFullSnapshot(
-        snapshot: unknown,
-        mode?: RequestDocumentMode,
-        pageEpoch?: number,
-        documentScopeID?: number
-    ): void;
+    invalidateDocumentContext(contextID?: number): void;
+    applyFullSnapshot(snapshot: unknown, contextID?: number): boolean;
     applySelectionPayload(
         payload: number | DOMSelectionSyncPayload,
-        pageEpoch?: number,
-        documentScopeID?: number
+        contextID?: number
     ): boolean;
-    applySubtreePayload(payload: unknown, pageEpoch?: number, documentScopeID?: number): void;
-    completeChildNodeRequest(nodeId: number, pageEpoch?: number, documentScopeID?: number): void;
-    rejectChildNodeRequest(nodeId: number, pageEpoch?: number, documentScopeID?: number): void;
-    retryQueuedChildNodeRequests(pageEpoch?: number, documentScopeID?: number): void;
-    resetChildNodeRequests(pageEpoch?: number, documentScopeID?: number): void;
-    resetDocumentRequestState(pageEpoch?: number, documentScopeID?: number): void;
-    rejectDocumentRequest(pageEpoch?: number, documentScopeID?: number): void;
-    completeDocumentRequest(pageEpoch?: number, documentScopeID?: number): void;
-    applyMutationBundle(bundle: string | MutationBundle, pageEpoch?: number): void;
-    applyMutationBundles(bundles: string | MutationBundle | MutationBundle[], pageEpoch?: number): void;
-    applyMutationBuffer(bufferName: string, pageEpoch?: number): boolean;
+    applySubtreePayload(payload: unknown, contextID?: number): boolean;
+    finishChildNodeRequest(nodeId: number, success: boolean, contextID?: number): void;
+    applyMutationBundle(bundle: string | MutationBundle, contextID?: number): void;
+    applyMutationBundles(bundles: string | MutationBundle | MutationBundle[], contextID?: number): void;
+    applyMutationBuffer(bufferName: string, contextID?: number): boolean;
     setSearchTerm(value: string): void;
-    setPreferredDepth(depth: number, pageEpoch?: number): void;
     updateConfig(partial: ProtocolConfig): void;
     adoptDocumentContext(context: DOMDocumentContext): boolean;
+    clearPointerHoverState(): void;
     __installed?: boolean;
 }

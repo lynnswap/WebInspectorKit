@@ -1,9 +1,15 @@
+import Foundation
+import OSLog
 import ObservationBridge
 import WebKit
 import WebInspectorRuntime
 
 #if canImport(UIKit)
 import UIKit
+
+private let tabContainerLogger = Logger(subsystem: "WebInspectorKit", category: "WITabContainer")
+private let verboseConsoleDiagnosticsEnabled =
+    ProcessInfo.processInfo.environment["WEBSPECTOR_VERBOSE_CONSOLE_LOGS"] == "1"
 
 @MainActor
 private protocol WIUIKitTabHost where Self: UIViewController {
@@ -133,6 +139,7 @@ public final class WITabViewController: UIViewController {
         self.requestedTabs = tabs
         self.requestedPageWebView = webView
         super.init(nibName: nil, bundle: nil)
+        inspectorController.prepareHiddenHostForSameWebViewHandoff(hostID)
         inspectorController.setTabsFromUI(tabs)
         inspectorController.updateHost(
             hostID,
@@ -210,6 +217,7 @@ public final class WITabViewController: UIViewController {
 
     public override func viewDidLoad() {
         super.viewDidLoad()
+        view.backgroundColor = .clear
 
         rebuildLayout(forceHostReplacement: true)
 
@@ -218,12 +226,9 @@ public final class WITabViewController: UIViewController {
         }
     }
 
-    public override func viewWillAppear(_ animated: Bool) {
-        super.viewWillAppear(animated)
-    }
-
     public override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        logTabContainerDiagnostics("viewDidAppear animated=\(animated)")
         syncRegisteredHostState()
     }
 
@@ -232,6 +237,7 @@ public final class WITabViewController: UIViewController {
         guard view.window == nil else {
             return
         }
+        logTabContainerDiagnostics("viewDidDisappear animated=\(animated) windowDetached=true")
         syncRegisteredHostState()
     }
 
@@ -285,10 +291,14 @@ public final class WITabViewController: UIViewController {
             return
         }
         needsHostStateSyncAfterSwap = false
+        let resolvedVisibility = forcedVisibility ?? currentHostVisibility
+        logTabContainerDiagnostics(
+            "syncRegisteredHostState allowDuringSwap=\(allowDuringSwap) visibility=\(visibilitySummary(resolvedVisibility))"
+        )
         inspectorController.updateHost(
             hostID,
             pageWebView: requestedPageWebView,
-            visibility: forcedVisibility ?? currentHostVisibility,
+            visibility: resolvedVisibility,
             isAttached: true,
             sceneActivationRequestingScene: view.window?.windowScene
         )
@@ -336,6 +346,9 @@ public final class WITabViewController: UIViewController {
                 let previousController = self.inspectorController
                 let previousHostID = self.hostID
                 let preferredRole = previousController.preferredRole(for: previousHostID)
+                self.logTabContainerDiagnostics(
+                    "controllerSwap begin previousHostID=\(self.compactHostID(previousHostID)) requestedHostKind=\(self.hostKindSummary(requestedSwap.hostKindAtRequest)) selectedTab=\(previousController.selectedTab?.identifier ?? "nil")"
+                )
                 await previousController.waitForRuntimeApplyForTesting()
                 let currentSelectedTab = previousController.selectedTab
                 let currentPreferredCompactSelectedTabIdentifier = previousController.preferredCompactSelectedTabIdentifier
@@ -363,6 +376,7 @@ public final class WITabViewController: UIViewController {
                 let nextInspectorController = requestedSwap.controller
                 self.inspectorController = nextInspectorController
                 self.hostID = nextInspectorController.registerHost(preferredRole: preferredRole)
+                nextInspectorController.prepareHiddenHostForSameWebViewHandoff(self.hostID)
                 nextInspectorController.setTabsFromUI(self.requestedTabs)
                 if let preservedCompactSelectedTabIdentifier {
                     nextInspectorController.setPreferredCompactSelectedTabIdentifierFromUI(
@@ -373,6 +387,9 @@ public final class WITabViewController: UIViewController {
                     _ = nextInspectorController.projectSelectedTabFromUI(currentSelectedTab)
                 }
                 self.syncRegisteredHostState(allowDuringSwap: true)
+                self.logTabContainerDiagnostics(
+                    "controllerSwap installed nextHostID=\(self.compactHostID(self.hostID)) selectedTab=\(nextInspectorController.selectedTab?.identifier ?? "nil") preferredCompact=\(nextInspectorController.preferredCompactSelectedTabIdentifier ?? "nil")"
+                )
 
                 if self.isViewLoaded {
                     self.invalidatePresentationStateForControllerSwap()
@@ -476,6 +493,60 @@ public final class WITabViewController: UIViewController {
         if let networkViewController = viewController as? WINetworkViewController {
             networkViewController.horizontalSizeClassOverrideForTesting = effectiveHorizontalSizeClass
         }
+    }
+
+    private func logTabContainerDiagnostics(
+        _ message: String,
+        level: OSLogType = .default
+    ) {
+        if verboseConsoleDiagnosticsEnabled == false,
+           level != .error,
+           level != .fault {
+            return
+        }
+        let state = "hostID=\(compactHostID(hostID)) activeHostKind=\(hostKindSummary(activeHostKind)) windowAttached=\(viewIfLoaded?.window != nil) currentVisibility=\(visibilitySummary(currentHostVisibility)) requestedWebView=\(webViewSummary(requestedPageWebView)) selectedTab=\(inspectorController.selectedTab?.identifier ?? "nil")"
+        let composed = "\(message) \(state)"
+        switch level {
+        case .error, .fault:
+            tabContainerLogger.error("\(composed, privacy: .public)")
+        case .debug:
+            tabContainerLogger.debug("\(composed, privacy: .public)")
+        default:
+            tabContainerLogger.notice("\(composed, privacy: .public)")
+        }
+    }
+
+    private func compactHostID(_ hostID: WIInspectorHostID) -> String {
+        String(hostID.hashValue, radix: 16)
+    }
+
+    private func hostKindSummary(_ hostKind: HostKind?) -> String {
+        switch hostKind {
+        case .compact:
+            return "compact"
+        case .regular:
+            return "regular"
+        case nil:
+            return "nil"
+        }
+    }
+
+    private func visibilitySummary(_ visibility: WIHostVisibility) -> String {
+        switch visibility {
+        case .visible:
+            return "visible"
+        case .hidden:
+            return "hidden"
+        case .finalizing:
+            return "finalizing"
+        }
+    }
+
+    private func webViewSummary(_ webView: WKWebView?) -> String {
+        guard let webView else {
+            return "nil"
+        }
+        return String(describing: ObjectIdentifier(webView))
     }
 }
 

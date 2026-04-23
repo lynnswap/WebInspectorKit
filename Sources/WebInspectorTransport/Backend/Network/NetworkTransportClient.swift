@@ -121,19 +121,24 @@ package struct NetworkTransportClient {
         normalizeScopeID: @escaping (String?) -> String?,
         logFailure: @escaping @MainActor (String) -> Void
     ) async throws -> NetworkBootstrapLoad {
-        if session.supportSnapshot.capabilities.contains(.networkBootstrapSnapshot) {
+        if session.shouldAttemptStableNetworkBootstrap() {
             do {
-                return try await StableBootstrapSource().load(
+                let load = try await StableBootstrapSource().load(
                     using: session,
                     targetIdentifier: targetIdentifier,
                     allocateRequestID: allocateRequestID,
                     defaultSessionID: defaultSessionID,
                     normalizeScopeID: normalizeScopeID
                 )
+                session.markStableNetworkBootstrapAvailable()
+                return load
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
-                logFailure("stable network bootstrap skipped: \(error.localizedDescription)")
+                if shouldDisableStableBootstrap(after: error),
+                   session.markStableNetworkBootstrapUnavailable() {
+                    logFailure("stable network bootstrap disabled: \(error.localizedDescription)")
+                }
             }
         }
 
@@ -150,6 +155,24 @@ package struct NetworkTransportClient {
         } catch {
             logFailure("historical network bootstrap skipped: \(error.localizedDescription)")
             return NetworkBootstrapLoad(snapshots: [])
+        }
+    }
+}
+
+private extension NetworkTransportClient {
+    func shouldDisableStableBootstrap(after error: any Error) -> Bool {
+        guard let transportError = error as? WITransportError else {
+            return false
+        }
+        switch transportError {
+        case .unsupported:
+            return true
+        case .remoteError:
+            return true
+        case .invalidResponse:
+            return true
+        default:
+            return false
         }
     }
 }

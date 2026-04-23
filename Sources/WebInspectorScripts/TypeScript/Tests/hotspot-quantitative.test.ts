@@ -1,11 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-    setAutoSnapshotOptions,
-    triggerSnapshotUpdate
-} from "../Runtime/DOMAgent/dom-agent-snapshot";
-import { inspector } from "../Runtime/DOMAgent/dom-agent-state";
-import {
     NetworkLoggingMode,
     bodyCache,
     clearThrottledEvents,
@@ -20,38 +15,8 @@ type WebKitMockHandler = {
     postMessage: ReturnType<typeof vi.fn>;
 };
 
-function snapshotHandler(): WebKitMockHandler {
-    return window.webkit?.messageHandlers?.webInspectorDOMSnapshot as WebKitMockHandler;
-}
-
-function mutationHandler(): WebKitMockHandler {
-    return window.webkit?.messageHandlers?.webInspectorDOMMutations as WebKitMockHandler;
-}
-
 function networkHandler(): WebKitMockHandler {
     return window.webkit?.messageHandlers?.webInspectorNetworkEvents as WebKitMockHandler;
-}
-
-function resetDOMState() {
-    inspector.map = new Map();
-    inspector.nodeMap = new WeakMap();
-    inspector.nextId = 1;
-    inspector.pendingMutations = [];
-    inspector.snapshotAutoUpdateObserver = null;
-    inspector.snapshotAutoUpdateEnabled = true;
-    inspector.snapshotAutoUpdatePending = false;
-    inspector.snapshotAutoUpdateTimer = null;
-    inspector.snapshotAutoUpdateFrame = null;
-    inspector.snapshotAutoUpdateDebounce = 50;
-    inspector.snapshotAutoUpdateMaxDepth = 4;
-    inspector.snapshotAutoUpdateReason = "mutation";
-    inspector.snapshotAutoUpdateOverflow = false;
-    inspector.snapshotAutoUpdateSuppressedCount = 0;
-    inspector.snapshotAutoUpdatePendingWhileSuppressed = false;
-    inspector.snapshotAutoUpdatePendingReason = null;
-    inspector.documentURL = null;
-    snapshotHandler().postMessage.mockClear();
-    mutationHandler().postMessage.mockClear();
 }
 
 function resetNetworkState() {
@@ -74,73 +39,8 @@ function measureEventsSize(events: Array<Record<string, any>>): number {
 
 describe("hotspot quantitative acceptance", () => {
     beforeEach(() => {
-        resetDOMState();
         resetNetworkState();
         document.body.innerHTML = "";
-    });
-
-    it("reduces full snapshot count by at least 50% and keeps mutation as primary path", () => {
-        const stableNode = document.createElement("main");
-        document.body.appendChild(stableNode);
-        inspector.map = new Map([[1, stableNode]]);
-        setAutoSnapshotOptions({ debounce: 50 });
-
-        const runs = 20;
-        for (let index = 0; index < runs; index += 1) {
-            inspector.pendingMutations = [];
-            triggerSnapshotUpdate("mutation");
-            vi.advanceTimersByTime(66);
-        }
-
-        const currentFullSnapshots = snapshotHandler().postMessage.mock.calls.length;
-        const legacyFullSnapshots = runs;
-        const reduction = legacyFullSnapshots > 0
-            ? (legacyFullSnapshots - currentFullSnapshots) / legacyFullSnapshots
-            : 0;
-
-        const mutationNode = document.createElement("div");
-        mutationNode.setAttribute("class", "active");
-        document.body.appendChild(mutationNode);
-        inspector.map = new Map([[1, mutationNode]]);
-
-        for (let index = 0; index < runs; index += 1) {
-            inspector.pendingMutations = [{
-                type: "attributes",
-                target: mutationNode,
-                attributeName: "class",
-                addedNodes: [] as unknown as NodeList,
-                removedNodes: [] as unknown as NodeList,
-                previousSibling: null
-            } as unknown as MutationRecord];
-            triggerSnapshotUpdate("mutation");
-            vi.advanceTimersByTime(66);
-        }
-
-        const mutationBundles = mutationHandler().postMessage.mock.calls.length;
-        const fallbackFullSnapshots = snapshotHandler().postMessage.mock.calls.length;
-        const stringifiedSnapshotBundles = snapshotHandler().postMessage.mock.calls.filter(call => {
-            const payload = call[0] as { bundle?: unknown };
-            return typeof payload.bundle === "string";
-        }).length;
-        const stringifiedMutationBundles = mutationHandler().postMessage.mock.calls.filter(call => {
-            const payload = call[0] as { bundle?: unknown };
-            return typeof payload.bundle === "string";
-        }).length;
-
-        console.info(
-            `[quant] dom_full_snapshot_reduction=${(reduction * 100).toFixed(2)}% ` +
-            `legacy=${legacyFullSnapshots} current=${currentFullSnapshots}`
-        );
-        console.info(
-            `[quant] dom_mutation_vs_full mutationBundles=${mutationBundles} fullSnapshots=${fallbackFullSnapshots}`
-        );
-        console.info(
-            `[quant] dom_bundle_stringify_count snapshot=${stringifiedSnapshotBundles} mutation=${stringifiedMutationBundles}`
-        );
-
-        expect(reduction).toBeGreaterThanOrEqual(0.5);
-        expect(mutationBundles).toBeGreaterThan(fallbackFullSnapshots);
-        expect(stringifiedSnapshotBundles + stringifiedMutationBundles).toBe(0);
     });
 
     it("reduces buffering payload size by at least 30% compared to body-capturing baseline", async () => {

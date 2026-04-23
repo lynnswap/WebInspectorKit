@@ -9,12 +9,14 @@ import AppKit
 @MainActor
 public final class WIDOMTreeViewController: NSViewController {
     private let inspector: WIDOMInspector
+    private let inspectorWebViewContainer = NSView()
+    private weak var attachedInspectorWebView: WKWebView?
+    private var inspectorWebViewConstraints: [NSLayoutConstraint] = []
     private var contextMenuNodeID: Int?
     private var contextMenuNodeIdentity: DOMNodeModel.ID?
     private var contextMenuBackendNodeID: Int?
     private var observationHandles: Set<ObservationHandle> = []
-    private var documentStoreObservationHandles: Set<ObservationHandle> = []
-
+    private var documentObservationHandles: Set<ObservationHandle> = []
     private let errorLabel = NSTextField(labelWithString: "")
 
     public init(inspector: WIDOMInspector) {
@@ -34,69 +36,65 @@ public final class WIDOMTreeViewController: NSViewController {
     public override func viewDidLoad() {
         super.viewDidLoad()
 
-        let inspectorWebView = inspector.makeInspectorWebView()
-        inspectorWebView.translatesAutoresizingMaskIntoConstraints = false
-        inspector.setDOMContextMenuProvider { [weak self] nodeID in
-            guard let self else {
-                return nil
-            }
-            self.contextMenuNodeID = nodeID
-            if let nodeID,
-               nodeID >= 0,
-               let node = self.inspector.document.node(localID: UInt64(nodeID)) {
-                self.contextMenuNodeIdentity = node.id
-                self.contextMenuBackendNodeID = node.backendNodeIDIsStable ? node.backendNodeID : nil
-            } else if let nodeID,
-                      let node = self.inspector.document.node(stableBackendNodeID: nodeID) {
-                self.contextMenuNodeIdentity = node.id
-                self.contextMenuBackendNodeID = node.backendNodeID
-            } else {
-                self.contextMenuNodeIdentity = nil
-                self.contextMenuBackendNodeID = nil
-            }
-            return self.makeTreeContextMenu()
-        }
-
+        inspectorWebViewContainer.translatesAutoresizingMaskIntoConstraints = false
         errorLabel.translatesAutoresizingMaskIntoConstraints = false
         errorLabel.isHidden = true
         errorLabel.textColor = .secondaryLabelColor
         errorLabel.maximumNumberOfLines = 3
-
-        view.addSubview(inspectorWebView)
+        view.addSubview(inspectorWebViewContainer)
         view.addSubview(errorLabel)
-
         NSLayoutConstraint.activate([
-            inspectorWebView.topAnchor.constraint(equalTo: view.topAnchor),
-            inspectorWebView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            inspectorWebView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            inspectorWebView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-
+            inspectorWebViewContainer.topAnchor.constraint(equalTo: view.topAnchor),
+            inspectorWebViewContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            inspectorWebViewContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            inspectorWebViewContainer.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             errorLabel.topAnchor.constraint(equalTo: view.topAnchor, constant: 12),
-            errorLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor)
+            errorLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
         ])
 
+        attachInspectorWebViewIfNeeded()
         observeState()
         updateErrorLabel(errorMessage: inspector.document.errorMessage)
     }
 
+    public override func viewDidAppear() {
+        super.viewDidAppear()
+        attachInspectorWebViewIfNeeded()
+    }
+
+    public override func viewDidDisappear() {
+        super.viewDidDisappear()
+        if view.window == nil {
+            detachInspectorWebViewIfNeeded()
+        }
+    }
+
     private func observeState() {
-        inspector.observe(
-            \.document
-        ) { [weak self] document in
+        inspector.observe(\.document) { [weak self] document in
             guard let self else {
                 return
             }
-            self.documentStoreObservationHandles.removeAll()
+            self.documentObservationHandles.removeAll()
             document.observe(
                 \.errorMessage,
                 options: [.removeDuplicates]
             ) { [weak self] newErrorMessage in
                 self?.updateErrorLabel(errorMessage: newErrorMessage)
             }
-            .store(in: &self.documentStoreObservationHandles)
+            .store(in: &self.documentObservationHandles)
             self.updateErrorLabel(errorMessage: document.errorMessage)
         }
         .store(in: &observationHandles)
+    }
+
+    private func updateErrorLabel(errorMessage: String?) {
+        if let errorMessage, !errorMessage.isEmpty {
+            errorLabel.stringValue = errorMessage
+            errorLabel.isHidden = false
+        } else {
+            errorLabel.stringValue = ""
+            errorLabel.isHidden = true
+        }
     }
 
     private func makeCopyMenu() -> NSMenu {
@@ -139,16 +137,6 @@ public final class WIDOMTreeViewController: NSViewController {
         return menu
     }
 
-    private func updateErrorLabel(errorMessage: String?) {
-        if let errorMessage, !errorMessage.isEmpty {
-            errorLabel.stringValue = errorMessage
-            errorLabel.isHidden = false
-        } else {
-            errorLabel.stringValue = ""
-            errorLabel.isHidden = true
-        }
-    }
-
     @objc
     private func copyHTML(_ sender: NSMenuItem) {
         copyNodeForContextMenu(kind: .html)
@@ -177,12 +165,15 @@ public final class WIDOMTreeViewController: NSViewController {
         }
         let undoManager = undoManager
         Task {
-            _ = await deleteContextMenuNode(
-                nodeID: nodeID,
-                nodeIdentity: nodeIdentity,
-                backendNodeID: backendNodeID,
-                undoManager: undoManager
-            )
+            do {
+                try await deleteContextMenuNode(
+                    nodeID: nodeID,
+                    nodeIdentity: nodeIdentity,
+                    backendNodeID: backendNodeID,
+                    undoManager: undoManager
+                )
+            } catch {
+            }
         }
     }
 
@@ -191,8 +182,8 @@ public final class WIDOMTreeViewController: NSViewController {
         nodeIdentity: DOMNodeModel.ID?,
         backendNodeID: Int? = nil,
         undoManager: UndoManager? = nil
-    ) async -> DOMMutationResult {
-        await deleteContextMenuNode(
+    ) async throws {
+        try await deleteContextMenuNode(
             nodeID: nodeID,
             nodeIdentity: nodeIdentity,
             backendNodeID: backendNodeID,
@@ -205,30 +196,38 @@ public final class WIDOMTreeViewController: NSViewController {
         nodeIdentity: DOMNodeModel.ID?,
         backendNodeID: Int?,
         undoManager: UndoManager?
-    ) async -> DOMMutationResult {
+    ) async throws {
         if let nodeIdentity {
-            let result = await inspector.deleteNode(nodeID: nodeIdentity, undoManager: undoManager)
-            guard result == .ignoredStaleContext, let backendNodeID else {
-                return result
+            do {
+                try await inspector.deleteNode(nodeID: nodeIdentity, undoManager: undoManager)
+                return
+            } catch DOMOperationError.invalidSelection, DOMOperationError.contextInvalidated {
+                guard let backendNodeID else {
+                    throw DOMOperationError.invalidSelection
+                }
+                try await inspector.deleteNode(nodeId: backendNodeID, undoManager: undoManager)
+                return
             }
-            return await inspector.deleteNode(nodeId: backendNodeID, undoManager: undoManager)
         }
         if let backendNodeID {
-            return await inspector.deleteNode(nodeId: backendNodeID, undoManager: undoManager)
+            try await inspector.deleteNode(nodeId: backendNodeID, undoManager: undoManager)
+            return
         }
         if let nodeID,
            let resolvedIdentity = nodeID >= 0
                 ? inspector.document.node(localID: UInt64(nodeID))?.id
                 : nil
         {
-            return await inspector.deleteNode(nodeID: resolvedIdentity, undoManager: undoManager)
+            try await inspector.deleteNode(nodeID: resolvedIdentity, undoManager: undoManager)
+            return
         }
         if let nodeID,
            let resolvedIdentity = inspector.document.node(stableBackendNodeID: nodeID)?.id
         {
-            return await inspector.deleteNode(nodeID: resolvedIdentity, undoManager: undoManager)
+            try await inspector.deleteNode(nodeID: resolvedIdentity, undoManager: undoManager)
+            return
         }
-        return .failed
+        throw DOMOperationError.invalidSelection
     }
 
     private var contextActionNodeID: Int? {
@@ -237,6 +236,68 @@ public final class WIDOMTreeViewController: NSViewController {
 
     private var contextActionNodeIdentity: DOMNodeModel.ID? {
         contextMenuNodeIdentity
+    }
+
+    private func attachInspectorWebViewIfNeeded() {
+        let inspectorWebView = inspector.inspectorWebViewForPresentation()
+        inspectorWebView.translatesAutoresizingMaskIntoConstraints = false
+        guard inspectorWebView.superview !== inspectorWebViewContainer else {
+            attachedInspectorWebView = inspectorWebView
+            installContextMenuProvider()
+            return
+        }
+
+        NSLayoutConstraint.deactivate(inspectorWebViewConstraints)
+        inspectorWebViewConstraints.removeAll(keepingCapacity: true)
+        inspectorWebView.removeFromSuperview()
+        inspectorWebViewContainer.addSubview(inspectorWebView)
+        let constraints = [
+            inspectorWebView.topAnchor.constraint(equalTo: inspectorWebViewContainer.topAnchor),
+            inspectorWebView.leadingAnchor.constraint(equalTo: inspectorWebViewContainer.leadingAnchor),
+            inspectorWebView.trailingAnchor.constraint(equalTo: inspectorWebViewContainer.trailingAnchor),
+            inspectorWebView.bottomAnchor.constraint(equalTo: inspectorWebViewContainer.bottomAnchor),
+        ]
+        NSLayoutConstraint.activate(constraints)
+        inspectorWebViewConstraints = constraints
+        attachedInspectorWebView = inspectorWebView
+        installContextMenuProvider()
+    }
+
+    private func detachInspectorWebViewIfNeeded() {
+        guard let attachedInspectorWebView,
+              attachedInspectorWebView.superview === inspectorWebViewContainer else {
+            self.attachedInspectorWebView = nil
+            NSLayoutConstraint.deactivate(inspectorWebViewConstraints)
+            inspectorWebViewConstraints.removeAll(keepingCapacity: true)
+            return
+        }
+        NSLayoutConstraint.deactivate(inspectorWebViewConstraints)
+        inspectorWebViewConstraints.removeAll(keepingCapacity: true)
+        attachedInspectorWebView.removeFromSuperview()
+        self.attachedInspectorWebView = nil
+    }
+
+    private func installContextMenuProvider() {
+        inspector.setDOMContextMenuProvider { [weak self] nodeID in
+            guard let self else {
+                return nil
+            }
+            self.contextMenuNodeID = nodeID
+            if let nodeID,
+               nodeID >= 0,
+               let node = self.inspector.document.node(localID: UInt64(nodeID)) {
+                self.contextMenuNodeIdentity = node.id
+                self.contextMenuBackendNodeID = node.backendNodeIDIsStable ? node.backendNodeID : nil
+            } else if let nodeID,
+                      let node = self.inspector.document.node(stableBackendNodeID: nodeID) {
+                self.contextMenuNodeIdentity = node.id
+                self.contextMenuBackendNodeID = node.backendNodeID
+            } else {
+                self.contextMenuNodeIdentity = nil
+                self.contextMenuBackendNodeID = nil
+            }
+            return self.makeTreeContextMenu()
+        }
     }
 
     func invokeContextMenuCopyForTesting(
@@ -312,6 +373,18 @@ public final class WIDOMTreeViewController: NSViewController {
         return ""
     }
 }
+
+#if DEBUG
+extension WIDOMTreeViewController {
+    var errorLabelStringValueForTesting: String {
+        errorLabel.stringValue
+    }
+
+    var isErrorLabelHiddenForTesting: Bool {
+        errorLabel.isHidden
+    }
+}
+#endif
 
 #if DEBUG && canImport(SwiftUI)
 import SwiftUI

@@ -25,6 +25,69 @@ struct NetworkTransportDriverTests {
     }
 
     @Test
+    func sameWebViewReattachDoesNotReplayBootstrapRows() async {
+        let backend = FakeRegistryBackend(
+            capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain, .networkBootstrapSnapshot],
+            pageTargetedResultProvider: { method, _, _ in
+                guard method == WITransportMethod.Network.getBootstrapSnapshot else {
+                    return nil
+                }
+                return makeBootstrapSnapshotResultPayload(
+                    resources: [
+                        makeBootstrapResourcePayload(
+                            bootstrapRowID: "bootstrap-row",
+                            ownerSessionID: "page-A",
+                            targetIdentifier: "page-A",
+                            url: "https://example.com/bootstrap.js",
+                            method: "UNKNOWN",
+                            requestType: "Script",
+                            mimeType: "text/javascript",
+                            phase: "completed"
+                        ),
+                    ]
+                )
+            }
+        )
+        let driver = NetworkTransportDriver(transportSessionFactory: makeTransportSessionFactory(using: backend))
+        let webView = makeIsolatedTestWebView()
+
+        await driver.attachPageWebView(webView)
+        await driver.waitForAttachForTesting()
+        #expect(await waitForCondition {
+            driver.store.entries.count == 1
+        })
+
+        await driver.attachPageWebView(webView)
+        await driver.waitForAttachForTesting()
+
+        #expect(driver.store.entries.count == 1)
+        #expect(backend.sentPageTargets.filter { $0.method == WITransportMethod.Network.getBootstrapSnapshot }.count == 1)
+
+        await driver.detachPageWebView(preparing: .stopped)
+    }
+
+    @Test
+    func sharedTransportUsesSingleAttachmentAcrossDomAndNetworkClients() async {
+        let backend = FakeRegistryBackend()
+        let sharedTransport = WISharedInspectorTransport(
+            sessionFactory: makeTransportSessionFactory(using: backend)
+        )
+        let webView = makeIsolatedTestWebView()
+
+        await sharedTransport.attach(client: .dom, to: webView)
+        await sharedTransport.attach(client: .network, to: webView)
+        await sharedTransport.waitForAttachForTesting()
+
+        #expect(backend.attachCallCount == 1)
+
+        await sharedTransport.suspend(client: .dom)
+        #expect(backend.detachCallCount == 0)
+
+        await sharedTransport.detach(client: .network)
+        #expect(backend.detachCallCount == 1)
+    }
+
+    @Test
     func networkTransportDriverFetchesDeferredRequestBodiesFromOwningTarget() async {
         let backend = FakeRegistryBackend(
             pageTargetedResultProvider: { method, _, targetIdentifier in
@@ -60,6 +123,57 @@ struct NetworkTransportDriverTests {
         )
 
         await session.detach()
+    }
+
+    @Test
+    func stableBootstrapMethodNotFoundDisablesFurtherAttemptsOnSameSession() async throws {
+        let backend = FakeRegistryBackend(
+            capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain, .networkBootstrapSnapshot],
+            pageTargetedResultProvider: { method, _, _ in
+                guard method == WITransportMethod.Page.getResourceTree else {
+                    return nil
+                }
+                return makeResourceTreeResultPayload(
+                    mainURL: "https://example.com/",
+                    resources: []
+                )
+            },
+            pageErrorResponseProvider: { method, _, _ in
+                guard method == WITransportMethod.Network.getBootstrapSnapshot else {
+                    return nil
+                }
+                return "'Network.getBootstrapSnapshot' was not found"
+            }
+        )
+        let session = makeTransportSessionFactory(using: backend)()
+        let transportClient = NetworkTransportClient()
+        let webView = makeIsolatedTestWebView()
+
+        try await session.attach(to: webView)
+
+        let firstLoad = try await transportClient.loadBootstrapResources(
+            using: session,
+            targetIdentifier: "page-A",
+            allocateRequestID: { 1 },
+            defaultSessionID: { $0 ?? "page-A" },
+            normalizeScopeID: { $0 },
+            logFailure: { _ in }
+        )
+        let secondLoad = try await transportClient.loadBootstrapResources(
+            using: session,
+            targetIdentifier: "page-A",
+            allocateRequestID: { 1 },
+            defaultSessionID: { $0 ?? "page-A" },
+            normalizeScopeID: { $0 },
+            logFailure: { _ in }
+        )
+
+        #expect(firstLoad.snapshots.count == 1)
+        #expect(secondLoad.snapshots.count == 1)
+        #expect(backend.sentPageTargets.filter { $0.method == WITransportMethod.Network.getBootstrapSnapshot }.count == 1)
+        #expect(backend.sentPageTargets.filter { $0.method == WITransportMethod.Page.getResourceTree }.count == 2)
+
+        session.detach()
     }
 
     @Test
@@ -281,7 +395,7 @@ struct NetworkTransportDriverTests {
                 messageSink.didReceiveRootMessage(
                     #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-B","type":"page","isProvisional":false}}}"#
                 )
-                await messageSink.waitForPendingMessagesForTesting()
+                await messageSink.waitForPendingMessages()
             }
         )
         let driver = NetworkTransportDriver(transportSessionFactory: makeTransportSessionFactory(using: backend))
@@ -1209,10 +1323,12 @@ private extension NetworkTransportDriverTests {
         configuration: WITransportConfiguration = .init(responseTimeout: .seconds(1))
     ) -> @MainActor () -> WITransportSession {
         {
-            WITransportSession(
+            let session = WITransportSession(
                 configuration: configuration,
                 backendFactory: { _ in backend }
             )
+            session.derivedPageTargetIdentifierProviderForTesting = { _ in nil }
+            return session
         }
     }
 
@@ -1255,6 +1371,7 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
 
     fileprivate var pageResultProvider: ((String, [String: Any]) throws -> [String: Any]?)?
     fileprivate var pageTargetedResultProvider: ((String, [String: Any], String) throws -> [String: Any]?)?
+    fileprivate var pageErrorResponseProvider: ((String, [String: Any], String) throws -> String?)?
     private var failingAttachCount: Int
     private let attachHandler: ((any WITransportBackendMessageSink) async -> Void)?
 
@@ -1266,6 +1383,7 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
         failingAttachCount: Int = 0,
         pageResultProvider: ((String, [String: Any]) throws -> [String: Any]?)? = nil,
         pageTargetedResultProvider: ((String, [String: Any], String) throws -> [String: Any]?)? = nil,
+        pageErrorResponseProvider: ((String, [String: Any], String) throws -> String?)? = nil,
         attachHandler: ((any WITransportBackendMessageSink) async -> Void)? = nil
     ) {
         supportSnapshot = .supported(
@@ -1275,6 +1393,7 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
         self.failingAttachCount = failingAttachCount
         self.pageResultProvider = pageResultProvider
         self.pageTargetedResultProvider = pageTargetedResultProvider
+        self.pageErrorResponseProvider = pageErrorResponseProvider
         self.attachHandler = attachHandler
     }
 
@@ -1307,7 +1426,7 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
             messageSink.didReceiveRootMessage(
                 #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-A","type":"page","isProvisional":false}}}"#
             )
-            await messageSink.waitForPendingMessagesForTesting()
+            await messageSink.waitForPendingMessages()
         }
     }
 
@@ -1337,6 +1456,14 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
         sentPageTargets.append(SentPageTarget(method: method, targetIdentifier: targetIdentifier))
 
         guard let identifier = payload["id"] as? Int else {
+            return
+        }
+
+        if let errorMessage = try pageErrorResponseProvider?(method, payload, targetIdentifier) {
+            messageSink?.didReceivePageMessage(
+                #"{"id":\#(identifier),"error":{"message":"\#(errorMessage)"}}"#,
+                targetIdentifier: targetIdentifier
+            )
             return
         }
 

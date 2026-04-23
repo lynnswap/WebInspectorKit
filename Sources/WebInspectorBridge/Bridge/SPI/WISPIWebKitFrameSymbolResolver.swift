@@ -57,26 +57,45 @@ private enum WISPIWebKitFrameObfuscation {
 
 private enum WISPIWebKitFrameResolverStrings {
     static let webKitImagePathSuffixes = [
+        // /System/Library/Frameworks/WebKit.framework/WebKit
         WISPIWebKitFrameObfuscation.deobfuscate(["it", "ork/WebK", "t.framew", "ks/WebKi", "Framewor", "Library/", "/System/"]),
+        // /System/Library/Frameworks/WebKit.framework/Versions/A/WebKit
         WISPIWebKitFrameObfuscation.deobfuscate(["ebKit", "ions/A/W", "ork/Vers", "t.framew", "ks/WebKi", "Framewor", "Library/", "/System/"]),
     ]
+    // __TEXT
     static let textSegmentName = WISPIWebKitFrameObfuscation.deobfuscate(["__TEXT"])
     static let symbolNames = [
+        // _WKPageLookUpFrameFromHandle
         WISPIWebKitFrameObfuscation.deobfuscate(["ndle", "meFromHa", "ookUpFra", "_WKPageL"]),
+        // _WKFrameCopyURL
         WISPIWebKitFrameObfuscation.deobfuscate(["CopyURL", "_WKFrame"]),
+        // _WKFrameCopyMIMEType
         WISPIWebKitFrameObfuscation.deobfuscate(["Type", "CopyMIME", "_WKFrame"]),
+        // _WKFrameIsDisplayingStandaloneImageDocument
         WISPIWebKitFrameObfuscation.deobfuscate(["ent", "ageDocum", "daloneIm", "yingStan", "IsDispla", "_WKFrame"]),
+        // _WKFrameGetMainResourceData
         WISPIWebKitFrameObfuscation.deobfuscate(["ata", "esourceD", "GetMainR", "_WKFrame"]),
+        // _WKFrameGetResourceData
         WISPIWebKitFrameObfuscation.deobfuscate(["rceData", "GetResou", "_WKFrame"]),
+        // _WKURLCreateWithUTF8String
         WISPIWebKitFrameObfuscation.deobfuscate(["ng", "UTF8Stri", "eateWith", "_WKURLCr"]),
+        // _WKURLCopyString
         WISPIWebKitFrameObfuscation.deobfuscate(["pyString", "_WKURLCo"]),
+        // _WKDataGetBytes
         WISPIWebKitFrameObfuscation.deobfuscate(["etBytes", "_WKDataG"]),
+        // _WKDataGetSize
         WISPIWebKitFrameObfuscation.deobfuscate(["etSize", "_WKDataG"]),
+        // _WKStringGetMaximumUTF8CStringSize
         WISPIWebKitFrameObfuscation.deobfuscate(["ze", "StringSi", "mumUTF8C", "gGetMaxi", "_WKStrin"]),
+        // _WKStringGetUTF8CString
         WISPIWebKitFrameObfuscation.deobfuscate(["CString", "gGetUTF8", "_WKStrin"]),
+        // _WKErrorCopyDomain
         WISPIWebKitFrameObfuscation.deobfuscate(["in", "CopyDoma", "_WKError"]),
+        // _WKErrorGetErrorCode
         WISPIWebKitFrameObfuscation.deobfuscate(["Code", "GetError", "_WKError"]),
+        // _WKErrorCopyLocalizedDescription
         WISPIWebKitFrameObfuscation.deobfuscate(["cription", "lizedDes", "CopyLoca", "_WKError"]),
+        // _WKRelease
         WISPIWebKitFrameObfuscation.deobfuscate(["se", "_WKRelea"]),
     ]
 }

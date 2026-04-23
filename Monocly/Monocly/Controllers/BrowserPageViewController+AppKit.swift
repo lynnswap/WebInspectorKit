@@ -183,11 +183,9 @@ final class BrowserPageViewController: NSViewController {
             for _ in 0..<100 {
                 if self.inspectorController.dom.hasPageWebView {
                     do {
-                        let result = try await self.inspectorController.dom.beginSelectionMode()
-                        didCompleteAutoStart = !result.cancelled
-                        if didCompleteAutoStart {
-                            return
-                        }
+                        try await self.inspectorController.dom.beginSelectionMode()
+                        didCompleteAutoStart = true
+                        return
                     } catch {
                         // Keep retrying until the page bridge is ready or we time out.
                     }

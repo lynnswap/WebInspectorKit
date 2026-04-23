@@ -24,7 +24,27 @@ package enum WITransportMethod {
     package enum DOM {
         package static let enable = "DOM.enable"
         package static let getDocument = "DOM.getDocument"
+        package static let setInspectModeEnabled = "DOM.setInspectModeEnabled"
+        package static let requestChildNodes = "DOM.requestChildNodes"
+        package static let requestNode = "DOM.requestNode"
+        package static let querySelector = "DOM.querySelector"
+        package static let removeNode = "DOM.removeNode"
+        package static let setAttributeValue = "DOM.setAttributeValue"
+        package static let removeAttribute = "DOM.removeAttribute"
         package static let getOuterHTML = "DOM.getOuterHTML"
+        package static let highlightNode = "DOM.highlightNode"
+        package static let hideHighlight = "DOM.hideHighlight"
+        package static let undo = "DOM.undo"
+        package static let redo = "DOM.redo"
+    }
+
+    package enum Inspector {
+        package static let enable = "Inspector.enable"
+        package static let initialized = "Inspector.initialized"
+    }
+
+    package enum Runtime {
+        package static let evaluate = "Runtime.evaluate"
     }
 }
 
@@ -159,7 +179,7 @@ package struct WITransportNetworkBootstrapResource: Decodable, Sendable {
     package let bodyFetchDescriptor: WITransportNetworkBootstrapBodyFetchDescriptor?
 }
 
-public struct WITransportDOMNode: Decodable, Sendable {
+public final class WITransportDOMNode: Decodable, Sendable {
     public let nodeId: Int
     public let nodeType: Int
     public let nodeName: String
@@ -171,6 +191,7 @@ public struct WITransportDOMNode: Decodable, Sendable {
     public let documentURL: String?
     public let baseURL: String?
     public let frameId: String?
+    public let contentDocument: WITransportDOMNode?
     public let layoutFlags: [String]?
 
     public init(
@@ -185,6 +206,7 @@ public struct WITransportDOMNode: Decodable, Sendable {
         documentURL: String?,
         baseURL: String?,
         frameId: String?,
+        contentDocument: WITransportDOMNode? = nil,
         layoutFlags: [String]?
     ) {
         self.nodeId = nodeId
@@ -198,6 +220,7 @@ public struct WITransportDOMNode: Decodable, Sendable {
         self.documentURL = documentURL
         self.baseURL = baseURL
         self.frameId = frameId
+        self.contentDocument = contentDocument
         self.layoutFlags = layoutFlags
     }
 }

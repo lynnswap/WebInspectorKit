@@ -22,6 +22,8 @@ import {
     applyLayoutState,
 } from "./dom-tree-utilities";
 
+const INSPECTOR_INTERNAL_OVERLAY_ATTRIBUTE = "data-web-inspector-overlay";
+
 // =============================================================================
 // Node Normalization
 // =============================================================================
@@ -38,6 +40,10 @@ export function normalizeNodeDescriptor(
         return null;
     }
 
+    if (shouldOmitDescriptor(descriptor)) {
+        return null;
+    }
+
     const resolvedId =
         typeof descriptor.nodeId === "number"
             ? descriptor.nodeId
@@ -51,6 +57,7 @@ export function normalizeNodeDescriptor(
 
     const nodeType = typeof descriptor.nodeType === "number" ? descriptor.nodeType : 0;
     const nodeName = descriptor.nodeName || "";
+    const frameId = typeof descriptor.frameId === "string" ? descriptor.frameId : null;
     const displayName = computeDisplayName(nodeType, nodeName, descriptor.localName);
     const attributes = deserializeAttributes(descriptor.attributes);
     const textContent = extractTextContent(nodeType, descriptor.nodeValue);
@@ -63,43 +70,46 @@ export function normalizeNodeDescriptor(
     const renderedSelf = resolveRenderedState(layoutFlags, descriptor.isRendered);
     const isRendered = parentRendered && renderedSelf;
 
+    const normalizedContentDocument = normalizeNodeDescriptor(descriptor.contentDocument, isRendered);
+
     const rawChildCount =
         typeof descriptor.childNodeCount === "number"
             ? descriptor.childNodeCount
             : typeof descriptor.childCount === "number"
               ? descriptor.childCount
+              : normalizedContentDocument
+                ? 1
               : Array.isArray(descriptor.children)
                 ? descriptor.children.length
                 : 0;
 
     const children: DOMNode[] = [];
-    const rawChildren = Array.isArray(descriptor.children) ? descriptor.children : [];
     let filteredChildren = 0;
 
-    for (const child of rawChildren) {
-        if (isIgnorableTextDescriptor(child)) {
-            filteredChildren += 1;
-            continue;
-        }
-        const normalized = normalizeNodeDescriptor(child, isRendered);
-        if (normalized) {
-            children.push(normalized);
+    if (normalizedContentDocument) {
+        children.push(normalizedContentDocument);
+    } else {
+        const rawChildren = Array.isArray(descriptor.children) ? descriptor.children : [];
+        for (const child of rawChildren) {
+            if (shouldOmitDescriptor(child)) {
+                filteredChildren += 1;
+                continue;
+            }
+            const normalized = normalizeNodeDescriptor(child, isRendered);
+            if (normalized) {
+                children.push(normalized);
+            }
         }
     }
 
     const visibleChildCount = Math.max(children.length, rawChildCount - filteredChildren);
-
-    if (visibleChildCount > children.length) {
-        children.push(
-            createPlaceholderNode(resolvedId, visibleChildCount - children.length, isRendered)
-        );
-    }
 
     return {
         id: resolvedId,
         nodeName,
         displayName,
         nodeType,
+        frameId,
         attributes,
         textContent,
         layoutFlags,
@@ -107,7 +117,6 @@ export function normalizeNodeDescriptor(
         isRendered,
         children,
         childCount: visibleChildCount,
-        placeholderParentId: null,
     };
 }
 
@@ -170,6 +179,35 @@ export function isIgnorableTextDescriptor(
     return shouldOmitTextNode(nodeType, textContent);
 }
 
+function shouldOmitDescriptor(
+    descriptor: RawNodeDescriptor | null | undefined
+): boolean {
+    if (!descriptor || typeof descriptor !== "object") {
+        return false;
+    }
+
+    if (isIgnorableTextDescriptor(descriptor)) {
+        return true;
+    }
+
+    return hasInternalOverlayMarker(descriptor.attributes);
+}
+
+function hasInternalOverlayMarker(
+    rawAttributes: (string | undefined)[] | undefined
+): boolean {
+    if (!Array.isArray(rawAttributes)) {
+        return false;
+    }
+
+    for (let index = 0; index + 1 < rawAttributes.length; index += 2) {
+        if (rawAttributes[index] === INSPECTOR_INTERNAL_OVERLAY_ATTRIBUTE) {
+            return rawAttributes[index + 1] === "true";
+        }
+    }
+    return false;
+}
+
 // =============================================================================
 // Display Name Computation
 // =============================================================================
@@ -190,32 +228,6 @@ export function computeDisplayName(
         return "#comment";
     }
     return nodeName || "";
-}
-
-// =============================================================================
-// Placeholder Nodes
-// =============================================================================
-
-/** Create a placeholder node for unexpanded children */
-export function createPlaceholderNode(
-    parentId: number,
-    remainingCount: number,
-    parentRendered = true
-): DOMNode {
-    return {
-        id: -Math.abs(parentId || 0) || -1,
-        nodeName: "...",
-        displayName: "…",
-        nodeType: 0,
-        attributes: [],
-        textContent: null,
-        children: [],
-        childCount: remainingCount,
-        layoutFlags: [],
-        renderedSelf: true,
-        isRendered: parentRendered,
-        placeholderParentId: parentId || null,
-    };
 }
 
 // =============================================================================
@@ -264,6 +276,7 @@ export function mergeNodeWithSource(
     target.nodeName = source.nodeName;
     target.displayName = source.displayName;
     target.nodeType = source.nodeType;
+    target.frameId = source.frameId ?? null;
     target.attributes = Array.isArray(source.attributes) ? source.attributes : [];
     target.textContent = source.textContent || null;
     target.childCount =
@@ -272,7 +285,6 @@ export function mergeNodeWithSource(
             : Array.isArray(source.children)
               ? source.children.length
               : 0;
-    target.placeholderParentId = source.placeholderParentId || null;
 
     const parent =
         typeof target.parentId === "number" ? treeState.nodes.get(target.parentId) : null;

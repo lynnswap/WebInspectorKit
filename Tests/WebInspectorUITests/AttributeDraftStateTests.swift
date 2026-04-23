@@ -11,7 +11,7 @@ struct AttributeDraftStateTests {
         var state = WIDOMAttributeDraftState()
         state.begin(value: "before")
 
-        let result = state.reconcile(externalValue: "after")
+        let result = state.externalBaselineAdvanced("after")
 
         #expect(result == .refreshClean)
         #expect(state.baselineValue == "after")
@@ -25,7 +25,7 @@ struct AttributeDraftStateTests {
         state.begin(value: "before")
         state.updateDraft("draft")
 
-        let result = state.reconcile(externalValue: "after")
+        let result = state.externalBaselineAdvanced("after")
 
         #expect(result == .preserveDirty)
         #expect(state.baselineValue == "after")
@@ -56,15 +56,15 @@ struct AttributeDraftStateTests {
             previousValue: "before"
         )
 
-        let staleResult = state.reconcile(externalValue: "before")
+        let staleResult = state.externalBaselineAdvanced("before")
 
         #expect(staleResult == .preserveDirty)
         #expect(state.baselineValue == "before")
         #expect(state.draftValue == "after")
         #expect(state.isDirty == true)
-        #expect(state.isAwaitingModelEcho == true)
+        #expect(state.isAwaitingModelEcho == false)
 
-        let echoedResult = state.reconcile(externalValue: "after")
+        let echoedResult = state.modelEchoMatched(submittedValue: "after")
 
         #expect(echoedResult == .refreshClean)
         #expect(state.baselineValue == "after")
@@ -79,7 +79,7 @@ struct AttributeDraftStateTests {
         state.begin(value: "before")
         state.updateDraft("draft")
 
-        let result = state.reconcile(externalValue: "server")
+        let result = state.externalBaselineAdvanced("server")
 
         #expect(result == .preserveDirty)
         #expect(state.baselineValue == "server")
@@ -93,7 +93,7 @@ struct AttributeDraftStateTests {
         state.begin(value: "before")
         state.updateDraft("draft")
 
-        let result = state.reconcile(externalValue: "draft")
+        let result = state.externalBaselineAdvanced("draft")
 
         #expect(result == .refreshClean)
         #expect(state.baselineValue == "draft")
@@ -106,7 +106,7 @@ struct AttributeDraftStateTests {
         var state = WIDOMAttributeDraftState()
         state.begin(value: "before")
 
-        let result = state.reconcile(externalValue: nil)
+        let result = state.selectionOrAttributeInvalidated(exists: false)
 
         #expect(result == .clear)
         #expect(state.baselineValue.isEmpty)
@@ -119,7 +119,7 @@ struct AttributeDraftStateTests {
         state.begin(value: "before")
         state.updateDraft("draft")
 
-        let result = state.reconcile(externalValue: nil)
+        let result = state.selectionOrAttributeInvalidated(exists: false)
 
         #expect(result == .preserveDirty)
         #expect(state.baselineValue == "before")
@@ -133,9 +133,9 @@ struct AttributeDraftStateTests {
         var state = WIDOMAttributeDraftState()
         state.begin(value: "before")
         state.updateDraft("draft")
-        _ = state.reconcile(externalValue: "server")
+        _ = state.externalBaselineAdvanced("server")
 
-        let result = state.reconcile(externalValue: nil)
+        let result = state.selectionOrAttributeInvalidated(exists: false)
 
         #expect(result == .preserveDirty)
         state.updateDraft("server")
@@ -150,7 +150,7 @@ struct AttributeDraftStateTests {
         state.begin(value: "before")
         state.updateDraft("")
 
-        let result = state.reconcile(externalValue: nil)
+        let result = state.selectionOrAttributeInvalidated(exists: false)
 
         #expect(result == .preserveDirty)
         #expect(state.baselineExists == false)

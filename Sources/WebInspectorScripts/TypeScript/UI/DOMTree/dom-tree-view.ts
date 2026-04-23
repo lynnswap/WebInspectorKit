@@ -1,10 +1,5 @@
 /**
  * DOMTreeView - Entry point for the DOM tree inspector UI.
- *
- * This module:
- * - Registers tree event handlers
- * - Initializes the public API on window.webInspectorDOMFrontend
- * - Triggers the initial document request on DOMContentLoaded
  */
 
 import {
@@ -14,57 +9,26 @@ import {
 } from "./dom-tree-types";
 import {
     adoptDocumentContext,
-    canAdoptDocumentContext,
-    restoreDocumentContext,
-    updateConfig,
-    completeChildNodeRequest,
-    rejectChildNodeRequest,
-    retryQueuedChildNodeRequests,
-    resetChildNodeRequests,
+    finishChildNodeRequest,
     matchesCurrentDocumentContext,
+    updateConfig,
 } from "./dom-tree-protocol";
-import { protocolState, transitionState } from "./dom-tree-state";
+import { protocolState, treeState } from "./dom-tree-state";
 import {
     applySubtree,
-    completeDocumentRequest,
-    rejectDocumentRequest,
-    requestSelectionRecoveryIfNeeded,
-    setSnapshot,
-    resetDocumentRequestStateForPageEpoch,
     applyMutationBuffer,
     applyMutationBundle,
     applyMutationBundles,
+    handleDocumentUpdated,
     registerTreeHandlers,
-    setPreferredDepth,
+    setSnapshot,
 } from "./dom-tree-snapshot";
-import { selectNode, selectNodeByPath, setSearchTerm } from "./dom-tree-view-support";
-
-// =============================================================================
-// Event Handlers
-// =============================================================================
-
-/** Attach event listeners for initial document load */
-function attachEventListeners(): void {
-    const bootstrap = readBootstrap();
-    if (bootstrap.config) {
-        updateConfig(bootstrap.config);
-    }
-    if (bootstrap.context) {
-        adoptDocumentContext(bootstrap.context);
-    }
-    if (typeof bootstrap.preferredDepth === "number") {
-        setPreferredDepth(bootstrap.preferredDepth, protocolState.pageEpoch);
-    }
-    try {
-        window.webkit?.messageHandlers?.webInspectorReady?.postMessage({
-            pageEpoch: protocolState.pageEpoch,
-            documentScopeID: protocolState.documentScopeID,
-        });
-    } catch {
-        // ignore
-    }
-    bootstrap.pendingDocumentRequest = null;
-}
+import {
+    clearPointerHoverState,
+    selectNode,
+    selectNodeByPath,
+    setSearchTerm,
+} from "./dom-tree-view-support";
 
 function readBootstrap(): DOMFrontendBootstrapState {
     const globalBootstrap = (window as Window & {
@@ -78,22 +42,62 @@ function readBootstrap(): DOMFrontendBootstrapState {
     return bootstrap;
 }
 
+function applyBootstrap(bootstrap: DOMFrontendBootstrapState): void {
+    if (bootstrap.config) {
+        updateConfig(bootstrap.config);
+    }
+    if (bootstrap.context) {
+        adoptDocumentContext(bootstrap.context);
+    }
+}
+
+function notifyReady(): void {
+    try {
+        window.webkit?.messageHandlers?.webInspectorReady?.postMessage({
+            contextID: protocolState.contextID,
+        });
+    } catch {
+        // ignore
+    }
+}
+
+function attachEventListeners(): void {
+    applyBootstrap(readBootstrap());
+    notifyReady();
+}
+
+function ensureFrontendContext(contextID: number | undefined): boolean {
+    if (matchesCurrentDocumentContext(contextID)) {
+        return true;
+    }
+    const bootstrapContextID = readBootstrap().context?.contextID;
+    if (
+        typeof contextID === "number"
+        && Number.isFinite(contextID)
+        && bootstrapContextID === contextID
+        && (
+            treeState.snapshot === null
+            || treeState.nodes.size === 0
+        )
+    ) {
+        adoptDocumentContext({ contextID });
+        return true;
+    }
+    return false;
+}
+
 function normalizeSelectionSyncPayload(
     payload: number | DOMSelectionSyncPayload
-): { nodeId: number | null; selectedLocalId: number | null; selectedBackendNodeId: number | null; selectedNodePath: number[] | null } {
+): { nodeId: number | null; selectedNodePath: number[] | null } {
     if (typeof payload === "number" && Number.isFinite(payload)) {
         return {
             nodeId: payload > 0 ? payload : null,
-            selectedLocalId: payload > 0 ? payload : null,
-            selectedBackendNodeId: null,
             selectedNodePath: null,
         };
     }
     if (!payload || typeof payload !== "object") {
         return {
             nodeId: null,
-            selectedLocalId: null,
-            selectedBackendNodeId: null,
             selectedNodePath: null,
         };
     }
@@ -105,36 +109,19 @@ function normalizeSelectionSyncPayload(
         payload.nodeId,
         payload.id,
     ];
-    const selectedLocalId =
+    const nodeId =
         candidateNodeIDs.find((candidate) => typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0)
         ?? null;
     const selectedNodePath = Array.isArray(payload.selectedNodePath)
         && payload.selectedNodePath.every((segment) => typeof segment === "number" && Number.isInteger(segment))
         ? payload.selectedNodePath
         : null;
-    const backendNodeIDCandidates = [
-        payload.selectedBackendNodeId,
-        payload.backendNodeId,
-        payload.backendNodeID,
-    ];
-    const selectedBackendNodeId =
-        payload.backendNodeIdIsStable === false
-            ? null
-            : backendNodeIDCandidates.find((candidate) => typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0)
-                ?? null;
     return {
-        nodeId: selectedLocalId,
-        selectedLocalId,
-        selectedBackendNodeId,
+        nodeId,
         selectedNodePath,
     };
 }
 
-// =============================================================================
-// Installation
-// =============================================================================
-
-/** Install WebInspectorKit DOMTreeView frontend */
 function installWebInspectorKit(): void {
     if (window.webInspectorDOMFrontend && window.webInspectorDOMFrontend.__installed) {
         return;
@@ -142,64 +129,34 @@ function installWebInspectorKit(): void {
 
     registerTreeHandlers();
 
-    const webInspectorDOMFrontend: WebInspectorDOMFrontend = {
-        applyFullSnapshot: (
-            snapshot,
-            mode = "fresh",
-            pageEpoch = protocolState.pageEpoch,
-            documentScopeID = protocolState.documentScopeID
-        ) => {
-            const incomingContext = { pageEpoch, documentScopeID };
-            const shouldForceFreshSnapshot =
-                transitionState.pendingFreshSnapshotContext?.pageEpoch === pageEpoch
-                && transitionState.pendingFreshSnapshotContext?.documentScopeID === documentScopeID;
-            const snapshotMode = shouldForceFreshSnapshot ? "fresh" : mode;
-            if (snapshotMode === "preserve-ui-state" && !matchesCurrentDocumentContext(pageEpoch, documentScopeID)) {
-                return;
-            }
-            const previousContext = {
-                pageEpoch: protocolState.pageEpoch,
-                documentScopeID: protocolState.documentScopeID,
-            };
-            const previousPendingFreshSnapshotContext = transitionState.pendingFreshSnapshotContext
-                ? { ...transitionState.pendingFreshSnapshotContext }
-                : null;
-            if (snapshotMode === "fresh" && !canAdoptDocumentContext(incomingContext)) {
-                return;
-            }
-            if (snapshotMode === "fresh") {
-                adoptDocumentContext(incomingContext);
-            }
-            if (!setSnapshot(snapshot as never, { mode: snapshotMode })) {
-                if (snapshotMode === "fresh") {
-                    restoreDocumentContext(previousContext, {
-                        pendingFreshSnapshotContext: previousPendingFreshSnapshotContext,
-                    });
-                }
-                return;
-            }
-            if (snapshotMode === "fresh") {
-                transitionState.pendingFreshSnapshotContext = null;
-            }
+    const webInspectorDOMFrontend: WebInspectorDOMFrontend & {
+        updateBootstrap?: (bootstrap: DOMFrontendBootstrapState) => void;
+    } = {
+        updateBootstrap: (bootstrap: DOMFrontendBootstrapState) => {
+            (window as Window & { __wiDOMFrontendBootstrap?: DOMFrontendBootstrapState }).__wiDOMFrontendBootstrap = bootstrap;
+            applyBootstrap(bootstrap);
+            notifyReady();
         },
-        applySubtreePayload: (
-            payload,
-            pageEpoch = protocolState.pageEpoch,
-            documentScopeID = protocolState.documentScopeID
-        ) => {
-            if (!matchesCurrentDocumentContext(pageEpoch, documentScopeID)) {
-                return;
+        invalidateDocumentContext: (contextID = protocolState.contextID) => {
+            if (typeof contextID === "number" && Number.isFinite(contextID)) {
+                adoptDocumentContext({ contextID });
             }
-            if (!applySubtree(payload as never)) {
-                return;
-            }
+            handleDocumentUpdated();
         },
-        applySelectionPayload: (
-            payload,
-            pageEpoch = protocolState.pageEpoch,
-            documentScopeID = protocolState.documentScopeID
-        ) => {
-            if (!matchesCurrentDocumentContext(pageEpoch, documentScopeID)) {
+        applyFullSnapshot: (snapshot, contextID = protocolState.contextID) => {
+            if (!ensureFrontendContext(contextID)) {
+                return false;
+            }
+            return setSnapshot(snapshot as never);
+        },
+        applySubtreePayload: (payload, contextID = protocolState.contextID) => {
+            if (!ensureFrontendContext(contextID)) {
+                return false;
+            }
+            return applySubtree(payload as never);
+        },
+        applySelectionPayload: (payload, contextID = protocolState.contextID) => {
+            if (!ensureFrontendContext(contextID)) {
                 return false;
             }
             const selection = normalizeSelectionSyncPayload(payload);
@@ -212,93 +169,24 @@ function installWebInspectorKit(): void {
                 return true;
             }
             if (Array.isArray(selection.selectedNodePath)) {
-                if (selectNodeByPath(selection.selectedNodePath, selectionOptions)) {
-                    return true;
-                }
+                return selectNodeByPath(selection.selectedNodePath, selectionOptions);
             }
-            requestSelectionRecoveryIfNeeded(
-                {
-                    selectedLocalId: selection.selectedLocalId,
-                    selectedBackendNodeId: selection.selectedBackendNodeId,
-                    selectedNodePath: selection.selectedNodePath,
-                },
-                pageEpoch,
-                documentScopeID
-            );
+            treeState.selectedNodeId = null;
             return false;
         },
-        completeChildNodeRequest: (
-            nodeId,
-            pageEpoch = protocolState.pageEpoch,
-            documentScopeID = protocolState.documentScopeID
-        ) => {
-            if (!matchesCurrentDocumentContext(pageEpoch, documentScopeID)) {
+        finishChildNodeRequest: (nodeId, success, contextID = protocolState.contextID) => {
+            if (!ensureFrontendContext(contextID)) {
                 return;
             }
-            completeChildNodeRequest(nodeId, pageEpoch, documentScopeID);
-        },
-        rejectChildNodeRequest: (
-            nodeId,
-            pageEpoch = protocolState.pageEpoch,
-            documentScopeID = protocolState.documentScopeID
-        ) => {
-            if (!matchesCurrentDocumentContext(pageEpoch, documentScopeID)) {
-                return;
-            }
-            rejectChildNodeRequest(nodeId, pageEpoch, documentScopeID);
-        },
-        retryQueuedChildNodeRequests: (
-            pageEpoch = protocolState.pageEpoch,
-            documentScopeID = protocolState.documentScopeID
-        ) => {
-            if (!matchesCurrentDocumentContext(pageEpoch, documentScopeID)) {
-                return;
-            }
-            retryQueuedChildNodeRequests();
-        },
-        resetChildNodeRequests: (
-            pageEpoch = protocolState.pageEpoch,
-            documentScopeID = protocolState.documentScopeID
-        ) => {
-            if (!matchesCurrentDocumentContext(pageEpoch, documentScopeID)) {
-                return;
-            }
-            resetChildNodeRequests(pageEpoch, documentScopeID);
-        },
-        resetDocumentRequestState: (
-            pageEpoch = protocolState.pageEpoch,
-            documentScopeID = protocolState.documentScopeID
-        ) => {
-            if (!matchesCurrentDocumentContext(pageEpoch, documentScopeID)) {
-                return;
-            }
-            resetDocumentRequestStateForPageEpoch(pageEpoch, documentScopeID);
-        },
-        rejectDocumentRequest: (
-            pageEpoch = protocolState.pageEpoch,
-            documentScopeID = protocolState.documentScopeID
-        ) => {
-            if (!matchesCurrentDocumentContext(pageEpoch, documentScopeID)) {
-                return;
-            }
-            rejectDocumentRequest(pageEpoch, documentScopeID);
-        },
-        completeDocumentRequest: (
-            pageEpoch = protocolState.pageEpoch,
-            documentScopeID = protocolState.documentScopeID
-        ) => {
-            if (!matchesCurrentDocumentContext(pageEpoch, documentScopeID)) {
-                return;
-            }
-            completeDocumentRequest(pageEpoch, documentScopeID);
+            finishChildNodeRequest(nodeId, success, contextID);
         },
         applyMutationBundle,
         applyMutationBundles,
         applyMutationBuffer,
         setSearchTerm,
-        setPreferredDepth,
         updateConfig,
         adoptDocumentContext,
+        clearPointerHoverState,
         __installed: true,
     };
 
@@ -314,9 +202,5 @@ function installWebInspectorKit(): void {
         attachEventListeners();
     }
 }
-
-// =============================================================================
-// Auto-initialization
-// =============================================================================
 
 installWebInspectorKit();

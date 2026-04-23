@@ -72,7 +72,7 @@ export function resolveRenderedState(
     if (typeof explicitRendered === "boolean") {
         return explicitRendered;
     }
-    if (Array.isArray(flags)) {
+    if (Array.isArray(flags) && flags.length > 0) {
         return flags.includes(LAYOUT_FLAG_RENDERED);
     }
     return true;

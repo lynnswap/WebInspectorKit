@@ -1,5 +1,6 @@
 #import "WITransportBridge.h"
 #import "WITransportInspectorABI.h"
+#import "../WebInspectorBridge/ObjCShim/WIKPrivateWebKitInspector.h"
 
 #import <TargetConditionals.h>
 #import <WebKit/WebKit.h>
@@ -8,9 +9,11 @@
 #import <algorithm>
 #import <atomic>
 #import <memory>
-#import <objc/message.h>
 #import <objc/runtime.h>
 #import <vector>
+#if __has_include(<ptrauth.h>)
+#import <ptrauth.h>
+#endif
 
 #if TARGET_OS_IPHONE || TARGET_OS_OSX
 namespace WITransportBridgePrivate {
@@ -28,6 +31,12 @@ static std::atomic<ptrdiff_t> cachedControllerOffset { invalidControllerOffset }
 
 static NSString *const errorDomain = @"WebInspectorTransport.Transport";
 
+static BOOL verboseConsoleDiagnosticsEnabled(void)
+{
+    NSDictionary<NSString *, NSString *> *environment = NSProcessInfo.processInfo.environment;
+    return [environment[@"WEBSPECTOR_VERBOSE_CONSOLE_LOGS"] isEqualToString:@"1"];
+}
+
 enum ErrorCode : NSInteger {
     ErrorCodeUnsupported = 1,
     ErrorCodeAttachFailed = 2,
@@ -39,6 +48,14 @@ enum ErrorCode : NSInteger {
 static NSDictionary *dictionaryValue(id value)
 {
     return [value isKindOfClass:NSDictionary.class] ? value : nil;
+}
+
+static NSString *deobfuscateSymbol(NSArray<NSString *> *reverseTokens)
+{
+    NSMutableString *result = [NSMutableString string];
+    for (NSString *token in [reverseTokens reverseObjectEnumerator])
+        [result appendString:token];
+    return result;
 }
 
 static NSString *stringValue(id value)
@@ -184,27 +201,6 @@ static ptrdiff_t ivarOffset(Class cls, const char *name)
 {
     Ivar ivar = class_getInstanceVariable(cls, name);
     return ivar ? ivar_getOffset(ivar) : NSNotFound;
-}
-
-static id invokeObjectGetter(id target, NSString *selectorName)
-{
-    SEL selector = NSSelectorFromString(selectorName);
-    if (![target respondsToSelector:selector])
-        return nil;
-
-    using Getter = id (*)(id, SEL);
-    return reinterpret_cast<Getter>(objc_msgSend)(target, selector);
-}
-
-static BOOL invokeVoid(id target, NSString *selectorName)
-{
-    SEL selector = NSSelectorFromString(selectorName);
-    if (![target respondsToSelector:selector])
-        return NO;
-
-    using Invoker = void (*)(id, SEL);
-    reinterpret_cast<Invoker>(objc_msgSend)(target, selector);
-    return YES;
 }
 
 static void *pageProxyPointer(WKWebView *webView)
@@ -527,11 +523,12 @@ private:
 
 @implementation WITransportBridge {
     __weak WKWebView *_webView;
-    id _inspector;
+    _WKInspector *_inspector;
     void *_controller;
     void *_backendDispatcher;
+    void *_frontendConnectionTarget;
     ptrdiff_t _controllerOffset;
-    WITransportBridgePrivate::DisconnectFrontendFn _disconnectFrontend;
+    uint64_t _disconnectFrontendAddress;
     WITransportResolvedFunctions _resolvedFunctions;
     std::unique_ptr<WITransportFrontendChannel> _frontendChannel;
     BOOL _frontendAttached;
@@ -575,11 +572,12 @@ private:
 {
     _frontendAttached = NO;
     _frontendChannel.reset();
-    _disconnectFrontend = nullptr;
+    _disconnectFrontendAddress = 0;
     _resolvedFunctions = WITransportBridgePrivate::emptyResolvedFunctions();
     _inspector = nil;
     _controller = nullptr;
     _backendDispatcher = nullptr;
+    _frontendConnectionTarget = nullptr;
     _controllerOffset = WITransportBridgePrivate::invalidControllerOffset;
 }
 
@@ -616,14 +614,11 @@ private:
         return NO;
     }
 
-    using ConnectFrontendFn = WITransportBridgePrivate::ConnectFrontendFn;
-    using DisconnectFrontendFn = WITransportBridgePrivate::DisconnectFrontendFn;
-
-    auto *connectFrontend = reinterpret_cast<ConnectFrontendFn>(static_cast<uintptr_t>(resolvedFunctions.connectFrontendAddress));
-    _disconnectFrontend = reinterpret_cast<DisconnectFrontendFn>(static_cast<uintptr_t>(resolvedFunctions.disconnectFrontendAddress));
+    _disconnectFrontendAddress = resolvedFunctions.disconnectFrontendAddress;
     _resolvedFunctions = resolvedFunctions;
 
-    _inspector = WITransportBridgePrivate::invokeObjectGetter(self.webView, @"_inspector");
+    if ([self.webView respondsToSelector:@selector(_inspector)])
+        _inspector = self.webView._inspector;
     void *page = WITransportBridgePrivate::pageProxyPointer(self.webView);
     ptrdiff_t preferredCachedOffset = _controllerOffset;
     if (preferredCachedOffset == WITransportBridgePrivate::invalidControllerOffset)
@@ -632,12 +627,14 @@ private:
     auto resolution = WITransportBridgePrivate::resolveControllerInPageProxy(page, preferredCachedOffset);
     void *controller = resolution.controller;
     void *backendDispatcher = resolution.backendDispatcher;
+    void *frontendConnectionTarget = controller;
 
     _controller = controller;
     _backendDispatcher = backendDispatcher;
     _controllerOffset = resolution.stats.resolvedOffset;
     if (_controllerOffset != WITransportBridgePrivate::invalidControllerOffset)
         WITransportBridgePrivate::cachedControllerOffset.store(_controllerOffset);
+    _frontendConnectionTarget = frontendConnectionTarget;
 
 #if TARGET_OS_OSX
     BOOL requiresInspectorConnection = NO;
@@ -645,7 +642,9 @@ private:
     BOOL requiresInspectorConnection = YES;
 #endif
 
-    if ((requiresInspectorConnection && !_inspector) || !_controller || !_backendDispatcher) {
+    if ((requiresInspectorConnection && (!_inspector || ![_inspector respondsToSelector:@selector(connect)]))
+        || !_controller
+        || !_backendDispatcher) {
         NSString *diagnostics = WITransportBridgePrivate::controllerResolutionDiagnosticsString(resolution.stats);
         NSLog(@"[WebInspectorTransport] controller resolution failed %@", diagnostics);
         NSError *transportError = WITransportBridgePrivate::selectorFailureError(
@@ -666,22 +665,17 @@ private:
     // Transport-only attach should not create the local Web Inspector frontend on macOS.
     // Doing so spawns an extra frontend/WebContent path and destabilizes sandboxed hosts.
 #else
-    if (!WITransportBridgePrivate::invokeVoid(_inspector, @"connect")) {
-        NSError *transportError = WITransportBridgePrivate::makeError(
-            WITransportBridgePrivate::ErrorCodeAttachFailed,
-            @"_WKInspector.connect was unavailable."
-        );
-        if (error)
-            *error = transportError;
-        [self reportFatalFailure:transportError.localizedDescription];
-        [self detach];
-        return NO;
-    }
+    [_inspector connect];
 #endif
 
     _frontendChannel = std::make_unique<WITransportFrontendChannel>(self, resolvedFunctions.stringImplToNSStringAddress);
-    connectFrontend(_controller, *_frontendChannel, false, false);
+    auto *connectFrontend = reinterpret_cast<WITransportBridgePrivate::ConnectFrontendFn>(
+        static_cast<uintptr_t>(resolvedFunctions.connectFrontendAddress)
+    );
+    connectFrontend(_frontendConnectionTarget, *_frontendChannel, false, false);
     _frontendAttached = YES;
+    if (WITransportBridgePrivate::verboseConsoleDiagnosticsEnabled())
+        NSLog(@"[WebInspectorTransport] native inspector attach succeeded mode=controller-wrapper");
     return YES;
 }
 
@@ -803,12 +797,16 @@ private:
 - (void)detach
 {
     BOOL canDisconnectFrontend = NO;
-    if (_frontendAttached && _frontendChannel && _controller && _disconnectFrontend) {
+    if (_frontendAttached && _frontendChannel && _controller && _frontendConnectionTarget && _disconnectFrontendAddress) {
         canDisconnectFrontend = [self attachedControllerIsStillValid];
     }
 
-    if (canDisconnectFrontend)
-        _disconnectFrontend(_controller, *_frontendChannel);
+    if (canDisconnectFrontend) {
+        auto *disconnectFrontend = reinterpret_cast<WITransportBridgePrivate::DisconnectFrontendFn>(
+            static_cast<uintptr_t>(_disconnectFrontendAddress)
+        );
+        disconnectFrontend(_frontendConnectionTarget, *_frontendChannel);
+    }
 
     [self invalidateAttachmentState];
 }

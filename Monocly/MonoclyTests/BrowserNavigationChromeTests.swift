@@ -9,6 +9,14 @@ import XCTest
 @testable import WebInspectorUI
 
 final class BrowserNavigationChromeTests: XCTestCase {
+    private final class ChallengeSender: NSObject, URLAuthenticationChallengeSender {
+        func use(_ credential: URLCredential, for challenge: URLAuthenticationChallenge) {}
+        func continueWithoutCredential(for challenge: URLAuthenticationChallenge) {}
+        func cancel(_ challenge: URLAuthenticationChallenge) {}
+        func performDefaultHandling(for challenge: URLAuthenticationChallenge) {}
+        func rejectProtectionSpaceAndContinue(with challenge: URLAuthenticationChallenge) {}
+    }
+
     private var retainedWindows: [UIWindow] = []
 
     override func tearDown() {
@@ -23,6 +31,39 @@ final class BrowserNavigationChromeTests: XCTestCase {
             XCTFail("Timed out while resetting the window context store.")
         }
         super.tearDown()
+    }
+
+    @MainActor
+    func testAuthenticationChallengeUsesDefaultHandling() async {
+        let store = BrowserStore(
+            url: URL(string: "https://example.com")!,
+            automaticallyLoadsInitialRequest: false
+        )
+        let protectionSpace = URLProtectionSpace(
+            host: "example.com",
+            port: 443,
+            protocol: NSURLProtectionSpaceHTTPS,
+            realm: nil,
+            authenticationMethod: NSURLAuthenticationMethodServerTrust
+        )
+        let challenge = URLAuthenticationChallenge(
+            protectionSpace: protectionSpace,
+            proposedCredential: nil,
+            previousFailureCount: 0,
+            failureResponse: nil,
+            error: nil,
+            sender: ChallengeSender()
+        )
+
+        let response: (URLSession.AuthChallengeDisposition, URLCredential?) = await store.webView(
+            store.webView,
+            respondTo: challenge
+        )
+        let disposition = response.0
+        let credential = response.1
+
+        XCTAssertEqual(disposition, URLSession.AuthChallengeDisposition.performDefaultHandling)
+        XCTAssertNil(credential)
     }
 
     private struct HostedRootViewControllerFixture {
@@ -49,17 +90,18 @@ final class BrowserNavigationChromeTests: XCTestCase {
         XCTAssertTrue(toolbarItems.contains { $0 === pageViewController.backButtonItemForTesting })
         XCTAssertTrue(toolbarItems.contains { $0 === pageViewController.forwardButtonItemForTesting })
         XCTAssertTrue(toolbarItems.contains { $0 === pageViewController.inspectorButtonItemForTesting })
-        XCTAssertTrue(pageViewController.backButtonItemForTesting.customView === pageViewController.backButtonForTesting)
-        XCTAssertTrue(pageViewController.forwardButtonItemForTesting.customView === pageViewController.forwardButtonForTesting)
-        XCTAssertFalse(pageViewController.backButtonForTesting.showsMenuAsPrimaryAction)
-        XCTAssertFalse(pageViewController.forwardButtonForTesting.showsMenuAsPrimaryAction)
-        XCTAssertNil(pageViewController.backButtonForTesting.menu)
-        XCTAssertNil(pageViewController.forwardButtonForTesting.menu)
+        XCTAssertNil(pageViewController.backButtonItemForTesting.customView)
+        XCTAssertNil(pageViewController.forwardButtonItemForTesting.customView)
+        XCTAssertNotNil(pageViewController.backButtonItemForTesting.primaryAction)
+        XCTAssertNotNil(pageViewController.forwardButtonItemForTesting.primaryAction)
+        XCTAssertNil(pageViewController.backButtonItemForTesting.menu)
+        XCTAssertNil(pageViewController.forwardButtonItemForTesting.menu)
         XCTAssertEqual(pageViewController.backButtonItemForTesting.accessibilityIdentifier, "Monocly.navigation.back.compact")
         XCTAssertEqual(pageViewController.forwardButtonItemForTesting.accessibilityIdentifier, "Monocly.navigation.forward.compact")
         XCTAssertEqual(pageViewController.inspectorButtonItemForTesting.accessibilityIdentifier, "Monocly.openInspectorButton.compact")
     }
 
+    @MainActor
     func testViewportChromeTopOverlapRequiresHostTopEdgeIntersection() {
         let hostFrame = CGRect(x: 40, y: 120, width: 320, height: 480)
         let chromeBelowHost = CGRect(x: 40, y: 620, width: 320, height: 44)
@@ -81,6 +123,7 @@ final class BrowserNavigationChromeTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testViewportChromeBottomOverlapRequiresFrameIntersection() {
         let hostFrame = CGRect(x: 40, y: 120, width: 320, height: 480)
         let chromeInDifferentColumn = CGRect(x: 420, y: 560, width: 320, height: 88)
@@ -122,10 +165,10 @@ final class BrowserNavigationChromeTests: XCTestCase {
         XCTAssertTrue(leadingItems.contains { $0 === pageViewController.backButtonItemForTesting })
         XCTAssertTrue(leadingItems.contains { $0 === pageViewController.forwardButtonItemForTesting })
         XCTAssertTrue(trailingItems.contains { $0 === pageViewController.inspectorButtonItemForTesting })
-        XCTAssertTrue(pageViewController.backButtonItemForTesting.customView === pageViewController.backButtonForTesting)
-        XCTAssertTrue(pageViewController.forwardButtonItemForTesting.customView === pageViewController.forwardButtonForTesting)
-        XCTAssertFalse(pageViewController.backButtonForTesting.showsMenuAsPrimaryAction)
-        XCTAssertFalse(pageViewController.forwardButtonForTesting.showsMenuAsPrimaryAction)
+        XCTAssertNil(pageViewController.backButtonItemForTesting.customView)
+        XCTAssertNil(pageViewController.forwardButtonItemForTesting.customView)
+        XCTAssertNotNil(pageViewController.backButtonItemForTesting.primaryAction)
+        XCTAssertNotNil(pageViewController.forwardButtonItemForTesting.primaryAction)
         XCTAssertEqual(pageViewController.backButtonItemForTesting.accessibilityIdentifier, "Monocly.navigation.back.regular")
         XCTAssertEqual(pageViewController.forwardButtonItemForTesting.accessibilityIdentifier, "Monocly.navigation.forward.regular")
         XCTAssertEqual(pageViewController.inspectorButtonItemForTesting.accessibilityIdentifier, "Monocly.openInspectorButton.regular")
@@ -265,6 +308,10 @@ final class BrowserNavigationChromeTests: XCTestCase {
         drainMainQueue()
 
         XCTAssertTrue(rootViewController.presentedViewController is WITabViewController)
+        let inspectorContainer = try XCTUnwrap(rootViewController.presentedViewController as? WITabViewController)
+        let sheet = try XCTUnwrap(inspectorContainer.sheetPresentationController)
+        XCTAssertEqual(sheet.selectedDetentIdentifier, .medium)
+        XCTAssertEqual(sheet.largestUndimmedDetentIdentifier, .medium)
         XCTAssertFalse(pageViewController.inspectorButtonItemForTesting.isEnabled)
 
         dismissPresentedInspector(from: rootViewController)
@@ -286,6 +333,65 @@ final class BrowserNavigationChromeTests: XCTestCase {
         XCTAssertNotNil(inspectorContainer.presentationController?.delegate)
 
         dismissPresentedInspector(from: rootViewController)
+    }
+
+    @MainActor
+    func testInspectorSheetHostingControllerUsesClearBackground() {
+        let browserStore = BrowserStore(
+            url: URL(string: "about:blank")!,
+            automaticallyLoadsInitialRequest: false
+        )
+        let controller = BrowserInspectorSheetHostingController(
+            browserStore: browserStore,
+            inspectorController: WIInspectorController(),
+            launchConfiguration: BrowserLaunchConfiguration(
+                initialURL: URL(string: "about:blank")!,
+                shouldShowDiagnostics: true,
+                uiTestScenario: .domOpenInspectorAfterInitialLoad
+            ),
+            tabs: [.dom()]
+        )
+
+        controller.loadViewIfNeeded()
+
+        XCTAssertEqual(controller.view.backgroundColor, .clear)
+    }
+
+    @MainActor
+    func testBrowserControllersUseClearBackgroundWithoutSystemFallback() throws {
+        let fixture = try makeHostedRootViewController()
+
+        XCTAssertEqual(fixture.rootViewController.view.backgroundColor, .clear)
+        XCTAssertEqual(
+            fixture.pageViewController.view.backgroundColor,
+            fixture.rootViewController.store.underPageBackgroundColor
+        )
+
+        let inspectorWindowController = BrowserInspectorWindowHostingController()
+        inspectorWindowController.loadViewIfNeeded()
+
+        XCTAssertEqual(inspectorWindowController.view.backgroundColor, .clear)
+    }
+
+    @MainActor
+    func testPageViewControllerUsesUnderPageBackgroundColorWhenProvided() {
+        let store = BrowserStore(
+            url: URL(string: "about:blank")!,
+            automaticallyLoadsInitialRequest: false
+        )
+        store.underPageBackgroundColor = .systemRed
+
+        let controller = BrowserPageViewController(
+            store: store,
+            inspectorController: WIInspectorController(),
+            launchConfiguration: BrowserLaunchConfiguration(
+                initialURL: URL(string: "about:blank")!
+            )
+        )
+
+        controller.loadViewIfNeeded()
+
+        XCTAssertEqual(controller.view.backgroundColor, .systemRed)
     }
 
     @MainActor
@@ -638,6 +744,34 @@ final class BrowserNavigationChromeTests: XCTestCase {
     }
 
     @MainActor
+    func testRapidSuccessiveLoadsDoNotLeaveCancelledNavigationErrorState() throws {
+        let firstURL = try makeTemporaryHTMLURL(named: "first-cancelled", title: "First Cancelled Page")
+        let secondURL = try makeTemporaryHTMLURL(named: "second-final", title: "Second Final Page")
+
+        let fixture = try makeHostedRootViewController()
+        let store = fixture.rootViewController.store
+
+        XCTAssertTrue(waitForNavigation(to: URL(string: "about:blank")!, minimumDidFinishCount: 1, in: store))
+
+        let initialCommitCount = store.didCommitNavigationCount
+        let initialFinishCount = store.didFinishNavigationCount
+
+        store.load(url: firstURL)
+        store.load(url: secondURL)
+
+        let finalLoadCompleted = waitForCondition(description: "rapid successive load settles on final page") {
+            store.currentURL == secondURL
+                && store.didCommitNavigationCount > initialCommitCount
+                && store.didFinishNavigationCount > initialFinishCount
+                && store.isLoading == false
+        }
+        XCTAssertTrue(finalLoadCompleted, "The browser did not settle on the final navigation target after cancelling the earlier request.")
+        XCTAssertEqual(store.currentURL, secondURL)
+        XCTAssertNil(store.lastNavigationErrorDescription)
+        XCTAssertGreaterThan(store.didCommitNavigationCount, initialCommitCount)
+    }
+
+    @MainActor
     func testForwardHistoryMenuAppearsAfterGoingBack() throws {
         let firstURL = try makeTemporaryHTMLURL(named: "first", title: "First Page")
         let secondURL = try makeTemporaryHTMLURL(named: "second", title: "Second Page")
@@ -698,7 +832,7 @@ final class BrowserNavigationChromeTests: XCTestCase {
         XCTAssertEqual(store.currentURL, firstURL)
         XCTAssertFalse(store.canGoBack)
         XCTAssertTrue(store.canGoForward)
-        XCTAssertTrue(pageViewController.forwardButtonForTesting.menu != nil)
+        XCTAssertTrue(pageViewController.forwardButtonItemForTesting.menu != nil)
     }
 
     @MainActor

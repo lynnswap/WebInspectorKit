@@ -50,7 +50,7 @@ final class BrowserRootViewController: UINavigationController {
         super.viewDidLoad()
         navigationBar.prefersLargeTitles = false
         setNavigationBarHidden(false, animated: false)
-        view.backgroundColor = .systemBackground
+        view.backgroundColor = .clear
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -65,6 +65,9 @@ final class BrowserRootViewController: UINavigationController {
 
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
+        if launchConfiguration.uiTestScenario == .domRemoteURL {
+            return
+        }
         requestInspectorSessionState(.suspended)
     }
 

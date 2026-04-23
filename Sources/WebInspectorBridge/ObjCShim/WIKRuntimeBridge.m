@@ -1,4 +1,5 @@
 #import "WIKRuntimeBridge.h"
+#import "WIKPrivateWebKitInspector.h"
 #import "WKWebView+EvaluateJavaScriptCompat.h"
 
 #if TARGET_OS_OSX
@@ -11,6 +12,298 @@ typedef const struct OpaqueWKPage *WKPageRef;
 NSErrorDomain const WIKRuntimeBridgeErrorDomain = @"WebInspectorBridge.WIKRuntimeBridge";
 
 @implementation WIKRuntimeBridge
+
+#if TARGET_OS_IPHONE
++ (nullable Class)wi_contentViewClass
+{
+    static Class contentViewClass;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        contentViewClass = NSClassFromString(@"WKContentView");
+    });
+    return contentViewClass;
+}
+
++ (nullable Class)wi_inspectorNodeSearchRecognizerClass
+{
+    static Class recognizerClass;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        recognizerClass = NSClassFromString(@"WKInspectorNodeSearchGestureRecognizer");
+    });
+    return recognizerClass;
+}
+
++ (BOOL)wi_contentViewHasInspectorNodeSearchRecognizer:(UIView *)contentView
+{
+    Class recognizerClass = [self wi_inspectorNodeSearchRecognizerClass];
+    if (!recognizerClass)
+        return NO;
+
+    for (UIGestureRecognizer *recognizer in contentView.gestureRecognizers) {
+        if ([recognizer isKindOfClass:recognizerClass])
+            return YES;
+    }
+
+    return NO;
+}
+
++ (nullable UIView *)wi_firstContentViewInView:(UIView *)view
+{
+    Class contentViewClass = [self wi_contentViewClass];
+    if (contentViewClass && [view isKindOfClass:contentViewClass])
+        return view;
+
+    for (UIView *subview in view.subviews) {
+        UIView *contentView = [self wi_firstContentViewInView:subview];
+        if (contentView)
+            return contentView;
+    }
+
+    return nil;
+}
+
++ (void)wi_appendContentViewsInView:(UIView *)view toArray:(NSMutableArray<UIView *> *)contentViews
+{
+    Class contentViewClass = [self wi_contentViewClass];
+    if (contentViewClass && [view isKindOfClass:contentViewClass])
+        [contentViews addObject:view];
+
+    for (UIView *subview in view.subviews)
+        [self wi_appendContentViewsInView:subview toArray:contentViews];
+}
+
++ (NSArray<UIView *> *)wi_contentViewsForWebView:(WKWebView *)webView
+{
+    NSMutableArray<UIView *> *contentViews = [NSMutableArray array];
+    [self wi_appendContentViewsInView:webView toArray:contentViews];
+    return [contentViews copy];
+}
+
++ (nullable UIView *)wi_preferredContentViewForWebView:(WKWebView *)webView
+{
+    NSArray<UIView *> *contentViews = [self wi_contentViewsForWebView:webView];
+    if (contentViews.count == 0)
+        return nil;
+
+    for (UIView *contentView in [contentViews reverseObjectEnumerator]) {
+        if (!CGRectIsEmpty(contentView.bounds) && !contentView.hidden && contentView.alpha > 0.0)
+            return contentView;
+    }
+
+    return contentViews.lastObject;
+}
+
++ (nullable UIView *)wi_currentContentViewForWebView:(WKWebView *)webView
+{
+    SEL selector = NSSelectorFromString(@"_currentContentView");
+    if (![webView respondsToSelector:selector])
+        return nil;
+
+    id result = [self objectResultFromTarget:webView selectorName:@"_currentContentView"];
+    if (![result isKindOfClass:[UIView class]])
+        return nil;
+
+    Class contentViewClass = [self wi_contentViewClass];
+    if (contentViewClass && ![result isKindOfClass:contentViewClass])
+        return nil;
+
+    return (UIView *)result;
+}
+
++ (nullable UIView *)wi_activeContentViewForWebView:(WKWebView *)webView
+{
+    UIView *contentView = [self wi_currentContentViewForWebView:webView];
+    if (contentView)
+        return contentView;
+
+    return [self wi_preferredContentViewForWebView:webView];
+}
+
++ (nullable NSObject *)inspectorForWebView:(WKWebView *)webView
+{
+    if (![webView respondsToSelector:@selector(_inspector)])
+        return nil;
+
+    _WKInspector *inspector = webView._inspector;
+    return inspector ?: nil;
+}
+
++ (nullable NSNumber *)inspectorElementSelectionActiveForWebView:(WKWebView *)webView
+{
+    if (![webView respondsToSelector:@selector(_inspector)])
+        return nil;
+
+    _WKInspector *inspector = webView._inspector;
+    if (!inspector || ![inspector respondsToSelector:@selector(isElementSelectionActive)])
+        return nil;
+    return @(inspector.isElementSelectionActive);
+}
+
++ (nullable NSNumber *)inspectorConnectedForWebView:(WKWebView *)webView
+{
+    if (![webView respondsToSelector:@selector(_inspector)])
+        return nil;
+
+    _WKInspector *inspector = webView._inspector;
+    if (!inspector || ![inspector respondsToSelector:@selector(isConnected)])
+        return nil;
+    return @(inspector.isConnected);
+}
+
++ (BOOL)connectInspectorForWebView:(WKWebView *)webView
+{
+    NSObject *inspector = [self inspectorForWebView:webView];
+    if (!inspector)
+        return NO;
+
+    if ([[self inspectorConnectedForWebView:webView] boolValue])
+        return YES;
+
+    BOOL didInvokeConnect = [self invokeVoidOnTarget:inspector selectorName:@"connect"];
+    NSNumber *connected = [self inspectorConnectedForWebView:webView];
+    if (connected)
+        return connected.boolValue;
+
+    BOOL didInvokeAttach = [self invokeVoidOnTarget:inspector selectorName:@"attach"];
+    connected = [self inspectorConnectedForWebView:webView];
+    if (connected)
+        return connected.boolValue;
+
+    return didInvokeConnect || didInvokeAttach;
+}
+
++ (BOOL)toggleInspectorElementSelectionForWebView:(WKWebView *)webView
+{
+    NSObject *inspector = [self inspectorForWebView:webView];
+    if (!inspector)
+        return NO;
+
+    return [self invokeVoidOnTarget:inspector selectorName:@"toggleElementSelection"];
+}
+
++ (nullable NSNumber *)showingInspectorIndicationForWebView:(WKWebView *)webView
+{
+    UIView *contentView = [self wi_activeContentViewForWebView:webView];
+    if (!contentView)
+        return nil;
+
+    return [self boolResultFromTarget:contentView selectorName:@"isShowingInspectorIndication"];
+}
+
++ (BOOL)setShowingInspectorIndication:(BOOL)showingInspectorIndication
+                           forWebView:(WKWebView *)webView
+{
+    UIView *contentView = [self wi_activeContentViewForWebView:webView];
+    if (!contentView)
+        return NO;
+
+    SEL selector = NSSelectorFromString(@"setShowingInspectorIndication:");
+    if (![contentView respondsToSelector:selector])
+        return NO;
+
+    typedef void (*Setter)(id, SEL, BOOL);
+    IMP implementation = [contentView methodForSelector:selector];
+    if (implementation == NULL)
+        return NO;
+
+    Setter function = (Setter)implementation;
+    function(contentView, selector, showingInspectorIndication);
+    return YES;
+}
+
++ (BOOL)canEnableInspectorNodeSearchForWebView:(WKWebView *)webView
+{
+    UIView *contentView = [self wi_activeContentViewForWebView:webView];
+    return contentView && [contentView respondsToSelector:@selector(_enableInspectorNodeSearch)];
+}
+
++ (BOOL)enableInspectorNodeSearchForWebView:(WKWebView *)webView
+{
+    UIView *activeContentView = [self wi_activeContentViewForWebView:webView];
+    if (!activeContentView || ![activeContentView respondsToSelector:@selector(_enableInspectorNodeSearch)])
+        return NO;
+
+    for (UIView *contentView in [self wi_contentViewsForWebView:webView]) {
+        if (contentView == activeContentView)
+            continue;
+        if ([contentView respondsToSelector:@selector(_disableInspectorNodeSearch)])
+            [contentView _disableInspectorNodeSearch];
+    }
+
+    if ([self wi_contentViewHasInspectorNodeSearchRecognizer:activeContentView])
+        return YES;
+
+    [activeContentView _enableInspectorNodeSearch];
+    return YES;
+}
+
++ (BOOL)disableInspectorNodeSearchForWebView:(WKWebView *)webView
+{
+    BOOL didDisable = NO;
+    for (UIView *contentView in [self wi_contentViewsForWebView:webView]) {
+        if (![contentView respondsToSelector:@selector(_disableInspectorNodeSearch)])
+            continue;
+        [contentView _disableInspectorNodeSearch];
+        didDisable = YES;
+    }
+    return didDisable;
+}
+
++ (BOOL)hasInspectorNodeSearchRecognizerForWebView:(WKWebView *)webView
+{
+    UIView *contentView = [self wi_activeContentViewForWebView:webView];
+    if (!contentView)
+        return NO;
+
+    return [self wi_contentViewHasInspectorNodeSearchRecognizer:contentView];
+}
+
++ (BOOL)removeInspectorNodeSearchRecognizersFromWebView:(WKWebView *)webView
+{
+    Class recognizerClass = [self wi_inspectorNodeSearchRecognizerClass];
+    if (!recognizerClass)
+        return NO;
+
+    BOOL didRemoveRecognizer = NO;
+    for (UIView *contentView in [self wi_contentViewsForWebView:webView]) {
+        for (UIGestureRecognizer *recognizer in [contentView.gestureRecognizers copy]) {
+            if (![recognizer isKindOfClass:recognizerClass])
+                continue;
+            recognizer.enabled = NO;
+            [contentView removeGestureRecognizer:recognizer];
+            didRemoveRecognizer = YES;
+        }
+    }
+    return didRemoveRecognizer;
+}
+
++ (nullable NSString *)nodeSearchDebugSummaryForWebView:(WKWebView *)webView
+{
+    NSArray<UIView *> *contentViews = [self wi_contentViewsForWebView:webView];
+    UIView *currentContentView = [self wi_currentContentViewForWebView:webView];
+    UIView *activeContentView = [self wi_activeContentViewForWebView:webView];
+
+    NSUInteger recognizerViewCount = 0;
+    for (UIView *contentView in contentViews) {
+        if ([self wi_contentViewHasInspectorNodeSearchRecognizer:contentView])
+            recognizerViewCount += 1;
+    }
+
+    BOOL activeHasNodeSearch = activeContentView && [self wi_contentViewHasInspectorNodeSearchRecognizer:activeContentView];
+    BOOL anyHasNodeSearch = recognizerViewCount > 0;
+    NSString *activeSource = currentContentView ? @"current" : @"fallback";
+
+    return [NSString stringWithFormat:
+        @"activeSource=%@ contentViews=%lu recognizerViews=%lu activeHasNodeSearch=%d anyHasNodeSearch=%d",
+        activeSource,
+        (unsigned long)contentViews.count,
+        (unsigned long)recognizerViewCount,
+        activeHasNodeSearch ? 1 : 0,
+        anyHasNodeSearch ? 1 : 0
+    ];
+}
+#endif
 
 + (NSObject *)objectResultFromTarget:(NSObject *)target selectorName:(NSString *)selectorName {
     SEL selector = NSSelectorFromString(selectorName);

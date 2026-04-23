@@ -298,15 +298,19 @@ private enum BrowserStoreSPI {
         reverseTokens.reversed().joined()
     }
 
+    // browsingContextController
     static let browsingContextControllerSelector = NSSelectorFromString(
         deobfuscate(["Controller", "Context", "browsing"])
     )
+    // backForwardList
     static let backForwardListSelector = NSSelectorFromString(
         deobfuscate(["List", "Forward", "back"])
     )
+    // goToBackForwardListItem:
     static let goToBackForwardListItemSelector = NSSelectorFromString(
         deobfuscate([":", "Item", "List", "Forward", "Back", "To", "go"])
     )
+    // _setHistoryDelegate:
     static let setHistoryDelegateSelector = NSSelectorFromString(
         deobfuscate([":", "Delegate", "History", "_set"])
     )
@@ -328,6 +332,7 @@ private enum BrowserStoreSPI {
     var lastWebContentTerminationDate: Date?
     var lastWebContentTerminationURL: URL?
     var lastNavigationErrorDescription: String?
+    var didCommitNavigationCount = 0
     var didFinishNavigationCount = 0
 
 #if canImport(UIKit)
@@ -445,6 +450,10 @@ private enum BrowserStoreSPI {
         webView.go(to: item)
     }
 
+    func load(url: URL) {
+        webView.load(URLRequest(url: url))
+    }
+
     func backHistoryItems(limit: Int = BrowserStoreSPI.maximumHistoryMenuItemCount) -> [BrowserHistoryMenuItem] {
         historyItems(direction: .back, limit: limit)
     }
@@ -531,6 +540,25 @@ private enum BrowserStoreSPI {
         for observer in historyObserverByID.values {
             observer()
         }
+    }
+
+    private func syncNavigationState(
+        from webView: WKWebView,
+        clearsNavigationError: Bool = false
+    ) {
+        isLoading = webView.isLoading
+        estimatedProgress = webView.estimatedProgress
+        currentURL = webView.url
+        if clearsNavigationError {
+            lastNavigationErrorDescription = nil
+        }
+        invalidateHistoryIfNeeded()
+        notifyStateObservers()
+    }
+
+    private func isBenignNavigationCancellation(_ error: any Error) -> Bool {
+        let nsError = error as NSError
+        return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
     }
 
     private func invalidateHistoryIfNeeded() {
@@ -655,7 +683,6 @@ private enum BrowserStoreSPI {
 
 extension BrowserStore: WKNavigationDelegate {
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
-        logger.debug("\(#function) decide navigation policy (action)")
 #if canImport(AppKit)
         if navigationAction.navigationType == .linkActivated,
            navigationAction.modifierFlags.contains(.command),
@@ -671,7 +698,6 @@ extension BrowserStore: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
-        logger.debug("\(#function) provisional navigation started")
         isLoading = true
         estimatedProgress = .zero
         notifyStateObservers()
@@ -682,35 +708,44 @@ extension BrowserStore: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
-        logger.debug("\(#function) navigation committed")
+        didCommitNavigationCount += 1
+        syncNavigationState(from: webView, clearsNavigationError: true)
     }
 
     func webView(_ webView: WKWebView, respondTo challenge: URLAuthenticationChallenge) async -> (URLSession.AuthChallengeDisposition, URLCredential?) {
-        logger.debug("\(#function) authentication challenge")
-        return (.useCredential, nil)
+        return (.performDefaultHandling, nil)
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError navigationError: Error) {
         logger.debug("\(#function) provisional navigation failed")
-        isLoading = false
-        estimatedProgress = .zero
+        if isBenignNavigationCancellation(navigationError) {
+#if canImport(UIKit)
+            endRefreshingIfNeeded()
+#endif
+            syncNavigationState(from: webView)
+            return
+        }
         lastNavigationErrorDescription = navigationError.localizedDescription
 #if canImport(UIKit)
         endRefreshingIfNeeded()
 #endif
-        invalidateHistoryIfNeeded()
-        notifyStateObservers()
+        syncNavigationState(from: webView)
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError navigationError: Error) {
         logger.debug("\(#function) navigation failed")
-        isLoading = false
+        if isBenignNavigationCancellation(navigationError) {
+#if canImport(UIKit)
+            endRefreshingIfNeeded()
+#endif
+            syncNavigationState(from: webView)
+            return
+        }
         lastNavigationErrorDescription = navigationError.localizedDescription
 #if canImport(UIKit)
         endRefreshingIfNeeded()
 #endif
-        invalidateHistoryIfNeeded()
-        notifyStateObservers()
+        syncNavigationState(from: webView)
     }
 
     func webView(_ webView: WKWebView, didReceiveServerRedirectForProvisionalNavigation navigation: WKNavigation!) {
@@ -728,15 +763,11 @@ extension BrowserStore: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        isLoading = false
-        estimatedProgress = .zero
-        lastNavigationErrorDescription = nil
         didFinishNavigationCount += 1
 #if canImport(UIKit)
         endRefreshingIfNeeded()
 #endif
-        invalidateHistoryIfNeeded()
-        notifyStateObservers()
+        syncNavigationState(from: webView, clearsNavigationError: true)
     }
 }
 
