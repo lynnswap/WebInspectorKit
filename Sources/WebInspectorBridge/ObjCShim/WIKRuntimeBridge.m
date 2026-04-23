@@ -94,6 +94,32 @@ NSErrorDomain const WIKRuntimeBridgeErrorDomain = @"WebInspectorBridge.WIKRuntim
     return contentViews.lastObject;
 }
 
++ (nullable UIView *)wi_currentContentViewForWebView:(WKWebView *)webView
+{
+    SEL selector = NSSelectorFromString(@"_currentContentView");
+    if (![webView respondsToSelector:selector])
+        return nil;
+
+    id result = [self objectResultFromTarget:webView selectorName:@"_currentContentView"];
+    if (![result isKindOfClass:[UIView class]])
+        return nil;
+
+    Class contentViewClass = [self wi_contentViewClass];
+    if (contentViewClass && ![result isKindOfClass:contentViewClass])
+        return nil;
+
+    return (UIView *)result;
+}
+
++ (nullable UIView *)wi_activeContentViewForWebView:(WKWebView *)webView
+{
+    UIView *contentView = [self wi_currentContentViewForWebView:webView];
+    if (contentView)
+        return contentView;
+
+    return [self wi_preferredContentViewForWebView:webView];
+}
+
 + (nullable NSObject *)inspectorForWebView:(WKWebView *)webView
 {
     if (![webView respondsToSelector:@selector(_inspector)])
@@ -158,7 +184,7 @@ NSErrorDomain const WIKRuntimeBridgeErrorDomain = @"WebInspectorBridge.WIKRuntim
 
 + (nullable NSNumber *)showingInspectorIndicationForWebView:(WKWebView *)webView
 {
-    UIView *contentView = [self wi_preferredContentViewForWebView:webView];
+    UIView *contentView = [self wi_activeContentViewForWebView:webView];
     if (!contentView)
         return nil;
 
@@ -168,7 +194,7 @@ NSErrorDomain const WIKRuntimeBridgeErrorDomain = @"WebInspectorBridge.WIKRuntim
 + (BOOL)setShowingInspectorIndication:(BOOL)showingInspectorIndication
                            forWebView:(WKWebView *)webView
 {
-    UIView *contentView = [self wi_preferredContentViewForWebView:webView];
+    UIView *contentView = [self wi_activeContentViewForWebView:webView];
     if (!contentView)
         return NO;
 
@@ -188,27 +214,27 @@ NSErrorDomain const WIKRuntimeBridgeErrorDomain = @"WebInspectorBridge.WIKRuntim
 
 + (BOOL)canEnableInspectorNodeSearchForWebView:(WKWebView *)webView
 {
-    UIView *contentView = [self wi_preferredContentViewForWebView:webView];
+    UIView *contentView = [self wi_activeContentViewForWebView:webView];
     return contentView && [contentView respondsToSelector:@selector(_enableInspectorNodeSearch)];
 }
 
 + (BOOL)enableInspectorNodeSearchForWebView:(WKWebView *)webView
 {
-    UIView *preferredContentView = [self wi_preferredContentViewForWebView:webView];
-    if (!preferredContentView || ![preferredContentView respondsToSelector:@selector(_enableInspectorNodeSearch)])
+    UIView *activeContentView = [self wi_activeContentViewForWebView:webView];
+    if (!activeContentView || ![activeContentView respondsToSelector:@selector(_enableInspectorNodeSearch)])
         return NO;
 
     for (UIView *contentView in [self wi_contentViewsForWebView:webView]) {
-        if (contentView == preferredContentView)
+        if (contentView == activeContentView)
             continue;
         if ([contentView respondsToSelector:@selector(_disableInspectorNodeSearch)])
             [contentView _disableInspectorNodeSearch];
     }
 
-    if ([self wi_contentViewHasInspectorNodeSearchRecognizer:preferredContentView])
+    if ([self wi_contentViewHasInspectorNodeSearchRecognizer:activeContentView])
         return YES;
 
-    [preferredContentView _enableInspectorNodeSearch];
+    [activeContentView _enableInspectorNodeSearch];
     return YES;
 }
 
@@ -226,17 +252,11 @@ NSErrorDomain const WIKRuntimeBridgeErrorDomain = @"WebInspectorBridge.WIKRuntim
 
 + (BOOL)hasInspectorNodeSearchRecognizerForWebView:(WKWebView *)webView
 {
-    Class recognizerClass = [self wi_inspectorNodeSearchRecognizerClass];
-    if (!recognizerClass)
+    UIView *contentView = [self wi_activeContentViewForWebView:webView];
+    if (!contentView)
         return NO;
 
-    for (UIView *contentView in [self wi_contentViewsForWebView:webView]) {
-        for (UIGestureRecognizer *recognizer in contentView.gestureRecognizers) {
-            if ([recognizer isKindOfClass:recognizerClass])
-                return YES;
-        }
-    }
-    return NO;
+    return [self wi_contentViewHasInspectorNodeSearchRecognizer:contentView];
 }
 
 + (BOOL)removeInspectorNodeSearchRecognizersFromWebView:(WKWebView *)webView
@@ -256,6 +276,32 @@ NSErrorDomain const WIKRuntimeBridgeErrorDomain = @"WebInspectorBridge.WIKRuntim
         }
     }
     return didRemoveRecognizer;
+}
+
++ (nullable NSString *)nodeSearchDebugSummaryForWebView:(WKWebView *)webView
+{
+    NSArray<UIView *> *contentViews = [self wi_contentViewsForWebView:webView];
+    UIView *currentContentView = [self wi_currentContentViewForWebView:webView];
+    UIView *activeContentView = [self wi_activeContentViewForWebView:webView];
+
+    NSUInteger recognizerViewCount = 0;
+    for (UIView *contentView in contentViews) {
+        if ([self wi_contentViewHasInspectorNodeSearchRecognizer:contentView])
+            recognizerViewCount += 1;
+    }
+
+    BOOL activeHasNodeSearch = activeContentView && [self wi_contentViewHasInspectorNodeSearchRecognizer:activeContentView];
+    BOOL anyHasNodeSearch = recognizerViewCount > 0;
+    NSString *activeSource = currentContentView ? @"current" : @"fallback";
+
+    return [NSString stringWithFormat:
+        @"activeSource=%@ contentViews=%lu recognizerViews=%lu activeHasNodeSearch=%d anyHasNodeSearch=%d",
+        activeSource,
+        (unsigned long)contentViews.count,
+        (unsigned long)recognizerViewCount,
+        activeHasNodeSearch ? 1 : 0,
+        anyHasNodeSearch ? 1 : 0
+    ];
 }
 #endif
 

@@ -54,6 +54,7 @@ import {
     buildNode,
     captureTreeScrollPosition,
     captureTreeScrollTop,
+    clearPointerHoverState,
     ensureTreeEventHandlers,
     reopenSelectionAncestors,
     processPendingNodeRenders,
@@ -445,7 +446,9 @@ function resetTreeViewportScroll(): void {
     syncTreeScrollMetrics();
 }
 
-function handleDocumentUpdated(): void {
+export function handleDocumentUpdated(): void {
+    clearPointerHoverState();
+    domTreeUpdater.reset();
     treeState.snapshot = null;
     treeState.nodes.clear();
     treeState.elements.clear();

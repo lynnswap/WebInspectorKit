@@ -71,16 +71,17 @@ struct DOMTreeRenderTests {
     }
 
     @Test
-    func treeViewShowsRecoverableDocumentError() async {
+    func detailViewShowsRecoverableDocumentErrorButton() async {
         let inspector = WIDOMInspector()
-        let (viewController, window) = makeHostedTreeViewController(inspector: inspector)
+        let (viewController, window) = makeHostedDetailViewController(inspector: inspector)
         defer { tearDown(window: window) }
 
         inspector.document.setErrorMessage("Failed to resolve selected element.")
 
         let showsError = await waitUntilAsync {
-            let configuration = viewController.contentUnavailableConfiguration as? UIContentUnavailableConfiguration
-            return configuration?.secondaryText == "Failed to resolve selected element."
+            let identifiers = viewController.navigationItem.rightBarButtonItems?
+                .compactMap(\.accessibilityIdentifier) ?? []
+            return identifiers.contains("WI.DOM.ErrorButton")
         }
         #expect(showsError)
     }

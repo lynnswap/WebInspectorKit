@@ -348,6 +348,7 @@ export const REFRESH_RETRY_WINDOW = 2000;
 
 /** Public frontend API */
 export interface WebInspectorDOMFrontend {
+    invalidateDocumentContext(contextID?: number): void;
     applyFullSnapshot(snapshot: unknown, contextID?: number): boolean;
     applySelectionPayload(
         payload: number | DOMSelectionSyncPayload,

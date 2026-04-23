@@ -56,5 +56,9 @@ package enum WIInspectorSelectionPrivateBridge {
     package static func removeNodeSearchRecognizers(in webView: WKWebView) -> Bool {
         WIKRuntimeBridge.removeInspectorNodeSearchRecognizers(from: webView)
     }
+
+    package static func nodeSearchDebugSummary(in webView: WKWebView) -> String? {
+        WIKRuntimeBridge.nodeSearchDebugSummary(for: webView)
+    }
 }
 #endif

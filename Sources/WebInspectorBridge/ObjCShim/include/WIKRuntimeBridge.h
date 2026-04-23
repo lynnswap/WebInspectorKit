@@ -77,6 +77,7 @@ typedef NS_ERROR_ENUM(WIKRuntimeBridgeErrorDomain, WIKRuntimeBridgeErrorCode) {
 + (BOOL)disableInspectorNodeSearchForWebView:(WKWebView *)webView;
 + (BOOL)hasInspectorNodeSearchRecognizerForWebView:(WKWebView *)webView;
 + (BOOL)removeInspectorNodeSearchRecognizersFromWebView:(WKWebView *)webView;
++ (nullable NSString *)nodeSearchDebugSummaryForWebView:(WKWebView *)webView;
 #endif
 
 #if TARGET_OS_OSX

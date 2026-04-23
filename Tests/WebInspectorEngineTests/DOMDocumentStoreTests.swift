@@ -561,7 +561,7 @@ struct DOMDocumentModelTests {
     }
 
     @Test
-    func unknownParentSetChildNodesMarksMirrorInvariantViolationWithoutCreatingPlaceholderRoot() {
+    func unknownParentSetChildNodesMarksRejectedStructuralMutationWithoutCreatingPlaceholderRoot() {
         let model = DOMDocumentModel()
         model.replaceDocument(
             with: .init(
@@ -594,11 +594,12 @@ struct DOMDocumentModelTests {
         #expect(model.detachedRootsForDiagnostics().isEmpty)
         #expect(model.node(localID: 900) == nil)
         #expect(model.node(backendNodeID: 1901) == nil)
-        #expect(model.consumeMirrorInvariantViolationReason() == "setChildNodes missing parent localID=900 childCount=1")
+        #expect(model.consumeMirrorInvariantViolationReason() == nil)
+        #expect(model.consumeRejectedStructuralMutationParentLocalIDs() == Set<UInt64>([900]))
     }
 
     @Test
-    func unknownParentSetChildNodesChainMarksMirrorInvariantViolationWithoutMaterializingLeaf() {
+    func unknownParentSetChildNodesChainMarksRejectedStructuralMutationWithoutMaterializingLeaf() {
         let model = DOMDocumentModel()
         model.replaceDocument(
             with: .init(
@@ -629,11 +630,12 @@ struct DOMDocumentModelTests {
         #expect(model.topLevelRoots().map(\.localID) == [1])
         #expect(model.detachedRootsForDiagnostics().isEmpty)
         #expect(model.node(backendNodeID: 2903) == nil)
-        #expect(model.consumeMirrorInvariantViolationReason() == "setChildNodes missing parent localID=900 childCount=1")
+        #expect(model.consumeMirrorInvariantViolationReason() == nil)
+        #expect(model.consumeRejectedStructuralMutationParentLocalIDs() == Set<UInt64>([900, 901, 902]))
     }
 
     @Test
-    func laterMainTreeSubtreeStillAppliesAfterUnknownParentInvariantViolation() {
+    func laterMainTreeSubtreeStillAppliesAfterUnknownParentRejectedMutation() {
         let model = DOMDocumentModel()
         model.replaceDocument(
             with: .init(
@@ -648,7 +650,8 @@ struct DOMDocumentModelTests {
                 ]
             )
         )
-        #expect(model.consumeMirrorInvariantViolationReason() == "setChildNodes missing parent localID=900 childCount=1")
+        #expect(model.consumeMirrorInvariantViolationReason() == nil)
+        #expect(model.consumeRejectedStructuralMutationParentLocalIDs() == Set<UInt64>([900]))
 
         model.applyMutationBundle(
             .init(
@@ -673,10 +676,11 @@ struct DOMDocumentModelTests {
         #expect(attachedNode.parent?.localID == 2)
         #expect(attachedNode.children.map(\.localID) == [902])
         #expect(model.consumeMirrorInvariantViolationReason() == nil)
+        #expect(model.consumeRejectedStructuralMutationParentLocalIDs().isEmpty)
     }
 
     @Test
-    func unknownParentChildNodeInsertedMarksMirrorInvariantViolationWithoutCreatingPlaceholderRoot() {
+    func unknownParentChildNodeInsertedMarksRejectedStructuralMutationWithoutCreatingPlaceholderRoot() {
         let model = DOMDocumentModel()
         model.replaceDocument(
             with: .init(
@@ -700,7 +704,8 @@ struct DOMDocumentModelTests {
         #expect(model.detachedRootsForDiagnostics().isEmpty)
         #expect(model.node(localID: 900) == nil)
         #expect(model.node(backendNodeID: 1901) == nil)
-        #expect(model.consumeMirrorInvariantViolationReason() == "childNodeInserted missing parent localID=900 nodeLocalID=901")
+        #expect(model.consumeMirrorInvariantViolationReason() == nil)
+        #expect(model.consumeRejectedStructuralMutationParentLocalIDs() == Set<UInt64>([900]))
     }
 
     @Test

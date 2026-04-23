@@ -116,6 +116,15 @@ final class DOMInspectorBridge: NSObject {
         ) ?? false
     }
 
+    func invalidateDocumentContext(contextID: DOMContextID) async {
+        await evaluateVoid(
+            "window.webInspectorDOMFrontend?.invalidateDocumentContext?.(contextID)",
+            arguments: [
+                "contextID": contextID,
+            ]
+        )
+    }
+
     func finishChildNodeRequest(nodeID: Int, success: Bool, contextID: DOMContextID) async {
         await evaluateVoid(
             "window.webInspectorDOMFrontend?.finishChildNodeRequest?.(nodeId, success, contextID)",

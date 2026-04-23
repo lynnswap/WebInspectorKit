@@ -19,6 +19,7 @@ import {
     applyMutationBuffer,
     applyMutationBundle,
     applyMutationBundles,
+    handleDocumentUpdated,
     registerTreeHandlers,
     setSnapshot,
 } from "./dom-tree-snapshot";
@@ -135,6 +136,12 @@ function installWebInspectorKit(): void {
             (window as Window & { __wiDOMFrontendBootstrap?: DOMFrontendBootstrapState }).__wiDOMFrontendBootstrap = bootstrap;
             applyBootstrap(bootstrap);
             notifyReady();
+        },
+        invalidateDocumentContext: (contextID = protocolState.contextID) => {
+            if (typeof contextID === "number" && Number.isFinite(contextID)) {
+                adoptDocumentContext({ contextID });
+            }
+            handleDocumentUpdated();
         },
         applyFullSnapshot: (snapshot, contextID = protocolState.contextID) => {
             if (!ensureFrontendContext(contextID)) {

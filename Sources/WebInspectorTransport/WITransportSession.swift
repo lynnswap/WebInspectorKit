@@ -456,14 +456,15 @@ package final class WISharedInspectorTransport {
 
     package func attach(
         client: WISharedInspectorTransportClient,
-        to webView: WKWebView
+        to webView: WKWebView,
+        forceReattach: Bool = false
     ) async {
         clientStates[client] = ClientState(
             webView: webView,
             demand: .attached,
             sequence: nextDemandSequence()
         )
-        await reconcileAttachment()
+        await reconcileAttachment(forceReattach: forceReattach)
     }
 
     package func suspend(client: WISharedInspectorTransportClient) async {
@@ -508,7 +509,7 @@ private extension WISharedInspectorTransport {
         return nextSequence
     }
 
-    func reconcileAttachment() async {
+    func reconcileAttachment(forceReattach: Bool = false) async {
         let desiredWebView = desiredAttachedWebView()
 
         guard let desiredWebView else {
@@ -525,7 +526,8 @@ private extension WISharedInspectorTransport {
 
         if attachedWebView === desiredWebView,
            session != nil,
-           attachTask == nil {
+           attachTask == nil,
+           forceReattach == false {
             return
         }
 

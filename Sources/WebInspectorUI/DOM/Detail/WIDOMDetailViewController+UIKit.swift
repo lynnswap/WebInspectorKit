@@ -171,12 +171,24 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     private lazy var dataSource = makeDataSource()
 
     private lazy var pickItem: UIBarButtonItem = {
-        UIBarButtonItem(
+        let item = UIBarButtonItem(
             image: UIImage(systemName: pickSymbolName),
             style: .plain,
             target: self,
             action: #selector(toggleSelectionMode)
         )
+        item.accessibilityIdentifier = "WI.DOM.PickButton"
+        return item
+    }()
+    private lazy var errorItem: UIBarButtonItem = {
+        let item = UIBarButtonItem(
+            image: UIImage(systemName: "exclamationmark.circle"),
+            style: .plain,
+            target: self,
+            action: #selector(presentCurrentErrorMessage)
+        )
+        item.accessibilityIdentifier = "WI.DOM.ErrorButton"
+        return item
     }()
 
     public init(inspector: WIDOMInspector, showsNavigationControls: Bool = true) {
@@ -234,7 +246,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
             navigationItem.rightBarButtonItems = nil
             return
         }
-        navigationItem.rightBarButtonItems = [pickItem]
+        navigationItem.rightBarButtonItems = currentRightBarButtonItems()
     }
 
     private func startObservingStateIfNeeded() {
@@ -277,6 +289,13 @@ public final class WIDOMDetailViewController: UICollectionViewController {
             ) { [weak self] _ in
                 self?.scheduleNavigationControlsUpdate()
                 self?.handleSelectedNodeChange()
+            }
+            .store(in: &self.documentStoreObservationHandles)
+            document.observe(
+                \.errorMessage,
+                options: [.removeDuplicates]
+            ) { [weak self] _ in
+                self?.scheduleNavigationControlsUpdate()
             }
             .store(in: &self.documentStoreObservationHandles)
             self.scheduleNavigationControlsUpdate()
@@ -343,12 +362,23 @@ public final class WIDOMDetailViewController: UICollectionViewController {
             navigationItem.additionalOverflowItems = UIDeferredMenuElement.uncached { [weak self] completion in
                 completion((self?.makeSecondaryMenu() ?? UIMenu()).children)
             }
+            navigationItem.rightBarButtonItems = currentRightBarButtonItems()
             pickItem.isEnabled = inspector.isPageReadyForSelection
             pickItem.image = UIImage(systemName: pickSymbolName)
             pickItem.tintColor = inspector.isSelectingElement ? .systemBlue : .label
+            errorItem.tintColor = .systemOrange
         } else {
             navigationItem.additionalOverflowItems = nil
         }
+    }
+
+    private func currentRightBarButtonItems() -> [UIBarButtonItem] {
+        var items = [pickItem]
+        if let errorMessage = inspector.document.errorMessage,
+           !errorMessage.isEmpty {
+            items.append(errorItem)
+        }
+        return items
     }
 
     private func handleSelectedNodeChange() {
@@ -1024,6 +1054,19 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     private func toggleSelectionMode() {
         inspector.requestSelectionModeToggle()
         updateNavigationControls()
+    }
+
+    @objc
+    private func presentCurrentErrorMessage() {
+        guard let errorMessage = inspector.document.errorMessage,
+              !errorMessage.isEmpty else {
+            return
+        }
+        WIDOMRuntimeErrorPresenter.present(
+            message: errorMessage,
+            from: errorItem,
+            in: self
+        )
     }
 
     @objc

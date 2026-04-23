@@ -15,6 +15,9 @@ public final class WIDOMTreeViewController: UIViewController {
     private var inspectorWebViewConstraints: [NSLayoutConstraint] = []
     private var isInspectorWebViewActive = false
     private var managesInspectorWebViewExternally = false
+#if DEBUG
+    private(set) var inspectorWebViewAttachCountForTesting = 0
+#endif
 
     public init(inspector: WIDOMInspector) {
         self.inspector = inspector
@@ -41,7 +44,6 @@ public final class WIDOMTreeViewController: UIViewController {
         ])
 
         observeState()
-        updateErrorPresentation(errorMessage: inspector.document.errorMessage)
         applyInspectorWebViewActivityIfNeeded()
     }
 
@@ -76,34 +78,8 @@ public final class WIDOMTreeViewController: UIViewController {
     }
 
     private func observeState() {
-        inspector.observe(\.document) { [weak self] document in
-            guard let self else {
-                return
-            }
-            self.documentObservationHandles.removeAll()
-            document.observe(
-                \.errorMessage,
-                options: [.removeDuplicates]
-            ) { [weak self] newErrorMessage in
-                self?.updateErrorPresentation(errorMessage: newErrorMessage)
-            }
-            .store(in: &self.documentObservationHandles)
-            self.updateErrorPresentation(errorMessage: document.errorMessage)
-        }
-        .store(in: &observationHandles)
-    }
-
-    private func updateErrorPresentation(errorMessage: String?) {
-        guard let errorMessage, !errorMessage.isEmpty else {
-            contentUnavailableConfiguration = nil
-            return
-        }
-
-        var configuration = UIContentUnavailableConfiguration.empty()
-        configuration.text = "Unable to Load DOM"
-        configuration.secondaryText = errorMessage
-        configuration.image = UIImage(systemName: "exclamationmark.triangle")
-        contentUnavailableConfiguration = configuration
+        _ = documentObservationHandles
+        _ = observationHandles
     }
 
     private func applyInspectorWebViewActivityIfNeeded() {
@@ -139,6 +115,9 @@ public final class WIDOMTreeViewController: UIViewController {
         NSLayoutConstraint.activate(constraints)
         inspectorWebViewConstraints = constraints
         attachedInspectorWebView = inspectorWebView
+#if DEBUG
+        inspectorWebViewAttachCountForTesting += 1
+#endif
         Task { @MainActor [weak self] in
             guard let self else {
                 return

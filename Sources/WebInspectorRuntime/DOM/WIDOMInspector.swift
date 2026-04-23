@@ -99,6 +99,19 @@ public final class WIDOMInspector {
         let targetIdentifier: String
     }
 
+    private struct DeferredLoadingMutationState {
+        let contextID: DOMContextID
+        let targetIdentifier: String
+        var sawMutation = false
+        var performedFollowUpRefresh = false
+    }
+
+    private struct FrontendHydrationKey: Equatable {
+        let contextID: DOMContextID
+        let projectionRevision: UInt64
+        let generation: UInt64
+    }
+
     private struct SelectionTransaction: Equatable {
         let contextID: DOMContextID
         let generation: UInt64
@@ -311,6 +324,9 @@ public final class WIDOMInspector {
     @ObservationIgnored var pointerDisconnectObserver: NSObjectProtocol?
     @ObservationIgnored private var pageWebViewAttachmentGeneration: UInt64 = 0
     @ObservationIgnored private var isDOMTransportAttached = false
+    @ObservationIgnored private var deferredLoadingMutationState: DeferredLoadingMutationState?
+    @ObservationIgnored private var frontendHydrationInFlightKey: FrontendHydrationKey?
+    @ObservationIgnored private var frontendHydrationReplayContextID: DOMContextID?
 #if DEBUG
     @ObservationIgnored package private(set) var freshContextDiagnosticsForTesting: [FreshContextDiagnosticEvent] = []
     @ObservationIgnored package private(set) var frontendHydrationDiagnosticsForTesting: [FrontendHydrationDiagnosticEvent] = []
@@ -391,6 +407,15 @@ public final class WIDOMInspector {
             logSelectionDiagnostics(
                 "frontendHostDidAttach waiting for ready",
                 extra: "reason=\(reason) contextID=\(contextID) frontendReadyContext=\(frontendReadyContextID.map(String.init) ?? "nil") generation=\(inspectorBridge.generation)",
+                level: .debug
+            )
+            return
+        }
+
+        guard canProjectCurrentDocumentToFrontend(contextID: contextID) else {
+            logSelectionDiagnostics(
+                "frontendHostDidAttach waiting for ready document",
+                extra: "reason=\(reason) contextID=\(contextID) phase=\(String(describing: phase)) rootPresent=\(document.rootNode != nil)",
                 level: .debug
             )
             return
@@ -568,12 +593,12 @@ public final class WIDOMInspector {
 
     public func beginSelectionMode() async throws {
         let _ = try requirePageWebView()
-        let context = try requireCurrentContext()
         applyRecoverableError(nil)
         let selectedContextID = currentContext?.contextID
         let hadSelectedNode = document.selectedNode != nil
 
         do {
+            let context = try requireCurrentContext()
             activatePageWindowForSelectionIfPossible()
 #if canImport(UIKit)
             try await requestPageWindowActivationIfNeeded()
@@ -658,11 +683,18 @@ public final class WIDOMInspector {
     }
 
     private func updateSelectionAvailability() {
+        let isReadyPhase: Bool
+        if case .ready = phase {
+            isReadyPhase = true
+        } else {
+            isReadyPhase = false
+        }
         isPageReadyForSelection =
             hasPageWebView
             && isDOMTransportAttached
             && currentContext != nil
             && phase.targetIdentifier != nil
+            && isReadyPhase
     }
 
     package func requestSelectionModeToggle() {
@@ -1088,6 +1120,23 @@ private extension WIDOMInspector {
         inspectorBridge.updateBootstrap(bootstrapPayload())
     }
 
+    func invalidateFrontendDocumentContext(contextID: DOMContextID) async {
+        updateInspectorBootstrap()
+        await inspectorBridge.invalidateDocumentContext(contextID: contextID)
+    }
+
+    func canProjectCurrentDocumentToFrontend(contextID: DOMContextID) -> Bool {
+        guard frontendReadyContextID == contextID,
+              currentContext?.contextID == contextID,
+              document.rootNode != nil else {
+            return false
+        }
+        guard case let .ready(context, _) = phase else {
+            return false
+        }
+        return context.contextID == contextID
+    }
+
     func frontendFullSnapshotPayload() -> [String: Any]? {
         guard let rootNode = document.rootNode else {
             return nil
@@ -1103,7 +1152,7 @@ private extension WIDOMInspector {
     }
 
     func frontendCanAcceptIncrementalProjection(contextID: DOMContextID) -> Bool {
-        guard frontendReadyContextID == contextID else {
+        guard canProjectCurrentDocumentToFrontend(contextID: contextID) else {
             return false
         }
         return frontendCoordinator.lastHydratedContextID == contextID
@@ -1205,6 +1254,11 @@ private extension WIDOMInspector {
 
         let projectionRevision = document.projectionRevision
         let frontendGeneration = inspectorBridge.generation
+        let hydrationKey = FrontendHydrationKey(
+            contextID: contextID,
+            projectionRevision: projectionRevision,
+            generation: frontendGeneration
+        )
         if frontendCoordinator.isHydrated(
             contextID: contextID,
             projectionRevision: projectionRevision,
@@ -1227,15 +1281,46 @@ private extension WIDOMInspector {
             return
         }
 
-        let snapshotPayload = frontendFullSnapshotPayload() ?? ["root": NSNull()]
-        guard frontendReadyContextID == contextID,
-              currentContext?.contextID == contextID else {
+        if frontendHydrationInFlightKey == hydrationKey {
+            logSelectionDiagnostics(
+                "hydrateReadyFrontendFromCurrentDocument skipped duplicate in-flight ready",
+                extra: "reason=\(reason) contextID=\(contextID) revision=\(projectionRevision) generation=\(frontendGeneration)"
+            )
+            return
+        }
+
+        if let frontendHydrationInFlightKey,
+           frontendHydrationInFlightKey.contextID == contextID {
+            frontendHydrationReplayContextID = contextID
+            logSelectionDiagnostics(
+                "hydrateReadyFrontendFromCurrentDocument queued replay while hydration is in flight",
+                extra: "reason=\(reason) contextID=\(contextID) revision=\(projectionRevision) generation=\(frontendGeneration) inFlightRevision=\(frontendHydrationInFlightKey.projectionRevision) inFlightGeneration=\(frontendHydrationInFlightKey.generation)",
+                level: .debug
+            )
+            return
+        }
+
+        frontendHydrationInFlightKey = hydrationKey
+
+        guard canProjectCurrentDocumentToFrontend(contextID: contextID),
+              let snapshotPayload = frontendFullSnapshotPayload() else {
+            frontendCoordinator.reset()
+            if frontendHydrationInFlightKey == hydrationKey {
+                frontendHydrationInFlightKey = nil
+            }
+            logSelectionDiagnostics(
+                "hydrateReadyFrontendFromCurrentDocument skipped without ready document",
+                extra: "reason=\(reason) contextID=\(contextID) revision=\(projectionRevision) generation=\(frontendGeneration) phase=\(String(describing: phase)) rootPresent=\(document.rootNode != nil)",
+                level: .debug
+            )
             return
         }
         updateInspectorBootstrap()
         let didApplySnapshot = await inspectorBridge.applyFullSnapshot(snapshotPayload, contextID: contextID)
-        guard frontendReadyContextID == contextID,
-              currentContext?.contextID == contextID else {
+        guard canProjectCurrentDocumentToFrontend(contextID: contextID) else {
+            if frontendHydrationInFlightKey == hydrationKey {
+                frontendHydrationInFlightKey = nil
+            }
             return
         }
         let didApplySelection = await applySelectionProjection(
@@ -1244,6 +1329,9 @@ private extension WIDOMInspector {
         )
         guard didApplySnapshot else {
             frontendCoordinator.reset()
+            if frontendHydrationInFlightKey == hydrationKey {
+                frontendHydrationInFlightKey = nil
+            }
             logSelectionDiagnostics(
                 "hydrateReadyFrontendFromCurrentDocument skipped failed projection",
                 extra: "reason=\(reason) contextID=\(contextID) revision=\(projectionRevision) generation=\(frontendGeneration) snapshot=false selection=\(didApplySelection)",
@@ -1270,6 +1358,22 @@ private extension WIDOMInspector {
             "hydrateReadyFrontendFromCurrentDocument applied current state",
             extra: "reason=\(reason) contextID=\(contextID) revision=\(projectionRevision) generation=\(frontendGeneration) snapshot=\(didApplySnapshot) selection=\(didApplySelection)"
         )
+
+        let shouldReplay = frontendHydrationReplayContextID == contextID
+            && currentContext?.contextID == contextID
+            && frontendReadyContextID == contextID
+        if shouldReplay {
+            frontendHydrationReplayContextID = nil
+        }
+        if frontendHydrationInFlightKey == hydrationKey {
+            frontendHydrationInFlightKey = nil
+        }
+        if shouldReplay {
+            await hydrateReadyFrontendFromCurrentDocument(
+                contextID: contextID,
+                reason: "hydrateReadyFrontendFromCurrentDocument.replay"
+            )
+        }
     }
 
     func markReadyFrontendProjectionCurrent(contextID: DOMContextID) {
@@ -1306,7 +1410,16 @@ private extension WIDOMInspector {
         selectionPayload: DOMSelectionSnapshotPayload?,
         reason: String
     ) async {
-        let snapshotPayload = frontendFullSnapshotPayload() ?? ["root": NSNull()]
+        guard canProjectCurrentDocumentToFrontend(contextID: contextID),
+              let snapshotPayload = frontendFullSnapshotPayload() else {
+            frontendCoordinator.reset()
+            logSelectionDiagnostics(
+                "projectCurrentDocumentToFrontend skipped without ready document",
+                extra: "reason=\(reason) contextID=\(contextID) phase=\(String(describing: phase)) rootPresent=\(document.rootNode != nil)",
+                level: .debug
+            )
+            return
+        }
         updateInspectorBootstrap()
         let didApplySnapshot = await inspectorBridge.applyFullSnapshot(snapshotPayload, contextID: contextID)
         let didApplySelection = await applySelectionProjection(selectionPayload, contextID: contextID)
@@ -1403,6 +1516,9 @@ private extension WIDOMInspector {
         setPhase(.idle)
         documentURL = nil
         frontendReadyContextID = nil
+        deferredLoadingMutationState = nil
+        frontendHydrationInFlightKey = nil
+        frontendHydrationReplayContextID = nil
         inspectModeTargetIdentifier = nil
         acceptsInspectEvents = false
         cancelPendingInspectMaterializationTimeout()
@@ -1446,6 +1562,9 @@ private extension WIDOMInspector {
         payloadNormalizer.resetForDocumentUpdate()
         frontendReadyContextID = nil
         frontendCoordinator.reset()
+        deferredLoadingMutationState = nil
+        frontendHydrationInFlightKey = nil
+        frontendHydrationReplayContextID = nil
         cancelPendingInspectMaterializationTimeout()
 
         let context = DOMContext(
@@ -1464,6 +1583,8 @@ private extension WIDOMInspector {
         } else {
             setPhase(.waitingForTarget(context))
         }
+
+        await invalidateFrontendDocumentContext(contextID: context.contextID)
 
 #if canImport(UIKit)
         await resetNativeInspectorSelectionStateForFreshContext(
@@ -1569,6 +1690,24 @@ private extension WIDOMInspector {
             "refreshCurrentDocumentFromTransport ready context=\(contextID) target=\(targetIdentifier) root=\(snapshot.root.nodeName)"
         )
 
+        if consumeDeferredLoadingMutationRefreshIfNeeded(
+            contextID: contextID,
+            targetIdentifier: targetIdentifier
+        ) {
+            logSelectionDiagnostics(
+                "refreshCurrentDocumentFromTransport scheduling follow-up refresh after loading-time mutations",
+                extra: "contextID=\(contextID) target=\(targetIdentifier)",
+                level: .debug
+            )
+            try await refreshCurrentDocumentFromTransport(
+                contextID: contextID,
+                targetIdentifier: targetIdentifier,
+                depth: depth,
+                isFreshDocument: false
+            )
+            return
+        }
+
         await hydrateInitiallyExpandedNodes(
             contextID: contextID,
             targetIdentifier: targetIdentifier,
@@ -1581,6 +1720,11 @@ private extension WIDOMInspector {
                 reason: "transport.refreshCurrentDocument"
             )
         }
+
+        clearDeferredLoadingMutationStateIfSettled(
+            contextID: contextID,
+            targetIdentifier: targetIdentifier
+        )
     }
 
     func loadDocumentResponseObject(
@@ -1717,6 +1861,14 @@ private extension WIDOMInspector {
             )
             frontendReadyContextID = contextID
             if case let .ready(context, _) = phase {
+                if bootstrapTask != nil {
+                    logSelectionDiagnostics(
+                        "handleInspectorReady waiting for bootstrap completion",
+                        extra: "contextID=\(contextID) revision=\(document.projectionRevision)",
+                        level: .debug
+                    )
+                    return
+                }
                 let contextID = context.contextID
                 Task { @MainActor [weak self] in
                     guard let self else {
@@ -1867,6 +2019,21 @@ private extension WIDOMInspector {
         guard isDOMEvent || envelope.method == "Inspector.inspect" else {
             return
         }
+        if isInspectEvent == false,
+           case let .loadingDocument(context, activeTargetIdentifier) = phase {
+            let matchesLoadingTarget =
+                envelope.targetIdentifier == nil
+                || envelope.targetIdentifier == activeTargetIdentifier
+                || sharedTransport.targetKind(for: envelope.targetIdentifier) == .frame
+            if matchesLoadingTarget {
+                noteDeferredLoadingMutation(
+                    contextID: context.contextID,
+                    targetIdentifier: activeTargetIdentifier,
+                    method: envelope.method
+                )
+                return
+            }
+        }
         guard case let .ready(context, targetIdentifier) = phase,
               isInspectEvent
                 || envelope.targetIdentifier == nil
@@ -1941,35 +2108,13 @@ private extension WIDOMInspector {
                     extra: "contextID=\(context.contextID) target=\(targetIdentifier) reason=\(mirrorInvariantViolationReason)",
                     level: .error
                 )
-                if let pendingSelection = pendingInspectSelection,
-                   pendingSelection.contextID == context.contextID,
-                   await recoverPendingInspectSelectionAfterMirrorInvariantViolation(
-                        pendingSelection,
-                        targetIdentifier: targetIdentifier,
-                        reason: mirrorInvariantViolationReason
-                   ) {
-                    return
-                }
-                do {
-                    try await refreshCurrentDocumentFromTransport(
-                        contextID: context.contextID,
-                        targetIdentifier: targetIdentifier,
-                        depth: configuration.snapshotDepth,
-                        isFreshDocument: false
-                    )
-                    await applyPendingInspectSelectionIfPossible()
-                    logSelectionDiagnostics(
-                        "handleDOMEventEnvelope refreshed current document after canonical mirror invariant violation",
-                        extra: "contextID=\(context.contextID) target=\(targetIdentifier) reason=\(mirrorInvariantViolationReason)",
-                        level: .debug
-                    )
-                } catch {
-                    logSelectionDiagnostics(
-                        "handleDOMEventEnvelope failed to refresh current document after canonical mirror invariant violation",
-                        extra: "contextID=\(context.contextID) target=\(targetIdentifier) reason=\(mirrorInvariantViolationReason) error=\(error.localizedDescription)",
-                        level: .error
-                    )
-                }
+                await beginFreshContext(
+                    documentURL: normalizedDocumentURL(pageWebView?.url?.absoluteString),
+                    targetIdentifier: targetIdentifier,
+                    loadImmediately: true,
+                    isFreshDocument: true,
+                    reason: "transport.mirrorInvariantViolation"
+                )
                 return
             }
             if mirrorInvariantViolationReason == nil, frontendCanAcceptIncrementalProjection(contextID: context.contextID) {
@@ -1986,11 +2131,26 @@ private extension WIDOMInspector {
                     reason: "handleDOMEventEnvelope.deferredMutation"
                 )
             }
+            recordPendingInspectProgressIfNeeded(
+                from: bundle,
+                contextID: context.contextID,
+                reason: "mutation.bundle",
+                rejectedStructuralMutationParentLocalIDs: rejectedStructuralMutationParentLocalIDs
+            )
+            await applyPendingInspectSelectionIfPossible()
+            await finishPendingInspectMaterialization(
+                from: bundle,
+                contextID: context.contextID,
+                rejectedStructuralMutationParentLocalIDs: rejectedStructuralMutationParentLocalIDs
+            )
             await applyPendingInspectSelectionIfPossible()
             await finishPendingChildRequests(
                 from: bundle,
                 contextID: context.contextID,
                 rejectedStructuralMutationParentLocalIDs: rejectedStructuralMutationParentLocalIDs
+            )
+            await advancePendingInspectMaterializationIfIdle(
+                contextID: context.contextID
             )
         case let .replaceSubtree(root):
             let bundle = DOMGraphMutationBundle(events: [.replaceSubtree(root: root)])
@@ -2002,11 +2162,26 @@ private extension WIDOMInspector {
                     reason: "handleDOMEventEnvelope.deferredSubtree"
                 )
             }
+            recordPendingInspectProgressIfNeeded(
+                from: bundle,
+                contextID: context.contextID,
+                reason: "mutation.replaceSubtree",
+                rejectedStructuralMutationParentLocalIDs: []
+            )
+            await applyPendingInspectSelectionIfPossible()
+            await finishPendingInspectMaterialization(
+                from: bundle,
+                contextID: context.contextID,
+                rejectedStructuralMutationParentLocalIDs: []
+            )
             await applyPendingInspectSelectionIfPossible()
             await finishPendingChildRequests(
                 from: bundle,
                 contextID: context.contextID,
                 rejectedStructuralMutationParentLocalIDs: []
+            )
+            await advancePendingInspectMaterializationIfIdle(
+                contextID: context.contextID
             )
         case let .selection(selection):
             let previousSelection = selectionNodeSummary(document.selectedNode)
@@ -2999,13 +3174,6 @@ private extension WIDOMInspector {
             return
         }
 
-        await completeInspectModeAfterBackendSelection()
-
-        guard currentContext?.contextID == contextID,
-              selectionTransactionIsCurrent(transaction) else {
-            return
-        }
-
         if let node = resolvedAttachedInspectedNodeFromCurrentDocument(nodeID: nodeID) {
             logSelectionDiagnostics(
                 "resolveInspectSelectionAfterTransportDrain resolved attached node before drain",
@@ -3182,6 +3350,7 @@ private extension WIDOMInspector {
                 contextID: contextID,
                 targetIdentifierForMaterialization: targetIdentifier
             )
+            await completeInspectModeAfterBackendSelection()
             finishInspectSelectionResolution(transaction: transaction)
             applyRecoverableError(nil)
             return
@@ -3205,6 +3374,7 @@ private extension WIDOMInspector {
                 contextID: contextID,
                 targetIdentifierForMaterialization: targetIdentifier
             )
+            await completeInspectModeAfterBackendSelection()
             finishInspectSelectionResolution(transaction: transaction)
             applyRecoverableError(nil)
             return
@@ -4606,6 +4776,7 @@ private extension WIDOMInspector {
             preferredSubtreeRootNodeIDs: pendingInspectSelection.materializedAncestorNodeIDs,
             targetIdentifierForMaterialization: pendingInspectSelection.resolutionTargetIdentifier
         )
+        await completeInspectModeAfterBackendSelection()
         finishInspectSelectionResolution(transaction: pendingInspectSelection.transaction)
         applyRecoverableError(nil)
     }
@@ -4817,6 +4988,10 @@ private extension WIDOMInspector {
             extra: "contextID=\(contextID.map(String.init) ?? "nil") generation=\(transaction.map { String($0.generation) } ?? "nil") error=\(errorMessage)",
             level: .error
         )
+        if transaction != nil,
+           inspectModeControlBackend != nil || isSelectingElement {
+            await completeInspectModeAfterBackendSelection()
+        }
         if transaction != nil {
             cancelPendingInspectMaterializationTimeout()
             pendingInspectSelection = nil
@@ -5069,6 +5244,64 @@ private extension WIDOMInspector {
         default:
             return true
         }
+    }
+
+    func noteDeferredLoadingMutation(
+        contextID: DOMContextID,
+        targetIdentifier: String,
+        method: String
+    ) {
+        if deferredLoadingMutationState?.contextID != contextID
+            || deferredLoadingMutationState?.targetIdentifier != targetIdentifier {
+            deferredLoadingMutationState = DeferredLoadingMutationState(
+                contextID: contextID,
+                targetIdentifier: targetIdentifier
+            )
+        }
+        deferredLoadingMutationState?.sawMutation = true
+        logSelectionDiagnostics(
+            "handleDOMEventEnvelope deferred mutation while document is loading",
+            extra: "contextID=\(contextID) target=\(targetIdentifier) method=\(method)",
+            level: .debug
+        )
+    }
+
+    func consumeDeferredLoadingMutationRefreshIfNeeded(
+        contextID: DOMContextID,
+        targetIdentifier: String
+    ) -> Bool {
+        guard var deferredLoadingMutationState,
+              deferredLoadingMutationState.contextID == contextID,
+              deferredLoadingMutationState.targetIdentifier == targetIdentifier,
+              deferredLoadingMutationState.sawMutation else {
+            return false
+        }
+        guard deferredLoadingMutationState.performedFollowUpRefresh == false else {
+            self.deferredLoadingMutationState = nil
+            logSelectionDiagnostics(
+                "refreshCurrentDocumentFromTransport suppressed additional follow-up refresh",
+                extra: "contextID=\(contextID) target=\(targetIdentifier)",
+                level: .debug
+            )
+            return false
+        }
+        deferredLoadingMutationState.sawMutation = false
+        deferredLoadingMutationState.performedFollowUpRefresh = true
+        self.deferredLoadingMutationState = deferredLoadingMutationState
+        return true
+    }
+
+    func clearDeferredLoadingMutationStateIfSettled(
+        contextID: DOMContextID,
+        targetIdentifier: String
+    ) {
+        guard let deferredLoadingMutationState,
+              deferredLoadingMutationState.contextID == contextID,
+              deferredLoadingMutationState.targetIdentifier == targetIdentifier,
+              deferredLoadingMutationState.sawMutation == false else {
+            return
+        }
+        self.deferredLoadingMutationState = nil
     }
 
     func injectedScriptIdentifier(from objectID: String) -> String? {
@@ -6154,6 +6387,12 @@ extension WIDOMInspector {
         )
     }
 
+    package func testResetFrontendHydrationState() {
+        frontendCoordinator.reset()
+        frontendHydrationInFlightKey = nil
+        frontendHydrationReplayContextID = nil
+    }
+
     package func testSetPendingInspectSelection(
         nodeID: Int,
         contextID: DOMContextID,
@@ -6209,6 +6448,26 @@ extension WIDOMInspector {
             return
         }
         setPhase(.loadingDocument(currentContext, targetIdentifier: targetIdentifier))
+    }
+
+    package func testRefreshCurrentDocumentFromTransport(
+        targetIdentifier: String,
+        depth: Int,
+        isFreshDocument: Bool
+    ) async throws {
+        guard let contextID = currentContext?.contextID else {
+            return
+        }
+        try await refreshCurrentDocumentFromTransport(
+            contextID: contextID,
+            targetIdentifier: targetIdentifier,
+            depth: depth,
+            isFreshDocument: isFreshDocument
+        )
+    }
+
+    package var testHasDeferredLoadingMutationState: Bool {
+        deferredLoadingMutationState != nil
     }
 
     package func testMaterializePendingInspectSelection(
@@ -6281,11 +6540,26 @@ extension WIDOMInspector {
     ) async {
         document.applyMutationBundle(bundle)
         let rejectedStructuralMutationParentLocalIDs = document.consumeRejectedStructuralMutationParentLocalIDs()
+        recordPendingInspectProgressIfNeeded(
+            from: bundle,
+            contextID: contextID,
+            reason: "test.bundle",
+            rejectedStructuralMutationParentLocalIDs: rejectedStructuralMutationParentLocalIDs
+        )
+        await applyPendingInspectSelectionIfPossible()
+        await finishPendingInspectMaterialization(
+            from: bundle,
+            contextID: contextID,
+            rejectedStructuralMutationParentLocalIDs: rejectedStructuralMutationParentLocalIDs
+        )
         await applyPendingInspectSelectionIfPossible()
         await finishPendingChildRequests(
             from: bundle,
             contextID: contextID,
             rejectedStructuralMutationParentLocalIDs: rejectedStructuralMutationParentLocalIDs
+        )
+        await advancePendingInspectMaterializationIfIdle(
+            contextID: contextID
         )
     }
 
@@ -6295,11 +6569,26 @@ extension WIDOMInspector {
     ) async {
         document.applyMutationBundle(bundle)
         let rejectedStructuralMutationParentLocalIDs = document.consumeRejectedStructuralMutationParentLocalIDs()
+        recordPendingInspectProgressIfNeeded(
+            from: bundle,
+            contextID: contextID,
+            reason: "test.transportBundle",
+            rejectedStructuralMutationParentLocalIDs: rejectedStructuralMutationParentLocalIDs
+        )
+        await applyPendingInspectSelectionIfPossible()
+        await finishPendingInspectMaterialization(
+            from: bundle,
+            contextID: contextID,
+            rejectedStructuralMutationParentLocalIDs: rejectedStructuralMutationParentLocalIDs
+        )
         await applyPendingInspectSelectionIfPossible()
         await finishPendingChildRequests(
             from: bundle,
             contextID: contextID,
             rejectedStructuralMutationParentLocalIDs: rejectedStructuralMutationParentLocalIDs
+        )
+        await advancePendingInspectMaterializationIfIdle(
+            contextID: contextID
         )
     }
 }

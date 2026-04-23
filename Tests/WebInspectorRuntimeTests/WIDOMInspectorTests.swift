@@ -548,8 +548,7 @@ struct WIDOMInspectorTests {
     }
 
     @Test
-    func mirrorInvariantViolationRefreshesCurrentDocumentFromTransport() async throws {
-        var documentVersion = 0
+    func unknownParentSetChildNodesDoesNotRefreshCurrentDocumentFromTransport() async throws {
         var getDocumentCallCount = 0
         let backend = FakeDOMTransportBackend(
             pageResultProvider: { method, _, _ in
@@ -557,32 +556,16 @@ struct WIDOMInspectorTests {
                     return [:]
                 }
                 getDocumentCallCount += 1
-                if documentVersion == 0 {
-                    return makeDocumentResult(
-                        url: "https://example.com/a",
-                        mainChildren: [[
-                            "nodeId": 6,
-                            "backendNodeId": 6,
-                            "nodeType": 1,
-                            "nodeName": "A",
-                            "localName": "a",
-                            "nodeValue": "",
-                            "attributes": ["id", "first"],
-                            "childNodeCount": 0,
-                            "children": [],
-                        ]]
-                    )
-                }
                 return makeDocumentResult(
                     url: "https://example.com/a",
                     mainChildren: [[
-                        "nodeId": 16,
-                        "backendNodeId": 16,
+                        "nodeId": 6,
+                        "backendNodeId": 6,
                         "nodeType": 1,
-                        "nodeName": "SECTION",
-                        "localName": "section",
+                        "nodeName": "A",
+                        "localName": "a",
                         "nodeValue": "",
-                        "attributes": ["id", "refreshed"],
+                        "attributes": ["id", "first"],
                         "childNodeCount": 0,
                         "children": [],
                     ]]
@@ -600,8 +583,8 @@ struct WIDOMInspectorTests {
                 && getDocumentCallCount == 1
         }
         #expect(ready)
+        let firstContextID = try #require(inspector.testCurrentContextID)
 
-        documentVersion = 1
         backend.emitPageEvent(
             method: "DOM.setChildNodes",
             params: [
@@ -619,14 +602,14 @@ struct WIDOMInspectorTests {
                 ]],
             ]
         )
+        await backend.waitForPendingMessages()
 
-        let refreshed = await waitForCondition {
-            inspector.testIsReady
-                && getDocumentCallCount >= 2
-                && inspector.document.node(localID: 16) != nil
-                && inspector.document.node(localID: 6) == nil
-        }
-        #expect(refreshed)
+        #expect(inspector.testIsReady)
+        #expect(inspector.testCurrentContextID == firstContextID)
+        #expect(inspector.testCurrentDocumentURL == "https://example.com/a")
+        #expect(getDocumentCallCount == 1)
+        #expect(inspector.document.node(localID: 6) != nil)
+        #expect(inspector.document.node(localID: 16) == nil)
     }
 
     @Test
@@ -720,6 +703,60 @@ struct WIDOMInspectorTests {
         #expect(reselectionReady)
         #expect(inspector.document.selectedNode?.localID != 6)
         #expect(inspectModeEnabledValues == [true, false, true, false])
+    }
+
+    @Test
+    func firstSelectionAfterFreshContextKeepsExistingTransportAttachment() async throws {
+        var inspectModeEnabledValues: [Bool] = []
+        var documentVersion = 0
+        let backend = FakeDOMTransportBackend(
+            emitsInitialPageTargetCreatedOnAttach: false,
+            pageResultProvider: { method, payload, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    if documentVersion == 0 {
+                        return makeDocumentResult(url: "https://example.com/a")
+                    }
+                    return makeDocumentResult(url: "https://example.com/b")
+                case WITransportMethod.DOM.setInspectModeEnabled:
+                    let params = runtimeTestDictionaryValue(payload["params"])
+                    if let enabled = params?["enabled"] as? Bool {
+                        inspectModeEnabledValues.append(enabled)
+                    }
+                    return [:]
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(
+            using: backend,
+            derivedPageTargetIdentifier: "page-A"
+        )
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+        #expect(backend.attachCount == 1)
+
+        documentVersion = 1
+        backend.emitPageEvent(method: "DOM.documentUpdated", params: [:], targetIdentifier: "page-A")
+
+        let freshContextReady = await waitForCondition {
+            inspector.testIsReady
+                && inspector.testCurrentDocumentURL == "https://example.com/b"
+        }
+        #expect(freshContextReady)
+        #expect(backend.attachCount == 1)
+
+        try await inspector.beginSelectionMode()
+        #expect(backend.attachCount == 1)
+        #expect(inspector.isSelectingElement)
+        #expect(inspectModeEnabledValues == [true])
     }
 
     @Test
@@ -954,6 +991,154 @@ struct WIDOMInspectorTests {
         }
 
         #expect(frontendHydratedForNewContext)
+    }
+
+    @Test
+    func loadingFreshContextPerformsFollowUpRefreshWhenDOMMutationsArriveDuringLoading() async throws {
+        let backend = FakeDOMTransportBackend()
+        var pageBGetDocumentCallCount = 0
+        backend.pageResultProvider = { method, _, targetIdentifier in
+            guard method == WITransportMethod.DOM.getDocument else {
+                return [:]
+            }
+            if targetIdentifier == "page-B" {
+                pageBGetDocumentCallCount += 1
+                if pageBGetDocumentCallCount == 1 {
+                    backend.emitPageEvent(
+                        method: "DOM.childNodeCountUpdated",
+                        params: [
+                            "nodeId": 16,
+                            "childNodeCount": 1,
+                        ],
+                        targetIdentifier: "page-B"
+                    )
+                    return makeDocumentResult(
+                        url: "https://example.com/b",
+                        mainChildren: [[
+                            "nodeId": 16,
+                            "backendNodeId": 16,
+                            "nodeType": 1,
+                            "nodeName": "SECTION",
+                            "localName": "section",
+                            "nodeValue": "",
+                            "attributes": ["id", "stale-first-load"],
+                            "childNodeCount": 0,
+                            "children": [],
+                        ]]
+                    )
+                }
+                return makeDocumentResult(
+                    url: "https://example.com/b",
+                    mainChildren: [[
+                        "nodeId": 26,
+                        "backendNodeId": 26,
+                        "nodeType": 1,
+                        "nodeName": "ARTICLE",
+                        "localName": "article",
+                        "nodeValue": "",
+                        "attributes": ["id", "refreshed-after-loading-mutation"],
+                        "childNodeCount": 0,
+                        "children": [],
+                    ]]
+                )
+            }
+            return makeDocumentResult(
+                url: "https://example.com/a",
+                mainChildren: [[
+                    "nodeId": 6,
+                    "backendNodeId": 6,
+                    "nodeType": 1,
+                    "nodeName": "A",
+                    "localName": "a",
+                    "nodeValue": "",
+                    "attributes": ["id", "first"],
+                    "childNodeCount": 0,
+                    "children": [],
+                ]]
+            )
+        }
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let initiallyReady = await waitForCondition {
+            inspector.testIsReady && inspector.document.node(localID: 6) != nil
+        }
+        #expect(initiallyReady)
+
+        let firstContextID = try #require(inspector.testCurrentContextID)
+        await inspector.testBeginFreshContext(
+            documentURL: "https://example.com/b",
+            targetIdentifier: nil,
+            loadImmediately: false,
+            isFreshDocument: true
+        )
+        inspector.testSetLoadingPhaseCurrentContext(targetIdentifier: "page-B")
+        backend.emitPageEvent(
+            method: "DOM.childNodeCountUpdated",
+            params: [
+                "nodeId": 16,
+                "childNodeCount": 1,
+            ],
+            targetIdentifier: "page-B"
+        )
+        await backend.waitForPendingMessages()
+        #expect(inspector.testHasDeferredLoadingMutationState)
+
+        try await inspector.testRefreshCurrentDocumentFromTransport(
+            targetIdentifier: "page-B",
+            depth: 4,
+            isFreshDocument: true
+        )
+
+        let refreshedAfterLoadingMutation = await waitForCondition {
+            inspector.testIsReady
+                && inspector.testCurrentContextID != firstContextID
+                && inspector.testCurrentDocumentURL == "https://example.com/b"
+                && pageBGetDocumentCallCount == 2
+        }
+        #expect(refreshedAfterLoadingMutation)
+    }
+
+    @Test
+    func repeatedReadyMessagesEventuallyHydrateCurrentRevision() async throws {
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, _, _ in
+                guard method == WITransportMethod.DOM.getDocument else {
+                    return [:]
+                }
+                return makeDocumentResult(url: "https://example.com/a")
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        let contextID = try #require(inspector.testCurrentContextID)
+        inspector.resetFrontendHydrationDiagnosticsForTesting()
+        inspector.testResetFrontendHydrationState()
+
+        inspector.testHandleReadyMessage(contextID: contextID)
+        inspector.testHandleReadyMessage(contextID: contextID)
+        inspector.testHandleReadyMessage(contextID: contextID)
+
+        let hydrated = await waitForCondition {
+            inspector.frontendHydrationDiagnosticsForTesting.contains {
+                if case let .hydrated(_, eventContextID, _, _) = $0 {
+                    return eventContextID == contextID
+                }
+                return false
+            }
+        }
+        #expect(hydrated)
+
     }
 
     @Test
@@ -1285,6 +1470,7 @@ struct WIDOMInspectorTests {
     func beginSelectionModeUsesProtocolInspectModeWithoutNativeEnable() async throws {
         var inspectModeEnabledValues: [Bool] = []
         var nodeSearchEnabledValues: [Bool] = []
+        var operationOrder: [String] = []
         let previousPrivateInspectorAccessProvider = WIDOMUIKitInspectorSelectionEnvironment.privateInspectorAccessProvider
         let previousInspectorConnectedProvider = WIDOMUIKitInspectorSelectionEnvironment.inspectorConnectedProvider
         let previousInspectorConnector = WIDOMUIKitInspectorSelectionEnvironment.inspectorConnector
@@ -1293,6 +1479,9 @@ struct WIDOMInspectorTests {
         let previousRecognizerPresenceProvider = WIDOMUIKitInspectorSelectionEnvironment.recognizerPresenceProvider
         let previousRecognizerRemover = WIDOMUIKitInspectorSelectionEnvironment.recognizerRemover
         let previousSelectionActiveProvider = WIDOMUIKitInspectorSelectionEnvironment.selectionActiveProvider
+        let previousTransportInspectActivationProvider = WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationProvider
+        let previousTransportInspectActivationTimeout = WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationTimeoutNanoseconds
+        let previousPageEditingDismissalHandler = WIDOMUIKitInspectorSelectionEnvironment.pageEditingDismissalHandler
         defer {
             WIDOMUIKitInspectorSelectionEnvironment.privateInspectorAccessProvider = previousPrivateInspectorAccessProvider
             WIDOMUIKitInspectorSelectionEnvironment.inspectorConnectedProvider = previousInspectorConnectedProvider
@@ -1302,6 +1491,9 @@ struct WIDOMInspectorTests {
             WIDOMUIKitInspectorSelectionEnvironment.recognizerPresenceProvider = previousRecognizerPresenceProvider
             WIDOMUIKitInspectorSelectionEnvironment.recognizerRemover = previousRecognizerRemover
             WIDOMUIKitInspectorSelectionEnvironment.selectionActiveProvider = previousSelectionActiveProvider
+            WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationProvider = previousTransportInspectActivationProvider
+            WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationTimeoutNanoseconds = previousTransportInspectActivationTimeout
+            WIDOMUIKitInspectorSelectionEnvironment.pageEditingDismissalHandler = previousPageEditingDismissalHandler
         }
 
         WIDOMUIKitInspectorSelectionEnvironment.privateInspectorAccessProvider = { _ in false }
@@ -1315,6 +1507,109 @@ struct WIDOMInspectorTests {
         WIDOMUIKitInspectorSelectionEnvironment.recognizerPresenceProvider = { _ in false }
         WIDOMUIKitInspectorSelectionEnvironment.recognizerRemover = { _ in true }
         WIDOMUIKitInspectorSelectionEnvironment.selectionActiveProvider = { _ in false }
+        WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationProvider = { _ in
+            inspectModeEnabledValues.last == true
+        }
+        WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationTimeoutNanoseconds = 0
+        WIDOMUIKitInspectorSelectionEnvironment.pageEditingDismissalHandler = { _ in
+            operationOrder.append("dismissEditing")
+        }
+
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, payload, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                case WITransportMethod.DOM.setInspectModeEnabled:
+                    operationOrder.append("setInspectModeEnabled")
+                    let params = runtimeTestDictionaryValue(payload["params"])
+                    if let enabled = params?["enabled"] as? Bool {
+                        inspectModeEnabledValues.append(enabled)
+                    }
+                    return [:]
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        try await inspector.beginSelectionMode()
+        #expect(inspector.isSelectingElement)
+        #expect(inspectModeEnabledValues == [true])
+        #expect(nodeSearchEnabledValues.contains(true) == false)
+        #expect(operationOrder.starts(with: ["dismissEditing", "setInspectModeEnabled"]))
+
+        await inspector.cancelSelectionMode()
+        #expect(inspector.isSelectingElement == false)
+        #expect(inspectModeEnabledValues == [true, false])
+        #expect(nodeSearchEnabledValues.contains(true) == false)
+    }
+
+    @Test
+    func beginSelectionModeUsesNativeInspectorOnUIKitWhenPrivateInspectorIsAvailable() async throws {
+        var inspectModeEnabledValues: [Bool] = []
+        var connectCallCount = 0
+        var toggleCallCount = 0
+        var nativeSelectionActive = false
+        var nodeSearchEnabledValues: [Bool] = []
+        let previousPrivateInspectorAccessProvider = WIDOMUIKitInspectorSelectionEnvironment.privateInspectorAccessProvider
+        let previousInspectorConnectedProvider = WIDOMUIKitInspectorSelectionEnvironment.inspectorConnectedProvider
+        let previousInspectorConnector = WIDOMUIKitInspectorSelectionEnvironment.inspectorConnector
+        let previousElementSelectionToggler = WIDOMUIKitInspectorSelectionEnvironment.elementSelectionToggler
+        let previousNodeSearchSetter = WIDOMUIKitInspectorSelectionEnvironment.nodeSearchSetter
+        let previousRecognizerPresenceProvider = WIDOMUIKitInspectorSelectionEnvironment.recognizerPresenceProvider
+        let previousRecognizerRemover = WIDOMUIKitInspectorSelectionEnvironment.recognizerRemover
+        let previousSelectionActiveProvider = WIDOMUIKitInspectorSelectionEnvironment.selectionActiveProvider
+        let previousTransportInspectActivationProvider = WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationProvider
+        let previousTransportInspectActivationTimeout = WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationTimeoutNanoseconds
+        defer {
+            WIDOMUIKitInspectorSelectionEnvironment.privateInspectorAccessProvider = previousPrivateInspectorAccessProvider
+            WIDOMUIKitInspectorSelectionEnvironment.inspectorConnectedProvider = previousInspectorConnectedProvider
+            WIDOMUIKitInspectorSelectionEnvironment.inspectorConnector = previousInspectorConnector
+            WIDOMUIKitInspectorSelectionEnvironment.elementSelectionToggler = previousElementSelectionToggler
+            WIDOMUIKitInspectorSelectionEnvironment.nodeSearchSetter = previousNodeSearchSetter
+            WIDOMUIKitInspectorSelectionEnvironment.recognizerPresenceProvider = previousRecognizerPresenceProvider
+            WIDOMUIKitInspectorSelectionEnvironment.recognizerRemover = previousRecognizerRemover
+            WIDOMUIKitInspectorSelectionEnvironment.selectionActiveProvider = previousSelectionActiveProvider
+            WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationProvider = previousTransportInspectActivationProvider
+            WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationTimeoutNanoseconds = previousTransportInspectActivationTimeout
+        }
+
+        WIDOMUIKitInspectorSelectionEnvironment.privateInspectorAccessProvider = { _ in true }
+        WIDOMUIKitInspectorSelectionEnvironment.inspectorConnectedProvider = { _ in
+            connectCallCount > 0
+        }
+        WIDOMUIKitInspectorSelectionEnvironment.inspectorConnector = { _ in
+            connectCallCount += 1
+            return true
+        }
+        WIDOMUIKitInspectorSelectionEnvironment.elementSelectionToggler = { _ in
+            toggleCallCount += 1
+            nativeSelectionActive.toggle()
+            return true
+        }
+        WIDOMUIKitInspectorSelectionEnvironment.nodeSearchSetter = { _, enabled in
+            nodeSearchEnabledValues.append(enabled)
+            return true
+        }
+        WIDOMUIKitInspectorSelectionEnvironment.recognizerPresenceProvider = { _ in
+            nodeSearchEnabledValues.last == true
+        }
+        WIDOMUIKitInspectorSelectionEnvironment.recognizerRemover = { _ in true }
+        WIDOMUIKitInspectorSelectionEnvironment.selectionActiveProvider = { _ in nativeSelectionActive }
+        WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationProvider = { _ in
+            inspectModeEnabledValues.last == true
+        }
+        WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationTimeoutNanoseconds = 0
 
         let backend = FakeDOMTransportBackend(
             pageResultProvider: { method, payload, _ in
@@ -1344,17 +1639,22 @@ struct WIDOMInspectorTests {
 
         try await inspector.beginSelectionMode()
         #expect(inspector.isSelectingElement)
-        #expect(inspectModeEnabledValues == [true])
-        #expect(nodeSearchEnabledValues.contains(true) == false)
+        #expect(connectCallCount == 1)
+        #expect(toggleCallCount == 0)
+        #expect(nativeSelectionActive == false)
+        #expect(nodeSearchEnabledValues.contains(true))
+        #expect(inspectModeEnabledValues.isEmpty)
 
         await inspector.cancelSelectionMode()
         #expect(inspector.isSelectingElement == false)
-        #expect(inspectModeEnabledValues == [true, false])
-        #expect(nodeSearchEnabledValues.contains(true) == false)
+        #expect(toggleCallCount == 0)
+        #expect(nativeSelectionActive == false)
+        #expect(nodeSearchEnabledValues.last == false)
+        #expect(inspectModeEnabledValues.isEmpty)
     }
 
     @Test
-    func beginSelectionModeUsesTransportProtocolOnUIKitWhenPrivateInspectorIsAvailable() async throws {
+    func beginSelectionModeFallsBackToTransportWhenNativeInspectorEnableFailsOnUIKit() async throws {
         var inspectModeEnabledValues: [Bool] = []
         var connectCallCount = 0
         var toggleCallCount = 0
@@ -1368,6 +1668,8 @@ struct WIDOMInspectorTests {
         let previousRecognizerPresenceProvider = WIDOMUIKitInspectorSelectionEnvironment.recognizerPresenceProvider
         let previousRecognizerRemover = WIDOMUIKitInspectorSelectionEnvironment.recognizerRemover
         let previousSelectionActiveProvider = WIDOMUIKitInspectorSelectionEnvironment.selectionActiveProvider
+        let previousTransportInspectActivationProvider = WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationProvider
+        let previousTransportInspectActivationTimeout = WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationTimeoutNanoseconds
         defer {
             WIDOMUIKitInspectorSelectionEnvironment.privateInspectorAccessProvider = previousPrivateInspectorAccessProvider
             WIDOMUIKitInspectorSelectionEnvironment.inspectorConnectedProvider = previousInspectorConnectedProvider
@@ -1377,6 +1679,8 @@ struct WIDOMInspectorTests {
             WIDOMUIKitInspectorSelectionEnvironment.recognizerPresenceProvider = previousRecognizerPresenceProvider
             WIDOMUIKitInspectorSelectionEnvironment.recognizerRemover = previousRecognizerRemover
             WIDOMUIKitInspectorSelectionEnvironment.selectionActiveProvider = previousSelectionActiveProvider
+            WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationProvider = previousTransportInspectActivationProvider
+            WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationTimeoutNanoseconds = previousTransportInspectActivationTimeout
         }
 
         WIDOMUIKitInspectorSelectionEnvironment.privateInspectorAccessProvider = { _ in true }
@@ -1389,18 +1693,21 @@ struct WIDOMInspectorTests {
         }
         WIDOMUIKitInspectorSelectionEnvironment.elementSelectionToggler = { _ in
             toggleCallCount += 1
-            nativeSelectionActive.toggle()
-            return true
+            return false
         }
         WIDOMUIKitInspectorSelectionEnvironment.nodeSearchSetter = { _, enabled in
             nodeSearchEnabledValues.append(enabled)
-            return true
+            return false
         }
         WIDOMUIKitInspectorSelectionEnvironment.recognizerPresenceProvider = { _ in
-            nodeSearchEnabledValues.last == true
+            false
         }
         WIDOMUIKitInspectorSelectionEnvironment.recognizerRemover = { _ in true }
         WIDOMUIKitInspectorSelectionEnvironment.selectionActiveProvider = { _ in nativeSelectionActive }
+        WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationProvider = { _ in
+            inspectModeEnabledValues.last == true
+        }
+        WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationTimeoutNanoseconds = 0
 
         let backend = FakeDOMTransportBackend(
             pageResultProvider: { method, payload, _ in
@@ -1411,100 +1718,6 @@ struct WIDOMInspectorTests {
                     let params = runtimeTestDictionaryValue(payload["params"])
                     if let enabled = params?["enabled"] as? Bool {
                         inspectModeEnabledValues.append(enabled)
-                    }
-                    return [:]
-                default:
-                    return [:]
-                }
-            }
-        )
-        let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
-        let webView = makeTestWebView()
-
-        await inspector.attach(to: webView)
-        let ready = await waitForCondition {
-            inspector.testIsReady && inspector.document.rootNode != nil
-        }
-        #expect(ready)
-
-        try await inspector.beginSelectionMode()
-        #expect(inspector.isSelectingElement)
-        #expect(connectCallCount == 0)
-        #expect(toggleCallCount == 0)
-        #expect(nativeSelectionActive == false)
-        #expect(nodeSearchEnabledValues.contains(true) == false)
-        #expect(inspectModeEnabledValues == [true])
-
-        await inspector.cancelSelectionMode()
-        #expect(inspector.isSelectingElement == false)
-        #expect(toggleCallCount == 0)
-        #expect(nativeSelectionActive == false)
-        #expect(nodeSearchEnabledValues.contains(true) == false)
-        #expect(inspectModeEnabledValues == [true, false])
-    }
-
-    @Test
-    func beginSelectionModeFallsBackToNativeInspectorWhenTransportEnableFailsOnUIKit() async throws {
-        var inspectModeEnabledValues: [Bool] = []
-        var connectCallCount = 0
-        var toggleCallCount = 0
-        var nativeSelectionActive = false
-        var nodeSearchEnabledValues: [Bool] = []
-        let previousPrivateInspectorAccessProvider = WIDOMUIKitInspectorSelectionEnvironment.privateInspectorAccessProvider
-        let previousInspectorConnectedProvider = WIDOMUIKitInspectorSelectionEnvironment.inspectorConnectedProvider
-        let previousInspectorConnector = WIDOMUIKitInspectorSelectionEnvironment.inspectorConnector
-        let previousElementSelectionToggler = WIDOMUIKitInspectorSelectionEnvironment.elementSelectionToggler
-        let previousNodeSearchSetter = WIDOMUIKitInspectorSelectionEnvironment.nodeSearchSetter
-        let previousRecognizerPresenceProvider = WIDOMUIKitInspectorSelectionEnvironment.recognizerPresenceProvider
-        let previousRecognizerRemover = WIDOMUIKitInspectorSelectionEnvironment.recognizerRemover
-        let previousSelectionActiveProvider = WIDOMUIKitInspectorSelectionEnvironment.selectionActiveProvider
-        defer {
-            WIDOMUIKitInspectorSelectionEnvironment.privateInspectorAccessProvider = previousPrivateInspectorAccessProvider
-            WIDOMUIKitInspectorSelectionEnvironment.inspectorConnectedProvider = previousInspectorConnectedProvider
-            WIDOMUIKitInspectorSelectionEnvironment.inspectorConnector = previousInspectorConnector
-            WIDOMUIKitInspectorSelectionEnvironment.elementSelectionToggler = previousElementSelectionToggler
-            WIDOMUIKitInspectorSelectionEnvironment.nodeSearchSetter = previousNodeSearchSetter
-            WIDOMUIKitInspectorSelectionEnvironment.recognizerPresenceProvider = previousRecognizerPresenceProvider
-            WIDOMUIKitInspectorSelectionEnvironment.recognizerRemover = previousRecognizerRemover
-            WIDOMUIKitInspectorSelectionEnvironment.selectionActiveProvider = previousSelectionActiveProvider
-        }
-
-        WIDOMUIKitInspectorSelectionEnvironment.privateInspectorAccessProvider = { _ in true }
-        WIDOMUIKitInspectorSelectionEnvironment.inspectorConnectedProvider = { _ in
-            connectCallCount > 0
-        }
-        WIDOMUIKitInspectorSelectionEnvironment.inspectorConnector = { _ in
-            connectCallCount += 1
-            return true
-        }
-        WIDOMUIKitInspectorSelectionEnvironment.elementSelectionToggler = { _ in
-            toggleCallCount += 1
-            nativeSelectionActive.toggle()
-            return true
-        }
-        WIDOMUIKitInspectorSelectionEnvironment.nodeSearchSetter = { _, enabled in
-            nodeSearchEnabledValues.append(enabled)
-            return enabled
-        }
-        WIDOMUIKitInspectorSelectionEnvironment.recognizerPresenceProvider = { _ in
-            nodeSearchEnabledValues.last == true
-        }
-        WIDOMUIKitInspectorSelectionEnvironment.recognizerRemover = { _ in true }
-        WIDOMUIKitInspectorSelectionEnvironment.selectionActiveProvider = { _ in nativeSelectionActive }
-
-        let backend = FakeDOMTransportBackend(
-            pageResultProvider: { method, payload, _ in
-                switch method {
-                case WITransportMethod.DOM.getDocument:
-                    return makeDocumentResult(url: "https://example.com/a")
-                case WITransportMethod.DOM.setInspectModeEnabled:
-                    let params = runtimeTestDictionaryValue(payload["params"])
-                    if let enabled = params?["enabled"] as? Bool {
-                        inspectModeEnabledValues.append(enabled)
-                    }
-                    if (params?["enabled"] as? Bool) == true {
-                        throw NSError(domain: "TestDOM", code: 1, userInfo: [NSLocalizedDescriptionKey: "transport inspect unavailable"])
                     }
                     return [:]
                 default:
@@ -1526,16 +1739,113 @@ struct WIDOMInspectorTests {
         #expect(inspector.isSelectingElement)
         #expect(connectCallCount == 1)
         #expect(toggleCallCount == 1)
-        #expect(nativeSelectionActive)
+        #expect(nativeSelectionActive == false)
         #expect(nodeSearchEnabledValues.contains(true))
         #expect(inspectModeEnabledValues == [true])
 
         await inspector.cancelSelectionMode()
         #expect(inspector.isSelectingElement == false)
-        #expect(toggleCallCount == 2)
+        #expect(toggleCallCount == 1)
         #expect(nativeSelectionActive == false)
-        #expect(nodeSearchEnabledValues.last == false)
+        #expect(inspectModeEnabledValues == [true, false])
+    }
+
+    @Test
+    func beginSelectionModeFallsBackToTransportWhenNativeInspectorDoesNotActivateOnUIKit() async throws {
+        var inspectModeEnabledValues: [Bool] = []
+        var connectCallCount = 0
+        var toggleCallCount = 0
+        var nativeSelectionActive = false
+        var nodeSearchEnabledValues: [Bool] = []
+        let previousPrivateInspectorAccessProvider = WIDOMUIKitInspectorSelectionEnvironment.privateInspectorAccessProvider
+        let previousInspectorConnectedProvider = WIDOMUIKitInspectorSelectionEnvironment.inspectorConnectedProvider
+        let previousInspectorConnector = WIDOMUIKitInspectorSelectionEnvironment.inspectorConnector
+        let previousElementSelectionToggler = WIDOMUIKitInspectorSelectionEnvironment.elementSelectionToggler
+        let previousNodeSearchSetter = WIDOMUIKitInspectorSelectionEnvironment.nodeSearchSetter
+        let previousRecognizerPresenceProvider = WIDOMUIKitInspectorSelectionEnvironment.recognizerPresenceProvider
+        let previousRecognizerRemover = WIDOMUIKitInspectorSelectionEnvironment.recognizerRemover
+        let previousSelectionActiveProvider = WIDOMUIKitInspectorSelectionEnvironment.selectionActiveProvider
+        let previousTransportInspectActivationProvider = WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationProvider
+        let previousTransportInspectActivationTimeout = WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationTimeoutNanoseconds
+        defer {
+            WIDOMUIKitInspectorSelectionEnvironment.privateInspectorAccessProvider = previousPrivateInspectorAccessProvider
+            WIDOMUIKitInspectorSelectionEnvironment.inspectorConnectedProvider = previousInspectorConnectedProvider
+            WIDOMUIKitInspectorSelectionEnvironment.inspectorConnector = previousInspectorConnector
+            WIDOMUIKitInspectorSelectionEnvironment.elementSelectionToggler = previousElementSelectionToggler
+            WIDOMUIKitInspectorSelectionEnvironment.nodeSearchSetter = previousNodeSearchSetter
+            WIDOMUIKitInspectorSelectionEnvironment.recognizerPresenceProvider = previousRecognizerPresenceProvider
+            WIDOMUIKitInspectorSelectionEnvironment.recognizerRemover = previousRecognizerRemover
+            WIDOMUIKitInspectorSelectionEnvironment.selectionActiveProvider = previousSelectionActiveProvider
+            WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationProvider = previousTransportInspectActivationProvider
+            WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationTimeoutNanoseconds = previousTransportInspectActivationTimeout
+        }
+
+        WIDOMUIKitInspectorSelectionEnvironment.privateInspectorAccessProvider = { _ in true }
+        WIDOMUIKitInspectorSelectionEnvironment.inspectorConnectedProvider = { _ in
+            connectCallCount > 0
+        }
+        WIDOMUIKitInspectorSelectionEnvironment.inspectorConnector = { _ in
+            connectCallCount += 1
+            return true
+        }
+        WIDOMUIKitInspectorSelectionEnvironment.elementSelectionToggler = { _ in
+            toggleCallCount += 1
+            nativeSelectionActive = false
+            return true
+        }
+        WIDOMUIKitInspectorSelectionEnvironment.nodeSearchSetter = { _, enabled in
+            nodeSearchEnabledValues.append(enabled)
+            return true
+        }
+        WIDOMUIKitInspectorSelectionEnvironment.recognizerPresenceProvider = { _ in
+            false
+        }
+        WIDOMUIKitInspectorSelectionEnvironment.recognizerRemover = { _ in true }
+        WIDOMUIKitInspectorSelectionEnvironment.selectionActiveProvider = { _ in nativeSelectionActive }
+        WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationProvider = { _ in
+            inspectModeEnabledValues.last == true
+        }
+        WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationTimeoutNanoseconds = 0
+
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, payload, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                case WITransportMethod.DOM.setInspectModeEnabled:
+                    let params = runtimeTestDictionaryValue(payload["params"])
+                    if let enabled = params?["enabled"] as? Bool {
+                        inspectModeEnabledValues.append(enabled)
+                    }
+                    return [:]
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        try await inspector.beginSelectionMode()
+        #expect(inspector.isSelectingElement)
+        #expect(connectCallCount == 1)
+        #expect(toggleCallCount == 1)
+        #expect(nativeSelectionActive == false)
+        #expect(nodeSearchEnabledValues.contains(true))
         #expect(inspectModeEnabledValues == [true])
+
+        await inspector.cancelSelectionMode()
+        #expect(inspector.isSelectingElement == false)
+        #expect(toggleCallCount == 1)
+        #expect(nativeSelectionActive == false)
+        #expect(inspectModeEnabledValues == [true, false])
     }
 
     @Test
@@ -1550,6 +1860,8 @@ struct WIDOMInspectorTests {
         let previousRecognizerPresenceProvider = WIDOMUIKitInspectorSelectionEnvironment.recognizerPresenceProvider
         let previousRecognizerRemover = WIDOMUIKitInspectorSelectionEnvironment.recognizerRemover
         let previousSelectionActiveProvider = WIDOMUIKitInspectorSelectionEnvironment.selectionActiveProvider
+        let previousTransportInspectActivationProvider = WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationProvider
+        let previousTransportInspectActivationTimeout = WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationTimeoutNanoseconds
         defer {
             WIDOMUIKitInspectorSelectionEnvironment.privateInspectorAccessProvider = previousPrivateInspectorAccessProvider
             WIDOMUIKitInspectorSelectionEnvironment.inspectorConnectedProvider = previousInspectorConnectedProvider
@@ -1559,6 +1871,8 @@ struct WIDOMInspectorTests {
             WIDOMUIKitInspectorSelectionEnvironment.recognizerPresenceProvider = previousRecognizerPresenceProvider
             WIDOMUIKitInspectorSelectionEnvironment.recognizerRemover = previousRecognizerRemover
             WIDOMUIKitInspectorSelectionEnvironment.selectionActiveProvider = previousSelectionActiveProvider
+            WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationProvider = previousTransportInspectActivationProvider
+            WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationTimeoutNanoseconds = previousTransportInspectActivationTimeout
         }
 
         WIDOMUIKitInspectorSelectionEnvironment.privateInspectorAccessProvider = { _ in false }
@@ -1572,6 +1886,8 @@ struct WIDOMInspectorTests {
         WIDOMUIKitInspectorSelectionEnvironment.recognizerPresenceProvider = { _ in false }
         WIDOMUIKitInspectorSelectionEnvironment.recognizerRemover = { _ in true }
         WIDOMUIKitInspectorSelectionEnvironment.selectionActiveProvider = { _ in false }
+        WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationProvider = { _ in true }
+        WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationTimeoutNanoseconds = 0
 
         let backend = FakeDOMTransportBackend(
             pageResultProvider: { method, _, _ in
@@ -1675,6 +1991,8 @@ struct WIDOMInspectorTests {
         let previousRecognizerPresenceProvider = WIDOMUIKitInspectorSelectionEnvironment.recognizerPresenceProvider
         let previousRecognizerRemover = WIDOMUIKitInspectorSelectionEnvironment.recognizerRemover
         let previousSelectionActiveProvider = WIDOMUIKitInspectorSelectionEnvironment.selectionActiveProvider
+        let previousTransportInspectActivationProvider = WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationProvider
+        let previousTransportInspectActivationTimeout = WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationTimeoutNanoseconds
         defer {
             WIDOMUIKitInspectorSelectionEnvironment.privateInspectorAccessProvider = previousPrivateInspectorAccessProvider
             WIDOMUIKitInspectorSelectionEnvironment.inspectorConnectedProvider = previousInspectorConnectedProvider
@@ -1684,6 +2002,8 @@ struct WIDOMInspectorTests {
             WIDOMUIKitInspectorSelectionEnvironment.recognizerPresenceProvider = previousRecognizerPresenceProvider
             WIDOMUIKitInspectorSelectionEnvironment.recognizerRemover = previousRecognizerRemover
             WIDOMUIKitInspectorSelectionEnvironment.selectionActiveProvider = previousSelectionActiveProvider
+            WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationProvider = previousTransportInspectActivationProvider
+            WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationTimeoutNanoseconds = previousTransportInspectActivationTimeout
         }
 
         WIDOMUIKitInspectorSelectionEnvironment.privateInspectorAccessProvider = { _ in true }
@@ -1708,6 +2028,10 @@ struct WIDOMInspectorTests {
         }
         WIDOMUIKitInspectorSelectionEnvironment.recognizerRemover = { _ in true }
         WIDOMUIKitInspectorSelectionEnvironment.selectionActiveProvider = { _ in nativeSelectionActive }
+        WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationProvider = { _ in
+            inspectModeEnabledValues.last == true
+        }
+        WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationTimeoutNanoseconds = 0
 
         let backend = FakeDOMTransportBackend(
             pageResultProvider: { method, payload, _ in
@@ -5815,6 +6139,7 @@ private final class FakeDOMTransportBackend: WITransportPlatformBackend {
     var supportSnapshot: WITransportSupportSnapshot
     var pageResultProvider: ((String, [String: Any], String) throws -> [String: Any])?
     var attachError: Error?
+    private(set) var attachCount = 0
 
     private var messageSink: (any WITransportBackendMessageSink)?
     private var currentTargetIdentifier = "page-A"
@@ -5838,10 +6163,11 @@ private final class FakeDOMTransportBackend: WITransportPlatformBackend {
         if let attachError {
             throw attachError
         }
+        attachCount += 1
         self.messageSink = messageSink
         if emitsInitialPageTargetCreatedOnAttach {
             messageSink.didReceiveRootMessage(
-                #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-A","type":"page","isProvisional":false}}}"#
+                #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"\#(currentTargetIdentifier)","type":"page","isProvisional":false}}}"#
             )
             await messageSink.waitForPendingMessages()
         }

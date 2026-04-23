@@ -474,12 +474,14 @@ extension WIDOMInspector {
         let connected = isNativeInspectorConnected(on: pageWebView)
         let selectionActive = isNativeInspectorElementSelectionActive(on: pageWebView)
         let contentViewActive = hasActiveNativeInspectorNodeSearch(in: pageWebView)
+        let nodeSearchSummary = WIInspectorSelectionPrivateBridge.nodeSearchDebugSummary(in: pageWebView)
 
         let accessValue = hasPrivateInspectorAccess ? "1" : "0"
         let connectedValue = connected.map { $0 ? "1" : "0" } ?? "n/a"
         let selectionValue = selectionActive.map { $0 ? "1" : "0" } ?? "n/a"
         let contentViewValue = contentViewActive ? "1" : "0"
-        return "privateInspectorAccess=\(accessValue) nativeInspectorConnected=\(connectedValue) nativeSelectionActive=\(selectionValue) contentViewActive=\(contentViewValue)"
+        let nodeSearchValue = nodeSearchSummary ?? "n/a"
+        return "privateInspectorAccess=\(accessValue) nativeInspectorConnected=\(connectedValue) nativeSelectionActive=\(selectionValue) contentViewActive=\(contentViewValue) nodeSearch=\(nodeSearchValue)"
     }
 }
 #endif
