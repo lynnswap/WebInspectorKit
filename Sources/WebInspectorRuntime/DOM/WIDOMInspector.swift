@@ -1,3 +1,4 @@
+import Foundation
 import OSLog
 import Observation
 import ObjectiveC
@@ -12,6 +13,38 @@ import UIKit
 private let domViewLogger = Logger(subsystem: "WebInspectorKit", category: "WIDOMInspector")
 private let domDeleteUndoHistoryLimit = 128
 nonisolated(unsafe) private let pageWebViewLifetimeObserverAssociationKey = unsafe malloc(1)!
+
+private enum WIDOMConsoleDiagnostics {
+    private static let milestoneMessages: Set<String> = [
+        "beginFreshContext requested",
+        "requestSelectionModeToggle enabled inspect mode",
+        "beginSelectionMode armed inspect selection",
+        "applyPendingInspectSelectionIfPossible resolved transport node",
+        "applySelection updated document and frontend",
+    ]
+
+    static let verboseConsoleDiagnosticsEnabled =
+        ProcessInfo.processInfo.environment["WEBSPECTOR_VERBOSE_CONSOLE_LOGS"] == "1"
+
+    static func shouldEmitSelectionDiagnostic(
+        message: String,
+        level: OSLogType,
+        verboseConsoleDiagnostics: Bool = verboseConsoleDiagnosticsEnabled
+    ) -> Bool {
+        if verboseConsoleDiagnostics {
+            return true
+        }
+
+        switch level {
+        case .error, .fault:
+            return true
+        case .debug:
+            return false
+        default:
+            return milestoneMessages.contains(message)
+        }
+    }
+}
 
 @MainActor
 private final class WIPageWebViewLifetimeObserver {
@@ -317,6 +350,7 @@ public final class WIDOMInspector {
     @ObservationIgnored private weak var deleteUndoManager: UndoManager?
     @ObservationIgnored private var pendingChildRequests: [PendingChildRequestKey: PendingChildRequestRecord] = [:]
     @ObservationIgnored private var lastSelectionDiagnosticMessage: String?
+    @ObservationIgnored private var lastEmittedSelectionDiagnosticMessage: String?
     @ObservationIgnored private var selectionGeneration: UInt64 = 0
     @ObservationIgnored private var acceptsInspectEvents = false
     @ObservationIgnored private var pendingInspectSelection: PendingInspectSelection?
@@ -796,6 +830,18 @@ public final class WIDOMInspector {
 
     package func resetInspectSelectionDiagnosticsForTesting() {
         inspectSelectionDiagnosticsForTesting.removeAll(keepingCapacity: false)
+    }
+
+    package static func shouldEmitSelectionDiagnosticToConsoleForTesting(
+        _ message: String,
+        level: OSLogType,
+        verboseConsoleDiagnostics: Bool
+    ) -> Bool {
+        WIDOMConsoleDiagnostics.shouldEmitSelectionDiagnostic(
+            message: message,
+            level: level,
+            verboseConsoleDiagnostics: verboseConsoleDiagnostics
+        )
     }
 
 #if canImport(UIKit)
@@ -1940,6 +1986,9 @@ private extension WIDOMInspector {
             }
             handleInspectorSelection(payload)
         case let .log(message):
+            guard WIDOMConsoleDiagnostics.verboseConsoleDiagnosticsEnabled else {
+                return
+            }
             domViewLogger.debug("inspector log: \(message, privacy: .public)")
         }
     }
@@ -5329,6 +5378,19 @@ private extension WIDOMInspector {
         let summary = selectionRuntimeSummary()
         let composed = "\(message)\(selectorPart)\(extraPart) \(summary)"
         lastSelectionDiagnosticMessage = composed
+        guard WIDOMConsoleDiagnostics.shouldEmitSelectionDiagnostic(
+            message: message,
+            level: level
+        ) else {
+            return
+        }
+        if WIDOMConsoleDiagnostics.verboseConsoleDiagnosticsEnabled == false,
+           level != .error,
+           level != .fault,
+           lastEmittedSelectionDiagnosticMessage == composed {
+            return
+        }
+        lastEmittedSelectionDiagnosticMessage = composed
         switch level {
         case .error, .fault:
             domViewLogger.error("\(composed, privacy: .public)")
@@ -5356,6 +5418,9 @@ private extension WIDOMInspector {
     }
 
     func logBootstrapDiagnostics(_ message: String) {
+        guard WIDOMConsoleDiagnostics.verboseConsoleDiagnosticsEnabled else {
+            return
+        }
         domViewLogger.debug("[WebInspectorDOM] \(message, privacy: .public)")
     }
 

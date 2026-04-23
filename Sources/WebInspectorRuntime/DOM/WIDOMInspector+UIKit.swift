@@ -1,4 +1,5 @@
 #if canImport(UIKit)
+import Foundation
 import GameController
 import OSLog
 import UIKit
@@ -428,9 +429,11 @@ extension WIDOMInspector {
         let beforeState = nativeInspectorInteractionStateSummaryForDiagnostics()
         await awaitInspectModeInactive()
         let afterState = nativeInspectorInteractionStateSummaryForDiagnostics()
-        domWindowActivationLogger.debug(
-            "native inspector node search reset reason=\(reason, privacy: .public) contextID=\(contextID, privacy: .public) before=\(beforeState ?? "nil", privacy: .public) after=\(afterState ?? "nil", privacy: .public)"
-        )
+        if ProcessInfo.processInfo.environment["WEBSPECTOR_VERBOSE_CONSOLE_LOGS"] == "1" {
+            domWindowActivationLogger.debug(
+                "native inspector node search reset reason=\(reason, privacy: .public) contextID=\(contextID, privacy: .public) before=\(beforeState ?? "nil", privacy: .public) after=\(afterState ?? "nil", privacy: .public)"
+            )
+        }
     }
 
     func installPointerDisconnectObserverIfNeeded() {

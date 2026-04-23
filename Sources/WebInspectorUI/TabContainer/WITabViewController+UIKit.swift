@@ -1,3 +1,4 @@
+import Foundation
 import OSLog
 import ObservationBridge
 import WebKit
@@ -7,6 +8,8 @@ import WebInspectorRuntime
 import UIKit
 
 private let tabContainerLogger = Logger(subsystem: "WebInspectorKit", category: "WITabContainer")
+private let verboseConsoleDiagnosticsEnabled =
+    ProcessInfo.processInfo.environment["WEBSPECTOR_VERBOSE_CONSOLE_LOGS"] == "1"
 
 @MainActor
 private protocol WIUIKitTabHost where Self: UIViewController {
@@ -496,6 +499,11 @@ public final class WITabViewController: UIViewController {
         _ message: String,
         level: OSLogType = .default
     ) {
+        if verboseConsoleDiagnosticsEnabled == false,
+           level != .error,
+           level != .fault {
+            return
+        }
         let state = "hostID=\(compactHostID(hostID)) activeHostKind=\(hostKindSummary(activeHostKind)) windowAttached=\(viewIfLoaded?.window != nil) currentVisibility=\(visibilitySummary(currentHostVisibility)) requestedWebView=\(webViewSummary(requestedPageWebView)) selectedTab=\(inspectorController.selectedTab?.identifier ?? "nil")"
         let composed = "\(message) \(state)"
         switch level {

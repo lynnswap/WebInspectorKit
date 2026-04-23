@@ -9,6 +9,11 @@ private enum WITransportNativeInspectorObfuscation {
     }
 }
 
+private enum WITransportConsoleDiagnostics {
+    static let verboseConsoleDiagnosticsEnabled =
+        ProcessInfo.processInfo.environment["WEBSPECTOR_VERBOSE_CONSOLE_LOGS"] == "1"
+}
+
 private enum WITransportNativeInspectorSymbolFailure {
     case sharedCacheUnavailable
     case localSymbolsUnavailable
@@ -911,13 +916,15 @@ private enum WITransportNativeInspectorResolver {
 
         guard let functionStarts = image.functionStarts else {
             #if DEBUG
-            NSLog(
-                "[WebInspectorTransport] native inspector text scan unavailable functionStarts=nil webCoreConnectTargets=%lu webCoreDisconnectTargets=%lu webKitBoundConnectTargets=%lu webKitBoundDisconnectTargets=%lu",
-                webCoreConnectTargets.count,
-                webCoreDisconnectTargets.count,
-                webKitBoundConnectTargets.count,
-                webKitBoundDisconnectTargets.count
-            )
+            if WITransportConsoleDiagnostics.verboseConsoleDiagnosticsEnabled {
+                NSLog(
+                    "[WebInspectorTransport] native inspector text scan unavailable functionStarts=nil webCoreConnectTargets=%lu webCoreDisconnectTargets=%lu webKitBoundConnectTargets=%lu webKitBoundDisconnectTargets=%lu",
+                    webCoreConnectTargets.count,
+                    webCoreDisconnectTargets.count,
+                    webKitBoundConnectTargets.count,
+                    webKitBoundDisconnectTargets.count
+                )
+            }
             #endif
             return .init(
                 symbols: resolvedSymbols,
@@ -945,17 +952,19 @@ private enum WITransportNativeInspectorResolver {
         )
 
         #if DEBUG
-        NSLog(
-            "[WebInspectorTransport] native inspector text scan webCoreConnectTargets=%lu webCoreDisconnectTargets=%lu webKitBoundConnectTargets=%lu webKitBoundDisconnectTargets=%lu connectTargets=%lu disconnectTargets=%lu resolvedConnect=%@ resolvedDisconnect=%@",
-            webCoreConnectTargets.count,
-            webCoreDisconnectTargets.count,
-            webKitBoundConnectTargets.count,
-            webKitBoundDisconnectTargets.count,
-            connectTargetAddresses.count,
-            disconnectTargetAddresses.count,
-            debugResolvedAddress(resolvedConnect),
-            debugResolvedAddress(resolvedDisconnect)
-        )
+        if WITransportConsoleDiagnostics.verboseConsoleDiagnosticsEnabled {
+            NSLog(
+                "[WebInspectorTransport] native inspector text scan webCoreConnectTargets=%lu webCoreDisconnectTargets=%lu webKitBoundConnectTargets=%lu webKitBoundDisconnectTargets=%lu connectTargets=%lu disconnectTargets=%lu resolvedConnect=%@ resolvedDisconnect=%@",
+                webCoreConnectTargets.count,
+                webCoreDisconnectTargets.count,
+                webKitBoundConnectTargets.count,
+                webKitBoundDisconnectTargets.count,
+                connectTargetAddresses.count,
+                disconnectTargetAddresses.count,
+                debugResolvedAddress(resolvedConnect),
+                debugResolvedAddress(resolvedDisconnect)
+            )
+        }
         #endif
 
         let resolvedWrapperSymbols = WITransportNativeInspectorResolvedSymbols(
@@ -1015,7 +1024,7 @@ private enum WITransportNativeInspectorResolver {
         usedConnectDisconnectFallback: Bool
     ) -> WITransportNativeInspectorSymbolResolution {
         _ = functionAddresses
-        if let phase {
+        if let phase, WITransportConsoleDiagnostics.verboseConsoleDiagnosticsEnabled {
             NSLog(successLogFormat, backendKind.rawValue, phase.message)
         }
         return WITransportNativeInspectorSymbolResolution(
@@ -1453,22 +1462,24 @@ private enum WITransportNativeInspectorResolver {
         failedReason: String
     ) {
         #if DEBUG
-        let headerAddress = unsafe UInt(bitPattern: image.ptr)
-        let dlsymDescription: String
-        if let dlsymAddress {
-            dlsymDescription = unsafe String(format: "0x%llx", dlsymAddress)
-        } else {
-            dlsymDescription = "nil"
+        if WITransportConsoleDiagnostics.verboseConsoleDiagnosticsEnabled {
+            let headerAddress = unsafe UInt(bitPattern: image.ptr)
+            let dlsymDescription: String
+            if let dlsymAddress {
+                dlsymDescription = unsafe String(format: "0x%llx", dlsymAddress)
+            } else {
+                dlsymDescription = "nil"
+            }
+            NSLog(
+                "[WebInspectorTransport] native inspector export lookup failed symbol=%@ header=0x%llx exportTrieAvailable=%@ exportTrieFound=%@ dlsym=%@ reason=%@",
+                symbolName,
+                UInt64(headerAddress),
+                exportTrieAvailable ? "true" : "false",
+                exportTrieFound ? "true" : "false",
+                dlsymDescription,
+                failedReason
+            )
         }
-        NSLog(
-            "[WebInspectorTransport] native inspector export lookup failed symbol=%@ header=0x%llx exportTrieAvailable=%@ exportTrieFound=%@ dlsym=%@ reason=%@",
-            symbolName,
-            UInt64(headerAddress),
-            exportTrieAvailable ? "true" : "false",
-            exportTrieFound ? "true" : "false",
-            dlsymDescription,
-            failedReason
-        )
         #endif
     }
 

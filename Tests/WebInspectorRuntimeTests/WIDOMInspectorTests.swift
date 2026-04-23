@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 import Testing
 import WebKit
 #if canImport(UIKit)
@@ -49,6 +50,60 @@ struct WIDOMInspectorTests {
         }
     }
 #endif
+
+    @Test
+    func selectionDiagnosticMilestonesStillEmitWithoutVerboseConsoleLogs() {
+        #expect(
+            WIDOMInspector.shouldEmitSelectionDiagnosticToConsoleForTesting(
+                "applySelection updated document and frontend",
+                level: .default,
+                verboseConsoleDiagnostics: false
+            )
+        )
+        #expect(
+            WIDOMInspector.shouldEmitSelectionDiagnosticToConsoleForTesting(
+                "beginFreshContext requested",
+                level: .default,
+                verboseConsoleDiagnostics: false
+            )
+        )
+    }
+
+    @Test
+    func selectionDiagnosticNoiseIsSuppressedWithoutVerboseConsoleLogs() {
+        #expect(
+            WIDOMInspector.shouldEmitSelectionDiagnosticToConsoleForTesting(
+                "attach requested",
+                level: .default,
+                verboseConsoleDiagnostics: false
+            ) == false
+        )
+        #expect(
+            WIDOMInspector.shouldEmitSelectionDiagnosticToConsoleForTesting(
+                "pending inspect progress observed",
+                level: .debug,
+                verboseConsoleDiagnostics: false
+            ) == false
+        )
+    }
+
+    @Test
+    func selectionDiagnosticVerboseModeRestoresConsoleTrace() {
+        #expect(
+            WIDOMInspector.shouldEmitSelectionDiagnosticToConsoleForTesting(
+                "attach requested",
+                level: .default,
+                verboseConsoleDiagnostics: true
+            )
+        )
+        #expect(
+            WIDOMInspector.shouldEmitSelectionDiagnosticToConsoleForTesting(
+                "pending inspect progress observed",
+                level: .debug,
+                verboseConsoleDiagnostics: true
+            )
+        )
+    }
 
     @Test
     func sameWebViewReattachKeepsContextID() async {

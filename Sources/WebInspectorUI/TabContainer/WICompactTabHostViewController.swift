@@ -1,10 +1,13 @@
 #if canImport(UIKit)
+import Foundation
 import OSLog
 import UIKit
 import ObservationBridge
 import WebInspectorRuntime
 
 private let compactTabHostLogger = Logger(subsystem: "WebInspectorKit", category: "WICompactTabs")
+private let verboseConsoleDiagnosticsEnabled =
+    ProcessInfo.processInfo.environment["WEBSPECTOR_VERBOSE_CONSOLE_LOGS"] == "1"
 
 @MainActor
 final class WICompactTabHostViewController: UITabBarController, UITabBarControllerDelegate {
@@ -344,6 +347,11 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
         _ message: String,
         level: OSLogType = .default
     ) {
+        if verboseConsoleDiagnosticsEnabled == false,
+           level != .error,
+           level != .fault {
+            return
+        }
         let state = "modelSelected=\(inspector.selectedTab?.identifier ?? "nil") nativeSelected=\(selectedTab?.identifier ?? "nil") displayTabs=\(displayTabs.map(\.identifier)) nativeTabs=\(tabs.map(\.identifier))"
         let composed = "\(message) \(state)"
         switch level {

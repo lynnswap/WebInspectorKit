@@ -6,6 +6,8 @@ import WebInspectorEngine
 import WebInspectorTransport
 
 private let inspectorControllerLogger = Logger(subsystem: "WebInspectorKit", category: "WIInspectorController")
+private let verboseConsoleDiagnosticsEnabled =
+    ProcessInfo.processInfo.environment["WEBSPECTOR_VERBOSE_CONSOLE_LOGS"] == "1"
 
 public enum WIHostVisibility: Sendable {
     case visible
@@ -762,6 +764,11 @@ private extension WIInspectorController {
         _ message: String,
         level: OSLogType = .default
     ) {
+        if verboseConsoleDiagnosticsEnabled == false,
+           level != .error,
+           level != .fault {
+            return
+        }
         switch level {
         case .error, .fault:
             inspectorControllerLogger.error("\(message, privacy: .public)")

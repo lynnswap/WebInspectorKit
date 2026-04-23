@@ -31,6 +31,12 @@ static std::atomic<ptrdiff_t> cachedControllerOffset { invalidControllerOffset }
 
 static NSString *const errorDomain = @"WebInspectorTransport.Transport";
 
+static BOOL verboseConsoleDiagnosticsEnabled(void)
+{
+    NSDictionary<NSString *, NSString *> *environment = NSProcessInfo.processInfo.environment;
+    return [environment[@"WEBSPECTOR_VERBOSE_CONSOLE_LOGS"] isEqualToString:@"1"];
+}
+
 enum ErrorCode : NSInteger {
     ErrorCodeUnsupported = 1,
     ErrorCodeAttachFailed = 2,
@@ -668,7 +674,8 @@ private:
     );
     connectFrontend(_frontendConnectionTarget, *_frontendChannel, false, false);
     _frontendAttached = YES;
-    NSLog(@"[WebInspectorTransport] native inspector attach succeeded mode=controller-wrapper");
+    if (WITransportBridgePrivate::verboseConsoleDiagnosticsEnabled())
+        NSLog(@"[WebInspectorTransport] native inspector attach succeeded mode=controller-wrapper");
     return YES;
 }
 
