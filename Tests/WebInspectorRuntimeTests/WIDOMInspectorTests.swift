@@ -4334,6 +4334,43 @@ struct WIDOMInspectorTests {
     }
 
     @Test
+    func frontendHoverHighlightPreservesRevealFalse() async throws {
+        var lastHighlightReveal: Bool?
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, payload, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                case WITransportMethod.DOM.highlightNode:
+                    let params = runtimeTestDictionaryValue(payload["params"])
+                    lastHighlightReveal = params?["reveal"] as? Bool
+                    return [:]
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testCurrentContextID != nil
+                && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        let contextID = try #require(inspector.testCurrentContextID)
+        inspector.testHandleInspectorMessage(.highlight(nodeID: 6, reveal: false, contextID: contextID))
+
+        let sentRevealFalse = await waitForCondition {
+            lastHighlightReveal == false
+        }
+        #expect(sentRevealFalse)
+    }
+
+    @Test
     func successfulInspectReappliesPersistentHighlightAfterInspectModeTeardown() async throws {
         var pageCalls: [(method: String, inspectModeEnabled: Bool?)] = []
         let backend = FakeDOMTransportBackend(

@@ -1705,12 +1705,12 @@ private extension WIDOMInspector {
             Task { @MainActor [weak self] in
                 await self?.performChildRequest(nodeID: nodeID, depth: depth, contextID: contextID)
             }
-        case let .highlight(nodeID, _, contextID):
+        case let .highlight(nodeID, reveal, contextID):
             guard phase.matches(contextID) else {
                 return
             }
             Task { @MainActor [weak self] in
-                try? await self?.highlightNode(nodeID)
+                try? await self?.highlightNode(nodeID, reveal: reveal)
             }
         case let .hideHighlight(contextID):
             guard phase.matches(contextID) else {
@@ -2330,12 +2330,15 @@ private extension WIDOMInspector {
         return .seconds(15)
     }
 
-    func highlightNode(_ nodeID: Int) async throws {
+    func highlightNode(_ nodeID: Int, reveal: Bool = true) async throws {
         let targetIdentifier = try requireCurrentTargetIdentifier()
         _ = try await sendDOMCommand(
             WITransportMethod.DOM.highlightNode,
             targetIdentifier: targetIdentifier,
-            parameters: DOMHighlightNodeParameters(nodeId: try transportNodeID(forFrontendNodeID: nodeID))
+            parameters: DOMHighlightNodeParameters(
+                nodeId: try transportNodeID(forFrontendNodeID: nodeID),
+                reveal: reveal
+            )
         )
     }
 
@@ -5618,7 +5621,10 @@ private extension WIDOMInspector {
             _ = try await sendDOMCommand(
                 WITransportMethod.DOM.highlightNode,
                 targetIdentifier: targetIdentifier,
-                parameters: DOMHighlightNodeParameters(nodeId: try transportNodeID(for: selectedNode))
+                parameters: DOMHighlightNodeParameters(
+                    nodeId: try transportNodeID(for: selectedNode),
+                    reveal: true
+                )
             )
         } catch {
             logSelectionDiagnostics(
@@ -5808,6 +5814,7 @@ private struct DOMHighlightNodeParameters: Encodable {
     }
 
     let nodeId: Int
+    let reveal: Bool
     let highlightConfig = HighlightConfig()
 }
 
