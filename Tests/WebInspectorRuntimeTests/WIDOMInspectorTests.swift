@@ -3635,6 +3635,139 @@ struct WIDOMInspectorTests {
     }
 
     @Test
+    func inspectorInspectRefreshesCurrentDocumentImmediatelyAfterInvariantViolation() async throws {
+        var documentVersion = 0
+        let backend = FakeDOMTransportBackend()
+        backend.pageResultProvider = { method, payload, targetIdentifier in
+            switch method {
+            case WITransportMethod.DOM.getDocument:
+                if documentVersion == 0 {
+                    return makeDocumentResult(url: "https://example.com/a")
+                }
+                return makeDocumentResult(
+                    url: "https://example.com/a",
+                    bodyChildren: [[
+                        "nodeId": 4,
+                        "backendNodeId": 4,
+                        "nodeType": 1,
+                        "nodeName": "MAIN",
+                        "localName": "main",
+                        "nodeValue": "",
+                        "attributes": ["id", "root"],
+                        "childNodeCount": 1,
+                        "children": [[
+                            "nodeId": 164,
+                            "backendNodeId": 164,
+                            "nodeType": 1,
+                            "nodeName": "DIV",
+                            "localName": "div",
+                            "nodeValue": "",
+                            "attributes": ["id", "container"],
+                            "childNodeCount": 1,
+                            "children": [[
+                                "nodeId": 219,
+                                "backendNodeId": 219,
+                                "nodeType": 1,
+                                "nodeName": "SPAN",
+                                "localName": "span",
+                                "nodeValue": "",
+                                "attributes": ["id", "resolved-after-refresh"],
+                                "childNodeCount": 0,
+                                "children": [],
+                            ]],
+                        ]],
+                    ]]
+                )
+            case WITransportMethod.DOM.setInspectModeEnabled:
+                return [:]
+            case WITransportMethod.DOM.requestNode:
+                return ["nodeId": 219]
+            case WITransportMethod.DOM.requestChildNodes:
+                let params = runtimeTestDictionaryValue(payload["params"])
+                let requestedNodeID = params.flatMap {
+                    runtimeTestIntValue($0["nodeId"]) ?? ($0["nodeId"] as? NSNumber)?.intValue
+                }
+                if requestedNodeID == 164 {
+                    backend.emitPageEvent(
+                        method: "DOM.setChildNodes",
+                        params: [
+                            "parentId": 203,
+                            "nodes": [[
+                                "nodeId": 219,
+                                "backendNodeId": 219,
+                                "nodeType": 1,
+                                "nodeName": "SPAN",
+                                "localName": "span",
+                                "nodeValue": "",
+                                "attributes": ["id", "resolved-after-refresh"],
+                                "childNodeCount": 0,
+                                "children": [],
+                            ]],
+                        ],
+                        targetIdentifier: targetIdentifier
+                    )
+                    documentVersion = 1
+                }
+                return [:]
+            default:
+                return [:]
+            }
+        }
+
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        inspector.document.replaceDocument(
+            with: makeMainDocumentSnapshot(
+                mainChildren: [
+                    DOMGraphNodeDescriptor(
+                        localID: 164,
+                        backendNodeID: 164,
+                        nodeType: 1,
+                        nodeName: "DIV",
+                        localName: "div",
+                        nodeValue: "",
+                        attributes: [.init(name: "id", value: "container")],
+                        childCount: 1,
+                        layoutFlags: [],
+                        isRendered: true,
+                        children: []
+                    )
+                ]
+            ),
+            isFreshDocument: true
+        )
+
+        try await inspector.beginSelectionMode()
+        backend.emitRootEvent(
+            method: "Inspector.inspect",
+            params: [
+                "object": [
+                    "type": "object",
+                    "subtype": "node",
+                    "objectId": "node-object-219",
+                ],
+                "hints": [:],
+            ]
+        )
+
+        let selected = await waitForCondition(maxAttempts: 300) {
+            inspector.document.selectedNode?.localID == 219
+                && inspector.document.errorMessage == nil
+                && inspector.testHasPendingInspectSelection == false
+                && inspector.isSelectingElement == false
+        }
+        #expect(selected)
+    }
+
+    @Test
     func frontendSnapshotDoesNotInjectDetachedSelectionSubtreeIntoMainRoot() async throws {
         let backend = FakeDOMTransportBackend(
             pageResultProvider: { method, _, _ in

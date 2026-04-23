@@ -1892,6 +1892,15 @@ private extension WIDOMInspector {
                     extra: "contextID=\(context.contextID) target=\(targetIdentifier) reason=\(mirrorInvariantViolationReason)",
                     level: .error
                 )
+                if let pendingSelection = pendingInspectSelection,
+                   pendingSelection.contextID == context.contextID,
+                   await recoverPendingInspectSelectionAfterMirrorInvariantViolation(
+                        pendingSelection,
+                        targetIdentifier: targetIdentifier,
+                        reason: mirrorInvariantViolationReason
+                   ) {
+                    return
+                }
             }
             if mirrorInvariantViolationReason == nil, frontendCanAcceptIncrementalProjection(contextID: context.contextID) {
                 await inspectorBridge.applyMutationBundles(payload, contextID: context.contextID)
@@ -4077,6 +4086,49 @@ private extension WIDOMInspector {
             targetIdentifier: refreshedPendingSelection.resolutionTargetIdentifier,
             transaction: refreshedPendingSelection.transaction
         )
+    }
+
+    private func recoverPendingInspectSelectionAfterMirrorInvariantViolation(
+        _ pendingSelection: PendingInspectSelection,
+        targetIdentifier: String,
+        reason: String
+    ) async -> Bool {
+        guard let currentPendingSelection = pendingInspectSelection,
+              currentPendingSelection == pendingSelection,
+              selectionTransactionIsCurrent(currentPendingSelection.transaction) else {
+            return false
+        }
+
+        let didRefresh = await refreshSelectionSubtreeFromTransportIfNeeded(
+            selectorPath: currentPendingSelection.selectorPath,
+            contextID: currentPendingSelection.contextID,
+            targetIdentifier: currentPendingSelection.resolutionTargetIdentifier
+        )
+
+        logSelectionDiagnostics(
+            "pending inspect invariant refresh finished",
+            selector: currentPendingSelection.selectorPath,
+            extra: "reason=\(reason) target=\(targetIdentifier) didRefresh=\(didRefresh) currentSelection=\(selectionNodeSummary(document.selectedNode))",
+            level: .debug
+        )
+
+        await applyPendingInspectSelectionIfPossible()
+
+        if pendingInspectSelection == nil {
+            return true
+        }
+
+        if didRefresh {
+            let materializationOutcome = await restartPendingInspectMaterializationAfterRefresh(
+                currentPendingSelection,
+                reason: "invariant.refresh"
+            )
+            if materializationOutcome != .exhausted {
+                return true
+            }
+        }
+
+        return false
     }
 
     private func knownDocumentRoots() -> [DOMNodeModel] {
