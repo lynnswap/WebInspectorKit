@@ -2226,7 +2226,108 @@ struct WIDOMInspectorTests {
     }
 
     @Test
-    func inspectorInspectDoesNotRequestChildNodesWhenRequestNodeReturnsUnresolvedNode() async throws {
+    func inspectorInspectMaterializesAttachedIncompleteAncestorWhenRequestNodeReturnsUnresolvedNode() async throws {
+        var requestedChildNodeIDs: [Int] = []
+        var backend: FakeDOMTransportBackend!
+        backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, payload, targetIdentifier in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                case WITransportMethod.DOM.setInspectModeEnabled:
+                    return [:]
+                case WITransportMethod.DOM.requestNode:
+                    return ["nodeId": 341]
+                case WITransportMethod.DOM.requestChildNodes:
+                    let params = runtimeTestDictionaryValue(payload["params"])
+                    let requestedNodeID = params.flatMap {
+                        runtimeTestIntValue($0["nodeId"]) ?? ($0["nodeId"] as? NSNumber)?.intValue
+                    }
+                    if let requestedNodeID {
+                        requestedChildNodeIDs.append(requestedNodeID)
+                        if requestedNodeID == 20 {
+                            backend.emitPageEvent(
+                                method: "DOM.setChildNodes",
+                                params: [
+                                    "parentId": 20,
+                                    "nodes": [[
+                                        "nodeId": 341,
+                                        "backendNodeId": 341,
+                                        "nodeType": 1,
+                                        "nodeName": "SPAN",
+                                        "localName": "span",
+                                        "nodeValue": "",
+                                        "attributes": ["id", "resolved-target"],
+                                        "childNodeCount": 0,
+                                        "children": [],
+                                    ]],
+                                ],
+                                targetIdentifier: targetIdentifier
+                            )
+                        }
+                    }
+                    return [:]
+                default:
+                    return [:]
+                }
+            }
+        )
+
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        inspector.document.replaceDocument(
+            with: makeMainDocumentSnapshot(
+                mainChildren: [
+                    DOMGraphNodeDescriptor(
+                        localID: 20,
+                        backendNodeID: 20,
+                        nodeType: 1,
+                        nodeName: "DIV",
+                        localName: "div",
+                        nodeValue: "",
+                        attributes: [.init(name: "id", value: "incomplete-container")],
+                        childCount: 1,
+                        layoutFlags: [],
+                        isRendered: true,
+                        children: []
+                    ),
+                ]
+            ),
+            isFreshDocument: true
+        )
+
+        try await inspector.beginSelectionMode()
+        backend.emitRootEvent(
+            method: "Inspector.inspect",
+            params: [
+                "object": [
+                    "type": "object",
+                    "subtype": "node",
+                    "objectId": "node-object-908",
+                ],
+                "hints": [:],
+            ]
+        )
+
+        let selected = await waitForCondition(maxAttempts: 300) {
+            requestedChildNodeIDs == [20]
+                && inspector.document.selectedNode?.localID == 341
+                && inspector.document.errorMessage == nil
+                && inspector.isSelectingElement == false
+        }
+        #expect(selected)
+    }
+
+    @Test
+    func inspectorInspectDoesNotRequestChildNodesWhenNoAttachedIncompleteCandidatesExist() async throws {
         var requestedChildNodeIDs: [Int] = []
         let backend = FakeDOMTransportBackend(
             pageResultProvider: { method, payload, _ in
@@ -2265,27 +2366,18 @@ struct WIDOMInspectorTests {
         inspector.document.replaceDocument(
             with: makeMainDocumentSnapshot(
                 mainChildren: [
-                    makeFrameOwnerDescriptor(
+                    DOMGraphNodeDescriptor(
                         localID: 20,
                         backendNodeID: 20,
-                        frameID: "frame-a",
-                        idAttribute: "frame-owner-a",
-                        childCount: 1,
-                        children: [
-                            makeFrameDocumentDescriptor(
-                                localID: 24,
-                                backendNodeID: 24,
-                                frameID: "frame-a",
-                                childCount: 2
-                            )
-                        ]
-                    ),
-                    makeFrameOwnerDescriptor(
-                        localID: 30,
-                        backendNodeID: 30,
-                        frameID: "frame-b",
-                        idAttribute: "frame-owner-b",
-                        childCount: 1
+                        nodeType: 1,
+                        nodeName: "DIV",
+                        localName: "div",
+                        nodeValue: "",
+                        attributes: [.init(name: "id", value: "loaded-container")],
+                        childCount: 0,
+                        layoutFlags: [],
+                        isRendered: true,
+                        children: []
                     ),
                 ]
             ),

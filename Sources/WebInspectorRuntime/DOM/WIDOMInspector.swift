@@ -2841,7 +2841,7 @@ private extension WIDOMInspector {
                 targetIdentifier: resolutionTargetIdentifier,
                 transaction: transaction,
                 showErrorOnFailure: true,
-                allowMaterialization: false
+                allowMaterialization: sharedTransport.targetKind(for: resolutionTargetIdentifier) != .frame
             )
         } catch {
             await completeInspectModeAfterBackendSelection()
@@ -3114,6 +3114,31 @@ private extension WIDOMInspector {
 
         guard selectionTransactionIsCurrent(transaction) else {
             return
+        }
+
+        let shouldMaterializeCurrentInspectSelection: Bool
+        if transaction != nil {
+            shouldMaterializeCurrentInspectSelection = selectionMaterializationCandidates(
+                for: pendingInspectSelection
+            ).strategy == .genericIncomplete
+        } else {
+            shouldMaterializeCurrentInspectSelection = true
+        }
+
+        if allowMaterialization, shouldMaterializeCurrentInspectSelection {
+            let outcome = await materializePendingInspectSelection(
+                nodeID: nodeID,
+                selectorPath: selectorPath,
+                contextID: contextID,
+                targetIdentifier: targetIdentifier,
+                transaction: transaction
+            )
+            switch outcome {
+            case .requested, .waitingForMutation:
+                return
+            case .exhausted:
+                break
+            }
         }
 
         logSelectionDiagnostics(
