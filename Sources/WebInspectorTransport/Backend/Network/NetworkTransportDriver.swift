@@ -80,7 +80,9 @@ final class NetworkTransportDriver: WINetworkBackend, InspectorTransportCapabili
     }
 
     func attachPageWebView(_ newWebView: WKWebView?) async {
-        guard webView !== newWebView || attachTask == nil else {
+        if webView === newWebView,
+           attachTask == nil,
+           await sharedTransport.attachedSession() != nil {
             return
         }
 
@@ -406,16 +408,16 @@ private extension NetworkTransportDriver {
     }
 
     func handlePageEvent(_ envelope: WITransportEventEnvelope, session: WITransportSession) async {
-        if transportLifecycleEventIsForFrame(envelope, session: session) {
-            return
-        }
-        switch envelope.method {
-        case "Target.targetCreated", "Target.didCommitProvisionalTarget":
-            try? await enableNetworkIfNeeded(for: envelope.targetIdentifier, session: session)
-        case "Target.targetDestroyed":
-            try? await enableNetworkIfNeeded(for: session.currentPageTargetIdentifier(), session: session)
-        default:
-            break
+        let frameLifecycleEvent = transportLifecycleEventIsForFrame(envelope, session: session)
+        if !frameLifecycleEvent {
+            switch envelope.method {
+            case "Target.targetCreated", "Target.didCommitProvisionalTarget":
+                try? await enableNetworkIfNeeded(for: envelope.targetIdentifier, session: session)
+            case "Target.targetDestroyed":
+                try? await enableNetworkIfNeeded(for: session.currentPageTargetIdentifier(), session: session)
+            default:
+                break
+            }
         }
         handle(envelope)
     }

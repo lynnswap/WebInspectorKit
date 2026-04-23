@@ -25,6 +25,48 @@ struct NetworkTransportDriverTests {
     }
 
     @Test
+    func sameWebViewReattachDoesNotReplayBootstrapRows() async {
+        let backend = FakeRegistryBackend(
+            capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain, .networkBootstrapSnapshot],
+            pageTargetedResultProvider: { method, _, _ in
+                guard method == WITransportMethod.Network.getBootstrapSnapshot else {
+                    return nil
+                }
+                return makeBootstrapSnapshotResultPayload(
+                    resources: [
+                        makeBootstrapResourcePayload(
+                            bootstrapRowID: "bootstrap-row",
+                            ownerSessionID: "page-A",
+                            targetIdentifier: "page-A",
+                            url: "https://example.com/bootstrap.js",
+                            method: "UNKNOWN",
+                            requestType: "Script",
+                            mimeType: "text/javascript",
+                            phase: "completed"
+                        ),
+                    ]
+                )
+            }
+        )
+        let driver = NetworkTransportDriver(transportSessionFactory: makeTransportSessionFactory(using: backend))
+        let webView = makeIsolatedTestWebView()
+
+        await driver.attachPageWebView(webView)
+        await driver.waitForAttachForTesting()
+        #expect(await waitForCondition {
+            driver.store.entries.count == 1
+        })
+
+        await driver.attachPageWebView(webView)
+        await driver.waitForAttachForTesting()
+
+        #expect(driver.store.entries.count == 1)
+        #expect(backend.sentPageTargets.filter { $0.method == WITransportMethod.Network.getBootstrapSnapshot }.count == 1)
+
+        await driver.detachPageWebView(preparing: .stopped)
+    }
+
+    @Test
     func sharedTransportUsesSingleAttachmentAcrossDomAndNetworkClients() async {
         let backend = FakeRegistryBackend()
         let sharedTransport = WISharedInspectorTransport(
