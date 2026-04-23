@@ -28,6 +28,7 @@ declare global {
             buffers?: Record<string, unknown>;
             messageHandlers?: {
                 webInspectorDomRequestChildren?: WebKitMessageHandler;
+                webInspectorDomReloadSnapshot?: WebKitMessageHandler;
                 webInspectorDomHighlight?: WebKitMessageHandler;
                 webInspectorDomHideHighlight?: WebKitMessageHandler;
                 webInspectorLog?: WebKitMessageHandler;

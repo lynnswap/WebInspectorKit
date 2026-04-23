@@ -14,6 +14,7 @@ declare global {
     interface WebInspectorMessageHandlers {
         [key: string]: WebInspectorMessageHandler | undefined;
         webInspectorDomRequestChildren?: WebInspectorMessageHandler;
+        webInspectorDomReloadSnapshot?: WebInspectorMessageHandler;
         webInspectorDomHighlight?: WebInspectorMessageHandler;
         webInspectorDomHideHighlight?: WebInspectorMessageHandler;
         webInspectorLog?: WebInspectorMessageHandler;

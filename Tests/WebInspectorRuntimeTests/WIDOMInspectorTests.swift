@@ -4371,6 +4371,39 @@ struct WIDOMInspectorTests {
     }
 
     @Test
+    func snapshotReloadMessageRefreshesCurrentDocumentFromTransport() async throws {
+        var currentURL = "https://example.com/a"
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, _, _ in
+                guard method == WITransportMethod.DOM.getDocument else {
+                    return [:]
+                }
+                return makeDocumentResult(url: currentURL)
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady
+                && inspector.document.rootNode != nil
+                && inspector.testCurrentDocumentURL == "https://example.com/a"
+        }
+        #expect(ready)
+
+        currentURL = "https://example.com/b"
+        let contextID = try #require(inspector.testCurrentContextID)
+        inspector.testHandleInspectorMessage(.requestSnapshotReload(reason: "dom-sync", contextID: contextID))
+
+        let reloaded = await waitForCondition {
+            inspector.testCurrentDocumentURL == "https://example.com/b"
+        }
+        #expect(reloaded)
+    }
+
+    @Test
     func successfulInspectReappliesPersistentHighlightAfterInspectModeTeardown() async throws {
         var pageCalls: [(method: String, inspectModeEnabled: Bool?)] = []
         let backend = FakeDOMTransportBackend(

@@ -1705,6 +1705,23 @@ private extension WIDOMInspector {
             Task { @MainActor [weak self] in
                 await self?.performChildRequest(nodeID: nodeID, depth: depth, contextID: contextID)
             }
+        case let .requestSnapshotReload(_, contextID):
+            guard phase.matches(contextID),
+                  let targetIdentifier = phase.targetIdentifier ?? sharedTransport.currentPageTargetIdentifier() else {
+                return
+            }
+            Task { @MainActor [weak self] in
+                do {
+                    try await self?.refreshCurrentDocumentFromTransport(
+                        contextID: contextID,
+                        targetIdentifier: targetIdentifier,
+                        depth: self?.configuration.snapshotDepth ?? 3,
+                        isFreshDocument: false
+                    )
+                } catch {
+                    self?.applyRecoverableError(self?.errorMessage(from: error))
+                }
+            }
         case let .highlight(nodeID, reveal, contextID):
             guard phase.matches(contextID) else {
                 return

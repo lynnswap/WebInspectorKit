@@ -10,6 +10,7 @@ import { protocolState } from "./dom-tree-state";
 
 type TypedHandlerName =
     | "webInspectorDomRequestChildren"
+    | "webInspectorDomReloadSnapshot"
     | "webInspectorDomHighlight"
     | "webInspectorDomHideHighlight";
 
@@ -148,6 +149,12 @@ export function requestHighlightNode(nodeId: number, options: { reveal?: boolean
 
 export function requestHideHighlight(): void {
     postTypedMessage("webInspectorDomHideHighlight");
+}
+
+export function requestSnapshotReload(reason: string): void {
+    postTypedMessage("webInspectorDomReloadSnapshot", {
+        reason,
+    });
 }
 
 export function reportInspectorError(context: string, error: unknown): void {

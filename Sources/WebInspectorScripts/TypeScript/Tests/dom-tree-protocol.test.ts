@@ -5,6 +5,7 @@ import {
     finishChildNodeRequest,
     onContextDidChange,
     requestChildNodes,
+    requestSnapshotReload,
 } from "../UI/DOMTree/dom-tree-protocol";
 import { applyMutationBundle, setSnapshot } from "../UI/DOMTree/dom-tree-snapshot";
 import { dom, protocolState, renderState, treeState } from "../UI/DOMTree/dom-tree-state";
@@ -40,6 +41,7 @@ function resetState(): void {
     window.webkit = {
         messageHandlers: {
             webInspectorDomRequestChildren: { postMessage: vi.fn() },
+            webInspectorDomReloadSnapshot: { postMessage: vi.fn() },
             webInspectorDomHighlight: { postMessage: vi.fn() },
             webInspectorDomHideHighlight: { postMessage: vi.fn() },
             webInspectorLog: { postMessage: vi.fn() },
@@ -84,6 +86,16 @@ describe("dom-tree-protocol", () => {
         finishChildNodeRequest(11, true, protocolState.contextID);
         await requestChildNodes(11, 3);
         expect(handler).toHaveBeenCalledTimes(2);
+    });
+
+    it("posts snapshot reload requests with the current contextID", () => {
+        requestSnapshotReload("dom-sync");
+
+        const handler = window.webkit?.messageHandlers?.webInspectorDomReloadSnapshot?.postMessage as ReturnType<typeof vi.fn>;
+        expect(handler).toHaveBeenCalledWith({
+            reason: "dom-sync",
+            contextID: protocolState.contextID,
+        });
     });
 
     it("ignores stale mutation bundles", () => {

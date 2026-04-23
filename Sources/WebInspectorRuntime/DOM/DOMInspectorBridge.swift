@@ -13,6 +13,7 @@ final class DOMInspectorBridge: NSObject {
     enum IncomingMessage {
         case ready(contextID: DOMContextID)
         case requestChildren(nodeID: Int, depth: Int, contextID: DOMContextID)
+        case requestSnapshotReload(reason: String, contextID: DOMContextID)
         case highlight(nodeID: Int, reveal: Bool, contextID: DOMContextID)
         case hideHighlight(contextID: DOMContextID)
         case domSelection(payload: Any, contextID: DOMContextID)
@@ -21,6 +22,7 @@ final class DOMInspectorBridge: NSObject {
 
     private enum HandlerName: String, CaseIterable {
         case requestChildren = "webInspectorDomRequestChildren"
+        case reloadSnapshot = "webInspectorDomReloadSnapshot"
         case highlight = "webInspectorDomHighlight"
         case hideHighlight = "webInspectorDomHideHighlight"
         case ready = "webInspectorReady"
@@ -376,6 +378,11 @@ extension DOMInspectorBridge: WKScriptMessageHandler {
             }
             let contextID = parseContextID(payload["contextID"]) ?? 0
             onMessage?(.requestChildren(nodeID: nodeID, depth: depth, contextID: contextID))
+        case .reloadSnapshot:
+            let payload = dictionaryPayload(from: body) ?? [:]
+            let reason = (payload["reason"] as? String) ?? "dom-sync"
+            let contextID = parseContextID(payload["contextID"]) ?? 0
+            onMessage?(.requestSnapshotReload(reason: reason, contextID: contextID))
         case .highlight:
             guard let payload = dictionaryPayload(from: body),
                   let nodeID = parseInt(payload["nodeId"])

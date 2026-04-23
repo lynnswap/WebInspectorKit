@@ -19,6 +19,7 @@ import {
     RawNodeDescriptor,
     SerializedNodeEnvelope,
 } from "./dom-tree-types";
+import { requestSnapshotReload as protocolRequestSnapshotReload } from "./dom-tree-protocol";
 import {
     dom,
     protocolState,
@@ -968,7 +969,11 @@ function applySetChildNodes(params: {
 /** Request a snapshot reload */
 export function requestSnapshotReload(reason?: string): void {
     const reloadReason = reason || "dom-sync";
-    console.debug("[WebInspectorKit] request reload:", reloadReason);
+    try {
+        protocolRequestSnapshotReload(reloadReason);
+    } catch {
+        console.debug("[WebInspectorKit] request reload:", reloadReason);
+    }
 }
 
 // =============================================================================
