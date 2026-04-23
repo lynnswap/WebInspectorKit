@@ -1819,7 +1819,11 @@ private extension WIDOMInspector {
             return
         }
         guard case let .ready(context, targetIdentifier) = phase,
-              isInspectEvent || envelope.targetIdentifier == nil || envelope.targetIdentifier == targetIdentifier else {
+              isInspectEvent
+                || envelope.targetIdentifier == nil
+                || envelope.targetIdentifier == targetIdentifier
+                || sharedTransport.targetKind(for: envelope.targetIdentifier) == .frame
+        else {
             return
         }
 

@@ -375,7 +375,8 @@ public final class WITransportSession {
     }
 
     package func shouldAttemptStableNetworkBootstrap() -> Bool {
-        stableNetworkBootstrapAvailability != .unavailable
+        supportSnapshot.capabilities.contains(.networkBootstrapSnapshot)
+            && stableNetworkBootstrapAvailability != .unavailable
     }
 
     @discardableResult

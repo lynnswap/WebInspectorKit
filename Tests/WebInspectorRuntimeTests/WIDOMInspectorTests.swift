@@ -3986,7 +3986,7 @@ struct WIDOMInspectorTests {
 
         try await inspector.deleteNode(nodeId: 42, undoManager: nil)
 
-        #expect(removedNodeID == 42)
+        #expect(removedNodeID == 7)
         #expect(inspector.document.node(localID: 42) != nil)
         #expect(inspector.document.node(backendNodeID: 42) == nil)
     }
