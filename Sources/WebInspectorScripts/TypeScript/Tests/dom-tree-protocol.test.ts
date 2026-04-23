@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
     adoptDocumentContext,
     finishChildNodeRequest,
+    onChildNodeRequestCompleted,
     onContextDidChange,
     requestChildNodes,
     requestSnapshotReload,
@@ -86,6 +87,16 @@ describe("dom-tree-protocol", () => {
         finishChildNodeRequest(11, true, protocolState.contextID);
         await requestChildNodes(11, 3);
         expect(handler).toHaveBeenCalledTimes(2);
+    });
+
+    it("notifies completion handlers even when the child request fails", () => {
+        const handler = vi.fn();
+        const dispose = onChildNodeRequestCompleted(handler);
+
+        finishChildNodeRequest(11, false, protocolState.contextID);
+
+        expect(handler).toHaveBeenCalledWith(11);
+        dispose();
     });
 
     it("posts snapshot reload requests with the current contextID", () => {

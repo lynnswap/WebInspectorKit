@@ -130,11 +130,9 @@ export function finishChildNodeRequest(nodeId: number, success: boolean, context
         return;
     }
     activeChildNodeRequests.delete(nodeId);
-    if (success) {
-        childNodeRequestCompletedHandlers.forEach((handler) => {
-            handler(nodeId);
-        });
-    }
+    childNodeRequestCompletedHandlers.forEach((handler) => {
+        handler(nodeId);
+    });
 }
 
 export function requestHighlightNode(nodeId: number, options: { reveal?: boolean } = {}): void {
