@@ -104,6 +104,11 @@ public final class WIDOMInspector {
         let generation: UInt64
     }
 
+    package enum InspectModeControlBackend: String {
+        case nativeInspector = "native-inspector"
+        case transportProtocol = "transport-protocol"
+    }
+
     private enum SelectionMaterializationStrategy: String {
         case frameRelated = "frame-related"
         case genericIncomplete = "generic-incomplete"
@@ -294,6 +299,7 @@ public final class WIDOMInspector {
     @ObservationIgnored private var frontendReadyContextID: DOMContextID?
     @ObservationIgnored private var externalRecoverableErrorHandler: (@MainActor (String?) -> Void)?
     @ObservationIgnored private var inspectModeTargetIdentifier: String?
+    @ObservationIgnored package var inspectModeControlBackend: InspectModeControlBackend?
     @ObservationIgnored private var inspectSelectionArm: InspectSelectionArm?
     @ObservationIgnored private weak var deleteUndoManager: UndoManager?
     @ObservationIgnored private var pendingChildRequests: [PendingChildRequestKey: PendingChildRequestRecord] = [:]
@@ -575,12 +581,28 @@ public final class WIDOMInspector {
 #endif
 
             let targetIdentifier = try requireCurrentTargetIdentifier()
+#if canImport(UIKit)
+            let inspectModeControlBackend = try await enableInspectorSelectionMode(
+                hadSelectedNode: hadSelectedNode,
+                contextID: context.contextID,
+                targetIdentifier: targetIdentifier
+            )
+#else
             if hadSelectedNode {
                 try? await hideHighlight()
             }
             try await setInspectModeEnabled(true, targetIdentifier: targetIdentifier)
+            let inspectModeControlBackend = InspectModeControlBackend.transportProtocol
+#endif
             guard currentContext?.contextID == context.contextID else {
+#if canImport(UIKit)
+                await disableInspectorSelectionModeIfNeeded(
+                    targetIdentifier: targetIdentifier,
+                    backend: inspectModeControlBackend
+                )
+#else
                 try? await setInspectModeEnabled(false, targetIdentifier: targetIdentifier)
+#endif
                 clearInspectModeState(
                     invalidatePendingSelection: true,
                     clearSelectionArm: true
@@ -589,7 +611,8 @@ public final class WIDOMInspector {
             }
             beginInspectMode(
                 contextID: context.contextID,
-                targetIdentifier: targetIdentifier
+                targetIdentifier: targetIdentifier,
+                backend: inspectModeControlBackend
             )
         } catch {
             if hadSelectedNode, let selectedContextID {
@@ -597,6 +620,25 @@ public final class WIDOMInspector {
             }
             throw error
         }
+    }
+
+    package func hideHighlightForInspectorLifecycle() async throws {
+        try await hideHighlight()
+    }
+
+    package func setProtocolInspectModeEnabledForInspectorLifecycle(
+        _ enabled: Bool,
+        targetIdentifier: String
+    ) async throws {
+        try await setInspectModeEnabled(enabled, targetIdentifier: targetIdentifier)
+    }
+
+    package func logInspectorLifecycleDiagnostics(
+        _ message: String,
+        extra: String? = nil,
+        level: OSLogType = .default
+    ) {
+        logSelectionDiagnostics(message, extra: extra, level: level)
     }
 
     private func setPageWebView(_ webView: WKWebView?) {
@@ -637,9 +679,15 @@ public final class WIDOMInspector {
                     try await self.beginSelectionMode()
                     self.logSelectionDiagnostics("requestSelectionModeToggle enabled inspect mode")
                 } catch {
+                    let nativeState: String
+#if canImport(UIKit)
+                    nativeState = self.nativeInspectorInteractionStateSummaryForDiagnostics() ?? "nil"
+#else
+                    nativeState = "n/a"
+#endif
                     self.logSelectionDiagnostics(
                         "requestSelectionModeToggle failed to enable inspect mode",
-                        extra: error.localizedDescription,
+                        extra: "\(error.localizedDescription) nativeState=\(nativeState)",
                         level: .error
                     )
                 }
@@ -730,7 +778,8 @@ public final class WIDOMInspector {
         if active {
             beginInspectMode(
                 contextID: currentContext?.contextID ?? 0,
-                targetIdentifier: "testing"
+                targetIdentifier: "testing",
+                backend: .transportProtocol
             )
         } else {
             clearInspectModeState()
@@ -1901,6 +1950,27 @@ private extension WIDOMInspector {
                    ) {
                     return
                 }
+                do {
+                    try await refreshCurrentDocumentFromTransport(
+                        contextID: context.contextID,
+                        targetIdentifier: targetIdentifier,
+                        depth: configuration.snapshotDepth,
+                        isFreshDocument: false
+                    )
+                    await applyPendingInspectSelectionIfPossible()
+                    logSelectionDiagnostics(
+                        "handleDOMEventEnvelope refreshed current document after canonical mirror invariant violation",
+                        extra: "contextID=\(context.contextID) target=\(targetIdentifier) reason=\(mirrorInvariantViolationReason)",
+                        level: .debug
+                    )
+                } catch {
+                    logSelectionDiagnostics(
+                        "handleDOMEventEnvelope failed to refresh current document after canonical mirror invariant violation",
+                        extra: "contextID=\(context.contextID) target=\(targetIdentifier) reason=\(mirrorInvariantViolationReason) error=\(error.localizedDescription)",
+                        level: .error
+                    )
+                }
+                return
             }
             if mirrorInvariantViolationReason == nil, frontendCanAcceptIncrementalProjection(contextID: context.contextID) {
                 await inspectorBridge.applyMutationBundles(payload, contextID: context.contextID)
@@ -2593,11 +2663,13 @@ private extension WIDOMInspector {
 
     func beginInspectMode(
         contextID: DOMContextID,
-        targetIdentifier: String
+        targetIdentifier: String,
+        backend: InspectModeControlBackend
     ) {
         selectionGeneration &+= 1
         pendingInspectSelection = nil
         inspectModeTargetIdentifier = targetIdentifier
+        inspectModeControlBackend = backend
         armInspectSelection(
             contextID: contextID,
             targetIdentifier: targetIdentifier
@@ -2613,6 +2685,7 @@ private extension WIDOMInspector {
         clearSelectionArm: Bool = true
     ) {
         inspectModeTargetIdentifier = nil
+        inspectModeControlBackend = nil
         if deactivateInspectEvents {
             acceptsInspectEvents = false
         }
@@ -2633,6 +2706,7 @@ private extension WIDOMInspector {
         invalidatePendingSelection: Bool = false,
         restoreSelectedHighlight: Bool = false
     ) async {
+        let activeInspectModeControlBackend = inspectModeControlBackend
         clearInspectModeState(
             invalidatePendingSelection: invalidatePendingSelection,
             markSelectionInactive: false,
@@ -2640,6 +2714,12 @@ private extension WIDOMInspector {
             clearSelectionArm: true
         )
 
+#if canImport(UIKit)
+        await disableInspectorSelectionModeIfNeeded(
+            targetIdentifier: targetIdentifier,
+            backend: activeInspectModeControlBackend
+        )
+#else
         if let targetIdentifier {
             do {
                 _ = try await sendDOMCommand(
@@ -2655,6 +2735,7 @@ private extension WIDOMInspector {
                 )
             }
         }
+#endif
 
 #if canImport(UIKit)
         await awaitInspectModeInactive()
@@ -2674,6 +2755,7 @@ private extension WIDOMInspector {
         invalidatePendingSelection: Bool = false
     ) async {
         let activeTargetIdentifier = inspectModeTargetIdentifier ?? phase.targetIdentifier
+        let activeInspectModeControlBackend = inspectModeControlBackend
         clearInspectModeState(
             invalidatePendingSelection: invalidatePendingSelection,
             markSelectionInactive: false,
@@ -2681,6 +2763,12 @@ private extension WIDOMInspector {
             clearSelectionArm: false
         )
 
+#if canImport(UIKit)
+        await disableInspectorSelectionModeIfNeeded(
+            targetIdentifier: activeTargetIdentifier,
+            backend: activeInspectModeControlBackend
+        )
+#else
         if let activeTargetIdentifier {
             do {
                 try await setInspectModeEnabled(false, targetIdentifier: activeTargetIdentifier)
@@ -2692,6 +2780,7 @@ private extension WIDOMInspector {
                 )
             }
         }
+#endif
 
 #if canImport(UIKit)
         await awaitInspectModeInactive()
@@ -3179,6 +3268,30 @@ private extension WIDOMInspector {
     ) async -> PendingInspectMaterializationOutcome {
         guard currentContext?.contextID == contextID,
               selectionTransactionIsCurrent(transaction) else {
+            return .exhausted
+        }
+
+        switch phase {
+        case let .ready(context, activeTargetIdentifier)
+            where context.contextID == contextID && activeTargetIdentifier == targetIdentifier:
+            break
+        case let .loadingDocument(context, _)
+            where context.contextID == contextID:
+            logSelectionDiagnostics(
+                "materializePendingInspectSelection deferred while document is not ready",
+                selector: selectorPath,
+                extra: "nodeID=\(nodeID) target=\(targetIdentifier) phase=\(String(describing: phase))"
+            )
+            return .waitingForMutation
+        case let .waitingForTarget(context)
+            where context.contextID == contextID:
+            logSelectionDiagnostics(
+                "materializePendingInspectSelection deferred while document is not ready",
+                selector: selectorPath,
+                extra: "nodeID=\(nodeID) target=\(targetIdentifier) phase=\(String(describing: phase))"
+            )
+            return .waitingForMutation
+        default:
             return .exhausted
         }
 
@@ -6089,6 +6202,36 @@ extension WIDOMInspector {
             activeRequestGeneration: activeRequestGeneration,
             genericDispatchDeferralCount: 0
         )
+    }
+
+    package func testSetLoadingPhaseCurrentContext(targetIdentifier: String) {
+        guard let currentContext else {
+            return
+        }
+        setPhase(.loadingDocument(currentContext, targetIdentifier: targetIdentifier))
+    }
+
+    package func testMaterializePendingInspectSelection(
+        nodeID: Int,
+        contextID: DOMContextID,
+        targetIdentifier: String,
+        selectorPath: String? = nil
+    ) async -> String {
+        let outcome = await materializePendingInspectSelection(
+            nodeID: nodeID,
+            selectorPath: selectorPath,
+            contextID: contextID,
+            targetIdentifier: targetIdentifier,
+            transaction: selectionTransaction(for: contextID)
+        )
+        switch outcome {
+        case .requested:
+            return "requested"
+        case .waitingForMutation:
+            return "waitingForMutation"
+        case .exhausted:
+            return "exhausted"
+        }
     }
 
     package var testPendingInspectScopedMaterializationRootLocalIDs: [UInt64] {

@@ -114,6 +114,78 @@ NSErrorDomain const WIKRuntimeBridgeErrorDomain = @"WebInspectorBridge.WIKRuntim
     return @(inspector.isElementSelectionActive);
 }
 
++ (nullable NSNumber *)inspectorConnectedForWebView:(WKWebView *)webView
+{
+    if (![webView respondsToSelector:@selector(_inspector)])
+        return nil;
+
+    _WKInspector *inspector = webView._inspector;
+    if (!inspector || ![inspector respondsToSelector:@selector(isConnected)])
+        return nil;
+    return @(inspector.isConnected);
+}
+
++ (BOOL)connectInspectorForWebView:(WKWebView *)webView
+{
+    NSObject *inspector = [self inspectorForWebView:webView];
+    if (!inspector)
+        return NO;
+
+    if ([[self inspectorConnectedForWebView:webView] boolValue])
+        return YES;
+
+    BOOL didInvokeConnect = [self invokeVoidOnTarget:inspector selectorName:@"connect"];
+    NSNumber *connected = [self inspectorConnectedForWebView:webView];
+    if (connected)
+        return connected.boolValue;
+
+    BOOL didInvokeAttach = [self invokeVoidOnTarget:inspector selectorName:@"attach"];
+    connected = [self inspectorConnectedForWebView:webView];
+    if (connected)
+        return connected.boolValue;
+
+    return didInvokeConnect || didInvokeAttach;
+}
+
++ (BOOL)toggleInspectorElementSelectionForWebView:(WKWebView *)webView
+{
+    NSObject *inspector = [self inspectorForWebView:webView];
+    if (!inspector)
+        return NO;
+
+    return [self invokeVoidOnTarget:inspector selectorName:@"toggleElementSelection"];
+}
+
++ (nullable NSNumber *)showingInspectorIndicationForWebView:(WKWebView *)webView
+{
+    UIView *contentView = [self wi_preferredContentViewForWebView:webView];
+    if (!contentView)
+        return nil;
+
+    return [self boolResultFromTarget:contentView selectorName:@"isShowingInspectorIndication"];
+}
+
++ (BOOL)setShowingInspectorIndication:(BOOL)showingInspectorIndication
+                           forWebView:(WKWebView *)webView
+{
+    UIView *contentView = [self wi_preferredContentViewForWebView:webView];
+    if (!contentView)
+        return NO;
+
+    SEL selector = NSSelectorFromString(@"setShowingInspectorIndication:");
+    if (![contentView respondsToSelector:selector])
+        return NO;
+
+    typedef void (*Setter)(id, SEL, BOOL);
+    IMP implementation = [contentView methodForSelector:selector];
+    if (implementation == NULL)
+        return NO;
+
+    Setter function = (Setter)implementation;
+    function(contentView, selector, showingInspectorIndication);
+    return YES;
+}
+
 + (BOOL)canEnableInspectorNodeSearchForWebView:(WKWebView *)webView
 {
     UIView *contentView = [self wi_preferredContentViewForWebView:webView];

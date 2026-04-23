@@ -15,13 +15,18 @@ NS_ASSUME_NONNULL_BEGIN
 
 @interface _WKInspector : NSObject
 @property (readonly, nonatomic) BOOL isElementSelectionActive;
+@property (readonly, nonatomic) BOOL isConnected;
 - (void)connect;
+- (void)attach;
+- (void)toggleElementSelection;
 @end
 
 #if TARGET_OS_IPHONE
 @interface UIView (WIKPrivateInspectorNodeSearch)
 - (void)_enableInspectorNodeSearch;
 - (void)_disableInspectorNodeSearch;
+- (BOOL)isShowingInspectorIndication;
+- (void)setShowingInspectorIndication:(BOOL)showingInspectorIndication;
 @end
 #endif
 

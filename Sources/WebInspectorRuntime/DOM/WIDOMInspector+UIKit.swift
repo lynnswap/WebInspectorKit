@@ -99,6 +99,18 @@ extension UIApplication: WIDOMUIKitSceneActivationRequesting {
 
 @MainActor
 package enum WIDOMUIKitInspectorSelectionEnvironment {
+    package static var privateInspectorAccessProvider: @MainActor (WKWebView) -> Bool = {
+        WIInspectorSelectionPrivateBridge.hasPrivateInspectorAccess(in: $0)
+    }
+    package static var inspectorConnectedProvider: @MainActor (WKWebView) -> Bool? = {
+        WIInspectorSelectionPrivateBridge.isInspectorConnected(in: $0)
+    }
+    package static var inspectorConnector: @MainActor (WKWebView) -> Bool = {
+        WIInspectorSelectionPrivateBridge.connectInspector(in: $0)
+    }
+    package static var elementSelectionToggler: @MainActor (WKWebView) -> Bool = {
+        WIInspectorSelectionPrivateBridge.toggleElementSelection(in: $0)
+    }
     package static var nodeSearchSetter: @MainActor (WKWebView, Bool) -> Bool = { webView, enabled in
         WIInspectorSelectionPrivateBridge.setNodeSearchEnabled(enabled, in: webView)
     }
@@ -241,6 +253,9 @@ extension WIDOMInspector {
             return
         }
 
+        if selectionActive {
+            _ = deactivateNativeInspectorElementSelectionIfNeeded(on: pageWebView)
+        }
         _ = WIDOMUIKitInspectorSelectionEnvironment.nodeSearchSetter(pageWebView, false)
         if hasActiveNativeInspectorNodeSearch(in: pageWebView) == false {
             return
@@ -262,8 +277,148 @@ extension WIDOMInspector {
         WIDOMUIKitInspectorSelectionEnvironment.recognizerPresenceProvider(webView)
     }
 
+    private func nativeInspectorSelectionBackend(for webView: WKWebView) -> InspectModeControlBackend {
+        if WIDOMUIKitInspectorSelectionEnvironment.privateInspectorAccessProvider(webView) {
+            return .nativeInspector
+        }
+        return .transportProtocol
+    }
+
+    private func isNativeInspectorConnected(on webView: WKWebView) -> Bool? {
+        WIDOMUIKitInspectorSelectionEnvironment.inspectorConnectedProvider(webView)
+    }
+
     private func isNativeInspectorElementSelectionActive(on webView: WKWebView) -> Bool? {
         WIDOMUIKitInspectorSelectionEnvironment.selectionActiveProvider(webView)
+    }
+
+    private func connectNativeInspectorIfNeeded(on webView: WKWebView) -> Bool {
+        if isNativeInspectorConnected(on: webView) == true {
+            return true
+        }
+        let didRequestConnect = WIDOMUIKitInspectorSelectionEnvironment.inspectorConnector(webView)
+        return isNativeInspectorConnected(on: webView) ?? didRequestConnect
+    }
+
+    private func activateNativeInspectorElementSelection(on webView: WKWebView) -> Bool {
+        let selectionWasActive = isNativeInspectorElementSelectionActive(on: webView) == true
+        let nodeSearchWasActive = hasActiveNativeInspectorNodeSearch(in: webView)
+        if selectionWasActive || nodeSearchWasActive {
+            if nodeSearchWasActive == false {
+                _ = WIDOMUIKitInspectorSelectionEnvironment.nodeSearchSetter(webView, true)
+            }
+            if isNativeInspectorConnected(on: webView) == false {
+                _ = connectNativeInspectorIfNeeded(on: webView)
+            }
+            return isNativeInspectorElementSelectionActive(on: webView) == true
+                || hasActiveNativeInspectorNodeSearch(in: webView)
+        }
+
+        let didEnableNodeSearch = WIDOMUIKitInspectorSelectionEnvironment.nodeSearchSetter(webView, true)
+        if isNativeInspectorConnected(on: webView) == false {
+            _ = connectNativeInspectorIfNeeded(on: webView)
+        }
+        if hasActiveNativeInspectorNodeSearch(in: webView) {
+            return true
+        }
+
+        let didToggleSelection = WIDOMUIKitInspectorSelectionEnvironment.elementSelectionToggler(webView)
+        if isNativeInspectorConnected(on: webView) == false {
+            _ = connectNativeInspectorIfNeeded(on: webView)
+        }
+        return isNativeInspectorElementSelectionActive(on: webView) == true
+            || hasActiveNativeInspectorNodeSearch(in: webView)
+            || didEnableNodeSearch
+            || didToggleSelection
+    }
+
+    private func deactivateNativeInspectorElementSelectionIfNeeded(on webView: WKWebView) -> Bool {
+        guard isNativeInspectorElementSelectionActive(on: webView) == true else {
+            return false
+        }
+        return WIDOMUIKitInspectorSelectionEnvironment.elementSelectionToggler(webView)
+    }
+
+    func enableInspectorSelectionMode(
+        hadSelectedNode: Bool,
+        contextID: DOMContextID,
+        targetIdentifier: String
+    ) async throws -> InspectModeControlBackend {
+        guard let pageWebView else {
+            throw DOMOperationError.pageUnavailable
+        }
+
+        if hadSelectedNode {
+            try? await hideHighlightForInspectorLifecycle()
+        }
+
+        do {
+            logInspectorLifecycleDiagnostics(
+                "beginSelectionMode using transport protocol backend",
+                extra: "backend=\(InspectModeControlBackend.transportProtocol.rawValue) contextID=\(contextID) target=\(targetIdentifier) nativeState=\(nativeInspectorInteractionStateSummaryForDiagnostics() ?? "nil")"
+            )
+            try await setProtocolInspectModeEnabledForInspectorLifecycle(true, targetIdentifier: targetIdentifier)
+            return .transportProtocol
+        } catch {
+            logInspectorLifecycleDiagnostics(
+                "beginSelectionMode transport protocol failed; evaluating native fallback",
+                extra: "contextID=\(contextID) target=\(targetIdentifier) error=\(error.localizedDescription) nativeState=\(nativeInspectorInteractionStateSummaryForDiagnostics() ?? "nil")",
+                level: .error
+            )
+
+            guard nativeInspectorSelectionBackend(for: pageWebView) == .nativeInspector else {
+                throw error
+            }
+
+            let didConnect = connectNativeInspectorIfNeeded(on: pageWebView)
+            let didEnable = activateNativeInspectorElementSelection(on: pageWebView)
+            logInspectorLifecycleDiagnostics(
+                "beginSelectionMode using native inspector fallback backend",
+                extra: "backend=\(InspectModeControlBackend.nativeInspector.rawValue) contextID=\(contextID) target=\(targetIdentifier) connected=\(didConnect) enabled=\(didEnable) nativeState=\(nativeInspectorInteractionStateSummaryForDiagnostics() ?? "nil")"
+            )
+            if didEnable {
+                return .nativeInspector
+            }
+
+            logInspectorLifecycleDiagnostics(
+                "beginSelectionMode native inspector fallback failed",
+                extra: "contextID=\(contextID) target=\(targetIdentifier) nativeState=\(nativeInspectorInteractionStateSummaryForDiagnostics() ?? "nil")",
+                level: .error
+            )
+            throw error
+        }
+    }
+
+    func disableInspectorSelectionModeIfNeeded(
+        targetIdentifier: String?,
+        backend: InspectModeControlBackend? = nil
+    ) async {
+        guard let pageWebView else {
+            return
+        }
+
+        switch backend ?? inspectModeControlBackend ?? nativeInspectorSelectionBackend(for: pageWebView) {
+        case .nativeInspector:
+            let didToggleOff = deactivateNativeInspectorElementSelectionIfNeeded(on: pageWebView)
+            let didDisableNodeSearch = WIDOMUIKitInspectorSelectionEnvironment.nodeSearchSetter(pageWebView, false)
+            logInspectorLifecycleDiagnostics(
+                "disableInspectorSelectionModeIfNeeded used native inspector backend",
+                extra: "backend=\(InspectModeControlBackend.nativeInspector.rawValue) target=\(targetIdentifier ?? "nil") toggledOff=\(didToggleOff) disabledNodeSearch=\(didDisableNodeSearch) nativeState=\(nativeInspectorInteractionStateSummaryForDiagnostics() ?? "nil")"
+            )
+        case .transportProtocol:
+            guard let targetIdentifier else {
+                return
+            }
+            do {
+                try await setProtocolInspectModeEnabledForInspectorLifecycle(false, targetIdentifier: targetIdentifier)
+            } catch {
+                logInspectorLifecycleDiagnostics(
+                    "disableInspectorSelectionModeIfNeeded failed to disable inspect mode",
+                    extra: error.localizedDescription,
+                    level: .error
+                )
+            }
+        }
     }
 
     func resetNativeInspectorSelectionStateForFreshContext(
@@ -315,12 +470,16 @@ extension WIDOMInspector {
             return nil
         }
 
+        let hasPrivateInspectorAccess = WIDOMUIKitInspectorSelectionEnvironment.privateInspectorAccessProvider(pageWebView)
+        let connected = isNativeInspectorConnected(on: pageWebView)
         let selectionActive = isNativeInspectorElementSelectionActive(on: pageWebView)
         let contentViewActive = hasActiveNativeInspectorNodeSearch(in: pageWebView)
 
+        let accessValue = hasPrivateInspectorAccess ? "1" : "0"
+        let connectedValue = connected.map { $0 ? "1" : "0" } ?? "n/a"
         let selectionValue = selectionActive.map { $0 ? "1" : "0" } ?? "n/a"
         let contentViewValue = contentViewActive ? "1" : "0"
-        return "nativeSelectionActive=\(selectionValue) contentViewActive=\(contentViewValue)"
+        return "privateInspectorAccess=\(accessValue) nativeInspectorConnected=\(connectedValue) nativeSelectionActive=\(selectionValue) contentViewActive=\(contentViewValue)"
     }
 }
 #endif

@@ -197,8 +197,15 @@ private extension DOMInspectorBridge {
         let bootstrapJSON = serializedBootstrapJSON()
         inspectorWebView.evaluateJavaScript(
             """
-            window.__wiDOMFrontendBootstrap = \(bootstrapJSON);
-            window.webInspectorDOMFrontend?.updateBootstrap?.(window.__wiDOMFrontendBootstrap);
+            (function() {
+                const nextBootstrap = \(bootstrapJSON);
+                const previousSerialized = JSON.stringify(window.__wiDOMFrontendBootstrap ?? null);
+                const nextSerialized = JSON.stringify(nextBootstrap ?? null);
+                window.__wiDOMFrontendBootstrap = nextBootstrap;
+                if (previousSerialized !== nextSerialized) {
+                    window.webInspectorDOMFrontend?.updateBootstrap?.(nextBootstrap);
+                }
+            })();
             """
         )
     }
