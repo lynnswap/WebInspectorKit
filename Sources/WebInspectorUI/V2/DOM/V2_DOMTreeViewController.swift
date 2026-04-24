@@ -4,10 +4,24 @@ import WebKit
 import WebInspectorRuntime
 
 @MainActor
-final class V2_DOMTreeViewController: UIViewController {
+final class V2_DOMTreeViewController: UINavigationController {
+    init(dom: V2_WIDOMRuntime) {
+        super.init(rootViewController: V2_DOMTreeContentViewController(dom: dom))
+        wiApplyClearNavigationBarStyle(to: self)
+        setNavigationBarHidden(true, animated: false)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+}
+
+@MainActor
+private final class V2_DOMTreeContentViewController: UIViewController {
     private let dom: V2_WIDOMRuntime
-    private let domTreeWebViewContainer = UIView()
-    private var domTreeWebViewConstraints: [NSLayoutConstraint] = []
+    private let containerView = UIView()
+    private weak var displayedDOMTreeWebView: WKWebView?
 
     init(dom: V2_WIDOMRuntime) {
         self.dom = dom
@@ -19,65 +33,51 @@ final class V2_DOMTreeViewController: UIViewController {
         nil
     }
 
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        view.backgroundColor = .clear
-        configureDOMTreeWebViewContainer()
+    override func loadView() {
+        containerView.backgroundColor = .clear
+        view = containerView
     }
 
-    override func viewDidAppear(_ animated: Bool) {
-        super.viewDidAppear(animated)
-        attachDOMTreeWebViewIfNeeded()
-    }
-
-    override func viewDidDisappear(_ animated: Bool) {
-        super.viewDidDisappear(animated)
-        if view.window == nil {
-            detachDOMTreeWebViewIfNeeded()
+    override func didMove(toParent parent: UIViewController?) {
+        super.didMove(toParent: parent)
+        guard parent != nil, isViewLoaded else {
+            return
         }
+        attachDOMTreeWebView()
     }
 
-    private func configureDOMTreeWebViewContainer() {
-        domTreeWebViewContainer.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(domTreeWebViewContainer)
-        NSLayoutConstraint.activate([
-            domTreeWebViewContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            domTreeWebViewContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            domTreeWebViewContainer.topAnchor.constraint(equalTo: view.topAnchor),
-            domTreeWebViewContainer.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-        ])
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        attachDOMTreeWebView()
     }
 
-    private func attachDOMTreeWebViewIfNeeded() {
-        guard isViewLoaded, view.window != nil else {
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        syncDOMTreeWebViewFrame()
+    }
+
+    private func attachDOMTreeWebView() {
+        let domTreeWebView = displayedDOMTreeWebView ?? dom.treeWebViewForPresentation()
+        displayedDOMTreeWebView = domTreeWebView
+        guard domTreeWebView.superview !== containerView else {
             return
         }
 
-        let domTreeWebView = dom.treeWebViewForPresentation()
-        guard domTreeWebView.superview !== domTreeWebViewContainer else {
-            return
-        }
-
-        NSLayoutConstraint.deactivate(domTreeWebViewConstraints)
-        domTreeWebViewConstraints.removeAll(keepingCapacity: true)
         domTreeWebView.removeFromSuperview()
-        domTreeWebView.translatesAutoresizingMaskIntoConstraints = false
-        domTreeWebViewContainer.addSubview(domTreeWebView)
-
-        let constraints = [
-            domTreeWebView.leadingAnchor.constraint(equalTo: domTreeWebViewContainer.leadingAnchor),
-            domTreeWebView.trailingAnchor.constraint(equalTo: domTreeWebViewContainer.trailingAnchor),
-            domTreeWebView.topAnchor.constraint(equalTo: domTreeWebViewContainer.topAnchor),
-            domTreeWebView.bottomAnchor.constraint(equalTo: domTreeWebViewContainer.bottomAnchor),
-        ]
-        NSLayoutConstraint.activate(constraints)
-        domTreeWebViewConstraints = constraints
+        domTreeWebView.translatesAutoresizingMaskIntoConstraints = true
+        domTreeWebView.frame = containerView.bounds
+        domTreeWebView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        containerView.addSubview(domTreeWebView)
     }
 
-    private func detachDOMTreeWebViewIfNeeded() {
-        NSLayoutConstraint.deactivate(domTreeWebViewConstraints)
-        domTreeWebViewConstraints.removeAll(keepingCapacity: true)
-        domTreeWebViewContainer.subviews.forEach { $0.removeFromSuperview() }
+    private func syncDOMTreeWebViewFrame() {
+        guard let displayedDOMTreeWebView,
+              displayedDOMTreeWebView.superview === containerView,
+              displayedDOMTreeWebView.frame != containerView.bounds else {
+            return
+        }
+
+        displayedDOMTreeWebView.frame = containerView.bounds
     }
 }
 #endif

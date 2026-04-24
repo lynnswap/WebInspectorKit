@@ -1,8 +1,6 @@
 #if canImport(UIKit)
-import Foundation
 import Observation
 import WebKit
-import WebInspectorEngine
 import WebInspectorRuntime
 
 @MainActor
@@ -19,6 +17,10 @@ public final class V2_WISession {
         self.interface = interface
     }
 
+    public convenience init(tabs: [V2_WITab]) {
+        self.init(interface: V2_WIInterfaceModel(tabs: tabs))
+    }
+
     public func attach(to webView: WKWebView) async {
         await runtime.attach(to: webView)
     }
@@ -31,34 +33,47 @@ public final class V2_WISession {
 @MainActor
 @Observable
 public final class V2_WIInterfaceModel {
-    var providedTabs: Set<V2_ProvidedWITab>
-    var customTabs: [V2_WITab]
-    public let network: V2_WINetworkInterfaceModel
+    private(set) var tabs: [V2_WITab]
+    private(set) var selectedTab: V2_WITab.ID?
+    public let dom: V2_DOMInterfaceModel
 
     public init(
-        network: V2_WINetworkInterfaceModel = V2_WINetworkInterfaceModel()
+        tabs: [V2_WITab] = V2_WITab.defaults,
+        dom: V2_DOMInterfaceModel = V2_DOMInterfaceModel()
     ) {
-        self.providedTabs = V2_ProvidedWITab.defaults
-        self.customTabs = []
-        self.network = network
+        self.tabs = tabs
+        self.selectedTab = tabs.first?.id
+        self.dom = dom
+    }
+
+    func selectTab(_ tabID: V2_WITab.ID) {
+        guard containsTab(withID: tabID) else {
+            return
+        }
+        selectedTab = tabID
+    }
+
+    var selectedTabModel: V2_WITab? {
+        guard let selectedTab else {
+            return nil
+        }
+        return tabs.first { $0.id == selectedTab }
+    }
+
+    func containsTab(withID tabID: V2_WITab.ID) -> Bool {
+        tabs.contains { $0.id == tabID }
     }
 }
 
 @MainActor
 @Observable
-public final class V2_WINetworkInterfaceModel {
-    public var searchText: String
-    public var activeResourceFilters: Set<NetworkResourceFilter>
-    public var selectedEntryID: UUID?
+public final class V2_DOMInterfaceModel {
+    private(set) var selectedCompactContent: V2_DOMCompactContent = .tree
 
-    public init(
-        searchText: String = "",
-        activeResourceFilters: Set<NetworkResourceFilter> = [],
-        selectedEntryID: UUID? = nil
-    ) {
-        self.searchText = searchText
-        self.activeResourceFilters = activeResourceFilters
-        self.selectedEntryID = selectedEntryID
+    public init() {}
+
+    func selectCompactContent(_ content: V2_DOMCompactContent) {
+        selectedCompactContent = content
     }
 }
 #endif
