@@ -6,7 +6,7 @@ import WebInspectorRuntime
 
 @MainActor
 @Observable
-public final class V2_WIInspectorSession {
+public final class V2_WISession {
     public let runtime: V2_WIRuntimeSession
     public let interface: V2_WIInterfaceModel
 
@@ -43,23 +43,14 @@ public final class V2_WIInterfaceModel {
 public final class V2_WIDOMInterfaceModel {
     public var selectedNodeID: DOMNodeModel.ID?
     public var expandedNodeIDs: Set<DOMNodeModel.ID>
-    public let editing: V2_WIDOMEditingModel
 
     public init(
         selectedNodeID: DOMNodeModel.ID? = nil,
-        expandedNodeIDs: Set<DOMNodeModel.ID> = [],
-        editing: V2_WIDOMEditingModel = V2_WIDOMEditingModel()
+        expandedNodeIDs: Set<DOMNodeModel.ID> = []
     ) {
         self.selectedNodeID = selectedNodeID
         self.expandedNodeIDs = expandedNodeIDs
-        self.editing = editing
     }
-}
-
-@MainActor
-@Observable
-public final class V2_WIDOMEditingModel {
-    public init() {}
 }
 
 @MainActor

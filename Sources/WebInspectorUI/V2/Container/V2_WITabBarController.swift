@@ -135,13 +135,13 @@ public struct V2_WITab {
 
 @MainActor
 public final class V2_WITabBarController: UITabBarController {
-    public let session: V2_WIInspectorSession
+    public let session: V2_WISession
 
     private lazy var providedTabItems = V2_ProvidedWITab.allCases
         .filter { session.interface.providedTabs.contains($0) }
         .map { $0.makeTab() }
 
-    public init(session: V2_WIInspectorSession = V2_WIInspectorSession()) {
+    public init(session: V2_WISession = V2_WISession()) {
         self.session = session
         super.init(nibName: nil, bundle: nil)
     }
