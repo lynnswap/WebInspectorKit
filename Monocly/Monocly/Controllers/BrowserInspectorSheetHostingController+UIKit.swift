@@ -15,8 +15,7 @@ final class BrowserInspectorSheetHostingController: UIViewController {
     private let browserStore: BrowserStore
     private let inspectorController: WIInspectorController
     private let launchConfiguration: BrowserLaunchConfiguration
-    private let tabs: [WITab]
-    private let inspectorContainer: WITabViewController
+    private let inspectorContainer: UIViewController
 #if DEBUG
     private var harnessPanel: BrowserInspectorUITestHarnessPanel?
 #else
@@ -30,17 +29,12 @@ final class BrowserInspectorSheetHostingController: UIViewController {
         browserStore: BrowserStore,
         inspectorController: WIInspectorController,
         launchConfiguration: BrowserLaunchConfiguration,
-        tabs: [WITab]
+        tabs _: [WITab]
     ) {
         self.browserStore = browserStore
         self.inspectorController = inspectorController
         self.launchConfiguration = launchConfiguration
-        self.tabs = tabs
-        self.inspectorContainer = WITabViewController(
-            inspectorController,
-            webView: browserStore.webView,
-            tabs: tabs
-        )
+        self.inspectorContainer = V2_WITabBarController()
         super.init(nibName: nil, bundle: nil)
         #if DEBUG
         if launchConfiguration.uiTestScenario?.showsInspectorHarnessPanel == true {

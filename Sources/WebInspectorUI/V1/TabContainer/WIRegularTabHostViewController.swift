@@ -101,16 +101,14 @@ final class WIRegularTabHostViewController: UINavigationController {
         tabObservationHandles.removeAll()
 
         inspector.observe(
-            \.tabs,
-            options: [.removeDuplicates]
+            \.tabs
         ) { [weak self] _ in
             self?.rebuildLayout()
         }
         .store(in: &tabObservationHandles)
 
         inspector.observe(
-            \.selectedTab,
-            options: [.removeDuplicates]
+            \.selectedTab
         ) { [weak self] _ in
             guard let self else {
                 return

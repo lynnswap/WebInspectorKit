@@ -256,22 +256,19 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         hasStartedObservingState = true
 
         inspector.observe(
-            \.hasPageWebView,
-            options: [.removeDuplicates]
+            \.hasPageWebView
         ) { [weak self] _ in
             self?.scheduleNavigationControlsUpdate()
         }
         .store(in: &stateObservationHandles)
         inspector.observe(
-            \.isPageReadyForSelection,
-            options: [.removeDuplicates]
+            \.isPageReadyForSelection
         ) { [weak self] _ in
             self?.scheduleNavigationControlsUpdate()
         }
         .store(in: &stateObservationHandles)
         inspector.observe(
-            \.isSelectingElement,
-            options: [.removeDuplicates]
+            \.isSelectingElement
         ) { [weak self] _ in
             self?.scheduleNavigationControlsUpdate()
         }
@@ -284,16 +281,14 @@ public final class WIDOMDetailViewController: UICollectionViewController {
             }
             self.documentStoreObservationHandles.removeAll()
             document.observe(
-                \.selectedNode,
-                options: [.removeDuplicates]
+                \.selectedNode
             ) { [weak self] _ in
                 self?.scheduleNavigationControlsUpdate()
                 self?.handleSelectedNodeChange()
             }
             .store(in: &self.documentStoreObservationHandles)
             document.observe(
-                \.errorMessage,
-                options: [.removeDuplicates]
+                \.errorMessage
             ) { [weak self] _ in
                 self?.scheduleNavigationControlsUpdate()
             }

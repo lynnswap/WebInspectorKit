@@ -282,11 +282,7 @@ final class BrowserInspectorCoordinator {
                 tabs: tabs
             )
         } else {
-            sheetController = WITabViewController(
-                inspectorController,
-                webView: browserStore.webView,
-                tabs: tabs
-            )
+            sheetController = V2_WITabBarController()
         }
         sheetController.modalPresentationStyle = .pageSheet
         applyDefaultDetents(to: sheetController)

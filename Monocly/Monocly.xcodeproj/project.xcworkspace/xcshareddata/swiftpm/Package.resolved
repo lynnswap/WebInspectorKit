@@ -24,8 +24,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/ObservationBridge.git",
       "state" : {
-        "revision" : "90f85df63a93816b8802da192c47d4163f616527",
-        "version" : "0.6.1"
+        "revision" : "ccd41097c73ca68b4560ab3393180cbd5b8cc571",
+        "version" : "0.7.0"
       }
     },
     {

@@ -6,11 +6,9 @@ import WebInspectorKit
 final class BrowserInspectorWindowHostingController: UIViewController {
     private struct AppliedInspectorContext: Equatable {
         let inspectorControllerID: ObjectIdentifier
-        let pageWebViewID: ObjectIdentifier
-        let tabIdentifiers: [String]
     }
 
-    private var inspectorContainer: WITabViewController?
+    private var inspectorContainer: UIViewController?
     private let placeholderLabel = UILabel()
     private var lastAppliedContext: AppliedInspectorContext?
 
@@ -32,11 +30,8 @@ final class BrowserInspectorWindowHostingController: UIViewController {
             return
         }
 
-        let pageWebView = inspectorContext.browserStore.webView
         let appliedContext = AppliedInspectorContext(
-            inspectorControllerID: ObjectIdentifier(inspectorContext.inspectorController),
-            pageWebViewID: ObjectIdentifier(pageWebView),
-            tabIdentifiers: inspectorContext.tabs.map(\.identifier)
+            inspectorControllerID: ObjectIdentifier(inspectorContext.inspectorController)
         )
 
         if lastAppliedContext == appliedContext {
@@ -44,19 +39,13 @@ final class BrowserInspectorWindowHostingController: UIViewController {
         }
 
         if let inspectorContainer {
-            inspectorContainer.setInspectorController(inspectorContext.inspectorController)
-            inspectorContainer.setPageWebView(pageWebView)
-            inspectorContainer.setTabs(inspectorContext.tabs)
-            lastAppliedContext = appliedContext
-            return
+            inspectorContainer.willMove(toParent: nil)
+            inspectorContainer.view.removeFromSuperview()
+            inspectorContainer.removeFromParent()
         }
 
         placeholderLabel.removeFromSuperview()
-        let container = WITabViewController(
-            inspectorContext.inspectorController,
-            webView: pageWebView,
-            tabs: inspectorContext.tabs
-        )
+        let container = V2_WITabBarController()
         addChild(container)
         container.view.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(container.view)

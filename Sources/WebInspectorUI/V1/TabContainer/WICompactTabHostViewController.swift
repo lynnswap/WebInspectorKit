@@ -91,16 +91,14 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
         tabObservationHandles.removeAll()
 
         inspector.observe(
-            \.tabs,
-            options: [.removeDuplicates]
+            \.tabs
         ) { [weak self] _ in
             self?.rebuildNativeTabsIfPossible()
         }
         .store(in: &tabObservationHandles)
 
         inspector.observe(
-            \.selectedTab,
-            options: [.removeDuplicates]
+            \.selectedTab
         ) { [weak self] newValue in
             guard let self else {
                 return

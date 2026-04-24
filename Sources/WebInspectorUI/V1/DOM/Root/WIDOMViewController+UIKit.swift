@@ -371,22 +371,19 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
         hasStartedObservingPickItemState = true
 
         inspector.observe(
-            \.hasPageWebView,
-            options: [.removeDuplicates]
+            \.hasPageWebView
         ) { [weak self] _ in
             self?.refreshNavigationControls()
         }
         .store(in: &pickItemObservationHandles)
         inspector.observe(
-            \.isPageReadyForSelection,
-            options: [.removeDuplicates]
+            \.isPageReadyForSelection
         ) { [weak self] _ in
             self?.refreshNavigationControls()
         }
         .store(in: &pickItemObservationHandles)
         inspector.observe(
-            \.isSelectingElement,
-            options: [.removeDuplicates]
+            \.isSelectingElement
         ) { [weak self] _ in
             self?.refreshNavigationControls()
         }
@@ -397,8 +394,7 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
             }
             self.documentObservationHandles.removeAll()
             document.observe(
-                \.errorMessage,
-                options: [.removeDuplicates]
+                \.errorMessage
             ) { [weak self] _ in
                 self?.refreshNavigationControls()
             }

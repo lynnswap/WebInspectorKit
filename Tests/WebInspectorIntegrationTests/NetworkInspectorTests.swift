@@ -582,14 +582,13 @@ struct NetworkInspectorTests {
     }
 
     @Test
-    func observeSearchTextSuppressesDuplicateConsecutiveStates() async {
+    func observeSearchTextEmitsDuplicateConsecutiveStates() async {
         let inspector = WINetworkModel(session: NetworkSession())
         var emittedValues: [String] = []
         var observationHandles = Set<ObservationHandle>()
 
         inspector.observeTask(
-            \.searchText,
-            options: [.removeDuplicates]
+            \.searchText
         ) { value in
             emittedValues.append(value)
         }
@@ -603,11 +602,10 @@ struct NetworkInspectorTests {
         #expect(receivedUpdated)
 
         inspector.searchText = "dup-keyword"
-        for _ in 0..<64 {
-            await Task.yield()
-        }
+        let receivedDuplicate = await waitUntil { emittedValues.count >= 3 }
+        #expect(receivedDuplicate)
 
-        #expect(emittedValues.count == 2)
+        #expect(emittedValues.count == 3)
         #expect(emittedValues.last == "dup-keyword")
     }
 
@@ -617,8 +615,7 @@ struct NetworkInspectorTests {
         var callbackCount = 0
 
         let handle = inspector.observeTask(
-            \.searchText,
-            options: [.removeDuplicates]
+            \.searchText
         ) { _ in
             callbackCount += 1
         }

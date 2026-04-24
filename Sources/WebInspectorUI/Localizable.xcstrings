@@ -4448,6 +4448,7 @@
     },
     "network.controls.filter" : {
       "comment" : "Control label for filtering recorded network requests.",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {

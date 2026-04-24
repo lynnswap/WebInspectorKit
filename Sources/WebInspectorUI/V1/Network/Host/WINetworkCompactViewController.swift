@@ -18,7 +18,7 @@ final class WINetworkCompactViewController: UINavigationController, UINavigation
         super.init(rootViewController: listPaneViewController)
         title = nil
 
-        inspector.observe(\.selectedEntry, options: [.removeDuplicates]) { [weak self] newValue in
+        inspector.observe(\.selectedEntry) { [weak self] newValue in
             guard let self else { return }
             self.syncNavigationStack(for: newValue)
         }

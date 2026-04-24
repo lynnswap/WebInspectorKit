@@ -6,10 +6,7 @@ enum WIObservationOptions {
         mode: .latest
     )
 
-    static let networkListSnapshot: ObservationOptions = [
-        .removeDuplicates,
-        .rateLimit(.throttle(defaultThrottle))
-    ]
+    static let networkListSnapshot = ObservationOptions.rateLimit(.throttle(defaultThrottle))
 
     static let domDetailContent = ObservationOptions.rateLimit(.throttle(defaultThrottle))
 }
