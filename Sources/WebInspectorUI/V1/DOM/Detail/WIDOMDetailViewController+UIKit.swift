@@ -68,12 +68,9 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     private var stateObservationHandles: Set<ObservationHandle> = []
     private var documentStoreObservationHandles: Set<ObservationHandle> = []
     private var selectedEntryObservationHandles: Set<ObservationHandle> = []
-    private let navigationUpdateCoalescer = UIUpdateCoalescer()
-    private let structureUpdateCoalescer = UIUpdateCoalescer()
     private var sections: [DetailSection] = []
     private var needsSnapshotReloadOnNextAppearance = false
     private var pendingReloadDataTask: Task<Void, Never>?
-    private var pendingForcedStructureRefresh = false
     private var selectedEntryRenderGeneration: UInt64 = 0
 
 #if DEBUG
@@ -233,21 +230,11 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     }
 
     private func scheduleNavigationControlsUpdate() {
-        navigationUpdateCoalescer.schedule { [weak self] in
-            self?.updateNavigationControls()
-        }
+        updateNavigationControls()
     }
 
     private func scheduleStructureUpdate(forceSnapshotUpdate: Bool = false) {
-        pendingForcedStructureRefresh = pendingForcedStructureRefresh || forceSnapshotUpdate
-        structureUpdateCoalescer.schedule { [weak self] in
-            guard let self else {
-                return
-            }
-            let shouldForceSnapshotUpdate = self.pendingForcedStructureRefresh
-            self.pendingForcedStructureRefresh = false
-            self.reconcileSectionStructure(forceSnapshotUpdate: shouldForceSnapshotUpdate)
-        }
+        reconcileSectionStructure(forceSnapshotUpdate: forceSnapshotUpdate)
     }
 
     private func updateNavigationControls() {
