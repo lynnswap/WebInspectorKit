@@ -134,29 +134,15 @@ public struct V2_WITab {
 }
 
 @MainActor
-public struct V2_WITabBarControllerConfiguration {
-    public var providedTabs: Set<V2_ProvidedWITab>
-    public var customTabs: [V2_WITab]
-
-    public init(
-        providedTabs: Set<V2_ProvidedWITab> = V2_ProvidedWITab.defaults,
-        customTabs: [V2_WITab] = []
-    ) {
-        self.providedTabs = providedTabs
-        self.customTabs = customTabs
-    }
-}
-
-@MainActor
 public final class V2_WITabBarController: UITabBarController {
-    public private(set) var configuration: V2_WITabBarControllerConfiguration
+    public let session: V2_WIInspectorSession
 
     private lazy var providedTabItems = V2_ProvidedWITab.allCases
-        .filter { configuration.providedTabs.contains($0) }
+        .filter { session.interface.providedTabs.contains($0) }
         .map { $0.makeTab() }
 
-    public init(configuration: V2_WITabBarControllerConfiguration = .init()) {
-        self.configuration = configuration
+    public init(session: V2_WIInspectorSession = V2_WIInspectorSession()) {
+        self.session = session
         super.init(nibName: nil, bundle: nil)
     }
 
