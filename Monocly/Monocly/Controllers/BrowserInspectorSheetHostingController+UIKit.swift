@@ -15,7 +15,7 @@ final class BrowserInspectorSheetHostingController: UIViewController {
     private let browserStore: BrowserStore
     private let inspectorController: WIInspectorController
     private let launchConfiguration: BrowserLaunchConfiguration
-    private let inspectorContainer: UIViewController
+    private let inspectorContainer: V2_WITabBarController
 #if DEBUG
     private var harnessPanel: BrowserInspectorUITestHarnessPanel?
 #else
@@ -95,18 +95,27 @@ final class BrowserInspectorSheetHostingController: UIViewController {
         nil
     }
 
-    deinit {
+    isolated deinit {
         pollTask?.cancel()
+        inspectorContainer.detachFromMonoclyBrowser()
     }
 
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .clear
         installInspectorContainer()
+        inspectorContainer.attachToMonoclyBrowser(browserStore)
         installHarnessPanelIfNeeded()
         startPollingHarnessStateIfNeeded()
         Task { @MainActor [weak self] in
             await self?.updateHarnessState()
+        }
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        if view.window == nil {
+            inspectorContainer.detachFromMonoclyBrowser()
         }
     }
 

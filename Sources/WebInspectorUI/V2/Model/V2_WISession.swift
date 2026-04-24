@@ -1,6 +1,7 @@
 #if canImport(UIKit)
 import Foundation
 import Observation
+import WebKit
 import WebInspectorEngine
 import WebInspectorRuntime
 
@@ -17,6 +18,14 @@ public final class V2_WISession {
         self.runtime = runtime
         self.interface = interface
     }
+
+    public func attach(to webView: WKWebView) async {
+        await runtime.attach(to: webView)
+    }
+
+    public func detach() async {
+        await runtime.detach()
+    }
 }
 
 @MainActor
@@ -24,32 +33,14 @@ public final class V2_WISession {
 public final class V2_WIInterfaceModel {
     var providedTabs: Set<V2_ProvidedWITab>
     var customTabs: [V2_WITab]
-    public let dom: V2_WIDOMInterfaceModel
     public let network: V2_WINetworkInterfaceModel
 
     public init(
-        dom: V2_WIDOMInterfaceModel = V2_WIDOMInterfaceModel(),
         network: V2_WINetworkInterfaceModel = V2_WINetworkInterfaceModel()
     ) {
         self.providedTabs = V2_ProvidedWITab.defaults
         self.customTabs = []
-        self.dom = dom
         self.network = network
-    }
-}
-
-@MainActor
-@Observable
-public final class V2_WIDOMInterfaceModel {
-    public var selectedNodeID: DOMNodeModel.ID?
-    public var expandedNodeIDs: Set<DOMNodeModel.ID>
-
-    public init(
-        selectedNodeID: DOMNodeModel.ID? = nil,
-        expandedNodeIDs: Set<DOMNodeModel.ID> = []
-    ) {
-        self.selectedNodeID = selectedNodeID
-        self.expandedNodeIDs = expandedNodeIDs
     }
 }
 

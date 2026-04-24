@@ -3,11 +3,17 @@ import UIKit
 
 @MainActor
 final class V2_DOMSplitViewController: UISplitViewController {
-    private let compactViewController = V2_DOMSplitViewController.makeCompactViewController()
-    private let domTreeViewController = V2_DOMSplitViewController.makeContentViewController()
-    private let elementDetailsViewController = V2_DOMSplitViewController.makeContentViewController()
+    private let session: V2_WISession
+    private lazy var compactViewController = V2_DOMSplitViewController.makeCompactViewController(session: session)
+    private lazy var domTreeViewController = V2_DOMTreeViewController(
+        dom: session.runtime.dom
+    )
+    private lazy var elementDetailsViewController = V2_DOMElementViewController(
+        dom: session.runtime.dom
+    )
 
-    init() {
+    init(session: V2_WISession = V2_WISession()) {
+        self.session = session
         super.init(style: .doubleColumn)
         configureSplitViewLayout()
     }
@@ -51,14 +57,8 @@ final class V2_DOMSplitViewController: UISplitViewController {
         }
     }
 
-    private static func makeContentViewController() -> UIViewController {
-        let viewController = UIViewController()
-        viewController.view.backgroundColor = .clear
-        return viewController
-    }
-
-    private static func makeCompactViewController() -> UINavigationController {
-        let navigationController = UINavigationController(rootViewController: V2_DOMCompactViewController())
+    private static func makeCompactViewController(session: V2_WISession) -> UINavigationController {
+        let navigationController = UINavigationController(rootViewController: V2_DOMCompactViewController(session: session))
         wiApplyClearNavigationBarStyle(to: navigationController)
         return navigationController
     }
@@ -66,8 +66,13 @@ final class V2_DOMSplitViewController: UISplitViewController {
 
 @MainActor
 private final class V2_DOMCompactViewController: UIViewController {
-    private let treeViewController = V2_DOMCompactViewController.makeContentViewController()
-    private let elementViewController = V2_DOMCompactViewController.makeContentViewController()
+    private let session: V2_WISession
+    private lazy var treeViewController = V2_DOMTreeViewController(
+        dom: session.runtime.dom
+    )
+    private lazy var elementViewController = V2_DOMElementViewController(
+        dom: session.runtime.dom
+    )
     private weak var segmentNavigationItem: UINavigationItem?
     private lazy var segmentBarButtonItem = UIBarButtonItem(customView: segmentControl)
     private lazy var segmentItemGroup = segmentBarButtonItem.creatingFixedGroup()
@@ -78,10 +83,14 @@ private final class V2_DOMCompactViewController: UIViewController {
         return control
     }()
 
-    private static func makeContentViewController() -> UIViewController {
-        let viewController = UIViewController()
-        viewController.view.backgroundColor = .clear
-        return viewController
+    init(session: V2_WISession) {
+        self.session = session
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
     }
 
     override func viewDidLoad() {

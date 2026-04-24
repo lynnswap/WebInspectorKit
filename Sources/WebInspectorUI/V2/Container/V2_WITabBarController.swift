@@ -1,5 +1,6 @@
 #if canImport(UIKit)
 import UIKit
+import WebKit
 
 @MainActor
 public enum V2_ProvidedWITab: Hashable, CaseIterable {
@@ -8,8 +9,8 @@ public enum V2_ProvidedWITab: Hashable, CaseIterable {
 
     public static let defaults: Set<Self> = [.dom, .network]
 
-    func makeTab() -> UITab {
-        let viewController = makeViewController()
+    func makeTab(session: V2_WISession) -> UITab {
+        let viewController = makeViewController(session: session)
         return UITab(title: title, image: image, identifier: identifier) { _ in
             viewController
         }
@@ -46,10 +47,10 @@ public enum V2_ProvidedWITab: Hashable, CaseIterable {
         }
     }
 
-    private func makeViewController() -> UIViewController {
+    private func makeViewController(session: V2_WISession) -> UIViewController {
         switch self {
         case .dom:
-            V2_DOMSplitViewController()
+            V2_DOMSplitViewController(session: session)
         case .network:
             V2_NetworkSplitViewController()
         }
@@ -139,7 +140,7 @@ public final class V2_WITabBarController: UITabBarController {
 
     private lazy var providedTabItems = V2_ProvidedWITab.allCases
         .filter { session.interface.providedTabs.contains($0) }
-        .map { $0.makeTab() }
+        .map { $0.makeTab(session: session) }
 
     public init(session: V2_WISession = V2_WISession()) {
         self.session = session
@@ -156,6 +157,14 @@ public final class V2_WITabBarController: UITabBarController {
         view.backgroundColor = .clear
         tabBar.scrollEdgeAppearance = tabBar.standardAppearance
         setTabs(providedTabItems, animated: false)
+    }
+
+    public func attach(to webView: WKWebView) async {
+        await session.attach(to: webView)
+    }
+
+    public func detach() async {
+        await session.detach()
     }
 }
 

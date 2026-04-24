@@ -580,10 +580,6 @@ public final class WIDOMInspector {
         inspectorBridge.detachInspectorWebView()
     }
 
-    package func setAutoSnapshotEnabled(_ enabled: Bool) async {
-        _ = enabled
-    }
-
     public func reloadPage() async throws {
         let webView = try requirePageWebView()
         await resetInteractionState()

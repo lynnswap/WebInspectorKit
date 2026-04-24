@@ -282,7 +282,9 @@ final class BrowserInspectorCoordinator {
                 tabs: tabs
             )
         } else {
-            sheetController = V2_WITabBarController()
+            let tabBarController = V2_WITabBarController()
+            tabBarController.attachToMonoclyBrowser(browserStore)
+            sheetController = tabBarController
         }
         sheetController.modalPresentationStyle = .pageSheet
         applyDefaultDetents(to: sheetController)
@@ -292,6 +294,7 @@ final class BrowserInspectorCoordinator {
                 return
             }
             if self.presentedSheetController === sheetController {
+                (sheetController as? V2_WITabBarController)?.detachFromMonoclyBrowser()
                 self.presentedSheetController = nil
                 self.notifyPresentationStateChanged()
             }
@@ -362,6 +365,7 @@ final class BrowserInspectorCoordinator {
 
     func invalidate() {
         sheetObserver.onDismiss = nil
+        (presentedSheetController as? V2_WITabBarController)?.detachFromMonoclyBrowser()
         presentedSheetController = nil
     }
 
@@ -495,6 +499,7 @@ final class BrowserInspectorCoordinator {
         guard isPresentedViewControllerInChain(presentedSheetController, from: presenter) == false else {
             return
         }
+        (presentedSheetController as? V2_WITabBarController)?.detachFromMonoclyBrowser()
         self.presentedSheetController = nil
     }
 
@@ -513,3 +518,20 @@ final class BrowserInspectorCoordinator {
     }
 #endif
 }
+
+#if canImport(UIKit)
+extension V2_WITabBarController {
+    func attachToMonoclyBrowser(_ browserStore: BrowserStore) {
+        let webView = browserStore.webView
+        Task { @MainActor [weak self, webView] in
+            await self?.attach(to: webView)
+        }
+    }
+
+    func detachFromMonoclyBrowser() {
+        Task { @MainActor [self] in
+            await detach()
+        }
+    }
+}
+#endif

@@ -34,7 +34,7 @@ package enum WIInspectorHostRole: Sendable {
 @Observable
 public final class WIInspectorController {
     private enum DOMPlan {
-        case attach(autoSnapshot: Bool)
+        case attach
         case suspend
         case detach
     }
@@ -666,7 +666,7 @@ private extension WIInspectorController {
             let tabState = resolvedTabState(for: target)
             return .init(
                 dom: tabState.domEnabled
-                    ? .attach(autoSnapshot: tabState.domAutoSnapshotEnabled)
+                    ? .attach
                     : .suspend,
                 network: tabState.networkEnabled
                     ? .attach(mode: tabState.networkMode)
@@ -678,27 +678,24 @@ private extension WIInspectorController {
     private func resolvedTabState(for target: WIRuntimeTarget) -> (
         domEnabled: Bool,
         networkEnabled: Bool,
-        domAutoSnapshotEnabled: Bool,
         networkMode: NetworkLoggingMode
     ) {
         if target.tabs.isEmpty {
             guard target.hasExplicitTabsConfiguration == false else {
-                return (false, false, false, .stopped)
+                return (false, false, .stopped)
             }
-            return (true, true, true, .active)
+            return (true, true, .active)
         }
 
         let domEnabled = target.tabs.contains {
             $0.identifier == WITab.domTabID || $0.identifier == WITab.elementTabID
         }
         let networkEnabled = target.tabs.contains { $0.identifier == WITab.networkTabID }
-        let domAutoSnapshotEnabled = target.selectedTab?.identifier == WITab.domTabID
-            || target.selectedTab?.identifier == WITab.elementTabID
         let networkMode: NetworkLoggingMode = target.selectedTab?.identifier == WITab.networkTabID
             ? .active
             : .buffering
 
-        return (domEnabled, networkEnabled, domAutoSnapshotEnabled, networkMode)
+        return (domEnabled, networkEnabled, networkMode)
     }
 
     private func apply(
@@ -720,13 +717,12 @@ private extension WIInspectorController {
         }
 
         switch plan.dom {
-        case let .attach(autoSnapshot):
+        case .attach:
             if let pageWebView {
                 await dom.attach(to: pageWebView)
             } else {
                 await dom.suspend()
             }
-            await dom.setAutoSnapshotEnabled(autoSnapshot)
         case .suspend:
             await dom.suspend()
         case .detach:
@@ -853,8 +849,8 @@ private extension WIInspectorController {
     private func runtimePlanSummary(_ plan: WIRuntimePlan) -> String {
         let domPlan: String
         switch plan.dom {
-        case let .attach(autoSnapshot):
-            domPlan = "attach(autoSnapshot=\(autoSnapshot))"
+        case .attach:
+            domPlan = "attach"
         case .suspend:
             domPlan = "suspend"
         case .detach:
