@@ -35,16 +35,16 @@ enum BrowserUITestScenario: String {
         let selectionTargets: [SelectionTargetDefinition]
     }
 
-    var defaultInspectorTabs: [WITab] {
+    var defaultInspectorTabs: [V2_WITab] {
         switch self {
         case .domNavigationBackForward:
-            [.dom()]
+            [.dom]
         case .domOpenInspectorAfterInitialLoad:
-            [.dom()]
+            [.dom]
         case .domAdFixture:
-            [.dom()]
+            [.dom]
         case .domRemoteURL:
-            [.dom()]
+            [.dom]
         }
     }
 
@@ -300,7 +300,7 @@ enum BrowserUITestScenario: String {
 
 struct BrowserLaunchConfiguration {
     let initialURL: URL
-    let autoOpenInspectorTabs: [WITab]
+    let autoOpenInspectorTabs: [V2_WITab]
     let shouldAutoOpenInspector: Bool
     let shouldAutoStartDOMSelection: Bool
     let shouldShowDiagnostics: Bool
@@ -311,7 +311,7 @@ struct BrowserLaunchConfiguration {
 
     init(
         initialURL: URL,
-        autoOpenInspectorTabs: [WITab] = [.dom(), .network()],
+        autoOpenInspectorTabs: [V2_WITab] = V2_WITab.defaults,
         shouldAutoOpenInspector: Bool = false,
         shouldAutoStartDOMSelection: Bool = false,
         shouldShowDiagnostics: Bool = false,
@@ -397,28 +397,28 @@ struct BrowserLaunchConfiguration {
     private static func resolveAutoOpenInspectorTabs(
         from environment: [String: String],
         uiTestScenario: BrowserUITestScenario?
-    ) -> [WITab] {
+    ) -> [V2_WITab] {
         guard let rawValue = environment["WEBSPECTOR_AUTO_OPEN_INSPECTOR_TABS"] else {
-            return uiTestScenario?.defaultInspectorTabs ?? [.dom(), .network()]
+            return uiTestScenario?.defaultInspectorTabs ?? V2_WITab.defaults
         }
 
         let requested = rawValue
             .split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
 
-        var tabs: [WITab] = []
+        var tabs: [V2_WITab] = []
         for entry in requested {
             switch entry {
             case "dom":
-                tabs.append(.dom())
+                tabs.append(.dom)
             case "network":
-                tabs.append(.network())
+                tabs.append(.network)
             default:
                 continue
             }
         }
 
-        return tabs.isEmpty ? [.dom(), .network()] : tabs
+        return tabs.isEmpty ? V2_WITab.defaults : tabs
     }
 
     private static func resolveUITestScenario(from environment: [String: String]) -> BrowserUITestScenario? {

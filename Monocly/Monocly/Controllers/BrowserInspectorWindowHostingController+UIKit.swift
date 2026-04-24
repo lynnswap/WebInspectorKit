@@ -9,7 +9,7 @@ final class BrowserInspectorWindowHostingController: UIViewController {
         let browserStoreID: ObjectIdentifier
     }
 
-    private var inspectorContainer: V2_WITabBarController?
+    private var inspectorContainer: V2_WIViewController?
     private let placeholderLabel = UILabel()
     private var lastAppliedContext: AppliedInspectorContext?
 
@@ -54,7 +54,7 @@ final class BrowserInspectorWindowHostingController: UIViewController {
         removeInspectorContainerIfNeeded()
 
         placeholderLabel.removeFromSuperview()
-        let container = V2_WITabBarController()
+        let container = V2_WIViewController(tabs: inspectorContext.tabs)
         addChild(container)
         container.view.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(container.view)

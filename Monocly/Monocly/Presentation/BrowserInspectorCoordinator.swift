@@ -11,7 +11,7 @@ struct BrowserInspectorWindowContext {
 
     let browserStore: BrowserStore
     let inspectorController: WIInspectorController
-    let tabs: [WITab]
+    let tabs: [V2_WITab]
 }
 
 struct BrowserInspectorSceneActivationRequester {
@@ -261,7 +261,7 @@ final class BrowserInspectorCoordinator {
         from presenter: UIViewController,
         browserStore: BrowserStore,
         inspectorController: WIInspectorController,
-        tabs: [WITab] = [.dom(), .network()],
+        tabs: [V2_WITab] = V2_WITab.defaults,
         launchConfiguration: BrowserLaunchConfiguration? = nil
     ) -> Bool {
         guard isPresentingInspector(presenter: presenter) == false else {
@@ -282,9 +282,9 @@ final class BrowserInspectorCoordinator {
                 tabs: tabs
             )
         } else {
-            let tabBarController = V2_WITabBarController()
-            tabBarController.attachToMonoclyBrowser(browserStore)
-            sheetController = tabBarController
+            let viewController = V2_WIViewController(tabs: tabs)
+            viewController.attachToMonoclyBrowser(browserStore)
+            sheetController = viewController
         }
         sheetController.modalPresentationStyle = .pageSheet
         applyDefaultDetents(to: sheetController)
@@ -294,7 +294,7 @@ final class BrowserInspectorCoordinator {
                 return
             }
             if self.presentedSheetController === sheetController {
-                (sheetController as? V2_WITabBarController)?.detachFromMonoclyBrowser()
+                (sheetController as? V2_WIViewController)?.detachFromMonoclyBrowser()
                 self.presentedSheetController = nil
                 self.notifyPresentationStateChanged()
             }
@@ -309,7 +309,7 @@ final class BrowserInspectorCoordinator {
         from presenter: UIViewController,
         browserStore: BrowserStore,
         inspectorController: WIInspectorController,
-        tabs: [WITab] = [.dom(), .network()]
+        tabs: [V2_WITab] = V2_WITab.defaults
     ) -> Bool {
         guard isPresentingInspector(presenter: presenter) == false else {
             return false
@@ -365,7 +365,7 @@ final class BrowserInspectorCoordinator {
 
     func invalidate() {
         sheetObserver.onDismiss = nil
-        (presentedSheetController as? V2_WITabBarController)?.detachFromMonoclyBrowser()
+        (presentedSheetController as? V2_WIViewController)?.detachFromMonoclyBrowser()
         presentedSheetController = nil
     }
 
@@ -499,7 +499,7 @@ final class BrowserInspectorCoordinator {
         guard isPresentedViewControllerInChain(presentedSheetController, from: presenter) == false else {
             return
         }
-        (presentedSheetController as? V2_WITabBarController)?.detachFromMonoclyBrowser()
+        (presentedSheetController as? V2_WIViewController)?.detachFromMonoclyBrowser()
         self.presentedSheetController = nil
     }
 
@@ -520,7 +520,7 @@ final class BrowserInspectorCoordinator {
 }
 
 #if canImport(UIKit)
-extension V2_WITabBarController {
+extension V2_WIViewController {
     func attachToMonoclyBrowser(_ browserStore: BrowserStore) {
         let webView = browserStore.webView
         Task { @MainActor [weak self, webView] in

@@ -152,7 +152,7 @@ final class BrowserPageViewController: UIViewController {
     @objc
     private func handleOpenInspectorAction(_ sender: Any?) {
         _ = sender
-        _ = openInspectorAsSheet(tabs: [.dom(), .network()])
+        _ = openInspectorAsSheet(tabs: V2_WITab.defaults)
     }
 
     private func configureViewHierarchy() {
@@ -188,7 +188,7 @@ final class BrowserPageViewController: UIViewController {
                     guard let self else {
                         return
                     }
-                    _ = self.openInspectorAsSheet(tabs: [.dom()])
+                    _ = self.openInspectorAsSheet(tabs: [.dom])
                 }
                 diagnosticsPanel.configureBeginNativeSelectionAction { [weak self] in
                     Task { @MainActor [weak self] in
@@ -382,7 +382,7 @@ final class BrowserPageViewController: UIViewController {
             guard let self else {
                 return
             }
-            _ = self.openInspectorAsSheet(tabs: [.dom(), .network()])
+            _ = self.openInspectorAsSheet(tabs: V2_WITab.defaults)
         }
     }
 
@@ -400,7 +400,7 @@ final class BrowserPageViewController: UIViewController {
             guard let self else {
                 return
             }
-            _ = self.openInspectorAsSheet(tabs: [.dom(), .network()])
+            _ = self.openInspectorAsSheet(tabs: V2_WITab.defaults)
         }
         let openInWindow = UIAction(
             title: "Open in New Window",
@@ -410,7 +410,7 @@ final class BrowserPageViewController: UIViewController {
             guard let self else {
                 return
             }
-            _ = self.openInspectorInNewWindow(tabs: [.dom(), .network()])
+            _ = self.openInspectorInNewWindow(tabs: V2_WITab.defaults)
         }
 
         return UIMenu(title: "", children: [openAsSheet, openInWindow])
@@ -537,7 +537,7 @@ final class BrowserPageViewController: UIViewController {
         maybeAutoStartSelectionIfNeeded(didPresent: didPresent)
     }
 
-    private func openInspectorAsSheet(tabs: [WITab]) -> Bool {
+    private func openInspectorAsSheet(tabs: [V2_WITab]) -> Bool {
         inspectorCoordinator.presentSheet(
             from: navigationController ?? self,
             browserStore: store,
@@ -547,7 +547,7 @@ final class BrowserPageViewController: UIViewController {
         )
     }
 
-    private func openInspectorInNewWindow(tabs: [WITab]) -> Bool {
+    private func openInspectorInNewWindow(tabs: [V2_WITab]) -> Bool {
         guard supportsMultipleScenesForInspectorMenu else {
             return false
         }
@@ -653,7 +653,7 @@ final class BrowserPageViewController: UIViewController {
 
     @discardableResult
     func triggerInspectorPrimaryActionForTesting() -> Bool {
-        openInspectorAsSheet(tabs: [.dom(), .network()])
+        openInspectorAsSheet(tabs: V2_WITab.defaults)
     }
 
     @discardableResult
@@ -668,7 +668,7 @@ final class BrowserPageViewController: UIViewController {
 
     @discardableResult
     func triggerInspectorWindowActionForTesting() -> Bool {
-        openInspectorInNewWindow(tabs: [.dom(), .network()])
+        openInspectorInNewWindow(tabs: V2_WITab.defaults)
     }
 
     func refreshInspectorControlsForTesting() {
