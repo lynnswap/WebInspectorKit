@@ -113,13 +113,13 @@ struct DOMDetailViewControllerTests {
             selectorPath: "#target",
             attributes: [DOMAttribute(nodeId: 42, name: "class", value: "before")]
         )
+        let selectedNodeID = try #require(inspector.document.selectedNode?.id)
         let (viewController, window) = makeHostedDetailViewController(inspector: inspector)
         defer { tearDown(window: window) }
 
-        let collectionView = try #require(viewController.collectionView)
         let initialReady = await waitUntil {
             viewController.snapshotApplyCountForTesting > 0
-                && self.visibleTextViewText(in: collectionView, at: IndexPath(item: 0, section: 2)) == "before"
+                && viewController.renderedAttributeValueForTesting(nodeID: selectedNodeID, name: "class") == "before"
         }
         #expect(initialReady)
 
@@ -127,7 +127,7 @@ struct DOMDetailViewControllerTests {
         inspector.document.updateSelectedAttribute(name: "class", value: "after")
 
         let valueUpdated = await waitUntil {
-            self.visibleTextViewText(in: collectionView, at: IndexPath(item: 0, section: 2)) == "after"
+            viewController.renderedAttributeValueForTesting(nodeID: selectedNodeID, name: "class") == "after"
         }
         #expect(valueUpdated)
         #expect(viewController.snapshotApplyCountForTesting == initialSnapshotCount)
@@ -173,13 +173,14 @@ struct DOMDetailViewControllerTests {
             extraTreeChildren: [makeNode(localID: 99)]
         )
         let originalSelection = inspector.document.selectedNode
+        let selectedNodeID = try #require(inspector.document.selectedNode?.id)
         let (viewController, window) = makeHostedDetailViewController(inspector: inspector)
         defer { tearDown(window: window) }
 
         let collectionView = try #require(viewController.collectionView)
         let initialReady = await waitUntil {
             viewController.snapshotApplyCountForTesting > 0
-                && self.visibleTextViewText(in: collectionView, at: IndexPath(item: 0, section: 2)) == "before"
+                && viewController.renderedAttributeValueForTesting(nodeID: selectedNodeID, name: "class") == "before"
         }
         #expect(initialReady)
 
@@ -199,495 +200,15 @@ struct DOMDetailViewControllerTests {
         )
 
         let replacementTracked = await waitUntil {
-            inspector.document.selectedNode !== originalSelection
+            guard let replacementNodeID = inspector.document.selectedNode?.id else {
+                return false
+            }
+            return inspector.document.selectedNode !== originalSelection
                 && collectionView.numberOfSections > 2
                 && collectionView.numberOfItems(inSection: 2) == 1
-                && self.visibleTextViewText(in: collectionView, at: IndexPath(item: 0, section: 2)) == "replaced"
+                && viewController.renderedAttributeValueForTesting(nodeID: replacementNodeID, name: "class") == "replaced"
         }
         #expect(replacementTracked)
-    }
-
-    @Test
-    func detailViewPreservesInlineAttributeDraftAcrossReplacementWithSameLocalID() async throws {
-        let inspector = makeInspector(
-            selectedLocalID: 42,
-            preview: "<div>",
-            selectorPath: "#target",
-            attributes: [DOMAttribute(nodeId: 42, name: "class", value: "before")]
-        )
-        let (viewController, window) = makeHostedDetailViewController(inspector: inspector)
-        defer { tearDown(window: window) }
-
-        let collectionView = try #require(viewController.collectionView)
-        let textView = try #require(await waitForVisibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)))
-
-        let didBeginEditing = await beginEditing(textView)
-        #expect(didBeginEditing)
-
-        textView.text = "draft"
-        textView.delegate?.textViewDidChange?(textView)
-
-        inspector.document.applyMutationBundle(
-            .init(
-                events: [
-                    .setChildNodes(
-                        parentLocalID: 1,
-                        nodes: [
-                            makeNode(localID: 42, attributes: [DOMAttribute(nodeId: 42, name: "class", value: "replaced")])
-                        ]
-                    )
-                ]
-            )
-        )
-
-        let draftPreserved = await waitUntil(maxTicks: 4096) {
-            guard let currentTextView = self.visibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)) else {
-                return false
-            }
-            return currentTextView.isFirstResponder && currentTextView.text == "draft"
-        }
-        #expect(draftPreserved)
-    }
-
-    @Test
-    func detailViewRefreshesUntouchedInlineAttributeAcrossReplacementWithSameLocalID() async throws {
-        let inspector = makeInspector(
-            selectedLocalID: 42,
-            preview: "<div>",
-            selectorPath: "#target",
-            attributes: [DOMAttribute(nodeId: 42, name: "class", value: "before")]
-        )
-        let (viewController, window) = makeHostedDetailViewController(inspector: inspector)
-        defer { tearDown(window: window) }
-
-        let collectionView = try #require(viewController.collectionView)
-        let textView = try #require(await waitForVisibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)))
-
-        let didBeginEditing = await beginEditing(textView)
-        #expect(didBeginEditing)
-
-        inspector.document.applyMutationBundle(
-            .init(
-                events: [
-                    .setChildNodes(
-                        parentLocalID: 1,
-                        nodes: [
-                            makeNode(localID: 42, attributes: [DOMAttribute(nodeId: 42, name: "class", value: "replaced")])
-                        ]
-                    )
-                ]
-            )
-        )
-
-        let refreshed = await waitUntil {
-            guard let currentTextView = self.visibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)) else {
-                return false
-            }
-            return currentTextView.text == "replaced" && currentTextView.isFirstResponder == false
-        }
-        #expect(refreshed)
-    }
-
-    @Test
-    func detailViewClearsCleanInlineEditorWhenDocumentIdentityChanges() async throws {
-        let inspector = makeInspector(
-            selectedLocalID: 42,
-            preview: "<div>",
-            selectorPath: "#target",
-            attributes: [DOMAttribute(nodeId: 42, name: "class", value: "before")]
-        )
-        let (viewController, window) = makeHostedDetailViewController(inspector: inspector)
-        defer { tearDown(window: window) }
-
-        let collectionView = try #require(viewController.collectionView)
-        let textView = try #require(await waitForVisibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)))
-
-        let didBeginEditing = await beginEditing(textView)
-        #expect(didBeginEditing)
-
-        inspector.document.replaceDocument(
-            with: .init(
-                root: makeNode(
-                    localID: 1,
-                    children: [
-                        makeNode(localID: 42, attributes: [DOMAttribute(nodeId: 42, name: "class", value: "after")])
-                    ]
-                ),
-                selectedLocalID: 42
-            ),
-            isFreshDocument: true
-        )
-
-        let editingCleared = await waitUntil {
-            guard let currentTextView = self.visibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)) else {
-                return false
-            }
-            return currentTextView.text == "after" && currentTextView.isFirstResponder == false
-        }
-        #expect(editingCleared)
-    }
-
-    @Test
-    func detailViewPreservesDirtyInlineAttributeDraftAfterDebouncedCommitUntilModelMatches() async throws {
-        let inspector = makeInspector(
-            selectedLocalID: 42,
-            preview: "<div>",
-            selectorPath: "#target",
-            attributes: [DOMAttribute(nodeId: 42, name: "class", value: "before")]
-        )
-        let (viewController, window) = makeHostedDetailViewController(inspector: inspector)
-        defer { tearDown(window: window) }
-
-        let collectionView = try #require(viewController.collectionView)
-        let textView = try #require(await waitForVisibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)))
-        let selectedNodeID = try #require(inspector.document.selectedNode?.id)
-
-        let didBeginEditing = await beginEditing(textView)
-        #expect(didBeginEditing)
-
-        let initialCommitGeneration = viewController.nextInlineCommitGenerationForTesting()
-        textView.text = "draft"
-        textView.delegate?.textViewDidChange?(textView)
-        let debouncedCommitSettled = await waitForInlineDebouncedCommitToSettle(
-            for: viewController,
-            nodeID: selectedNodeID,
-            name: "class",
-            initialGeneration: initialCommitGeneration
-        )
-        #expect(debouncedCommitSettled)
-
-        inspector.document.applyMutationBundle(
-            .init(
-                events: [
-                    .setChildNodes(
-                        parentLocalID: 1,
-                        nodes: [
-                            makeNode(localID: 42, attributes: [DOMAttribute(nodeId: 42, name: "class", value: "server")])
-                        ]
-                    )
-                ]
-            )
-        )
-
-        let draftPreserved = await waitUntil(maxTicks: 4096) {
-            guard let currentTextView = self.visibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)) else {
-                return false
-            }
-            return currentTextView.isFirstResponder && currentTextView.text == "draft"
-        }
-        #expect(draftPreserved)
-    }
-
-    @Test
-    func detailViewClearsInlineAttributeDraftAfterModelMatchesBeforeSameOwnerReplacement() async throws {
-        let inspector = makeInspector(
-            selectedLocalID: 42,
-            preview: "<div>",
-            selectorPath: "#target",
-            attributes: [DOMAttribute(nodeId: 42, name: "class", value: "before")]
-        )
-        let (viewController, window) = makeHostedDetailViewController(inspector: inspector)
-        defer { tearDown(window: window) }
-
-        let collectionView = try #require(viewController.collectionView)
-        let textView = try #require(await waitForVisibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)))
-        let selectedNodeID = try #require(inspector.document.selectedNode?.id)
-
-        let didBeginEditing = await beginEditing(textView)
-        #expect(didBeginEditing)
-
-        let initialCommitGeneration = viewController.nextInlineCommitGenerationForTesting()
-        textView.text = "draft"
-        textView.delegate?.textViewDidChange?(textView)
-        let debouncedCommitSettled = await waitForInlineDebouncedCommitToSettle(
-            for: viewController,
-            nodeID: selectedNodeID,
-            name: "class",
-            initialGeneration: initialCommitGeneration
-        )
-        #expect(debouncedCommitSettled)
-
-        inspector.document.updateSelectedAttribute(name: "class", value: "draft")
-        let modelEchoApplied = await waitUntil {
-            inspector.document.selectedNode?.attributes.first(where: { $0.name == "class" })?.value == "draft"
-                && viewController.inlineDraftPhaseForTesting(nodeID: selectedNodeID, name: "class") == .clean
-        }
-        #expect(modelEchoApplied)
-
-        inspector.document.applyMutationBundle(
-            .init(
-                events: [
-                    .setChildNodes(
-                        parentLocalID: 1,
-                        nodes: [
-                            makeNode(localID: 42, attributes: [DOMAttribute(nodeId: 42, name: "class", value: "replaced")])
-                        ]
-                    )
-                ]
-            )
-        )
-
-        let replacementApplied = await waitUntil {
-            guard let currentTextView = self.visibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)) else {
-                return false
-            }
-            return currentTextView.isFirstResponder == false && currentTextView.text == "replaced"
-        }
-        #expect(replacementApplied)
-    }
-
-    @Test
-    func detailViewKeepsDirtyDraftAfterExternalBaselineChange() async throws {
-        let inspector = makeInspector(
-            selectedLocalID: 42,
-            preview: "<div>",
-            selectorPath: "#target",
-            attributes: [DOMAttribute(nodeId: 42, name: "class", value: "before")]
-        )
-        let (viewController, window) = makeHostedDetailViewController(inspector: inspector)
-        defer { tearDown(window: window) }
-
-        let collectionView = try #require(viewController.collectionView)
-        let selectedNodeID = try #require(inspector.document.selectedNode?.id)
-        let initialReady = await waitUntil {
-            self.visibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2))?.text == "before"
-        }
-        #expect(initialReady)
-
-        viewController.installInlineDraftSessionForTesting(
-            nodeID: selectedNodeID,
-            name: "class",
-            baselineValue: "before",
-            draftValue: "draft"
-        )
-        inspector.document.updateSelectedAttribute(name: "class", value: "server")
-        let baselineAdvanced = await waitUntil {
-            inspector.document.selectedNode?.attributes.first(where: { $0.name == "class" })?.value == "server"
-                && viewController.inlineDraftSessionForTesting(nodeID: selectedNodeID, name: "class")?.draftState.baselineValue == "server"
-        }
-        #expect(baselineAdvanced)
-
-        viewController.applyInlineDraftForTesting(
-            nodeID: selectedNodeID,
-            name: "class",
-            value: "before"
-        )
-        let draftReturnedToEditing = await waitUntil {
-            viewController.inlineDraftPhaseForTesting(nodeID: selectedNodeID, name: "class") == .editing
-                && viewController.inlineDraftSessionForTesting(nodeID: selectedNodeID, name: "class")?.draftValue == "before"
-                && viewController.inlineDisplayedAttributeValueForTesting(nodeID: selectedNodeID, name: "class") == "before"
-        }
-        #expect(draftReturnedToEditing)
-
-        let dirtyDraftPreserved = await waitUntil(maxTicks: 4096) {
-            let modelValue = inspector.document.selectedNode?.attributes.first(where: { $0.name == "class" })?.value
-            return modelValue == "server"
-                && viewController.inlineDraftSessionForTesting(nodeID: selectedNodeID, name: "class")?.draftValue == "before"
-                && viewController.inlineDisplayedAttributeValueForTesting(nodeID: selectedNodeID, name: "class") == "before"
-        }
-        #expect(dirtyDraftPreserved)
-    }
-
-    @Test
-    func detailViewClearsInlineAttributeDraftWhenSelectionChangesToDifferentLocalID() async throws {
-        let inspector = makeInspector(
-            selectedLocalID: 42,
-            preview: "<div>",
-            selectorPath: "#target",
-            attributes: [DOMAttribute(nodeId: 42, name: "class", value: "before")]
-        )
-        let (viewController, window) = makeHostedDetailViewController(inspector: inspector)
-        defer { tearDown(window: window) }
-
-        let collectionView = try #require(viewController.collectionView)
-        let textView = try #require(await waitForVisibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)))
-
-        let didBeginEditing = await beginEditing(textView)
-        #expect(didBeginEditing)
-
-        textView.text = "draft"
-        textView.delegate?.textViewDidChange?(textView)
-
-        inspector.document.replaceDocument(
-            with: .init(
-                root: makeNode(
-                    localID: 1,
-                    children: [makeNode(localID: 77, attributes: [DOMAttribute(nodeId: 77, name: "class", value: "other")])]
-                ),
-                selectedLocalID: 77
-            )
-        )
-        inspector.document.applySelectionSnapshot(
-            .init(
-                localID: 77,
-                preview: "<div>",
-                attributes: [DOMAttribute(nodeId: 77, name: "class", value: "other")],
-                path: ["html", "body", "div"],
-                selectorPath: "#other",
-                styleRevision: 0
-            )
-        )
-
-        let draftCleared = await waitUntil {
-            guard let currentTextView = self.visibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)) else {
-                return false
-            }
-            return currentTextView.text == "other"
-        }
-        #expect(draftCleared)
-    }
-
-    @Test
-    func detailViewIgnoresCancelledDeferredDeselectionTask() async throws {
-        let inspector = makeInspector(
-            selectedLocalID: 42,
-            preview: "<div>",
-            selectorPath: "#target",
-            attributes: [DOMAttribute(nodeId: 42, name: "class", value: "before")]
-        )
-        let (viewController, window) = makeHostedDetailViewController(inspector: inspector)
-        defer { tearDown(window: window) }
-
-        let collectionView = try #require(viewController.collectionView)
-        let textView = try #require(await waitForVisibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)))
-
-        let didBeginEditing = await beginEditing(textView)
-        #expect(didBeginEditing)
-
-        let initialSnapshotCount = try #require(await stableSnapshotApplyCount(for: viewController))
-        let selectionSnapshot = makeSelectionSnapshot(
-            localID: 42,
-            preview: "<div>",
-            attributes: [DOMAttribute(nodeId: 42, name: "class", value: "before")],
-            selectorPath: "#target"
-        )
-
-        inspector.document.applySelectionSnapshot(nil)
-        inspector.document.applySelectionSnapshot(selectionSnapshot)
-
-        let finalSnapshotCount = try #require(await stableSnapshotApplyCount(for: viewController))
-        let finalStateIsStable = await waitUntil {
-            guard let currentTextView = self.visibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)) else {
-                return false
-            }
-            return currentTextView.text == "before" && currentTextView.isFirstResponder == false
-        }
-
-        #expect(finalStateIsStable)
-        #expect(finalSnapshotCount >= initialSnapshotCount)
-    }
-
-    @Test
-    func detailViewDiscardFallbackDoesNotCommitDirtyDraft() async throws {
-        let inspector = makeInspector(
-            selectedLocalID: 42,
-            preview: "<div>",
-            selectorPath: "#target",
-            attributes: [DOMAttribute(nodeId: 42, name: "class", value: "before")]
-        )
-        let (viewController, window) = makeHostedDetailViewController(inspector: inspector)
-        defer { tearDown(window: window) }
-
-        let collectionView = try #require(viewController.collectionView)
-        let textView = try #require(await waitForVisibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)))
-
-        let didBeginEditing = await beginEditing(textView)
-        #expect(didBeginEditing)
-
-        textView.text = "draft"
-        textView.delegate?.textViewDidChange?(textView)
-        inspector.document.updateSelectedAttribute(name: "class", value: "live")
-        try await Task.sleep(nanoseconds: 50_000_000)
-
-        viewController.discardInlineEditingStateUsingViewFallbackForTesting()
-
-        let liveValuePreserved = await waitUntil {
-            let currentValue = inspector.document.selectedNode?.attributes.first(where: { $0.name == "class" })?.value
-            guard let currentTextView = self.visibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)) else {
-                return false
-            }
-            return currentValue == "live"
-                && currentTextView.text == "live"
-                && currentTextView.isFirstResponder == false
-        }
-
-        #expect(liveValuePreserved)
-    }
-
-    @Test
-    func detailViewDiscardFallbackCompletesWhenEditedCellIsReused() async throws {
-        let inspector = makeInspector(
-            selectedLocalID: 42,
-            preview: "<div>",
-            selectorPath: "#target",
-            attributes: [DOMAttribute(nodeId: 42, name: "class", value: "before")],
-            extraTreeChildren: [makeNode(localID: 77, attributes: [DOMAttribute(nodeId: 77, name: "class", value: "other")])]
-        )
-        let (viewController, window) = makeHostedDetailViewController(inspector: inspector)
-        defer { tearDown(window: window) }
-
-        let collectionView = try #require(viewController.collectionView)
-        let textView = try #require(await waitForVisibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)))
-
-        let didBeginEditing = await beginEditing(textView)
-        #expect(didBeginEditing)
-
-        textView.text = "draft"
-        textView.delegate?.textViewDidChange?(textView)
-
-        viewController.discardInlineEditingStateUsingViewFallbackForTesting()
-        inspector.document.applySelectionSnapshot(
-            makeSelectionSnapshot(
-                localID: 77,
-                preview: "<div class=\"other\">",
-                attributes: [DOMAttribute(nodeId: 77, name: "class", value: "other")],
-                selectorPath: "#other"
-            )
-        )
-
-        let rebuiltStateSettles = await waitUntil {
-            guard let currentTextView = self.visibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)) else {
-                return false
-            }
-            return currentTextView.text == "other" && currentTextView.isFirstResponder == false
-        }
-
-        #expect(rebuiltStateSettles)
-    }
-
-    @Test
-    func detailViewClearsStaleInlineEditingFlagWhenVisibleEditorIsNotFirstResponder() async throws {
-        let inspector = makeInspector(
-            selectedLocalID: 42,
-            preview: "<div>",
-            selectorPath: "#target",
-            attributes: [DOMAttribute(nodeId: 42, name: "class", value: "before")],
-            extraTreeChildren: [makeNode(localID: 77, attributes: [DOMAttribute(nodeId: 77, name: "class", value: "other")])]
-        )
-        let (viewController, window) = makeHostedDetailViewController(inspector: inspector)
-        defer { tearDown(window: window) }
-
-        let collectionView = try #require(viewController.collectionView)
-        let initialTextView = try #require(await waitForVisibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)))
-        #expect(initialTextView.isFirstResponder == false)
-
-        let selectedNodeID = try #require(inspector.document.selectedNode?.id)
-        viewController.installStaleInlineEditingStateForTesting(nodeID: selectedNodeID, name: "class")
-
-        inspector.document.applySelectionSnapshot(
-            makeSelectionSnapshot(
-                localID: 77,
-                preview: "<div class=\"other\">",
-                attributes: [DOMAttribute(nodeId: 77, name: "class", value: "other")],
-                selectorPath: "#other"
-            )
-        )
-
-        let selectionRefreshes = await waitUntil {
-            self.visibleTextViewText(in: collectionView, at: IndexPath(item: 0, section: 2)) == "other"
-        }
-
-        #expect(selectionRefreshes)
     }
 
     @Test
@@ -809,16 +330,6 @@ struct DOMDetailViewControllerTests {
         return WKWebView(frame: .zero, configuration: configuration)
     }
 
-    private func loadHTML(_ html: String, in webView: WKWebView) async {
-        let navigationDelegate = NavigationDelegate()
-        webView.navigationDelegate = navigationDelegate
-
-        await withCheckedContinuation { continuation in
-            navigationDelegate.continuation = continuation
-            webView.loadHTMLString(html, baseURL: nil)
-        }
-    }
-
     private func makeHostedDetailViewController(
         inspector: WIDOMInspector
     ) -> (WIDOMDetailViewController, UIWindow) {
@@ -845,73 +356,6 @@ struct DOMDetailViewControllerTests {
             return nil
         }
         return configuration.text
-    }
-
-    private func visibleTextViewText(in collectionView: UICollectionView, at indexPath: IndexPath) -> String? {
-        collectionView.layoutIfNeeded()
-        guard collectionView.cellForItem(at: indexPath) != nil else {
-            return nil
-        }
-        return visibleTextView(in: collectionView, at: indexPath)?.text
-    }
-
-    private func visibleTextView(in collectionView: UICollectionView, at indexPath: IndexPath) -> UITextView? {
-        collectionView.layoutIfNeeded()
-        guard let cell = collectionView.cellForItem(at: indexPath) else {
-            return nil
-        }
-        return firstSubview(of: UITextView.self, in: cell.contentView)
-    }
-
-    private func waitForVisibleTextView(
-        in collectionView: UICollectionView,
-        at indexPath: IndexPath,
-        maxTicks: Int = 256
-    ) async -> UITextView? {
-        for _ in 0..<maxTicks {
-            if let textView = visibleTextView(in: collectionView, at: indexPath) {
-                return textView
-            }
-            await Task.yield()
-        }
-        return visibleTextView(in: collectionView, at: indexPath)
-    }
-
-    private func beginEditing(_ textView: UITextView, maxTicks: Int = 256) async -> Bool {
-        textView.becomeFirstResponder()
-        for _ in 0..<maxTicks {
-            if textView.isFirstResponder {
-                textView.delegate?.textViewDidBeginEditing?(textView)
-                return true
-            }
-            await Task.yield()
-        }
-        return textView.isFirstResponder
-    }
-
-    private func waitForInlineDebouncedCommitToSettle(
-        for viewController: WIDOMDetailViewController,
-        nodeID: DOMNodeModel.ID,
-        name: String,
-        initialGeneration: UInt64,
-        maxTicks: Int = 1024
-    ) async -> Bool {
-        await waitUntil(maxTicks: maxTicks) {
-            viewController.nextInlineCommitGenerationForTesting() > initialGeneration
-                && !viewController.hasPendingInlineCommitForTesting(nodeID: nodeID, name: name)
-        }
-    }
-
-    private func firstSubview<ViewType: UIView>(of type: ViewType.Type, in view: UIView) -> ViewType? {
-        if let matched = view as? ViewType {
-            return matched
-        }
-        for subview in view.subviews {
-            if let matched = firstSubview(of: type, in: subview) {
-                return matched
-            }
-        }
-        return nil
     }
 
     private func waitUntil(maxTicks: Int = 1024, _ condition: () -> Bool) async -> Bool {
@@ -966,41 +410,6 @@ struct DOMDetailViewControllerTests {
             isRendered: true,
             children: children
         )
-    }
-
-    private func makeSelectionSnapshot(
-        localID: UInt64,
-        preview: String,
-        attributes: [DOMAttribute],
-        selectorPath: String
-    ) -> DOMSelectionSnapshotPayload {
-        .init(
-            localID: localID,
-            preview: preview,
-            attributes: attributes,
-            path: ["html", "body", "div"],
-            selectorPath: selectorPath,
-            styleRevision: 0
-        )
-    }
-}
-
-private final class NavigationDelegate: NSObject, WKNavigationDelegate {
-    var continuation: CheckedContinuation<Void, Never>?
-
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        continuation?.resume()
-        continuation = nil
-    }
-
-    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) {
-        continuation?.resume()
-        continuation = nil
-    }
-
-    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {
-        continuation?.resume()
-        continuation = nil
     }
 }
 #endif

@@ -436,6 +436,7 @@
       }
     },
     "delete" : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
