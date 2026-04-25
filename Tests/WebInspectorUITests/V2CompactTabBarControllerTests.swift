@@ -72,6 +72,21 @@ struct V2CompactTabBarControllerTests {
     }
 
     @Test
+    func compactTabSelectionUsesNonAnimatedTransition() throws {
+        let session = V2_WISession(tabs: V2_WITab.defaults)
+        let tabBarController = V2_WICompactTabBarController(session: session)
+        let animator = try #require(
+            tabBarController.tabBarController(
+                tabBarController,
+                animationControllerForTransitionFrom: UIViewController(),
+                to: UIViewController()
+            )
+        )
+
+        #expect(animator.transitionDuration(using: nil) == 0)
+    }
+
+    @Test
     func customCompactTabIsNotForcedIntoNavigationController() {
         let customViewController = UIViewController()
         let tab = V2_WITab(identifier: "custom", title: "Custom") {

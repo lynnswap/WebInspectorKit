@@ -6,6 +6,7 @@ import UIKit
 final class V2_WICompactTabBarController: UITabBarController, UITabBarControllerDelegate {
     private let session: V2_WISession
     private let interface: V2_WIInterfaceModel
+    private let tabTransitionAnimator = V2_WINoAnimationTabTransitionAnimator()
     private var tabObservationHandles: Set<ObservationHandle> = []
     private var nativeTabByTabID: [V2_WITab.ID: UITab] = [:]
 
@@ -55,6 +56,14 @@ final class V2_WICompactTabBarController: UITabBarController, UITabBarController
 
     func tabBarController(
         _ tabBarController: UITabBarController,
+        animationControllerForTransitionFrom fromVC: UIViewController,
+        to toVC: UIViewController
+    ) -> (any UIViewControllerAnimatedTransitioning)? {
+        tabTransitionAnimator
+    }
+
+    func tabBarController(
+        _ tabBarController: UITabBarController,
         didSelectTab selectedTab: UITab,
         previousTab: UITab?
     ) {
@@ -86,6 +95,27 @@ final class V2_WICompactTabBarController: UITabBarController, UITabBarController
         }
         nativeTabByTabID[tab.id] = nativeTab
         return nativeTab
+    }
+}
+
+@MainActor
+private final class V2_WINoAnimationTabTransitionAnimator: NSObject, UIViewControllerAnimatedTransitioning {
+    func transitionDuration(using transitionContext: (any UIViewControllerContextTransitioning)?) -> TimeInterval {
+        0
+    }
+
+    func animateTransition(using transitionContext: any UIViewControllerContextTransitioning) {
+        guard
+            let toViewController = transitionContext.viewController(forKey: .to),
+            let toView = transitionContext.view(forKey: .to) ?? toViewController.view
+        else {
+            transitionContext.completeTransition(false)
+            return
+        }
+
+        toView.frame = transitionContext.finalFrame(for: toViewController)
+        transitionContext.containerView.addSubview(toView)
+        transitionContext.completeTransition(!transitionContext.transitionWasCancelled)
     }
 }
 #endif
