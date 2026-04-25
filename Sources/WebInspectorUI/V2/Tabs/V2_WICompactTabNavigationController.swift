@@ -4,6 +4,7 @@ import UIKit
 @MainActor
 class V2_WICompactTabNavigationController: UINavigationController {
     override init(rootViewController: UIViewController) {
+        rootViewController.wiDetachFromV2ContainerForReuse()
         super.init(rootViewController: rootViewController)
         view.backgroundColor = .clear
         navigationBar.prefersLargeTitles = false

@@ -1,19 +1,28 @@
 #if canImport(UIKit)
 import UIKit
+import WebInspectorRuntime
 
 @MainActor
 final class V2_DOMSplitViewController: UISplitViewController {
-    private let session: V2_WISession
-    private lazy var navigationItems = V2_DOMNavigationItems(dom: session.runtime.dom)
+    private let dom: V2_WIDOMRuntime
+    private let treeViewController: V2_DOMTreeViewController
+    private let elementViewController: V2_DOMElementViewController
+    private lazy var navigationItems = V2_DOMNavigationItems(dom: dom)
     private lazy var domTreeViewController = V2_WIRegularSplitColumnNavigationController(
-        rootViewController: V2_DOMTreeViewController(dom: session.runtime.dom)
+        rootViewController: treeViewController
     )
     private lazy var elementDetailsViewController = V2_WIRegularSplitColumnNavigationController(
-        rootViewController: V2_DOMElementViewController(dom: session.runtime.dom)
+        rootViewController: elementViewController
     )
 
-    init(session: V2_WISession = V2_WISession()) {
-        self.session = session
+    init(
+        dom: V2_WIDOMRuntime,
+        treeViewController: V2_DOMTreeViewController,
+        elementViewController: V2_DOMElementViewController
+    ) {
+        self.dom = dom
+        self.treeViewController = treeViewController
+        self.elementViewController = elementViewController
         super.init(style: .doubleColumn)
     }
 
@@ -63,7 +72,12 @@ final class V2_DOMSplitViewController: UISplitViewController {
 import SwiftUI
 
 #Preview("V2 DOM Split") {
-    V2_DOMSplitViewController()
+    let dom = V2_WIDOMRuntime()
+    V2_DOMSplitViewController(
+        dom: dom,
+        treeViewController: V2_DOMTreeViewController(dom: dom),
+        elementViewController: V2_DOMElementViewController(dom: dom)
+    )
 }
 #endif
 #endif

@@ -1,5 +1,6 @@
 #if canImport(UIKit)
 import Observation
+import UIKit
 import WebKit
 import WebInspectorRuntime
 
@@ -15,6 +16,10 @@ public final class V2_WISession {
     ) {
         self.runtime = runtime
         self.interface = interface
+    }
+
+    isolated deinit {
+        interface.removeContentCache(for: self)
     }
 
     public convenience init(tabs: [V2_WITab]) {
@@ -35,6 +40,9 @@ public final class V2_WISession {
 public final class V2_WIInterfaceModel {
     private(set) var tabs: [V2_WITab]
     private(set) var selection: V2_WIDisplayTab.ID?
+    @ObservationIgnored private var contentViewControllerBySessionID: [
+        ObjectIdentifier: [V2_WIDisplayContentKey: UIViewController]
+    ] = [:]
 
     public init(tabs: [V2_WITab] = V2_WITab.defaults) {
         self.tabs = Self.uniqueTabs(tabs)
@@ -63,6 +71,59 @@ public final class V2_WIInterfaceModel {
         selection = displayTabID
     }
 
+    func setTabs(_ tabs: [V2_WITab]) {
+        let uniqueTabs = Self.uniqueTabs(tabs)
+        self.tabs = uniqueTabs
+        pruneContentCache(retaining: Self.reachableContentKeys(for: self.tabs))
+        guard let selection,
+              isValidDisplayTabID(selection) else {
+            self.selection = self.tabs.first?.id
+            return
+        }
+    }
+
+    func viewController<Content: UIViewController>(
+        for key: V2_WIDisplayContentKey,
+        session: V2_WISession,
+        make: () -> Content
+    ) -> Content {
+        let sessionID = ObjectIdentifier(session)
+        if let viewController = contentViewControllerBySessionID[sessionID]?[key] {
+            if let contentViewController = viewController as? Content {
+                return contentViewController
+            }
+            viewController.wiDetachFromV2ContainerForReuse()
+        }
+
+        let viewController = make()
+        contentViewControllerBySessionID[sessionID, default: [:]][key] = viewController
+        return viewController
+    }
+
+    func pruneContentCache(retaining keys: Set<V2_WIDisplayContentKey>) {
+        for (sessionID, cache) in contentViewControllerBySessionID {
+            var retainedCache: [V2_WIDisplayContentKey: UIViewController] = [:]
+            for (key, viewController) in cache {
+                guard keys.contains(key) else {
+                    viewController.wiDetachFromV2ContainerForReuse()
+                    continue
+                }
+                retainedCache[key] = viewController
+            }
+            contentViewControllerBySessionID[sessionID] = retainedCache
+        }
+    }
+
+    func removeContentCache(for session: V2_WISession) {
+        let sessionID = ObjectIdentifier(session)
+        guard let cache = contentViewControllerBySessionID.removeValue(forKey: sessionID) else {
+            return
+        }
+        for viewController in cache.values {
+            viewController.wiDetachFromV2ContainerForReuse()
+        }
+    }
+
     var selectedTab: V2_WITab? {
         guard let selection else {
             return nil
@@ -84,6 +145,12 @@ public final class V2_WIInterfaceModel {
             }
             result.append(tab)
         }
+    }
+
+    private static func reachableContentKeys(for tabs: [V2_WITab]) -> Set<V2_WIDisplayContentKey> {
+        let resolver = V2_WITabResolver()
+        return resolver.contentKeys(for: .compact, tabs: tabs)
+            .union(resolver.contentKeys(for: .regular, tabs: tabs))
     }
 }
 #endif

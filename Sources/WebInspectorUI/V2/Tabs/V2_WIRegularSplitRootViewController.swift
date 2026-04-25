@@ -6,6 +6,7 @@ final class V2_WIRegularSplitRootViewController: UIViewController {
     private let contentViewController: UIViewController
 
     init(contentViewController: UIViewController) {
+        contentViewController.wiDetachFromV2ContainerForReuse()
         self.contentViewController = contentViewController
         super.init(nibName: nil, bundle: nil)
     }

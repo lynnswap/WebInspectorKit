@@ -67,6 +67,8 @@ public final class V2_WIViewController: UIViewController {
             activeHost.view.removeFromSuperview()
             activeHost.removeFromParent()
         }
+        activeHost = nil
+        activeHostKind = nil
 
         let host: UIViewController
         switch kind {

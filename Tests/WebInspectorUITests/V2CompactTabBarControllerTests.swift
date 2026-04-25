@@ -24,7 +24,7 @@ struct V2CompactTabBarControllerTests {
             hostLayout: .compact
         )
         let networkNavigationController = try #require(networkViewController as? UINavigationController)
-        #expect(networkNavigationController.viewControllers.first is V2_NetworkCompactViewController)
+        #expect(networkNavigationController.viewControllers.first is V2_NetworkListViewController)
         #expect(networkNavigationController.isNavigationBarHidden == false)
     }
 

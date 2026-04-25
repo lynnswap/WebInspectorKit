@@ -1,13 +1,5 @@
 #if canImport(UIKit)
 import UIKit
-import WebInspectorRuntime
-
-@MainActor
-final class V2_NetworkCompactViewController: V2_NetworkListViewController {
-    init(network: V2_WINetworkRuntime) {
-        super.init(inspector: network.model)
-    }
-}
 
 @MainActor
 final class V2_NetworkSplitViewController: UISplitViewController {
@@ -16,9 +8,9 @@ final class V2_NetworkSplitViewController: UISplitViewController {
         rootViewController: V2_NetworkSplitViewController.makeEmptyViewController()
     )
 
-    init(network: V2_WINetworkRuntime) {
+    init(listViewController: V2_NetworkListViewController) {
         primaryViewController = V2_WIRegularSplitColumnNavigationController(
-            rootViewController: V2_NetworkListViewController(inspector: network.model)
+            rootViewController: listViewController
         )
         super.init(style: .doubleColumn)
         configureSplitViewLayout()
@@ -53,9 +45,13 @@ final class V2_NetworkSplitViewController: UISplitViewController {
 
 #if DEBUG && canImport(SwiftUI)
 import SwiftUI
+import WebInspectorRuntime
 
 #Preview("V2 Network Split") {
-    V2_NetworkSplitViewController(network: V2_WINetworkRuntime())
+    let network = V2_WINetworkRuntime()
+    V2_NetworkSplitViewController(
+        listViewController: V2_NetworkListViewController(inspector: network.model)
+    )
 }
 #endif
 #endif

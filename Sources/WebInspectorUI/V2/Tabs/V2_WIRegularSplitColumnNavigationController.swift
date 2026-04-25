@@ -4,6 +4,7 @@ import UIKit
 @MainActor
 final class V2_WIRegularSplitColumnNavigationController: UINavigationController {
     override init(rootViewController: UIViewController) {
+        rootViewController.wiDetachFromV2ContainerForReuse()
         super.init(rootViewController: rootViewController)
         wiApplyClearNavigationBarStyle(to: self)
         setNavigationBarHidden(true, animated: false)

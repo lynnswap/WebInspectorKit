@@ -43,7 +43,12 @@ final class V2_DOMTreeViewController: UIViewController {
     }
 
     private func attachDOMTreeWebView() {
-        let domTreeWebView = displayedDOMTreeWebView ?? dom.treeWebViewForPresentation()
+        let domTreeWebView = dom.treeWebViewForPresentation()
+        if let displayedDOMTreeWebView,
+           displayedDOMTreeWebView !== domTreeWebView,
+           displayedDOMTreeWebView.superview === containerView {
+            displayedDOMTreeWebView.removeFromSuperview()
+        }
         displayedDOMTreeWebView = domTreeWebView
         guard domTreeWebView.superview !== containerView else {
             return
@@ -66,4 +71,12 @@ final class V2_DOMTreeViewController: UIViewController {
         displayedDOMTreeWebView.frame = containerView.bounds
     }
 }
+
+#if DEBUG
+extension V2_DOMTreeViewController {
+    var displayedDOMTreeWebViewForTesting: WKWebView? {
+        displayedDOMTreeWebView
+    }
+}
+#endif
 #endif

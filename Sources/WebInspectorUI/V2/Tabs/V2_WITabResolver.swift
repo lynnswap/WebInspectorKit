@@ -31,5 +31,19 @@ struct V2_WITabResolver {
 
         return displayTabs.first
     }
+
+    func contentKeys(
+        for hostLayout: V2_WITabHostLayout,
+        tabs: [V2_WITab]
+    ) -> Set<V2_WIDisplayContentKey> {
+        Set(
+            displayTabs(for: hostLayout, tabs: tabs).flatMap { displayTab in
+                displayTab.sourceTab.definition.contentKeys(
+                    for: hostLayout,
+                    displayTab: displayTab
+                )
+            }
+        )
+    }
 }
 #endif
