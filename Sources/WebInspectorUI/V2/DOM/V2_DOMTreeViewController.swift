@@ -4,21 +4,7 @@ import WebKit
 import WebInspectorRuntime
 
 @MainActor
-final class V2_DOMTreeViewController: UINavigationController {
-    init(dom: V2_WIDOMRuntime) {
-        super.init(rootViewController: V2_DOMTreeContentViewController(dom: dom))
-        wiApplyClearNavigationBarStyle(to: self)
-        setNavigationBarHidden(true, animated: false)
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        nil
-    }
-}
-
-@MainActor
-private final class V2_DOMTreeContentViewController: UIViewController {
+final class V2_DOMTreeViewController: UIViewController {
     private let dom: V2_WIDOMRuntime
     private let containerView = UIView()
     private weak var displayedDOMTreeWebView: WKWebView?

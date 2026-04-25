@@ -21,6 +21,22 @@ struct V2CompactTabBarControllerTests {
     }
 
     @Test
+    func compactDOMTreeDoesNotNestAnotherNavigationController() throws {
+        let session = V2_WISession(tabs: V2_WITab.defaults)
+        let domViewController = V2_WITab.dom.makeViewController(session: session, hostLayout: .compact)
+        let domNavigationController = try #require(domViewController as? UINavigationController)
+        let domCompactViewController = try #require(
+            domNavigationController.viewControllers.first as? V2_DOMCompactViewController
+        )
+
+        domCompactViewController.loadViewIfNeeded()
+
+        let treeViewController = try #require(domCompactViewController.children.first)
+        #expect(treeViewController is V2_DOMTreeViewController)
+        #expect((treeViewController is UINavigationController) == false)
+    }
+
+    @Test
     func customCompactTabIsNotForcedIntoNavigationController() {
         let customViewController = UIViewController()
         let tab = V2_WITab(identifier: "custom", title: "Custom") {
