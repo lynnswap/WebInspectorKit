@@ -83,6 +83,30 @@ struct V2CompactTabBarControllerTests {
     }
 
     @Test
+    func compactNetworkOwnsNetworkNavigationItems() throws {
+        let session = V2_WISession(tabs: V2_WITab.defaults)
+        let networkViewController = V2_WITabContentFactory.makeViewController(
+            for: .network,
+            session: session,
+            hostLayout: .compact
+        )
+        let networkNavigationController = try #require(networkViewController as? UINavigationController)
+        let listViewController = try #require(
+            networkNavigationController.viewControllers.first as? V2_NetworkListViewController
+        )
+
+        listViewController.loadViewIfNeeded()
+
+        #expect(listViewController.navigationItem.additionalOverflowItems != nil)
+        #expect(listViewController.navigationItem.searchController != nil)
+        #expect(
+            listViewController.navigationItem.trailingItemGroups
+                .flatMap(\.barButtonItems)
+                .contains { $0.accessibilityIdentifier == "WI.Network.FilterButton" }
+        )
+    }
+
+    @Test
     func compactTabSelectionUsesNonAnimatedTransition() throws {
         let session = V2_WISession(tabs: V2_WITab.defaults)
         let tabBarController = V2_WICompactTabBarController(session: session)

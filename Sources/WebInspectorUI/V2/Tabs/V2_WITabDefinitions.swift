@@ -139,13 +139,14 @@ final class V2_NetworkTabDefinition: V2_WITabDefinition {
             V2_NetworkListViewController(inspector: session.runtime.network.model)
         }
 
-        return switch layout {
+        switch layout {
         case .compact:
-            V2_WICompactTabNavigationController(
+            listViewController.installNavigationItems(on: listViewController.navigationItem)
+            return V2_WICompactTabNavigationController(
                 rootViewController: listViewController
             )
         case .regular:
-            V2_WIRegularSplitRootViewController(
+            return V2_WIRegularSplitRootViewController(
                 contentViewController: V2_NetworkSplitViewController(
                     listViewController: listViewController
                 )

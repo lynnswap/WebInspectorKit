@@ -25,6 +25,7 @@ class V2_NetworkListViewController: UICollectionViewController {
     private var observationHandles: Set<ObservationHandle> = []
 
     private var needsSnapshotReloadOnNextAppearance = false
+    private lazy var navigationItems = V2_NetworkNavigationItems(inspector: inspector)
     private lazy var dataSource = makeDataSource()
 
     init(inspector: WINetworkModel) {
@@ -65,9 +66,23 @@ class V2_NetworkListViewController: UICollectionViewController {
     }
 
     private static func makeListLayout() -> UICollectionViewLayout {
-        var configuration = UICollectionLayoutListConfiguration(appearance: .insetGrouped)
-        configuration.showsSeparators = true
-        return UICollectionViewCompositionalLayout.list(using: configuration)
+        UICollectionViewCompositionalLayout { _, environment in
+            var configuration = UICollectionLayoutListConfiguration(appearance: .insetGrouped)
+            configuration.showsSeparators = true
+
+            let section = NSCollectionLayoutSection.list(
+                using: configuration,
+                layoutEnvironment: environment
+            )
+            var contentInsets = section.contentInsets
+            contentInsets.top = 0
+            section.contentInsets = contentInsets
+            return section
+        }
+    }
+
+    func installNavigationItems(on navigationItem: UINavigationItem) {
+        navigationItems.install(on: navigationItem)
     }
 
     private func startObservingInspector() {
@@ -263,6 +278,22 @@ final class V2_NetworkObservingListCell: UICollectionViewListCell {
 extension V2_NetworkListViewController {
     var collectionViewForTesting: UICollectionView {
         collectionView
+    }
+
+    var searchControllerForTesting: UISearchController {
+        navigationItems.searchControllerForTesting
+    }
+
+    var filterItemForTesting: UIBarButtonItem {
+        navigationItems.filterItemForTesting
+    }
+
+    var filterMenuForTesting: UIMenu {
+        navigationItems.filterMenuForTesting
+    }
+
+    var overflowMenuForTesting: UIMenu {
+        navigationItems.overflowMenuForTesting
     }
 }
 #endif

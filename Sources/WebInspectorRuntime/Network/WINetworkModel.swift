@@ -127,6 +127,52 @@ public final class WINetworkModel {
         restartSelectedEntryBodyFetch()
     }
 
+    public func setSearchText(_ text: String) {
+        guard searchText != text else {
+            return
+        }
+        searchText = text
+    }
+
+    public func clearSearchText() {
+        setSearchText("")
+    }
+
+    public func setResourceFilter(_ filter: NetworkResourceFilter, enabled: Bool) {
+        if filter == .all {
+            if enabled {
+                clearResourceFilters()
+            }
+            return
+        }
+
+        var nextFilters = activeResourceFilters
+        if enabled {
+            nextFilters.insert(filter)
+        } else {
+            nextFilters.remove(filter)
+        }
+        guard nextFilters != activeResourceFilters else {
+            return
+        }
+        activeResourceFilters = nextFilters
+    }
+
+    public func toggleResourceFilter(_ filter: NetworkResourceFilter) {
+        if filter == .all {
+            clearResourceFilters()
+            return
+        }
+        setResourceFilter(filter, enabled: activeResourceFilters.contains(filter) == false)
+    }
+
+    public func clearResourceFilters() {
+        guard activeResourceFilters.isEmpty == false else {
+            return
+        }
+        activeResourceFilters = []
+    }
+
     public func clear() async {
         cancelSelectedEntryBodyFetch()
         selectedEntryObservationHandles.removeAll()

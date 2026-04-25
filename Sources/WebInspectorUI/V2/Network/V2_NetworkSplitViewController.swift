@@ -3,13 +3,16 @@ import UIKit
 
 @MainActor
 final class V2_NetworkSplitViewController: UISplitViewController {
-    private let primaryViewController: V2_WIRegularSplitColumnNavigationController
+    private let listViewController: V2_NetworkListViewController
+    private let primaryViewController: V2_NetworkListColumnNavigationController
     private let secondaryViewController = V2_WIRegularSplitColumnNavigationController(
         rootViewController: V2_NetworkSplitViewController.makeEmptyViewController()
     )
 
     init(listViewController: V2_NetworkListViewController) {
-        primaryViewController = V2_WIRegularSplitColumnNavigationController(
+        self.listViewController = listViewController
+        listViewController.installNavigationItems(on: listViewController.navigationItem)
+        primaryViewController = V2_NetworkListColumnNavigationController(
             rootViewController: listViewController
         )
         super.init(style: .doubleColumn)
@@ -40,6 +43,27 @@ final class V2_NetworkSplitViewController: UISplitViewController {
         let viewController = UIViewController()
         viewController.view.backgroundColor = .clear
         return viewController
+    }
+}
+
+@MainActor
+private final class V2_NetworkListColumnNavigationController: UINavigationController {
+    override init(rootViewController: UIViewController) {
+        rootViewController.wiDetachFromV2ContainerForReuse()
+        super.init(rootViewController: rootViewController)
+        wiApplyClearNavigationBarStyle(to: self)
+        navigationBar.prefersLargeTitles = false
+        setNavigationBarHidden(false, animated: false)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        setNavigationBarHidden(false, animated: false)
     }
 }
 

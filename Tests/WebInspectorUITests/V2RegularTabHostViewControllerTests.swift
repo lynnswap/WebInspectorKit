@@ -59,7 +59,7 @@ struct V2RegularTabHostViewControllerTests {
     }
 
     @Test
-    func regularNetworkRootDoesNotExposeDOMNavigationItems() throws {
+    func regularNetworkRootDoesNotExposeNetworkListNavigationItems() throws {
         let session = V2_WISession(tabs: V2_WITab.defaults)
         session.interface.selectTab(V2_WITab.network)
         let host = V2_WIRegularTabContentViewController(session: session)
@@ -69,8 +69,41 @@ struct V2RegularTabHostViewControllerTests {
         let rootViewController = try #require(host.viewControllers.first)
         rootViewController.loadViewIfNeeded()
 
+        #expect(rootViewController.navigationItem.searchController == nil)
         #expect(rootViewController.navigationItem.additionalOverflowItems == nil)
-        #expect(rootViewController.navigationItem.trailingItemGroups.isEmpty)
+        #expect(
+            rootViewController.navigationItem.trailingItemGroups
+                .flatMap(\.barButtonItems)
+                .contains {
+                    $0.accessibilityIdentifier == "WI.Network.FilterButton"
+                        || $0.accessibilityIdentifier == "WI.DOM.PickButton"
+                } == false
+        )
+    }
+
+    @Test
+    func regularNetworkListColumnOwnsNetworkNavigationItems() throws {
+        let session = V2_WISession(tabs: V2_WITab.defaults)
+        session.interface.selectTab(V2_WITab.network)
+        let host = V2_WIRegularTabContentViewController(session: session)
+
+        host.loadViewIfNeeded()
+
+        let rootViewController = try #require(host.viewControllers.first)
+        rootViewController.loadViewIfNeeded()
+        let splitViewController = try #require(rootViewController.children.first as? UISplitViewController)
+        let navigationController = try #require(splitViewController.viewController(for: .primary) as? UINavigationController)
+        let listViewController = try #require(
+            navigationController.viewControllers.first as? V2_NetworkListViewController
+        )
+
+        #expect(listViewController.navigationItem.searchController != nil)
+        #expect(listViewController.navigationItem.additionalOverflowItems != nil)
+        #expect(
+            listViewController.navigationItem.trailingItemGroups
+                .flatMap(\.barButtonItems)
+                .contains { $0.accessibilityIdentifier == "WI.Network.FilterButton" }
+        )
     }
 
     @Test
@@ -88,7 +121,7 @@ struct V2RegularTabHostViewControllerTests {
     }
 
     @Test
-    func regularNetworkSplitColumnsUseHiddenNavigationControllers() throws {
+    func regularNetworkSplitShowsListColumnNavigationOnly() throws {
         let session = V2_WISession(tabs: V2_WITab.defaults)
         session.interface.selectTab(V2_WITab.network)
         let host = V2_WIRegularTabContentViewController(session: session)
@@ -99,7 +132,11 @@ struct V2RegularTabHostViewControllerTests {
         rootViewController.loadViewIfNeeded()
         let splitViewController = try #require(rootViewController.children.first as? UISplitViewController)
 
-        try assertHiddenNavigationControllers(in: splitViewController, columns: [.primary, .secondary])
+        let primaryNavigationController = try #require(
+            splitViewController.viewController(for: .primary) as? UINavigationController
+        )
+        #expect(primaryNavigationController.isNavigationBarHidden == false)
+        try assertHiddenNavigationControllers(in: splitViewController, columns: [.secondary])
     }
 
     @Test
