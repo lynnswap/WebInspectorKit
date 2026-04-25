@@ -78,7 +78,7 @@ final class V2_DOMNavigationItems: NSObject {
 
     private func updatePickItemAppearance() {
         pickItem.isEnabled = dom.isPageReadyForSelection
-        pickItem.tintColor = dom.isSelectingElement ? .systemBlue : .label
+        pickItem.tintColor = dom.isSelectingElement ? .tintColor : .label
     }
 }
 #endif
