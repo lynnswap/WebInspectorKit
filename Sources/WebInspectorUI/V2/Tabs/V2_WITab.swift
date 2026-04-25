@@ -1,6 +1,11 @@
 #if canImport(UIKit)
 import UIKit
 
+enum V2_WITabHostLayout {
+    case compact
+    case regular
+}
+
 extension V2_WITab {
     public static nonisolated func == (lhs: V2_WITab, rhs: V2_WITab) -> Bool { lhs.id == rhs.id }
     public nonisolated func hash(into hasher: inout Hasher) { hasher.combine(id) }
@@ -10,11 +15,13 @@ extension V2_WITab {
 public struct V2_WITab: Equatable, Identifiable {
     public typealias ID = String
     public typealias ViewControllerProvider = @MainActor (V2_WITab, V2_WISession) -> UIViewController
+    typealias HostLayoutViewControllerProvider = @MainActor (V2_WITab, V2_WISession, V2_WITabHostLayout) -> UIViewController
 
     public let id: ID
     public let title: String
     public let image: UIImage?
     public let viewControllerProvider: ViewControllerProvider?
+    let hostLayoutViewControllerProvider: HostLayoutViewControllerProvider?
     public var userInfo: Any?
 
     public init(
@@ -28,6 +35,22 @@ public struct V2_WITab: Equatable, Identifiable {
         self.title = title
         self.image = image
         self.viewControllerProvider = viewControllerProvider
+        self.hostLayoutViewControllerProvider = nil
+        self.userInfo = userInfo
+    }
+
+    init(
+        title: String,
+        image: UIImage?,
+        identifier: String,
+        hostLayoutViewControllerProvider: @escaping HostLayoutViewControllerProvider,
+        userInfo: Any? = nil
+    ) {
+        self.id = identifier
+        self.title = title
+        self.image = image
+        self.viewControllerProvider = nil
+        self.hostLayoutViewControllerProvider = hostLayoutViewControllerProvider
         self.userInfo = userInfo
     }
 
@@ -79,6 +102,10 @@ public struct V2_WITab: Equatable, Identifiable {
 
     func makeViewController(session: V2_WISession) -> UIViewController {
         viewControllerProvider?(self, session) ?? UIViewController()
+    }
+
+    func makeViewController(session: V2_WISession, hostLayout: V2_WITabHostLayout) -> UIViewController {
+        hostLayoutViewControllerProvider?(self, session, hostLayout) ?? makeViewController(session: session)
     }
 
     private static func systemImage(named name: String) -> UIImage? {

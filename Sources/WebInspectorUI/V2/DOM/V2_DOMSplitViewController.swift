@@ -5,7 +5,9 @@ import UIKit
 final class V2_DOMSplitViewController: UISplitViewController {
     private let session: V2_WISession
     private lazy var domTreeViewController = V2_DOMTreeViewController(dom: session.runtime.dom)
-    private lazy var elementDetailsViewController = V2_DOMElementViewController(dom: session.runtime.dom)
+    private lazy var elementDetailsViewController = V2_WIRegularSplitColumnNavigationController(
+        rootViewController: V2_DOMElementViewController(dom: session.runtime.dom)
+    )
 
     init(session: V2_WISession = V2_WISession()) {
         self.session = session

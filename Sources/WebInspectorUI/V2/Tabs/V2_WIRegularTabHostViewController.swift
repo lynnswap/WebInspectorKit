@@ -3,11 +3,11 @@ import ObservationBridge
 import UIKit
 
 @MainActor
-final class V2_WIRegularTabContentViewController: UIViewController {
+final class V2_WIRegularTabContentViewController: UINavigationController {
     private let session: V2_WISession
     private let interface: V2_WIInterfaceModel
     private var tabObservationHandles: Set<ObservationHandle> = []
-    private var viewControllerByTabID: [V2_WITab.ID: UIViewController] = [:]
+    private var navigationRootViewControllerByTabID: [V2_WITab.ID: UIViewController] = [:]
     private var isApplyingSegmentSelection = false
 
     private lazy var segmentBarButtonItem: UIBarButtonItem = {
@@ -45,9 +45,9 @@ final class V2_WIRegularTabContentViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .clear
+        navigationBar.prefersLargeTitles = false
+        wiApplyClearNavigationBarStyle(to: self)
         installSegments()
-        navigationItem.style = .browser
-        navigationItem.centerItemGroups = [segmentItemGroup]
         bindModel()
         render()
     }
@@ -115,42 +115,102 @@ final class V2_WIRegularTabContentViewController: UIViewController {
         guard let selectedTab = interface.selectedTabModel else {
             return
         }
-        let viewController = viewController(for: selectedTab)
-        guard children.first !== viewController else {
+        let viewController = navigationRootViewController(for: selectedTab)
+        guard viewControllers.first !== viewController else {
+            updateNavigationItem(for: viewController)
             return
         }
 
-        removeDisplayedViewController()
-        addChild(viewController)
-        viewController.view.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(viewController.view)
-        NSLayoutConstraint.activate([
-            viewController.view.topAnchor.constraint(equalTo: view.topAnchor),
-            viewController.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            viewController.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            viewController.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-        ])
-        viewController.didMove(toParent: self)
+        clearNavigationItem(for: viewControllers.first)
+        setViewControllers([viewController], animated: false)
+        updateNavigationItem(for: viewController)
     }
 
-    private func removeDisplayedViewController() {
-        guard let viewController = children.first else {
+    private func clearNavigationItem(for viewController: UIViewController?) {
+        guard let viewController else {
             return
         }
-
-        viewController.willMove(toParent: nil)
-        viewController.view.removeFromSuperview()
-        viewController.removeFromParent()
+        viewController.navigationItem.centerItemGroups = []
     }
 
-    private func viewController(for tab: V2_WITab) -> UIViewController {
-        if let viewController = viewControllerByTabID[tab.id] {
+    private func navigationRootViewController(for tab: V2_WITab) -> UIViewController {
+        if let viewController = navigationRootViewControllerByTabID[tab.id] {
             return viewController
         }
 
-        let viewController = tab.makeViewController(session: session)
-        viewControllerByTabID[tab.id] = viewController
+        let contentViewController = tab.makeViewController(session: session, hostLayout: .regular)
+        let viewController = navigationRootViewController(wrapping: contentViewController)
+        navigationRootViewControllerByTabID[tab.id] = viewController
         return viewController
+    }
+
+    private func updateNavigationItem(for viewController: UIViewController) {
+        viewController.navigationItem.style = .browser
+        viewController.navigationItem.centerItemGroups = [segmentItemGroup]
+    }
+
+    private func navigationRootViewController(wrapping viewController: UIViewController) -> UIViewController {
+        guard viewController is UISplitViewController else {
+            return viewController
+        }
+        return V2_WIRegularSplitRootViewController(contentViewController: viewController)
+    }
+}
+
+@MainActor
+private final class V2_WIRegularSplitRootViewController: UIViewController {
+    private let contentViewController: UIViewController
+
+    init(contentViewController: UIViewController) {
+        self.contentViewController = contentViewController
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .clear
+        installContentViewController()
+    }
+
+    private func installContentViewController() {
+        guard contentViewController.parent == nil else {
+            return
+        }
+
+        addChild(contentViewController)
+        contentViewController.view.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(contentViewController.view)
+        NSLayoutConstraint.activate([
+            contentViewController.view.topAnchor.constraint(equalTo: view.topAnchor),
+            contentViewController.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            contentViewController.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            contentViewController.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+        contentViewController.didMove(toParent: self)
+    }
+}
+
+@MainActor
+final class V2_WIRegularSplitColumnNavigationController: UINavigationController {
+    override init(rootViewController: UIViewController) {
+        super.init(rootViewController: rootViewController)
+        wiApplyClearNavigationBarStyle(to: self)
+        setNavigationBarHidden(true, animated: false)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        setNavigationBarHidden(true, animated: false)
     }
 }
 #endif

@@ -2,10 +2,30 @@
 import UIKit
 
 @MainActor
+final class V2_NetworkCompactViewController: UIViewController {
+    init() {
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .clear
+    }
+}
+
+@MainActor
 final class V2_NetworkSplitViewController: UISplitViewController {
-    private let primaryViewController = V2_NetworkSplitViewController.makeEmptyViewController()
-    private let secondaryViewController = V2_NetworkSplitViewController.makeEmptyViewController()
-    private let compactViewController = V2_NetworkSplitViewController.makeEmptyViewController()
+    private let primaryViewController = V2_WIRegularSplitColumnNavigationController(
+        rootViewController: V2_NetworkSplitViewController.makeEmptyViewController()
+    )
+    private let secondaryViewController = V2_WIRegularSplitColumnNavigationController(
+        rootViewController: V2_NetworkSplitViewController.makeEmptyViewController()
+    )
 
     init() {
         super.init(style: .doubleColumn)
@@ -28,7 +48,6 @@ final class V2_NetworkSplitViewController: UISplitViewController {
         displayModeButtonVisibility = .never
         preferredDisplayMode = .oneBesideSecondary
 
-        setViewController(compactViewController, for: .compact)
         setViewController(primaryViewController, for: .primary)
         setViewController(secondaryViewController, for: .secondary)
     }

@@ -100,7 +100,7 @@ final class V2_WICompactTabBarController: UITabBarController, UITabBarController
             return viewController
         }
 
-        let viewController = tab.makeViewController(session: session)
+        let viewController = tab.makeViewController(session: session, hostLayout: .compact)
         viewControllerByTabID[tab.id] = viewController
         return viewController
     }
