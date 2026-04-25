@@ -149,7 +149,7 @@ struct WIDOMInspectorTests {
 
         #expect(iframeNode.frameID == "frame-child")
         #expect(iframeNode.childCount == 1)
-        #expect(nestedDocument.nodeType == 9)
+        #expect(nestedDocument.nodeType == .document)
         #expect(nestedDocument.frameID == "frame-child")
         #expect(nestedDocument.children.first?.children.first?.localName == "button")
     }
@@ -2822,7 +2822,7 @@ struct WIDOMInspectorTests {
 
         let iframeNode = try #require(inspector.document.node(localID: 20))
         let nestedDocument = try #require(iframeNode.children.first)
-        #expect(nestedDocument.nodeType == 9)
+        #expect(nestedDocument.nodeType == .document)
         #expect(nestedDocument.frameID == "frame-child")
         #expect(nestedDocument.parent?.localID == iframeNode.localID)
 

@@ -1874,7 +1874,7 @@ private extension WIDOMInspector {
     }
 
     func shouldHydrateInitiallyExpandedNode(_ node: DOMNodeModel, depth: Int) -> Bool {
-        guard node.nodeType != 10 else {
+        guard node.nodeType != .documentType else {
             return false
         }
         let name = (node.localName.isEmpty ? node.nodeName : node.localName).lowercased()
@@ -3866,28 +3866,28 @@ private extension WIDOMInspector {
         )
     }
 
-    private func inferredNodeType(for node: DOMNodeModel) -> Int {
-        if node.nodeType != 0 {
+    private func inferredNodeType(for node: DOMNodeModel) -> DOMNodeType {
+        if node.nodeType != .unknown {
             return node.nodeType
         }
 
         switch nodeNameForMatching(node) {
         case "#document":
-            return 9
+            return .document
         case "!doctype", "#doctype":
-            return 10
+            return .documentType
         case "#text":
-            return 3
+            return .text
         case "#comment":
-            return 8
+            return .comment
         case "#cdata-section":
-            return 4
+            return .cdataSection
         case "#document-fragment", "#shadow-root":
-            return 11
+            return .documentFragment
         case let name where !name.isEmpty && !name.hasPrefix("#"):
-            return 1
+            return .element
         default:
-            return 0
+            return .unknown
         }
     }
 
@@ -3896,7 +3896,7 @@ private extension WIDOMInspector {
     }
 
     private func isDocumentNode(_ node: DOMNodeModel) -> Bool {
-        inferredNodeType(for: node) == 9
+        inferredNodeType(for: node) == .document
     }
 
     private func isFrameDocumentCandidate(_ node: DOMNodeModel) -> Bool {
@@ -3913,7 +3913,7 @@ private extension WIDOMInspector {
     }
 
     private func isFrameOwnerNode(_ node: DOMNodeModel) -> Bool {
-        guard inferredNodeType(for: node) == 1 else {
+        guard inferredNodeType(for: node) == .element else {
             return false
         }
         let nodeName = nodeNameForMatching(node)
@@ -5743,7 +5743,7 @@ private extension WIDOMInspector {
         if !node.preview.isEmpty {
             return node.preview
         }
-        if node.nodeType == 3 {
+        if node.nodeType == .text {
             return node.nodeValue
         }
         return "<\(node.localName.isEmpty ? node.nodeName.lowercased() : node.localName)>"
@@ -5790,7 +5790,7 @@ private extension WIDOMInspector {
     }
 
     func selectorPathText(for node: DOMNodeModel) -> String {
-        guard node.nodeType == 1 else {
+        guard node.nodeType == .element else {
             return ""
         }
 
@@ -5812,7 +5812,7 @@ private extension WIDOMInspector {
     }
 
     func xPathText(for node: DOMNodeModel) -> String {
-        if node.nodeType == 9 {
+        if node.nodeType == .document {
             return "/"
         }
 
@@ -5820,7 +5820,7 @@ private extension WIDOMInspector {
         var current: DOMNodeModel? = node
 
         while let candidate = current {
-            if candidate.nodeType == 9 {
+            if candidate.nodeType == .document {
                 current = candidate.parent
                 continue
             }
@@ -5841,14 +5841,14 @@ private extension WIDOMInspector {
         guard let parent = node.parent else {
             return nil
         }
-        if parent.nodeType == 9 {
+        if parent.nodeType == .document {
             return parent.parent
         }
         return parent
     }
 
     func selectorPathComponent(for node: DOMNodeModel) -> (value: String, done: Bool)? {
-        guard node.nodeType == 1 else {
+        guard node.nodeType == .element else {
             return nil
         }
 
@@ -5908,22 +5908,22 @@ private extension WIDOMInspector {
 
     func xPathComponent(for node: DOMNodeModel) -> String? {
         switch node.nodeType {
-        case 1:
+        case .element:
             let nodeName = selectorNodeName(for: node)
             guard !nodeName.isEmpty else {
                 return nil
             }
             let index = xPathIndex(for: node)
             return index > 0 ? "\(nodeName)[\(index)]" : nodeName
-        case 2:
+        case .attribute:
             return "@\(node.nodeName)"
-        case 3, 4:
+        case .text, .cdataSection:
             let index = xPathIndex(for: node)
             return index > 0 ? "text()[\(index)]" : "text()"
-        case 8:
+        case .comment:
             let index = xPathIndex(for: node)
             return index > 0 ? "comment()[\(index)]" : "comment()"
-        case 7:
+        case .processingInstruction:
             let index = xPathIndex(for: node)
             return index > 0 ? "processing-instruction()[\(index)]" : "processing-instruction()"
         default:
@@ -5970,14 +5970,14 @@ private extension WIDOMInspector {
         if lhs === rhs {
             return true
         }
-        if lhs.nodeType == 1, rhs.nodeType == 1 {
+        if lhs.nodeType == .element, rhs.nodeType == .element {
             return selectorNodeName(for: lhs) == selectorNodeName(for: rhs)
         }
-        if lhs.nodeType == 4 {
-            return rhs.nodeType == 3
+        if lhs.nodeType == .cdataSection {
+            return rhs.nodeType == .text
         }
-        if rhs.nodeType == 4 {
-            return lhs.nodeType == 3
+        if rhs.nodeType == .cdataSection {
+            return lhs.nodeType == .text
         }
         return lhs.nodeType == rhs.nodeType
     }
@@ -5986,7 +5986,7 @@ private extension WIDOMInspector {
         guard let parent = node.parent else {
             return [node]
         }
-        return parent.children.filter { $0.nodeType == 1 }
+        return parent.children.filter { $0.nodeType == .element }
     }
 
     func selectorNodeName(for node: DOMNodeModel) -> String {
@@ -6011,7 +6011,7 @@ private extension WIDOMInspector {
     func nodeIsInsideEmbeddedDocument(_ node: DOMNodeModel) -> Bool {
         var current = node.parent
         while let currentNode = current {
-            if currentNode.nodeType == 9, currentNode.parent != nil {
+            if currentNode.nodeType == .document, currentNode.parent != nil {
                 return true
             }
             current = currentNode.parent
@@ -6039,7 +6039,7 @@ private extension WIDOMInspector {
             "nodeId": Int(node.localID),
             "backendNodeId": node.backendNodeID as Any,
             "backendNodeIdIsStable": node.backendNodeIDIsStable,
-            "nodeType": node.nodeType,
+            "nodeType": node.nodeType.rawValue,
             "nodeName": node.nodeName,
             "localName": node.localName,
             "nodeValue": node.nodeValue,

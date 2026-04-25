@@ -147,7 +147,7 @@ struct DOMDocumentModelTests {
         let nestedButton = try! #require(nestedDocument.children.first)
 
         #expect(iframeNode.frameID == "frame-child")
-        #expect(nestedDocument.nodeType == 9)
+        #expect(nestedDocument.nodeType == .document)
         #expect(nestedDocument.parent === iframeNode)
         #expect(nestedDocument.frameID == "frame-child")
         #expect(nestedButton.localName == "button")
@@ -464,7 +464,7 @@ struct DOMDocumentModelTests {
         #expect(model.detachedRootsForDiagnostics().map(\.localID) == [900])
         #expect(detachedTarget.localID == 901)
         #expect(detachedTarget.localName == "img")
-        #expect(detachedTarget.parent?.nodeType == 9)
+        #expect(detachedTarget.parent?.nodeType == .document)
     }
 
     @Test

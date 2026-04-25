@@ -372,9 +372,9 @@ public final class WIDOMDetailViewController: UICollectionViewController {
 
     private func defaultPreview(for entry: DOMNodeModel) -> String {
         switch entry.nodeType {
-        case 3:
+        case .text:
             return entry.nodeValue
-        case 8:
+        case .comment:
             return "<!-- \(entry.nodeValue) -->"
         default:
             let name = entry.localName.isEmpty ? entry.nodeName : entry.localName

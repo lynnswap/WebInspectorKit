@@ -44,9 +44,9 @@ final class V2_DOMElementPreviewCell: V2_DOMElementBaseCell {
 extension V2_DOMElementPreviewCell {
     private static func defaultPreview(for node: DOMNodeModel) -> String {
         switch node.nodeType {
-        case 3:
+        case .text:
             return node.nodeValue
-        case 8:
+        case .comment:
             return "<!-- \(node.nodeValue) -->"
         default:
             let name = node.localName.isEmpty ? node.nodeName : node.localName

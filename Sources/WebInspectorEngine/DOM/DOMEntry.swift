@@ -43,7 +43,7 @@ public final class DOMNodeModel: Equatable, Hashable, Identifiable {
     package var backendNodeID: Int?
     package var backendNodeIDIsStable: Bool
     public var frameID: String?
-    public var nodeType: Int
+    public var nodeType: DOMNodeType
     public var nodeName: String
     public var localName: String
     public var nodeValue: String
@@ -67,7 +67,7 @@ public final class DOMNodeModel: Equatable, Hashable, Identifiable {
         backendNodeID: Int? = nil,
         backendNodeIDIsStable: Bool? = nil,
         frameID: String? = nil,
-        nodeType: Int,
+        nodeType: DOMNodeType,
         nodeName: String,
         localName: String,
         nodeValue: String,
@@ -98,6 +98,46 @@ public final class DOMNodeModel: Equatable, Hashable, Identifiable {
         self.preview = preview
         self.path = path
         self.selectorPath = selectorPath
+    }
+
+    package convenience init(
+        id: ID,
+        backendNodeID: Int? = nil,
+        backendNodeIDIsStable: Bool? = nil,
+        frameID: String? = nil,
+        nodeType: Int,
+        nodeName: String,
+        localName: String,
+        nodeValue: String,
+        attributes: [DOMAttribute],
+        children: [DOMNodeModel] = [],
+        childCount: Int,
+        layoutFlags: [String] = [],
+        isRendered: Bool = true,
+        styleRevision: Int = 0,
+        preview: String = "",
+        path: [String] = [],
+        selectorPath: String = ""
+    ) {
+        self.init(
+            id: id,
+            backendNodeID: backendNodeID,
+            backendNodeIDIsStable: backendNodeIDIsStable,
+            frameID: frameID,
+            nodeType: DOMNodeType(protocolValue: nodeType),
+            nodeName: nodeName,
+            localName: localName,
+            nodeValue: nodeValue,
+            attributes: attributes,
+            children: children,
+            childCount: childCount,
+            layoutFlags: layoutFlags,
+            isRendered: isRendered,
+            styleRevision: styleRevision,
+            preview: preview,
+            path: path,
+            selectorPath: selectorPath
+        )
     }
 
     public var localID: UInt64 {

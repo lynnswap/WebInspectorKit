@@ -344,12 +344,12 @@ private extension DOMPayloadNormalizer {
             ?? uint64Value(object["nodeId"])
             ?? uint64Value(object["id"])
             ?? fallbackState.allocate()
-        let nodeType = intValue(object["nodeType"]) ?? 0
+        let nodeType = DOMNodeType(protocolValue: intValue(object["nodeType"]) ?? 0)
         let rawNodeName = stringValue(object["nodeName"]) ?? ""
         let rawLocalName = stringValue(object["localName"]) ?? ""
         let frameID = stringValue(object["frameId"]) ?? stringValue(object["frameID"])
-        let nodeName = nodeType == 1 ? rawNodeName.lowercased() : rawNodeName
-        let localName = nodeType == 1
+        let nodeName = nodeType == .element ? rawNodeName.lowercased() : rawNodeName
+        let localName = nodeType == .element
             ? (rawLocalName.isEmpty ? rawNodeName : rawLocalName).lowercased()
             : rawLocalName
         let nodeValue = stringValue(object["nodeValue"]) ?? ""

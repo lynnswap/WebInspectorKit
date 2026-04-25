@@ -40,6 +40,7 @@ struct V2DOMElementViewControllerTests {
                 && viewController.collectionView.numberOfItems(inSection: 0) == 1
                 && viewController.collectionView.numberOfItems(inSection: 1) == 1
                 && viewController.collectionView.numberOfItems(inSection: 2) == 2
+                && visibleListCellText(in: viewController.collectionView, at: IndexPath(item: 0, section: 1)) == "#selected"
         }
         #expect(initialReady)
         #expect(viewController.isShowingEmptyStateForTesting == false)
@@ -91,6 +92,36 @@ struct V2DOMElementViewControllerTests {
             visibleListCellSecondaryText(in: viewController.collectionView, at: IndexPath(item: 0, section: 2))
                 == "updated"
         )
+    }
+
+    @Test
+    func elementViewUpdatesSelectorTextChanges() async throws {
+        let runtime = V2_WIDOMRuntime()
+        seedSelectedNode(
+            into: runtime,
+            preview: "<div id=\"selected\">",
+            selectorPath: "#before",
+            attributes: [
+                DOMAttribute(name: "id", value: "selected"),
+            ]
+        )
+        let (viewController, window) = makeHostedElementViewController(runtime: runtime)
+        defer { tearDown(window: window) }
+
+        let initialReady = await waitUntil {
+            visibleListCellText(in: viewController.collectionView, at: IndexPath(item: 0, section: 1)) == "#before"
+        }
+        #expect(initialReady)
+        let selectorTextView = visibleTextView(in: viewController.collectionView, at: IndexPath(item: 0, section: 1))
+        #expect(selectorTextView?.isSelectable == true)
+        #expect(selectorTextView?.isEditable == false)
+
+        runtime.document.selectedNode?.selectorPath = "#after"
+
+        let selectorUpdated = await waitUntil {
+            visibleListCellText(in: viewController.collectionView, at: IndexPath(item: 0, section: 1)) == "#after"
+        }
+        #expect(selectorUpdated)
     }
 
     private func seedSelectedNode(
@@ -166,9 +197,33 @@ struct V2DOMElementViewControllerTests {
         }
         guard let cell = collectionView.cellForItem(at: indexPath) as? UICollectionViewListCell,
               let configuration = cell.contentConfiguration as? UIListContentConfiguration else {
-            return nil
+            return visibleTextView(in: collectionView.cellForItem(at: indexPath)?.contentView)?.text
         }
         return configuration.text
+    }
+
+    private func visibleTextView(in collectionView: UICollectionView, at indexPath: IndexPath) -> UITextView? {
+        collectionView.layoutIfNeeded()
+        guard collectionView.numberOfSections > indexPath.section,
+              collectionView.numberOfItems(inSection: indexPath.section) > indexPath.item else {
+            return nil
+        }
+        return visibleTextView(in: collectionView.cellForItem(at: indexPath)?.contentView)
+    }
+
+    private func visibleTextView(in view: UIView?) -> UITextView? {
+        guard let view else {
+            return nil
+        }
+        if let textView = view as? UITextView {
+            return textView
+        }
+        for subview in view.subviews {
+            if let textView = visibleTextView(in: subview) {
+                return textView
+            }
+        }
+        return nil
     }
 
     private func visibleListCellSecondaryText(in collectionView: UICollectionView, at indexPath: IndexPath) -> String? {
