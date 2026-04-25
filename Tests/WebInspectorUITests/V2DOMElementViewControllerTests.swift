@@ -61,6 +61,13 @@ struct V2DOMElementViewControllerTests {
         #expect(hasCenteredTextContainerInsets(selectorTextView))
         #expect(visibleCellHeight(in: viewController.collectionView, at: IndexPath(item: 0, section: 1)) ?? 0 >= 44)
         #expect(visibleListCellText(in: viewController.collectionView, at: IndexPath(item: 0, section: 2)) == "id")
+        let attributeTextViews = visibleTextViews(in: viewController.collectionView, at: IndexPath(item: 0, section: 2))
+        #expect(attributeTextViews.map(\.text) == ["id", "selected"])
+        let attributeTextsAreSelectable = attributeTextViews.allSatisfy { $0.isSelectable }
+        let attributeTextsAreReadOnly = attributeTextViews.allSatisfy { $0.isEditable == false }
+        #expect(attributeTextsAreSelectable)
+        #expect(attributeTextsAreReadOnly)
+        #expect(visibleCellHeight(in: viewController.collectionView, at: IndexPath(item: 0, section: 2)) ?? 0 >= 44)
     }
 
     @Test
@@ -234,27 +241,34 @@ struct V2DOMElementViewControllerTests {
     }
 
     private func visibleTextView(in collectionView: UICollectionView, at indexPath: IndexPath) -> UITextView? {
+        visibleTextViews(in: collectionView, at: indexPath).first
+    }
+
+    private func visibleTextViews(in collectionView: UICollectionView, at indexPath: IndexPath) -> [UITextView] {
         collectionView.layoutIfNeeded()
         guard collectionView.numberOfSections > indexPath.section,
               collectionView.numberOfItems(inSection: indexPath.section) > indexPath.item else {
-            return nil
+            return []
         }
-        return visibleTextView(in: collectionView.cellForItem(at: indexPath)?.contentView)
+        return visibleTextViews(in: collectionView.cellForItem(at: indexPath)?.contentView)
     }
 
     private func visibleTextView(in view: UIView?) -> UITextView? {
+        visibleTextViews(in: view).first
+    }
+
+    private func visibleTextViews(in view: UIView?) -> [UITextView] {
         guard let view else {
-            return nil
+            return []
         }
         if let textView = view as? UITextView {
-            return textView
+            return [textView]
         }
+        var textViews: [UITextView] = []
         for subview in view.subviews {
-            if let textView = visibleTextView(in: subview) {
-                return textView
-            }
+            textViews.append(contentsOf: visibleTextViews(in: subview))
         }
-        return nil
+        return textViews
     }
 
     private func visibleCellHeight(in collectionView: UICollectionView, at indexPath: IndexPath) -> CGFloat? {
@@ -283,7 +297,7 @@ struct V2DOMElementViewControllerTests {
         }
         guard let cell = collectionView.cellForItem(at: indexPath) as? UICollectionViewListCell,
               let configuration = cell.contentConfiguration as? UIListContentConfiguration else {
-            return nil
+            return visibleTextViews(in: collectionView.cellForItem(at: indexPath)?.contentView).dropFirst().first?.text
         }
         return configuration.secondaryText
     }

@@ -6,8 +6,8 @@ import WebInspectorEngine
 final class V2_DOMElementPreviewCell: V2_DOMElementBaseCell {
     private let previewTextView = V2_DOMElementSelectableTextView(frame: .zero, textContainer: nil)
 
-    override var selectableTextViewForSizing: V2_DOMElementSelectableTextView? {
-        previewTextView
+    override var selectableTextViewsForSizing: [V2_DOMElementSelectableTextView] {
+        [previewTextView]
     }
 
     override init(frame: CGRect) {

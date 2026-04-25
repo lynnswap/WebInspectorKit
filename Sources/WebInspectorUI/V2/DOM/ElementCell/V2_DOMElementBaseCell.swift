@@ -7,8 +7,8 @@ class V2_DOMElementBaseCell: UICollectionViewListCell {
 
     private var observationHandles: Set<ObservationHandle> = []
 
-    var selectableTextViewForSizing: V2_DOMElementSelectableTextView? {
-        nil
+    var selectableTextViewsForSizing: [V2_DOMElementSelectableTextView] {
+        []
     }
 
     override func prepareForReuse() {
@@ -25,7 +25,8 @@ class V2_DOMElementBaseCell: UICollectionViewListCell {
             return attributes
         }
 
-        if let selectableTextView = selectableTextViewForSizing {
+        let selectableTextViews = selectableTextViewsForSizing
+        if selectableTextViews.count == 1, let selectableTextView = selectableTextViews.first {
             contentView.bounds.size.width = targetWidth
             contentView.setNeedsLayout()
             contentView.layoutIfNeeded()
@@ -46,6 +47,7 @@ class V2_DOMElementBaseCell: UICollectionViewListCell {
         contentView.bounds.size.width = targetWidth
         contentView.setNeedsLayout()
         contentView.layoutIfNeeded()
+        selectableTextViews.forEach { $0.invalidateIntrinsicContentSize() }
 
         let fittingSize = contentView.systemLayoutSizeFitting(
             CGSize(width: targetWidth, height: UIView.layoutFittingCompressedSize.height),
