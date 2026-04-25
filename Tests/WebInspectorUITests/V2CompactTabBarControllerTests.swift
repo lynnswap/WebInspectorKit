@@ -88,5 +88,22 @@ struct V2CompactTabBarControllerTests {
         #expect(viewController === customViewController)
         #expect((viewController is UINavigationController) == false)
     }
+
+    @Test
+    func customCompactTabCanUseGenericDOMIdentifier() {
+        let customViewController = UIViewController()
+        let tab = V2_WITab(identifier: "dom", title: "DOM") {
+            customViewController
+        }
+        let session = V2_WISession(tabs: [tab])
+
+        let viewController = V2_WITabContentFactory.makeViewController(
+            for: tab,
+            session: session,
+            hostLayout: .compact
+        )
+
+        #expect(viewController === customViewController)
+    }
 }
 #endif

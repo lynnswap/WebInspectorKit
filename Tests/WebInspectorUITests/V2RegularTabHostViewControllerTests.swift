@@ -97,6 +97,23 @@ struct V2RegularTabHostViewControllerTests {
         try assertHiddenNavigationControllers(in: splitViewController, columns: [.primary, .secondary])
     }
 
+    @Test
+    func customRegularTabCanUseGenericNetworkIdentifier() {
+        let customViewController = UIViewController()
+        let tab = V2_WITab(identifier: "network", title: "Network") {
+            customViewController
+        }
+        let session = V2_WISession(tabs: [tab])
+
+        let viewController = V2_WITabContentFactory.makeViewController(
+            for: tab,
+            session: session,
+            hostLayout: .regular
+        )
+
+        #expect(viewController === customViewController)
+    }
+
     private var domColumns: [UISplitViewController.Column] {
         if #available(iOS 26.0, *) {
             [.secondary, .inspector]

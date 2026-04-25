@@ -3,8 +3,8 @@ import UIKit
 
 @MainActor
 enum V2_WIStandardTab: String, CaseIterable {
-    case dom
-    case network
+    case dom = "wi_dom"
+    case network = "wi_network"
 
     init?(id: V2_WITab.ID) {
         self.init(rawValue: id)
