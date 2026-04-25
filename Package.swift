@@ -48,7 +48,7 @@ let package = Package(
     dependencies: [
         .package(
             url: "https://github.com/lynnswap/ObservationBridge.git",
-            exact: "0.7.0"
+            exact: "0.7.1"
         ),
         .package(
             url: "https://github.com/lynnswap/UIHostingMenu.git",

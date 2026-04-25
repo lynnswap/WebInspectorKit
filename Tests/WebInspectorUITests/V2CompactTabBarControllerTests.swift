@@ -9,12 +9,20 @@ struct V2CompactTabBarControllerTests {
     func providedCompactTabsUseNavigationControllers() throws {
         let session = V2_WISession(tabs: V2_WITab.defaults)
 
-        let domViewController = V2_WITab.dom.makeViewController(session: session, hostLayout: .compact)
+        let domViewController = V2_WITabContentFactory.makeViewController(
+            for: .dom,
+            session: session,
+            hostLayout: .compact
+        )
         let domNavigationController = try #require(domViewController as? UINavigationController)
         #expect(domNavigationController.viewControllers.first is V2_DOMCompactViewController)
         #expect(domNavigationController.isNavigationBarHidden == false)
 
-        let networkViewController = V2_WITab.network.makeViewController(session: session, hostLayout: .compact)
+        let networkViewController = V2_WITabContentFactory.makeViewController(
+            for: .network,
+            session: session,
+            hostLayout: .compact
+        )
         let networkNavigationController = try #require(networkViewController as? UINavigationController)
         #expect(networkNavigationController.viewControllers.first is V2_NetworkCompactViewController)
         #expect(networkNavigationController.isNavigationBarHidden == false)
@@ -23,7 +31,11 @@ struct V2CompactTabBarControllerTests {
     @Test
     func compactDOMTreeDoesNotNestAnotherNavigationController() throws {
         let session = V2_WISession(tabs: V2_WITab.defaults)
-        let domViewController = V2_WITab.dom.makeViewController(session: session, hostLayout: .compact)
+        let domViewController = V2_WITabContentFactory.makeViewController(
+            for: .dom,
+            session: session,
+            hostLayout: .compact
+        )
         let domNavigationController = try #require(domViewController as? UINavigationController)
         let domCompactViewController = try #require(
             domNavigationController.viewControllers.first as? V2_DOMCompactViewController
@@ -44,7 +56,11 @@ struct V2CompactTabBarControllerTests {
         }
         let session = V2_WISession(tabs: [tab])
 
-        let viewController = tab.makeViewController(session: session, hostLayout: .compact)
+        let viewController = V2_WITabContentFactory.makeViewController(
+            for: tab,
+            session: session,
+            hostLayout: .compact
+        )
 
         #expect(viewController === customViewController)
         #expect((viewController is UINavigationController) == false)

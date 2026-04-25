@@ -56,7 +56,7 @@ struct V2RegularTabHostViewControllerTests {
     @Test
     func regularNetworkRootDoesNotExposeDOMNavigationItems() throws {
         let session = V2_WISession(tabs: V2_WITab.defaults)
-        session.interface.selectTab("network")
+        session.interface.selectTab(V2_WITab.network)
         let host = V2_WIRegularTabContentViewController(session: session)
 
         host.loadViewIfNeeded()
@@ -85,7 +85,7 @@ struct V2RegularTabHostViewControllerTests {
     @Test
     func regularNetworkSplitColumnsUseHiddenNavigationControllers() throws {
         let session = V2_WISession(tabs: V2_WITab.defaults)
-        session.interface.selectTab("network")
+        session.interface.selectTab(V2_WITab.network)
         let host = V2_WIRegularTabContentViewController(session: session)
 
         host.loadViewIfNeeded()

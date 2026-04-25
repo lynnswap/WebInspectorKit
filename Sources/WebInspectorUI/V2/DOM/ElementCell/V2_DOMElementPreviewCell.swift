@@ -35,9 +35,6 @@ final class V2_DOMElementPreviewCell: V2_DOMElementBaseCell {
             return
         }
         
-        // WORKAROUND: ObservationBridge の初回送出が次の描画サイクルまで遅れるため、
-        // 初回表示だけここで同期的に反映する。
-        // ObservationBridge が bind 時に初回値を送出するようになったら削除する。
         self.render(displayPreviewText: node.displayPreviewText)
         
         store(

@@ -24,7 +24,6 @@ final class V2_DOMCompactViewController: UIViewController {
     private lazy var treeViewController = V2_DOMTreeViewController(dom: session.runtime.dom)
     private lazy var elementViewController = V2_DOMElementViewController(dom: session.runtime.dom)
     private var observationHandles: Set<ObservationHandle> = []
-    private var isApplyingSegmentSelection = false
 
     private lazy var segmentBarButtonItem: UIBarButtonItem = {
         let item = UIBarButtonItem(customView: segmentedControl)
@@ -69,16 +68,10 @@ final class V2_DOMCompactViewController: UIViewController {
 
     @objc
     private func handleSegmentSelectionChanged(_ sender: UISegmentedControl) {
-        guard isApplyingSegmentSelection == false else {
+        guard sender.selectedSegmentIndex != UISegmentedControl.noSegment else {
             return
         }
-        let selectedIndex = sender.selectedSegmentIndex
-        guard selectedIndex >= 0,
-              V2_DOMCompactContent.allCases.indices.contains(selectedIndex) else {
-            return
-        }
-
-        interface.dom.selectCompactContent(V2_DOMCompactContent.allCases[selectedIndex])
+        interface.dom.selectCompactContent(at: sender.selectedSegmentIndex)
     }
 
     private func bindModel() {
@@ -99,15 +92,12 @@ final class V2_DOMCompactViewController: UIViewController {
     }
 
     private func syncSegmentSelection() {
-        let selectedIndex = V2_DOMCompactContent.allCases.firstIndex(of: interface.dom.selectedCompactContent)
-            ?? UISegmentedControl.noSegment
+        let selectedIndex = interface.dom.selectedCompactContentIndex ?? UISegmentedControl.noSegment
         guard segmentedControl.selectedSegmentIndex != selectedIndex else {
             return
         }
 
-        isApplyingSegmentSelection = true
         segmentedControl.selectedSegmentIndex = selectedIndex
-        isApplyingSegmentSelection = false
     }
 
     private func displaySelectedContent() {

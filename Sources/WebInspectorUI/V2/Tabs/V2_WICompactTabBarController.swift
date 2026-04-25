@@ -7,12 +7,35 @@ final class V2_WICompactTabBarController: UITabBarController, UITabBarController
     private let session: V2_WISession
     private let interface: V2_WIInterfaceModel
     private var tabObservationHandles: Set<ObservationHandle> = []
-    private var viewControllerByTabID: [V2_WITab.ID: UIViewController] = [:]
+    private var nativeTabByTabID: [V2_WITab.ID: UITab] = [:]
 
     init(session: V2_WISession) {
         self.session = session
         self.interface = session.interface
         super.init(nibName: nil, bundle: nil)
+
+        delegate = self
+        let tabs = nativeTabs(for: interface.tabs)
+        setTabs(tabs, animated: false)
+        selectedTab = tabs.first { $0.identifier == interface.selectedTab?.id }
+
+        interface.observe(\.tabs) { [weak self] _ in
+            guard let self else {
+                return
+            }
+            let tabs = nativeTabs(for: interface.tabs)
+            setTabs(tabs, animated: true)
+            selectedTab = tabs.first { $0.identifier == interface.selectedTab?.id }
+        }
+        .store(in: &tabObservationHandles)
+
+        interface.observe(\.selectedTab) { [weak self] selectedTab in
+            guard let self else {
+                return
+            }
+            self.selectedTab = self.tabs.first { $0.identifier == selectedTab?.id }
+        }
+        .store(in: &tabObservationHandles)
     }
 
     @available(*, unavailable)
@@ -27,15 +50,7 @@ final class V2_WICompactTabBarController: UITabBarController, UITabBarController
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .clear
-        delegate = self
         tabBar.scrollEdgeAppearance = tabBar.standardAppearance
-        installNativeTabs()
-        bindModel()
-        render()
-    }
-
-    func tabBarController(_ tabBarController: UITabBarController, shouldSelectTab candidateTab: UITab) -> Bool {
-        interface.containsTab(withID: candidateTab.identifier)
     }
 
     func tabBarController(
@@ -43,66 +58,34 @@ final class V2_WICompactTabBarController: UITabBarController, UITabBarController
         didSelectTab selectedTab: UITab,
         previousTab: UITab?
     ) {
-        guard interface.containsTab(withID: selectedTab.identifier) else {
-            return
-        }
-        interface.selectTab(selectedTab.identifier)
+        interface.selectTab(withID: selectedTab.identifier)
     }
 
-    private func bindModel() {
-        tabObservationHandles.removeAll()
-        interface.observe(\.selectedTab) { [weak self] _ in
-            self?.syncNativeSelection()
-        }
-        .store(in: &tabObservationHandles)
+    private func nativeTabs(for tabs: [V2_WITab]) -> [UITab] {
+        let activeTabIDs = Set(tabs.map(\.id))
+        nativeTabByTabID = nativeTabByTabID.filter { activeTabIDs.contains($0.key) }
+        return tabs.map(nativeTab(for:))
     }
 
-    private func render() {
-        guard isViewLoaded else {
-            return
+    private func nativeTab(for tab: V2_WITab) -> UITab {
+        if let nativeTab = nativeTabByTabID[tab.id] {
+            return nativeTab
         }
 
-        syncNativeSelection()
-    }
-
-    private func installNativeTabs() {
-        setTabs(interface.tabs.map(makeNativeTab), animated: false)
-    }
-
-    private func makeNativeTab(for tab: V2_WITab) -> UITab {
-        let viewController = viewController(for: tab)
-        return UITab(
+        let session = session
+        let nativeTab = UITab(
             title: tab.title,
             image: tab.image,
             identifier: tab.id
         ) { _ in
-            viewController
+            V2_WITabContentFactory.makeViewController(
+                for: tab,
+                session: session,
+                hostLayout: .compact
+            )
         }
-    }
-
-    private func syncNativeSelection() {
-        guard let nativeTab = nativeTab(for: interface.selectedTab),
-              selectedTab !== nativeTab else {
-            return
-        }
-        selectedTab = nativeTab
-    }
-
-    private func nativeTab(for tabID: V2_WITab.ID?) -> UITab? {
-        guard let tabID else {
-            return nil
-        }
-        return tabs.first { $0.identifier == tabID }
-    }
-
-    private func viewController(for tab: V2_WITab) -> UIViewController {
-        if let viewController = viewControllerByTabID[tab.id] {
-            return viewController
-        }
-
-        let viewController = tab.makeViewController(session: session, hostLayout: .compact)
-        viewControllerByTabID[tab.id] = viewController
-        return viewController
+        nativeTabByTabID[tab.id] = nativeTab
+        return nativeTab
     }
 }
 #endif

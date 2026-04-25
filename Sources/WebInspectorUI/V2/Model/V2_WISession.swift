@@ -34,7 +34,7 @@ public final class V2_WISession {
 @Observable
 public final class V2_WIInterfaceModel {
     private(set) var tabs: [V2_WITab]
-    private(set) var selectedTab: V2_WITab.ID?
+    private(set) var selectedTab: V2_WITab?
     public let dom: V2_DOMInterfaceModel
 
     public init(
@@ -42,26 +42,43 @@ public final class V2_WIInterfaceModel {
         dom: V2_DOMInterfaceModel = V2_DOMInterfaceModel()
     ) {
         self.tabs = tabs
-        self.selectedTab = tabs.first?.id
+        self.selectedTab = tabs.first
         self.dom = dom
     }
 
-    func selectTab(_ tabID: V2_WITab.ID) {
-        guard containsTab(withID: tabID) else {
+    func selectTab(_ tab: V2_WITab) {
+        guard tabs.contains(tab) else {
             return
         }
-        selectedTab = tabID
+        guard selectedTab != tab else {
+            return
+        }
+        selectedTab = tab
     }
 
-    var selectedTabModel: V2_WITab? {
+    func selectTab(at index: Int) {
+        guard tabs.indices.contains(index) else {
+            return
+        }
+        selectTab(tabs[index])
+    }
+
+    func selectTab(withID tabID: V2_WITab.ID) {
+        guard let tab = tab(withID: tabID) else {
+            return
+        }
+        selectTab(tab)
+    }
+
+    var selectedTabIndex: Int? {
         guard let selectedTab else {
             return nil
         }
-        return tabs.first { $0.id == selectedTab }
+        return tabs.firstIndex(of: selectedTab)
     }
 
-    func containsTab(withID tabID: V2_WITab.ID) -> Bool {
-        tabs.contains { $0.id == tabID }
+    private func tab(withID tabID: V2_WITab.ID) -> V2_WITab? {
+        tabs.first { $0.id == tabID }
     }
 }
 
@@ -74,6 +91,17 @@ public final class V2_DOMInterfaceModel {
 
     func selectCompactContent(_ content: V2_DOMCompactContent) {
         selectedCompactContent = content
+    }
+
+    func selectCompactContent(at index: Int) {
+        guard V2_DOMCompactContent.allCases.indices.contains(index) else {
+            return
+        }
+        selectedCompactContent = V2_DOMCompactContent.allCases[index]
+    }
+
+    var selectedCompactContentIndex: Int? {
+        V2_DOMCompactContent.allCases.firstIndex(of: selectedCompactContent)
     }
 }
 #endif
