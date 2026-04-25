@@ -28,7 +28,7 @@ public struct DOMAttribute: Hashable, Identifiable, Sendable {
 
 @MainActor
 @Observable
-public final class DOMNodeModel: Equatable, Hashable {
+public final class DOMNodeModel: Equatable, Hashable, Identifiable {
     public struct ID: Hashable, Sendable {
         public let documentIdentity: UUID
         public let localID: UInt64

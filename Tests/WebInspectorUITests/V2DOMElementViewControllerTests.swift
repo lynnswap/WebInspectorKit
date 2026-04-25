@@ -8,17 +8,20 @@ import UIKit
 @MainActor
 struct V2DOMElementViewControllerTests {
     @Test
-    func elementViewShowsEmptyStateWithoutSelection() {
+    func elementViewShowsEmptyStateWithoutSelection() async {
         let runtime = V2_WIDOMRuntime()
         let (viewController, window) = makeHostedElementViewController(runtime: runtime)
         defer { tearDown(window: window) }
 
-        #expect(viewController.isShowingEmptyStateForTesting)
+        let emptyStateReady = await waitUntil {
+            viewController.isShowingEmptyStateForTesting
+        }
+        #expect(emptyStateReady)
         #expect(viewController.collectionView.numberOfSections == 0)
     }
 
     @Test
-    func elementViewRendersSelectedNodeSections() throws {
+    func elementViewRendersSelectedNodeSections() async throws {
         let runtime = V2_WIDOMRuntime()
         seedSelectedNode(
             into: runtime,
@@ -32,6 +35,13 @@ struct V2DOMElementViewControllerTests {
         let (viewController, window) = makeHostedElementViewController(runtime: runtime)
         defer { tearDown(window: window) }
 
+        let initialReady = await waitUntil {
+            viewController.collectionView.numberOfSections == 3
+                && viewController.collectionView.numberOfItems(inSection: 0) == 1
+                && viewController.collectionView.numberOfItems(inSection: 1) == 1
+                && viewController.collectionView.numberOfItems(inSection: 2) == 2
+        }
+        #expect(initialReady)
         #expect(viewController.isShowingEmptyStateForTesting == false)
         #expect(viewController.collectionView.numberOfSections == 3)
         #expect(viewController.collectionView.numberOfItems(inSection: 0) == 1)
@@ -43,6 +53,44 @@ struct V2DOMElementViewControllerTests {
         )
         #expect(visibleListCellText(in: viewController.collectionView, at: IndexPath(item: 0, section: 1)) == "#selected")
         #expect(visibleListCellText(in: viewController.collectionView, at: IndexPath(item: 0, section: 2)) == "id")
+    }
+
+    @Test
+    func elementViewReconfiguresAttributeValueChanges() async throws {
+        let runtime = V2_WIDOMRuntime()
+        seedSelectedNode(
+            into: runtime,
+            preview: "<div id=\"selected\">",
+            selectorPath: "#selected",
+            attributes: [
+                DOMAttribute(name: "id", value: "selected"),
+            ]
+        )
+        let (viewController, window) = makeHostedElementViewController(runtime: runtime)
+        defer { tearDown(window: window) }
+
+        let initialReady = await waitUntil {
+            visibleListCellSecondaryText(in: viewController.collectionView, at: IndexPath(item: 0, section: 2))
+                == "selected"
+        }
+        #expect(initialReady)
+
+        runtime.document.selectedNode?.attributes = [
+            DOMAttribute(name: "id", value: "updated"),
+        ]
+
+        let valueUpdated = await waitUntil {
+            visibleListCellSecondaryText(in: viewController.collectionView, at: IndexPath(item: 0, section: 2))
+                == "updated"
+        }
+        #expect(valueUpdated)
+
+        #expect(viewController.collectionView.numberOfSections == 3)
+        #expect(viewController.collectionView.numberOfItems(inSection: 2) == 1)
+        #expect(
+            visibleListCellSecondaryText(in: viewController.collectionView, at: IndexPath(item: 0, section: 2))
+                == "updated"
+        )
     }
 
     private func seedSelectedNode(
@@ -112,11 +160,39 @@ struct V2DOMElementViewControllerTests {
 
     private func visibleListCellText(in collectionView: UICollectionView, at indexPath: IndexPath) -> String? {
         collectionView.layoutIfNeeded()
+        guard collectionView.numberOfSections > indexPath.section,
+              collectionView.numberOfItems(inSection: indexPath.section) > indexPath.item else {
+            return nil
+        }
         guard let cell = collectionView.cellForItem(at: indexPath) as? UICollectionViewListCell,
               let configuration = cell.contentConfiguration as? UIListContentConfiguration else {
             return nil
         }
         return configuration.text
+    }
+
+    private func visibleListCellSecondaryText(in collectionView: UICollectionView, at indexPath: IndexPath) -> String? {
+        collectionView.layoutIfNeeded()
+        guard collectionView.numberOfSections > indexPath.section,
+              collectionView.numberOfItems(inSection: indexPath.section) > indexPath.item else {
+            return nil
+        }
+        guard let cell = collectionView.cellForItem(at: indexPath) as? UICollectionViewListCell,
+              let configuration = cell.contentConfiguration as? UIListContentConfiguration else {
+            return nil
+        }
+        return configuration.secondaryText
+    }
+
+    private func waitUntil(maxTicks: Int = 1024, _ condition: () -> Bool) async -> Bool {
+        for _ in 0..<maxTicks {
+            if condition() {
+                return true
+            }
+            await Task.yield()
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        return condition()
     }
 }
 #endif

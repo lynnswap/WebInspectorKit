@@ -23,15 +23,48 @@ final class V2_DOMElementViewController: UICollectionViewController {
         }
     }
 
-    fileprivate enum Item: Hashable, Sendable {
-        case element(nodeID: DOMNodeModel.ID)
-        case selector(nodeID: DOMNodeModel.ID)
-        case attribute(nodeID: DOMNodeModel.ID, name: String)
+    fileprivate enum Item: Hashable {
+        case element(DOMNodeModel)
+        case selector(DOMNodeModel)
+        case attribute(DOMAttribute)
 
-        var nodeID: DOMNodeModel.ID {
+        static func == (lhs: Item, rhs: Item) -> Bool {
+            switch (lhs, rhs) {
+            case let (.element(lhsNode), .element(rhsNode)):
+                lhsNode == rhsNode
+            case let (.selector(lhsNode), .selector(rhsNode)):
+                lhsNode == rhsNode
+            case let (.attribute(lhsAttribute), .attribute(rhsAttribute)):
+                lhsAttribute.id == rhsAttribute.id
+            default:
+                false
+            }
+        }
+
+        func hash(into hasher: inout Hasher) {
             switch self {
-            case let .element(nodeID), let .selector(nodeID), let .attribute(nodeID, _):
-                nodeID
+            case let .element(node):
+                hasher.combine(0)
+                hasher.combine(node)
+            case let .selector(node):
+                hasher.combine(1)
+                hasher.combine(node)
+            case let .attribute(attribute):
+                hasher.combine(2)
+                hasher.combine(attribute.id)
+            }
+        }
+
+        func hasSameContent(as other: Item) -> Bool {
+            switch (self, other) {
+            case let (.element(lhsNode), .element(rhsNode)):
+                lhsNode == rhsNode
+            case let (.selector(lhsNode), .selector(rhsNode)):
+                lhsNode == rhsNode
+            case let (.attribute(lhsAttribute), .attribute(rhsAttribute)):
+                lhsAttribute == rhsAttribute
+            default:
+                false
             }
         }
     }
@@ -93,8 +126,14 @@ final class V2_DOMElementViewController: UICollectionViewController {
     }
 
     private func makeDataSource() -> UICollectionViewDiffableDataSource<Section, Item> {
-        let cellRegistration = UICollectionView.CellRegistration<V2_DOMElementListCell, Item> { [weak self] cell, _, item in
-            cell.bind(item, node: self?.dom.document.node(id: item.nodeID))
+        let elementCellRegistration = UICollectionView.CellRegistration<V2_DOMElementPreviewCell, DOMNodeModel> { cell, _, node in
+            cell.bind(node: node)
+        }
+        let selectorCellRegistration = UICollectionView.CellRegistration<V2_DOMElementSelectorCell, DOMNodeModel> { cell, _, node in
+            cell.bind(node: node)
+        }
+        let attributeCellRegistration = UICollectionView.CellRegistration<V2_DOMElementAttributeCell, DOMAttribute> { cell, _, attribute in
+            cell.bind(attribute)
         }
         let headerRegistration = UICollectionView.SupplementaryRegistration<UICollectionViewListCell>(
             elementKind: UICollectionView.elementKindSectionHeader
@@ -110,11 +149,26 @@ final class V2_DOMElementViewController: UICollectionViewController {
         let dataSource = UICollectionViewDiffableDataSource<Section, Item>(
             collectionView: collectionView
         ) { collectionView, indexPath, item in
-            collectionView.dequeueConfiguredReusableCell(
-                using: cellRegistration,
-                for: indexPath,
-                item: item
-            )
+            switch item {
+            case let .element(node):
+                collectionView.dequeueConfiguredReusableCell(
+                    using: elementCellRegistration,
+                    for: indexPath,
+                    item: node
+                )
+            case let .selector(node):
+                collectionView.dequeueConfiguredReusableCell(
+                    using: selectorCellRegistration,
+                    for: indexPath,
+                    item: node
+                )
+            case let .attribute(attribute):
+                collectionView.dequeueConfiguredReusableCell(
+                    using: attributeCellRegistration,
+                    for: indexPath,
+                    item: attribute
+                )
+            }
         }
         dataSource.supplementaryViewProvider = { collectionView, _, indexPath in
             collectionView.dequeueConfiguredReusableSupplementary(
@@ -154,7 +208,13 @@ final class V2_DOMElementViewController: UICollectionViewController {
             }
 
             let nextItems = self.items(in: .attributes, for: selectedNode)
-            guard nextItems != self.currentItems(in: .attributes) else {
+            let currentItems = self.currentItems(in: .attributes)
+            guard self.hasSameItemContent(nextItems, currentItems) == false else {
+                return
+            }
+
+            guard self.hasSameItemIdentity(nextItems, currentItems) == false else {
+                self.applyAttributeContentUpdate(selectedNode: selectedNode, items: nextItems)
                 return
             }
 
@@ -198,6 +258,22 @@ final class V2_DOMElementViewController: UICollectionViewController {
         return snapshot.itemIdentifiers(inSection: section)
     }
 
+    private func hasSameItemIdentity(_ lhs: [Item], _ rhs: [Item]) -> Bool {
+        lhs.count == rhs.count && zip(lhs, rhs).allSatisfy(==)
+    }
+
+    private func hasSameItemContent(_ lhs: [Item], _ rhs: [Item]) -> Bool {
+        lhs.count == rhs.count && zip(lhs, rhs).allSatisfy { lhsItem, rhsItem in
+            lhsItem.hasSameContent(as: rhsItem)
+        }
+    }
+
+    private func applyAttributeContentUpdate(selectedNode: DOMNodeModel, items: [Item]) {
+        var snapshot = makeSnapshot(selectedNode: selectedNode)
+        snapshot.reconfigureItems(items)
+        dataSource.apply(snapshot, animatingDifferences: false)
+    }
+
     private func makeSnapshot(selectedNode: DOMNodeModel) -> NSDiffableDataSourceSnapshot<Section, Item> {
         var snapshot = NSDiffableDataSourceSnapshot<Section, Item>()
 
@@ -223,136 +299,11 @@ final class V2_DOMElementViewController: UICollectionViewController {
     private func items(in section: Section, for selectedNode: DOMNodeModel) -> [Item] {
         switch section {
         case .element:
-            return [.element(nodeID: selectedNode.id)]
+            return [.element(selectedNode)]
         case .selector:
-            return selectedNode.selectorPath.isEmpty ? [] : [.selector(nodeID: selectedNode.id)]
+            return selectedNode.selectorPath.isEmpty ? [] : [.selector(selectedNode)]
         case .attributes:
-            return selectedNode.attributes.map { .attribute(nodeID: selectedNode.id, name: $0.name) }
-        }
-    }
-}
-
-private final class V2_DOMElementListCell: UICollectionViewListCell {
-    private var observationHandles: Set<ObservationHandle> = []
-    private var item: V2_DOMElementViewController.Item?
-    private weak var node: DOMNodeModel?
-
-    override func prepareForReuse() {
-        super.prepareForReuse()
-        observationHandles.removeAll()
-        item = nil
-        node = nil
-    }
-
-    func bind(_ item: V2_DOMElementViewController.Item, node: DOMNodeModel?) {
-        observationHandles.removeAll()
-        self.item = item
-        self.node = node
-        render(item, node: node)
-        startObserving(item, node: node)
-    }
-
-    private func startObserving(_ item: V2_DOMElementViewController.Item, node: DOMNodeModel?) {
-        guard let node else {
-            return
-        }
-
-        switch item {
-        case .element:
-            node.observe(
-                [\.preview, \.nodeType, \.nodeName, \.localName, \.nodeValue, \.attributes],
-                onChange: { [weak self] in
-                    self?.renderCurrentItem()
-                }
-            )
-            .store(in: &observationHandles)
-        case .selector:
-            node.observe(
-                \.selectorPath,
-                onChange: { [weak self] _ in
-                    self?.renderCurrentItem()
-                }
-            )
-            .store(in: &observationHandles)
-        case .attribute:
-            node.observe(
-                \.attributes,
-                onChange: { [weak self] _ in
-                    self?.renderCurrentItem()
-                }
-            )
-            .store(in: &observationHandles)
-        }
-    }
-
-    private func renderCurrentItem() {
-        guard let item else {
-            return
-        }
-        render(item, node: node)
-    }
-
-    private func render(_ item: V2_DOMElementViewController.Item, node: DOMNodeModel?) {
-        var configuration = UIListContentConfiguration.cell()
-        accessories = []
-
-        switch item {
-        case .element:
-            guard let node else {
-                contentConfiguration = nil
-                return
-            }
-            configuration.text = node.preview.isEmpty ? Self.defaultPreview(for: node) : node.preview
-            configuration.textProperties.numberOfLines = 0
-            configuration.textProperties.font = Self.monospacedFootnoteFont
-            configuration.textProperties.color = .label
-        case .selector:
-            guard let node else {
-                contentConfiguration = nil
-                return
-            }
-            configuration.text = node.selectorPath
-            configuration.textProperties.numberOfLines = 0
-            configuration.textProperties.font = Self.monospacedFootnoteFont
-            configuration.textProperties.color = .label
-        case let .attribute(_, name):
-            guard let node else {
-                contentConfiguration = nil
-                return
-            }
-            configuration.text = name
-            configuration.secondaryText = node.attributes.first { $0.name == name }?.value
-            configuration.textProperties.color = .secondaryLabel
-            configuration.secondaryTextProperties.numberOfLines = 0
-            configuration.secondaryTextProperties.font = Self.monospacedFootnoteFont
-            configuration.secondaryTextProperties.color = .label
-        }
-
-        contentConfiguration = configuration
-    }
-
-    private static var monospacedFootnoteFont: UIFont {
-        UIFontMetrics(forTextStyle: .footnote).scaledFont(
-            for: .monospacedSystemFont(
-                ofSize: UIFont.preferredFont(forTextStyle: .footnote).pointSize,
-                weight: .regular
-            )
-        )
-    }
-
-    private static func defaultPreview(for node: DOMNodeModel) -> String {
-        switch node.nodeType {
-        case 3:
-            return node.nodeValue
-        case 8:
-            return "<!-- \(node.nodeValue) -->"
-        default:
-            let name = node.localName.isEmpty ? node.nodeName : node.localName
-            let attributes = node.attributes.map { attribute in
-                "\(attribute.name)=\"\(attribute.value)\""
-            }.joined(separator: " ")
-            let suffix = attributes.isEmpty ? "" : " \(attributes)"
-            return "<\(name)\(suffix)>"
+            return selectedNode.attributes.map { .attribute($0) }
         }
     }
 }
@@ -360,7 +311,7 @@ private final class V2_DOMElementListCell: UICollectionViewListCell {
 #if DEBUG
 extension V2_DOMElementViewController {
     var isShowingEmptyStateForTesting: Bool {
-        contentUnavailableConfiguration != nil && collectionView.isHidden
+        contentUnavailableConfiguration != nil
     }
 
     var renderedSectionIdentifiersForTesting: [String] {
