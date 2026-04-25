@@ -21,6 +21,7 @@ enum V2_DOMCompactContent: Equatable, CaseIterable {
 final class V2_DOMCompactViewController: UIViewController {
     private let session: V2_WISession
     private let interface: V2_WIInterfaceModel
+    private lazy var navigationItems = V2_DOMNavigationItems(dom: session.runtime.dom)
     private lazy var treeViewController = V2_DOMTreeViewController(dom: session.runtime.dom)
     private lazy var elementViewController = V2_DOMElementViewController(dom: session.runtime.dom)
     private var observationHandles: Set<ObservationHandle> = []
@@ -62,6 +63,9 @@ final class V2_DOMCompactViewController: UIViewController {
         view.backgroundColor = .clear
         navigationItem.style = .browser
         navigationItem.leadingItemGroups = [segmentItemGroup]
+        navigationItems.install(on: navigationItem) { [weak self] in
+            self?.undoManager
+        }
         bindModel()
         render()
     }

@@ -1,29 +1,16 @@
 #if canImport(UIKit)
-import ObservationBridge
 import UIKit
-import UIHostingMenu
 
 @MainActor
 final class V2_DOMSplitViewController: UISplitViewController {
     private let session: V2_WISession
-    private var observationHandles: Set<ObservationHandle> = []
+    private lazy var navigationItems = V2_DOMNavigationItems(dom: session.runtime.dom)
     private lazy var domTreeViewController = V2_WIRegularSplitColumnNavigationController(
         rootViewController: V2_DOMTreeViewController(dom: session.runtime.dom)
     )
     private lazy var elementDetailsViewController = V2_WIRegularSplitColumnNavigationController(
         rootViewController: V2_DOMElementViewController(dom: session.runtime.dom)
     )
-    private lazy var pickItem: UIBarButtonItem = {
-        let item = UIBarButtonItem(
-            image: UIImage(systemName: "scope"),
-            style: .plain,
-            target: self,
-            action: #selector(toggleSelectionMode)
-        )
-        item.accessibilityIdentifier = "WI.DOM.PickButton"
-        return item
-    }()
-    private lazy var deferredSecondaryOverflowItems = makeDeferredSecondaryOverflowItems()
 
     init(session: V2_WISession = V2_WISession()) {
         self.session = session
@@ -35,16 +22,11 @@ final class V2_DOMSplitViewController: UISplitViewController {
         nil
     }
 
-    isolated deinit {
-        observationHandles.removeAll()
-    }
-
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .clear
         configureSplitViewLayout()
         configureNavigationItem()
-        bindNavigationState()
     }
 
     private func configureSplitViewLayout() {
@@ -71,54 +53,9 @@ final class V2_DOMSplitViewController: UISplitViewController {
     }
 
     private func configureNavigationItem() {
-        updatePickItemAppearance()
-        navigationItem.trailingItemGroups = [
-            UIBarButtonItemGroup(
-                barButtonItems: [pickItem],
-                representativeItem: nil
-            )
-        ]
-        navigationItem.additionalOverflowItems = deferredSecondaryOverflowItems
-    }
-
-    private func bindNavigationState() {
-        observationHandles.removeAll()
-        session.runtime.dom.observeNavigationState { [weak self] in
-            self?.updatePickItemAppearance()
+        navigationItems.install(on: navigationItem) { [weak self] in
+            self?.undoManager
         }
-        .forEach { $0.store(in: &observationHandles) }
-    }
-
-    private func makeDeferredSecondaryOverflowItems() -> UIDeferredMenuElement {
-        UIDeferredMenuElement.uncached { [weak self] completion in
-            guard let self else {
-                completion([])
-                return
-            }
-            completion(makeSecondaryMenu(undoManager: undoManager).children)
-        }
-    }
-
-    private func makeSecondaryMenu(undoManager: UndoManager?) -> UIMenu {
-        let hostingMenu = UIHostingMenu(
-            rootView: V2_DOMOverflowMenuView(
-                dom: session.runtime.dom,
-                undoManager: undoManager
-            )
-        )
-        return (try? hostingMenu.menu()) ?? UIMenu()
-    }
-
-    @objc
-    private func toggleSelectionMode() {
-        session.runtime.dom.requestSelectionModeToggle()
-        updatePickItemAppearance()
-    }
-
-    private func updatePickItemAppearance() {
-        let dom = session.runtime.dom
-        pickItem.isEnabled = dom.isPageReadyForSelection
-        pickItem.tintColor = dom.isSelectingElement ? .systemBlue : .label
     }
 }
 

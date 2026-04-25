@@ -49,6 +49,29 @@ struct V2CompactTabBarControllerTests {
     }
 
     @Test
+    func compactDOMOwnsDOMNavigationItems() throws {
+        let session = V2_WISession(tabs: V2_WITab.defaults)
+        let domViewController = V2_WITabContentFactory.makeViewController(
+            for: .dom,
+            session: session,
+            hostLayout: .compact
+        )
+        let domNavigationController = try #require(domViewController as? UINavigationController)
+        let domCompactViewController = try #require(
+            domNavigationController.viewControllers.first as? V2_DOMCompactViewController
+        )
+
+        domCompactViewController.loadViewIfNeeded()
+
+        #expect(domCompactViewController.navigationItem.additionalOverflowItems != nil)
+        #expect(
+            domCompactViewController.navigationItem.trailingItemGroups
+                .flatMap(\.barButtonItems)
+                .contains { $0.accessibilityIdentifier == "WI.DOM.PickButton" }
+        )
+    }
+
+    @Test
     func customCompactTabIsNotForcedIntoNavigationController() {
         let customViewController = UIViewController()
         let tab = V2_WITab(identifier: "custom", title: "Custom") {
