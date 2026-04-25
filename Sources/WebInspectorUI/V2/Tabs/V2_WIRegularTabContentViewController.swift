@@ -1,13 +1,12 @@
 #if canImport(UIKit)
-import ObservationBridge
 import UIKit
 
 @MainActor
 final class V2_WIRegularTabContentViewController: UINavigationController {
     private let session: V2_WISession
-    private let interface: V2_WIInterfaceModel
-    private var observationHandles: Set<ObservationHandle> = []
-    private var rootViewControllerByTabID: [V2_WITab.ID: UIViewController] = [:]
+    private var tabCoordinator: V2_WITabHostCoordinator?
+    private var rootViewControllerByTabID: [V2_WIDisplayTab.ID: UIViewController] = [:]
+    private var segmentDisplayTabIDs: [V2_WIDisplayTab.ID] = []
 
     private lazy var segmentBarButtonItem: UIBarButtonItem = {
         let item = UIBarButtonItem(customView: segmentedControl)
@@ -28,57 +27,21 @@ final class V2_WIRegularTabContentViewController: UINavigationController {
 
     init(session: V2_WISession) {
         self.session = session
-        self.interface = session.interface
         super.init(nibName: nil, bundle: nil)
 
         navigationBar.prefersLargeTitles = false
         wiApplyClearNavigationBarStyle(to: self)
 
-        setSegments(for: interface.tabs)
-        segmentedControl.selectedSegmentIndex = interface.selectedTabIndex ?? UISegmentedControl.noSegment
-        if let selectedTab = interface.selectedTab {
-            setViewControllers([rootViewController(for: selectedTab)], animated: false)
-        }
-
-        interface.observe(\.tabs) { [weak self] tabs in
-            guard let self else {
-                return
-            }
-            let activeTabIDs = Set(tabs.map(\.id))
-            rootViewControllerByTabID = rootViewControllerByTabID.filter { activeTabIDs.contains($0.key) }
-            setSegments(for: tabs)
-            segmentedControl.selectedSegmentIndex = interface.selectedTabIndex ?? UISegmentedControl.noSegment
-            if let selectedTab = interface.selectedTab {
-                setViewControllers([rootViewController(for: selectedTab)], animated: true)
-            }
-        }
-        .store(in: &observationHandles)
-
-        interface.observe(\.selectedTab) { [weak self] selectedTab in
-            guard let self else {
-                return
-            }
-            segmentedControl.selectedSegmentIndex = interface.selectedTabIndex ?? UISegmentedControl.noSegment
-            guard let selectedTab else {
-                setViewControllers([], animated: false)
-                return
-            }
-            let viewController = rootViewController(for: selectedTab)
-            guard viewControllers.first !== viewController else {
-                return
-            }
-            setViewControllers([viewController], animated: false)
-        }
-        .store(in: &observationHandles)
+        tabCoordinator = V2_WITabHostCoordinator(
+            interface: session.interface,
+            hostLayout: .regular,
+            renderer: self
+        )
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         nil
-    }
-
-    isolated deinit {
-        observationHandles.removeAll()
     }
 
     override func viewDidLoad() {
@@ -91,30 +54,58 @@ final class V2_WIRegularTabContentViewController: UINavigationController {
         guard sender.selectedSegmentIndex != UISegmentedControl.noSegment else {
             return
         }
-        interface.selectTab(at: sender.selectedSegmentIndex)
+        guard segmentDisplayTabIDs.indices.contains(sender.selectedSegmentIndex) else {
+            return
+        }
+        tabCoordinator?.selectDisplayTab(withID: segmentDisplayTabIDs[sender.selectedSegmentIndex])
     }
 
-    private func setSegments(for tabs: [V2_WITab]) {
+    private func setSegments(for displayTabs: [V2_WIDisplayTab]) {
+        segmentDisplayTabIDs = displayTabs.map(\.id)
         segmentedControl.removeAllSegments()
-        for (index, tab) in tabs.enumerated() {
-            segmentedControl.insertSegment(withTitle: tab.title, at: index, animated: false)
+        for (index, displayTab) in displayTabs.enumerated() {
+            segmentedControl.insertSegment(withTitle: displayTab.title, at: index, animated: false)
         }
     }
 
-    private func rootViewController(for tab: V2_WITab) -> UIViewController {
-        if let viewController = rootViewControllerByTabID[tab.id] {
+    private func rootViewController(for displayTab: V2_WIDisplayTab) -> UIViewController {
+        if let viewController = rootViewControllerByTabID[displayTab.id] {
             return viewController
         }
 
         let viewController = V2_WITabContentFactory.makeViewController(
-            for: tab,
+            for: displayTab,
             session: session,
             hostLayout: .regular
         )
         viewController.navigationItem.style = .browser
         viewController.navigationItem.centerItemGroups = [segmentItemGroup]
-        rootViewControllerByTabID[tab.id] = viewController
+        rootViewControllerByTabID[displayTab.id] = viewController
         return viewController
+    }
+}
+
+extension V2_WIRegularTabContentViewController: V2_WITabHostRendering {
+    func renderTabs(_ displayTabs: [V2_WIDisplayTab], animated: Bool) {
+        let activeTabIDs = Set(displayTabs.map(\.id))
+        rootViewControllerByTabID = rootViewControllerByTabID.filter { activeTabIDs.contains($0.key) }
+        setSegments(for: displayTabs)
+    }
+
+    func renderSelection(_ selectedDisplayTab: V2_WIDisplayTab?, animated: Bool) {
+        segmentedControl.selectedSegmentIndex = selectedDisplayTab.flatMap {
+            segmentDisplayTabIDs.firstIndex(of: $0.id)
+        } ?? UISegmentedControl.noSegment
+        guard let selectedDisplayTab else {
+            setViewControllers([], animated: false)
+            return
+        }
+
+        let viewController = rootViewController(for: selectedDisplayTab)
+        guard viewControllers.first !== viewController else {
+            return
+        }
+        setViewControllers([viewController], animated: animated)
     }
 }
 

@@ -100,7 +100,7 @@ struct V2RegularTabHostViewControllerTests {
     @Test
     func customRegularTabCanUseGenericNetworkIdentifier() {
         let customViewController = UIViewController()
-        let tab = V2_WITab(identifier: "network", title: "Network") {
+        let tab = V2_WITab(identifier: "wi_network", title: "Network") {
             customViewController
         }
         let session = V2_WISession(tabs: [tab])
@@ -112,6 +112,31 @@ struct V2RegularTabHostViewControllerTests {
         )
 
         #expect(viewController === customViewController)
+    }
+
+    @Test
+    func regularResolverDoesNotExposeCompactElement() {
+        let resolver = V2_WITabResolver()
+
+        #expect(
+            resolver.displayTabs(for: .regular, tabs: V2_WITab.defaults).map(\.id)
+                == ["wi_dom", "wi_network"]
+        )
+    }
+
+    @Test
+    func compactElementSelectionFallsBackToDOMInRegularWithoutMutatingSelection() throws {
+        let session = V2_WISession(tabs: V2_WITab.defaults)
+        session.interface.selectDisplayTab(withID: V2_WIDisplayTab.compactElementID)
+
+        let selectedDisplayTab = V2_WITabResolver().selectedDisplayTab(
+            for: .regular,
+            tabs: session.interface.tabs,
+            selection: session.interface.selection
+        )
+
+        #expect(selectedDisplayTab?.id == V2_WITab.dom.id)
+        #expect(session.interface.selection == V2_WIDisplayTab.compactElementID)
     }
 
     private var domColumns: [UISplitViewController.Column] {

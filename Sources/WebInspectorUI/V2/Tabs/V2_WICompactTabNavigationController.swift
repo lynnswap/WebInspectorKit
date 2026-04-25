@@ -2,7 +2,7 @@
 import UIKit
 
 @MainActor
-final class V2_WICompactTabNavigationController: UINavigationController {
+class V2_WICompactTabNavigationController: UINavigationController {
     override init(rootViewController: UIViewController) {
         super.init(rootViewController: rootViewController)
         view.backgroundColor = .clear

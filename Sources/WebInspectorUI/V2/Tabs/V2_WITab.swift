@@ -7,10 +7,16 @@ public struct V2_WITab: Equatable, Hashable, Identifiable {
     public typealias ViewControllerProvider = @MainActor (V2_WITab, V2_WISession) -> UIViewController
 
     public let id: ID
-    public let title: String
-    public let image: UIImage?
-    public let viewControllerProvider: ViewControllerProvider?
+    internal let definition: any V2_WITabDefinition
     public var userInfo: Any?
+
+    public var title: String {
+        definition.title
+    }
+
+    public var image: UIImage? {
+        definition.image
+    }
 
     public static nonisolated func == (lhs: V2_WITab, rhs: V2_WITab) -> Bool {
         lhs.id == rhs.id
@@ -20,6 +26,15 @@ public struct V2_WITab: Equatable, Hashable, Identifiable {
         hasher.combine(id)
     }
 
+    init(
+        definition: any V2_WITabDefinition,
+        userInfo: Any? = nil
+    ) {
+        self.id = definition.id
+        self.definition = definition
+        self.userInfo = userInfo
+    }
+
     public init(
         title: String,
         image: UIImage?,
@@ -27,11 +42,15 @@ public struct V2_WITab: Equatable, Hashable, Identifiable {
         viewControllerProvider: ViewControllerProvider? = nil,
         userInfo: Any? = nil
     ) {
-        self.id = identifier
-        self.title = title
-        self.image = image
-        self.viewControllerProvider = viewControllerProvider
-        self.userInfo = userInfo
+        self.init(
+            definition: V2_CustomTabDefinition(
+                id: identifier,
+                title: title,
+                image: image,
+                viewControllerProvider: viewControllerProvider
+            ),
+            userInfo: userInfo
+        )
     }
 
     public init(
@@ -59,7 +78,7 @@ public struct V2_WITab: Equatable, Hashable, Identifiable {
     ) {
         self.init(
             title: title,
-            image: Self.systemImage(named: systemImage),
+            image: UIImage(systemName: systemImage),
             identifier: id,
             viewControllerProvider: viewControllerProvider,
             userInfo: userInfo
@@ -79,13 +98,25 @@ public struct V2_WITab: Equatable, Hashable, Identifiable {
             viewControllerProvider: { _, _ in makeViewController() }
         )
     }
+}
 
-    func makeViewController(session: V2_WISession) -> UIViewController {
-        viewControllerProvider?(self, session) ?? UIViewController()
-    }
+@MainActor
+protocol V2_WITabDefinition: AnyObject {
+    var id: V2_WITab.ID { get }
+    var title: String { get }
+    var image: UIImage? { get }
 
-    private static func systemImage(named name: String) -> UIImage? {
-        UIImage(systemName: name)
+    func displayTabs(for layout: V2_WITabHostLayout, tab: V2_WITab) -> [V2_WIDisplayTab]
+    func makeViewController(
+        for displayTab: V2_WIDisplayTab,
+        session: V2_WISession,
+        layout: V2_WITabHostLayout
+    ) -> UIViewController
+}
+
+extension V2_WITabDefinition {
+    func displayTabs(for layout: V2_WITabHostLayout, tab: V2_WITab) -> [V2_WIDisplayTab] {
+        [.content(sourceTab: tab)]
     }
 }
 #endif

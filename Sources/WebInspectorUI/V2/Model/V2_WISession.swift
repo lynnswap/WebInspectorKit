@@ -34,74 +34,56 @@ public final class V2_WISession {
 @Observable
 public final class V2_WIInterfaceModel {
     private(set) var tabs: [V2_WITab]
-    private(set) var selectedTab: V2_WITab?
-    public let dom: V2_DOMInterfaceModel
+    private(set) var selection: V2_WIDisplayTab.ID?
 
-    public init(
-        tabs: [V2_WITab] = V2_WITab.defaults,
-        dom: V2_DOMInterfaceModel = V2_DOMInterfaceModel()
-    ) {
-        self.tabs = tabs
-        self.selectedTab = tabs.first
-        self.dom = dom
+    public init(tabs: [V2_WITab] = V2_WITab.defaults) {
+        self.tabs = Self.uniqueTabs(tabs)
+        self.selection = self.tabs.first?.id
     }
 
     func selectTab(_ tab: V2_WITab) {
         guard tabs.contains(tab) else {
             return
         }
-        guard selectedTab != tab else {
-            return
-        }
-        selectedTab = tab
-    }
-
-    func selectTab(at index: Int) {
-        guard tabs.indices.contains(index) else {
-            return
-        }
-        selectTab(tabs[index])
+        selectDisplayTab(withID: tab.id)
     }
 
     func selectTab(withID tabID: V2_WITab.ID) {
-        guard let tab = tab(withID: tabID) else {
+        guard tabs.contains(where: { $0.id == tabID }) else {
             return
         }
-        selectTab(tab)
+        selectDisplayTab(withID: tabID)
     }
 
-    var selectedTabIndex: Int? {
-        guard let selectedTab else {
+    func selectDisplayTab(withID displayTabID: V2_WIDisplayTab.ID) {
+        guard isValidDisplayTabID(displayTabID),
+              selection != displayTabID else {
+            return
+        }
+        selection = displayTabID
+    }
+
+    var selectedTab: V2_WITab? {
+        guard let selection else {
             return nil
         }
-        return tabs.firstIndex(of: selectedTab)
+        return tabs.first { $0.id == selection }
     }
 
-    private func tab(withID tabID: V2_WITab.ID) -> V2_WITab? {
-        tabs.first { $0.id == tabID }
-    }
-}
-
-@MainActor
-@Observable
-public final class V2_DOMInterfaceModel {
-    private(set) var selectedCompactContent: V2_DOMCompactContent = .tree
-
-    public init() {}
-
-    func selectCompactContent(_ content: V2_DOMCompactContent) {
-        selectedCompactContent = content
-    }
-
-    func selectCompactContent(at index: Int) {
-        guard V2_DOMCompactContent.allCases.indices.contains(index) else {
-            return
+    private func isValidDisplayTabID(_ displayTabID: V2_WIDisplayTab.ID) -> Bool {
+        if tabs.contains(where: { $0.id == displayTabID }) {
+            return true
         }
-        selectedCompactContent = V2_DOMCompactContent.allCases[index]
+        return displayTabID == V2_WIDisplayTab.compactElementID && tabs.contains(where: { $0.definition is V2_DOMTabDefinition })
     }
 
-    var selectedCompactContentIndex: Int? {
-        V2_DOMCompactContent.allCases.firstIndex(of: selectedCompactContent)
+    private static func uniqueTabs(_ tabs: [V2_WITab]) -> [V2_WITab] {
+        tabs.reduce(into: []) { result, tab in
+            guard result.contains(where: { $0.id == tab.id }) == false else {
+                return
+            }
+            result.append(tab)
+        }
     }
 }
 #endif

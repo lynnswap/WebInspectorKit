@@ -2,13 +2,9 @@
 import UIKit
 
 @MainActor
-enum V2_WIStandardTab: String, CaseIterable {
+public enum V2_WIStandardTab: String, CaseIterable, Hashable {
     case dom = "wi_dom"
     case network = "wi_network"
-
-    init?(id: V2_WITab.ID) {
-        self.init(rawValue: id)
-    }
 
     var id: V2_WITab.ID {
         rawValue
@@ -31,23 +27,15 @@ enum V2_WIStandardTab: String, CaseIterable {
             UIImage(systemName: "waveform.path.ecg.rectangle")
         }
     }
-
-    var tab: V2_WITab {
-        V2_WITab(
-            title: title,
-            image: image,
-            identifier: id
-        )
-    }
 }
 
 extension V2_WITab {
     public static var dom: V2_WITab {
-        V2_WIStandardTab.dom.tab
+        V2_WITab(definition: V2_DOMTabDefinition())
     }
 
     public static var network: V2_WITab {
-        V2_WIStandardTab.network.tab
+        V2_WITab(definition: V2_NetworkTabDefinition())
     }
 
     public static var defaults: [V2_WITab] {
