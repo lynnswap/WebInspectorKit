@@ -51,6 +51,10 @@ let package = Package(
             exact: "0.7.0"
         ),
         .package(
+            url: "https://github.com/lynnswap/UIHostingMenu.git",
+            exact: "0.1.4"
+        ),
+        .package(
             url: "https://github.com/p-x9/MachOKit.git",
             exact: "0.49.0"
         )
@@ -139,7 +143,8 @@ let package = Package(
                 "WebInspectorEngine",
                 "WebInspectorBridge",
                 "WebInspectorBridgeObjCShim",
-                .product(name: "ObservationBridge", package: "ObservationBridge")
+                .product(name: "ObservationBridge", package: "ObservationBridge"),
+                .product(name: "UIHostingMenu", package: "UIHostingMenu", condition: .when(platforms: [.iOS]))
             ],
             resources: [
                 .process("Localizable.xcstrings")

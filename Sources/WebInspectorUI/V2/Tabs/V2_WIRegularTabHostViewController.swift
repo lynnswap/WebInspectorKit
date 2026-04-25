@@ -6,8 +6,8 @@ import UIKit
 final class V2_WIRegularTabContentViewController: UINavigationController {
     private let session: V2_WISession
     private let interface: V2_WIInterfaceModel
-    private var tabObservationHandles: Set<ObservationHandle> = []
-    private var navigationRootViewControllerByTabID: [V2_WITab.ID: UIViewController] = [:]
+    private var observationHandles: Set<ObservationHandle> = []
+    private var rootViewControllerByTabID: [V2_WITab.ID: UIViewController] = [:]
     private var isApplyingSegmentSelection = false
 
     private lazy var segmentBarButtonItem: UIBarButtonItem = {
@@ -39,7 +39,7 @@ final class V2_WIRegularTabContentViewController: UINavigationController {
     }
 
     isolated deinit {
-        tabObservationHandles.removeAll()
+        observationHandles.removeAll()
     }
 
     override func viewDidLoad() {
@@ -67,11 +67,11 @@ final class V2_WIRegularTabContentViewController: UINavigationController {
     }
 
     private func bindModel() {
-        tabObservationHandles.removeAll()
+        observationHandles.removeAll()
         interface.observe(\.selectedTab) { [weak self] _ in
             self?.syncSelection()
         }
-        .store(in: &tabObservationHandles)
+        .store(in: &observationHandles)
     }
 
     private func render() {
@@ -115,32 +115,23 @@ final class V2_WIRegularTabContentViewController: UINavigationController {
         guard let selectedTab = interface.selectedTabModel else {
             return
         }
-        let viewController = navigationRootViewController(for: selectedTab)
+        let viewController = rootViewController(for: selectedTab)
         guard viewControllers.first !== viewController else {
             updateNavigationItem(for: viewController)
             return
         }
 
-        clearNavigationItem(for: viewControllers.first)
         setViewControllers([viewController], animated: false)
         updateNavigationItem(for: viewController)
     }
 
-    private func clearNavigationItem(for viewController: UIViewController?) {
-        guard let viewController else {
-            return
-        }
-        viewController.navigationItem.centerItemGroups = []
-    }
-
-    private func navigationRootViewController(for tab: V2_WITab) -> UIViewController {
-        if let viewController = navigationRootViewControllerByTabID[tab.id] {
+    private func rootViewController(for tab: V2_WITab) -> UIViewController {
+        if let viewController = rootViewControllerByTabID[tab.id] {
             return viewController
         }
 
-        let contentViewController = tab.makeViewController(session: session, hostLayout: .regular)
-        let viewController = navigationRootViewController(wrapping: contentViewController)
-        navigationRootViewControllerByTabID[tab.id] = viewController
+        let viewController = tab.makeViewController(session: session, hostLayout: .regular)
+        rootViewControllerByTabID[tab.id] = viewController
         return viewController
     }
 
@@ -148,69 +139,6 @@ final class V2_WIRegularTabContentViewController: UINavigationController {
         viewController.navigationItem.style = .browser
         viewController.navigationItem.centerItemGroups = [segmentItemGroup]
     }
-
-    private func navigationRootViewController(wrapping viewController: UIViewController) -> UIViewController {
-        guard viewController is UISplitViewController else {
-            return viewController
-        }
-        return V2_WIRegularSplitRootViewController(contentViewController: viewController)
-    }
 }
 
-@MainActor
-private final class V2_WIRegularSplitRootViewController: UIViewController {
-    private let contentViewController: UIViewController
-
-    init(contentViewController: UIViewController) {
-        self.contentViewController = contentViewController
-        super.init(nibName: nil, bundle: nil)
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        nil
-    }
-
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        view.backgroundColor = .clear
-        installContentViewController()
-    }
-
-    private func installContentViewController() {
-        guard contentViewController.parent == nil else {
-            return
-        }
-
-        addChild(contentViewController)
-        contentViewController.view.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(contentViewController.view)
-        NSLayoutConstraint.activate([
-            contentViewController.view.topAnchor.constraint(equalTo: view.topAnchor),
-            contentViewController.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            contentViewController.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            contentViewController.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-        ])
-        contentViewController.didMove(toParent: self)
-    }
-}
-
-@MainActor
-final class V2_WIRegularSplitColumnNavigationController: UINavigationController {
-    override init(rootViewController: UIViewController) {
-        super.init(rootViewController: rootViewController)
-        wiApplyClearNavigationBarStyle(to: self)
-        setNavigationBarHidden(true, animated: false)
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        nil
-    }
-
-    override func viewWillAppear(_ animated: Bool) {
-        super.viewWillAppear(animated)
-        setNavigationBarHidden(true, animated: false)
-    }
-}
 #endif

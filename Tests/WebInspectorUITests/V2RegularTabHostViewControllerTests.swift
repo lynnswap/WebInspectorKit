@@ -21,6 +21,54 @@ struct V2RegularTabHostViewControllerTests {
     }
 
     @Test
+    func domSplitOwnsDOMNavigationItems() throws {
+        let session = V2_WISession(tabs: V2_WITab.defaults)
+        let splitViewController = V2_DOMSplitViewController(session: session)
+
+        splitViewController.loadViewIfNeeded()
+
+        #expect(splitViewController.navigationItem.additionalOverflowItems != nil)
+        #expect(
+            splitViewController.navigationItem.trailingItemGroups
+                .flatMap(\.barButtonItems)
+                .contains { $0.accessibilityIdentifier == "WI.DOM.PickButton" }
+        )
+    }
+
+    @Test
+    func regularDOMSplitNavigationItemsAreExposedThroughRoot() throws {
+        let session = V2_WISession(tabs: V2_WITab.defaults)
+        let host = V2_WIRegularTabContentViewController(session: session)
+
+        host.loadViewIfNeeded()
+
+        let rootViewController = try #require(host.viewControllers.first)
+        rootViewController.loadViewIfNeeded()
+
+        #expect(rootViewController.navigationItem.additionalOverflowItems != nil)
+        #expect(
+            rootViewController.navigationItem.trailingItemGroups
+                .flatMap(\.barButtonItems)
+                .contains { $0.accessibilityIdentifier == "WI.DOM.PickButton" }
+        )
+    }
+
+    @Test
+    func regularNetworkRootDoesNotExposeDOMNavigationItems() throws {
+        let session = V2_WISession(tabs: V2_WITab.defaults)
+        session.interface.selectTab("network")
+        let host = V2_WIRegularTabContentViewController(session: session)
+
+        host.loadViewIfNeeded()
+
+        let rootViewController = try #require(host.viewControllers.first)
+        rootViewController.loadViewIfNeeded()
+
+        #expect(rootViewController.navigationItem.additionalOverflowItems == nil)
+        #expect(rootViewController.navigationItem.trailingItemGroups.isEmpty)
+    }
+
+    @Test
     func regularDOMSplitColumnsUseHiddenNavigationControllers() throws {
         let session = V2_WISession(tabs: V2_WITab.defaults)
         let host = V2_WIRegularTabContentViewController(session: session)
