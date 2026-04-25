@@ -154,21 +154,6 @@ public final class WINetworkViewController: UISplitViewController, UISplitViewCo
 }
 
 @MainActor
-func networkStatusColor(for severity: NetworkStatusSeverity) -> UIColor {
-    switch severity {
-    case .success:
-        return .systemGreen
-    case .notice:
-        return .systemYellow
-    case .warning:
-        return .systemOrange
-    case .error:
-        return .systemRed
-    case .neutral:
-        return .secondaryLabel
-    }
-}
-@MainActor
 func networkBodyTypeLabel(entry: NetworkEntry, body: NetworkBody) -> String? {
     let headerValue: String?
     switch body.role {

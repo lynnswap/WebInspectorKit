@@ -6,7 +6,7 @@ import WebInspectorTransport
 @MainActor
 @Observable
 public final class V2_WINetworkRuntime {
-    @ObservationIgnored private let model: WINetworkModel
+    @ObservationIgnored package let model: WINetworkModel
 
     public var entries: [NetworkEntry] {
         model.store.entries

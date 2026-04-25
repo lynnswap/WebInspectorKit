@@ -93,11 +93,11 @@ final class V2_NetworkTabDefinition: V2_WITabDefinition {
         switch layout {
         case .compact:
             V2_WICompactTabNavigationController(
-                rootViewController: V2_NetworkCompactViewController()
+                rootViewController: V2_NetworkCompactViewController(network: session.runtime.network)
             )
         case .regular:
             V2_WIRegularSplitRootViewController(
-                contentViewController: V2_NetworkSplitViewController()
+                contentViewController: V2_NetworkSplitViewController(network: session.runtime.network)
             )
         }
     }

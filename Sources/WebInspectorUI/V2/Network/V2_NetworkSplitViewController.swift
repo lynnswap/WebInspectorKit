@@ -1,33 +1,25 @@
 #if canImport(UIKit)
 import UIKit
+import WebInspectorRuntime
 
 @MainActor
-final class V2_NetworkCompactViewController: UIViewController {
-    init() {
-        super.init(nibName: nil, bundle: nil)
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        nil
-    }
-
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        view.backgroundColor = .clear
+final class V2_NetworkCompactViewController: V2_NetworkListViewController {
+    init(network: V2_WINetworkRuntime) {
+        super.init(inspector: network.model)
     }
 }
 
 @MainActor
 final class V2_NetworkSplitViewController: UISplitViewController {
-    private let primaryViewController = V2_WIRegularSplitColumnNavigationController(
-        rootViewController: V2_NetworkSplitViewController.makeEmptyViewController()
-    )
+    private let primaryViewController: V2_WIRegularSplitColumnNavigationController
     private let secondaryViewController = V2_WIRegularSplitColumnNavigationController(
         rootViewController: V2_NetworkSplitViewController.makeEmptyViewController()
     )
 
-    init() {
+    init(network: V2_WINetworkRuntime) {
+        primaryViewController = V2_WIRegularSplitColumnNavigationController(
+            rootViewController: V2_NetworkListViewController(inspector: network.model)
+        )
         super.init(style: .doubleColumn)
         configureSplitViewLayout()
     }
@@ -63,7 +55,7 @@ final class V2_NetworkSplitViewController: UISplitViewController {
 import SwiftUI
 
 #Preview("V2 Network Split") {
-    V2_NetworkSplitViewController()
+    V2_NetworkSplitViewController(network: V2_WINetworkRuntime())
 }
 #endif
 #endif
