@@ -797,7 +797,6 @@ struct DOMDocumentModelTests {
                 localID: 42,
                 backendNodeID: 77,
                 backendNodeIDIsStable: false,
-                preview: "<div id=\"placeholder\">",
                 attributes: [],
                 path: ["html", "body", "div"],
                 selectorPath: "#placeholder",
@@ -823,7 +822,6 @@ struct DOMDocumentModelTests {
         model.applySelectionSnapshot(
             .init(
                 localID: 42,
-                preview: "<div id=\"target\">",
                 attributes: [.init(nodeId: 42, name: "id", value: "target")],
                 path: ["html", "body", "div"],
                 selectorPath: "#target",
@@ -832,7 +830,6 @@ struct DOMDocumentModelTests {
         )
 
         let selectedNode = try! #require(model.selectedNode)
-        #expect(selectedNode.preview == "<div id=\"target\">")
         #expect(selectedNode.selectorPath == "#target")
         #expect(selectedNode.styleRevision == 2)
         #expect(selectedNode.attributes.first(where: { $0.name == "id" })?.value == "target")
@@ -844,7 +841,6 @@ struct DOMDocumentModelTests {
         model.applySelectionSnapshot(
             .init(
                 localID: 42,
-                preview: "<div id=\"target\">",
                 attributes: [],
                 path: ["html", "body", "div"],
                 selectorPath: "#target",
@@ -880,7 +876,6 @@ struct DOMDocumentModelTests {
                 localID: 42,
                 backendNodeID: 77,
                 backendNodeIDIsStable: true,
-                preview: "<div id=\"target\">",
                 attributes: [.init(nodeId: 77, name: "id", value: "target")],
                 path: ["html", "body", "div"],
                 selectorPath: "#target",
@@ -907,7 +902,6 @@ struct DOMDocumentModelTests {
             .init(
                 localID: 42,
                 backendNodeID: nil,
-                preview: "<div id=\"target\">",
                 attributes: [],
                 path: ["html", "body", "div"],
                 selectorPath: "#target",
@@ -932,7 +926,6 @@ struct DOMDocumentModelTests {
         model.applySelectionSnapshot(
             .init(
                 localID: 42,
-                preview: "<div id=\"target\">",
                 attributes: [.init(nodeId: 42, name: "id", value: "target")],
                 path: ["html", "body", "div"],
                 selectorPath: "#target",
@@ -941,10 +934,11 @@ struct DOMDocumentModelTests {
         )
 
         let selectedNode = try! #require(model.selectedNode)
+        selectedNode.preview = "<div id=\"target\">"
         model.applySelectionSnapshot(nil)
 
         #expect(model.selectedNode == nil)
-        #expect(selectedNode.preview.isEmpty)
+        #expect(selectedNode.preview == "<div id=\"target\">")
         #expect(selectedNode.path.isEmpty)
         #expect(selectedNode.selectorPath.isEmpty)
         #expect(selectedNode.styleRevision == 0)

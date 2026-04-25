@@ -36,7 +36,6 @@ enum WIDOMPreviewFixtures {
             graphStore.applySelectionSnapshot(
                 .init(
                     localID: localID,
-                    preview: "<span aria-label=\"スノーボード\">...</span>",
                     attributes: attributes,
                     path: [],
                     selectorPath: "#hplogo > span",
@@ -67,7 +66,6 @@ enum WIDOMPreviewFixtures {
             graphStore.applySelectionSnapshot(
                 .init(
                     localID: localID,
-                    preview: "<img alt=\"スノーボード 2026\" src=\"/logos/doodles/2026/snowboarding-2026-feb-18-a-6753651837111226-law.gif\">",
                     attributes: attributes,
                     path: [],
                     selectorPath: "#hplogo > img",

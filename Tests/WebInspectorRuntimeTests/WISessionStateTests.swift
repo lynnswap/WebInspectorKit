@@ -474,7 +474,6 @@ struct WISessionStateTests {
         inspector.document.applySelectionSnapshot(
             .init(
                 localID: selectedLocalID,
-                preview: "<div id=\"selected\"></div>",
                 attributes: attributes,
                 path: ["html", "body", "div"],
                 selectorPath: "#selected",

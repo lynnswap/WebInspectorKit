@@ -4,58 +4,94 @@ import UIKit
 import WebInspectorEngine
 
 final class V2_DOMElementPreviewCell: V2_DOMElementBaseCell {
-    private weak var node: DOMNodeModel?
+    private let previewTextView = V2_DOMElementSelectableTextView(frame: .zero, textContainer: nil)
+
+    override var selectableTextViewForSizing: V2_DOMElementSelectableTextView? {
+        previewTextView
+    }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        configurePreviewTextView()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        previewTextView.apply(text: "")
+    }
 
     func bind(node: DOMNodeModel?) {
         resetObservationHandles()
-        self.node = node
-        render()
+        accessories = []
+        contentConfiguration = nil
 
         guard let node else {
+            previewTextView.apply(text: "")
             return
         }
-
+        
+        // WORKAROUND: ObservationBridge の初回送出が次の描画サイクルまで遅れるため、
+        // 初回表示だけここで同期的に反映する。
+        // ObservationBridge が bind 時に初回値を送出するようになったら削除する。
+        self.render(displayPreviewText: node.displayPreviewText)
+        
         store(
-            node.observe(
-                [\.preview, \.nodeType, \.nodeName, \.localName, \.nodeValue, \.attributes]
-            ) { [weak self] in
-                self?.render()
+            node.observe(\.displayPreviewText) { [weak self] displayPreviewText in
+                self?.render(displayPreviewText: displayPreviewText)
             }
         )
     }
 
-    private func render() {
-        guard let node else {
-            contentConfiguration = nil
-            accessories = []
-            return
-        }
+    private func configurePreviewTextView() {
+        previewTextView.translatesAutoresizingMaskIntoConstraints = false
+        previewTextView.font = Self.monospacedFootnoteFont
+        previewTextView.textColor = .label
+        contentView.addSubview(previewTextView)
 
-        var configuration = UIListContentConfiguration.cell()
-        configuration.text = node.preview.isEmpty ? Self.defaultPreview(for: node) : node.preview
-        configuration.textProperties.numberOfLines = 0
-        configuration.textProperties.font = Self.monospacedFootnoteFont
-        configuration.textProperties.color = .label
-        accessories = []
-        contentConfiguration = configuration
+        NSLayoutConstraint.activate([
+            previewTextView.topAnchor.constraint(equalTo: contentView.layoutMarginsGuide.topAnchor),
+            previewTextView.leadingAnchor.constraint(equalTo: contentView.layoutMarginsGuide.leadingAnchor),
+            previewTextView.trailingAnchor.constraint(equalTo: contentView.layoutMarginsGuide.trailingAnchor),
+            previewTextView.bottomAnchor.constraint(equalTo: contentView.layoutMarginsGuide.bottomAnchor),
+        ])
+    }
+
+    private func render(displayPreviewText: String) {
+        previewTextView.apply(text: displayPreviewText)
     }
 }
 
-extension V2_DOMElementPreviewCell {
-    private static func defaultPreview(for node: DOMNodeModel) -> String {
-        switch node.nodeType {
+private extension DOMNodeModel {
+    var displayPreviewText: String {
+        switch nodeType {
         case .text:
-            return node.nodeValue
+            return trimmedNodeValue
         case .comment:
-            return "<!-- \(node.nodeValue) -->"
+            return "<!-- \(trimmedNodeValue) -->"
+        case .documentType:
+            let name = displayNodeName.isEmpty ? "html" : displayNodeName
+            return "<!DOCTYPE \(name)>"
         default:
-            let name = node.localName.isEmpty ? node.nodeName : node.localName
-            let attributes = node.attributes.map { attribute in
+            let attributes = attributes.map { attribute in
                 "\(attribute.name)=\"\(attribute.value)\""
             }.joined(separator: " ")
             let suffix = attributes.isEmpty ? "" : " \(attributes)"
-            return "<\(name)\(suffix)>"
+            return "<\(displayNodeName)\(suffix)>"
         }
+    }
+
+    private var displayNodeName: String {
+        let name = localName.isEmpty ? nodeName : localName
+        return name.lowercased()
+    }
+
+    private var trimmedNodeValue: String {
+        nodeValue.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 

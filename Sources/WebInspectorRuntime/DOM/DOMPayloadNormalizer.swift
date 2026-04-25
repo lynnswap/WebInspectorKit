@@ -84,7 +84,6 @@ final class DOMPayloadNormalizer {
         let backendNodeIDIsStable = boolValue(object["backendNodeIdIsStable"])
             ?? boolValue(object["backendNodeIDIsStable"])
             ?? (explicitBackendNodeID != nil)
-        let preview = stringValue(object["preview"]) ?? ""
         let attributes = normalizeSelectionAttributes(object["attributes"], localID: localID)
         let path = arrayValue(object["path"])?.compactMap(stringValue) ?? []
         let selectorPath = stringValue(object["selectorPath"])
@@ -94,7 +93,6 @@ final class DOMPayloadNormalizer {
             localID: localID,
             backendNodeID: backendNodeID,
             backendNodeIDIsStable: backendNodeIDIsStable,
-            preview: preview,
             attributes: attributes,
             path: path,
             selectorPath: selectorPath,

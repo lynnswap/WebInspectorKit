@@ -198,7 +198,6 @@ public final class DOMDocumentModel {
            node.backendNodeID == payloadBackendNodeID {
             node.backendNodeIDIsStable = payload.backendNodeIDIsStable
         }
-        node.preview = payload.preview
         node.path = payload.path
         if let selectorPath = payload.selectorPath {
             node.selectorPath = selectorPath

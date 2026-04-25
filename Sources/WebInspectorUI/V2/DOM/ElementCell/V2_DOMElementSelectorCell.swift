@@ -4,7 +4,11 @@ import UIKit
 import WebInspectorEngine
 
 final class V2_DOMElementSelectorCell: V2_DOMElementBaseCell {
-    private let selectorTextView = SelectableSelectorTextView(frame: .zero, textContainer: nil)
+    private let selectorTextView = V2_DOMElementSelectableTextView(frame: .zero, textContainer: nil)
+
+    override var selectableTextViewForSizing: V2_DOMElementSelectableTextView? {
+        selectorTextView
+    }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -25,7 +29,6 @@ final class V2_DOMElementSelectorCell: V2_DOMElementBaseCell {
         resetObservationHandles()
         accessories = []
         contentConfiguration = nil
-        selectorTextView.apply(text: "")
 
         store(
             node.observe(\.selectorPath) { [weak self] selectorPath in
@@ -50,46 +53,6 @@ final class V2_DOMElementSelectorCell: V2_DOMElementBaseCell {
 
     private func render(selectorPath: String) {
         selectorTextView.apply(text: selectorPath)
-    }
-}
-
-private final class SelectableSelectorTextView: UITextView {
-    override init(frame: CGRect, textContainer: NSTextContainer?) {
-        super.init(frame: frame, textContainer: textContainer)
-        configure()
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        nil
-    }
-
-    override var intrinsicContentSize: CGSize {
-        CGSize(width: UIView.noIntrinsicMetric, height: contentSize.height)
-    }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        invalidateIntrinsicContentSize()
-    }
-
-    func apply(text: String) {
-        guard self.text != text else {
-            return
-        }
-        self.text = text
-        invalidateIntrinsicContentSize()
-    }
-
-    private func configure() {
-        isEditable = false
-        isSelectable = true
-        isScrollEnabled = false
-        backgroundColor = .clear
-        textContainerInset = .zero
-        textContainer.lineFragmentPadding = 0
-        adjustsFontForContentSizeCategory = true
-        setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     }
 }
 #endif

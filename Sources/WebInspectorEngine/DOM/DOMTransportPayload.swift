@@ -92,7 +92,6 @@ package struct DOMSelectionSnapshotPayload: Sendable {
     package var localID: UInt64?
     package var backendNodeID: Int?
     package var backendNodeIDIsStable: Bool
-    package var preview: String
     package var attributes: [DOMAttribute]
     package var path: [String]
     package var selectorPath: String?
@@ -102,7 +101,6 @@ package struct DOMSelectionSnapshotPayload: Sendable {
         localID: UInt64?,
         backendNodeID: Int? = nil,
         backendNodeIDIsStable: Bool? = nil,
-        preview: String,
         attributes: [DOMAttribute],
         path: [String],
         selectorPath: String?,
@@ -111,7 +109,6 @@ package struct DOMSelectionSnapshotPayload: Sendable {
         self.localID = localID
         self.backendNodeID = backendNodeID
         self.backendNodeIDIsStable = backendNodeIDIsStable ?? (backendNodeID != nil)
-        self.preview = preview
         self.attributes = attributes
         self.path = path
         self.selectorPath = selectorPath

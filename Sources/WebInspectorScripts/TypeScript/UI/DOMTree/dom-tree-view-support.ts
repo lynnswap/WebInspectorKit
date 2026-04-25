@@ -1221,7 +1221,6 @@ function notifyNativeSelection(node: DOMNode | null): void {
     const payload = node
         ? {
               id: typeof node.id === "number" ? node.id : null,
-              preview: renderPreview(node),
               attributes: Array.isArray(node.attributes)
                   ? node.attributes.map((attr) => ({
                         name: attr.name || "",
@@ -1234,7 +1233,6 @@ function notifyNativeSelection(node: DOMNode | null): void {
           }
         : {
               id: null,
-              preview: "",
               attributes: [],
               path: [],
               styleRevision: treeState.styleRevision,

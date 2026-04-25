@@ -12,7 +12,6 @@ struct DOMDetailViewControllerTests {
     func detailViewUpdatesPreviewWithoutApplyingAnotherSnapshot() async throws {
         let inspector = makeInspector(
             selectedLocalID: 42,
-            preview: "<div class=\"before\">",
             selectorPath: "#target",
             attributes: [DOMAttribute(nodeId: 42, name: "class", value: "before")]
         )
@@ -40,7 +39,6 @@ struct DOMDetailViewControllerTests {
     func detailViewUpdatesSelectorPathWithoutApplyingAnotherSnapshot() async throws {
         let inspector = makeInspector(
             selectedLocalID: 42,
-            preview: "<div>",
             selectorPath: "#before",
             attributes: [DOMAttribute(nodeId: 42, name: "class", value: "before")]
         )
@@ -68,7 +66,6 @@ struct DOMDetailViewControllerTests {
     func detailViewIgnoresMutationsOnUnselectedNode() async throws {
         let inspector = makeInspector(
             selectedLocalID: 42,
-            preview: "<div>",
             selectorPath: "#target",
             attributes: [DOMAttribute(nodeId: 42, name: "class", value: "selected")],
             extraTreeChildren: [makeNode(localID: 99, attributes: [DOMAttribute(nodeId: 99, name: "data-other", value: "old")])]
@@ -79,7 +76,7 @@ struct DOMDetailViewControllerTests {
         let collectionView = try #require(viewController.collectionView)
         let initialReady = await waitUntil {
             viewController.snapshotApplyCountForTesting > 0
-                && self.visibleListCellText(in: collectionView, at: IndexPath(item: 0, section: 0)) == "<div>"
+                && self.visibleListCellText(in: collectionView, at: IndexPath(item: 0, section: 0)) == "<div class=\"selected\">"
         }
         #expect(initialReady)
 
@@ -99,7 +96,7 @@ struct DOMDetailViewControllerTests {
         )
 
         let unchanged = await waitUntil {
-            self.visibleListCellText(in: collectionView, at: IndexPath(item: 0, section: 0)) == "<div>"
+            self.visibleListCellText(in: collectionView, at: IndexPath(item: 0, section: 0)) == "<div class=\"selected\">"
         }
         #expect(unchanged)
         #expect(viewController.snapshotApplyCountForTesting == initialSnapshotCount)
@@ -109,7 +106,6 @@ struct DOMDetailViewControllerTests {
     func detailViewUpdatesAttributeValueWithoutApplyingAnotherSnapshot() async throws {
         let inspector = makeInspector(
             selectedLocalID: 42,
-            preview: "<div>",
             selectorPath: "#target",
             attributes: [DOMAttribute(nodeId: 42, name: "class", value: "before")]
         )
@@ -137,7 +133,6 @@ struct DOMDetailViewControllerTests {
     func detailViewAppliesSnapshotWhenAttributeStructureChanges() async throws {
         let inspector = makeInspector(
             selectedLocalID: 42,
-            preview: "<div>",
             selectorPath: "#target",
             attributes: [DOMAttribute(nodeId: 42, name: "class", value: "value")]
         )
@@ -167,7 +162,6 @@ struct DOMDetailViewControllerTests {
     func detailViewTracksReplacementOfSelectedEntryWithSameLocalID() async throws {
         let inspector = makeInspector(
             selectedLocalID: 42,
-            preview: "<div>",
             selectorPath: "#target",
             attributes: [DOMAttribute(nodeId: 42, name: "class", value: "before")],
             extraTreeChildren: [makeNode(localID: 99)]
@@ -292,7 +286,6 @@ struct DOMDetailViewControllerTests {
 
     private func makeInspector(
         selectedLocalID: UInt64,
-        preview: String,
         selectorPath: String,
         attributes: [DOMAttribute],
         extraTreeChildren: [DOMGraphNodeDescriptor] = []
@@ -313,7 +306,6 @@ struct DOMDetailViewControllerTests {
         inspector.document.applySelectionSnapshot(
             .init(
                 localID: selectedLocalID,
-                preview: preview,
                 attributes: attributes,
                 path: ["html", "body", "div"],
                 selectorPath: selectorPath,

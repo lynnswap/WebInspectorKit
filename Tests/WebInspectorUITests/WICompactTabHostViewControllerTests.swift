@@ -81,7 +81,6 @@ struct WICompactTabHostViewControllerTests {
         controller.dom.document.applySelectionSnapshot(
             .init(
                 localID: 99,
-                preview: "<section id=\"secondary\" class=\"updated\" data-role=\"hero\"></section>",
                 attributes: [
                     DOMAttribute(nodeId: 99, name: "id", value: "secondary"),
                     DOMAttribute(nodeId: 99, name: "class", value: "updated"),
@@ -129,7 +128,6 @@ struct WICompactTabHostViewControllerTests {
         controller.dom.document.applySelectionSnapshot(
             .init(
                 localID: 99,
-                preview: "<section id=\"secondary\" class=\"updated\" data-role=\"hero\"></section>",
                 attributes: [
                     DOMAttribute(nodeId: 99, name: "id", value: "secondary"),
                     DOMAttribute(nodeId: 99, name: "class", value: "updated"),
@@ -313,7 +311,6 @@ struct WICompactTabHostViewControllerTests {
         inspector.document.applySelectionSnapshot(
             .init(
                 localID: selectedLocalID,
-                preview: "<div id=\"selected\"></div>",
                 attributes: attributes,
                 path: ["html", "body", "div"],
                 selectorPath: "#selected",
@@ -376,7 +373,6 @@ struct WICompactTabHostViewControllerTests {
         inspector.document.applySelectionSnapshot(
             .init(
                 localID: 42,
-                preview: "<div id=\"selected\"></div>",
                 attributes: [
                     DOMAttribute(nodeId: 42, name: "id", value: "selected")
                 ],

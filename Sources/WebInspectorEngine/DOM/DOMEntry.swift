@@ -153,7 +153,6 @@ public final class DOMNodeModel: Equatable, Hashable, Identifiable {
     }
 
     package func clearSelectionProjectionState() {
-        preview = ""
         path = []
         selectorPath = ""
         styleRevision = 0

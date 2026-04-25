@@ -25,7 +25,6 @@ struct V2DOMElementViewControllerTests {
         let runtime = V2_WIDOMRuntime()
         seedSelectedNode(
             into: runtime,
-            preview: "<div id=\"selected\" class=\"hero\">",
             selectorPath: "#selected",
             attributes: [
                 DOMAttribute(name: "id", value: "selected"),
@@ -52,8 +51,44 @@ struct V2DOMElementViewControllerTests {
             visibleListCellText(in: viewController.collectionView, at: IndexPath(item: 0, section: 0))
                 == "<div id=\"selected\" class=\"hero\">"
         )
+        let previewTextView = visibleTextView(in: viewController.collectionView, at: IndexPath(item: 0, section: 0))
+        #expect(previewTextView?.isSelectable == true)
+        #expect(previewTextView?.isEditable == false)
+        #expect(hasCenteredTextContainerInsets(previewTextView))
+        #expect(visibleCellHeight(in: viewController.collectionView, at: IndexPath(item: 0, section: 0)) ?? 0 >= 44)
         #expect(visibleListCellText(in: viewController.collectionView, at: IndexPath(item: 0, section: 1)) == "#selected")
+        let selectorTextView = visibleTextView(in: viewController.collectionView, at: IndexPath(item: 0, section: 1))
+        #expect(hasCenteredTextContainerInsets(selectorTextView))
+        #expect(visibleCellHeight(in: viewController.collectionView, at: IndexPath(item: 0, section: 1)) ?? 0 >= 44)
         #expect(visibleListCellText(in: viewController.collectionView, at: IndexPath(item: 0, section: 2)) == "id")
+    }
+
+    @Test
+    func elementViewExpandsPreviewCellForLongText() async throws {
+        let runtime = V2_WIDOMRuntime()
+        let longAttributeValue = String(repeating: "/xjs", count: 80)
+        let expectedPreview = "<div src=\"\(longAttributeValue)\">"
+        seedSelectedNode(
+            into: runtime,
+            selectorPath: "#selected",
+            attributes: [
+                DOMAttribute(name: "src", value: longAttributeValue),
+            ]
+        )
+        let (viewController, window) = makeHostedElementViewController(runtime: runtime)
+        defer { tearDown(window: window) }
+
+        let previewExpanded = await waitUntil {
+            let indexPath = IndexPath(item: 0, section: 0)
+            guard visibleListCellText(in: viewController.collectionView, at: indexPath) == expectedPreview,
+                  let cell = viewController.collectionView.cellForItem(at: indexPath),
+                  let textView = visibleTextView(in: cell.contentView),
+                  let lineHeight = textView.font?.lineHeight else {
+                return false
+            }
+            return cell.bounds.height > lineHeight * 2
+        }
+        #expect(previewExpanded)
     }
 
     @Test
@@ -61,7 +96,6 @@ struct V2DOMElementViewControllerTests {
         let runtime = V2_WIDOMRuntime()
         seedSelectedNode(
             into: runtime,
-            preview: "<div id=\"selected\">",
             selectorPath: "#selected",
             attributes: [
                 DOMAttribute(name: "id", value: "selected"),
@@ -99,7 +133,6 @@ struct V2DOMElementViewControllerTests {
         let runtime = V2_WIDOMRuntime()
         seedSelectedNode(
             into: runtime,
-            preview: "<div id=\"selected\">",
             selectorPath: "#before",
             attributes: [
                 DOMAttribute(name: "id", value: "selected"),
@@ -126,7 +159,6 @@ struct V2DOMElementViewControllerTests {
 
     private func seedSelectedNode(
         into runtime: V2_WIDOMRuntime,
-        preview: String,
         selectorPath: String,
         attributes: [DOMAttribute]
     ) {
@@ -141,7 +173,6 @@ struct V2DOMElementViewControllerTests {
         runtime.document.applySelectionSnapshot(
             .init(
                 localID: 42,
-                preview: preview,
                 attributes: attributes,
                 path: ["html", "body", "div"],
                 selectorPath: selectorPath,
@@ -224,6 +255,24 @@ struct V2DOMElementViewControllerTests {
             }
         }
         return nil
+    }
+
+    private func visibleCellHeight(in collectionView: UICollectionView, at indexPath: IndexPath) -> CGFloat? {
+        collectionView.layoutIfNeeded()
+        guard collectionView.numberOfSections > indexPath.section,
+              collectionView.numberOfItems(inSection: indexPath.section) > indexPath.item else {
+            return nil
+        }
+        return collectionView.cellForItem(at: indexPath)?.bounds.height
+    }
+
+    private func hasCenteredTextContainerInsets(_ textView: UITextView?) -> Bool {
+        guard let textView else {
+            return false
+        }
+        textView.layoutIfNeeded()
+        return textView.textContainerInset.top > 0
+            && abs(textView.textContainerInset.top - textView.textContainerInset.bottom) <= 1
     }
 
     private func visibleListCellSecondaryText(in collectionView: UICollectionView, at indexPath: IndexPath) -> String? {

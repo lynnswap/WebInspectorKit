@@ -94,7 +94,6 @@ struct DOMTreeRenderTests {
         inspector.document.applySelectionSnapshot(
             .init(
                 localID: 4,
-                preview: "<body>",
                 attributes: [DOMAttribute(nodeId: 4, name: "class", value: "page")],
                 path: ["html", "body", "main"],
                 selectorPath: "body.page",
@@ -121,7 +120,6 @@ struct DOMTreeRenderTests {
         await inspector.inspectorBridge.applySelectionPayload(
             makeSelectionPayload(
                 localID: Int(selectedNode.localID),
-                preview: "<body>",
                 selectorPath: "body.page",
                 attributes: [["name": "class", "value": "page"]]
             ),
@@ -137,7 +135,7 @@ struct DOMTreeRenderTests {
             guard let collectionView = detailViewController.collectionView else {
                 return false
             }
-            return visibleListCellText(in: collectionView, at: IndexPath(item: 0, section: 0)) == "<body>"
+            return visibleListCellText(in: collectionView, at: IndexPath(item: 0, section: 0)) == "<body class=\"page\">"
         }
         #expect(detailReady)
 
@@ -148,7 +146,7 @@ struct DOMTreeRenderTests {
         ) ?? ""
 
         #expect(selectedTreeText.localizedCaseInsensitiveContains("body"))
-        #expect(detailPreview == "<body>")
+        #expect(detailPreview == "<body class=\"page\">")
     }
 
     @Test
@@ -531,7 +529,6 @@ private extension DOMTreeRenderTests {
 
     func makeSelectionPayload(
         localID: Int,
-        preview: String,
         selectorPath: String,
         attributes: [[String: String]]
     ) -> [String: Any] {
@@ -539,9 +536,8 @@ private extension DOMTreeRenderTests {
             "id": localID,
             "backendNodeId": localID,
             "backendNodeIdIsStable": true,
-            "preview": preview,
             "attributes": attributes,
-            "path": ["html", "body", preview],
+            "path": ["html", "body", selectorPath],
             "selectorPath": selectorPath,
             "styleRevision": 0,
         ]

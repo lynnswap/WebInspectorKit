@@ -1048,7 +1048,6 @@ struct TabViewControllerUITabTests {
         inspector.document.applySelectionSnapshot(
             .init(
                 localID: 42,
-                preview: "<div id=\"first\">",
                 attributes: [.init(nodeId: 42, name: "id", value: "first")],
                 path: ["html", "body", "div"],
                 selectorPath: "#first",
@@ -1062,7 +1061,6 @@ struct TabViewControllerUITabTests {
         inspector.document.applySelectionSnapshot(
             .init(
                 localID: 43,
-                preview: "<div id=\"second\">",
                 attributes: [.init(nodeId: 43, name: "id", value: "second")],
                 path: ["html", "body", "div"],
                 selectorPath: "#second",
@@ -2167,7 +2165,6 @@ struct TabViewControllerUITabTests {
         inspector.document.applySelectionSnapshot(
             .init(
                 localID: selectedLocalID,
-                preview: "<div id=\"selected\"></div>",
                 attributes: attributes,
                 path: ["html", "body", "div"],
                 selectorPath: "#selected",
