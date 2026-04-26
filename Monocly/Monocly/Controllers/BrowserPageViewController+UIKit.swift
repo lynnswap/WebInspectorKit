@@ -152,7 +152,7 @@ final class BrowserPageViewController: UIViewController {
     @objc
     private func handleOpenInspectorAction(_ sender: Any?) {
         _ = sender
-        _ = openInspectorAsSheet(tabs: V2_WITab.defaults)
+        _ = openInspectorAsSheet(tabs: [.dom, .network])
     }
 
     private func configureViewHierarchy() {
@@ -382,7 +382,7 @@ final class BrowserPageViewController: UIViewController {
             guard let self else {
                 return
             }
-            _ = self.openInspectorAsSheet(tabs: V2_WITab.defaults)
+            _ = self.openInspectorAsSheet(tabs: [.dom, .network])
         }
     }
 
@@ -400,7 +400,7 @@ final class BrowserPageViewController: UIViewController {
             guard let self else {
                 return
             }
-            _ = self.openInspectorAsSheet(tabs: V2_WITab.defaults)
+            _ = self.openInspectorAsSheet(tabs: [.dom, .network])
         }
         let openInWindow = UIAction(
             title: "Open in New Window",
@@ -410,7 +410,7 @@ final class BrowserPageViewController: UIViewController {
             guard let self else {
                 return
             }
-            _ = self.openInspectorInNewWindow(tabs: V2_WITab.defaults)
+            _ = self.openInspectorInNewWindow(tabs: [.dom, .network])
         }
 
         return UIMenu(title: "", children: [openAsSheet, openInWindow])
@@ -653,7 +653,7 @@ final class BrowserPageViewController: UIViewController {
 
     @discardableResult
     func triggerInspectorPrimaryActionForTesting() -> Bool {
-        openInspectorAsSheet(tabs: V2_WITab.defaults)
+        openInspectorAsSheet(tabs: [.dom, .network])
     }
 
     @discardableResult
@@ -668,7 +668,7 @@ final class BrowserPageViewController: UIViewController {
 
     @discardableResult
     func triggerInspectorWindowActionForTesting() -> Bool {
-        openInspectorInNewWindow(tabs: V2_WITab.defaults)
+        openInspectorInNewWindow(tabs: [.dom, .network])
     }
 
     func refreshInspectorControlsForTesting() {

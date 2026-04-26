@@ -261,7 +261,7 @@ final class BrowserInspectorCoordinator {
         from presenter: UIViewController,
         browserStore: BrowserStore,
         inspectorController: WIInspectorController,
-        tabs: [V2_WITab] = V2_WITab.defaults,
+        tabs: [V2_WITab] = [.dom, .network],
         launchConfiguration: BrowserLaunchConfiguration? = nil
     ) -> Bool {
         guard isPresentingInspector(presenter: presenter) == false else {
@@ -309,7 +309,7 @@ final class BrowserInspectorCoordinator {
         from presenter: UIViewController,
         browserStore: BrowserStore,
         inspectorController: WIInspectorController,
-        tabs: [V2_WITab] = V2_WITab.defaults
+        tabs: [V2_WITab] = [.dom, .network]
     ) -> Bool {
         guard isPresentingInspector(presenter: presenter) == false else {
             return false

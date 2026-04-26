@@ -1,28 +1,31 @@
 #if canImport(UIKit)
+import ObservationBridge
 import UIKit
 
 @MainActor
 final class V2_WICompactTabBarController: UITabBarController, UITabBarControllerDelegate {
     private let session: V2_WISession
-    private var tabCoordinator: V2_WITabHostCoordinator?
     private let tabTransitionAnimator = V2_WINoAnimationTabTransitionAnimator()
-    private var nativeTabByTabID: [V2_WIDisplayTab.ID: UITab] = [:]
+    private var nativeTabByItemID: [V2_TabDisplayItem.ID: UITab] = [:]
+    private var observationHandles: Set<ObservationHandle> = []
+    private var isRenderingSelection = false
 
     init(session: V2_WISession) {
         self.session = session
         super.init(nibName: nil, bundle: nil)
 
         delegate = self
-        tabCoordinator = V2_WITabHostCoordinator(
-            interface: session.interface,
-            hostLayout: .compact,
-            renderer: self
-        )
+        renderTabsAndSelection(animated: false)
+        bindInterface()
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         nil
+    }
+
+    deinit {
+        observationHandles.removeAll()
     }
 
     override func viewDidLoad() {
@@ -44,45 +47,81 @@ final class V2_WICompactTabBarController: UITabBarController, UITabBarController
         didSelectTab selectedTab: UITab,
         previousTab: UITab?
     ) {
-        tabCoordinator?.selectDisplayTab(withID: selectedTab.identifier)
+        guard isRenderingSelection == false else {
+            return
+        }
+        session.interface.selectItem(withID: selectedTab.identifier)
     }
 
-    private func nativeTabs(for displayTabs: [V2_WIDisplayTab]) -> [UITab] {
-        let activeTabIDs = Set(displayTabs.map(\.id))
-        nativeTabByTabID = nativeTabByTabID.filter { activeTabIDs.contains($0.key) }
-        return displayTabs.map(nativeTab(for:))
+    private func bindInterface() {
+        session.interface.observe(\.tabs) { [weak self] _ in
+            self?.renderTabsAndSelection(animated: true)
+        }
+        .store(in: &observationHandles)
+
+        session.interface.observe(\.selectedItemID) { [weak self] _ in
+            self?.renderSelection()
+        }
+        .store(in: &observationHandles)
     }
 
-    private func nativeTab(for displayTab: V2_WIDisplayTab) -> UITab {
-        let tabID = displayTab.id
-        if let nativeTab = nativeTabByTabID[tabID] {
+    private func renderTabsAndSelection(animated: Bool) {
+        let displayItems = session.interface.displayItems(for: .compact)
+        renderSelectionFromInterface {
+            setTabs(nativeTabs(for: displayItems), animated: animated)
+            renderSelection()
+        }
+    }
+
+    private func renderSelection() {
+        let selectedDisplayItem = session.interface.resolvedSelection(for: .compact)
+        let nextSelectedTab = tabs.first { $0.identifier == selectedDisplayItem?.id }
+        guard selectedTab?.identifier != nextSelectedTab?.identifier else {
+            return
+        }
+        renderSelectionFromInterface {
+            selectedTab = nextSelectedTab
+        }
+    }
+
+    private func renderSelectionFromInterface(_ render: () -> Void) {
+        let wasRenderingSelection = isRenderingSelection
+        isRenderingSelection = true
+        defer {
+            isRenderingSelection = wasRenderingSelection
+        }
+        render()
+    }
+
+    private func nativeTabs(for displayItems: [V2_TabDisplayItem]) -> [UITab] {
+        let activeItemIDs = Set(displayItems.map(\.id))
+        nativeTabByItemID = nativeTabByItemID.filter { activeItemIDs.contains($0.key) }
+        return displayItems.map(nativeTab(for:))
+    }
+
+    private func nativeTab(for displayItem: V2_TabDisplayItem) -> UITab {
+        let itemID = displayItem.id
+        if let nativeTab = nativeTabByItemID[itemID] {
             return nativeTab
         }
 
+        let descriptor = session.interface.descriptor(for: displayItem)
+        let tabs = session.interface.tabs
         let session = session
         let nativeTab = UITab(
-            title: displayTab.title,
-            image: displayTab.image,
-            identifier: tabID
+            title: descriptor?.title ?? "",
+            image: descriptor?.image,
+            identifier: itemID
         ) { _ in
-            V2_WITabContentFactory.makeViewController(
-                for: displayTab,
+            V2_TabContentFactory.makeViewController(
+                for: displayItem,
                 session: session,
-                hostLayout: .compact
+                hostLayout: .compact,
+                tabs: tabs
             )
         }
-        nativeTabByTabID[tabID] = nativeTab
+        nativeTabByItemID[itemID] = nativeTab
         return nativeTab
-    }
-}
-
-extension V2_WICompactTabBarController: V2_WITabHostRendering {
-    func renderTabs(_ displayTabs: [V2_WIDisplayTab], animated: Bool) {
-        setTabs(nativeTabs(for: displayTabs), animated: animated)
-    }
-
-    func renderSelection(_ selectedDisplayTab: V2_WIDisplayTab?, animated: Bool) {
-        selectedTab = tabs.first { $0.identifier == selectedDisplayTab?.id }
     }
 }
 

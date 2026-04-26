@@ -2,33 +2,49 @@
 import UIKit
 
 @MainActor
-final class V2_DOMTabDefinition: V2_WITabDefinition {
-    let id = V2_WIStandardTab.dom.id
-    let title = V2_WIStandardTab.dom.title
-    let image = V2_WIStandardTab.dom.image
+struct V2_DOMTabController: V2_BuiltInTabController {
+    let tabID = V2_WITab.dom.id
+    let descriptor = V2_TabDisplayDescriptor(
+        title: V2_WITab.dom.title,
+        image: V2_WITab.dom.image
+    )
+
+    private let elementDescriptor = V2_TabDisplayDescriptor(
+        title: "Element",
+        image: UIImage(systemName: "info.circle")
+    )
 
     private enum ContentID {
         static let tree = "tree"
         static let element = "element"
     }
 
-    func displayTabs(for layout: V2_WITabHostLayout, tab: V2_WITab) -> [V2_WIDisplayTab] {
+    func displayItems(for layout: V2_WITabHostLayout) -> [V2_TabDisplayItem] {
         switch layout {
         case .compact:
-            [.content(sourceTab: tab), .compactElement(sourceTab: tab)]
+            [.tab(tabID), .domElement(parent: tabID)]
         case .regular:
-            [.content(sourceTab: tab)]
+            [.tab(tabID)]
+        }
+    }
+
+    func descriptor(for displayItem: V2_TabDisplayItem) -> V2_TabDisplayDescriptor? {
+        switch displayItem {
+        case let .tab(tabID):
+            tabID == self.tabID ? descriptor : nil
+        case let .domElement(parent):
+            parent == tabID ? elementDescriptor : nil
         }
     }
 
     func contentKeys(
         for layout: V2_WITabHostLayout,
-        displayTab: V2_WIDisplayTab
-    ) -> [V2_WIDisplayContentKey] {
-        switch (layout, displayTab.kind) {
-        case (.compact, .content):
+        displayItem: V2_TabDisplayItem
+    ) -> [V2_TabContentKey] {
+        switch (layout, displayItem) {
+        case (.compact, .tab):
             [contentKey(ContentID.tree)]
-        case (.compact, .compactElement):
+        case (.compact, .domElement):
             [contentKey(ContentID.element)]
         case (.regular, _):
             [
@@ -39,17 +55,17 @@ final class V2_DOMTabDefinition: V2_WITabDefinition {
     }
 
     func makeViewController(
-        for displayTab: V2_WIDisplayTab,
+        for displayItem: V2_TabDisplayItem,
         session: V2_WISession,
         layout: V2_WITabHostLayout
     ) -> UIViewController {
-        switch (layout, displayTab.kind) {
-        case (.compact, .content):
+        switch (layout, displayItem) {
+        case (.compact, .tab):
             V2_DOMCompactTabNavigationController(
                 rootViewController: cachedDOMTreeViewController(session: session),
                 dom: session.runtime.dom
             )
-        case (.compact, .compactElement):
+        case (.compact, .domElement):
             V2_DOMCompactTabNavigationController(
                 rootViewController: cachedDOMElementViewController(session: session),
                 dom: session.runtime.dom
@@ -66,19 +82,19 @@ final class V2_DOMTabDefinition: V2_WITabDefinition {
     }
 
     private func cachedDOMTreeViewController(session: V2_WISession) -> V2_DOMTreeViewController {
-        session.interface.viewController(for: contentKey(ContentID.tree), session: session) {
+        session.interface.viewController(for: contentKey(ContentID.tree)) {
             V2_DOMTreeViewController(dom: session.runtime.dom)
         }
     }
 
     private func cachedDOMElementViewController(session: V2_WISession) -> V2_DOMElementViewController {
-        session.interface.viewController(for: contentKey(ContentID.element), session: session) {
+        session.interface.viewController(for: contentKey(ContentID.element)) {
             V2_DOMElementViewController(dom: session.runtime.dom)
         }
     }
 
-    private func contentKey(_ contentID: String) -> V2_WIDisplayContentKey {
-        V2_WIDisplayContentKey(definitionID: id, contentID: contentID)
+    private func contentKey(_ contentID: String) -> V2_TabContentKey {
+        V2_TabContentKey(tabID: tabID, contentID: contentID)
     }
 }
 #endif

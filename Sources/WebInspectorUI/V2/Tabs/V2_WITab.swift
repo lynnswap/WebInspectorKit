@@ -1,21 +1,25 @@
 #if canImport(UIKit)
 import UIKit
+import WebInspectorRuntime
 
 @MainActor
 public struct V2_WITab: Equatable, Hashable, Identifiable {
     public typealias ID = String
-    public typealias ViewControllerProvider = @MainActor (V2_WITab, V2_WISession) -> UIViewController
+    public typealias ViewControllerProvider = @MainActor (V2_WITabProviderContext) -> UIViewController
 
     public let id: ID
-    internal let definition: any V2_WITabDefinition
-    public var userInfo: Any?
+    public let title: String
+    public let image: UIImage?
+    let kind: Kind
 
-    public var title: String {
-        definition.title
+    enum BuiltIn: Hashable {
+        case dom
+        case network
     }
 
-    public var image: UIImage? {
-        definition.image
+    enum Kind {
+        case builtIn(BuiltIn)
+        case custom(V2_CustomWITab)
     }
 
     public static nonisolated func == (lhs: V2_WITab, rhs: V2_WITab) -> Bool {
@@ -27,76 +31,121 @@ public struct V2_WITab: Equatable, Hashable, Identifiable {
     }
 
     init(
-        definition: any V2_WITabDefinition,
-        userInfo: Any? = nil
-    ) {
-        self.id = definition.id
-        self.definition = definition
-        self.userInfo = userInfo
-    }
-
-    public init(
+        id: ID,
         title: String,
         image: UIImage?,
-        identifier: String,
-        viewControllerProvider: ViewControllerProvider? = nil,
-        userInfo: Any? = nil
+        kind: Kind
     ) {
-        self.init(
-            definition: V2_CustomTabDefinition(
-                id: identifier,
-                title: title,
-                image: image,
-                viewControllerProvider: viewControllerProvider
-            ),
-            userInfo: userInfo
-        )
+        self.id = id
+        self.title = title
+        self.image = image
+        self.kind = kind
     }
 
-    public init(
-        id: String,
+    public static let dom = V2_WITab(
+        id: "wi_dom",
+        title: "DOM",
+        image: UIImage(systemName: "chevron.left.forwardslash.chevron.right"),
+        kind: .builtIn(.dom)
+    )
+
+    public static let network = V2_WITab(
+        id: "wi_network",
+        title: "Network",
+        image: UIImage(systemName: "waveform.path.ecg.rectangle"),
+        kind: .builtIn(.network)
+    )
+
+    public static func custom(
+        id: ID,
         title: String,
         image: UIImage?,
-        viewControllerProvider: ViewControllerProvider? = nil,
-        userInfo: Any? = nil
-    ) {
-        self.init(
+        makeViewController: @escaping ViewControllerProvider
+    ) -> V2_WITab {
+        V2_WITab(
+            id: id,
             title: title,
             image: image,
-            identifier: id,
-            viewControllerProvider: viewControllerProvider,
-            userInfo: userInfo
+            kind: .custom(
+                V2_CustomWITab(
+                    id: id,
+                    makeViewController: makeViewController
+                )
+            )
         )
     }
 
-    public init(
-        id: String,
+    public static func custom(
+        id: ID,
         title: String,
         systemImage: String,
-        viewControllerProvider: ViewControllerProvider? = nil,
-        userInfo: Any? = nil
-    ) {
-        self.init(
+        makeViewController: @escaping ViewControllerProvider
+    ) -> V2_WITab {
+        custom(
+            id: id,
             title: title,
             image: UIImage(systemName: systemImage),
-            identifier: id,
-            viewControllerProvider: viewControllerProvider,
-            userInfo: userInfo
+            makeViewController: makeViewController
         )
     }
 
     public init(
-        identifier: String,
+        id: ID,
         title: String,
-        image: UIImage? = nil,
-        makeViewController: @escaping @MainActor () -> UIViewController
+        image: UIImage?,
+        makeViewController: @escaping ViewControllerProvider
     ) {
-        self.init(
+        self = Self.custom(
+            id: id,
             title: title,
             image: image,
-            identifier: identifier,
-            viewControllerProvider: { _, _ in makeViewController() }
+            makeViewController: makeViewController
         )
+    }
+
+    public init(
+        id: ID,
+        title: String,
+        systemImage: String,
+        makeViewController: @escaping ViewControllerProvider
+    ) {
+        self = Self.custom(
+            id: id,
+            title: title,
+            systemImage: systemImage,
+            makeViewController: makeViewController
+        )
+    }
+}
+
+@MainActor
+public struct V2_WITabProviderContext {
+    public let session: V2_WISession
+
+    public var runtime: V2_WIRuntimeSession {
+        session.runtime
+    }
+}
+
+@MainActor
+struct V2_CustomWITab {
+    let id: V2_WITab.ID
+    let makeViewController: V2_WITab.ViewControllerProvider
+}
+
+extension V2_WITab {
+    var builtIn: BuiltIn? {
+        guard case let .builtIn(builtIn) = kind else {
+            return nil
+        }
+        return builtIn
+    }
+
+    var custom: V2_CustomWITab? {
+        guard case let .custom(custom) = kind else {
+            return nil
+        }
+        return custom
     }
 }
 #endif

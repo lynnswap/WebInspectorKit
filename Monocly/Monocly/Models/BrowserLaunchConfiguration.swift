@@ -311,7 +311,7 @@ struct BrowserLaunchConfiguration {
 
     init(
         initialURL: URL,
-        autoOpenInspectorTabs: [V2_WITab] = V2_WITab.defaults,
+        autoOpenInspectorTabs: [V2_WITab] = [.dom, .network],
         shouldAutoOpenInspector: Bool = false,
         shouldAutoStartDOMSelection: Bool = false,
         shouldShowDiagnostics: Bool = false,
@@ -399,7 +399,7 @@ struct BrowserLaunchConfiguration {
         uiTestScenario: BrowserUITestScenario?
     ) -> [V2_WITab] {
         guard let rawValue = environment["WEBSPECTOR_AUTO_OPEN_INSPECTOR_TABS"] else {
-            return uiTestScenario?.defaultInspectorTabs ?? V2_WITab.defaults
+            return uiTestScenario?.defaultInspectorTabs ?? [.dom, .network]
         }
 
         let requested = rawValue
@@ -418,7 +418,7 @@ struct BrowserLaunchConfiguration {
             }
         }
 
-        return tabs.isEmpty ? V2_WITab.defaults : tabs
+        return tabs.isEmpty ? [.dom, .network] : tabs
     }
 
     private static func resolveUITestScenario(from environment: [String: String]) -> BrowserUITestScenario? {

@@ -8,7 +8,7 @@ import UIKit
 struct V2RegularTabHostViewControllerTests {
     @Test
     func regularHostWrapsSplitTabBeforeInstallingInNavigationStack() throws {
-        let session = V2_WISession(tabs: V2_WITab.defaults)
+        let session = V2_WISession(tabs: [.dom, .network])
         let host = V2_WIRegularTabContentViewController(session: session)
 
         host.loadViewIfNeeded()
@@ -42,7 +42,7 @@ struct V2RegularTabHostViewControllerTests {
 
     @Test
     func regularDOMSplitNavigationItemsAreExposedThroughRoot() throws {
-        let session = V2_WISession(tabs: V2_WITab.defaults)
+        let session = V2_WISession(tabs: [.dom, .network])
         let host = V2_WIRegularTabContentViewController(session: session)
 
         host.loadViewIfNeeded()
@@ -60,7 +60,7 @@ struct V2RegularTabHostViewControllerTests {
 
     @Test
     func regularNetworkRootDoesNotExposeNetworkListNavigationItems() throws {
-        let session = V2_WISession(tabs: V2_WITab.defaults)
+        let session = V2_WISession(tabs: [.dom, .network])
         session.interface.selectTab(V2_WITab.network)
         let host = V2_WIRegularTabContentViewController(session: session)
 
@@ -83,7 +83,7 @@ struct V2RegularTabHostViewControllerTests {
 
     @Test
     func regularNetworkListColumnOwnsNetworkNavigationItems() throws {
-        let session = V2_WISession(tabs: V2_WITab.defaults)
+        let session = V2_WISession(tabs: [.dom, .network])
         session.interface.selectTab(V2_WITab.network)
         let host = V2_WIRegularTabContentViewController(session: session)
 
@@ -110,7 +110,7 @@ struct V2RegularTabHostViewControllerTests {
 
     @Test
     func regularDOMSplitColumnsUseHiddenNavigationControllers() throws {
-        let session = V2_WISession(tabs: V2_WITab.defaults)
+        let session = V2_WISession(tabs: [.dom, .network])
         let host = V2_WIRegularTabContentViewController(session: session)
 
         host.loadViewIfNeeded()
@@ -124,7 +124,7 @@ struct V2RegularTabHostViewControllerTests {
 
     @Test
     func regularNetworkSplitShowsListColumnNavigationOnly() throws {
-        let session = V2_WISession(tabs: V2_WITab.defaults)
+        let session = V2_WISession(tabs: [.dom, .network])
         session.interface.selectTab(V2_WITab.network)
         let host = V2_WIRegularTabContentViewController(session: session)
 
@@ -142,14 +142,59 @@ struct V2RegularTabHostViewControllerTests {
     }
 
     @Test
+    func regularHostRestoresPreviouslySelectedNetworkTab() throws {
+        let session = V2_WISession(tabs: [.dom, .network])
+        session.interface.selectTab(.network)
+
+        let host = V2_WIRegularTabContentViewController(session: session)
+        host.loadViewIfNeeded()
+
+        let rootViewController = try #require(host.viewControllers.first)
+        rootViewController.loadViewIfNeeded()
+        let splitViewController = try childSplitViewController(in: rootViewController)
+        let navigationController = try #require(splitViewController.viewController(for: .primary) as? UINavigationController)
+
+        #expect(navigationController.viewControllers.first is V2_NetworkListViewController)
+        #expect(session.interface.selectedItemID == V2_WITab.network.id)
+    }
+
+    @Test
+    func compactHostRestoresSelectionAfterRegularHostDisplaysNetwork() throws {
+        let session = V2_WISession(tabs: [.dom, .network])
+        session.interface.selectTab(.network)
+
+        let regularHost = V2_WIRegularTabContentViewController(session: session)
+        regularHost.loadViewIfNeeded()
+        let compactHost = V2_WICompactTabBarController(session: session)
+        compactHost.loadViewIfNeeded()
+
+        #expect(compactHost.selectedTab?.identifier == V2_WITab.network.id)
+        #expect(session.interface.selectedItemID == V2_WITab.network.id)
+    }
+
+    @Test
+    func compactElementSelectionSurvivesRegularRoundTrip() throws {
+        let session = V2_WISession(tabs: [.dom, .network])
+        session.interface.selectItem(withID: V2_TabDisplayItem.domElementID)
+
+        let regularHost = V2_WIRegularTabContentViewController(session: session)
+        regularHost.loadViewIfNeeded()
+        let compactHost = V2_WICompactTabBarController(session: session)
+        compactHost.loadViewIfNeeded()
+
+        #expect(compactHost.selectedTab?.identifier == V2_TabDisplayItem.domElementID)
+        #expect(session.interface.selectedItemID == V2_TabDisplayItem.domElementID)
+    }
+
+    @Test
     func customRegularTabCanUseGenericNetworkIdentifier() {
         let customViewController = UIViewController()
-        let tab = V2_WITab(identifier: "wi_network", title: "Network") {
+        let tab = V2_WITab.custom(id: "wi_network", title: "Network", image: nil) { _ in
             customViewController
         }
         let session = V2_WISession(tabs: [tab])
 
-        let viewController = V2_WITabContentFactory.makeViewController(
+        let viewController = V2_TabContentFactory.makeViewController(
             for: tab,
             session: session,
             hostLayout: .regular
@@ -160,34 +205,34 @@ struct V2RegularTabHostViewControllerTests {
 
     @Test
     func regularResolverDoesNotExposeCompactElement() {
-        let resolver = V2_WITabResolver()
+        let resolver = V2_TabDisplayProjection()
 
         #expect(
-            resolver.displayTabs(for: .regular, tabs: V2_WITab.defaults).map(\.id)
+            resolver.displayItems(for: .regular, tabs: [.dom, .network]).map(\.id)
                 == ["wi_dom", "wi_network"]
         )
     }
 
     @Test
     func compactElementSelectionFallsBackToDOMInRegularWithoutMutatingSelection() throws {
-        let session = V2_WISession(tabs: V2_WITab.defaults)
-        session.interface.selectDisplayTab(withID: V2_WIDisplayTab.compactElementID)
+        let session = V2_WISession(tabs: [.dom, .network])
+        session.interface.selectItem(withID: V2_TabDisplayItem.domElementID)
 
-        let selectedDisplayTab = V2_WITabResolver().selectedDisplayTab(
+        let selectedDisplayTab = V2_TabDisplayProjection().resolvedSelection(
             for: .regular,
             tabs: session.interface.tabs,
-            selection: session.interface.selection
+            selectedItemID: session.interface.selectedItemID
         )
 
         #expect(selectedDisplayTab?.id == V2_WITab.dom.id)
-        #expect(session.interface.selection == V2_WIDisplayTab.compactElementID)
+        #expect(session.interface.selectedItemID == V2_TabDisplayItem.domElementID)
     }
 
     @Test
     func domContentViewControllersAreSharedBetweenCompactAndRegular() throws {
-        let session = V2_WISession(tabs: V2_WITab.defaults)
+        let session = V2_WISession(tabs: [.dom, .network])
         let compactDOMNavigationController = try #require(
-            V2_WITabContentFactory.makeViewController(
+            V2_TabContentFactory.makeViewController(
                 for: .dom,
                 session: session,
                 hostLayout: .compact
@@ -197,12 +242,12 @@ struct V2RegularTabHostViewControllerTests {
             compactDOMNavigationController.viewControllers.first as? V2_DOMTreeViewController
         )
         let elementDisplayTab = try #require(
-            V2_WITabResolver()
-                .displayTabs(for: .compact, tabs: session.interface.tabs)
-                .first { $0.id == V2_WIDisplayTab.compactElementID }
+            V2_TabDisplayProjection()
+                .displayItems(for: .compact, tabs: session.interface.tabs)
+                .first { $0.id == V2_TabDisplayItem.domElementID }
         )
         let compactElementNavigationController = try #require(
-            V2_WITabContentFactory.makeViewController(
+            V2_TabContentFactory.makeViewController(
                 for: elementDisplayTab,
                 session: session,
                 hostLayout: .compact
@@ -212,7 +257,7 @@ struct V2RegularTabHostViewControllerTests {
             compactElementNavigationController.viewControllers.first as? V2_DOMElementViewController
         )
 
-        let regularRootViewController = V2_WITabContentFactory.makeViewController(
+        let regularRootViewController = V2_TabContentFactory.makeViewController(
             for: .dom,
             session: session,
             hostLayout: .regular
@@ -225,9 +270,9 @@ struct V2RegularTabHostViewControllerTests {
 
     @Test
     func networkListViewControllerIsSharedBetweenCompactAndRegular() throws {
-        let session = V2_WISession(tabs: V2_WITab.defaults)
+        let session = V2_WISession(tabs: [.dom, .network])
         let compactNavigationController = try #require(
-            V2_WITabContentFactory.makeViewController(
+            V2_TabContentFactory.makeViewController(
                 for: .network,
                 session: session,
                 hostLayout: .compact
@@ -237,7 +282,7 @@ struct V2RegularTabHostViewControllerTests {
             compactNavigationController.viewControllers.first as? V2_NetworkListViewController
         )
 
-        let regularRootViewController = V2_WITabContentFactory.makeViewController(
+        let regularRootViewController = V2_TabContentFactory.makeViewController(
             for: .network,
             session: session,
             hostLayout: .regular
@@ -255,18 +300,18 @@ struct V2RegularTabHostViewControllerTests {
     func customProviderIsCalledOncePerCachedTab() {
         let customViewController = UIViewController()
         var providerCallCount = 0
-        let tab = V2_WITab(identifier: "custom", title: "Custom") {
+        let tab = V2_WITab.custom(id: "custom", title: "Custom", image: nil) { _ in
             providerCallCount += 1
             return customViewController
         }
         let session = V2_WISession(tabs: [tab])
 
-        let compactViewController = V2_WITabContentFactory.makeViewController(
+        let compactViewController = V2_TabContentFactory.makeViewController(
             for: tab,
             session: session,
             hostLayout: .compact
         )
-        let regularViewController = V2_WITabContentFactory.makeViewController(
+        let regularViewController = V2_TabContentFactory.makeViewController(
             for: tab,
             session: session,
             hostLayout: .regular
@@ -280,18 +325,18 @@ struct V2RegularTabHostViewControllerTests {
     @Test
     func cachedCustomContentDetachesFromPreviousParentBeforeReuse() {
         let customViewController = UIViewController()
-        let tab = V2_WITab(identifier: "custom", title: "Custom") {
+        let tab = V2_WITab.custom(id: "custom", title: "Custom", image: nil) { _ in
             customViewController
         }
         let session = V2_WISession(tabs: [tab])
-        let compactViewController = V2_WITabContentFactory.makeViewController(
+        let compactViewController = V2_TabContentFactory.makeViewController(
             for: tab,
             session: session,
             hostLayout: .compact
         )
         let previousNavigationController = UINavigationController(rootViewController: compactViewController)
 
-        let regularViewController = V2_WITabContentFactory.makeViewController(
+        let regularViewController = V2_TabContentFactory.makeViewController(
             for: tab,
             session: session,
             hostLayout: .regular
@@ -304,9 +349,9 @@ struct V2RegularTabHostViewControllerTests {
 
     @Test
     func changingTabsPrunesUnreachableContentCache() throws {
-        let session = V2_WISession(tabs: V2_WITab.defaults)
+        let session = V2_WISession(tabs: [.dom, .network])
         let compactNavigationController = try #require(
-            V2_WITabContentFactory.makeViewController(
+            V2_TabContentFactory.makeViewController(
                 for: .network,
                 session: session,
                 hostLayout: .compact
@@ -315,11 +360,11 @@ struct V2RegularTabHostViewControllerTests {
         let cachedNetworkListViewController = try #require(compactNavigationController.viewControllers.first)
 
         session.interface.setTabs([.dom])
-        let networkKey = V2_WIDisplayContentKey(
-            definitionID: V2_WITab.network.id,
+        let networkKey = V2_TabContentKey(
+            tabID: V2_WITab.network.id,
             contentID: "root"
         )
-        let replacementViewController = session.interface.viewController(for: networkKey, session: session) {
+        let replacementViewController = session.interface.viewController(for: networkKey) {
             UIViewController()
         }
 
@@ -327,13 +372,12 @@ struct V2RegularTabHostViewControllerTests {
     }
 
     @Test
-    func sharedInterfaceKeepsContentCacheScopedBySession() throws {
-        let interface = V2_WIInterfaceModel(tabs: V2_WITab.defaults)
-        let firstSession = V2_WISession(interface: interface)
-        let secondSession = V2_WISession(interface: interface)
+    func contentCacheIsScopedBySession() throws {
+        let firstSession = V2_WISession(tabs: [.dom, .network])
+        let secondSession = V2_WISession(tabs: [.dom, .network])
 
         let firstNavigationController = try #require(
-            V2_WITabContentFactory.makeViewController(
+            V2_TabContentFactory.makeViewController(
                 for: .network,
                 session: firstSession,
                 hostLayout: .compact
@@ -344,7 +388,7 @@ struct V2RegularTabHostViewControllerTests {
         )
 
         let secondNavigationController = try #require(
-            V2_WITabContentFactory.makeViewController(
+            V2_TabContentFactory.makeViewController(
                 for: .network,
                 session: secondSession,
                 hostLayout: .compact
@@ -359,8 +403,8 @@ struct V2RegularTabHostViewControllerTests {
 
     @Test
     func cachedContentParentMovesToCurrentContainer() throws {
-        let session = V2_WISession(tabs: V2_WITab.defaults)
-        let firstRegularRootViewController = V2_WITabContentFactory.makeViewController(
+        let session = V2_WISession(tabs: [.dom, .network])
+        let firstRegularRootViewController = V2_TabContentFactory.makeViewController(
             for: .dom,
             session: session,
             hostLayout: .regular
@@ -373,7 +417,7 @@ struct V2RegularTabHostViewControllerTests {
         let firstParent = try #require(treeViewController.parent)
 
         let compactNavigationController = try #require(
-            V2_WITabContentFactory.makeViewController(
+            V2_TabContentFactory.makeViewController(
                 for: .dom,
                 session: session,
                 hostLayout: .compact
@@ -385,7 +429,7 @@ struct V2RegularTabHostViewControllerTests {
         #expect(treeViewController.parent === compactNavigationController)
         #expect(treeViewController.parent !== firstParent)
 
-        let secondRegularRootViewController = V2_WITabContentFactory.makeViewController(
+        let secondRegularRootViewController = V2_TabContentFactory.makeViewController(
             for: .dom,
             session: session,
             hostLayout: .regular

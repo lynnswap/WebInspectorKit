@@ -8,9 +8,9 @@ View、処理、状態、モデル、タブ定義は省略します。
 ## Source Layout
 
 - `Containers`: V2 の host / wrapper ViewController。`UINavigationController` / `UITabBarController` / split root など、UIKit container の責務を持つ型。
-- `Tabs`: tab API、display tab、tab definition protocol、resolver、factory、host coordinator。
-- `DOM`: DOM 固有の content ViewController、navigation item、DOM tab definition。
-- `Network`: Network 固有の content ViewController、menu view、Network tab definition。
+- `Tabs`: public tab API、layout 別 display item projection、content cache、content factory。
+- `DOM`: DOM 固有の content ViewController、navigation item、built-in DOM tab controller。
+- `Network`: Network 固有の content ViewController、menu view、built-in Network tab controller。
 
 ```mermaid
 flowchart TD
@@ -72,7 +72,9 @@ flowchart TD
 - root の child は compact なら `V2_WICompactTabBarController`、regular なら `V2_WIRegularTabContentViewController`。
 - `V2_WIRegularTabContentViewController` は `UINavigationController`。DOM / Network の切り替え segment もここが持つ。
 - compact host の下に来る DOM 系の標準 VC は `V2_DOMCompactTabNavigationController` で包んだ `V2_DOMTreeViewController` / `V2_DOMElementViewController`。custom tab にはこの wrapping を強制しない。
-- compact の Element は public tab ではなく、DOM tab から派生した compact 専用 display tab。
+- public API の tab は `V2_WITab.dom` / `V2_WITab.network` / custom tab だけ。
+- compact の Element は public tab ではなく、DOM tab から派生した internal display item。
+- final content VC は `V2_TabContentKey` で cache し、navigation / split / root wrapper は host layout ごとに作り直す。
 - regular host の下に来る標準 VC は `V2_DOMSplitViewController` / `V2_NetworkSplitViewController`。
 - ただし `UISplitViewController` は `UINavigationController` に直接入れられないため、regular host では private な `V2_WIRegularSplitRootViewController` で包む。
 - `UISplitViewController` の column は UIKit が自動で `UINavigationController` に包むため、regular split では column 側を明示的な hidden `UINavigationController` にしている。

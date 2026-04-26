@@ -12,18 +12,14 @@ public final class V2_WISession {
 
     public init(
         runtime: V2_WIRuntimeSession = V2_WIRuntimeSession(),
-        interface: V2_WIInterfaceModel = V2_WIInterfaceModel()
+        tabs: [V2_WITab] = [.dom, .network]
     ) {
         self.runtime = runtime
-        self.interface = interface
+        self.interface = V2_WIInterfaceModel(tabs: tabs)
     }
 
     isolated deinit {
-        interface.removeContentCache(for: self)
-    }
-
-    public convenience init(tabs: [V2_WITab]) {
-        self.init(interface: V2_WIInterfaceModel(tabs: tabs))
+        interface.removeContentCache()
     }
 
     public func attach(to webView: WKWebView) async {
@@ -39,103 +35,105 @@ public final class V2_WISession {
 @Observable
 public final class V2_WIInterfaceModel {
     private(set) var tabs: [V2_WITab]
-    private(set) var selection: V2_WIDisplayTab.ID?
-    @ObservationIgnored private var contentViewControllerBySessionID: [
-        ObjectIdentifier: [V2_WIDisplayContentKey: UIViewController]
-    ] = [:]
+    private(set) var selectedItemID: V2_TabDisplayItem.ID?
+    @ObservationIgnored private let projection = V2_TabDisplayProjection()
+    @ObservationIgnored private let contentCache = V2_TabContentCache()
 
-    public init(tabs: [V2_WITab] = V2_WITab.defaults) {
+    public init(tabs: [V2_WITab] = [.dom, .network]) {
         self.tabs = Self.uniqueTabs(tabs)
-        self.selection = self.tabs.first?.id
+        self.selectedItemID = self.tabs.first?.id
+    }
+
+    func displayItems(for hostLayout: V2_WITabHostLayout) -> [V2_TabDisplayItem] {
+        projection.displayItems(for: hostLayout, tabs: tabs)
+    }
+
+    func resolvedSelection(for hostLayout: V2_WITabHostLayout) -> V2_TabDisplayItem? {
+        projection.resolvedSelection(
+            for: hostLayout,
+            tabs: tabs,
+            selectedItemID: selectedItemID
+        )
+    }
+
+    func descriptor(for displayItem: V2_TabDisplayItem) -> V2_TabDisplayDescriptor? {
+        projection.descriptor(for: displayItem, tabs: tabs)
     }
 
     func selectTab(_ tab: V2_WITab) {
         guard tabs.contains(tab) else {
             return
         }
-        selectDisplayTab(withID: tab.id)
+        selectItem(.tab(tab.id))
     }
 
     func selectTab(withID tabID: V2_WITab.ID) {
-        guard tabs.contains(where: { $0.id == tabID }) else {
-            return
-        }
-        selectDisplayTab(withID: tabID)
+        selectItem(.tab(tabID))
     }
 
-    func selectDisplayTab(withID displayTabID: V2_WIDisplayTab.ID) {
-        guard isValidDisplayTabID(displayTabID),
-              selection != displayTabID else {
+    func selectItem(_ displayItem: V2_TabDisplayItem) {
+        guard isValidItemID(displayItem.id),
+              selectedItemID != displayItem.id else {
             return
         }
-        selection = displayTabID
+        selectedItemID = displayItem.id
+    }
+
+    func selectItem(withID displayItemID: V2_TabDisplayItem.ID) {
+        guard isValidItemID(displayItemID),
+              selectedItemID != displayItemID else {
+            return
+        }
+        selectedItemID = displayItemID
     }
 
     func setTabs(_ tabs: [V2_WITab]) {
         let uniqueTabs = Self.uniqueTabs(tabs)
         self.tabs = uniqueTabs
-        pruneContentCache(retaining: Self.reachableContentKeys(for: self.tabs))
-        guard let selection,
-              isValidDisplayTabID(selection) else {
-            self.selection = self.tabs.first?.id
+        pruneContentCache(retaining: reachableContentKeys(for: uniqueTabs))
+        guard let selectedItemID,
+              isValidItemID(selectedItemID) else {
+            self.selectedItemID = uniqueTabs.first?.id
             return
         }
     }
 
     func viewController<Content: UIViewController>(
-        for key: V2_WIDisplayContentKey,
-        session: V2_WISession,
+        for key: V2_TabContentKey,
         make: () -> Content
     ) -> Content {
-        let sessionID = ObjectIdentifier(session)
-        if let viewController = contentViewControllerBySessionID[sessionID]?[key] {
-            if let contentViewController = viewController as? Content {
-                return contentViewController
-            }
-            viewController.wiDetachFromV2ContainerForReuse()
-        }
-
-        let viewController = make()
-        contentViewControllerBySessionID[sessionID, default: [:]][key] = viewController
-        return viewController
+        contentCache.viewController(for: key, make: make)
     }
 
-    func pruneContentCache(retaining keys: Set<V2_WIDisplayContentKey>) {
-        for (sessionID, cache) in contentViewControllerBySessionID {
-            var retainedCache: [V2_WIDisplayContentKey: UIViewController] = [:]
-            for (key, viewController) in cache {
-                guard keys.contains(key) else {
-                    viewController.wiDetachFromV2ContainerForReuse()
-                    continue
-                }
-                retainedCache[key] = viewController
-            }
-            contentViewControllerBySessionID[sessionID] = retainedCache
-        }
+    func pruneContentCache(retaining keys: Set<V2_TabContentKey>) {
+        contentCache.prune(retaining: keys)
     }
 
-    func removeContentCache(for session: V2_WISession) {
-        let sessionID = ObjectIdentifier(session)
-        guard let cache = contentViewControllerBySessionID.removeValue(forKey: sessionID) else {
-            return
-        }
-        for viewController in cache.values {
-            viewController.wiDetachFromV2ContainerForReuse()
-        }
+    func removeContentCache() {
+        contentCache.removeAll()
     }
 
     var selectedTab: V2_WITab? {
-        guard let selection else {
+        guard let selectedItemID else {
             return nil
         }
-        return tabs.first { $0.id == selection }
+        let selectedSourceTabID = selectedItemID == V2_TabDisplayItem.domElementID
+            ? V2_WITab.dom.id
+            : selectedItemID
+        return tabs.first { $0.id == selectedSourceTabID }
     }
 
-    private func isValidDisplayTabID(_ displayTabID: V2_WIDisplayTab.ID) -> Bool {
-        if tabs.contains(where: { $0.id == displayTabID }) {
+    private func isValidItemID(_ displayItemID: V2_TabDisplayItem.ID) -> Bool {
+        if tabs.contains(where: { $0.id == displayItemID }) {
             return true
         }
-        return displayTabID == V2_WIDisplayTab.compactElementID && tabs.contains(where: { $0.definition is V2_DOMTabDefinition })
+        return displayItemID == V2_TabDisplayItem.domElementID
+            && tabs.contains(where: { $0.builtIn == .dom })
+    }
+
+    private func reachableContentKeys(for tabs: [V2_WITab]) -> Set<V2_TabContentKey> {
+        projection.contentKeys(for: .compact, tabs: tabs)
+            .union(projection.contentKeys(for: .regular, tabs: tabs))
     }
 
     private static func uniqueTabs(_ tabs: [V2_WITab]) -> [V2_WITab] {
@@ -145,12 +143,6 @@ public final class V2_WIInterfaceModel {
             }
             result.append(tab)
         }
-    }
-
-    private static func reachableContentKeys(for tabs: [V2_WITab]) -> Set<V2_WIDisplayContentKey> {
-        let resolver = V2_WITabResolver()
-        return resolver.contentKeys(for: .compact, tabs: tabs)
-            .union(resolver.contentKeys(for: .regular, tabs: tabs))
     }
 }
 #endif

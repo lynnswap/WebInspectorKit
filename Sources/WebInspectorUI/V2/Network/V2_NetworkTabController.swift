@@ -2,19 +2,20 @@
 import UIKit
 
 @MainActor
-final class V2_NetworkTabDefinition: V2_WITabDefinition {
-    let id = V2_WIStandardTab.network.id
-    let title = V2_WIStandardTab.network.title
-    let image = V2_WIStandardTab.network.image
+struct V2_NetworkTabController: V2_BuiltInTabController {
+    let tabID = V2_WITab.network.id
+    let descriptor = V2_TabDisplayDescriptor(
+        title: V2_WITab.network.title,
+        image: V2_WITab.network.image
+    )
 
     func makeViewController(
-        for displayTab: V2_WIDisplayTab,
+        for displayItem: V2_TabDisplayItem,
         session: V2_WISession,
         layout: V2_WITabHostLayout
     ) -> UIViewController {
         let listViewController = session.interface.viewController(
-            for: V2_WIDisplayContentKey(definitionID: id, contentID: "root"),
-            session: session
+            for: V2_TabContentKey(tabID: tabID, contentID: "root")
         ) {
             V2_NetworkListViewController(inspector: session.runtime.network.model)
         }

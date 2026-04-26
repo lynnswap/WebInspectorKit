@@ -7,9 +7,9 @@ import UIKit
 struct V2CompactTabBarControllerTests {
     @Test
     func providedCompactTabsUseNavigationControllers() throws {
-        let session = V2_WISession(tabs: V2_WITab.defaults)
+        let session = V2_WISession(tabs: [.dom, .network])
 
-        let domViewController = V2_WITabContentFactory.makeViewController(
+        let domViewController = V2_TabContentFactory.makeViewController(
             for: .dom,
             session: session,
             hostLayout: .compact
@@ -18,7 +18,7 @@ struct V2CompactTabBarControllerTests {
         #expect(domNavigationController.viewControllers.first is V2_DOMTreeViewController)
         #expect(domNavigationController.isNavigationBarHidden == false)
 
-        let networkViewController = V2_WITabContentFactory.makeViewController(
+        let networkViewController = V2_TabContentFactory.makeViewController(
             for: .network,
             session: session,
             hostLayout: .compact
@@ -30,14 +30,14 @@ struct V2CompactTabBarControllerTests {
 
     @Test
     func compactElementTabUsesElementViewController() throws {
-        let session = V2_WISession(tabs: V2_WITab.defaults)
+        let session = V2_WISession(tabs: [.dom, .network])
         let displayTab = try #require(
-            V2_WITabResolver()
-                .displayTabs(for: .compact, tabs: session.interface.tabs)
-                .first { $0.id == V2_WIDisplayTab.compactElementID }
+            V2_TabDisplayProjection()
+                .displayItems(for: .compact, tabs: session.interface.tabs)
+                .first { $0.id == V2_TabDisplayItem.domElementID }
         )
 
-        let viewController = V2_WITabContentFactory.makeViewController(
+        let viewController = V2_TabContentFactory.makeViewController(
             for: displayTab,
             session: session,
             hostLayout: .compact
@@ -49,8 +49,8 @@ struct V2CompactTabBarControllerTests {
 
     @Test
     func compactDOMTreeDoesNotNestAnotherNavigationController() throws {
-        let session = V2_WISession(tabs: V2_WITab.defaults)
-        let domViewController = V2_WITabContentFactory.makeViewController(
+        let session = V2_WISession(tabs: [.dom, .network])
+        let domViewController = V2_TabContentFactory.makeViewController(
             for: .dom,
             session: session,
             hostLayout: .compact
@@ -63,8 +63,8 @@ struct V2CompactTabBarControllerTests {
 
     @Test
     func compactDOMOwnsDOMNavigationItems() throws {
-        let session = V2_WISession(tabs: V2_WITab.defaults)
-        let domViewController = V2_WITabContentFactory.makeViewController(
+        let session = V2_WISession(tabs: [.dom, .network])
+        let domViewController = V2_TabContentFactory.makeViewController(
             for: .dom,
             session: session,
             hostLayout: .compact
@@ -84,8 +84,8 @@ struct V2CompactTabBarControllerTests {
 
     @Test
     func compactNetworkOwnsNetworkNavigationItems() throws {
-        let session = V2_WISession(tabs: V2_WITab.defaults)
-        let networkViewController = V2_WITabContentFactory.makeViewController(
+        let session = V2_WISession(tabs: [.dom, .network])
+        let networkViewController = V2_TabContentFactory.makeViewController(
             for: .network,
             session: session,
             hostLayout: .compact
@@ -108,7 +108,7 @@ struct V2CompactTabBarControllerTests {
 
     @Test
     func compactTabSelectionUsesNonAnimatedTransition() throws {
-        let session = V2_WISession(tabs: V2_WITab.defaults)
+        let session = V2_WISession(tabs: [.dom, .network])
         let tabBarController = V2_WICompactTabBarController(session: session)
         let animator = try #require(
             tabBarController.tabBarController(
@@ -124,12 +124,12 @@ struct V2CompactTabBarControllerTests {
     @Test
     func customCompactTabIsNotForcedIntoNavigationController() {
         let customViewController = UIViewController()
-        let tab = V2_WITab(identifier: "custom", title: "Custom") {
+        let tab = V2_WITab.custom(id: "custom", title: "Custom", image: nil) { _ in
             customViewController
         }
         let session = V2_WISession(tabs: [tab])
 
-        let viewController = V2_WITabContentFactory.makeViewController(
+        let viewController = V2_TabContentFactory.makeViewController(
             for: tab,
             session: session,
             hostLayout: .compact
@@ -142,12 +142,12 @@ struct V2CompactTabBarControllerTests {
     @Test
     func customCompactTabCanUseGenericDOMIdentifier() {
         let customViewController = UIViewController()
-        let tab = V2_WITab(identifier: "wi_dom", title: "DOM") {
+        let tab = V2_WITab.custom(id: "wi_dom", title: "DOM", image: nil) { _ in
             customViewController
         }
         let session = V2_WISession(tabs: [tab])
 
-        let viewController = V2_WITabContentFactory.makeViewController(
+        let viewController = V2_TabContentFactory.makeViewController(
             for: tab,
             session: session,
             hostLayout: .compact
@@ -158,14 +158,14 @@ struct V2CompactTabBarControllerTests {
 
     @Test
     func compactResolverDerivesElementOnlyFromDOMTab() {
-        let resolver = V2_WITabResolver()
+        let resolver = V2_TabDisplayProjection()
 
         #expect(
-            resolver.displayTabs(for: .compact, tabs: V2_WITab.defaults).map(\.id)
-                == ["wi_dom", "wi_element", "wi_network"]
+            resolver.displayItems(for: .compact, tabs: [.dom, .network]).map(\.id)
+                == ["wi_dom", V2_TabDisplayItem.domElementID, "wi_network"]
         )
         #expect(
-            resolver.displayTabs(for: .compact, tabs: [.network]).map(\.id)
+            resolver.displayItems(for: .compact, tabs: [.network]).map(\.id)
                 == ["wi_network"]
         )
     }
