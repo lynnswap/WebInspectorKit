@@ -7,69 +7,91 @@ import UIKit
 @MainActor
 final class V2_NetworkObservingListCell: UICollectionViewListCell {
     private var observationHandles: Set<ObservationHandle> = []
+    private let statusIndicatorView = UIView(frame: CGRect(origin: .zero, size: CGSize(width: 8, height: 8)))
+    private let fileTypeLabel = UILabel()
 #if DEBUG
     private(set) var fileTypeLabelTextForTesting: String?
     private(set) var statusIndicatorColorForTesting: UIColor?
 #endif
 
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        configureStaticViews()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
     override func prepareForReuse() {
         super.prepareForReuse()
-        resetObservationHandles()
-        contentConfiguration = nil
-        accessories = []
 #if DEBUG
         fileTypeLabelTextForTesting = nil
         statusIndicatorColorForTesting = nil
 #endif
     }
 
-    func bind(item: NetworkEntry) {
-        resetObservationHandles()
-
-        store(
-            item.observe(\.displayName) { [weak self] displayName in
-                self?.render(displayName: displayName)
-            }
-        )
-        store(
-            item.observe([\.fileTypeLabel, \.statusSeverity]) { [weak self, weak item] in
-                guard let item else {
-                    return
-                }
-                self?.renderAccessories(item: item)
-            }
-        )
-    }
-
-    private func resetObservationHandles() {
+    isolated deinit {
         observationHandles.removeAll()
     }
 
-    private func store(_ observationHandle: ObservationHandle) {
-        observationHandle.store(in: &observationHandles)
+    func bind(item: NetworkEntry) {
+        observationHandles.removeAll()
+        render(displayName: item.displayName)
+        renderAccessories(item: item)
+
+        item.observe([\.fileTypeLabel, \.statusSeverity]) { [weak self, weak item] in
+            guard let item else {
+                return
+            }
+            self?.renderAccessories(item: item)
+        }
+        .store(in: &observationHandles)
+    }
+    
+    private func configureStaticViews() {
+        statusIndicatorView.layer.cornerRadius = 4
+
+        fileTypeLabel.textColor = .secondaryLabel
+        fileTypeLabel.font = .preferredFont(forTextStyle: .footnote)
+        fileTypeLabel.adjustsFontForContentSizeCategory = true
+
+        contentConfiguration = Self.makeContentConfiguration()
+        accessories = [
+            .customView(
+                configuration: .init(
+                    customView: statusIndicatorView,
+                    placement: .leading(),
+                    reservedLayoutWidth: .custom(8),
+                    maintainsFixedSize: true
+                )
+            ),
+            .customView(
+                configuration: .init(
+                    customView: fileTypeLabel,
+                    placement: .trailing(),
+                    reservedLayoutWidth: .actual,
+                    maintainsFixedSize: false
+                )
+            ),
+            .disclosureIndicator()
+        ]
     }
 
     private func render(displayName: String) {
         var content = (contentConfiguration as? UIListContentConfiguration) ?? Self.makeContentConfiguration()
+        guard content.text != displayName else {
+            return
+        }
         content.text = displayName
         contentConfiguration = content
     }
 
     private func renderAccessories(item: NetworkEntry) {
-        let statusColor = networkStatusColor(for: item.statusSeverity)
-        accessories = [
-            .customView(configuration: Self.statusIndicatorConfiguration(color: statusColor)),
-            .label(
-                text: item.fileTypeLabel,
-                options: .init(
-                    reservedLayoutWidth: .actual,
-                    tintColor: .secondaryLabel,
-                    font: .preferredFont(forTextStyle: .footnote),
-                    adjustsFontForContentSizeCategory: true
-                )
-            ),
-            .disclosureIndicator()
-        ]
+        let statusColor = item.statusSeverity.color
+        statusIndicatorView.backgroundColor = statusColor
+        fileTypeLabel.text = item.fileTypeLabel
 #if DEBUG
         fileTypeLabelTextForTesting = item.fileTypeLabel
         statusIndicatorColorForTesting = statusColor
@@ -89,18 +111,6 @@ final class V2_NetworkObservingListCell: UICollectionViewListCell {
         )
         return content
     }
-
-    private static func statusIndicatorConfiguration(color: UIColor) -> UICellAccessory.CustomViewConfiguration {
-        let dotView = UIView(frame: CGRect(origin: .zero, size: CGSize(width: 8, height: 8)))
-        dotView.backgroundColor = color
-        dotView.layer.cornerRadius = 4
-
-        return .init(
-            customView: dotView,
-            placement: .leading(),
-            reservedLayoutWidth: .custom(8),
-            maintainsFixedSize: true
-        )
-    }
 }
+
 #endif

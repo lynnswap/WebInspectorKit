@@ -461,7 +461,7 @@ import UIKit
     }
 
     private func makeStatusBadgeAttachment(for entry: NetworkEntry, baselineFont: UIFont) -> NSTextAttachment {
-        let tint = networkStatusColor(for: entry.statusSeverity)
+        let tint = entry.statusSeverity.color
         let badgeFont = UIFontMetrics(forTextStyle: .caption1).scaledFont(
             for: .systemFont(
                 ofSize: UIFont.preferredFont(forTextStyle: .caption1).pointSize,

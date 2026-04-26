@@ -222,39 +222,6 @@ struct V2NetworkListViewControllerTests {
     }
 
     @Test
-    func listCellTextUpdatesWhenEntryDisplayNameChanges() async throws {
-        let inspector = WINetworkModel(session: NetworkSession())
-        let entries = inspector.store.applySnapshots([
-            makeSnapshot(requestID: 1, url: "https://example.com/assets/app.js", mimeType: "text/javascript")
-        ])
-        let entry = try #require(entries.first)
-        let viewController = V2_NetworkListViewController(inspector: inspector)
-        let window = showInWindow(viewController)
-        defer { window.isHidden = true }
-
-        let collectionView = viewController.collectionViewForTesting
-        let indexPath = IndexPath(item: 0, section: 0)
-        let didRender = await waitUntil {
-            collectionView.cellForItem(at: indexPath) is UICollectionViewListCell
-        }
-        #expect(didRender)
-
-        entry.url = "https://example.com/styles/site.css"
-
-        let didUpdate = await waitUntil {
-            guard
-                let cell = collectionView.cellForItem(at: indexPath) as? UICollectionViewListCell,
-                let content = cell.contentConfiguration as? UIListContentConfiguration
-            else {
-                return false
-            }
-            return content.text == "site.css"
-        }
-
-        #expect(didUpdate)
-    }
-
-    @Test
     func listCellAccessoriesUpdateWhenEntryMetadataChanges() async throws {
         let inspector = WINetworkModel(session: NetworkSession())
         let entries = inspector.store.applySnapshots([

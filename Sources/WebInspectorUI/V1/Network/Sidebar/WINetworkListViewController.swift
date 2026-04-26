@@ -301,7 +301,7 @@ private final class WINetworkObservingListCell: UICollectionViewListCell {
 @MainActor
 private func statusIndicatorConfiguration(for item: NetworkEntry) -> UICellAccessory.CustomViewConfiguration {
     let dotView = UIView(frame: CGRect(origin: .zero, size: CGSize(width: 8, height: 8)))
-    dotView.backgroundColor = networkStatusColor(for: item.statusSeverity)
+    dotView.backgroundColor = item.statusSeverity.color
     dotView.layer.cornerRadius = 4
 
     return .init(
