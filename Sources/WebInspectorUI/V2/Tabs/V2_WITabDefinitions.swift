@@ -141,7 +141,6 @@ final class V2_NetworkTabDefinition: V2_WITabDefinition {
 
         switch layout {
         case .compact:
-            listViewController.installNavigationItems(on: listViewController.navigationItem)
             return V2_WICompactTabNavigationController(
                 rootViewController: listViewController
             )

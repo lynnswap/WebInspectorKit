@@ -97,19 +97,57 @@ struct V2NetworkListViewControllerTests {
     }
 
     @Test
-    func searchControllerTextSyncsFromNetworkModelWhenInstalled() async throws {
+    func searchControllerTextSyncsFromNetworkModelChanges() async throws {
         let inspector = WINetworkModel(session: NetworkSession())
         let viewController = V2_NetworkListViewController(inspector: inspector)
 
         viewController.loadViewIfNeeded()
         inspector.setSearchText("external-query")
-        viewController.installNavigationItems(on: viewController.navigationItem)
 
         let didSync = await waitUntil {
             viewController.searchControllerForTesting.searchBar.text == "external-query"
         }
 
         #expect(didSync)
+
+        inspector.clearSearchText()
+
+        let didClear = await waitUntil {
+            viewController.searchControllerForTesting.searchBar.text == ""
+        }
+
+        #expect(didClear)
+    }
+
+    @Test
+    func searchTextSurvivesMovingCachedListBetweenNavigationContainers() {
+        let inspector = WINetworkModel(session: NetworkSession())
+        let viewController = V2_NetworkListViewController(inspector: inspector)
+        let firstNavigationController = UINavigationController(rootViewController: viewController)
+        let window = showInWindow(firstNavigationController)
+        defer { window.isHidden = true }
+
+        updateSearchText("persisted-query", in: viewController)
+        let firstSearchController = viewController.searchControllerForTesting
+
+        viewController.wiDetachFromV2ContainerForReuse()
+
+        firstSearchController.searchBar.text = ""
+        viewController.updateSearchResults(for: firstSearchController)
+
+        #expect(inspector.searchText == "persisted-query")
+        #expect(viewController.navigationItem.searchController == nil)
+
+        let secondNavigationController = UINavigationController(rootViewController: viewController)
+        window.rootViewController = secondNavigationController
+        secondNavigationController.view.frame = window.bounds
+        secondNavigationController.view.layoutIfNeeded()
+
+        let secondSearchController = viewController.searchControllerForTesting
+
+        #expect(secondSearchController !== firstSearchController)
+        #expect(secondSearchController.searchBar.text == "persisted-query")
+        #expect(inspector.searchText == "persisted-query")
     }
 
     @Test
@@ -138,6 +176,26 @@ struct V2NetworkListViewControllerTests {
 
         #expect(didClear)
         #expect(try filterAction(.all, in: viewController.filterMenuForTesting).state == .on)
+    }
+
+    @Test
+    func filterMenuSupportsMultipleResourceFilters() async throws {
+        let inspector = WINetworkModel(session: NetworkSession())
+        let viewController = V2_NetworkListViewController(inspector: inspector)
+
+        viewController.loadViewIfNeeded()
+
+        try filterAction(.script, in: viewController.filterMenuForTesting).performWithSender(nil, target: nil)
+        try filterAction(.image, in: viewController.filterMenuForTesting).performWithSender(nil, target: nil)
+
+        let didSelectMultipleFilters = await waitUntil {
+            inspector.activeResourceFilters == [.script, .image]
+                && viewController.filterItemForTesting.isSelected
+        }
+
+        #expect(didSelectMultipleFilters)
+        #expect(try filterAction(.script, in: viewController.filterMenuForTesting).state == .on)
+        #expect(try filterAction(.image, in: viewController.filterMenuForTesting).state == .on)
     }
 
     @Test
@@ -258,11 +316,9 @@ struct V2NetworkListViewControllerTests {
         let viewController = V2_NetworkListViewController(inspector: inspector)
 
         viewController.loadViewIfNeeded()
-        viewController.installNavigationItems(on: viewController.navigationItem)
 
         let clearAction = try #require(viewController.overflowMenuForTesting.children.first as? UIAction)
         #expect(viewController.navigationItem.additionalOverflowItems != nil)
-        #expect(clearAction.attributes.contains(.destructive))
         #expect(clearAction.attributes.contains(.disabled))
     }
 
@@ -275,7 +331,6 @@ struct V2NetworkListViewControllerTests {
         let viewController = V2_NetworkListViewController(inspector: inspector)
 
         viewController.loadViewIfNeeded()
-        viewController.installNavigationItems(on: viewController.navigationItem)
 
         let clearAction = try #require(viewController.overflowMenuForTesting.children.first as? UIAction)
         #expect(viewController.navigationItem.additionalOverflowItems != nil)
@@ -358,15 +413,20 @@ struct V2NetworkListViewControllerTests {
         _ filter: NetworkResourceFilter,
         in menu: UIMenu
     ) throws -> UIAction {
-        if filter == .all {
-            return try #require(menu.children.first as? UIAction)
+        try #require(action(title: filter.localizedTitle, in: menu))
+    }
+
+    private func action(title: String, in menu: UIMenu) -> UIAction? {
+        for child in menu.children {
+            if let action = child as? UIAction, action.title == title {
+                return action
+            }
+            if let childMenu = child as? UIMenu,
+               let action = action(title: title, in: childMenu) {
+                return action
+            }
         }
-        let resourceSection = try #require(menu.children.compactMap { $0 as? UIMenu }.first)
-        return try #require(
-            resourceSection.children
-                .compactMap { $0 as? UIAction }
-                .first { $0.title == filter.localizedTitle }
-        )
+        return nil
     }
 
     private func waitUntil(

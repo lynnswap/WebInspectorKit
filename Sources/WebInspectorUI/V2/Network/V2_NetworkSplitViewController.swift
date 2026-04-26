@@ -11,7 +11,6 @@ final class V2_NetworkSplitViewController: UISplitViewController {
 
     init(listViewController: V2_NetworkListViewController) {
         self.listViewController = listViewController
-        listViewController.installNavigationItems(on: listViewController.navigationItem)
         primaryViewController = V2_NetworkListColumnNavigationController(
             rootViewController: listViewController
         )

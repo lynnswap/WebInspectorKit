@@ -97,6 +97,8 @@ struct V2RegularTabHostViewControllerTests {
             navigationController.viewControllers.first as? V2_NetworkListViewController
         )
 
+        listViewController.loadViewIfNeeded()
+
         #expect(listViewController.navigationItem.searchController != nil)
         #expect(listViewController.navigationItem.additionalOverflowItems != nil)
         #expect(

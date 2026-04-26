@@ -4,10 +4,11 @@ import WebInspectorEngine
 import WebInspectorRuntime
 
 #if canImport(UIKit)
+import UIHostingMenu
 import UIKit
 
 @MainActor
-class V2_NetworkListViewController: UICollectionViewController {
+class V2_NetworkListViewController: UICollectionViewController, UISearchResultsUpdating {
     private enum SectionIdentifier: Hashable {
         case main
     }
@@ -25,7 +26,23 @@ class V2_NetworkListViewController: UICollectionViewController {
     private var observationHandles: Set<ObservationHandle> = []
 
     private var needsSnapshotReloadOnNextAppearance = false
-    private lazy var navigationItems = V2_NetworkNavigationItems(inspector: inspector)
+    private var isApplyingSearchPresentation = false
+    private var activeSearchController: UISearchController?
+    private lazy var filterHostingMenu = UIHostingMenu(
+        rootView: V2_NetworkFilterMenuView(inspector: inspector)
+    )
+    private lazy var overflowHostingMenu = UIHostingMenu(
+        rootView: V2_NetworkOverflowMenuView(inspector: inspector)
+    )
+    private lazy var filterItem: UIBarButtonItem = {
+        let item = UIBarButtonItem(
+            image: UIImage(systemName: "line.3.horizontal.decrease"),
+            menu: makeFilterMenu()
+        )
+        item.accessibilityIdentifier = "WI.Network.FilterButton"
+        item.isSelected = inspector.effectiveResourceFilters.isEmpty == false
+        return item
+    }()
     private lazy var dataSource = makeDataSource()
 
     init(inspector: WINetworkModel) {
@@ -39,8 +56,9 @@ class V2_NetworkListViewController: UICollectionViewController {
         nil
     }
 
-    deinit {
+    isolated deinit {
         observationHandles.removeAll()
+        detachSearchPresentation()
     }
 
     override func viewDidLoad() {
@@ -52,17 +70,26 @@ class V2_NetworkListViewController: UICollectionViewController {
         collectionView.keyboardDismissMode = .onDrag
         collectionView.accessibilityIdentifier = "V2.Network.List"
 
+        configureNavigationItem()
         reloadDataFromInspector()
     }
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        configureNavigationItem()
         navigationController?.setNavigationBarHidden(false, animated: animated)
     }
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         flushPendingSnapshotUpdateIfNeeded()
+    }
+
+    override func willMove(toParent parent: UIViewController?) {
+        if parent == nil {
+            detachSearchPresentation()
+        }
+        super.willMove(toParent: parent)
     }
 
     private static func makeListLayout() -> UICollectionViewLayout {
@@ -81,15 +108,133 @@ class V2_NetworkListViewController: UICollectionViewController {
         }
     }
 
-    func installNavigationItems(on navigationItem: UINavigationItem) {
-        navigationItems.install(on: navigationItem)
-    }
-
     private func startObservingInspector() {
         inspector.observe(\.displayEntries, options: Self.snapshotObservationOptions) { [weak self] displayEntries in
             self?.reloadDataFromInspector(displayEntries: displayEntries)
         }
         .store(in: &observationHandles)
+
+        inspector.observe(\.searchText) { [weak self] searchText in
+            self?.renderSearchText(searchText)
+        }
+        .store(in: &observationHandles)
+
+        inspector.observe(\.effectiveResourceFilters) { [weak self] _ in
+            self?.resourceFilterSelectionDidChange()
+        }
+        .store(in: &observationHandles)
+    }
+
+    private func configureNavigationItem() {
+        navigationItem.style = .browser
+        if activeSearchController == nil || navigationItem.searchController !== activeSearchController {
+            attachSearchPresentation()
+        }
+        navigationItem.preferredSearchBarPlacement = .stacked
+        navigationItem.hidesSearchBarWhenScrolling = false
+        navigationItem.trailingItemGroups = [
+            UIBarButtonItemGroup(
+                barButtonItems: [filterItem],
+                representativeItem: nil
+            )
+        ]
+        navigationItem.additionalOverflowItems = makeOverflowMenuElement()
+
+        renderSearchText(inspector.searchText)
+        renderFilterItem()
+    }
+
+    func updateSearchResults(for searchController: UISearchController) {
+        guard
+            isApplyingSearchPresentation == false,
+            searchController === activeSearchController
+        else {
+            return
+        }
+        let searchText = searchController.searchBar.text ?? ""
+        guard searchText != inspector.searchText else {
+            return
+        }
+        inspector.setSearchText(searchText)
+    }
+
+    private func attachSearchPresentation() {
+        let searchController = makeSearchController()
+        isApplyingSearchPresentation = true
+        defer {
+            isApplyingSearchPresentation = false
+        }
+
+        activeSearchController?.searchResultsUpdater = nil
+        activeSearchController = searchController
+        navigationItem.searchController = searchController
+    }
+
+    private func detachSearchPresentation() {
+        guard activeSearchController != nil || navigationItem.searchController != nil else {
+            return
+        }
+
+        isApplyingSearchPresentation = true
+        defer {
+            isApplyingSearchPresentation = false
+        }
+
+        activeSearchController?.searchResultsUpdater = nil
+        activeSearchController = nil
+        navigationItem.searchController = nil
+    }
+
+    private func makeSearchController() -> UISearchController {
+        let searchController = UISearchController(searchResultsController: nil)
+        searchController.obscuresBackgroundDuringPresentation = false
+        searchController.searchBar.placeholder = wiLocalized("network.search.placeholder")
+        searchController.searchBar.text = inspector.searchText
+        searchController.searchResultsUpdater = self
+        return searchController
+    }
+
+    private func renderSearchText(_ text: String) {
+        guard
+            isViewLoaded,
+            let activeSearchController,
+            activeSearchController.searchBar.text != text
+        else {
+            return
+        }
+        isApplyingSearchPresentation = true
+        defer {
+            isApplyingSearchPresentation = false
+        }
+        activeSearchController.searchBar.text = text
+    }
+
+    private func renderFilterItem() {
+        guard isViewLoaded else {
+            return
+        }
+        filterItem.isSelected = inspector.effectiveResourceFilters.isEmpty == false
+    }
+
+    private func resourceFilterSelectionDidChange() {
+        if isViewLoaded {
+            filterHostingMenu.setNeedsUpdate()
+        }
+        renderFilterItem()
+    }
+
+    private func makeFilterMenu() -> UIMenu {
+        (try? filterHostingMenu.menu()) ?? UIMenu()
+    }
+
+    private func makeOverflowMenuElement() -> UIDeferredMenuElement {
+        UIDeferredMenuElement.uncached { [weak self] completion in
+            completion((self?.makeOverflowMenu() ?? UIMenu()).children)
+        }
+    }
+
+    private func makeOverflowMenu() -> UIMenu {
+        (try? overflowHostingMenu.menu()) ?? UIMenu()
     }
 
     private func makeDataSource() -> UICollectionViewDiffableDataSource<SectionIdentifier, NetworkEntry> {
@@ -151,6 +296,7 @@ class V2_NetworkListViewController: UICollectionViewController {
     private func reloadDataFromInspector(displayEntries: [NetworkEntry]? = nil) {
         let resolvedDisplayEntries = displayEntries ?? inspector.displayEntries
         requestSnapshotUpdate(displayEntries: resolvedDisplayEntries)
+        overflowHostingMenu.requestUpdate()
 
         let shouldShowEmptyState = resolvedDisplayEntries.isEmpty
         collectionView.isHidden = shouldShowEmptyState
@@ -174,106 +320,6 @@ class V2_NetworkListViewController: UICollectionViewController {
     }
 }
 
-@MainActor
-final class V2_NetworkObservingListCell: UICollectionViewListCell {
-    private var observationHandles: Set<ObservationHandle> = []
-#if DEBUG
-    private(set) var fileTypeLabelTextForTesting: String?
-    private(set) var statusIndicatorColorForTesting: UIColor?
-#endif
-
-    override func prepareForReuse() {
-        super.prepareForReuse()
-        resetObservationHandles()
-        contentConfiguration = nil
-        accessories = []
-#if DEBUG
-        fileTypeLabelTextForTesting = nil
-        statusIndicatorColorForTesting = nil
-#endif
-    }
-
-    func bind(item: NetworkEntry) {
-        resetObservationHandles()
-
-        store(
-            item.observe(\.displayName) { [weak self] displayName in
-                self?.render(displayName: displayName)
-            }
-        )
-        store(
-            item.observe([\.fileTypeLabel, \.statusSeverity]) { [weak self, weak item] in
-                guard let item else {
-                    return
-                }
-                self?.renderAccessories(item: item)
-            }
-        )
-    }
-
-    private func resetObservationHandles() {
-        observationHandles.removeAll()
-    }
-
-    private func store(_ observationHandle: ObservationHandle) {
-        observationHandle.store(in: &observationHandles)
-    }
-
-    private func render(displayName: String) {
-        var content = (contentConfiguration as? UIListContentConfiguration) ?? Self.makeContentConfiguration()
-        content.text = displayName
-        contentConfiguration = content
-    }
-
-    private func renderAccessories(item: NetworkEntry) {
-        let statusColor = networkStatusColor(for: item.statusSeverity)
-        accessories = [
-            .customView(configuration: Self.statusIndicatorConfiguration(color: statusColor)),
-            .label(
-                text: item.fileTypeLabel,
-                options: .init(
-                    reservedLayoutWidth: .actual,
-                    tintColor: .secondaryLabel,
-                    font: .preferredFont(forTextStyle: .footnote),
-                    adjustsFontForContentSizeCategory: true
-                )
-            ),
-            .disclosureIndicator()
-        ]
-#if DEBUG
-        fileTypeLabelTextForTesting = item.fileTypeLabel
-        statusIndicatorColorForTesting = statusColor
-#endif
-    }
-
-    private static func makeContentConfiguration() -> UIListContentConfiguration {
-        var content = UIListContentConfiguration.cell()
-        content.secondaryText = nil
-        content.textProperties.numberOfLines = 2
-        content.textProperties.lineBreakMode = .byTruncatingMiddle
-        content.textProperties.font = UIFontMetrics(forTextStyle: .subheadline).scaledFont(
-            for: .systemFont(
-                ofSize: UIFont.preferredFont(forTextStyle: .subheadline).pointSize,
-                weight: .semibold
-            )
-        )
-        return content
-    }
-
-    private static func statusIndicatorConfiguration(color: UIColor) -> UICellAccessory.CustomViewConfiguration {
-        let dotView = UIView(frame: CGRect(origin: .zero, size: CGSize(width: 8, height: 8)))
-        dotView.backgroundColor = color
-        dotView.layer.cornerRadius = 4
-
-        return .init(
-            customView: dotView,
-            placement: .leading(),
-            reservedLayoutWidth: .custom(8),
-            maintainsFixedSize: true
-        )
-    }
-}
-
 #if DEBUG
 extension V2_NetworkListViewController {
     var collectionViewForTesting: UICollectionView {
@@ -281,19 +327,32 @@ extension V2_NetworkListViewController {
     }
 
     var searchControllerForTesting: UISearchController {
-        navigationItems.searchControllerForTesting
+        loadViewIfNeeded()
+        configureNavigationItem()
+        guard let activeSearchController else {
+            fatalError("Expected V2_NetworkListViewController to have an active search controller")
+        }
+        return activeSearchController
     }
 
     var filterItemForTesting: UIBarButtonItem {
-        navigationItems.filterItemForTesting
+        filterItem
     }
 
     var filterMenuForTesting: UIMenu {
-        navigationItems.filterMenuForTesting
+        materializedMenuForTesting(filterHostingMenu)
     }
 
     var overflowMenuForTesting: UIMenu {
-        navigationItems.overflowMenuForTesting
+        materializedMenuForTesting(overflowHostingMenu)
+    }
+
+    private func materializedMenuForTesting<Content>(_ hostingMenu: UIHostingMenu<Content>) -> UIMenu {
+        if let cachedMenu = hostingMenu.cachedMenu {
+            return cachedMenu
+        }
+        _ = try? hostingMenu.menu()
+        return hostingMenu.cachedMenu ?? UIMenu()
     }
 }
 #endif
