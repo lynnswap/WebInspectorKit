@@ -1,18 +1,24 @@
 #if canImport(UIKit)
 import ObservationBridge
+import SyntaxEditorUI
 import UIKit
 import WebInspectorEngine
 
 final class V2_DOMElementPreviewCell: V2_DOMElementBaseCell {
-    private let previewTextView = V2_DOMElementSelectableTextView(frame: .zero, textContainer: nil)
+    private static let minimumHeight: CGFloat = 44
 
-    override var selectableTextViewsForSizing: [V2_DOMElementSelectableTextView] {
-        [previewTextView]
-    }
+    private let previewModel = SyntaxEditorModel(
+        text: "",
+        language: BuiltinSyntaxLanguages.html,
+        isEditable: false,
+        lineWrappingEnabled: true
+    )
+    private lazy var previewEditorView = SyntaxEditorView(model: previewModel)
+    private var layoutInvalidationTask: Task<Void, Never>?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        configurePreviewTextView()
+        configurePreviewEditorView()
     }
 
     @available(*, unavailable)
@@ -22,7 +28,39 @@ final class V2_DOMElementPreviewCell: V2_DOMElementBaseCell {
 
     override func prepareForReuse() {
         super.prepareForReuse()
-        previewTextView.apply(text: "")
+        layoutInvalidationTask?.cancel()
+        render(displayPreviewText: "")
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        updateVerticalTextInsets()
+    }
+
+    override func preferredLayoutAttributesFitting(
+        _ layoutAttributes: UICollectionViewLayoutAttributes
+    ) -> UICollectionViewLayoutAttributes {
+        let attributes = super.preferredLayoutAttributesFitting(layoutAttributes)
+        let targetWidth = attributes.size.width > 0 ? attributes.size.width : layoutAttributes.size.width
+        guard targetWidth > 0 else {
+            return attributes
+        }
+
+        contentView.bounds.size.width = targetWidth
+        contentView.setNeedsLayout()
+        contentView.layoutIfNeeded()
+
+        let textWidth = previewEditorView.bounds.width > 0
+            ? previewEditorView.bounds.width
+            : max(targetWidth - contentView.layoutMargins.left - contentView.layoutMargins.right, 1)
+        let textHeight = fittingEditorHeight(for: textWidth)
+        attributes.size.width = targetWidth
+        attributes.size.height = max(
+            Self.minimumHeight,
+            attributes.size.height,
+            ceil(textHeight + contentView.layoutMargins.top + contentView.layoutMargins.bottom)
+        )
+        return attributes
     }
 
     func bind(node: DOMNodeModel?) {
@@ -31,7 +69,7 @@ final class V2_DOMElementPreviewCell: V2_DOMElementBaseCell {
         contentConfiguration = nil
 
         guard let node else {
-            previewTextView.apply(text: "")
+            render(displayPreviewText: "")
             return
         }
         
@@ -44,22 +82,97 @@ final class V2_DOMElementPreviewCell: V2_DOMElementBaseCell {
         )
     }
 
-    private func configurePreviewTextView() {
-        previewTextView.translatesAutoresizingMaskIntoConstraints = false
-        previewTextView.font = Self.monospacedFootnoteFont
-        previewTextView.textColor = .label
-        contentView.addSubview(previewTextView)
+    private func configurePreviewEditorView() {
+        previewEditorView.translatesAutoresizingMaskIntoConstraints = false
+        previewEditorView.isEditable = false
+        previewEditorView.isSelectable = true
+        previewEditorView.isScrollEnabled = false
+        previewEditorView.alwaysBounceVertical = false
+        previewEditorView.backgroundColor = .clear
+        previewEditorView.textContainer.lineFragmentPadding = 0
+        previewEditorView.textContainerInset = .zero
+        previewEditorView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        previewEditorView.setContentCompressionResistancePriority(.required, for: .vertical)
+        previewEditorView.setContentHuggingPriority(.required, for: .vertical)
+        contentView.addSubview(previewEditorView)
 
         NSLayoutConstraint.activate([
-            previewTextView.topAnchor.constraint(equalTo: contentView.layoutMarginsGuide.topAnchor),
-            previewTextView.leadingAnchor.constraint(equalTo: contentView.layoutMarginsGuide.leadingAnchor),
-            previewTextView.trailingAnchor.constraint(equalTo: contentView.layoutMarginsGuide.trailingAnchor),
-            previewTextView.bottomAnchor.constraint(equalTo: contentView.layoutMarginsGuide.bottomAnchor),
+            previewEditorView.topAnchor.constraint(equalTo: contentView.layoutMarginsGuide.topAnchor),
+            previewEditorView.leadingAnchor.constraint(equalTo: contentView.layoutMarginsGuide.leadingAnchor),
+            previewEditorView.trailingAnchor.constraint(equalTo: contentView.layoutMarginsGuide.trailingAnchor),
+            previewEditorView.bottomAnchor.constraint(equalTo: contentView.layoutMarginsGuide.bottomAnchor),
         ])
     }
 
     private func render(displayPreviewText: String) {
-        previewTextView.apply(text: displayPreviewText)
+        guard previewModel.text != displayPreviewText else {
+            return
+        }
+        previewModel.text = displayPreviewText
+        previewEditorView.invalidateIntrinsicContentSize()
+        setNeedsLayout()
+        scheduleLayoutInvalidation()
+    }
+
+    private func fittingEditorHeight(for width: CGFloat) -> CGFloat {
+        guard width > 0 else {
+            return 0
+        }
+
+        let originalInsets = previewEditorView.textContainerInset
+        let sizingInsets = UIEdgeInsets(top: 0, left: originalInsets.left, bottom: 0, right: originalInsets.right)
+        if originalInsets != sizingInsets {
+            previewEditorView.textContainerInset = sizingInsets
+        }
+        let size = previewEditorView.sizeThatFits(
+            CGSize(width: width, height: CGFloat.greatestFiniteMagnitude)
+        )
+        if previewEditorView.textContainerInset != originalInsets {
+            previewEditorView.textContainerInset = originalInsets
+        }
+        return ceil(size.height)
+    }
+
+    private func updateVerticalTextInsets() {
+        guard previewEditorView.bounds.width > 0, previewEditorView.bounds.height > 0 else {
+            return
+        }
+
+        let textHeight = fittingEditorHeight(for: previewEditorView.bounds.width)
+        let verticalInset = max(0, floor((previewEditorView.bounds.height - textHeight) / 2))
+        let nextInsets = UIEdgeInsets(top: verticalInset, left: 0, bottom: verticalInset, right: 0)
+        guard previewEditorView.textContainerInset != nextInsets else {
+            return
+        }
+
+        previewEditorView.textContainerInset = nextInsets
+        previewEditorView.contentOffset = .zero
+    }
+
+    private func scheduleLayoutInvalidation() {
+        layoutInvalidationTask?.cancel()
+        layoutInvalidationTask = Task { @MainActor [weak self] in
+            await Task.yield()
+            guard !Task.isCancelled, let self else {
+                return
+            }
+
+            self.previewEditorView.invalidateIntrinsicContentSize()
+            self.contentView.setNeedsLayout()
+            self.setNeedsLayout()
+            self.containingCollectionView?.collectionViewLayout.invalidateLayout()
+        }
+    }
+
+    private var containingCollectionView: UICollectionView? {
+        var candidate = superview
+        while let view = candidate {
+            if let collectionView = view as? UICollectionView {
+                return collectionView
+            }
+            candidate = view.superview
+        }
+        return nil
     }
 }
 

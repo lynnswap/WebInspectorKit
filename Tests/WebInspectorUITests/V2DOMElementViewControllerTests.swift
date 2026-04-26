@@ -1,4 +1,5 @@
 #if canImport(UIKit)
+import SyntaxEditorUI
 import Testing
 import UIKit
 @testable import WebInspectorEngine
@@ -52,8 +53,10 @@ struct V2DOMElementViewControllerTests {
                 == "<div id=\"selected\" class=\"hero\">"
         )
         let previewTextView = visibleTextView(in: viewController.collectionView, at: IndexPath(item: 0, section: 0))
+        #expect(previewTextView is SyntaxEditorView)
         #expect(previewTextView?.isSelectable == true)
         #expect(previewTextView?.isEditable == false)
+        #expect(previewTextView?.isScrollEnabled == false)
         #expect(hasCenteredTextContainerInsets(previewTextView))
         #expect(visibleCellHeight(in: viewController.collectionView, at: IndexPath(item: 0, section: 0)) ?? 0 >= 44)
         #expect(visibleListCellText(in: viewController.collectionView, at: IndexPath(item: 0, section: 1)) == "#selected")
