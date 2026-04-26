@@ -1,11 +1,6 @@
 #if canImport(UIKit)
 import UIKit
 
-enum V2_WITabHostLayout: Hashable {
-    case compact
-    case regular
-}
-
 @MainActor
 enum V2_WITabContentFactory {
     static func makeViewController(
@@ -30,26 +25,6 @@ enum V2_WITabContentFactory {
             session: session,
             layout: hostLayout
         )
-    }
-}
-
-extension UIViewController {
-    func wiDetachFromV2ContainerForReuse() {
-        if let navigationController = parent as? UINavigationController,
-           navigationController.viewControllers.contains(where: { $0 === self }) {
-            navigationController.setViewControllers(
-                navigationController.viewControllers.filter { $0 !== self },
-                animated: false
-            )
-        }
-
-        guard parent != nil else {
-            return
-        }
-
-        willMove(toParent: nil)
-        view.removeFromSuperview()
-        removeFromParent()
     }
 }
 #endif

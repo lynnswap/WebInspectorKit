@@ -5,6 +5,13 @@ View、処理、状態、モデル、タブ定義は省略します。
 
 矢印は child ViewController を表します。
 
+## Source Layout
+
+- `Containers`: V2 の host / wrapper ViewController。`UINavigationController` / `UITabBarController` / split root など、UIKit container の責務を持つ型。
+- `Tabs`: tab API、display tab、tab definition protocol、resolver、factory、host coordinator。
+- `DOM`: DOM 固有の content ViewController、navigation item、DOM tab definition。
+- `Network`: Network 固有の content ViewController、menu view、Network tab definition。
+
 ```mermaid
 flowchart TD
     Root["V2_WIViewController<br/>UIViewController"]
