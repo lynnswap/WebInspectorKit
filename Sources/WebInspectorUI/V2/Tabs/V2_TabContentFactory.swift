@@ -61,8 +61,7 @@ enum V2_TabContentFactory {
 
         return customController.makeViewController(
             for: tab,
-            session: session,
-            layout: hostLayout
+            session: session
         )
     }
 

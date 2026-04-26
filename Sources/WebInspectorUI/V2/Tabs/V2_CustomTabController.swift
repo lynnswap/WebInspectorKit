@@ -5,8 +5,7 @@ import UIKit
 struct V2_CustomTabController {
     func makeViewController(
         for tab: V2_WITab,
-        session: V2_WISession,
-        layout: V2_WITabHostLayout
+        session: V2_WISession
     ) -> UIViewController {
         guard let custom = tab.custom else {
             return UIViewController()
@@ -17,12 +16,8 @@ struct V2_CustomTabController {
         ) {
             custom.makeViewController(V2_WITabProviderContext(session: session))
         }
-        guard layout == .regular,
-              viewController is UISplitViewController else {
-            viewController.wiDetachFromV2ContainerForReuse()
-            return viewController
-        }
-        return V2_WIRegularSplitRootViewController(contentViewController: viewController)
+        viewController.wiDetachFromV2ContainerForReuse()
+        return viewController
     }
 }
 #endif
