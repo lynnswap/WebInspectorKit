@@ -4,7 +4,7 @@ import WebInspectorEngine
 import WebInspectorRuntime
 
 @MainActor
-struct V2_NetworkFilterMenuView: View {
+struct V2_NetworkListFilterMenuView: View {
     var inspector: WINetworkModel
 
     var body: some View {

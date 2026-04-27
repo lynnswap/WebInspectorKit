@@ -3,7 +3,7 @@ import SwiftUI
 import WebInspectorRuntime
 
 @MainActor
-struct V2_NetworkOverflowMenuView: View {
+struct V2_NetworkListOverflowMenuView: View {
     var inspector: WINetworkModel
 
     var body: some View {

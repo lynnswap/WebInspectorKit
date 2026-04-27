@@ -10,7 +10,7 @@ View、処理、状態、モデル、タブ定義は省略します。
 - `Containers`: V2 の host / wrapper ViewController。`UINavigationController` / `UITabBarController` / split root など、UIKit container の責務を持つ型。
 - `Tabs`: public tab API、layout 別 display item projection、content cache、content factory。
 - `DOM`: DOM 固有の content ViewController、navigation item、built-in DOM tab controller。
-- `Network`: Network 固有の content ViewController、menu view、built-in Network tab controller。
+- `Network`: Network 固有の container / built-in tab controller。`List` に一覧 UI、`Detail` に選択 entry の detail UI を置く。
 
 ```mermaid
 flowchart TD
@@ -23,8 +23,9 @@ flowchart TD
     ElementCompactNavigation["V2_DOMCompactTabNavigationController<br/>UINavigationController<br/>private"]
     RegularDOMRoot["V2_WIRegularSplitRootViewController<br/>UIViewController<br/>private"]
     DOMSplit["V2_DOMSplitViewController<br/>UISplitViewController"]
-    NetworkCompactNavigation["V2_WICompactTabNavigationController<br/>UINavigationController<br/>private"]
-    NetworkCompact["V2_NetworkListViewController<br/>UICollectionViewController"]
+    NetworkCompactNavigation["V2_NetworkCompactNavigationController<br/>UINavigationController<br/>private"]
+    NetworkCompactList["V2_NetworkListViewController<br/>UICollectionViewController"]
+    NetworkCompactDetail["V2_NetworkEntryDetailViewController<br/>UICollectionViewController"]
     RegularNetworkRoot["V2_WIRegularSplitRootViewController<br/>UIViewController<br/>private"]
     NetworkSplit["V2_NetworkSplitViewController<br/>UISplitViewController"]
 
@@ -35,10 +36,10 @@ flowchart TD
     RegularElementNavigation["V2_WIRegularSplitColumnNavigationController<br/>UINavigationController"]
     RegularElement["V2_DOMElementViewController<br/>UIViewController"]
 
-    NetworkPrimaryNavigation["V2_WIRegularSplitColumnNavigationController<br/>UINavigationController"]
+    NetworkPrimaryNavigation["V2_NetworkListColumnNavigationController<br/>UINavigationController<br/>private"]
     NetworkSecondaryNavigation["V2_WIRegularSplitColumnNavigationController<br/>UINavigationController"]
     NetworkList["V2_NetworkListViewController<br/>UICollectionViewController"]
-    NetworkSecondary["UIViewController<br/>secondary placeholder"]
+    NetworkDetail["V2_NetworkEntryDetailViewController<br/>UICollectionViewController"]
 
     Root -->|compact| CompactHost
     Root -->|regular| RegularHost
@@ -48,7 +49,8 @@ flowchart TD
     CompactHost --> NetworkCompactNavigation
     DOMCompactNavigation --> CompactTree
     ElementCompactNavigation --> CompactElement
-    NetworkCompactNavigation --> NetworkCompact
+    NetworkCompactNavigation --> NetworkCompactList
+    NetworkCompactNavigation -. "push on selection" .-> NetworkCompactDetail
 
     RegularHost --> RegularDOMRoot
     RegularHost --> RegularNetworkRoot
@@ -63,22 +65,5 @@ flowchart TD
     NetworkSplit --> NetworkPrimaryNavigation
     NetworkSplit --> NetworkSecondaryNavigation
     NetworkPrimaryNavigation --> NetworkList
-    NetworkSecondaryNavigation --> NetworkSecondary
+    NetworkSecondaryNavigation --> NetworkDetail
 ```
-
-## 要点
-
-- root は `V2_WIViewController`。
-- root の child は compact なら `V2_WICompactTabBarController`、regular なら `V2_WIRegularTabContentViewController`。
-- `V2_WIRegularTabContentViewController` は `UINavigationController`。DOM / Network の切り替え segment もここが持つ。
-- compact host の下に来る DOM 系の標準 VC は `V2_DOMCompactTabNavigationController` で包んだ `V2_DOMTreeViewController` / `V2_DOMElementViewController`。custom tab にはこの wrapping を強制しない。
-- public API の tab は `V2_WITab.dom` / `V2_WITab.network` / custom tab だけ。
-- compact の Element は public tab ではなく、DOM tab から派生した internal display item。
-- final content VC は `V2_TabContentKey` で cache し、navigation / split / root wrapper は host layout ごとに作り直す。
-- regular host の下に来る標準 VC は `V2_DOMSplitViewController` / `V2_NetworkSplitViewController`。
-- ただし `UISplitViewController` は `UINavigationController` に直接入れられないため、regular host では private な `V2_WIRegularSplitRootViewController` で包む。
-- `UISplitViewController` の column は UIKit が自動で `UINavigationController` に包むため、regular split では column 側を明示的な hidden `UINavigationController` にしている。
-- DOM split の下は Tree / Element。compact では Tree と Element が別 tab。
-- `V2_DOMTreeViewController` は `UIViewController`。compact では tab 側の `UINavigationController`、regular では split column 側の hidden `UINavigationController` が必要な navigation container を担う。
-- compact Network は `V2_WICompactTabNavigationController` の root に `V2_NetworkListViewController` を持つ。
-- regular Network は primary column に `V2_NetworkListViewController`、secondary column に一時的な空の `UIViewController` を持つ。

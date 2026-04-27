@@ -1,20 +1,33 @@
 #if canImport(UIKit)
 import UIKit
+import WebInspectorRuntime
 
 @MainActor
 final class V2_NetworkSplitViewController: UISplitViewController {
+    private let inspector: WINetworkModel
     private let listViewController: V2_NetworkListViewController
+    private let detailViewController: V2_NetworkEntryDetailViewController
     private let primaryViewController: V2_NetworkListColumnNavigationController
-    private let secondaryViewController = V2_WIRegularSplitColumnNavigationController(
-        rootViewController: V2_NetworkSplitViewController.makeEmptyViewController()
-    )
+    private let secondaryViewController: V2_WIRegularSplitColumnNavigationController
 
-    init(listViewController: V2_NetworkListViewController) {
+    init(
+        inspector: WINetworkModel,
+        listViewController: V2_NetworkListViewController,
+        detailViewController: V2_NetworkEntryDetailViewController
+    ) {
+        self.inspector = inspector
         self.listViewController = listViewController
+        self.detailViewController = detailViewController
         primaryViewController = V2_NetworkListColumnNavigationController(
             rootViewController: listViewController
         )
+        secondaryViewController = V2_WIRegularSplitColumnNavigationController(
+            rootViewController: detailViewController
+        )
         super.init(style: .doubleColumn)
+        listViewController.setEntrySelectionAction { [weak self] entry in
+            self?.showEntryDetail(entry)
+        }
         configureSplitViewLayout()
     }
 
@@ -38,10 +51,8 @@ final class V2_NetworkSplitViewController: UISplitViewController {
         setViewController(secondaryViewController, for: .secondary)
     }
 
-    private static func makeEmptyViewController() -> UIViewController {
-        let viewController = UIViewController()
-        viewController.view.backgroundColor = .clear
-        return viewController
+    private func showEntryDetail(_ entry: NetworkEntry?) {
+        inspector.selectEntry(entry)
     }
 }
 
@@ -73,7 +84,9 @@ import WebInspectorRuntime
 #Preview("V2 Network Split") {
     let network = V2_WINetworkRuntime()
     V2_NetworkSplitViewController(
-        listViewController: V2_NetworkListViewController(inspector: network.model)
+        inspector: network.model,
+        listViewController: V2_NetworkListViewController(inspector: network.model),
+        detailViewController: V2_NetworkEntryDetailViewController(inspector: network.model)
     )
 }
 #endif

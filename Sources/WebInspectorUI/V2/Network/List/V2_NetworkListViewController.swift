@@ -9,6 +9,8 @@ import UIKit
 
 @MainActor
 class V2_NetworkListViewController: UICollectionViewController, UISearchResultsUpdating {
+    typealias EntrySelectionAction = @MainActor (NetworkEntry?) -> Void
+
     private enum SectionIdentifier: Hashable {
         case main
     }
@@ -23,16 +25,17 @@ class V2_NetworkListViewController: UICollectionViewController, UISearchResultsU
     )
 
     private let inspector: WINetworkModel
+    private var entrySelectionAction: EntrySelectionAction
     private var observationHandles: Set<ObservationHandle> = []
 
     private var needsSnapshotReloadOnNextAppearance = false
     private var isApplyingSearchPresentation = false
     private var activeSearchController: UISearchController?
     private lazy var filterHostingMenu = UIHostingMenu(
-        rootView: V2_NetworkFilterMenuView(inspector: inspector)
+        rootView: V2_NetworkListFilterMenuView(inspector: inspector)
     )
     private lazy var overflowHostingMenu = UIHostingMenu(
-        rootView: V2_NetworkOverflowMenuView(inspector: inspector)
+        rootView: V2_NetworkListOverflowMenuView(inspector: inspector)
     )
     private lazy var filterItem: UIBarButtonItem = {
         let item = UIBarButtonItem(
@@ -47,6 +50,9 @@ class V2_NetworkListViewController: UICollectionViewController, UISearchResultsU
 
     init(inspector: WINetworkModel) {
         self.inspector = inspector
+        entrySelectionAction = { [inspector] entry in
+            inspector.selectEntry(entry)
+        }
         super.init(collectionViewLayout: Self.makeListLayout())
         startObservingInspector()
     }
@@ -59,6 +65,10 @@ class V2_NetworkListViewController: UICollectionViewController, UISearchResultsU
     isolated deinit {
         observationHandles.removeAll()
         detachSearchPresentation()
+    }
+
+    func setEntrySelectionAction(_ action: @escaping EntrySelectionAction) {
+        entrySelectionAction = action
     }
 
     override func viewDidLoad() {
@@ -238,7 +248,7 @@ class V2_NetworkListViewController: UICollectionViewController, UISearchResultsU
     }
 
     private func makeDataSource() -> UICollectionViewDiffableDataSource<SectionIdentifier, NetworkEntry> {
-        let listCellRegistration = UICollectionView.CellRegistration<V2_NetworkObservingListCell, NetworkEntry> { cell, _, item in
+        let listCellRegistration = UICollectionView.CellRegistration<V2_NetworkListCell, NetworkEntry> { cell, _, item in
             cell.bind(item: item)
         }
         return UICollectionViewDiffableDataSource<SectionIdentifier, NetworkEntry>(
@@ -313,10 +323,10 @@ class V2_NetworkListViewController: UICollectionViewController, UISearchResultsU
 
     override func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         guard let entry = dataSource.itemIdentifier(for: indexPath) else {
-            inspector.selectEntry(nil)
+            entrySelectionAction(nil)
             return
         }
-        inspector.selectEntry(entry)
+        entrySelectionAction(entry)
     }
 }
 

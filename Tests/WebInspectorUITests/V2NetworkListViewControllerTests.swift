@@ -244,11 +244,21 @@ struct V2NetworkListViewControllerTests {
         entry.refreshFileTypeLabel()
 
         let didUpdate = await waitUntil {
-            guard let cell = collectionView.cellForItem(at: indexPath) as? V2_NetworkObservingListCell else {
+            guard let cell = collectionView.cellForItem(at: indexPath) as? V2_NetworkListCell else {
                 return false
             }
-            return cell.fileTypeLabelTextForTesting == "png"
-                && cell.statusIndicatorColorForTesting == .systemOrange
+            let fileTypeLabel = descendant(
+                UILabel.self,
+                in: cell,
+                accessibilityIdentifier: "V2.Network.List.FileTypeLabel"
+            )
+            let statusIndicatorView = descendant(
+                UIView.self,
+                in: cell,
+                accessibilityIdentifier: "V2.Network.List.StatusIndicator"
+            )
+            return fileTypeLabel?.text == "png"
+                && statusIndicatorView?.backgroundColor == .systemOrange
         }
 
         #expect(didUpdate)
@@ -275,6 +285,34 @@ struct V2NetworkListViewControllerTests {
         viewController.collectionView(collectionView, didSelectItemAt: IndexPath(item: 0, section: 0))
 
         #expect(inspector.selectedEntry === entry)
+    }
+
+    @Test
+    func selectingEntryCanBeHandledByInjectedAction() async throws {
+        let inspector = WINetworkModel(session: NetworkSession())
+        let entries = inspector.store.applySnapshots([
+            makeSnapshot(requestID: 1, url: "https://example.com/assets/app.js", mimeType: "text/javascript")
+        ])
+        let entry = try #require(entries.first)
+        let viewController = V2_NetworkListViewController(inspector: inspector)
+        var selectedEntry: NetworkEntry?
+        viewController.setEntrySelectionAction { entry in
+            selectedEntry = entry
+        }
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let collectionView = viewController.collectionViewForTesting
+        let didRender = await waitUntil {
+            collectionView.numberOfSections == 1
+                && collectionView.numberOfItems(inSection: 0) == 1
+        }
+        #expect(didRender)
+
+        viewController.collectionView(collectionView, didSelectItemAt: IndexPath(item: 0, section: 0))
+
+        #expect(selectedEntry === entry)
+        #expect(inspector.selectedEntry == nil)
     }
 
     @Test
@@ -365,6 +403,30 @@ struct V2NetworkListViewControllerTests {
             return nil
         }
         return content.text
+    }
+
+    private func descendant<View: UIView>(
+        _ type: View.Type,
+        in view: UIView?,
+        accessibilityIdentifier: String
+    ) -> View? {
+        guard let view else {
+            return nil
+        }
+        if let matchingView = view as? View,
+           matchingView.accessibilityIdentifier == accessibilityIdentifier {
+            return matchingView
+        }
+        for subview in view.subviews {
+            if let matchingView = descendant(
+                type,
+                in: subview,
+                accessibilityIdentifier: accessibilityIdentifier
+            ) {
+                return matchingView
+            }
+        }
+        return nil
     }
 
     private func updateSearchText(

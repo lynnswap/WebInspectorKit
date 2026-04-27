@@ -5,14 +5,10 @@ import WebInspectorEngine
 import UIKit
 
 @MainActor
-final class V2_NetworkObservingListCell: UICollectionViewListCell {
+final class V2_NetworkListCell: UICollectionViewListCell {
     private var observationHandles: Set<ObservationHandle> = []
     private let statusIndicatorView = UIView(frame: CGRect(origin: .zero, size: CGSize(width: 8, height: 8)))
     private let fileTypeLabel = UILabel()
-#if DEBUG
-    private(set) var fileTypeLabelTextForTesting: String?
-    private(set) var statusIndicatorColorForTesting: UIColor?
-#endif
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -22,14 +18,6 @@ final class V2_NetworkObservingListCell: UICollectionViewListCell {
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         nil
-    }
-
-    override func prepareForReuse() {
-        super.prepareForReuse()
-#if DEBUG
-        fileTypeLabelTextForTesting = nil
-        statusIndicatorColorForTesting = nil
-#endif
     }
 
     isolated deinit {
@@ -49,10 +37,12 @@ final class V2_NetworkObservingListCell: UICollectionViewListCell {
         }
         .store(in: &observationHandles)
     }
-    
+
     private func configureStaticViews() {
+        statusIndicatorView.accessibilityIdentifier = "V2.Network.List.StatusIndicator"
         statusIndicatorView.layer.cornerRadius = 4
 
+        fileTypeLabel.accessibilityIdentifier = "V2.Network.List.FileTypeLabel"
         fileTypeLabel.textColor = .secondaryLabel
         fileTypeLabel.font = .preferredFont(forTextStyle: .footnote)
         fileTypeLabel.adjustsFontForContentSizeCategory = true
@@ -92,10 +82,6 @@ final class V2_NetworkObservingListCell: UICollectionViewListCell {
         let statusColor = item.statusSeverity.color
         statusIndicatorView.backgroundColor = statusColor
         fileTypeLabel.text = item.fileTypeLabel
-#if DEBUG
-        fileTypeLabelTextForTesting = item.fileTypeLabel
-        statusIndicatorColorForTesting = statusColor
-#endif
     }
 
     private static func makeContentConfiguration() -> UIListContentConfiguration {

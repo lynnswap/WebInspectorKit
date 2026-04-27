@@ -1,6 +1,7 @@
 #if canImport(UIKit)
 import Testing
 import UIKit
+@testable import WebInspectorEngine
 @testable import WebInspectorRuntime
 @testable import WebInspectorUI
 
@@ -106,6 +107,66 @@ struct V2RegularTabHostViewControllerTests {
                 .flatMap(\.barButtonItems)
                 .contains { $0.accessibilityIdentifier == "WI.Network.FilterButton" }
         )
+    }
+
+    @Test
+    func regularNetworkSplitContainsDetailSecondary() throws {
+        let session = V2_WISession(tabs: [.dom, .network])
+        session.interface.selectTab(V2_WITab.network)
+        let rootViewController = V2_TabContentFactory.makeViewController(
+            for: .network,
+            session: session,
+            hostLayout: .regular
+        )
+        let splitViewController = try childSplitViewController(in: rootViewController)
+        let detailViewController: V2_NetworkEntryDetailViewController = try splitRootViewController(
+            in: splitViewController,
+            column: .secondary
+        )
+
+        #expect(detailViewController.collectionViewForTesting.isHidden)
+    }
+
+    @Test
+    func regularNetworkListSelectionUpdatesDetailSecondary() async throws {
+        let session = V2_WISession(tabs: [.dom, .network])
+        session.interface.selectTab(V2_WITab.network)
+        let entry = try #require(
+            session.runtime.network.model.store.applySnapshots([
+                makeSnapshot(requestID: 1, url: "https://example.com/detail.json")
+            ]).first
+        )
+        let rootViewController = V2_TabContentFactory.makeViewController(
+            for: .network,
+            session: session,
+            hostLayout: .regular
+        )
+        let window = showInWindow(rootViewController)
+        defer { window.isHidden = true }
+        let splitViewController = try childSplitViewController(in: rootViewController)
+        let listViewController: V2_NetworkListViewController = try splitRootViewController(
+            in: splitViewController,
+            column: .primary
+        )
+        let detailViewController: V2_NetworkEntryDetailViewController = try splitRootViewController(
+            in: splitViewController,
+            column: .secondary
+        )
+
+        let collectionView = listViewController.collectionViewForTesting
+        let didRenderList = await waitUntil {
+            collectionView.numberOfSections == 1 && collectionView.numberOfItems(inSection: 0) == 1
+        }
+        #expect(didRenderList)
+
+        listViewController.collectionView(collectionView, didSelectItemAt: IndexPath(item: 0, section: 0))
+
+        let didUpdateDetail = await waitUntil {
+            session.runtime.network.model.selectedEntry === entry
+                && detailViewController.collectionViewForTesting.isHidden == false
+        }
+
+        #expect(didUpdateDetail)
     }
 
     @Test
@@ -294,6 +355,55 @@ struct V2RegularTabHostViewControllerTests {
         )
 
         #expect(regularListViewController === compactListViewController)
+    }
+
+    @Test
+    func networkDetailViewControllerIsSharedBetweenCompactAndRegular() async throws {
+        let session = V2_WISession(tabs: [.dom, .network])
+        session.runtime.network.model.store.applySnapshots([
+            makeSnapshot(requestID: 1, url: "https://example.com/detail.json")
+        ])
+        let compactNavigationController = try #require(
+            V2_TabContentFactory.makeViewController(
+                for: .network,
+                session: session,
+                hostLayout: .compact
+            ) as? UINavigationController
+        )
+        let compactListViewController = try #require(
+            compactNavigationController.viewControllers.first as? V2_NetworkListViewController
+        )
+        let window = showInWindow(compactNavigationController)
+        defer { window.isHidden = true }
+
+        let collectionView = compactListViewController.collectionViewForTesting
+        let didRenderList = await waitUntil {
+            collectionView.numberOfSections == 1 && collectionView.numberOfItems(inSection: 0) == 1
+        }
+        #expect(didRenderList)
+
+        compactListViewController.collectionView(collectionView, didSelectItemAt: IndexPath(item: 0, section: 0))
+        let didPushDetail = await waitUntil {
+            compactNavigationController.viewControllers.last is V2_NetworkEntryDetailViewController
+        }
+        #expect(didPushDetail)
+
+        let compactDetailViewController = try #require(
+            compactNavigationController.viewControllers.last as? V2_NetworkEntryDetailViewController
+        )
+
+        let regularRootViewController = V2_TabContentFactory.makeViewController(
+            for: .network,
+            session: session,
+            hostLayout: .regular
+        )
+        let splitViewController = try childSplitViewController(in: regularRootViewController)
+        let regularDetailViewController: V2_NetworkEntryDetailViewController = try splitRootViewController(
+            in: splitViewController,
+            column: .secondary
+        )
+
+        #expect(regularDetailViewController === compactDetailViewController)
     }
 
     @Test
@@ -511,6 +621,64 @@ struct V2RegularTabHostViewControllerTests {
             let navigationController = try #require(viewController as? UINavigationController)
             #expect(navigationController.isNavigationBarHidden)
         }
+    }
+
+    private func makeSnapshot(
+        requestID: Int,
+        url: String
+    ) -> NetworkEntry.Snapshot {
+        NetworkEntry.Snapshot(
+            sessionID: "test-session",
+            requestID: requestID,
+            request: NetworkEntry.Request(
+                url: url,
+                method: "GET",
+                headers: NetworkHeaders(),
+                body: nil,
+                bodyBytesSent: nil,
+                type: nil,
+                wallTime: nil
+            ),
+            response: NetworkEntry.Response(
+                statusCode: 200,
+                statusText: "OK",
+                mimeType: "application/json",
+                headers: NetworkHeaders(),
+                body: nil,
+                blockedCookies: [],
+                errorDescription: nil
+            ),
+            transfer: NetworkEntry.Transfer(
+                startTimestamp: 0,
+                endTimestamp: 1,
+                duration: 1,
+                encodedBodyLength: 128,
+                decodedBodyLength: 128,
+                phase: .completed
+            )
+        )
+    }
+
+    private func showInWindow(_ viewController: UIViewController) -> UIWindow {
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 768))
+        window.rootViewController = viewController
+        window.makeKeyAndVisible()
+        viewController.view.frame = window.bounds
+        viewController.view.layoutIfNeeded()
+        return window
+    }
+
+    private func waitUntil(
+        maxTicks: Int = 512,
+        _ condition: () -> Bool
+    ) async -> Bool {
+        for _ in 0..<maxTicks {
+            if condition() {
+                return true
+            }
+            await Task.yield()
+        }
+        return condition()
     }
 }
 #endif
