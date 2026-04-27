@@ -123,7 +123,10 @@ final class V2_NetworkEntryDetailViewController: UICollectionViewController {
 
         let dataSource = UICollectionViewDiffableDataSource<SectionIdentifier, ItemIdentifier>(
             collectionView: collectionView
-        ) { collectionView, indexPath, item in
+        ) { [weak self] collectionView, indexPath, item in
+            guard let self else {
+                return nil
+            }
             if case .overview = item, let selectedEntry = self.selectedEntry {
                 return collectionView.dequeueConfiguredReusableCell(
                     using: overviewCellRegistration,

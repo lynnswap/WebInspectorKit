@@ -19,6 +19,28 @@ struct V2NetworkEntryDetailViewControllerTests {
     }
 
     @Test
+    func detailDataSourceDoesNotRetainViewController() async {
+        let inspector = WINetworkModel(session: NetworkSession())
+        weak var weakViewController: V2_NetworkEntryDetailViewController?
+        var viewController: V2_NetworkEntryDetailViewController? = V2_NetworkEntryDetailViewController(
+            inspector: inspector
+        )
+        weakViewController = viewController
+
+        viewController?.loadViewIfNeeded()
+        for _ in 0..<64 {
+            await Task.yield()
+        }
+
+        viewController = nil
+        for _ in 0..<64 {
+            await Task.yield()
+        }
+
+        #expect(weakViewController == nil)
+    }
+
+    @Test
     func detailRendersOverviewRequestAndResponseHeaders() async throws {
         let inspector = WINetworkModel(session: NetworkSession())
         let entry = try #require(

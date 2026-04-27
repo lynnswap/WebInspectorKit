@@ -145,7 +145,7 @@ struct V2CompactTabBarControllerTests {
     }
 
     @Test
-    func compactNetworkModelSelectionDoesNotPushDetailViewController() throws {
+    func inactiveCompactNetworkModelSelectionDoesNotPushDetailViewController() throws {
         let session = V2_WISession(tabs: [.dom, .network])
         let entry = try #require(
             session.runtime.network.model.store.applySnapshots([
@@ -163,6 +163,93 @@ struct V2CompactTabBarControllerTests {
         session.runtime.network.model.selectEntry(entry)
 
         #expect(networkNavigationController.viewControllers.last is V2_NetworkListViewController)
+    }
+
+    @Test
+    func activeCompactNetworkModelSelectionPushesDetailViewController() async throws {
+        let session = V2_WISession(tabs: [.dom, .network])
+        let entry = try #require(
+            session.runtime.network.model.store.applySnapshots([
+                makeSnapshot(requestID: 1, url: "https://example.com/request.json")
+            ]).first
+        )
+        let networkNavigationController = try #require(
+            V2_TabContentFactory.makeViewController(
+                for: .network,
+                session: session,
+                hostLayout: .compact
+            ) as? V2_NetworkCompactNavigationController
+        )
+        let window = showInWindow(networkNavigationController)
+        defer { window.isHidden = true }
+
+        session.runtime.network.model.selectEntry(entry)
+
+        let didPushDetail = await waitUntil {
+            networkNavigationController.viewControllers.last is V2_NetworkEntryDetailViewController
+        }
+
+        #expect(didPushDetail)
+    }
+
+    @Test
+    func compactNetworkInitialModelSelectionPushesDetailWhenAppearing() async throws {
+        let session = V2_WISession(tabs: [.dom, .network])
+        let entry = try #require(
+            session.runtime.network.model.store.applySnapshots([
+                makeSnapshot(requestID: 1, url: "https://example.com/request.json")
+            ]).first
+        )
+        session.runtime.network.model.selectEntry(entry)
+        let networkNavigationController = try #require(
+            V2_TabContentFactory.makeViewController(
+                for: .network,
+                session: session,
+                hostLayout: .compact
+            ) as? V2_NetworkCompactNavigationController
+        )
+
+        let window = showInWindow(networkNavigationController)
+        defer { window.isHidden = true }
+
+        let didPushDetail = await waitUntil {
+            networkNavigationController.viewControllers.last is V2_NetworkEntryDetailViewController
+        }
+
+        #expect(didPushDetail)
+    }
+
+    @Test
+    func activeCompactNetworkSelectionClearPopsDetailViewController() async throws {
+        let session = V2_WISession(tabs: [.dom, .network])
+        let entry = try #require(
+            session.runtime.network.model.store.applySnapshots([
+                makeSnapshot(requestID: 1, url: "https://example.com/request.json")
+            ]).first
+        )
+        session.runtime.network.model.selectEntry(entry)
+        let networkNavigationController = try #require(
+            V2_TabContentFactory.makeViewController(
+                for: .network,
+                session: session,
+                hostLayout: .compact
+            ) as? V2_NetworkCompactNavigationController
+        )
+        let window = showInWindow(networkNavigationController)
+        defer { window.isHidden = true }
+
+        let didPushDetail = await waitUntil {
+            networkNavigationController.viewControllers.last is V2_NetworkEntryDetailViewController
+        }
+        #expect(didPushDetail)
+
+        session.runtime.network.model.selectEntry(nil)
+
+        let didPopDetail = await waitUntil {
+            networkNavigationController.viewControllers.last is V2_NetworkListViewController
+        }
+
+        #expect(didPopDetail)
     }
 
     @Test
