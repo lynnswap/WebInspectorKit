@@ -90,8 +90,8 @@ class V2_NetworkListViewController: UICollectionViewController, UISearchResultsU
         navigationController?.setNavigationBarHidden(false, animated: animated)
     }
 
-    override func viewDidAppear(_ animated: Bool) {
-        super.viewDidAppear(animated)
+    override func viewIsAppearing(_ animated: Bool) {
+        super.viewIsAppearing(animated)
         flushPendingSnapshotUpdateIfNeeded()
     }
 

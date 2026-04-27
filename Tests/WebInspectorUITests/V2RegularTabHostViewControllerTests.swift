@@ -559,10 +559,12 @@ struct V2RegularTabHostViewControllerTests {
         let runtime = V2_WIDOMRuntime()
         let treeViewController = V2_DOMTreeViewController(dom: runtime)
         treeViewController.loadViewIfNeeded()
+        treeViewController.view.frame = CGRect(x: 0, y: 0, width: 320, height: 480)
 
         treeViewController.beginAppearanceTransition(true, animated: false)
         treeViewController.endAppearanceTransition()
         let firstWebView = try #require(treeViewController.displayedDOMTreeWebViewForTesting)
+        #expect(firstWebView.frame == treeViewController.view.bounds)
 
         await runtime.detach()
 
@@ -572,6 +574,7 @@ struct V2RegularTabHostViewControllerTests {
 
         #expect(secondWebView !== firstWebView)
         #expect(secondWebView.superview === treeViewController.view)
+        #expect(secondWebView.frame == treeViewController.view.bounds)
         #expect(firstWebView.superview == nil)
     }
 
