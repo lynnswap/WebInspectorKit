@@ -19,9 +19,9 @@ package protocol NetworkBootstrapSource {
     func load(
         using session: WITransportSession,
         targetIdentifier: String,
-        allocateRequestID: @escaping () -> Int,
-        defaultSessionID: @escaping (String?) -> String,
-        normalizeScopeID: @escaping (String?) -> String?
+        allocateRequestID: @escaping @MainActor () -> Int,
+        defaultSessionID: @escaping @MainActor (String?) -> String,
+        normalizeScopeID: @escaping @MainActor (String?) -> String?
     ) async throws -> NetworkBootstrapLoad
 }
 
@@ -34,9 +34,9 @@ package struct StableBootstrapSource: NetworkBootstrapSource {
     package func load(
         using session: WITransportSession,
         targetIdentifier: String,
-        allocateRequestID: @escaping () -> Int,
-        defaultSessionID: @escaping (String?) -> String,
-        normalizeScopeID: @escaping (String?) -> String?
+        allocateRequestID: @escaping @MainActor () -> Int,
+        defaultSessionID: @escaping @MainActor (String?) -> String,
+        normalizeScopeID: @escaping @MainActor (String?) -> String?
     ) async throws -> NetworkBootstrapLoad {
         let result = try await session.sendPageData(
             method: WITransportMethod.Network.getBootstrapSnapshot,
@@ -193,9 +193,9 @@ package struct HistoricalBootstrapSource: NetworkBootstrapSource {
     package func load(
         using session: WITransportSession,
         targetIdentifier: String,
-        allocateRequestID: @escaping () -> Int,
-        defaultSessionID: @escaping (String?) -> String,
-        normalizeScopeID: @escaping (String?) -> String?
+        allocateRequestID: @escaping @MainActor () -> Int,
+        defaultSessionID: @escaping @MainActor (String?) -> String,
+        normalizeScopeID: @escaping @MainActor (String?) -> String?
     ) async throws -> NetworkBootstrapLoad {
         let result = try await session.sendPageData(
             method: WITransportMethod.Page.getResourceTree,
