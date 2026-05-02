@@ -1568,14 +1568,18 @@ private extension WIDOMInspector {
     }
 
     func cancelStaleInspectModeBeforeBeginningSelectionIfNeeded() async {
-        let shouldCancelStaleInspectMode =
+        var shouldCancelStaleInspectMode =
             isSelectingElement
                 || acceptsInspectEvents
                 || inspectModeControlBackend != nil
                 || inspectModeTargetIdentifier != nil
+#if canImport(UIKit)
+        shouldCancelStaleInspectMode =
+            shouldCancelStaleInspectMode
                 || nativeInspectorSelectionToggleNeedsDeactivation
                 || nativeInspectorNodeSearchNeedsDirectDeactivation
                 || nativeInspectorProtocolInspectModeNeedsDeactivation
+#endif
         guard shouldCancelStaleInspectMode else {
             return
         }
