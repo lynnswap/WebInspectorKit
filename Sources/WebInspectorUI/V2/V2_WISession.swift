@@ -19,7 +19,7 @@ public final class V2_WISession {
     }
 
     public convenience init(
-        configuration: WIModelConfiguration = .init(),
+        configuration: WIModelConfiguration,
         dependencies: WIInspectorDependencies = .liveValue,
         tabs: [V2_WITab] = [.dom, .network]
     ) {
@@ -28,6 +28,17 @@ public final class V2_WISession {
                 configuration: configuration,
                 dependencies: dependencies
             ),
+            tabs: tabs
+        )
+    }
+
+    public convenience init(
+        dependencies: WIInspectorDependencies,
+        tabs: [V2_WITab] = [.dom, .network]
+    ) {
+        self.init(
+            configuration: .init(),
+            dependencies: dependencies,
             tabs: tabs
         )
     }

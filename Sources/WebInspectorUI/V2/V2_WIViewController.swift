@@ -21,7 +21,7 @@ public final class V2_WIViewController: UIViewController {
     }
 
     public convenience init(
-        configuration: WIModelConfiguration = .init(),
+        configuration: WIModelConfiguration,
         dependencies: WIInspectorDependencies = .liveValue,
         tabs: [V2_WITab] = [.dom, .network]
     ) {
@@ -34,11 +34,20 @@ public final class V2_WIViewController: UIViewController {
         )
     }
 
-    public convenience init(tabs: [V2_WITab]) {
+    public convenience init(
+        dependencies: WIInspectorDependencies,
+        tabs: [V2_WITab] = [.dom, .network]
+    ) {
         self.init(
             configuration: .init(),
-            dependencies: .liveValue,
+            dependencies: dependencies,
             tabs: tabs
+        )
+    }
+
+    public convenience init(tabs: [V2_WITab]) {
+        self.init(
+            session: V2_WISession(tabs: tabs)
         )
     }
 

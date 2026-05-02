@@ -8,6 +8,28 @@ import UIKit
 @MainActor
 struct V2CompactTabBarControllerTests {
     @Test
+    func publicInitializersKeepDefaultAndTabsEntriesUnambiguous() {
+        let defaultSession = V2_WISession()
+        let tabsSession = V2_WISession(tabs: [.dom])
+        let configurationSession = V2_WISession(configuration: .init())
+        let dependenciesSession = V2_WISession(dependencies: .liveValue)
+
+        let defaultViewController = V2_WIViewController()
+        let tabsViewController = V2_WIViewController(tabs: [.network])
+        let configurationViewController = V2_WIViewController(configuration: .init())
+        let dependenciesViewController = V2_WIViewController(dependencies: .liveValue)
+
+        #expect(defaultSession.interface.tabs.map(\.id) == [V2_WITab.dom.id, V2_WITab.network.id])
+        #expect(tabsSession.interface.tabs.map(\.id) == [V2_WITab.dom.id])
+        #expect(configurationSession.interface.tabs.map(\.id) == [V2_WITab.dom.id, V2_WITab.network.id])
+        #expect(dependenciesSession.interface.tabs.map(\.id) == [V2_WITab.dom.id, V2_WITab.network.id])
+        #expect(defaultViewController.session.interface.tabs.map(\.id) == [V2_WITab.dom.id, V2_WITab.network.id])
+        #expect(tabsViewController.session.interface.tabs.map(\.id) == [V2_WITab.network.id])
+        #expect(configurationViewController.session.interface.tabs.map(\.id) == [V2_WITab.dom.id, V2_WITab.network.id])
+        #expect(dependenciesViewController.session.interface.tabs.map(\.id) == [V2_WITab.dom.id, V2_WITab.network.id])
+    }
+
+    @Test
     func providedCompactTabsUseNavigationControllers() throws {
         let session = V2_WISession(tabs: [.dom, .network])
 
