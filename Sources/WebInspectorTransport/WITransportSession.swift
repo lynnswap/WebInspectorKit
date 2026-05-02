@@ -47,6 +47,21 @@ public final class WITransportSession {
         self.init(configuration: configuration, backendFactory: WITransportPlatformBackendFactory.makeDefaultBackend)
     }
 
+    package static func unsupported(
+        configuration: WITransportConfiguration = .init(),
+        reason: String = "Test transport is unsupported."
+    ) -> WITransportSession {
+        WITransportSession(
+            configuration: configuration,
+            backendFactory: { configuration in
+                WITransportPlatformBackendFactory.makeUnsupportedBackend(
+                    configuration: configuration,
+                    reason: reason
+                )
+            }
+        )
+    }
+
     init(
         configuration: WITransportConfiguration = .init(),
         backendFactory: @escaping @MainActor (WITransportConfiguration) -> any WITransportPlatformBackend,
@@ -212,6 +227,10 @@ public final class WITransportSession {
         pageTargetTracker.observedCurrentIdentifier
     }
 
+    package func currentCommittedPageTargetIdentifier() -> String? {
+        pageTargetTracker.committedIdentifier
+    }
+
     package func targetKind(for identifier: String?) -> WITransportTargetKind? {
         pageTargetTracker.targetKind(for: identifier)
     }
@@ -225,6 +244,10 @@ public final class WITransportSession {
             _ = refreshDerivedPageTargetIdentifierIfNeeded()
         }
         return pageTargetTracker.orderedIdentifiers
+    }
+
+    package func frameTargetIdentifiers() -> [String] {
+        pageTargetTracker.frameTargetIdentifiers
     }
 
     package func sendRootData(
@@ -498,6 +521,18 @@ package final class WISharedInspectorTransport {
         session?.currentObservedPageTargetIdentifier()
     }
 
+    package func currentCommittedPageTargetIdentifier() -> String? {
+        session?.currentCommittedPageTargetIdentifier()
+    }
+
+    package func pageTargetIdentifiers() -> [String] {
+        session?.pageTargetIdentifiers() ?? []
+    }
+
+    package func frameTargetIdentifiers() -> [String] {
+        session?.frameTargetIdentifiers() ?? []
+    }
+
     package func targetKind(for identifier: String?) -> WITransportTargetKind? {
         session?.targetKind(for: identifier)
     }
@@ -712,7 +747,16 @@ extension WITransportSession {
             log("received root event method=\(method)")
         }
 
-        if method.hasPrefix("DOM.") || method == "Inspector.inspect" {
+        if method == "Inspector.inspect" {
+            enqueuePageEvent(
+                method: method,
+                targetIdentifier: inspectEventTargetIdentifier(from: parsed.params),
+                paramsObject: parsed.params
+            )
+            return
+        }
+
+        if method.hasPrefix("DOM.") {
             enqueuePageEvent(
                 method: method,
                 targetIdentifier: inspectEventTargetIdentifier(from: parsed.params)
@@ -1314,6 +1358,10 @@ private final class WITransportPageTargetTracker {
         return currentIdentifierStorage
     }
 
+    var committedIdentifier: String? {
+        committedIdentifierStorage
+    }
+
     var allowsDerivedCommittedSeed: Bool {
         !hasObservedLifecycleEvents && currentIdentifierStorage == nil
     }
@@ -1326,6 +1374,18 @@ private final class WITransportPageTargetTracker {
                 }
                 if rhs.identifier == currentIdentifierStorage {
                     return false
+                }
+                return lhs.creationOrder > rhs.creationOrder
+            }
+            .map(\.identifier)
+    }
+
+    var frameTargetIdentifiers: [String] {
+        knownTargetsByIdentifier.values
+            .filter { $0.kind == .frame }
+            .sorted { lhs, rhs in
+                if lhs.isProvisional != rhs.isProvisional {
+                    return lhs.isProvisional == false
                 }
                 return lhs.creationOrder > rhs.creationOrder
             }

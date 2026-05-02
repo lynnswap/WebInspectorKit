@@ -18,6 +18,31 @@ public final class V2_WISession {
         self.interface = V2_WIInterfaceModel(tabs: tabs)
     }
 
+    public convenience init(
+        configuration: WIModelConfiguration,
+        dependencies: WIInspectorDependencies = .liveValue,
+        tabs: [V2_WITab] = [.dom, .network]
+    ) {
+        self.init(
+            runtime: V2_WIRuntimeSession(
+                configuration: configuration,
+                dependencies: dependencies
+            ),
+            tabs: tabs
+        )
+    }
+
+    public convenience init(
+        dependencies: WIInspectorDependencies,
+        tabs: [V2_WITab] = [.dom, .network]
+    ) {
+        self.init(
+            configuration: .init(),
+            dependencies: dependencies,
+            tabs: tabs
+        )
+    }
+
     isolated deinit {
         interface.removeContentCache()
     }

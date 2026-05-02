@@ -11,6 +11,113 @@ typedef const struct OpaqueWKPage *WKPageRef;
 
 NSErrorDomain const WIKRuntimeBridgeErrorDomain = @"WebInspectorBridge.WIKRuntimeBridge";
 
+#if TARGET_OS_IPHONE
+@interface WIKInspectorNodeSearchCommitGestureRecognizer : UIGestureRecognizer
+- (instancetype)initWithContentView:(UIView *)contentView;
+@end
+
+@interface WIKInspectorNodeSearchCommitGestureRecognizer ()
+@property (nonatomic, weak) UIView *contentView;
+@property (nonatomic) CGPoint initialLocation;
+@property (nonatomic) BOOL hasInitialLocation;
+@property (nonatomic) BOOL didMoveBeyondTapTolerance;
+- (void)wi_commitInspectorNodeSearchIfPossible;
+@end
+
+@implementation WIKInspectorNodeSearchCommitGestureRecognizer
+
+static const CGFloat WIKInspectorNodeSearchCommitMovementThreshold = 3.0;
+
+- (instancetype)initWithContentView:(UIView *)contentView
+{
+    self = [super initWithTarget:nil action:nil];
+    if (!self)
+        return nil;
+
+    _contentView = contentView;
+    self.cancelsTouchesInView = NO;
+    self.delaysTouchesBegan = NO;
+    self.delaysTouchesEnded = NO;
+    return self;
+}
+
+- (BOOL)canPreventGestureRecognizer:(UIGestureRecognizer *)preventedGestureRecognizer
+{
+    return NO;
+}
+
+- (BOOL)canBePreventedByGestureRecognizer:(UIGestureRecognizer *)preventingGestureRecognizer
+{
+    return NO;
+}
+
+- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event
+{
+    if (touches.count != 1) {
+        self.state = UIGestureRecognizerStateFailed;
+        return;
+    }
+
+    UIView *contentView = self.contentView ?: self.view;
+    self.initialLocation = [[touches anyObject] locationInView:contentView];
+    self.hasInitialLocation = YES;
+    self.didMoveBeyondTapTolerance = NO;
+}
+
+- (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event
+{
+    if (!self.hasInitialLocation || self.state != UIGestureRecognizerStatePossible)
+        return;
+
+    UIView *contentView = self.contentView ?: self.view;
+    CGPoint location = [[touches anyObject] locationInView:contentView];
+    CGFloat deltaX = location.x - self.initialLocation.x;
+    CGFloat deltaY = location.y - self.initialLocation.y;
+    CGFloat squaredDistance = deltaX * deltaX + deltaY * deltaY;
+    CGFloat threshold = WIKInspectorNodeSearchCommitMovementThreshold;
+    if (squaredDistance >= threshold * threshold)
+        self.didMoveBeyondTapTolerance = YES;
+}
+
+- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event
+{
+    if (self.state != UIGestureRecognizerStatePossible)
+        return;
+
+    if (!self.didMoveBeyondTapTolerance) {
+        self.state = UIGestureRecognizerStateFailed;
+        return;
+    }
+
+    self.state = UIGestureRecognizerStateRecognized;
+    [self wi_commitInspectorNodeSearchIfPossible];
+}
+
+- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event
+{
+    self.state = UIGestureRecognizerStateCancelled;
+}
+
+- (void)reset
+{
+    [super reset];
+    self.hasInitialLocation = NO;
+    self.didMoveBeyondTapTolerance = NO;
+    self.initialLocation = CGPointZero;
+}
+
+- (void)wi_commitInspectorNodeSearchIfPossible
+{
+    UIView *contentView = self.contentView ?: self.view;
+    if (!contentView || ![contentView respondsToSelector:@selector(_inspectorNodeSearchRecognized:)])
+        return;
+
+    [contentView _inspectorNodeSearchRecognized:self];
+}
+
+@end
+#endif
+
 @implementation WIKRuntimeBridge
 
 #if TARGET_OS_IPHONE
@@ -34,6 +141,11 @@ NSErrorDomain const WIKRuntimeBridgeErrorDomain = @"WebInspectorBridge.WIKRuntim
     return recognizerClass;
 }
 
++ (Class)wi_inspectorNodeSearchCommitRecognizerClass
+{
+    return [WIKInspectorNodeSearchCommitGestureRecognizer class];
+}
+
 + (BOOL)wi_contentViewHasInspectorNodeSearchRecognizer:(UIView *)contentView
 {
     Class recognizerClass = [self wi_inspectorNodeSearchRecognizerClass];
@@ -46,6 +158,42 @@ NSErrorDomain const WIKRuntimeBridgeErrorDomain = @"WebInspectorBridge.WIKRuntim
     }
 
     return NO;
+}
+
++ (BOOL)wi_contentViewHasInspectorNodeSearchCommitRecognizer:(UIView *)contentView
+{
+    Class recognizerClass = [self wi_inspectorNodeSearchCommitRecognizerClass];
+    for (UIGestureRecognizer *recognizer in contentView.gestureRecognizers) {
+        if ([recognizer isKindOfClass:recognizerClass])
+            return YES;
+    }
+
+    return NO;
+}
+
++ (BOOL)wi_installInspectorNodeSearchCommitRecognizerInContentView:(UIView *)contentView
+{
+    if ([self wi_contentViewHasInspectorNodeSearchCommitRecognizer:contentView])
+        return NO;
+
+    WIKInspectorNodeSearchCommitGestureRecognizer *recognizer =
+        [[WIKInspectorNodeSearchCommitGestureRecognizer alloc] initWithContentView:contentView];
+    [contentView addGestureRecognizer:recognizer];
+    return YES;
+}
+
++ (BOOL)wi_removeInspectorNodeSearchCommitRecognizersInContentView:(UIView *)contentView
+{
+    BOOL didRemoveRecognizer = NO;
+    Class recognizerClass = [self wi_inspectorNodeSearchCommitRecognizerClass];
+    for (UIGestureRecognizer *recognizer in [contentView.gestureRecognizers copy]) {
+        if (![recognizer isKindOfClass:recognizerClass])
+            continue;
+        recognizer.enabled = NO;
+        [contentView removeGestureRecognizer:recognizer];
+        didRemoveRecognizer = YES;
+    }
+    return didRemoveRecognizer;
 }
 
 + (nullable UIView *)wi_firstContentViewInView:(UIView *)view
@@ -229,12 +377,16 @@ NSErrorDomain const WIKRuntimeBridgeErrorDomain = @"WebInspectorBridge.WIKRuntim
             continue;
         if ([contentView respondsToSelector:@selector(_disableInspectorNodeSearch)])
             [contentView _disableInspectorNodeSearch];
+        [self wi_removeInspectorNodeSearchCommitRecognizersInContentView:contentView];
     }
 
-    if ([self wi_contentViewHasInspectorNodeSearchRecognizer:activeContentView])
+    if ([self wi_contentViewHasInspectorNodeSearchRecognizer:activeContentView]) {
+        [self wi_installInspectorNodeSearchCommitRecognizerInContentView:activeContentView];
         return YES;
+    }
 
     [activeContentView _enableInspectorNodeSearch];
+    [self wi_installInspectorNodeSearchCommitRecognizerInContentView:activeContentView];
     return YES;
 }
 
@@ -242,10 +394,11 @@ NSErrorDomain const WIKRuntimeBridgeErrorDomain = @"WebInspectorBridge.WIKRuntim
 {
     BOOL didDisable = NO;
     for (UIView *contentView in [self wi_contentViewsForWebView:webView]) {
-        if (![contentView respondsToSelector:@selector(_disableInspectorNodeSearch)])
-            continue;
-        [contentView _disableInspectorNodeSearch];
-        didDisable = YES;
+        if ([contentView respondsToSelector:@selector(_disableInspectorNodeSearch)]) {
+            [contentView _disableInspectorNodeSearch];
+            didDisable = YES;
+        }
+        didDisable = [self wi_removeInspectorNodeSearchCommitRecognizersInContentView:contentView] || didDisable;
     }
     return didDisable;
 }
@@ -262,13 +415,13 @@ NSErrorDomain const WIKRuntimeBridgeErrorDomain = @"WebInspectorBridge.WIKRuntim
 + (BOOL)removeInspectorNodeSearchRecognizersFromWebView:(WKWebView *)webView
 {
     Class recognizerClass = [self wi_inspectorNodeSearchRecognizerClass];
-    if (!recognizerClass)
-        return NO;
 
     BOOL didRemoveRecognizer = NO;
     for (UIView *contentView in [self wi_contentViewsForWebView:webView]) {
         for (UIGestureRecognizer *recognizer in [contentView.gestureRecognizers copy]) {
-            if (![recognizer isKindOfClass:recognizerClass])
+            BOOL isNodeSearchRecognizer = recognizerClass && [recognizer isKindOfClass:recognizerClass];
+            BOOL isCommitRecognizer = [recognizer isKindOfClass:[self wi_inspectorNodeSearchCommitRecognizerClass]];
+            if (!isNodeSearchRecognizer && !isCommitRecognizer)
                 continue;
             recognizer.enabled = NO;
             [contentView removeGestureRecognizer:recognizer];
@@ -285,21 +438,27 @@ NSErrorDomain const WIKRuntimeBridgeErrorDomain = @"WebInspectorBridge.WIKRuntim
     UIView *activeContentView = [self wi_activeContentViewForWebView:webView];
 
     NSUInteger recognizerViewCount = 0;
+    NSUInteger commitRecognizerViewCount = 0;
     for (UIView *contentView in contentViews) {
         if ([self wi_contentViewHasInspectorNodeSearchRecognizer:contentView])
             recognizerViewCount += 1;
+        if ([self wi_contentViewHasInspectorNodeSearchCommitRecognizer:contentView])
+            commitRecognizerViewCount += 1;
     }
 
     BOOL activeHasNodeSearch = activeContentView && [self wi_contentViewHasInspectorNodeSearchRecognizer:activeContentView];
+    BOOL activeHasCommit = activeContentView && [self wi_contentViewHasInspectorNodeSearchCommitRecognizer:activeContentView];
     BOOL anyHasNodeSearch = recognizerViewCount > 0;
     NSString *activeSource = currentContentView ? @"current" : @"fallback";
 
     return [NSString stringWithFormat:
-        @"activeSource=%@ contentViews=%lu recognizerViews=%lu activeHasNodeSearch=%d anyHasNodeSearch=%d",
+        @"activeSource=%@ contentViews=%lu recognizerViews=%lu commitRecognizerViews=%lu activeHasNodeSearch=%d activeHasCommit=%d anyHasNodeSearch=%d",
         activeSource,
         (unsigned long)contentViews.count,
         (unsigned long)recognizerViewCount,
+        (unsigned long)commitRecognizerViewCount,
         activeHasNodeSearch ? 1 : 0,
+        activeHasCommit ? 1 : 0,
         anyHasNodeSearch ? 1 : 0
     ];
 }

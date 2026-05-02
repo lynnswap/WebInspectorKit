@@ -8,7 +8,7 @@ Web Inspector for `WKWebView` (iOS / macOS).
 
 ## Products
 
-- `WebInspectorKit`: Container UI, `WITab`-based tab composition, Observation state
+- `WebInspectorKit`: V2 UIKit container UI, `V2_WITab`-based tab composition, Observation state
 - `WebInspectorEngine`: DOM/Network engines, runtime actors, bundled inspector scripts
 
 `WebInspectorKit` depends on `WebInspectorEngine`.
@@ -17,8 +17,9 @@ Web Inspector for `WKWebView` (iOS / macOS).
 
 - DOM tree browsing (element picking, highlights, deletion, attribute editing)
 - Network request logging (fetch/XHR/WebSocket) with buffering/active mode switching
-- Configurable tabs via `WITab` (`viewControllerProvider` for custom tabs)
-- Explicit lifecycle via `WIInspectorController` (`connect(to:)`, `suspend()`, `disconnect()`)
+- Configurable V2 tabs via `V2_WITab`
+- Explicit V2 lifecycle via `V2_WISession` / `V2_WIViewController` (`attach(to:)`, `detach()`)
+- Dependency injection via `WIInspectorDependencies`
 
 ## Requirements
 
@@ -37,25 +38,27 @@ import WebInspectorKit
 
 final class BrowserViewController: UIViewController {
     private let pageWebView = WKWebView(frame: .zero)
-    private let inspector = WIInspectorController()
 
     @objc private func presentInspector() {
-        let container = WITabViewController(
-            inspector,
-            webView: pageWebView,
-            tabs: [.dom(), .network()]
-        )
-        container.modalPresentationStyle = .pageSheet
-        if let sheet = container.sheetPresentationController {
+        let inspector = V2_WIViewController()
+        inspector.modalPresentationStyle = .pageSheet
+        if let sheet = inspector.sheetPresentationController {
             sheet.detents = [.medium(), .large()]
             sheet.selectedDetentIdentifier = .medium
         }
-        present(container, animated: true)
+        Task { @MainActor in
+            await inspector.attach(to: pageWebView)
+            present(inspector, animated: true)
+        }
     }
 }
 ```
 
 ### AppKit
+
+V2 UI is currently UIKit-only. The AppKit `WIInspectorController` / `WITabViewController`
+entry point remains for compatibility, but is not the recommended architecture path and is
+scheduled to be removed after V2 stabilization.
 
 ```swift
 import AppKit
@@ -84,24 +87,36 @@ final class BrowserWindowController: NSWindowController {
 ## Custom Tab
 
 ```swift
-let customTab = WITab(
+let customTab = V2_WITab.custom(
+    id: "my_custom_tab",
     title: "Custom",
-    image: nil,
-    identifier: "my_custom_tab",
-    role: .other
-) { tab in
-    _ = tab
-    #if canImport(UIKit)
+    systemImage: "folder"
+) { context in
+    _ = context.runtime
     return UIViewController()
-    #else
-    return NSViewController()
-    #endif
 }
 
-let container = WITabViewController(
-    inspector,
-    webView: pageWebView,
-    tabs: [.dom(), .network(), customTab]
+let inspector = V2_WIViewController(
+    tabs: [.dom, .network, customTab]
+)
+```
+
+## Dependency Injection
+
+Keep value-only settings in `WIModelConfiguration`, and inject side-effectful runtime
+boundaries through `WIInspectorDependencies`.
+
+```swift
+let dependencies = WIInspectorDependencies.testing {
+    $0.network = WIInspectorNetworkClient(
+        networkAgentScript: { "" }
+    )
+}
+
+let inspector = V2_WIViewController(
+    configuration: WIModelConfiguration(),
+    dependencies: dependencies,
+    tabs: [.dom, .network]
 )
 ```
 

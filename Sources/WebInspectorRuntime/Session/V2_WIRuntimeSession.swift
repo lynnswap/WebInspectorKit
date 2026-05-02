@@ -8,15 +8,20 @@ public final class V2_WIRuntimeSession {
     public let dom: V2_WIDOMRuntime
     public let network: V2_WINetworkRuntime
 
-    public convenience init(configuration: WIModelConfiguration = .init()) {
-        let sharedTransport = WISharedInspectorTransport()
+    public convenience init(
+        configuration: WIModelConfiguration = .init(),
+        dependencies: WIInspectorDependencies = .liveValue
+    ) {
+        let sharedTransport = dependencies.makeSharedTransport()
         self.init(
             dom: V2_WIDOMRuntime(
                 configuration: configuration.dom,
+                dependencies: dependencies,
                 sharedTransport: sharedTransport
             ),
             network: V2_WINetworkRuntime(
                 configuration: configuration.network,
+                dependencies: dependencies,
                 sharedTransport: sharedTransport
             )
         )

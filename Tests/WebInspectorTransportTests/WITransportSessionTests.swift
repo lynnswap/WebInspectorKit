@@ -379,6 +379,7 @@ struct WITransportSessionTests {
         #expect(frameEvent?.method == "Target.targetCreated")
         #expect(frameEvent?.targetIdentifier == "frame-A")
         #expect(session.targetKind(for: "frame-A") == .frame)
+        #expect(session.frameTargetIdentifiers() == ["frame-A"])
         #expect(session.currentPageTargetIdentifier() == "page-A")
         #expect(session.pageTargetIdentifiers() == ["page-A"])
     }
@@ -414,6 +415,7 @@ struct WITransportSessionTests {
         #expect(destroyedEvent?.method == "Target.targetDestroyed")
         #expect(destroyedEvent?.targetIdentifier == "frame-A")
         #expect(session.targetKind(for: "frame-A") == .frame)
+        #expect(session.frameTargetIdentifiers().isEmpty)
         #expect(session.currentPageTargetIdentifier() == "page-A")
     }
 
@@ -785,6 +787,7 @@ struct WITransportSessionTests {
             await session.waitForPostActivePageEventsToDrain()
         }
         defer { drainTask.cancel() }
+        await Task.yield()
 
         backend.emitPageMessage(
             #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-1"}}"#,
@@ -797,20 +800,10 @@ struct WITransportSessionTests {
         session.beginPageEventDelivery()
         session.finishPageEventDelivery()
 
-        let drainedAfterCommittedTarget = await withTaskGroup(of: Bool.self) { group in
-            group.addTask {
-                await drainTask.value
-                return true
-            }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: 200_000_000)
-                return false
-            }
-
-            let result = await group.next() ?? false
-            group.cancelAll()
-            return result
-        }
+        let drainedAfterCommittedTarget = await Self.task(
+            drainTask,
+            completesWithinNanoseconds: 200_000_000
+        )
 
         #expect(drainedAfterCommittedTarget)
 
@@ -852,6 +845,7 @@ struct WITransportSessionTests {
             await session.waitForPostActivePageEventsToDrain()
         }
         defer { drainTask.cancel() }
+        await Task.yield()
 
         backend.emitPageMessage(
             #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-1"}}"#,
@@ -859,20 +853,10 @@ struct WITransportSessionTests {
         )
         await backend.waitForPendingMessages()
 
-        let drainedAfterDroppedBufferedEvent = await withTaskGroup(of: Bool.self) { group in
-            group.addTask {
-                await drainTask.value
-                return true
-            }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: 200_000_000)
-                return false
-            }
-
-            let result = await group.next() ?? false
-            group.cancelAll()
-            return result
-        }
+        let drainedAfterDroppedBufferedEvent = await Self.task(
+            drainTask,
+            completesWithinNanoseconds: 200_000_000
+        )
 
         #expect(drainedAfterDroppedBufferedEvent)
     }
@@ -909,20 +893,14 @@ struct WITransportSessionTests {
         session.beginPageEventDelivery()
         session.finishPageEventDelivery()
 
-        let drainedAfterOverflow = await withTaskGroup(of: Bool.self) { group in
-            group.addTask {
-                await session.waitForPostActivePageEventsToDrain()
-                return true
-            }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: 200_000_000)
-                return false
-            }
-
-            let result = await group.next() ?? false
-            group.cancelAll()
-            return result
+        let drainTask = Task { @MainActor in
+            await session.waitForPostActivePageEventsToDrain()
         }
+        defer { drainTask.cancel() }
+        let drainedAfterOverflow = await Self.task(
+            drainTask,
+            completesWithinNanoseconds: 200_000_000
+        )
 
         #expect(drainedAfterOverflow)
     }
@@ -958,6 +936,7 @@ struct WITransportSessionTests {
             await session.waitForPostActivePageEventsToDrain()
         }
         defer { drainTask.cancel() }
+        await Task.yield()
 
         backend.emitPageMessage(
             #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-1"}}"#,
@@ -965,39 +944,19 @@ struct WITransportSessionTests {
         )
         await backend.waitForPendingMessages()
 
-        let drainedWhileFirstEventWasStillActive = await withTaskGroup(of: Bool.self) { group in
-            group.addTask {
-                await drainTask.value
-                return true
-            }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: 200_000_000)
-                return false
-            }
-
-            let result = await group.next() ?? false
-            group.cancelAll()
-            return result
-        }
+        let drainedWhileFirstEventWasStillActive = await Self.task(
+            drainTask,
+            completesWithinNanoseconds: 200_000_000
+        )
 
         #expect(drainedWhileFirstEventWasStillActive == false)
 
         session.finishPageEventDelivery()
 
-        let drainedAfterFinishingActiveEvent = await withTaskGroup(of: Bool.self) { group in
-            group.addTask {
-                await drainTask.value
-                return true
-            }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: 200_000_000)
-                return false
-            }
-
-            let result = await group.next() ?? false
-            group.cancelAll()
-            return result
-        }
+        let drainedAfterFinishingActiveEvent = await Self.task(
+            drainTask,
+            completesWithinNanoseconds: 200_000_000
+        )
 
         #expect(drainedAfterFinishingActiveEvent)
     }
@@ -1337,6 +1296,23 @@ private extension WITransportSessionTests {
         }
     }
 
+    static func task(
+        _ task: Task<Void, Never>,
+        completesWithinNanoseconds timeoutNanoseconds: UInt64
+    ) async -> Bool {
+        await withCheckedContinuation { continuation in
+            let box = BoolContinuationBox()
+            Task {
+                await task.value
+                box.resume(true, continuation: continuation)
+            }
+            Task {
+                try? await Task.sleep(nanoseconds: timeoutNanoseconds)
+                box.resume(false, continuation: continuation)
+            }
+        }
+    }
+
     static func identifier(from message: String) throws -> Int {
         guard
             let object = try JSONSerialization.jsonObject(with: Data(message.utf8)) as? [String: Any],
@@ -1367,6 +1343,23 @@ private extension WITransportSessionTests {
 
     enum TestError: Error {
         case invalidMessage
+    }
+}
+
+private final class BoolContinuationBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var didResume = false
+
+    func resume(_ value: Bool, continuation: CheckedContinuation<Bool, Never>) {
+        lock.lock()
+        guard !didResume else {
+            lock.unlock()
+            return
+        }
+        didResume = true
+        lock.unlock()
+
+        continuation.resume(returning: value)
     }
 }
 

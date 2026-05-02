@@ -54,7 +54,7 @@ public final class NetworkPageAgent: NSObject, PageAgent {
     // XHR/fetch remain page-hooked to preserve reliable body capture.
     private let nativeObserverIncludesFetchAndXHR = false
 
-    private let runtime: WISPIRuntime
+    private let dependencies: NetworkPageAgentDependencies
     private let controllerStateRegistry: WIUserContentControllerStateRegistry
     private var bridgeMode: WIBridgeMode
     private var bridgeModeLocked = false
@@ -65,11 +65,19 @@ public final class NetworkPageAgent: NSObject, PageAgent {
         bridgeMode
     }
 
-    package init(controllerStateRegistry: WIUserContentControllerStateRegistry = .shared) {
-        runtime = .shared
-        self.controllerStateRegistry = controllerStateRegistry
-        bridgeMode = runtime.startupMode()
+    package init(dependencies: NetworkPageAgentDependencies = .liveValue) {
+        self.dependencies = dependencies
+        self.controllerStateRegistry = dependencies.controllerStateRegistry
+        bridgeMode = dependencies.startupMode()
         super.init()
+    }
+
+    package convenience init(controllerStateRegistry: WIUserContentControllerStateRegistry) {
+        self.init(
+            dependencies: NetworkPageAgentDependencies(
+                controllerStateRegistry: controllerStateRegistry
+            )
+        )
     }
 
     isolated deinit {
@@ -390,7 +398,7 @@ private extension NetworkPageAgent {
         guard !bridgeModeLocked else {
             return
         }
-        bridgeMode = runtime.modeForAttachment(webView: webView)
+        bridgeMode = dependencies.modeForAttachment(webView)
         bridgeModeLocked = true
         networkLogger.notice("bridge_mode=\(self.bridgeMode.rawValue, privacy: .public)")
     }
@@ -535,7 +543,7 @@ private extension NetworkPageAgent {
 
     func loadNetworkAgentScriptSource() -> String? {
         do {
-            return try WebInspectorScripts.networkAgent()
+            return try dependencies.loadNetworkAgentScriptSource()
         } catch {
             networkLogger.error("failed to prepare network inspector script: \(error.localizedDescription, privacy: .public)")
             return nil
@@ -873,7 +881,9 @@ private extension NetworkPageAgent {
                     return false
                 }
                 return self.loggingMode == .active
-            }
+            },
+            supportsResourceLoadDelegate: dependencies.supportsResourceLoadDelegate,
+            setResourceLoadDelegate: dependencies.setResourceLoadDelegate
         )
         let attached = observer.attach(to: webView)
         nativeObserverEnabled = attached

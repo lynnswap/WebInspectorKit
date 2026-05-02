@@ -57,6 +57,17 @@ enum WITransportPlatformBackendFactory {
         )
         #endif
     }
+
+    @MainActor
+    static func makeUnsupportedBackend(
+        configuration: WITransportConfiguration,
+        reason: String
+    ) -> any WITransportPlatformBackend {
+        WITransportUnsupportedPlatformBackend(
+            configuration: configuration,
+            reason: reason
+        )
+    }
 }
 
 @MainActor
