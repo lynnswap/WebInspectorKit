@@ -1275,6 +1275,9 @@ struct WIDOMInspectorTests {
         #expect(inspector.isSelectingElement)
         #expect((inspectModePayload?["enabled"] as? Bool) == true)
         #expect(inspectModePayload?["highlightConfig"] != nil)
+        #expect(runtimeTestHasVisibleHighlightConfig(
+            runtimeTestDictionaryValue(inspectModePayload?["highlightConfig"])
+        ))
     }
 
     @Test
@@ -1326,26 +1329,34 @@ struct WIDOMInspectorTests {
         let previousSceneProvider = WIDOMUIKitSceneActivationEnvironment.sceneProvider
         let previousRequestingSceneProvider = WIDOMUIKitSceneActivationEnvironment.requestingSceneProvider
         let previousActivationTimeout = WIDOMUIKitSceneActivationEnvironment.activationTimeout
+        let previousActivationWaiter = WIDOMUIKitSceneActivationEnvironment.activationWaiter
         defer {
             WIDOMUIKitSceneActivationEnvironment.requester = previousRequester
             WIDOMUIKitSceneActivationEnvironment.sceneProvider = previousSceneProvider
             WIDOMUIKitSceneActivationEnvironment.requestingSceneProvider = previousRequestingSceneProvider
             WIDOMUIKitSceneActivationEnvironment.activationTimeout = previousActivationTimeout
+            WIDOMUIKitSceneActivationEnvironment.activationWaiter = previousActivationWaiter
         }
 
         WIDOMUIKitSceneActivationEnvironment.requester = requester
         WIDOMUIKitSceneActivationEnvironment.sceneProvider = { _ in targetScene }
         WIDOMUIKitSceneActivationEnvironment.requestingSceneProvider = { _ in nil }
         WIDOMUIKitSceneActivationEnvironment.activationTimeout = .milliseconds(200)
+        WIDOMUIKitSceneActivationEnvironment.activationWaiter = { target, timeout in
+            let clock = ContinuousClock()
+            let deadline = clock.now.advanced(by: timeout)
+            while target.activationState != .foregroundActive {
+                if clock.now >= deadline {
+                    throw DOMOperationError.scriptFailure("Page scene activation timed out.")
+                }
+                try await clock.sleep(for: .milliseconds(1))
+            }
+        }
 
-        requester.onRequest = { target in
+        requester.onRequest = { _ in
             await requestGate.open()
             await activationGate.wait()
             targetScene.activationState = .foregroundActive
-            NotificationCenter.default.post(
-                name: UIScene.didActivateNotification,
-                object: target
-            )
         }
 
         let backend = FakeDOMTransportBackend(
@@ -1386,6 +1397,88 @@ struct WIDOMInspectorTests {
         #expect(requester.requestCount == 1)
         #expect((inspectModePayload?["enabled"] as? Bool) == true)
         #expect(inspector.isSelectingElement)
+    }
+
+    @Test
+    func beginSelectionModeDoesNotEnableInspectModeWhenNavigationStartsDuringSceneActivation() async {
+        let requester = FakeSceneActivationRequester()
+        let targetScene = FakeSceneActivationTarget(activationState: .foregroundInactive)
+        let requestGate = AsyncGate()
+        let activationGate = AsyncGate()
+        var inspectModePayload: [String: Any]?
+
+        let previousRequester = WIDOMUIKitSceneActivationEnvironment.requester
+        let previousSceneProvider = WIDOMUIKitSceneActivationEnvironment.sceneProvider
+        let previousRequestingSceneProvider = WIDOMUIKitSceneActivationEnvironment.requestingSceneProvider
+        let previousActivationTimeout = WIDOMUIKitSceneActivationEnvironment.activationTimeout
+        let previousActivationWaiter = WIDOMUIKitSceneActivationEnvironment.activationWaiter
+        defer {
+            WIDOMUIKitSceneActivationEnvironment.requester = previousRequester
+            WIDOMUIKitSceneActivationEnvironment.sceneProvider = previousSceneProvider
+            WIDOMUIKitSceneActivationEnvironment.requestingSceneProvider = previousRequestingSceneProvider
+            WIDOMUIKitSceneActivationEnvironment.activationTimeout = previousActivationTimeout
+            WIDOMUIKitSceneActivationEnvironment.activationWaiter = previousActivationWaiter
+        }
+
+        WIDOMUIKitSceneActivationEnvironment.requester = requester
+        WIDOMUIKitSceneActivationEnvironment.sceneProvider = { _ in targetScene }
+        WIDOMUIKitSceneActivationEnvironment.requestingSceneProvider = { _ in nil }
+        WIDOMUIKitSceneActivationEnvironment.activationTimeout = .milliseconds(200)
+        WIDOMUIKitSceneActivationEnvironment.activationWaiter = { target, timeout in
+            let clock = ContinuousClock()
+            let deadline = clock.now.advanced(by: timeout)
+            while target.activationState != .foregroundActive {
+                if clock.now >= deadline {
+                    throw DOMOperationError.scriptFailure("Page scene activation timed out.")
+                }
+                try await clock.sleep(for: .milliseconds(1))
+            }
+        }
+
+        requester.onRequest = { _ in
+            await requestGate.open()
+            await activationGate.wait()
+            targetScene.activationState = .foregroundActive
+        }
+
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, payload, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                case WITransportMethod.DOM.setInspectModeEnabled:
+                    inspectModePayload = runtimeTestDictionaryValue(payload["params"])
+                    return [:]
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+        let window = hostWebViewInWindow(webView)
+        defer { window.isHidden = true }
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        let beginSelectionTask = Task {
+            try await inspector.beginSelectionMode()
+        }
+
+        await requestGate.wait()
+        inspector.testSetLoadingPhaseCurrentContext(targetIdentifier: "page-B")
+        await activationGate.open()
+
+        await #expect(throws: DOMOperationError.contextInvalidated) {
+            try await beginSelectionTask.value
+        }
+        #expect(inspectModePayload == nil)
+        #expect(inspector.isSelectingElement == false)
     }
 
     @Test
@@ -1615,6 +1708,7 @@ struct WIDOMInspectorTests {
     @Test
     func beginSelectionModeUsesNativeInspectorOnUIKitWhenPrivateInspectorIsAvailable() async throws {
         var inspectModeEnabledValues: [Bool] = []
+        var inspectModeHighlightConfigs: [[String: Any]?] = []
         var connectCallCount = 0
         var toggleCallCount = 0
         var nativeSelectionActive = false
@@ -1678,6 +1772,9 @@ struct WIDOMInspectorTests {
                     let params = runtimeTestDictionaryValue(payload["params"])
                     if let enabled = params?["enabled"] as? Bool {
                         inspectModeEnabledValues.append(enabled)
+                        inspectModeHighlightConfigs.append(
+                            runtimeTestDictionaryValue(params?["highlightConfig"])
+                        )
                     }
                     return [:]
                 default:
@@ -1704,14 +1801,119 @@ struct WIDOMInspectorTests {
         #expect(toggleCallCount == 0)
         #expect(nativeSelectionActive == false)
         #expect(nodeSearchEnabledValues.contains(true))
-        #expect(inspectModeEnabledValues.isEmpty)
+        #expect(inspectModeEnabledValues == [true])
+        #expect(runtimeTestHasVisibleHighlightConfig(inspectModeHighlightConfigs.first ?? nil))
 
         await inspector.cancelSelectionMode()
         #expect(inspector.isSelectingElement == false)
         #expect(toggleCallCount == 0)
         #expect(nativeSelectionActive == false)
         #expect(nodeSearchEnabledValues.last == false)
-        #expect(inspectModeEnabledValues.isEmpty)
+        #expect(inspectModeEnabledValues == [true, false])
+    }
+
+    @Test
+    func beginSelectionModeDoesNotActivateNativeInspectorWhenNavigationStartsDuringProtocolEnable() async throws {
+        var inspectModeEnabledValues: [Bool] = []
+        var connectCallCount = 0
+        var toggleCallCount = 0
+        var nativeSelectionActive = false
+        var nodeSearchEnabledValues: [Bool] = []
+        var didInvalidateContext = false
+        var inspector: WIDOMInspector!
+        let previousPrivateInspectorAccessProvider = WIDOMUIKitInspectorSelectionEnvironment.privateInspectorAccessProvider
+        let previousInspectorConnectedProvider = WIDOMUIKitInspectorSelectionEnvironment.inspectorConnectedProvider
+        let previousInspectorConnector = WIDOMUIKitInspectorSelectionEnvironment.inspectorConnector
+        let previousElementSelectionToggler = WIDOMUIKitInspectorSelectionEnvironment.elementSelectionToggler
+        let previousNodeSearchSetter = WIDOMUIKitInspectorSelectionEnvironment.nodeSearchSetter
+        let previousRecognizerPresenceProvider = WIDOMUIKitInspectorSelectionEnvironment.recognizerPresenceProvider
+        let previousRecognizerRemover = WIDOMUIKitInspectorSelectionEnvironment.recognizerRemover
+        let previousSelectionActiveProvider = WIDOMUIKitInspectorSelectionEnvironment.selectionActiveProvider
+        let previousTransportInspectActivationProvider = WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationProvider
+        let previousTransportInspectActivationTimeout = WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationTimeoutNanoseconds
+        defer {
+            WIDOMUIKitInspectorSelectionEnvironment.privateInspectorAccessProvider = previousPrivateInspectorAccessProvider
+            WIDOMUIKitInspectorSelectionEnvironment.inspectorConnectedProvider = previousInspectorConnectedProvider
+            WIDOMUIKitInspectorSelectionEnvironment.inspectorConnector = previousInspectorConnector
+            WIDOMUIKitInspectorSelectionEnvironment.elementSelectionToggler = previousElementSelectionToggler
+            WIDOMUIKitInspectorSelectionEnvironment.nodeSearchSetter = previousNodeSearchSetter
+            WIDOMUIKitInspectorSelectionEnvironment.recognizerPresenceProvider = previousRecognizerPresenceProvider
+            WIDOMUIKitInspectorSelectionEnvironment.recognizerRemover = previousRecognizerRemover
+            WIDOMUIKitInspectorSelectionEnvironment.selectionActiveProvider = previousSelectionActiveProvider
+            WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationProvider = previousTransportInspectActivationProvider
+            WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationTimeoutNanoseconds = previousTransportInspectActivationTimeout
+        }
+
+        WIDOMUIKitInspectorSelectionEnvironment.privateInspectorAccessProvider = { _ in true }
+        WIDOMUIKitInspectorSelectionEnvironment.inspectorConnectedProvider = { _ in
+            connectCallCount > 0
+        }
+        WIDOMUIKitInspectorSelectionEnvironment.inspectorConnector = { _ in
+            connectCallCount += 1
+            return true
+        }
+        WIDOMUIKitInspectorSelectionEnvironment.elementSelectionToggler = { _ in
+            toggleCallCount += 1
+            nativeSelectionActive.toggle()
+            return true
+        }
+        WIDOMUIKitInspectorSelectionEnvironment.nodeSearchSetter = { _, enabled in
+            nodeSearchEnabledValues.append(enabled)
+            return true
+        }
+        WIDOMUIKitInspectorSelectionEnvironment.recognizerPresenceProvider = { _ in
+            nodeSearchEnabledValues.last == true
+        }
+        WIDOMUIKitInspectorSelectionEnvironment.recognizerRemover = { _ in true }
+        WIDOMUIKitInspectorSelectionEnvironment.selectionActiveProvider = { _ in nativeSelectionActive }
+        WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationProvider = { _ in
+            inspectModeEnabledValues.last == true
+        }
+        WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationTimeoutNanoseconds = 0
+
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, payload, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                case WITransportMethod.DOM.setInspectModeEnabled:
+                    let params = runtimeTestDictionaryValue(payload["params"])
+                    guard let enabled = params?["enabled"] as? Bool else {
+                        return [:]
+                    }
+                    inspectModeEnabledValues.append(enabled)
+                    if enabled, didInvalidateContext == false {
+                        didInvalidateContext = true
+                        inspector.testSetLoadingPhaseCurrentContext(targetIdentifier: "page-B")
+                    }
+                    return [:]
+                default:
+                    return [:]
+                }
+            }
+        )
+        inspector = makeInspector(
+            using: backend,
+            dependencies: .liveValue
+        )
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        await #expect(throws: DOMOperationError.contextInvalidated) {
+            try await inspector.beginSelectionMode()
+        }
+        #expect(connectCallCount == 1)
+        #expect(toggleCallCount == 0)
+        #expect(nativeSelectionActive == false)
+        #expect(nodeSearchEnabledValues.isEmpty)
+        #expect(inspectModeEnabledValues == [true, false])
+        #expect(inspector.isSelectingElement == false)
     }
 
     @Test
@@ -1801,13 +2003,13 @@ struct WIDOMInspectorTests {
         #expect(connectCallCount == 1)
         #expect(toggleCallCount == 1)
         #expect(nodeSearchEnabledValues == [true])
-        #expect(inspectModeEnabledValues.isEmpty)
+        #expect(inspectModeEnabledValues == [true])
 
         await inspector.cancelSelectionMode()
         #expect(inspector.isSelectingElement == false)
         #expect(toggleCallCount == 2)
         #expect(nodeSearchEnabledValues == [true, false])
-        #expect(inspectModeEnabledValues.isEmpty)
+        #expect(inspectModeEnabledValues == [true, false])
     }
 
     @Test
@@ -2902,6 +3104,113 @@ struct WIDOMInspectorTests {
         }
         #expect(selected)
         #expect(requestNodeTargets == ["frame-target-A"])
+    }
+
+    @Test
+    func inspectorInspectFallsBackToSecondaryPageTargetForRequestNode() async throws {
+        var requestNodeTargets: [String] = []
+        let backend = FakeDOMTransportBackend()
+        backend.pageResultProvider = { method, payload, targetIdentifier in
+            switch method {
+            case WITransportMethod.DOM.getDocument:
+                if targetIdentifier == "page-frame-A" {
+                    return [
+                        "root": [
+                            "nodeId": 240,
+                            "backendNodeId": 240,
+                            "nodeType": 9,
+                            "nodeName": "#document",
+                            "localName": "",
+                            "nodeValue": "",
+                            "documentURL": "https://ads.example.com/frame",
+                            "frameId": "frame-child",
+                            "childNodeCount": 1,
+                            "children": [[
+                                "nodeId": 241,
+                                "backendNodeId": 241,
+                                "nodeType": 1,
+                                "nodeName": "HTML",
+                                "localName": "html",
+                                "nodeValue": "",
+                                "childNodeCount": 1,
+                                "children": [[
+                                    "nodeId": 260,
+                                    "backendNodeId": 260,
+                                    "nodeType": 1,
+                                    "nodeName": "BUTTON",
+                                    "localName": "button",
+                                    "nodeValue": "",
+                                    "attributes": ["id", "frame-target"],
+                                    "childNodeCount": 0,
+                                    "children": [],
+                                ]],
+                            ]],
+                        ],
+                    ]
+                }
+                return makeIFrameDocumentResultWithEmptyNestedDocument(url: "https://example.com/a")
+            case WITransportMethod.DOM.setInspectModeEnabled:
+                return [:]
+            case WITransportMethod.DOM.requestNode:
+                let params = runtimeTestDictionaryValue(payload["params"])
+                if params?["objectId"] as? String == "node-object-frame-target" {
+                    requestNodeTargets.append(targetIdentifier)
+                    if targetIdentifier == "page-frame-A" {
+                        return ["nodeId": 260]
+                    }
+                }
+                return [:]
+            default:
+                return [:]
+            }
+        }
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        backend.emitRootEvent(
+            method: "Target.targetCreated",
+            params: [
+                "targetInfo": [
+                    "targetId": "page-frame-A",
+                    "type": "page",
+                    "isProvisional": false,
+                ],
+            ]
+        )
+        await backend.waitForPendingMessages()
+
+        try await inspector.beginSelectionMode()
+        backend.emitPageEvent(
+            method: "Inspector.inspect",
+            params: [
+                "object": [
+                    "type": "object",
+                    "subtype": "node",
+                    "objectId": "node-object-frame-target",
+                ],
+                "hints": [:],
+            ],
+            targetIdentifier: "page-A"
+        )
+
+        let selected = await waitForCondition {
+            inspector.document.selectedNode?.backendNodeID == 260
+                && inspector.document.selectedNode?.attributes.contains(where: { $0.name == "id" && $0.value == "frame-target" }) == true
+                && inspector.isSelectingElement == false
+        }
+        #expect(selected)
+        #expect(inspector.document.selectedNode?.localID != 20)
+        #expect(requestNodeTargets == ["page-A", "page-frame-A"])
+        let nestedDocument = try #require(inspector.document.node(localID: 24))
+        #expect(nestedDocument.children.first?.localID == 241)
+        #expect(inspector.document.node(localID: 260)?.backendNodeID == 260)
     }
 
     @Test
@@ -5355,10 +5664,27 @@ struct WIDOMInspectorTests {
 
     @Test
     func selectedNodeSendsPersistentHighlightAndHidesItOnDocumentReload() async throws {
-        var pageMethods: [String] = []
+        var pageCalls: [(method: String, inspectModeEnabled: Bool?, highlightConfig: [String: Any]?)] = []
         let backend = FakeDOMTransportBackend(
-            pageResultProvider: { method, _, _ in
-                pageMethods.append(method)
+            pageResultProvider: { method, payload, _ in
+                let params = runtimeTestDictionaryValue(payload["params"])
+                let inspectModeEnabled: Bool?
+                if method == WITransportMethod.DOM.setInspectModeEnabled {
+                    inspectModeEnabled = params?["enabled"] as? Bool
+                } else {
+                    inspectModeEnabled = nil
+                }
+                let highlightConfig: [String: Any]?
+                if method == WITransportMethod.DOM.highlightNode {
+                    highlightConfig = runtimeTestDictionaryValue(params?["highlightConfig"])
+                } else {
+                    highlightConfig = nil
+                }
+                pageCalls.append((
+                    method: method,
+                    inspectModeEnabled: inspectModeEnabled,
+                    highlightConfig: highlightConfig
+                ))
                 switch method {
                 case WITransportMethod.DOM.getDocument:
                     return makeDocumentResult(
@@ -5399,9 +5725,22 @@ struct WIDOMInspectorTests {
         let selected = await waitForCondition {
             inspector.document.selectedNode?.localID == 6
                 && inspector.isSelectingElement == false
-                && pageMethods.contains(WITransportMethod.DOM.highlightNode)
+                && pageCalls.contains(where: { $0.method == WITransportMethod.DOM.highlightNode })
         }
         #expect(selected)
+
+        let inspectModeDisableIndex = pageCalls.lastIndex(where: {
+            $0.method == WITransportMethod.DOM.setInspectModeEnabled && $0.inspectModeEnabled == false
+        })
+        let persistentHighlightIndex = pageCalls.lastIndex(where: {
+            $0.method == WITransportMethod.DOM.highlightNode
+        })
+        #expect(inspectModeDisableIndex != nil)
+        #expect(persistentHighlightIndex != nil)
+        if let inspectModeDisableIndex, let persistentHighlightIndex {
+            #expect(persistentHighlightIndex > inspectModeDisableIndex)
+            #expect(runtimeTestHasVisibleHighlightConfig(pageCalls[persistentHighlightIndex].highlightConfig))
+        }
 
         try await inspector.reloadDocument()
 
@@ -5409,8 +5748,12 @@ struct WIDOMInspectorTests {
             inspector.document.selectedNode == nil
         }
         #expect(reloaded)
-        let highlightIndex = pageMethods.lastIndex(of: WITransportMethod.DOM.highlightNode)
-        let hideHighlightIndex = pageMethods.lastIndex(of: WITransportMethod.DOM.hideHighlight)
+        let highlightIndex = pageCalls.lastIndex(where: {
+            $0.method == WITransportMethod.DOM.highlightNode
+        })
+        let hideHighlightIndex = pageCalls.lastIndex(where: {
+            $0.method == WITransportMethod.DOM.hideHighlight
+        })
         #expect(highlightIndex != nil)
         #expect(hideHighlightIndex != nil)
         if let highlightIndex, let hideHighlightIndex {
@@ -5421,6 +5764,7 @@ struct WIDOMInspectorTests {
     @Test
     func frontendHoverHighlightPreservesRevealFalse() async throws {
         var lastHighlightReveal: Bool?
+        var lastHighlightConfig: [String: Any]?
         let backend = FakeDOMTransportBackend(
             pageResultProvider: { method, payload, _ in
                 switch method {
@@ -5429,6 +5773,7 @@ struct WIDOMInspectorTests {
                 case WITransportMethod.DOM.highlightNode:
                     let params = runtimeTestDictionaryValue(payload["params"])
                     lastHighlightReveal = params?["reveal"] as? Bool
+                    lastHighlightConfig = runtimeTestDictionaryValue(params?["highlightConfig"])
                     return [:]
                 default:
                     return [:]
@@ -5453,6 +5798,7 @@ struct WIDOMInspectorTests {
             lastHighlightReveal == false
         }
         #expect(sentRevealFalse)
+        #expect(runtimeTestHasVisibleHighlightConfig(lastHighlightConfig))
     }
 
     @Test
@@ -5577,17 +5923,27 @@ struct WIDOMInspectorTests {
 
     @Test
     func successfulInspectReappliesPersistentHighlightAfterInspectModeTeardown() async throws {
-        var pageCalls: [(method: String, inspectModeEnabled: Bool?)] = []
+        var pageCalls: [(method: String, inspectModeEnabled: Bool?, highlightConfig: [String: Any]?)] = []
         let backend = FakeDOMTransportBackend(
             pageResultProvider: { method, payload, _ in
+                let params = runtimeTestDictionaryValue(payload["params"])
                 let inspectModeEnabled: Bool?
-                if method == WITransportMethod.DOM.setInspectModeEnabled,
-                   let params = runtimeTestDictionaryValue(payload["params"]) {
-                    inspectModeEnabled = params["enabled"] as? Bool
+                if method == WITransportMethod.DOM.setInspectModeEnabled {
+                    inspectModeEnabled = params?["enabled"] as? Bool
                 } else {
                     inspectModeEnabled = nil
                 }
-                pageCalls.append((method: method, inspectModeEnabled: inspectModeEnabled))
+                let highlightConfig: [String: Any]?
+                if method == WITransportMethod.DOM.highlightNode {
+                    highlightConfig = runtimeTestDictionaryValue(params?["highlightConfig"])
+                } else {
+                    highlightConfig = nil
+                }
+                pageCalls.append((
+                    method: method,
+                    inspectModeEnabled: inspectModeEnabled,
+                    highlightConfig: highlightConfig
+                ))
 
                 switch method {
                 case WITransportMethod.DOM.getDocument:
@@ -5641,21 +5997,38 @@ struct WIDOMInspectorTests {
                 && highlightIndex >= 0
         }
         #expect(selected)
+        let persistentHighlightIndex = pageCalls.lastIndex(where: {
+            $0.method == WITransportMethod.DOM.highlightNode
+        })
+        #expect(persistentHighlightIndex != nil)
+        if let persistentHighlightIndex {
+            #expect(runtimeTestHasVisibleHighlightConfig(pageCalls[persistentHighlightIndex].highlightConfig))
+        }
     }
 
     @Test
     func unresolvedInspectRestoresExistingPersistentHighlight() async throws {
-        var pageCalls: [(method: String, inspectModeEnabled: Bool?)] = []
+        var pageCalls: [(method: String, inspectModeEnabled: Bool?, highlightConfig: [String: Any]?)] = []
         let backend = FakeDOMTransportBackend(
             pageResultProvider: { method, payload, _ in
+                let params = runtimeTestDictionaryValue(payload["params"])
                 let inspectModeEnabled: Bool?
-                if method == WITransportMethod.DOM.setInspectModeEnabled,
-                   let params = runtimeTestDictionaryValue(payload["params"]) {
-                    inspectModeEnabled = params["enabled"] as? Bool
+                if method == WITransportMethod.DOM.setInspectModeEnabled {
+                    inspectModeEnabled = params?["enabled"] as? Bool
                 } else {
                     inspectModeEnabled = nil
                 }
-                pageCalls.append((method: method, inspectModeEnabled: inspectModeEnabled))
+                let highlightConfig: [String: Any]?
+                if method == WITransportMethod.DOM.highlightNode {
+                    highlightConfig = runtimeTestDictionaryValue(params?["highlightConfig"])
+                } else {
+                    highlightConfig = nil
+                }
+                pageCalls.append((
+                    method: method,
+                    inspectModeEnabled: inspectModeEnabled,
+                    highlightConfig: highlightConfig
+                ))
 
                 switch method {
                 case WITransportMethod.DOM.getDocument:
@@ -5720,21 +6093,38 @@ struct WIDOMInspectorTests {
                 && highlightIndex >= 0
         }
         #expect(preserved)
+        let restoredHighlightIndex = pageCalls.lastIndex(where: {
+            $0.method == WITransportMethod.DOM.highlightNode
+        })
+        #expect(restoredHighlightIndex != nil)
+        if let restoredHighlightIndex {
+            #expect(runtimeTestHasVisibleHighlightConfig(pageCalls[restoredHighlightIndex].highlightConfig))
+        }
     }
 
     @Test
     func inspectorInspectResolvesNodeBeforeInspectModeTeardown() async throws {
-        var pageCalls: [(method: String, inspectModeEnabled: Bool?)] = []
+        var pageCalls: [(method: String, inspectModeEnabled: Bool?, highlightConfig: [String: Any]?)] = []
         let backend = FakeDOMTransportBackend(
             pageResultProvider: { method, payload, _ in
+                let params = runtimeTestDictionaryValue(payload["params"])
                 let inspectModeEnabled: Bool?
-                if method == WITransportMethod.DOM.setInspectModeEnabled,
-                   let params = runtimeTestDictionaryValue(payload["params"]) {
-                    inspectModeEnabled = params["enabled"] as? Bool
+                if method == WITransportMethod.DOM.setInspectModeEnabled {
+                    inspectModeEnabled = params?["enabled"] as? Bool
                 } else {
                     inspectModeEnabled = nil
                 }
-                pageCalls.append((method: method, inspectModeEnabled: inspectModeEnabled))
+                let highlightConfig: [String: Any]?
+                if method == WITransportMethod.DOM.highlightNode {
+                    highlightConfig = runtimeTestDictionaryValue(params?["highlightConfig"])
+                } else {
+                    highlightConfig = nil
+                }
+                pageCalls.append((
+                    method: method,
+                    inspectModeEnabled: inspectModeEnabled,
+                    highlightConfig: highlightConfig
+                ))
 
                 switch method {
                 case WITransportMethod.DOM.getDocument:
@@ -5797,10 +6187,18 @@ struct WIDOMInspectorTests {
         let disableInspectIndex = pageCalls.lastIndex(where: {
             $0.method == WITransportMethod.DOM.setInspectModeEnabled && $0.inspectModeEnabled == false
         })
+        let persistentHighlightIndex = pageCalls.lastIndex(where: {
+            $0.method == WITransportMethod.DOM.highlightNode
+        })
         #expect(requestNodeIndex != nil)
         #expect(disableInspectIndex != nil)
         if let requestNodeIndex, let disableInspectIndex {
             #expect(requestNodeIndex < disableInspectIndex)
+        }
+        #expect(persistentHighlightIndex != nil)
+        if let disableInspectIndex, let persistentHighlightIndex {
+            #expect(persistentHighlightIndex > disableInspectIndex)
+            #expect(runtimeTestHasVisibleHighlightConfig(pageCalls[persistentHighlightIndex].highlightConfig))
         }
     }
 
@@ -6298,6 +6696,37 @@ private func runtimeTestDictionaryValue(_ value: Any?) -> [String: Any]? {
         return normalized.isEmpty ? nil : normalized
     }
     return nil
+}
+
+private func runtimeTestDoubleValue(_ value: Any?) -> Double? {
+    if let value = value as? Double {
+        return value
+    }
+    if let value = value as? Float {
+        return Double(value)
+    }
+    if let value = value as? Int {
+        return Double(value)
+    }
+    if let value = value as? NSNumber {
+        if CFGetTypeID(value) == CFBooleanGetTypeID() {
+            return nil
+        }
+        return value.doubleValue
+    }
+    return nil
+}
+
+private func runtimeTestHasVisibleHighlightConfig(_ config: [String: Any]?) -> Bool {
+    guard let config else {
+        return false
+    }
+    return ["contentColor", "paddingColor", "borderColor", "marginColor"].allSatisfy { key in
+        guard let color = runtimeTestDictionaryValue(config[key]) else {
+            return false
+        }
+        return runtimeTestDoubleValue(color["a"]).map { $0 > 0 } == true
+    }
 }
 
 @MainActor

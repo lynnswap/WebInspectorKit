@@ -379,6 +379,7 @@ struct WITransportSessionTests {
         #expect(frameEvent?.method == "Target.targetCreated")
         #expect(frameEvent?.targetIdentifier == "frame-A")
         #expect(session.targetKind(for: "frame-A") == .frame)
+        #expect(session.frameTargetIdentifiers() == ["frame-A"])
         #expect(session.currentPageTargetIdentifier() == "page-A")
         #expect(session.pageTargetIdentifiers() == ["page-A"])
     }
@@ -414,6 +415,7 @@ struct WITransportSessionTests {
         #expect(destroyedEvent?.method == "Target.targetDestroyed")
         #expect(destroyedEvent?.targetIdentifier == "frame-A")
         #expect(session.targetKind(for: "frame-A") == .frame)
+        #expect(session.frameTargetIdentifiers().isEmpty)
         #expect(session.currentPageTargetIdentifier() == "page-A")
     }
 

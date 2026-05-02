@@ -242,6 +242,10 @@ public final class WITransportSession {
         return pageTargetTracker.orderedIdentifiers
     }
 
+    package func frameTargetIdentifiers() -> [String] {
+        pageTargetTracker.frameTargetIdentifiers
+    }
+
     package func sendRootData(
         method: String,
         parametersData: Data? = nil
@@ -511,6 +515,14 @@ package final class WISharedInspectorTransport {
 
     package func currentObservedPageTargetIdentifier() -> String? {
         session?.currentObservedPageTargetIdentifier()
+    }
+
+    package func pageTargetIdentifiers() -> [String] {
+        session?.pageTargetIdentifiers() ?? []
+    }
+
+    package func frameTargetIdentifiers() -> [String] {
+        session?.frameTargetIdentifiers() ?? []
     }
 
     package func targetKind(for identifier: String?) -> WITransportTargetKind? {
@@ -1350,6 +1362,18 @@ private final class WITransportPageTargetTracker {
                 }
                 if rhs.identifier == currentIdentifierStorage {
                     return false
+                }
+                return lhs.creationOrder > rhs.creationOrder
+            }
+            .map(\.identifier)
+    }
+
+    var frameTargetIdentifiers: [String] {
+        knownTargetsByIdentifier.values
+            .filter { $0.kind == .frame }
+            .sorted { lhs, rhs in
+                if lhs.isProvisional != rhs.isProvisional {
+                    return lhs.isProvisional == false
                 }
                 return lhs.creationOrder > rhs.creationOrder
             }

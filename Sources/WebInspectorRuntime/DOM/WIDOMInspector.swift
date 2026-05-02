@@ -17,6 +17,8 @@ nonisolated(unsafe) private let pageWebViewLifetimeObserverAssociationKey = unsa
 private enum WIDOMConsoleDiagnostics {
     private static let milestoneMessages: Set<String> = [
         "beginFreshContext requested",
+        "beginSelectionMode using native inspector backend",
+        "beginSelectionMode enabled protocol inspect mode for native inspector backend",
         "requestSelectionModeToggle enabled inspect mode",
         "beginSelectionMode armed inspect selection",
         "applyPendingInspectSelectionIfPossible resolved transport node",
@@ -215,6 +217,12 @@ public final class WIDOMInspector {
         var progressRevision: UInt64 = 0
     }
 
+    private struct InspectorInspectNodeResolution {
+        let nodeID: Int
+        let targetIdentifier: String
+        let attemptedTargetIdentifiers: [String]
+    }
+
     private struct PendingChildRequestKey: Hashable {
         let nodeID: Int
         let contextID: DOMContextID
@@ -371,6 +379,8 @@ public final class WIDOMInspector {
 #if canImport(UIKit)
     @ObservationIgnored package weak var sceneActivationRequestingScene: UIScene?
     @ObservationIgnored package var nativeInspectorSelectionToggleNeedsDeactivation = false
+    @ObservationIgnored package var nativeInspectorNodeSearchNeedsDirectDeactivation = false
+    @ObservationIgnored package var nativeInspectorProtocolInspectModeNeedsDeactivation = false
 #endif
 
     public convenience init(
@@ -627,6 +637,18 @@ public final class WIDOMInspector {
         )
     }
 
+    package func selectionLifecycleStateMatches(
+        contextID: DOMContextID,
+        targetIdentifier: String
+    ) -> Bool {
+        guard case let .ready(context, currentTargetIdentifier) = phase else {
+            return false
+        }
+        return context.contextID == contextID
+            && currentTargetIdentifier == targetIdentifier
+            && currentContext?.contextID == contextID
+    }
+
     public func beginSelectionMode() async throws {
         let _ = try requirePageWebView()
         applyRecoverableError(nil)
@@ -634,14 +656,20 @@ public final class WIDOMInspector {
         let hadSelectedNode = document.selectedNode != nil
 
         do {
-            let context = try requireCurrentContext()
+            let initialState = try requireReadySelectionState()
             activatePageWindowForSelectionIfPossible()
 #if canImport(UIKit)
             try await requestPageWindowActivationIfNeeded()
             await awaitInspectModeInactive()
 #endif
 
-            let targetIdentifier = try requireCurrentTargetIdentifier()
+            let readyState = try requireReadySelectionState()
+            guard readyState.context.contextID == initialState.context.contextID,
+                  readyState.targetIdentifier == initialState.targetIdentifier else {
+                throw DOMOperationError.contextInvalidated
+            }
+            let context = readyState.context
+            let targetIdentifier = readyState.targetIdentifier
 #if canImport(UIKit)
             let inspectModeControlBackend = try await enableInspectorSelectionMode(
                 hadSelectedNode: hadSelectedNode,
@@ -655,7 +683,10 @@ public final class WIDOMInspector {
             try await setInspectModeEnabled(true, targetIdentifier: targetIdentifier)
             let inspectModeControlBackend = InspectModeControlBackend.transportProtocol
 #endif
-            guard currentContext?.contextID == context.contextID else {
+            guard selectionLifecycleStateMatches(
+                contextID: context.contextID,
+                targetIdentifier: targetIdentifier
+            ) else {
 #if canImport(UIKit)
                 await disableInspectorSelectionModeIfNeeded(
                     targetIdentifier: targetIdentifier,
@@ -1495,6 +1526,14 @@ private extension WIDOMInspector {
             throw DOMOperationError.contextInvalidated
         }
         return currentContext
+    }
+
+    func requireReadySelectionState() throws -> (context: DOMContext, targetIdentifier: String) {
+        guard case let .ready(context, targetIdentifier) = phase,
+              currentContext?.contextID == context.contextID else {
+            throw DOMOperationError.contextInvalidated
+        }
+        return (context, targetIdentifier)
     }
 
     func requireCurrentTargetIdentifier() throws -> String {
@@ -3014,6 +3053,11 @@ private extension WIDOMInspector {
 #else
         isSelectingElement = false
 #endif
+
+        if let contextID = currentContext?.contextID,
+           document.selectedNode != nil {
+            await syncSelectedNodeHighlight(contextID: contextID)
+        }
     }
 
     func setInspectModeEnabled(
@@ -3135,37 +3179,39 @@ private extension WIDOMInspector {
                 "handleInspectorInspectEvent received transport inspect",
                 extra: "contextID=\(contextID) objectID=\(objectID) injectedScriptId=\(injectedScriptIdentifier(from: objectID) ?? "nil") sourceTarget=\(eventTargetIdentifier ?? "nil") requestNodeTarget=\(resolutionTargetIdentifier) generation=\(transaction.generation)"
             )
-            let nodeID = try await transportNodeID(
+            let resolution = try await resolveInspectorInspectNodeID(
                 forRemoteObjectID: objectID,
-                targetIdentifier: resolutionTargetIdentifier
+                initialTargetIdentifier: resolutionTargetIdentifier
             )
             logSelectionDiagnostics(
                 "handleInspectorInspectEvent resolved requestNode",
                 extra: inspectResolutionDiagnosticSummary(
-                    nodeID: nodeID,
-                    targetIdentifier: resolutionTargetIdentifier,
+                    nodeID: resolution.nodeID,
+                    targetIdentifier: resolution.targetIdentifier,
                     contextID: contextID
-                ),
+                ) + " attempts=\(resolution.attemptedTargetIdentifiers.joined(separator: ","))",
                 level: .debug
             )
-            if resolvedAttachedInspectedNodeFromCurrentDocument(nodeID: nodeID) == nil {
+            if resolvedAttachedInspectedNodeFromCurrentDocument(nodeID: resolution.nodeID) == nil {
                 _ = upsertPendingInspectSelection(
-                    nodeID: nodeID,
+                    nodeID: resolution.nodeID,
                     contextID: contextID,
                     selectorPath: nil,
-                    resolutionTargetIdentifier: resolutionTargetIdentifier,
+                    resolutionTargetIdentifier: resolution.targetIdentifier,
                     transaction: transaction
                 )
             }
             scheduleInspectSelectionResolutionAfterTransportDrain(
                 objectID: objectID,
-                nodeID: nodeID,
+                nodeID: resolution.nodeID,
                 contextID: contextID,
                 selectorPath: nil,
-                targetIdentifier: resolutionTargetIdentifier,
+                targetIdentifier: resolution.targetIdentifier,
                 transaction: transaction,
                 showErrorOnFailure: true,
-                allowMaterialization: sharedTransport.targetKind(for: resolutionTargetIdentifier) != .frame
+                allowMaterialization: allowsInspectSelectionMaterialization(
+                    targetIdentifier: resolution.targetIdentifier
+                )
             )
         } catch {
             await completeInspectModeAfterBackendSelection()
@@ -3257,7 +3303,7 @@ private extension WIDOMInspector {
             return
         }
 
-        if sharedTransport.targetKind(for: targetIdentifier) == .frame {
+        if shouldMergeTargetDocumentForInspectSelection(targetIdentifier: targetIdentifier) {
             _ = await mergeFrameTargetDocumentIfNeeded(
                 targetIdentifier: targetIdentifier,
                 contextID: contextID,
@@ -3341,6 +3387,70 @@ private extension WIDOMInspector {
         return nodeID
     }
 
+    private func resolveInspectorInspectNodeID(
+        forRemoteObjectID objectID: String,
+        initialTargetIdentifier: String
+    ) async throws -> InspectorInspectNodeResolution {
+        let candidateTargetIdentifiers = inspectorInspectRequestNodeCandidateTargets(
+            initialTargetIdentifier: initialTargetIdentifier
+        )
+        var attemptedTargetIdentifiers: [String] = []
+        var lastError: (any Error)?
+
+        for targetIdentifier in candidateTargetIdentifiers {
+            attemptedTargetIdentifiers.append(targetIdentifier)
+            do {
+                let nodeID = try await transportNodeID(
+                    forRemoteObjectID: objectID,
+                    targetIdentifier: targetIdentifier
+                )
+                if targetIdentifier != initialTargetIdentifier {
+                    logSelectionDiagnostics(
+                        "Inspector.inspect resolved node on fallback target",
+                        extra: "initialTarget=\(initialTargetIdentifier) resolvedTarget=\(targetIdentifier) attempts=\(attemptedTargetIdentifiers.joined(separator: ","))",
+                        level: .debug
+                    )
+                }
+                return InspectorInspectNodeResolution(
+                    nodeID: nodeID,
+                    targetIdentifier: targetIdentifier,
+                    attemptedTargetIdentifiers: attemptedTargetIdentifiers
+                )
+            } catch {
+                lastError = error
+            }
+        }
+
+        throw lastError ?? DOMOperationError.invalidSelection
+    }
+
+    private func inspectorInspectRequestNodeCandidateTargets(
+        initialTargetIdentifier: String
+    ) -> [String] {
+        var targetIdentifiers: [String] = []
+        func appendTarget(_ targetIdentifier: String?) {
+            guard let targetIdentifier,
+                  targetIdentifiers.contains(targetIdentifier) == false else {
+                return
+            }
+            targetIdentifiers.append(targetIdentifier)
+        }
+
+        appendTarget(initialTargetIdentifier)
+
+        guard sharedTransport.targetKind(for: initialTargetIdentifier) != .frame else {
+            return targetIdentifiers
+        }
+
+        for targetIdentifier in sharedTransport.pageTargetIdentifiers() {
+            appendTarget(targetIdentifier)
+        }
+        for targetIdentifier in sharedTransport.frameTargetIdentifiers() {
+            appendTarget(targetIdentifier)
+        }
+        return targetIdentifiers
+    }
+
     private func upsertPendingInspectSelection(
         nodeID: Int,
         contextID: DOMContextID,
@@ -3407,7 +3517,7 @@ private extension WIDOMInspector {
             return
         }
 
-        if sharedTransport.targetKind(for: targetIdentifier) == .frame,
+        if shouldMergeTargetDocumentForInspectSelection(targetIdentifier: targetIdentifier),
            await mergeFrameTargetDocumentIfNeeded(
                 targetIdentifier: targetIdentifier,
                 contextID: contextID,
@@ -4485,6 +4595,20 @@ private extension WIDOMInspector {
         return roots
     }
 
+    private func shouldMergeTargetDocumentForInspectSelection(
+        targetIdentifier: String
+    ) -> Bool {
+        sharedTransport.targetKind(for: targetIdentifier) == .frame
+            || targetIdentifier != phase.targetIdentifier
+    }
+
+    private func allowsInspectSelectionMaterialization(
+        targetIdentifier: String
+    ) -> Bool {
+        sharedTransport.targetKind(for: targetIdentifier) != .frame
+            && targetIdentifier == phase.targetIdentifier
+    }
+
     private func mergeFrameTargetDocumentIfNeeded(
         targetIdentifier: String,
         contextID: DOMContextID,
@@ -4492,7 +4616,7 @@ private extension WIDOMInspector {
     ) async -> Bool {
         guard currentContext?.contextID == contextID,
               selectionTransactionIsCurrent(transaction),
-              sharedTransport.targetKind(for: targetIdentifier) == .frame else {
+              shouldMergeTargetDocumentForInspectSelection(targetIdentifier: targetIdentifier) else {
             return false
         }
 
@@ -4652,7 +4776,7 @@ private extension WIDOMInspector {
             return false
         }
 
-        if sharedTransport.targetKind(for: targetIdentifier) == .frame {
+        if shouldMergeTargetDocumentForInspectSelection(targetIdentifier: targetIdentifier) {
             guard await mergeFrameTargetDocumentIfNeeded(
                 targetIdentifier: targetIdentifier,
                 contextID: contextID,
@@ -6233,28 +6357,29 @@ private extension WIDOMInspector {
     }
 }
 
-private struct DOMSetInspectModeEnabledParameters: Encodable {
-    struct RGBAColor: Encodable {
-        let r: Int
-        let g: Int
-        let b: Int
-        let a: Double
-    }
+private struct DOMHighlightColor: Encodable {
+    let r: Int
+    let g: Int
+    let b: Int
+    let a: Double
+}
 
-    struct HighlightConfig: Encodable {
-        let showInfo: Bool
-        let contentColor = RGBAColor(r: 111, g: 168, b: 220, a: 0.66)
-        let paddingColor = RGBAColor(r: 147, g: 196, b: 125, a: 0.66)
-        let borderColor = RGBAColor(r: 255, g: 229, b: 153, a: 0.66)
-        let marginColor = RGBAColor(r: 246, g: 178, b: 107, a: 0.66)
-    }
+private struct DOMHighlightConfig: Encodable {
+    let showInfo: Bool
+    let contentColor = DOMHighlightColor(r: 111, g: 168, b: 220, a: 0.66)
+    let paddingColor = DOMHighlightColor(r: 147, g: 196, b: 125, a: 0.66)
+    let borderColor = DOMHighlightColor(r: 255, g: 229, b: 153, a: 0.66)
+    let marginColor = DOMHighlightColor(r: 246, g: 178, b: 107, a: 0.66)
+}
+
+private struct DOMSetInspectModeEnabledParameters: Encodable {
 
     let enabled: Bool
-    let highlightConfig: HighlightConfig?
+    let highlightConfig: DOMHighlightConfig?
 
     static let enabled = DOMSetInspectModeEnabledParameters(
         enabled: true,
-        highlightConfig: .init(showInfo: false)
+        highlightConfig: DOMHighlightConfig(showInfo: false)
     )
 
     static let disabled = DOMSetInspectModeEnabledParameters(
@@ -6315,13 +6440,9 @@ private struct DOMRemoveAttributeParameters: Encodable {
 }
 
 private struct DOMHighlightNodeParameters: Encodable {
-    struct HighlightConfig: Encodable {
-        let showInfo = false
-    }
-
     let nodeId: Int
     let reveal: Bool
-    let highlightConfig = HighlightConfig()
+    let highlightConfig = DOMHighlightConfig(showInfo: false)
 }
 
 private extension String {
