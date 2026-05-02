@@ -328,7 +328,14 @@ extension WIDOMInspector {
         dependencies.webKitSPI.dismissPageEditing(webView)
     }
 
+    private func nativeInspectorSelectionNeedsProtocolInspectModeReset(on webView: WKWebView) -> Bool {
+        isNativeInspectorElementSelectionActive(on: webView) == true
+            || hasActiveNativeInspectorNodeSearch(in: webView)
+    }
+
     private func enableProtocolInspectModeForNativeInspectorSelection(
+        on webView: WKWebView,
+        contextID: DOMContextID,
         targetIdentifier: String
     ) async -> Bool {
         do {
@@ -343,11 +350,103 @@ extension WIDOMInspector {
             )
             return true
         } catch {
+            let didRecover = await recoverProtocolInspectModeEnableAfterNativeInspectorWakeup(
+                on: webView,
+                contextID: contextID,
+                targetIdentifier: targetIdentifier,
+                initialError: error
+            )
+            if didRecover {
+                return true
+            }
+
             nativeInspectorProtocolInspectModeNeedsDeactivation = false
             logInspectorLifecycleDiagnostics(
                 "beginSelectionMode failed to enable protocol inspect mode for native inspector backend",
                 extra: "target=\(targetIdentifier) error=\(error.localizedDescription)",
                 level: .error
+            )
+            return false
+        }
+    }
+
+    private func recoverProtocolInspectModeEnableAfterNativeInspectorWakeup(
+        on webView: WKWebView,
+        contextID: DOMContextID,
+        targetIdentifier: String,
+        initialError: any Error
+    ) async -> Bool {
+        guard selectionLifecycleStateMatches(
+            contextID: contextID,
+            targetIdentifier: targetIdentifier
+        ) else {
+            return false
+        }
+
+        let didActivateNativeSelection = activateNativeInspectorElementSelection(on: webView)
+        guard didActivateNativeSelection,
+              selectionLifecycleStateMatches(
+                contextID: contextID,
+                targetIdentifier: targetIdentifier
+              ) else {
+            cleanUpNativeInspectorActivationAttempt(on: webView)
+            return false
+        }
+
+        do {
+            try await ContinuousClock().sleep(for: .milliseconds(20))
+        } catch {
+            return false
+        }
+
+        guard selectionLifecycleStateMatches(
+            contextID: contextID,
+            targetIdentifier: targetIdentifier
+        ) else {
+            cleanUpNativeInspectorActivationAttempt(on: webView)
+            return false
+        }
+
+        do {
+            try await setProtocolInspectModeEnabledForInspectorLifecycle(
+                true,
+                targetIdentifier: targetIdentifier
+            )
+            nativeInspectorProtocolInspectModeNeedsDeactivation = true
+            logInspectorLifecycleDiagnostics(
+                "beginSelectionMode enabled protocol inspect mode after native inspector wakeup",
+                extra: "target=\(targetIdentifier) initialError=\(initialError.localizedDescription)"
+            )
+            return true
+        } catch {
+            logInspectorLifecycleDiagnostics(
+                "beginSelectionMode failed protocol inspect mode retry after native inspector wakeup",
+                extra: "target=\(targetIdentifier) initialError=\(initialError.localizedDescription) retryError=\(error.localizedDescription)",
+                level: .error
+            )
+            return false
+        }
+    }
+
+    @discardableResult
+    private func resetProtocolInspectModeForNativeInspectorSelection(
+        targetIdentifier: String
+    ) async -> Bool {
+        do {
+            try await setProtocolInspectModeEnabledForInspectorLifecycle(
+                false,
+                targetIdentifier: targetIdentifier
+            )
+            logInspectorLifecycleDiagnostics(
+                "beginSelectionMode reset protocol inspect mode before native inspector backend",
+                extra: "target=\(targetIdentifier)"
+            )
+            return true
+        } catch {
+            logInspectorLifecycleDiagnostics(
+                "beginSelectionMode failed to reset protocol inspect mode before native inspector backend",
+                extra: "target=\(targetIdentifier) error=\(error.localizedDescription)",
+                level: .debug
             )
             return false
         }
@@ -430,18 +529,46 @@ extension WIDOMInspector {
         if nativeInspectorSelectionBackend(for: pageWebView) == .nativeInspector {
             nativeInspectorProtocolInspectModeNeedsDeactivation = false
             let didConnect = connectNativeInspectorIfNeeded(on: pageWebView)
+            let shouldResetProtocolInspectMode = nativeInspectorSelectionNeedsProtocolInspectModeReset(
+                on: pageWebView
+            )
+            if shouldResetProtocolInspectMode {
+                await resetProtocolInspectModeForNativeInspectorSelection(
+                    targetIdentifier: targetIdentifier
+                )
+            }
             let didEnableProtocolInspectMode = await enableProtocolInspectModeForNativeInspectorSelection(
+                on: pageWebView,
+                contextID: contextID,
                 targetIdentifier: targetIdentifier
             )
+            guard didEnableProtocolInspectMode else {
+                guard selectionLifecycleStateMatches(
+                    contextID: contextID,
+                    targetIdentifier: targetIdentifier
+                ) else {
+                    cleanUpNativeInspectorActivationAttempt(on: pageWebView)
+                    throw DOMOperationError.contextInvalidated
+                }
+                logInspectorLifecycleDiagnostics(
+                    "beginSelectionMode skipped native inspector backend because protocol inspect mode did not enable",
+                    extra: "contextID=\(contextID) target=\(targetIdentifier) nativeState=\(nativeInspectorInteractionStateSummaryForDiagnostics() ?? "nil")",
+                    level: .error
+                )
+                cleanUpNativeInspectorActivationAttempt(on: pageWebView)
+                return try await enableTransportProtocolInspectorSelectionMode(
+                    on: pageWebView,
+                    contextID: contextID,
+                    targetIdentifier: targetIdentifier
+                )
+            }
             guard selectionLifecycleStateMatches(
                 contextID: contextID,
                 targetIdentifier: targetIdentifier
             ) else {
-                if didEnableProtocolInspectMode {
-                    _ = await disableProtocolInspectModeForNativeInspectorSelectionIfNeeded(
-                        targetIdentifier: targetIdentifier
-                    )
-                }
+                _ = await disableProtocolInspectModeForNativeInspectorSelectionIfNeeded(
+                    targetIdentifier: targetIdentifier
+                )
                 cleanUpNativeInspectorActivationAttempt(on: pageWebView)
                 throw DOMOperationError.contextInvalidated
             }
@@ -454,11 +581,9 @@ extension WIDOMInspector {
                 contextID: contextID,
                 targetIdentifier: targetIdentifier
             ) else {
-                if didEnableProtocolInspectMode {
-                    _ = await disableProtocolInspectModeForNativeInspectorSelectionIfNeeded(
-                        targetIdentifier: targetIdentifier
-                    )
-                }
+                _ = await disableProtocolInspectModeForNativeInspectorSelectionIfNeeded(
+                    targetIdentifier: targetIdentifier
+                )
                 cleanUpNativeInspectorActivationAttempt(on: pageWebView)
                 throw DOMOperationError.contextInvalidated
             }
@@ -471,22 +596,21 @@ extension WIDOMInspector {
                 extra: "contextID=\(contextID) target=\(targetIdentifier) nativeState=\(nativeInspectorInteractionStateSummaryForDiagnostics() ?? "nil")",
                 level: .error
             )
-            if didEnableProtocolInspectMode {
-                if await waitForTransportInspectModeActivation(on: pageWebView) {
-                    guard selectionLifecycleStateMatches(
-                        contextID: contextID,
+            if await waitForTransportInspectModeActivation(on: pageWebView) {
+                guard selectionLifecycleStateMatches(
+                    contextID: contextID,
+                    targetIdentifier: targetIdentifier
+                ) else {
+                    _ = await disableProtocolInspectModeForNativeInspectorSelectionIfNeeded(
                         targetIdentifier: targetIdentifier
-                    ) else {
-                        _ = await disableProtocolInspectModeForNativeInspectorSelectionIfNeeded(
-                            targetIdentifier: targetIdentifier
-                        )
-                        cleanUpNativeInspectorActivationAttempt(on: pageWebView)
-                        throw DOMOperationError.contextInvalidated
-                    }
+                    )
                     cleanUpNativeInspectorActivationAttempt(on: pageWebView)
-                    nativeInspectorProtocolInspectModeNeedsDeactivation = false
-                    return .transportProtocol
+                    throw DOMOperationError.contextInvalidated
                 }
+                cleanUpNativeInspectorActivationAttempt(on: pageWebView)
+                nativeInspectorProtocolInspectModeNeedsDeactivation = false
+                return .transportProtocol
+            } else {
                 _ = await disableProtocolInspectModeForNativeInspectorSelectionIfNeeded(
                     targetIdentifier: targetIdentifier
                 )
@@ -494,6 +618,18 @@ extension WIDOMInspector {
             cleanUpNativeInspectorActivationAttempt(on: pageWebView)
         }
 
+        return try await enableTransportProtocolInspectorSelectionMode(
+            on: pageWebView,
+            contextID: contextID,
+            targetIdentifier: targetIdentifier
+        )
+    }
+
+    private func enableTransportProtocolInspectorSelectionMode(
+        on pageWebView: WKWebView,
+        contextID: DOMContextID,
+        targetIdentifier: String
+    ) async throws -> InspectModeControlBackend {
         do {
             logInspectorLifecycleDiagnostics(
                 "beginSelectionMode using transport protocol backend",

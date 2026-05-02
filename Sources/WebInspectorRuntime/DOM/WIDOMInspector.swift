@@ -651,6 +651,8 @@ public final class WIDOMInspector {
 
     public func beginSelectionMode() async throws {
         let _ = try requirePageWebView()
+        try await refreshReadyContextIfTransportTargetAdvanced(reason: "beginSelectionMode")
+        await cancelStaleInspectModeBeforeBeginningSelectionIfNeeded()
         applyRecoverableError(nil)
         let selectedContextID = currentContext?.contextID
         let hadSelectedNode = document.selectedNode != nil
@@ -1541,6 +1543,52 @@ private extension WIDOMInspector {
             throw DOMOperationError.contextInvalidated
         }
         return targetIdentifier
+    }
+
+    func refreshReadyContextIfTransportTargetAdvanced(reason: String) async throws {
+        guard case let .ready(_, activeTargetIdentifier) = phase,
+              let committedTargetIdentifier = sharedTransport.currentCommittedPageTargetIdentifier(),
+              committedTargetIdentifier != activeTargetIdentifier else {
+            return
+        }
+
+        logSelectionDiagnostics(
+            "selection requested with stale target; refreshing current document",
+            extra: "reason=\(reason) activeTarget=\(activeTargetIdentifier) committedTarget=\(committedTargetIdentifier)",
+            level: .error
+        )
+        await beginFreshContext(
+            documentURL: normalizedDocumentURL(pageWebView?.url?.absoluteString),
+            targetIdentifier: committedTargetIdentifier,
+            loadImmediately: true,
+            isFreshDocument: true,
+            reason: "\(reason).targetAdvanced"
+        )
+        throw DOMOperationError.contextInvalidated
+    }
+
+    func cancelStaleInspectModeBeforeBeginningSelectionIfNeeded() async {
+        let shouldCancelStaleInspectMode =
+            isSelectingElement
+                || acceptsInspectEvents
+                || inspectModeControlBackend != nil
+                || inspectModeTargetIdentifier != nil
+                || nativeInspectorSelectionToggleNeedsDeactivation
+                || nativeInspectorNodeSearchNeedsDirectDeactivation
+                || nativeInspectorProtocolInspectModeNeedsDeactivation
+        guard shouldCancelStaleInspectMode else {
+            return
+        }
+
+        let targetIdentifier = inspectModeTargetIdentifier ?? phase.targetIdentifier
+        logSelectionDiagnostics(
+            "beginSelectionMode cancelling stale inspect mode before rearming",
+            extra: "target=\(targetIdentifier ?? "nil") selecting=\(isSelectingElement) acceptsInspectEvents=\(acceptsInspectEvents) backend=\(inspectModeControlBackend?.rawValue ?? "nil")"
+        )
+        await cancelInspectMode(
+            targetIdentifier: targetIdentifier,
+            invalidatePendingSelection: true
+        )
     }
 
     func nodeForBackendAction(backendNodeID: Int) -> DOMNodeModel? {
@@ -3138,7 +3186,9 @@ private extension WIDOMInspector {
             targetIdentifier: resolutionTargetIdentifier,
             transaction: transaction,
             showErrorOnFailure: false,
-            allowMaterialization: false
+            allowMaterialization: allowsInspectSelectionMaterialization(
+                targetIdentifier: resolutionTargetIdentifier
+            )
         )
     }
 
@@ -3545,14 +3595,11 @@ private extension WIDOMInspector {
             return
         }
 
-        let shouldMaterializeCurrentInspectSelection: Bool
-        if transaction != nil {
-            shouldMaterializeCurrentInspectSelection = selectionMaterializationCandidates(
-                for: pendingInspectSelection
-            ).strategy == .genericIncomplete
-        } else {
-            shouldMaterializeCurrentInspectSelection = true
-        }
+        let shouldMaterializeCurrentInspectSelection = shouldMaterializeInspectSelection(
+            transaction: transaction,
+            pendingSelection: pendingInspectSelection,
+            showErrorOnFailure: showErrorOnFailure
+        )
 
         if allowMaterialization, shouldMaterializeCurrentInspectSelection {
             let outcome = await materializePendingInspectSelection(
@@ -3587,6 +3634,25 @@ private extension WIDOMInspector {
             errorMessage: "Failed to resolve selected element."
         )
         throw DOMOperationError.invalidSelection
+    }
+
+    private func shouldMaterializeInspectSelection(
+        transaction: SelectionTransaction?,
+        pendingSelection: PendingInspectSelection?,
+        showErrorOnFailure: Bool
+    ) -> Bool {
+        guard transaction != nil else {
+            return true
+        }
+
+        switch selectionMaterializationCandidates(for: pendingSelection).strategy {
+        case .genericIncomplete:
+            return true
+        case .frameRelated, .nestedDocumentRoots:
+            return showErrorOnFailure == false
+        case .body, .html, .structuredChild, .root, .none:
+            return false
+        }
     }
 
     @discardableResult

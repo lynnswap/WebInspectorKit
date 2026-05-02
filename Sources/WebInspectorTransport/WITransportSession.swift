@@ -227,6 +227,10 @@ public final class WITransportSession {
         pageTargetTracker.observedCurrentIdentifier
     }
 
+    package func currentCommittedPageTargetIdentifier() -> String? {
+        pageTargetTracker.committedIdentifier
+    }
+
     package func targetKind(for identifier: String?) -> WITransportTargetKind? {
         pageTargetTracker.targetKind(for: identifier)
     }
@@ -515,6 +519,10 @@ package final class WISharedInspectorTransport {
 
     package func currentObservedPageTargetIdentifier() -> String? {
         session?.currentObservedPageTargetIdentifier()
+    }
+
+    package func currentCommittedPageTargetIdentifier() -> String? {
+        session?.currentCommittedPageTargetIdentifier()
     }
 
     package func pageTargetIdentifiers() -> [String] {
@@ -1348,6 +1356,10 @@ private final class WITransportPageTargetTracker {
             return nil
         }
         return currentIdentifierStorage
+    }
+
+    var committedIdentifier: String? {
+        committedIdentifierStorage
     }
 
     var allowsDerivedCommittedSeed: Bool {
