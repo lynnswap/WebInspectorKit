@@ -1,4 +1,5 @@
 import Testing
+import WebInspectorBridge
 import WebKit
 #if canImport(UIKit)
 import UIKit
@@ -63,6 +64,13 @@ struct WIInspectorDependenciesTests {
         #expect(dependencies.domFrontend.resourcesDirectoryURL()?.path == "/tmp/dom-tree-view")
         #expect(try dependencies.network.networkAgentScript() == "custom-network-script")
         #expect(dependencies.webKitSPI.setNodeSearchEnabled(WKWebView(frame: .zero), true))
+
+        let webView = WKWebView(frame: .zero)
+        let networkDependencies = dependencies.makeNetworkPageAgentDependencies()
+        #expect(networkDependencies.startupMode() == .legacyJSON)
+        #expect(networkDependencies.modeForAttachment(webView) == .legacyJSON)
+        #expect(networkDependencies.supportsResourceLoadDelegate(webView) == false)
+        #expect(networkDependencies.setResourceLoadDelegate(webView, nil) == false)
     }
 
     @Test

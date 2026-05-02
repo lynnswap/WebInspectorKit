@@ -262,26 +262,21 @@ public struct WIInspectorWebKitSPIClient: WIInspectorDependencyClient {
         self.removeNodeSearchRecognizers = removeNodeSearchRecognizers
         self.isElementSelectionActive = isElementSelectionActive
         self.startupBridgeMode = {
-            WISPIRuntime.shared.startupMode()
+            .legacyJSON
         }
-        self.bridgeModeForAttachment = { webView in
-            WISPIRuntime.shared.modeForAttachment(webView: webView)
+        self.bridgeModeForAttachment = { _ in
+            .legacyJSON
         }
-        self.supportsResourceLoadDelegate = { webView in
-            WISPIRuntime.shared.canSetResourceLoadDelegate(on: webView)
+        self.supportsResourceLoadDelegate = { _ in
+            false
         }
-        self.setResourceLoadDelegate = { webView, delegate in
-            WISPIRuntime.shared.setResourceLoadDelegate(on: webView, delegate: delegate)
+        self.setResourceLoadDelegate = { _, _ in
+            false
         }
-        self.dismissPageEditing = { webView in
-            #if canImport(UIKit)
-            webView.endEditing(true)
-            #else
-            _ = webView
-            #endif
+        self.dismissPageEditing = { _ in
         }
         self.transportInspectActivationProvider = { _ in true }
-        self.transportInspectActivationTimeoutNanoseconds = 50_000_000
+        self.transportInspectActivationTimeoutNanoseconds = 0
     }
 
     package init(
@@ -367,7 +362,31 @@ public struct WIInspectorWebKitSPIClient: WIInspectorDependencyClient {
                 WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationTimeoutNanoseconds
         )
         #else
-        Self()
+        Self(
+            hasPrivateInspectorAccess: { _ in false },
+            isInspectorConnected: { _ in nil },
+            connectInspector: { _ in false },
+            toggleElementSelection: { _ in false },
+            setNodeSearchEnabled: { _, _ in false },
+            hasNodeSearchRecognizer: { _ in false },
+            removeNodeSearchRecognizers: { _ in true },
+            isElementSelectionActive: { _ in false },
+            startupBridgeMode: {
+                WISPIRuntime.shared.startupMode()
+            },
+            bridgeModeForAttachment: { webView in
+                WISPIRuntime.shared.modeForAttachment(webView: webView)
+            },
+            supportsResourceLoadDelegate: { webView in
+                WISPIRuntime.shared.canSetResourceLoadDelegate(on: webView)
+            },
+            setResourceLoadDelegate: { webView, delegate in
+                WISPIRuntime.shared.setResourceLoadDelegate(on: webView, delegate: delegate)
+            },
+            dismissPageEditing: { _ in },
+            transportInspectActivationProvider: { _ in true },
+            transportInspectActivationTimeoutNanoseconds: 50_000_000
+        )
         #endif
     }
 
