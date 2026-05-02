@@ -7,7 +7,7 @@ final class V2_WICompactTabBarController: UITabBarController, UITabBarController
     private let session: V2_WISession
     private let tabTransitionAnimator = V2_WINoAnimationTabTransitionAnimator()
     private var nativeTabByItemID: [V2_TabDisplayItem.ID: UITab] = [:]
-    private var observationHandles: Set<ObservationHandle> = []
+    private let observationScope = ObservationScope()
     private var isRenderingSelection = false
 
     init(session: V2_WISession) {
@@ -24,8 +24,8 @@ final class V2_WICompactTabBarController: UITabBarController, UITabBarController
         nil
     }
 
-    deinit {
-        observationHandles.removeAll()
+    isolated deinit {
+        observationScope.cancelAll()
     }
 
     override func viewDidLoad() {
@@ -57,12 +57,12 @@ final class V2_WICompactTabBarController: UITabBarController, UITabBarController
         session.interface.observe(\.tabs) { [weak self] _ in
             self?.renderTabsAndSelection(animated: true)
         }
-        .store(in: &observationHandles)
+        .store(in: observationScope)
 
         session.interface.observe(\.selectedItemID) { [weak self] _ in
             self?.renderSelection()
         }
-        .store(in: &observationHandles)
+        .store(in: observationScope)
     }
 
     private func renderTabsAndSelection(animated: Bool) {

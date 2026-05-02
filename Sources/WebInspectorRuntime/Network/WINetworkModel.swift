@@ -58,7 +58,7 @@ public final class WINetworkModel {
     }
 
     @ObservationIgnored private var selectedEntryFetchTask: Task<Void, Never>?
-    @ObservationIgnored private var selectedEntryObservationHandles: Set<ObservationHandle> = []
+    @ObservationIgnored private let selectedEntryObservationScope = ObservationScope()
     @ObservationIgnored private var observedSelectedBodyState: ObservedSelectedBodyState?
     package private(set) var isAttachedToPage: Bool = false
 
@@ -106,7 +106,7 @@ public final class WINetworkModel {
 
     func detach() async {
         cancelSelectedEntryBodyFetch()
-        selectedEntryObservationHandles.removeAll()
+        selectedEntryObservationScope.cancelAll()
         observedSelectedBodyState = nil
         selectedEntry = nil
         await session.detach()
@@ -175,7 +175,7 @@ public final class WINetworkModel {
 
     public func clear() async {
         cancelSelectedEntryBodyFetch()
-        selectedEntryObservationHandles.removeAll()
+        selectedEntryObservationScope.cancelAll()
         observedSelectedBodyState = nil
         selectedEntry = nil
         await session.clearNetworkLogs()
@@ -187,7 +187,7 @@ public final class WINetworkModel {
 
     func tearDownForDeinit() {
         cancelSelectedEntryBodyFetch()
-        selectedEntryObservationHandles.removeAll()
+        selectedEntryObservationScope.cancelAll()
         observedSelectedBodyState = nil
         selectedEntry = nil
         session.tearDownForDeinit()
@@ -201,27 +201,28 @@ private extension WINetworkModel {
     }
 
     func startObservingSelectedEntry(_ entry: NetworkEntry?) {
-        selectedEntryObservationHandles.removeAll()
         observedSelectedBodyState = bodyState(for: entry)
-        guard let entry else {
-            return
-        }
+        selectedEntryObservationScope.update {
+            guard let entry else {
+                return
+            }
 
-        entry.observe([\.requestBody, \.responseBody]) { [weak self, weak entry] in
-            guard let self, let entry else {
-                return
+            entry.observe([\.requestBody, \.responseBody]) { [weak self, weak entry] in
+                guard let self, let entry else {
+                    return
+                }
+                guard self.selectedEntry?.id == entry.id else {
+                    return
+                }
+                let currentBodyState = self.bodyState(for: entry)
+                guard self.observedSelectedBodyState != currentBodyState else {
+                    return
+                }
+                self.observedSelectedBodyState = currentBodyState
+                self.restartSelectedEntryBodyFetch()
             }
-            guard self.selectedEntry?.id == entry.id else {
-                return
-            }
-            let currentBodyState = self.bodyState(for: entry)
-            guard self.observedSelectedBodyState != currentBodyState else {
-                return
-            }
-            self.observedSelectedBodyState = currentBodyState
-            self.restartSelectedEntryBodyFetch()
+            .store(in: selectedEntryObservationScope)
         }
-        .store(in: &selectedEntryObservationHandles)
     }
 
     func restartSelectedEntryBodyFetch() {

@@ -1,5 +1,5 @@
 {
-  "originHash" : "323b10c73b20d4f605258ece132d1ffaf41db40bba76ae2abbf9be32fadc8f8f",
+  "originHash" : "89064ad4b03a574088b540948d92236a045c26dadc43d5b3a36e5bfd14973a15",
   "pins" : [
     {
       "identity" : "machokit",
@@ -24,8 +24,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/ObservationBridge.git",
       "state" : {
-        "revision" : "fa81bf910f93bc6192d8941476afdbc73541c9b3",
-        "version" : "0.7.1"
+        "revision" : "ba3b94adc34467dfa53836292c88f6d43095802e",
+        "version" : "0.8.0"
       }
     },
     {
@@ -105,8 +105,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/SyntaxEditorUI.git",
       "state" : {
-        "revision" : "2bdc8aa4841f4f8c02fe8b1102d568079e8626ac",
-        "version" : "0.4.0"
+        "revision" : "8b9b2807f573cf82b156aabb4534dfd4e7f0b02e",
+        "version" : "0.4.2"
       }
     },
     {

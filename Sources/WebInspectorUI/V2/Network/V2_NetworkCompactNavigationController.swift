@@ -8,7 +8,7 @@ final class V2_NetworkCompactNavigationController: V2_WICompactTabNavigationCont
     private let inspector: WINetworkModel
     private let listViewController: V2_NetworkListViewController
     private let detailViewController: V2_NetworkEntryDetailViewController
-    private var observationHandles: Set<ObservationHandle> = []
+    private let observationScope = ObservationScope()
     private var isSyncingStack = false
 
     init(
@@ -27,7 +27,7 @@ final class V2_NetworkCompactNavigationController: V2_WICompactTabNavigationCont
     }
 
     isolated deinit {
-        observationHandles.removeAll()
+        observationScope.cancelAll()
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -55,18 +55,16 @@ final class V2_NetworkCompactNavigationController: V2_WICompactTabNavigationCont
     }
 
     private func startObservingSelection() {
-        guard observationHandles.isEmpty else {
-            return
+        observationScope.update {
+            inspector.observe(\.selectedEntry) { [weak self] selectedEntry in
+                self?.syncStack(with: selectedEntry, animated: true)
+            }
+            .store(in: observationScope)
         }
-
-        inspector.observe(\.selectedEntry) { [weak self] selectedEntry in
-            self?.syncStack(with: selectedEntry, animated: true)
-        }
-        .store(in: &observationHandles)
     }
 
     private func stopObservingSelection() {
-        observationHandles.removeAll()
+        observationScope.cancelAll()
     }
 
     private func syncStack(with entry: NetworkEntry?, animated: Bool) {

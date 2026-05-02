@@ -7,7 +7,7 @@ final class V2_WIRegularTabContentViewController: UINavigationController {
     private let session: V2_WISession
     private var segmentDisplayItemIDs: [V2_TabDisplayItem.ID] = []
     private var displayedDisplayItemID: V2_TabDisplayItem.ID?
-    private var observationHandles: Set<ObservationHandle> = []
+    private let observationScope = ObservationScope()
 
     private lazy var segmentBarButtonItem: UIBarButtonItem = {
         let item = UIBarButtonItem(customView: segmentedControl)
@@ -42,8 +42,8 @@ final class V2_WIRegularTabContentViewController: UINavigationController {
         nil
     }
 
-    deinit {
-        observationHandles.removeAll()
+    isolated deinit {
+        observationScope.cancelAll()
     }
 
     override func viewDidLoad() {
@@ -66,12 +66,12 @@ final class V2_WIRegularTabContentViewController: UINavigationController {
         session.interface.observe(\.tabs) { [weak self] _ in
             self?.renderTabsAndSelection(animated: true)
         }
-        .store(in: &observationHandles)
+        .store(in: observationScope)
 
         session.interface.observe(\.selectedItemID) { [weak self] _ in
             self?.renderSelection(animated: false)
         }
-        .store(in: &observationHandles)
+        .store(in: observationScope)
     }
 
     private func renderTabsAndSelection(animated: Bool) {

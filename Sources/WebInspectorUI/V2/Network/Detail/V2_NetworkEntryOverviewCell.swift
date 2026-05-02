@@ -5,20 +5,18 @@ import WebInspectorRuntime
 
 @MainActor
 final class V2_NetworkEntryOverviewCell: UICollectionViewListCell {
-    private var observationHandles: Set<ObservationHandle> = []
+    private let observationScope = ObservationScope()
 
     override func prepareForReuse() {
         super.prepareForReuse()
-        observationHandles.removeAll()
+        observationScope.cancelAll()
     }
 
     isolated deinit {
-        observationHandles.removeAll()
+        observationScope.cancelAll()
     }
 
     func bind(entry: NetworkEntry) {
-        observationHandles.removeAll()
-
         var content = UIListContentConfiguration.subtitleCell()
         content.textProperties.numberOfLines = 1
         content.secondaryText = entry.url
@@ -29,19 +27,21 @@ final class V2_NetworkEntryOverviewCell: UICollectionViewListCell {
         content.attributedText = makeMetricsAttributedText(for: entry)
         contentConfiguration = content
 
-        entry.observe(\.url) { [weak self] newURL in
-            self?.renderURL(newURL)
-        }
-        .store(in: &observationHandles)
-
-        entry.observe([\.method, \.statusCode, \.statusText, \.phase, \.duration, \.encodedBodyLength]) {
-            [weak self, weak entry] in
-            guard let self, let entry else {
-                return
+        observationScope.update {
+            entry.observe(\.url) { [weak self] newURL in
+                self?.renderURL(newURL)
             }
-            self.renderMetrics(self.makeMetricsAttributedText(for: entry))
+            .store(in: observationScope)
+
+            entry.observe([\.method, \.statusCode, \.statusText, \.phase, \.duration, \.encodedBodyLength]) {
+                [weak self, weak entry] in
+                guard let self, let entry else {
+                    return
+                }
+                self.renderMetrics(self.makeMetricsAttributedText(for: entry))
+            }
+            .store(in: observationScope)
         }
-        .store(in: &observationHandles)
     }
 
     private func renderURL(_ url: String) {

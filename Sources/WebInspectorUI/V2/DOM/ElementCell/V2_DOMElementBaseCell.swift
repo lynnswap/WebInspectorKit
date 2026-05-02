@@ -5,7 +5,7 @@ import UIKit
 class V2_DOMElementBaseCell: UICollectionViewListCell {
     private static let minimumHeight: CGFloat = 44
 
-    private var observationHandles: Set<ObservationHandle> = []
+    private let observationScope = ObservationScope()
 
     var selectableTextViewsForSizing: [V2_DOMElementSelectableTextView] {
         []
@@ -13,7 +13,7 @@ class V2_DOMElementBaseCell: UICollectionViewListCell {
 
     override func prepareForReuse() {
         super.prepareForReuse()
-        resetObservationHandles()
+        resetObservations()
     }
 
     override func preferredLayoutAttributesFitting(
@@ -59,12 +59,16 @@ class V2_DOMElementBaseCell: UICollectionViewListCell {
         return attributes
     }
 
-    func resetObservationHandles() {
-        observationHandles.removeAll()
+    func resetObservations() {
+        observationScope.cancelAll()
     }
 
-    func store(_ observationHandle: ObservationHandle) {
-        observationHandle.store(in: &observationHandles)
+    func updateObservations(_ body: () -> Void) {
+        observationScope.update(body)
+    }
+
+    func store(_ observationRegistration: ObservationRegistration) {
+        observationRegistration.store(in: observationScope)
     }
 
     static var monospacedFootnoteFont: UIFont {

@@ -32,8 +32,8 @@ final class V2_NetworkEntryDetailViewController: UICollectionViewController {
     }
 
     private let inspector: WINetworkModel
-    private var observationHandles: Set<ObservationHandle> = []
-    private var selectedEntryObservationHandles: Set<ObservationHandle> = []
+    private let observationScope = ObservationScope()
+    private let selectedEntryObservationScope = ObservationScope()
     private lazy var dataSource = makeDataSource()
 
     private var selectedEntry: NetworkEntry? {
@@ -47,7 +47,7 @@ final class V2_NetworkEntryDetailViewController: UICollectionViewController {
         inspector.observe(\.selectedEntry) { [weak self] selectedEntry in
             self?.display(selectedEntry, reloadData: true)
         }
-        .store(in: &observationHandles)
+        .store(in: observationScope)
     }
 
     @available(*, unavailable)
@@ -56,8 +56,8 @@ final class V2_NetworkEntryDetailViewController: UICollectionViewController {
     }
 
     isolated deinit {
-        observationHandles.removeAll()
-        selectedEntryObservationHandles.removeAll()
+        observationScope.cancelAll()
+        selectedEntryObservationScope.cancelAll()
     }
 
     override func viewDidLoad() {
@@ -150,7 +150,6 @@ final class V2_NetworkEntryDetailViewController: UICollectionViewController {
     }
 
     private func display(_ entry: NetworkEntry?, reloadData: Bool) {
-        selectedEntryObservationHandles.removeAll()
         title = entry?.displayName
 
         guard isViewLoaded else {
@@ -158,6 +157,7 @@ final class V2_NetworkEntryDetailViewController: UICollectionViewController {
         }
 
         guard let entry else {
+            selectedEntryObservationScope.update {}
             collectionView.isHidden = true
             var configuration = UIContentUnavailableConfiguration.empty()
             configuration.text = wiLocalized("network.empty.selection.title", default: "No request selected")
@@ -182,21 +182,23 @@ final class V2_NetworkEntryDetailViewController: UICollectionViewController {
     }
 
     private func startObserving(_ entry: NetworkEntry) {
-        entry.observe([\.requestHeaders, \.responseHeaders]) { [weak self, weak entry] in
-            guard let self, let entry, self.selectedEntry?.id == entry.id else {
-                return
+        selectedEntryObservationScope.update {
+            entry.observe([\.requestHeaders, \.responseHeaders]) { [weak self, weak entry] in
+                guard let self, let entry, self.selectedEntry?.id == entry.id else {
+                    return
+                }
+                self.applySnapshot()
             }
-            self.applySnapshot()
-        }
-        .store(in: &selectedEntryObservationHandles)
+            .store(in: selectedEntryObservationScope)
 
-        entry.observe(\.url) { [weak self, weak entry] _ in
-            guard let self, let entry, self.selectedEntry?.id == entry.id else {
-                return
+            entry.observe(\.url) { [weak self, weak entry] _ in
+                guard let self, let entry, self.selectedEntry?.id == entry.id else {
+                    return
+                }
+                self.title = entry.displayName
             }
-            self.title = entry.displayName
+            .store(in: selectedEntryObservationScope)
         }
-        .store(in: &selectedEntryObservationHandles)
     }
 
     private func makeSnapshot() -> NSDiffableDataSourceSnapshot<SectionIdentifier, ItemIdentifier> {

@@ -10,7 +10,7 @@ import UIKit
 final class WINetworkCompactViewController: UINavigationController, UINavigationControllerDelegate {
     private let inspector: WINetworkModel
     private let listPaneViewController: WINetworkListViewController
-    private var observationHandles: Set<ObservationHandle> = []
+    private let observationScope = ObservationScope()
 
     init(inspector: WINetworkModel, queryModel: WINetworkQueryModel) {
         self.inspector = inspector
@@ -22,7 +22,7 @@ final class WINetworkCompactViewController: UINavigationController, UINavigation
             guard let self else { return }
             self.syncNavigationStack(for: newValue)
         }
-        .store(in: &observationHandles)
+        .store(in: observationScope)
     }
 
     @available(*, unavailable)

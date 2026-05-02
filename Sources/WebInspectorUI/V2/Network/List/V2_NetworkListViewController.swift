@@ -26,7 +26,7 @@ class V2_NetworkListViewController: UICollectionViewController, UISearchResultsU
 
     private let inspector: WINetworkModel
     private var entrySelectionAction: EntrySelectionAction
-    private var observationHandles: Set<ObservationHandle> = []
+    private let observationScope = ObservationScope()
 
     private var needsSnapshotReloadOnNextAppearance = false
     private var isApplyingSearchPresentation = false
@@ -63,7 +63,7 @@ class V2_NetworkListViewController: UICollectionViewController, UISearchResultsU
     }
 
     isolated deinit {
-        observationHandles.removeAll()
+        observationScope.cancelAll()
         detachSearchPresentation()
     }
 
@@ -122,17 +122,17 @@ class V2_NetworkListViewController: UICollectionViewController, UISearchResultsU
         inspector.observe(\.displayEntries, options: Self.snapshotObservationOptions) { [weak self] displayEntries in
             self?.reloadDataFromInspector(displayEntries: displayEntries)
         }
-        .store(in: &observationHandles)
+        .store(in: observationScope)
 
         inspector.observe(\.searchText) { [weak self] searchText in
             self?.renderSearchText(searchText)
         }
-        .store(in: &observationHandles)
+        .store(in: observationScope)
 
         inspector.observe(\.effectiveResourceFilters) { [weak self] _ in
             self?.resourceFilterSelectionDidChange()
         }
-        .store(in: &observationHandles)
+        .store(in: observationScope)
     }
 
     private func configureNavigationItem() {

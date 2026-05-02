@@ -14,7 +14,7 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
     private let inspector: WIInspectorController
     private let renderCache: WIUIKitTabRenderCache
     private let synthesizedElementTab = WITab.element()
-    private var tabObservationHandles: Set<ObservationHandle> = []
+    private let tabObservationScope = ObservationScope()
     private var isApplyingSelectionFromModel = false
 
     init(
@@ -39,7 +39,7 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
     }
 
     isolated deinit {
-        tabObservationHandles.removeAll()
+        tabObservationScope.cancelAll()
     }
 
     override func viewDidLoad() {
@@ -61,7 +61,7 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
 
     func prepareForRemoval() {
         delegate = nil
-        tabObservationHandles.removeAll()
+        tabObservationScope.cancelAll()
         releaseInstalledTabsIfNeeded()
     }
 
@@ -88,14 +88,14 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
     }
 
     private func bindModel() {
-        tabObservationHandles.removeAll()
+        tabObservationScope.cancelAll()
 
         inspector.observe(
             \.tabs
         ) { [weak self] _ in
             self?.rebuildNativeTabsIfPossible()
         }
-        .store(in: &tabObservationHandles)
+        .store(in: tabObservationScope)
 
         inspector.observe(
             \.selectedTab
@@ -105,7 +105,7 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
             }
             self.syncNativeSelection(with: newValue)
         }
-        .store(in: &tabObservationHandles)
+        .store(in: tabObservationScope)
     }
 
     private func rebuildNativeTabsIfPossible() {

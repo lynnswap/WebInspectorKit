@@ -6,7 +6,7 @@ import UIKit
 
 @MainActor
 final class V2_NetworkListCell: UICollectionViewListCell {
-    private var observationHandles: Set<ObservationHandle> = []
+    private let observationScope = ObservationScope()
     private let statusIndicatorView = UIView(frame: CGRect(origin: .zero, size: CGSize(width: 8, height: 8)))
     private let fileTypeLabel = UILabel()
 
@@ -21,21 +21,22 @@ final class V2_NetworkListCell: UICollectionViewListCell {
     }
 
     isolated deinit {
-        observationHandles.removeAll()
+        observationScope.cancelAll()
     }
 
     func bind(item: NetworkEntry) {
-        observationHandles.removeAll()
         render(displayName: item.displayName)
         renderAccessories(item: item)
 
-        item.observe([\.fileTypeLabel, \.statusSeverity]) { [weak self, weak item] in
-            guard let item else {
-                return
+        observationScope.update {
+            item.observe([\.fileTypeLabel, \.statusSeverity]) { [weak self, weak item] in
+                guard let item else {
+                    return
+                }
+                self?.renderAccessories(item: item)
             }
-            self?.renderAccessories(item: item)
+            .store(in: observationScope)
         }
-        .store(in: &observationHandles)
     }
 
     private func configureStaticViews() {

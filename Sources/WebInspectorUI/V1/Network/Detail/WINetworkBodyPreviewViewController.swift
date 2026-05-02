@@ -45,7 +45,7 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
     private var renderTask: Task<Void, Never>?
     private var renderGeneration: UInt64 = 0
     private var hasAppliedInitialTreeSnapshot = false
-    private var bodyObservationHandles: Set<ObservationHandle> = []
+    private let bodyObservationScope = ObservationScope()
 
     private var treePayloadByItem: [TreeItem: TreeItemPayload] = [:]
     private lazy var treeDataSource = makeTreeDataSource()
@@ -85,7 +85,7 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
 
     isolated deinit {
         renderTask?.cancel()
-        bodyObservationHandles.removeAll()
+        bodyObservationScope.cancelAll()
     }
 
     public override func viewDidLoad() {
@@ -210,27 +210,28 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
     }
 
     private func startObservingBodyState() {
-        bodyObservationHandles.removeAll()
-        bodyState.observeTask(
-            [
-                \.kind,
-                \.preview,
-                \.full,
-                \.size,
-                \.isBase64Encoded,
-                \.isTruncated,
-                \.summary,
-                \.reference,
-                \.formEntries,
-                \.fetchState
-            ]
-        ) { [weak self] in
-            guard let self else {
-                return
+        bodyObservationScope.update {
+            bodyState.observeTask(
+                [
+                    \.kind,
+                    \.preview,
+                    \.full,
+                    \.size,
+                    \.isBase64Encoded,
+                    \.isTruncated,
+                    \.summary,
+                    \.reference,
+                    \.formEntries,
+                    \.fetchState
+                ]
+            ) { [weak self] in
+                guard let self else {
+                    return
+                }
+                self.requestRenderModelUpdate()
             }
-            self.requestRenderModelUpdate()
+            .store(in: bodyObservationScope)
         }
-        .store(in: &bodyObservationHandles)
     }
 
     private func makeTreeLayout() -> UICollectionViewLayout {

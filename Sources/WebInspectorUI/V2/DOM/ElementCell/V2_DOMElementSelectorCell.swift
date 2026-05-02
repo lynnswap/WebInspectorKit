@@ -26,15 +26,16 @@ final class V2_DOMElementSelectorCell: V2_DOMElementBaseCell {
     }
 
     func bind(node: DOMNodeModel) {
-        resetObservationHandles()
         accessories = []
         contentConfiguration = nil
 
-        store(
-            node.observe(\.selectorPath) { [weak self] selectorPath in
-                self?.render(selectorPath: selectorPath)
-            }
-        )
+        updateObservations {
+            store(
+                node.observe(\.selectorPath) { [weak self] selectorPath in
+                    self?.render(selectorPath: selectorPath)
+                }
+            )
+        }
     }
 
     private func configureSelectorTextView() {

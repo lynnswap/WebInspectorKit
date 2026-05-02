@@ -6,7 +6,7 @@ import ObservationBridge
 @MainActor
 final class WINetworkFilterMenuCoordinator {
     private unowned let queryModel: WINetworkQueryModel
-    private var observationHandles: Set<ObservationHandle> = []
+    private let observationScope = ObservationScope()
 
     private lazy var barButtonItem: UIBarButtonItem = {
         let item = UIBarButtonItem(
@@ -23,7 +23,7 @@ final class WINetworkFilterMenuCoordinator {
         queryModel.observeTask(\.effectiveFilters) { [weak self] effectiveFilters in
             self?.applyMenuStateAfterMutation(effectiveFilters: effectiveFilters)
         }
-        .store(in: &observationHandles)
+        .store(in: observationScope)
     }
 
     var item: UIBarButtonItem {

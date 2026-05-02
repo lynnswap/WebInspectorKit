@@ -65,9 +65,9 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     private let inspector: WIDOMInspector
     private let showsNavigationControls: Bool
     private var hasStartedObservingState = false
-    private var stateObservationHandles: Set<ObservationHandle> = []
-    private var documentStoreObservationHandles: Set<ObservationHandle> = []
-    private var selectedEntryObservationHandles: Set<ObservationHandle> = []
+    private let stateObservationScope = ObservationScope()
+    private let documentStoreObservationScope = ObservationScope()
+    private let selectedEntryObservationScope = ObservationScope()
     private var sections: [DetailSection] = []
     private var needsSnapshotReloadOnNextAppearance = false
     private var pendingReloadDataTask: Task<Void, Never>?
@@ -114,9 +114,9 @@ public final class WIDOMDetailViewController: UICollectionViewController {
 
     isolated deinit {
         pendingReloadDataTask?.cancel()
-        stateObservationHandles.removeAll()
-        documentStoreObservationHandles.removeAll()
-        selectedEntryObservationHandles.removeAll()
+        stateObservationScope.cancelAll()
+        documentStoreObservationScope.cancelAll()
+        selectedEntryObservationScope.cancelAll()
     }
 
     public override func viewDidLoad() {
@@ -165,36 +165,37 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         inspector.observe(\.hasPageWebView) { [weak self] _ in
             self?.scheduleNavigationControlsUpdate()
         }
-        .store(in: &stateObservationHandles)
+        .store(in: stateObservationScope)
 
         inspector.observe(\.isPageReadyForSelection) { [weak self] _ in
             self?.scheduleNavigationControlsUpdate()
         }
-        .store(in: &stateObservationHandles)
+        .store(in: stateObservationScope)
 
         inspector.observe(\.isSelectingElement) { [weak self] _ in
             self?.scheduleNavigationControlsUpdate()
         }
-        .store(in: &stateObservationHandles)
+        .store(in: stateObservationScope)
 
         inspector.observe(\.document) { [weak self] document in
             guard let self else {
                 return
             }
-            self.documentStoreObservationHandles.removeAll()
-            document.observe(\.selectedNode) { [weak self] _ in
-                self?.scheduleNavigationControlsUpdate()
-                self?.handleSelectedNodeChange()
+            self.documentStoreObservationScope.update {
+                document.observe(\.selectedNode) { [weak self] _ in
+                    self?.scheduleNavigationControlsUpdate()
+                    self?.handleSelectedNodeChange()
+                }
+                .store(in: self.documentStoreObservationScope)
+                document.observe(\.errorMessage) { [weak self] _ in
+                    self?.scheduleNavigationControlsUpdate()
+                }
+                .store(in: self.documentStoreObservationScope)
             }
-            .store(in: &self.documentStoreObservationHandles)
-            document.observe(\.errorMessage) { [weak self] _ in
-                self?.scheduleNavigationControlsUpdate()
-            }
-            .store(in: &self.documentStoreObservationHandles)
             self.scheduleNavigationControlsUpdate()
             self.handleSelectedNodeChange()
         }
-        .store(in: &stateObservationHandles)
+        .store(in: stateObservationScope)
     }
 
     private func makeSecondaryMenu() -> UIMenu {
@@ -262,10 +263,10 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     }
 
     private func handleSelectedNodeChange() {
-        selectedEntryObservationHandles.removeAll()
         selectedEntryRenderGeneration &+= 1
 
         guard let selectedEntry = inspector.document.selectedNode else {
+            selectedEntryObservationScope.update {}
             var configuration = UIContentUnavailableConfiguration.empty()
             configuration.text = wiLocalized("dom.element.select_prompt")
             configuration.secondaryText = wiLocalized("dom.element.hint")
@@ -289,20 +290,22 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     }
 
     private func startObservingSelectedEntry(_ entry: DOMNodeModel) {
-        entry.observe(
-            [\.attributes],
-            onChange: { [weak self, weak entry] in
-                guard let self, let entry else {
-                    return
-                }
-                guard self.inspector.document.selectedNode === entry else {
-                    return
-                }
-                self.scheduleStructureUpdate()
-            },
-            isolation: MainActor.shared
-        )
-        .store(in: &selectedEntryObservationHandles)
+        selectedEntryObservationScope.update {
+            entry.observe(
+                [\.attributes],
+                onChange: { [weak self, weak entry] in
+                    guard let self, let entry else {
+                        return
+                    }
+                    guard self.inspector.document.selectedNode === entry else {
+                        return
+                    }
+                    self.scheduleStructureUpdate()
+                },
+                isolation: MainActor.shared
+            )
+            .store(in: selectedEntryObservationScope)
+        }
     }
 
     private func reconcileSectionStructure(forceSnapshotUpdate: Bool = false) {
@@ -673,13 +676,13 @@ public final class WIDOMDetailViewController: UICollectionViewController {
 }
 
 private final class DOMObservingListCell: UICollectionViewListCell {
-    private var observationHandles: Set<ObservationHandle> = []
+    private let observationScope = ObservationScope()
     private var stableID: WIDOMDetailViewController.ItemStableID?
     private var payloadProvider: (@MainActor (WIDOMDetailViewController.ItemStableID) -> WIDOMDetailViewController.ItemPayload?)?
 
     override func prepareForReuse() {
         super.prepareForReuse()
-        observationHandles.removeAll()
+        observationScope.cancelAll()
         stableID = nil
         payloadProvider = nil
     }
@@ -689,15 +692,16 @@ private final class DOMObservingListCell: UICollectionViewListCell {
         entry: DOMNodeModel?,
         payloadProvider: @escaping @MainActor (WIDOMDetailViewController.ItemStableID) -> WIDOMDetailViewController.ItemPayload?
     ) {
-        observationHandles.removeAll()
         self.stableID = stableID
         self.payloadProvider = payloadProvider
         applyCurrentPayload()
 
-        guard let entry else {
-            return
+        observationScope.update {
+            guard let entry else {
+                return
+            }
+            startObserving(entry: entry, stableID: stableID)
         }
-        startObserving(entry: entry, stableID: stableID)
     }
 
     private func startObserving(entry: DOMNodeModel, stableID: WIDOMDetailViewController.ItemStableID) {
@@ -710,7 +714,7 @@ private final class DOMObservingListCell: UICollectionViewListCell {
                 },
                 isolation: MainActor.shared
             )
-            .store(in: &observationHandles)
+            .store(in: observationScope)
         case .selector:
             entry.observe(
                 \.selectorPath,
@@ -719,7 +723,7 @@ private final class DOMObservingListCell: UICollectionViewListCell {
                 },
                 isolation: MainActor.shared
             )
-            .store(in: &observationHandles)
+            .store(in: observationScope)
         case .attribute, .emptyAttribute:
             entry.observe(
                 \.attributes,
@@ -728,7 +732,7 @@ private final class DOMObservingListCell: UICollectionViewListCell {
                 },
                 isolation: MainActor.shared
             )
-            .store(in: &observationHandles)
+            .store(in: observationScope)
         }
     }
 

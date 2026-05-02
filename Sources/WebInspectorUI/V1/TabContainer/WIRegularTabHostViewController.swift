@@ -7,7 +7,7 @@ import WebInspectorRuntime
 final class WIRegularTabHostViewController: UINavigationController {
     private let inspector: WIInspectorController
     private let renderCache: WIUIKitTabRenderCache
-    private var tabObservationHandles: Set<ObservationHandle> = []
+    private let tabObservationScope = ObservationScope()
     private var isApplyingSegmentSelection = false
 
     private var tabs: [WITab] {
@@ -49,7 +49,7 @@ final class WIRegularTabHostViewController: UINavigationController {
     }
 
     isolated deinit {
-        tabObservationHandles.removeAll()
+        tabObservationScope.cancelAll()
     }
 
     override func viewDidLoad() {
@@ -63,7 +63,7 @@ final class WIRegularTabHostViewController: UINavigationController {
     }
 
     func prepareForRemoval() {
-        tabObservationHandles.removeAll()
+        tabObservationScope.cancelAll()
         detachDisplayedRootViewControllerIfNeeded()
     }
 
@@ -98,14 +98,14 @@ final class WIRegularTabHostViewController: UINavigationController {
     }
 
     private func bindModel() {
-        tabObservationHandles.removeAll()
+        tabObservationScope.cancelAll()
 
         inspector.observe(
             \.tabs
         ) { [weak self] _ in
             self?.rebuildLayout()
         }
-        .store(in: &tabObservationHandles)
+        .store(in: tabObservationScope)
 
         inspector.observe(
             \.selectedTab
@@ -115,7 +115,7 @@ final class WIRegularTabHostViewController: UINavigationController {
             }
             self.applySelectedTabProjection()
         }
-        .store(in: &tabObservationHandles)
+        .store(in: tabObservationScope)
     }
 
     private func rebuildLayout() {

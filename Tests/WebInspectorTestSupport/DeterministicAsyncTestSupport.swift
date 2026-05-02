@@ -151,19 +151,19 @@ public actor AsyncCounter {
 @MainActor
 public final class ObservationRecorder<Value: Sendable> {
     private let queue = AsyncValueQueue<Value>()
-    private var handles: Set<ObservationHandle> = []
+    private let observationScope = ObservationScope()
 
     public init() {}
 
     public func record(
-        _ registration: (@escaping @MainActor (Value) -> Void) -> ObservationHandle
+        _ registration: (@escaping @MainActor (Value) -> Void) -> ObservationRegistration
     ) {
         registration { [queue] value in
             Task {
                 await queue.push(value)
             }
         }
-        .store(in: &handles)
+        .store(in: observationScope)
     }
 
     public func next() async -> Value {

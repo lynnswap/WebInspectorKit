@@ -14,7 +14,7 @@ public final class WINetworkListViewController: UICollectionViewController {
 
     private let inspector: WINetworkModel
     private let queryModel: WINetworkQueryModel
-    private var observationHandles: Set<ObservationHandle> = []
+    private let observationScope = ObservationScope()
 
     private var needsSnapshotReloadOnNextAppearance = false
     private lazy var dataSource = makeDataSource()
@@ -118,7 +118,7 @@ public final class WINetworkListViewController: UICollectionViewController {
         inspector.observe(\.displayEntries, options: WIObservationOptions.networkListSnapshot) { [weak self] displayEntries in
             self?.reloadDataFromInspector(displayEntries: displayEntries)
         }
-        .store(in: &observationHandles)
+        .store(in: observationScope)
     }
 
     private func makeDataSource() -> UICollectionViewDiffableDataSource<SectionIdentifier, NetworkEntry> {
@@ -196,7 +196,7 @@ public final class WINetworkListViewController: UICollectionViewController {
     }
 
     private func configureListCell(_ cell: WINetworkObservingListCell, item: NetworkEntry) {
-        cell.resetObservationHandles()
+        cell.resetObservations()
 
         var content = UIListContentConfiguration.cell()
         content.text = item.displayName
@@ -230,7 +230,7 @@ public final class WINetworkListViewController: UICollectionViewController {
             content.text = newValue
             cell?.contentConfiguration = content
         }
-        .store(in: &cell.observationHandles)
+        .store(in: cell.observationScope)
 
         item.observe([\.fileTypeLabel, \.statusSeverity]) { [weak cell, weak item] in
             guard let cell, let item else { return }
@@ -248,7 +248,7 @@ public final class WINetworkListViewController: UICollectionViewController {
                 .disclosureIndicator()
             ]
         }
-        .store(in: &cell.observationHandles)
+        .store(in: cell.observationScope)
     }
 
     private func makeSecondaryMenu() -> UIMenu {
@@ -286,15 +286,15 @@ public final class WINetworkListViewController: UICollectionViewController {
 
 @MainActor
 private final class WINetworkObservingListCell: UICollectionViewListCell {
-    fileprivate var observationHandles: Set<ObservationHandle> = []
+    fileprivate let observationScope = ObservationScope()
 
     override func prepareForReuse() {
         super.prepareForReuse()
-        observationHandles.removeAll()
+        observationScope.cancelAll()
     }
 
-    func resetObservationHandles() {
-        observationHandles.removeAll()
+    func resetObservations() {
+        observationScope.cancelAll()
     }
 }
 

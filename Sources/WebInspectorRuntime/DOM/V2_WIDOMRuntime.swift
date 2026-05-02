@@ -63,13 +63,18 @@ public final class V2_WIDOMRuntime {
         inspector.isSelectingElement
     }
 
-    package func observeNavigationState(_ onChange: @escaping @MainActor () -> Void) -> [ObservationHandle] {
-        [
-            inspector.observe(\.hasPageWebView) { _ in onChange() },
-            inspector.observe(\.isPageReadyForSelection) { _ in onChange() },
-            inspector.observe(\.isSelectingElement) { _ in onChange() },
-            document.observe(\.selectedNode) { _ in onChange() },
-        ]
+    package func observeNavigationState(
+        in scope: ObservationScope,
+        _ onChange: @escaping @MainActor () -> Void
+    ) {
+        inspector.observe(\.hasPageWebView) { _ in onChange() }
+            .store(in: scope)
+        inspector.observe(\.isPageReadyForSelection) { _ in onChange() }
+            .store(in: scope)
+        inspector.observe(\.isSelectingElement) { _ in onChange() }
+            .store(in: scope)
+        document.observe(\.selectedNode) { _ in onChange() }
+            .store(in: scope)
     }
 
     package func requestSelectionModeToggle() {

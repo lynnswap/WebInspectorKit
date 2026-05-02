@@ -7,7 +7,7 @@ import WebInspectorRuntime
 @MainActor
 final class V2_DOMNavigationItems: NSObject {
     private let dom: V2_WIDOMRuntime
-    private var observationHandles: Set<ObservationHandle> = []
+    private let observationScope = ObservationScope()
     private var undoManagerProvider: (@MainActor () -> UndoManager?)?
 
     private lazy var pickItem: UIBarButtonItem = {
@@ -25,14 +25,13 @@ final class V2_DOMNavigationItems: NSObject {
         self.dom = dom
         super.init()
 
-        dom.observeNavigationState { [weak self] in
+        dom.observeNavigationState(in: observationScope) { [weak self] in
             self?.updatePickItemAppearance()
         }
-        .forEach { $0.store(in: &observationHandles) }
     }
 
-    deinit {
-        observationHandles.removeAll()
+    isolated deinit {
+        observationScope.cancelAll()
     }
 
     func install(

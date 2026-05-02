@@ -64,22 +64,23 @@ final class V2_DOMElementPreviewCell: V2_DOMElementBaseCell {
     }
 
     func bind(node: DOMNodeModel?) {
-        resetObservationHandles()
         accessories = []
         contentConfiguration = nil
 
-        guard let node else {
-            render(displayPreviewText: "")
-            return
-        }
-        
-        self.render(displayPreviewText: node.displayPreviewText)
-        
-        store(
-            node.observe(\.displayPreviewText) { [weak self] displayPreviewText in
-                self?.render(displayPreviewText: displayPreviewText)
+        updateObservations {
+            guard let node else {
+                render(displayPreviewText: "")
+                return
             }
-        )
+
+            self.render(displayPreviewText: node.displayPreviewText)
+
+            store(
+                node.observe(\.displayPreviewText) { [weak self] displayPreviewText in
+                    self?.render(displayPreviewText: displayPreviewText)
+                }
+            )
+        }
     }
 
     private func configurePreviewEditorView() {

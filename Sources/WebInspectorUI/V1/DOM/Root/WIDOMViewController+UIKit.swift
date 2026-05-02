@@ -20,8 +20,8 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
     private let elementDetailsNavigationController: UINavigationController
     private var hasAppliedInitialRegularColumnWidth = false
     private var hasStartedObservingPickItemState = false
-    private var pickItemObservationHandles: Set<ObservationHandle> = []
-    private var documentObservationHandles: Set<ObservationHandle> = []
+    private let pickItemObservationScope = ObservationScope()
+    private let documentObservationScope = ObservationScope()
 
     var regularLayoutModeOverrideForTesting: RegularLayoutMode = .automatic {
         didSet {
@@ -375,33 +375,34 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
         ) { [weak self] _ in
             self?.refreshNavigationControls()
         }
-        .store(in: &pickItemObservationHandles)
+        .store(in: pickItemObservationScope)
         inspector.observe(
             \.isPageReadyForSelection
         ) { [weak self] _ in
             self?.refreshNavigationControls()
         }
-        .store(in: &pickItemObservationHandles)
+        .store(in: pickItemObservationScope)
         inspector.observe(
             \.isSelectingElement
         ) { [weak self] _ in
             self?.refreshNavigationControls()
         }
-        .store(in: &pickItemObservationHandles)
+        .store(in: pickItemObservationScope)
         inspector.observe(\.document) { [weak self] document in
             guard let self else {
                 return
             }
-            self.documentObservationHandles.removeAll()
-            document.observe(
-                \.errorMessage
-            ) { [weak self] _ in
-                self?.refreshNavigationControls()
+            self.documentObservationScope.update {
+                document.observe(
+                    \.errorMessage
+                ) { [weak self] _ in
+                    self?.refreshNavigationControls()
+                }
+                .store(in: self.documentObservationScope)
             }
-            .store(in: &self.documentObservationHandles)
             self.refreshNavigationControls()
         }
-        .store(in: &pickItemObservationHandles)
+        .store(in: pickItemObservationScope)
     }
 
     private func refreshNavigationControls() {

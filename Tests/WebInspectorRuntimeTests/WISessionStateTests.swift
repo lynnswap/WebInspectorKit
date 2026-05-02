@@ -377,11 +377,11 @@ struct WISessionStateTests {
         controller.setTabs([.dom(), .network()])
 
         let recorder = Recorder()
-        var observationHandles = Set<ObservationHandle>()
+        let observationScope = ObservationScope()
         controller.observeTask([\.selectedTab]) {
             await recorder.append(controller.selectedTab?.identifier)
         }
-        .store(in: &observationHandles)
+        .store(in: observationScope)
 
         let networkTab = controller.tabs.first { $0.identifier == WITab.networkTabID }
         controller.setSelectedTab(networkTab)

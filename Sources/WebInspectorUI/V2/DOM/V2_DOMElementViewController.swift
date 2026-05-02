@@ -73,8 +73,8 @@ final class V2_DOMElementViewController: UICollectionViewController {
 
     private lazy var dataSource = makeDataSource()
 
-    private var nodeHandles: Set<ObservationHandle> = []
-    private var sectionHandles: Set<ObservationHandle> = []
+    private let nodeObservationScope = ObservationScope()
+    private let sectionObservationScope = ObservationScope()
 
     init(dom: V2_WIDOMRuntime) {
         self.dom = dom
@@ -92,11 +92,11 @@ final class V2_DOMElementViewController: UICollectionViewController {
         collectionView.backgroundColor = .clear
         _ = dataSource
 
-        nodeHandles.removeAll()
+        nodeObservationScope.cancelAll()
         dom.document.observe(\.selectedNode) { [weak self] node in
             self?.applyNode(node)
         }
-        .store(in: &nodeHandles)
+        .store(in: nodeObservationScope)
     }
 
     override func collectionView(_ collectionView: UICollectionView, shouldSelectItemAt indexPath: IndexPath) -> Bool {
@@ -180,7 +180,6 @@ final class V2_DOMElementViewController: UICollectionViewController {
     }
 
     private func applyNode(_ selectedNode: DOMNodeModel?) {
-        sectionHandles.removeAll()
         if let selectedNode {
             if contentUnavailableConfiguration != nil {
                 contentUnavailableConfiguration = nil
@@ -189,6 +188,7 @@ final class V2_DOMElementViewController: UICollectionViewController {
 
             observeAttributeSection(of: selectedNode)
         } else {
+            sectionObservationScope.update {}
             if contentUnavailableConfiguration == nil {
                 var configuration = UIContentUnavailableConfiguration.empty()
                 configuration.text = wiLocalized("dom.element.select_prompt")
@@ -202,28 +202,30 @@ final class V2_DOMElementViewController: UICollectionViewController {
     }
 
     private func observeAttributeSection(of selectedNode: DOMNodeModel) {
-        selectedNode.observe(\.attributes) { [weak self, weak selectedNode] _ in
-            guard let self, let selectedNode, self.dom.document.selectedNode === selectedNode else {
-                return
-            }
+        sectionObservationScope.update {
+            selectedNode.observe(\.attributes) { [weak self, weak selectedNode] _ in
+                guard let self, let selectedNode, self.dom.document.selectedNode === selectedNode else {
+                    return
+                }
 
-            let nextItems = self.items(in: .attributes, for: selectedNode)
-            let currentItems = self.currentItems(in: .attributes)
-            guard self.hasSameItemContent(nextItems, currentItems) == false else {
-                return
-            }
+                let nextItems = self.items(in: .attributes, for: selectedNode)
+                let currentItems = self.currentItems(in: .attributes)
+                guard self.hasSameItemContent(nextItems, currentItems) == false else {
+                    return
+                }
 
-            guard self.hasSameItemIdentity(nextItems, currentItems) == false else {
-                self.applyAttributeContentUpdate(selectedNode: selectedNode, items: nextItems)
-                return
-            }
+                guard self.hasSameItemIdentity(nextItems, currentItems) == false else {
+                    self.applyAttributeContentUpdate(selectedNode: selectedNode, items: nextItems)
+                    return
+                }
 
-            guard self.applySection(.attributes, items: nextItems, animatingDifferences: true) else {
-                self.applyNode(selectedNode)
-                return
+                guard self.applySection(.attributes, items: nextItems, animatingDifferences: true) else {
+                    self.applyNode(selectedNode)
+                    return
+                }
             }
+            .store(in: sectionObservationScope)
         }
-        .store(in: &sectionHandles)
     }
 
     @discardableResult
