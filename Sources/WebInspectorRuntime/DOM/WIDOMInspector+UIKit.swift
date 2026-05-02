@@ -269,7 +269,9 @@ extension WIDOMInspector {
         let selectionWasActive = isNativeInspectorElementSelectionActive(on: webView) == true
         let nodeSearchWasActive = hasActiveNativeInspectorNodeSearch(in: webView)
         if selectionWasActive || nodeSearchWasActive {
-            if nodeSearchWasActive == false {
+            if nodeSearchWasActive {
+                _ = dependencies.webKitSPI.setNodeSearchEnabled(webView, true)
+            } else {
                 let didEnableNodeSearch = dependencies.webKitSPI.setNodeSearchEnabled(webView, true)
                 nativeInspectorNodeSearchNeedsDirectDeactivation = didEnableNodeSearch
             }

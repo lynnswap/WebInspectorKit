@@ -361,6 +361,7 @@ public final class WIDOMInspector {
     @ObservationIgnored private var lastSelectionDiagnosticMessage: String?
     @ObservationIgnored private var lastEmittedSelectionDiagnosticMessage: String?
     @ObservationIgnored private var selectionGeneration: UInt64 = 0
+    @ObservationIgnored private var selectionActivationGeneration: UInt64 = 0
     @ObservationIgnored private var acceptsInspectEvents = false
     @ObservationIgnored private var pendingInspectSelection: PendingInspectSelection?
     @ObservationIgnored private var pendingInspectMaterializationTimeoutTask: Task<Void, Never>?
@@ -656,15 +657,36 @@ public final class WIDOMInspector {
         applyRecoverableError(nil)
         let selectedContextID = currentContext?.contextID
         let hadSelectedNode = document.selectedNode != nil
+        var selectionActivation: (
+            generation: UInt64,
+            contextID: DOMContextID,
+            targetIdentifier: String
+        )?
 
         do {
             let initialState = try requireReadySelectionState()
+            let activationGeneration = beginSelectionActivation(
+                contextID: initialState.context.contextID,
+                targetIdentifier: initialState.targetIdentifier
+            )
+            selectionActivation = (
+                generation: activationGeneration,
+                contextID: initialState.context.contextID,
+                targetIdentifier: initialState.targetIdentifier
+            )
             activatePageWindowForSelectionIfPossible()
 #if canImport(UIKit)
             try await requestPageWindowActivationIfNeeded()
             await awaitInspectModeInactive()
 #endif
 
+            guard selectionActivationIsCurrent(
+                generation: activationGeneration,
+                contextID: initialState.context.contextID,
+                targetIdentifier: initialState.targetIdentifier
+            ) else {
+                throw DOMOperationError.contextInvalidated
+            }
             let readyState = try requireReadySelectionState()
             guard readyState.context.contextID == initialState.context.contextID,
                   readyState.targetIdentifier == initialState.targetIdentifier else {
@@ -685,7 +707,8 @@ public final class WIDOMInspector {
             try await setInspectModeEnabled(true, targetIdentifier: targetIdentifier)
             let inspectModeControlBackend = InspectModeControlBackend.transportProtocol
 #endif
-            guard selectionLifecycleStateMatches(
+            guard selectionActivationIsCurrent(
+                generation: activationGeneration,
                 contextID: context.contextID,
                 targetIdentifier: targetIdentifier
             ) else {
@@ -709,6 +732,13 @@ public final class WIDOMInspector {
                 backend: inspectModeControlBackend
             )
         } catch {
+            if let selectionActivation,
+               selectionActivationGeneration == selectionActivation.generation {
+                clearInspectModeState(
+                    invalidatePendingSelection: true,
+                    clearSelectionArm: true
+                )
+            }
             if hadSelectedNode, let selectedContextID {
                 await syncSelectedNodeHighlight(contextID: selectedContextID)
             }
@@ -1665,6 +1695,7 @@ private extension WIDOMInspector {
         frontendCoordinator.reset()
         isSelectingElement = false
         selectionGeneration &+= 1
+        selectionActivationGeneration &+= 1
         cancelPendingChildRequestRecords()
         payloadNormalizer.resetForDocumentUpdate()
         document.clearDocument(isFreshDocument: true)
@@ -2995,6 +3026,33 @@ private extension WIDOMInspector {
         isSelectingElement = true
     }
 
+    func beginSelectionActivation(
+        contextID: DOMContextID,
+        targetIdentifier: String
+    ) -> UInt64 {
+        selectionActivationGeneration &+= 1
+        pendingInspectSelection = nil
+        inspectModeTargetIdentifier = targetIdentifier
+        inspectModeControlBackend = nil
+        acceptsInspectEvents = false
+        inspectSelectionArm = nil
+        isSelectingElement = true
+        return selectionActivationGeneration
+    }
+
+    func selectionActivationIsCurrent(
+        generation: UInt64,
+        contextID: DOMContextID,
+        targetIdentifier: String
+    ) -> Bool {
+        selectionActivationGeneration == generation
+            && isSelectingElement
+            && selectionLifecycleStateMatches(
+                contextID: contextID,
+                targetIdentifier: targetIdentifier
+            )
+    }
+
     func clearInspectModeState(
         invalidatePendingSelection: Bool = false,
         markSelectionInactive: Bool = true,
@@ -3015,6 +3073,7 @@ private extension WIDOMInspector {
         if invalidatePendingSelection {
             pendingInspectSelection = nil
             selectionGeneration &+= 1
+            selectionActivationGeneration &+= 1
         }
     }
 
@@ -3030,6 +3089,7 @@ private extension WIDOMInspector {
             deactivateInspectEvents: true,
             clearSelectionArm: true
         )
+        let cancellationActivationGeneration = selectionActivationGeneration
 
 #if canImport(UIKit)
         await disableInspectorSelectionModeIfNeeded(
@@ -3056,12 +3116,17 @@ private extension WIDOMInspector {
 
 #if canImport(UIKit)
         await awaitInspectModeInactive()
-        isSelectingElement = false
+        if selectionActivationGeneration == cancellationActivationGeneration {
+            isSelectingElement = false
+        }
 #else
-        isSelectingElement = false
+        if selectionActivationGeneration == cancellationActivationGeneration {
+            isSelectingElement = false
+        }
 #endif
 
-        if restoreSelectedHighlight,
+        if selectionActivationGeneration == cancellationActivationGeneration,
+           restoreSelectedHighlight,
            let contextID = currentContext?.contextID,
            document.selectedNode != nil {
             await syncSelectedNodeHighlight(contextID: contextID)
@@ -3069,8 +3134,16 @@ private extension WIDOMInspector {
     }
 
     private func completeInspectModeAfterBackendSelection(
+        transaction: SelectionTransaction? = nil,
         invalidatePendingSelection: Bool = false
     ) async {
+        guard selectionTransactionIsCurrent(transaction) else {
+            logSelectionDiagnostics(
+                "completeInspectModeAfterBackendSelection ignored stale transaction",
+                extra: "generation=\(transaction.map { String($0.generation) } ?? "nil")"
+            )
+            return
+        }
         let activeTargetIdentifier = inspectModeTargetIdentifier ?? phase.targetIdentifier
         let activeInspectModeControlBackend = inspectModeControlBackend
         clearInspectModeState(
@@ -3099,6 +3172,13 @@ private extension WIDOMInspector {
         }
 #endif
 
+        guard selectionTransactionIsCurrent(transaction) else {
+            logSelectionDiagnostics(
+                "completeInspectModeAfterBackendSelection skipped stale completion",
+                extra: "generation=\(transaction.map { String($0.generation) } ?? "nil")"
+            )
+            return
+        }
 #if canImport(UIKit)
         await awaitInspectModeInactive()
         isSelectingElement = false
@@ -3218,7 +3298,7 @@ private extension WIDOMInspector {
             return
         }
         guard let resolutionTargetIdentifier else {
-            await completeInspectModeAfterBackendSelection()
+            await completeInspectModeAfterBackendSelection(transaction: transaction)
             await clearSelectionForFailedResolution(
                 contextID: contextID,
                 transaction: transaction,
@@ -3268,7 +3348,7 @@ private extension WIDOMInspector {
                 )
             )
         } catch {
-            await completeInspectModeAfterBackendSelection()
+            await completeInspectModeAfterBackendSelection(transaction: transaction)
             logSelectionDiagnostics(
                 "Inspector.inspect failed to resolve node",
                 extra: "sourceTarget=\(eventTargetIdentifier ?? "nil") requestNodeTarget=\(resolutionTargetIdentifier) error=\(error.localizedDescription)",
@@ -3565,7 +3645,7 @@ private extension WIDOMInspector {
                 contextID: contextID,
                 targetIdentifierForMaterialization: targetIdentifier
             )
-            await completeInspectModeAfterBackendSelection()
+            await completeInspectModeAfterBackendSelection(transaction: transaction)
             finishInspectSelectionResolution(transaction: transaction)
             applyRecoverableError(nil)
             return
@@ -3589,7 +3669,7 @@ private extension WIDOMInspector {
                 contextID: contextID,
                 targetIdentifierForMaterialization: targetIdentifier
             )
-            await completeInspectModeAfterBackendSelection()
+            await completeInspectModeAfterBackendSelection(transaction: transaction)
             finishInspectSelectionResolution(transaction: transaction)
             applyRecoverableError(nil)
             return
@@ -3776,6 +3856,17 @@ private extension WIDOMInspector {
             pendingInspectSelection.observedMaterializationStrategy = selectionMaterialization.strategy
             pendingInspectSelection.observedMaterializationCandidateNodeIDs = selectionMaterialization.candidateNodeIDs
             self.pendingInspectSelection = pendingInspectSelection
+            if selectionMaterialization.strategy == .genericIncomplete,
+               pendingInspectSelection.outstandingMaterializationNodeIDs.isEmpty {
+                logSelectionDiagnostics(
+                    "materializePendingInspectSelection waiting after generic candidate completion",
+                    selector: selectorPath,
+                    extra: "nodeID=\(nodeID) target=\(targetIdentifier) plan=\(selectionMaterializationPlanSummary(selectionMaterialization)) pendingInspect=\(pendingInspectSelectionDiagnosticSummary(pendingInspectSelection))",
+                    level: .debug
+                )
+                schedulePendingInspectMaterializationTimeout(for: pendingInspectSelection)
+                return .waitingForMutation
+            }
             return pendingInspectSelection.outstandingMaterializationNodeIDs.isEmpty ? .exhausted : .requested
         }
 
@@ -5021,7 +5112,7 @@ private extension WIDOMInspector {
             preferredSubtreeRootNodeIDs: pendingInspectSelection.materializedAncestorNodeIDs,
             targetIdentifierForMaterialization: pendingInspectSelection.resolutionTargetIdentifier
         )
-        await completeInspectModeAfterBackendSelection()
+        await completeInspectModeAfterBackendSelection(transaction: pendingInspectSelection.transaction)
         finishInspectSelectionResolution(transaction: pendingInspectSelection.transaction)
         applyRecoverableError(nil)
     }
@@ -5235,7 +5326,7 @@ private extension WIDOMInspector {
         )
         if transaction != nil,
            inspectModeControlBackend != nil || isSelectingElement {
-            await completeInspectModeAfterBackendSelection()
+            await completeInspectModeAfterBackendSelection(transaction: transaction)
         }
         if transaction != nil {
             cancelPendingInspectMaterializationTimeout()

@@ -25,6 +25,7 @@ NS_ASSUME_NONNULL_BEGIN
 @interface UIView (WIKPrivateInspectorNodeSearch)
 - (void)_enableInspectorNodeSearch;
 - (void)_disableInspectorNodeSearch;
+- (void)_inspectorNodeSearchRecognized:(id)recognizer;
 - (BOOL)isShowingInspectorIndication;
 - (void)setShowingInspectorIndication:(BOOL)showingInspectorIndication;
 @end

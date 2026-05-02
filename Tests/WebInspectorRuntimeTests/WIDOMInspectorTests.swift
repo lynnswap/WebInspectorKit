@@ -1498,6 +1498,97 @@ struct WIDOMInspectorTests {
     }
 
     @Test
+    func selectionModeToggleCancelsPendingActivationBeforeInspectModeEnables() async throws {
+#if canImport(UIKit)
+        let requester = FakeSceneActivationRequester()
+        let targetScene = FakeSceneActivationTarget(activationState: .foregroundInactive)
+        let requestGate = AsyncGate()
+        let activationGate = AsyncGate()
+        var inspectModeEnabledValues: [Bool] = []
+
+        let previousRequester = WIDOMUIKitSceneActivationEnvironment.requester
+        let previousSceneProvider = WIDOMUIKitSceneActivationEnvironment.sceneProvider
+        let previousRequestingSceneProvider = WIDOMUIKitSceneActivationEnvironment.requestingSceneProvider
+        let previousActivationTimeout = WIDOMUIKitSceneActivationEnvironment.activationTimeout
+        let previousActivationWaiter = WIDOMUIKitSceneActivationEnvironment.activationWaiter
+        defer {
+            WIDOMUIKitSceneActivationEnvironment.requester = previousRequester
+            WIDOMUIKitSceneActivationEnvironment.sceneProvider = previousSceneProvider
+            WIDOMUIKitSceneActivationEnvironment.requestingSceneProvider = previousRequestingSceneProvider
+            WIDOMUIKitSceneActivationEnvironment.activationTimeout = previousActivationTimeout
+            WIDOMUIKitSceneActivationEnvironment.activationWaiter = previousActivationWaiter
+        }
+
+        WIDOMUIKitSceneActivationEnvironment.requester = requester
+        WIDOMUIKitSceneActivationEnvironment.sceneProvider = { _ in targetScene }
+        WIDOMUIKitSceneActivationEnvironment.requestingSceneProvider = { _ in nil }
+        WIDOMUIKitSceneActivationEnvironment.activationTimeout = .milliseconds(200)
+        WIDOMUIKitSceneActivationEnvironment.activationWaiter = { target, timeout in
+            let clock = ContinuousClock()
+            let deadline = clock.now.advanced(by: timeout)
+            while target.activationState != .foregroundActive {
+                if clock.now >= deadline {
+                    throw DOMOperationError.scriptFailure("Page scene activation timed out.")
+                }
+                try await clock.sleep(for: .milliseconds(1))
+            }
+        }
+
+        requester.onRequest = { _ in
+            await requestGate.open()
+            await activationGate.wait()
+            targetScene.activationState = .foregroundActive
+        }
+
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, payload, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                case WITransportMethod.DOM.setInspectModeEnabled:
+                    let params = runtimeTestDictionaryValue(payload["params"])
+                    if let enabled = params?["enabled"] as? Bool {
+                        inspectModeEnabledValues.append(enabled)
+                    }
+                    return [:]
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+        let window = hostWebViewInWindow(webView)
+        defer { window.isHidden = true }
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        inspector.requestSelectionModeToggle()
+        await requestGate.wait()
+        #expect(inspector.isSelectingElement)
+        #expect(inspectModeEnabledValues.isEmpty)
+
+        inspector.requestSelectionModeToggle()
+        let cancelled = await waitForCondition {
+            inspector.isSelectingElement == false
+        }
+        #expect(cancelled)
+
+        await activationGate.open()
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        #expect(requester.requestCount == 1)
+        #expect(inspectModeEnabledValues.contains(true) == false)
+        #expect(inspector.isSelectingElement == false)
+#endif
+    }
+
+    @Test
     func beginSelectionModeDoesNotEnableInspectModeWhenNavigationStartsDuringSceneActivation() async {
         let requester = FakeSceneActivationRequester()
         let targetScene = FakeSceneActivationTarget(activationState: .foregroundInactive)
@@ -2223,18 +2314,18 @@ struct WIDOMInspectorTests {
         #expect(inspectModeEnableAttempts == 2)
         #expect(connectCallCount == 1)
         #expect(toggleCallCount == 0)
-        #expect(nodeSearchEnabledValues == [true])
+        #expect(nodeSearchEnabledValues == [true, true])
         #expect(inspectModeEnabledValues == [true])
 
         await inspector.cancelSelectionMode()
         #expect(inspector.isSelectingElement == false)
         #expect(toggleCallCount == 0)
-        #expect(nodeSearchEnabledValues == [true, false])
+        #expect(nodeSearchEnabledValues == [true, true, false])
         #expect(inspectModeEnabledValues == [true, false])
     }
 
     @Test
-    func beginSelectionModeDoesNotRecreateActiveNativeNodeSearchAfterProtocolEnableOnUIKit() async throws {
+    func beginSelectionModeRefreshesActiveNativeNodeSearchAfterProtocolEnableOnUIKit() async throws {
         var inspectModeEnabledValues: [Bool] = []
         var connectCallCount = 0
         var toggleCallCount = 0
@@ -2330,13 +2421,13 @@ struct WIDOMInspectorTests {
         #expect(inspector.isSelectingElement)
         #expect(connectCallCount == 1)
         #expect(toggleCallCount == 0)
-        #expect(nodeSearchEnabledValues == [false])
+        #expect(nodeSearchEnabledValues == [false, true])
         #expect(inspectModeEnabledValues == [true])
 
         await inspector.cancelSelectionMode()
         #expect(inspector.isSelectingElement == false)
         #expect(toggleCallCount == 1)
-        #expect(nodeSearchEnabledValues == [false])
+        #expect(nodeSearchEnabledValues == [false, true])
         #expect(inspectModeEnabledValues == [true, false])
     }
 
@@ -3059,6 +3150,88 @@ struct WIDOMInspectorTests {
 
         #expect(outcome == "waitingForMutation")
         #expect(requestedNodeIDs.isEmpty)
+    }
+
+    @Test
+    func genericPendingInspectMaterializationWaitsAfterCompletedCandidateStillMissesNode() async throws {
+        var requestedNodeIDs: [Int] = []
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, payload, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                case WITransportMethod.DOM.setInspectModeEnabled:
+                    return [:]
+                case WITransportMethod.DOM.requestChildNodes:
+                    let params = runtimeTestDictionaryValue(payload["params"])
+                    if let nodeID = params.flatMap({ runtimeTestIntValue($0["nodeId"]) }) {
+                        requestedNodeIDs.append(nodeID)
+                    }
+                    return [:]
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+        inspector.document.replaceDocument(
+            with: makeMainDocumentSnapshot(
+                mainChildren: [
+                    DOMGraphNodeDescriptor(
+                        localID: 500,
+                        backendNodeID: 500,
+                        nodeType: 1,
+                        nodeName: "section",
+                        localName: "section",
+                        nodeValue: "",
+                        attributes: [.init(name: "id", value: "dynamic")],
+                        childCount: 2,
+                        layoutFlags: [],
+                        isRendered: true,
+                        children: []
+                    ),
+                ]
+            ),
+            isFreshDocument: true
+        )
+
+        try await inspector.beginSelectionMode()
+        backend.emitPageEvent(method: "DOM.inspect", params: ["nodeId": 502])
+        let requestedGenericCandidate = await waitForCondition {
+            requestedNodeIDs == [500]
+        }
+        #expect(requestedGenericCandidate)
+
+        backend.emitPageEvent(
+            method: "DOM.setChildNodes",
+            params: [
+                "parentId": 500,
+                "nodes": [[
+                    "nodeId": 501,
+                    "backendNodeId": 501,
+                    "nodeType": 1,
+                    "nodeName": "SPAN",
+                    "localName": "span",
+                    "nodeValue": "",
+                    "attributes": ["id", "placeholder"],
+                    "childNodeCount": 0,
+                    "children": [],
+                ]],
+            ]
+        )
+        await backend.waitForPendingMessages()
+
+        #expect(inspector.document.selectedNode == nil)
+        #expect(inspector.testHasPendingInspectSelection)
+        #expect(inspector.document.errorMessage == nil)
     }
 
     @Test
