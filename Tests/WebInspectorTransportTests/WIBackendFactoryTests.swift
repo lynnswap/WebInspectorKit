@@ -1,6 +1,6 @@
 import Testing
 @testable import WebInspectorEngine
-@testable import WebInspectorTransport
+@_spi(Monocly) @testable import WebInspectorTransport
 
 @MainActor
 struct WIBackendFactoryTests {
@@ -26,5 +26,20 @@ struct WIBackendFactoryTests {
         )
 
         #expect(String(describing: type(of: backend)) == "NetworkTransportDriver")
+    }
+
+    @Test
+    func pageAgentFallbackOverrideWinsOverInjectedSupportedSnapshot() {
+        let backend = WIBackendFactoryTesting.withPageAgentFallback {
+            WIBackendFactory.makeNetworkBackend(
+                configuration: .init(),
+                supportSnapshot: .supported(
+                    backendKind: .iOSNativeInspector,
+                    capabilities: [.networkDomain]
+                )
+            )
+        }
+
+        #expect(String(describing: type(of: backend)) == "NetworkPageAgent")
     }
 }

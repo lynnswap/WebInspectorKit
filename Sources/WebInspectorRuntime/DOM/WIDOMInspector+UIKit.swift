@@ -47,15 +47,6 @@ private final class WIDOMUIKitSceneActivationWaitState {
 }
 
 @MainActor
-private final class WIDOMUIKitSceneActivationRequestErrorState {
-    private(set) var error: Error?
-
-    func signal(_ error: Error) {
-        self.error = error
-    }
-}
-
-@MainActor
 package protocol WIDOMUIKitSceneActivationTarget: AnyObject {
     var activationState: UIScene.ActivationState { get }
     var sceneSession: UISceneSession? { get }
@@ -124,6 +115,11 @@ package enum WIDOMUIKitInspectorSelectionEnvironment {
     package static var selectionActiveProvider: @MainActor (WKWebView) -> Bool? = {
         WIInspectorSelectionPrivateBridge.isElementSelectionActive(in: $0)
     }
+    package static var pageEditingDismissalHandler: @MainActor (WKWebView) -> Void = {
+        $0.endEditing(true)
+    }
+    package static var transportInspectActivationProvider: @MainActor (WKWebView) -> Bool = { _ in true }
+    package static var transportInspectActivationTimeoutNanoseconds: UInt64 = 50_000_000
 }
 
 @MainActor
@@ -138,7 +134,7 @@ package enum WIDOMUIKitSceneActivationEnvironment {
         try await waitForSceneActivation(target, timeout: timeout)
     }
 
-    private static func waitForSceneActivation(
+    package static func waitForSceneActivation(
         _ target: any WIDOMUIKitSceneActivationTarget,
         timeout: Duration
     ) async throws {
@@ -201,46 +197,12 @@ extension WIDOMInspector {
         guard let pageWindow = pageWebView?.window else {
             return
         }
-        guard let pageScene = WIDOMUIKitSceneActivationEnvironment.sceneProvider(pageWindow) else {
-            return
-        }
-        guard pageScene.activationState != .foregroundActive else {
-            return
-        }
-
-        let requestingScene = sceneActivationRequestingScene
-            ?? WIDOMUIKitSceneActivationEnvironment.requestingSceneProvider(pageScene)
-        let requestErrorState = WIDOMUIKitSceneActivationRequestErrorState()
-        let activationTask = Task { @MainActor in
-            try await WIDOMUIKitSceneActivationEnvironment.activationWaiter(
-                pageScene,
-                WIDOMUIKitSceneActivationEnvironment.activationTimeout
-            )
-        }
-
-        defer {
-            activationTask.cancel()
-        }
-
-        WIDOMUIKitSceneActivationEnvironment.requester.requestActivation(
-            of: pageScene,
-            requestingScene: requestingScene
-        ) { error in
-            Task { @MainActor in
-                domWindowActivationLogger.error("page scene activation failed: \(error.localizedDescription, privacy: .public)")
-                requestErrorState.signal(error)
-                activationTask.cancel()
-            }
-        }
-
-        do {
-            try await activationTask.value
-        } catch is CancellationError {
-            if let error = requestErrorState.error {
-                throw DOMOperationError.scriptFailure(error.localizedDescription)
-            }
-            throw CancellationError()
-        }
+        let sceneActivation = dependencies.platform.uiKitSceneActivation
+        try await sceneActivation.activateWindowSceneIfNeeded(
+            pageWindow,
+            sceneActivationRequestingScene,
+            sceneActivation.activationTimeout
+        )
     }
 
     func awaitInspectModeInactive() async {
@@ -257,7 +219,7 @@ extension WIDOMInspector {
         if selectionActive {
             _ = deactivateNativeInspectorElementSelectionIfNeeded(on: pageWebView)
         }
-        _ = WIDOMUIKitInspectorSelectionEnvironment.nodeSearchSetter(pageWebView, false)
+        _ = dependencies.webKitSPI.setNodeSearchEnabled(pageWebView, false)
         if hasActiveNativeInspectorNodeSearch(in: pageWebView) == false {
             return
         }
@@ -271,42 +233,43 @@ extension WIDOMInspector {
     }
 
     private func removeLingeringNativeInspectorNodeSearchRecognizers(in webView: WKWebView) {
-        _ = WIDOMUIKitInspectorSelectionEnvironment.recognizerRemover(webView)
+        _ = dependencies.webKitSPI.removeNodeSearchRecognizers(webView)
     }
 
     private func hasActiveNativeInspectorNodeSearch(in webView: WKWebView) -> Bool {
-        WIDOMUIKitInspectorSelectionEnvironment.recognizerPresenceProvider(webView)
+        dependencies.webKitSPI.hasNodeSearchRecognizer(webView)
     }
 
     private func nativeInspectorSelectionBackend(for webView: WKWebView) -> InspectModeControlBackend {
-        if WIDOMUIKitInspectorSelectionEnvironment.privateInspectorAccessProvider(webView) {
+        if dependencies.webKitSPI.hasPrivateInspectorAccess(webView) {
             return .nativeInspector
         }
         return .transportProtocol
     }
 
     private func isNativeInspectorConnected(on webView: WKWebView) -> Bool? {
-        WIDOMUIKitInspectorSelectionEnvironment.inspectorConnectedProvider(webView)
+        dependencies.webKitSPI.isInspectorConnected(webView)
     }
 
     private func isNativeInspectorElementSelectionActive(on webView: WKWebView) -> Bool? {
-        WIDOMUIKitInspectorSelectionEnvironment.selectionActiveProvider(webView)
+        dependencies.webKitSPI.isElementSelectionActive(webView)
     }
 
     private func connectNativeInspectorIfNeeded(on webView: WKWebView) -> Bool {
         if isNativeInspectorConnected(on: webView) == true {
             return true
         }
-        let didRequestConnect = WIDOMUIKitInspectorSelectionEnvironment.inspectorConnector(webView)
+        let didRequestConnect = dependencies.webKitSPI.connectInspector(webView)
         return isNativeInspectorConnected(on: webView) ?? didRequestConnect
     }
 
     private func activateNativeInspectorElementSelection(on webView: WKWebView) -> Bool {
+        nativeInspectorSelectionToggleNeedsDeactivation = false
         let selectionWasActive = isNativeInspectorElementSelectionActive(on: webView) == true
         let nodeSearchWasActive = hasActiveNativeInspectorNodeSearch(in: webView)
         if selectionWasActive || nodeSearchWasActive {
             if nodeSearchWasActive == false {
-                _ = WIDOMUIKitInspectorSelectionEnvironment.nodeSearchSetter(webView, true)
+                _ = dependencies.webKitSPI.setNodeSearchEnabled(webView, true)
             }
             if isNativeInspectorConnected(on: webView) == false {
                 _ = connectNativeInspectorIfNeeded(on: webView)
@@ -315,7 +278,7 @@ extension WIDOMInspector {
                 || hasActiveNativeInspectorNodeSearch(in: webView)
         }
 
-        let didEnableNodeSearch = WIDOMUIKitInspectorSelectionEnvironment.nodeSearchSetter(webView, true)
+        let didEnableNodeSearch = dependencies.webKitSPI.setNodeSearchEnabled(webView, true)
         if isNativeInspectorConnected(on: webView) == false {
             _ = connectNativeInspectorIfNeeded(on: webView)
         }
@@ -323,21 +286,59 @@ extension WIDOMInspector {
             return true
         }
 
-        let didToggleSelection = WIDOMUIKitInspectorSelectionEnvironment.elementSelectionToggler(webView)
+        let didToggleSelection = dependencies.webKitSPI.toggleElementSelection(webView)
         if isNativeInspectorConnected(on: webView) == false {
             _ = connectNativeInspectorIfNeeded(on: webView)
         }
-        return isNativeInspectorElementSelectionActive(on: webView) == true
-            || hasActiveNativeInspectorNodeSearch(in: webView)
-            || didEnableNodeSearch
-            || didToggleSelection
+        let selectionActive = isNativeInspectorElementSelectionActive(on: webView)
+        if didToggleSelection && selectionActive == nil {
+            nativeInspectorSelectionToggleNeedsDeactivation = true
+        }
+        if selectionActive == true || hasActiveNativeInspectorNodeSearch(in: webView) {
+            return true
+        }
+        return selectionActive == nil && (didEnableNodeSearch || didToggleSelection)
     }
 
     private func deactivateNativeInspectorElementSelectionIfNeeded(on webView: WKWebView) -> Bool {
-        guard isNativeInspectorElementSelectionActive(on: webView) == true else {
+        let shouldToggleOff = isNativeInspectorElementSelectionActive(on: webView) == true
+            || nativeInspectorSelectionToggleNeedsDeactivation
+        nativeInspectorSelectionToggleNeedsDeactivation = false
+        guard shouldToggleOff else {
             return false
         }
-        return WIDOMUIKitInspectorSelectionEnvironment.elementSelectionToggler(webView)
+        return dependencies.webKitSPI.toggleElementSelection(webView)
+    }
+
+    private func dismissPageEditingForInspectorSelection(on webView: WKWebView) {
+        dependencies.webKitSPI.dismissPageEditing(webView)
+    }
+
+    private func waitForTransportInspectModeActivation(on webView: WKWebView) async -> Bool {
+        if dependencies.webKitSPI.transportInspectActivationProvider(webView) {
+            return true
+        }
+
+        let timeoutNanoseconds = dependencies.webKitSPI.transportInspectActivationTimeoutNanoseconds
+        guard timeoutNanoseconds > 0 else {
+            return false
+        }
+
+        let clock = ContinuousClock()
+        let clampedTimeout = min(timeoutNanoseconds, UInt64(Int64.max))
+        let deadline = clock.now.advanced(by: .nanoseconds(Int64(clampedTimeout)))
+        while clock.now < deadline {
+            do {
+                try await clock.sleep(for: .milliseconds(10))
+            } catch {
+                return dependencies.webKitSPI.transportInspectActivationProvider(webView)
+            }
+            if dependencies.webKitSPI.transportInspectActivationProvider(webView) {
+                return true
+            }
+        }
+
+        return dependencies.webKitSPI.transportInspectActivationProvider(webView)
     }
 
     func enableInspectorSelectionMode(
@@ -353,28 +354,13 @@ extension WIDOMInspector {
             try? await hideHighlightForInspectorLifecycle()
         }
 
-        do {
-            logInspectorLifecycleDiagnostics(
-                "beginSelectionMode using transport protocol backend",
-                extra: "backend=\(InspectModeControlBackend.transportProtocol.rawValue) contextID=\(contextID) target=\(targetIdentifier) nativeState=\(nativeInspectorInteractionStateSummaryForDiagnostics() ?? "nil")"
-            )
-            try await setProtocolInspectModeEnabledForInspectorLifecycle(true, targetIdentifier: targetIdentifier)
-            return .transportProtocol
-        } catch {
-            logInspectorLifecycleDiagnostics(
-                "beginSelectionMode transport protocol failed; evaluating native fallback",
-                extra: "contextID=\(contextID) target=\(targetIdentifier) error=\(error.localizedDescription) nativeState=\(nativeInspectorInteractionStateSummaryForDiagnostics() ?? "nil")",
-                level: .error
-            )
+        dismissPageEditingForInspectorSelection(on: pageWebView)
 
-            guard nativeInspectorSelectionBackend(for: pageWebView) == .nativeInspector else {
-                throw error
-            }
-
+        if nativeInspectorSelectionBackend(for: pageWebView) == .nativeInspector {
             let didConnect = connectNativeInspectorIfNeeded(on: pageWebView)
             let didEnable = activateNativeInspectorElementSelection(on: pageWebView)
             logInspectorLifecycleDiagnostics(
-                "beginSelectionMode using native inspector fallback backend",
+                "beginSelectionMode using native inspector backend",
                 extra: "backend=\(InspectModeControlBackend.nativeInspector.rawValue) contextID=\(contextID) target=\(targetIdentifier) connected=\(didConnect) enabled=\(didEnable) nativeState=\(nativeInspectorInteractionStateSummaryForDiagnostics() ?? "nil")"
             )
             if didEnable {
@@ -382,8 +368,32 @@ extension WIDOMInspector {
             }
 
             logInspectorLifecycleDiagnostics(
-                "beginSelectionMode native inspector fallback failed",
+                "beginSelectionMode native inspector failed; falling back to transport protocol",
                 extra: "contextID=\(contextID) target=\(targetIdentifier) nativeState=\(nativeInspectorInteractionStateSummaryForDiagnostics() ?? "nil")",
+                level: .error
+            )
+        }
+
+        do {
+            logInspectorLifecycleDiagnostics(
+                "beginSelectionMode using transport protocol backend",
+                extra: "backend=\(InspectModeControlBackend.transportProtocol.rawValue) contextID=\(contextID) target=\(targetIdentifier) nativeState=\(nativeInspectorInteractionStateSummaryForDiagnostics() ?? "nil")"
+            )
+            try await setProtocolInspectModeEnabledForInspectorLifecycle(true, targetIdentifier: targetIdentifier)
+            if await waitForTransportInspectModeActivation(on: pageWebView) {
+                return .transportProtocol
+            }
+            logInspectorLifecycleDiagnostics(
+                "beginSelectionMode transport protocol did not activate",
+                extra: "contextID=\(contextID) target=\(targetIdentifier) nativeState=\(nativeInspectorInteractionStateSummaryForDiagnostics() ?? "nil")",
+                level: .error
+            )
+            try? await setProtocolInspectModeEnabledForInspectorLifecycle(false, targetIdentifier: targetIdentifier)
+            throw DOMOperationError.scriptFailure("Transport inspect mode did not activate.")
+        } catch {
+            logInspectorLifecycleDiagnostics(
+                "beginSelectionMode transport protocol failed",
+                extra: "contextID=\(contextID) target=\(targetIdentifier) error=\(error.localizedDescription) nativeState=\(nativeInspectorInteractionStateSummaryForDiagnostics() ?? "nil")",
                 level: .error
             )
             throw error
@@ -401,7 +411,7 @@ extension WIDOMInspector {
         switch backend ?? inspectModeControlBackend ?? nativeInspectorSelectionBackend(for: pageWebView) {
         case .nativeInspector:
             let didToggleOff = deactivateNativeInspectorElementSelectionIfNeeded(on: pageWebView)
-            let didDisableNodeSearch = WIDOMUIKitInspectorSelectionEnvironment.nodeSearchSetter(pageWebView, false)
+            let didDisableNodeSearch = dependencies.webKitSPI.setNodeSearchEnabled(pageWebView, false)
             logInspectorLifecycleDiagnostics(
                 "disableInspectorSelectionModeIfNeeded used native inspector backend",
                 extra: "backend=\(InspectModeControlBackend.nativeInspector.rawValue) target=\(targetIdentifier ?? "nil") toggledOff=\(didToggleOff) disabledNodeSearch=\(didDisableNodeSearch) nativeState=\(nativeInspectorInteractionStateSummaryForDiagnostics() ?? "nil")"
@@ -473,7 +483,7 @@ extension WIDOMInspector {
             return nil
         }
 
-        let hasPrivateInspectorAccess = WIDOMUIKitInspectorSelectionEnvironment.privateInspectorAccessProvider(pageWebView)
+        let hasPrivateInspectorAccess = dependencies.webKitSPI.hasPrivateInspectorAccess(pageWebView)
         let connected = isNativeInspectorConnected(on: pageWebView)
         let selectionActive = isNativeInspectorElementSelectionActive(on: pageWebView)
         let contentViewActive = hasActiveNativeInspectorNodeSearch(in: pageWebView)

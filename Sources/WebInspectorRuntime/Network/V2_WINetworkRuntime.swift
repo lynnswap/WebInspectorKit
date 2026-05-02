@@ -12,21 +12,29 @@ public final class V2_WINetworkRuntime {
         model.store.entries
     }
 
-    public convenience init(configuration: NetworkConfiguration = .init()) {
+    public convenience init(
+        configuration: NetworkConfiguration = .init(),
+        dependencies: WIInspectorDependencies = .liveValue
+    ) {
         self.init(
             configuration: configuration,
-            sharedTransport: WISharedInspectorTransport()
+            dependencies: dependencies,
+            sharedTransport: dependencies.makeSharedTransport()
         )
     }
 
     package init(
         configuration: NetworkConfiguration,
+        dependencies: WIInspectorDependencies = .liveValue,
         sharedTransport: WISharedInspectorTransport
     ) {
         let backend = WIBackendFactory.makeNetworkBackend(
             configuration: configuration,
+            supportSnapshot: dependencies.transport.supportSnapshot(),
             sharedTransport: sharedTransport
-        )
+        ) {
+            NetworkPageAgent(dependencies: dependencies.makeNetworkPageAgentDependencies())
+        }
         let session = NetworkSession(
             configuration: configuration,
             backend: backend

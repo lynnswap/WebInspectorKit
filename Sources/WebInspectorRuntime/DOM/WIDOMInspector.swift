@@ -324,6 +324,7 @@ public final class WIDOMInspector {
         }
     }
 
+    @ObservationIgnored package let dependencies: WIInspectorDependencies
     @ObservationIgnored private let sharedTransport: WISharedInspectorTransport
     @ObservationIgnored let inspectorBridge: DOMInspectorBridge
     @ObservationIgnored private let frontendCoordinator = DOMFrontendCoordinator()
@@ -369,27 +370,32 @@ public final class WIDOMInspector {
 
 #if canImport(UIKit)
     @ObservationIgnored package weak var sceneActivationRequestingScene: UIScene?
+    @ObservationIgnored package var nativeInspectorSelectionToggleNeedsDeactivation = false
 #endif
 
     public convenience init(
         configuration: DOMConfiguration = .init(),
+        dependencies: WIInspectorDependencies = .liveValue,
         onRecoverableError: (@MainActor (String?) -> Void)? = nil
     ) {
         self.init(
             configuration: configuration,
-            sharedTransport: WISharedInspectorTransport(),
+            dependencies: dependencies,
+            sharedTransport: dependencies.makeSharedTransport(),
             onRecoverableError: onRecoverableError
         )
     }
 
     package init(
         configuration: DOMConfiguration = .init(),
+        dependencies: WIInspectorDependencies = .liveValue,
         sharedTransport: WISharedInspectorTransport,
         onRecoverableError: (@MainActor (String?) -> Void)? = nil
     ) {
+        self.dependencies = dependencies
         self.configuration = configuration
         self.sharedTransport = sharedTransport
-        self.inspectorBridge = DOMInspectorBridge()
+        self.inspectorBridge = DOMInspectorBridge(dependencies: dependencies.domFrontend)
         self.document = DOMDocumentModel()
         self.externalRecoverableErrorHandler = onRecoverableError
 

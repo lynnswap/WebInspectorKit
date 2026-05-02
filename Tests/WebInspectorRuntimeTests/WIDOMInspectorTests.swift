@@ -1587,7 +1587,10 @@ struct WIDOMInspectorTests {
                 }
             }
         )
-        let inspector = makeInspector(using: backend)
+        let inspector = makeInspector(
+            using: backend,
+            dependencies: .liveValue
+        )
         _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
@@ -1682,7 +1685,10 @@ struct WIDOMInspectorTests {
                 }
             }
         )
-        let inspector = makeInspector(using: backend)
+        let inspector = makeInspector(
+            using: backend,
+            dependencies: .liveValue
+        )
         _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
@@ -1705,6 +1711,102 @@ struct WIDOMInspectorTests {
         #expect(toggleCallCount == 0)
         #expect(nativeSelectionActive == false)
         #expect(nodeSearchEnabledValues.last == false)
+        #expect(inspectModeEnabledValues.isEmpty)
+    }
+
+    @Test
+    func beginSelectionModeKeepsNativeInspectorWhenActivationProbeIsUnavailableOnUIKit() async throws {
+        var inspectModeEnabledValues: [Bool] = []
+        var connectCallCount = 0
+        var toggleCallCount = 0
+        var nodeSearchEnabledValues: [Bool] = []
+        let previousPrivateInspectorAccessProvider = WIDOMUIKitInspectorSelectionEnvironment.privateInspectorAccessProvider
+        let previousInspectorConnectedProvider = WIDOMUIKitInspectorSelectionEnvironment.inspectorConnectedProvider
+        let previousInspectorConnector = WIDOMUIKitInspectorSelectionEnvironment.inspectorConnector
+        let previousElementSelectionToggler = WIDOMUIKitInspectorSelectionEnvironment.elementSelectionToggler
+        let previousNodeSearchSetter = WIDOMUIKitInspectorSelectionEnvironment.nodeSearchSetter
+        let previousRecognizerPresenceProvider = WIDOMUIKitInspectorSelectionEnvironment.recognizerPresenceProvider
+        let previousRecognizerRemover = WIDOMUIKitInspectorSelectionEnvironment.recognizerRemover
+        let previousSelectionActiveProvider = WIDOMUIKitInspectorSelectionEnvironment.selectionActiveProvider
+        let previousTransportInspectActivationProvider = WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationProvider
+        let previousTransportInspectActivationTimeout = WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationTimeoutNanoseconds
+        defer {
+            WIDOMUIKitInspectorSelectionEnvironment.privateInspectorAccessProvider = previousPrivateInspectorAccessProvider
+            WIDOMUIKitInspectorSelectionEnvironment.inspectorConnectedProvider = previousInspectorConnectedProvider
+            WIDOMUIKitInspectorSelectionEnvironment.inspectorConnector = previousInspectorConnector
+            WIDOMUIKitInspectorSelectionEnvironment.elementSelectionToggler = previousElementSelectionToggler
+            WIDOMUIKitInspectorSelectionEnvironment.nodeSearchSetter = previousNodeSearchSetter
+            WIDOMUIKitInspectorSelectionEnvironment.recognizerPresenceProvider = previousRecognizerPresenceProvider
+            WIDOMUIKitInspectorSelectionEnvironment.recognizerRemover = previousRecognizerRemover
+            WIDOMUIKitInspectorSelectionEnvironment.selectionActiveProvider = previousSelectionActiveProvider
+            WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationProvider = previousTransportInspectActivationProvider
+            WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationTimeoutNanoseconds = previousTransportInspectActivationTimeout
+        }
+
+        WIDOMUIKitInspectorSelectionEnvironment.privateInspectorAccessProvider = { _ in true }
+        WIDOMUIKitInspectorSelectionEnvironment.inspectorConnectedProvider = { _ in
+            connectCallCount > 0
+        }
+        WIDOMUIKitInspectorSelectionEnvironment.inspectorConnector = { _ in
+            connectCallCount += 1
+            return true
+        }
+        WIDOMUIKitInspectorSelectionEnvironment.elementSelectionToggler = { _ in
+            toggleCallCount += 1
+            return true
+        }
+        WIDOMUIKitInspectorSelectionEnvironment.nodeSearchSetter = { _, enabled in
+            nodeSearchEnabledValues.append(enabled)
+            return true
+        }
+        WIDOMUIKitInspectorSelectionEnvironment.recognizerPresenceProvider = { _ in false }
+        WIDOMUIKitInspectorSelectionEnvironment.recognizerRemover = { _ in true }
+        WIDOMUIKitInspectorSelectionEnvironment.selectionActiveProvider = { _ in nil }
+        WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationProvider = { _ in
+            inspectModeEnabledValues.last == true
+        }
+        WIDOMUIKitInspectorSelectionEnvironment.transportInspectActivationTimeoutNanoseconds = 0
+
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, payload, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                case WITransportMethod.DOM.setInspectModeEnabled:
+                    let params = runtimeTestDictionaryValue(payload["params"])
+                    if let enabled = params?["enabled"] as? Bool {
+                        inspectModeEnabledValues.append(enabled)
+                    }
+                    return [:]
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(
+            using: backend,
+            dependencies: .liveValue
+        )
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        try await inspector.beginSelectionMode()
+        #expect(inspector.isSelectingElement)
+        #expect(connectCallCount == 1)
+        #expect(toggleCallCount == 1)
+        #expect(nodeSearchEnabledValues == [true])
+        #expect(inspectModeEnabledValues.isEmpty)
+
+        await inspector.cancelSelectionMode()
+        #expect(inspector.isSelectingElement == false)
+        #expect(toggleCallCount == 2)
+        #expect(nodeSearchEnabledValues == [true, false])
         #expect(inspectModeEnabledValues.isEmpty)
     }
 
@@ -1780,7 +1882,10 @@ struct WIDOMInspectorTests {
                 }
             }
         )
-        let inspector = makeInspector(using: backend)
+        let inspector = makeInspector(
+            using: backend,
+            dependencies: .liveValue
+        )
         _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
@@ -1878,7 +1983,10 @@ struct WIDOMInspectorTests {
                 }
             }
         )
-        let inspector = makeInspector(using: backend)
+        let inspector = makeInspector(
+            using: backend,
+            dependencies: .liveValue
+        )
         _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
@@ -5763,8 +5871,10 @@ struct WIDOMInspectorTests {
 private func makeInspector(
     configuration: DOMConfiguration = .init(),
     using backend: FakeDOMTransportBackend,
-    derivedPageTargetIdentifier: String? = nil
+    derivedPageTargetIdentifier: String? = nil,
+    dependencies: WIInspectorDependencies? = nil
 ) -> WIDOMInspector {
+    let dependencies = dependencies ?? makeDOMInspectorTestDependencies()
     let sharedTransport = WISharedInspectorTransport(sessionFactory: {
         let session = WITransportSession(
             configuration: .init(responseTimeout: .seconds(1)),
@@ -5781,8 +5891,16 @@ private func makeInspector(
     })
     return WIDOMInspector(
         configuration: configuration,
+        dependencies: dependencies,
         sharedTransport: sharedTransport
     )
+}
+
+@MainActor
+private func makeDOMInspectorTestDependencies() -> WIInspectorDependencies {
+    var dependencies = WIInspectorDependencies.liveValue
+    dependencies.webKitSPI = .testValue
+    return dependencies
 }
 
 @MainActor

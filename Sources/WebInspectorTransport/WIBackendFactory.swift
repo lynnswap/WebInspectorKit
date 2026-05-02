@@ -5,14 +5,17 @@ package enum WIBackendFactory {
     package static func makeNetworkBackend(
         configuration: NetworkConfiguration,
         supportSnapshot: WITransportSupportSnapshot? = nil,
-        sharedTransport: WISharedInspectorTransport? = nil
+        sharedTransport: WISharedInspectorTransport? = nil,
+        pageAgentFactory: @escaping @MainActor () -> any WINetworkBackend = {
+            NetworkPageAgent()
+        }
     ) -> any WINetworkBackend {
         let resolvedSupport = WIBackendFactoryTesting.networkSupportSnapshotOverride
             ?? supportSnapshot
             ?? WITransportSession().supportSnapshot
         _ = configuration
         guard resolvedSupport.isSupported else {
-            return NetworkPageAgent()
+            return pageAgentFactory()
         }
         return NetworkTransportDriver(
             sharedTransport: sharedTransport,

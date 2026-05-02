@@ -13,19 +13,25 @@ public final class V2_WIDOMRuntime {
 
     public let document: DOMDocumentModel
 
-    public convenience init(configuration: DOMConfiguration = .init()) {
+    public convenience init(
+        configuration: DOMConfiguration = .init(),
+        dependencies: WIInspectorDependencies = .liveValue
+    ) {
         self.init(
             configuration: configuration,
-            sharedTransport: WISharedInspectorTransport()
+            dependencies: dependencies,
+            sharedTransport: dependencies.makeSharedTransport()
         )
     }
 
     package init(
         configuration: DOMConfiguration,
+        dependencies: WIInspectorDependencies = .liveValue,
         sharedTransport: WISharedInspectorTransport
     ) {
         let inspector = WIDOMInspector(
             configuration: configuration,
+            dependencies: dependencies,
             sharedTransport: sharedTransport
         )
         self.inspector = inspector

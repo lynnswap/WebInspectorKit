@@ -8,33 +8,37 @@ Internal refactors, transport rewrites, module splits, and cache changes are int
 
 `WebInspectorView` was removed.
 
-Use `WITabViewController` with a `WIInspectorController` instead.
+On UIKit, use the V2 entry point: `V2_WIViewController` or `V2_WISession`.
+The older `WIInspectorController` / `WITabViewController` path remains for compatibility,
+but it is no longer the recommended architecture and is scheduled for removal after V2
+stabilizes.
 
 ```swift
-private let inspector = WIInspectorController()
-
 @objc private func presentInspector() {
-    let controller = WITabViewController(
-        inspector,
-        webView: pageWebView,
-        tabs: [.dom(), .network()]
-    )
-    present(controller, animated: true)
+    let inspector = V2_WIViewController()
+    Task { @MainActor in
+        await inspector.attach(to: pageWebView)
+        present(inspector, animated: true)
+    }
 }
 ```
 
 If your app used the default inspector UI, this is the main migration.
 
+AppKit should stay on `WIInspectorController` / `WITabViewController` until a V2 AppKit
+surface is available.
+
 ## 2. Rename the model and lifecycle API
 
 | `v0.1.x` | Current |
 | --- | --- |
-| `WebInspectorModel` | `WIInspectorController` |
+| `WebInspectorModel` | `V2_WISession` / `V2_WIViewController` on UIKit |
 | `WebInspectorConfiguration` | `WIModelConfiguration` |
-| `attach(webView:)` | `connect(to:)` |
-| `detach()` | `disconnect()` |
+| `attach(webView:)` | `attach(to:)` |
+| `detach()` | `detach()` |
 
-`suspend()` is still available.
+`WIInspectorController.connect(to:)`, `suspend()`, and `disconnect()` remain only on the
+legacy compatibility path.
 
 The DOM-related configuration fields keep the same meaning, but they now live under `WIModelConfiguration.dom`.
 
@@ -52,7 +56,7 @@ let inspector = WebInspectorModel(
 inspector.attach(webView: webView)
 ```
 
-After:
+Legacy compatibility:
 
 ```swift
 let inspector = WIInspectorController(
@@ -68,37 +72,71 @@ let inspector = WIInspectorController(
 inspector.connect(to: webView)
 ```
 
-## 3. Update custom tab definitions
-
-The important source-level changes are:
-
-- `WITab` changed from a value type to a reference type.
-- `WITabRole` became `WITab.Role`.
-- `value:` became `id:` / `identifier:`.
-- Tab titles are now plain `String`.
-- The old `WITabBuilder`-based `WebInspectorView { ... }` API is gone.
-- Custom tabs now provide a platform view controller (`UIViewController` / `NSViewController`).
+V2 UIKit:
 
 ```swift
-let customTab = WITab(
-    id: "custom",
-    title: "Custom",
-    systemImage: "folder",
-    role: .other
-) { _ in
-    MyCustomViewController()
+let inspector = V2_WIViewController(
+    configuration: WIModelConfiguration(
+        dom: DOMConfiguration(
+            snapshotDepth: 6,
+            subtreeDepth: 4,
+            autoUpdateDebounce: 0.3
+        )
+    )
+)
+
+await inspector.attach(to: webView)
+```
+
+## 3. Inject side effects through `WIInspectorDependencies`
+
+`WIModelConfiguration` now stays focused on value-only configuration. Runtime factories,
+scripts, WebKit SPI, transport, sleep/timeout behavior, and UIKit scene activation can be
+injected through `WIInspectorDependencies`.
+
+```swift
+let dependencies = WIInspectorDependencies.testing {
+    $0.network = WIInspectorNetworkClient(
+        networkAgentScript: { "" }
+    )
 }
 
-let controller = WITabViewController(
-    inspector,
-    webView: pageWebView,
-    tabs: [.dom(), .network(), customTab]
+let inspector = V2_WIViewController(
+    configuration: WIModelConfiguration(),
+    dependencies: dependencies,
+    tabs: [.dom, .network]
 )
 ```
 
-If you only use the built-in tabs, keep using `.dom()`, `.network()`, and on UIKit `.element()`.
+Use `WIInspectorDependencies.liveValue` for production defaults and
+`WIInspectorDependencies.testing { ... }` for tests.
 
-## 4. Use intent-based DOM APIs
+## 4. Update custom tab definitions
+
+The important source-level changes are:
+
+- UIKit custom tabs should use `V2_WITab`.
+- The old `WITabBuilder`-based `WebInspectorView { ... }` API is gone.
+- V2 custom tabs provide a `UIViewController`.
+
+```swift
+let customTab = V2_WITab.custom(
+    id: "custom",
+    title: "Custom",
+    systemImage: "folder"
+) { context in
+    _ = context.runtime
+    MyCustomViewController()
+}
+
+let controller = V2_WIViewController(
+    tabs: [.dom, .network, customTab]
+)
+```
+
+If you only use the built-in V2 tabs, keep using `.dom` and `.network`.
+
+## 5. Use intent-based DOM APIs
 
 The DOM model no longer exposes low-level `nodeId`-driven editing and reload APIs.
 

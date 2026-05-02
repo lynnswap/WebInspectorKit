@@ -47,6 +47,21 @@ public final class WITransportSession {
         self.init(configuration: configuration, backendFactory: WITransportPlatformBackendFactory.makeDefaultBackend)
     }
 
+    package static func unsupported(
+        configuration: WITransportConfiguration = .init(),
+        reason: String = "Test transport is unsupported."
+    ) -> WITransportSession {
+        WITransportSession(
+            configuration: configuration,
+            backendFactory: { configuration in
+                WITransportPlatformBackendFactory.makeUnsupportedBackend(
+                    configuration: configuration,
+                    reason: reason
+                )
+            }
+        )
+    }
+
     init(
         configuration: WITransportConfiguration = .init(),
         backendFactory: @escaping @MainActor (WITransportConfiguration) -> any WITransportPlatformBackend,

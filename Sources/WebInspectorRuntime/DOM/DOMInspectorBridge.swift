@@ -35,6 +35,12 @@ final class DOMInspectorBridge: NSObject {
     private(set) var inspectorWebView: InspectorWebView?
     private(set) var generation: UInt64 = 0
     private var bootstrapPayload: [String: Any] = DOMInspectorBridge.defaultBootstrapPayload()
+    private let dependencies: WIInspectorDOMFrontendClient
+
+    init(dependencies: WIInspectorDOMFrontendClient = .liveValue) {
+        self.dependencies = dependencies
+        super.init()
+    }
 
     func makeInspectorWebView(bootstrapPayload: [String: Any]) -> InspectorWebView {
         self.bootstrapPayload = bootstrapPayload
@@ -42,7 +48,7 @@ final class DOMInspectorBridge: NSObject {
             return inspectorWebView
         }
 
-        let inspectorWebView = InspectorWebView()
+        let inspectorWebView = dependencies.makeInspectorWebView()
         installInitialBootstrap(on: inspectorWebView)
         attachInspectorWebView(to: inspectorWebView)
         loadInspector(in: inspectorWebView)
@@ -229,8 +235,8 @@ private extension DOMInspectorBridge {
     }
 
     func loadInspector(in inspectorWebView: InspectorWebView) {
-        guard let mainURL = WIAssets.mainFileURL,
-              let baseURL = WIAssets.resourcesDirectory
+        guard let mainURL = dependencies.mainFileURL(),
+              let baseURL = dependencies.resourcesDirectoryURL()
         else {
             domInspectorBridgeLogger.error("missing inspector resources")
             return

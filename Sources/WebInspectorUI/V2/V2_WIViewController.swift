@@ -1,6 +1,7 @@
 #if canImport(UIKit)
 import UIKit
 import WebKit
+import WebInspectorRuntime
 
 @MainActor
 public final class V2_WIViewController: UIViewController {
@@ -19,8 +20,26 @@ public final class V2_WIViewController: UIViewController {
         super.init(nibName: nil, bundle: nil)
     }
 
+    public convenience init(
+        configuration: WIModelConfiguration = .init(),
+        dependencies: WIInspectorDependencies = .liveValue,
+        tabs: [V2_WITab] = [.dom, .network]
+    ) {
+        self.init(
+            session: V2_WISession(
+                configuration: configuration,
+                dependencies: dependencies,
+                tabs: tabs
+            )
+        )
+    }
+
     public convenience init(tabs: [V2_WITab]) {
-        self.init(session: V2_WISession(tabs: tabs))
+        self.init(
+            configuration: .init(),
+            dependencies: .liveValue,
+            tabs: tabs
+        )
     }
 
     @available(*, unavailable)
