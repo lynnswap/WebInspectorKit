@@ -727,7 +727,16 @@ extension WITransportSession {
             log("received root event method=\(method)")
         }
 
-        if method.hasPrefix("DOM.") || method == "Inspector.inspect" {
+        if method == "Inspector.inspect" {
+            enqueuePageEvent(
+                method: method,
+                targetIdentifier: inspectEventTargetIdentifier(from: parsed.params),
+                paramsObject: parsed.params
+            )
+            return
+        }
+
+        if method.hasPrefix("DOM.") {
             enqueuePageEvent(
                 method: method,
                 targetIdentifier: inspectEventTargetIdentifier(from: parsed.params)
