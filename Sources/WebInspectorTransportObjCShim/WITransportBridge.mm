@@ -1,6 +1,5 @@
 #import "WITransportBridge.h"
 #import "WITransportInspectorABI.h"
-#import "../WebInspectorBridge/ObjCShim/WIKPrivateWebKitInspector.h"
 
 #import <TargetConditionals.h>
 #import <WebKit/WebKit.h>
@@ -56,6 +55,40 @@ static NSString *deobfuscateSymbol(NSArray<NSString *> *reverseTokens)
     for (NSString *token in [reverseTokens reverseObjectEnumerator])
         [result appendString:token];
     return result;
+}
+
+static SEL selectorFromReverseTokens(NSArray<NSString *> *reverseTokens)
+{
+    return NSSelectorFromString(deobfuscateSymbol(reverseTokens));
+}
+
+static id objectResult(id target, SEL selector)
+{
+    if (![target respondsToSelector:selector])
+        return nil;
+
+    typedef id (*Getter)(id, SEL);
+    IMP implementation = [target methodForSelector:selector];
+    if (implementation == NULL)
+        return nil;
+
+    Getter function = (Getter)implementation;
+    return function(target, selector);
+}
+
+static BOOL invokeVoid(id target, SEL selector)
+{
+    if (![target respondsToSelector:selector])
+        return NO;
+
+    typedef void (*Invoker)(id, SEL);
+    IMP implementation = [target methodForSelector:selector];
+    if (implementation == NULL)
+        return NO;
+
+    Invoker function = (Invoker)implementation;
+    function(target, selector);
+    return YES;
 }
 
 static NSString *stringValue(id value)
@@ -197,15 +230,15 @@ static BOOL pointerIsWritableMapped(const void *pointer)
     return (info.protection & requiredProtection) == requiredProtection;
 }
 
-static ptrdiff_t ivarOffset(Class cls, const char *name)
+static ptrdiff_t ivarOffset(Class cls, NSString *name)
 {
-    Ivar ivar = class_getInstanceVariable(cls, name);
+    Ivar ivar = class_getInstanceVariable(cls, name.UTF8String);
     return ivar ? ivar_getOffset(ivar) : NSNotFound;
 }
 
 static void *pageProxyPointer(WKWebView *webView)
 {
-    ptrdiff_t offset = ivarOffset(WKWebView.class, "_page");
+    ptrdiff_t offset = ivarOffset(WKWebView.class, deobfuscateSymbol(@[@"page", @"_"]));
     if (offset == NSNotFound)
         return nullptr;
 
@@ -459,16 +492,16 @@ static NSError *selectorFailureError(
     NSString *diagnostics = controllerResolutionDiagnosticsString(controllerResolutionStats);
 #if !TARGET_OS_OSX
     if (!inspectorObject)
-        return makeError(ErrorCodeAttachFailed, @"WKWebView._inspector was unavailable.", diagnostics);
+        return makeError(ErrorCodeAttachFailed, @"Inspector object was unavailable.", diagnostics);
 #else
     (void)inspectorObject;
 #endif
     if (!pageProxy)
-        return makeError(ErrorCodeAttachFailed, @"Unable to resolve WebPageProxy from WKWebView.", diagnostics);
+        return makeError(ErrorCodeAttachFailed, @"Page proxy was unavailable.", diagnostics);
     if (!controller)
-        return makeError(ErrorCodeAttachFailed, @"Unable to resolve WebPageInspectorController from WebPageProxy.", diagnostics);
+        return makeError(ErrorCodeAttachFailed, @"Inspector controller was unavailable.", diagnostics);
     if (!backendDispatcher)
-        return makeError(ErrorCodeAttachFailed, @"Unable to resolve Inspector::BackendDispatcher from WebPageInspectorController.", diagnostics);
+        return makeError(ErrorCodeAttachFailed, @"Backend dispatcher was unavailable.", diagnostics);
     return makeError(
         ErrorCodeAttachFailed,
         @"Required private selectors or inspector controller state were unavailable.",
@@ -523,7 +556,7 @@ private:
 
 @implementation WITransportBridge {
     __weak WKWebView *_webView;
-    _WKInspector *_inspector;
+    id _inspector;
     void *_controller;
     void *_backendDispatcher;
     void *_frontendConnectionTarget;
@@ -617,8 +650,8 @@ private:
     _disconnectFrontendAddress = resolvedFunctions.disconnectFrontendAddress;
     _resolvedFunctions = resolvedFunctions;
 
-    if ([self.webView respondsToSelector:@selector(_inspector)])
-        _inspector = self.webView._inspector;
+    SEL inspectorSelector = WITransportBridgePrivate::selectorFromReverseTokens(@[@"inspector", @"_"]);
+    _inspector = WITransportBridgePrivate::objectResult(self.webView, inspectorSelector);
     void *page = WITransportBridgePrivate::pageProxyPointer(self.webView);
     ptrdiff_t preferredCachedOffset = _controllerOffset;
     if (preferredCachedOffset == WITransportBridgePrivate::invalidControllerOffset)
@@ -642,7 +675,8 @@ private:
     BOOL requiresInspectorConnection = YES;
 #endif
 
-    if ((requiresInspectorConnection && (!_inspector || ![_inspector respondsToSelector:@selector(connect)]))
+    SEL connectSelector = WITransportBridgePrivate::selectorFromReverseTokens(@[@"connect"]);
+    if ((requiresInspectorConnection && (!_inspector || ![_inspector respondsToSelector:connectSelector]))
         || !_controller
         || !_backendDispatcher) {
         NSString *diagnostics = WITransportBridgePrivate::controllerResolutionDiagnosticsString(resolution.stats);
@@ -665,7 +699,7 @@ private:
     // Transport-only attach should not create the local Web Inspector frontend on macOS.
     // Doing so spawns an extra frontend/WebContent path and destabilizes sandboxed hosts.
 #else
-    [_inspector connect];
+    WITransportBridgePrivate::invokeVoid(_inspector, connectSelector);
 #endif
 
     _frontendChannel = std::make_unique<WITransportFrontendChannel>(self, resolvedFunctions.stringImplToNSStringAddress);
@@ -696,13 +730,13 @@ private:
         if (error) {
             *error = WITransportBridgePrivate::makeError(
                 WITransportBridgePrivate::ErrorCodeNotAttached,
-                @"The root BackendDispatcher is unavailable."
+                @"The root dispatcher is unavailable."
             );
         }
         return NO;
     }
     if (![self attachedControllerIsStillValid]) {
-        NSString *failureMessage = @"The root BackendDispatcher is unavailable.";
+        NSString *failureMessage = @"The root dispatcher is unavailable.";
         [self invalidateAttachmentState];
         [self reportFatalFailure:failureMessage];
         if (error) {

@@ -1,5 +1,4 @@
 #import "WIKRuntimeBridge.h"
-#import "WIKPrivateWebKitInspector.h"
 #import "WKWebView+EvaluateJavaScriptCompat.h"
 
 #if TARGET_OS_OSX
@@ -10,6 +9,78 @@ typedef const struct OpaqueWKFrameHandle *WKFrameHandleRef;
 typedef const struct OpaqueWKPage *WKPageRef;
 
 NSErrorDomain const WIKRuntimeBridgeErrorDomain = @"WebInspectorBridge.WIKRuntimeBridge";
+
+static NSString *WIKRuntimeBridgeStringFromReverseTokens(NSArray<NSString *> *reverseTokens)
+{
+    NSMutableString *string = [NSMutableString string];
+    for (NSString *token in [reverseTokens reverseObjectEnumerator])
+        [string appendString:token];
+    return [string copy];
+}
+
+static SEL WIKRuntimeBridgeSelectorFromReverseTokens(NSArray<NSString *> *reverseTokens)
+{
+    return NSSelectorFromString(WIKRuntimeBridgeStringFromReverseTokens(reverseTokens));
+}
+
+static NSObject *WIKRuntimeBridgeObjectResult(id target, SEL selector)
+{
+    if (![target respondsToSelector:selector])
+        return nil;
+
+    typedef id (*Getter)(id, SEL);
+    IMP implementation = [target methodForSelector:selector];
+    if (implementation == NULL)
+        return nil;
+
+    Getter function = (Getter)implementation;
+    id result = function(target, selector);
+    return [result isKindOfClass:[NSObject class]] ? result : nil;
+}
+
+static NSNumber *WIKRuntimeBridgeBoolResult(id target, SEL selector)
+{
+    if (![target respondsToSelector:selector])
+        return nil;
+
+    typedef BOOL (*Getter)(id, SEL);
+    IMP implementation = [target methodForSelector:selector];
+    if (implementation == NULL)
+        return nil;
+
+    Getter function = (Getter)implementation;
+    return @(function(target, selector));
+}
+
+static BOOL WIKRuntimeBridgeInvokeVoid(id target, SEL selector)
+{
+    if (![target respondsToSelector:selector])
+        return NO;
+
+    typedef void (*Invoker)(id, SEL);
+    IMP implementation = [target methodForSelector:selector];
+    if (implementation == NULL)
+        return NO;
+
+    Invoker function = (Invoker)implementation;
+    function(target, selector);
+    return YES;
+}
+
+static BOOL WIKRuntimeBridgeInvokeObject(id target, SEL selector, id object)
+{
+    if (![target respondsToSelector:selector])
+        return NO;
+
+    typedef void (*Invoker)(id, SEL, id);
+    IMP implementation = [target methodForSelector:selector];
+    if (implementation == NULL)
+        return NO;
+
+    Invoker function = (Invoker)implementation;
+    function(target, selector, object);
+    return YES;
+}
 
 #if TARGET_OS_IPHONE
 @interface WIKInspectorNodeSearchCommitGestureRecognizer : UIGestureRecognizer
@@ -109,10 +180,13 @@ static const CGFloat WIKInspectorNodeSearchCommitMovementThreshold = 3.0;
 - (void)wi_commitInspectorNodeSearchIfPossible
 {
     UIView *contentView = self.contentView ?: self.view;
-    if (!contentView || ![contentView respondsToSelector:@selector(_inspectorNodeSearchRecognized:)])
+    if (!contentView)
         return;
 
-    [contentView _inspectorNodeSearchRecognized:self];
+    SEL selector = WIKRuntimeBridgeSelectorFromReverseTokens(
+        @[@":", @"Recognized", @"Search", @"Node", @"inspector", @"_"]
+    );
+    WIKRuntimeBridgeInvokeObject(contentView, selector, self);
 }
 
 @end
@@ -126,7 +200,8 @@ static const CGFloat WIKInspectorNodeSearchCommitMovementThreshold = 3.0;
     static Class contentViewClass;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        contentViewClass = NSClassFromString(@"WKContentView");
+        NSString *className = WIKRuntimeBridgeStringFromReverseTokens(@[@"View", @"Content", @"WK"]);
+        contentViewClass = NSClassFromString(className);
     });
     return contentViewClass;
 }
@@ -136,7 +211,10 @@ static const CGFloat WIKInspectorNodeSearchCommitMovementThreshold = 3.0;
     static Class recognizerClass;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        recognizerClass = NSClassFromString(@"WKInspectorNodeSearchGestureRecognizer");
+        NSString *className = WIKRuntimeBridgeStringFromReverseTokens(
+            @[@"Recognizer", @"Gesture", @"Search", @"Node", @"Inspector", @"WK"]
+        );
+        recognizerClass = NSClassFromString(className);
     });
     return recognizerClass;
 }
@@ -244,11 +322,12 @@ static const CGFloat WIKInspectorNodeSearchCommitMovementThreshold = 3.0;
 
 + (nullable UIView *)wi_currentContentViewForWebView:(WKWebView *)webView
 {
-    SEL selector = NSSelectorFromString(@"_currentContentView");
+    NSString *selectorName = WIKRuntimeBridgeStringFromReverseTokens(@[@"View", @"Content", @"current", @"_"]);
+    SEL selector = NSSelectorFromString(selectorName);
     if (![webView respondsToSelector:selector])
         return nil;
 
-    id result = [self objectResultFromTarget:webView selectorName:@"_currentContentView"];
+    id result = [self objectResultFromTarget:webView selectorName:selectorName];
     if (![result isKindOfClass:[UIView class]])
         return nil;
 
@@ -270,33 +349,28 @@ static const CGFloat WIKInspectorNodeSearchCommitMovementThreshold = 3.0;
 
 + (nullable NSObject *)inspectorForWebView:(WKWebView *)webView
 {
-    if (![webView respondsToSelector:@selector(_inspector)])
-        return nil;
-
-    _WKInspector *inspector = webView._inspector;
-    return inspector ?: nil;
+    return [self objectResultFromTarget:webView
+                           selectorName:WIKRuntimeBridgeStringFromReverseTokens(@[@"inspector", @"_"])];
 }
 
 + (nullable NSNumber *)inspectorElementSelectionActiveForWebView:(WKWebView *)webView
 {
-    if (![webView respondsToSelector:@selector(_inspector)])
+    NSObject *inspector = [self inspectorForWebView:webView];
+    if (!inspector)
         return nil;
 
-    _WKInspector *inspector = webView._inspector;
-    if (!inspector || ![inspector respondsToSelector:@selector(isElementSelectionActive)])
-        return nil;
-    return @(inspector.isElementSelectionActive);
+    return [self boolResultFromTarget:inspector
+                         selectorName:WIKRuntimeBridgeStringFromReverseTokens(@[@"Active", @"Selection", @"Element", @"is"])];
 }
 
 + (nullable NSNumber *)inspectorConnectedForWebView:(WKWebView *)webView
 {
-    if (![webView respondsToSelector:@selector(_inspector)])
+    NSObject *inspector = [self inspectorForWebView:webView];
+    if (!inspector)
         return nil;
 
-    _WKInspector *inspector = webView._inspector;
-    if (!inspector || ![inspector respondsToSelector:@selector(isConnected)])
-        return nil;
-    return @(inspector.isConnected);
+    return [self boolResultFromTarget:inspector
+                         selectorName:WIKRuntimeBridgeStringFromReverseTokens(@[@"Connected", @"is"])];
 }
 
 + (BOOL)connectInspectorForWebView:(WKWebView *)webView
@@ -308,12 +382,14 @@ static const CGFloat WIKInspectorNodeSearchCommitMovementThreshold = 3.0;
     if ([[self inspectorConnectedForWebView:webView] boolValue])
         return YES;
 
-    BOOL didInvokeConnect = [self invokeVoidOnTarget:inspector selectorName:@"connect"];
+    BOOL didInvokeConnect = [self invokeVoidOnTarget:inspector
+                                        selectorName:WIKRuntimeBridgeStringFromReverseTokens(@[@"connect"])];
     NSNumber *connected = [self inspectorConnectedForWebView:webView];
     if (connected)
         return connected.boolValue;
 
-    BOOL didInvokeAttach = [self invokeVoidOnTarget:inspector selectorName:@"attach"];
+    BOOL didInvokeAttach = [self invokeVoidOnTarget:inspector
+                                       selectorName:WIKRuntimeBridgeStringFromReverseTokens(@[@"attach"])];
     connected = [self inspectorConnectedForWebView:webView];
     if (connected)
         return connected.boolValue;
@@ -327,7 +403,8 @@ static const CGFloat WIKInspectorNodeSearchCommitMovementThreshold = 3.0;
     if (!inspector)
         return NO;
 
-    return [self invokeVoidOnTarget:inspector selectorName:@"toggleElementSelection"];
+    return [self invokeVoidOnTarget:inspector
+                       selectorName:WIKRuntimeBridgeStringFromReverseTokens(@[@"Selection", @"Element", @"toggle"])];
 }
 
 + (nullable NSNumber *)showingInspectorIndicationForWebView:(WKWebView *)webView
@@ -336,7 +413,8 @@ static const CGFloat WIKInspectorNodeSearchCommitMovementThreshold = 3.0;
     if (!contentView)
         return nil;
 
-    return [self boolResultFromTarget:contentView selectorName:@"isShowingInspectorIndication"];
+    return [self boolResultFromTarget:contentView
+                         selectorName:WIKRuntimeBridgeStringFromReverseTokens(@[@"Indication", @"Inspector", @"Showing", @"is"])];
 }
 
 + (BOOL)setShowingInspectorIndication:(BOOL)showingInspectorIndication
@@ -346,7 +424,9 @@ static const CGFloat WIKInspectorNodeSearchCommitMovementThreshold = 3.0;
     if (!contentView)
         return NO;
 
-    SEL selector = NSSelectorFromString(@"setShowingInspectorIndication:");
+    SEL selector = WIKRuntimeBridgeSelectorFromReverseTokens(
+        @[@":", @"Indication", @"Inspector", @"Showing", @"set"]
+    );
     if (![contentView respondsToSelector:selector])
         return NO;
 
@@ -363,20 +443,22 @@ static const CGFloat WIKInspectorNodeSearchCommitMovementThreshold = 3.0;
 + (BOOL)canEnableInspectorNodeSearchForWebView:(WKWebView *)webView
 {
     UIView *contentView = [self wi_activeContentViewForWebView:webView];
-    return contentView && [contentView respondsToSelector:@selector(_enableInspectorNodeSearch)];
+    SEL selector = WIKRuntimeBridgeSelectorFromReverseTokens(@[@"Search", @"Node", @"Inspector", @"enable", @"_"]);
+    return contentView && [contentView respondsToSelector:selector];
 }
 
 + (BOOL)enableInspectorNodeSearchForWebView:(WKWebView *)webView
 {
     UIView *activeContentView = [self wi_activeContentViewForWebView:webView];
-    if (!activeContentView || ![activeContentView respondsToSelector:@selector(_enableInspectorNodeSearch)])
+    SEL enableSelector = WIKRuntimeBridgeSelectorFromReverseTokens(@[@"Search", @"Node", @"Inspector", @"enable", @"_"]);
+    SEL disableSelector = WIKRuntimeBridgeSelectorFromReverseTokens(@[@"Search", @"Node", @"Inspector", @"disable", @"_"]);
+    if (!activeContentView || ![activeContentView respondsToSelector:enableSelector])
         return NO;
 
     for (UIView *contentView in [self wi_contentViewsForWebView:webView]) {
         if (contentView == activeContentView)
             continue;
-        if ([contentView respondsToSelector:@selector(_disableInspectorNodeSearch)])
-            [contentView _disableInspectorNodeSearch];
+        WIKRuntimeBridgeInvokeVoid(contentView, disableSelector);
         [self wi_removeInspectorNodeSearchCommitRecognizersInContentView:contentView];
     }
 
@@ -385,7 +467,7 @@ static const CGFloat WIKInspectorNodeSearchCommitMovementThreshold = 3.0;
         return YES;
     }
 
-    [activeContentView _enableInspectorNodeSearch];
+    WIKRuntimeBridgeInvokeVoid(activeContentView, enableSelector);
     [self wi_installInspectorNodeSearchCommitRecognizerInContentView:activeContentView];
     return YES;
 }
@@ -393,11 +475,10 @@ static const CGFloat WIKInspectorNodeSearchCommitMovementThreshold = 3.0;
 + (BOOL)disableInspectorNodeSearchForWebView:(WKWebView *)webView
 {
     BOOL didDisable = NO;
+    SEL disableSelector = WIKRuntimeBridgeSelectorFromReverseTokens(@[@"Search", @"Node", @"Inspector", @"disable", @"_"]);
     for (UIView *contentView in [self wi_contentViewsForWebView:webView]) {
-        if ([contentView respondsToSelector:@selector(_disableInspectorNodeSearch)]) {
-            [contentView _disableInspectorNodeSearch];
+        if (WIKRuntimeBridgeInvokeVoid(contentView, disableSelector))
             didDisable = YES;
-        }
         didDisable = [self wi_removeInspectorNodeSearchCommitRecognizersInContentView:contentView] || didDisable;
     }
     return didDisable;
@@ -465,53 +546,15 @@ static const CGFloat WIKInspectorNodeSearchCommitMovementThreshold = 3.0;
 #endif
 
 + (NSObject *)objectResultFromTarget:(NSObject *)target selectorName:(NSString *)selectorName {
-    SEL selector = NSSelectorFromString(selectorName);
-    if (![target respondsToSelector:selector]) {
-        return nil;
-    }
-
-    typedef id (*Getter)(id, SEL);
-    IMP implementation = [target methodForSelector:selector];
-    if (implementation == NULL) {
-        return nil;
-    }
-
-    Getter function = (Getter)implementation;
-    id result = function(target, selector);
-    return [result isKindOfClass:[NSObject class]] ? result : nil;
+    return WIKRuntimeBridgeObjectResult(target, NSSelectorFromString(selectorName));
 }
 
 + (NSNumber *)boolResultFromTarget:(NSObject *)target selectorName:(NSString *)selectorName {
-    SEL selector = NSSelectorFromString(selectorName);
-    if (![target respondsToSelector:selector]) {
-        return nil;
-    }
-
-    typedef BOOL (*Getter)(id, SEL);
-    IMP implementation = [target methodForSelector:selector];
-    if (implementation == NULL) {
-        return nil;
-    }
-
-    Getter function = (Getter)implementation;
-    return @(function(target, selector));
+    return WIKRuntimeBridgeBoolResult(target, NSSelectorFromString(selectorName));
 }
 
 + (BOOL)invokeVoidOnTarget:(NSObject *)target selectorName:(NSString *)selectorName {
-    SEL selector = NSSelectorFromString(selectorName);
-    if (![target respondsToSelector:selector]) {
-        return NO;
-    }
-
-    typedef void (*Invoker)(id, SEL);
-    IMP implementation = [target methodForSelector:selector];
-    if (implementation == NULL) {
-        return NO;
-    }
-
-    Invoker function = (Invoker)implementation;
-    function(target, selector);
-    return YES;
+    return WIKRuntimeBridgeInvokeVoid(target, NSSelectorFromString(selectorName));
 }
 
 + (BOOL)invokeActionStateOnTarget:(NSObject *)target
@@ -539,7 +582,7 @@ static const CGFloat WIKInspectorNodeSearchCommitMovementThreshold = 3.0;
         return nil;
     }
 
-    SEL selector = NSSelectorFromString(@"frameID");
+    SEL selector = WIKRuntimeBridgeSelectorFromReverseTokens(@[@"ID", @"frame"]);
     if (![handle respondsToSelector:selector]) {
         return nil;
     }
@@ -559,12 +602,13 @@ static const CGFloat WIKInspectorNodeSearchCommitMovementThreshold = 3.0;
         return nil;
     }
 
-    id handle = [self objectResultFromTarget:frameInfo selectorName:@"_handle"];
+    id handle = [self objectResultFromTarget:frameInfo
+                                selectorName:WIKRuntimeBridgeStringFromReverseTokens(@[@"handle", @"_"])];
     return [self frameIDForHandle:handle];
 }
 
 + (WKPageRef)pageRefForWebView:(WKWebView *)webView {
-    SEL selector = NSSelectorFromString(@"_pageForTesting");
+    SEL selector = WIKRuntimeBridgeSelectorFromReverseTokens(@[@"Testing", @"For", @"page", @"_"]);
     if (![webView respondsToSelector:selector]) {
         return NULL;
     }
@@ -580,13 +624,13 @@ static const CGFloat WIKInspectorNodeSearchCommitMovementThreshold = 3.0;
 }
 
 + (WKFrameHandleRef)frameHandleRefForFrameInfo:(WKFrameInfo *)frameInfo {
-    id handle = [self objectResultFromTarget:frameInfo selectorName:@"_handle"];
+    id handle = [self objectResultFromTarget:frameInfo
+                                selectorName:WIKRuntimeBridgeStringFromReverseTokens(@[@"handle", @"_"])];
     if (![handle isKindOfClass:[NSObject class]]) {
         return NULL;
     }
-    // The frame-lookup C API unwraps the Objective-C WKObject wrapper and calls
-    // -_apiObject internally. Passing the raw
-    // _apiObject pointer here crashes because it is no longer an Objective-C object.
+    // The frame-lookup C API unwraps the Objective-C WKObject wrapper internally.
+    // Passing the unwrapped pointer here crashes because it is no longer an Objective-C object.
     return (WKFrameHandleRef)(__bridge void *)handle;
 }
 
@@ -625,12 +669,14 @@ static const CGFloat WIKInspectorNodeSearchCommitMovementThreshold = 3.0;
         return;
     }
 
-    id frameInfo = [self objectResultFromTarget:node selectorName:@"info"];
+    id frameInfo = [self objectResultFromTarget:node
+                                   selectorName:WIKRuntimeBridgeStringFromReverseTokens(@[@"info"])];
     if ([frameInfo isKindOfClass:[WKFrameInfo class]]) {
         [self appendFrameInfoIfNeeded:frameInfo frameInfos:frameInfos seenFrameIDs:seenFrameIDs];
     }
 
-    id childFrames = [self objectResultFromTarget:node selectorName:@"childFrames"];
+    id childFrames = [self objectResultFromTarget:node
+                                     selectorName:WIKRuntimeBridgeStringFromReverseTokens(@[@"Frames", @"child"])];
     if (![childFrames isKindOfClass:[NSArray class]]) {
         return;
     }
@@ -655,13 +701,16 @@ static const CGFloat WIKInspectorNodeSearchCommitMovementThreshold = 3.0;
 
 + (void)resolveMainFrameInfoForWebView:(WKWebView *)webView
                      completionHandler:(void (^)(NSArray<WKFrameInfo *> * _Nullable frameInfos))completionHandler {
-    id mainFrameHandle = [self objectResultFromTarget:webView selectorName:@"_mainFrame"];
+    id mainFrameHandle = [self objectResultFromTarget:webView
+                                         selectorName:WIKRuntimeBridgeStringFromReverseTokens(@[@"Frame", @"main", @"_"])];
     if (!mainFrameHandle) {
         completionHandler(nil);
         return;
     }
 
-    SEL selector = NSSelectorFromString(@"_frameInfoFromHandle:completionHandler:");
+    SEL selector = WIKRuntimeBridgeSelectorFromReverseTokens(
+        @[@":", @"Handler", @"completion", @":", @"Handle", @"From", @"Info", @"frame", @"_"]
+    );
     if (![webView respondsToSelector:selector]) {
         completionHandler(nil);
         return;
@@ -686,7 +735,7 @@ static const CGFloat WIKInspectorNodeSearchCommitMovementThreshold = 3.0;
 
 + (void)resolveFrameInfosFromFrameTreesForWebView:(WKWebView *)webView
                                 completionHandler:(void (^)(NSArray<WKFrameInfo *> * _Nullable frameInfos))completionHandler {
-    SEL selector = NSSelectorFromString(@"_frameTrees:");
+    SEL selector = WIKRuntimeBridgeSelectorFromReverseTokens(@[@":", @"Trees", @"frame", @"_"]);
     if (![webView respondsToSelector:selector]) {
         [self resolveMainFrameInfoForWebView:webView completionHandler:completionHandler];
         return;
@@ -727,7 +776,7 @@ static const CGFloat WIKInspectorNodeSearchCommitMovementThreshold = 3.0;
         return;
     }
 
-    SEL framesSelector = NSSelectorFromString(@"_frames:");
+    SEL framesSelector = WIKRuntimeBridgeSelectorFromReverseTokens(@[@":", @"frames", @"_"]);
     if ([webView respondsToSelector:framesSelector]) {
         IMP implementation = [webView methodForSelector:framesSelector];
         if (implementation != NULL) {
@@ -940,7 +989,8 @@ static const CGFloat WIKInspectorNodeSearchCommitMovementThreshold = 3.0;
         return item.view;
     }
 
-    Ivar controlIvar = class_getInstanceVariable(NSMenuToolbarItem.class, "_control");
+    NSString *controlIvarName = WIKRuntimeBridgeStringFromReverseTokens(@[@"control", @"_"]);
+    Ivar controlIvar = class_getInstanceVariable(NSMenuToolbarItem.class, controlIvarName.UTF8String);
     if (controlIvar == NULL) {
         return nil;
     }

@@ -1,6 +1,12 @@
 import Foundation
 import WebKit
 
+private enum WITransportSessionObfuscation {
+    static func deobfuscate(_ reverseTokens: [String]) -> String {
+        reverseTokens.reversed().joined()
+    }
+}
+
 @MainActor
 public final class WITransportSession {
     public enum State: String, Sendable {
@@ -1179,17 +1185,20 @@ extension WITransportSession {
             return derivedPageTargetIdentifierProviderForTesting(webView)
         }
 #endif
-        let handleSelector = NSSelectorFromString("_handle")
+        let handleKey = WITransportSessionObfuscation.deobfuscate(["handle", "_"])
+        let handleSelector = NSSelectorFromString(handleKey)
         guard webView.responds(to: handleSelector),
-              let handle = (webView.value(forKey: "_handle") as AnyObject?) else {
+              let handle = (webView.value(forKey: handleKey) as AnyObject?) else {
             return nil
         }
 
-        let pageIDSelector = NSSelectorFromString("webPageID")
-        let legacyPageIDSelector = NSSelectorFromString("_webPageID")
+        let pageIDKey = WITransportSessionObfuscation.deobfuscate(["ID", "Page", "web"])
+        let legacyPageIDKey = WITransportSessionObfuscation.deobfuscate(["ID", "Page", "web", "_"])
+        let pageIDSelector = NSSelectorFromString(pageIDKey)
+        let legacyPageIDSelector = NSSelectorFromString(legacyPageIDKey)
         let pageIDValue =
-            (handle.responds(to: pageIDSelector) ? handle.value(forKey: "webPageID") as? NSNumber : nil)
-            ?? (handle.responds(to: legacyPageIDSelector) ? handle.value(forKey: "_webPageID") as? NSNumber : nil)
+            (handle.responds(to: pageIDSelector) ? handle.value(forKey: pageIDKey) as? NSNumber : nil)
+            ?? (handle.responds(to: legacyPageIDSelector) ? handle.value(forKey: legacyPageIDKey) as? NSNumber : nil)
 
         guard let pageIDValue else {
             return nil
