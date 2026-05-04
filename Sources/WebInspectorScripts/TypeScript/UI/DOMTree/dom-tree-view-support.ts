@@ -883,11 +883,11 @@ export function scrollSelectionIntoView(nodeId: number): boolean {
             nextTop = absoluteTop - viewport.safeAreaTop - viewport.blockMargin;
             needsScroll = true;
         }
-    } else if (absoluteTop < visibleTop) {
-        nextTop = absoluteTop - viewport.safeAreaTop - viewport.blockMargin;
-        needsScroll = true;
-    } else if (absoluteBottom > visibleBottom) {
-        nextTop = absoluteBottom - viewport.height + viewport.safeAreaBottom + viewport.blockMargin;
+    } else if (absoluteTop < visibleTop || absoluteBottom > visibleBottom) {
+        nextTop = absoluteTop + (targetRect.height / 2)
+            - viewport.safeAreaTop
+            - viewport.blockMargin
+            - (availableHeight / 2);
         needsScroll = true;
     }
 
