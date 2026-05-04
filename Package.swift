@@ -152,7 +152,8 @@ let package = Package(
                 .product(name: "SyntaxEditorUI", package: "SyntaxEditorUI", condition: .when(platforms: [.iOS]))
             ],
             resources: [
-                .process("Localizable.xcstrings")
+                .process("Localizable.xcstrings"),
+                .process("Resources/Preview")
             ],
             swiftSettings: strictSwiftSettings
         ),

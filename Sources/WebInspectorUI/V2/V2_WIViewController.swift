@@ -128,5 +128,112 @@ import SwiftUI
 #Preview("V2_WIViewController") {
     V2_WIViewController()
 }
+
+#Preview("V2_WIViewController Sheet") {
+    V2_WIPreviewSheetHostViewController()
+}
+
+@MainActor
+private final class V2_WIPreviewSheetHostViewController: UIViewController, WKNavigationDelegate {
+    private let webView: WKWebView = {
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        return WKWebView(frame: .zero, configuration: configuration)
+    }()
+
+    private let inspector = V2_WIViewController()
+    private var didAppear = false
+    private var didFinishLoading = false
+    private var didStartInspectorPresentation = false
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+
+        view.backgroundColor = .systemBackground
+        webView.navigationDelegate = self
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(webView)
+        NSLayoutConstraint.activate([
+            webView.topAnchor.constraint(equalTo: view.topAnchor),
+            webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            webView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+
+        webView.loadHTMLString(
+            Self.loadPreviewHTML(),
+            baseURL: Self.previewBaseURL
+        )
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        didAppear = true
+        presentInspectorIfReady()
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        didFinishLoading = true
+        presentInspectorIfReady()
+    }
+
+    private func presentInspectorIfReady() {
+        guard didAppear, didFinishLoading, !didStartInspectorPresentation else {
+            return
+        }
+        didStartInspectorPresentation = true
+
+        Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+            await inspector.attach(to: webView)
+            inspector.modalPresentationStyle = .pageSheet
+            if let sheet = inspector.sheetPresentationController {
+                sheet.detents = [.medium(), .large()]
+                sheet.selectedDetentIdentifier = .medium
+                sheet.prefersGrabberVisible = true
+                sheet.prefersScrollingExpandsWhenScrolledToEdge = false
+                sheet.largestUndimmedDetentIdentifier = .medium
+            }
+            guard presentedViewController == nil else {
+                return
+            }
+            present(inspector, animated: false)
+        }
+    }
+
+    private static let previewBaseURL = URL(string: "https://preview.local")
+
+    private static func loadPreviewHTML() -> String {
+        guard
+            let url = Bundle.module.url(
+                forResource: "WebInspectorPreviewPage",
+                withExtension: "html"
+            ),
+            let html = try? String(contentsOf: url, encoding: .utf8)
+        else {
+            return missingPreviewHTML
+        }
+        return html
+    }
+
+    private static let missingPreviewHTML = """
+    <!doctype html>
+    <html lang="en">
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Missing WebInspectorKit Preview Resource</title>
+      </head>
+      <body>
+        <main>
+          <h1>Missing WebInspectorKit preview resource</h1>
+          <p>WebInspectorPreviewPage.html could not be loaded.</p>
+        </main>
+      </body>
+    </html>
+    """
+}
 #endif
 #endif
