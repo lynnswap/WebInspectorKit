@@ -22,17 +22,14 @@ import MachO
         fallbackHandle,
     ]
 
-    // _dyld_get_shared_cache_range
     private static let sharedCacheRangeFunction = unsafe resolveSymbol(
         named: deobfuscate(["_range", "_cache", "_shared", "_get", "dyld", "_"]),
         as: SharedCacheRangeFunction.self
     )
-    // dyld_image_header_containing_address
     private static let imageHeaderContainingAddressFunction = unsafe resolveSymbol(
         named: deobfuscate(["_address", "_containing", "_header", "_image", "dyld"]),
         as: ImageHeaderContainingAddressFunction.self
     )
-    // dyld_shared_cache_file_path
     private static let sharedCacheFilePathFunction = unsafe resolveSymbol(
         named: deobfuscate(["_path", "_file", "_cache", "_shared", "dyld"]),
         as: SharedCacheFilePathFunction.self
