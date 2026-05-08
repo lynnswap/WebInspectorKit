@@ -40,13 +40,12 @@ struct V2_NetworkTabController: V2_BuiltInTabController {
                 detailViewController: detailViewController
             )
         case .regular:
-            return V2_WIRegularSplitRootViewController(
-                contentViewController: V2_NetworkSplitViewController(
-                    inspector: session.runtime.network.model,
-                    listViewController: listViewController,
-                    detailViewController: detailViewController
-                )
+            let splitViewController = V2_NetworkSplitViewController(
+                inspector: session.runtime.network.model,
+                listViewController: listViewController,
+                detailViewController: detailViewController
             )
+            return V2_WIRegularSplitRootViewController(contentViewController: splitViewController)
         }
     }
 

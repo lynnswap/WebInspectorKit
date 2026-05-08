@@ -5,6 +5,280 @@ import WebInspectorTestSupport
 @MainActor
 struct NetworkStoreTests {
     @Test
+    func bodySyntaxKindUsesContentTypeAndURL() {
+        #expect(
+            NetworkEntry.bodySyntaxKind(
+                contentType: "application/problem+json; charset=utf-8",
+                url: "https://example.com/error"
+            ) == .json
+        )
+        #expect(
+            NetworkEntry.bodySyntaxKind(
+                contentType: nil,
+                url: "https://example.com/assets/app.mjs"
+            ) == .javascript
+        )
+        #expect(
+            NetworkEntry.bodySyntaxKind(
+                contentType: "application/xhtml+xml",
+                url: "https://example.com/page"
+            ) == .html
+        )
+        #expect(
+            NetworkEntry.bodySyntaxKind(
+                contentType: "application/atom+xml",
+                url: "https://example.com/feed"
+            ) == .xml
+        )
+        #expect(NetworkEntry.isURLEncodedFormContentType("application/x-www-form-urlencoded; charset=UTF-8"))
+    }
+
+    @Test
+    func networkBodyTextRepresentationUsesRawTextAndSummaryFallback() {
+        let rawBody = NetworkBody(
+            kind: .text,
+            preview: nil,
+            full: "plain payload",
+            summary: "summary"
+        )
+        #expect(rawBody.displayText == "plain payload")
+        #expect(rawBody.textRepresentation == "plain payload")
+        #expect(rawBody.textRepresentationSyntaxKind == .plainText)
+
+        let summaryBody = NetworkBody(
+            kind: .text,
+            preview: nil,
+            full: nil,
+            summary: "No content"
+        )
+        #expect(summaryBody.displayText == "No content")
+        #expect(summaryBody.textRepresentation == "No content")
+    }
+
+    @Test
+    func networkBodyTextRepresentationDecodesBase64Text() {
+        let body = NetworkBody(
+            kind: .text,
+            preview: "aGVsbG8gd29ybGQ=",
+            full: nil,
+            isBase64Encoded: true,
+            isTruncated: false
+        )
+
+        #expect(body.displayText == "aGVsbG8gd29ybGQ=")
+        #expect(body.textRepresentation == "hello world")
+    }
+
+    @Test
+    func networkBodyTextRepresentationFormatsFormEntries() {
+        let body = NetworkBody(
+            kind: .form,
+            preview: nil,
+            full: nil,
+            summary: "FormData",
+            formEntries: [
+                NetworkBody.FormEntry(name: "token", value: "abc", isFile: false, fileName: nil),
+                NetworkBody.FormEntry(name: "upload", value: "", isFile: true, fileName: "payload.txt"),
+            ]
+        )
+
+        #expect(body.textRepresentation == "token=abc\nupload=<file payload.txt>")
+        #expect(body.textRepresentationSyntaxKind == .plainText)
+    }
+
+    @Test
+    func networkBodyTextRepresentationFormatsURLEncodedRawBody() {
+        let body = NetworkBody(
+            kind: .text,
+            preview: nil,
+            full: "name=Jane+Doe&city=Tokyo%20East"
+        )
+
+        body.applyTextRepresentationHints(
+            syntaxKind: .plainText,
+            treatsRawTextAsURLEncodedForm: true
+        )
+
+        #expect(body.treatsRawTextAsURLEncodedForm)
+        #expect(body.textRepresentation == "name=Jane Doe\ncity=Tokyo East")
+        #expect(body.textRepresentationSyntaxKind == .plainText)
+    }
+
+    @Test
+    func networkBodyTextRepresentationPrettyPrintsJSON() {
+        let body = NetworkBody(
+            kind: .text,
+            preview: nil,
+            full: #"{"name":"Ada","items":[1,2]}"#
+        )
+
+        #expect(body.textRepresentation?.contains("\n") == true)
+        #expect(body.textRepresentation?.contains(#""name""#) == true)
+        #expect(body.textRepresentationSyntaxKind == .json)
+    }
+
+    @Test
+    func networkBodyTextRepresentationDoesNotDecodeBinaryBody() {
+        let body = NetworkBody(
+            kind: .binary,
+            preview: "raw-bytes",
+            full: "raw-bytes",
+            summary: "Binary content"
+        )
+
+        #expect(body.displayText == "raw-bytes")
+        #expect(body.textRepresentation == "Binary content")
+        #expect(body.textRepresentationSyntaxKind == .plainText)
+    }
+
+    @Test
+    func networkEntryConfiguresBodyRolesAndSyntaxHintsWhenBodiesAreAssigned() throws {
+        let requestBody = NetworkBody(
+            kind: .text,
+            preview: nil,
+            full: #"{"ok":true}"#,
+            role: .response
+        )
+        let responseBody = NetworkBody(
+            kind: .text,
+            preview: nil,
+            full: "body {}",
+            role: .request
+        )
+        let store = NetworkStore()
+
+        let entry = try #require(
+            store.applySnapshots([
+                Self.makeSnapshot(
+                    requestID: 1,
+                    url: "https://example.com/styles/main.css",
+                    requestHeaders: NetworkHeaders(dictionary: [
+                        "content-type": "application/json",
+                    ]),
+                    responseMimeType: "text/css",
+                    requestBody: requestBody,
+                    responseBody: responseBody
+                )
+            ]).first
+        )
+
+        #expect(entry.requestBody === requestBody)
+        #expect(requestBody.role == .request)
+        #expect(requestBody.sourceSyntaxKind == .json)
+        #expect(responseBody.role == .response)
+        #expect(responseBody.sourceSyntaxKind == .css)
+    }
+
+    @Test
+    func networkEntryRefreshesExistingBodySyntaxHintsWhenMetadataChanges() throws {
+        let requestBody = NetworkBody(
+            kind: .text,
+            preview: nil,
+            full: "name=Jane+Doe"
+        )
+        let responseBody = NetworkBody(
+            kind: .text,
+            preview: nil,
+            full: "body {}"
+        )
+        let store = NetworkStore()
+        let entry = try #require(
+            store.applySnapshots([
+                Self.makeSnapshot(
+                    requestID: 2,
+                    url: "https://example.com/body",
+                    requestBody: requestBody,
+                    responseBody: responseBody
+                )
+            ]).first
+        )
+
+        #expect(requestBody.sourceSyntaxKind == .plainText)
+        #expect(requestBody.treatsRawTextAsURLEncodedForm == false)
+        #expect(responseBody.sourceSyntaxKind == .plainText)
+
+        entry.applyRequestStart(
+            url: "https://example.com/app.js",
+            method: nil,
+            requestHeaders: NetworkHeaders(dictionary: [
+                "content-type": "application/x-www-form-urlencoded",
+            ]),
+            requestType: nil,
+            requestBody: nil,
+            requestBodyBytesSent: nil,
+            startTimestamp: 0,
+            wallTime: nil
+        )
+        #expect(requestBody.treatsRawTextAsURLEncodedForm)
+        #expect(requestBody.textRepresentation == "name=Jane Doe")
+        #expect(responseBody.sourceSyntaxKind == .javascript)
+
+        entry.applyResponse(
+            statusCode: 200,
+            statusText: "OK",
+            mimeType: "text/css",
+            responseHeaders: NetworkHeaders(),
+            requestType: nil,
+            timestamp: 1
+        )
+        #expect(responseBody.sourceSyntaxKind == .css)
+
+        entry.applyResponse(
+            statusCode: 200,
+            statusText: "OK",
+            mimeType: nil,
+            responseHeaders: NetworkHeaders(dictionary: [
+                "content-type": "application/json",
+            ]),
+            requestType: nil,
+            timestamp: 2
+        )
+        #expect(responseBody.sourceSyntaxKind == .json)
+    }
+
+    @Test
+    func networkEntryFetchedBodyUpdatesTextRepresentation() throws {
+        let targetBody = NetworkBody(
+            kind: .text,
+            preview: nil,
+            full: nil,
+            isTruncated: true,
+            reference: "response-ref",
+            fetchState: .inline,
+            role: .response
+        )
+        let fetchedBody = NetworkBody(
+            kind: .text,
+            preview: nil,
+            full: #"{"updated":true}"#,
+            isTruncated: false,
+            reference: "response-ref",
+            fetchState: .full,
+            role: .response
+        )
+        let store = NetworkStore()
+        let entry = try #require(
+            store.applySnapshots([
+                Self.makeSnapshot(
+                    requestID: 3,
+                    url: "https://example.com/fetch",
+                    responseHeaders: NetworkHeaders(dictionary: [
+                        "content-type": "application/json",
+                    ]),
+                    responseBody: targetBody
+                )
+            ]).first
+        )
+
+        entry.applyFetchedBody(fetchedBody, to: targetBody)
+
+        #expect(targetBody.fetchState == .full)
+        #expect(targetBody.textRepresentation?.contains("\n") == true)
+        #expect(targetBody.textRepresentation?.contains(#""updated""#) == true)
+        #expect(targetBody.textRepresentationSyntaxKind == .json)
+    }
+
+    @Test
     func keepsEntriesScopedBySessionAndRequestId() throws {
         let store = NetworkStore()
 
@@ -763,5 +1037,47 @@ private extension NetworkStoreTests {
         sessionID: String = ""
     ) {
         store.apply(payload, sessionID: sessionID)
+    }
+
+    static func makeSnapshot(
+        requestID: Int,
+        url: String,
+        method: String = "GET",
+        requestHeaders: NetworkHeaders = NetworkHeaders(),
+        responseMimeType: String? = nil,
+        responseHeaders: NetworkHeaders = NetworkHeaders(),
+        requestBody: NetworkBody? = nil,
+        responseBody: NetworkBody? = nil
+    ) -> NetworkEntry.Snapshot {
+        NetworkEntry.Snapshot(
+            sessionID: "test-session",
+            requestID: requestID,
+            request: NetworkEntry.Request(
+                url: url,
+                method: method,
+                headers: requestHeaders,
+                body: requestBody,
+                bodyBytesSent: nil,
+                type: nil,
+                wallTime: nil
+            ),
+            response: NetworkEntry.Response(
+                statusCode: 200,
+                statusText: "OK",
+                mimeType: responseMimeType,
+                headers: responseHeaders,
+                body: responseBody,
+                blockedCookies: [],
+                errorDescription: nil
+            ),
+            transfer: NetworkEntry.Transfer(
+                startTimestamp: 0,
+                endTimestamp: 1,
+                duration: 1,
+                encodedBodyLength: nil,
+                decodedBodyLength: nil,
+                phase: .completed
+            )
+        )
     }
 }

@@ -52,12 +52,15 @@ struct V2DOMElementViewControllerTests {
             visibleListCellText(in: viewController.collectionView, at: IndexPath(item: 0, section: 0))
                 == "<div id=\"selected\" class=\"hero\">"
         )
-        let previewTextView = visibleTextView(in: viewController.collectionView, at: IndexPath(item: 0, section: 0))
-        #expect(previewTextView is SyntaxEditorView)
-        #expect(previewTextView?.isSelectable == true)
-        #expect(previewTextView?.isEditable == false)
-        #expect(previewTextView?.isScrollEnabled == false)
-        #expect(hasCenteredTextContainerInsets(previewTextView))
+        let previewEditorView = visibleSyntaxEditorView(
+            in: viewController.collectionView,
+            at: IndexPath(item: 0, section: 0)
+        )
+        #expect(previewEditorView != nil)
+        #expect(previewEditorView?.isSelectable == true)
+        #expect(previewEditorView?.isEditable == false)
+        #expect(previewEditorView?.isScrollEnabled == false)
+        #expect(hasCenteredTextContainerInsets(previewEditorView))
         #expect(visibleCellHeight(in: viewController.collectionView, at: IndexPath(item: 0, section: 0)) ?? 0 >= 44)
         #expect(visibleListCellText(in: viewController.collectionView, at: IndexPath(item: 0, section: 1)) == "#selected")
         let selectorTextView = visibleTextView(in: viewController.collectionView, at: IndexPath(item: 0, section: 1))
@@ -92,10 +95,10 @@ struct V2DOMElementViewControllerTests {
             let indexPath = IndexPath(item: 0, section: 0)
             guard visibleListCellText(in: viewController.collectionView, at: indexPath) == expectedPreview,
                   let cell = viewController.collectionView.cellForItem(at: indexPath),
-                  let textView = visibleTextView(in: cell.contentView),
-                  let lineHeight = textView.font?.lineHeight else {
+                  let editorView = visibleSyntaxEditorView(in: cell.contentView) else {
                 return false
             }
+            let lineHeight = editorView.font.lineHeight
             return cell.bounds.height > lineHeight * 2
         }
         #expect(previewExpanded)
@@ -238,9 +241,36 @@ struct V2DOMElementViewControllerTests {
         }
         guard let cell = collectionView.cellForItem(at: indexPath) as? UICollectionViewListCell,
               let configuration = cell.contentConfiguration as? UIListContentConfiguration else {
-            return visibleTextView(in: collectionView.cellForItem(at: indexPath)?.contentView)?.text
+            return visibleDisplayText(in: collectionView.cellForItem(at: indexPath)?.contentView)
         }
         return configuration.text
+    }
+
+    private func visibleSyntaxEditorView(
+        in collectionView: UICollectionView,
+        at indexPath: IndexPath
+    ) -> SyntaxEditorView? {
+        collectionView.layoutIfNeeded()
+        guard collectionView.numberOfSections > indexPath.section,
+              collectionView.numberOfItems(inSection: indexPath.section) > indexPath.item else {
+            return nil
+        }
+        return visibleSyntaxEditorView(in: collectionView.cellForItem(at: indexPath)?.contentView)
+    }
+
+    private func visibleSyntaxEditorView(in view: UIView?) -> SyntaxEditorView? {
+        guard let view else {
+            return nil
+        }
+        if let editorView = view as? SyntaxEditorView {
+            return editorView
+        }
+        for subview in view.subviews {
+            if let editorView = visibleSyntaxEditorView(in: subview) {
+                return editorView
+            }
+        }
+        return nil
     }
 
     private func visibleTextView(in collectionView: UICollectionView, at indexPath: IndexPath) -> UITextView? {
@@ -274,6 +304,24 @@ struct V2DOMElementViewControllerTests {
         return textViews
     }
 
+    private func visibleDisplayText(in view: UIView?) -> String? {
+        guard let view else {
+            return nil
+        }
+        if let textView = view as? UITextView {
+            return textView.text
+        }
+        if let editorView = view as? SyntaxEditorView {
+            return editorView.text
+        }
+        for subview in view.subviews {
+            if let text = visibleDisplayText(in: subview) {
+                return text
+            }
+        }
+        return nil
+    }
+
     private func visibleCellHeight(in collectionView: UICollectionView, at indexPath: IndexPath) -> CGFloat? {
         collectionView.layoutIfNeeded()
         guard collectionView.numberOfSections > indexPath.section,
@@ -290,6 +338,15 @@ struct V2DOMElementViewControllerTests {
         textView.layoutIfNeeded()
         return textView.textContainerInset.top > 0
             && abs(textView.textContainerInset.top - textView.textContainerInset.bottom) <= 1
+    }
+
+    private func hasCenteredTextContainerInsets(_ editorView: SyntaxEditorView?) -> Bool {
+        guard let editorView else {
+            return false
+        }
+        editorView.layoutIfNeeded()
+        return editorView.textContainerInset.top > 0
+            && abs(editorView.textContainerInset.top - editorView.textContainerInset.bottom) <= 1
     }
 
     private func visibleListCellSecondaryText(in collectionView: UICollectionView, at indexPath: IndexPath) -> String? {

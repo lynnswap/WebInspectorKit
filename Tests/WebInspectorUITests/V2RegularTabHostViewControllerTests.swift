@@ -1,4 +1,5 @@
 #if canImport(UIKit)
+import SyntaxEditorUI
 import Testing
 import UIKit
 @testable import WebInspectorEngine
@@ -110,6 +111,81 @@ struct V2RegularTabHostViewControllerTests {
     }
 
     @Test
+    func regularNetworkRootExposesDetailModeMenuAsTrailingText() async throws {
+        let session = V2_WISession(tabs: [.dom, .network])
+        session.interface.selectTab(V2_WITab.network)
+        let entry = try #require(
+            session.runtime.network.model.store.applySnapshots([
+                makeSnapshot(
+                    requestID: 1,
+                    url: "https://example.com/body.json",
+                    responseBody: makeBody(full: "{\"ok\":true}", role: .response)
+                )
+            ]).first
+        )
+        let host = V2_WIRegularTabContentViewController(session: session)
+        let window = showInWindow(host)
+        defer { window.isHidden = true }
+        let rootViewController = try #require(host.viewControllers.first)
+        rootViewController.loadViewIfNeeded()
+
+        #expect(rootViewController.navigationItem.centerItemGroups.isEmpty == false)
+        let initialModeItem = try #require(regularDetailModeItem(in: rootViewController))
+        #expect(initialModeItem.isEnabled == false)
+        let initialModeButton = try #require(initialModeItem.customView as? UIButton)
+        #expect(initialModeButton.configuration?.title == V2_NetworkEntryDetailMode.overview.title)
+        #expect(initialModeButton.showsMenuAsPrimaryAction)
+        #expect(initialModeButton.changesSelectionAsPrimaryAction)
+        #expect(initialModeButton.preferredMenuElementOrder == .fixed)
+        #expect(initialModeButton.isEnabled == false)
+
+        session.runtime.network.model.selectEntry(entry)
+
+        let didEnableModeItem = await waitUntil {
+            guard
+                let modeItem = regularDetailModeItem(in: rootViewController),
+                let modeButton = modeItem.customView as? UIButton,
+                modeItem.isEnabled,
+                modeButton.isEnabled,
+                let menu = modeButton.menu,
+                let responseAction = action(title: V2_NetworkEntryDetailMode.responseBody.title, in: menu)
+            else {
+                return false
+            }
+            return responseAction.attributes.contains(.disabled) == false
+        }
+        #expect(didEnableModeItem)
+
+        let enabledModeItem = try #require(regularDetailModeItem(in: rootViewController))
+        let enabledModeButton = try #require(enabledModeItem.customView as? UIButton)
+        #expect(enabledModeItem === initialModeItem)
+        #expect(enabledModeButton === initialModeButton)
+        #expect(enabledModeButton.preferredMenuElementOrder == .fixed)
+        #expect(enabledModeItem.preferredMenuElementOrder == .fixed)
+        #expect(menuActionTitles(in: try #require(enabledModeButton.menu)) == V2_NetworkEntryDetailMode.allCases.map(\.title))
+        let responseAction = try action(for: .responseBody, in: try #require(enabledModeButton.menu))
+        responseAction.performWithSender(nil, target: nil)
+
+        let didSwitchModeTitle = await waitUntil {
+            guard
+                let modeItem = regularDetailModeItem(in: rootViewController),
+                let modeButton = modeItem.customView as? UIButton,
+                let menu = modeButton.menu
+            else {
+                return false
+            }
+            return modeButton.configuration?.title == V2_NetworkEntryDetailMode.responseBody.title
+                && modeButton.preferredMenuElementOrder == .fixed
+                && menuActionTitles(in: menu) == V2_NetworkEntryDetailMode.allCases.map(\.title)
+        }
+        #expect(didSwitchModeTitle)
+        let switchedModeItem = try #require(regularDetailModeItem(in: rootViewController))
+        let switchedModeButton = try #require(switchedModeItem.customView as? UIButton)
+        #expect(switchedModeItem === enabledModeItem)
+        #expect(switchedModeButton === enabledModeButton)
+    }
+
+    @Test
     func regularNetworkSplitContainsDetailSecondary() throws {
         let session = V2_WISession(tabs: [.dom, .network])
         session.interface.selectTab(V2_WITab.network)
@@ -167,6 +243,65 @@ struct V2RegularTabHostViewControllerTests {
         }
 
         #expect(didUpdateDetail)
+    }
+
+    @Test
+    func regularNetworkBodyViewUsesDetailSafeArea() async throws {
+        let session = V2_WISession(tabs: [.dom, .network])
+        session.interface.selectTab(V2_WITab.network)
+        let entry = try #require(
+            session.runtime.network.model.store.applySnapshots([
+                makeSnapshot(
+                    requestID: 1,
+                    url: "https://example.com/body.json",
+                    responseBody: makeBody(
+                        full: String(repeating: "{\"ok\":true}", count: 64),
+                        role: .response
+                    )
+                )
+            ]).first
+        )
+        let rootViewController = V2_TabContentFactory.makeViewController(
+            for: .network,
+            session: session,
+            hostLayout: .regular
+        )
+        let window = showInWindow(
+            rootViewController,
+            frame: CGRect(x: 0, y: 0, width: 724, height: 560)
+        )
+        defer { window.isHidden = true }
+        let splitViewController = try childSplitViewController(in: rootViewController)
+        let detailViewController: V2_NetworkEntryDetailViewController = try splitRootViewController(
+            in: splitViewController,
+            column: .secondary
+        )
+        detailViewController.loadViewIfNeeded()
+        detailViewController.additionalSafeAreaInsets = UIEdgeInsets(top: 0, left: 240, bottom: 0, right: 0)
+        detailViewController.view.setNeedsLayout()
+        detailViewController.view.layoutIfNeeded()
+
+        session.runtime.network.model.selectEntry(entry)
+        let collectionView = detailViewController.collectionViewForTesting
+        let didRenderOverview = await waitUntil {
+            collectionView.isHidden == false
+                && collectionView.numberOfSections == 3
+        }
+        #expect(didRenderOverview)
+
+        detailViewController.setModeForTesting(.responseBody)
+
+        let didRenderBody = await waitUntil {
+            detailViewController.bodyTextViewForTesting.text.contains("\"ok\"")
+        }
+        #expect(didRenderBody)
+
+        let syntaxView = detailViewController.bodyTextViewForTesting
+        let syntaxFrame = syntaxView.convert(syntaxView.bounds, to: detailViewController.view)
+        let safeAreaFrame = detailViewController.view.safeAreaLayoutGuide.layoutFrame
+
+        #expect(abs(syntaxFrame.minX - safeAreaFrame.minX) <= 1)
+        #expect(abs(syntaxFrame.maxX - safeAreaFrame.maxX) <= 1)
     }
 
     @Test
@@ -628,7 +763,9 @@ struct V2RegularTabHostViewControllerTests {
 
     private func makeSnapshot(
         requestID: Int,
-        url: String
+        url: String,
+        requestBody: NetworkBody? = nil,
+        responseBody: NetworkBody? = nil
     ) -> NetworkEntry.Snapshot {
         NetworkEntry.Snapshot(
             sessionID: "test-session",
@@ -637,7 +774,7 @@ struct V2RegularTabHostViewControllerTests {
                 url: url,
                 method: "GET",
                 headers: NetworkHeaders(),
-                body: nil,
+                body: requestBody,
                 bodyBytesSent: nil,
                 type: nil,
                 wallTime: nil
@@ -647,7 +784,7 @@ struct V2RegularTabHostViewControllerTests {
                 statusText: "OK",
                 mimeType: "application/json",
                 headers: NetworkHeaders(),
-                body: nil,
+                body: responseBody,
                 blockedCookies: [],
                 errorDescription: nil
             ),
@@ -662,8 +799,59 @@ struct V2RegularTabHostViewControllerTests {
         )
     }
 
-    private func showInWindow(_ viewController: UIViewController) -> UIWindow {
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 768))
+    private func makeBody(
+        full: String,
+        role: NetworkBody.Role
+    ) -> NetworkBody {
+        NetworkBody(
+            kind: .text,
+            preview: full,
+            full: full,
+            size: nil,
+            isBase64Encoded: false,
+            isTruncated: false,
+            summary: nil,
+            reference: nil,
+            formEntries: [],
+            fetchState: .full,
+            role: role
+        )
+    }
+
+    private func regularDetailModeItem(in viewController: UIViewController) -> UIBarButtonItem? {
+        viewController.navigationItem.trailingItemGroups
+            .flatMap(\.barButtonItems)
+            .first { $0.accessibilityIdentifier == "V2.Network.DetailModeButton.Regular" }
+    }
+
+    private func action(
+        for mode: V2_NetworkEntryDetailMode,
+        in menu: UIMenu
+    ) throws -> UIAction {
+        try #require(action(title: mode.title, in: menu))
+    }
+
+    private func action(title: String, in menu: UIMenu) -> UIAction? {
+        for child in menu.children {
+            if let action = child as? UIAction, action.title == title {
+                return action
+            }
+            if let submenu = child as? UIMenu, let nested = action(title: title, in: submenu) {
+                return nested
+            }
+        }
+        return nil
+    }
+
+    private func menuActionTitles(in menu: UIMenu) -> [String] {
+        menu.children.compactMap { ($0 as? UIAction)?.title }
+    }
+
+    private func showInWindow(
+        _ viewController: UIViewController,
+        frame: CGRect = CGRect(x: 0, y: 0, width: 1024, height: 768)
+    ) -> UIWindow {
+        let window = UIWindow(frame: frame)
         window.rootViewController = viewController
         window.makeKeyAndVisible()
         viewController.view.frame = window.bounds

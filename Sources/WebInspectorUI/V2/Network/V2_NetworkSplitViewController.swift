@@ -39,6 +39,7 @@ final class V2_NetworkSplitViewController: UISplitViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .clear
+        configureNavigationItem()
     }
 
     private func configureSplitViewLayout() {
@@ -46,6 +47,7 @@ final class V2_NetworkSplitViewController: UISplitViewController {
         presentsWithGesture = false
         displayModeButtonVisibility = .never
         preferredDisplayMode = .oneBesideSecondary
+        preferredPrimaryColumnWidthFraction = 0.33
 
         setViewController(primaryViewController, for: .primary)
         setViewController(secondaryViewController, for: .secondary)
@@ -53,6 +55,20 @@ final class V2_NetworkSplitViewController: UISplitViewController {
 
     private func showEntryDetail(_ entry: NetworkEntry?) {
         inspector.selectEntry(entry)
+    }
+
+    private func configureNavigationItem() {
+        let item = detailViewController.makeRegularModeItem()
+        if #available(iOS 26.0, *) {
+            item.hidesSharedBackground = true
+        }
+        let group = UIBarButtonItemGroup(
+            barButtonItems: [item],
+            representativeItem: nil
+        )
+        navigationItem.trailingItemGroups = [
+            group
+        ]
     }
 }
 
@@ -87,6 +103,15 @@ import WebInspectorRuntime
         inspector: network.model,
         listViewController: V2_NetworkListViewController(inspector: network.model),
         detailViewController: V2_NetworkEntryDetailViewController(inspector: network.model)
+    )
+}
+
+#Preview("V2 Network Split Entries") {
+    let inspector = WINetworkPreviewFixtures.makeInspector(mode: .detail)
+    V2_NetworkSplitViewController(
+        inspector: inspector,
+        listViewController: V2_NetworkListViewController(inspector: inspector),
+        detailViewController: V2_NetworkEntryDetailViewController(inspector: inspector)
     )
 }
 #endif
