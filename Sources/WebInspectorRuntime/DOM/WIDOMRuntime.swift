@@ -51,6 +51,10 @@ public final class WIDOMRuntime {
         await inspector.detach()
     }
 
+    package func suspend() async {
+        await inspector.suspend()
+    }
+
     package func treeWebViewForPresentation() -> WKWebView {
         if let domTreeWebView {
             return domTreeWebView

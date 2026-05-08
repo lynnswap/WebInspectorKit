@@ -54,4 +54,8 @@ public final class WINetworkRuntime {
     public func detach() async {
         await model.detach()
     }
+
+    package func suspend() async {
+        await model.suspend()
+    }
 }

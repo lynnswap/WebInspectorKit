@@ -303,6 +303,7 @@ final class MonoclyLifecycleTests: XCTestCase {
         let mainWindow = try XCTUnwrap(mainSceneDelegate.window)
         retainedWindows.append(mainWindow)
         let rootViewController = try XCTUnwrap(mainSceneDelegate.rootViewController)
+        let presentationWebView = rootViewController.inspectorRuntime.dom.treeWebViewForPresentation()
 
         XCTAssertTrue(
             coordinator.presentWindow(
@@ -325,6 +326,7 @@ final class MonoclyLifecycleTests: XCTestCase {
         XCTAssertTrue(waitForCondition {
             BrowserInspectorCoordinator.hasInspectorWindow(for: rootViewController.inspectorRuntime)
                 && rootViewController.inspectorRuntime.dom.hasPageWebViewForDiagnostics == false
+                && rootViewController.inspectorRuntime.dom.treeWebViewForPresentation() === presentationWebView
         })
 
         inspectorSceneDelegate.disconnect(windowScene: windowScene)
@@ -332,6 +334,7 @@ final class MonoclyLifecycleTests: XCTestCase {
         XCTAssertTrue(waitForCondition {
             BrowserInspectorCoordinator.hasInspectorWindow(for: rootViewController.inspectorRuntime) == false
                 && rootViewController.inspectorRuntime.dom.hasPageWebViewForDiagnostics == false
+                && rootViewController.inspectorRuntime.dom.treeWebViewForPresentation() !== presentationWebView
         })
     }
 

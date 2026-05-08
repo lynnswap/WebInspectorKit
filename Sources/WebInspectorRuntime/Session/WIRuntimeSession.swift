@@ -41,4 +41,10 @@ public final class WIRuntimeSession {
         await dom.detach()
         await network.detach()
     }
+
+    @_spi(Monocly)
+    public func suspendPageAttachment() async {
+        await dom.suspend()
+        await network.suspend()
+    }
 }

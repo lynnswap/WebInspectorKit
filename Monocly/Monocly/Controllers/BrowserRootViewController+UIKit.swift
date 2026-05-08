@@ -6,6 +6,7 @@ import UIKit
 final class BrowserRootViewController: UINavigationController {
     private enum InspectorRuntimeAttachment {
         case attached
+        case suspended
         case detached
     }
 
@@ -86,7 +87,7 @@ final class BrowserRootViewController: UINavigationController {
     }
 
     func prepareForSceneDisconnectionPreservingInspectorSession() {
-        requestInspectorRuntimeAttachment(.detached)
+        requestInspectorRuntimeAttachment(.suspended)
     }
 
     func waitForInspectorSessionTransitions() async {
@@ -133,6 +134,8 @@ private extension BrowserRootViewController {
                 switch desiredAttachment {
                 case .attached:
                     await inspectorRuntime.attach(to: store.webView)
+                case .suspended:
+                    await inspectorRuntime.suspendPageAttachment()
                 case .detached:
                     await inspectorRuntime.detach()
                 }
