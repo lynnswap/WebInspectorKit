@@ -1,4 +1,5 @@
 #if canImport(UIKit)
+import SyntaxEditorUI
 import Testing
 import UIKit
 @testable import WebInspectorEngine
@@ -156,6 +157,295 @@ struct V2NetworkEntryDetailViewControllerTests {
 
         #expect(didRenderOnlyHeaderSections)
         #expect(fetcher.fetchCount == 0)
+    }
+
+    @Test
+    func detailModeMenuReflectsBodyAvailability() async throws {
+        let inspector = WINetworkModel(session: NetworkSession())
+        let entry = try #require(
+            inspector.store.applySnapshots([
+                makeSnapshot(
+                    requestID: 1,
+                    url: "https://example.com/body",
+                    requestBody: makeBody(
+                        full: "request-body",
+                        role: .request
+                    ),
+                    responseBody: nil
+                )
+            ]).first
+        )
+        inspector.selectEntry(entry)
+        let viewController = V2_NetworkEntryDetailViewController(inspector: inspector)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didRender = await waitUntil {
+            viewController.collectionViewForTesting.numberOfSections == 3
+        }
+        #expect(didRender)
+
+        let overviewAction = try action(for: .overview, in: viewController.modeMenuForTesting)
+        let requestAction = try action(for: .requestBody, in: viewController.modeMenuForTesting)
+        let responseAction = try action(for: .responseBody, in: viewController.modeMenuForTesting)
+
+        #expect(overviewAction.state == .on)
+        #expect(overviewAction.attributes.contains(.disabled) == false)
+        #expect(requestAction.attributes.contains(.disabled) == false)
+        #expect(responseAction.attributes.contains(.disabled))
+        #expect(menuActionTitles(in: viewController.modeMenuForTesting) == V2_NetworkEntryDetailMode.allCases.map(\.title))
+
+        requestAction.performWithSender(nil, target: nil)
+
+        let didSwitch = await waitUntil {
+            viewController.currentModeForTesting == .requestBody
+                && viewController.bodyTextViewForTesting.text == "request-body"
+        }
+        #expect(didSwitch)
+        #expect(try action(for: .requestBody, in: viewController.modeMenuForTesting).state == .on)
+        #expect(menuActionTitles(in: viewController.modeMenuForTesting) == V2_NetworkEntryDetailMode.allCases.map(\.title))
+    }
+
+    @Test
+    func responseBodyModeRendersPrettyPrintedJSONInReadOnlySyntaxEditor() async throws {
+        let compactJSON = "{\"name\":\"codex\",\"value\":42}"
+        let inspector = WINetworkModel(session: NetworkSession())
+        let entry = try #require(
+            inspector.store.applySnapshots([
+                makeSnapshot(
+                    requestID: 1,
+                    url: "https://example.com/api/data.json",
+                    responseHeaders: NetworkHeaders([
+                        NetworkHeaderField(name: "content-type", value: "application/json")
+                    ]),
+                    responseBody: makeBody(full: compactJSON, role: .response)
+                )
+            ]).first
+        )
+        inspector.selectEntry(entry)
+        let viewController = V2_NetworkEntryDetailViewController(inspector: inspector)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        viewController.setModeForTesting(.responseBody)
+
+        let didRender = await waitUntil {
+            viewController.bodyTextViewForTesting.text.contains("\n")
+                && viewController.bodyTextViewForTesting.text.contains("\"name\"")
+        }
+        #expect(didRender)
+
+        let syntaxView = viewController.bodyTextViewForTesting
+        #expect(syntaxView.isEditable == false)
+        #expect(syntaxView.isSelectable)
+        #expect(syntaxView.model.lineWrappingEnabled)
+        #expect(syntaxView.model.language == .json)
+        #expect(syntaxView.model.colorTheme == .xcode)
+    }
+
+    @Test
+    func requestBodyModeFormatsFormEntriesAsPlainText() async throws {
+        let inspector = WINetworkModel(session: NetworkSession())
+        let body = NetworkBody(
+            kind: .form,
+            preview: nil,
+            full: nil,
+            size: nil,
+            isBase64Encoded: false,
+            isTruncated: false,
+            summary: "FormData",
+            reference: nil,
+            formEntries: [
+                NetworkBody.FormEntry(name: "token", value: "abc", isFile: false, fileName: nil),
+                NetworkBody.FormEntry(name: "upload", value: "<file payload.txt>", isFile: true, fileName: "payload.txt"),
+            ],
+            fetchState: .full,
+            role: .request
+        )
+        let entry = try #require(
+            inspector.store.applySnapshots([
+                makeSnapshot(
+                    requestID: 1,
+                    url: "https://example.com/upload",
+                    method: "POST",
+                    requestBody: body
+                )
+            ]).first
+        )
+        inspector.selectEntry(entry)
+        let viewController = V2_NetworkEntryDetailViewController(inspector: inspector)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        viewController.setModeForTesting(.requestBody)
+
+        let didRender = await waitUntil {
+            viewController.bodyTextViewForTesting.text == "token=abc\nupload=<file payload.txt>"
+        }
+        #expect(didRender)
+        let syntaxView = viewController.bodyTextViewForTesting
+        #expect(syntaxView.model.colorTheme == .webInspectorPlainText)
+    }
+
+    @Test
+    func requestBodyModeFormatsURLEncodedFormText() async throws {
+        let inspector = WINetworkModel(session: NetworkSession())
+        let entry = try #require(
+            inspector.store.applySnapshots([
+                makeSnapshot(
+                    requestID: 1,
+                    url: "https://example.com/form",
+                    method: "POST",
+                    requestHeaders: NetworkHeaders([
+                        NetworkHeaderField(name: "content-type", value: "application/x-www-form-urlencoded")
+                    ]),
+                    requestBody: makeBody(
+                        full: "name=Jane+Doe&city=Tokyo%20East",
+                        role: .request
+                    )
+                )
+            ]).first
+        )
+        inspector.selectEntry(entry)
+        let viewController = V2_NetworkEntryDetailViewController(inspector: inspector)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        viewController.setModeForTesting(.requestBody)
+
+        let didRender = await waitUntil {
+            viewController.bodyTextViewForTesting.text == "name=Jane Doe\ncity=Tokyo East"
+        }
+        #expect(didRender)
+        #expect(viewController.bodyTextViewForTesting.model.colorTheme == .webInspectorPlainText)
+    }
+
+    @Test
+    func responseBodyModeUsesNoHighlightThemeForPlainText() async throws {
+        let inspector = WINetworkModel(session: NetworkSession())
+        let entry = try #require(
+            inspector.store.applySnapshots([
+                makeSnapshot(
+                    requestID: 1,
+                    url: "https://example.com/download.bin",
+                    responseHeaders: NetworkHeaders([
+                        NetworkHeaderField(name: "content-type", value: "application/octet-stream")
+                    ]),
+                    responseBody: makeBody(full: "plain payload", role: .response)
+                )
+            ]).first
+        )
+        inspector.selectEntry(entry)
+        let viewController = V2_NetworkEntryDetailViewController(inspector: inspector)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        viewController.setModeForTesting(.responseBody)
+
+        let didRender = await waitUntil {
+            viewController.bodyTextViewForTesting.text == "plain payload"
+        }
+        #expect(didRender)
+        #expect(viewController.bodyTextViewForTesting.model.colorTheme == .webInspectorPlainText)
+    }
+
+    @Test
+    func bodyModePersistsAcrossSelectedEntryChanges() async throws {
+        let inspector = WINetworkModel(session: NetworkSession())
+        let entries = inspector.store.applySnapshots([
+            makeSnapshot(
+                requestID: 1,
+                url: "https://example.com/first.json",
+                responseBody: makeBody(full: "{\"first\":true}", role: .response)
+            ),
+            makeSnapshot(
+                requestID: 2,
+                url: "https://example.com/second.json",
+                responseBody: nil
+            ),
+        ])
+        let firstEntry = try #require(entries.first)
+        let secondEntry = try #require(entries.dropFirst().first)
+        inspector.selectEntry(firstEntry)
+        let viewController = V2_NetworkEntryDetailViewController(inspector: inspector)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        viewController.setModeForTesting(.responseBody)
+        let didRenderFirst = await waitUntil {
+            viewController.bodyTextViewForTesting.text.contains("\"first\"")
+        }
+        #expect(didRenderFirst)
+
+        inspector.selectEntry(secondEntry)
+
+        let didKeepMode = await waitUntil {
+            viewController.currentModeForTesting == .responseBody
+                && viewController.title == "second.json"
+                && viewController.bodyTextViewForTesting.text == wiLocalized(
+                    "network.body.unavailable",
+                    default: "Body unavailable"
+                )
+        }
+        #expect(didKeepMode)
+    }
+
+    @Test
+    func bodyViewUpdatesWhenBodyFetchStateAndTextChange() async throws {
+        let body = NetworkBody(
+            kind: .text,
+            preview: nil,
+            full: nil,
+            size: nil,
+            isBase64Encoded: false,
+            isTruncated: true,
+            summary: nil,
+            reference: "response-ref",
+            formEntries: [],
+            fetchState: .inline,
+            role: .response
+        )
+        let inspector = WINetworkModel(session: NetworkSession())
+        let entry = try #require(
+            inspector.store.applySnapshots([
+                makeSnapshot(
+                    requestID: 1,
+                    url: "https://example.com/fetch.json",
+                    responseHeaders: NetworkHeaders([
+                        NetworkHeaderField(name: "content-type", value: "application/json")
+                    ]),
+                    responseBody: body
+                )
+            ]).first
+        )
+        inspector.selectEntry(entry)
+        let viewController = V2_NetworkEntryDetailViewController(inspector: inspector)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        viewController.setModeForTesting(.responseBody)
+        body.fetchState = .fetching
+
+        let didShowFetching = await waitUntil {
+            viewController.bodyTextViewForTesting.text == wiLocalized(
+                "network.body.fetching",
+                default: "Fetching body..."
+            )
+        }
+        #expect(didShowFetching)
+
+        body.applyFullBody(
+            "{\"updated\":true}",
+            isBase64Encoded: false,
+            isTruncated: false,
+            size: nil
+        )
+
+        let didShowUpdatedText = await waitUntil {
+            viewController.bodyTextViewForTesting.text.contains("\"updated\"")
+                && viewController.bodyTextViewForTesting.text.contains("\n")
+        }
+        #expect(didShowUpdatedText)
     }
 
     @Test
@@ -329,20 +619,48 @@ struct V2NetworkEntryDetailViewControllerTests {
         )
     }
 
-    private func makeBody(reference: String, role: NetworkBody.Role) -> NetworkBody {
+    private func makeBody(
+        reference: String? = nil,
+        full: String? = nil,
+        preview: String? = "preview",
+        role: NetworkBody.Role
+    ) -> NetworkBody {
         NetworkBody(
             kind: .text,
-            preview: "preview",
-            full: nil,
+            preview: preview,
+            full: full,
             size: nil,
             isBase64Encoded: false,
-            isTruncated: true,
+            isTruncated: full == nil,
             summary: nil,
             reference: reference,
             formEntries: [],
-            fetchState: .inline,
+            fetchState: full == nil ? .inline : .full,
             role: role
         )
+    }
+
+    private func action(
+        for mode: V2_NetworkEntryDetailMode,
+        in menu: UIMenu
+    ) throws -> UIAction {
+        try #require(action(title: mode.title, in: menu))
+    }
+
+    private func action(title: String, in menu: UIMenu) -> UIAction? {
+        for child in menu.children {
+            if let action = child as? UIAction, action.title == title {
+                return action
+            }
+            if let submenu = child as? UIMenu, let nested = action(title: title, in: submenu) {
+                return nested
+            }
+        }
+        return nil
+    }
+
+    private func menuActionTitles(in menu: UIMenu) -> [String] {
+        menu.children.compactMap { ($0 as? UIAction)?.title }
     }
 
     private func listCellText(

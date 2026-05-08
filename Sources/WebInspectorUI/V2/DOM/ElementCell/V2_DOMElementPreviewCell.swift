@@ -9,7 +9,7 @@ final class V2_DOMElementPreviewCell: V2_DOMElementBaseCell {
 
     private let previewModel = SyntaxEditorModel(
         text: "",
-        language: BuiltinSyntaxLanguages.html,
+        language: .html,
         isEditable: false,
         lineWrappingEnabled: true
     )
@@ -90,7 +90,6 @@ final class V2_DOMElementPreviewCell: V2_DOMElementBaseCell {
         previewEditorView.isScrollEnabled = false
         previewEditorView.alwaysBounceVertical = false
         previewEditorView.backgroundColor = .clear
-        previewEditorView.textContainer.lineFragmentPadding = 0
         previewEditorView.textContainerInset = .zero
         previewEditorView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         previewEditorView.setContentCompressionResistancePriority(.required, for: .vertical)
@@ -120,18 +119,25 @@ final class V2_DOMElementPreviewCell: V2_DOMElementBaseCell {
             return 0
         }
 
-        let originalInsets = previewEditorView.textContainerInset
-        let sizingInsets = UIEdgeInsets(top: 0, left: originalInsets.left, bottom: 0, right: originalInsets.right)
-        if originalInsets != sizingInsets {
-            previewEditorView.textContainerInset = sizingInsets
+        guard previewModel.text.isEmpty == false else {
+            return ceil(previewEditorView.font.lineHeight)
         }
-        let size = previewEditorView.sizeThatFits(
-            CGSize(width: width, height: CGFloat.greatestFiniteMagnitude)
+
+        let lineFragmentPadding = CGFloat(10)
+        let textInsets = previewEditorView.textContainerInset
+        let textWidth = max(1, width - textInsets.left - textInsets.right - lineFragmentPadding)
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineBreakMode = .byCharWrapping
+        let textBounds = (previewModel.text as NSString).boundingRect(
+            with: CGSize(width: textWidth, height: CGFloat.greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [
+                .font: previewEditorView.font,
+                .paragraphStyle: paragraphStyle,
+            ],
+            context: nil
         )
-        if previewEditorView.textContainerInset != originalInsets {
-            previewEditorView.textContainerInset = originalInsets
-        }
-        return ceil(size.height)
+        return max(ceil(previewEditorView.font.lineHeight), ceil(textBounds.height))
     }
 
     private func updateVerticalTextInsets() {

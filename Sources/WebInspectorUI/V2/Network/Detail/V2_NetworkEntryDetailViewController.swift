@@ -1,11 +1,12 @@
 #if canImport(UIKit)
 import ObservationBridge
+import SyntaxEditorUI
 import UIKit
 import WebInspectorEngine
 import WebInspectorRuntime
 
 @MainActor
-final class V2_NetworkEntryDetailViewController: UICollectionViewController {
+final class V2_NetworkEntryDetailViewController: UIViewController, UICollectionViewDelegate {
     private enum SectionIdentifier: Int, CaseIterable, Hashable {
         case overview
         case request
@@ -34,7 +35,31 @@ final class V2_NetworkEntryDetailViewController: UICollectionViewController {
     private let inspector: WINetworkModel
     private let observationScope = ObservationScope()
     private let selectedEntryObservationScope = ObservationScope()
+    private let bodyViewController = V2_NetworkBodyViewController()
+    private lazy var modeMenu = V2_NetworkEntryDetailModeMenu(
+        detailViewController: self,
+        inspector: inspector
+    )
+    private lazy var collectionView: UICollectionView = {
+        let collectionView = UICollectionView(frame: .zero, collectionViewLayout: Self.makeListLayout())
+        collectionView.translatesAutoresizingMaskIntoConstraints = false
+        collectionView.backgroundColor = .clear
+        collectionView.alwaysBounceVertical = true
+        collectionView.accessibilityIdentifier = "V2.Network.Detail"
+        collectionView.delegate = self
+        collectionView.isHidden = true
+        return collectionView
+    }()
     private lazy var dataSource = makeDataSource()
+    fileprivate var mode: V2_NetworkEntryDetailMode = .overview {
+        didSet {
+            guard mode != oldValue else {
+                return
+            }
+            renderCurrentMode(reloadData: mode == .overview)
+            modeMenu.render()
+        }
+    }
 
     private var selectedEntry: NetworkEntry? {
         inspector.selectedEntry
@@ -42,7 +67,7 @@ final class V2_NetworkEntryDetailViewController: UICollectionViewController {
 
     init(inspector: WINetworkModel) {
         self.inspector = inspector
-        super.init(collectionViewLayout: Self.makeListLayout())
+        super.init(nibName: nil, bundle: nil)
 
         inspector.observe(\.selectedEntry) { [weak self] selectedEntry in
             self?.display(selectedEntry, reloadData: true)
@@ -63,14 +88,48 @@ final class V2_NetworkEntryDetailViewController: UICollectionViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .clear
-        collectionView.backgroundColor = .clear
-        collectionView.alwaysBounceVertical = true
-        collectionView.accessibilityIdentifier = "V2.Network.Detail"
+        configureNavigationItem()
+        installCollectionView()
+        installBodyViewController()
         display(inspector.selectedEntry, reloadData: true)
     }
 
-    override func collectionView(_ collectionView: UICollectionView, shouldSelectItemAt indexPath: IndexPath) -> Bool {
+    func collectionView(_ collectionView: UICollectionView, shouldSelectItemAt indexPath: IndexPath) -> Bool {
         false
+    }
+
+    private func configureNavigationItem() {
+        navigationItem.trailingItemGroups = [
+            UIBarButtonItemGroup(
+                barButtonItems: [modeMenu.makeCompactItem()],
+                representativeItem: nil
+            )
+        ]
+    }
+
+    private func installCollectionView() {
+        view.addSubview(collectionView)
+        NSLayoutConstraint.activate([
+            collectionView.topAnchor.constraint(equalTo: view.topAnchor),
+            collectionView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            collectionView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            collectionView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+    }
+
+    private func installBodyViewController() {
+        addChild(bodyViewController)
+        bodyViewController.view.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(bodyViewController.view)
+        let safeArea = view.safeAreaLayoutGuide
+        NSLayoutConstraint.activate([
+            bodyViewController.view.topAnchor.constraint(equalTo: view.topAnchor),
+            bodyViewController.view.leadingAnchor.constraint(equalTo: safeArea.leadingAnchor),
+            bodyViewController.view.trailingAnchor.constraint(equalTo: safeArea.trailingAnchor),
+            bodyViewController.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+        bodyViewController.didMove(toParent: self)
+        bodyViewController.view.isHidden = true
     }
 
     private static func makeListLayout() -> UICollectionViewLayout {
@@ -155,10 +214,11 @@ final class V2_NetworkEntryDetailViewController: UICollectionViewController {
         guard isViewLoaded else {
             return
         }
-
         guard let entry else {
             selectedEntryObservationScope.update {}
             collectionView.isHidden = true
+            bodyViewController.view.isHidden = true
+            bodyViewController.display(entry: nil, body: nil, role: .response)
             var configuration = UIContentUnavailableConfiguration.empty()
             configuration.text = wiLocalized("network.empty.selection.title", default: "No request selected")
             configuration.secondaryText = wiLocalized(
@@ -171,23 +231,18 @@ final class V2_NetworkEntryDetailViewController: UICollectionViewController {
             return
         }
 
-        collectionView.isHidden = false
         contentUnavailableConfiguration = nil
-        if reloadData {
-            applySnapshotUsingReloadData()
-        } else {
-            applySnapshot()
-        }
         startObserving(entry)
+        renderCurrentMode(reloadData: reloadData)
     }
 
     private func startObserving(_ entry: NetworkEntry) {
         selectedEntryObservationScope.update {
-            entry.observe([\.requestHeaders, \.responseHeaders]) { [weak self, weak entry] in
+            entry.observe([\.requestHeaders, \.responseHeaders, \.requestBody, \.responseBody]) { [weak self, weak entry] in
                 guard let self, let entry, self.selectedEntry?.id == entry.id else {
                     return
                 }
-                self.applySnapshot()
+                self.renderCurrentMode(reloadData: false)
             }
             .store(in: selectedEntryObservationScope)
 
@@ -198,6 +253,51 @@ final class V2_NetworkEntryDetailViewController: UICollectionViewController {
                 self.title = entry.displayName
             }
             .store(in: selectedEntryObservationScope)
+        }
+    }
+
+    private func renderCurrentMode(reloadData: Bool) {
+        guard isViewLoaded else {
+            return
+        }
+        guard let selectedEntry else {
+            return
+        }
+
+        switch mode {
+        case .overview:
+            bodyViewController.display(entry: nil, body: nil, role: .response)
+            bodyViewController.view.isHidden = true
+            collectionView.isHidden = false
+            if reloadData {
+                applySnapshotUsingReloadData()
+            } else {
+                applySnapshot()
+            }
+        case .requestBody, .responseBody:
+            collectionView.isHidden = true
+            bodyViewController.view.isHidden = false
+            guard let role = mode.bodyRole else {
+                return
+            }
+            bodyViewController.display(
+                entry: selectedEntry,
+                body: body(in: selectedEntry, for: role),
+                role: role
+            )
+        }
+    }
+
+    func makeRegularModeItem() -> UIBarButtonItem {
+        modeMenu.makeRegularItem()
+    }
+
+    private func body(in entry: NetworkEntry, for role: NetworkBody.Role) -> NetworkBody? {
+        switch role {
+        case .request:
+            entry.requestBody
+        case .response:
+            entry.responseBody
         }
     }
 
@@ -271,10 +371,186 @@ final class V2_NetworkEntryDetailViewController: UICollectionViewController {
     }
 }
 
+@MainActor
+private final class V2_NetworkEntryDetailModeMenu {
+    private weak var detailViewController: V2_NetworkEntryDetailViewController?
+    private let inspector: WINetworkModel
+    private let observationScope = ObservationScope()
+    private let selectedEntryObservationScope = ObservationScope()
+    private var compactItem: UIBarButtonItem?
+    private var regularItem: UIBarButtonItem?
+
+    init(detailViewController: V2_NetworkEntryDetailViewController, inspector: WINetworkModel) {
+        self.detailViewController = detailViewController
+        self.inspector = inspector
+
+        inspector.observe(\.selectedEntry) { [weak self] entry in
+            self?.observeBodyAvailability(in: entry)
+            self?.render()
+        }
+        .store(in: observationScope)
+    }
+
+    isolated deinit {
+        observationScope.cancelAll()
+        selectedEntryObservationScope.cancelAll()
+    }
+
+    private func observeBodyAvailability(in entry: NetworkEntry?) {
+        selectedEntryObservationScope.update {
+            guard let entry else {
+                return
+            }
+            entry.observe([\.requestBody, \.responseBody]) { [weak self, weak entry] in
+                guard let self, let entry, self.inspector.selectedEntry?.id == entry.id else {
+                    return
+                }
+                self.render()
+            }
+            .store(in: selectedEntryObservationScope)
+        }
+    }
+
+    fileprivate func render() {
+        let mode = detailViewController?.mode ?? .overview
+        let selectedEntry = inspector.selectedEntry
+        let isEnabled = selectedEntry != nil
+
+        if let compactItem {
+            compactItem.image = UIImage(systemName: mode.systemImageName)
+            compactItem.title = nil
+            compactItem.isEnabled = isEnabled
+            compactItem.menu = makeMenu(includesImages: true)
+            compactItem.accessibilityLabel = mode.title
+            compactItem.preferredMenuElementOrder = .fixed
+        }
+
+        if let regularItem {
+            regularItem.isEnabled = isEnabled
+            regularItem.accessibilityLabel = mode.title
+            regularItem.preferredMenuElementOrder = .fixed
+
+            if let button = regularItem.customView as? UIButton {
+                var configuration = button.configuration ?? .bordered()
+                configuration.title = mode.title
+                button.configuration = configuration
+                button.menu = makeMenu(includesImages: false)
+                button.isEnabled = isEnabled
+                button.accessibilityLabel = mode.title
+                button.preferredMenuElementOrder = .fixed
+            }
+        }
+    }
+
+    func makeCompactItem() -> UIBarButtonItem {
+        if let compactItem {
+            return compactItem
+        }
+
+        let compactItem = makeCompactBarButtonItem()
+        self.compactItem = compactItem
+        render()
+        return compactItem
+    }
+
+    func makeRegularItem() -> UIBarButtonItem {
+        if let regularItem {
+            return regularItem
+        }
+
+        let regularItem = makeRegularBarButtonItem()
+        self.regularItem = regularItem
+        render()
+        return regularItem
+    }
+
+    func makeMenuForTesting() -> UIMenu {
+        makeMenu(includesImages: true)
+    }
+
+    private func makeCompactBarButtonItem() -> UIBarButtonItem {
+        let item = UIBarButtonItem(
+            image: UIImage(systemName: (detailViewController?.mode ?? .overview).systemImageName),
+            menu: makeMenu(includesImages: true)
+        )
+        item.accessibilityIdentifier = "V2.Network.DetailModeButton"
+        item.preferredMenuElementOrder = .fixed
+        return item
+    }
+
+    private func makeRegularBarButtonItem() -> UIBarButtonItem {
+        let item = UIBarButtonItem(customView: makeRegularModeButton())
+        item.accessibilityIdentifier = "V2.Network.DetailModeButton.Regular"
+        item.preferredMenuElementOrder = .fixed
+        return item
+    }
+
+    private func makeRegularModeButton() -> UIButton {
+        let button = UIButton(type: .system)
+        var configuration = UIButton.Configuration.bordered()
+        configuration.title = (detailViewController?.mode ?? .overview).title
+        button.configuration = configuration
+        button.showsMenuAsPrimaryAction = true
+        button.changesSelectionAsPrimaryAction = true
+        button.preferredMenuElementOrder = .fixed
+        button.menu = makeMenu(includesImages: false)
+        button.accessibilityIdentifier = "V2.Network.DetailModeButton.Regular.Button"
+        button.setContentCompressionResistancePriority(.required, for: .horizontal)
+        return button
+    }
+
+    private func makeMenu(includesImages: Bool) -> UIMenu {
+        UIMenu(
+            title: "",
+            options: .singleSelection,
+            children: V2_NetworkEntryDetailMode.allCases.map { mode in
+                UIAction(
+                    title: mode.title,
+                    image: includesImages ? UIImage(systemName: mode.systemImageName) : nil,
+                    attributes: isModeEnabled(mode) ? [] : [.disabled],
+                    state: detailViewController?.mode == mode ? .on : .off
+                ) { [weak detailViewController] _ in
+                    detailViewController?.mode = mode
+                }
+            }
+        )
+    }
+
+    private func isModeEnabled(_ mode: V2_NetworkEntryDetailMode) -> Bool {
+        guard let selectedEntry = inspector.selectedEntry else {
+            return mode == .overview
+        }
+        switch mode {
+        case .overview:
+            return true
+        case .requestBody:
+            return selectedEntry.requestBody != nil
+        case .responseBody:
+            return selectedEntry.responseBody != nil
+        }
+    }
+}
+
 #if DEBUG
 extension V2_NetworkEntryDetailViewController {
     var collectionViewForTesting: UICollectionView {
         collectionView
+    }
+
+    var currentModeForTesting: V2_NetworkEntryDetailMode {
+        mode
+    }
+
+    var modeMenuForTesting: UIMenu {
+        modeMenu.makeMenuForTesting()
+    }
+
+    var bodyTextViewForTesting: SyntaxEditorView {
+        bodyViewController.syntaxViewForTesting
+    }
+
+    func setModeForTesting(_ mode: V2_NetworkEntryDetailMode) {
+        self.mode = mode
     }
 }
 #endif

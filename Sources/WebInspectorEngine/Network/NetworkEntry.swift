@@ -111,6 +111,15 @@ public final class NetworkEntry: Identifiable, Equatable, Hashable {
         }
     }
 
+    package enum BodySyntaxKind: Hashable, Sendable {
+        case plainText
+        case json
+        case html
+        case xml
+        case css
+        case javascript
+    }
+
     public struct WebSocket: Hashable, Sendable {
         public enum ReadyState: String, Sendable {
             case connecting
@@ -1020,6 +1029,57 @@ public final class NetworkEntry: Identifiable, Equatable, Hashable {
         return .other
     }
 
+    package func bodyContentType(for role: NetworkBody.Role) -> String? {
+        switch role {
+        case .request:
+            requestHeaders["content-type"]
+        case .response:
+            responseHeaders["content-type"] ?? mimeType
+        }
+    }
+
+    package func isURLEncodedFormBody(for role: NetworkBody.Role) -> Bool {
+        Self.isURLEncodedFormContentType(bodyContentType(for: role))
+    }
+
+    package func bodySyntaxKind(for role: NetworkBody.Role) -> BodySyntaxKind {
+        Self.bodySyntaxKind(
+            contentType: bodyContentType(for: role),
+            url: url
+        )
+    }
+
+    package static func bodySyntaxKind(
+        contentType: String?,
+        url: String
+    ) -> BodySyntaxKind {
+        let normalizedContentType = normalizedMimeType(contentType)
+        let pathExtension = normalizedPathExtension(url)
+
+        if isJSONContentType(normalizedContentType) || pathExtension == "json" {
+            return .json
+        }
+        if documentMimeTypes.contains(normalizedContentType)
+            || documentExtensions.contains(pathExtension) {
+            return .html
+        }
+        if isXMLContentType(normalizedContentType) || pathExtension == "xml" {
+            return .xml
+        }
+        if normalizedContentType == "text/css" || pathExtension == "css" {
+            return .css
+        }
+        if scriptMimeTokens.contains(where: { normalizedContentType.contains($0) })
+            || scriptExtensions.contains(pathExtension) {
+            return .javascript
+        }
+        return .plainText
+    }
+
+    package static func isURLEncodedFormContentType(_ contentType: String?) -> Bool {
+        normalizedMimeType(contentType) == "application/x-www-form-urlencoded"
+    }
+
     func applyWebSocketHandshakeRequest(headers: NetworkHeaders) {
         if !headers.isEmpty {
             requestHeaders = headers
@@ -1119,11 +1179,19 @@ extension NetworkEntry {
     ]
     fileprivate static let fontExtensions: Set<String> = ["woff", "woff2", "ttf", "otf", "eot"]
 
+    fileprivate static func isJSONContentType(_ contentType: String) -> Bool {
+        contentType == "application/json" || contentType.hasSuffix("+json")
+    }
+
+    fileprivate static func isXMLContentType(_ contentType: String) -> Bool {
+        contentType == "application/xml" || contentType == "text/xml" || contentType.hasSuffix("+xml")
+    }
+
     fileprivate static func normalizedMimeType(_ mimeType: String?) -> String {
         guard let mimeType, mimeType.isEmpty == false else { return "" }
         let trimmed = mimeType.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: true)
             .first ?? ""
-        return trimmed.lowercased()
+        return trimmed.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
     fileprivate static func normalizedPathExtension(_ url: String) -> String {
