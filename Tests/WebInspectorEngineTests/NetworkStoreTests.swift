@@ -5,6 +5,35 @@ import WebInspectorTestSupport
 @MainActor
 struct NetworkStoreTests {
     @Test
+    func bodySyntaxKindUsesContentTypeAndURL() {
+        #expect(
+            NetworkEntry.bodySyntaxKind(
+                contentType: "application/problem+json; charset=utf-8",
+                url: "https://example.com/error"
+            ) == .json
+        )
+        #expect(
+            NetworkEntry.bodySyntaxKind(
+                contentType: nil,
+                url: "https://example.com/assets/app.mjs"
+            ) == .javascript
+        )
+        #expect(
+            NetworkEntry.bodySyntaxKind(
+                contentType: "application/xhtml+xml",
+                url: "https://example.com/page"
+            ) == .html
+        )
+        #expect(
+            NetworkEntry.bodySyntaxKind(
+                contentType: "application/atom+xml",
+                url: "https://example.com/feed"
+            ) == .xml
+        )
+        #expect(NetworkEntry.isURLEncodedFormContentType("application/x-www-form-urlencoded; charset=UTF-8"))
+    }
+
+    @Test
     func keepsEntriesScopedBySessionAndRequestId() throws {
         let store = NetworkStore()
 
