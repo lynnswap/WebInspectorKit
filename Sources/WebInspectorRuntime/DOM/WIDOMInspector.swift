@@ -850,7 +850,6 @@ public final class WIDOMInspector {
         }
     }
 
-#if DEBUG
     @_spi(Monocly) public func currentDocumentURLForDiagnostics() -> String? {
         currentContext?.documentURL
     }
@@ -885,6 +884,7 @@ public final class WIDOMInspector {
         lastSelectionDiagnosticMessage
     }
 
+#if DEBUG
     package func resetFreshContextDiagnosticsForTesting() {
         freshContextDiagnosticsForTesting.removeAll(keepingCapacity: false)
     }
@@ -908,12 +908,12 @@ public final class WIDOMInspector {
             verboseConsoleDiagnostics: verboseConsoleDiagnostics
         )
     }
+#endif
 
 #if canImport(UIKit)
     @_spi(Monocly) public func nativeInspectorInteractionStateForDiagnostics() -> String? {
         nativeInspectorInteractionStateSummaryForDiagnostics()
     }
-#endif
 #endif
 
 #if DEBUG
@@ -930,7 +930,6 @@ public final class WIDOMInspector {
     }
 #endif
 
-#if DEBUG
     @_spi(Monocly) public func selectNodeForTesting(cssSelector: String) async throws {
         guard !cssSelector.isEmpty else {
             logSelectionDiagnostics(
@@ -1043,7 +1042,6 @@ public final class WIDOMInspector {
         )
         throw DOMOperationError.invalidSelection
     }
-#endif
 
     public func copySelectedHTML() async throws -> String {
         try await copySelectionImpl(.html)
@@ -5364,7 +5362,6 @@ private extension WIDOMInspector {
         applyRecoverableError(showError ? errorMessage : nil)
     }
 
-#if DEBUG
     func resolveTestingPreviewNode(_ preview: String) -> DOMNodeModel? {
         let normalizedPreview = preview.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedPreview.isEmpty else {
@@ -5553,7 +5550,6 @@ private extension WIDOMInspector {
         }
         return candidates
     }
-#endif
 
     func inspectEventResolutionTargetIdentifier(eventTargetIdentifier: String?) -> String? {
         if let eventTargetIdentifier,

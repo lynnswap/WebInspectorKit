@@ -3,6 +3,7 @@ import XCTest
 
 #if os(iOS)
 import UIKit
+@_spi(Monocly) import WebInspectorRuntime
 @testable import WebInspectorRuntime
 @testable import WebInspectorUI
 
@@ -191,8 +192,8 @@ final class MonoclyLifecycleTests: XCTestCase {
             coordinator.presentWindow(
                 from: fixture.rootViewController,
                 browserStore: fixture.rootViewController.store,
-                inspectorController: fixture.rootViewController.inspectorController,
-                tabs: [.dom(), .network()]
+                inspectorRuntime: fixture.rootViewController.inspectorRuntime,
+                tabs: [.dom, .network]
             )
         )
         XCTAssertEqual(activationCount, 0)
@@ -251,19 +252,17 @@ final class MonoclyLifecycleTests: XCTestCase {
         XCTAssertNil(MonoclyWindowContextStore.shared.currentWindowScene)
         XCTAssertNil(MonoclyWindowContextStore.shared.currentWindow)
         XCTAssertTrue(waitForCondition {
-            rootViewController.inspectorController.lifecycle == .disconnected
+            rootViewController.inspectorRuntime.dom.hasPageWebViewForDiagnostics == false
         })
     }
 
     @MainActor
-    func testMainSceneDelegateRetainsRootUntilDisconnectFinalizationCompletes() throws {
+    func testMainSceneDelegateRetainsRootUntilRuntimeDetachCompletes() throws {
         let sceneDelegate = MonoclyMainSceneDelegate()
         let windowScene = try makeWindowScene()
         let launchConfiguration = BrowserLaunchConfiguration(initialURL: URL(string: "about:blank")!)
         weak var weakRootViewController: BrowserRootViewController?
-        var inspectorController: WIInspectorController?
-        var didEnterDisconnectedCommit = false
-        var resumeDisconnectedCommit: CheckedContinuation<Void, Never>?
+        var inspectorRuntime: WIRuntimeSession?
 
         sceneDelegate.connect(windowScene: windowScene, launchConfiguration: launchConfiguration)
 
@@ -273,29 +272,14 @@ final class MonoclyLifecycleTests: XCTestCase {
         do {
             let rootViewController = try XCTUnwrap(sceneDelegate.rootViewController)
             weakRootViewController = rootViewController
-            inspectorController = rootViewController.inspectorController
-            rootViewController.inspectorController.testRuntimeLifecycleCommitHook = { lifecycle in
-                guard lifecycle == .disconnected else {
-                    return
-                }
-                didEnterDisconnectedCommit = true
-                await withCheckedContinuation { continuation in
-                    resumeDisconnectedCommit = continuation
-                }
-            }
+            inspectorRuntime = rootViewController.inspectorRuntime
 
             sceneDelegate.disconnect(windowScene: windowScene)
         }
 
-        XCTAssertTrue(waitForCondition {
-            didEnterDisconnectedCommit
-        })
         XCTAssertNotNil(weakRootViewController)
-
-        resumeDisconnectedCommit?.resume()
-
         XCTAssertTrue(waitForCondition {
-            inspectorController?.lifecycle == .disconnected
+            inspectorRuntime?.dom.hasPageWebViewForDiagnostics == false
         })
     }
 
@@ -324,8 +308,8 @@ final class MonoclyLifecycleTests: XCTestCase {
             coordinator.presentWindow(
                 from: rootViewController,
                 browserStore: rootViewController.store,
-                inspectorController: rootViewController.inspectorController,
-                tabs: [.dom(), .network()]
+                inspectorRuntime: rootViewController.inspectorRuntime,
+                tabs: [.dom, .network]
             )
         )
 
@@ -339,13 +323,15 @@ final class MonoclyLifecycleTests: XCTestCase {
         XCTAssertNil(mainSceneDelegate.window)
         XCTAssertNil(mainSceneDelegate.rootViewController)
         XCTAssertTrue(waitForCondition {
-            rootViewController.inspectorController.lifecycle == .suspended
+            BrowserInspectorCoordinator.hasInspectorWindow(for: rootViewController.inspectorRuntime)
+                && rootViewController.inspectorRuntime.dom.hasPageWebViewForDiagnostics == false
         })
 
         inspectorSceneDelegate.disconnect(windowScene: windowScene)
 
         XCTAssertTrue(waitForCondition {
-            rootViewController.inspectorController.lifecycle == .disconnected
+            BrowserInspectorCoordinator.hasInspectorWindow(for: rootViewController.inspectorRuntime) == false
+                && rootViewController.inspectorRuntime.dom.hasPageWebViewForDiagnostics == false
         })
     }
 
@@ -374,8 +360,8 @@ final class MonoclyLifecycleTests: XCTestCase {
             coordinator.presentWindow(
                 from: firstRootViewController,
                 browserStore: firstRootViewController.store,
-                inspectorController: firstRootViewController.inspectorController,
-                tabs: [.dom(), .network()]
+                inspectorRuntime: firstRootViewController.inspectorRuntime,
+                tabs: [.dom, .network]
             )
         )
 
@@ -409,8 +395,8 @@ final class MonoclyLifecycleTests: XCTestCase {
             coordinator.presentWindow(
                 from: fixture.rootViewController,
                 browserStore: fixture.rootViewController.store,
-                inspectorController: fixture.rootViewController.inspectorController,
-                tabs: [.dom(), .network()]
+                inspectorRuntime: fixture.rootViewController.inspectorRuntime,
+                tabs: [.dom, .network]
             )
         )
         XCTAssertTrue(coordinator.hasInspectorWindowForTesting)
@@ -466,8 +452,8 @@ final class MonoclyLifecycleTests: XCTestCase {
             coordinator.presentWindow(
                 from: fixture.rootViewController,
                 browserStore: fixture.rootViewController.store,
-                inspectorController: fixture.rootViewController.inspectorController,
-                tabs: [.dom(), .network()]
+                inspectorRuntime: fixture.rootViewController.inspectorRuntime,
+                tabs: [.dom, .network]
             )
         )
 
@@ -480,8 +466,8 @@ final class MonoclyLifecycleTests: XCTestCase {
             coordinator.presentWindow(
                 from: fixture.rootViewController,
                 browserStore: fixture.rootViewController.store,
-                inspectorController: fixture.rootViewController.inspectorController,
-                tabs: [.dom(), .network()]
+                inspectorRuntime: fixture.rootViewController.inspectorRuntime,
+                tabs: [.dom, .network]
             )
         )
         XCTAssertTrue(coordinator.hasInspectorWindowForTesting)
@@ -556,8 +542,8 @@ final class MonoclyLifecycleTests: XCTestCase {
             coordinator.presentWindow(
                 from: fixture.rootViewController,
                 browserStore: fixture.rootViewController.store,
-                inspectorController: fixture.rootViewController.inspectorController,
-                tabs: [.dom(), .network()]
+                inspectorRuntime: fixture.rootViewController.inspectorRuntime,
+                tabs: [.dom, .network]
             )
         )
 
@@ -770,8 +756,8 @@ final class MonoclyLifecycleTests: XCTestCase {
             BrowserInspectorCoordinator.present(
                 from: firstWindow,
                 browserStore: firstRootViewController.store,
-                inspectorController: firstRootViewController.inspectorController,
-                tabs: [.dom(), .network()]
+                inspectorRuntime: firstRootViewController.inspectorRuntime,
+                tabs: [.dom, .network]
             )
         )
 
@@ -812,8 +798,8 @@ final class MonoclyLifecycleTests: XCTestCase {
             BrowserInspectorCoordinator.present(
                 from: firstWindow,
                 browserStore: firstRootViewController.store,
-                inspectorController: firstRootViewController.inspectorController,
-                tabs: [.dom(), .network()]
+                inspectorRuntime: firstRootViewController.inspectorRuntime,
+                tabs: [.dom, .network]
             )
         )
 
@@ -828,8 +814,8 @@ final class MonoclyLifecycleTests: XCTestCase {
             BrowserInspectorCoordinator.present(
                 from: secondWindow,
                 browserStore: secondRootViewController.store,
-                inspectorController: secondRootViewController.inspectorController,
-                tabs: [.dom(), .network()]
+                inspectorRuntime: secondRootViewController.inspectorRuntime,
+                tabs: [.dom, .network]
             )
         )
         RunLoop.main.run(until: Date().addingTimeInterval(0.1))
@@ -869,8 +855,8 @@ final class MonoclyLifecycleTests: XCTestCase {
             BrowserInspectorCoordinator.present(
                 from: secondaryWindow,
                 browserStore: secondaryRootViewController.store,
-                inspectorController: secondaryRootViewController.inspectorController,
-                tabs: [.dom(), .network()]
+                inspectorRuntime: secondaryRootViewController.inspectorRuntime,
+                tabs: [.dom, .network]
             )
         )
 
@@ -928,8 +914,8 @@ final class MonoclyLifecycleTests: XCTestCase {
             BrowserInspectorCoordinator.present(
                 from: mainWindow,
                 browserStore: firstRootViewController.store,
-                inspectorController: firstRootViewController.inspectorController,
-                tabs: [.dom(), .network()]
+                inspectorRuntime: firstRootViewController.inspectorRuntime,
+                tabs: [.dom, .network]
             )
         )
 
@@ -962,8 +948,8 @@ final class MonoclyLifecycleTests: XCTestCase {
             BrowserInspectorCoordinator.present(
                 from: mainWindow,
                 browserStore: firstRootViewController.store,
-                inspectorController: firstRootViewController.inspectorController,
-                tabs: [.dom(), .network()]
+                inspectorRuntime: firstRootViewController.inspectorRuntime,
+                tabs: [.dom, .network]
             )
         )
 
@@ -997,8 +983,8 @@ final class MonoclyLifecycleTests: XCTestCase {
             BrowserInspectorCoordinator.present(
                 from: mainWindow,
                 browserStore: firstRootViewController.store,
-                inspectorController: firstRootViewController.inspectorController,
-                tabs: [.dom(), .network()]
+                inspectorRuntime: firstRootViewController.inspectorRuntime,
+                tabs: [.dom, .network]
             )
         )
 
@@ -1015,7 +1001,7 @@ final class MonoclyLifecycleTests: XCTestCase {
 
         let reopenedRootViewController = try XCTUnwrap(mainWindow.contentViewController as? BrowserRootViewController)
         XCTAssertFalse(firstRootViewController.store === reopenedRootViewController.store)
-        XCTAssertFalse(firstRootViewController.inspectorController === reopenedRootViewController.inspectorController)
+        XCTAssertFalse(firstRootViewController.inspectorRuntime === reopenedRootViewController.inspectorRuntime)
     }
 }
 #endif

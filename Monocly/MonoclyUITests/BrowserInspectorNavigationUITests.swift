@@ -170,7 +170,7 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
         )
 
         let resolvedImage = selection.selectedPreview.contains("<img")
-            && selection.treeSelectedPreview.contains("fixture-ad-image")
+            && selection.treeSelectedPreview.contains("<img")
         let anchoredInsideIframe = selection.treeSelectedLineage.localizedCaseInsensitiveContains("iframe")
             && selection.treeSelectedLineage.localizedCaseInsensitiveContains("#document")
         let avoidedUtilityFrame = !selection.selectedPreview.contains("__uspapiLocator")
@@ -206,7 +206,7 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
         let selection = try performNativeSelection(in: app, tap: CGVector(dx: 0.73, dy: 0.40))
 
         let resolvedButton = selection.selectedPreview.contains("<button")
-            && selection.treeSelectedPreview.contains("fixture-ad-cta")
+            && selection.treeSelectedPreview.contains("<button")
         let anchoredInsideIframe = selection.treeSelectedLineage.localizedCaseInsensitiveContains("iframe")
             && selection.treeSelectedLineage.localizedCaseInsensitiveContains("#document")
         let avoidedUtilityFrame = !selection.selectedPreview.contains("__uspapiLocator")

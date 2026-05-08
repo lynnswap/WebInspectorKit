@@ -5,11 +5,11 @@ import WebInspectorKit
 @MainActor
 final class BrowserInspectorWindowHostingController: UIViewController {
     private struct AppliedInspectorContext: Equatable {
-        let inspectorControllerID: ObjectIdentifier
+        let inspectorRuntimeID: ObjectIdentifier
         let browserStoreID: ObjectIdentifier
     }
 
-    private var inspectorContainer: V2_WIViewController?
+    private var inspectorContainer: WIViewController?
     private let placeholderLabel = UILabel()
     private var lastAppliedContext: AppliedInspectorContext?
 
@@ -20,10 +20,6 @@ final class BrowserInspectorWindowHostingController: UIViewController {
         placeholderLabel.textColor = .secondaryLabel
         placeholderLabel.translatesAutoresizingMaskIntoConstraints = false
         updateInspectorContext()
-    }
-
-    isolated deinit {
-        inspectorContainer?.detachFromMonoclyBrowser()
     }
 
     override func viewDidDisappear(_ animated: Bool) {
@@ -43,7 +39,7 @@ final class BrowserInspectorWindowHostingController: UIViewController {
         }
 
         let appliedContext = AppliedInspectorContext(
-            inspectorControllerID: ObjectIdentifier(inspectorContext.inspectorController),
+            inspectorRuntimeID: ObjectIdentifier(inspectorContext.inspectorRuntime),
             browserStoreID: ObjectIdentifier(inspectorContext.browserStore)
         )
 
@@ -54,7 +50,12 @@ final class BrowserInspectorWindowHostingController: UIViewController {
         removeInspectorContainerIfNeeded()
 
         placeholderLabel.removeFromSuperview()
-        let container = V2_WIViewController(tabs: inspectorContext.tabs)
+        let container = WIViewController(
+            session: WISession(
+                runtime: inspectorContext.inspectorRuntime,
+                tabs: inspectorContext.tabs
+            )
+        )
         addChild(container)
         container.view.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(container.view)
@@ -65,7 +66,6 @@ final class BrowserInspectorWindowHostingController: UIViewController {
             container.view.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
         container.didMove(toParent: self)
-        container.attachToMonoclyBrowser(inspectorContext.browserStore)
         inspectorContainer = container
         lastAppliedContext = appliedContext
     }
@@ -74,7 +74,6 @@ final class BrowserInspectorWindowHostingController: UIViewController {
         guard let inspectorContainer else {
             return
         }
-        inspectorContainer.detachFromMonoclyBrowser()
         inspectorContainer.willMove(toParent: nil)
         inspectorContainer.view.removeFromSuperview()
         inspectorContainer.removeFromParent()

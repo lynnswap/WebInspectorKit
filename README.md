@@ -8,7 +8,7 @@ Web Inspector for `WKWebView` (iOS / macOS).
 
 ## Products
 
-- `WebInspectorKit`: V2 UIKit container UI, `V2_WITab`-based tab composition, Observation state
+- `WebInspectorKit`: UIKit container UI, `WITab`-based tab composition, Observation state
 - `WebInspectorEngine`: DOM/Network engines, runtime actors, bundled inspector scripts
 
 `WebInspectorKit` depends on `WebInspectorEngine`.
@@ -17,8 +17,8 @@ Web Inspector for `WKWebView` (iOS / macOS).
 
 - DOM tree browsing (element picking, highlights, deletion, attribute editing)
 - Network request logging (fetch/XHR/WebSocket) with buffering/active mode switching
-- Configurable V2 tabs via `V2_WITab`
-- Explicit V2 lifecycle via `V2_WISession` / `V2_WIViewController` (`attach(to:)`, `detach()`)
+- Configurable tabs via `WITab`
+- Explicit lifecycle via `WISession` / `WIViewController` (`attach(to:)`, `detach()`)
 - Dependency injection via `WIInspectorDependencies`
 
 ## Requirements
@@ -40,7 +40,7 @@ final class BrowserViewController: UIViewController {
     private let pageWebView = WKWebView(frame: .zero)
 
     @objc private func presentInspector() {
-        let inspector = V2_WIViewController()
+        let inspector = WIViewController()
         inspector.modalPresentationStyle = .pageSheet
         if let sheet = inspector.sheetPresentationController {
             sheet.detents = [.medium(), .large()]
@@ -54,40 +54,10 @@ final class BrowserViewController: UIViewController {
 }
 ```
 
-### AppKit
-
-V2 UI is currently UIKit-only. The AppKit `WIInspectorController` / `WITabViewController`
-entry point remains for compatibility, but is not the recommended architecture path and is
-scheduled to be removed after V2 stabilization.
-
-```swift
-import AppKit
-import WebKit
-import WebInspectorKit
-
-final class BrowserWindowController: NSWindowController {
-    let pageWebView = WKWebView(frame: .zero)
-    let inspector = WIInspectorController()
-
-    @objc func presentInspector() {
-        let container = WITabViewController(
-            inspector,
-            webView: pageWebView,
-            tabs: [.dom(), .network()]
-        )
-        let inspectorWindow = NSWindow(contentViewController: container)
-        inspectorWindow.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-        inspectorWindow.title = "Web Inspector"
-        inspectorWindow.setContentSize(NSSize(width: 960, height: 720))
-        inspectorWindow.makeKeyAndOrderFront(nil)
-    }
-}
-```
-
 ## Custom Tab
 
 ```swift
-let customTab = V2_WITab.custom(
+let customTab = WITab.custom(
     id: "my_custom_tab",
     title: "Custom",
     systemImage: "folder"
@@ -96,7 +66,7 @@ let customTab = V2_WITab.custom(
     return UIViewController()
 }
 
-let inspector = V2_WIViewController(
+let inspector = WIViewController(
     tabs: [.dom, .network, customTab]
 )
 ```
@@ -113,7 +83,7 @@ let dependencies = WIInspectorDependencies.testing {
     )
 }
 
-let inspector = V2_WIViewController(
+let inspector = WIViewController(
     configuration: WIModelConfiguration(),
     dependencies: dependencies,
     tabs: [.dom, .network]

@@ -723,6 +723,7 @@
       }
     },
     "dom.element.attributes.empty" : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -2730,6 +2731,7 @@
     },
     "inspector.tab.dom" : {
       "comment" : "Tab title that displays the DOM inspector.",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -2873,6 +2875,7 @@
     },
     "inspector.tab.element" : {
       "comment" : "Tab title for the selected DOM element.",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -3016,6 +3019,7 @@
     },
     "inspector.tab.network" : {
       "comment" : "Tab title for the network inspector.",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -7062,6 +7066,7 @@
     },
     "network.section.error" : {
       "comment" : "Section title for a network request error.",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {

@@ -6,46 +6,26 @@ import WebKit
 @Suite(.serialized)
 struct ControllerActivationTests {
     @Test
-    func connectWithDOMTabAttachesDOMOwner() async {
-        let controller = WIInspectorController()
-        controller.setTabs([.dom(), .network()])
+    func attachConnectsDOMRuntimeToPageWebView() async {
+        let runtime = WIRuntimeSession()
         let webView = makeTestWebView()
 
-        await controller.connect(to: webView)
+        await runtime.attach(to: webView)
 
-        #expect(controller.lifecycle == .active)
-        #expect(controller.dom.hasPageWebView == true)
+        #expect(runtime.dom.hasPageWebView == true)
     }
 
     @Test
-    func customTabWithoutDOMDoesNotAttachDOMOwner() async {
-        let controller = WIInspectorController()
-        controller.setTabs([
-            WITab(
-                id: "custom",
-                title: "Custom",
-                systemImage: "star"
-            )
-        ])
-
-        await controller.connect(to: makeTestWebView())
-
-        #expect(controller.dom.hasPageWebView == false)
-    }
-
-    @Test
-    func suspendDetachesDOMOwner() async {
-        let controller = WIInspectorController()
-        controller.setTabs([.dom()])
+    func detachDisconnectsDOMRuntimeFromPageWebView() async {
+        let runtime = WIRuntimeSession()
         let webView = makeTestWebView()
 
-        await controller.connect(to: webView)
-        #expect(controller.dom.hasPageWebView == true)
+        await runtime.attach(to: webView)
+        #expect(runtime.dom.hasPageWebView == true)
 
-        await controller.suspend()
+        await runtime.detach()
 
-        #expect(controller.lifecycle == .suspended)
-        #expect(controller.dom.hasPageWebView == false)
+        #expect(runtime.dom.hasPageWebView == false)
     }
 }
 
