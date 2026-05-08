@@ -218,11 +218,7 @@ final class V2_NetworkEntryDetailViewController: UIViewController, UICollectionV
             selectedEntryObservationScope.update {}
             collectionView.isHidden = true
             bodyViewController.view.isHidden = true
-            bodyViewController.display(
-                body: nil,
-                syntaxKind: .plainText,
-                isURLEncodedForm: false
-            )
+            bodyViewController.display(body: nil)
             var configuration = UIContentUnavailableConfiguration.empty()
             configuration.text = wiLocalized("network.empty.selection.title", default: "No request selected")
             configuration.secondaryText = wiLocalized(
@@ -270,11 +266,7 @@ final class V2_NetworkEntryDetailViewController: UIViewController, UICollectionV
 
         switch mode {
         case .overview:
-            bodyViewController.display(
-                body: nil,
-                syntaxKind: .plainText,
-                isURLEncodedForm: false
-            )
+            bodyViewController.display(body: nil)
             bodyViewController.view.isHidden = true
             collectionView.isHidden = false
             if reloadData {
@@ -288,11 +280,7 @@ final class V2_NetworkEntryDetailViewController: UIViewController, UICollectionV
             guard let role = mode.bodyRole else {
                 return
             }
-            bodyViewController.display(
-                body: body(in: selectedEntry, for: role),
-                syntaxKind: selectedEntry.bodySyntaxKind(for: role),
-                isURLEncodedForm: selectedEntry.isURLEncodedFormBody(for: role)
-            )
+            bodyViewController.display(body: body(in: selectedEntry, for: role))
         }
     }
 

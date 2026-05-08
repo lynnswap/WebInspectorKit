@@ -111,15 +111,6 @@ public final class NetworkEntry: Identifiable, Equatable, Hashable {
         }
     }
 
-    package enum BodySyntaxKind: Hashable, Sendable {
-        case plainText
-        case json
-        case html
-        case xml
-        case css
-        case javascript
-    }
-
     public struct WebSocket: Hashable, Sendable {
         public enum ReadyState: String, Sendable {
             case connecting
@@ -426,15 +417,31 @@ public final class NetworkEntry: Identifiable, Equatable, Hashable {
     nonisolated public let requestID: Int
     nonisolated public let createdAt: Date
 
-    public internal(set) var url: String
+    public internal(set) var url: String {
+        didSet {
+            refreshBodyTextRepresentationHints()
+        }
+    }
     public internal(set) var method: String
     public internal(set) var statusCode: Int?
     public internal(set) var statusText: String
-    public internal(set) var mimeType: String?
+    public internal(set) var mimeType: String? {
+        didSet {
+            refreshResponseBodyTextRepresentationHints()
+        }
+    }
     public internal(set) var fileTypeLabel: String
     public internal(set) var resourceFilter: NetworkResourceFilter
-    public internal(set) var requestHeaders: NetworkHeaders
-    public internal(set) var responseHeaders: NetworkHeaders
+    public internal(set) var requestHeaders: NetworkHeaders {
+        didSet {
+            refreshRequestBodyTextRepresentationHints()
+        }
+    }
+    public internal(set) var responseHeaders: NetworkHeaders {
+        didSet {
+            refreshResponseBodyTextRepresentationHints()
+        }
+    }
     public internal(set) var startTimestamp: TimeInterval
     public internal(set) var endTimestamp: TimeInterval?
     public internal(set) var duration: TimeInterval?
@@ -445,8 +452,16 @@ public final class NetworkEntry: Identifiable, Equatable, Hashable {
     public internal(set) var requestBodyBytesSent: Int?
     public internal(set) var wallTime: TimeInterval?
     public internal(set) var phase: Phase
-    public internal(set) var requestBody: NetworkBody?
-    public internal(set) var responseBody: NetworkBody?
+    public internal(set) var requestBody: NetworkBody? {
+        didSet {
+            configureBody(requestBody, role: .request)
+        }
+    }
+    public internal(set) var responseBody: NetworkBody? {
+        didSet {
+            configureBody(responseBody, role: .response)
+        }
+    }
     public internal(set) var webSocket: WebSocket?
 
     public var kind: Kind {
@@ -551,9 +566,7 @@ public final class NetworkEntry: Identifiable, Equatable, Hashable {
         requestType = snapshot.request.type
         requestBodyBytesSent = snapshot.request.bodyBytesSent ?? snapshot.request.body?.size
         requestBody = snapshot.request.body
-        requestBody?.role = .request
         responseBody = snapshot.response.body
-        responseBody?.role = .response
         phase = snapshot.transfer.phase
         endTimestamp = snapshot.transfer.endTimestamp
         duration = snapshot.transfer.duration
@@ -644,7 +657,6 @@ public final class NetworkEntry: Identifiable, Equatable, Hashable {
         )
         self.requestType = requestType
         self.requestBody = requestBody
-        self.requestBody?.role = .request
         self.requestBodyBytesSent = requestBodyBytesSent ?? requestBody?.size
         refreshFileTypeLabel()
     }
@@ -675,11 +687,10 @@ public final class NetworkEntry: Identifiable, Equatable, Hashable {
             if let existingRequestBody = self.requestBody,
                existingRequestBody.hasDeferredContent,
                requestBody.hasDeferredContent {
-                existingRequestBody.role = .request
+                configureBody(existingRequestBody, role: .request)
                 existingRequestBody.adoptDeferredNetworkRequestTarget(from: requestBody)
             } else {
                 self.requestBody = requestBody
-                self.requestBody?.role = .request
             }
         }
         if let requestBodyBytesSent = requestBodyBytesSent ?? requestBody?.size {
@@ -767,7 +778,6 @@ public final class NetworkEntry: Identifiable, Equatable, Hashable {
         }
         if let responseBody {
             self.responseBody = responseBody
-            self.responseBody?.role = .response
         } else if failed {
             self.responseBody = nil
         }
@@ -1042,7 +1052,7 @@ public final class NetworkEntry: Identifiable, Equatable, Hashable {
         Self.isURLEncodedFormContentType(bodyContentType(for: role))
     }
 
-    package func bodySyntaxKind(for role: NetworkBody.Role) -> BodySyntaxKind {
+    package func bodySyntaxKind(for role: NetworkBody.Role) -> NetworkBodySyntaxKind {
         Self.bodySyntaxKind(
             contentType: bodyContentType(for: role),
             url: url
@@ -1052,7 +1062,7 @@ public final class NetworkEntry: Identifiable, Equatable, Hashable {
     package static func bodySyntaxKind(
         contentType: String?,
         url: String
-    ) -> BodySyntaxKind {
+    ) -> NetworkBodySyntaxKind {
         let normalizedContentType = normalizedMimeType(contentType)
         let pathExtension = normalizedPathExtension(url)
 
@@ -1078,6 +1088,36 @@ public final class NetworkEntry: Identifiable, Equatable, Hashable {
 
     package static func isURLEncodedFormContentType(_ contentType: String?) -> Bool {
         normalizedMimeType(contentType) == "application/x-www-form-urlencoded"
+    }
+
+    private func configureBody(_ body: NetworkBody?, role: NetworkBody.Role) {
+        guard let body else {
+            return
+        }
+        body.role = role
+        body.applyTextRepresentationHints(
+            syntaxKind: bodySyntaxKind(for: role),
+            treatsRawTextAsURLEncodedForm: isURLEncodedFormBody(for: role)
+        )
+    }
+
+    private func refreshBodyTextRepresentationHints() {
+        refreshRequestBodyTextRepresentationHints()
+        refreshResponseBodyTextRepresentationHints()
+    }
+
+    private func refreshRequestBodyTextRepresentationHints() {
+        requestBody?.applyTextRepresentationHints(
+            syntaxKind: bodySyntaxKind(for: .request),
+            treatsRawTextAsURLEncodedForm: isURLEncodedFormBody(for: .request)
+        )
+    }
+
+    private func refreshResponseBodyTextRepresentationHints() {
+        responseBody?.applyTextRepresentationHints(
+            syntaxKind: bodySyntaxKind(for: .response),
+            treatsRawTextAsURLEncodedForm: isURLEncodedFormBody(for: .response)
+        )
     }
 
     func applyWebSocketHandshakeRequest(headers: NetworkHeaders) {
