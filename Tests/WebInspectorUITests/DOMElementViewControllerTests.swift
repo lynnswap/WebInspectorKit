@@ -170,6 +170,33 @@ struct DOMElementViewControllerTests {
         #expect(selectorUpdated)
     }
 
+    @Test
+    func elementViewInsertsSelectorSectionWhenSelectorPathResolvesAfterSelection() async throws {
+        let runtime = WIDOMRuntime()
+        seedSelectedNode(
+            into: runtime,
+            selectorPath: "",
+            attributes: [
+                DOMAttribute(name: "id", value: "selected"),
+            ]
+        )
+        let (viewController, window) = makeHostedElementViewController(runtime: runtime)
+        defer { tearDown(window: window) }
+
+        let initialReady = await waitUntil {
+            viewController.renderedSectionIdentifiersForTesting == ["element", "attributes"]
+        }
+        #expect(initialReady)
+
+        runtime.document.selectedNode?.selectorPath = "#after"
+
+        let selectorInserted = await waitUntil {
+            viewController.renderedSectionIdentifiersForTesting == ["element", "selector", "attributes"]
+                && visibleListCellText(in: viewController.collectionView, at: IndexPath(item: 0, section: 1)) == "#after"
+        }
+        #expect(selectorInserted)
+    }
+
     private func seedSelectedNode(
         into runtime: WIDOMRuntime,
         selectorPath: String,

@@ -263,6 +263,9 @@ final class NetworkEntryDetailViewController: UIViewController, UICollectionView
         guard let selectedEntry else {
             return
         }
+        guard resetUnavailableModeIfNeeded(for: selectedEntry) == false else {
+            return
+        }
 
         switch mode {
         case .overview:
@@ -282,6 +285,17 @@ final class NetworkEntryDetailViewController: UIViewController, UICollectionView
             }
             bodyViewController.display(body: body(in: selectedEntry, for: role))
         }
+    }
+
+    private func resetUnavailableModeIfNeeded(for entry: NetworkEntry) -> Bool {
+        guard let role = mode.bodyRole else {
+            return false
+        }
+        guard body(in: entry, for: role) == nil else {
+            return false
+        }
+        mode = .overview
+        return true
     }
 
     func makeRegularModeItem() -> UIBarButtonItem {

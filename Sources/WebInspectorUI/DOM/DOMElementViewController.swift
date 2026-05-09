@@ -186,7 +186,7 @@ final class DOMElementViewController: UICollectionViewController {
             }
             dataSource.applySnapshotUsingReloadData(makeSnapshot(selectedNode: selectedNode))
 
-            observeAttributeSection(of: selectedNode)
+            observeSections(of: selectedNode)
         } else {
             sectionObservationScope.update {}
             if contentUnavailableConfiguration == nil {
@@ -201,10 +201,16 @@ final class DOMElementViewController: UICollectionViewController {
         }
     }
 
-    private func observeAttributeSection(of selectedNode: DOMNodeModel) {
+    private func observeSections(of selectedNode: DOMNodeModel) {
         sectionObservationScope.update {
-            selectedNode.observe(\.attributes) { [weak self, weak selectedNode] _ in
+            selectedNode.observe([\.attributes, \.selectorPath]) { [weak self, weak selectedNode] in
                 guard let self, let selectedNode, self.dom.document.selectedNode === selectedNode else {
+                    return
+                }
+
+                let nextSections = self.sections(for: selectedNode)
+                guard self.dataSource.snapshot().sectionIdentifiers == nextSections else {
+                    self.dataSource.apply(self.makeSnapshot(selectedNode: selectedNode), animatingDifferences: true)
                     return
                 }
 

@@ -350,7 +350,7 @@ struct NetworkEntryDetailViewControllerTests {
     }
 
     @Test
-    func bodyModePersistsAcrossSelectedEntryChanges() async throws {
+    func bodyModeResetsWhenSelectedEntryLacksCurrentBody() async throws {
         let inspector = WINetworkModel(session: NetworkSession())
         let entries = inspector.store.applySnapshots([
             makeSnapshot(
@@ -379,15 +379,16 @@ struct NetworkEntryDetailViewControllerTests {
 
         inspector.selectEntry(secondEntry)
 
-        let didKeepMode = await waitUntil {
-            viewController.currentModeForTesting == .responseBody
+        let didResetMode = await waitUntil {
+            viewController.currentModeForTesting == .overview
                 && viewController.title == "second.json"
-                && viewController.bodyTextViewForTesting.text == wiLocalized(
-                    "network.body.unavailable",
-                    default: "Body unavailable"
-                )
+                && viewController.collectionViewForTesting.isHidden == false
+                && listCellSecondaryText(
+                    in: viewController.collectionViewForTesting,
+                    at: IndexPath(item: 0, section: 0)
+                ) == "https://example.com/second.json"
         }
-        #expect(didKeepMode)
+        #expect(didResetMode)
     }
 
     @Test
