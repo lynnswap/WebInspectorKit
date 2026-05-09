@@ -6104,6 +6104,77 @@ struct WIDOMInspectorTests {
     }
 
     @Test
+    func copyNodeByBackendIDRefreshesDocumentForSelectorWhenMirrorNodeIsMissing() async throws {
+        var getDocumentCount = 0
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, _, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    getDocumentCount += 1
+                    return makeDocumentResult(url: "https://example.com")
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        let webView = makeTestWebView()
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        inspector.document.replaceDocument(
+            with: makeMainDocumentSnapshot(mainChildren: []),
+            isFreshDocument: false
+        )
+        let getDocumentCountBeforeCopy = getDocumentCount
+        let selectorPath = try await inspector.copyNode(nodeId: 5, kind: .selectorPath)
+
+        let refreshedNode = try #require(inspector.document.node(backendNodeID: 5))
+        #expect(refreshedNode.localName == "div")
+        #expect(refreshedNode.attributes.contains { $0.name == "id" && $0.value == "target" })
+        #expect(selectorPath == "#target")
+        #expect(getDocumentCount > getDocumentCountBeforeCopy)
+    }
+
+    @Test
+    func copyNodeByBackendIDRefreshesDocumentForXPathWhenMirrorNodeIsMissing() async throws {
+        var getDocumentCount = 0
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, _, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    getDocumentCount += 1
+                    return makeDocumentResult(url: "https://example.com")
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        let webView = makeTestWebView()
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        inspector.document.replaceDocument(
+            with: makeMainDocumentSnapshot(mainChildren: []),
+            isFreshDocument: false
+        )
+        let getDocumentCountBeforeCopy = getDocumentCount
+        let xpath = try await inspector.copyNode(nodeId: 5, kind: .xpath)
+
+        let refreshedNode = try #require(inspector.document.node(backendNodeID: 5))
+        #expect(refreshedNode.localName == "div")
+        #expect(xpath == "/html/body/main/div")
+        #expect(getDocumentCount > getDocumentCountBeforeCopy)
+    }
+
+    @Test
     func deleteNodeByBackendIDPrefersBackendNodeOverLocalIDCollision() async throws {
         var removedNodeID: Int?
         let backend = FakeDOMTransportBackend(

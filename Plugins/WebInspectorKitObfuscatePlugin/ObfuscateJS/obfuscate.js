@@ -145,15 +145,6 @@ async function bundleEntry(entryPath, esbuild, debugDefine) {
   return result.outputFiles[0].text;
 }
 
-function loadTypeScript() {
-  try {
-    return require("typescript");
-  } catch (err) {
-    console.error("Missing typescript. Run: (cd Plugins/WebInspectorKitObfuscatePlugin/ObfuscateJS && pnpm install)");
-    process.exit(1);
-  }
-}
-
 function loadEsbuild() {
   try {
     return require("esbuild");
@@ -167,39 +158,8 @@ function getScriptName(filePath) {
   return path.basename(filePath, path.extname(filePath));
 }
 
-function replaceDebugDefines(source, debugDefine) {
-  if (!debugDefine) {
-    return source;
-  }
-  return source.replace(/\b__PD_DEBUG__\b/g, debugDefine);
-}
-
 function containsModuleSyntax(source) {
   return /(^|\n)\s*(import|export)\s/m.test(source);
-}
-
-function transpileTypeScript(source, filePath, ts) {
-  const moduleKind = Object.prototype.hasOwnProperty.call(ts.ModuleKind, "ESNext")
-    ? ts.ModuleKind.ESNext
-    : ts.ModuleKind.ES2022;
-  const result = ts.transpileModule(source, {
-    fileName: filePath,
-    compilerOptions: {
-      target: ts.ScriptTarget.ES2024,
-      module: moduleKind
-    }
-  });
-  const diagnostics = result.diagnostics || [];
-  const errors = diagnostics.filter((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error);
-  if (errors.length > 0) {
-    const host = {
-      getCanonicalFileName: (name) => name,
-      getCurrentDirectory: () => process.cwd(),
-      getNewLine: () => "\n"
-    };
-    throw new Error(ts.formatDiagnosticsWithColorAndContext(errors, host));
-  }
-  return result.outputText;
 }
 
 function ensureDirectory(filePath) {
@@ -290,10 +250,10 @@ async function main() {
 
   const scripts = {};
   const entryFiles = collectEntryFiles(inputDir).sort();
-  const entryNames = new Set();
 
   if (entryFiles.length > 0) {
     const esbuild = loadEsbuild();
+    const entryNames = new Set();
     for (const entryPath of entryFiles) {
       const name = getScriptName(entryPath);
       if (entryNames.has(name)) {
@@ -324,46 +284,6 @@ async function main() {
       }
       scripts[name] = result.code;
     }
-  }
-
-  const files = collectScriptFiles(inputDir);
-  const tsFiles = files.filter((filePath) => filePath.endsWith(".ts"));
-  const ts = tsFiles.length > 0 ? loadTypeScript() : null;
-  for (const filePath of files) {
-    const name = getScriptName(filePath);
-    if (entryNames.has(name)) {
-      continue;
-    }
-    if (Object.prototype.hasOwnProperty.call(scripts, name)) {
-      throw new Error(`Duplicate JS module name: ${name}`);
-    }
-    let source = fs.readFileSync(filePath, "utf8");
-    if (filePath.endsWith(".ts")) {
-      if (!ts) {
-        throw new Error("TypeScript not available");
-      }
-      source = transpileTypeScript(source, filePath, ts);
-    }
-    source = replaceDebugDefines(source, debugDefine);
-    if (!shouldObfuscate || exclude.has(name) || containsModuleSyntax(source)) {
-      scripts[name] = source;
-      continue;
-    }
-    const result = await terser.minify(source, {
-      compress: true,
-      mangle: {
-        toplevel: true,
-        reserved: reservedNames,
-      },
-      format: {
-        comments: false,
-      },
-    });
-    if (!result || result.error || !result.code) {
-      const error = result && result.error ? result.error : new Error("Unknown terser failure");
-      throw error;
-    }
-    scripts[name] = result.code;
   }
 
   const inputFingerprint = computeInputFingerprint(inputDir, configPath, __filename);
