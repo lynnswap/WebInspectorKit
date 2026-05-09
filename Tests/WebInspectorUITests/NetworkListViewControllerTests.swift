@@ -265,6 +265,32 @@ struct NetworkListViewControllerTests {
     }
 
     @Test
+    func listCellTitleUpdatesWhenEntryURLChanges() async throws {
+        let inspector = WINetworkModel(session: NetworkSession())
+        let entries = inspector.store.applySnapshots([
+            makeSnapshot(requestID: 1, url: "https://example.com/assets/app.js", mimeType: "text/javascript")
+        ])
+        let entry = try #require(entries.first)
+        let viewController = NetworkListViewController(inspector: inspector)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let collectionView = viewController.collectionViewForTesting
+        let indexPath = IndexPath(item: 0, section: 0)
+        let didRender = await waitUntil {
+            listCellText(in: collectionView, at: indexPath) == "app.js"
+        }
+        #expect(didRender)
+
+        entry.url = "https://example.com/assets/renamed.css"
+
+        let didUpdate = await waitUntil {
+            listCellText(in: collectionView, at: indexPath) == "renamed.css"
+        }
+        #expect(didUpdate)
+    }
+
+    @Test
     func selectingEntryUpdatesNetworkSelection() async throws {
         let inspector = WINetworkModel(session: NetworkSession())
         let entries = inspector.store.applySnapshots([

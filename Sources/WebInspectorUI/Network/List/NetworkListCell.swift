@@ -29,10 +29,11 @@ final class NetworkListCell: UICollectionViewListCell {
         renderAccessories(item: item)
 
         observationScope.update {
-            item.observe([\.fileTypeLabel, \.statusSeverity]) { [weak self, weak item] in
+            item.observe([\.url, \.fileTypeLabel, \.statusSeverity]) { [weak self, weak item] in
                 guard let item else {
                     return
                 }
+                self?.render(displayName: item.displayName)
                 self?.renderAccessories(item: item)
             }
             .store(in: observationScope)
