@@ -243,6 +243,7 @@ public final class NetworkEntry: Identifiable, Equatable, Hashable {
             public let response: Response
             public let requestType: String?
             public let timestamp: TimeInterval
+            public let requestBodyBytesSent: Int?
             public let encodedBodyLength: Int?
             public let decodedBodyLength: Int?
 
@@ -251,6 +252,7 @@ public final class NetworkEntry: Identifiable, Equatable, Hashable {
                 response: Response,
                 requestType: String?,
                 timestamp: TimeInterval,
+                requestBodyBytesSent: Int? = nil,
                 encodedBodyLength: Int?,
                 decodedBodyLength: Int?
             ) {
@@ -258,6 +260,7 @@ public final class NetworkEntry: Identifiable, Equatable, Hashable {
                 self.response = response
                 self.requestType = requestType
                 self.timestamp = timestamp
+                self.requestBodyBytesSent = requestBodyBytesSent
                 self.encodedBodyLength = encodedBodyLength
                 self.decodedBodyLength = decodedBodyLength
             }
@@ -750,6 +753,7 @@ public final class NetworkEntry: Identifiable, Equatable, Hashable {
         decodedBodySize: Int?,
         errorDescription: String?,
         requestType: String?,
+        requestBodyBytesSent: Int?,
         responseBody: NetworkBody?,
         timestamp: TimeInterval,
         failed: Bool
@@ -778,6 +782,9 @@ public final class NetworkEntry: Identifiable, Equatable, Hashable {
         duration = max(0, timestamp - startTimestamp)
         if let requestType {
             self.requestType = requestType
+        }
+        if let requestBodyBytesSent {
+            self.requestBodyBytesSent = requestBodyBytesSent
         }
         if let responseBody {
             self.responseBody = responseBody
@@ -824,6 +831,7 @@ public final class NetworkEntry: Identifiable, Equatable, Hashable {
                 decodedBodySize: value.decodedBodyLength,
                 errorDescription: value.response.errorDescription,
                 requestType: value.requestType,
+                requestBodyBytesSent: value.requestBodyBytesSent,
                 responseBody: value.response.body,
                 timestamp: value.timestamp,
                 failed: false
@@ -837,6 +845,7 @@ public final class NetworkEntry: Identifiable, Equatable, Hashable {
                 decodedBodySize: nil,
                 errorDescription: value.response.errorDescription,
                 requestType: value.requestType,
+                requestBodyBytesSent: nil,
                 responseBody: value.response.body,
                 timestamp: value.timestamp,
                 failed: true
@@ -869,6 +878,7 @@ public final class NetworkEntry: Identifiable, Equatable, Hashable {
                 decodedBodySize: value.decodedBodyLength,
                 errorDescription: value.response.errorDescription,
                 requestType: value.request.type,
+                requestBodyBytesSent: value.request.bodyBytesSent,
                 responseBody: value.response.body,
                 timestamp: value.endTimestamp ?? value.startTimestamp,
                 failed: false

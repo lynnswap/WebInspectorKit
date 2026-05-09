@@ -27,22 +27,17 @@ struct NetworkTransportDriverTests {
     @Test
     func sameWebViewReattachDoesNotReplayBootstrapRows() async {
         let backend = FakeRegistryBackend(
-            capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain, .networkBootstrapSnapshot],
-            pageTargetedResultProvider: { method, _, _ in
-                guard method == WITransportMethod.Network.getBootstrapSnapshot else {
+            pageResultProvider: { method, _ in
+                guard method == WITransportMethod.Page.getResourceTree else {
                     return nil
                 }
-                return makeBootstrapSnapshotResultPayload(
+                return makeResourceTreeResultPayload(
+                    mainURL: "https://example.com/",
                     resources: [
-                        makeBootstrapResourcePayload(
-                            bootstrapRowID: "bootstrap-row",
-                            ownerSessionID: "page-A",
-                            targetIdentifier: "page-A",
+                        makeFrameResourcePayload(
                             url: "https://example.com/bootstrap.js",
-                            method: "UNKNOWN",
-                            requestType: "Script",
-                            mimeType: "text/javascript",
-                            phase: "completed"
+                            type: "Script",
+                            mimeType: "text/javascript"
                         ),
                     ]
                 )
@@ -54,14 +49,14 @@ struct NetworkTransportDriverTests {
         await driver.attachPageWebView(webView)
         await driver.waitForAttachForTesting()
         #expect(await waitForCondition {
-            driver.store.entries.count == 1
+            driver.store.entries.count == 2
         })
 
         await driver.attachPageWebView(webView)
         await driver.waitForAttachForTesting()
 
-        #expect(driver.store.entries.count == 1)
-        #expect(backend.sentPageTargets.filter { $0.method == WITransportMethod.Network.getBootstrapSnapshot }.count == 1)
+        #expect(driver.store.entries.count == 2)
+        #expect(backend.sentPageTargets.filter { $0.method == WITransportMethod.Page.getResourceTree }.count == 1)
 
         await driver.detachPageWebView(preparing: .stopped)
     }
@@ -88,16 +83,8 @@ struct NetworkTransportDriverTests {
     }
 
     @Test
-    func networkTransportDriverFetchesDeferredRequestBodiesFromOwningTarget() async {
-        let backend = FakeRegistryBackend(
-            pageTargetedResultProvider: { method, _, targetIdentifier in
-                guard method == WITransportMethod.Network.getRequestPostData,
-                      targetIdentifier == "page-child" else {
-                    return nil
-                }
-                return ["postData": "targeted=value"]
-            }
-        )
+    func networkTransportDriverDoesNotFetchDeferredRequestBodies() async {
+        let backend = FakeRegistryBackend()
         let driver = NetworkTransportDriver(transportSessionFactory: makeTransportSessionFactory(using: backend))
         let session = WINetworkRuntime(configuration: .init(), backend: driver)
         let webView = makeIsolatedTestWebView()
@@ -113,22 +100,105 @@ struct NetworkTransportDriverTests {
             role: .request
         )
 
-        #expect(body?.role == .request)
-        #expect(body?.full == "targeted=value")
-        #expect(
-            backend.sentPageTargets.contains {
-                $0.method == WITransportMethod.Network.getRequestPostData
-                    && $0.targetIdentifier == "page-child"
-            }
-        )
+        #expect(body == nil)
+        #expect(driver.supportsDeferredLoading(for: .request) == false)
 
         await session.detach()
     }
 
     @Test
-    func stableBootstrapMethodNotFoundDisablesFurtherAttemptsOnSameSession() async throws {
+    func networkTransportDriverStoresInlinePostDataAsRequestBody() async {
+        let backend = FakeRegistryBackend()
+        let driver = NetworkTransportDriver(transportSessionFactory: makeTransportSessionFactory(using: backend))
+        let webView = makeIsolatedTestWebView()
+
+        await driver.attachPageWebView(webView)
+        await driver.waitForAttachForTesting()
+
+        backend.emitPageEvent(
+            method: "Network.requestWillBeSent",
+            params: [
+                "requestId": "request-post-data",
+                "timestamp": 12.0,
+                "walltime": 1_700_000_000.0,
+                "type": "Fetch",
+                "request": [
+                    "url": "https://example.com/post",
+                    "method": "POST",
+                    "headers": [
+                        "Content-Type": "application/json",
+                    ],
+                    "postData": #"{"hello":"world"}"#,
+                ],
+            ],
+            targetIdentifier: "page-A"
+        )
+
+        #expect(await waitForCondition {
+            guard let entry = driver.store.entries.first(where: { $0.url == "https://example.com/post" }) else {
+                return false
+            }
+            return entry.requestBody?.full == #"{"hello":"world"}"#
+                && entry.requestBody?.hasDeferredContent == false
+                && entry.requestBodyBytesSent == #"{"hello":"world"}"#.utf8.count
+        })
+
+        await driver.detachPageWebView(preparing: .stopped)
+    }
+
+    @Test
+    func networkTransportDriverKeepsMissingPostDataUnavailableWhileRecordingSentBytes() async {
+        let backend = FakeRegistryBackend()
+        let driver = NetworkTransportDriver(transportSessionFactory: makeTransportSessionFactory(using: backend))
+        let webView = makeIsolatedTestWebView()
+
+        await driver.attachPageWebView(webView)
+        await driver.waitForAttachForTesting()
+
+        backend.emitPageEvent(
+            method: "Network.requestWillBeSent",
+            params: [
+                "requestId": "request-missing-post-data",
+                "timestamp": 12.0,
+                "type": "Fetch",
+                "request": [
+                    "url": "https://example.com/missing-post-data",
+                    "method": "POST",
+                    "headers": [:],
+                ],
+            ],
+            targetIdentifier: "page-A"
+        )
+        backend.emitPageEvent(
+            method: "Network.loadingFinished",
+            params: [
+                "requestId": "request-missing-post-data",
+                "timestamp": 13.0,
+                "metrics": [
+                    "requestBodyBytesSent": 512,
+                    "responseBodyBytesReceived": 64,
+                    "responseBodyDecodedSize": 64,
+                ],
+            ],
+            targetIdentifier: "page-A"
+        )
+
+        #expect(await waitForCondition {
+            guard let entry = driver.store.entries.first(where: { $0.url == "https://example.com/missing-post-data" }) else {
+                return false
+            }
+            return entry.phase == .completed
+                && entry.requestBody == nil
+                && entry.requestBodyBytesSent == 512
+                && entry.decodedBodyLength == 64
+        })
+
+        await driver.detachPageWebView(preparing: .stopped)
+    }
+
+    @Test
+    func bootstrapLoadsResourceTreeEachTimeWithoutStableNetworkSnapshot() async throws {
         let backend = FakeRegistryBackend(
-            capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain, .networkBootstrapSnapshot],
             pageTargetedResultProvider: { method, _, _ in
                 guard method == WITransportMethod.Page.getResourceTree else {
                     return nil
@@ -137,12 +207,6 @@ struct NetworkTransportDriverTests {
                     mainURL: "https://example.com/",
                     resources: []
                 )
-            },
-            pageErrorResponseProvider: { method, _, _ in
-                guard method == WITransportMethod.Network.getBootstrapSnapshot else {
-                    return nil
-                }
-                return "'Network.getBootstrapSnapshot' was not found"
             }
         )
         let session = makeTransportSessionFactory(using: backend)()
@@ -170,7 +234,6 @@ struct NetworkTransportDriverTests {
 
         #expect(firstLoad.snapshots.count == 1)
         #expect(secondLoad.snapshots.count == 1)
-        #expect(backend.sentPageTargets.filter { $0.method == WITransportMethod.Network.getBootstrapSnapshot }.count == 1)
         #expect(backend.sentPageTargets.filter { $0.method == WITransportMethod.Page.getResourceTree }.count == 2)
 
         session.detach()
@@ -1099,221 +1162,6 @@ struct NetworkTransportDriverTests {
         await session.detach()
     }
 
-    @Test
-    func networkTransportDriverRebindsStableBootstrapRowsAcrossTargetChanges() async {
-        let backend = FakeRegistryBackend(
-            capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain, .networkBootstrapSnapshot],
-            pageResultProvider: { method, _ in
-                guard method == WITransportMethod.Network.getBootstrapSnapshot else {
-                    return nil
-                }
-                return makeBootstrapSnapshotResultPayload(
-                    resources: [
-                        makeBootstrapResourcePayload(
-                            bootstrapRowID: "target-swap",
-                            rawRequestID: "request-target-swap",
-                            ownerSessionID: "page-provisional",
-                            frameID: "frame-main",
-                            targetIdentifier: "page-provisional",
-                            url: "https://example.com/swap.js",
-                            method: "UNKNOWN",
-                            requestType: "Script",
-                            mimeType: "text/javascript",
-                            phase: "inFlight"
-                        ),
-                    ]
-                )
-            }
-        )
-        let driver = NetworkTransportDriver(transportSessionFactory: makeTransportSessionFactory(using: backend))
-        let webView = makeIsolatedTestWebView()
-
-        await driver.attachPageWebView(webView)
-        await driver.waitForAttachForTesting()
-
-        backend.emitRootEvent(
-            method: "Target.didCommitProvisionalTarget",
-            params: [
-                "oldTargetId": "page-provisional",
-                "newTargetId": "page-committed",
-            ]
-        )
-        backend.emitPageEvent(
-            method: "Network.requestWillBeSent",
-            params: [
-                "requestId": "request-target-swap",
-                "timestamp": 12.0,
-                "type": "Script",
-                "request": [
-                    "url": "https://example.com/swap.js",
-                    "method": "GET",
-                    "headers": [:],
-                ],
-            ],
-            targetIdentifier: "page-committed"
-        )
-        backend.emitPageEvent(
-            method: "Network.responseReceived",
-            params: [
-                "requestId": "request-target-swap",
-                "timestamp": 13.0,
-                "type": "Script",
-                "response": [
-                    "url": "https://example.com/swap.js",
-                    "status": 200,
-                    "statusText": "OK",
-                    "headers": [:],
-                    "mimeType": "text/javascript",
-                ],
-            ],
-            targetIdentifier: "page-committed"
-        )
-        backend.emitPageEvent(
-            method: "Network.loadingFinished",
-            params: [
-                "requestId": "request-target-swap",
-                "timestamp": 14.0,
-                "metrics": [
-                    "responseBodyBytesReceived": 64,
-                    "responseBodyDecodedSize": 64,
-                ],
-            ],
-            targetIdentifier: "page-committed"
-        )
-
-        #expect(await waitForCondition {
-            let matches = driver.store.entries.filter { $0.url == "https://example.com/swap.js" }
-            guard let entry = matches.first else {
-                return false
-            }
-            return matches.count == 1
-                && entry.sessionID == "page-committed"
-                && entry.phase == .completed
-                && entry.statusCode == 200
-                && entry.encodedBodyLength == 64
-        })
-
-        await driver.detachPageWebView(preparing: .stopped)
-    }
-
-    @Test
-    func networkTransportDriverMatchesRedirectedStableContinuationByPreviousURL() async {
-        let backend = FakeRegistryBackend(
-            capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain, .networkBootstrapSnapshot],
-            pageResultProvider: { method, _ in
-                guard method == WITransportMethod.Network.getBootstrapSnapshot else {
-                    return nil
-                }
-                return makeBootstrapSnapshotResultPayload(
-                    resources: [
-                        makeBootstrapResourcePayload(
-                            bootstrapRowID: "redirect-rebind",
-                            rawRequestID: "request-redirect-rebind",
-                            ownerSessionID: "page-provisional",
-                            frameID: "frame-main",
-                            targetIdentifier: "page-provisional",
-                            url: "https://example.com/original.js",
-                            method: "GET",
-                            requestType: "Script",
-                            mimeType: "text/javascript",
-                            phase: "inFlight"
-                        ),
-                    ]
-                )
-            }
-        )
-        let driver = NetworkTransportDriver(transportSessionFactory: makeTransportSessionFactory(using: backend))
-        let webView = makeIsolatedTestWebView()
-
-        await driver.attachPageWebView(webView)
-        await driver.waitForAttachForTesting()
-
-        backend.emitRootEvent(
-            method: "Target.didCommitProvisionalTarget",
-            params: [
-                "oldTargetId": "page-provisional",
-                "newTargetId": "page-committed",
-            ]
-        )
-        backend.emitPageEvent(
-            method: "Network.requestWillBeSent",
-            params: [
-                "requestId": "request-redirect-rebind",
-                "timestamp": 12.0,
-                "type": "Script",
-                "request": [
-                    "url": "https://example.com/final.js",
-                    "method": "GET",
-                    "headers": [:],
-                ],
-                "redirectResponse": [
-                    "url": "https://example.com/original.js",
-                    "status": 302,
-                    "statusText": "Found",
-                    "headers": [
-                        "Location": "https://example.com/final.js",
-                    ],
-                    "mimeType": "text/javascript",
-                ],
-            ],
-            targetIdentifier: "page-committed"
-        )
-        backend.emitPageEvent(
-            method: "Network.responseReceived",
-            params: [
-                "requestId": "request-redirect-rebind",
-                "timestamp": 13.0,
-                "type": "Script",
-                "response": [
-                    "url": "https://example.com/final.js",
-                    "status": 200,
-                    "statusText": "OK",
-                    "headers": [:],
-                    "mimeType": "text/javascript",
-                ],
-            ],
-            targetIdentifier: "page-committed"
-        )
-        backend.emitPageEvent(
-            method: "Network.loadingFinished",
-            params: [
-                "requestId": "request-redirect-rebind",
-                "timestamp": 14.0,
-                "metrics": [
-                    "responseBodyBytesReceived": 64,
-                    "responseBodyDecodedSize": 64,
-                ],
-            ],
-            targetIdentifier: "page-committed"
-        )
-
-        let matchedRedirectEntries = await waitForCondition {
-            let originalMatches = driver.store.entries.filter { $0.url == "https://example.com/original.js" }
-            let finalMatches = driver.store.entries.filter { $0.url == "https://example.com/final.js" }
-            guard let originalEntry = originalMatches.first,
-                  let finalEntry = finalMatches.first else {
-                return false
-            }
-            return originalMatches.count == 1
-                && finalMatches.count == 1
-                && originalEntry.sessionID == "page-committed"
-                && originalEntry.phase == .completed
-                && originalEntry.statusCode == 302
-                && finalEntry.sessionID == "page-committed"
-                && finalEntry.phase == .completed
-                && finalEntry.statusCode == 200
-                && finalEntry.encodedBodyLength == 64
-        }
-        if !matchedRedirectEntries {
-            let snapshot = driver.store.entries.map {
-                "\($0.url)|session=\($0.sessionID)|phase=\($0.phase.rawValue)|status=\($0.statusCode.map(String.init) ?? "nil")|bytes=\($0.encodedBodyLength.map(String.init) ?? "nil")"
-            }
-            Issue.record("redirect continuity snapshot: \(snapshot)")
-        }
-        #expect(matchedRedirectEntries)
-
-        await driver.detachPageWebView(preparing: .stopped)
-    }
 }
 
 @MainActor
@@ -1584,67 +1432,6 @@ private func makeFrameResourcePayload(
     }
     if let targetId {
         payload["targetId"] = targetId
-    }
-    return payload
-}
-
-private func makeBootstrapSnapshotResultPayload(resources: [[String: Any]]) -> [String: Any] {
-    ["resources": resources]
-}
-
-private func makeBootstrapResourcePayload(
-    bootstrapRowID: String,
-    rawRequestID: String? = nil,
-    ownerSessionID: String,
-    frameID: String? = nil,
-    targetIdentifier: String? = nil,
-    url: String,
-    method: String,
-    requestType: String,
-    mimeType: String,
-    statusCode: Int? = nil,
-    statusText: String? = nil,
-    phase: String,
-    requestHeaders: [String: String] = [:],
-    responseHeaders: [String: String] = [:],
-    canceled: Bool? = nil,
-    errorDescription: String? = nil,
-    bodyFetchDescriptor: [String: Any]? = nil
-) -> [String: Any] {
-    var payload: [String: Any] = [
-        "bootstrapRowID": bootstrapRowID,
-        "ownerSessionID": ownerSessionID,
-        "url": url,
-        "method": method,
-        "requestType": requestType,
-        "mimeType": mimeType,
-        "phase": phase,
-        "requestHeaders": requestHeaders,
-        "responseHeaders": responseHeaders,
-    ]
-    if let rawRequestID {
-        payload["rawRequestID"] = rawRequestID
-    }
-    if let frameID {
-        payload["frameID"] = frameID
-    }
-    if let targetIdentifier {
-        payload["targetIdentifier"] = targetIdentifier
-    }
-    if let statusCode {
-        payload["statusCode"] = statusCode
-    }
-    if let statusText {
-        payload["statusText"] = statusText
-    }
-    if let canceled {
-        payload["canceled"] = canceled
-    }
-    if let errorDescription {
-        payload["errorDescription"] = errorDescription
-    }
-    if let bodyFetchDescriptor {
-        payload["bodyFetchDescriptor"] = bodyFetchDescriptor
     }
     return payload
 }

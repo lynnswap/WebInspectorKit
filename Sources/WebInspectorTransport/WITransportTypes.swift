@@ -24,7 +24,6 @@ public enum WITransportCapability: String, Hashable, Sendable {
     case pageTargetRouting
     case domDomain
     case networkDomain
-    case networkBootstrapSnapshot
 }
 
 public struct WITransportSupportSnapshot: Sendable {
