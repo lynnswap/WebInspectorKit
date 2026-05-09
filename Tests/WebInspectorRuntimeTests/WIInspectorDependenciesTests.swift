@@ -74,7 +74,7 @@ struct WIInspectorDependenciesTests {
     }
 
     @Test
-    func v2NetworkRuntimeUsesInjectedTransportSupportForBackendSelection() {
+    func networkRuntimeUsesInjectedTransportSupportForBackendSelection() {
         let dependencies = WIInspectorDependencies.testing {
             $0.transport = WIInspectorTransportClient(
                 supportSnapshot: {
@@ -92,14 +92,14 @@ struct WIInspectorDependenciesTests {
             )
         }
 
-        let runtime = V2_WINetworkRuntime(dependencies: dependencies)
+        let runtime = WINetworkRuntime(dependencies: dependencies)
 
         #expect(runtime.model.session.testBackendTypeName() == "NetworkTransportDriver")
     }
 
     @Test
-    func v2NetworkRuntimeFallsBackToInjectedPageAgentWhenTransportIsUnsupported() {
-        let runtime = V2_WINetworkRuntime(dependencies: .testValue)
+    func networkRuntimeFallsBackToInjectedPageAgentWhenTransportIsUnsupported() {
+        let runtime = WINetworkRuntime(dependencies: .testValue)
 
         #expect(runtime.model.session.testBackendTypeName() == "NetworkPageAgent")
     }

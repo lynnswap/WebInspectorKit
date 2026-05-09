@@ -10,8 +10,8 @@ struct BrowserInspectorWindowContext {
     static let sceneActivityType = "lynnpd.webspector.web-inspector"
 
     let browserStore: BrowserStore
-    let inspectorController: WIInspectorController
-    let tabs: [V2_WITab]
+    let inspectorRuntime: WIRuntimeSession
+    let tabs: [WITab]
 }
 
 struct BrowserInspectorSceneActivationRequester {
@@ -63,7 +63,7 @@ final class BrowserInspectorCoordinator {
         private var staleSceneSessionIdentifiers: Set<String> = []
         private var isPendingPresentation = false
         private var observers: [UUID: (Bool) -> Void] = [:]
-        private var releaseHandlersByInspectorControllerID: [ObjectIdentifier: () -> Void] = [:]
+        private var releaseHandlersByInspectorRuntimeID: [ObjectIdentifier: () -> Void] = [:]
 
         var currentContext: BrowserInspectorWindowContext? {
             context
@@ -95,11 +95,11 @@ final class BrowserInspectorCoordinator {
         }
 
         func setContext(_ context: BrowserInspectorWindowContext?) {
-            let previousInspectorControllerID = self.context.map { ObjectIdentifier($0.inspectorController) }
-            let nextInspectorControllerID = context.map { ObjectIdentifier($0.inspectorController) }
+            let previousInspectorRuntimeID = self.context.map { ObjectIdentifier($0.inspectorRuntime) }
+            let nextInspectorRuntimeID = context.map { ObjectIdentifier($0.inspectorRuntime) }
             self.context = context
-            if previousInspectorControllerID != nextInspectorControllerID {
-                releaseContext(for: previousInspectorControllerID)
+            if previousInspectorRuntimeID != nextInspectorRuntimeID {
+                releaseContext(for: previousInspectorRuntimeID)
             }
         }
 
@@ -161,16 +161,16 @@ final class BrowserInspectorCoordinator {
             notifyObserversIfNeeded(previousState: previousState)
         }
 
-        func hasWindow(for inspectorController: WIInspectorController) -> Bool {
-            context?.inspectorController === inspectorController && presentationState
+        func hasWindow(for inspectorRuntime: WIRuntimeSession) -> Bool {
+            context?.inspectorRuntime === inspectorRuntime && presentationState
         }
 
         func setReleaseHandler(
-            for inspectorController: WIInspectorController,
+            for inspectorRuntime: WIRuntimeSession,
             _ handler: (() -> Void)?
         ) {
-            let inspectorControllerID = ObjectIdentifier(inspectorController)
-            releaseHandlersByInspectorControllerID[inspectorControllerID] = handler
+            let inspectorRuntimeID = ObjectIdentifier(inspectorRuntime)
+            releaseHandlersByInspectorRuntimeID[inspectorRuntimeID] = handler
         }
 
         func canRestoreSceneSession(_ sceneSession: UISceneSession) -> Bool {
@@ -193,7 +193,7 @@ final class BrowserInspectorCoordinator {
 
         func clear() {
             let previousState = presentationState
-            let previousInspectorControllerID = context.map { ObjectIdentifier($0.inspectorController) }
+            let previousInspectorRuntimeID = context.map { ObjectIdentifier($0.inspectorRuntime) }
             setContext(nil)
             sceneSessionsByIdentifier.removeAll()
             reusableSceneSession = nil
@@ -201,7 +201,7 @@ final class BrowserInspectorCoordinator {
             restorableSceneSessionIdentifiers.removeAll()
             staleSceneSessionIdentifiers.removeAll()
             isPendingPresentation = false
-            releaseContext(for: previousInspectorControllerID)
+            releaseContext(for: previousInspectorRuntimeID)
             notifyObserversIfNeeded(previousState: previousState)
         }
 
@@ -224,9 +224,9 @@ final class BrowserInspectorCoordinator {
             }
         }
 
-        private func releaseContext(for inspectorControllerID: ObjectIdentifier?) {
-            guard let inspectorControllerID,
-                  let releaseHandler = releaseHandlersByInspectorControllerID.removeValue(forKey: inspectorControllerID) else {
+        private func releaseContext(for inspectorRuntimeID: ObjectIdentifier?) {
+            guard let inspectorRuntimeID,
+                  let releaseHandler = releaseHandlersByInspectorRuntimeID.removeValue(forKey: inspectorRuntimeID) else {
                 return
             }
             releaseHandler()
@@ -260,8 +260,8 @@ final class BrowserInspectorCoordinator {
     func presentSheet(
         from presenter: UIViewController,
         browserStore: BrowserStore,
-        inspectorController: WIInspectorController,
-        tabs: [V2_WITab] = [.dom, .network],
+        inspectorRuntime: WIRuntimeSession,
+        tabs: [WITab] = [.dom, .network],
         launchConfiguration: BrowserLaunchConfiguration? = nil
     ) -> Bool {
         guard isPresentingInspector(presenter: presenter) == false else {
@@ -277,14 +277,14 @@ final class BrowserInspectorCoordinator {
         if let launchConfiguration, launchConfiguration.uiTestScenario != nil {
             sheetController = BrowserInspectorSheetHostingController(
                 browserStore: browserStore,
-                inspectorController: inspectorController,
+                inspectorRuntime: inspectorRuntime,
                 launchConfiguration: configuration,
                 tabs: tabs
             )
         } else {
-            let viewController = V2_WIViewController(tabs: tabs)
-            viewController.attachToMonoclyBrowser(browserStore)
-            sheetController = viewController
+            sheetController = WIViewController(
+                session: WISession(runtime: inspectorRuntime, tabs: tabs)
+            )
         }
         sheetController.modalPresentationStyle = .pageSheet
         applyDefaultDetents(to: sheetController)
@@ -294,7 +294,6 @@ final class BrowserInspectorCoordinator {
                 return
             }
             if self.presentedSheetController === sheetController {
-                (sheetController as? V2_WIViewController)?.detachFromMonoclyBrowser()
                 self.presentedSheetController = nil
                 self.notifyPresentationStateChanged()
             }
@@ -308,8 +307,8 @@ final class BrowserInspectorCoordinator {
     func presentWindow(
         from presenter: UIViewController,
         browserStore: BrowserStore,
-        inspectorController: WIInspectorController,
-        tabs: [V2_WITab] = [.dom, .network]
+        inspectorRuntime: WIRuntimeSession,
+        tabs: [WITab] = [.dom, .network]
     ) -> Bool {
         guard isPresentingInspector(presenter: presenter) == false else {
             return false
@@ -321,7 +320,7 @@ final class BrowserInspectorCoordinator {
         Self.inspectorWindowRegistry.setContext(
             BrowserInspectorWindowContext(
                 browserStore: browserStore,
-                inspectorController: inspectorController,
+                inspectorRuntime: inspectorRuntime,
                 tabs: tabs
             )
         )
@@ -365,7 +364,6 @@ final class BrowserInspectorCoordinator {
 
     func invalidate() {
         sheetObserver.onDismiss = nil
-        (presentedSheetController as? V2_WIViewController)?.detachFromMonoclyBrowser()
         presentedSheetController = nil
     }
 
@@ -389,15 +387,15 @@ final class BrowserInspectorCoordinator {
         inspectorWindowRegistry.currentContext
     }
 
-    static func hasInspectorWindow(for inspectorController: WIInspectorController) -> Bool {
-        inspectorWindowRegistry.hasWindow(for: inspectorController)
+    static func hasInspectorWindow(for inspectorRuntime: WIRuntimeSession) -> Bool {
+        inspectorWindowRegistry.hasWindow(for: inspectorRuntime)
     }
 
     static func setInspectorWindowReleaseHandler(
-        for inspectorController: WIInspectorController,
+        for inspectorRuntime: WIRuntimeSession,
         _ handler: (() -> Void)?
     ) {
-        inspectorWindowRegistry.setReleaseHandler(for: inspectorController, handler)
+        inspectorWindowRegistry.setReleaseHandler(for: inspectorRuntime, handler)
     }
 
     static func attachInspectorWindowSceneSession(_ sceneSession: UISceneSession) {
@@ -499,7 +497,6 @@ final class BrowserInspectorCoordinator {
         guard isPresentedViewControllerInChain(presentedSheetController, from: presenter) == false else {
             return
         }
-        (presentedSheetController as? V2_WIViewController)?.detachFromMonoclyBrowser()
         self.presentedSheetController = nil
     }
 
@@ -518,20 +515,3 @@ final class BrowserInspectorCoordinator {
     }
 #endif
 }
-
-#if canImport(UIKit)
-extension V2_WIViewController {
-    func attachToMonoclyBrowser(_ browserStore: BrowserStore) {
-        let webView = browserStore.webView
-        Task { @MainActor [weak self, webView] in
-            await self?.attach(to: webView)
-        }
-    }
-
-    func detachFromMonoclyBrowser() {
-        Task { @MainActor [self] in
-            await detach()
-        }
-    }
-}
-#endif

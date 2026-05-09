@@ -8,7 +8,7 @@
 
 ## 製品
 
-- `WebInspectorKit`: V2 UIKit コンテナ UI、`V2_WITab` ベースのタブ構成、Observation ベースの状態管理
+- `WebInspectorKit`: UIKit コンテナ UI、`WITab` ベースのタブ構成、Observation ベースの状態管理
 - `WebInspectorEngine`: DOM/Network エンジン、ランタイム actor、同梱 inspector script
 
 `WebInspectorKit` は `WebInspectorEngine` に依存します。
@@ -17,8 +17,8 @@
 
 - DOM ツリーの参照（要素ピック、ハイライト、削除、属性編集）
 - Network リクエストログ（fetch/XHR/WebSocket）と、buffering/active モード切り替え
-- `V2_WITab` による V2 タブ構成のカスタマイズ
-- `V2_WISession` / `V2_WIViewController` による明示的ライフサイクル（`attach(to:)`, `detach()`）
+- `WITab` によるタブ構成のカスタマイズ
+- `WISession` / `WIViewController` による明示的ライフサイクル（`attach(to:)`, `detach()`）
 - `WIInspectorDependencies` による依存性注入
 
 ## 要件
@@ -40,7 +40,7 @@ final class BrowserViewController: UIViewController {
     private let pageWebView = WKWebView(frame: .zero)
 
     @objc private func presentInspector() {
-        let inspector = V2_WIViewController()
+        let inspector = WIViewController()
         inspector.modalPresentationStyle = .pageSheet
         if let sheet = inspector.sheetPresentationController {
             sheet.detents = [.medium(), .large()]
@@ -55,39 +55,10 @@ final class BrowserViewController: UIViewController {
 }
 ```
 
-### AppKit
-
-V2 UI は現時点では UIKit のみです。AppKit の `WIInspectorController` / `WITabViewController`
-入口は互換用に残っていますが、推奨アーキテクチャではなく、V2 安定後に削除予定です。
-
-```swift
-import AppKit
-import WebKit
-import WebInspectorKit
-
-final class BrowserWindowController: NSWindowController {
-    let pageWebView = WKWebView(frame: .zero)
-    let inspector = WIInspectorController()
-
-    @objc func presentInspector() {
-        let container = WITabViewController(
-            inspector,
-            webView: pageWebView,
-            tabs: [.dom(), .network()]
-        )
-        let inspectorWindow = NSWindow(contentViewController: container)
-        inspectorWindow.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-        inspectorWindow.title = "Web Inspector"
-        inspectorWindow.setContentSize(NSSize(width: 960, height: 720))
-        inspectorWindow.makeKeyAndOrderFront(nil)
-    }
-}
-```
-
 ## カスタムタブ
 
 ```swift
-let customTab = V2_WITab.custom(
+let customTab = WITab.custom(
     id: "my_custom_tab",
     title: "Custom",
     systemImage: "folder"
@@ -96,7 +67,7 @@ let customTab = V2_WITab.custom(
     return UIViewController()
 }
 
-let inspector = V2_WIViewController(
+let inspector = WIViewController(
     tabs: [.dom, .network, customTab]
 )
 ```
@@ -113,7 +84,7 @@ let dependencies = WIInspectorDependencies.testing {
     )
 }
 
-let inspector = V2_WIViewController(
+let inspector = WIViewController(
     configuration: WIModelConfiguration(),
     dependencies: dependencies,
     tabs: [.dom, .network]

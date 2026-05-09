@@ -35,7 +35,7 @@ enum BrowserUITestScenario: String {
         let selectionTargets: [SelectionTargetDefinition]
     }
 
-    var defaultInspectorTabs: [V2_WITab] {
+    var defaultInspectorTabs: [WITab] {
         switch self {
         case .domNavigationBackForward:
             [.dom]
@@ -300,7 +300,7 @@ enum BrowserUITestScenario: String {
 
 struct BrowserLaunchConfiguration {
     let initialURL: URL
-    let autoOpenInspectorTabs: [V2_WITab]
+    let autoOpenInspectorTabs: [WITab]
     let shouldAutoOpenInspector: Bool
     let shouldAutoStartDOMSelection: Bool
     let shouldShowDiagnostics: Bool
@@ -311,7 +311,7 @@ struct BrowserLaunchConfiguration {
 
     init(
         initialURL: URL,
-        autoOpenInspectorTabs: [V2_WITab] = [.dom, .network],
+        autoOpenInspectorTabs: [WITab] = [.dom, .network],
         shouldAutoOpenInspector: Bool = false,
         shouldAutoStartDOMSelection: Bool = false,
         shouldShowDiagnostics: Bool = false,
@@ -397,7 +397,7 @@ struct BrowserLaunchConfiguration {
     private static func resolveAutoOpenInspectorTabs(
         from environment: [String: String],
         uiTestScenario: BrowserUITestScenario?
-    ) -> [V2_WITab] {
+    ) -> [WITab] {
         guard let rawValue = environment["WEBSPECTOR_AUTO_OPEN_INSPECTOR_TABS"] else {
             return uiTestScenario?.defaultInspectorTabs ?? [.dom, .network]
         }
@@ -406,7 +406,7 @@ struct BrowserLaunchConfiguration {
             .split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
 
-        var tabs: [V2_WITab] = []
+        var tabs: [WITab] = []
         for entry in requested {
             switch entry {
             case "dom":

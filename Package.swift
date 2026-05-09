@@ -151,6 +151,9 @@ let package = Package(
                 .product(name: "UIHostingMenu", package: "UIHostingMenu", condition: .when(platforms: [.iOS])),
                 .product(name: "SyntaxEditorUI", package: "SyntaxEditorUI", condition: .when(platforms: [.iOS]))
             ],
+            exclude: [
+                "Docs"
+            ],
             resources: [
                 .process("Localizable.xcstrings"),
                 .process("Resources/Preview")

@@ -13,9 +13,9 @@ final class BrowserInspectorSheetHostingController: UIViewController {
     }
 
     private let browserStore: BrowserStore
-    private let inspectorController: WIInspectorController
+    private let inspectorRuntime: WIRuntimeSession
     private let launchConfiguration: BrowserLaunchConfiguration
-    private let inspectorContainer: V2_WIViewController
+    private let inspectorContainer: WIViewController
 #if DEBUG
     private var harnessPanel: BrowserInspectorUITestHarnessPanel?
 #else
@@ -27,23 +27,25 @@ final class BrowserInspectorSheetHostingController: UIViewController {
 
     init(
         browserStore: BrowserStore,
-        inspectorController: WIInspectorController,
+        inspectorRuntime: WIRuntimeSession,
         launchConfiguration: BrowserLaunchConfiguration,
-        tabs: [V2_WITab]
+        tabs: [WITab]
     ) {
         self.browserStore = browserStore
-        self.inspectorController = inspectorController
+        self.inspectorRuntime = inspectorRuntime
         self.launchConfiguration = launchConfiguration
-        self.inspectorContainer = V2_WIViewController(tabs: tabs)
+        self.inspectorContainer = WIViewController(
+            session: WISession(runtime: inspectorRuntime, tabs: tabs)
+        )
         super.init(nibName: nil, bundle: nil)
         #if DEBUG
         if launchConfiguration.uiTestScenario?.showsInspectorHarnessPanel == true {
             self.harnessPanel = BrowserInspectorUITestHarnessPanel(
                 fixturePages: launchConfiguration.uiTestFixturePages,
-                onBeginNativeSelection: { [weak inspectorController] in
+                onBeginNativeSelection: { [weak inspectorRuntime] in
                     Task { @MainActor in
                         do {
-                            try await inspectorController?.dom.beginSelectionMode()
+                            try await inspectorRuntime?.dom.beginSelectionMode()
                         } catch {
                             inspectorHarnessLogger.error(
                                 "beginNativeSelection failed error=\(error.localizedDescription, privacy: .public)"
@@ -54,18 +56,18 @@ final class BrowserInspectorSheetHostingController: UIViewController {
                 onLoadPage: { [weak browserStore] page in
                     browserStore?.load(url: page.url)
                 },
-                onSelectNode: { [weak inspectorController] target in
+                onSelectNode: { [weak inspectorRuntime] target in
                     Task { @MainActor in
                         inspectorHarnessLogger.notice("selectNode tapped selector=\(target.selector, privacy: .public)")
                         do {
-                            try await inspectorController?.dom.selectNodeForTesting(
+                            try await inspectorRuntime?.dom.selectNodeForTesting(
                                 preview: target.expectedPreview,
                                 selectorPath: target.expectedSelector
                             )
                         } catch {
                             inspectorHarnessLogger.error("selectNode failed selector=\(target.selector, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
                         }
-                        if let dom = inspectorController?.dom {
+                        if let dom = inspectorRuntime?.dom {
                             inspectorHarnessLogger.notice(
                                 "selectNode finished selector=\(target.selector, privacy: .public) selectedPreview=\(dom.currentSelectedNodePreviewForDiagnostics() ?? "nil", privacy: .public) selectedSelector=\(dom.currentSelectedNodeSelectorForDiagnostics() ?? "nil", privacy: .public) error=\(dom.document.errorMessage ?? "nil", privacy: .public)"
                             )
@@ -97,25 +99,16 @@ final class BrowserInspectorSheetHostingController: UIViewController {
 
     isolated deinit {
         pollTask?.cancel()
-        inspectorContainer.detachFromMonoclyBrowser()
     }
 
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .clear
         installInspectorContainer()
-        inspectorContainer.attachToMonoclyBrowser(browserStore)
         installHarnessPanelIfNeeded()
         startPollingHarnessStateIfNeeded()
         Task { @MainActor [weak self] in
             await self?.updateHarnessState()
-        }
-    }
-
-    override func viewDidDisappear(_ animated: Bool) {
-        super.viewDidDisappear(animated)
-        if view.window == nil {
-            inspectorContainer.detachFromMonoclyBrowser()
         }
     }
 
@@ -169,24 +162,24 @@ final class BrowserInspectorSheetHostingController: UIViewController {
         }
 
         let treeDiagnostics = await currentDOMTreeDiagnostics()
-        let visibleNodes = inspectorController.dom.visibleNodeSummariesForDiagnostics(limit: 40).joined(separator: "\n")
+        let visibleNodes = inspectorRuntime.dom.visibleNodeSummariesForDiagnostics(limit: 40).joined(separator: "\n")
 
         harnessPanel.apply(
             state: .init(
                 browserURL: browserStore.currentURL?.absoluteString ?? "n/a",
-                domDocumentURL: inspectorController.dom.currentDocumentURLForDiagnostics() ?? "n/a",
-                domContextID: inspectorController.dom.currentContextIDForDiagnostics().map(String.init) ?? "n/a",
-                domIsSelecting: inspectorController.dom.isSelectingElement,
-                domSelectedPreview: inspectorController.dom.currentSelectedNodePreviewForDiagnostics() ?? "n/a",
-                domSelectedSelector: inspectorController.dom.currentSelectedNodeSelectorForDiagnostics() ?? "n/a",
+                domDocumentURL: inspectorRuntime.dom.currentDocumentURLForDiagnostics() ?? "n/a",
+                domContextID: inspectorRuntime.dom.currentContextIDForDiagnostics().map(String.init) ?? "n/a",
+                domIsSelecting: inspectorRuntime.dom.isSelectingElementForDiagnostics,
+                domSelectedPreview: inspectorRuntime.dom.currentSelectedNodePreviewForDiagnostics() ?? "n/a",
+                domSelectedSelector: inspectorRuntime.dom.currentSelectedNodeSelectorForDiagnostics() ?? "n/a",
                 domTreeSelectedPreview: treeDiagnostics.preview,
                 domTreeSelectedLineage: treeDiagnostics.lineage,
                 domTreeSelectedVisible: treeDiagnostics.isVisible,
-                domSelectionDebug: inspectorController.dom.lastSelectionDiagnosticForDiagnostics() ?? "n/a",
+                domSelectionDebug: inspectorRuntime.dom.lastSelectionDiagnosticForDiagnostics() ?? "n/a",
                 domVisibleNodes: visibleNodes,
-                domNativeSelectionState: inspectorController.dom.nativeInspectorInteractionStateForDiagnostics() ?? "n/a",
-                domRootReady: inspectorController.dom.document.rootNode != nil,
-                domError: inspectorController.dom.document.errorMessage ?? "n/a",
+                domNativeSelectionState: inspectorRuntime.dom.nativeInspectorInteractionStateForDiagnostics() ?? "n/a",
+                domRootReady: inspectorRuntime.dom.document.rootNode != nil,
+                domError: inspectorRuntime.dom.document.errorMessage ?? "n/a",
                 remoteTapTargetSummary: latestRemoteTapTargetDiagnostics?.summary ?? "n/a",
                 remoteTapPoint: latestRemoteTapTargetDiagnostics.map {
                     String(format: "%.4f,%.4f", $0.normalizedTap.dx, $0.normalizedTap.dy)
@@ -200,28 +193,10 @@ final class BrowserInspectorSheetHostingController: UIViewController {
 
 #if DEBUG
     private func currentDOMTreeDiagnostics() async -> (preview: String, lineage: String, isVisible: Bool?) {
-        guard let domViewController = findDOMViewController(in: inspectorContainer) else {
-            return ("n/a", "n/a", nil)
-        }
-        let preview = await domViewController.selectedTreeNodePreviewForDiagnostics() ?? "n/a"
-        let lineage = await domViewController.selectedTreeNodeLineageForDiagnostics() ?? "n/a"
-        let isVisible = await domViewController.selectedTreeNodeIsVisibleForDiagnostics()
+        let preview = inspectorRuntime.dom.currentSelectedNodePreviewForDiagnostics() ?? "n/a"
+        let lineage = inspectorRuntime.dom.currentSelectedNodeLineageForDiagnostics() ?? "n/a"
+        let isVisible = inspectorRuntime.dom.document.selectedNode != nil
         return (preview, lineage, isVisible)
-    }
-
-    private func findDOMViewController(in viewController: UIViewController) -> WIDOMViewController? {
-        if let domViewController = viewController as? WIDOMViewController {
-            return domViewController
-        }
-        for child in viewController.children {
-            if let domViewController = findDOMViewController(in: child) {
-                return domViewController
-            }
-        }
-        if let presentedViewController = viewController.presentedViewController {
-            return findDOMViewController(in: presentedViewController)
-        }
-        return nil
     }
 
     private func focusPreferredRemoteTapTargetForTesting() async {

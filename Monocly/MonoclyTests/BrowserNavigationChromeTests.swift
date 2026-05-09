@@ -4,6 +4,7 @@ import WebKit
 import XCTest
 @testable import Monocly
 @testable import WebInspectorEngine
+@_spi(Monocly) import WebInspectorRuntime
 @testable import WebInspectorRuntime
 @_spi(Monocly) import WebInspectorTransport
 @testable import WebInspectorUI
@@ -256,18 +257,18 @@ final class BrowserNavigationChromeTests: XCTestCase {
         pageViewController.setSupportsMultipleScenesForTesting(false)
         applyHorizontalSizeClass(.compact, to: rootViewController)
         let inspectorContainer = try presentCompactInspector(from: pageViewController, rootViewController: rootViewController)
-        let compactHost = try XCTUnwrap(inspectorContainer.activeHostViewControllerForTesting as? WICompactTabHostViewController)
+        let compactHost = try XCTUnwrap(inspectorContainer.activeHostViewControllerForTesting as? WICompactTabBarController)
 
         XCTAssertEqual(
             compactHost.displayedTabIdentifiersForTesting,
-            ["wi_dom", "wi_element", "wi_network"]
+            ["wi_dom", "wi_dom.element", "wi_network"]
         )
 
         dismissPresentedInspector(from: rootViewController)
     }
 
     @MainActor
-    func testCompactInspectorReopenRestoresLastSelectedTopLevelTab() throws {
+    func testCompactInspectorSelectionStaysLocalToPresentedSession() throws {
         let fixture = try makeHostedRootViewController()
         let rootViewController = fixture.rootViewController
         let pageViewController = fixture.pageViewController
@@ -275,21 +276,19 @@ final class BrowserNavigationChromeTests: XCTestCase {
         pageViewController.setSupportsMultipleScenesForTesting(false)
         applyHorizontalSizeClass(.compact, to: rootViewController)
         let firstInspector = try presentCompactInspector(from: pageViewController, rootViewController: rootViewController)
-        let firstHost = try XCTUnwrap(firstInspector.activeHostViewControllerForTesting as? WICompactTabHostViewController)
-        let domTab = try XCTUnwrap(firstHost.currentUITabsForTesting.first(where: { $0.identifier == "wi_dom" }))
-        let elementTab = try XCTUnwrap(firstHost.currentUITabsForTesting.first(where: { $0.identifier == "wi_element" }))
-
-        XCTAssertTrue(firstHost.tabBarController(firstHost, shouldSelectTab: elementTab))
-        firstHost.selectedTab = elementTab
-        firstHost.tabBarController(firstHost, didSelectTab: elementTab, previousTab: domTab)
-        XCTAssertEqual(rootViewController.inspectorController.selectedTab?.identifier, "wi_element")
+        let firstHost = try XCTUnwrap(firstInspector.activeHostViewControllerForTesting as? WICompactTabBarController)
+        _ = try XCTUnwrap(firstHost.currentUITabsForTesting.first(where: { $0.identifier == "wi_dom.element" }))
+        firstInspector.session.interface.selectItem(withID: "wi_dom.element")
+        drainMainQueue()
+        XCTAssertEqual(firstInspector.session.interface.selectedItemID, "wi_dom.element")
+        XCTAssertEqual(firstInspector.session.interface.selectedTab?.id, "wi_dom")
 
         dismissPresentedInspector(from: rootViewController)
 
         let secondInspector = try presentCompactInspector(from: pageViewController, rootViewController: rootViewController)
-        let secondHost = try XCTUnwrap(secondInspector.activeHostViewControllerForTesting as? WICompactTabHostViewController)
+        let secondHost = try XCTUnwrap(secondInspector.activeHostViewControllerForTesting as? WICompactTabBarController)
 
-        XCTAssertEqual(secondHost.selectedTab?.identifier, "wi_element")
+        XCTAssertEqual(secondHost.selectedTab?.identifier, "wi_dom")
 
         dismissPresentedInspector(from: rootViewController)
     }
@@ -307,8 +306,8 @@ final class BrowserNavigationChromeTests: XCTestCase {
         XCTAssertTrue(pageViewController.triggerInspectorPrimaryActionForTesting())
         drainMainQueue()
 
-        XCTAssertTrue(rootViewController.presentedViewController is WITabViewController)
-        let inspectorContainer = try XCTUnwrap(rootViewController.presentedViewController as? WITabViewController)
+        XCTAssertTrue(rootViewController.presentedViewController is WIViewController)
+        let inspectorContainer = try XCTUnwrap(rootViewController.presentedViewController as? WIViewController)
         let sheet = try XCTUnwrap(inspectorContainer.sheetPresentationController)
         XCTAssertEqual(sheet.selectedDetentIdentifier, .medium)
         XCTAssertEqual(sheet.largestUndimmedDetentIdentifier, .medium)
@@ -329,10 +328,54 @@ final class BrowserNavigationChromeTests: XCTestCase {
         XCTAssertTrue(pageViewController.triggerInspectorPrimaryActionForTesting())
         drainMainQueue()
 
-        let inspectorContainer = try XCTUnwrap(rootViewController.presentedViewController as? WITabViewController)
+        let inspectorContainer = try XCTUnwrap(rootViewController.presentedViewController as? WIViewController)
         XCTAssertNotNil(inspectorContainer.presentationController?.delegate)
 
         dismissPresentedInspector(from: rootViewController)
+    }
+
+    @MainActor
+    func testInspectorSheetKeepsRuntimeAttachedWhenPresenterDisappearsDuringAdaptivePresentation() throws {
+        let initialURL = try makeTemporaryHTMLURL(named: "inspector-adaptive-sheet", title: "Inspector Adaptive Sheet")
+        let fixture = try makeHostedRootViewController(initialURL: initialURL)
+        let rootViewController = fixture.rootViewController
+        let pageViewController = fixture.pageViewController
+        let inspectorRuntime = rootViewController.inspectorRuntime
+
+        pageViewController.setSupportsMultipleScenesForTesting(true)
+        applyHorizontalSizeClass(.regular, to: rootViewController)
+        XCTAssertTrue(waitForNavigation(to: initialURL, minimumDidFinishCount: 1, in: rootViewController.store))
+
+        _ = try presentRegularInspector(from: pageViewController, rootViewController: rootViewController)
+        var simulatedDisappearance = false
+        defer {
+            if simulatedDisappearance {
+                rootViewController.beginAppearanceTransition(true, animated: false)
+                rootViewController.endAppearanceTransition()
+                drainMainQueue()
+            }
+            dismissPresentedInspector(from: rootViewController)
+        }
+
+        XCTAssertTrue(
+            waitForCondition(description: "runtime attached before adaptive disappearance") {
+                inspectorRuntime.dom.hasPageWebViewForDiagnostics
+                    && inspectorRuntime.network.model.session.mode == .active
+            }
+        )
+
+        rootViewController.beginAppearanceTransition(false, animated: false)
+        rootViewController.endAppearanceTransition()
+        simulatedDisappearance = true
+        drainMainQueue()
+
+        XCTAssertTrue(
+            waitForCondition(description: "sheet presentation keeps root-owned runtime attached") {
+                inspectorRuntime.dom.hasPageWebViewForDiagnostics
+                    && inspectorRuntime.network.model.session.mode == .active
+            },
+            "Presenter disappearance during adaptive sheet presentation detached the shared inspector runtime."
+        )
     }
 
     @MainActor
@@ -343,13 +386,13 @@ final class BrowserNavigationChromeTests: XCTestCase {
         )
         let controller = BrowserInspectorSheetHostingController(
             browserStore: browserStore,
-            inspectorController: WIInspectorController(),
+            inspectorRuntime: WIRuntimeSession(),
             launchConfiguration: BrowserLaunchConfiguration(
                 initialURL: URL(string: "about:blank")!,
                 shouldShowDiagnostics: true,
                 uiTestScenario: .domOpenInspectorAfterInitialLoad
             ),
-            tabs: [.dom()]
+            tabs: [.dom]
         )
 
         controller.loadViewIfNeeded()
@@ -383,7 +426,7 @@ final class BrowserNavigationChromeTests: XCTestCase {
 
         let controller = BrowserPageViewController(
             store: store,
-            inspectorController: WIInspectorController(),
+            inspectorRuntime: WIRuntimeSession(),
             launchConfiguration: BrowserLaunchConfiguration(
                 initialURL: URL(string: "about:blank")!
             )
@@ -466,8 +509,8 @@ final class BrowserNavigationChromeTests: XCTestCase {
             coordinator.presentWindow(
                 from: unattachedPresenter,
                 browserStore: fixture.rootViewController.store,
-                inspectorController: fixture.rootViewController.inspectorController,
-                tabs: [.dom(), .network()]
+                inspectorRuntime: fixture.rootViewController.inspectorRuntime,
+                tabs: [.dom, .network]
             )
         )
         XCTAssertEqual(activationCount, 1)
@@ -493,130 +536,121 @@ final class BrowserNavigationChromeTests: XCTestCase {
     }
 
     @MainActor
-    func testOpeningInspectorBootstrapsCurrentPageResourceTimings() throws {
-        try WIBackendFactoryTesting.withPageAgentFallback(reason: "Monocly page-agent bootstrap regression") {
-            let initialURL = try makeTemporaryHTMLURL(named: "network-bootstrap", title: "Network Bootstrap")
-            let fixture = try makeHostedRootViewController(initialURL: initialURL)
-            let rootViewController = fixture.rootViewController
-            let pageViewController = fixture.pageViewController
-            let inspectorController = rootViewController.inspectorController
+    func testOpeningInspectorUsesRootOwnedNetworkRuntime() throws {
+        let initialURL = try makeTemporaryHTMLURL(named: "network-root-owned", title: "Network Root Owned")
+        let fixture = try makeHostedRootViewController(initialURL: initialURL)
+        let rootViewController = fixture.rootViewController
+        let pageViewController = fixture.pageViewController
+        let inspectorRuntime = rootViewController.inspectorRuntime
 
-            pageViewController.setSupportsMultipleScenesForTesting(true)
-            applyHorizontalSizeClass(.regular, to: rootViewController)
+        pageViewController.setSupportsMultipleScenesForTesting(true)
+        applyHorizontalSizeClass(.regular, to: rootViewController)
 
-            XCTAssertTrue(waitForNavigation(to: initialURL, minimumDidFinishCount: 1, in: rootViewController.store))
-            try installSyntheticResourceTimings(
-                [[
-                    "decodedBodySize": 256,
-                    "duration": 4,
-                    "encodedBodySize": 128,
-                    "initiatorType": "script",
-                    "name": "https://example.com/bootstrap.js",
-                    "requestMethod": "GET",
-                    "responseStatus": 200,
-                    "startTime": 12
-                ]],
-                on: rootViewController.store.webView
-            )
+        XCTAssertTrue(waitForNavigation(to: initialURL, minimumDidFinishCount: 1, in: rootViewController.store))
+        try seedNetworkStore(
+            url: "https://example.com/root-owned-runtime",
+            requestID: 700,
+            into: inspectorRuntime.network.model.store
+        )
 
-            _ = try presentRegularInspector(from: pageViewController, rootViewController: rootViewController)
-            selectInspectorTab("wi_network", in: inspectorController)
+        let inspector = try presentRegularInspector(from: pageViewController, rootViewController: rootViewController)
+        selectInspectorTab("wi_network", in: inspector.session)
 
-            let bootstrapped = waitForCondition(description: "open inspector bootstraps existing page resources") {
-                inspectorController.network.session.mode == .active
-                    && inspectorController.network.store.entries.contains { $0.url == "https://example.com/bootstrap.js" }
-            }
-            XCTAssertTrue(
-                bootstrapped,
-                "Opening the inspector on the Network tab did not bootstrap the current page resource timings into the shared network store."
-            )
+        let usesRootRuntime = waitForCondition(description: "inspector uses root-owned network runtime") {
+            inspector.session.runtime === inspectorRuntime
+                && inspectorRuntime.network.model.session.mode == .active
+                && inspectorRuntime.network.model.store.entries.contains { $0.url == "https://example.com/root-owned-runtime" }
         }
+        XCTAssertTrue(
+            usesRootRuntime,
+            "Opening the inspector did not use the root-owned network runtime and its existing store."
+        )
     }
 
     @MainActor
-    func testDismissingCompactInspectorSuspendsControllerAndClearsNetworkStore() throws {
+    func testDismissingInspectorKeepsRootOwnedRuntimeAttachedAndNetworkStore() throws {
         let initialURL = try makeTemporaryHTMLURL(named: "network-close", title: "Network Close")
         let fixture = try makeHostedRootViewController(initialURL: initialURL)
         let rootViewController = fixture.rootViewController
         let pageViewController = fixture.pageViewController
-        let inspectorController = rootViewController.inspectorController
+        let inspectorRuntime = rootViewController.inspectorRuntime
 
         pageViewController.setSupportsMultipleScenesForTesting(true)
         applyHorizontalSizeClass(.regular, to: rootViewController)
 
         XCTAssertTrue(waitForNavigation(to: initialURL, minimumDidFinishCount: 1, in: rootViewController.store))
 
-        _ = try presentRegularInspector(from: pageViewController, rootViewController: rootViewController)
-        selectInspectorTab("wi_network", in: inspectorController)
+        let inspector = try presentRegularInspector(from: pageViewController, rootViewController: rootViewController)
+        selectInspectorTab("wi_network", in: inspector.session)
         try seedNetworkStore(
             url: "https://example.com/seed-close",
             requestID: 701,
-            into: inspectorController.network.store
+            into: inspectorRuntime.network.model.store
         )
 
         let seeded = waitForCondition(description: "seed network entries before dismiss") {
-            inspectorController.network.session.mode == .active
-                && inspectorController.network.store.entries.contains { $0.url == "https://example.com/seed-close" }
+            inspectorRuntime.network.model.session.mode == .active
+                && inspectorRuntime.network.model.store.entries.contains { $0.url == "https://example.com/seed-close" }
         }
         XCTAssertTrue(seeded, "The regular inspector did not expose the seeded network store entry before dismiss.")
 
         dismissPresentedInspector(from: rootViewController)
 
-        let suspendedAndCleared = waitForCondition(description: "dismiss compact inspector clears network store") {
-            inspectorController.lifecycle == .suspended
-                && inspectorController.network.session.mode == .stopped
-                && inspectorController.network.store.entries.isEmpty
+        let runtimeStayedAttached = waitForCondition(description: "dismiss inspector keeps root-owned runtime attached") {
+            inspectorRuntime.dom.hasPageWebViewForDiagnostics
+                && inspectorRuntime.network.model.session.mode == .active
+                && inspectorRuntime.network.model.store.entries.contains { $0.url == "https://example.com/seed-close" }
         }
         XCTAssertTrue(
-            suspendedAndCleared,
-            "Dismissing the compact inspector did not suspend the shared inspector controller and clear the network store."
+            runtimeStayedAttached,
+            "Dismissing the inspector detached or cleared the root-owned runtime."
         )
     }
 
     @MainActor
-    func testReopeningCompactInspectorRebootstrapsCurrentPageNetworkEntries() throws {
+    func testReopeningInspectorReusesRootOwnedRuntimeNetworkEntries() throws {
         let initialURL = try makeTemporaryHTMLURL(named: "network-reopen", title: "Network Reopen")
         let fixture = try makeHostedRootViewController(initialURL: initialURL)
         let rootViewController = fixture.rootViewController
         let pageViewController = fixture.pageViewController
-        let inspectorController = rootViewController.inspectorController
+        let inspectorRuntime = rootViewController.inspectorRuntime
 
         pageViewController.setSupportsMultipleScenesForTesting(true)
         applyHorizontalSizeClass(.regular, to: rootViewController)
 
         XCTAssertTrue(waitForNavigation(to: initialURL, minimumDidFinishCount: 1, in: rootViewController.store))
 
-        _ = try presentRegularInspector(from: pageViewController, rootViewController: rootViewController)
-        selectInspectorTab("wi_network", in: inspectorController)
+        let firstInspector = try presentRegularInspector(from: pageViewController, rootViewController: rootViewController)
+        selectInspectorTab("wi_network", in: firstInspector.session)
         try seedNetworkStore(
             url: "https://example.com/seed-reopen",
             requestID: 702,
-            into: inspectorController.network.store
+            into: inspectorRuntime.network.model.store
         )
 
         let firstSeed = waitForCondition(description: "seed network entry before reopen") {
-            inspectorController.network.store.entries.contains { $0.url == "https://example.com/seed-reopen" }
+            inspectorRuntime.network.model.store.entries.contains { $0.url == "https://example.com/seed-reopen" }
         }
         XCTAssertTrue(firstSeed, "The first inspector presentation did not expose the seeded network entry.")
 
         dismissPresentedInspector(from: rootViewController)
 
-        let cleared = waitForCondition(description: "network store clears after dismiss") {
-            inspectorController.network.store.entries.isEmpty
-                && inspectorController.network.session.mode == .stopped
+        let retained = waitForCondition(description: "network store persists after dismiss") {
+            inspectorRuntime.network.model.store.entries.contains { $0.url == "https://example.com/seed-reopen" }
+                && inspectorRuntime.network.model.session.mode == .active
         }
-        XCTAssertTrue(cleared, "The shared inspector controller did not clear the network store after dismiss.")
+        XCTAssertTrue(retained, "The root-owned runtime did not preserve the network store after dismiss.")
 
-        _ = try presentRegularInspector(from: pageViewController, rootViewController: rootViewController)
-        selectInspectorTab("wi_network", in: inspectorController)
+        let secondInspector = try presentRegularInspector(from: pageViewController, rootViewController: rootViewController)
+        selectInspectorTab("wi_network", in: secondInspector.session)
         let expectedFinishCount = rootViewController.store.didFinishNavigationCount + 1
         rootViewController.store.webView.reload()
 
-        let rebound = waitForCondition(description: "fresh network capture after reopen") {
-            inspectorController.lifecycle == .active
-                && inspectorController.network.session.mode == .active
+        let rebound = waitForCondition(description: "network capture continues after reopen") {
+            inspectorRuntime.dom.hasPageWebViewForDiagnostics
+                && inspectorRuntime.network.model.session.mode == .active
                 && rootViewController.store.didFinishNavigationCount >= expectedFinishCount
-                && inspectorController.network.store.entries.isEmpty == false
+                && inspectorRuntime.network.model.store.entries.isEmpty == false
         }
         XCTAssertTrue(rebound, "Reopening the inspector did not produce a fresh network session after the page reloaded.")
 
@@ -629,45 +663,45 @@ final class BrowserNavigationChromeTests: XCTestCase {
         let fixture = try makeHostedRootViewController(initialURL: initialURL)
         let rootViewController = fixture.rootViewController
         let pageViewController = fixture.pageViewController
-        let inspectorController = rootViewController.inspectorController
+        let inspectorRuntime = rootViewController.inspectorRuntime
 
         pageViewController.setSupportsMultipleScenesForTesting(true)
         applyHorizontalSizeClass(.regular, to: rootViewController)
 
         XCTAssertTrue(waitForNavigation(to: initialURL, minimumDidFinishCount: 1, in: rootViewController.store))
 
-        _ = try presentRegularInspector(from: pageViewController, rootViewController: rootViewController)
-        selectInspectorTab("wi_network", in: inspectorController)
+        let inspector = try presentRegularInspector(from: pageViewController, rootViewController: rootViewController)
+        selectInspectorTab("wi_network", in: inspector.session)
         try seedNetworkStore(
             url: "https://example.com/seed-switch",
             requestID: 703,
-            into: inspectorController.network.store
+            into: inspectorRuntime.network.model.store
         )
 
         let seeded = waitForCondition(description: "seed network entries before tab switch") {
-            inspectorController.network.session.mode == .active
-                && inspectorController.network.store.entries.contains { $0.url == "https://example.com/seed-switch" }
+            inspectorRuntime.network.model.session.mode == .active
+                && inspectorRuntime.network.model.store.entries.contains { $0.url == "https://example.com/seed-switch" }
         }
         XCTAssertTrue(seeded, "The inspector did not expose the seeded network entry before switching tabs.")
 
-        let bootstrappedEntryCount = inspectorController.network.store.entries.count
-        selectInspectorTab("wi_dom", in: inspectorController)
+        let bootstrappedEntryCount = inspectorRuntime.network.model.store.entries.count
+        selectInspectorTab("wi_dom", in: inspector.session)
 
         let switchedToDOM = waitForCondition(description: "switch to DOM without clearing network store") {
-            inspectorController.lifecycle == .active
-                && inspectorController.network.session.mode == .buffering
-                && inspectorController.network.store.entries.count >= bootstrappedEntryCount
-                && inspectorController.network.store.entries.contains { $0.url == "https://example.com/seed-switch" }
+            inspectorRuntime.dom.hasPageWebViewForDiagnostics
+                && inspectorRuntime.network.model.session.mode == .active
+                && inspectorRuntime.network.model.store.entries.count >= bootstrappedEntryCount
+                && inspectorRuntime.network.model.store.entries.contains { $0.url == "https://example.com/seed-switch" }
         }
         XCTAssertTrue(switchedToDOM, "Switching away from the Network tab cleared the network store while the inspector stayed open.")
 
-        selectInspectorTab("wi_network", in: inspectorController)
+        selectInspectorTab("wi_network", in: inspector.session)
 
         let switchedBack = waitForCondition(description: "switch back to network without clearing network store") {
-            inspectorController.lifecycle == .active
-                && inspectorController.network.session.mode == .active
-                && inspectorController.network.store.entries.count >= bootstrappedEntryCount
-                && inspectorController.network.store.entries.contains { $0.url == "https://example.com/seed-switch" }
+            inspectorRuntime.dom.hasPageWebViewForDiagnostics
+                && inspectorRuntime.network.model.session.mode == .active
+                && inspectorRuntime.network.model.store.entries.count >= bootstrappedEntryCount
+                && inspectorRuntime.network.model.store.entries.contains { $0.url == "https://example.com/seed-switch" }
         }
         XCTAssertTrue(switchedBack, "Switching back to the Network tab did not preserve the existing network store entries.")
 
@@ -969,13 +1003,13 @@ private extension BrowserNavigationChromeTests {
     func presentCompactInspector(
         from pageViewController: BrowserPageViewController,
         rootViewController: BrowserRootViewController
-    ) throws -> WITabViewController {
+    ) throws -> WIViewController {
         let buttonItem = pageViewController.inspectorButtonItemForTesting
         let action = try XCTUnwrap(buttonItem.action)
         XCTAssertTrue(UIApplication.shared.sendAction(action, to: buttonItem.target, from: buttonItem, for: nil))
         drainMainQueue()
 
-        let inspectorContainer = try XCTUnwrap(rootViewController.presentedViewController as? WITabViewController)
+        let inspectorContainer = try XCTUnwrap(rootViewController.presentedViewController as? WIViewController)
         inspectorContainer.horizontalSizeClassOverrideForTesting = .compact
         inspectorContainer.loadViewIfNeeded()
         inspectorContainer.view.layoutIfNeeded()
@@ -986,11 +1020,11 @@ private extension BrowserNavigationChromeTests {
     func presentRegularInspector(
         from pageViewController: BrowserPageViewController,
         rootViewController: BrowserRootViewController
-    ) throws -> WITabViewController {
+    ) throws -> WIViewController {
         XCTAssertTrue(pageViewController.triggerInspectorPrimaryActionForTesting())
         drainMainQueue()
 
-        let inspectorContainer = try XCTUnwrap(rootViewController.presentedViewController as? WITabViewController)
+        let inspectorContainer = try XCTUnwrap(rootViewController.presentedViewController as? WIViewController)
         inspectorContainer.loadViewIfNeeded()
         inspectorContainer.view.layoutIfNeeded()
         return inspectorContainer
@@ -999,22 +1033,18 @@ private extension BrowserNavigationChromeTests {
     @MainActor
     func selectCompactInspectorTab(
         _ identifier: String,
-        in inspectorContainer: WITabViewController
+        in inspectorContainer: WIViewController
     ) throws {
-        let compactHost = try XCTUnwrap(inspectorContainer.activeHostViewControllerForTesting as? WICompactTabHostViewController)
-        let targetTab = try XCTUnwrap(compactHost.currentUITabsForTesting.first(where: { $0.identifier == identifier }))
-        let previousTab = compactHost.selectedTab
-        XCTAssertTrue(compactHost.tabBarController(compactHost, shouldSelectTab: targetTab))
-        compactHost.selectedTab = targetTab
-        compactHost.tabBarController(compactHost, didSelectTab: targetTab, previousTab: previousTab)
-        waitForInspectorRuntimeApply(in: inspectorContainer.inspectorController)
+        let compactHost = try XCTUnwrap(inspectorContainer.activeHostViewControllerForTesting as? WICompactTabBarController)
+        _ = try XCTUnwrap(compactHost.currentUITabsForTesting.first(where: { $0.identifier == identifier }))
+        inspectorContainer.session.interface.selectItem(withID: identifier)
+        drainMainQueue()
     }
 
     @MainActor
-    func selectInspectorTab(_ identifier: String, in inspectorController: WIInspectorController) {
-        let tab = inspectorController.tabs.first(where: { $0.identifier == identifier })
-        inspectorController.setSelectedTab(tab)
-        waitForInspectorRuntimeApply(in: inspectorController)
+    func selectInspectorTab(_ identifier: String, in session: WISession) {
+        session.interface.selectTab(withID: identifier)
+        drainMainQueue()
     }
 
     @MainActor
@@ -1102,19 +1132,6 @@ private extension BrowserNavigationChromeTests {
         while rootViewController.presentedViewController != nil, Date() < deadline {
             drainMainQueue()
         }
-        drainMainQueue()
-    }
-
-    @MainActor
-    func waitForInspectorRuntimeApply(in inspectorController: WIInspectorController) {
-        let expectation = XCTestExpectation(description: "wait for inspector runtime apply")
-        Task { @MainActor in
-            await inspectorController.waitForRuntimeApplyForTesting()
-            expectation.fulfill()
-        }
-
-        let waitResult = XCTWaiter().wait(for: [expectation], timeout: 5)
-        XCTAssertEqual(waitResult, .completed, "Timed out while waiting for inspector runtime state to settle.")
         drainMainQueue()
     }
 

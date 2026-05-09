@@ -7,19 +7,19 @@ import WebKit
 struct DOMInspectorTests {
     @Test
     func inspectorStartsWithEmptyDocument() {
-        let inspector = WIInspectorController().dom
+        let runtime = WIDOMRuntime()
 
-        #expect(inspector.document.rootNode == nil)
-        #expect(inspector.document.selectedNode == nil)
-        #expect(inspector.document.errorMessage == nil)
+        #expect(runtime.document.rootNode == nil)
+        #expect(runtime.document.selectedNode == nil)
+        #expect(runtime.document.errorMessage == nil)
     }
 
     @Test
     func reloadDocumentWithoutPageThrowsPageUnavailable() async {
-        let inspector = WIInspectorController().dom
+        let runtime = WIDOMRuntime()
 
         await #expect(throws: DOMOperationError.pageUnavailable) {
-            try await inspector.reloadDocument()
+            try await runtime.reloadDocument()
         }
     }
 
