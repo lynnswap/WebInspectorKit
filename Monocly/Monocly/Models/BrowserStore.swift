@@ -485,7 +485,7 @@ private enum BrowserStoreSPI {
             }
             .store(in: &cancellables)
 
-        webView.publisher(for: \.url, options: [.initial, .new])
+        webView.publisher(for: \.url, options: [.new])
             .receive(on: DispatchQueue.main)
             .sink { [weak self] url in
                 guard let self else {
@@ -557,9 +557,6 @@ private enum BrowserStoreSPI {
     }
 
     private func syncCurrentURL(_ url: URL?) {
-        guard let url else {
-            return
-        }
         currentURL = url
     }
 

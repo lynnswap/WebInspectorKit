@@ -67,6 +67,37 @@ final class BrowserNavigationChromeTests: XCTestCase {
         XCTAssertNil(credential)
     }
 
+    @MainActor
+    func testInitialCurrentURLSurvivesEmptyWebViewURL() {
+        let initialURL = URL(string: "https://example.com/initial")!
+        let store = BrowserStore(url: initialURL, automaticallyLoadsInitialRequest: false)
+
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+
+        XCTAssertNil(store.webView.url)
+        XCTAssertEqual(store.currentURL, initialURL)
+    }
+
+    @MainActor
+    func testNavigationFailureClearsCurrentURLWhenWebViewURLIsNil() {
+        let staleURL = URL(string: "https://example.com/stale")!
+        let store = BrowserStore(url: staleURL, automaticallyLoadsInitialRequest: false)
+
+        store.currentURL = staleURL
+        store.webView(
+            store.webView,
+            didFailProvisionalNavigation: nil,
+            withError: NSError(
+                domain: NSURLErrorDomain,
+                code: NSURLErrorCannotFindHost
+            )
+        )
+
+        XCTAssertNil(store.webView.url)
+        XCTAssertNil(store.currentURL)
+        XCTAssertNotNil(store.lastNavigationErrorDescription)
+    }
+
     private struct HostedRootViewControllerFixture {
         let window: UIWindow
         let rootViewController: BrowserRootViewController
