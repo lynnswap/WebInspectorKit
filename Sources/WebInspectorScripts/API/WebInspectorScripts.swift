@@ -15,7 +15,6 @@ public enum WebInspectorScriptsError: LocalizedError, Sendable {
 public enum WebInspectorScripts {
     public static let domTreeViewResourceSubdirectory = "Resources/DOMTreeView"
 
-    @MainActor private static var cachedNetworkAgent: String?
     @MainActor private static var cachedDOMTreeView: String?
 
     public static var resourceBundle: Bundle {
@@ -39,18 +38,6 @@ public enum WebInspectorScripts {
             )
         }
         return resourceBundle.url(forResource: name, withExtension: fileExtension)
-    }
-
-    @MainActor
-    public static func networkAgent() throws -> String {
-        if let cachedNetworkAgent {
-            return cachedNetworkAgent
-        }
-        guard let script = ScriptBundle.source(named: "network-agent"), !script.isEmpty else {
-            throw WebInspectorScriptsError.scriptUnavailable(name: "network-agent")
-        }
-        cachedNetworkAgent = script
-        return script
     }
 
     @MainActor

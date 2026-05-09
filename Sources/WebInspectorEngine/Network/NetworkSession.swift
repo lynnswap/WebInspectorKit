@@ -131,9 +131,5 @@ extension NetworkSession {
     package func testBackendTypeName() -> String {
         runtime.testBackendTypeName()
     }
-
-    package func testPageAgentTypeName() -> String {
-        runtime.testPageAgentTypeName()
-    }
 }
 #endif

@@ -1,7 +1,7 @@
 #if DEBUG
 import Foundation
-@_spi(PreviewSupport) import WebInspectorEngine
-@_spi(PreviewSupport) import WebInspectorRuntime
+import WebInspectorEngine
+import WebInspectorRuntime
 
 @MainActor
 enum WINetworkPreviewFixtures {
@@ -21,21 +21,21 @@ enum WINetworkPreviewFixtures {
     }
 
     static func applySampleData(to inspector: WINetworkModel, mode: Mode) {
-        let payload: NSDictionary
+        let snapshots: [NetworkEntry.Snapshot]
         switch mode {
         case .root:
-            payload = sampleBatchPayload()
+            snapshots = sampleSnapshots()
         case .rootLongTitle:
-            payload = sampleBatchPayload(includeLongTitle: true)
+            snapshots = sampleSnapshots(includeLongTitle: true)
         case .detail:
-            payload = sampleBatchPayload()
+            snapshots = sampleSnapshots()
         case .bodyPreviewObjectTree:
-            payload = sampleBatchPayload(bodyMode: .json)
+            snapshots = sampleSnapshots(bodyMode: .json)
         case .bodyPreviewText:
-            payload = sampleBatchPayload(bodyMode: .plainText)
+            snapshots = sampleSnapshots(bodyMode: .plainText)
         }
 
-        inspector.wiApplyPreviewBatch(payload)
+        inspector.store.applySnapshots(snapshots)
         switch mode {
         case .detail, .bodyPreviewObjectTree, .bodyPreviewText:
             inspector.selectEntry(preferredDetailEntry(in: inspector))
@@ -70,10 +70,10 @@ enum WINetworkPreviewFixtures {
         case plainText
     }
 
-    private static func sampleBatchPayload(
+    private static func sampleSnapshots(
         includeLongTitle: Bool = false,
         bodyMode: BodyMode = .json
-    ) -> NSDictionary {
+    ) -> [NetworkEntry.Snapshot] {
         let bodyText: String
         let mimeType: String
         let contentType: String
@@ -89,96 +89,132 @@ enum WINetworkPreviewFixtures {
             contentType = "text/plain; charset=utf-8"
         }
 
-        var events: [[String: Any]] = [
-            [
-                "kind": "requestWillBeSent",
-                "requestId": 1001,
-                "time": ["monotonicMs": 1000.0, "wallMs": 1700000000000.0],
-                "url": "https://play.google.com/log?format=json&hasfast=true",
-                "method": "POST",
-                "headers": [
+        var snapshots: [NetworkEntry.Snapshot] = [
+            makeSnapshot(
+                requestID: 1001,
+                url: "https://play.google.com/log?format=json&hasfast=true",
+                method: "POST",
+                requestHeaders: NetworkHeaders(dictionary: [
                     "authorization": "Bearer preview-token",
                     "content-type": "application/x-www-form-urlencoded",
-                ],
-                "body": [
-                    "kind": "text",
-                    "size": 64,
-                    "truncated": false,
-                    "preview": "hl=ja&gl=JP&source=wi-preview",
-                ],
-                "bodySize": 64,
-                "initiator": "xhr",
-            ],
-            [
-                "kind": "responseReceived",
-                "requestId": 1001,
-                "time": ["monotonicMs": 1119.0, "wallMs": 1700000000119.0],
-                "status": 200,
-                "statusText": "OK",
-                "mimeType": mimeType,
-                "headers": [
+                ]),
+                requestBody: NetworkBody(
+                    kind: .text,
+                    preview: "hl=ja&gl=JP&source=wi-preview",
+                    full: "hl=ja&gl=JP&source=wi-preview",
+                    size: 64,
+                    isTruncated: false,
+                    role: .request
+                ),
+                requestBodyBytesSent: 64,
+                responseMimeType: mimeType,
+                responseHeaders: NetworkHeaders(dictionary: [
                     "content-length": String(bodyText.count),
                     "content-type": contentType,
-                ],
-                "initiator": "xhr",
-            ],
-            [
-                "kind": "loadingFinished",
-                "requestId": 1001,
-                "time": ["monotonicMs": 1125.0, "wallMs": 1700000000125.0],
-                "encodedBodyLength": bodyText.count,
-                "decodedBodySize": bodyText.count,
-                "body": [
-                    "kind": "text",
-                    "size": bodyText.count,
-                    "truncated": false,
-                    "preview": bodyText,
-                    "content": bodyText,
-                ],
-                "initiator": "xhr",
-            ],
-            [
-                "kind": "resourceTiming",
-                "requestId": 1002,
-                "url": "https://www.gstatic.com/images/icons/material/system/2x/trending_up_grey600_24dp.png",
-                "method": "GET",
-                "status": 200,
-                "statusText": "OK",
-                "mimeType": "image/png",
-                "startTime": ["monotonicMs": 900.0, "wallMs": 1699999999400.0],
-                "endTime": ["monotonicMs": 1728.0, "wallMs": 1700000000228.0],
-                "encodedBodyLength": 0,
-                "decodedBodySize": 0,
-                "initiator": "img",
-            ],
+                ]),
+                responseBody: NetworkBody(
+                    kind: .text,
+                    preview: bodyText,
+                    full: bodyText,
+                    size: bodyText.count,
+                    isTruncated: false,
+                    role: .response
+                ),
+                statusCode: 200,
+                statusText: "OK",
+                startTimestamp: 1.0,
+                endTimestamp: 1.125,
+                wallTime: 1_700_000_000.0,
+                encodedBodyLength: bodyText.count,
+                decodedBodyLength: bodyText.count,
+                type: "xhr"
+            ),
+            makeSnapshot(
+                requestID: 1002,
+                url: "https://www.gstatic.com/images/icons/material/system/2x/trending_up_grey600_24dp.png",
+                responseMimeType: "image/png",
+                statusCode: 200,
+                statusText: "OK",
+                startTimestamp: 0.9,
+                endTimestamp: 1.728,
+                wallTime: 1_699_999_999.4,
+                encodedBodyLength: 0,
+                decodedBodyLength: 0,
+                type: "img"
+            ),
         ]
 
         if includeLongTitle {
-            events.insert(
-                [
-                    "kind": "resourceTiming",
-                    "requestId": 1999,
-                    "url": "https://cdn.example.com/assets/network/preview/super-long-file-name-for-line-wrap-validation-with-json-tag-rendering-and-truncation-check.json",
-                    "method": "GET",
-                    "status": 200,
-                    "statusText": "OK",
-                    "mimeType": "application/json",
-                    "startTime": ["monotonicMs": 1900.0, "wallMs": 1700000000800.0],
-                    "endTime": ["monotonicMs": 2200.0, "wallMs": 1700000001100.0],
-                    "encodedBodyLength": 512,
-                    "decodedBodySize": 512,
-                    "initiator": "xhr",
-                ],
+            snapshots.insert(
+                makeSnapshot(
+                    requestID: 1999,
+                    url: "https://cdn.example.com/assets/network/preview/super-long-file-name-for-line-wrap-validation-with-json-tag-rendering-and-truncation-check.json",
+                    responseMimeType: "application/json",
+                    statusCode: 200,
+                    statusText: "OK",
+                    startTimestamp: 1.9,
+                    endTimestamp: 2.2,
+                    wallTime: 1_700_000_000.8,
+                    encodedBodyLength: 512,
+                    decodedBodyLength: 512,
+                    type: "xhr"
+                ),
                 at: 0
             )
         }
 
-        return [
-            "version": 1,
-            "sessionId": "preview-session",
-            "seq": 1,
-            "events": events,
-        ]
+        return snapshots
+    }
+
+    private static func makeSnapshot(
+        requestID: Int,
+        url: String,
+        method: String = "GET",
+        requestHeaders: NetworkHeaders = NetworkHeaders(),
+        requestBody: NetworkBody? = nil,
+        requestBodyBytesSent: Int? = nil,
+        responseMimeType: String? = nil,
+        responseHeaders: NetworkHeaders = NetworkHeaders(),
+        responseBody: NetworkBody? = nil,
+        statusCode: Int? = nil,
+        statusText: String = "",
+        startTimestamp: TimeInterval,
+        endTimestamp: TimeInterval?,
+        wallTime: TimeInterval?,
+        encodedBodyLength: Int?,
+        decodedBodyLength: Int?,
+        type: String?
+    ) -> NetworkEntry.Snapshot {
+        NetworkEntry.Snapshot(
+            sessionID: "preview-session",
+            requestID: requestID,
+            request: NetworkEntry.Request(
+                url: url,
+                method: method,
+                headers: requestHeaders,
+                body: requestBody,
+                bodyBytesSent: requestBodyBytesSent,
+                type: type,
+                wallTime: wallTime
+            ),
+            response: NetworkEntry.Response(
+                statusCode: statusCode,
+                statusText: statusText,
+                mimeType: responseMimeType,
+                headers: responseHeaders,
+                body: responseBody,
+                blockedCookies: [],
+                errorDescription: nil
+            ),
+            transfer: NetworkEntry.Transfer(
+                startTimestamp: startTimestamp,
+                endTimestamp: endTimestamp,
+                duration: endTimestamp.map { $0 - startTimestamp },
+                encodedBodyLength: encodedBodyLength,
+                decodedBodyLength: decodedBodyLength,
+                phase: .completed
+            )
+        )
     }
 
     private static func preferredDetailEntry(in inspector: WINetworkModel) -> NetworkEntry? {

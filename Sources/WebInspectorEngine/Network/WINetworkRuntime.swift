@@ -28,7 +28,7 @@ package final class WINetworkRuntime {
     package convenience init(configuration: NetworkConfiguration = .init()) {
         self.init(
             configuration: configuration,
-            backend: NetworkPageAgent()
+            backend: WINetworkUnsupportedBackend(reason: "No native network backend was provided.")
         )
     }
 
@@ -123,21 +123,8 @@ package final class WINetworkRuntime {
 
 #if DEBUG
 extension WINetworkRuntime {
-    func wiApplyPreviewBatch(_ payload: NSDictionary) {
-        guard let batch = NetworkWire.PageHook.Batch.decode(from: payload) else {
-            return
-        }
-        store.applyNetworkBatch(batch)
-    }
-}
-
-extension WINetworkRuntime {
     package func testBackendTypeName() -> String {
         String(describing: type(of: backend))
-    }
-
-    package func testPageAgentTypeName() -> String {
-        testBackendTypeName()
     }
 }
 #endif

@@ -1,3 +1,4 @@
+import WebInspectorBridge
 import WebKit
 
 package typealias WIAny = Any

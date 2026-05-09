@@ -68,7 +68,6 @@ let package = Package(
             name: "WebInspectorEngine",
             dependencies: [
                 "WebInspectorBridge",
-                "WebInspectorScripts",
             ],
             swiftSettings: strictSwiftSettings
         ),
