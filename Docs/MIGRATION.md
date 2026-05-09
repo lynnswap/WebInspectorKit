@@ -76,8 +76,10 @@ injected through `WIInspectorDependencies`.
 
 ```swift
 let dependencies = WIInspectorDependencies.testing {
-    $0.network = WIInspectorNetworkClient(
-        networkAgentScript: { "" }
+    $0.domFrontend = WIInspectorDOMFrontendClient(
+        domTreeViewScript: { "" },
+        mainFileURL: { nil },
+        resourcesDirectoryURL: { nil }
     )
 }
 

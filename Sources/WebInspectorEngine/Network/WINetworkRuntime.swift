@@ -154,45 +154,55 @@ private extension WINetworkRuntime {
 }
 
 @MainActor
-private final class WINetworkUnavailableBackend: WINetworkBackend {
-    weak var webView: WKWebView?
-    let store = NetworkStore()
+package final class WINetworkUnsupportedBackend: WINetworkBackend {
+    package var webView: WKWebView? {
+        nil
+    }
 
-    let support = WIBackendSupport(
-        availability: .unsupported,
-        backendKind: .unsupported,
-        failureReason: "No backend was provided."
-    )
+    package let store = NetworkStore()
+    package let support: WIBackendSupport
 
-    func setMode(_ mode: NetworkLoggingMode) async {
+    package init(reason: String = "Network backend is unsupported.") {
+        self.support = WIBackendSupport(
+            availability: .unsupported,
+            backendKind: .unsupported,
+            failureReason: reason
+        )
+    }
+
+    package func setMode(_ mode: NetworkLoggingMode) async {
         store.setRecording(mode != .stopped)
         if mode == .stopped {
             store.reset()
         }
     }
 
-    func attachPageWebView(_ newWebView: WKWebView?) async {
-        webView = newWebView
+    package func attachPageWebView(_ newWebView: WKWebView?) async {
     }
 
-    func detachPageWebView(preparing modeBeforeDetach: NetworkLoggingMode?) async {
-        _ = modeBeforeDetach
-        webView = nil
+    package func detachPageWebView(preparing modeBeforeDetach: NetworkLoggingMode?) async {
+        if let modeBeforeDetach {
+            store.setRecording(modeBeforeDetach != .stopped)
+            if modeBeforeDetach == .stopped {
+                store.reset()
+            }
+        }
     }
 
-    func clearNetworkLogs() async {
+    package func clearNetworkLogs() async {
         store.clear()
     }
 
-    func tearDownForDeinit() {
-        webView = nil
+    package func tearDownForDeinit() {
         store.setRecording(false)
         store.reset()
     }
 
-    func fetchBodyResult(locator: NetworkDeferredBodyLocator, role: NetworkBody.Role) async -> WINetworkBodyFetchResult {
-        _ = locator
-        _ = role
+    package func supportsDeferredLoading(for role: NetworkBody.Role) -> Bool {
+        false
+    }
+
+    package func fetchBodyResult(locator: NetworkDeferredBodyLocator, role: NetworkBody.Role) async -> WINetworkBodyFetchResult {
         return .agentUnavailable
     }
 }

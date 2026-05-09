@@ -1,7 +1,6 @@
 import Foundation
 import WebKit
 import WebInspectorBridge
-import WebInspectorEngine
 import WebInspectorScripts
 import WebInspectorTransport
 
@@ -15,20 +14,17 @@ public protocol WIInspectorDependencyClient {
 public struct WIInspectorDependencies: WIInspectorDependencyClient {
     public var transport: WIInspectorTransportClient
     public var domFrontend: WIInspectorDOMFrontendClient
-    public var network: WIInspectorNetworkClient
     public var webKitSPI: WIInspectorWebKitSPIClient
     public var platform: WIInspectorPlatformClient
 
     public init(
         transport: WIInspectorTransportClient = .liveValue,
         domFrontend: WIInspectorDOMFrontendClient = .liveValue,
-        network: WIInspectorNetworkClient = .liveValue,
         webKitSPI: WIInspectorWebKitSPIClient = .liveValue,
         platform: WIInspectorPlatformClient = .liveValue
     ) {
         self.transport = transport
         self.domFrontend = domFrontend
-        self.network = network
         self.webKitSPI = webKitSPI
         self.platform = platform
     }
@@ -41,7 +37,6 @@ public struct WIInspectorDependencies: WIInspectorDependencyClient {
         Self(
             transport: .testValue,
             domFrontend: .testValue,
-            network: .testValue,
             webKitSPI: .testValue,
             platform: .testValue
         )
@@ -55,17 +50,6 @@ public struct WIInspectorDependencies: WIInspectorDependencyClient {
 
     package func makeSharedTransport() -> WISharedInspectorTransport {
         transport.makeSharedTransport()
-    }
-
-    package func makeNetworkPageAgentDependencies() -> NetworkPageAgentDependencies {
-        NetworkPageAgentDependencies(
-            controllerStateRegistry: network.controllerStateRegistry,
-            startupMode: webKitSPI.startupBridgeMode,
-            modeForAttachment: webKitSPI.bridgeModeForAttachment,
-            loadNetworkAgentScriptSource: network.networkAgentScript,
-            supportsResourceLoadDelegate: webKitSPI.supportsResourceLoadDelegate,
-            setResourceLoadDelegate: webKitSPI.setResourceLoadDelegate
-        )
     }
 }
 
@@ -187,40 +171,6 @@ public struct WIInspectorDOMFrontendClient: WIInspectorDependencyClient {
 
     func makeInspectorWebView() -> InspectorWebView {
         InspectorWebView(dependencies: self)
-    }
-}
-
-@MainActor
-public struct WIInspectorNetworkClient: WIInspectorDependencyClient {
-    public var networkAgentScript: @MainActor @Sendable () throws -> String
-    package var controllerStateRegistry: WIUserContentControllerStateRegistry
-
-    public init(
-        networkAgentScript: @escaping @MainActor @Sendable () throws -> String = {
-            try WebInspectorScripts.networkAgent()
-        }
-    ) {
-        self.networkAgentScript = networkAgentScript
-        self.controllerStateRegistry = .shared
-    }
-
-    package init(
-        networkAgentScript: @escaping @MainActor @Sendable () throws -> String,
-        controllerStateRegistry: WIUserContentControllerStateRegistry
-    ) {
-        self.networkAgentScript = networkAgentScript
-        self.controllerStateRegistry = controllerStateRegistry
-    }
-
-    public static var liveValue: Self {
-        Self()
-    }
-
-    public static var testValue: Self {
-        Self(
-            networkAgentScript: { "" },
-            controllerStateRegistry: .shared
-        )
     }
 }
 

@@ -1,5 +1,4 @@
 import Testing
-import WebInspectorBridge
 import WebKit
 #if canImport(UIKit)
 import UIKit
@@ -30,7 +29,6 @@ struct WIInspectorDependenciesTests {
         #expect(try dependencies.domFrontend.domTreeViewScript() == "")
         #expect(dependencies.domFrontend.mainFileURL() == nil)
         #expect(dependencies.domFrontend.resourcesDirectoryURL() == nil)
-        #expect(try dependencies.network.networkAgentScript() == "")
 
         let webView = WKWebView(frame: .zero)
         #expect(dependencies.webKitSPI.hasPrivateInspectorAccess(webView) == false)
@@ -51,9 +49,6 @@ struct WIInspectorDependenciesTests {
                 mainFileURL: { URL(fileURLWithPath: "/tmp/dom-tree-view.html") },
                 resourcesDirectoryURL: { URL(fileURLWithPath: "/tmp/dom-tree-view") }
             )
-            $0.network = WIInspectorNetworkClient(
-                networkAgentScript: { "custom-network-script" }
-            )
             $0.webKitSPI = WIInspectorWebKitSPIClient(
                 setNodeSearchEnabled: { _, enabled in enabled }
             )
@@ -62,15 +57,7 @@ struct WIInspectorDependenciesTests {
         #expect(try dependencies.domFrontend.domTreeViewScript() == "custom-dom-script")
         #expect(dependencies.domFrontend.mainFileURL()?.path == "/tmp/dom-tree-view.html")
         #expect(dependencies.domFrontend.resourcesDirectoryURL()?.path == "/tmp/dom-tree-view")
-        #expect(try dependencies.network.networkAgentScript() == "custom-network-script")
         #expect(dependencies.webKitSPI.setNodeSearchEnabled(WKWebView(frame: .zero), true))
-
-        let webView = WKWebView(frame: .zero)
-        let networkDependencies = dependencies.makeNetworkPageAgentDependencies()
-        #expect(networkDependencies.startupMode() == .legacyJSON)
-        #expect(networkDependencies.modeForAttachment(webView) == .legacyJSON)
-        #expect(networkDependencies.supportsResourceLoadDelegate(webView) == false)
-        #expect(networkDependencies.setResourceLoadDelegate(webView, nil) == false)
     }
 
     @Test
@@ -98,10 +85,11 @@ struct WIInspectorDependenciesTests {
     }
 
     @Test
-    func networkRuntimeFallsBackToInjectedPageAgentWhenTransportIsUnsupported() {
+    func networkRuntimeUsesUnsupportedBackendWhenTransportIsUnsupported() {
         let runtime = WINetworkRuntime(dependencies: .testValue)
 
-        #expect(runtime.model.session.testBackendTypeName() == "NetworkPageAgent")
+        #expect(runtime.model.session.testBackendTypeName() == "WINetworkUnsupportedBackend")
+        #expect(runtime.model.session.backendSupport.isSupported == false)
     }
 
 #if canImport(UIKit)
