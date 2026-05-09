@@ -7,7 +7,6 @@ import Testing
 struct WebInspectorScriptsTests {
     @Test
     func bundledScriptsLoadFromCommittedGeneratedSwift() throws {
-        #expect(try WebInspectorScripts.networkAgent().isEmpty == false)
         #expect(try WebInspectorScripts.domTreeView().isEmpty == false)
     }
 

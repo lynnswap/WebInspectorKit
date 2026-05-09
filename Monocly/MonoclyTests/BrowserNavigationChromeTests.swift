@@ -3,6 +3,7 @@ import UIKit
 import WebKit
 import XCTest
 @testable import Monocly
+import WebInspectorBridge
 @testable import WebInspectorEngine
 @_spi(Monocly) import WebInspectorRuntime
 @testable import WebInspectorRuntime
@@ -1119,19 +1120,22 @@ private extension BrowserNavigationChromeTests {
         requestID: Int,
         into store: NetworkStore
     ) throws {
-        let payload: [String: Any] = [
-            "kind": "requestWillBeSent",
-            "requestId": requestID,
-            "url": url,
-            "method": "GET",
-            "time": [
-                "monotonicMs": 1_000.0,
-                "wallMs": 1_700_000_000_000.0
-            ]
-        ]
-        let data = try JSONSerialization.data(withJSONObject: payload)
-        let event = try JSONDecoder().decode(NetworkWire.PageHook.Event.self, from: data)
-        store.apply(event, sessionID: "")
+        let update = NetworkEntry.Update.requestStarted(
+            .init(
+                requestID: requestID,
+                request: NetworkEntry.Request(
+                    url: url,
+                    method: "GET",
+                    headers: NetworkHeaders(),
+                    body: nil,
+                    bodyBytesSent: nil,
+                    type: nil,
+                    wallTime: 1_700_000_000.0
+                ),
+                timestamp: 1.0
+            )
+        )
+        store.apply(update, sessionID: "")
     }
 
     @MainActor

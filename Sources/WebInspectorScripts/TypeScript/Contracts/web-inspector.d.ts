@@ -20,7 +20,6 @@ declare global {
         webInspectorLog?: WebInspectorMessageHandler;
         webInspectorReady?: WebInspectorMessageHandler;
         webInspectorDomSelection?: WebInspectorMessageHandler;
-        webInspectorWSUpdate?: WebInspectorMessageHandler;
     }
 
     interface WebKitBridge {
@@ -32,7 +31,6 @@ declare global {
 
     interface Window {
         webInspectorDOMFrontend?: WebInspectorDOMFrontend;
-        webInspectorNetworkAgent?: Record<string, unknown>;
         webkit?: WebKitBridge;
     }
 

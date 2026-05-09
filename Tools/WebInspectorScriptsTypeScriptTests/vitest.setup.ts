@@ -12,10 +12,7 @@ const createMessageHandlers = (): MessageHandlers => ({
     webInspectorDomSelection: { postMessage: vi.fn() },
     webInspectorDomRequestChildren: { postMessage: vi.fn() },
     webInspectorDomHighlight: { postMessage: vi.fn() },
-    webInspectorDomHideHighlight: { postMessage: vi.fn() },
-    webInspectorNetworkEvents: { postMessage: vi.fn() },
-    webInspectorNetworkReset: { postMessage: vi.fn() },
-    webInspectorWSUpdate: { postMessage: vi.fn() }
+    webInspectorDomHideHighlight: { postMessage: vi.fn() }
 });
 
 beforeEach(() => {

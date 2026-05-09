@@ -13,11 +13,11 @@ struct NetworkSessionTests {
     }
 
     @Test
-    func defaultSessionUsesFunctionalPageAgentBackend() {
+    func defaultSessionUsesUnsupportedBackend() {
         let session = NetworkSession()
 
-        #expect(session.testBackendTypeName() == "NetworkPageAgent")
-        #expect(session.backendSupport.isSupported)
+        #expect(session.testBackendTypeName() == "WINetworkUnsupportedBackend")
+        #expect(session.backendSupport.isSupported == false)
     }
 
     @Test

@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import ObservationBridge
 import WebKit
+import WebInspectorTestSupport
 @testable import WebInspectorEngine
 @testable import WebInspectorRuntime
 @testable import WebInspectorUI
@@ -709,10 +710,8 @@ struct NetworkInspectorTests {
         inspector.store.apply(event, sessionID: "")
     }
 
-    private func decodeEvent(_ payload: [String: Any], sessionID: String = "") throws -> NetworkWire.PageHook.Event {
-        _ = sessionID
-        let data = try JSONSerialization.data(withJSONObject: payload)
-        return try JSONDecoder().decode(NetworkWire.PageHook.Event.self, from: data)
+    private func decodeEvent(_ payload: [String: Any], sessionID: String = "") throws -> NetworkEntry.Update {
+        try NetworkTestHelpers.decodeEvent(payload, sessionID: sessionID)
     }
 
     private func waitUntil(
