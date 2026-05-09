@@ -14,9 +14,6 @@ importers:
       terser:
         specifier: ^5.30.3
         version: 5.44.1
-      typescript:
-        specifier: ^5.7.3
-        version: 5.9.3
 
 packages:
 
@@ -220,11 +217,6 @@ packages:
     engines: {node: '>=10'}
     hasBin: true
 
-  typescript@5.9.3:
-    resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
-    engines: {node: '>=14.17'}
-    hasBin: true
-
 snapshots:
 
   '@esbuild/aix-ppc64@0.25.12':
@@ -372,5 +364,3 @@ snapshots:
       acorn: 8.15.0
       commander: 2.20.3
       source-map-support: 0.5.21
-
-  typescript@5.9.3: {}

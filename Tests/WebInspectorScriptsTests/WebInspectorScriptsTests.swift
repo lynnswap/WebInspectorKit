@@ -11,6 +11,13 @@ struct WebInspectorScriptsTests {
     }
 
     @Test
+    func committedGeneratedBundleOnlyPublishesEntrypointScripts() {
+        #expect(ScriptBundle.source(named: "dom-tree-view")?.isEmpty == false)
+        #expect(ScriptBundle.source(named: "dom-tree-model") == nil)
+        #expect(ScriptBundle.source(named: "agent-contract") == nil)
+    }
+
+    @Test
     func committedGeneratedBundleMatchesCurrentSourceInputs() throws {
         let expectedFingerprint = try Self.computeInputFingerprint()
         #expect(WebInspectorScripts.bundledScriptInputFingerprint == expectedFingerprint)

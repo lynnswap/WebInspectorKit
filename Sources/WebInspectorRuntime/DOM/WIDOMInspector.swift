@@ -1066,9 +1066,6 @@ public final class WIDOMInspector {
         if let node = nodeForBackendAction(backendNodeID: nodeId) {
             return try await copyText(for: node, kind: kind)
         }
-        if let text = try await copyTextForLiveBackendNode(backendNodeID: nodeId, kind: kind) {
-            return text
-        }
         if kind == .html {
             let response = try await sendDOMCommand(
                 WITransportMethod.DOM.getOuterHTML,
@@ -1626,26 +1623,6 @@ private extension WIDOMInspector {
     func nodeForBackendAction(backendNodeID: Int) -> DOMNodeModel? {
         document.node(stableBackendNodeID: backendNodeID)
             ?? document.node(backendNodeID: backendNodeID)
-    }
-
-    func copyTextForLiveBackendNode(
-        backendNodeID: Int,
-        kind: DOMSelectionCopyKind
-    ) async throws -> String? {
-        guard let pageWebView else {
-            return nil
-        }
-        let target = NSDictionary(dictionary: [
-            "kind": "backend",
-            "value": NSNumber(value: backendNodeID),
-        ])
-        let rawValue = try await pageWebView.callAsyncJavaScriptCompat(
-            "return window.webInspectorDOM?.\(kind.jsFunction)?.(target) ?? null;",
-            arguments: ["target": target],
-            in: nil,
-            contentWorld: .page
-        )
-        return rawValue as? String
     }
 
     func transportNodeID(for node: DOMNodeModel) throws -> Int {
@@ -6075,7 +6052,7 @@ private extension WIDOMInspector {
     }
 
     func selectorPathText(for node: DOMNodeModel) -> String {
-        guard node.nodeType == .element else {
+        guard nodeIsElementLike(node) else {
             return ""
         }
 
@@ -6133,7 +6110,7 @@ private extension WIDOMInspector {
     }
 
     func selectorPathComponent(for node: DOMNodeModel) -> (value: String, done: Bool)? {
-        guard node.nodeType == .element else {
+        guard nodeIsElementLike(node) else {
             return nil
         }
 
@@ -6192,14 +6169,20 @@ private extension WIDOMInspector {
     }
 
     func xPathComponent(for node: DOMNodeModel) -> String? {
-        switch node.nodeType {
-        case .element:
+        func elementComponent() -> String? {
             let nodeName = selectorNodeName(for: node)
             guard !nodeName.isEmpty else {
                 return nil
             }
             let index = xPathIndex(for: node)
             return index > 0 ? "\(nodeName)[\(index)]" : nodeName
+        }
+
+        switch node.nodeType {
+        case .element:
+            return elementComponent()
+        case .unknown where nodeIsElementLike(node):
+            return elementComponent()
         case .attribute:
             return "@\(node.nodeName)"
         case .text, .cdataSection:
@@ -6255,7 +6238,7 @@ private extension WIDOMInspector {
         if lhs === rhs {
             return true
         }
-        if lhs.nodeType == .element, rhs.nodeType == .element {
+        if nodeIsElementLike(lhs), nodeIsElementLike(rhs) {
             return selectorNodeName(for: lhs) == selectorNodeName(for: rhs)
         }
         if lhs.nodeType == .cdataSection {
@@ -6271,12 +6254,23 @@ private extension WIDOMInspector {
         guard let parent = node.parent else {
             return [node]
         }
-        return parent.children.filter { $0.nodeType == .element }
+        return parent.children.filter(nodeIsElementLike)
     }
 
     func selectorNodeName(for node: DOMNodeModel) -> String {
         let rawName = node.localName.isEmpty ? node.nodeName : node.localName
         return rawName.lowercased()
+    }
+
+    func nodeIsElementLike(_ node: DOMNodeModel) -> Bool {
+        if node.nodeType == .element {
+            return true
+        }
+        guard node.nodeType == .unknown else {
+            return false
+        }
+        let nodeName = selectorNodeName(for: node)
+        return !nodeName.isEmpty && !nodeName.hasPrefix("#")
     }
 
     func classNames(for node: DOMNodeModel) -> [String] {
