@@ -22,7 +22,7 @@ private enum WIDOMConsoleDiagnostics {
         "requestSelectionModeToggle enabled inspect mode",
         "beginSelectionMode armed inspect selection",
         "applyPendingInspectSelectionIfPossible resolved transport node",
-        "applySelection updated document and frontend",
+        "applySelection updated document",
     ]
 
     static let verboseConsoleDiagnosticsEnabled =
@@ -107,11 +107,6 @@ public final class WIDOMInspector {
         case beginFreshContext(reason: String, isFreshDocument: Bool)
     }
 
-    package enum FrontendHydrationDiagnosticEvent: Equatable, Sendable {
-        case hydrated(reason: String, contextID: DOMContextID, revision: UInt64, generation: UInt64)
-        case skippedDuplicateReady(reason: String, contextID: DOMContextID, revision: UInt64, generation: UInt64)
-    }
-
     package enum InspectSelectionDiagnosticEvent: Equatable, Sendable {
         case armed(contextID: DOMContextID, targetIdentifier: String, generation: UInt64)
         case ignoredStaleEvent(
@@ -139,12 +134,6 @@ public final class WIDOMInspector {
         let targetIdentifier: String
         var sawMutation = false
         var performedFollowUpRefresh = false
-    }
-
-    private struct FrontendHydrationKey: Equatable {
-        let contextID: DOMContextID
-        let projectionRevision: UInt64
-        let generation: UInt64
     }
 
     private struct SelectionTransaction: Equatable {
@@ -299,43 +288,8 @@ public final class WIDOMInspector {
         }
     }
 
-    @MainActor
-    private final class DOMFrontendCoordinator {
-        private(set) var lastHydratedContextID: DOMContextID?
-        private(set) var lastHydratedProjectionRevision: UInt64?
-        private(set) var lastHydratedGeneration: UInt64?
-
-        func reset() {
-            lastHydratedContextID = nil
-            lastHydratedProjectionRevision = nil
-            lastHydratedGeneration = nil
-        }
-
-        func isHydrated(
-            contextID: DOMContextID,
-            projectionRevision: UInt64,
-            generation: UInt64
-        ) -> Bool {
-            lastHydratedContextID == contextID
-                && lastHydratedProjectionRevision == projectionRevision
-                && lastHydratedGeneration == generation
-        }
-
-        func recordHydration(
-            contextID: DOMContextID,
-            projectionRevision: UInt64,
-            generation: UInt64
-        ) {
-            lastHydratedContextID = contextID
-            lastHydratedProjectionRevision = projectionRevision
-            lastHydratedGeneration = generation
-        }
-    }
-
     @ObservationIgnored package let dependencies: WIInspectorDependencies
     @ObservationIgnored private let sharedTransport: WISharedInspectorTransport
-    @ObservationIgnored let inspectorBridge: DOMInspectorBridge
-    @ObservationIgnored private let frontendCoordinator = DOMFrontendCoordinator()
     @ObservationIgnored private let payloadNormalizer = DOMPayloadNormalizer()
 
     public let document: DOMDocumentModel
@@ -351,7 +305,6 @@ public final class WIDOMInspector {
     @ObservationIgnored private var documentURL: String?
     @ObservationIgnored private var bootstrapTask: Task<Void, Never>?
     @ObservationIgnored private var bootstrapGeneration: UInt64 = 0
-    @ObservationIgnored private var frontendReadyContextID: DOMContextID?
     @ObservationIgnored private var externalRecoverableErrorHandler: (@MainActor (String?) -> Void)?
     @ObservationIgnored private var inspectModeTargetIdentifier: String?
     @ObservationIgnored package var inspectModeControlBackend: InspectModeControlBackend?
@@ -369,11 +322,8 @@ public final class WIDOMInspector {
     @ObservationIgnored private var pageWebViewAttachmentGeneration: UInt64 = 0
     @ObservationIgnored private var isDOMTransportAttached = false
     @ObservationIgnored private var deferredLoadingMutationState: DeferredLoadingMutationState?
-    @ObservationIgnored private var frontendHydrationInFlightKey: FrontendHydrationKey?
-    @ObservationIgnored private var frontendHydrationReplayContextID: DOMContextID?
 #if DEBUG
     @ObservationIgnored package private(set) var freshContextDiagnosticsForTesting: [FreshContextDiagnosticEvent] = []
-    @ObservationIgnored package private(set) var frontendHydrationDiagnosticsForTesting: [FrontendHydrationDiagnosticEvent] = []
     @ObservationIgnored package private(set) var inspectSelectionDiagnosticsForTesting: [InspectSelectionDiagnosticEvent] = []
 #endif
 
@@ -406,13 +356,9 @@ public final class WIDOMInspector {
         self.dependencies = dependencies
         self.configuration = configuration
         self.sharedTransport = sharedTransport
-        self.inspectorBridge = DOMInspectorBridge(dependencies: dependencies.domFrontend)
         self.document = DOMDocumentModel()
         self.externalRecoverableErrorHandler = onRecoverableError
 
-        inspectorBridge.onMessage = { [weak self] message in
-            self?.handleInspectorMessage(message)
-        }
         self.sharedTransport.setEventHandler({ [weak self] envelope in
             await self?.handleTransportEvent(envelope)
         }, for: .dom)
@@ -423,78 +369,6 @@ public final class WIDOMInspector {
     }
     package func setRecoverableErrorHandler(_ handler: (@MainActor (String?) -> Void)?) {
         externalRecoverableErrorHandler = handler
-    }
-
-    package func inspectorWebViewForPresentation() -> WKWebView {
-        makeInspectorWebView()
-    }
-
-    package func refreshFrontendProjectionIfPossible(reason: String = "manual") async {
-        guard let contextID = currentContext?.contextID else {
-            return
-        }
-        let selectionPayload = document.selectedNode.map(selectionPayload(for:))
-        await projectCurrentDocumentToFrontend(
-            contextID: contextID,
-            selectionPayload: selectionPayload,
-            reason: reason
-        )
-    }
-
-    package func frontendHostDidAttach(reason: String = "frontendHostDidAttach") async {
-        updateInspectorBootstrap()
-        frontendCoordinator.reset()
-
-        guard let contextID = currentContext?.contextID else {
-            logSelectionDiagnostics(
-                "frontendHostDidAttach waiting for context",
-                extra: "reason=\(reason) generation=\(inspectorBridge.generation)",
-                level: .debug
-            )
-            return
-        }
-
-        guard frontendReadyContextID == contextID else {
-            logSelectionDiagnostics(
-                "frontendHostDidAttach waiting for ready",
-                extra: "reason=\(reason) contextID=\(contextID) frontendReadyContext=\(frontendReadyContextID.map(String.init) ?? "nil") generation=\(inspectorBridge.generation)",
-                level: .debug
-            )
-            return
-        }
-
-        guard canProjectCurrentDocumentToFrontend(contextID: contextID) else {
-            logSelectionDiagnostics(
-                "frontendHostDidAttach waiting for ready document",
-                extra: "reason=\(reason) contextID=\(contextID) phase=\(String(describing: phase)) rootPresent=\(document.rootNode != nil)",
-                level: .debug
-            )
-            return
-        }
-
-        await projectCurrentDocumentToFrontend(
-            contextID: contextID,
-            selectionPayload: document.selectedNode.map(selectionPayload(for:)),
-            reason: reason
-        )
-    }
-
-    package func makeInspectorWebView() -> WKWebView {
-        let reusesExistingInspectorWebView = inspectorBridge.inspectorWebView != nil
-        if reusesExistingInspectorWebView == false {
-            frontendReadyContextID = nil
-            frontendCoordinator.reset()
-        }
-        let inspectorWebView = inspectorBridge.makeInspectorWebView(bootstrapPayload: bootstrapPayload())
-        logSelectionDiagnostics(
-            "makeInspectorWebView",
-            extra: "reusesExisting=\(reusesExistingInspectorWebView) frontendReadyContext=\(frontendReadyContextID.map(String.init) ?? "nil") generation=\(inspectorBridge.generation)",
-            level: .debug
-        )
-#if canImport(UIKit)
-        installPointerDisconnectObserverIfNeeded()
-#endif
-        return inspectorWebView
     }
 
     package func attach(to webView: WKWebView) async {
@@ -518,7 +392,6 @@ public final class WIDOMInspector {
             guard isDOMTransportAttached else {
                 cancelBootstrap()
                 clearContextState(reason: "attach.transportUnavailable.sameWebView")
-                updateInspectorBootstrap()
                 return
             }
             return
@@ -545,7 +418,6 @@ public final class WIDOMInspector {
             if isSwitchingAttachedPage {
                 cancelBootstrap()
                 clearContextState(reason: "attach.transportUnavailable.newWebView")
-                updateInspectorBootstrap()
             }
             return
         }
@@ -575,7 +447,6 @@ public final class WIDOMInspector {
         setPageWebView(nil)
         cancelBootstrap()
         clearContextState(reason: "suspend")
-        updateInspectorBootstrap()
     }
 
     package func detach() async {
@@ -593,8 +464,6 @@ public final class WIDOMInspector {
         setPageWebView(nil)
         cancelBootstrap()
         clearContextState(reason: "detach")
-        updateInspectorBootstrap()
-        inspectorBridge.detachInspectorWebView()
     }
 
     public func reloadPage() async throws {
@@ -838,12 +707,9 @@ public final class WIDOMInspector {
         isDOMTransportAttached = false
         currentContext = nil
         setPhase(.idle)
-        frontendReadyContextID = nil
-        frontendCoordinator.reset()
         inspectSelectionArm = nil
         cancelPendingChildRequestRecords()
         document.setErrorMessage(nil)
-        inspectorBridge.detachInspectorWebView()
         clearDeleteUndoHistory()
         Task { @MainActor [sharedTransport] in
             await sharedTransport.detach(client: .dom)
@@ -887,10 +753,6 @@ public final class WIDOMInspector {
 #if DEBUG
     package func resetFreshContextDiagnosticsForTesting() {
         freshContextDiagnosticsForTesting.removeAll(keepingCapacity: false)
-    }
-
-    package func resetFrontendHydrationDiagnosticsForTesting() {
-        frontendHydrationDiagnosticsForTesting.removeAll(keepingCapacity: false)
     }
 
     package func resetInspectSelectionDiagnosticsForTesting() {
@@ -1134,6 +996,55 @@ public final class WIDOMInspector {
         try await deleteNode(nodeID: nodeId, nodeLocalID: nil, undoManager: undoManager)
     }
 
+    package func selectNode(_ node: DOMNodeModel) async {
+        guard document.contains(node) else {
+            return
+        }
+
+        if let contextID = currentContext?.contextID {
+            await applySelection(
+                to: node,
+                selectorPath: node.selectorPath.nilIfEmpty,
+                contextID: contextID
+            )
+        } else {
+            document.applySelectionSnapshot(selectionPayload(for: node))
+        }
+    }
+
+    package func requestChildNodes(for node: DOMNodeModel, depth: Int) async {
+        guard document.contains(node),
+              node.childCount > node.children.count,
+              node.localID <= UInt64(Int.max),
+              let context = currentContext,
+              let targetIdentifier = phase.targetIdentifier ?? sharedTransport.currentPageTargetIdentifier()
+        else {
+            return
+        }
+
+        _ = await requestChildNodesAndWaitForCompletion(
+            transportNodeID: (try? transportNodeID(for: node)) ?? Int(node.localID),
+            frontendNodeID: Int(node.localID),
+            targetIdentifier: targetIdentifier,
+            contextID: context.contextID,
+            depth: depth
+        )
+    }
+
+    package func highlightNode(_ node: DOMNodeModel, reveal: Bool) async {
+        guard document.contains(node),
+              node.localID <= UInt64(Int.max)
+        else {
+            return
+        }
+
+        try? await highlightNode(Int(node.localID), reveal: reveal)
+    }
+
+    package func hideNodeHighlight() async {
+        try? await hideHighlight()
+    }
+
     public func setAttribute(
         nodeID: DOMNodeModel.ID,
         name: String,
@@ -1209,62 +1120,6 @@ public final class WIDOMInspector {
 }
 
 private extension WIDOMInspector {
-    func bootstrapPayload() -> [String: Any] {
-        [
-            "config": [
-                "snapshotDepth": configuration.snapshotDepth,
-                "subtreeDepth": configuration.subtreeDepth,
-                "autoUpdateDebounce": configuration.autoUpdateDebounce,
-            ],
-            "context": [
-                "contextID": currentContext?.contextID ?? 0,
-            ],
-        ]
-    }
-
-    func updateInspectorBootstrap() {
-        inspectorBridge.updateBootstrap(bootstrapPayload())
-    }
-
-    func invalidateFrontendDocumentContext(contextID: DOMContextID) async {
-        updateInspectorBootstrap()
-        await inspectorBridge.invalidateDocumentContext(contextID: contextID)
-    }
-
-    func canProjectCurrentDocumentToFrontend(contextID: DOMContextID) -> Bool {
-        guard frontendReadyContextID == contextID,
-              currentContext?.contextID == contextID,
-              document.rootNode != nil else {
-            return false
-        }
-        guard case let .ready(context, _) = phase else {
-            return false
-        }
-        return context.contextID == contextID
-    }
-
-    func frontendFullSnapshotPayload() -> [String: Any]? {
-        guard let rootNode = document.rootNode else {
-            return nil
-        }
-        var payload: [String: Any] = [
-            "root": nodePayloadDictionary(from: rootNode)
-        ]
-        if let selectedLocalID = document.selectedNode?.localID,
-           selectedLocalID <= UInt64(Int.max) {
-            payload["selectedLocalId"] = Int(selectedLocalID)
-        }
-        return payload
-    }
-
-    func frontendCanAcceptIncrementalProjection(contextID: DOMContextID) -> Bool {
-        guard canProjectCurrentDocumentToFrontend(contextID: contextID) else {
-            return false
-        }
-        return frontendCoordinator.lastHydratedContextID == contextID
-            && frontendCoordinator.lastHydratedGeneration == inspectorBridge.generation
-    }
-
     func armInspectSelection(
         contextID: DOMContextID,
         targetIdentifier: String
@@ -1347,197 +1202,6 @@ private extension WIDOMInspector {
         }
 
         return true
-    }
-
-    func hydrateReadyFrontendFromCurrentDocument(
-        contextID: DOMContextID,
-        reason: String
-    ) async {
-        guard frontendReadyContextID == contextID,
-              currentContext?.contextID == contextID else {
-            return
-        }
-
-        let projectionRevision = document.projectionRevision
-        let frontendGeneration = inspectorBridge.generation
-        let hydrationKey = FrontendHydrationKey(
-            contextID: contextID,
-            projectionRevision: projectionRevision,
-            generation: frontendGeneration
-        )
-        if frontendCoordinator.isHydrated(
-            contextID: contextID,
-            projectionRevision: projectionRevision,
-            generation: frontendGeneration
-        ) {
-#if DEBUG
-            frontendHydrationDiagnosticsForTesting.append(
-                .skippedDuplicateReady(
-                    reason: reason,
-                    contextID: contextID,
-                    revision: projectionRevision,
-                    generation: frontendGeneration
-                )
-            )
-#endif
-            logSelectionDiagnostics(
-                "hydrateReadyFrontendFromCurrentDocument skipped duplicate ready",
-                extra: "reason=\(reason) contextID=\(contextID) revision=\(projectionRevision) generation=\(frontendGeneration)"
-            )
-            return
-        }
-
-        if frontendHydrationInFlightKey == hydrationKey {
-            logSelectionDiagnostics(
-                "hydrateReadyFrontendFromCurrentDocument skipped duplicate in-flight ready",
-                extra: "reason=\(reason) contextID=\(contextID) revision=\(projectionRevision) generation=\(frontendGeneration)"
-            )
-            return
-        }
-
-        if let frontendHydrationInFlightKey,
-           frontendHydrationInFlightKey.contextID == contextID {
-            frontendHydrationReplayContextID = contextID
-            logSelectionDiagnostics(
-                "hydrateReadyFrontendFromCurrentDocument queued replay while hydration is in flight",
-                extra: "reason=\(reason) contextID=\(contextID) revision=\(projectionRevision) generation=\(frontendGeneration) inFlightRevision=\(frontendHydrationInFlightKey.projectionRevision) inFlightGeneration=\(frontendHydrationInFlightKey.generation)",
-                level: .debug
-            )
-            return
-        }
-
-        frontendHydrationInFlightKey = hydrationKey
-
-        guard canProjectCurrentDocumentToFrontend(contextID: contextID),
-              let snapshotPayload = frontendFullSnapshotPayload() else {
-            frontendCoordinator.reset()
-            if frontendHydrationInFlightKey == hydrationKey {
-                frontendHydrationInFlightKey = nil
-            }
-            logSelectionDiagnostics(
-                "hydrateReadyFrontendFromCurrentDocument skipped without ready document",
-                extra: "reason=\(reason) contextID=\(contextID) revision=\(projectionRevision) generation=\(frontendGeneration) phase=\(String(describing: phase)) rootPresent=\(document.rootNode != nil)",
-                level: .debug
-            )
-            return
-        }
-        updateInspectorBootstrap()
-        let didApplySnapshot = await inspectorBridge.applyFullSnapshot(snapshotPayload, contextID: contextID)
-        guard canProjectCurrentDocumentToFrontend(contextID: contextID) else {
-            if frontendHydrationInFlightKey == hydrationKey {
-                frontendHydrationInFlightKey = nil
-            }
-            return
-        }
-        let didApplySelection = await applySelectionProjection(
-            document.selectedNode.map(selectionPayload(for:)),
-            contextID: contextID
-        )
-        guard didApplySnapshot else {
-            frontendCoordinator.reset()
-            if frontendHydrationInFlightKey == hydrationKey {
-                frontendHydrationInFlightKey = nil
-            }
-            logSelectionDiagnostics(
-                "hydrateReadyFrontendFromCurrentDocument skipped failed projection",
-                extra: "reason=\(reason) contextID=\(contextID) revision=\(projectionRevision) generation=\(frontendGeneration) snapshot=false selection=\(didApplySelection)",
-                level: .debug
-            )
-            return
-        }
-        frontendCoordinator.recordHydration(
-            contextID: contextID,
-            projectionRevision: projectionRevision,
-            generation: frontendGeneration
-        )
-#if DEBUG
-        frontendHydrationDiagnosticsForTesting.append(
-            .hydrated(
-                reason: reason,
-                contextID: contextID,
-                revision: projectionRevision,
-                generation: frontendGeneration
-            )
-        )
-#endif
-        logSelectionDiagnostics(
-            "hydrateReadyFrontendFromCurrentDocument applied current state",
-            extra: "reason=\(reason) contextID=\(contextID) revision=\(projectionRevision) generation=\(frontendGeneration) snapshot=\(didApplySnapshot) selection=\(didApplySelection)"
-        )
-
-        let shouldReplay = frontendHydrationReplayContextID == contextID
-            && currentContext?.contextID == contextID
-            && frontendReadyContextID == contextID
-        if shouldReplay {
-            frontendHydrationReplayContextID = nil
-        }
-        if frontendHydrationInFlightKey == hydrationKey {
-            frontendHydrationInFlightKey = nil
-        }
-        if shouldReplay {
-            await hydrateReadyFrontendFromCurrentDocument(
-                contextID: contextID,
-                reason: "hydrateReadyFrontendFromCurrentDocument.replay"
-            )
-        }
-    }
-
-    func markReadyFrontendProjectionCurrent(contextID: DOMContextID) {
-        guard frontendReadyContextID == contextID else {
-            return
-        }
-        frontendCoordinator.recordHydration(
-            contextID: contextID,
-            projectionRevision: document.projectionRevision,
-            generation: inspectorBridge.generation
-        )
-    }
-
-    func applySelectionProjection(
-        _ selectionPayload: DOMSelectionSnapshotPayload?,
-        contextID: DOMContextID
-    ) async -> Bool {
-        guard let selectionPayload else {
-            await inspectorBridge.applySelectionPayload(
-                selectionPayloadDictionary(from: nil),
-                contextID: contextID
-            )
-            return true
-        }
-
-        return await inspectorBridge.applySelectionPayload(
-            selectionPayloadDictionary(from: selectionPayload),
-            contextID: contextID
-        )
-    }
-
-    func projectCurrentDocumentToFrontend(
-        contextID: DOMContextID,
-        selectionPayload: DOMSelectionSnapshotPayload?,
-        reason: String
-    ) async {
-        guard canProjectCurrentDocumentToFrontend(contextID: contextID),
-              let snapshotPayload = frontendFullSnapshotPayload() else {
-            frontendCoordinator.reset()
-            logSelectionDiagnostics(
-                "projectCurrentDocumentToFrontend skipped without ready document",
-                extra: "reason=\(reason) contextID=\(contextID) phase=\(String(describing: phase)) rootPresent=\(document.rootNode != nil)",
-                level: .debug
-            )
-            return
-        }
-        updateInspectorBootstrap()
-        let didApplySnapshot = await inspectorBridge.applyFullSnapshot(snapshotPayload, contextID: contextID)
-        let didApplySelection = await applySelectionProjection(selectionPayload, contextID: contextID)
-        if frontendReadyContextID == contextID, didApplySnapshot {
-            markReadyFrontendProjectionCurrent(contextID: contextID)
-        } else if frontendReadyContextID == contextID, didApplySnapshot == false {
-            frontendCoordinator.reset()
-        }
-        logSelectionDiagnostics(
-            "projectCurrentDocumentToFrontend",
-            extra: "reason=\(reason) contextID=\(contextID) snapshot=\(didApplySnapshot) selection=\(didApplySelection)"
-        )
     }
 
     func requirePageWebView() throws -> WKWebView {
@@ -1654,20 +1318,16 @@ private extension WIDOMInspector {
 #endif
         logSelectionDiagnostics(
             "clearContextState",
-            extra: "reason=\(reason) pageWebView=\(webViewSummary(pageWebView)) transportAttached=\(isDOMTransportAttached) frontendReadyContext=\(frontendReadyContextID.map(String.init) ?? "nil") inspectTarget=\(inspectModeTargetIdentifier ?? "nil")"
+            extra: "reason=\(reason) pageWebView=\(webViewSummary(pageWebView)) transportAttached=\(isDOMTransportAttached) inspectTarget=\(inspectModeTargetIdentifier ?? "nil")"
         )
         currentContext = nil
         setPhase(.idle)
         documentURL = nil
-        frontendReadyContextID = nil
         deferredLoadingMutationState = nil
-        frontendHydrationInFlightKey = nil
-        frontendHydrationReplayContextID = nil
         inspectModeTargetIdentifier = nil
         acceptsInspectEvents = false
         cancelPendingInspectMaterializationTimeout()
         pendingInspectSelection = nil
-        frontendCoordinator.reset()
         isSelectingElement = false
         selectionGeneration &+= 1
         selectionActivationGeneration &+= 1
@@ -1705,11 +1365,7 @@ private extension WIDOMInspector {
         await failPendingChildRequests()
         cancelBootstrap()
         payloadNormalizer.resetForDocumentUpdate()
-        frontendReadyContextID = nil
-        frontendCoordinator.reset()
         deferredLoadingMutationState = nil
-        frontendHydrationInFlightKey = nil
-        frontendHydrationReplayContextID = nil
         cancelPendingInspectMaterializationTimeout()
 
         let context = DOMContext(
@@ -1729,15 +1385,12 @@ private extension WIDOMInspector {
             setPhase(.waitingForTarget(context))
         }
 
-        await invalidateFrontendDocumentContext(contextID: context.contextID)
-
 #if canImport(UIKit)
         await resetNativeInspectorSelectionStateForFreshContext(
             reason: reason,
             contextID: context.contextID
         )
 #endif
-        updateInspectorBootstrap()
         logBootstrapDiagnostics(
             "beginFreshContext context=\(context.contextID) target=\(targetIdentifier ?? "nil") loadImmediately=\(loadImmediately) url=\(documentURL ?? "nil")"
         )
@@ -1859,13 +1512,6 @@ private extension WIDOMInspector {
             depth: depth
         )
 
-        if frontendReadyContextID == contextID {
-            await hydrateReadyFrontendFromCurrentDocument(
-                contextID: contextID,
-                reason: "transport.refreshCurrentDocument"
-            )
-        }
-
         clearDeferredLoadingMutationStateIfSettled(
             contextID: contextID,
             targetIdentifier: targetIdentifier
@@ -1985,111 +1631,6 @@ private extension WIDOMInspector {
             return false
         }
         return depth <= 2
-    }
-
-    func handleInspectorMessage(_ message: DOMInspectorBridge.IncomingMessage) {
-        switch message {
-        case let .ready(contextID):
-            guard phase.matches(contextID) else {
-                logSelectionDiagnostics(
-                    "handleInspectorReady ignored",
-                    extra: "contextID=\(contextID) currentContext=\(currentContext.map { String($0.contextID) } ?? "nil")",
-                    level: .debug
-                )
-                return
-            }
-            let wasFrontendReadyForContext = frontendReadyContextID == contextID
-            logSelectionDiagnostics(
-                "handleInspectorReady",
-                extra: "contextID=\(contextID) wasFrontendReady=\(wasFrontendReadyForContext)",
-                level: .debug
-            )
-            frontendReadyContextID = contextID
-            if case let .ready(context, _) = phase {
-                if bootstrapTask != nil {
-                    logSelectionDiagnostics(
-                        "handleInspectorReady waiting for bootstrap completion",
-                        extra: "contextID=\(contextID) revision=\(document.projectionRevision)",
-                        level: .debug
-                    )
-                    return
-                }
-                let contextID = context.contextID
-                Task { @MainActor [weak self] in
-                    guard let self else {
-                        return
-                    }
-                    await self.hydrateReadyFrontendFromCurrentDocument(
-                        contextID: contextID,
-                        reason: "ready.currentContext"
-                    )
-                }
-                return
-            }
-            if case let .waitingForTarget(context) = phase,
-               wasFrontendReadyForContext == false,
-               let targetIdentifier = sharedTransport.currentObservedPageTargetIdentifier()
-                    ?? sharedTransport.currentPageTargetIdentifier() {
-                logSelectionDiagnostics(
-                    "handleInspectorReady loading waiting context",
-                    extra: "contextID=\(contextID) target=\(targetIdentifier)"
-                )
-                startLoadingDocument(
-                    for: context,
-                    targetIdentifier: targetIdentifier,
-                    depth: configuration.snapshotDepth,
-                    isFreshDocument: true
-                )
-            }
-        case let .requestChildren(nodeID, depth, contextID):
-            guard phase.matches(contextID) else {
-                return
-            }
-            Task { @MainActor [weak self] in
-                await self?.performChildRequest(nodeID: nodeID, depth: depth, contextID: contextID)
-            }
-        case let .requestSnapshotReload(_, contextID):
-            guard phase.matches(contextID),
-                  let targetIdentifier = phase.targetIdentifier ?? sharedTransport.currentPageTargetIdentifier() else {
-                return
-            }
-            Task { @MainActor [weak self] in
-                do {
-                    try await self?.refreshCurrentDocumentFromTransport(
-                        contextID: contextID,
-                        targetIdentifier: targetIdentifier,
-                        depth: self?.configuration.snapshotDepth ?? 3,
-                        isFreshDocument: false
-                    )
-                } catch {
-                    self?.applyRecoverableError(self?.errorMessage(from: error))
-                }
-            }
-        case let .highlight(nodeID, reveal, contextID):
-            guard phase.matches(contextID) else {
-                return
-            }
-            Task { @MainActor [weak self] in
-                try? await self?.highlightNode(nodeID, reveal: reveal)
-            }
-        case let .hideHighlight(contextID):
-            guard phase.matches(contextID) else {
-                return
-            }
-            Task { @MainActor [weak self] in
-                try? await self?.hideHighlight()
-            }
-        case let .domSelection(payload, contextID):
-            guard phase.matches(contextID) else {
-                return
-            }
-            handleInspectorSelection(payload)
-        case let .log(message):
-            guard WIDOMConsoleDiagnostics.verboseConsoleDiagnosticsEnabled else {
-                return
-            }
-            domViewLogger.debug("inspector log: \(message, privacy: .public)")
-        }
     }
 
     func handleTransportEvent(_ envelope: WITransportEventEnvelope) async {
@@ -2265,20 +1806,6 @@ private extension WIDOMInspector {
                 )
                 return
             }
-            if mirrorInvariantViolationReason == nil, frontendCanAcceptIncrementalProjection(contextID: context.contextID) {
-                await inspectorBridge.applyMutationBundles(payload, contextID: context.contextID)
-                markReadyFrontendProjectionCurrent(contextID: context.contextID)
-            } else if mirrorInvariantViolationReason == nil, frontendReadyContextID == context.contextID {
-                logSelectionDiagnostics(
-                    "handleDOMEventEnvelope deferred mutation until initial hydration",
-                    extra: "contextID=\(context.contextID) revision=\(document.projectionRevision)",
-                    level: .debug
-                )
-                await hydrateReadyFrontendFromCurrentDocument(
-                    contextID: context.contextID,
-                    reason: "handleDOMEventEnvelope.deferredMutation"
-                )
-            }
             recordPendingInspectProgressIfNeeded(
                 from: bundle,
                 contextID: context.contextID,
@@ -2303,13 +1830,6 @@ private extension WIDOMInspector {
         case let .replaceSubtree(root):
             let bundle = DOMGraphMutationBundle(events: [.replaceSubtree(root: root)])
             document.applyMutationBundle(bundle)
-            if frontendCanAcceptIncrementalProjection(contextID: context.contextID) == false,
-               frontendReadyContextID == context.contextID {
-                await hydrateReadyFrontendFromCurrentDocument(
-                    contextID: context.contextID,
-                    reason: "handleDOMEventEnvelope.deferredSubtree"
-                )
-            }
             recordPendingInspectProgressIfNeeded(
                 from: bundle,
                 contextID: context.contextID,
@@ -2339,26 +1859,10 @@ private extension WIDOMInspector {
                 selector: selection?.selectorPath,
                 extra: "payload=\(selectionPayloadSummary(selection)) previous=\(previousSelection)"
             )
-            if frontendCanAcceptIncrementalProjection(contextID: context.contextID) {
-                await inspectorBridge.applySelectionPayload(
-                    selectionPayloadDictionary(from: selection),
-                    contextID: context.contextID
-                )
-                markReadyFrontendProjectionCurrent(contextID: context.contextID)
-            } else if frontendReadyContextID == context.contextID {
-                await hydrateReadyFrontendFromCurrentDocument(
-                    contextID: context.contextID,
-                    reason: "handleDOMEventEnvelope.deferredSelection"
-                )
-            }
         case let .selectorPath(selectorPath):
             document.applySelectorPath(selectorPath)
         case let .snapshot(snapshot, resetDocument):
             document.replaceDocument(with: snapshot, isFreshDocument: resetDocument)
-            if frontendReadyContextID == context.contextID {
-                await inspectorBridge.applyFullSnapshot(payload, contextID: context.contextID)
-                markReadyFrontendProjectionCurrent(contextID: context.contextID)
-            }
             await applyPendingInspectSelectionIfPossible()
         }
     }
@@ -2613,22 +2117,7 @@ private extension WIDOMInspector {
             level: .debug
         )
 
-        guard shouldNotifyFrontend else {
-            return
-        }
-
-        if success, let node = document.node(localID: UInt64(nodeID)) {
-            await inspectorBridge.applySubtreePayload(
-                nodePayloadDictionary(from: node),
-                contextID: contextID
-            )
-        }
-
-        await inspectorBridge.finishChildNodeRequest(
-            nodeID: nodeID,
-            success: success,
-            contextID: contextID
-        )
+        _ = shouldNotifyFrontend
     }
 
     private func failPendingChildRequests(contextID: DOMContextID? = nil) async {
@@ -2651,13 +2140,7 @@ private extension WIDOMInspector {
                 extra: "nodeID=\(key.nodeID) contextID=\(key.contextID) reportsToFrontend=\(shouldNotifyFrontend)",
                 level: .debug
             )
-            if shouldNotifyFrontend {
-                await inspectorBridge.finishChildNodeRequest(
-                    nodeID: key.nodeID,
-                    success: false,
-                    contextID: key.contextID
-                )
-            }
+            _ = shouldNotifyFrontend
         }
     }
 
@@ -2825,11 +2308,6 @@ private extension WIDOMInspector {
                     selector: resolvedSelection.selectorPath,
                     extra: "payload=\(selectionPayloadSummary(resolvedSelection)) previous=\(previousSelection)"
                 )
-                if let contextID = currentContext?.contextID,
-                   frontendReadyContextID == contextID,
-                   frontendCoordinator.lastHydratedContextID == contextID {
-                    markReadyFrontendProjectionCurrent(contextID: contextID)
-                }
                 let transaction = pendingInspectSelection?.transaction
                     ?? {
                         guard let contextID = currentContext?.contextID else {
@@ -2853,11 +2331,6 @@ private extension WIDOMInspector {
                 selector: resolvedSelection.selectorPath,
                 extra: "payload=\(selectionPayloadSummary(resolvedSelection)) previous=\(previousSelection)"
             )
-            if let contextID = currentContext?.contextID,
-               frontendReadyContextID == contextID,
-               frontendCoordinator.lastHydratedContextID == contextID {
-                markReadyFrontendProjectionCurrent(contextID: contextID)
-            }
             Task { @MainActor [weak self] in
                 guard let self, let contextID = self.currentContext?.contextID else {
                     return
@@ -5001,44 +4474,10 @@ private extension WIDOMInspector {
             payload.selectorPath = selectorPath
         }
         document.applySelectionSnapshot(payload)
-        if frontendCanAcceptIncrementalProjection(contextID: contextID) {
-            let subtreeRoot = selectionSubtreeRoot(
-                for: node,
-                preferredNodeIDs: preferredSubtreeRootNodeIDs
-            )
-            let didApplySubtree: Bool
-            if let subtreeRoot {
-                didApplySubtree = await inspectorBridge.applySubtreePayload(
-                    nodePayloadDictionary(from: subtreeRoot),
-                    contextID: contextID
-                )
-            } else {
-                didApplySubtree = true
-            }
-            let didApplySelection = await applySelectionProjection(payload, contextID: contextID)
-            let needsFullSnapshotFallback = !didApplySelection || (subtreeRoot != nil && !didApplySubtree)
-            if needsFullSnapshotFallback {
-                frontendCoordinator.reset()
-                await projectCurrentDocumentToFrontend(
-                    contextID: contextID,
-                    selectionPayload: payload,
-                    reason: "applySelection.fullSnapshotFallback"
-                )
-            } else {
-                markReadyFrontendProjectionCurrent(contextID: contextID)
-            }
-        } else {
-            await projectCurrentDocumentToFrontend(
-                contextID: contextID,
-                selectionPayload: payload,
-                reason: frontendReadyContextID == contextID
-                    ? "applySelection.initialHydration"
-                    : "applySelection.proactiveProjection"
-            )
-        }
+        _ = preferredSubtreeRootNodeIDs
         await syncSelectedNodeHighlight(contextID: contextID)
         logSelectionDiagnostics(
-            "applySelection updated document and frontend",
+            "applySelection updated document",
             selector: selectorPath,
             extra: selectionNodeSummary(node)
         )
@@ -5328,14 +4767,7 @@ private extension WIDOMInspector {
 
         document.clearSelection()
         try? await hideHighlight()
-        if let contextID,
-           frontendCanAcceptIncrementalProjection(contextID: contextID) {
-            await inspectorBridge.applySelectionPayload(
-                selectionPayloadDictionary(from: nil),
-                contextID: contextID
-            )
-            markReadyFrontendProjectionCurrent(contextID: contextID)
-        }
+        _ = contextID
         applyRecoverableError(showError ? errorMessage : nil)
     }
 
@@ -6626,6 +6058,12 @@ extension WIDOMInspector {
 
 #if DEBUG
 extension WIDOMInspector {
+    package enum TestInspectorMessage {
+        case requestChildren(nodeID: Int, depth: Int, contextID: DOMContextID)
+        case highlight(nodeID: Int, reveal: Bool, contextID: DOMContextID)
+        case requestSnapshotReload(reason: String, contextID: DOMContextID)
+    }
+
     package var testCurrentContextID: DOMContextID? {
         currentContext?.contextID
     }
@@ -6645,20 +6083,33 @@ extension WIDOMInspector {
         await handleTransportEvent(envelope)
     }
 
-    func testHandleInspectorMessage(_ message: DOMInspectorBridge.IncomingMessage) {
-        handleInspectorMessage(message)
-    }
-
-    package func testHandleReadyMessage(contextID: DOMContextID) {
-        handleInspectorMessage(.ready(contextID: contextID))
-    }
-
-    package func testFrontendIsReady() async -> Bool {
-        await inspectorBridge.frontendIsReady()
-    }
-
-    package func testFrontendHostDidAttach(reason: String = "test.frontendHostDidAttach") async {
-        await frontendHostDidAttach(reason: reason)
+    package func testHandleInspectorMessage(_ message: TestInspectorMessage) {
+        switch message {
+        case let .requestChildren(nodeID, depth, contextID):
+            Task { @MainActor [weak self] in
+                await self?.performChildRequest(nodeID: nodeID, depth: depth, contextID: contextID)
+            }
+        case let .highlight(nodeID, reveal, contextID):
+            guard currentContext?.contextID == contextID else {
+                return
+            }
+            Task { @MainActor [weak self] in
+                try? await self?.highlightNode(nodeID, reveal: reveal)
+            }
+        case let .requestSnapshotReload(_, contextID):
+            guard let context = currentContext,
+                  context.contextID == contextID,
+                  let targetIdentifier = phase.targetIdentifier
+            else {
+                return
+            }
+            startLoadingDocument(
+                for: context,
+                targetIdentifier: targetIdentifier,
+                depth: configuration.snapshotDepth,
+                isFreshDocument: false
+            )
+        }
     }
 
     package func testHandleInspectorSelection(_ payload: DOMSelectionSnapshotPayload?) {
@@ -6722,12 +6173,6 @@ extension WIDOMInspector {
             isFreshDocument: isFreshDocument,
             reason: "testBeginFreshContext"
         )
-    }
-
-    package func testResetFrontendHydrationState() {
-        frontendCoordinator.reset()
-        frontendHydrationInFlightKey = nil
-        frontendHydrationReplayContextID = nil
     }
 
     package func testSetPendingInspectSelection(
@@ -6834,19 +6279,12 @@ extension WIDOMInspector {
         pendingInspectSelection?.scopedMaterializationRootNodeIDs.map(\.localID) ?? []
     }
 
-    package var testFrontendSnapshotRootLocalID: UInt64? {
+    package var testDocumentRootLocalID: UInt64? {
         document.rootNode?.localID
     }
 
-    package var testFrontendSnapshotRootChildLocalIDs: [UInt64] {
-        let root = frontendFullSnapshotPayload()?["root"] as? [String: Any]
-        let children = root?["children"] as? [[String: Any]] ?? []
-        return children.compactMap { child in
-            if let id = child["id"] as? Int {
-                return UInt64(id)
-            }
-            return nil
-        }
+    package var testDocumentRootChildLocalIDs: [UInt64] {
+        document.rootNode?.children.map(\.localID) ?? []
     }
 
     package var testHasPendingInspectSelection: Bool {

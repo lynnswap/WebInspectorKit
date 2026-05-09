@@ -1,35 +1,24 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `Sources/WebInspectorEngine`: core DOM/Network engines, runtime actors, and script bridge.
-- `Sources/WebInspectorModel`: session state/command/effect reducer models.
-- `Sources/WebInspectorRuntime`: session runtime, DOM/Network models, and DOM frontend runtime bridge.
+- `Sources/WebInspectorEngine`: core DOM/Network engines and runtime actors.
+- `Sources/WebInspectorRuntime`: session runtime and DOM/Network models.
 - `Sources/WebInspectorUI`: view controllers and UI presentation layer.
 - `Sources/WebInspectorKit`: public facade/re-export layer.
 - `Sources/WebInspectorBridge`: Swift bridge + Objective-C runtime bridge integration layer.
 - `Tests/WebInspectorEngineTests`, `Tests/WebInspectorRuntimeTests`, `Tests/WebInspectorUITests`, `Tests/WebInspectorIntegrationTests`, `Tests/WebInspectorIntegrationLongTests`: Swift tests grouped by module responsibility (`IntegrationLong` is the opt-in long-running suite).
-- `Tests/WebInspectorScriptsTests`: regression tests for committed bundled JavaScript access.
 - `Tests/WebInspectorTestSupport`: shared Swift test helpers.
-- `Sources/WebInspectorScripts/TypeScript/Tests`: Vitest suites for DOM/network helper scripts.
-- `Tools/WebInspectorScriptsTypeScriptTests`: pnpm/vitest harness so `node_modules` stays out of `Sources/`.
 - `Monocly/`: app project.
-- `Plugins/WebInspectorKitObfuscatePlugin/ObfuscateJS/`: JavaScript bundling toolchain used by `./Scripts/generate-bundled-js.sh`.
 
 ## Test Commands
 Run from repository root:
-- `./Scripts/generate-bundled-js.sh`: sync ObfuscateJS dependencies and regenerate `Generated/WebInspectorScriptsGenerated/CommittedBundledJavaScriptData.swift` after changing TypeScript or ObfuscateJS inputs.
 - `xcodebuild test -workspace WebInspectorKit.xcworkspace -scheme WebInspectorUITests -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1`: run fast UI-focused Swift tests.
 - `xcodebuild test -workspace WebInspectorKit.xcworkspace -scheme WebInspectorIntegrationTests -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1`: run fast integration Swift tests (default gate).
 - `xcodebuild test -workspace WebInspectorKit.xcworkspace -scheme WebInspectorIntegrationLongTests -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1`: run long-running integration scenarios when explicitly needed.
-- `pnpm --dir Tools/WebInspectorScriptsTypeScriptTests run test`: run TypeScript tests with Vitest.
-- `pnpm --dir Tools/WebInspectorScriptsTypeScriptTests run typecheck`: run strict TypeScript type checks.
 - `xcrun simctl list devices available`: list valid simulator destinations when destination names differ locally.
 
-## Bundled JavaScript Workflow
-- Swift package consumers should never need Node tooling during build.
-- If you change `Sources/WebInspectorScripts/TypeScript`, `Plugins/WebInspectorKitObfuscatePlugin/ObfuscateJS/obfuscate.js`, or `Plugins/WebInspectorKitObfuscatePlugin/ObfuscateJS/obfuscate.config.json`, run `./Scripts/generate-bundled-js.sh`.
-- `./Scripts/generate-bundled-js.sh` always runs `pnpm install --frozen-lockfile` in `Plugins/WebInspectorKitObfuscatePlugin/ObfuscateJS` before regeneration.
-- Commit regenerated `Generated/WebInspectorScriptsGenerated/CommittedBundledJavaScriptData.swift` together with the source change that required it.
+## DOM Tree UI
+- The DOM tree inspector UI is native UIKit/TextKit2. There is no bundled JavaScript DOM tree frontend or script regeneration workflow.
 
 ## Coding Style & Naming Conventions
 - Swift 6.2 / Swift language mode 6 is the baseline.

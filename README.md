@@ -78,11 +78,7 @@ boundaries through `WIInspectorDependencies`.
 
 ```swift
 let dependencies = WIInspectorDependencies.testing {
-    $0.domFrontend = WIInspectorDOMFrontendClient(
-        domTreeViewScript: { "" },
-        mainFileURL: { nil },
-        resourcesDirectoryURL: { nil }
-    )
+    $0.transport.configuration.responseTimeout = .milliseconds(250)
 }
 
 let inspector = WIViewController(
@@ -99,10 +95,7 @@ See [`MIGRATION.md`](Docs/MIGRATION.md) for details on breaking changes.
 ## Contributor Workflow
 
 - Consumers of the Swift package do not need `node`, `pnpm`, or `esbuild`.
-- If you change files under `Sources/WebInspectorScripts/TypeScript`, `Plugins/WebInspectorKitObfuscatePlugin/ObfuscateJS/obfuscate.js`, or `Plugins/WebInspectorKitObfuscatePlugin/ObfuscateJS/obfuscate.config.json`, run `./Scripts/generate-bundled-js.sh`.
-- `./Scripts/generate-bundled-js.sh` syncs `Plugins/WebInspectorKitObfuscatePlugin/ObfuscateJS` with `pnpm install --frozen-lockfile`, then updates `Generated/WebInspectorScriptsGenerated/CommittedBundledJavaScriptData.swift`.
-- TypeScript test files stay under `Sources/WebInspectorScripts/TypeScript/Tests`, while the pnpm/vitest harness lives under `Tools/WebInspectorScriptsTypeScriptTests`, so local `node_modules` does not end up under `Sources/`.
-- Commit the TypeScript/tooling change and the regenerated `CommittedBundledJavaScriptData.swift` in the same commit.
+- The DOM tree inspector UI is native UIKit/TextKit2. There is no bundled JavaScript DOM tree frontend or generated script regeneration step.
 
 ## License
 

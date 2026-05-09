@@ -29,10 +29,6 @@ let package = Package(
             targets: ["WebInspectorBridge"]
         ),
         .library(
-            name: "WebInspectorScripts",
-            targets: ["WebInspectorScripts"]
-        ),
-        .library(
             name: "WebInspectorUI",
             targets: ["WebInspectorUI"]
         ),
@@ -77,7 +73,6 @@ let package = Package(
                 "WebInspectorEngine",
                 "WebInspectorTransport",
                 "WebInspectorBridge",
-                "WebInspectorScripts",
                 .product(name: "ObservationBridge", package: "ObservationBridge")
             ],
             swiftSettings: strictSwiftSettings
@@ -89,24 +84,6 @@ let package = Package(
                 .product(name: "MachOKit", package: "MachOKit")
             ],
             exclude: ["ObjCShim"],
-            swiftSettings: strictSwiftSettings
-        ),
-        .target(
-            name: "WebInspectorScriptsGenerated",
-            path: "Generated/WebInspectorScriptsGenerated",
-            swiftSettings: strictSwiftSettings
-        ),
-        .target(
-            name: "WebInspectorScripts",
-            dependencies: [
-                "WebInspectorScriptsGenerated"
-            ],
-            exclude: [
-                "TypeScript"
-            ],
-            resources: [
-                .process("Resources/DOMTreeView")
-            ],
             swiftSettings: strictSwiftSettings
         ),
         .target(
@@ -165,8 +142,7 @@ let package = Package(
                 "WebInspectorUI",
                 "WebInspectorEngine",
                 "WebInspectorRuntime",
-                "WebInspectorBridge",
-                "WebInspectorScripts"
+                "WebInspectorBridge"
             ],
             swiftSettings: strictSwiftSettings
         ),
@@ -241,14 +217,6 @@ let package = Package(
                 "WebInspectorTestSupport"
             ],
             path: "Tests/WebInspectorIntegrationTests",
-            swiftSettings: strictSwiftSettings
-        ),
-        .testTarget(
-            name: "WebInspectorScriptsTests",
-            dependencies: [
-                "WebInspectorScripts"
-            ],
-            path: "Tests/WebInspectorScriptsTests",
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(

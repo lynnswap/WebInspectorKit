@@ -55,7 +55,7 @@ struct WIDOMInspectorTests {
     func selectionDiagnosticMilestonesStillEmitWithoutVerboseConsoleLogs() {
         #expect(
             WIDOMInspector.shouldEmitSelectionDiagnosticToConsoleForTesting(
-                "applySelection updated document and frontend",
+                "applySelection updated document",
                 level: .default,
                 verboseConsoleDiagnostics: false
             )
@@ -109,7 +109,6 @@ struct WIDOMInspectorTests {
     func sameWebViewReattachKeepsContextID() async {
         let backend = FakeDOMTransportBackend()
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -124,7 +123,6 @@ struct WIDOMInspectorTests {
     func switchingWebViewsAdvancesContextID() async throws {
         let backend = FakeDOMTransportBackend()
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let firstWebView = makeTestWebView()
         let secondWebView = makeTestWebView()
 
@@ -218,7 +216,6 @@ struct WIDOMInspectorTests {
     func suspendClearsAttachedPageWebView() async {
         let backend = FakeDOMTransportBackend()
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -234,7 +231,6 @@ struct WIDOMInspectorTests {
     func attachedPageWebViewDeallocationClearsAttachmentState() async {
         let backend = FakeDOMTransportBackend()
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         weak var releasedWebView: WKWebView?
 
         do {
@@ -258,7 +254,6 @@ struct WIDOMInspectorTests {
         let backend = FakeDOMTransportBackend()
         backend.attachError = WITransportError.attachFailed("simulated attach failure")
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -281,7 +276,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -319,7 +313,6 @@ struct WIDOMInspectorTests {
             using: backend,
             derivedPageTargetIdentifier: "page-A"
         )
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -337,7 +330,6 @@ struct WIDOMInspectorTests {
     func attachReinstallsPointerDisconnectObserverAfterSuspend() async {
         let backend = FakeDOMTransportBackend()
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -363,7 +355,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -386,7 +377,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -429,7 +419,6 @@ struct WIDOMInspectorTests {
             using: backend,
             derivedPageTargetIdentifier: "page-A"
         )
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -467,7 +456,6 @@ struct WIDOMInspectorTests {
             using: backend,
             derivedPageTargetIdentifier: "page-A"
         )
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -534,7 +522,6 @@ struct WIDOMInspectorTests {
             using: backend,
             derivedPageTargetIdentifier: "page-A"
         )
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -575,7 +562,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -628,7 +614,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -717,7 +702,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -788,7 +772,6 @@ struct WIDOMInspectorTests {
             using: backend,
             derivedPageTargetIdentifier: "page-A"
         )
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -863,7 +846,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -963,7 +945,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -1013,7 +994,7 @@ struct WIDOMInspectorTests {
     }
 
     @Test
-    func freshContextDoesNotMarkFrontendCurrentBeforeInitialHydration() async throws {
+    func freshContextRefreshesNativeDocumentAfterDocumentUpdated() async throws {
         var documentVersion = 0
         let backend = FakeDOMTransportBackend(
             pageResultProvider: { method, _, _ in
@@ -1027,7 +1008,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -1037,7 +1017,6 @@ struct WIDOMInspectorTests {
         #expect(initiallyReady)
 
         let firstContextID = try #require(inspector.testCurrentContextID)
-        inspector.resetFrontendHydrationDiagnosticsForTesting()
         documentVersion = 1
         backend.emitPageEvent(method: "DOM.documentUpdated", params: [:])
 
@@ -1058,26 +1037,12 @@ struct WIDOMInspectorTests {
                 && inspector.testCurrentDocumentURL == "https://example.com/b"
         }
         #expect(refreshedDocumentReady)
-        let frontendReady = await waitForCondition {
-            await inspector.testFrontendIsReady()
-        }
-        #expect(frontendReady)
-        inspector.testHandleReadyMessage(contextID: currentContextID)
 
-        let hydrationCompleted = await waitForCondition {
-            return inspector.frontendHydrationDiagnosticsForTesting.contains {
-                if case let .hydrated(_, eventContextID, _, _) = $0 {
-                    return eventContextID == currentContextID
-                }
-                return false
-            }
-        }
-
-        #expect(hydrationCompleted)
+        #expect(inspector.testCurrentContextID == currentContextID)
     }
 
     @Test
-    func provisionalNavigationHydratesFrontendForNewContext() async throws {
+    func provisionalNavigationRefreshesNativeDocumentForNewContext() async throws {
         let backend = FakeDOMTransportBackend(
             pageResultProvider: { method, _, targetIdentifier in
                 guard method == WITransportMethod.DOM.getDocument else {
@@ -1087,7 +1052,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -1097,7 +1061,6 @@ struct WIDOMInspectorTests {
         #expect(initiallyReady)
 
         let firstContextID = try #require(inspector.testCurrentContextID)
-        inspector.resetFrontendHydrationDiagnosticsForTesting()
 
         backend.emitRootEvent(
             method: "Target.didCommitProvisionalTarget",
@@ -1119,31 +1082,9 @@ struct WIDOMInspectorTests {
         #expect(advancedToNewContext)
 
         let currentContextID = try #require(inspector.testCurrentContextID)
-        let frontendReady = await waitForCondition {
-            await inspector.testFrontendIsReady()
-        }
-        #expect(frontendReady)
-        inspector.testHandleReadyMessage(contextID: currentContextID)
 
-        let frontendHydratedForNewContext = await waitForCondition {
-            guard inspector.testCurrentDocumentURL == "https://example.com/b" else {
-                return false
-            }
-            return inspector.frontendHydrationDiagnosticsForTesting.contains {
-                switch $0 {
-                case let .hydrated(reason, eventContextID, _, _),
-                     let .skippedDuplicateReady(reason, eventContextID, _, _):
-                    return eventContextID == currentContextID
-                        && (
-                            reason == "transport.refreshCurrentDocument"
-                                || reason == "ready.currentContext"
-                                || reason == "handleDOMEventEnvelope.deferredMutation"
-                        )
-                }
-            }
-        }
-
-        #expect(frontendHydratedForNewContext)
+        #expect(inspector.testCurrentContextID == currentContextID)
+        #expect(inspector.testCurrentDocumentURL == "https://example.com/b")
     }
 
     @Test
@@ -1211,7 +1152,6 @@ struct WIDOMInspectorTests {
             )
         }
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -1265,7 +1205,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -1275,27 +1214,13 @@ struct WIDOMInspectorTests {
         #expect(ready)
 
         let contextID = try #require(inspector.testCurrentContextID)
-        inspector.resetFrontendHydrationDiagnosticsForTesting()
-        inspector.testResetFrontendHydrationState()
 
-        inspector.testHandleReadyMessage(contextID: contextID)
-        inspector.testHandleReadyMessage(contextID: contextID)
-        inspector.testHandleReadyMessage(contextID: contextID)
-
-        let hydrated = await waitForCondition {
-            inspector.frontendHydrationDiagnosticsForTesting.contains {
-                if case let .hydrated(_, eventContextID, _, _) = $0 {
-                    return eventContextID == contextID
-                }
-                return false
-            }
-        }
-        #expect(hydrated)
+        #expect(inspector.testCurrentContextID == contextID)
 
     }
 
     @Test
-    func readyFrontendReopenHydratesCurrentDocumentWithoutTransportReload() async throws {
+    func readyContextRemainsCurrentWithoutPresentationReload() async throws {
         var getDocumentCallCount = 0
         let backend = FakeDOMTransportBackend(
             pageResultProvider: { method, _, _ in
@@ -1307,7 +1232,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -1318,27 +1242,9 @@ struct WIDOMInspectorTests {
 
         let contextID = try #require(inspector.testCurrentContextID)
         let initialGetDocumentCallCount = getDocumentCallCount
-        inspector.resetFrontendHydrationDiagnosticsForTesting()
-
-        _ = inspector.makeInspectorWebView()
-        let frontendReady = await waitForCondition {
-            await inspector.testFrontendIsReady()
-        }
-        #expect(frontendReady)
-        inspector.testHandleReadyMessage(contextID: contextID)
-        let frontendHydratedWithoutReload = await waitForCondition {
-            inspector.frontendHydrationDiagnosticsForTesting.contains {
-                switch $0 {
-                case let .hydrated(reason, eventContextID, _, _),
-                     let .skippedDuplicateReady(reason, eventContextID, _, _):
-                    return reason == "ready.currentContext" && eventContextID == contextID
-                }
-            }
-        }
 
         #expect(inspector.testCurrentContextID == contextID)
         #expect(inspector.testCurrentDocumentURL == "https://example.com/a")
-        #expect(frontendHydratedWithoutReload)
         #expect(getDocumentCallCount == initialGetDocumentCallCount)
     }
 
@@ -1359,7 +1265,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -1398,7 +1303,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -1471,7 +1375,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
         let window = hostWebViewInWindow(webView)
         defer { window.isHidden = true }
@@ -1557,7 +1460,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
         let window = hostWebViewInWindow(webView)
         defer { window.isHidden = true }
@@ -1644,7 +1546,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
         let window = hostWebViewInWindow(webView)
         defer { window.isHidden = true }
@@ -1706,7 +1607,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
         let window = hostWebViewInWindow(webView)
         defer { window.isHidden = true }
@@ -1753,7 +1653,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
         let window = hostWebViewInWindow(webView)
         defer { window.isHidden = true }
@@ -1789,7 +1688,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -1873,7 +1771,6 @@ struct WIDOMInspectorTests {
             using: backend,
             dependencies: .liveValue
         )
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -1975,7 +1872,6 @@ struct WIDOMInspectorTests {
             using: backend,
             dependencies: .liveValue
         )
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -2085,7 +1981,6 @@ struct WIDOMInspectorTests {
             using: backend,
             dependencies: .liveValue
         )
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -2181,7 +2076,6 @@ struct WIDOMInspectorTests {
             using: backend,
             dependencies: .liveValue
         )
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -2300,7 +2194,6 @@ struct WIDOMInspectorTests {
             using: backend,
             dependencies: .liveValue
         )
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -2408,7 +2301,6 @@ struct WIDOMInspectorTests {
             using: backend,
             dependencies: .liveValue
         )
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -2513,7 +2405,6 @@ struct WIDOMInspectorTests {
             using: backend,
             dependencies: .liveValue
         )
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -2610,7 +2501,6 @@ struct WIDOMInspectorTests {
             using: backend,
             dependencies: .liveValue
         )
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -2709,7 +2599,6 @@ struct WIDOMInspectorTests {
             using: backend,
             dependencies: .liveValue
         )
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -2810,7 +2699,6 @@ struct WIDOMInspectorTests {
             using: backend,
             dependencies: .liveValue
         )
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -2917,7 +2805,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -3065,7 +2952,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -3130,7 +3016,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -3174,7 +3059,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -3250,7 +3134,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
         let initialScrollEnabled = webView.scrollView.isScrollEnabled
         let initialPanEnabled = webView.scrollView.panGestureRecognizer.isEnabled
@@ -3304,7 +3187,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -3340,7 +3222,6 @@ struct WIDOMInspectorTests {
             }
         }
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -3398,7 +3279,6 @@ struct WIDOMInspectorTests {
             }
         }
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -3469,7 +3349,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -3546,7 +3425,6 @@ struct WIDOMInspectorTests {
             }
         }
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -3649,7 +3527,6 @@ struct WIDOMInspectorTests {
             }
         }
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -3693,7 +3570,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -3767,7 +3643,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -3868,7 +3743,6 @@ struct WIDOMInspectorTests {
             }
         }
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -3931,7 +3805,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -4012,7 +3885,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -4115,7 +3987,6 @@ struct WIDOMInspectorTests {
             }
         }
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -4198,7 +4069,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -4267,7 +4137,6 @@ struct WIDOMInspectorTests {
         }
 
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -4347,7 +4216,6 @@ struct WIDOMInspectorTests {
         )
 
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -4427,7 +4295,6 @@ struct WIDOMInspectorTests {
         )
 
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -4494,7 +4361,6 @@ struct WIDOMInspectorTests {
         )
 
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -4545,7 +4411,6 @@ struct WIDOMInspectorTests {
         )
 
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -4598,7 +4463,6 @@ struct WIDOMInspectorTests {
         }
 
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -4680,7 +4544,6 @@ struct WIDOMInspectorTests {
         }
 
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -4750,7 +4613,6 @@ struct WIDOMInspectorTests {
         )
 
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -4809,7 +4671,6 @@ struct WIDOMInspectorTests {
         )
 
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -4873,7 +4734,6 @@ struct WIDOMInspectorTests {
         )
 
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -4946,7 +4806,6 @@ struct WIDOMInspectorTests {
         )
 
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -5004,7 +4863,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -5120,7 +4978,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -5252,7 +5109,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -5364,7 +5220,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -5487,7 +5342,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -5589,7 +5443,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -5715,7 +5568,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -5777,8 +5629,8 @@ struct WIDOMInspectorTests {
             )
         )
 
-        #expect(inspector.testFrontendSnapshotRootLocalID == 1)
-        #expect(inspector.testFrontendSnapshotRootChildLocalIDs.contains(647) == false)
+        #expect(inspector.testDocumentRootLocalID == 1)
+        #expect(inspector.testDocumentRootChildLocalIDs.contains(647) == false)
         #expect(inspector.document.topLevelRoots().map(\.localID) == [1])
     }
 
@@ -5797,7 +5649,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -5845,7 +5696,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -5900,7 +5750,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -5957,7 +5806,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -5995,7 +5843,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -6299,7 +6146,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -6351,7 +6197,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -6432,7 +6277,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -6498,7 +6342,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -6586,7 +6429,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -6656,7 +6498,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -6688,7 +6529,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -6707,93 +6547,6 @@ struct WIDOMInspectorTests {
             inspector.testCurrentDocumentURL == "https://example.com/b"
         }
         #expect(reloaded)
-    }
-
-    @Test
-    func inspectorBridgeReappliesCurrentBootstrapAfterNavigationReload() async throws {
-        let bridge = DOMInspectorBridge()
-        let webView = bridge.makeInspectorWebView(
-            bootstrapPayload: [
-                "config": [
-                    "snapshotDepth": 4,
-                ],
-                "context": [
-                    "contextID": 1,
-                ],
-            ]
-        )
-
-        let frontendReady = await waitForCondition {
-            await bridge.frontendIsReady()
-        }
-        #expect(frontendReady)
-
-        bridge.updateBootstrap([
-            "config": [
-                "snapshotDepth": 7,
-            ],
-            "context": [
-                "contextID": 99,
-            ],
-        ])
-
-        try await webView.callAsyncVoidJavaScript(
-            """
-            window.__wiDOMFrontendBootstrap = { context: { contextID: -1 }, config: { snapshotDepth: 1 } };
-            """,
-            arguments: [:],
-            contentWorld: .page
-        )
-
-        bridge.webView(webView, didCommit: nil)
-        bridge.webView(webView, didFinish: nil)
-
-        let bootstrapContextID = try await webView.callAsyncJavaScriptCompat(
-            "return window.__wiDOMFrontendBootstrap?.context?.contextID ?? null;",
-            arguments: [:],
-            in: nil,
-            contentWorld: .page
-        ) as? NSNumber
-        let snapshotDepth = try await webView.callAsyncJavaScriptCompat(
-            "return window.__wiDOMFrontendBootstrap?.config?.snapshotDepth ?? null;",
-            arguments: [:],
-            in: nil,
-            contentWorld: .page
-        ) as? NSNumber
-
-        #expect(bootstrapContextID?.intValue == 99)
-        #expect(snapshotDepth?.intValue == 7)
-    }
-
-    @Test
-    func inspectorBridgeDoesNotNotifyReadyWhenBootstrapIsUnchanged() async throws {
-        let bridge = DOMInspectorBridge()
-        var readyCount = 0
-        bridge.onMessage = { message in
-            if case .ready = message {
-                readyCount += 1
-            }
-        }
-
-        let bootstrapPayload: [String: Any] = [
-            "config": [
-                "snapshotDepth": 4,
-            ],
-            "context": [
-                "contextID": 1,
-            ],
-        ]
-        _ = bridge.makeInspectorWebView(bootstrapPayload: bootstrapPayload)
-
-        let initialReady = await waitForCondition {
-            readyCount >= 1
-        }
-        #expect(initialReady)
-
-        bridge.updateBootstrap(bootstrapPayload)
-
-        try? await Task.sleep(nanoseconds: 200_000_000)
-        #expect(readyCount == 1)
     }
 
     @Test
@@ -6846,7 +6599,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -6931,7 +6683,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -7029,7 +6780,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
@@ -7124,7 +6874,6 @@ struct WIDOMInspectorTests {
             }
         )
         let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)

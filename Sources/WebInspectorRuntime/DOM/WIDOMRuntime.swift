@@ -9,7 +9,6 @@ import WebInspectorTransport
 @Observable
 public final class WIDOMRuntime {
     private let inspector: WIDOMInspector
-    @ObservationIgnored private var domTreeWebView: WKWebView?
 
     public let document: DOMDocumentModel
 
@@ -47,22 +46,11 @@ public final class WIDOMRuntime {
     }
 
     public func detach() async {
-        domTreeWebView = nil
         await inspector.detach()
     }
 
     package func suspend() async {
         await inspector.suspend()
-    }
-
-    package func treeWebViewForPresentation() -> WKWebView {
-        if let domTreeWebView {
-            return domTreeWebView
-        }
-
-        let domTreeWebView = inspector.inspectorWebViewForPresentation()
-        self.domTreeWebView = domTreeWebView
-        return domTreeWebView
     }
 
     package var hasPageWebView: Bool {
@@ -120,6 +108,38 @@ public final class WIDOMRuntime {
             nodeID: document.selectedNode?.id,
             undoManager: undoManager
         )
+    }
+
+    package func selectNode(_ node: DOMNodeModel) async {
+        await inspector.selectNode(node)
+    }
+
+    package func requestChildNodes(for node: DOMNodeModel, depth: Int) async {
+        await inspector.requestChildNodes(for: node, depth: depth)
+    }
+
+    package func highlightNode(_ node: DOMNodeModel, reveal: Bool) async {
+        await inspector.highlightNode(node, reveal: reveal)
+    }
+
+    package func hideNodeHighlight() async {
+        await inspector.hideNodeHighlight()
+    }
+
+    package func copyHTML(for node: DOMNodeModel) async throws -> String {
+        try await inspector.copyNode(nodeID: node.id, kind: .html)
+    }
+
+    package func copySelectorPath(for node: DOMNodeModel) async throws -> String {
+        try await inspector.copyNode(nodeID: node.id, kind: .selectorPath)
+    }
+
+    package func copyXPath(for node: DOMNodeModel) async throws -> String {
+        try await inspector.copyNode(nodeID: node.id, kind: .xpath)
+    }
+
+    package func deleteNode(_ node: DOMNodeModel, undoManager: UndoManager?) async throws {
+        try await inspector.deleteNode(nodeID: node.id, undoManager: undoManager)
     }
 }
 

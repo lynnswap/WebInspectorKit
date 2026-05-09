@@ -2,4 +2,3 @@
 @_exported import WebInspectorEngine
 @_exported import WebInspectorRuntime
 @_exported import WebInspectorBridge
-@_exported import WebInspectorScripts

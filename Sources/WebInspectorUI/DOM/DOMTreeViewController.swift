@@ -1,16 +1,15 @@
 #if canImport(UIKit)
 import UIKit
-import WebKit
 import WebInspectorRuntime
 
 @MainActor
 final class DOMTreeViewController: UIViewController {
     private let dom: WIDOMRuntime
-    private let containerView = UIView()
-    private weak var displayedDOMTreeWebView: WKWebView?
+    private let treeView: DOMTreeTextView
 
     init(dom: WIDOMRuntime) {
         self.dom = dom
+        self.treeView = DOMTreeTextView(dom: dom)
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -20,63 +19,16 @@ final class DOMTreeViewController: UIViewController {
     }
 
     override func loadView() {
-        containerView.backgroundColor = .clear
-        view = containerView
-    }
-
-    override func didMove(toParent parent: UIViewController?) {
-        super.didMove(toParent: parent)
-        guard parent != nil, isViewLoaded else {
-            return
-        }
-        attachDOMTreeWebView()
-    }
-
-    override func viewIsAppearing(_ animated: Bool) {
-        super.viewIsAppearing(animated)
-        attachDOMTreeWebView()
-        syncDOMTreeWebViewFrame()
-    }
-
-    override func viewDidLayoutSubviews() {
-        super.viewDidLayoutSubviews()
-        syncDOMTreeWebViewFrame()
-    }
-
-    private func attachDOMTreeWebView() {
-        let domTreeWebView = dom.treeWebViewForPresentation()
-        if let displayedDOMTreeWebView,
-           displayedDOMTreeWebView !== domTreeWebView,
-           displayedDOMTreeWebView.superview === containerView {
-            displayedDOMTreeWebView.removeFromSuperview()
-        }
-        displayedDOMTreeWebView = domTreeWebView
-        guard domTreeWebView.superview !== containerView else {
-            return
-        }
-
-        domTreeWebView.removeFromSuperview()
-        domTreeWebView.translatesAutoresizingMaskIntoConstraints = true
-        domTreeWebView.frame = containerView.bounds
-        domTreeWebView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        containerView.addSubview(domTreeWebView)
-    }
-
-    private func syncDOMTreeWebViewFrame() {
-        guard let displayedDOMTreeWebView,
-              displayedDOMTreeWebView.superview === containerView,
-              displayedDOMTreeWebView.frame != containerView.bounds else {
-            return
-        }
-
-        displayedDOMTreeWebView.frame = containerView.bounds
+        treeView.backgroundColor = .clear
+        treeView.accessibilityIdentifier = "WebInspector.DOM.Tree.NativeTextView"
+        view = treeView
     }
 }
 
 #if DEBUG
 extension DOMTreeViewController {
-    var displayedDOMTreeWebViewForTesting: WKWebView? {
-        displayedDOMTreeWebView
+    var displayedDOMTreeTextViewForTesting: DOMTreeTextView {
+        treeView
     }
 }
 #endif

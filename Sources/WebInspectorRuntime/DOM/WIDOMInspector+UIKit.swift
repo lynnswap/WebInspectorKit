@@ -757,7 +757,6 @@ extension WIDOMInspector {
     }
 
     private func handlePointerDisconnectForInspectorHover() async {
-        await inspectorBridge.clearPointerHoverState()
         await restoreInspectorHighlightAfterPointerDisconnect()
     }
 

@@ -1,7 +1,6 @@
 import Foundation
 import WebKit
 import WebInspectorBridge
-import WebInspectorScripts
 import WebInspectorTransport
 
 @MainActor
@@ -13,18 +12,15 @@ public protocol WIInspectorDependencyClient {
 @MainActor
 public struct WIInspectorDependencies: WIInspectorDependencyClient {
     public var transport: WIInspectorTransportClient
-    public var domFrontend: WIInspectorDOMFrontendClient
     public var webKitSPI: WIInspectorWebKitSPIClient
     public var platform: WIInspectorPlatformClient
 
     public init(
         transport: WIInspectorTransportClient = .liveValue,
-        domFrontend: WIInspectorDOMFrontendClient = .liveValue,
         webKitSPI: WIInspectorWebKitSPIClient = .liveValue,
         platform: WIInspectorPlatformClient = .liveValue
     ) {
         self.transport = transport
-        self.domFrontend = domFrontend
         self.webKitSPI = webKitSPI
         self.platform = platform
     }
@@ -36,7 +32,6 @@ public struct WIInspectorDependencies: WIInspectorDependencyClient {
     public static var testValue: Self {
         Self(
             transport: .testValue,
-            domFrontend: .testValue,
             webKitSPI: .testValue,
             platform: .testValue
         )
@@ -104,73 +99,6 @@ public struct WIInspectorTransportClient: WIInspectorDependencyClient {
         WISharedInspectorTransport(sessionFactory: {
             makeSessionWithConfiguration(configuration)
         })
-    }
-}
-
-@MainActor
-public struct WIInspectorDOMFrontendClient: WIInspectorDependencyClient {
-    public var domTreeViewScript: @MainActor @Sendable () throws -> String
-    public var mainFileURL: @MainActor @Sendable () -> URL?
-    public var resourcesDirectoryURL: @MainActor @Sendable () -> URL?
-
-    public init(
-        domTreeViewScript: @escaping @MainActor @Sendable () throws -> String = {
-            try WebInspectorScripts.domTreeView()
-        },
-        mainFileURL: @escaping @MainActor @Sendable () -> URL? = {
-            WebInspectorScripts.resourceBundle.url(
-                forResource: "dom-tree-view",
-                withExtension: "html",
-                subdirectory: WebInspectorScripts.domTreeViewResourceSubdirectory
-            ) ?? Bundle.main.url(
-                forResource: "dom-tree-view",
-                withExtension: "html",
-                subdirectory: WebInspectorScripts.domTreeViewResourceSubdirectory
-            )
-        },
-        resourcesDirectoryURL: @escaping @MainActor @Sendable () -> URL? = {
-            let packageURL = WebInspectorScripts.resourceBundle.url(
-                forResource: "dom-tree-view",
-                withExtension: "html",
-                subdirectory: WebInspectorScripts.domTreeViewResourceSubdirectory
-            )
-            let mainURL = Bundle.main.url(
-                forResource: "dom-tree-view",
-                withExtension: "html",
-                subdirectory: WebInspectorScripts.domTreeViewResourceSubdirectory
-            )
-            return (packageURL ?? mainURL)?.deletingLastPathComponent()
-        }
-    ) {
-        self.domTreeViewScript = domTreeViewScript
-        self.mainFileURL = mainFileURL
-        self.resourcesDirectoryURL = resourcesDirectoryURL
-    }
-
-    public static var liveValue: Self {
-        Self(
-            domTreeViewScript: {
-                try WebInspectorScripts.domTreeView()
-            },
-            mainFileURL: {
-                WIAssets.mainFileURL
-            },
-            resourcesDirectoryURL: {
-                WIAssets.resourcesDirectory
-            }
-        )
-    }
-
-    public static var testValue: Self {
-        Self(
-            domTreeViewScript: { "" },
-            mainFileURL: { nil },
-            resourcesDirectoryURL: { nil }
-        )
-    }
-
-    func makeInspectorWebView() -> InspectorWebView {
-        InspectorWebView(dependencies: self)
     }
 }
 

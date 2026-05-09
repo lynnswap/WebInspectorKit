@@ -29,35 +29,6 @@ struct ControllerActivationTests {
         #expect(runtime.dom.hasPageWebView == false)
     }
 
-    @Test
-    func suspendPageAttachmentKeepsDOMPresentationWebView() async {
-        let runtime = WIRuntimeSession()
-        let webView = makeTestWebView()
-        let presentationWebView = runtime.dom.treeWebViewForPresentation()
-
-        await runtime.attach(to: webView)
-        #expect(runtime.dom.hasPageWebView == true)
-
-        await runtime.suspendPageAttachment()
-
-        #expect(runtime.dom.hasPageWebView == false)
-        #expect(runtime.dom.treeWebViewForPresentation() === presentationWebView)
-    }
-
-    @Test
-    func detachDropsDOMPresentationWebView() async {
-        let runtime = WIRuntimeSession()
-        let webView = makeTestWebView()
-        let presentationWebView = runtime.dom.treeWebViewForPresentation()
-
-        await runtime.attach(to: webView)
-        #expect(runtime.dom.hasPageWebView == true)
-
-        await runtime.detach()
-
-        #expect(runtime.dom.hasPageWebView == false)
-        #expect(runtime.dom.treeWebViewForPresentation() !== presentationWebView)
-    }
 }
 
 @MainActor

@@ -690,7 +690,7 @@ struct RegularTabHostViewControllerTests {
     }
 
     @Test
-    func cachedDOMTreeRefreshesWebViewAfterRuntimeDetach() async throws {
+    func cachedDOMTreeKeepsNativeViewAfterRuntimeDetach() async throws {
         let runtime = WIDOMRuntime()
         let treeViewController = DOMTreeViewController(dom: runtime)
         treeViewController.loadViewIfNeeded()
@@ -698,19 +698,17 @@ struct RegularTabHostViewControllerTests {
 
         treeViewController.beginAppearanceTransition(true, animated: false)
         treeViewController.endAppearanceTransition()
-        let firstWebView = try #require(treeViewController.displayedDOMTreeWebViewForTesting)
-        #expect(firstWebView.frame == treeViewController.view.bounds)
+        let firstTreeView = treeViewController.displayedDOMTreeTextViewForTesting
+        #expect(firstTreeView === treeViewController.view)
 
         await runtime.detach()
 
         treeViewController.beginAppearanceTransition(true, animated: false)
         treeViewController.endAppearanceTransition()
-        let secondWebView = try #require(treeViewController.displayedDOMTreeWebViewForTesting)
+        let secondTreeView = treeViewController.displayedDOMTreeTextViewForTesting
 
-        #expect(secondWebView !== firstWebView)
-        #expect(secondWebView.superview === treeViewController.view)
-        #expect(secondWebView.frame == treeViewController.view.bounds)
-        #expect(firstWebView.superview == nil)
+        #expect(secondTreeView === firstTreeView)
+        #expect(secondTreeView === treeViewController.view)
     }
 
     private var domColumns: [UISplitViewController.Column] {

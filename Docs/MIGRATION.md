@@ -71,16 +71,12 @@ await inspector.attach(to: webView)
 ## 3. Inject side effects through `WIInspectorDependencies`
 
 `WIModelConfiguration` now stays focused on value-only configuration. Runtime factories,
-scripts, WebKit SPI, transport, sleep/timeout behavior, and UIKit scene activation can be
+WebKit SPI, transport, sleep/timeout behavior, and UIKit scene activation can be
 injected through `WIInspectorDependencies`.
 
 ```swift
 let dependencies = WIInspectorDependencies.testing {
-    $0.domFrontend = WIInspectorDOMFrontendClient(
-        domTreeViewScript: { "" },
-        mainFileURL: { nil },
-        resourcesDirectoryURL: { nil }
-    )
+    $0.transport.configuration.responseTimeout = .milliseconds(250)
 }
 
 let inspector = WIViewController(
@@ -93,7 +89,15 @@ let inspector = WIViewController(
 Use `WIInspectorDependencies.liveValue` for production defaults and
 `WIInspectorDependencies.testing { ... }` for tests.
 
-## 4. Update custom tab definitions
+## 4. Remove `WebInspectorScripts` imports
+
+The DOM tree frontend is now native UIKit/TextKit2. The `WebInspectorScripts` product and
+`@_exported import WebInspectorScripts` are gone.
+
+Remove direct `WebInspectorScripts` imports and any custom `WIInspectorDOMFrontendClient`
+injection. Apps no longer need to run or ship the DOM tree JavaScript bundling workflow.
+
+## 5. Update custom tab definitions
 
 The important source-level changes are:
 

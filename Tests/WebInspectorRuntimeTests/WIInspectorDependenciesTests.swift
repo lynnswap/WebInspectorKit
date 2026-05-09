@@ -26,9 +26,6 @@ struct WIInspectorDependenciesTests {
         let support = dependencies.transport.supportSnapshot()
 
         #expect(support.isSupported == false)
-        #expect(try dependencies.domFrontend.domTreeViewScript() == "")
-        #expect(dependencies.domFrontend.mainFileURL() == nil)
-        #expect(dependencies.domFrontend.resourcesDirectoryURL() == nil)
 
         let webView = WKWebView(frame: .zero)
         #expect(dependencies.webKitSPI.hasPrivateInspectorAccess(webView) == false)
@@ -44,19 +41,11 @@ struct WIInspectorDependenciesTests {
     @Test
     func testingAllowsIndividualClientOverrides() throws {
         let dependencies = WIInspectorDependencies.testing {
-            $0.domFrontend = WIInspectorDOMFrontendClient(
-                domTreeViewScript: { "custom-dom-script" },
-                mainFileURL: { URL(fileURLWithPath: "/tmp/dom-tree-view.html") },
-                resourcesDirectoryURL: { URL(fileURLWithPath: "/tmp/dom-tree-view") }
-            )
             $0.webKitSPI = WIInspectorWebKitSPIClient(
                 setNodeSearchEnabled: { _, enabled in enabled }
             )
         }
 
-        #expect(try dependencies.domFrontend.domTreeViewScript() == "custom-dom-script")
-        #expect(dependencies.domFrontend.mainFileURL()?.path == "/tmp/dom-tree-view.html")
-        #expect(dependencies.domFrontend.resourcesDirectoryURL()?.path == "/tmp/dom-tree-view")
         #expect(dependencies.webKitSPI.setNodeSearchEnabled(WKWebView(frame: .zero), true))
     }
 
