@@ -571,6 +571,7 @@ public final class NetworkEntry: Identifiable, Equatable, Hashable {
         endTimestamp = snapshot.transfer.endTimestamp
         duration = snapshot.transfer.duration
         refreshFileTypeLabel()
+        configureBodies()
     }
 
     convenience init(sessionID: String, update: Update) {
@@ -632,6 +633,7 @@ public final class NetworkEntry: Identifiable, Equatable, Hashable {
             )
             apply(update)
         }
+        configureBodies()
     }
 
     convenience init(
@@ -659,6 +661,7 @@ public final class NetworkEntry: Identifiable, Equatable, Hashable {
         self.requestBody = requestBody
         self.requestBodyBytesSent = requestBodyBytesSent ?? requestBody?.size
         refreshFileTypeLabel()
+        configureBodies()
     }
 
     func applyRequestStart(
@@ -1099,6 +1102,11 @@ public final class NetworkEntry: Identifiable, Equatable, Hashable {
             syntaxKind: bodySyntaxKind(for: role),
             treatsRawTextAsURLEncodedForm: isURLEncodedFormBody(for: role)
         )
+    }
+
+    private func configureBodies() {
+        configureBody(requestBody, role: .request)
+        configureBody(responseBody, role: .response)
     }
 
     private func refreshBodyTextRepresentationHints() {

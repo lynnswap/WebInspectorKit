@@ -381,6 +381,7 @@ struct NetworkStoreTests {
             "requestId": 10,
             "url": "https://example.com/api",
             "method": "POST",
+            "headers": ["content-type": "application/json"],
             "body": [
                 "kind": "text",
                 "encoding": "utf-8",
@@ -411,8 +412,11 @@ struct NetworkStoreTests {
         #expect(entry.requestBody?.displayText == #"{"hello":"world"}"#)
         #expect(entry.requestBody?.isBase64Encoded == false)
         #expect(entry.requestBody?.size == 17)
+        #expect(entry.requestBody?.role == .request)
+        #expect(entry.requestBody?.sourceSyntaxKind == .json)
         #expect(entry.requestBodyBytesSent == 17)
         #expect(entry.responseBody?.displayText == "ok")
+        #expect(entry.responseBody?.role == .response)
         #expect(entry.responseBody?.isBase64Encoded == false)
         #expect(entry.responseBody?.isTruncated == false)
     }
