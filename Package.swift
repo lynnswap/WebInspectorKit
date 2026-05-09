@@ -56,7 +56,7 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/lynnswap/SyntaxEditorUI.git",
-            exact: "0.5.0"
+            exact: "0.5.1"
         ),
         .package(
             url: "https://github.com/p-x9/MachOKit.git",
