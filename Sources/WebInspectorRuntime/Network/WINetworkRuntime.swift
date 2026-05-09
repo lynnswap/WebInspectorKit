@@ -32,9 +32,7 @@ public final class WINetworkRuntime {
             configuration: configuration,
             supportSnapshot: dependencies.transport.supportSnapshot(),
             sharedTransport: sharedTransport
-        ) {
-            NetworkPageAgent(dependencies: dependencies.makeNetworkPageAgentDependencies())
-        }
+        )
         let session = NetworkSession(
             configuration: configuration,
             backend: backend
