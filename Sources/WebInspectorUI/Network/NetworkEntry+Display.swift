@@ -76,7 +76,7 @@ extension NetworkEntry {
     }
 }
 
-enum NetworkStatusSeverity {
+enum NetworkStatusSeverity: Sendable {
     case success
     case notice
     case warning

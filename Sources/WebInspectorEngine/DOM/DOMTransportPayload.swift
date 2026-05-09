@@ -5,7 +5,7 @@ package struct DOMGraphNodeDescriptor: Sendable {
     package var backendNodeID: Int?
     package var backendNodeIDIsStable: Bool
     package var frameID: String?
-    package var nodeType: Int
+    package var nodeType: DOMNodeType
     package var nodeName: String
     package var localName: String
     package var nodeValue: String
@@ -20,7 +20,7 @@ package struct DOMGraphNodeDescriptor: Sendable {
         backendNodeID: Int?,
         backendNodeIDIsStable: Bool? = nil,
         frameID: String? = nil,
-        nodeType: Int,
+        nodeType: DOMNodeType,
         nodeName: String,
         localName: String,
         nodeValue: String,
@@ -44,6 +44,38 @@ package struct DOMGraphNodeDescriptor: Sendable {
         self.isRendered = isRendered
         self.children = children
     }
+
+    package init(
+        localID: UInt64,
+        backendNodeID: Int?,
+        backendNodeIDIsStable: Bool? = nil,
+        frameID: String? = nil,
+        nodeType: Int,
+        nodeName: String,
+        localName: String,
+        nodeValue: String,
+        attributes: [DOMAttribute],
+        childCount: Int,
+        layoutFlags: [String],
+        isRendered: Bool,
+        children: [DOMGraphNodeDescriptor]
+    ) {
+        self.init(
+            localID: localID,
+            backendNodeID: backendNodeID,
+            backendNodeIDIsStable: backendNodeIDIsStable,
+            frameID: frameID,
+            nodeType: DOMNodeType(protocolValue: nodeType),
+            nodeName: nodeName,
+            localName: localName,
+            nodeValue: nodeValue,
+            attributes: attributes,
+            childCount: childCount,
+            layoutFlags: layoutFlags,
+            isRendered: isRendered,
+            children: children
+        )
+    }
 }
 
 package struct DOMGraphSnapshot: Sendable {
@@ -60,7 +92,6 @@ package struct DOMSelectionSnapshotPayload: Sendable {
     package var localID: UInt64?
     package var backendNodeID: Int?
     package var backendNodeIDIsStable: Bool
-    package var preview: String
     package var attributes: [DOMAttribute]
     package var path: [String]
     package var selectorPath: String?
@@ -70,7 +101,6 @@ package struct DOMSelectionSnapshotPayload: Sendable {
         localID: UInt64?,
         backendNodeID: Int? = nil,
         backendNodeIDIsStable: Bool? = nil,
-        preview: String,
         attributes: [DOMAttribute],
         path: [String],
         selectorPath: String?,
@@ -79,7 +109,6 @@ package struct DOMSelectionSnapshotPayload: Sendable {
         self.localID = localID
         self.backendNodeID = backendNodeID
         self.backendNodeIDIsStable = backendNodeIDIsStable ?? (backendNodeID != nil)
-        self.preview = preview
         self.attributes = attributes
         self.path = path
         self.selectorPath = selectorPath

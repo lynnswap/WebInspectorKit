@@ -98,16 +98,16 @@ enum WINetworkPreviewFixtures {
                 "method": "POST",
                 "headers": [
                     "authorization": "Bearer preview-token",
-                    "content-type": "application/x-www-form-urlencoded"
+                    "content-type": "application/x-www-form-urlencoded",
                 ],
                 "body": [
                     "kind": "text",
                     "size": 64,
                     "truncated": false,
-                    "preview": "hl=ja&gl=JP&source=wi-preview"
+                    "preview": "hl=ja&gl=JP&source=wi-preview",
                 ],
                 "bodySize": 64,
-                "initiator": "xhr"
+                "initiator": "xhr",
             ],
             [
                 "kind": "responseReceived",
@@ -118,9 +118,9 @@ enum WINetworkPreviewFixtures {
                 "mimeType": mimeType,
                 "headers": [
                     "content-length": String(bodyText.count),
-                    "content-type": contentType
+                    "content-type": contentType,
                 ],
-                "initiator": "xhr"
+                "initiator": "xhr",
             ],
             [
                 "kind": "loadingFinished",
@@ -133,9 +133,9 @@ enum WINetworkPreviewFixtures {
                     "size": bodyText.count,
                     "truncated": false,
                     "preview": bodyText,
-                    "content": bodyText
+                    "content": bodyText,
                 ],
-                "initiator": "xhr"
+                "initiator": "xhr",
             ],
             [
                 "kind": "resourceTiming",
@@ -149,8 +149,8 @@ enum WINetworkPreviewFixtures {
                 "endTime": ["monotonicMs": 1728.0, "wallMs": 1700000000228.0],
                 "encodedBodyLength": 0,
                 "decodedBodySize": 0,
-                "initiator": "img"
-            ]
+                "initiator": "img",
+            ],
         ]
 
         if includeLongTitle {
@@ -167,7 +167,7 @@ enum WINetworkPreviewFixtures {
                     "endTime": ["monotonicMs": 2200.0, "wallMs": 1700000001100.0],
                     "encodedBodyLength": 512,
                     "decodedBodySize": 512,
-                    "initiator": "xhr"
+                    "initiator": "xhr",
                 ],
                 at: 0
             )
@@ -177,7 +177,7 @@ enum WINetworkPreviewFixtures {
             "version": 1,
             "sessionId": "preview-session",
             "seq": 1,
-            "events": events
+            "events": events,
         ]
     }
 

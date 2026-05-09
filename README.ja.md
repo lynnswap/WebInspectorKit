@@ -8,7 +8,7 @@
 
 ## 製品
 
-- `WebInspectorKit`: コンテナ UI、`WITab` ベースのタブ構成、Observation ベースの状態管理
+- `WebInspectorKit`: UIKit コンテナ UI、`WITab` ベースのタブ構成、Observation ベースの状態管理
 - `WebInspectorEngine`: DOM/Network エンジン、ランタイム actor、同梱 inspector script
 
 `WebInspectorKit` は `WebInspectorEngine` に依存します。
@@ -17,8 +17,9 @@
 
 - DOM ツリーの参照（要素ピック、ハイライト、削除、属性編集）
 - Network リクエストログ（fetch/XHR/WebSocket）と、buffering/active モード切り替え
-- `WITab` によるタブ構成のカスタマイズ（custom tab は `viewControllerProvider` を利用）
-- `WIInspectorController` による明示的ライフサイクル（`connect(to:)`, `suspend()`, `disconnect()`）
+- `WITab` によるタブ構成のカスタマイズ
+- `WISession` / `WIViewController` による明示的ライフサイクル（`attach(to:)`, `detach()`）
+- `WIInspectorDependencies` による依存性注入
 
 ## 要件
 
@@ -37,47 +38,19 @@ import WebInspectorKit
 
 final class BrowserViewController: UIViewController {
     private let pageWebView = WKWebView(frame: .zero)
-    private let inspector = WIInspectorController()
 
     @objc private func presentInspector() {
-        let container = WITabViewController(
-            inspector,
-            webView: pageWebView,
-            tabs: [.dom(), .network()]
-        )
-        container.modalPresentationStyle = .pageSheet
-        if let sheet = container.sheetPresentationController {
+        let inspector = WIViewController()
+        inspector.modalPresentationStyle = .pageSheet
+        if let sheet = inspector.sheetPresentationController {
             sheet.detents = [.medium(), .large()]
             sheet.selectedDetentIdentifier = .medium
             sheet.prefersGrabberVisible = true
         }
-        present(container, animated: true)
-    }
-}
-```
-
-### AppKit
-
-```swift
-import AppKit
-import WebKit
-import WebInspectorKit
-
-final class BrowserWindowController: NSWindowController {
-    let pageWebView = WKWebView(frame: .zero)
-    let inspector = WIInspectorController()
-
-    @objc func presentInspector() {
-        let container = WITabViewController(
-            inspector,
-            webView: pageWebView,
-            tabs: [.dom(), .network()]
-        )
-        let inspectorWindow = NSWindow(contentViewController: container)
-        inspectorWindow.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-        inspectorWindow.title = "Web Inspector"
-        inspectorWindow.setContentSize(NSSize(width: 960, height: 720))
-        inspectorWindow.makeKeyAndOrderFront(nil)
+        Task { @MainActor in
+            await inspector.attach(to: pageWebView)
+            present(inspector, animated: true)
+        }
     }
 }
 ```
@@ -85,24 +58,36 @@ final class BrowserWindowController: NSWindowController {
 ## カスタムタブ
 
 ```swift
-let customTab = WITab(
+let customTab = WITab.custom(
+    id: "my_custom_tab",
     title: "Custom",
-    image: nil,
-    identifier: "my_custom_tab",
-    role: .other
-) { tab in
-    _ = tab
-    #if canImport(UIKit)
+    systemImage: "folder"
+) { context in
+    _ = context.runtime
     return UIViewController()
-    #else
-    return NSViewController()
-    #endif
 }
 
-let container = WITabViewController(
-    inspector,
-    webView: pageWebView,
-    tabs: [.dom(), .network(), customTab]
+let inspector = WIViewController(
+    tabs: [.dom, .network, customTab]
+)
+```
+
+## 依存性注入
+
+値だけの設定は `WIModelConfiguration` に残し、副作用を持つ runtime 境界は
+`WIInspectorDependencies` で注入します。
+
+```swift
+let dependencies = WIInspectorDependencies.testing {
+    $0.network = WIInspectorNetworkClient(
+        networkAgentScript: { "" }
+    )
+}
+
+let inspector = WIViewController(
+    configuration: WIModelConfiguration(),
+    dependencies: dependencies,
+    tabs: [.dom, .network]
 )
 ```
 

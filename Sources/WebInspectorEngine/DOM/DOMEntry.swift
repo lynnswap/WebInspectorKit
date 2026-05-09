@@ -28,7 +28,7 @@ public struct DOMAttribute: Hashable, Identifiable, Sendable {
 
 @MainActor
 @Observable
-public final class DOMNodeModel: Equatable, Hashable {
+public final class DOMNodeModel: Equatable, Hashable, Identifiable {
     public struct ID: Hashable, Sendable {
         public let documentIdentity: UUID
         public let localID: UInt64
@@ -43,7 +43,7 @@ public final class DOMNodeModel: Equatable, Hashable {
     package var backendNodeID: Int?
     package var backendNodeIDIsStable: Bool
     public var frameID: String?
-    public var nodeType: Int
+    public var nodeType: DOMNodeType
     public var nodeName: String
     public var localName: String
     public var nodeValue: String
@@ -67,7 +67,7 @@ public final class DOMNodeModel: Equatable, Hashable {
         backendNodeID: Int? = nil,
         backendNodeIDIsStable: Bool? = nil,
         frameID: String? = nil,
-        nodeType: Int,
+        nodeType: DOMNodeType,
         nodeName: String,
         localName: String,
         nodeValue: String,
@@ -100,6 +100,46 @@ public final class DOMNodeModel: Equatable, Hashable {
         self.selectorPath = selectorPath
     }
 
+    package convenience init(
+        id: ID,
+        backendNodeID: Int? = nil,
+        backendNodeIDIsStable: Bool? = nil,
+        frameID: String? = nil,
+        nodeType: Int,
+        nodeName: String,
+        localName: String,
+        nodeValue: String,
+        attributes: [DOMAttribute],
+        children: [DOMNodeModel] = [],
+        childCount: Int,
+        layoutFlags: [String] = [],
+        isRendered: Bool = true,
+        styleRevision: Int = 0,
+        preview: String = "",
+        path: [String] = [],
+        selectorPath: String = ""
+    ) {
+        self.init(
+            id: id,
+            backendNodeID: backendNodeID,
+            backendNodeIDIsStable: backendNodeIDIsStable,
+            frameID: frameID,
+            nodeType: DOMNodeType(protocolValue: nodeType),
+            nodeName: nodeName,
+            localName: localName,
+            nodeValue: nodeValue,
+            attributes: attributes,
+            children: children,
+            childCount: childCount,
+            layoutFlags: layoutFlags,
+            isRendered: isRendered,
+            styleRevision: styleRevision,
+            preview: preview,
+            path: path,
+            selectorPath: selectorPath
+        )
+    }
+
     public var localID: UInt64 {
         id.localID
     }
@@ -113,7 +153,6 @@ public final class DOMNodeModel: Equatable, Hashable {
     }
 
     package func clearSelectionProjectionState() {
-        preview = ""
         path = []
         selectorPath = ""
         styleRevision = 0

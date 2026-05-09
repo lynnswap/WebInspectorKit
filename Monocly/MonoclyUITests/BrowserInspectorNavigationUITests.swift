@@ -170,7 +170,7 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
         )
 
         let resolvedImage = selection.selectedPreview.contains("<img")
-            && selection.treeSelectedPreview.contains("fixture-ad-image")
+            && selection.treeSelectedPreview.contains("<img")
         let anchoredInsideIframe = selection.treeSelectedLineage.localizedCaseInsensitiveContains("iframe")
             && selection.treeSelectedLineage.localizedCaseInsensitiveContains("#document")
         let avoidedUtilityFrame = !selection.selectedPreview.contains("__uspapiLocator")
@@ -206,7 +206,7 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
         let selection = try performNativeSelection(in: app, tap: CGVector(dx: 0.73, dy: 0.40))
 
         let resolvedButton = selection.selectedPreview.contains("<button")
-            && selection.treeSelectedPreview.contains("fixture-ad-cta")
+            && selection.treeSelectedPreview.contains("<button")
         let anchoredInsideIframe = selection.treeSelectedLineage.localizedCaseInsensitiveContains("iframe")
             && selection.treeSelectedLineage.localizedCaseInsensitiveContains("#document")
         let avoidedUtilityFrame = !selection.selectedPreview.contains("__uspapiLocator")
@@ -409,6 +409,54 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
             pageFilename: "dom-page-2.html",
             canGoBack: true,
             canGoForward: false
+        )
+    }
+
+    @MainActor
+    func testDOMInspectorNativeDragSelectionResolvesAfterPageNavigation() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["MONOCLY_UI_TEST_SCENARIO"] = "domNavigationBackForward"
+        app.launch()
+
+        XCTAssertTrue(app.buttons[AccessibilityID.loadPage1].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons[AccessibilityID.loadPage2].waitForExistence(timeout: 10))
+
+        _ = try waitForHarnessState(
+            in: app,
+            pageFilename: "dom-page-1.html",
+            canGoBack: false,
+            canGoForward: false
+        )
+
+        app.buttons[AccessibilityID.loadPage2].tap()
+
+        _ = try waitForHarnessState(
+            in: app,
+            pageFilename: "dom-page-2.html",
+            canGoBack: true,
+            canGoForward: false
+        )
+
+        let selection = try performNativeSelection(
+            in: app,
+            dragFrom: CGVector(dx: 0.42, dy: 0.22),
+            to: CGVector(dx: 0.58, dy: 0.24),
+            timeout: 20
+        )
+
+        XCTAssertTrue(
+            selection.selectedPreview.contains("<")
+                && selection.treeSelectedPreview != "domTreeSelectedPreview=n/a"
+                && selection.treeSelectedVisible
+                && selection.error == "domError=n/a",
+            """
+            Native drag selection did not resolve after page navigation.
+            selectedPreview=\(selection.selectedPreview)
+            treeSelectedPreview=\(selection.treeSelectedPreview)
+            treeSelectedVisible=\(selection.treeSelectedVisible)
+            domSelectionDebug=\(selection.selectionDebug)
+            domError=\(selection.error)
+            """
         )
     }
 
@@ -623,6 +671,31 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
         tap: CGVector,
         timeout: TimeInterval = 15
     ) throws -> (selectedPreview: String, treeSelectedPreview: String, treeSelectedLineage: String, treeSelectedVisible: Bool, selectionDebug: String, error: String) {
+        try performNativeSelection(in: app, timeout: timeout) {
+            app.coordinate(withNormalizedOffset: tap).tap()
+        }
+    }
+
+    @MainActor
+    private func performNativeSelection(
+        in app: XCUIApplication,
+        dragFrom start: CGVector,
+        to end: CGVector,
+        timeout: TimeInterval = 15
+    ) throws -> (selectedPreview: String, treeSelectedPreview: String, treeSelectedLineage: String, treeSelectedVisible: Bool, selectionDebug: String, error: String) {
+        try performNativeSelection(in: app, timeout: timeout) {
+            let startCoordinate = app.coordinate(withNormalizedOffset: start)
+            let endCoordinate = app.coordinate(withNormalizedOffset: end)
+            startCoordinate.press(forDuration: 0.1, thenDragTo: endCoordinate)
+        }
+    }
+
+    @MainActor
+    private func performNativeSelection(
+        in app: XCUIApplication,
+        timeout: TimeInterval,
+        gesture: () -> Void
+    ) throws -> (selectedPreview: String, treeSelectedPreview: String, treeSelectedLineage: String, treeSelectedVisible: Bool, selectionDebug: String, error: String) {
         let beginNativeSelectionButton = app.buttons[AccessibilityID.beginNativeSelection]
         XCTAssertTrue(beginNativeSelectionButton.waitForExistence(timeout: 10))
         beginNativeSelectionButton.tap()
@@ -635,7 +708,7 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
             "DOM selection mode did not start: \(selectingLabel.label)"
         )
 
-        app.coordinate(withNormalizedOffset: tap).tap()
+        gesture()
 
         let domSelectedPreviewLabel = app.staticTexts[AccessibilityID.domSelectedPreview]
         let domTreeSelectedPreviewLabel = app.staticTexts[AccessibilityID.domTreeSelectedPreview]

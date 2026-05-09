@@ -198,7 +198,6 @@ public final class DOMDocumentModel {
            node.backendNodeID == payloadBackendNodeID {
             node.backendNodeIDIsStable = payload.backendNodeIDIsStable
         }
-        node.preview = payload.preview
         node.path = payload.path
         if let selectorPath = payload.selectorPath {
             node.selectorPath = selectorPath
@@ -873,39 +872,39 @@ private extension DOMDocumentModel {
     }
 
     func isDocumentNode(_ node: DOMNodeModel) -> Bool {
-        inferredNodeType(for: node) == 9
+        inferredNodeType(for: node) == .document
     }
 
     func isFrameOwnerNode(_ node: DOMNodeModel) -> Bool {
-        guard inferredNodeType(for: node) == 1 else {
+        guard inferredNodeType(for: node) == .element else {
             return false
         }
         let nodeName = (node.localName.isEmpty ? node.nodeName : node.localName).lowercased()
         return nodeName == "iframe" || nodeName == "frame"
     }
 
-    func inferredNodeType(for node: DOMNodeModel) -> Int {
-        if node.nodeType != 0 {
+    func inferredNodeType(for node: DOMNodeModel) -> DOMNodeType {
+        if node.nodeType != .unknown {
             return node.nodeType
         }
 
         switch (node.localName.isEmpty ? node.nodeName : node.localName).lowercased() {
         case "#document":
-            return 9
+            return .document
         case "!doctype", "#doctype":
-            return 10
+            return .documentType
         case "#text":
-            return 3
+            return .text
         case "#comment":
-            return 8
+            return .comment
         case "#cdata-section":
-            return 4
+            return .cdataSection
         case "#document-fragment", "#shadow-root":
-            return 11
+            return .documentFragment
         case let name where !name.isEmpty && !name.hasPrefix("#"):
-            return 1
+            return .element
         default:
-            return 0
+            return .unknown
         }
     }
 }

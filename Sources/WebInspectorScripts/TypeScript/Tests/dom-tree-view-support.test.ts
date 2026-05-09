@@ -337,9 +337,9 @@ describe("dom-tree-view-support", () => {
         treeState.selectedNodeId = 12;
 
         document.documentElement.style.setProperty("--wi-safe-area-top", "44px");
-        document.documentElement.scrollTop = 100;
+        document.documentElement.scrollTop = 400;
         document.documentElement.scrollLeft = 18;
-        setVisualViewport({ pageTop: 100, pageLeft: 18, width: 320, height: 640 });
+        setVisualViewport({ pageTop: 400, pageLeft: 18, width: 320, height: 640 });
         setDocumentExtent({ width: 1200, height: 2400 });
         row.getBoundingClientRect = () => ({
             top: 20,
@@ -364,7 +364,7 @@ describe("dom-tree-view-support", () => {
         window.scrollTo = scrollTo as unknown as typeof window.scrollTo;
 
         expect(module.scrollSelectionIntoView(12)).toBe(false);
-        expect(scrollTo).toHaveBeenLastCalledWith({ top: 68, left: 18, behavior: "auto" });
+        expect(scrollTo).toHaveBeenLastCalledWith({ top: 98, left: 18, behavior: "auto" });
     });
 
     it("preserves horizontal scroll while revealing rows hidden below the safe area inset", async () => {
@@ -407,7 +407,7 @@ describe("dom-tree-view-support", () => {
         window.scrollTo = scrollTo as unknown as typeof window.scrollTo;
 
         expect(module.scrollSelectionIntoView(13)).toBe(false);
-        expect(scrollTo).toHaveBeenLastCalledWith({ top: 72, left: 55, behavior: "auto" });
+        expect(scrollTo).toHaveBeenLastCalledWith({ top: 347, left: 55, behavior: "auto" });
         expect(document.documentElement.scrollLeft).toBe(55);
     });
 

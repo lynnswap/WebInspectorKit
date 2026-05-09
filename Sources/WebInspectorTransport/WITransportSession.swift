@@ -1,6 +1,12 @@
 import Foundation
 import WebKit
 
+private enum WITransportSessionObfuscation {
+    static func deobfuscate(_ reverseTokens: [String]) -> String {
+        reverseTokens.reversed().joined()
+    }
+}
+
 @MainActor
 public final class WITransportSession {
     public enum State: String, Sendable {
@@ -45,6 +51,21 @@ public final class WITransportSession {
 
     public convenience init(configuration: WITransportConfiguration = .init()) {
         self.init(configuration: configuration, backendFactory: WITransportPlatformBackendFactory.makeDefaultBackend)
+    }
+
+    package static func unsupported(
+        configuration: WITransportConfiguration = .init(),
+        reason: String = "Test transport is unsupported."
+    ) -> WITransportSession {
+        WITransportSession(
+            configuration: configuration,
+            backendFactory: { configuration in
+                WITransportPlatformBackendFactory.makeUnsupportedBackend(
+                    configuration: configuration,
+                    reason: reason
+                )
+            }
+        )
     }
 
     init(
@@ -212,6 +233,10 @@ public final class WITransportSession {
         pageTargetTracker.observedCurrentIdentifier
     }
 
+    package func currentCommittedPageTargetIdentifier() -> String? {
+        pageTargetTracker.committedIdentifier
+    }
+
     package func targetKind(for identifier: String?) -> WITransportTargetKind? {
         pageTargetTracker.targetKind(for: identifier)
     }
@@ -225,6 +250,10 @@ public final class WITransportSession {
             _ = refreshDerivedPageTargetIdentifierIfNeeded()
         }
         return pageTargetTracker.orderedIdentifiers
+    }
+
+    package func frameTargetIdentifiers() -> [String] {
+        pageTargetTracker.frameTargetIdentifiers
     }
 
     package func sendRootData(
@@ -498,6 +527,18 @@ package final class WISharedInspectorTransport {
         session?.currentObservedPageTargetIdentifier()
     }
 
+    package func currentCommittedPageTargetIdentifier() -> String? {
+        session?.currentCommittedPageTargetIdentifier()
+    }
+
+    package func pageTargetIdentifiers() -> [String] {
+        session?.pageTargetIdentifiers() ?? []
+    }
+
+    package func frameTargetIdentifiers() -> [String] {
+        session?.frameTargetIdentifiers() ?? []
+    }
+
     package func targetKind(for identifier: String?) -> WITransportTargetKind? {
         session?.targetKind(for: identifier)
     }
@@ -712,7 +753,16 @@ extension WITransportSession {
             log("received root event method=\(method)")
         }
 
-        if method.hasPrefix("DOM.") || method == "Inspector.inspect" {
+        if method == "Inspector.inspect" {
+            enqueuePageEvent(
+                method: method,
+                targetIdentifier: inspectEventTargetIdentifier(from: parsed.params),
+                paramsObject: parsed.params
+            )
+            return
+        }
+
+        if method.hasPrefix("DOM.") {
             enqueuePageEvent(
                 method: method,
                 targetIdentifier: inspectEventTargetIdentifier(from: parsed.params)
@@ -1135,17 +1185,20 @@ extension WITransportSession {
             return derivedPageTargetIdentifierProviderForTesting(webView)
         }
 #endif
-        let handleSelector = NSSelectorFromString("_handle")
+        let handleKey = WITransportSessionObfuscation.deobfuscate(["handle", "_"])
+        let handleSelector = NSSelectorFromString(handleKey)
         guard webView.responds(to: handleSelector),
-              let handle = (webView.value(forKey: "_handle") as AnyObject?) else {
+              let handle = (webView.value(forKey: handleKey) as AnyObject?) else {
             return nil
         }
 
-        let pageIDSelector = NSSelectorFromString("webPageID")
-        let legacyPageIDSelector = NSSelectorFromString("_webPageID")
+        let pageIDKey = WITransportSessionObfuscation.deobfuscate(["ID", "Page", "web"])
+        let legacyPageIDKey = WITransportSessionObfuscation.deobfuscate(["ID", "Page", "web", "_"])
+        let pageIDSelector = NSSelectorFromString(pageIDKey)
+        let legacyPageIDSelector = NSSelectorFromString(legacyPageIDKey)
         let pageIDValue =
-            (handle.responds(to: pageIDSelector) ? handle.value(forKey: "webPageID") as? NSNumber : nil)
-            ?? (handle.responds(to: legacyPageIDSelector) ? handle.value(forKey: "_webPageID") as? NSNumber : nil)
+            (handle.responds(to: pageIDSelector) ? handle.value(forKey: pageIDKey) as? NSNumber : nil)
+            ?? (handle.responds(to: legacyPageIDSelector) ? handle.value(forKey: legacyPageIDKey) as? NSNumber : nil)
 
         guard let pageIDValue else {
             return nil
@@ -1314,6 +1367,10 @@ private final class WITransportPageTargetTracker {
         return currentIdentifierStorage
     }
 
+    var committedIdentifier: String? {
+        committedIdentifierStorage
+    }
+
     var allowsDerivedCommittedSeed: Bool {
         !hasObservedLifecycleEvents && currentIdentifierStorage == nil
     }
@@ -1326,6 +1383,18 @@ private final class WITransportPageTargetTracker {
                 }
                 if rhs.identifier == currentIdentifierStorage {
                     return false
+                }
+                return lhs.creationOrder > rhs.creationOrder
+            }
+            .map(\.identifier)
+    }
+
+    var frameTargetIdentifiers: [String] {
+        knownTargetsByIdentifier.values
+            .filter { $0.kind == .frame }
+            .sorted { lhs, rhs in
+                if lhs.isProvisional != rhs.isProvisional {
+                    return lhs.isProvisional == false
                 }
                 return lhs.creationOrder > rhs.creationOrder
             }

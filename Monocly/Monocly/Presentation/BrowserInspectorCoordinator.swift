@@ -3,8 +3,6 @@ import WebInspectorKit
 
 #if canImport(UIKit)
 import UIKit
-#elseif canImport(AppKit)
-import AppKit
 #endif
 
 #if canImport(UIKit)
@@ -12,7 +10,7 @@ struct BrowserInspectorWindowContext {
     static let sceneActivityType = "lynnpd.webspector.web-inspector"
 
     let browserStore: BrowserStore
-    let inspectorController: WIInspectorController
+    let inspectorRuntime: WIRuntimeSession
     let tabs: [WITab]
 }
 
@@ -65,7 +63,7 @@ final class BrowserInspectorCoordinator {
         private var staleSceneSessionIdentifiers: Set<String> = []
         private var isPendingPresentation = false
         private var observers: [UUID: (Bool) -> Void] = [:]
-        private var releaseHandlersByInspectorControllerID: [ObjectIdentifier: () -> Void] = [:]
+        private var releaseHandlersByInspectorRuntimeID: [ObjectIdentifier: () -> Void] = [:]
 
         var currentContext: BrowserInspectorWindowContext? {
             context
@@ -97,11 +95,11 @@ final class BrowserInspectorCoordinator {
         }
 
         func setContext(_ context: BrowserInspectorWindowContext?) {
-            let previousInspectorControllerID = self.context.map { ObjectIdentifier($0.inspectorController) }
-            let nextInspectorControllerID = context.map { ObjectIdentifier($0.inspectorController) }
+            let previousInspectorRuntimeID = self.context.map { ObjectIdentifier($0.inspectorRuntime) }
+            let nextInspectorRuntimeID = context.map { ObjectIdentifier($0.inspectorRuntime) }
             self.context = context
-            if previousInspectorControllerID != nextInspectorControllerID {
-                releaseContext(for: previousInspectorControllerID)
+            if previousInspectorRuntimeID != nextInspectorRuntimeID {
+                releaseContext(for: previousInspectorRuntimeID)
             }
         }
 
@@ -163,16 +161,16 @@ final class BrowserInspectorCoordinator {
             notifyObserversIfNeeded(previousState: previousState)
         }
 
-        func hasWindow(for inspectorController: WIInspectorController) -> Bool {
-            context?.inspectorController === inspectorController && presentationState
+        func hasWindow(for inspectorRuntime: WIRuntimeSession) -> Bool {
+            context?.inspectorRuntime === inspectorRuntime && presentationState
         }
 
         func setReleaseHandler(
-            for inspectorController: WIInspectorController,
+            for inspectorRuntime: WIRuntimeSession,
             _ handler: (() -> Void)?
         ) {
-            let inspectorControllerID = ObjectIdentifier(inspectorController)
-            releaseHandlersByInspectorControllerID[inspectorControllerID] = handler
+            let inspectorRuntimeID = ObjectIdentifier(inspectorRuntime)
+            releaseHandlersByInspectorRuntimeID[inspectorRuntimeID] = handler
         }
 
         func canRestoreSceneSession(_ sceneSession: UISceneSession) -> Bool {
@@ -195,7 +193,7 @@ final class BrowserInspectorCoordinator {
 
         func clear() {
             let previousState = presentationState
-            let previousInspectorControllerID = context.map { ObjectIdentifier($0.inspectorController) }
+            let previousInspectorRuntimeID = context.map { ObjectIdentifier($0.inspectorRuntime) }
             setContext(nil)
             sceneSessionsByIdentifier.removeAll()
             reusableSceneSession = nil
@@ -203,7 +201,7 @@ final class BrowserInspectorCoordinator {
             restorableSceneSessionIdentifiers.removeAll()
             staleSceneSessionIdentifiers.removeAll()
             isPendingPresentation = false
-            releaseContext(for: previousInspectorControllerID)
+            releaseContext(for: previousInspectorRuntimeID)
             notifyObserversIfNeeded(previousState: previousState)
         }
 
@@ -226,9 +224,9 @@ final class BrowserInspectorCoordinator {
             }
         }
 
-        private func releaseContext(for inspectorControllerID: ObjectIdentifier?) {
-            guard let inspectorControllerID,
-                  let releaseHandler = releaseHandlersByInspectorControllerID.removeValue(forKey: inspectorControllerID) else {
+        private func releaseContext(for inspectorRuntimeID: ObjectIdentifier?) {
+            guard let inspectorRuntimeID,
+                  let releaseHandler = releaseHandlersByInspectorRuntimeID.removeValue(forKey: inspectorRuntimeID) else {
                 return
             }
             releaseHandler()
@@ -262,8 +260,8 @@ final class BrowserInspectorCoordinator {
     func presentSheet(
         from presenter: UIViewController,
         browserStore: BrowserStore,
-        inspectorController: WIInspectorController,
-        tabs: [WITab] = [.dom(), .network()],
+        inspectorRuntime: WIRuntimeSession,
+        tabs: [WITab] = [.dom, .network],
         launchConfiguration: BrowserLaunchConfiguration? = nil
     ) -> Bool {
         guard isPresentingInspector(presenter: presenter) == false else {
@@ -279,15 +277,13 @@ final class BrowserInspectorCoordinator {
         if let launchConfiguration, launchConfiguration.uiTestScenario != nil {
             sheetController = BrowserInspectorSheetHostingController(
                 browserStore: browserStore,
-                inspectorController: inspectorController,
+                inspectorRuntime: inspectorRuntime,
                 launchConfiguration: configuration,
                 tabs: tabs
             )
         } else {
-            sheetController = WITabViewController(
-                inspectorController,
-                webView: browserStore.webView,
-                tabs: tabs
+            sheetController = WIViewController(
+                session: WISession(runtime: inspectorRuntime, tabs: tabs)
             )
         }
         sheetController.modalPresentationStyle = .pageSheet
@@ -311,8 +307,8 @@ final class BrowserInspectorCoordinator {
     func presentWindow(
         from presenter: UIViewController,
         browserStore: BrowserStore,
-        inspectorController: WIInspectorController,
-        tabs: [WITab] = [.dom(), .network()]
+        inspectorRuntime: WIRuntimeSession,
+        tabs: [WITab] = [.dom, .network]
     ) -> Bool {
         guard isPresentingInspector(presenter: presenter) == false else {
             return false
@@ -324,7 +320,7 @@ final class BrowserInspectorCoordinator {
         Self.inspectorWindowRegistry.setContext(
             BrowserInspectorWindowContext(
                 browserStore: browserStore,
-                inspectorController: inspectorController,
+                inspectorRuntime: inspectorRuntime,
                 tabs: tabs
             )
         )
@@ -391,15 +387,15 @@ final class BrowserInspectorCoordinator {
         inspectorWindowRegistry.currentContext
     }
 
-    static func hasInspectorWindow(for inspectorController: WIInspectorController) -> Bool {
-        inspectorWindowRegistry.hasWindow(for: inspectorController)
+    static func hasInspectorWindow(for inspectorRuntime: WIRuntimeSession) -> Bool {
+        inspectorWindowRegistry.hasWindow(for: inspectorRuntime)
     }
 
     static func setInspectorWindowReleaseHandler(
-        for inspectorController: WIInspectorController,
+        for inspectorRuntime: WIRuntimeSession,
         _ handler: (() -> Void)?
     ) {
-        inspectorWindowRegistry.setReleaseHandler(for: inspectorController, handler)
+        inspectorWindowRegistry.setReleaseHandler(for: inspectorRuntime, handler)
     }
 
     static func attachInspectorWindowSceneSession(_ sceneSession: UISceneSession) {
@@ -432,6 +428,10 @@ final class BrowserInspectorCoordinator {
 
     static func clearInspectorWindowPresentation() {
         inspectorWindowRegistry.clear()
+    }
+
+    static func setInspectorWindowContextForTesting(_ context: BrowserInspectorWindowContext?) {
+        inspectorWindowRegistry.setContext(context)
     }
 
     static func inspectorWindowPresentationStateForTesting(
@@ -516,132 +516,6 @@ final class BrowserInspectorCoordinator {
             cursor = current.presentedViewController
         }
         return false
-    }
-#elseif canImport(AppKit)
-    private final class InspectorWindowStore {
-        weak var window: NSWindow?
-        private var currentInspectorControllerID: ObjectIdentifier?
-        private var releaseHandlersByInspectorControllerID: [ObjectIdentifier: () -> Void] = [:]
-        private var closeObserver: NSObjectProtocol?
-
-        func setWindow(_ window: NSWindow?, inspectorController: WIInspectorController) {
-            removeCloseObserver()
-            self.window = window
-            currentInspectorControllerID = ObjectIdentifier(inspectorController)
-
-            guard let window else {
-                currentInspectorControllerID = nil
-                return
-            }
-
-            closeObserver = NotificationCenter.default.addObserver(
-                forName: NSWindow.willCloseNotification,
-                object: window,
-                queue: .main
-            ) { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    guard let self else {
-                        return
-                    }
-                    let releaseHandler = self.currentInspectorControllerID.flatMap {
-                        self.releaseHandlersByInspectorControllerID[$0]
-                    }
-                    self.window = nil
-                    self.currentInspectorControllerID = nil
-                    self.removeCloseObserver()
-                    releaseHandler?()
-                }
-            }
-        }
-
-        func setCurrentInspectorController(_ inspectorController: WIInspectorController) {
-            let previousInspectorControllerID = currentInspectorControllerID
-            let nextInspectorControllerID = ObjectIdentifier(inspectorController)
-            currentInspectorControllerID = nextInspectorControllerID
-            if let previousInspectorControllerID,
-               previousInspectorControllerID != nextInspectorControllerID {
-                releaseHandlersByInspectorControllerID[previousInspectorControllerID]?()
-            }
-        }
-
-        func hasWindow(for inspectorController: WIInspectorController) -> Bool {
-            window != nil && currentInspectorControllerID == ObjectIdentifier(inspectorController)
-        }
-
-        func setReleaseHandler(
-            for inspectorController: WIInspectorController,
-            _ handler: (() -> Void)?
-        ) {
-            let inspectorControllerID = ObjectIdentifier(inspectorController)
-            releaseHandlersByInspectorControllerID[inspectorControllerID] = handler
-        }
-
-        private func removeCloseObserver() {
-            if let closeObserver {
-                NotificationCenter.default.removeObserver(closeObserver)
-                self.closeObserver = nil
-            }
-        }
-    }
-
-    private static let inspectorWindowStore = InspectorWindowStore()
-
-    static func hasInspectorWindow(for inspectorController: WIInspectorController) -> Bool {
-        inspectorWindowStore.hasWindow(for: inspectorController)
-    }
-
-    static func setInspectorWindowReleaseHandler(
-        for inspectorController: WIInspectorController,
-        _ handler: (() -> Void)?
-    ) {
-        inspectorWindowStore.setReleaseHandler(for: inspectorController, handler)
-    }
-
-    static func present(
-        from parentWindow: NSWindow?,
-        browserStore: BrowserStore,
-        inspectorController: WIInspectorController,
-        tabs: [WITab] = [.dom(), .network()]
-    ) -> Bool {
-        let resolvedParentWindow = parentWindow ?? MonoclyWindowContextStore.shared.currentWindow
-
-        if let existingWindow = Self.inspectorWindowStore.window,
-           let existingContainer = existingWindow.contentViewController as? WITabViewController {
-            existingContainer.setTabs(tabs)
-            existingContainer.setPageWebView(browserStore.webView)
-            existingContainer.setInspectorController(inspectorController)
-            Self.inspectorWindowStore.setCurrentInspectorController(inspectorController)
-            existingWindow.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-            return true
-        }
-
-        let container = WITabViewController(
-            inspectorController,
-            webView: browserStore.webView,
-            tabs: tabs
-        )
-        let window = NSWindow(contentViewController: container)
-        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-        window.title = "Web Inspector"
-        window.setContentSize(NSSize(width: 960, height: 720))
-        window.minSize = NSSize(width: 640, height: 480)
-
-        if let resolvedParentWindow {
-            let parentFrame = resolvedParentWindow.frame
-            let origin = NSPoint(
-                x: parentFrame.midX - (window.frame.width / 2),
-                y: parentFrame.midY - (window.frame.height / 2)
-            )
-            window.setFrameOrigin(origin)
-        } else {
-            window.center()
-        }
-
-        Self.inspectorWindowStore.setWindow(window, inspectorController: inspectorController)
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-        return true
     }
 #endif
 }

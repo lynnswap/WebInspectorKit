@@ -116,9 +116,9 @@ package struct NetworkTransportClient {
     package func loadBootstrapResources(
         using session: WITransportSession,
         targetIdentifier: String,
-        allocateRequestID: @escaping () -> Int,
-        defaultSessionID: @escaping (String?) -> String,
-        normalizeScopeID: @escaping (String?) -> String?,
+        allocateRequestID: @escaping @MainActor () -> Int,
+        defaultSessionID: @escaping @MainActor (String?) -> String,
+        normalizeScopeID: @escaping @MainActor (String?) -> String?,
         logFailure: @escaping @MainActor (String) -> Void
     ) async throws -> NetworkBootstrapLoad {
         if session.shouldAttemptStableNetworkBootstrap() {

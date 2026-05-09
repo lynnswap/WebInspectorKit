@@ -172,36 +172,21 @@ private enum WITransportNativeInspectorResolver {
         "/System/Library/PrivateFrameworks/WebCore.framework/WebCore",
         "/System/Library/PrivateFrameworks/WebCore.framework/Versions/A/WebCore",
     ]
-    // __TEXT
     private static let textSegmentName = WITransportNativeInspectorObfuscation.deobfuscate(["__TEXT"])
-    // dyld_shared_cache_
     private static let sharedCacheFilePrefix = WITransportNativeInspectorObfuscation.deobfuscate(["e_", "red_cach", "dyld_sha"])
-    // .symbols
     private static let sharedCacheFileSuffix = WITransportNativeInspectorObfuscation.deobfuscate([".symbols"])
-    // arm64e
     private static let arm64eArchitecture = WITransportNativeInspectorObfuscation.deobfuscate(["arm64e"])
-    // arm64
     private static let arm64Architecture = WITransportNativeInspectorObfuscation.deobfuscate(["arm64"])
-    // __ZN6WebKit26WebPageInspectorController15connectFrontendERN9Inspector15FrontendChannelEbb
-    fileprivate static let connectFrontendSymbol = WITransportNativeInspectorObfuscation.deobfuscate(["annelEbb", "ontendCh", "ctor15Fr", "RN9Inspe", "rontendE", "connectF", "roller15", "ctorCont", "ageInspe", "it26WebP", "_ZN6WebK", "_"])
-    // __ZN6WebKit26WebPageInspectorController18disconnectFrontendERN9Inspector15FrontendChannelE
-    fileprivate static let disconnectFrontendSymbol = WITransportNativeInspectorObfuscation.deobfuscate(["ChannelE", "Frontend", "pector15", "dERN9Ins", "tFronten", "isconnec", "oller18d", "torContr", "geInspec", "t26WebPa", "ZN6WebKi", "__"])
-    // [WebInspectorTransport] native inspector symbols resolved backend=%@ phase=%@
+    fileprivate static let connectFrontendSymbol = WITransportNativeInspectorObfuscation.deobfuscate(["annelEbb", "ontendCh", "ctor15Fr", "RN9Inspe", "rontendE", "connectF", "roller15", "ctorCont", "ageInspe", "it26WebP", "WebK", "ZN6", "__"])
+    fileprivate static let disconnectFrontendSymbol = WITransportNativeInspectorObfuscation.deobfuscate(["ChannelE", "Frontend", "pector15", "dERN9Ins", "tFronten", "isconnec", "oller18d", "torContr", "geInspec", "t26WebPa", "WebKi", "ZN6", "__"])
     private static let successLogFormat = WITransportNativeInspectorObfuscation.deobfuscate(["se=%@", "d=%@ pha", "d backen", " resolve", " symbols", "nspector", "native i", "nsport] ", "ectorTra", "[WebInsp"])
-    // [WebInspectorTransport] native inspector symbol lookup failed backend=%@ reason=%@
     private static let failureLogFormat = WITransportNativeInspectorObfuscation.deobfuscate(["%@", " reason=", "ckend=%@", "ailed ba", "lookup f", " symbol ", "nspector", "native i", "nsport] ", "ectorTra", "[WebInsp"])
-    // __ZN3WTF6String8fromUTF8ENSt3__14spanIKDuLm18446744073709551615EEE
     private static let stringFromUTF8Symbol = WITransportNativeInspectorObfuscation.deobfuscate(["51615EEE", "40737095", "m1844674", "panIKDuL", "St3__14s", "omUTF8EN", "tring8fr", "ZN3WTF6S", "__"])
-    // __ZN3WTF10StringImplcvP8NSStringEv
     private static let stringImplToNSStringSymbol = WITransportNativeInspectorObfuscation.deobfuscate(["StringEv", "plcvP8NS", "StringIm", "ZN3WTF10", "__"])
-    // __ZN3WTF10StringImpl7destroyEPS0_
     private static let destroyStringImplSymbol = WITransportNativeInspectorObfuscation.deobfuscate(["royEPS0_", "mpl7dest", "0StringI", "_ZN3WTF1", "_"])
-    // __ZN9Inspector17BackendDispatcher8dispatchERKN3WTF6StringE
     private static let backendDispatcherDispatchSymbol = WITransportNativeInspectorObfuscation.deobfuscate(["6StringE", "ERKN3WTF", "dispatch", "patcher8", "ckendDis", "ctor17Ba", "ZN9Inspe", "__"])
-    // __ZN7WebCore23PageInspectorController15connectFrontendERN9Inspector15FrontendChannelEbb
-    private static let pageInspectorControllerConnectSymbol = WITransportNativeInspectorObfuscation.deobfuscate(["bb", "15FrontendChannelE", "RN9Inspector", "15connectFrontendE", "23PageInspectorController", "7WebCore", "__ZN"])
-    // __ZN7WebCore23PageInspectorController18disconnectFrontendERN9Inspector15FrontendChannelE
-    private static let pageInspectorControllerDisconnectSymbol = WITransportNativeInspectorObfuscation.deobfuscate(["E", "15FrontendChannel", "ERN9Inspector", "18disconnectFrontend", "23PageInspectorController", "7WebCore", "__ZN"])
+    private static let pageInspectorControllerConnectSymbol = WITransportNativeInspectorObfuscation.deobfuscate(["bb", "15FrontendChannelE", "RN9Inspector", "15connectFrontendE", "Controller", "Inspector", "23Page", "Core", "Web", "7", "__ZN"])
+    private static let pageInspectorControllerDisconnectSymbol = WITransportNativeInspectorObfuscation.deobfuscate(["E", "15FrontendChannel", "ERN9Inspector", "18disconnectFrontend", "Controller", "Inspector", "23Page", "Core", "Web", "7", "__ZN"])
     // __ZN7WebCore24FrameInspectorController15connectFrontendERN9Inspector15FrontendChannelEbb
     private static let frameInspectorControllerConnectSymbol = WITransportNativeInspectorObfuscation.deobfuscate(["bb", "15FrontendChannelE", "RN9Inspector", "15connectFrontendE", "24FrameInspectorController", "7WebCore", "__ZN"])
     // __ZN7WebCore24FrameInspectorController18disconnectFrontendERN9Inspector15FrontendChannelE

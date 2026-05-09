@@ -78,6 +78,9 @@ typedef NS_ERROR_ENUM(WIKRuntimeBridgeErrorDomain, WIKRuntimeBridgeErrorCode) {
 + (BOOL)hasInspectorNodeSearchRecognizerForWebView:(WKWebView *)webView;
 + (BOOL)removeInspectorNodeSearchRecognizersFromWebView:(WKWebView *)webView;
 + (nullable NSString *)nodeSearchDebugSummaryForWebView:(WKWebView *)webView;
+#if DEBUG
++ (BOOL)shouldCommitInspectorNodeSearchForTestingWithMovementBeyondTapTolerance:(BOOL)didMoveBeyondTapTolerance;
+#endif
 #endif
 
 #if TARGET_OS_OSX

@@ -38,13 +38,13 @@ enum BrowserUITestScenario: String {
     var defaultInspectorTabs: [WITab] {
         switch self {
         case .domNavigationBackForward:
-            [.dom()]
+            [.dom]
         case .domOpenInspectorAfterInitialLoad:
-            [.dom()]
+            [.dom]
         case .domAdFixture:
-            [.dom()]
+            [.dom]
         case .domRemoteURL:
-            [.dom()]
+            [.dom]
         }
     }
 
@@ -311,7 +311,7 @@ struct BrowserLaunchConfiguration {
 
     init(
         initialURL: URL,
-        autoOpenInspectorTabs: [WITab] = [.dom(), .network()],
+        autoOpenInspectorTabs: [WITab] = [.dom, .network],
         shouldAutoOpenInspector: Bool = false,
         shouldAutoStartDOMSelection: Bool = false,
         shouldShowDiagnostics: Bool = false,
@@ -399,7 +399,7 @@ struct BrowserLaunchConfiguration {
         uiTestScenario: BrowserUITestScenario?
     ) -> [WITab] {
         guard let rawValue = environment["WEBSPECTOR_AUTO_OPEN_INSPECTOR_TABS"] else {
-            return uiTestScenario?.defaultInspectorTabs ?? [.dom(), .network()]
+            return uiTestScenario?.defaultInspectorTabs ?? [.dom, .network]
         }
 
         let requested = rawValue
@@ -410,15 +410,15 @@ struct BrowserLaunchConfiguration {
         for entry in requested {
             switch entry {
             case "dom":
-                tabs.append(.dom())
+                tabs.append(.dom)
             case "network":
-                tabs.append(.network())
+                tabs.append(.network)
             default:
                 continue
             }
         }
 
-        return tabs.isEmpty ? [.dom(), .network()] : tabs
+        return tabs.isEmpty ? [.dom, .network] : tabs
     }
 
     private static func resolveUITestScenario(from environment: [String: String]) -> BrowserUITestScenario? {

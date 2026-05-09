@@ -5,12 +5,12 @@ import WebInspectorKit
 @MainActor
 final class BrowserInspectorWindowHostingController: UIViewController {
     private struct AppliedInspectorContext: Equatable {
-        let inspectorControllerID: ObjectIdentifier
-        let pageWebViewID: ObjectIdentifier
-        let tabIdentifiers: [String]
+        let inspectorRuntimeID: ObjectIdentifier
+        let browserStoreID: ObjectIdentifier
+        let tabIDs: [WITab.ID]
     }
 
-    private var inspectorContainer: WITabViewController?
+    private var inspectorContainer: WIViewController?
     private let placeholderLabel = UILabel()
     private var lastAppliedContext: AppliedInspectorContext?
 
@@ -23,39 +23,40 @@ final class BrowserInspectorWindowHostingController: UIViewController {
         updateInspectorContext()
     }
 
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        if view.window == nil {
+            removeInspectorContainerIfNeeded()
+            lastAppliedContext = nil
+        }
+    }
+
     func updateInspectorContext() {
         guard let inspectorContext = BrowserInspectorCoordinator.inspectorWindowContext() else {
             lastAppliedContext = nil
-            if inspectorContainer == nil {
-                installPlaceholderIfNeeded()
-            }
+            removeInspectorContainerIfNeeded()
+            installPlaceholderIfNeeded()
             return
         }
 
-        let pageWebView = inspectorContext.browserStore.webView
         let appliedContext = AppliedInspectorContext(
-            inspectorControllerID: ObjectIdentifier(inspectorContext.inspectorController),
-            pageWebViewID: ObjectIdentifier(pageWebView),
-            tabIdentifiers: inspectorContext.tabs.map(\.identifier)
+            inspectorRuntimeID: ObjectIdentifier(inspectorContext.inspectorRuntime),
+            browserStoreID: ObjectIdentifier(inspectorContext.browserStore),
+            tabIDs: inspectorContext.tabs.map(\.id)
         )
 
         if lastAppliedContext == appliedContext {
             return
         }
 
-        if let inspectorContainer {
-            inspectorContainer.setInspectorController(inspectorContext.inspectorController)
-            inspectorContainer.setPageWebView(pageWebView)
-            inspectorContainer.setTabs(inspectorContext.tabs)
-            lastAppliedContext = appliedContext
-            return
-        }
+        removeInspectorContainerIfNeeded()
 
         placeholderLabel.removeFromSuperview()
-        let container = WITabViewController(
-            inspectorContext.inspectorController,
-            webView: pageWebView,
-            tabs: inspectorContext.tabs
+        let container = WIViewController(
+            session: WISession(
+                runtime: inspectorContext.inspectorRuntime,
+                tabs: inspectorContext.tabs
+            )
         )
         addChild(container)
         container.view.translatesAutoresizingMaskIntoConstraints = false
@@ -69,6 +70,16 @@ final class BrowserInspectorWindowHostingController: UIViewController {
         container.didMove(toParent: self)
         inspectorContainer = container
         lastAppliedContext = appliedContext
+    }
+
+    private func removeInspectorContainerIfNeeded() {
+        guard let inspectorContainer else {
+            return
+        }
+        inspectorContainer.willMove(toParent: nil)
+        inspectorContainer.view.removeFromSuperview()
+        inspectorContainer.removeFromParent()
+        self.inspectorContainer = nil
     }
 
     private func installPlaceholderIfNeeded() {

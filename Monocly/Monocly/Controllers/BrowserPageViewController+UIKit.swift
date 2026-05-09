@@ -20,7 +20,7 @@ final class BrowserPageViewController: UIViewController {
     }
 
     private let store: BrowserStore
-    private let inspectorController: WIInspectorController
+    private let inspectorRuntime: WIRuntimeSession
     private let launchConfiguration: BrowserLaunchConfiguration
     private let inspectorCoordinator = BrowserInspectorCoordinator()
     private let logger = Logger(subsystem: "Monocly", category: "BrowserPageViewController")
@@ -67,11 +67,11 @@ final class BrowserPageViewController: UIViewController {
 
     init(
         store: BrowserStore,
-        inspectorController: WIInspectorController,
+        inspectorRuntime: WIRuntimeSession,
         launchConfiguration: BrowserLaunchConfiguration
     ) {
         self.store = store
-        self.inspectorController = inspectorController
+        self.inspectorRuntime = inspectorRuntime
         self.launchConfiguration = launchConfiguration
         super.init(nibName: nil, bundle: nil)
         inspectorCoordinator.onPresentationStateChange = { [weak self] in
@@ -152,7 +152,7 @@ final class BrowserPageViewController: UIViewController {
     @objc
     private func handleOpenInspectorAction(_ sender: Any?) {
         _ = sender
-        _ = openInspectorAsSheet(tabs: [.dom(), .network()])
+        _ = openInspectorAsSheet(tabs: [.dom, .network])
     }
 
     private func configureViewHierarchy() {
@@ -188,14 +188,14 @@ final class BrowserPageViewController: UIViewController {
                     guard let self else {
                         return
                     }
-                    _ = self.openInspectorAsSheet(tabs: [.dom()])
+                    _ = self.openInspectorAsSheet(tabs: [.dom])
                 }
                 diagnosticsPanel.configureBeginNativeSelectionAction { [weak self] in
                     Task { @MainActor [weak self] in
                         guard let self else {
                             return
                         }
-                        try? await self.inspectorController.dom.beginSelectionMode()
+                        try? await self.inspectorRuntime.dom.beginSelectionMode()
                         self.updateDiagnosticsOverlay()
                     }
                 }
@@ -382,7 +382,7 @@ final class BrowserPageViewController: UIViewController {
             guard let self else {
                 return
             }
-            _ = self.openInspectorAsSheet(tabs: [.dom(), .network()])
+            _ = self.openInspectorAsSheet(tabs: [.dom, .network])
         }
     }
 
@@ -400,7 +400,7 @@ final class BrowserPageViewController: UIViewController {
             guard let self else {
                 return
             }
-            _ = self.openInspectorAsSheet(tabs: [.dom(), .network()])
+            _ = self.openInspectorAsSheet(tabs: [.dom, .network])
         }
         let openInWindow = UIAction(
             title: "Open in New Window",
@@ -410,7 +410,7 @@ final class BrowserPageViewController: UIViewController {
             guard let self else {
                 return
             }
-            _ = self.openInspectorInNewWindow(tabs: [.dom(), .network()])
+            _ = self.openInspectorInNewWindow(tabs: [.dom, .network])
         }
 
         return UIMenu(title: "", children: [openAsSheet, openInWindow])
@@ -505,11 +505,11 @@ final class BrowserPageViewController: UIViewController {
         diagnosticsPanel.update(
             with: store,
             uiTestState: .init(
-                domIsSelecting: inspectorController.dom.isSelectingElement,
-                domSelectedPreview: inspectorController.dom.currentSelectedNodePreviewForDiagnostics() ?? "n/a",
-                domSelectedLineage: inspectorController.dom.currentSelectedNodeLineageForDiagnostics() ?? "n/a",
-                domSelectionDebug: inspectorController.dom.lastSelectionDiagnosticForDiagnostics() ?? "n/a",
-                domError: inspectorController.dom.document.errorMessage ?? "n/a",
+                domIsSelecting: inspectorRuntime.dom.isSelectingElementForDiagnostics,
+                domSelectedPreview: inspectorRuntime.dom.currentSelectedNodePreviewForDiagnostics() ?? "n/a",
+                domSelectedLineage: inspectorRuntime.dom.currentSelectedNodeLineageForDiagnostics() ?? "n/a",
+                domSelectionDebug: inspectorRuntime.dom.lastSelectionDiagnosticForDiagnostics() ?? "n/a",
+                domError: inspectorRuntime.dom.document.errorMessage ?? "n/a",
                 remoteTapTargetSummary: latestRemoteTapTargetDiagnostics?.summary ?? "n/a",
                 remoteTapPoint: latestRemoteTapTargetDiagnostics.map {
                     String(format: "%.4f,%.4f", $0.normalizedTap.dx, $0.normalizedTap.dy)
@@ -541,7 +541,7 @@ final class BrowserPageViewController: UIViewController {
         inspectorCoordinator.presentSheet(
             from: navigationController ?? self,
             browserStore: store,
-            inspectorController: inspectorController,
+            inspectorRuntime: inspectorRuntime,
             tabs: tabs,
             launchConfiguration: launchConfiguration
         )
@@ -555,7 +555,7 @@ final class BrowserPageViewController: UIViewController {
         return inspectorCoordinator.presentWindow(
             from: navigationController ?? self,
             browserStore: store,
-            inspectorController: inspectorController,
+            inspectorRuntime: inspectorRuntime,
             tabs: tabs
         )
     }
@@ -582,9 +582,9 @@ final class BrowserPageViewController: UIViewController {
             }
             self.logger.notice("auto-starting DOM selection mode for diagnostics")
             for _ in 0..<100 {
-                if self.inspectorController.dom.hasPageWebView {
+                if self.inspectorRuntime.dom.hasPageWebViewForDiagnostics {
                     do {
-                        try await self.inspectorController.dom.beginSelectionMode()
+                        try await self.inspectorRuntime.dom.beginSelectionMode()
                         didCompleteAutoStart = true
                         return
                     } catch {
@@ -653,7 +653,7 @@ final class BrowserPageViewController: UIViewController {
 
     @discardableResult
     func triggerInspectorPrimaryActionForTesting() -> Bool {
-        openInspectorAsSheet(tabs: [.dom(), .network()])
+        openInspectorAsSheet(tabs: [.dom, .network])
     }
 
     @discardableResult
@@ -668,7 +668,7 @@ final class BrowserPageViewController: UIViewController {
 
     @discardableResult
     func triggerInspectorWindowActionForTesting() -> Bool {
-        openInspectorInNewWindow(tabs: [.dom(), .network()])
+        openInspectorInNewWindow(tabs: [.dom, .network])
     }
 
     func refreshInspectorControlsForTesting() {
@@ -677,6 +677,10 @@ final class BrowserPageViewController: UIViewController {
 
     var hasInspectorWindowForTesting: Bool {
         inspectorCoordinator.hasInspectorWindowForTesting
+    }
+
+    var isPresentingInspectorForRuntimeAttachment: Bool {
+        inspectorCoordinator.isPresentingInspector(presenter: navigationController ?? self)
     }
 
     func dismissInspectorWindowForTesting() {

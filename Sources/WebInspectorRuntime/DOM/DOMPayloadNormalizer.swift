@@ -84,7 +84,6 @@ final class DOMPayloadNormalizer {
         let backendNodeIDIsStable = boolValue(object["backendNodeIdIsStable"])
             ?? boolValue(object["backendNodeIDIsStable"])
             ?? (explicitBackendNodeID != nil)
-        let preview = stringValue(object["preview"]) ?? ""
         let attributes = normalizeSelectionAttributes(object["attributes"], localID: localID)
         let path = arrayValue(object["path"])?.compactMap(stringValue) ?? []
         let selectorPath = stringValue(object["selectorPath"])
@@ -94,7 +93,6 @@ final class DOMPayloadNormalizer {
             localID: localID,
             backendNodeID: backendNodeID,
             backendNodeIDIsStable: backendNodeIDIsStable,
-            preview: preview,
             attributes: attributes,
             path: path,
             selectorPath: selectorPath,
@@ -344,12 +342,12 @@ private extension DOMPayloadNormalizer {
             ?? uint64Value(object["nodeId"])
             ?? uint64Value(object["id"])
             ?? fallbackState.allocate()
-        let nodeType = intValue(object["nodeType"]) ?? 0
+        let nodeType = DOMNodeType(protocolValue: intValue(object["nodeType"]) ?? 0)
         let rawNodeName = stringValue(object["nodeName"]) ?? ""
         let rawLocalName = stringValue(object["localName"]) ?? ""
         let frameID = stringValue(object["frameId"]) ?? stringValue(object["frameID"])
-        let nodeName = nodeType == 1 ? rawNodeName.lowercased() : rawNodeName
-        let localName = nodeType == 1
+        let nodeName = nodeType == .element ? rawNodeName.lowercased() : rawNodeName
+        let localName = nodeType == .element
             ? (rawLocalName.isEmpty ? rawNodeName : rawLocalName).lowercased()
             : rawLocalName
         let nodeValue = stringValue(object["nodeValue"]) ?? ""

@@ -27,65 +27,38 @@ package enum WISPISymbols {
         reverseTokens.reversed().joined()
     }
 
-    // _worldWithConfiguration:
     package static let worldWithConfigurationSelector = deobfuscate([":", "Configuration", "With", "world", "_"])
-    // addBuffer:name:contentWorld:
     package static let publicAddBufferSelector = deobfuscate([":", "World", "content", ":", "name", ":", "Buffer", "add"])
-    // removeBufferWithName:contentWorld:
     package static let publicRemoveBufferSelector = deobfuscate([":", "World", "content", ":", "Name", "With", "Buffer", "remove"])
-    // _addBuffer:contentWorld:name:
     package static let privateAddBufferSelector = deobfuscate([":", "name", ":", "World", "content", ":", "Buffer", "add", "_"])
-    // _removeBufferWithName:contentWorld:
     package static let privateRemoveBufferSelector = deobfuscate([":", "World", "content", ":", "Name", "With", "Buffer", "remove", "_"])
-    // _setResourceLoadDelegate:
     package static let setResourceLoadDelegateSelector = deobfuscate([":", "Delegate", "Load", "Resource", "set", "_"])
-    // alloc
     package static let allocSelector = deobfuscate(["alloc"])
-    // initWithData:
     package static let initWithDataSelector = deobfuscate([":", "Data", "With", "init"])
 
-    // _WKContentWorldConfiguration
     package static let contentWorldConfigurationClass = deobfuscate(["Configuration", "World", "Content", "WK", "_"])
-    // _WKJSHandle
     package static let privateJSHandleClass = deobfuscate(["Handle", "JS", "WK", "_"])
-    // WKJSHandle
     package static let publicJSHandleClass = deobfuscate(["Handle", "JS", "WK"])
-    // _WKSerializedNode
     package static let privateSerializedNodeClass = deobfuscate(["Node", "Serialized", "WK", "_"])
-    // WKJSSerializedNode
     package static let publicSerializedNodeClass = deobfuscate(["Node", "Serialized", "JS", "WK"])
-    // _WKJSBuffer
     package static let privateJSBufferClass = deobfuscate(["Buffer", "JS", "WK", "_"])
-    // WKJSScriptingBuffer
     package static let publicJSScriptingBufferClass = deobfuscate(["Buffer", "Scripting", "JS", "WK"])
 
-    // _setUnobscuredSafeAreaInsets:
     package static let setUnobscuredSafeAreaInsetsSelector = deobfuscate([":", "Insets", "Area", "Safe", "Unobscured", "set", "_"])
-    // _setObscuredInsetEdgesAffectedBySafeArea:
     package static let setObscuredInsetEdgesAffectedBySafeAreaSelector = deobfuscate([":", "Area", "Safe", "By", "Affected", "Edges", "Inset", "Obscured", "set", "_"])
-    // _setObscuredInsetsInternal:
     package static let setObscuredInsetsInternalSelector = deobfuscate([":", "Internal", "Insets", "Obscured", "set", "_"])
-    // _setContentScrollInset:
     package static let setContentScrollInsetSelector = deobfuscate([":", "Inset", "Scroll", "Content", "set", "_"])
-    // _setContentScrollInsetInternal:
     package static let setContentScrollInsetInternalSelector = deobfuscate([":", "Internal", "Inset", "Scroll", "Content", "set", "_"])
-    // _frameOrBoundsMayHaveChanged
     package static let frameOrBoundsMayHaveChangedSelector = deobfuscate(["Changed", "Have", "May", "Bounds", "Or", "frame", "_"])
-    // automaticallyAdjustsViewLayoutSizesWithObscuredInset
     package static let automaticallyAdjustsViewLayoutSizesWithObscuredInsetKey = deobfuscate(["Inset", "Obscured", "With", "Sizes", "Layout", "View", "Adjusts", "automatically"])
-    // _inputViewBoundsInWindow
     package static let inputViewBoundsInWindowSelector = deobfuscate(["Window", "In", "Bounds", "View", "input", "_"])
 
     package static let enableJSHandleSetterNames = [
-        // setAllowJSHandleCreation:
         deobfuscate([":", "Creation", "Handle", "JS", "Allow", "set"]),
-        // setJSHandleCreationEnabled:
         deobfuscate([":", "Enabled", "Creation", "Handle", "JS", "set"]),
     ]
     package static let enableNodeSerializationSetterNames = [
-        // setAllowNodeSerialization:
         deobfuscate([":", "Serialization", "Node", "Allow", "set"]),
-        // setNodeSerializationEnabled:
         deobfuscate([":", "Enabled", "Serialization", "Node", "set"]),
     ]
 }

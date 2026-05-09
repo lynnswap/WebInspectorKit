@@ -1,0 +1,59 @@
+#if canImport(UIKit)
+import ObservationBridge
+import UIKit
+import WebInspectorEngine
+
+final class DOMElementSelectorCell: DOMElementBaseCell {
+    private let selectorTextView = DOMElementSelectableTextView(frame: .zero, textContainer: nil)
+
+    override var selectableTextViewsForSizing: [DOMElementSelectableTextView] {
+        [selectorTextView]
+    }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        configureSelectorTextView()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        selectorTextView.apply(text: "")
+    }
+
+    func bind(node: DOMNodeModel) {
+        accessories = []
+        contentConfiguration = nil
+
+        updateObservations {
+            store(
+                node.observe(\.selectorPath) { [weak self] selectorPath in
+                    self?.render(selectorPath: selectorPath)
+                }
+            )
+        }
+    }
+
+    private func configureSelectorTextView() {
+        selectorTextView.translatesAutoresizingMaskIntoConstraints = false
+        selectorTextView.font = Self.monospacedFootnoteFont
+        selectorTextView.textColor = .label
+        contentView.addSubview(selectorTextView)
+
+        NSLayoutConstraint.activate([
+            selectorTextView.topAnchor.constraint(equalTo: contentView.layoutMarginsGuide.topAnchor),
+            selectorTextView.leadingAnchor.constraint(equalTo: contentView.layoutMarginsGuide.leadingAnchor),
+            selectorTextView.trailingAnchor.constraint(equalTo: contentView.layoutMarginsGuide.trailingAnchor),
+            selectorTextView.bottomAnchor.constraint(equalTo: contentView.layoutMarginsGuide.bottomAnchor),
+        ])
+    }
+
+    private func render(selectorPath: String) {
+        selectorTextView.apply(text: selectorPath)
+    }
+}
+#endif

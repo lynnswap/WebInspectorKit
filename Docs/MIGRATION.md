@@ -8,33 +8,33 @@ Internal refactors, transport rewrites, module splits, and cache changes are int
 
 `WebInspectorView` was removed.
 
-Use `WITabViewController` with a `WIInspectorController` instead.
+Use `WIViewController` or `WISession`.
 
 ```swift
-private let inspector = WIInspectorController()
-
 @objc private func presentInspector() {
-    let controller = WITabViewController(
-        inspector,
-        webView: pageWebView,
-        tabs: [.dom(), .network()]
-    )
-    present(controller, animated: true)
+    let inspector = WIViewController()
+    Task { @MainActor in
+        await inspector.attach(to: pageWebView)
+        present(inspector, animated: true)
+    }
 }
 ```
 
 If your app used the default inspector UI, this is the main migration.
 
+AppKit inspector UI is no longer shipped. macOS runtime and bridge support remains available
+where it does not depend on the removed AppKit UI.
+
 ## 2. Rename the model and lifecycle API
 
 | `v0.1.x` | Current |
 | --- | --- |
-| `WebInspectorModel` | `WIInspectorController` |
+| `WebInspectorModel` | `WISession` / `WIViewController` on UIKit |
 | `WebInspectorConfiguration` | `WIModelConfiguration` |
-| `attach(webView:)` | `connect(to:)` |
-| `detach()` | `disconnect()` |
+| `attach(webView:)` | `attach(to:)` |
+| `detach()` | `detach()` |
 
-`suspend()` is still available.
+The old `connect(to:)`, `suspend()`, and `disconnect()` lifecycle path was removed.
 
 The DOM-related configuration fields keep the same meaning, but they now live under `WIModelConfiguration.dom`.
 
@@ -52,10 +52,10 @@ let inspector = WebInspectorModel(
 inspector.attach(webView: webView)
 ```
 
-After:
+Current:
 
 ```swift
-let inspector = WIInspectorController(
+let inspector = WIViewController(
     configuration: WIModelConfiguration(
         dom: DOMConfiguration(
             snapshotDepth: 6,
@@ -65,40 +65,58 @@ let inspector = WIInspectorController(
     )
 )
 
-inspector.connect(to: webView)
+await inspector.attach(to: webView)
 ```
 
-## 3. Update custom tab definitions
+## 3. Inject side effects through `WIInspectorDependencies`
 
-The important source-level changes are:
-
-- `WITab` changed from a value type to a reference type.
-- `WITabRole` became `WITab.Role`.
-- `value:` became `id:` / `identifier:`.
-- Tab titles are now plain `String`.
-- The old `WITabBuilder`-based `WebInspectorView { ... }` API is gone.
-- Custom tabs now provide a platform view controller (`UIViewController` / `NSViewController`).
+`WIModelConfiguration` now stays focused on value-only configuration. Runtime factories,
+scripts, WebKit SPI, transport, sleep/timeout behavior, and UIKit scene activation can be
+injected through `WIInspectorDependencies`.
 
 ```swift
-let customTab = WITab(
-    id: "custom",
-    title: "Custom",
-    systemImage: "folder",
-    role: .other
-) { _ in
-    MyCustomViewController()
+let dependencies = WIInspectorDependencies.testing {
+    $0.network = WIInspectorNetworkClient(
+        networkAgentScript: { "" }
+    )
 }
 
-let controller = WITabViewController(
-    inspector,
-    webView: pageWebView,
-    tabs: [.dom(), .network(), customTab]
+let inspector = WIViewController(
+    configuration: WIModelConfiguration(),
+    dependencies: dependencies,
+    tabs: [.dom, .network]
 )
 ```
 
-If you only use the built-in tabs, keep using `.dom()`, `.network()`, and on UIKit `.element()`.
+Use `WIInspectorDependencies.liveValue` for production defaults and
+`WIInspectorDependencies.testing { ... }` for tests.
 
-## 4. Use intent-based DOM APIs
+## 4. Update custom tab definitions
+
+The important source-level changes are:
+
+- UIKit custom tabs should use `WITab`.
+- The old `WITabBuilder`-based `WebInspectorView { ... }` API is gone.
+- Custom tabs provide a `UIViewController`.
+
+```swift
+let customTab = WITab.custom(
+    id: "custom",
+    title: "Custom",
+    systemImage: "folder"
+) { context in
+    _ = context.runtime
+    MyCustomViewController()
+}
+
+let controller = WIViewController(
+    tabs: [.dom, .network, customTab]
+)
+```
+
+If you only use the built-in tabs, keep using `.dom` and `.network`.
+
+## 5. Use intent-based DOM APIs
 
 The DOM model no longer exposes low-level `nodeId`-driven editing and reload APIs.
 

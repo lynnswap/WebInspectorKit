@@ -436,6 +436,7 @@
       }
     },
     "delete" : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -722,6 +723,7 @@
       }
     },
     "dom.element.attributes.empty" : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -2729,6 +2731,7 @@
     },
     "inspector.tab.dom" : {
       "comment" : "Tab title that displays the DOM inspector.",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -2872,6 +2875,7 @@
     },
     "inspector.tab.element" : {
       "comment" : "Tab title for the selected DOM element.",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -3015,6 +3019,7 @@
     },
     "inspector.tab.network" : {
       "comment" : "Tab title for the network inspector.",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -4448,6 +4453,7 @@
     },
     "network.controls.filter" : {
       "comment" : "Control label for filtering recorded network requests.",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -7060,6 +7066,7 @@
     },
     "network.section.error" : {
       "comment" : "Section title for a network request error.",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {

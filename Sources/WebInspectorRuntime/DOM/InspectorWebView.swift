@@ -16,14 +16,27 @@ final class InspectorWebView: WKWebView {
 #if canImport(AppKit)
     var domContextMenuProvider: ((Int?) -> NSMenu?)?
 #endif
+    private let dependencies: WIInspectorDOMFrontendClient
 
-    convenience init() {
-        self.init(frame: .zero, configuration: Self.makeDefaultConfiguration())
+    convenience init(dependencies: WIInspectorDOMFrontendClient = .liveValue) {
+        self.init(
+            frame: .zero,
+            configuration: Self.makeDefaultConfiguration(dependencies: dependencies),
+            dependencies: dependencies
+        )
     }
-    
-    override init(frame: CGRect, configuration: WKWebViewConfiguration) {
+
+    init(
+        frame: CGRect,
+        configuration: WKWebViewConfiguration,
+        dependencies: WIInspectorDOMFrontendClient = .liveValue
+    ) {
+        self.dependencies = dependencies
         super.init(frame: frame, configuration: configuration)
-        Self.installDOMTreeViewScriptsIfNeeded(on: configuration.userContentController)
+        Self.installDOMTreeViewScriptsIfNeeded(
+            on: configuration.userContentController,
+            dependencies: dependencies
+        )
         applyInspectorDefaults()
     }
     
@@ -32,24 +45,34 @@ final class InspectorWebView: WKWebView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    private static func makeDefaultConfiguration() -> WKWebViewConfiguration {
+    private static func makeDefaultConfiguration(
+        dependencies: WIInspectorDOMFrontendClient
+    ) -> WKWebViewConfiguration {
         let configuration = WKWebViewConfiguration()
         configuration.writingToolsBehavior = .none
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
-        configuration.userContentController = makeInspectorContentController()
+        configuration.userContentController = makeInspectorContentController(dependencies: dependencies)
         return configuration
     }
 
-    private static func makeInspectorContentController() -> WKUserContentController {
+    private static func makeInspectorContentController(
+        dependencies: WIInspectorDOMFrontendClient
+    ) -> WKUserContentController {
         let controller = WKUserContentController()
-        installDOMTreeViewScriptsIfNeeded(on: controller)
+        installDOMTreeViewScriptsIfNeeded(on: controller, dependencies: dependencies)
         return controller
     }
 
-    private static func installDOMTreeViewScriptsIfNeeded(on controller: WKUserContentController) {
+    private static func installDOMTreeViewScriptsIfNeeded(
+        on controller: WKUserContentController,
+        dependencies: WIInspectorDOMFrontendClient
+    ) {
         let existingSources = Set(controller.userScripts.map(\.source))
         do {
-            let scriptSource = try WebInspectorScripts.domTreeView()
+            let scriptSource = try dependencies.domTreeViewScript()
+            guard !scriptSource.isEmpty else {
+                return
+            }
             if existingSources.contains(scriptSource) {
                 return
             }

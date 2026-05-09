@@ -1,4 +1,5 @@
 import Foundation
+import WebInspectorEngine
 
 package enum WITransportMethod {
     package enum Browser {
@@ -181,7 +182,7 @@ package struct WITransportNetworkBootstrapResource: Decodable, Sendable {
 
 public final class WITransportDOMNode: Decodable, Sendable {
     public let nodeId: Int
-    public let nodeType: Int
+    public let nodeType: DOMNodeType
     public let nodeName: String
     public let localName: String
     public let nodeValue: String
@@ -196,7 +197,7 @@ public final class WITransportDOMNode: Decodable, Sendable {
 
     public init(
         nodeId: Int,
-        nodeType: Int,
+        nodeType: DOMNodeType,
         nodeName: String,
         localName: String,
         nodeValue: String,
@@ -222,6 +223,38 @@ public final class WITransportDOMNode: Decodable, Sendable {
         self.frameId = frameId
         self.contentDocument = contentDocument
         self.layoutFlags = layoutFlags
+    }
+
+    public convenience init(
+        nodeId: Int,
+        nodeType: Int,
+        nodeName: String,
+        localName: String,
+        nodeValue: String,
+        childNodeCount: Int?,
+        children: [WITransportDOMNode]?,
+        attributes: [String]?,
+        documentURL: String?,
+        baseURL: String?,
+        frameId: String?,
+        contentDocument: WITransportDOMNode? = nil,
+        layoutFlags: [String]?
+    ) {
+        self.init(
+            nodeId: nodeId,
+            nodeType: DOMNodeType(protocolValue: nodeType),
+            nodeName: nodeName,
+            localName: localName,
+            nodeValue: nodeValue,
+            childNodeCount: childNodeCount,
+            children: children,
+            attributes: attributes,
+            documentURL: documentURL,
+            baseURL: baseURL,
+            frameId: frameId,
+            contentDocument: contentDocument,
+            layoutFlags: layoutFlags
+        )
     }
 }
 

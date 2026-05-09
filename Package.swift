@@ -48,7 +48,15 @@ let package = Package(
     dependencies: [
         .package(
             url: "https://github.com/lynnswap/ObservationBridge.git",
-            exact: "0.6.1"
+            exact: "0.8.0"
+        ),
+        .package(
+            url: "https://github.com/lynnswap/UIHostingMenu.git",
+            exact: "0.1.4"
+        ),
+        .package(
+            url: "https://github.com/lynnswap/SyntaxEditorUI.git",
+            exact: "0.5.1"
         ),
         .package(
             url: "https://github.com/p-x9/MachOKit.git",
@@ -139,10 +147,16 @@ let package = Package(
                 "WebInspectorEngine",
                 "WebInspectorBridge",
                 "WebInspectorBridgeObjCShim",
-                .product(name: "ObservationBridge", package: "ObservationBridge")
+                .product(name: "ObservationBridge", package: "ObservationBridge"),
+                .product(name: "UIHostingMenu", package: "UIHostingMenu", condition: .when(platforms: [.iOS])),
+                .product(name: "SyntaxEditorUI", package: "SyntaxEditorUI", condition: .when(platforms: [.iOS]))
+            ],
+            exclude: [
+                "Docs"
             ],
             resources: [
-                .process("Localizable.xcstrings")
+                .process("Localizable.xcstrings"),
+                .process("Resources/Preview")
             ],
             swiftSettings: strictSwiftSettings
         ),
@@ -212,7 +226,8 @@ let package = Package(
                 "WebInspectorRuntime",
                 "WebInspectorEngine",
                 "WebInspectorBridge",
-                "WebInspectorTestSupport"
+                "WebInspectorTestSupport",
+                .product(name: "SyntaxEditorUI", package: "SyntaxEditorUI", condition: .when(platforms: [.iOS]))
             ],
             path: "Tests/WebInspectorUITests",
             swiftSettings: strictSwiftSettings

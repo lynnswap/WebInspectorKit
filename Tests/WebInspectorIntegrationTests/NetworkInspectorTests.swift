@@ -582,18 +582,17 @@ struct NetworkInspectorTests {
     }
 
     @Test
-    func observeSearchTextSuppressesDuplicateConsecutiveStates() async {
+    func observeSearchTextIgnoresUnchangedConsecutiveAssignments() async {
         let inspector = WINetworkModel(session: NetworkSession())
         var emittedValues: [String] = []
-        var observationHandles = Set<ObservationHandle>()
+        let observationScope = ObservationScope()
 
         inspector.observeTask(
-            \.searchText,
-            options: [.removeDuplicates]
+            \.searchText
         ) { value in
             emittedValues.append(value)
         }
-        .store(in: &observationHandles)
+        .store(in: observationScope)
 
         let receivedInitial = await waitUntil { emittedValues.count >= 1 }
         #expect(receivedInitial)
@@ -603,9 +602,7 @@ struct NetworkInspectorTests {
         #expect(receivedUpdated)
 
         inspector.searchText = "dup-keyword"
-        for _ in 0..<64 {
-            await Task.yield()
-        }
+        try? await Task.sleep(nanoseconds: 300_000_000)
 
         #expect(emittedValues.count == 2)
         #expect(emittedValues.last == "dup-keyword")
@@ -615,18 +612,19 @@ struct NetworkInspectorTests {
     func observeSearchTextStopsEmittingAfterCancel() async {
         let inspector = WINetworkModel(session: NetworkSession())
         var callbackCount = 0
+        let observationScope = ObservationScope()
 
-        let handle = inspector.observeTask(
-            \.searchText,
-            options: [.removeDuplicates]
+        inspector.observeTask(
+            \.searchText
         ) { _ in
             callbackCount += 1
         }
+        .store(in: observationScope)
 
         let receivedInitial = await waitUntil { callbackCount >= 1 }
         #expect(receivedInitial)
 
-        handle.cancel()
+        observationScope.cancelAll()
         await Task.yield()
         let countAfterCancel = callbackCount
 

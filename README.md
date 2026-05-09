@@ -8,7 +8,7 @@ Web Inspector for `WKWebView` (iOS / macOS).
 
 ## Products
 
-- `WebInspectorKit`: Container UI, `WITab`-based tab composition, Observation state
+- `WebInspectorKit`: UIKit container UI, `WITab`-based tab composition, Observation state
 - `WebInspectorEngine`: DOM/Network engines, runtime actors, bundled inspector scripts
 
 `WebInspectorKit` depends on `WebInspectorEngine`.
@@ -17,8 +17,9 @@ Web Inspector for `WKWebView` (iOS / macOS).
 
 - DOM tree browsing (element picking, highlights, deletion, attribute editing)
 - Network request logging (fetch/XHR/WebSocket) with buffering/active mode switching
-- Configurable tabs via `WITab` (`viewControllerProvider` for custom tabs)
-- Explicit lifecycle via `WIInspectorController` (`connect(to:)`, `suspend()`, `disconnect()`)
+- Configurable tabs via `WITab`
+- Explicit lifecycle via `WISession` / `WIViewController` (`attach(to:)`, `detach()`)
+- Dependency injection via `WIInspectorDependencies`
 
 ## Requirements
 
@@ -37,46 +38,18 @@ import WebInspectorKit
 
 final class BrowserViewController: UIViewController {
     private let pageWebView = WKWebView(frame: .zero)
-    private let inspector = WIInspectorController()
 
     @objc private func presentInspector() {
-        let container = WITabViewController(
-            inspector,
-            webView: pageWebView,
-            tabs: [.dom(), .network()]
-        )
-        container.modalPresentationStyle = .pageSheet
-        if let sheet = container.sheetPresentationController {
+        let inspector = WIViewController()
+        inspector.modalPresentationStyle = .pageSheet
+        if let sheet = inspector.sheetPresentationController {
             sheet.detents = [.medium(), .large()]
             sheet.selectedDetentIdentifier = .medium
         }
-        present(container, animated: true)
-    }
-}
-```
-
-### AppKit
-
-```swift
-import AppKit
-import WebKit
-import WebInspectorKit
-
-final class BrowserWindowController: NSWindowController {
-    let pageWebView = WKWebView(frame: .zero)
-    let inspector = WIInspectorController()
-
-    @objc func presentInspector() {
-        let container = WITabViewController(
-            inspector,
-            webView: pageWebView,
-            tabs: [.dom(), .network()]
-        )
-        let inspectorWindow = NSWindow(contentViewController: container)
-        inspectorWindow.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-        inspectorWindow.title = "Web Inspector"
-        inspectorWindow.setContentSize(NSSize(width: 960, height: 720))
-        inspectorWindow.makeKeyAndOrderFront(nil)
+        Task { @MainActor in
+            await inspector.attach(to: pageWebView)
+            present(inspector, animated: true)
+        }
     }
 }
 ```
@@ -84,24 +57,36 @@ final class BrowserWindowController: NSWindowController {
 ## Custom Tab
 
 ```swift
-let customTab = WITab(
+let customTab = WITab.custom(
+    id: "my_custom_tab",
     title: "Custom",
-    image: nil,
-    identifier: "my_custom_tab",
-    role: .other
-) { tab in
-    _ = tab
-    #if canImport(UIKit)
+    systemImage: "folder"
+) { context in
+    _ = context.runtime
     return UIViewController()
-    #else
-    return NSViewController()
-    #endif
 }
 
-let container = WITabViewController(
-    inspector,
-    webView: pageWebView,
-    tabs: [.dom(), .network(), customTab]
+let inspector = WIViewController(
+    tabs: [.dom, .network, customTab]
+)
+```
+
+## Dependency Injection
+
+Keep value-only settings in `WIModelConfiguration`, and inject side-effectful runtime
+boundaries through `WIInspectorDependencies`.
+
+```swift
+let dependencies = WIInspectorDependencies.testing {
+    $0.network = WIInspectorNetworkClient(
+        networkAgentScript: { "" }
+    )
+}
+
+let inspector = WIViewController(
+    configuration: WIModelConfiguration(),
+    dependencies: dependencies,
+    tabs: [.dom, .network]
 )
 ```
 

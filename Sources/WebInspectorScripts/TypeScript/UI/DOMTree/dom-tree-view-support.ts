@@ -883,11 +883,11 @@ export function scrollSelectionIntoView(nodeId: number): boolean {
             nextTop = absoluteTop - viewport.safeAreaTop - viewport.blockMargin;
             needsScroll = true;
         }
-    } else if (absoluteTop < visibleTop) {
-        nextTop = absoluteTop - viewport.safeAreaTop - viewport.blockMargin;
-        needsScroll = true;
-    } else if (absoluteBottom > visibleBottom) {
-        nextTop = absoluteBottom - viewport.height + viewport.safeAreaBottom + viewport.blockMargin;
+    } else if (absoluteTop < visibleTop || absoluteBottom > visibleBottom) {
+        nextTop = absoluteTop + (targetRect.height / 2)
+            - viewport.safeAreaTop
+            - viewport.blockMargin
+            - (availableHeight / 2);
         needsScroll = true;
     }
 
@@ -1221,7 +1221,6 @@ function notifyNativeSelection(node: DOMNode | null): void {
     const payload = node
         ? {
               id: typeof node.id === "number" ? node.id : null,
-              preview: renderPreview(node),
               attributes: Array.isArray(node.attributes)
                   ? node.attributes.map((attr) => ({
                         name: attr.name || "",
@@ -1234,7 +1233,6 @@ function notifyNativeSelection(node: DOMNode | null): void {
           }
         : {
               id: null,
-              preview: "",
               attributes: [],
               path: [],
               styleRevision: treeState.styleRevision,

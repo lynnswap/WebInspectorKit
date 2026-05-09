@@ -60,5 +60,13 @@ package enum WIInspectorSelectionPrivateBridge {
     package static func nodeSearchDebugSummary(in webView: WKWebView) -> String? {
         WIKRuntimeBridge.nodeSearchDebugSummary(for: webView)
     }
+
+    #if DEBUG
+    package static func shouldCommitNodeSearchForTesting(didMoveBeyondTapTolerance: Bool) -> Bool {
+        WIKRuntimeBridge.shouldCommitInspectorNodeSearchForTesting(
+            withMovementBeyondTapTolerance: didMoveBeyondTapTolerance
+        )
+    }
+    #endif
 }
 #endif
