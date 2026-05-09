@@ -491,7 +491,7 @@ private enum BrowserStoreSPI {
                 guard let self else {
                     return
                 }
-                self.currentURL = url
+                self.syncCurrentURL(url)
                 self.notifyStateObservers()
             }
             .store(in: &cancellables)
@@ -548,12 +548,19 @@ private enum BrowserStoreSPI {
     ) {
         isLoading = webView.isLoading
         estimatedProgress = webView.estimatedProgress
-        currentURL = webView.url
+        syncCurrentURL(webView.url)
         if clearsNavigationError {
             lastNavigationErrorDescription = nil
         }
         invalidateHistoryIfNeeded()
         notifyStateObservers()
+    }
+
+    private func syncCurrentURL(_ url: URL?) {
+        guard let url else {
+            return
+        }
+        currentURL = url
     }
 
     private func isBenignNavigationCancellation(_ error: any Error) -> Bool {

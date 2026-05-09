@@ -430,6 +430,10 @@ final class BrowserInspectorCoordinator {
         inspectorWindowRegistry.clear()
     }
 
+    static func setInspectorWindowContextForTesting(_ context: BrowserInspectorWindowContext?) {
+        inspectorWindowRegistry.setContext(context)
+    }
+
     static func inspectorWindowPresentationStateForTesting(
         hasContext: Bool,
         isPendingPresentation: Bool,

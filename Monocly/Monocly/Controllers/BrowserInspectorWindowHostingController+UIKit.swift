@@ -7,6 +7,7 @@ final class BrowserInspectorWindowHostingController: UIViewController {
     private struct AppliedInspectorContext: Equatable {
         let inspectorRuntimeID: ObjectIdentifier
         let browserStoreID: ObjectIdentifier
+        let tabIDs: [WITab.ID]
     }
 
     private var inspectorContainer: WIViewController?
@@ -40,7 +41,8 @@ final class BrowserInspectorWindowHostingController: UIViewController {
 
         let appliedContext = AppliedInspectorContext(
             inspectorRuntimeID: ObjectIdentifier(inspectorContext.inspectorRuntime),
-            browserStoreID: ObjectIdentifier(inspectorContext.browserStore)
+            browserStoreID: ObjectIdentifier(inspectorContext.browserStore),
+            tabIDs: inspectorContext.tabs.map(\.id)
         )
 
         if lastAppliedContext == appliedContext {

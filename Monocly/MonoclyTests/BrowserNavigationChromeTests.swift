@@ -417,6 +417,41 @@ final class BrowserNavigationChromeTests: XCTestCase {
     }
 
     @MainActor
+    func testInspectorWindowHostingRefreshesWhenTabsChange() throws {
+        let browserStore = BrowserStore(
+            url: URL(string: "about:blank")!,
+            automaticallyLoadsInitialRequest: false
+        )
+        let inspectorRuntime = WIRuntimeSession()
+        BrowserInspectorCoordinator.setInspectorWindowContextForTesting(
+            BrowserInspectorWindowContext(
+                browserStore: browserStore,
+                inspectorRuntime: inspectorRuntime,
+                tabs: [.dom]
+            )
+        )
+
+        let controller = BrowserInspectorWindowHostingController()
+        controller.loadViewIfNeeded()
+
+        let firstInspector = try XCTUnwrap(controller.children.compactMap { $0 as? WIViewController }.first)
+        XCTAssertEqual(firstInspector.session.interface.tabs.map(\.id), [WITab.dom.id])
+
+        BrowserInspectorCoordinator.setInspectorWindowContextForTesting(
+            BrowserInspectorWindowContext(
+                browserStore: browserStore,
+                inspectorRuntime: inspectorRuntime,
+                tabs: [.dom, .network]
+            )
+        )
+        controller.updateInspectorContext()
+
+        let updatedInspector = try XCTUnwrap(controller.children.compactMap { $0 as? WIViewController }.first)
+        XCTAssertFalse(updatedInspector === firstInspector)
+        XCTAssertEqual(updatedInspector.session.interface.tabs.map(\.id), [WITab.dom.id, WITab.network.id])
+    }
+
+    @MainActor
     func testPageViewControllerUsesUnderPageBackgroundColorWhenProvided() {
         let store = BrowserStore(
             url: URL(string: "about:blank")!,
