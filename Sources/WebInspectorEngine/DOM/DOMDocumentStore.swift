@@ -460,6 +460,7 @@ private extension DOMDocumentModel {
             nodeValue: descriptor.nodeValue,
             attributes: normalizeAttributes(descriptor.attributes, backendNodeID: descriptor.backendNodeID),
             childCount: max(descriptor.childCount, descriptor.children.count),
+            childCountIsKnown: descriptor.childCountIsKnown,
             layoutFlags: descriptor.layoutFlags,
             isRendered: descriptor.isRendered
         )
@@ -596,7 +597,8 @@ private extension DOMDocumentModel {
             return
         }
 
-        node.childCount = max(0, childCount)
+        node.childCount = max(0, childCount, node.children.count)
+        node.childCountIsKnown = true
         applyLayout(into: node, layoutFlags: layoutFlags, isRendered: isRendered)
     }
 
@@ -630,6 +632,7 @@ private extension DOMDocumentModel {
 
         parent.children = nextChildren
         parent.childCount = max(parent.childCount, nextChildren.count)
+        parent.childCountIsKnown = true
         relinkChildren(of: parent)
     }
 

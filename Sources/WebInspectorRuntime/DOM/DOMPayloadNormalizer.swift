@@ -377,6 +377,9 @@ private extension DOMPayloadNormalizer {
 
         let explicitChildCount = intValue(object["childNodeCount"])
             ?? intValue(object["childCount"])
+        let childCountIsKnown = explicitChildCount != nil
+            || contentDocumentPayload != nil
+            || object["children"] != nil
         let minimumChildCount = max(children.count, contentDocumentPayload == nil ? 0 : 1)
         let childCount = explicitChildCount.map {
             max(max(0, $0 - omittedChildren), minimumChildCount)
@@ -393,6 +396,7 @@ private extension DOMPayloadNormalizer {
             nodeValue: nodeValue,
             attributes: attributes,
             childCount: max(0, childCount),
+            childCountIsKnown: childCountIsKnown,
             layoutFlags: layoutFlags ?? [],
             isRendered: isRendered,
             children: children

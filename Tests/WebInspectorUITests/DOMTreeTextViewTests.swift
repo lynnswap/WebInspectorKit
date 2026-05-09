@@ -79,10 +79,93 @@ struct DOMTreeTextViewTests {
         let view = makeTreeView()
         let htmlLine = try #require(view.renderedLineSnapshotsForTesting.first { $0.text.contains("<html") })
         let bodyLine = try #require(view.renderedLineSnapshotsForTesting.first { $0.text.contains("<body") })
+        let attachmentSnapshots = view.disclosureAttachmentSnapshotsForTesting
 
         #expect(view.paragraphLineHeightForTesting == view.rowHeightForTesting)
         #expect(htmlLine.disclosureRect.midY == CGFloat(htmlLine.rowIndex) * view.rowHeightForTesting + view.rowHeightForTesting / 2)
         #expect(bodyLine.disclosureRect.midY == CGFloat(bodyLine.rowIndex) * view.rowHeightForTesting + view.rowHeightForTesting / 2)
+        #expect(attachmentSnapshots.count == view.renderedLineSnapshotsForTesting.filter(\.hasDisclosure).count)
+        #expect(attachmentSnapshots.contains { $0.expectedColumn > 0 })
+        #expect(attachmentSnapshots.allSatisfy { $0.column == $0.expectedColumn })
+    }
+
+    @Test
+    func loadedChildrenKeepDisclosureWhenChildCountTemporarilyDrops() throws {
+        let runtime = WIDOMRuntime()
+        runtime.document.replaceDocument(with: .init(root: makeDocumentNode()))
+        let view = makeTreeView(runtime: runtime)
+
+        runtime.document.applyMutationBundle(
+            DOMGraphMutationBundle(
+                events: [
+                    .childNodeCountUpdated(
+                        nodeLocalID: FixtureNodeID.article,
+                        childCount: 0,
+                        layoutFlags: nil,
+                        isRendered: nil
+                    ),
+                ]
+            )
+        )
+        view.synchronizeDocumentForTesting()
+
+        let articleLine = try #require(view.renderedLineSnapshotsForTesting.first { $0.text.contains("<article") })
+        #expect(articleLine.hasDisclosure)
+        #expect(articleLine.text.contains("<article>...</article>"))
+    }
+
+    @Test
+    func unknownChildCountElementKeepsDisclosureUntilConfirmedEmpty() throws {
+        let runtime = WIDOMRuntime()
+        runtime.document.replaceDocument(with: .init(root: makeUnknownChildCountDocumentNode()))
+        let view = makeTreeView(runtime: runtime)
+
+        var articleLine = try #require(view.renderedLineSnapshotsForTesting.first { $0.text.contains("<article") })
+        #expect(articleLine.hasDisclosure)
+        #expect(articleLine.text.contains("<article>...</article>"))
+
+        runtime.document.applyMutationBundle(
+            DOMGraphMutationBundle(
+                events: [
+                    .setChildNodes(parentLocalID: FixtureNodeID.article, nodes: []),
+                ]
+            )
+        )
+        view.synchronizeDocumentForTesting()
+
+        articleLine = try #require(view.renderedLineSnapshotsForTesting.first { $0.text.contains("<article") })
+        #expect(!articleLine.hasDisclosure)
+        #expect(articleLine.text.contains("<article></article>"))
+    }
+
+    @Test
+    func dynamicReloadClearsOldFragmentSurfacesBeforeRelayout() {
+        let runtime = WIDOMRuntime()
+        runtime.document.replaceDocument(with: .init(root: makeDocumentNode()))
+        let view = makeTreeView(runtime: runtime)
+
+        #expect(view.fragmentSubviewCountForTesting > 0)
+
+        runtime.document.applyMutationBundle(
+            DOMGraphMutationBundle(
+                events: [
+                    .attributeModified(
+                        nodeLocalID: FixtureNodeID.div,
+                        name: "data-dynamic",
+                        value: "1",
+                        layoutFlags: nil,
+                        isRendered: nil
+                    ),
+                ]
+            )
+        )
+        view.synchronizeDocumentForTesting()
+
+        #expect(view.fragmentSubviewCountForTesting == 0)
+
+        view.layoutIfNeeded()
+
+        #expect(view.fragmentSubviewCountForTesting > 0)
     }
 
     @Test
@@ -286,6 +369,38 @@ struct DOMTreeTextViewTests {
         )
     }
 
+    private func makeUnknownChildCountDocumentNode() -> DOMGraphNodeDescriptor {
+        makeNode(
+            localID: FixtureNodeID.document,
+            type: .document,
+            nodeName: "#document",
+            localName: "",
+            children: [
+                makeNode(
+                    localID: FixtureNodeID.html,
+                    nodeName: "HTML",
+                    localName: "html",
+                    children: [
+                        makeNode(
+                            localID: FixtureNodeID.body,
+                            nodeName: "BODY",
+                            localName: "body",
+                            children: [
+                                makeNode(
+                                    localID: FixtureNodeID.article,
+                                    nodeName: "ARTICLE",
+                                    localName: "article",
+                                    childCount: 0,
+                                    childCountIsKnown: false
+                                ),
+                            ]
+                        ),
+                    ]
+                ),
+            ]
+        )
+    }
+
     private func makeNode(
         localID: UInt64,
         type: DOMNodeType = .element,
@@ -294,7 +409,8 @@ struct DOMTreeTextViewTests {
         nodeValue: String = "",
         attributes: [DOMAttribute] = [],
         children: [DOMGraphNodeDescriptor] = [],
-        childCount: Int? = nil
+        childCount: Int? = nil,
+        childCountIsKnown: Bool = true
     ) -> DOMGraphNodeDescriptor {
         DOMGraphNodeDescriptor(
             localID: localID,
@@ -305,6 +421,7 @@ struct DOMTreeTextViewTests {
             nodeValue: nodeValue,
             attributes: attributes,
             childCount: childCount ?? children.count,
+            childCountIsKnown: childCountIsKnown,
             layoutFlags: [],
             isRendered: true,
             children: children

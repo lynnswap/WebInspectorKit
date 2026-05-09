@@ -118,7 +118,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         }
 
         reapplyTextAttributes()
-        updateFindHighlightFragmentViews()
+        updateDecorations()
     }
 
     func viewportBounds(for textViewportLayoutController: NSTextViewportLayoutController) -> CGRect {
@@ -132,9 +132,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     }
 
     func textViewportLayoutControllerWillLayout(_ textViewportLayoutController: NSTextViewportLayoutController) {
-        lastUsedFragmentViews = Set(
-            fragmentViewMap.objectEnumerator()?.allObjects as? [DOMTreeTextLayoutFragmentView] ?? []
-        )
+        lastUsedFragmentViews = Set(textContentView.subviews.compactMap { $0 as? DOMTreeTextLayoutFragmentView })
     }
 
     func textViewportLayoutController(
@@ -216,7 +214,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
             }
             if hoveredNodeID != row.node.id {
                 hoveredNodeID = row.node.id
-                updateFindHighlightFragmentViews()
+                updateContentDecorations()
             }
             Task { @MainActor [dom, node = row.node] in
                 await dom.highlightNode(node, reveal: false)
@@ -356,17 +354,13 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         requestedChildNodeIDs = requestedChildNodeIDs.filter { nodeID in
             dom.document.node(id: nodeID) != nil
         }
-
-        let attributedText = NSMutableAttributedString(
-            string: renderedText.isEmpty ? "\n" : renderedText,
-            attributes: baseTextAttributes()
-        )
-        applyRowAttributes(to: attributedText)
-        textStorage.setAttributedString(attributedText)
+        resetTextFragmentViews()
+        rebuildTextStorage()
 
         clearFindDecorations()
         findCoordinator.invalidateResultsAfterTextChange()
         updateTextLayoutGeometry()
+        updateContentDecorations()
         setNeedsLayout()
         revealPendingSelectedNodeIfPossible()
     }
@@ -406,7 +400,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         var utf16Location = 0
 
         func append(_ node: DOMNodeModel, depth: Int) {
-            let hasDisclosure = node.childCount > 0
+            let hasDisclosure = nodeHasDisclosure(node)
             let isOpen = isNodeOpen(node, depth: depth)
             let markup = DOMTreeMarkupBuilder.markup(for: node, hasDisclosure: hasDisclosure, isOpen: isOpen)
             let prefix = renderedLinePrefix(depth: depth)
@@ -462,6 +456,12 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         }
 
         return (nextRows, lines.joined(separator: "\n"))
+    }
+
+    private func nodeHasDisclosure(_ node: DOMNodeModel) -> Bool {
+        node.childCount > 0
+            || !node.children.isEmpty
+            || (!node.childCountIsKnown && DOMTreeMarkupBuilder.canContainChildNodes(node))
     }
 
     private func isNodeOpen(_ node: DOMNodeModel, depth: Int) -> Bool {
@@ -534,7 +534,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
             return
         }
         hoveredNodeID = nil
-        updateFindHighlightFragmentViews()
+        updateContentDecorations()
     }
 
     private func makeContextMenu(for node: DOMNodeModel) -> UIMenu {
@@ -611,9 +611,23 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         }
         textStorage.addAttributes(baseTextAttributes(), range: fullRange)
         applyRowAttributes(to: textStorage)
+        applyDisclosureAttachments(to: textStorage)
         for case let fragmentView as DOMTreeTextLayoutFragmentView in textContentView.subviews {
             fragmentView.setNeedsDisplay()
         }
+    }
+
+    private func rebuildTextStorage() {
+        let attributedText = NSMutableAttributedString(
+            string: renderedText.isEmpty ? "\n" : renderedText,
+            attributes: baseTextAttributes()
+        )
+        applyRowAttributes(to: attributedText)
+        applyDisclosureAttachments(to: attributedText)
+        textContentStorage.performEditingTransaction {
+            textStorage.setAttributedString(attributedText)
+        }
+        invalidateTextLayout()
     }
 
     private func applySyntaxAttributes(for row: DOMTreeLine, to attributedText: NSMutableAttributedString) {
@@ -656,6 +670,72 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         if !textContainer.size.wiIsNearlyEqual(to: containerSize) {
             textContainer.size = containerSize
         }
+        updateContentDecorations()
+    }
+
+    private func resetTextFragmentViews() {
+        for case let fragmentView as DOMTreeTextLayoutFragmentView in textContentView.subviews {
+            fragmentView.removeFromSuperview()
+        }
+        fragmentViewMap.removeAllObjects()
+        lastUsedFragmentViews.removeAll(keepingCapacity: true)
+    }
+
+    private func invalidateTextLayout() {
+        layoutManager.invalidateLayout(for: textContentStorage.documentRange)
+        layoutManager.textSelectionNavigation.flushLayoutCache()
+    }
+
+    private func applyDisclosureAttachments(to attributedText: NSMutableAttributedString) {
+        for row in rows where row.hasDisclosure {
+            let range = NSRange(
+                location: row.textRange.location + row.depth * Self.indentSpacesPerDepth,
+                length: 1
+            )
+            guard NSMaxRange(range) <= attributedText.length else {
+                continue
+            }
+            attributedText.replaceCharacters(
+                in: range,
+                with: disclosureAttachmentString(isOpen: row.isOpen)
+            )
+        }
+    }
+
+    private func disclosureAttachmentString(isOpen: Bool) -> NSAttributedString {
+        let attachment = NSTextAttachment()
+        attachment.image = Self.disclosureImage(
+            isOpen: isOpen,
+            color: DOMTreeHighlightTheme.webInspector.disclosure.resolvedColor(with: traitCollection)
+        )
+        attachment.bounds = CGRect(
+            x: 0,
+            y: (Self.font.capHeight - Self.iconSide) / 2,
+            width: Self.iconSide,
+            height: Self.iconSide
+        )
+
+        let attributedString = NSMutableAttributedString(attachment: attachment)
+        attributedString.addAttributes(baseTextAttributes(), range: NSRange(location: 0, length: attributedString.length))
+        return attributedString
+    }
+
+    private static func disclosureImage(isOpen: Bool, color: UIColor) -> UIImage? {
+        guard let image = UIImage(
+            systemName: "triangle.fill",
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: iconSide, weight: .regular)
+        )?.withTintColor(color, renderingMode: .alwaysOriginal) else {
+            return nil
+        }
+
+        let side = iconSide
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: side, height: side))
+        return renderer.image { rendererContext in
+            let context = rendererContext.cgContext
+            context.translateBy(x: side / 2, y: side / 2)
+            context.rotate(by: isOpen ? .pi : .pi / 2)
+            image.draw(in: CGRect(x: -side / 2, y: -side / 2, width: side, height: side))
+        }
     }
 
     private func measureTextWidth(_ text: String) -> CGFloat {
@@ -676,9 +756,6 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         for fragmentView: DOMTreeTextLayoutFragmentView,
         surfaceFrame: CGRect
     ) {
-        fragmentView.hoverRowRects = hoverRowRects(surfaceFrame: surfaceFrame)
-        fragmentView.selectedRowRects = selectedRowRects(surfaceFrame: surfaceFrame)
-        fragmentView.disclosureMarkers = disclosureMarkers(surfaceFrame: surfaceFrame)
         fragmentView.findHighlightRects = findFoundRanges.flatMap {
             textRects(for: $0, layoutFragmentFrame: surfaceFrame)
         }
@@ -704,38 +781,38 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         return CGRect(x: 0, y: 0, width: max(bounds.width, 1), height: max(bounds.height, 1))
     }
 
-    private func selectedRowRects(surfaceFrame: CGRect) -> [CGRect] {
+    private func selectedContentRowRects() -> [CGRect] {
         guard let selectedNodeID = dom.document.selectedNode?.id else {
             return []
         }
-        return rowRects(for: selectedNodeID, surfaceFrame: surfaceFrame)
+        return rowRects(for: selectedNodeID)
     }
 
-    private func hoverRowRects(surfaceFrame: CGRect) -> [CGRect] {
+    private func hoverContentRowRects() -> [CGRect] {
         guard let hoveredNodeID else {
             return []
         }
-        return rowRects(for: hoveredNodeID, surfaceFrame: surfaceFrame)
+        return rowRects(for: hoveredNodeID)
     }
 
-    private func rowRects(for nodeID: DOMNodeModel.ID, surfaceFrame: CGRect) -> [CGRect] {
+    private func rowRects(for nodeID: DOMNodeModel.ID) -> [CGRect] {
         guard let rowIndex = rowIndexByNodeID[nodeID],
               rows.indices.contains(rowIndex)
         else {
             return []
         }
+        return [contentRowRect(rowIndex: rowIndex)]
+    }
+
+    private func contentRowRect(rowIndex: Int) -> CGRect {
         let highlightHeight = min(rowHeight, ceil(Self.font.lineHeight))
         let highlightY = CGFloat(rowIndex) * rowHeight + (rowHeight - highlightHeight) / 2
-        let rowRect = CGRect(
+        return CGRect(
             x: 0,
             y: highlightY,
             width: max(textContentView.bounds.width, contentSize.width - Self.textInsets.left - Self.textInsets.right),
             height: highlightHeight
         )
-        guard rowRect.intersects(surfaceFrame) else {
-            return []
-        }
-        return [rowRect.offsetBy(dx: -surfaceFrame.minX, dy: -surfaceFrame.minY)]
     }
 
     private func textRects(for range: NSRange, layoutFragmentFrame: CGRect) -> [CGRect] {
@@ -760,36 +837,6 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         return rects
     }
 
-    private func disclosureMarkers(surfaceFrame: CGRect) -> [DOMTreeDisclosureMarker] {
-        visibleRows(intersecting: surfaceFrame).compactMap { row in
-            guard row.hasDisclosure,
-                  row.disclosureRect.intersects(surfaceFrame)
-            else {
-                return nil
-            }
-
-            return DOMTreeDisclosureMarker(
-                rect: row.disclosureRect.offsetBy(
-                    dx: -surfaceFrame.minX,
-                    dy: -surfaceFrame.minY
-                ),
-                isOpen: row.isOpen
-            )
-        }
-    }
-
-    private func visibleRows(intersecting surfaceFrame: CGRect) -> ArraySlice<DOMTreeLine> {
-        guard !rows.isEmpty else {
-            return []
-        }
-        let startIndex = max(0, Int(floor(surfaceFrame.minY / rowHeight)))
-        let endIndex = min(rows.count, Int(ceil(surfaceFrame.maxY / rowHeight)) + 1)
-        guard startIndex < endIndex else {
-            return []
-        }
-        return rows[startIndex..<endIndex]
-    }
-
     private func textRange(for range: NSRange) -> NSTextRange? {
         let clampedRange = clampedTextRange(range)
         guard let start = textContentStorage.location(
@@ -801,6 +848,17 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
             return nil
         }
         return NSTextRange(location: start, end: end)
+    }
+
+    private func updateDecorations() {
+        updateContentDecorations()
+        updateFindHighlightFragmentViews()
+    }
+
+    private func updateContentDecorations() {
+        textContentView.hoverRowRects = hoverContentRowRects()
+        textContentView.selectedRowRects = selectedContentRowRects()
+        textContentView.setNeedsDisplay()
     }
 
     private func updateFindHighlightFragmentViews() {
@@ -849,8 +907,16 @@ extension DOMTreeTextView {
         let markupRange: NSRange
         let markupStartX: CGFloat
         let disclosureRect: CGRect
+        let hasDisclosure: Bool
+        let isOpen: Bool
         let tokenKinds: [String]
         let tokenTexts: [String]
+    }
+
+    struct DisclosureAttachmentSnapshot {
+        let text: String
+        let column: Int
+        let expectedColumn: Int
     }
 
     var renderedTextForTesting: String {
@@ -872,10 +938,36 @@ extension DOMTreeTextView {
                 markupRange: row.markupRange,
                 markupStartX: CGFloat(row.markupRange.location) * Self.characterWidth,
                 disclosureRect: row.disclosureRect,
+                hasDisclosure: row.hasDisclosure,
+                isOpen: row.isOpen,
                 tokenKinds: row.tokens.map(\.kind.rawValue),
                 tokenTexts: row.tokens.map { line.substring(with: $0.range) }
             )
         }
+    }
+
+    var disclosureAttachmentSnapshotsForTesting: [DisclosureAttachmentSnapshot] {
+        var snapshots: [DisclosureAttachmentSnapshot] = []
+        textStorage.enumerateAttribute(
+            .attachment,
+            in: NSRange(location: 0, length: textStorage.length)
+        ) { value, range, _ in
+            guard value != nil,
+                  let row = rows.first(where: {
+                      range.location >= $0.textRange.location && range.location < NSMaxRange($0.textRange)
+                  })
+            else {
+                return
+            }
+            snapshots.append(
+                DisclosureAttachmentSnapshot(
+                    text: row.text,
+                    column: range.location - row.textRange.location,
+                    expectedColumn: row.depth * Self.indentSpacesPerDepth
+                )
+            )
+        }
+        return snapshots
     }
 
     var findFoundRangesForTesting: [NSRange] {
@@ -926,7 +1018,11 @@ extension DOMTreeTextView {
     }
 
     func selectedRowRectsForTesting() -> [CGRect] {
-        selectedRowRects(surfaceFrame: CGRect(origin: .zero, size: textContentView.bounds.size))
+        selectedContentRowRects()
+    }
+
+    var fragmentSubviewCountForTesting: Int {
+        textContentView.subviews.filter { $0 is DOMTreeTextLayoutFragmentView }.count
     }
 
     var rowHeightForTesting: CGFloat {
@@ -1097,6 +1193,17 @@ private enum DOMTreeMarkupBuilder {
             fallbackMarkup("#document")
         default:
             fallbackMarkup(fallbackPreview(for: node))
+        }
+    }
+
+    static func canContainChildNodes(_ node: DOMNodeModel) -> Bool {
+        switch inferredNodeType(for: node) {
+        case .document, .documentFragment:
+            return true
+        case .element:
+            return !voidElementNames.contains(elementName(for: node))
+        default:
+            return false
         }
     }
 
@@ -1293,37 +1400,15 @@ private enum DOMTreeMarkupBuilder {
     }
 }
 
-private struct DOMTreeDisclosureMarker {
-    let rect: CGRect
-    let isOpen: Bool
-}
-
 private final class DOMTreeTextContentView: UIView {
+    var hoverRowRects: [CGRect] = [] {
+        didSet { setNeedsDisplay() }
+    }
+    var selectedRowRects: [CGRect] = [] {
+        didSet { setNeedsDisplay() }
+    }
+
     override init(frame: CGRect) {
-        super.init(frame: frame)
-        isOpaque = false
-        backgroundColor = .clear
-        isUserInteractionEnabled = false
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-}
-
-private final class DOMTreeTextLayoutFragmentView: UIView {
-    let layoutFragment: NSTextLayoutFragment
-    var layoutFragmentDrawPoint = CGPoint.zero
-    var hoverRowRects: [CGRect] = []
-    var selectedRowRects: [CGRect] = []
-    var disclosureMarkers: [DOMTreeDisclosureMarker] = []
-    var findHighlightRects: [CGRect] = []
-    var currentFindHighlightRects: [CGRect] = []
-    private static let disclosureImage = UIImage(systemName: "triangle.fill")
-
-    init(layoutFragment: NSTextLayoutFragment, frame: CGRect) {
-        self.layoutFragment = layoutFragment
         super.init(frame: frame)
         isOpaque = false
         backgroundColor = .clear
@@ -1353,14 +1438,31 @@ private final class DOMTreeTextLayoutFragmentView: UIView {
             context.fill(rowRect)
         }
         context.restoreGState()
+    }
+}
 
-        if let disclosureImage = Self.disclosureImage?.withTintColor(
-            DOMTreeHighlightTheme.webInspector.disclosure.resolvedColor(with: traitCollection),
-            renderingMode: .alwaysOriginal
-        ) {
-            for marker in disclosureMarkers where marker.rect.intersects(rect) {
-                drawDisclosureMarker(marker, image: disclosureImage)
-            }
+private final class DOMTreeTextLayoutFragmentView: UIView {
+    let layoutFragment: NSTextLayoutFragment
+    var layoutFragmentDrawPoint = CGPoint.zero
+    var findHighlightRects: [CGRect] = []
+    var currentFindHighlightRects: [CGRect] = []
+
+    init(layoutFragment: NSTextLayoutFragment, frame: CGRect) {
+        self.layoutFragment = layoutFragment
+        super.init(frame: frame)
+        isOpaque = false
+        backgroundColor = .clear
+        isUserInteractionEnabled = false
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func draw(_ rect: CGRect) {
+        guard let context = UIGraphicsGetCurrentContext() else {
+            return
         }
 
         context.saveGState()
@@ -1378,25 +1480,6 @@ private final class DOMTreeTextLayoutFragmentView: UIView {
         context.restoreGState()
 
         layoutFragment.draw(at: layoutFragmentDrawPoint, in: context)
-    }
-
-    private func drawDisclosureMarker(_ marker: DOMTreeDisclosureMarker, image: UIImage) {
-        let side = min(marker.rect.width, marker.rect.height, DOMTreeTextView.iconSide)
-        let drawRect = CGRect(
-            x: marker.rect.midX - side / 2,
-            y: marker.rect.midY - side / 2,
-            width: side,
-            height: side
-        )
-
-        guard let context = UIGraphicsGetCurrentContext() else {
-            return
-        }
-        context.saveGState()
-        context.translateBy(x: drawRect.midX, y: drawRect.midY)
-        context.rotate(by: marker.isOpen ? .pi : .pi / 2)
-        image.draw(in: CGRect(x: -side / 2, y: -side / 2, width: side, height: side))
-        context.restoreGState()
     }
 }
 

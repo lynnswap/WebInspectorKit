@@ -55,6 +55,7 @@ public final class DOMNodeModel: Equatable, Hashable, Identifiable {
     public var children: [DOMNodeModel]
 
     public var childCount: Int
+    package var childCountIsKnown: Bool
     public var layoutFlags: [String]
     public var isRendered: Bool
     public var styleRevision: Int
@@ -74,6 +75,7 @@ public final class DOMNodeModel: Equatable, Hashable, Identifiable {
         attributes: [DOMAttribute],
         children: [DOMNodeModel] = [],
         childCount: Int,
+        childCountIsKnown: Bool = true,
         layoutFlags: [String] = [],
         isRendered: Bool = true,
         styleRevision: Int = 0,
@@ -92,6 +94,7 @@ public final class DOMNodeModel: Equatable, Hashable, Identifiable {
         self.attributes = attributes
         self.children = children
         self.childCount = childCount
+        self.childCountIsKnown = childCountIsKnown
         self.layoutFlags = layoutFlags
         self.isRendered = isRendered
         self.styleRevision = styleRevision
@@ -112,6 +115,7 @@ public final class DOMNodeModel: Equatable, Hashable, Identifiable {
         attributes: [DOMAttribute],
         children: [DOMNodeModel] = [],
         childCount: Int,
+        childCountIsKnown: Bool = true,
         layoutFlags: [String] = [],
         isRendered: Bool = true,
         styleRevision: Int = 0,
@@ -131,6 +135,7 @@ public final class DOMNodeModel: Equatable, Hashable, Identifiable {
             attributes: attributes,
             children: children,
             childCount: childCount,
+            childCountIsKnown: childCountIsKnown,
             layoutFlags: layoutFlags,
             isRendered: isRendered,
             styleRevision: styleRevision,

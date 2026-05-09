@@ -4707,6 +4707,7 @@ private extension WIDOMInspector {
             nodeValue: node.nodeValue,
             attributes: node.attributes,
             childCount: node.childCount,
+            childCountIsKnown: node.childCountIsKnown,
             layoutFlags: node.layoutFlags,
             isRendered: node.isRendered,
             children: node.children.map(nodeDescriptor(from:))

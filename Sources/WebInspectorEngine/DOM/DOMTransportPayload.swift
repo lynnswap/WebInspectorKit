@@ -11,6 +11,7 @@ package struct DOMGraphNodeDescriptor: Sendable {
     package var nodeValue: String
     package var attributes: [DOMAttribute]
     package var childCount: Int
+    package var childCountIsKnown: Bool
     package var layoutFlags: [String]
     package var isRendered: Bool
     package var children: [DOMGraphNodeDescriptor]
@@ -26,6 +27,7 @@ package struct DOMGraphNodeDescriptor: Sendable {
         nodeValue: String,
         attributes: [DOMAttribute],
         childCount: Int,
+        childCountIsKnown: Bool = true,
         layoutFlags: [String],
         isRendered: Bool,
         children: [DOMGraphNodeDescriptor]
@@ -40,6 +42,7 @@ package struct DOMGraphNodeDescriptor: Sendable {
         self.nodeValue = nodeValue
         self.attributes = attributes
         self.childCount = childCount
+        self.childCountIsKnown = childCountIsKnown
         self.layoutFlags = layoutFlags
         self.isRendered = isRendered
         self.children = children
@@ -56,6 +59,7 @@ package struct DOMGraphNodeDescriptor: Sendable {
         nodeValue: String,
         attributes: [DOMAttribute],
         childCount: Int,
+        childCountIsKnown: Bool = true,
         layoutFlags: [String],
         isRendered: Bool,
         children: [DOMGraphNodeDescriptor]
@@ -71,6 +75,7 @@ package struct DOMGraphNodeDescriptor: Sendable {
             nodeValue: nodeValue,
             attributes: attributes,
             childCount: childCount,
+            childCountIsKnown: childCountIsKnown,
             layoutFlags: layoutFlags,
             isRendered: isRendered,
             children: children
