@@ -1291,11 +1291,9 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
     }
 
     func sendRootMessage(_ message: String) throws {
-        _ = message
     }
 
     func sendPageMessage(_ message: String, targetIdentifier: String, outerIdentifier: Int) throws {
-        _ = outerIdentifier
         let payload = try decodeMessagePayload(message)
         guard let method = payload["method"] as? String else {
             return
@@ -1336,8 +1334,6 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
     }
 
     func compatibilityResponse(scope: WITransportTargetScope, method: String) -> Data? {
-        _ = scope
-        _ = method
         return nil
     }
 

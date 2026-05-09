@@ -782,24 +782,16 @@ extension BrowserStore {
         backForwardListItemAdded itemAdded: WKBackForwardListItem!,
         removed itemsRemoved: [WKBackForwardListItem]!
     ) {
-        _ = webView
-        _ = itemAdded
-        _ = itemsRemoved
         invalidateHistoryIfNeeded()
     }
 
     @objc(_webView:didNavigateWithNavigationData:)
     func _webView(_ webView: WKWebView!, didNavigateWith navigationData: NSObject!) {
-        _ = webView
-        _ = navigationData
         invalidateHistoryIfNeeded()
     }
 
     @objc(_webView:didUpdateHistoryTitle:forURL:)
     func _webView(_ webView: WKWebView!, didUpdateHistoryTitle title: String!, forURL url: URL!) {
-        _ = webView
-        _ = title
-        _ = url
         invalidateHistoryIfNeeded()
     }
 }

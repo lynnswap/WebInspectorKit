@@ -164,7 +164,6 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         )
         configureHighlights(
             for: fragmentView,
-            layoutFragmentFrame: layoutFrame,
             surfaceFrame: surfaceFrame
         )
 
@@ -675,7 +674,6 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
 
     private func configureHighlights(
         for fragmentView: DOMTreeTextLayoutFragmentView,
-        layoutFragmentFrame: CGRect,
         surfaceFrame: CGRect
     ) {
         fragmentView.hoverRowRects = hoverRowRects(surfaceFrame: surfaceFrame)
@@ -688,7 +686,6 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
             textRects(for: $0, layoutFragmentFrame: surfaceFrame)
         }
         fragmentView.setNeedsDisplay()
-        _ = layoutFragmentFrame
     }
 
     private func visibleTextRect(horizontalPadding: CGFloat = 64) -> CGRect {
@@ -810,7 +807,6 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         for case let fragmentView as DOMTreeTextLayoutFragmentView in textContentView.subviews {
             configureHighlights(
                 for: fragmentView,
-                layoutFragmentFrame: fragmentView.layoutFragment.layoutFragmentFrame,
                 surfaceFrame: fragmentView.frame
             )
         }

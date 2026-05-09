@@ -292,7 +292,6 @@ private extension NetworkTransportDriver {
         after error: Error,
         session: WITransportSession
     ) -> Bool {
-        _ = session
         guard !(error is CancellationError),
               let transportError = error as? WITransportError else {
             return false
@@ -370,7 +369,6 @@ private extension NetworkTransportDriver {
     }
 
     func shouldLogAttachFailure(_ error: Error, session: WITransportSession) -> Bool {
-        _ = session
         if error is CancellationError {
             return false
         }

@@ -93,7 +93,6 @@ import MachO
         named symbolName: String,
         as type: T.Type
     ) -> T? {
-        _ = type
 
         var iterator = unsafe symbolSearchHandles.makeIterator()
         while let candidate = unsafe iterator.next() {

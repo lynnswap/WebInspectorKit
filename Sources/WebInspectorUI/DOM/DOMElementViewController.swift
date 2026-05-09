@@ -90,7 +90,7 @@ final class DOMElementViewController: UICollectionViewController {
         super.viewDidLoad()
         view.backgroundColor = .clear
         collectionView.backgroundColor = .clear
-        _ = dataSource
+        collectionView.dataSource = dataSource
 
         nodeObservationScope.cancelAll()
         dom.document.observe(\.selectedNode) { [weak self] node in

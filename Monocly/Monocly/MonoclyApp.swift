@@ -111,7 +111,6 @@ final class MonoclyAppDelegate: UIResponder, UIApplicationDelegate {
         _ application: UIApplication,
         willFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
-        _ = launchOptions
         recoverLegacySceneStateIfNeeded(supportsMultipleScenes: application.supportsMultipleScenes)
         return true
     }
@@ -120,8 +119,6 @@ final class MonoclyAppDelegate: UIResponder, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
-        _ = application
-        _ = launchOptions
         return true
     }
 
@@ -184,7 +181,6 @@ final class MonoclyAppDelegate: UIResponder, UIApplicationDelegate {
     }
 
     func application(_ application: UIApplication, didDiscardSceneSessions sceneSessions: Set<UISceneSession>) {
-        _ = application
         BrowserInspectorCoordinator.handleInspectorWindowSceneSessionsDidDiscard(sceneSessions)
     }
 
@@ -259,8 +255,6 @@ final class MonoclyMainSceneDelegate: NSObject, UIWindowSceneDelegate {
         willConnectTo session: UISceneSession,
         options connectionOptions: UIScene.ConnectionOptions
     ) {
-        _ = session
-        _ = connectionOptions
         guard let windowScene = scene as? UIWindowScene else {
             return
         }
@@ -363,8 +357,6 @@ final class MonoclyInspectorSceneDelegate: NSObject, UIWindowSceneDelegate {
         willConnectTo session: UISceneSession,
         options connectionOptions: UIScene.ConnectionOptions
     ) {
-        _ = session
-        _ = connectionOptions
         guard let windowScene = scene as? UIWindowScene else {
             return
         }

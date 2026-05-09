@@ -2117,7 +2117,6 @@ private extension WIDOMInspector {
             level: .debug
         )
 
-        _ = shouldNotifyFrontend
     }
 
     private func failPendingChildRequests(contextID: DOMContextID? = nil) async {
@@ -2140,7 +2139,6 @@ private extension WIDOMInspector {
                 extra: "nodeID=\(key.nodeID) contextID=\(key.contextID) reportsToFrontend=\(shouldNotifyFrontend)",
                 level: .debug
             )
-            _ = shouldNotifyFrontend
         }
     }
 
@@ -3837,7 +3835,6 @@ private extension WIDOMInspector {
             to: frameOwner,
             selectorPath: pendingSelection.selectorPath,
             contextID: pendingSelection.contextID,
-            preferredSubtreeRootNodeIDs: pendingSelection.materializedAncestorNodeIDs,
             targetIdentifierForMaterialization: pendingSelection.resolutionTargetIdentifier
         )
         finishInspectSelectionResolution(transaction: pendingSelection.transaction)
@@ -4371,7 +4368,6 @@ private extension WIDOMInspector {
             to: selectedNode,
             selectorPath: selectorPath,
             contextID: contextID,
-            preferredSubtreeRootNodeIDs: materializedCandidateIDs,
             allowPostSelectionMaterialization: false
         )
     }
@@ -4465,7 +4461,6 @@ private extension WIDOMInspector {
         to node: DOMNodeModel,
         selectorPath: String?,
         contextID: DOMContextID,
-        preferredSubtreeRootNodeIDs: Set<DOMNodeModel.ID> = [],
         targetIdentifierForMaterialization: String? = nil,
         allowPostSelectionMaterialization: Bool = true
     ) async {
@@ -4474,7 +4469,6 @@ private extension WIDOMInspector {
             payload.selectorPath = selectorPath
         }
         document.applySelectionSnapshot(payload)
-        _ = preferredSubtreeRootNodeIDs
         await syncSelectedNodeHighlight(contextID: contextID)
         logSelectionDiagnostics(
             "applySelection updated document",
@@ -4523,7 +4517,6 @@ private extension WIDOMInspector {
             to: node,
             selectorPath: pendingInspectSelection.selectorPath,
             contextID: pendingInspectSelection.contextID,
-            preferredSubtreeRootNodeIDs: pendingInspectSelection.materializedAncestorNodeIDs,
             targetIdentifierForMaterialization: pendingInspectSelection.resolutionTargetIdentifier
         )
         await completeInspectModeAfterBackendSelection(transaction: pendingInspectSelection.transaction)
@@ -4767,7 +4760,6 @@ private extension WIDOMInspector {
 
         document.clearSelection()
         try? await hideHighlight()
-        _ = contextID
         applyRecoverableError(showError ? errorMessage : nil)
     }
 

@@ -489,9 +489,6 @@ private final class WIInspectorNoopSceneActivationRequester: WIDOMUIKitSceneActi
         requestingScene: UIScene?,
         errorHandler: ((any Error) -> Void)?
     ) {
-        _ = target
-        _ = requestingScene
-        _ = errorHandler
     }
 }
 #endif

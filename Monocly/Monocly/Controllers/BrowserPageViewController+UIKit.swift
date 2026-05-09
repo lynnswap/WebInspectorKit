@@ -151,7 +151,6 @@ final class BrowserPageViewController: UIViewController {
 
     @objc
     private func handleOpenInspectorAction(_ sender: Any?) {
-        _ = sender
         _ = openInspectorAsSheet(tabs: [.dom, .network])
     }
 

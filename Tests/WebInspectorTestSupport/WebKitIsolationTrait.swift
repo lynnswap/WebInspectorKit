@@ -10,8 +10,6 @@ public struct WebKitIsolationTrait: TestTrait, SuiteTrait, TestScoping {
         testCase: Testing.Test.Case?,
         performing function: @Sendable () async throws -> Void
     ) async throws {
-        _ = test
-        _ = testCase
         try await withWebKitTestIsolation {
             try await function()
         }

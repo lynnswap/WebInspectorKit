@@ -998,7 +998,6 @@ private enum WITransportNativeInspectorResolver {
         webKitHeaderAddress: UInt,
         javaScriptCoreHeaderAddress: UInt
     ) -> [UInt] {
-        _ = javaScriptCoreHeaderAddress
         return [webKitHeaderAddress]
     }
 
@@ -1008,7 +1007,6 @@ private enum WITransportNativeInspectorResolver {
         source: String?,
         usedConnectDisconnectFallback: Bool
     ) -> WITransportNativeInspectorSymbolResolution {
-        _ = functionAddresses
         if let phase, WITransportConsoleDiagnostics.verboseConsoleDiagnosticsEnabled {
             NSLog(successLogFormat, backendKind.rawValue, phase.message)
         }
@@ -2116,15 +2114,6 @@ enum WITransportNativeInspectorSymbolResolver {
         destroyStringImplSymbol: String? = nil,
         backendDispatcherDispatchSymbol: String? = nil
     ) -> WITransportAttachSymbolResolution {
-        _ = imagePathSuffixes
-        _ = connectSymbol
-        _ = disconnectSymbol
-        _ = alternateConnectSymbols
-        _ = alternateDisconnectSymbols
-        _ = stringFromUTF8Symbol
-        _ = stringImplToNSStringSymbol
-        _ = destroyStringImplSymbol
-        _ = backendDispatcherDispatchSymbol
         return currentAttachResolution()
     }
 }

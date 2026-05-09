@@ -735,7 +735,6 @@ private extension DOMDocumentModel {
 
     func flagRejectedStructuralMutation(parentLocalID: UInt64, reason: String) {
         rejectedStructuralMutationParentLocalIDs.insert(parentLocalID)
-        _ = reason
     }
 
     func reconcileSelectedNode() {

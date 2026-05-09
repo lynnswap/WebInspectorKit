@@ -15,8 +15,6 @@ protocol WITransportPlatformBackend: AnyObject {
 
 extension WITransportPlatformBackend {
     func compatibilityResponse(scope: WITransportTargetScope, method: String) -> Data? {
-        _ = scope
-        _ = method
         return nil
     }
 }
@@ -75,13 +73,10 @@ private final class WITransportUnsupportedPlatformBackend: WITransportPlatformBa
     let supportSnapshot: WITransportSupportSnapshot
 
     init(configuration: WITransportConfiguration, reason: String) {
-        _ = configuration
         supportSnapshot = .unsupported(reason: reason)
     }
 
     func attach(to webView: WKWebView, messageSink: any WITransportBackendMessageSink) async throws {
-        _ = webView
-        _ = messageSink
         throw WITransportError.unsupported(supportSnapshot.failureReason ?? "WebInspectorTransport is unsupported.")
     }
 
@@ -89,14 +84,10 @@ private final class WITransportUnsupportedPlatformBackend: WITransportPlatformBa
     }
 
     func sendRootMessage(_ message: String) throws {
-        _ = message
         throw WITransportError.transportClosed
     }
 
     func sendPageMessage(_ message: String, targetIdentifier: String, outerIdentifier: Int) throws {
-        _ = message
-        _ = targetIdentifier
-        _ = outerIdentifier
         throw WITransportError.transportClosed
     }
 }

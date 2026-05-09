@@ -19,7 +19,6 @@ extension WIDOMInspector {
     }
 
     package func setDOMContextMenuProvider(_ provider: ((Int?) -> NSMenu?)?) {
-        _ = provider
     }
 
     func copyToSystemPasteboard(_ text: String) {

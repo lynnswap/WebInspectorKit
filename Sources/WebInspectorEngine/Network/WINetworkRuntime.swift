@@ -222,7 +222,6 @@ private final class WINetworkBodyFetchingBackend: WINetworkBackend {
     }
 
     func detachPageWebView(preparing modeBeforeDetach: NetworkLoggingMode?) async {
-        _ = modeBeforeDetach
         webView = nil
     }
 

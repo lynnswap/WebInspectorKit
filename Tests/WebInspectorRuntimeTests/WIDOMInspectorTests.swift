@@ -7378,7 +7378,6 @@ private final class FakeDOMTransportBackend: WITransportPlatformBackend {
     }
 
     func attach(to webView: WKWebView, messageSink: any WITransportBackendMessageSink) async throws {
-        _ = webView
         if let attachError {
             throw attachError
         }
@@ -7397,7 +7396,6 @@ private final class FakeDOMTransportBackend: WITransportPlatformBackend {
     }
 
     func sendRootMessage(_ message: String) throws {
-        _ = message
     }
 
     func sendPageMessage(_ message: String, targetIdentifier: String, outerIdentifier: Int) throws {
@@ -7419,7 +7417,6 @@ private final class FakeDOMTransportBackend: WITransportPlatformBackend {
     }
 
     func compatibilityResponse(scope: WITransportTargetScope, method: String) -> Data? {
-        _ = scope
         if method == WITransportMethod.DOM.enable {
             return Data("{}".utf8)
         }

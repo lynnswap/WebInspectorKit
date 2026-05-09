@@ -1110,7 +1110,6 @@ private final class FakeSessionBackend: WITransportPlatformBackend {
     }
 
     func attach(to webView: WKWebView, messageSink: any WITransportBackendMessageSink) async throws {
-        _ = webView
         self.messageSink = messageSink
         if let supportSnapshotAfterAttach {
             supportSnapshot = supportSnapshotAfterAttach

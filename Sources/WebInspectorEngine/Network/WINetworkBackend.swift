@@ -23,7 +23,6 @@ package protocol NetworkBodyFetching: AnyObject {
 
 package extension NetworkBodyFetching {
     func supportsDeferredLoading(for role: NetworkBody.Role) -> Bool {
-        _ = role
         return true
     }
 }
@@ -48,7 +47,6 @@ package extension WINetworkBackend {
     func prepareForNavigationReconnect() {}
 
     func resumeAfterNavigationReconnect(to webView: WKWebView) {
-        _ = webView
     }
 
     func loadBodyIfNeeded(for entry: NetworkEntry, body: NetworkBody) async throws -> NetworkBody {

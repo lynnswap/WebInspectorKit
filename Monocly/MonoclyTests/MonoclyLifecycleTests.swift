@@ -640,7 +640,6 @@ final class MonoclyLifecycleTests: XCTestCase {
         var showWindowCallCount = 0
 
         override func showWindow(_ sender: Any?) {
-            _ = sender
             if window == nil {
                 window = NSWindow(contentViewController: NSViewController())
             }
