@@ -89,11 +89,7 @@ package final class NetworkTimelineResolver {
         _ load: NetworkBootstrapLoad,
         into store: NetworkStore
     ) {
-        let insertedEntries = store.applySnapshots(load.snapshots)
-        let survivingRequestIDs = Set(insertedEntries.map(\.requestID))
-        register(
-            bindings: load.bindings.filter { survivingRequestIDs.contains($0.canonicalRequestID) }
-        )
+        store.applySnapshots(load.snapshots)
     }
 
     package func finish(
@@ -291,12 +287,6 @@ package final class NetworkTimelineResolver {
 }
 
 private extension NetworkTimelineResolver {
-    func register(bindings: [Binding]) {
-        for binding in bindings {
-            exactBindings[RequestKey(sessionID: binding.sessionID, rawRequestID: binding.rawRequestID)] = binding
-        }
-    }
-
     func rebindCommittedContinuation(
         sessionID: String,
         rawRequestID: String,

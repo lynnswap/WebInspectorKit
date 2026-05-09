@@ -13,67 +13,35 @@ package struct NetworkTransportClient {
         role: NetworkBody.Role
     ) async -> WINetworkBodyFetchResult {
         do {
-            switch locator {
-            case .networkRequest(let requestID, let targetIdentifier):
-                switch role {
-                case .request:
-                    let response = try await codec.decode(
-                        NetworkGetRequestPostDataResponse.self,
-                        from: try await session.sendPageData(
-                            method: WITransportMethod.Network.getRequestPostData,
-                            targetIdentifier: targetIdentifier,
-                            parametersData: try await codec.encode(
-                                NetworkRequestIDParameters(requestId: requestID)
-                            )
+            switch (locator, role) {
+            case (.networkRequest, .request):
+                return .bodyUnavailable
+            case let (.networkRequest(requestID, targetIdentifier), .response):
+                let response = try await codec.decode(
+                    NetworkGetResponseBodyResponse.self,
+                    from: try await session.sendPageData(
+                        method: WITransportMethod.Network.getResponseBody,
+                        targetIdentifier: targetIdentifier,
+                        parametersData: try await codec.encode(
+                            NetworkRequestIDParameters(requestId: requestID)
                         )
                     )
-                    guard !response.postData.isEmpty else {
-                        return .bodyUnavailable
-                    }
-                    return .fetched(
-                        NetworkBody(
-                            kind: .text,
-                            preview: nil,
-                            full: response.postData,
-                            size: response.postData.utf8.count,
-                            isBase64Encoded: false,
-                            isTruncated: false,
-                            summary: nil,
-                            formEntries: [],
-                            fetchState: .full,
-                            role: .request
-                        )
+                )
+                return .fetched(
+                    NetworkBody(
+                        kind: response.base64Encoded ? .binary : .text,
+                        preview: nil,
+                        full: response.body,
+                        size: nil,
+                        isBase64Encoded: response.base64Encoded,
+                        isTruncated: false,
+                        summary: nil,
+                        formEntries: [],
+                        fetchState: .full,
+                        role: .response
                     )
-                case .response:
-                    let response = try await codec.decode(
-                        NetworkGetResponseBodyResponse.self,
-                        from: try await session.sendPageData(
-                            method: WITransportMethod.Network.getResponseBody,
-                            targetIdentifier: targetIdentifier,
-                            parametersData: try await codec.encode(
-                                NetworkRequestIDParameters(requestId: requestID)
-                            )
-                        )
-                    )
-                    return .fetched(
-                        NetworkBody(
-                            kind: response.base64Encoded ? .binary : .text,
-                            preview: nil,
-                            full: response.body,
-                            size: nil,
-                            isBase64Encoded: response.base64Encoded,
-                            isTruncated: false,
-                            summary: nil,
-                            formEntries: [],
-                            fetchState: .full,
-                            role: .response
-                        )
-                    )
-                }
-            case .pageResource(let targetIdentifier, let frameID, let url):
-                guard role == .response else {
-                    return .bodyUnavailable
-                }
+                )
+            case let (.pageResource(targetIdentifier, frameID, url), .response):
                 let response = try await codec.decode(
                     PageGetResourceContentResponse.self,
                     from: try await session.sendPageData(
@@ -98,7 +66,7 @@ package struct NetworkTransportClient {
                         role: .response
                     )
                 )
-            case .opaqueHandle:
+            case (.pageResource, .request), (.opaqueHandle, _):
                 return .bodyUnavailable
             }
         } catch let error as WITransportError {
@@ -121,29 +89,8 @@ package struct NetworkTransportClient {
         normalizeScopeID: @escaping @MainActor (String?) -> String?,
         logFailure: @escaping @MainActor (String) -> Void
     ) async throws -> NetworkBootstrapLoad {
-        if session.shouldAttemptStableNetworkBootstrap() {
-            do {
-                let load = try await StableBootstrapSource().load(
-                    using: session,
-                    targetIdentifier: targetIdentifier,
-                    allocateRequestID: allocateRequestID,
-                    defaultSessionID: defaultSessionID,
-                    normalizeScopeID: normalizeScopeID
-                )
-                session.markStableNetworkBootstrapAvailable()
-                return load
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                if shouldDisableStableBootstrap(after: error),
-                   session.markStableNetworkBootstrapUnavailable() {
-                    logFailure("stable network bootstrap disabled: \(error.localizedDescription)")
-                }
-            }
-        }
-
         do {
-            return try await HistoricalBootstrapSource().load(
+            return try await PageResourceTreeBootstrapSource().load(
                 using: session,
                 targetIdentifier: targetIdentifier,
                 allocateRequestID: allocateRequestID,
@@ -153,26 +100,8 @@ package struct NetworkTransportClient {
         } catch is CancellationError {
             throw CancellationError()
         } catch {
-            logFailure("historical network bootstrap skipped: \(error.localizedDescription)")
+            logFailure("resource tree network bootstrap skipped: \(error.localizedDescription)")
             return NetworkBootstrapLoad(snapshots: [])
-        }
-    }
-}
-
-private extension NetworkTransportClient {
-    func shouldDisableStableBootstrap(after error: any Error) -> Bool {
-        guard let transportError = error as? WITransportError else {
-            return false
-        }
-        switch transportError {
-        case .unsupported:
-            return true
-        case .remoteError:
-            return true
-        case .invalidResponse:
-            return true
-        default:
-            return false
         }
     }
 }
@@ -189,10 +118,6 @@ private struct PageGetResourceContentParameters: Encodable, Sendable {
 private struct NetworkGetResponseBodyResponse: Decodable, Sendable {
     let body: String
     let base64Encoded: Bool
-}
-
-private struct NetworkGetRequestPostDataResponse: Decodable, Sendable {
-    let postData: String
 }
 
 private struct PageGetResourceContentResponse: Decodable, Sendable {

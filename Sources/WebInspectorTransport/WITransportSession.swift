@@ -43,7 +43,6 @@ public final class WITransportSession {
     private var outOfOrderSettledPageEventSequences: Set<UInt64> = []
     private var activePageEventDeliveryCount: UInt64 = 0
     private var pageEventDrainWaiters: [PageEventDrainWaiter] = []
-    private var stableNetworkBootstrapAvailability: StableNetworkBootstrapAvailability = .unknown
 
 #if DEBUG
     package var derivedPageTargetIdentifierProviderForTesting: (@MainActor (WKWebView) -> String?)?
@@ -99,7 +98,6 @@ public final class WITransportSession {
         self.webView = webView
         self.backend = backend
         resetTransportStateForAttach()
-        stableNetworkBootstrapAvailability = .unknown
 
         let messageSink = WITransportSessionMessageSink(session: self)
         backendMessageSink = messageSink
@@ -403,34 +401,11 @@ public final class WITransportSession {
         originalInspectability = nil
     }
 
-    package func shouldAttemptStableNetworkBootstrap() -> Bool {
-        supportSnapshot.capabilities.contains(.networkBootstrapSnapshot)
-            && stableNetworkBootstrapAvailability != .unavailable
-    }
-
-    @discardableResult
-    package func markStableNetworkBootstrapUnavailable() -> Bool {
-        let wasUnavailable = stableNetworkBootstrapAvailability == .unavailable
-        stableNetworkBootstrapAvailability = .unavailable
-        return !wasUnavailable
-    }
-
-    package func markStableNetworkBootstrapAvailable() {
-        stableNetworkBootstrapAvailability = .available
-    }
 }
 
 private struct PageEventDrainWaiter {
     let targetSequence: UInt64
     let continuation: CheckedContinuation<Void, Never>
-}
-
-extension WITransportSession {
-    enum StableNetworkBootstrapAvailability {
-        case unknown
-        case available
-        case unavailable
-    }
 }
 
 package enum WISharedInspectorTransportClient: Hashable, Sendable {

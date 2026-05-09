@@ -66,7 +66,9 @@ final class NetworkTransportDriver: WINetworkBackend, InspectorTransportCapabili
 
     package func supportsDeferredLoading(for role: NetworkBody.Role) -> Bool {
         switch role {
-        case .request, .response:
+        case .request:
+            false
+        case .response:
             true
         }
     }
@@ -673,10 +675,7 @@ private extension NetworkTransportDriver {
                         method: normalizedMethod,
                         headers: NetworkHeaders(dictionary: params.request.headers),
                         body: makeRequestBody(
-                            postData: params.request.postData,
-                            method: params.request.method,
-                            requestID: params.requestId,
-                            targetIdentifier: normalizedTargetIdentifier
+                            postData: params.request.postData
                         ),
                         bodyBytesSent: params.request.postData?.utf8.count,
                         type: params.type,
@@ -771,11 +770,12 @@ private extension NetworkTransportDriver {
                         blockedCookies: [],
                         errorDescription: nil
                     ),
-                    requestType: nil,
-                    timestamp: params.timestamp,
-                    encodedBodyLength: params.metrics?.responseBodyBytesReceived,
-                    decodedBodyLength: params.metrics?.responseBodyDecodedSize
-                )
+                        requestType: nil,
+                        timestamp: params.timestamp,
+                        requestBodyBytesSent: params.metrics?.requestBodyBytesSent,
+                        encodedBodyLength: params.metrics?.responseBodyBytesReceived,
+                        decodedBodyLength: params.metrics?.responseBodyDecodedSize
+                    )
             ),
             sessionID: sessionID,
         )
@@ -1002,53 +1002,23 @@ private extension NetworkTransportDriver {
         )
     }
 
-    func makeRequestBody(
-        postData: String?,
-        method: String,
-        requestID: String,
-        targetIdentifier: String?
-    ) -> NetworkBody? {
-        if let postData, !postData.isEmpty {
-            return NetworkBody(
-                kind: .text,
-                preview: postData,
-                full: postData,
-                size: postData.utf8.count,
-                isBase64Encoded: false,
-                isTruncated: false,
-                summary: nil,
-                formEntries: [],
-                fetchState: .full,
-                role: .request
-            )
-        }
-
-        guard requestMethodMayCarryBody(method) else {
+    func makeRequestBody(postData: String?) -> NetworkBody? {
+        guard let postData, !postData.isEmpty else {
             return nil
         }
 
         return NetworkBody(
             kind: .text,
-            preview: nil,
-            full: nil,
-            size: nil,
+            preview: postData,
+            full: postData,
+            size: postData.utf8.count,
             isBase64Encoded: false,
-            isTruncated: true,
+            isTruncated: false,
             summary: nil,
-            deferredLocator: .networkRequest(id: requestID, targetIdentifier: targetIdentifier),
             formEntries: [],
-            fetchState: .inline,
+            fetchState: .full,
             role: .request
         )
-    }
-
-    func requestMethodMayCarryBody(_ method: String) -> Bool {
-        switch method.uppercased() {
-        case "GET", "HEAD":
-            false
-        default:
-            true
-        }
     }
 
     func loadBootstrapResources(

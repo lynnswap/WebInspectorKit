@@ -18,8 +18,6 @@ package enum WITransportMethod {
     package enum Network {
         package static let enable = "Network.enable"
         package static let getResponseBody = "Network.getResponseBody"
-        package static let getRequestPostData = "Network.getRequestPostData"
-        package static let getBootstrapSnapshot = "Network.getBootstrapSnapshot"
     }
 
     package enum DOM {
@@ -140,44 +138,6 @@ public struct WITransportFrameResourceTree: Decodable, Sendable {
         self.childFrames = childFrames
         self.resources = resources
     }
-}
-
-package enum WITransportNetworkBootstrapPhase: String, Decodable, Sendable {
-    case completed
-    case failed
-    case inFlight
-
-    package init(from decoder: any Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        let rawValue = try container.decode(String.self)
-        self = Self(rawValue: rawValue) ?? .completed
-    }
-}
-
-package struct WITransportNetworkBootstrapBodyFetchDescriptor: Decodable, Sendable {
-    package let targetIdentifier: String?
-    package let frameId: String
-    package let url: String
-}
-
-package struct WITransportNetworkBootstrapResource: Decodable, Sendable {
-    package let bootstrapRowID: String
-    package let rawRequestID: String?
-    package let ownerSessionID: String
-    package let frameID: String?
-    package let targetIdentifier: String?
-    package let url: String
-    package let method: String
-    package let requestType: String?
-    package let mimeType: String?
-    package let statusCode: Int?
-    package let statusText: String?
-    package let requestHeaders: [String: String]?
-    package let responseHeaders: [String: String]?
-    package let phase: WITransportNetworkBootstrapPhase
-    package let canceled: Bool?
-    package let errorDescription: String?
-    package let bodyFetchDescriptor: WITransportNetworkBootstrapBodyFetchDescriptor?
 }
 
 public final class WITransportDOMNode: Decodable, Sendable {
