@@ -1,3 +1,4 @@
+#if canImport(UIKit)
 import Testing
 import UIKit
 @testable import WebInspectorUI
@@ -53,3 +54,4 @@ struct WISessionStateTests {
 }
 
 private final class TestViewController: UIViewController {}
+#endif
