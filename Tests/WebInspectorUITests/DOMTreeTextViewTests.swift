@@ -175,11 +175,21 @@ struct DOMTreeTextViewTests {
         let darkAttributeName = try #require(DOMTreeTextView.tokenColorForTesting(kind: "attributeName", style: .dark))
         let darkAttributeValue = try #require(DOMTreeTextView.tokenColorForTesting(kind: "attributeValue", style: .dark))
         let darkSelectedRow = DOMTreeTextView.selectedRowBackgroundColorForTesting(style: .dark)
+        let lightDisclosure = DOMTreeTextView.disclosureColorForTesting(style: .light)
+        let darkDisclosure = DOMTreeTextView.disclosureColorForTesting(style: .dark)
+        let expectedLightDisclosure = UIColor.systemGray.resolvedColor(
+            with: UITraitCollection(userInterfaceStyle: .light)
+        )
+        let expectedDarkDisclosure = UIColor.systemGray.resolvedColor(
+            with: UITraitCollection(userInterfaceStyle: .dark)
+        )
 
         #expect(lightTag.wiHexRGBForTesting == "0F6BDC")
         #expect(darkTag.wiHexRGBForTesting == "32D4FF")
         #expect(darkAttributeName.wiHexRGBForTesting == "EC9EFF")
         #expect(darkAttributeValue.wiHexRGBForTesting == "FFD479")
+        #expect(lightDisclosure.wiHexRGBForTesting == expectedLightDisclosure.wiHexRGBForTesting)
+        #expect(darkDisclosure.wiHexRGBForTesting == expectedDarkDisclosure.wiHexRGBForTesting)
         #expect(abs(darkSelectedRow.wiAlphaForTesting - 0.35) < 0.01)
     }
 
