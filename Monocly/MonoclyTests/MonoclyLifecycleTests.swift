@@ -284,7 +284,7 @@ final class MonoclyLifecycleTests: XCTestCase {
     }
 
     @MainActor
-    func testMainSceneDelegatePreservesInspectorSessionWhileInspectorSceneIsConnected() throws {
+    func testMainSceneDelegatePreservesInspectorSessionWhileInspectorSceneIsConnected() async throws {
         let mainSceneDelegate = MonoclyMainSceneDelegate()
         let inspectorSceneDelegate = MonoclyInspectorSceneDelegate()
         let coordinator = BrowserInspectorCoordinator()
@@ -320,6 +320,7 @@ final class MonoclyLifecycleTests: XCTestCase {
         retainedWindows.append(inspectorWindow)
 
         mainSceneDelegate.disconnect(windowScene: windowScene)
+        await rootViewController.waitForInspectorSessionTransitions()
 
         XCTAssertNil(mainSceneDelegate.window)
         XCTAssertNil(mainSceneDelegate.rootViewController)
@@ -330,6 +331,7 @@ final class MonoclyLifecycleTests: XCTestCase {
         })
 
         inspectorSceneDelegate.disconnect(windowScene: windowScene)
+        await rootViewController.waitForInspectorSessionTransitions()
 
         XCTAssertTrue(waitForCondition {
             BrowserInspectorCoordinator.hasInspectorWindow(for: rootViewController.inspectorRuntime) == false

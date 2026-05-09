@@ -16,6 +16,7 @@ final class BrowserRootViewController: UINavigationController {
     private var pendingInspectorRuntimeAttachment: InspectorRuntimeAttachment?
     private var inspectorLifecycleTask: Task<Void, Never>?
     private var isFinalizingInspectorSession = false
+    private var isPreservingInspectorSessionForSceneDisconnection = false
 
     init(
         store: BrowserStore? = nil,
@@ -60,6 +61,7 @@ final class BrowserRootViewController: UINavigationController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        isPreservingInspectorSessionForSceneDisconnection = false
         requestInspectorRuntimeAttachment(.attached)
     }
 
@@ -69,6 +71,9 @@ final class BrowserRootViewController: UINavigationController {
             return
         }
         if pageViewController?.isPresentingInspectorForRuntimeAttachment == true {
+            return
+        }
+        if isPreservingInspectorSessionForSceneDisconnection {
             return
         }
         requestInspectorRuntimeAttachment(.detached)
@@ -83,10 +88,12 @@ final class BrowserRootViewController: UINavigationController {
             return
         }
         isFinalizingInspectorSession = true
+        isPreservingInspectorSessionForSceneDisconnection = false
         requestInspectorRuntimeAttachment(.detached)
     }
 
     func prepareForSceneDisconnectionPreservingInspectorSession() {
+        isPreservingInspectorSessionForSceneDisconnection = true
         requestInspectorRuntimeAttachment(.suspended)
     }
 
