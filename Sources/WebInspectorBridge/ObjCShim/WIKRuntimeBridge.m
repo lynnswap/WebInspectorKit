@@ -99,6 +99,11 @@ static BOOL WIKRuntimeBridgeInvokeObject(id target, SEL selector, id object)
 
 static const CGFloat WIKInspectorNodeSearchCommitMovementThreshold = 3.0;
 
+static BOOL WIKInspectorNodeSearchShouldCommit(BOOL didMoveBeyondTapTolerance)
+{
+    return !didMoveBeyondTapTolerance;
+}
+
 - (instancetype)initWithContentView:(UIView *)contentView
 {
     self = [super initWithTarget:nil action:nil];
@@ -155,7 +160,7 @@ static const CGFloat WIKInspectorNodeSearchCommitMovementThreshold = 3.0;
     if (self.state != UIGestureRecognizerStatePossible)
         return;
 
-    if (!self.didMoveBeyondTapTolerance) {
+    if (!WIKInspectorNodeSearchShouldCommit(self.didMoveBeyondTapTolerance)) {
         self.state = UIGestureRecognizerStateFailed;
         return;
     }
@@ -223,6 +228,13 @@ static const CGFloat WIKInspectorNodeSearchCommitMovementThreshold = 3.0;
 {
     return [WIKInspectorNodeSearchCommitGestureRecognizer class];
 }
+
+#if DEBUG
++ (BOOL)shouldCommitInspectorNodeSearchForTestingWithMovementBeyondTapTolerance:(BOOL)didMoveBeyondTapTolerance
+{
+    return WIKInspectorNodeSearchShouldCommit(didMoveBeyondTapTolerance);
+}
+#endif
 
 + (BOOL)wi_contentViewHasInspectorNodeSearchRecognizer:(UIView *)contentView
 {
