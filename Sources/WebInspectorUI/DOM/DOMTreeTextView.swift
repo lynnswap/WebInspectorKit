@@ -529,7 +529,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         }
         .store(in: observationScope)
 
-        dom.document.observe(\.selectedNode) { [weak self] _ in
+        dom.document.observe([\.selectedNode, \.selectionRevision]) { [weak self] in
             self?.handleSelectedNodeChange()
         }
         .store(in: observationScope)
@@ -537,7 +537,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
 
     private func handleSelectedNodeChange() {
         let previousOpenState = openState
-        prepareSelectionForRendering()
+        prepareSelectionForRendering(clearsMultiSelectionForDocumentSelection: true)
         if previousOpenState != openState {
             reloadTree(resetFragments: false)
             return
@@ -679,6 +679,8 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
 
         guard !replacements.isEmpty else {
             requestChildrenForOpenRowsIfNeeded()
+            updateContentDecorations()
+            revealPendingSelectedNodeIfPossible()
             return true
         }
 
@@ -715,24 +717,57 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         return true
     }
 
-    private func prepareSelectionForRendering() {
+    private func prepareSelectionForRendering(clearsMultiSelectionForDocumentSelection: Bool = false) {
         let selectedNode = dom.document.selectedNode
         let selectedNodeID = selectedNode?.id
-        if selectedNodeID != lastObservedSelectedNodeID {
-            if let selectedNodeID, !multiSelectedNodeIDs.contains(selectedNodeID) {
-                clearMultiSelection(keepingLast: selectedNodeID)
-            } else if selectedNodeID == nil {
-                clearMultiSelection(keepingLast: nil)
-            }
+        let selectedNodeIDChanged = selectedNodeID != lastObservedSelectedNodeID
+        if selectedNodeIDChanged {
             lastObservedSelectedNodeID = selectedNodeID
             pendingRevealSelectedNodeID = selectedNodeID
         }
+        reconcileMultiSelectionForRenderedSelection(
+            selectedNodeID: selectedNodeID,
+            selectedNodeIDChanged: selectedNodeIDChanged,
+            clearsMultiSelectionForDocumentSelection: clearsMultiSelectionForDocumentSelection
+        )
 
         guard let selectedNode else {
             pendingRevealSelectedNodeID = nil
             return
         }
         openAncestors(of: selectedNode)
+    }
+
+    private func reconcileMultiSelectionForRenderedSelection(
+        selectedNodeID: DOMNodeModel.ID?,
+        selectedNodeIDChanged: Bool,
+        clearsMultiSelectionForDocumentSelection: Bool
+    ) {
+        if clearsMultiSelectionForDocumentSelection {
+            if let selectedNodeID {
+                if !multiSelectedNodeIDs.isEmpty
+                    || multiSelectionLastNodeID != selectedNodeID
+                    || multiSelectionShiftAnchorNodeID != nil
+                    || !multiSelectionShiftRangeNodeIDs.isEmpty {
+                    clearMultiSelection(keepingLast: selectedNodeID)
+                }
+            } else if !multiSelectedNodeIDs.isEmpty
+                        || multiSelectionLastNodeID != nil
+                        || multiSelectionShiftAnchorNodeID != nil
+                        || !multiSelectionShiftRangeNodeIDs.isEmpty {
+                clearMultiSelection(keepingLast: nil)
+            }
+            return
+        }
+
+        guard selectedNodeIDChanged else {
+            return
+        }
+        if let selectedNodeID, !multiSelectedNodeIDs.contains(selectedNodeID) {
+            clearMultiSelection(keepingLast: selectedNodeID)
+        } else if selectedNodeID == nil {
+            clearMultiSelection(keepingLast: nil)
+        }
     }
 
     private func openAncestors(of node: DOMNodeModel) {
@@ -2225,9 +2260,14 @@ extension DOMTreeTextView {
                 return nil
             }
             let attachmentRange = disclosureAttachmentRange(for: row)
+            let hasAttachment = unsafe textStorage.attribute(
+                .attachment,
+                at: attachmentRange.location,
+                effectiveRange: nil
+            ) is NSTextAttachment
             return DisclosureAttachmentSnapshot(
                 text: row.text,
-                hasAttachment: textStorage.attribute(.attachment, at: attachmentRange.location, effectiveRange: nil) is NSTextAttachment,
+                hasAttachment: hasAttachment,
                 attachmentRange: attachmentRange,
                 slotRect: slotRect,
                 rowRect: rowRect,
@@ -2400,6 +2440,14 @@ extension DOMTreeTextView {
 
     func selectedRowRectsForTesting() -> [CGRect] {
         selectedContentRowRects()
+    }
+
+    var drawnSelectedRowRectsForTesting: [CGRect] {
+        textContentView.selectedRowRects
+    }
+
+    func clearDrawnSelectedRowRectsForTesting() {
+        textContentView.selectedRowRects = []
     }
 
     var fragmentSubviewCountForTesting: Int {

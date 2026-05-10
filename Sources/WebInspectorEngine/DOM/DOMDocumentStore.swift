@@ -28,6 +28,7 @@ public final class DOMDocumentModel {
     package private(set) var documentIdentity = UUID()
     package private(set) var projectionRevision: UInt64 = 0
     package private(set) var treeRevision: UInt64 = 0
+    package private(set) var selectionRevision: UInt64 = 0
     package private(set) var selectedNodeDetailRevision: UInt64 = 0
     package private(set) var mirrorInvariantViolationReason: String?
     package private(set) var rejectedStructuralMutationParentLocalIDs: Set<UInt64> = []
@@ -261,6 +262,7 @@ public final class DOMDocumentModel {
         guard let payload, let localID = payload.localID else {
             selectedNode = nil
             projectionRevision &+= 1
+            selectionRevision &+= 1
             selectedNodeDetailRevision &+= 1
             logSelectionTransitionIfNeeded(
                 action: "applySelectionSnapshot",
@@ -304,6 +306,7 @@ public final class DOMDocumentModel {
         )
         selectedNode = node
         projectionRevision &+= 1
+        selectionRevision &+= 1
         selectedNodeDetailRevision &+= 1
         if didChangeTree {
             treeRevision &+= 1

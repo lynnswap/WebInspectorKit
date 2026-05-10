@@ -265,6 +265,77 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func documentSelectionClearsStaleMultiSelectionForSameSelectedNode() async throws {
+        let runtime = WIDOMRuntime()
+        runtime.document.replaceDocument(
+            with: .init(root: makeDocumentNode(), selectedLocalID: FixtureNodeID.input)
+        )
+        let view = makeTreeView(runtime: runtime)
+        await waitForObservationDelivery()
+
+        view.primaryClickRowForTesting(containing: "<div id=\"start-of-content\"")
+        view.primaryClickRowForTesting(containing: "<input disabled>", modifiers: .shift)
+
+        #expect(view.multiSelectedLocalIDsForTesting == [
+            FixtureNodeID.div,
+            FixtureNodeID.unknownElement,
+            FixtureNodeID.image,
+            FixtureNodeID.input,
+        ])
+        #expect(view.selectedRowRectsForTesting().isEmpty)
+
+        runtime.document.applySelectionSnapshot(
+            DOMSelectionSnapshotPayload(
+                localID: FixtureNodeID.input,
+                backendNodeID: Int(FixtureNodeID.input),
+                attributes: [DOMAttribute(name: "disabled", value: "")],
+                path: ["html", "body", "input"],
+                selectorPath: "input",
+                styleRevision: 0
+            )
+        )
+        await waitForObservationDelivery()
+        view.layoutIfNeeded()
+
+        #expect(view.multiSelectedLocalIDsForTesting.isEmpty)
+        #expect(view.selectedRowRectsForTesting().count == 1)
+    }
+
+    @Test
+    func noOpContentInvalidationRefreshesDrawnSelectionDecoration() async throws {
+        let runtime = WIDOMRuntime()
+        runtime.document.replaceDocument(
+            with: .init(root: makeDocumentNode(), selectedLocalID: FixtureNodeID.input)
+        )
+        let view = makeTreeView(runtime: runtime)
+        view.synchronizeDocumentForTesting()
+        await waitForObservationDelivery()
+        view.resetPerformanceCountersForTesting()
+
+        #expect(view.drawnSelectedRowRectsForTesting.count == 1)
+        view.clearDrawnSelectedRowRectsForTesting()
+        #expect(view.drawnSelectedRowRectsForTesting.isEmpty)
+
+        runtime.document.applyMutationBundle(
+            DOMGraphMutationBundle(
+                events: [
+                    .attributeModified(
+                        nodeLocalID: FixtureNodeID.input,
+                        name: "disabled",
+                        value: "",
+                        layoutFlags: nil,
+                        isRendered: nil
+                    ),
+                ]
+            )
+        )
+
+        #expect(await waitUntilReloadCount(1, in: view))
+        #expect(view.incrementalTextStorageEditCallCountForTesting == 0)
+        #expect(view.drawnSelectedRowRectsForTesting.count == 1)
+    }
+
+    @Test
     func usesWebInspectorDynamicHighlightColors() throws {
         let lightTag = try #require(DOMTreeTextView.tokenColorForTesting(kind: "tagName", style: .light))
         let darkTag = try #require(DOMTreeTextView.tokenColorForTesting(kind: "tagName", style: .dark))
