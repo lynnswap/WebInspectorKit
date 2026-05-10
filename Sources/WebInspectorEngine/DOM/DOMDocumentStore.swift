@@ -11,6 +11,12 @@ public enum DOMDocumentState: Equatable, Sendable {
     case failed
 }
 
+package enum DOMTreeInvalidation: Equatable, Sendable {
+    case documentReset
+    case structural(affectedLocalIDs: Set<UInt64>)
+    case content(affectedLocalIDs: Set<UInt64>)
+}
+
 @MainActor
 @Observable
 public final class DOMDocumentModel {
@@ -21,13 +27,28 @@ public final class DOMDocumentModel {
 
     package private(set) var documentIdentity = UUID()
     package private(set) var projectionRevision: UInt64 = 0
+    package private(set) var treeRevision: UInt64 = 0
+    package private(set) var selectedNodeDetailRevision: UInt64 = 0
     package private(set) var mirrorInvariantViolationReason: String?
     package private(set) var rejectedStructuralMutationParentLocalIDs: Set<UInt64> = []
+    @ObservationIgnored private var treeInvalidationHandlers: [UUID: @MainActor (DOMTreeInvalidation) -> Void] = [:]
 
     private var nodesByLocalID: [UInt64: DOMNodeModel] = [:]
     private var detachedRoots: [DOMNodeModel] = []
 
     public init() {}
+
+    package func addTreeInvalidationHandler(
+        _ handler: @escaping @MainActor (DOMTreeInvalidation) -> Void
+    ) -> UUID {
+        let id = UUID()
+        treeInvalidationHandlers[id] = handler
+        return id
+    }
+
+    package func removeTreeInvalidationHandler(id: UUID) {
+        treeInvalidationHandlers[id] = nil
+    }
 
     package func setErrorMessage(_ message: String?) {
         guard errorMessage != message else {
@@ -50,6 +71,7 @@ public final class DOMDocumentModel {
         let previousSelectedNode = selectedNode
         selectedNode = nil
         projectionRevision &+= 1
+        selectedNodeDetailRevision &+= 1
         guard previousSelectedNode != nil else {
             return
         }
@@ -70,6 +92,9 @@ public final class DOMDocumentModel {
         clearContents()
         documentState = .loading
         projectionRevision &+= 1
+        treeRevision &+= 1
+        selectedNodeDetailRevision &+= 1
+        emitTreeInvalidation(.documentReset)
         guard previousSelectedNode != nil || previousRootNode != nil else {
             return
         }
@@ -89,6 +114,9 @@ public final class DOMDocumentModel {
         clearContents()
         documentState = .detached
         projectionRevision &+= 1
+        treeRevision &+= 1
+        selectedNodeDetailRevision &+= 1
+        emitTreeInvalidation(.documentReset)
         guard previousSelectedNode != nil || previousRootNode != nil else {
             return
         }
@@ -103,6 +131,9 @@ public final class DOMDocumentModel {
         errorMessage = message
         documentState = .failed
         projectionRevision &+= 1
+        treeRevision &+= 1
+        selectedNodeDetailRevision &+= 1
+        emitTreeInvalidation(.documentReset)
     }
 
     package func replaceDocument(
@@ -123,6 +154,9 @@ public final class DOMDocumentModel {
         }
         documentState = .ready
         projectionRevision &+= 1
+        treeRevision &+= 1
+        selectedNodeDetailRevision &+= 1
+        emitTreeInvalidation(.documentReset)
     }
 
     package func applyMutationBundle(_ bundle: DOMGraphMutationBundle) {
@@ -132,13 +166,20 @@ public final class DOMDocumentModel {
 
         let previousSelectedLocalID = selectedLocalID
         let previousSelectedNode = selectedNode
+        var structuralLocalIDs = Set<UInt64>()
+        var contentLocalIDs = Set<UInt64>()
         for event in bundle.events {
             switch event {
             case let .childNodeInserted(parentLocalID, previousLocalID, node):
+                structuralLocalIDs.insert(parentLocalID)
+                structuralLocalIDs.insert(node.localID)
                 applyChildNodeInserted(parentLocalID: parentLocalID, previousLocalID: previousLocalID, node: node)
             case let .childNodeRemoved(parentLocalID, nodeLocalID):
+                structuralLocalIDs.insert(parentLocalID)
+                structuralLocalIDs.insert(nodeLocalID)
                 applyChildNodeRemoved(parentLocalID: parentLocalID, nodeLocalID: nodeLocalID)
             case let .attributeModified(nodeLocalID, name, value, layoutFlags, isRendered):
+                contentLocalIDs.insert(nodeLocalID)
                 applyAttributeModified(
                     nodeLocalID: nodeLocalID,
                     name: name,
@@ -147,6 +188,7 @@ public final class DOMDocumentModel {
                     isRendered: isRendered
                 )
             case let .attributeRemoved(nodeLocalID, name, layoutFlags, isRendered):
+                contentLocalIDs.insert(nodeLocalID)
                 applyAttributeRemoved(
                     nodeLocalID: nodeLocalID,
                     name: name,
@@ -154,6 +196,7 @@ public final class DOMDocumentModel {
                     isRendered: isRendered
                 )
             case let .characterDataModified(nodeLocalID, value, layoutFlags, isRendered):
+                contentLocalIDs.insert(nodeLocalID)
                 applyCharacterDataModified(
                     nodeLocalID: nodeLocalID,
                     value: value,
@@ -161,6 +204,7 @@ public final class DOMDocumentModel {
                     isRendered: isRendered
                 )
             case let .childNodeCountUpdated(nodeLocalID, childCount, layoutFlags, isRendered):
+                contentLocalIDs.insert(nodeLocalID)
                 applyChildNodeCountUpdated(
                     nodeLocalID: nodeLocalID,
                     childCount: childCount,
@@ -168,10 +212,14 @@ public final class DOMDocumentModel {
                     isRendered: isRendered
                 )
             case let .setChildNodes(parentLocalID, nodes):
+                structuralLocalIDs.insert(parentLocalID)
+                structuralLocalIDs.formUnion(nodes.map(\.localID))
                 applySetChildNodes(parentLocalID: parentLocalID, nodes: nodes)
             case let .setDetachedRoots(nodes):
+                structuralLocalIDs.formUnion(nodes.map(\.localID))
                 applySetDetachedRoots(nodes)
             case let .replaceSubtree(root):
+                structuralLocalIDs.insert(root.localID)
                 applyReplaceSubtree(root)
             case .documentUpdated:
                 return
@@ -187,6 +235,16 @@ public final class DOMDocumentModel {
             selectedNode = node(stableBackendNodeID: stableBackendNodeID)
         }
         projectionRevision &+= 1
+        treeRevision &+= 1
+        if selectedNode !== previousSelectedNode
+            || selectedNode.map({ contentLocalIDs.contains($0.localID) || structuralLocalIDs.contains($0.localID) }) == true {
+            selectedNodeDetailRevision &+= 1
+        }
+        if !structuralLocalIDs.isEmpty {
+            emitTreeInvalidation(.structural(affectedLocalIDs: structuralLocalIDs))
+        } else if !contentLocalIDs.isEmpty {
+            emitTreeInvalidation(.content(affectedLocalIDs: contentLocalIDs))
+        }
         logSelectionTransitionIfNeeded(
             action: "applyMutationBundle",
             previous: previousSelectedNode,
@@ -203,6 +261,7 @@ public final class DOMDocumentModel {
         guard let payload, let localID = payload.localID else {
             selectedNode = nil
             projectionRevision &+= 1
+            selectedNodeDetailRevision &+= 1
             logSelectionTransitionIfNeeded(
                 action: "applySelectionSnapshot",
                 previous: previousSelectedNode,
@@ -239,12 +298,17 @@ public final class DOMDocumentModel {
             node.selectorPath = selectorPath
         }
         node.styleRevision = payload.styleRevision
-        replaceAttributes(
+        let didChangeTree = replaceAttributes(
             on: node,
             with: normalizeAttributes(payload.attributes, backendNodeID: node.backendNodeID)
         )
         selectedNode = node
         projectionRevision &+= 1
+        selectedNodeDetailRevision &+= 1
+        if didChangeTree {
+            treeRevision &+= 1
+            emitTreeInvalidation(.content(affectedLocalIDs: [node.localID]))
+        }
         logSelectionTransitionIfNeeded(
             action: "applySelectionSnapshot",
             previous: previousSelectedNode,
@@ -264,6 +328,7 @@ public final class DOMDocumentModel {
 
         if node.selectorPath != payload.selectorPath {
             node.selectorPath = payload.selectorPath
+            selectedNodeDetailRevision &+= 1
         }
     }
 
@@ -273,6 +338,7 @@ public final class DOMDocumentModel {
         }
         if node.selectorPath != selectorPath {
             node.selectorPath = selectorPath
+            selectedNodeDetailRevision &+= 1
         }
     }
 
@@ -280,14 +346,22 @@ public final class DOMDocumentModel {
         guard let node = selectedNode, contains(node) else {
             return
         }
-        _ = setAttributeValue(on: node, name: name, value: value)
+        if setAttributeValue(on: node, name: name, value: value) {
+            selectedNodeDetailRevision &+= 1
+            treeRevision &+= 1
+            emitTreeInvalidation(.content(affectedLocalIDs: [node.localID]))
+        }
     }
 
     package func removeSelectedAttribute(name: String) {
         guard let node = selectedNode, contains(node) else {
             return
         }
-        _ = removeAttributeValue(on: node, name: name)
+        if removeAttributeValue(on: node, name: name) {
+            selectedNodeDetailRevision &+= 1
+            treeRevision &+= 1
+            emitTreeInvalidation(.content(affectedLocalIDs: [node.localID]))
+        }
     }
 
     package func containsEntry(localID: UInt64, backendNodeID: Int?) -> Bool {
@@ -357,7 +431,15 @@ public final class DOMDocumentModel {
         guard backendNodeID == nil || node.backendNodeID == backendNodeID else {
             return false
         }
-        return setAttributeValue(on: node, name: name, value: value)
+        let didChange = setAttributeValue(on: node, name: name, value: value)
+        if didChange {
+            treeRevision &+= 1
+            if selectedNode === node {
+                selectedNodeDetailRevision &+= 1
+            }
+            emitTreeInvalidation(.content(affectedLocalIDs: [node.localID]))
+        }
+        return didChange
     }
 
     @discardableResult
@@ -372,7 +454,15 @@ public final class DOMDocumentModel {
         guard backendNodeID == nil || node.backendNodeID == backendNodeID else {
             return false
         }
-        return removeAttributeValue(on: node, name: name)
+        let didChange = removeAttributeValue(on: node, name: name)
+        if didChange {
+            treeRevision &+= 1
+            if selectedNode === node {
+                selectedNodeDetailRevision &+= 1
+            }
+            emitTreeInvalidation(.content(affectedLocalIDs: [node.localID]))
+        }
+        return didChange
     }
 
     package var selectedLocalID: UInt64? {
@@ -384,10 +474,19 @@ public final class DOMDocumentModel {
             return
         }
         removeSubtree(node, removeFromParent: true)
+        treeRevision &+= 1
+        selectedNodeDetailRevision &+= 1
+        emitTreeInvalidation(.structural(affectedLocalIDs: [node.localID]))
     }
 }
 
 private extension DOMDocumentModel {
+    func emitTreeInvalidation(_ invalidation: DOMTreeInvalidation) {
+        for handler in treeInvalidationHandlers.values {
+            handler(invalidation)
+        }
+    }
+
     func replaceContents(
         selectedLocalID: UInt64?,
         selectedStableBackendNodeID: Int? = nil,
@@ -448,7 +547,7 @@ private extension DOMDocumentModel {
     ) -> Bool {
         if let index = node.attributes.firstIndex(where: { $0.name == name }) {
             guard node.attributes[index].value != value else {
-                return true
+                return false
             }
             node.attributes[index].value = value
             return true
@@ -469,14 +568,16 @@ private extension DOMDocumentModel {
         return true
     }
 
+    @discardableResult
     func replaceAttributes(
         on node: DOMNodeModel,
         with newAttributes: [DOMAttribute]
-    ) {
+    ) -> Bool {
         guard node.attributes != newAttributes else {
-            return
+            return false
         }
         node.attributes = newAttributes
+        return true
     }
 
     @discardableResult
@@ -752,6 +853,7 @@ private extension DOMDocumentModel {
             )
             selectedNode = nil
             projectionRevision &+= 1
+            selectedNodeDetailRevision &+= 1
         }
         if rootNode === root {
             rootNode = nil
@@ -788,6 +890,7 @@ private extension DOMDocumentModel {
             )
             selectedNode = nil
             projectionRevision &+= 1
+            selectedNodeDetailRevision &+= 1
             return
         }
         guard isNodeAttachedToPrimaryTree(resolvedNode) else {
@@ -798,6 +901,7 @@ private extension DOMDocumentModel {
             )
             selectedNode = nil
             projectionRevision &+= 1
+            selectedNodeDetailRevision &+= 1
             return
         }
         if resolvedNode !== currentSelection {
@@ -808,6 +912,7 @@ private extension DOMDocumentModel {
             )
             selectedNode = resolvedNode
             projectionRevision &+= 1
+            selectedNodeDetailRevision &+= 1
         }
     }
 }

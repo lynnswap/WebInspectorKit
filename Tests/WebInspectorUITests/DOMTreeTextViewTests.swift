@@ -32,16 +32,19 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
-    func exposesTokenRangesAndKeepsDisclosureOutOfMarkup() throws {
+    func exposesTokenRangesAndKeepsDisclosureAttachmentOutOfMarkup() throws {
         let view = makeTreeView()
         let lines = view.renderedLineSnapshotsForTesting
         let htmlLine = try #require(lines.first { $0.text.contains("<html") })
         let divLine = try #require(lines.first { $0.text.contains("data-testid") })
+        let attachmentSnapshots = view.disclosureAttachmentSnapshotsForTesting
 
         #expect(htmlLine.depth == 0)
         #expect(htmlLine.markupRange.location == 2)
-        #expect(htmlLine.disclosureRect.maxX <= htmlLine.markupStartX)
-        #expect(divLine.disclosureRect.maxX <= divLine.markupStartX)
+        #expect(attachmentSnapshots.allSatisfy { $0.hasAttachment })
+        #expect(attachmentSnapshots.allSatisfy { $0.slotRect.maxX <= $0.markupStartX })
+        #expect(attachmentSnapshots.contains { $0.attachmentRange.location < htmlLine.textRange.location + htmlLine.markupRange.location })
+        #expect(attachmentSnapshots.contains { $0.attachmentRange.location < divLine.textRange.location + divLine.markupRange.location })
         #expect(divLine.tokenKinds.contains("punctuation"))
         #expect(divLine.tokenKinds.contains("tagName"))
         #expect(divLine.tokenKinds.contains("attributeName"))
@@ -109,18 +112,34 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
-    func disclosureRowsUseTheSameLineHeightAsTextLayout() throws {
+    func contentWidthDoesNotClipFullWidthRenderedText() throws {
+        let runtime = WIDOMRuntime()
+        runtime.document.replaceDocument(with: .init(root: makeWideGlyphDocumentNode()))
+        let view = makeTreeView(runtime: runtime)
+        view.frame = CGRect(x: 0, y: 0, width: 120, height: 320)
+        view.layoutIfNeeded()
+
+        let wideLine = try #require(view.renderedLineSnapshotsForTesting.first { $0.text.contains("data-title") })
+        let renderedWidth = ceil((wideLine.text as NSString).size(withAttributes: [
+            .font: UIFont.monospacedSystemFont(ofSize: 13, weight: .regular),
+        ]).width)
+
+        #expect(view.contentSize.width >= renderedWidth)
+    }
+
+    @Test
+    func disclosureAttachmentsUseTextKitLineGeometry() throws {
         let view = makeTreeView()
-        let htmlLine = try #require(view.renderedLineSnapshotsForTesting.first { $0.text.contains("<html") })
-        let bodyLine = try #require(view.renderedLineSnapshotsForTesting.first { $0.text.contains("<body") })
         let attachmentSnapshots = view.disclosureAttachmentSnapshotsForTesting
 
         #expect(view.paragraphLineHeightForTesting == view.rowHeightForTesting)
-        #expect(htmlLine.disclosureRect.midY == CGFloat(htmlLine.rowIndex) * view.rowHeightForTesting + view.rowHeightForTesting / 2)
-        #expect(bodyLine.disclosureRect.midY == CGFloat(bodyLine.rowIndex) * view.rowHeightForTesting + view.rowHeightForTesting / 2)
         #expect(attachmentSnapshots.count == view.renderedLineSnapshotsForTesting.filter(\.hasDisclosure).count)
-        #expect(attachmentSnapshots.contains { $0.expectedColumn > 0 })
-        #expect(attachmentSnapshots.allSatisfy { $0.column == $0.expectedColumn })
+        #expect(attachmentSnapshots.allSatisfy { $0.hasAttachment })
+        #expect(attachmentSnapshots.allSatisfy { $0.rowRect.contains(CGPoint(x: $0.slotRect.midX, y: $0.slotRect.midY)) })
+        #expect(attachmentSnapshots.allSatisfy { $0.slotRect.minY >= $0.rowRect.minY })
+        #expect(attachmentSnapshots.allSatisfy { $0.slotRect.maxY <= $0.rowRect.maxY })
+        #expect(attachmentSnapshots.contains { $0.isOpen })
+        #expect(attachmentSnapshots.contains { !$0.isOpen })
     }
 
     @Test
@@ -219,6 +238,33 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func selectionOnlyChangeUpdatesDecorationsWithoutRebuildingTextStorage() async throws {
+        let runtime = WIDOMRuntime()
+        runtime.document.replaceDocument(with: .init(root: makeDocumentNode()))
+        let view = makeTreeView(runtime: runtime)
+        await waitForObservationDelivery()
+        view.resetPerformanceCountersForTesting()
+
+        runtime.document.applySelectionSnapshot(
+            DOMSelectionSnapshotPayload(
+                localID: FixtureNodeID.html,
+                backendNodeID: Int(FixtureNodeID.html),
+                attributes: [DOMAttribute(name: "lang", value: "en")],
+                path: ["html"],
+                selectorPath: "html",
+                styleRevision: 0
+            )
+        )
+        await waitForObservationDelivery()
+        view.layoutIfNeeded()
+
+        #expect(view.reloadTreeCallCountForTesting == 0)
+        #expect(view.rebuildTextStorageCallCountForTesting == 0)
+        #expect(view.selectedRowRectsForTesting().count == 1)
+        #expect(view.renderedTextForTesting.contains("<html lang=\"en\">"))
+    }
+
+    @Test
     func usesWebInspectorDynamicHighlightColors() throws {
         let lightTag = try #require(DOMTreeTextView.tokenColorForTesting(kind: "tagName", style: .light))
         let darkTag = try #require(DOMTreeTextView.tokenColorForTesting(kind: "tagName", style: .dark))
@@ -282,6 +328,96 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func pickerSelectionReloadsOnlyWhenOpeningHiddenAncestors() async throws {
+        let runtime = WIDOMRuntime()
+        runtime.document.replaceDocument(with: .init(root: makeDocumentNode()))
+        let view = makeTreeView(runtime: runtime)
+        await waitForObservationDelivery()
+
+        #expect(view.renderedTextForTesting.contains("<article>...</article>"))
+        view.resetPerformanceCountersForTesting()
+
+        runtime.document.applySelectionSnapshot(
+            DOMSelectionSnapshotPayload(
+                localID: FixtureNodeID.nestedSpan,
+                backendNodeID: Int(FixtureNodeID.nestedSpan),
+                attributes: [DOMAttribute(name: "id", value: "nested-child")],
+                path: ["html", "body", "article", "span"],
+                selectorPath: "article > span",
+                styleRevision: 0
+            )
+        )
+
+        #expect(await waitUntilReloadCount(1, in: view))
+        #expect(view.reloadTreeCallCountForTesting == 1)
+        #expect(view.rebuildTextStorageCallCountForTesting == 0)
+        #expect(view.incrementalTextStorageEditCallCountForTesting == 1)
+        #expect(view.resetTextFragmentViewsCallCountForTesting == 0)
+        #expect(view.renderedTextForTesting.contains("<span id=\"nested-child\"></span>"))
+    }
+
+    @Test
+    func treeInvalidationIncrementallyEditsAttributeMutationsIntoRenderedMarkup() async throws {
+        let runtime = WIDOMRuntime()
+        runtime.document.replaceDocument(with: .init(root: makeDocumentNode()))
+        let view = makeTreeView(runtime: runtime)
+        await waitForObservationDelivery()
+        view.resetPerformanceCountersForTesting()
+
+        runtime.document.applyMutationBundle(
+            DOMGraphMutationBundle(
+                events: [
+                    .attributeModified(
+                        nodeLocalID: FixtureNodeID.div,
+                        name: "data-revision",
+                        value: "updated",
+                        layoutFlags: nil,
+                        isRendered: nil
+                    ),
+                ]
+            )
+        )
+
+        #expect(await waitUntilReloadCount(1, in: view))
+        #expect(view.reloadTreeCallCountForTesting == 1)
+        #expect(view.rebuildTextStorageCallCountForTesting == 0)
+        #expect(view.incrementalTextStorageEditCallCountForTesting == 1)
+        #expect(view.resetTextFragmentViewsCallCountForTesting == 0)
+        #expect(view.renderedTextForTesting.contains("data-revision=\"updated\""))
+    }
+
+    @Test
+    func treeInvalidationSubscribersSurviveViewRecreation() async throws {
+        let runtime = WIDOMRuntime()
+        runtime.document.replaceDocument(with: .init(root: makeDocumentNode()))
+        var previousView: DOMTreeTextView? = makeTreeView(runtime: runtime)
+        let currentView = makeTreeView(runtime: runtime)
+        await waitForObservationDelivery()
+        previousView?.resetPerformanceCountersForTesting()
+        currentView.resetPerformanceCountersForTesting()
+
+        previousView = nil
+        await waitForObservationDelivery()
+        runtime.document.applyMutationBundle(
+            DOMGraphMutationBundle(
+                events: [
+                    .attributeModified(
+                        nodeLocalID: FixtureNodeID.div,
+                        name: "data-after-recreate",
+                        value: "1",
+                        layoutFlags: nil,
+                        isRendered: nil
+                    ),
+                ]
+            )
+        )
+
+        #expect(await waitUntilReloadCount(1, in: currentView))
+        #expect(currentView.reloadTreeCallCountForTesting == 1)
+        #expect(currentView.renderedTextForTesting.contains("data-after-recreate=\"1\""))
+    }
+
+    @Test
     func findDecorationsAndContextMenuUseRenderedMarkup() {
         let view = makeTreeView()
 
@@ -297,6 +433,16 @@ struct DOMTreeTextViewTests {
                 "Delete Node",
             ]
         )
+    }
+
+    @Test
+    func staleFindSearchIdentifierDoesNotDecorateRanges() {
+        let view = makeTreeView()
+
+        view.decorateStaleFindTextForTesting(query: "data-testid")
+
+        #expect(view.findFoundRangesForTesting.isEmpty)
+        #expect(view.findHighlightedRangesForTesting.isEmpty)
     }
 
     @Test
@@ -476,6 +622,22 @@ struct DOMTreeTextViewTests {
         return view
     }
 
+    private func waitForObservationDelivery() async {
+        for _ in 0..<5 {
+            await Task.yield()
+        }
+    }
+
+    private func waitUntilReloadCount(_ count: Int, in view: DOMTreeTextView) async -> Bool {
+        for _ in 0..<20 {
+            if view.reloadTreeCallCountForTesting == count {
+                return true
+            }
+            await Task.yield()
+        }
+        return view.reloadTreeCallCountForTesting == count
+    }
+
     private func makeDocumentNode() -> DOMGraphNodeDescriptor {
         makeNode(
             localID: FixtureNodeID.document,
@@ -605,6 +767,42 @@ struct DOMTreeTextViewTests {
                                     localName: "article",
                                     childCount: 0,
                                     childCountIsKnown: false
+                                ),
+                            ]
+                        ),
+                    ]
+                ),
+            ]
+        )
+    }
+
+    private func makeWideGlyphDocumentNode() -> DOMGraphNodeDescriptor {
+        makeNode(
+            localID: FixtureNodeID.document,
+            type: .document,
+            nodeName: "#document",
+            localName: "",
+            children: [
+                makeNode(
+                    localID: FixtureNodeID.html,
+                    nodeName: "HTML",
+                    localName: "html",
+                    children: [
+                        makeNode(
+                            localID: FixtureNodeID.body,
+                            nodeName: "BODY",
+                            localName: "body",
+                            children: [
+                                makeNode(
+                                    localID: FixtureNodeID.div,
+                                    nodeName: "DIV",
+                                    localName: "div",
+                                    attributes: [
+                                        DOMAttribute(
+                                            name: "data-title",
+                                            value: String(repeating: "日本語テキスト", count: 16)
+                                        ),
+                                    ]
                                 ),
                             ]
                         ),

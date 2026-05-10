@@ -375,12 +375,12 @@ public final class WITransportSession {
         }
     }
 
-    fileprivate func handleInboundMessage(_ message: WITransportInboundMessage) {
+    fileprivate func handleParsedInboundMessage(_ message: WITransportParsedInboundMessage) {
         switch message {
-        case .root(let payload):
-            handleIncomingRootMessage(payload)
-        case .page(let payload, let targetIdentifier):
-            handleIncomingPageMessage(payload, targetIdentifier: targetIdentifier)
+        case .root(let parsed):
+            handleIncomingRootMessage(parsed)
+        case .page(let parsed, let targetIdentifier):
+            handleIncomingPageMessage(parsed, targetIdentifier: targetIdentifier)
         }
     }
 
@@ -630,6 +630,86 @@ private extension WISharedInspectorTransport {
     }
 }
 
+private struct WITransportParsedMessage: Sendable {
+    let id: Int?
+    let method: String?
+    let paramsData: Data
+    let resultData: Data
+    let errorMessage: String?
+}
+
+private enum WITransportParsedInboundMessage: Sendable {
+    case root(WITransportParsedMessage)
+    case page(parsed: WITransportParsedMessage, targetIdentifier: String)
+}
+
+private enum WITransportMessageParser {
+    static func parse(_ message: WITransportInboundMessage) -> WITransportParsedInboundMessage? {
+        switch message {
+        case .root(let payload):
+            guard let parsed = parseMessage(payload) else {
+                return nil
+            }
+            return .root(parsed)
+        case let .page(payload, targetIdentifier):
+            guard let parsed = parseMessage(payload) else {
+                return nil
+            }
+            return .page(parsed: parsed, targetIdentifier: targetIdentifier)
+        }
+    }
+
+    private static func parseMessage(_ messageString: String) -> WITransportParsedMessage? {
+        guard let data = messageString.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data, options: []),
+              let dictionary = object as? [String: Any] else {
+            return nil
+        }
+
+        return WITransportParsedMessage(
+            id: identifierValue(dictionary["id"]),
+            method: stringValue(dictionary["method"]),
+            paramsData: dataForJSONObject(dictionary["params"]),
+            resultData: dataForJSONObject(dictionary["result"]),
+            errorMessage: stringValue((dictionary["error"] as? [String: Any])?["message"])
+        )
+    }
+
+    private static func dataForJSONObject(_ object: Any?) -> Data {
+        guard let object else {
+            return Data("{}".utf8)
+        }
+        if JSONSerialization.isValidJSONObject(object),
+           let data = try? JSONSerialization.data(withJSONObject: object, options: []) {
+            return data
+        }
+        if object is NSNull {
+            return Data("{}".utf8)
+        }
+        return Data("{}".utf8)
+    }
+
+    private static func identifierValue(_ value: Any?) -> Int? {
+        if let number = value as? NSNumber {
+            return number.intValue
+        }
+        if let string = value as? String {
+            return Int(string)
+        }
+        return nil
+    }
+
+    private static func stringValue(_ value: Any?) -> String? {
+        if let string = value as? String {
+            return string
+        }
+        if let number = value as? NSNumber {
+            return number.stringValue
+        }
+        return nil
+    }
+}
+
 extension WITransportSession {
     func awaitReply(
         id: Int,
@@ -677,11 +757,7 @@ extension WITransportSession {
         }
     }
 
-    func handleIncomingRootMessage(_ messageString: String) {
-        guard let parsed = parseMessage(messageString) else {
-            return
-        }
-
+    private func handleIncomingRootMessage(_ parsed: WITransportParsedMessage) {
         if let identifier = parsed.id,
            replyRegistry.containsPendingReply(id: identifier) {
             if replyRegistry.containsPageCommand(id: identifier) {
@@ -714,7 +790,7 @@ extension WITransportSession {
             } else {
                 replyRegistry.resumeIfPending(
                     id: identifier,
-                    result: .success(dataForJSONObject(parsed.result))
+                    result: .success(parsed.resultData)
                 )
             }
             return
@@ -731,8 +807,8 @@ extension WITransportSession {
         if method == "Inspector.inspect" {
             enqueuePageEvent(
                 method: method,
-                targetIdentifier: inspectEventTargetIdentifier(from: parsed.params),
-                paramsObject: parsed.params
+                targetIdentifier: inspectEventTargetIdentifier(from: parsed.paramsData),
+                paramsData: parsed.paramsData
             )
             return
         }
@@ -740,22 +816,18 @@ extension WITransportSession {
         if method.hasPrefix("DOM.") {
             enqueuePageEvent(
                 method: method,
-                targetIdentifier: inspectEventTargetIdentifier(from: parsed.params)
+                targetIdentifier: inspectEventTargetIdentifier(from: parsed.paramsData)
                     ?? currentPageTargetIdentifier()
                     ?? refreshDerivedPageTargetIdentifierIfNeeded(),
-                paramsObject: parsed.params
+                paramsData: parsed.paramsData
             )
             return
         }
 
-        emitSyntheticPageEventIfNeeded(method: method, paramsObject: parsed.params)
+        emitSyntheticPageEventIfNeeded(method: method, paramsData: parsed.paramsData)
     }
 
-    func handleIncomingPageMessage(_ messageString: String, targetIdentifier: String) {
-        guard let parsed = parseMessage(messageString) else {
-            return
-        }
-
+    private func handleIncomingPageMessage(_ parsed: WITransportParsedMessage, targetIdentifier: String) {
         if let identifier = parsed.id,
            replyRegistry.containsPendingReply(id: identifier) {
             if let errorMessage = parsed.errorMessage {
@@ -772,7 +844,7 @@ extension WITransportSession {
             } else {
                 replyRegistry.resumeIfPending(
                     id: identifier,
-                    result: .success(dataForJSONObject(parsed.result))
+                    result: .success(parsed.resultData)
                 )
             }
             return
@@ -789,12 +861,12 @@ extension WITransportSession {
         enqueuePageEvent(
             method: method,
             targetIdentifier: targetIdentifier,
-            paramsObject: parsed.params
+            paramsData: parsed.paramsData
         )
     }
 
-    func emitSyntheticPageEventIfNeeded(method: String, paramsObject: Any?) {
-        guard let params = paramsObject as? [String: Any] else {
+    func emitSyntheticPageEventIfNeeded(method: String, paramsData: Data) {
+        guard let params = dictionaryObject(from: paramsData) else {
             return
         }
 
@@ -882,6 +954,18 @@ extension WITransportSession {
         targetIdentifier: String?,
         paramsObject: Any?
     ) {
+        enqueuePageEvent(
+            method: method,
+            targetIdentifier: targetIdentifier,
+            paramsData: dataForJSONObject(paramsObject)
+        )
+    }
+
+    func enqueuePageEvent(
+        method: String,
+        targetIdentifier: String?,
+        paramsData: Data
+    ) {
         guard !pageEventQueueClosed else {
             return
         }
@@ -890,7 +974,7 @@ extension WITransportSession {
             method: method,
             targetScope: .page,
             targetIdentifier: targetIdentifier,
-            paramsData: dataForJSONObject(paramsObject)
+            paramsData: paramsData
         )
         nextPageEventSequence &+= 1
         let sequence = nextPageEventSequence
@@ -1032,29 +1116,6 @@ extension WITransportSession {
         outOfOrderSettledPageEventSequences.insert(sequence)
     }
 
-    func parseMessage(
-        _ messageString: String
-    ) -> (id: Int?, method: String?, params: Any?, result: Any?, errorMessage: String?)? {
-        guard let data = messageString.data(using: .utf8) else {
-            return nil
-        }
-
-        guard
-            let object = try? JSONSerialization.jsonObject(with: data, options: []),
-            let dictionary = object as? [String: Any]
-        else {
-            return nil
-        }
-
-        return (
-            id: identifierValue(dictionary["id"]),
-            method: stringValue(dictionary["method"]),
-            params: dictionary["params"],
-            result: dictionary["result"],
-            errorMessage: stringValue((dictionary["error"] as? [String: Any])?["message"])
-        )
-    }
-
     func commandJSONString(identifier: Int, method: String, parametersData: Data?) throws -> String {
         var payload: [String: Any] = [
             "id": identifier,
@@ -1101,6 +1162,14 @@ extension WITransportSession {
         return Data("{}".utf8)
     }
 
+    func dictionaryObject(from data: Data) -> [String: Any]? {
+        guard !data.isEmpty,
+              let object = try? JSONSerialization.jsonObject(with: data, options: []) else {
+            return nil
+        }
+        return object as? [String: Any]
+    }
+
     func identifierValue(_ value: Any?) -> Int? {
         if let number = value as? NSNumber {
             return number.intValue
@@ -1135,8 +1204,8 @@ extension WITransportSession {
         configuration.logHandler?("[WebInspectorTransport] \(message)")
     }
 
-    func inspectEventTargetIdentifier(from paramsObject: Any?) -> String? {
-        guard let params = paramsObject as? [String: Any] else {
+    func inspectEventTargetIdentifier(from paramsData: Data) -> String? {
+        guard let params = dictionaryObject(from: paramsData) else {
             return nil
         }
         return stringValue(params["targetId"])
@@ -1738,21 +1807,12 @@ private final class InboundMessagePump: @unchecked Sendable {
             return
         }
 
-        if Thread.isMainThread {
-            drainPendingMessagesOnMainThreadIfPossible()
-            return
-        }
-
         Task.detached { [weak self] in
             await self?.drain()
         }
     }
 
     func waitUntilDrained() async {
-        await MainActor.run {
-            drainPendingMessagesOnMainThreadIfPossible()
-        }
-
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             stateLock.lock()
             state.drainWaiters.append(continuation)
@@ -1806,22 +1866,13 @@ private final class InboundMessagePump: @unchecked Sendable {
 
     private func drain() async {
         while let message = nextMessage() {
+            guard let parsedMessage = WITransportMessageParser.parse(message) else {
+                continue
+            }
             if let session = await MainActor.run(body: { sessionReference.session }) {
                 await MainActor.run {
-                    session.handleInboundMessage(message)
+                    session.handleParsedInboundMessage(parsedMessage)
                 }
-            }
-        }
-    }
-
-    private func drainPendingMessagesOnMainThreadIfPossible() {
-        guard let session = MainActor.assumeIsolated({ sessionReference.session }) else {
-            return
-        }
-
-        while let message = nextMessage() {
-            MainActor.assumeIsolated {
-                session.handleInboundMessage(message)
             }
         }
     }

@@ -1,382 +1,193 @@
 import Foundation
 import WebInspectorEngine
 
-enum DOMGraphDelta {
+enum DOMGraphDelta: Sendable {
     case snapshot(DOMGraphSnapshot, resetDocument: Bool)
     case mutations(DOMGraphMutationBundle)
-    case replaceSubtree(DOMGraphNodeDescriptor)
     case selection(DOMSelectionSnapshotPayload?)
     case selectorPath(DOMSelectorPathPayload)
 }
 
-@MainActor
-final class DOMPayloadNormalizer {
-    nonisolated private static let fallbackLocalIDBase: UInt64 = 9_000_000_000_000_000_000
-    private var nextFallbackLocalID: UInt64 = DOMPayloadNormalizer.fallbackLocalIDBase
+actor DOMPayloadNormalizer {
+    nonisolated func resetForDocumentUpdate() {}
 
-    private struct FallbackState {
-        var nextLocalID: UInt64
-
-        mutating func allocate() -> UInt64 {
-            let current = nextLocalID
-            nextLocalID &+= 1
-            return current
-        }
-    }
-
-    func resetForDocumentUpdate() {
-        nextFallbackLocalID = DOMPayloadNormalizer.fallbackLocalIDBase
-    }
-
-    func normalizeBundlePayload(_ payload: Any) -> DOMGraphDelta? {
-        guard let object = parseObjectPayload(payload) else {
+    func documentURL(fromDocumentResponseData data: Data) -> String? {
+        guard let object = Self.dictionaryValue(from: data),
+              let root = Self.dictionaryValue(object["root"]) else {
             return nil
         }
-
-        if let version = intValue(object["version"]), version != 2 {
-            return nil
-        }
-
-        switch stringValue(object["kind"]) {
-        case "snapshot":
-            let reason = stringValue(object["reason"])
-            let snapshotMode = stringValue(object["snapshotMode"])
-            let shouldResetDocument: Bool
-            switch snapshotMode {
-            case "fresh":
-                shouldResetDocument = true
-            case "preserve-ui-state":
-                shouldResetDocument = false
-            default:
-                shouldResetDocument = reason == "initial"
-            }
-            if shouldResetDocument {
-                resetForDocumentUpdate()
-            }
-            guard let snapshotPayload = object["snapshot"],
-                  let snapshot = normalizeSnapshotPayload(snapshotPayload)
-            else {
-                return nil
-            }
-            return .snapshot(snapshot, resetDocument: shouldResetDocument)
-
-        case "mutation":
-            guard let events = arrayValue(object["events"]) else {
-                return nil
-            }
-            let bundle = DOMGraphMutationBundle(events: normalizeMutationEvents(events))
-            return .mutations(bundle)
-
-        default:
-            return nil
-        }
+        return Self.stringValue(root["documentURL"])
     }
 
-    func normalizeSelectionPayload(_ payload: Any) -> DOMGraphDelta {
-        guard let object = dictionaryValue(payload), !object.isEmpty else {
-            return .selection(nil)
-        }
-
-        let localID = uint64Value(object["id"]) ?? uint64Value(object["nodeId"])
-        let explicitBackendNodeID = intValue(object["backendNodeId"])
-            ?? intValue(object["backendNodeID"])
-        let backendNodeID = explicitBackendNodeID
-        let backendNodeIDIsStable = boolValue(object["backendNodeIdIsStable"])
-            ?? boolValue(object["backendNodeIDIsStable"])
-            ?? (explicitBackendNodeID != nil)
-        let attributes = normalizeSelectionAttributes(object["attributes"], localID: localID)
-        let path = arrayValue(object["path"])?.compactMap(stringValue) ?? []
-        let selectorPath = stringValue(object["selectorPath"])
-        let styleRevision = intValue(object["styleRevision"]) ?? 0
-
-        let selection = DOMSelectionSnapshotPayload(
-            localID: localID,
-            backendNodeID: backendNodeID,
-            backendNodeIDIsStable: backendNodeIDIsStable,
-            attributes: attributes,
-            path: path,
-            selectorPath: selectorPath,
-            styleRevision: styleRevision
-        )
-        return .selection(selection)
-    }
-
-    func normalizeSelectorPayload(_ payload: Any) -> DOMGraphDelta? {
-        guard let object = dictionaryValue(payload) else {
-            return nil
-        }
-
-        let localID = uint64Value(object["id"]) ?? uint64Value(object["nodeId"])
-        let selectorPath = stringValue(object["selectorPath"]) ?? ""
-        return .selectorPath(.init(localID: localID, selectorPath: selectorPath))
-    }
-
-    func normalizeSnapshot(_ payload: Any) -> DOMGraphSnapshot? {
-        normalizeSnapshotPayload(payload)
-    }
-
-    func normalizeBackendResponse(
-        method: String,
-        responseObject: [String: Any],
+    func normalizeDocumentResponseData(
+        _ data: Data,
         resetDocument: Bool
     ) -> DOMGraphDelta? {
-        guard let result = responseObject["result"] else {
-            return nil
-        }
-
-        switch method {
-        case "DOM.getDocument":
-            if resetDocument {
-                resetForDocumentUpdate()
-            }
-            guard let snapshot = normalizeSnapshotPayload(result) else {
-                return nil
-            }
-            return .snapshot(snapshot, resetDocument: resetDocument)
-
-        case "DOM.requestChildNodes":
-            var fallbackState = makeFallbackState()
-            defer { commitFallbackState(fallbackState) }
-            let normalizedPayload = resolveNodePayload(result) ?? result
-            guard let node = normalizeNodeDescriptor(normalizedPayload, fallbackState: &fallbackState) else {
-                return nil
-            }
-            return .replaceSubtree(node)
-
-        default:
-            return nil
-        }
-    }
-}
-
-private extension DOMPayloadNormalizer {
-    private func makeFallbackState() -> FallbackState {
-        FallbackState(nextLocalID: nextFallbackLocalID)
-    }
-
-    private func commitFallbackState(_ state: FallbackState) {
-        nextFallbackLocalID = state.nextLocalID
-    }
-
-    func parseObjectPayload(_ payload: Any) -> [String: Any]? {
-        if let object = dictionaryValue(payload) {
-            return object
-        }
-
-        if let json = payload as? String,
-           let data = json.data(using: .utf8),
-           let decoded = try? JSONSerialization.jsonObject(with: data),
-           let object = dictionaryValue(decoded) {
-            return object
-        }
-
-        return nil
-    }
-
-    func normalizeSnapshotPayload(_ payload: Any) -> DOMGraphSnapshot? {
-        guard let snapshotObject = resolveSnapshotPayload(payload) else {
-            return nil
-        }
-
-        var fallbackState = makeFallbackState()
-        defer { commitFallbackState(fallbackState) }
-        guard let rootPayload = snapshotObject["root"],
-              let root = normalizeNodeDescriptor(rootPayload, fallbackState: &fallbackState)
+        guard let object = Self.dictionaryValue(from: data),
+              let rootPayload = object["root"],
+              let root = Self.normalizeNodeDescriptor(rootPayload)
         else {
             return nil
         }
-
-        let selectedLocalID = resolveSelectedLocalID(snapshotObject, root: root)
-        return DOMGraphSnapshot(root: root, selectedLocalID: selectedLocalID)
+        return .snapshot(.init(root: root), resetDocument: resetDocument)
     }
 
-    func resolveSnapshotPayload(_ payload: Any) -> [String: Any]? {
-        if let object = dictionaryValue(payload) {
-            if isSerializedNodeEnvelope(object) {
-                return resolveSerializedNodeEnvelope(object)
-            }
-
-            if object["root"] != nil {
-                var resolved = object
-                if let root = object["root"],
-                   let rootObject = dictionaryValue(root),
-                   isSerializedNodeEnvelope(rootObject),
-                   let nested = resolveSerializedNodeEnvelope(rootObject),
-                   let nestedRoot = nested["root"] {
-                    resolved["root"] = nestedRoot
-                    if resolved["selectedNodeId"] == nil {
-                        resolved["selectedNodeId"] = nested["selectedNodeId"]
-                    }
-                    if resolved["selectedLocalId"] == nil {
-                        resolved["selectedLocalId"] = nested["selectedLocalId"]
-                    }
-                    if resolved["selectedNodePath"] == nil {
-                        resolved["selectedNodePath"] = nested["selectedNodePath"]
-                    }
-                }
-                return resolved
-            }
-
-            if looksLikeNodeDescriptor(object) {
-                return ["root": object]
-            }
-        }
-
-        if let json = payload as? String,
-           let data = json.data(using: .utf8),
-           let decoded = try? JSONSerialization.jsonObject(with: data) {
-            return resolveSnapshotPayload(decoded)
-        }
-
-        return nil
-    }
-
-    func resolveSerializedNodeEnvelope(_ envelope: [String: Any]) -> [String: Any]? {
-        guard isSerializedNodeEnvelope(envelope) else {
+    func normalizeDOMEvent(
+        method rawMethod: String,
+        paramsData: Data
+    ) -> DOMGraphDelta? {
+        let params = Self.dictionaryValue(from: paramsData) ?? [:]
+        let method = rawMethod.hasPrefix("DOM.") ? String(rawMethod.dropFirst(4)) : rawMethod
+        guard let event = Self.normalizeMutationEvent(method: method, params: params) else {
             return nil
         }
-
-        let fallbackSnapshot = envelope["fallback"].flatMap(resolveSnapshotPayload)
-        let rootFromNode = envelope["node"].flatMap(resolveNodePayload)
-        let rootFromFallback = fallbackSnapshot?["root"] ?? envelope["fallback"].flatMap(resolveNodePayload)
-
-        let resolvedRoot: Any?
-        if let rootFromNode, let rootFromFallback {
-            if nodeDescriptorHasLocalIDs(rootFromFallback) {
-                resolvedRoot = rootFromFallback
-            } else if nodeDescriptorHasStableIDs(rootFromNode) || !nodeDescriptorHasStableIDs(rootFromFallback) {
-                resolvedRoot = rootFromNode
-            } else {
-                resolvedRoot = rootFromFallback
-            }
-        } else {
-            resolvedRoot = rootFromNode ?? rootFromFallback
-        }
-
-        guard let resolvedRoot else {
-            return fallbackSnapshot
-        }
-
-        var resolved: [String: Any] = ["root": resolvedRoot]
-        if let selectedNodeID = uint64Value(envelope["selectedNodeId"]) ?? uint64Value(fallbackSnapshot?["selectedNodeId"]) {
-            resolved["selectedNodeId"] = selectedNodeID
-        }
-        if let selectedLocalID = uint64Value(envelope["selectedLocalId"]) ?? uint64Value(fallbackSnapshot?["selectedLocalId"]) {
-            resolved["selectedLocalId"] = selectedLocalID
-        }
-        if let selectedNodePath = normalizeNodePath(envelope["selectedNodePath"]) ?? normalizeNodePath(fallbackSnapshot?["selectedNodePath"]) {
-            resolved["selectedNodePath"] = selectedNodePath
-        }
-        return resolved
+        return .mutations(.init(events: [event]))
     }
 
-    func resolveSelectedLocalID(_ snapshotObject: [String: Any], root: DOMGraphNodeDescriptor) -> UInt64? {
-        if let selectedLocalID = uint64Value(snapshotObject["selectedLocalId"]) {
-            return selectedLocalID
-        }
-        if let selectedNodeID = intValue(snapshotObject["selectedNodeId"]),
-           let resolvedNode = findNodeDescriptor(backendNodeID: selectedNodeID, in: root)
-        {
-            return resolvedNode.localID
-        }
+}
 
-        guard let path = normalizeNodePath(snapshotObject["selectedNodePath"]) else {
+private extension DOMPayloadNormalizer {
+    static func dictionaryValue(from data: Data) -> [String: Any]? {
+        guard !data.isEmpty,
+              let object = try? JSONSerialization.jsonObject(with: data, options: []) else {
             return nil
         }
+        return object as? [String: Any]
+    }
 
-        var current = root
-        for index in path {
-            guard index >= 0, index < current.children.count else {
+    static func normalizeMutationEvent(
+        method: String,
+        params: [String: Any]
+    ) -> DOMGraphMutationEvent? {
+        switch method {
+        case "childNodeInserted":
+            guard let parentLocalID = uint64Value(params["parentNodeId"]),
+                  let nodePayload = params["node"],
+                  let node = normalizeNodeDescriptor(nodePayload)
+            else {
                 return nil
             }
-            current = current.children[index]
-        }
-        return current.localID
-    }
+            let previousLocalID = uint64ValueAllowingZero(params["previousNodeId"])
+            return .childNodeInserted(
+                parentLocalID: parentLocalID,
+                previousLocalID: previousLocalID,
+                node: node
+            )
 
-    func resolveNodePayload(_ payload: Any) -> Any? {
-        if let json = payload as? String,
-           let data = json.data(using: .utf8),
-           let decoded = try? JSONSerialization.jsonObject(with: data) {
-            return resolveNodePayload(decoded)
-        }
+        case "childNodeRemoved":
+            guard let parentLocalID = uint64Value(params["parentNodeId"]),
+                  let nodeLocalID = uint64Value(params["nodeId"]) else {
+                return nil
+            }
+            return .childNodeRemoved(parentLocalID: parentLocalID, nodeLocalID: nodeLocalID)
 
-        guard let object = dictionaryValue(payload) else {
+        case "attributeModified":
+            guard let nodeLocalID = uint64Value(params["nodeId"]),
+                  let name = stringValue(params["name"]) else {
+                return nil
+            }
+            return .attributeModified(
+                nodeLocalID: nodeLocalID,
+                name: name,
+                value: stringValue(params["value"]) ?? "",
+                layoutFlags: normalizeLayoutFlags(params["layoutFlags"]),
+                isRendered: boolValue(params["isRendered"])
+            )
+
+        case "attributeRemoved":
+            guard let nodeLocalID = uint64Value(params["nodeId"]),
+                  let name = stringValue(params["name"]) else {
+                return nil
+            }
+            return .attributeRemoved(
+                nodeLocalID: nodeLocalID,
+                name: name,
+                layoutFlags: normalizeLayoutFlags(params["layoutFlags"]),
+                isRendered: boolValue(params["isRendered"])
+            )
+
+        case "characterDataModified":
+            guard let nodeLocalID = uint64Value(params["nodeId"]) else {
+                return nil
+            }
+            return .characterDataModified(
+                nodeLocalID: nodeLocalID,
+                value: stringValue(params["characterData"]) ?? "",
+                layoutFlags: normalizeLayoutFlags(params["layoutFlags"]),
+                isRendered: boolValue(params["isRendered"])
+            )
+
+        case "childNodeCountUpdated":
+            guard let nodeLocalID = uint64Value(params["nodeId"]),
+                  let childCount = intValue(params["childNodeCount"]) else {
+                return nil
+            }
+            return .childNodeCountUpdated(
+                nodeLocalID: nodeLocalID,
+                childCount: childCount,
+                layoutFlags: normalizeLayoutFlags(params["layoutFlags"]),
+                isRendered: boolValue(params["isRendered"])
+            )
+
+        case "setChildNodes":
+            let nodesPayload = arrayValue(params["nodes"]) ?? []
+            let nodes = nodesPayload.compactMap(normalizeNodeDescriptor)
+            if let parentLocalID = uint64Value(params["parentId"]) {
+                return .setChildNodes(parentLocalID: parentLocalID, nodes: nodes)
+            }
+            guard !nodes.isEmpty else {
+                return nil
+            }
+            return .setDetachedRoots(nodes: nodes)
+
+        case "documentUpdated":
+            return .documentUpdated
+
+        default:
             return nil
         }
-
-        if isSerializedNodeEnvelope(object) {
-            return resolveSerializedNodeEnvelope(object)?["root"]
-        }
-
-        return looksLikeNodeDescriptor(object) ? object : nil
     }
 
-    private func normalizeNodeDescriptor(
-        _ payload: Any,
-        fallbackState: inout FallbackState
-    ) -> DOMGraphNodeDescriptor? {
-        guard let object = dictionaryValue(payload) else {
+    static func normalizeNodeDescriptor(_ payload: Any) -> DOMGraphNodeDescriptor? {
+        guard let object = dictionaryValue(payload),
+              let localID = uint64Value(object["nodeId"])
+        else {
             return nil
-        }
-
-        if isSerializedNodeEnvelope(object),
-           let resolved = resolveSerializedNodeEnvelope(object),
-           let root = resolved["root"] {
-            return normalizeNodeDescriptor(root, fallbackState: &fallbackState)
         }
 
         if isInternalOverlayNodePayload(object) {
             return nil
         }
 
-        let explicitBackendNodeID = intValue(object["backendNodeId"])
-            ?? intValue(object["backendNodeID"])
-        let backendNodeID = explicitBackendNodeID
-            ?? intValue(object["nodeId"])
-            ?? intValue(object["id"])
-        let backendNodeIDIsStable = explicitBackendNodeID != nil
-        let localID = uint64Value(object["localId"])
-            ?? uint64Value(object["localID"])
-            ?? uint64Value(object["handleId"])
-            ?? uint64Value(object["nodeId"])
-            ?? uint64Value(object["id"])
-            ?? fallbackState.allocate()
         let nodeType = DOMNodeType(protocolValue: intValue(object["nodeType"]) ?? 0)
         let rawNodeName = stringValue(object["nodeName"]) ?? ""
         let rawLocalName = stringValue(object["localName"]) ?? ""
-        let frameID = stringValue(object["frameId"]) ?? stringValue(object["frameID"])
+        let frameID = stringValue(object["frameId"])
         let nodeName = nodeType == .element ? rawNodeName.lowercased() : rawNodeName
         let localName = nodeType == .element
             ? (rawLocalName.isEmpty ? rawNodeName : rawLocalName).lowercased()
             : rawLocalName
         let nodeValue = stringValue(object["nodeValue"]) ?? ""
+        let explicitBackendNodeID = intValue(object["backendNodeId"])
+        let backendNodeID = explicitBackendNodeID
+            ?? (localID <= UInt64(Int.max) ? Int(localID) : nil)
 
-        let attributes = normalizeNodeAttributes(object["attributes"], backendNodeID: backendNodeID)
-        let contentDocumentPayload = object["contentDocument"].flatMap(resolveNodePayload)
+        let contentDocumentPayload = object["contentDocument"]
         let childPayloads = contentDocumentPayload.map { [$0] } ?? (arrayValue(object["children"]) ?? [])
-        let layoutFlags = normalizeLayoutFlags(object["layoutFlags"])
-        let isRendered = boolValue(object["isRendered"]) ?? true
-
         var children: [DOMGraphNodeDescriptor] = []
         children.reserveCapacity(childPayloads.count)
         var omittedChildren = 0
         for childPayload in childPayloads {
-            if isInternalOverlayNodePayload(childPayload) {
-                omittedChildren += 1
-                continue
-            }
-            guard let child = normalizeNodeDescriptor(
-                childPayload,
-                fallbackState: &fallbackState
-            ) else {
+            guard let child = normalizeNodeDescriptor(childPayload) else {
+                if isInternalOverlayNodePayload(childPayload) {
+                    omittedChildren += 1
+                }
                 continue
             }
             children.append(child)
         }
 
         let explicitChildCount = intValue(object["childNodeCount"])
-            ?? intValue(object["childCount"])
         let childCountIsKnown = explicitChildCount != nil
             || contentDocumentPayload != nil
             || object["children"] != nil
@@ -388,346 +199,68 @@ private extension DOMPayloadNormalizer {
         return DOMGraphNodeDescriptor(
             localID: localID,
             backendNodeID: backendNodeID,
-            backendNodeIDIsStable: backendNodeIDIsStable,
+            backendNodeIDIsStable: explicitBackendNodeID != nil,
             frameID: frameID,
             nodeType: nodeType,
             nodeName: nodeName,
             localName: localName,
             nodeValue: nodeValue,
-            attributes: attributes,
-            childCount: max(0, childCount),
+            attributes: normalizeNodeAttributes(object["attributes"], backendNodeID: backendNodeID),
+            childCount: childCount,
             childCountIsKnown: childCountIsKnown,
-            layoutFlags: layoutFlags ?? [],
-            isRendered: isRendered,
+            layoutFlags: normalizeLayoutFlags(object["layoutFlags"]) ?? [],
+            isRendered: boolValue(object["isRendered"]) ?? true,
             children: children
         )
     }
 
-    func normalizeMutationEvents(_ events: [Any]) -> [DOMGraphMutationEvent] {
-        var normalized: [DOMGraphMutationEvent] = []
-        var fallbackState = makeFallbackState()
-        defer { commitFallbackState(fallbackState) }
-
-        for entry in events {
-            guard let object = dictionaryValue(entry) else {
-                continue
-            }
-            guard let rawMethod = stringValue(object["method"]) else {
-                continue
-            }
-            let method = rawMethod.hasPrefix("DOM.") ? String(rawMethod.dropFirst(4)) : rawMethod
-            let params = dictionaryValue(object["params"]) ?? [:]
-
-            switch method {
-            case "childNodeInserted":
-                guard let parentLocalID = uint64Value(params["parentNodeId"]) ?? uint64Value(params["parentId"]),
-                      let nodePayload = params["node"],
-                      let node = normalizeNodeDescriptor(nodePayload, fallbackState: &fallbackState)
-                else {
-                    continue
-                }
-                let previousLocalID = uint64ValueAllowingZero(params["previousNodeId"]) ?? uint64ValueAllowingZero(params["previousId"])
-                normalized.append(
-                    .childNodeInserted(
-                        parentLocalID: parentLocalID,
-                        previousLocalID: previousLocalID,
-                        node: node
-                    )
-                )
-
-            case "childNodeRemoved":
-                guard let parentLocalID = uint64Value(params["parentNodeId"]) ?? uint64Value(params["parentId"]),
-                      let nodeLocalID = uint64Value(params["nodeId"]) else {
-                    continue
-                }
-                normalized.append(.childNodeRemoved(parentLocalID: parentLocalID, nodeLocalID: nodeLocalID))
-
-            case "attributeModified":
-                guard let nodeLocalID = uint64Value(params["nodeId"]),
-                      let name = stringValue(params["name"])
-                else {
-                    continue
-                }
-                let value = stringValue(params["value"]) ?? ""
-                normalized.append(
-                    .attributeModified(
-                        nodeLocalID: nodeLocalID,
-                        name: name,
-                        value: value,
-                        layoutFlags: normalizeLayoutFlags(params["layoutFlags"]),
-                        isRendered: boolValue(params["isRendered"])
-                    )
-                )
-
-            case "attributeRemoved":
-                guard let nodeLocalID = uint64Value(params["nodeId"]),
-                      let name = stringValue(params["name"])
-                else {
-                    continue
-                }
-                normalized.append(
-                    .attributeRemoved(
-                        nodeLocalID: nodeLocalID,
-                        name: name,
-                        layoutFlags: normalizeLayoutFlags(params["layoutFlags"]),
-                        isRendered: boolValue(params["isRendered"])
-                    )
-                )
-
-            case "characterDataModified":
-                guard let nodeLocalID = uint64Value(params["nodeId"]) else {
-                    continue
-                }
-                normalized.append(
-                    .characterDataModified(
-                        nodeLocalID: nodeLocalID,
-                        value: stringValue(params["characterData"]) ?? "",
-                        layoutFlags: normalizeLayoutFlags(params["layoutFlags"]),
-                        isRendered: boolValue(params["isRendered"])
-                    )
-                )
-
-            case "childNodeCountUpdated":
-                guard let nodeLocalID = uint64Value(params["nodeId"]),
-                      let childCount = intValue(params["childNodeCount"]) ?? intValue(params["childCount"])
-                else {
-                    continue
-                }
-                normalized.append(
-                    .childNodeCountUpdated(
-                        nodeLocalID: nodeLocalID,
-                        childCount: childCount,
-                        layoutFlags: normalizeLayoutFlags(params["layoutFlags"]),
-                        isRendered: boolValue(params["isRendered"])
-                    )
-                )
-
-            case "setChildNodes":
-                let nodesPayload = arrayValue(params["nodes"]) ?? []
-                if let parentLocalID = uint64Value(params["parentNodeId"]) ?? uint64Value(params["parentId"]) {
-                    let nodes = nodesPayload.compactMap { normalizeNodeDescriptor($0, fallbackState: &fallbackState) }
-                    normalized.append(.setChildNodes(parentLocalID: parentLocalID, nodes: nodes))
-                } else {
-                    let nodes = nodesPayload.compactMap { normalizeNodeDescriptor($0, fallbackState: &fallbackState) }
-                    guard !nodes.isEmpty else {
-                        continue
-                    }
-                    normalized.append(.setDetachedRoots(nodes: nodes))
-                    continue
-                }
-
-            case "documentUpdated":
-                normalized.append(.documentUpdated)
-                fallbackState.nextLocalID = DOMPayloadNormalizer.fallbackLocalIDBase
-
-            default:
-                continue
-            }
-        }
-
-        return normalized
-    }
-
-    func normalizeSelectionAttributes(_ payload: Any?, localID: UInt64?) -> [DOMAttribute] {
-        let nodeID: Int?
-        if let localID, localID <= UInt64(Int.max) {
-            nodeID = Int(localID)
-        } else {
-            nodeID = nil
-        }
-
+    static func normalizeNodeAttributes(_ payload: Any?, backendNodeID: Int?) -> [DOMAttribute] {
         guard let values = arrayValue(payload) else {
             return []
         }
 
-        return values.compactMap { entry in
-            guard let object = dictionaryValue(entry),
-                  let name = stringValue(object["name"])
-            else {
-                return nil
-            }
-            let value = stringValue(object["value"]) ?? ""
-            return DOMAttribute(nodeId: nodeID, name: name, value: value)
+        var attributes: [DOMAttribute] = []
+        attributes.reserveCapacity(values.count / 2)
+        var index = 0
+        while index + 1 < values.count {
+            let name = stringValue(values[index]) ?? ""
+            let value = stringValue(values[index + 1]) ?? ""
+            attributes.append(DOMAttribute(nodeId: backendNodeID, name: name, value: value))
+            index += 2
         }
+        return attributes
     }
 
-    func normalizeNodeAttributes(_ payload: Any?, backendNodeID: Int?) -> [DOMAttribute] {
-        guard let values = arrayValue(payload) else {
-            return []
-        }
-
-        if values.allSatisfy({ $0 is String }) {
-            var attributes: [DOMAttribute] = []
-            var index = 0
-            while index + 1 < values.count {
-                let name = stringValue(values[index]) ?? ""
-                let value = stringValue(values[index + 1]) ?? ""
-                attributes.append(DOMAttribute(nodeId: backendNodeID, name: name, value: value))
-                index += 2
-            }
-            return attributes
-        }
-
-        return values.compactMap { entry in
-            guard let object = dictionaryValue(entry),
-                  let name = stringValue(object["name"])
-            else {
-                return nil
-            }
-            let value = stringValue(object["value"]) ?? ""
-            return DOMAttribute(nodeId: backendNodeID, name: name, value: value)
-        }
-    }
-
-    func containsInternalOverlayMarker(_ payload: Any?) -> Bool {
+    static func containsInternalOverlayMarker(_ payload: Any?) -> Bool {
         guard let values = arrayValue(payload) else {
             return false
         }
 
-        if values.allSatisfy({ $0 is String || $0 is NSString }) {
-            var index = 0
-            while index + 1 < values.count {
-                if stringValue(values[index]) == "data-web-inspector-overlay" {
-                    return stringValue(values[index + 1]) == "true"
-                }
-                index += 2
+        var index = 0
+        while index + 1 < values.count {
+            if stringValue(values[index]) == "data-web-inspector-overlay" {
+                return stringValue(values[index + 1]) == "true"
             }
-            return false
+            index += 2
         }
-
-        return values.contains { entry in
-            guard let object = dictionaryValue(entry) else {
-                return false
-            }
-            return stringValue(object["name"]) == "data-web-inspector-overlay"
-                && stringValue(object["value"]) == "true"
-        }
+        return false
     }
 
-    func normalizeLayoutFlags(_ payload: Any?) -> [String]? {
+    static func isInternalOverlayNodePayload(_ payload: Any?) -> Bool {
+        guard let object = dictionaryValue(payload) else {
+            return false
+        }
+        return containsInternalOverlayMarker(object["attributes"])
+    }
+
+    static func normalizeLayoutFlags(_ payload: Any?) -> [String]? {
         guard let values = arrayValue(payload) else {
             return nil
         }
         return values.compactMap(stringValue)
     }
 
-    func normalizeNodePath(_ payload: Any?) -> [Int]? {
-        guard let values = arrayValue(payload) else {
-            return nil
-        }
-        var path: [Int] = []
-        path.reserveCapacity(values.count)
-        for value in values {
-            guard let index = intValue(value), index >= 0 else {
-                return nil
-            }
-            path.append(index)
-        }
-        return path
-    }
-
-    func isSerializedNodeEnvelope(_ object: [String: Any]) -> Bool {
-        stringValue(object["type"]) == "serialized-node-envelope"
-    }
-
-    func isInternalOverlayNodePayload(_ payload: Any?) -> Bool {
-        guard let object = dictionaryValue(payload) else {
-            return false
-        }
-
-        if isSerializedNodeEnvelope(object),
-           let resolved = resolveSerializedNodeEnvelope(object),
-           let root = resolved["root"] {
-            return isInternalOverlayNodePayload(root)
-        }
-
-        return containsInternalOverlayMarker(object["attributes"])
-    }
-
-    func looksLikeNodeDescriptor(_ object: [String: Any]) -> Bool {
-        object["nodeId"] != nil
-            || object["id"] != nil
-            || object["nodeType"] != nil
-            || object["nodeName"] != nil
-            || object["children"] != nil
-    }
-
-    func nodeDescriptorHasStableIDs(_ payload: Any) -> Bool {
-        guard let object = dictionaryValue(payload) else {
-            return false
-        }
-
-        guard uint64Value(object["backendNodeId"]) != nil
-            || uint64Value(object["backendNodeID"]) != nil
-        else {
-            return false
-        }
-
-        if let contentDocument = object["contentDocument"] {
-            return nodeDescriptorHasStableIDs(contentDocument)
-        }
-
-        guard let children = arrayValue(object["children"]) else {
-            return true
-        }
-
-        for child in children {
-            guard nodeDescriptorHasStableIDs(child) else {
-                return false
-            }
-        }
-        return true
-    }
-
-    func nodeDescriptorHasLocalIDs(_ payload: Any) -> Bool {
-        guard let object = dictionaryValue(payload) else {
-            return false
-        }
-
-        guard uint64Value(object["localId"]) != nil
-            || uint64Value(object["localID"]) != nil
-            || uint64Value(object["handleId"]) != nil
-            || uint64Value(object["nodeId"]) != nil
-            || uint64Value(object["id"]) != nil
-        else {
-            return false
-        }
-
-        if let contentDocument = object["contentDocument"] {
-            return nodeDescriptorHasLocalIDs(contentDocument)
-        }
-
-        guard let children = arrayValue(object["children"]) else {
-            return true
-        }
-
-        for child in children {
-            guard nodeDescriptorHasLocalIDs(child) else {
-                return false
-            }
-        }
-        return true
-    }
-
-    func findNodeDescriptor(
-        backendNodeID: Int,
-        in root: DOMGraphNodeDescriptor
-    ) -> DOMGraphNodeDescriptor? {
-        if root.backendNodeIDIsStable,
-           root.backendNodeID == backendNodeID {
-            return root
-        }
-
-        for child in root.children {
-            if let resolved = findNodeDescriptor(backendNodeID: backendNodeID, in: child) {
-                return resolved
-            }
-        }
-
-        return nil
-    }
-
-    func dictionaryValue(_ value: Any?) -> [String: Any]? {
+    static func dictionaryValue(_ value: Any?) -> [String: Any]? {
         if let value = value as? [String: Any] {
             return value
         }
@@ -745,7 +278,7 @@ private extension DOMPayloadNormalizer {
         return nil
     }
 
-    func arrayValue(_ value: Any?) -> [Any]? {
+    static func arrayValue(_ value: Any?) -> [Any]? {
         if let value = value as? [Any] {
             return value
         }
@@ -755,7 +288,7 @@ private extension DOMPayloadNormalizer {
         return nil
     }
 
-    func stringValue(_ value: Any?) -> String? {
+    static func stringValue(_ value: Any?) -> String? {
         if value is NSNull {
             return nil
         }
@@ -768,7 +301,7 @@ private extension DOMPayloadNormalizer {
         return nil
     }
 
-    func intValue(_ value: Any?) -> Int? {
+    static func intValue(_ value: Any?) -> Int? {
         if value is Bool {
             return nil
         }
@@ -816,7 +349,7 @@ private extension DOMPayloadNormalizer {
         return nil
     }
 
-    func uint64Value(_ value: Any?) -> UInt64? {
+    static func uint64Value(_ value: Any?) -> UInt64? {
         if let value = value as? UInt64, value > 0 {
             return value
         }
@@ -829,7 +362,7 @@ private extension DOMPayloadNormalizer {
         return UInt64(intValue)
     }
 
-    func uint64ValueAllowingZero(_ value: Any?) -> UInt64? {
+    static func uint64ValueAllowingZero(_ value: Any?) -> UInt64? {
         if let value = value as? UInt64 {
             return value
         }
@@ -842,7 +375,7 @@ private extension DOMPayloadNormalizer {
         return UInt64(intValue)
     }
 
-    func boolValue(_ value: Any?) -> Bool? {
+    static func boolValue(_ value: Any?) -> Bool? {
         if let value = value as? Bool {
             return value
         }

@@ -136,9 +136,18 @@ struct WIDOMInspectorTests {
     }
 
     @Test
-    func payloadNormalizerEmbedsContentDocumentAsCanonicalChild() throws {
+    func payloadNormalizerEmbedsContentDocumentAsCanonicalChild() async throws {
         let normalizer = DOMPayloadNormalizer()
-        let snapshot = try #require(normalizer.normalizeSnapshot(makeIFrameDocumentResult(url: "https://example.com/a")["root"] as Any))
+        let delta = try #require(
+            await normalizer.normalizeDocumentResponseData(
+                jsonData(makeIFrameDocumentResult(url: "https://example.com/a")),
+                resetDocument: true
+            )
+        )
+        guard case let .snapshot(snapshot, _) = delta else {
+            Issue.record("Expected DOM snapshot")
+            return
+        }
         let htmlNode = try #require(snapshot.root.children.first)
         let bodyNode = try #require(htmlNode.children.first(where: { $0.localName == "body" }))
         let mainNode = try #require(bodyNode.children.first(where: { $0.localName == "main" }))
@@ -153,38 +162,34 @@ struct WIDOMInspectorTests {
     }
 
     @Test
-    func payloadNormalizerPreservesProtocolNodeIDsForDetachedRoots() throws {
+    func payloadNormalizerPreservesProtocolNodeIDsForDetachedRoots() async throws {
         let normalizer = DOMPayloadNormalizer()
         let delta = try #require(
-            normalizer.normalizeBundlePayload([
-                "version": 2,
-                "kind": "mutation",
-                "events": [[
-                    "method": "DOM.setChildNodes",
-                    "params": [
-                        "nodes": [[
-                            "nodeId": 900,
-                            "backendNodeId": 900,
-                            "nodeType": 9,
-                            "nodeName": "#document",
-                            "localName": "",
+            await normalizer.normalizeDOMEvent(
+                method: "DOM.setChildNodes",
+                paramsData: jsonData([
+                    "nodes": [[
+                        "nodeId": 900,
+                        "backendNodeId": 900,
+                        "nodeType": 9,
+                        "nodeName": "#document",
+                        "localName": "",
+                        "nodeValue": "",
+                        "childNodeCount": 1,
+                        "children": [[
+                            "nodeId": 1093,
+                            "backendNodeId": 1093,
+                            "nodeType": 1,
+                            "nodeName": "IMG",
+                            "localName": "img",
                             "nodeValue": "",
-                            "childNodeCount": 1,
-                            "children": [[
-                                "nodeId": 1093,
-                                "backendNodeId": 1093,
-                                "nodeType": 1,
-                                "nodeName": "IMG",
-                                "localName": "img",
-                                "nodeValue": "",
-                                "attributes": ["id", "detached-target"],
-                                "childNodeCount": 0,
-                                "children": [],
-                            ]],
-                        ]]
-                    ],
-                ]],
-            ])
+                            "attributes": ["id", "detached-target"],
+                            "childNodeCount": 0,
+                            "children": [],
+                        ]],
+                    ]]
+                ])
+            )
         )
 
         guard case let .mutations(bundle) = delta else {
@@ -201,6 +206,47 @@ struct WIDOMInspectorTests {
         #expect(nodes.first?.backendNodeID == 900)
         #expect(nodes.first?.children.first?.localID == 1093)
         #expect(nodes.first?.children.first?.backendNodeID == 1093)
+    }
+
+    @Test
+    func payloadNormalizerMarksFallbackProtocolNodeIDsUnstable() async throws {
+        let normalizer = DOMPayloadNormalizer()
+        let delta = try #require(
+            await normalizer.normalizeDocumentResponseData(
+                jsonData([
+                    "root": [
+                        "nodeId": 100,
+                        "nodeType": 9,
+                        "nodeName": "#document",
+                        "localName": "",
+                        "nodeValue": "",
+                        "childNodeCount": 1,
+                        "children": [[
+                            "nodeId": 101,
+                            "backendNodeId": 9001,
+                            "nodeType": 1,
+                            "nodeName": "HTML",
+                            "localName": "html",
+                            "nodeValue": "",
+                            "childNodeCount": 0,
+                            "children": [],
+                        ]],
+                    ],
+                ]),
+                resetDocument: true
+            )
+        )
+
+        guard case let .snapshot(snapshot, _) = delta else {
+            Issue.record("Expected DOM snapshot")
+            return
+        }
+
+        #expect(snapshot.root.localID == 100)
+        #expect(snapshot.root.backendNodeID == 100)
+        #expect(!snapshot.root.backendNodeIDIsStable)
+        #expect(snapshot.root.children.first?.backendNodeID == 9001)
+        #expect(snapshot.root.children.first?.backendNodeIDIsStable == true)
     }
 
     @Test
@@ -6080,7 +6126,16 @@ struct WIDOMInspectorTests {
     func copySelectedSelectorPathGeneratesPathLocally() async throws {
         let inspector = WIDOMInspector()
         let normalizer = DOMPayloadNormalizer()
-        let snapshot = try #require(normalizer.normalizeSnapshot(makeDocumentResult(url: "https://example.com/a")))
+        let delta = try #require(
+            await normalizer.normalizeDocumentResponseData(
+                jsonData(makeDocumentResult(url: "https://example.com/a")),
+                resetDocument: true
+            )
+        )
+        guard case let .snapshot(snapshot, _) = delta else {
+            Issue.record("Expected DOM snapshot")
+            return
+        }
         inspector.document.replaceDocument(
             with: .init(root: snapshot.root, selectedLocalID: 5),
             isFreshDocument: true
@@ -6097,7 +6152,16 @@ struct WIDOMInspectorTests {
     func copySelectedSelectorPathIncludesFrameOwnerForNestedDocument() async throws {
         let inspector = WIDOMInspector()
         let normalizer = DOMPayloadNormalizer()
-        let snapshot = try #require(normalizer.normalizeSnapshot(makeIFrameDocumentResult(url: "https://example.com/a")))
+        let delta = try #require(
+            await normalizer.normalizeDocumentResponseData(
+                jsonData(makeIFrameDocumentResult(url: "https://example.com/a")),
+                resetDocument: true
+            )
+        )
+        guard case let .snapshot(snapshot, _) = delta else {
+            Issue.record("Expected DOM snapshot")
+            return
+        }
         inspector.document.replaceDocument(
             with: .init(root: snapshot.root, selectedLocalID: 26),
             isFreshDocument: true
@@ -7222,6 +7286,10 @@ private func waitForCondition(
         try? await Task.sleep(nanoseconds: intervalNanoseconds)
     }
     return await condition()
+}
+
+private func jsonData(_ object: Any) throws -> Data {
+    try JSONSerialization.data(withJSONObject: object, options: [])
 }
 
 private func makeDocumentResult(

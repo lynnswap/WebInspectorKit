@@ -522,6 +522,7 @@ public final class WIDOMInspector {
 
     public func beginSelectionMode() async throws {
         let _ = try requirePageWebView()
+        await awaitTransportMessagesToDrain()
         try await refreshReadyContextIfTransportTargetAdvanced(reason: "beginSelectionMode")
         await cancelStaleInspectModeBeforeBeginningSelectionIfNeeded()
         applyRecoverableError(nil)
@@ -1511,7 +1512,7 @@ private extension WIDOMInspector {
         logBootstrapDiagnostics(
             "refreshCurrentDocumentFromTransport begin context=\(contextID) target=\(targetIdentifier)"
         )
-        let responseObject = try await loadDocumentResponseObject(
+        let responseData = try await loadDocumentResponseData(
             targetIdentifier: targetIdentifier
         )
 
@@ -1520,9 +1521,8 @@ private extension WIDOMInspector {
             throw DOMOperationError.contextInvalidated
         }
 
-        guard let delta = payloadNormalizer.normalizeBackendResponse(
-            method: WITransportMethod.DOM.getDocument,
-            responseObject: ["result": responseObject],
+        guard let delta = await payloadNormalizer.normalizeDocumentResponseData(
+            responseData,
             resetDocument: isFreshDocument
         ),
         case let .snapshot(snapshot, _) = delta else {
@@ -1530,8 +1530,9 @@ private extension WIDOMInspector {
         }
 
         document.replaceDocument(with: snapshot, isFreshDocument: isFreshDocument)
+        let responseDocumentURL = await payloadNormalizer.documentURL(fromDocumentResponseData: responseData)
         let resolvedURL = normalizedDocumentURL(pageWebView?.url?.absoluteString)
-            ?? normalizedDocumentURL((responseObject["root"] as? [String: Any])?["documentURL"] as? String)
+            ?? normalizedDocumentURL(responseDocumentURL)
             ?? currentContext.documentURL
         let resolvedContext = DOMContext(contextID: contextID, documentURL: resolvedURL)
         self.currentContext = resolvedContext
@@ -1572,26 +1573,26 @@ private extension WIDOMInspector {
         )
     }
 
-    func loadDocumentResponseObject(
+    func loadDocumentResponseData(
         targetIdentifier: String
-    ) async throws -> [String: Any] {
-        logBootstrapDiagnostics("loadDocumentResponseObject target=\(targetIdentifier) inspector.enable")
+    ) async throws -> Data {
+        logBootstrapDiagnostics("loadDocumentResponseData target=\(targetIdentifier) inspector.enable")
         _ = try await sendDOMCommand(
             WITransportMethod.Inspector.enable,
             targetIdentifier: targetIdentifier
         )
-        logBootstrapDiagnostics("loadDocumentResponseObject target=\(targetIdentifier) inspector.initialized")
+        logBootstrapDiagnostics("loadDocumentResponseData target=\(targetIdentifier) inspector.initialized")
         _ = try await sendDOMCommand(
             WITransportMethod.Inspector.initialized,
             targetIdentifier: targetIdentifier
         )
-        logBootstrapDiagnostics("loadDocumentResponseObject target=\(targetIdentifier) dom.enable")
+        logBootstrapDiagnostics("loadDocumentResponseData target=\(targetIdentifier) dom.enable")
         _ = try await sendDOMCommand(
             WITransportMethod.DOM.enable,
             targetIdentifier: targetIdentifier
         )
-        logBootstrapDiagnostics("loadDocumentResponseObject target=\(targetIdentifier) dom.getDocument")
-        return try await sendDOMCommand(
+        logBootstrapDiagnostics("loadDocumentResponseData target=\(targetIdentifier) dom.getDocument")
+        return try await sendDOMCommandData(
             WITransportMethod.DOM.getDocument,
             targetIdentifier: targetIdentifier
         )
@@ -1854,8 +1855,10 @@ private extension WIDOMInspector {
             return
         }
 
-        let payload = mutationBundlePayload(from: envelope, contextID: context.contextID)
-        guard let delta = payloadNormalizer.normalizeBundlePayload(payload) else {
+        guard let delta = await payloadNormalizer.normalizeDOMEvent(
+            method: envelope.method,
+            paramsData: envelope.paramsData
+        ) else {
             return
         }
 
@@ -1910,30 +1913,6 @@ private extension WIDOMInspector {
             await advancePendingInspectMaterializationIfIdle(
                 contextID: context.contextID
             )
-        case let .replaceSubtree(root):
-            let bundle = DOMGraphMutationBundle(events: [.replaceSubtree(root: root)])
-            document.applyMutationBundle(bundle)
-            recordPendingInspectProgressIfNeeded(
-                from: bundle,
-                contextID: context.contextID,
-                reason: "mutation.replaceSubtree",
-                rejectedStructuralMutationParentLocalIDs: []
-            )
-            await applyPendingInspectSelectionIfPossible()
-            await finishPendingInspectMaterialization(
-                from: bundle,
-                contextID: context.contextID,
-                rejectedStructuralMutationParentLocalIDs: []
-            )
-            await applyPendingInspectSelectionIfPossible()
-            await finishPendingChildRequests(
-                from: bundle,
-                contextID: context.contextID,
-                rejectedStructuralMutationParentLocalIDs: []
-            )
-            await advancePendingInspectMaterializationIfIdle(
-                contextID: context.contextID
-            )
         case let .selection(selection):
             let previousSelection = selectionNodeSummary(document.selectedNode)
             document.applySelectionSnapshot(selection)
@@ -1948,27 +1927,6 @@ private extension WIDOMInspector {
             document.replaceDocument(with: snapshot, isFreshDocument: resetDocument)
             await applyPendingInspectSelectionIfPossible()
         }
-    }
-
-    func mutationBundlePayload(
-        from envelope: WITransportEventEnvelope,
-        contextID: DOMContextID
-    ) -> [String: Any] {
-        let params: [String: Any]
-        if let object = try? JSONSerialization.jsonObject(with: envelope.paramsData) as? [String: Any] {
-            params = object
-        } else {
-            params = [:]
-        }
-        return [
-            "version": 2,
-            "kind": "mutation",
-            "contextID": contextID,
-            "events": [[
-                "method": envelope.method,
-                "params": params,
-            ]],
-        ]
     }
 
     func finishPendingChildRequests(
@@ -2334,8 +2292,7 @@ private extension WIDOMInspector {
         )
     }
 
-    func handleInspectorSelection(_ payload: Any) {
-        if case let .selection(selection) = payloadNormalizer.normalizeSelectionPayload(payload) {
+    func handleInspectorSelection(_ selection: DOMSelectionSnapshotPayload?) {
             let previousSelection = selectionNodeSummary(document.selectedNode)
             guard let selection else {
                 logSelectionDiagnostics(
@@ -2419,7 +2376,6 @@ private extension WIDOMInspector {
                 await self.syncSelectedNodeHighlight(contextID: contextID)
             }
         }
-    }
 
     func deleteNode(
         nodeID: Int,
@@ -4341,10 +4297,9 @@ private extension WIDOMInspector {
     }
 
     private func loadDocumentSnapshot(targetIdentifier: String) async throws -> DOMGraphSnapshot {
-        let responseObject = try await loadDocumentResponseObject(targetIdentifier: targetIdentifier)
-        guard let delta = payloadNormalizer.normalizeBackendResponse(
-            method: WITransportMethod.DOM.getDocument,
-            responseObject: ["result": responseObject],
+        let responseData = try await loadDocumentResponseData(targetIdentifier: targetIdentifier)
+        guard let delta = await payloadNormalizer.normalizeDocumentResponseData(
+            responseData,
             resetDocument: false
         ),
         case let .snapshot(snapshot, _) = delta else {
@@ -5472,21 +5427,6 @@ private extension WIDOMInspector {
         )
     }
 
-    func selectionPayloadDictionary(from payload: DOMSelectionSnapshotPayload?) -> [String: Any] {
-        guard let payload else {
-            return ["id": NSNull()]
-        }
-        return [
-            "id": Int(payload.localID ?? 0),
-            "backendNodeId": payload.backendNodeID as Any,
-            "backendNodeIdIsStable": payload.backendNodeIDIsStable,
-            "attributes": payload.attributes.map { ["name": $0.name, "value": $0.value] },
-            "path": payload.path,
-            "selectorPath": payload.selectorPath as Any,
-            "styleRevision": payload.styleRevision,
-        ]
-    }
-
     func selectionPathLabels(for node: DOMNodeModel) -> [String] {
         var labels: [String] = []
         var current: DOMNodeModel? = node
@@ -5843,20 +5783,36 @@ private extension WIDOMInspector {
         targetIdentifier: String,
         parametersData: Data? = nil
     ) async throws -> [String: Any] {
+        let data = try await sendDOMCommandData(
+            method,
+            targetIdentifier: targetIdentifier,
+            parametersData: parametersData
+        )
+        guard !data.isEmpty else {
+            return [:]
+        }
+        do {
+            let object = try JSONSerialization.jsonObject(with: data)
+            return object as? [String: Any] ?? [:]
+        } catch {
+            throw DOMOperationError.scriptFailure(error.localizedDescription)
+        }
+    }
+
+    func sendDOMCommandData(
+        _ method: String,
+        targetIdentifier: String,
+        parametersData: Data? = nil
+    ) async throws -> Data {
         guard let session = await sharedTransport.attachedSession() else {
             throw DOMOperationError.contextInvalidated
         }
         do {
-            let data = try await session.sendPageData(
+            return try await session.sendPageData(
                 method: method,
                 targetIdentifier: targetIdentifier,
                 parametersData: parametersData
             )
-            guard !data.isEmpty else {
-                return [:]
-            }
-            let object = try JSONSerialization.jsonObject(with: data)
-            return object as? [String: Any] ?? [:]
         } catch let error as WITransportError {
             throw mapTransportError(error)
         } catch {
@@ -6184,7 +6140,7 @@ extension WIDOMInspector {
     }
 
     package func testHandleInspectorSelection(_ payload: DOMSelectionSnapshotPayload?) {
-        handleInspectorSelection(selectionPayloadDictionary(from: payload))
+        handleInspectorSelection(payload)
     }
 
     package func testWaitForBootstrap() async {

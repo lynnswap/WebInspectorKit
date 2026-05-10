@@ -8,6 +8,10 @@ final class DOMTreeFindCoordinator: NSObject, @MainActor UIFindInteractionDelega
     private let documentIdentifier = 0
     private weak var textView: DOMTreeTextView?
     lazy var findInteraction = UIFindInteraction(sessionDelegate: self)
+    private var activeResultAggregator: UITextSearchAggregator<Int>?
+    private var activeSearchCancellation: DOMTreeFindSearchCancellation?
+    private var activeSearchIdentifier: Int?
+    private var nextSearchIdentifier = 0
 
     init(textView: DOMTreeTextView) {
         self.textView = textView
@@ -34,6 +38,7 @@ final class DOMTreeFindCoordinator: NSObject, @MainActor UIFindInteractionDelega
     }
 
     func findInteraction(_ interaction: UIFindInteraction, didEnd session: UIFindSession) {
+        invalidateActiveResultAggregator()
         textView?.clearFindDecorations()
     }
 
@@ -71,20 +76,85 @@ final class DOMTreeFindCoordinator: NSObject, @MainActor UIFindInteractionDelega
             return
         }
 
-        textView.clearFindDecorations()
-        for range in Self.searchRanges(
-            in: textView.renderedTextForFind,
+        cancelActiveSearch()
+        let cancellation = DOMTreeFindSearchCancellation()
+        let searchIdentifier = nextSearchIdentifier
+        nextSearchIdentifier += 1
+        activeSearchCancellation = cancellation
+        activeSearchIdentifier = searchIdentifier
+        activeResultAggregator = resultAggregator
+        let search = DOMTreeFindSearchRequest(
+            identifier: searchIdentifier,
+            source: textView.renderedTextForFind,
             queryString: queryString,
             compareOptions: sanitizedCompareOptions(options.stringCompareOptions),
-            wordMatchMethod: options.wordMatchMethod
-        ) {
-            resultAggregator.foundRange(
-                DOMTreeTextRange(nsRange: range),
-                searchString: queryString,
-                document: documentIdentifier
-            )
+            wordMatchMethod: options.wordMatchMethod,
+            documentIdentifier: documentIdentifier,
+            resultAggregator: resultAggregator,
+            cancellation: cancellation
+        )
+
+        textView.clearFindDecorations()
+        textView.beginFindDecorationBatch()
+        cancellation.beginDecorationBatch()
+
+        Task.detached(priority: .userInitiated) { [weak self, search] in
+            let searchResultBatchSize = 128
+            var pendingRanges: [NSRange] = []
+            pendingRanges.reserveCapacity(searchResultBatchSize)
+
+            func flushPendingRanges() async -> Bool {
+                guard !pendingRanges.isEmpty else {
+                    return !search.cancellation.isCancelled
+                }
+
+                let ranges = pendingRanges
+                pendingRanges.removeAll(keepingCapacity: true)
+                return await MainActor.run {
+                    guard !search.cancellation.isCancelled else {
+                        return false
+                    }
+                    for range in ranges {
+                        guard !search.cancellation.isCancelled else {
+                            return false
+                        }
+                        search.resultAggregator.foundRange(
+                            DOMTreeTextRange(nsRange: range, findSearchIdentifier: search.identifier),
+                            searchString: search.queryString,
+                            document: search.documentIdentifier
+                        )
+                    }
+                    return true
+                }
+            }
+
+            let completedSearch = await Self.enumerateSearchRangesAsync(
+                in: search.source,
+                queryString: search.queryString,
+                compareOptions: search.compareOptions,
+                wordMatchMethod: search.wordMatchMethod
+            ) { range in
+                guard !search.cancellation.isCancelled else {
+                    return false
+                }
+                pendingRanges.append(range)
+                if pendingRanges.count >= searchResultBatchSize {
+                    return await flushPendingRanges()
+                }
+                return true
+            }
+
+            if completedSearch, await flushPendingRanges(), !search.cancellation.isCancelled {
+                await MainActor.run {
+                    guard !search.cancellation.isCancelled else {
+                        return
+                    }
+                    search.resultAggregator.finishedSearching()
+                }
+            }
+
+            await self?.finishTextSearch(cancellation: search.cancellation)
         }
-        resultAggregator.finishedSearching()
     }
 
     func decorate(
@@ -92,6 +162,9 @@ final class DOMTreeFindCoordinator: NSObject, @MainActor UIFindInteractionDelega
         document: Int?,
         usingStyle: UITextSearchFoundTextStyle
     ) {
+        guard isCurrentFindTextRange(foundTextRange) else {
+            return
+        }
         guard let range = nsRange(for: foundTextRange) else {
             return
         }
@@ -103,6 +176,7 @@ final class DOMTreeFindCoordinator: NSObject, @MainActor UIFindInteractionDelega
     }
 
     func invalidateResultsAfterTextChange() {
+        invalidateActiveResultAggregator()
         findInteraction.updateResultCount()
     }
 
@@ -141,6 +215,63 @@ final class DOMTreeFindCoordinator: NSObject, @MainActor UIFindInteractionDelega
         sanitized.remove(.anchored)
         return sanitized
     }
+
+    func invalidateActiveSearch() {
+        invalidateActiveResultAggregator()
+    }
+
+    private func invalidateActiveResultAggregator() {
+        cancelActiveSearch()
+    }
+
+    private func cancelActiveSearch() {
+        if activeSearchCancellation?.cancelAndClaimDecorationBatch() == true {
+            textView?.endFindDecorationBatch()
+        }
+        activeSearchCancellation = nil
+        activeSearchIdentifier = nil
+
+        let resultAggregator = activeResultAggregator
+        activeResultAggregator = nil
+        resultAggregator?.invalidate()
+    }
+
+    private func finishTextSearch(cancellation: DOMTreeFindSearchCancellation) {
+        if cancellation.finishAndClaimDecorationBatch() {
+            textView?.endFindDecorationBatch()
+        }
+        if activeSearchCancellation === cancellation {
+            activeSearchCancellation = nil
+        }
+    }
+
+    private func isCurrentFindTextRange(_ textRange: UITextRange) -> Bool {
+        guard let findSearchIdentifier = (textRange as? DOMTreeTextRange)?.findSearchIdentifier else {
+            return true
+        }
+        return findSearchIdentifier == activeSearchIdentifier
+    }
+
+#if DEBUG
+    func decorateStaleFoundTextForTesting(queryString: String) {
+        guard let textView,
+              let range = Self.searchRanges(in: textView.renderedTextForFind, queryString: queryString).first
+        else {
+            return
+        }
+
+        decorate(
+            foundTextRange: DOMTreeTextRange(nsRange: range, findSearchIdentifier: Int.max),
+            document: documentIdentifier,
+            usingStyle: .found
+        )
+        decorate(
+            foundTextRange: DOMTreeTextRange(nsRange: range, findSearchIdentifier: Int.max),
+            document: documentIdentifier,
+            usingStyle: .highlighted
+        )
+    }
+#endif
 
     static func searchRanges(
         in source: String,
@@ -184,7 +315,52 @@ final class DOMTreeFindCoordinator: NSObject, @MainActor UIFindInteractionDelega
         return ranges
     }
 
-    private static func composedCharacterAlignedRange(_ range: NSRange, in source: NSString) -> NSRange {
+    @discardableResult
+    private nonisolated static func enumerateSearchRangesAsync(
+        in source: String,
+        queryString: String,
+        compareOptions: NSString.CompareOptions,
+        wordMatchMethod: UITextSearchOptions.WordMatchMethod,
+        _ body: (NSRange) async -> Bool
+    ) async -> Bool {
+        guard !source.isEmpty, !queryString.isEmpty else {
+            return true
+        }
+
+        let sourceString = source as NSString
+        var searchRange = NSRange(location: 0, length: sourceString.length)
+        var options = compareOptions
+        options.remove(.backwards)
+        options.remove(.anchored)
+
+        while searchRange.length > 0 {
+            let foundRange = sourceString.range(
+                of: queryString,
+                options: options,
+                range: searchRange
+            )
+            guard foundRange.location != NSNotFound, foundRange.length > 0 else {
+                break
+            }
+
+            let alignedRange = composedCharacterAlignedRange(foundRange, in: sourceString)
+            if accepts(range: alignedRange, in: sourceString, wordMatchMethod: wordMatchMethod) {
+                guard await body(alignedRange) else {
+                    return false
+                }
+            }
+
+            let nextLocation = foundRange.location + max(foundRange.length, 1)
+            guard nextLocation <= sourceString.length else {
+                break
+            }
+            searchRange = NSRange(location: nextLocation, length: sourceString.length - nextLocation)
+        }
+
+        return true
+    }
+
+    private nonisolated static func composedCharacterAlignedRange(_ range: NSRange, in source: NSString) -> NSRange {
         guard range.length > 0, source.length > 0 else {
             return range
         }
@@ -196,7 +372,7 @@ final class DOMTreeFindCoordinator: NSObject, @MainActor UIFindInteractionDelega
         return NSRange(location: lower, length: upper - lower)
     }
 
-    private static func accepts(
+    private nonisolated static func accepts(
         range: NSRange,
         in source: NSString,
         wordMatchMethod: UITextSearchOptions.WordMatchMethod
@@ -214,7 +390,7 @@ final class DOMTreeFindCoordinator: NSObject, @MainActor UIFindInteractionDelega
         }
     }
 
-    private static func isIdentifierBoundary(at offset: Int, in source: NSString) -> Bool {
+    private nonisolated static func isIdentifierBoundary(at offset: Int, in source: NSString) -> Bool {
         guard offset > 0, offset < source.length else {
             return true
         }
@@ -228,12 +404,12 @@ final class DOMTreeFindCoordinator: NSObject, @MainActor UIFindInteractionDelega
             || !isIdentifierCharacter(source[index])
     }
 
-    private static func stringIndex(forUTF16Offset offset: Int, in source: String) -> String.Index? {
+    private nonisolated static func stringIndex(forUTF16Offset offset: Int, in source: String) -> String.Index? {
         let utf16Index = source.utf16.index(source.utf16.startIndex, offsetBy: offset)
         return String.Index(utf16Index, within: source)
     }
 
-    private static func isIdentifierCharacter(_ character: Character) -> Bool {
+    private nonisolated static func isIdentifierCharacter(_ character: Character) -> Bool {
         if character == "_" {
             return true
         }
@@ -254,13 +430,15 @@ private final class DOMTreeTextPosition: UITextPosition {
 
 private final class DOMTreeTextRange: UITextRange {
     let nsRange: NSRange
+    let findSearchIdentifier: Int?
     private let startPosition: DOMTreeTextPosition
     private let endPosition: DOMTreeTextPosition
 
-    init(nsRange: NSRange) {
+    init(nsRange: NSRange, findSearchIdentifier: Int? = nil) {
         let location = max(0, nsRange.location)
         let length = max(0, nsRange.length)
         self.nsRange = NSRange(location: location, length: length)
+        self.findSearchIdentifier = findSearchIdentifier
         self.startPosition = DOMTreeTextPosition(offset: location)
         self.endPosition = DOMTreeTextPosition(offset: location + length)
         super.init()
@@ -276,6 +454,52 @@ private final class DOMTreeTextRange: UITextRange {
 
     override var isEmpty: Bool {
         nsRange.length == 0
+    }
+}
+
+private struct DOMTreeFindSearchRequest: @unchecked Sendable {
+    let identifier: Int
+    let source: String
+    let queryString: String
+    let compareOptions: NSString.CompareOptions
+    let wordMatchMethod: UITextSearchOptions.WordMatchMethod
+    let documentIdentifier: Int
+    let resultAggregator: UITextSearchAggregator<Int>
+    let cancellation: DOMTreeFindSearchCancellation
+}
+
+private final class DOMTreeFindSearchCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+    private var decorationBatchActive = false
+
+    var isCancelled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelled
+    }
+
+    func beginDecorationBatch() {
+        lock.lock()
+        decorationBatchActive = true
+        lock.unlock()
+    }
+
+    func cancelAndClaimDecorationBatch() -> Bool {
+        lock.lock()
+        cancelled = true
+        let shouldEndDecorationBatch = decorationBatchActive
+        decorationBatchActive = false
+        lock.unlock()
+        return shouldEndDecorationBatch
+    }
+
+    func finishAndClaimDecorationBatch() -> Bool {
+        lock.lock()
+        let shouldEndDecorationBatch = decorationBatchActive
+        decorationBatchActive = false
+        lock.unlock()
+        return shouldEndDecorationBatch
     }
 }
 
