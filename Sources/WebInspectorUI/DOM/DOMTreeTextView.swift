@@ -66,7 +66,9 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     private var scheduledTreeReloadTask: Task<Void, Never>?
     private var treeInvalidationHandlerID: UUID?
     private var resolvedTextAttributesCache: DOMTreeResolvedTextAttributes?
+    private var renderedLinePrefixCache: [Int: String] = [:]
     private var markupCache: [DOMNodeModel.ID: DOMTreeCachedMarkup] = [:]
+    private var maxLineDisplayColumnCount = 0
     private var multiSelectedNodeIDs: Set<DOMNodeModel.ID> = []
     private var multiSelectionLastNodeID: DOMNodeModel.ID?
     private var multiSelectionShiftAnchorNodeID: DOMNodeModel.ID?
@@ -79,6 +81,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
 #if DEBUG
     private var lastPresentedDOMMenuTitles: [String] = []
     private var reloadTreeCallCount = 0
+    private var buildRenderedRowsCallCount = 0
     private var rebuildTextStorageCallCount = 0
     private var incrementalTextStorageEditCallCount = 0
     private var resetTextFragmentViewsCallCount = 0
@@ -560,13 +563,26 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
             let invalidation = self.pendingTreeInvalidation
             self.pendingTreeInvalidation = nil
             self.scheduledTreeReloadTask = nil
-            self.reloadTree(resetFragments: invalidation?.requiresTextFragmentReset == true)
+            self.reloadTree(for: invalidation)
         }
     }
 
-    private func reloadTree(resetFragments: Bool) {
+    private func reloadTree(for invalidation: DOMTreeInvalidation?) {
 #if DEBUG
         reloadTreeCallCount += 1
+#endif
+        if case let .content(affectedLocalIDs) = invalidation,
+           applyContentInvalidation(affectedLocalIDs: affectedLocalIDs) {
+            return
+        }
+        reloadTree(resetFragments: invalidation?.requiresTextFragmentReset == true, countsCall: false)
+    }
+
+    private func reloadTree(resetFragments: Bool, countsCall: Bool = true) {
+#if DEBUG
+        if countsCall {
+            reloadTreeCallCount += 1
+        }
 #endif
         let previousRows = rows
         let previousText = renderedText
@@ -576,12 +592,12 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         prepareSelectionForRendering()
         let buildResult = buildRenderedRows()
         rows = buildResult.rows
-        rowIndexByNodeID = Dictionary(uniqueKeysWithValues: rows.map { ($0.node.id, $0.rowIndex) })
-        pruneMarkupCache(keeping: Set(rows.map(\.node.id)))
+        rebuildRowIndexAndPruneMarkupCache()
         reconcileMultiSelectionAfterReload()
         renderedText = buildResult.text
         clampTextSelectionAfterTextChange()
-        measuredTextWidth = CGFloat(buildResult.maxLineDisplayColumnCount) * Self.characterWidth
+        maxLineDisplayColumnCount = buildResult.maxLineDisplayColumnCount
+        updateMeasuredTextWidth()
         requestedChildNodeIDs = requestedChildNodeIDs.filter { nodeID in
             dom.document.node(id: nodeID) != nil
         }
@@ -604,6 +620,99 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         updateContentDecorations()
         setNeedsLayout()
         revealPendingSelectedNodeIfPossible()
+    }
+
+    private func applyContentInvalidation(affectedLocalIDs: Set<UInt64>) -> Bool {
+        guard dom.document.documentState == .ready, !rows.isEmpty else {
+            return false
+        }
+
+        let documentIdentity = dom.document.documentIdentity
+        let affectedRowIndices = affectedLocalIDs.compactMap {
+            rowIndexByNodeID[DOMNodeModel.ID(documentIdentity: documentIdentity, localID: $0)]
+        }
+        guard !affectedRowIndices.isEmpty else {
+            return true
+        }
+        guard affectedRowIndices.count <= max(8, rows.count / 4) else {
+            return false
+        }
+
+        var nextRows = rows
+        let mutableText = NSMutableString(string: renderedText)
+        var replacements: [(range: NSRange, text: String)] = []
+        var changedRowIndices = Set<Int>()
+        var nextMaxLineDisplayColumnCount = maxLineDisplayColumnCount
+        var needsMaxLineDisplayColumnCountRebuild = false
+
+        for rowIndex in affectedRowIndices.sorted(by: >) {
+            let previousRow = nextRows[rowIndex]
+            let nextRow = renderedRow(
+                for: previousRow.node,
+                depth: previousRow.depth,
+                rowIndex: rowIndex,
+                utf16Location: previousRow.textRange.location
+            )
+            guard !previousRow.hasSameRenderedContent(as: nextRow) else {
+                continue
+            }
+
+            replacements.append((previousRow.textRange, nextRow.text))
+            mutableText.replaceCharacters(in: previousRow.textRange, with: nextRow.text)
+            nextRows[rowIndex] = nextRow
+            changedRowIndices.insert(rowIndex)
+            if nextRow.displayColumnCount > nextMaxLineDisplayColumnCount {
+                nextMaxLineDisplayColumnCount = nextRow.displayColumnCount
+            } else if previousRow.displayColumnCount == maxLineDisplayColumnCount,
+                      nextRow.displayColumnCount < previousRow.displayColumnCount {
+                needsMaxLineDisplayColumnCountRebuild = true
+            }
+
+            let delta = nextRow.textRange.length - previousRow.textRange.length
+            guard delta != 0, rowIndex + 1 < nextRows.count else {
+                continue
+            }
+            for shiftedIndex in (rowIndex + 1)..<nextRows.count {
+                nextRows[shiftedIndex] = nextRows[shiftedIndex].offsettingTextRange(by: delta)
+            }
+        }
+
+        guard !replacements.isEmpty else {
+            requestChildrenForOpenRowsIfNeeded()
+            return true
+        }
+
+        rows = nextRows
+        renderedText = mutableText as String
+        clampTextSelectionAfterTextChange()
+        maxLineDisplayColumnCount = needsMaxLineDisplayColumnCountRebuild
+            ? recomputeMaxLineDisplayColumnCount()
+            : nextMaxLineDisplayColumnCount
+        updateMeasuredTextWidth()
+        requestedChildNodeIDs = requestedChildNodeIDs.filter { nodeID in
+            dom.document.node(id: nodeID) != nil
+        }
+        requestChildrenForOpenRowsIfNeeded()
+
+        textContentStorage.performEditingTransaction {
+            for replacement in replacements {
+                textStorage.replaceCharacters(in: replacement.range, with: replacement.text)
+            }
+        }
+#if DEBUG
+        incrementalTextStorageEditCallCount += 1
+#endif
+
+        let changedRows = changedRowIndices.sorted().map { rows[$0] }
+        applyTextAttributes(to: changedRows)
+        setNeedsDisplayForTextRanges(changedRows.map(\.textRange))
+        clearFindDecorations()
+        findCoordinator.invalidateResultsAfterTextChange()
+        updateTextLayoutGeometry()
+        updateContentDecorations()
+        setNeedsLayout()
+        revealPendingSelectedNodeIfPossible()
+        return true
     }
 
     private func prepareSelectionForRendering() {
@@ -637,6 +746,9 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     }
 
     private func buildRenderedRows() -> (rows: [DOMTreeLine], text: String, maxLineDisplayColumnCount: Int) {
+#if DEBUG
+        buildRenderedRowsCallCount += 1
+#endif
         guard dom.document.documentState == .ready else {
             return ([], "", 0)
         }
@@ -645,49 +757,30 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         }
 
         var nextRows: [DOMTreeLine] = []
+        nextRows.reserveCapacity(rows.count)
         var nextText = ""
+        nextText.reserveCapacity(renderedText.count)
         var utf16Location = 0
         var maxLineDisplayColumnCount = 0
 
         func append(_ node: DOMNodeModel, depth: Int) {
-            let hasDisclosure = nodeHasDisclosure(node)
-            let isOpen = isNodeOpen(node, depth: depth)
-            let markup = cachedMarkup(for: node, hasDisclosure: hasDisclosure, isOpen: isOpen)
-            let prefix = renderedLinePrefix(depth: depth)
-            let line = prefix + markup.text
-            let prefixLength = depth * Self.indentSpacesPerDepth + Self.disclosureSlotSpaces
-            let lineLength = prefixLength + markup.utf16Length
-            maxLineDisplayColumnCount = max(maxLineDisplayColumnCount, prefixLength + markup.displayColumnCount)
             let rowIndex = nextRows.count
-            let textRange = NSRange(location: utf16Location, length: lineLength)
-            let markupRange = NSRange(location: prefixLength, length: markup.utf16Length)
-            let tokens = markup.tokens.map {
-                DOMTreeToken(
-                    kind: $0.kind,
-                    range: NSRange(location: prefixLength + $0.range.location, length: $0.range.length)
-                )
-            }
-
-            nextRows.append(
-                DOMTreeLine(
-                    node: node,
-                    depth: depth,
-                    rowIndex: rowIndex,
-                    text: line,
-                    textRange: textRange,
-                    markupRange: markupRange,
-                    tokens: tokens,
-                    hasDisclosure: hasDisclosure,
-                    isOpen: isOpen
-                )
+            let row = renderedRow(
+                for: node,
+                depth: depth,
+                rowIndex: rowIndex,
+                utf16Location: utf16Location
             )
+
+            maxLineDisplayColumnCount = max(maxLineDisplayColumnCount, row.displayColumnCount)
+            nextRows.append(row)
             if rowIndex > 0 {
                 nextText.append("\n")
             }
-            nextText.append(line)
-            utf16Location += lineLength + 1
+            nextText.append(row.text)
+            utf16Location += row.textRange.length + 1
 
-            guard hasDisclosure, isOpen else {
+            guard row.hasDisclosure, row.isOpen else {
                 return
             }
             for child in node.children {
@@ -701,6 +794,44 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         }
 
         return (nextRows, nextText, maxLineDisplayColumnCount)
+    }
+
+    private func renderedRow(
+        for node: DOMNodeModel,
+        depth: Int,
+        rowIndex: Int,
+        utf16Location: Int
+    ) -> DOMTreeLine {
+        let hasDisclosure = nodeHasDisclosure(node)
+        let isOpen = isNodeOpen(node, depth: depth)
+        let markup = cachedMarkup(for: node, hasDisclosure: hasDisclosure, isOpen: isOpen)
+        let prefix = renderedLinePrefix(depth: depth)
+        let line = prefix + markup.text
+        let prefixLength = depth * Self.indentSpacesPerDepth + Self.disclosureSlotSpaces
+        let lineLength = prefixLength + markup.utf16Length
+        var tokens: [DOMTreeToken] = []
+        tokens.reserveCapacity(markup.tokens.count)
+        for token in markup.tokens {
+            tokens.append(
+                DOMTreeToken(
+                    kind: token.kind,
+                    range: NSRange(location: prefixLength + token.range.location, length: token.range.length)
+                )
+            )
+        }
+
+        return DOMTreeLine(
+            node: node,
+            depth: depth,
+            rowIndex: rowIndex,
+            text: line,
+            textRange: NSRange(location: utf16Location, length: lineLength),
+            markupRange: NSRange(location: prefixLength, length: markup.utf16Length),
+            tokens: tokens,
+            displayColumnCount: prefixLength + markup.displayColumnCount,
+            hasDisclosure: hasDisclosure,
+            isOpen: isOpen
+        )
     }
 
     private func cachedMarkup(for node: DOMNodeModel, hasDisclosure: Bool, isOpen: Bool) -> DOMTreeMarkup {
@@ -745,7 +876,37 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     }
 
     private func renderedLinePrefix(depth: Int) -> String {
-        String(repeating: " ", count: depth * Self.indentSpacesPerDepth + Self.disclosureSlotSpaces)
+        if let cached = renderedLinePrefixCache[depth] {
+            return cached
+        }
+        let prefix = String(repeating: " ", count: depth * Self.indentSpacesPerDepth + Self.disclosureSlotSpaces)
+        renderedLinePrefixCache[depth] = prefix
+        return prefix
+    }
+
+    private func rebuildRowIndexAndPruneMarkupCache() {
+        var nextRowIndexByNodeID: [DOMNodeModel.ID: Int] = [:]
+        nextRowIndexByNodeID.reserveCapacity(rows.count)
+        var visibleNodeIDs = Set<DOMNodeModel.ID>()
+        visibleNodeIDs.reserveCapacity(rows.count)
+        for row in rows {
+            nextRowIndexByNodeID[row.node.id] = row.rowIndex
+            visibleNodeIDs.insert(row.node.id)
+        }
+        rowIndexByNodeID = nextRowIndexByNodeID
+        pruneMarkupCache(keeping: visibleNodeIDs)
+    }
+
+    private func recomputeMaxLineDisplayColumnCount() -> Int {
+        var maxColumnCount = 0
+        for row in rows where row.displayColumnCount > maxColumnCount {
+            maxColumnCount = row.displayColumnCount
+        }
+        return maxColumnCount
+    }
+
+    private func updateMeasuredTextWidth() {
+        measuredTextWidth = CGFloat(maxLineDisplayColumnCount) * Self.characterWidth
     }
 
     private func requestChildrenForOpenRowsIfNeeded() {
@@ -2080,6 +2241,10 @@ extension DOMTreeTextView {
         reloadTreeCallCount
     }
 
+    var buildRenderedRowsCallCountForTesting: Int {
+        buildRenderedRowsCallCount
+    }
+
     var rebuildTextStorageCallCountForTesting: Int {
         rebuildTextStorageCallCount
     }
@@ -2094,6 +2259,7 @@ extension DOMTreeTextView {
 
     func resetPerformanceCountersForTesting() {
         reloadTreeCallCount = 0
+        buildRenderedRowsCallCount = 0
         rebuildTextStorageCallCount = 0
         incrementalTextStorageEditCallCount = 0
         resetTextFragmentViewsCallCount = 0
@@ -2356,6 +2522,7 @@ private struct DOMTreeLine {
     let textRange: NSRange
     let markupRange: NSRange
     let tokens: [DOMTreeToken]
+    let displayColumnCount: Int
     let hasDisclosure: Bool
     let isOpen: Bool
 
@@ -2364,8 +2531,24 @@ private struct DOMTreeLine {
             && depth == other.depth
             && text == other.text
             && tokens == other.tokens
+            && displayColumnCount == other.displayColumnCount
             && hasDisclosure == other.hasDisclosure
             && isOpen == other.isOpen
+    }
+
+    func offsettingTextRange(by delta: Int) -> DOMTreeLine {
+        DOMTreeLine(
+            node: node,
+            depth: depth,
+            rowIndex: rowIndex,
+            text: text,
+            textRange: NSRange(location: textRange.location + delta, length: textRange.length),
+            markupRange: markupRange,
+            tokens: tokens,
+            displayColumnCount: displayColumnCount,
+            hasDisclosure: hasDisclosure,
+            isOpen: isOpen
+        )
     }
 }
 

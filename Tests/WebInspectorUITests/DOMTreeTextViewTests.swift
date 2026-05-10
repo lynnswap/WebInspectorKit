@@ -380,6 +380,7 @@ struct DOMTreeTextViewTests {
 
         #expect(await waitUntilReloadCount(1, in: view))
         #expect(view.reloadTreeCallCountForTesting == 1)
+        #expect(view.buildRenderedRowsCallCountForTesting == 0)
         #expect(view.rebuildTextStorageCallCountForTesting == 0)
         #expect(view.incrementalTextStorageEditCallCountForTesting == 1)
         #expect(view.resetTextFragmentViewsCallCountForTesting == 0)
