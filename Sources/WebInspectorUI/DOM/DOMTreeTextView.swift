@@ -645,7 +645,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         }
 
         var nextRows: [DOMTreeLine] = []
-        var lines: [String] = []
+        var nextText = ""
         var utf16Location = 0
         var maxLineDisplayColumnCount = 0
 
@@ -655,12 +655,12 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
             let markup = cachedMarkup(for: node, hasDisclosure: hasDisclosure, isOpen: isOpen)
             let prefix = renderedLinePrefix(depth: depth)
             let line = prefix + markup.text
-            let prefixLength = (prefix as NSString).length
-            let lineLength = (line as NSString).length
-            maxLineDisplayColumnCount = max(maxLineDisplayColumnCount, Self.estimatedDisplayColumnCount(for: line))
+            let prefixLength = depth * Self.indentSpacesPerDepth + Self.disclosureSlotSpaces
+            let lineLength = prefixLength + markup.utf16Length
+            maxLineDisplayColumnCount = max(maxLineDisplayColumnCount, prefixLength + markup.displayColumnCount)
             let rowIndex = nextRows.count
             let textRange = NSRange(location: utf16Location, length: lineLength)
-            let markupRange = NSRange(location: prefixLength, length: (markup.text as NSString).length)
+            let markupRange = NSRange(location: prefixLength, length: markup.utf16Length)
             let tokens = markup.tokens.map {
                 DOMTreeToken(
                     kind: $0.kind,
@@ -681,7 +681,10 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
                     isOpen: isOpen
                 )
             )
-            lines.append(line)
+            if rowIndex > 0 {
+                nextText.append("\n")
+            }
+            nextText.append(line)
             utf16Location += lineLength + 1
 
             guard hasDisclosure, isOpen else {
@@ -697,47 +700,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
             append(node, depth: 0)
         }
 
-        return (nextRows, lines.joined(separator: "\n"), maxLineDisplayColumnCount)
-    }
-
-    private static func estimatedDisplayColumnCount(for string: String) -> Int {
-        if string.unicodeScalars.allSatisfy({ $0.isASCII }) {
-            return (string as NSString).length
-        }
-
-        return string.unicodeScalars.reduce(0) { columns, scalar in
-            columns + estimatedDisplayColumns(for: scalar)
-        }
-    }
-
-    private static func estimatedDisplayColumns(for scalar: Unicode.Scalar) -> Int {
-        switch scalar.value {
-        case 0x09:
-            return 4
-        case 0x0A, 0x0D:
-            return 0
-        case 0xFE00...0xFE0F, 0xE0100...0xE01EF, 0x200B, 0x200D:
-            return 0
-        default:
-            break
-        }
-
-        switch scalar.properties.generalCategory {
-        case .nonspacingMark, .spacingMark, .enclosingMark:
-            return 0
-        case .control, .format:
-            return 0
-        default:
-            break
-        }
-
-        if scalar.isASCII {
-            return 1
-        }
-
-        // Conservative non-ASCII sizing prevents full-width and fallback glyphs from being clipped
-        // without returning to per-line glyph measurement on the main thread.
-        return 2
+        return (nextRows, nextText, maxLineDisplayColumnCount)
     }
 
     private func cachedMarkup(for node: DOMNodeModel, hasDisclosure: Bool, isOpen: Bool) -> DOMTreeMarkup {
@@ -2529,18 +2492,23 @@ private struct DOMTreeHighlightTheme {
 
 private struct DOMTreeMarkup {
     private(set) var text = ""
+    private(set) var utf16Length = 0
+    private(set) var displayColumnCount = 0
     private(set) var tokens: [DOMTreeToken] = []
 
     mutating func append(_ fragment: String, kind: DOMTreeTokenKind) {
         guard !fragment.isEmpty else {
             return
         }
-        let start = (text as NSString).length
+        let metrics = domTreeTextMetrics(for: fragment)
+        let start = utf16Length
         text += fragment
+        utf16Length += metrics.utf16Length
+        displayColumnCount += metrics.displayColumnCount
         tokens.append(
             DOMTreeToken(
                 kind: kind,
-                range: NSRange(location: start, length: (fragment as NSString).length)
+                range: NSRange(location: start, length: metrics.utf16Length)
             )
         )
     }
@@ -2556,6 +2524,86 @@ private struct DOMTreeMarkup {
         append(value, kind: .text)
         append("\"", kind: .punctuation)
     }
+}
+
+private struct DOMTreeTextMetrics {
+    let utf16Length: Int
+    let displayColumnCount: Int
+}
+
+private func domTreeTextMetrics(for string: String) -> DOMTreeTextMetrics {
+    var utf8Length = 0
+    var asciiColumnCount = 0
+    var isASCII = true
+
+    for byte in string.utf8 {
+        utf8Length += 1
+        if byte < 0x80 {
+            asciiColumnCount += domTreeASCIIColumnCount(for: byte)
+        } else {
+            isASCII = false
+            break
+        }
+    }
+
+    if isASCII {
+        return DOMTreeTextMetrics(
+            utf16Length: utf8Length,
+            displayColumnCount: asciiColumnCount
+        )
+    }
+
+    var utf16Length = 0
+    var displayColumnCount = 0
+    for scalar in string.unicodeScalars {
+        utf16Length += scalar.value > 0xFFFF ? 2 : 1
+        displayColumnCount += domTreeDisplayColumnCount(for: scalar)
+    }
+    return DOMTreeTextMetrics(
+        utf16Length: utf16Length,
+        displayColumnCount: displayColumnCount
+    )
+}
+
+private func domTreeASCIIColumnCount(for byte: UInt8) -> Int {
+    switch byte {
+    case 0x09:
+        return 4
+    case 0x0A, 0x0D:
+        return 0
+    default:
+        return 1
+    }
+}
+
+private func domTreeDisplayColumnCount(for scalar: Unicode.Scalar) -> Int {
+    switch scalar.value {
+    case 0x09:
+        return 4
+    case 0x0A, 0x0D:
+        return 0
+    case 0xFE00...0xFE0F, 0xE0100...0xE01EF, 0x200B, 0x200D:
+        return 0
+    default:
+        break
+    }
+
+    switch scalar.properties.generalCategory {
+    case .nonspacingMark, .spacingMark, .enclosingMark:
+        return 0
+    case .control, .format:
+        return 0
+    default:
+        break
+    }
+
+    if scalar.isASCII {
+        return 1
+    }
+
+    // Conservative non-ASCII sizing prevents full-width and fallback glyphs from being clipped
+    // without returning to per-line glyph measurement on the main thread.
+    return 2
 }
 
 @MainActor
