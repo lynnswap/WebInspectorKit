@@ -66,6 +66,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     private var scheduledTreeReloadTask: Task<Void, Never>?
     private var treeInvalidationHandlerID: UUID?
     private var resolvedTextAttributesCache: DOMTreeResolvedTextAttributes?
+    private var disclosureSymbolImageCache: [DisclosureSymbolImageCacheKey: UIImage] = [:]
     private var renderedLinePrefixCache: [Int: String] = [:]
     private var markupCache: [DOMNodeModel.ID: DOMTreeCachedMarkup] = [:]
     private var maxLineDisplayColumnCount = 0
@@ -511,6 +512,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         addInteraction(findCoordinator.findInteraction)
         registerForTraitChanges(UITraitCollection.systemTraitsAffectingColorAppearance) { (self: DOMTreeTextView, _) in
             self.resolvedTextAttributesCache = nil
+            self.disclosureSymbolImageCache.removeAll(keepingCapacity: true)
             self.reapplyTextAttributes()
             self.updateDecorations()
         }
@@ -1544,21 +1546,70 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
 
     private func disclosureAttachmentString(isOpen: Bool) -> NSAttributedString {
         var attributes = baseTextAttributes()
-        attributes[.foregroundColor] = DOMTreeHighlightTheme.webInspector.disclosure.resolvedColor(with: traitCollection)
+        let disclosureColor = DOMTreeHighlightTheme.webInspector.disclosure.resolvedColor(with: traitCollection)
+        attributes[.foregroundColor] = disclosureColor
 
-        guard let image = Self.disclosureSymbolImage(isOpen: isOpen) else {
+        guard let image = disclosureSymbolImage(isOpen: isOpen, color: disclosureColor) else {
             return NSAttributedString(string: isOpen ? "v" : ">", attributes: attributes)
         }
 
-        let attributedString = NSMutableAttributedString(attachment: NSTextAttachment(image: image))
+        let attachment = NSTextAttachment(image: image)
+        attachment.bounds = Self.disclosureAttachmentBounds(for: image)
+        let attributedString = NSMutableAttributedString(attachment: attachment)
         attributedString.addAttributes(attributes, range: NSRange(location: 0, length: attributedString.length))
         return attributedString
     }
 
-    private static func disclosureSymbolImage(isOpen: Bool) -> UIImage? {
-        UIImage(
-            systemName: isOpen ? "chevron.down" : "chevron.right",
+    private func disclosureSymbolImage(isOpen: Bool, color: UIColor) -> UIImage? {
+        let key = DisclosureSymbolImageCacheKey(userInterfaceStyle: traitCollection.userInterfaceStyle, isOpen: isOpen)
+        if let cached = disclosureSymbolImageCache[key] {
+            return cached
+        }
+        guard let image = Self.rotatedDisclosureTriangleImage(isOpen: isOpen, color: color) else {
+            return nil
+        }
+        disclosureSymbolImageCache[key] = image
+        return image
+    }
+
+    private static func rotatedDisclosureTriangleImage(isOpen: Bool, color: UIColor) -> UIImage? {
+        guard let image = UIImage(
+            systemName: "triangle.fill",
             withConfiguration: disclosureSymbolConfiguration
+        )?.withTintColor(color, renderingMode: .alwaysOriginal) else {
+            return nil
+        }
+        return rotatedImage(image, radians: isOpen ? .pi : .pi / 2)
+    }
+
+    private static func rotatedImage(_ image: UIImage, radians: CGFloat) -> UIImage {
+        let sourceSize = image.size
+        let rotatedBounds = CGRect(origin: .zero, size: sourceSize)
+            .applying(CGAffineTransform(rotationAngle: radians))
+            .standardized
+        let targetSize = CGSize(width: ceil(rotatedBounds.width), height: ceil(rotatedBounds.height))
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = image.scale
+        format.opaque = false
+        return UIGraphicsImageRenderer(size: targetSize, format: format).image { rendererContext in
+            let context = rendererContext.cgContext
+            context.translateBy(x: targetSize.width / 2, y: targetSize.height / 2)
+            context.rotate(by: radians)
+            image.draw(in: CGRect(
+                x: -sourceSize.width / 2,
+                y: -sourceSize.height / 2,
+                width: sourceSize.width,
+                height: sourceSize.height
+            ))
+        }
+    }
+
+    private static func disclosureAttachmentBounds(for image: UIImage) -> CGRect {
+        CGRect(
+            x: 0,
+            y: (font.capHeight - image.size.height) / 2,
+            width: image.size.width,
+            height: image.size.height
         )
     }
 
@@ -3205,6 +3256,11 @@ private final class DOMTreeTextLayoutFragmentView: UIView {
 
         layoutFragment.draw(at: layoutFragmentDrawPoint, in: context)
     }
+}
+
+private struct DisclosureSymbolImageCacheKey: Hashable {
+    let userInterfaceStyle: UIUserInterfaceStyle
+    let isOpen: Bool
 }
 
 private extension CGRect {
