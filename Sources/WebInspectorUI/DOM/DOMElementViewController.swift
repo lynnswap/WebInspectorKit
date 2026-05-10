@@ -93,8 +93,8 @@ final class DOMElementViewController: UICollectionViewController {
         collectionView.dataSource = dataSource
 
         nodeObservationScope.cancelAll()
-        dom.document.observe(\.selectedNode) { [weak self] node in
-            self?.applyNode(node)
+        dom.document.observe([\.documentState, \.selectedNode, \.errorMessage]) { [weak self] in
+            self?.applyDocumentState()
         }
         .store(in: nodeObservationScope)
     }
@@ -179,6 +179,25 @@ final class DOMElementViewController: UICollectionViewController {
         return dataSource
     }
 
+    private func applyDocumentState() {
+        switch dom.document.documentState {
+        case .loading:
+            applyUnavailableState(
+                text: wiLocalized("dom.element.loading", default: "Loading DOM..."),
+                secondaryText: nil,
+                image: UIImage(systemName: "arrow.clockwise")
+            )
+        case .failed:
+            applyUnavailableState(
+                text: dom.document.errorMessage ?? wiLocalized("dom.element.load_failed", default: "Failed to load DOM"),
+                secondaryText: nil,
+                image: UIImage(systemName: "exclamationmark.triangle")
+            )
+        case .detached, .ready:
+            applyNode(dom.document.selectedNode)
+        }
+    }
+
     private func applyNode(_ selectedNode: DOMNodeModel?) {
         if let selectedNode {
             if contentUnavailableConfiguration != nil {
@@ -188,17 +207,24 @@ final class DOMElementViewController: UICollectionViewController {
 
             observeSections(of: selectedNode)
         } else {
-            sectionObservationScope.update {}
-            if contentUnavailableConfiguration == nil {
-                var configuration = UIContentUnavailableConfiguration.empty()
-                configuration.text = wiLocalized("dom.element.select_prompt")
-                configuration.secondaryText = wiLocalized("dom.element.hint")
-                configuration.image = UIImage(systemName: "cursorarrow.rays")
-                contentUnavailableConfiguration = configuration
-            }
-            let snapshot = NSDiffableDataSourceSnapshot<Section, Item>()
-            dataSource.applySnapshotUsingReloadData(snapshot)
+            applyUnavailableState(
+                text: wiLocalized("dom.element.select_prompt"),
+                secondaryText: wiLocalized("dom.element.hint"),
+                image: UIImage(systemName: "cursorarrow.rays")
+            )
         }
+    }
+
+    private func applyUnavailableState(text: String, secondaryText: String?, image: UIImage?) {
+        sectionObservationScope.update {}
+        var configuration = UIContentUnavailableConfiguration.empty()
+        configuration.text = text
+        configuration.secondaryText = secondaryText
+        configuration.image = image
+        contentUnavailableConfiguration = configuration
+
+        let snapshot = NSDiffableDataSourceSnapshot<Section, Item>()
+        dataSource.applySnapshotUsingReloadData(snapshot)
     }
 
     private func observeSections(of selectedNode: DOMNodeModel) {
@@ -320,6 +346,10 @@ final class DOMElementViewController: UICollectionViewController {
 extension DOMElementViewController {
     var isShowingEmptyStateForTesting: Bool {
         contentUnavailableConfiguration != nil
+    }
+
+    var contentUnavailableTextForTesting: String? {
+        (contentUnavailableConfiguration as? UIContentUnavailableConfiguration)?.text
     }
 
     var renderedSectionIdentifiersForTesting: [String] {

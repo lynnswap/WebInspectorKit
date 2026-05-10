@@ -452,7 +452,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     }
 
     private func startObservingDocument() {
-        dom.document.observe([\.rootNode, \.errorMessage, \.projectionRevision]) { [weak self] in
+        dom.document.observe([\.documentState, \.rootNode, \.errorMessage, \.projectionRevision]) { [weak self] in
             self?.reloadTree()
         }
         .store(in: observationScope)
@@ -475,6 +475,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         requestedChildNodeIDs = requestedChildNodeIDs.filter { nodeID in
             dom.document.node(id: nodeID) != nil
         }
+        requestChildrenForOpenRowsIfNeeded()
         resetTextFragmentViews()
         rebuildTextStorage()
 
@@ -517,6 +518,9 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     }
 
     private func buildRenderedRows() -> (rows: [DOMTreeLine], text: String) {
+        guard dom.document.documentState == .ready else {
+            return ([], "")
+        }
         guard let rootNode = dom.document.rootNode else {
             return ([], "")
         }
@@ -570,7 +574,6 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
             guard hasDisclosure, isOpen else {
                 return
             }
-            requestChildrenIfNeeded(for: node)
             for child in node.children {
                 append(child, depth: depth + 1)
             }
@@ -607,6 +610,15 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
 
     private static func disclosureX(depth: Int) -> CGFloat {
         CGFloat(depth * indentSpacesPerDepth) * characterWidth
+    }
+
+    private func requestChildrenForOpenRowsIfNeeded() {
+        guard dom.document.documentState == .ready else {
+            return
+        }
+        for row in rows where row.hasDisclosure && row.isOpen {
+            requestChildrenIfNeeded(for: row.node)
+        }
     }
 
     private func nodeName(for node: DOMNodeModel) -> String {

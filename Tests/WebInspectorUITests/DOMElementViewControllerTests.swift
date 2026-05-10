@@ -22,6 +22,29 @@ struct DOMElementViewControllerTests {
     }
 
     @Test
+    func elementViewDistinguishesLoadingFromReadyWithoutSelection() async {
+        let runtime = WIDOMRuntime()
+        runtime.document.beginLoadingDocument(isFreshDocument: true)
+        let (viewController, window) = makeHostedElementViewController(runtime: runtime)
+        defer { tearDown(window: window) }
+
+        let loadingStateReady = await waitUntil {
+            viewController.contentUnavailableTextForTesting == "Loading DOM..."
+                && viewController.collectionView.numberOfSections == 0
+        }
+        #expect(loadingStateReady)
+
+        runtime.document.replaceDocument(with: .init(root: makeNode(localID: 1)))
+
+        let readyEmptyStateReady = await waitUntil {
+            viewController.contentUnavailableTextForTesting != nil
+                && viewController.contentUnavailableTextForTesting != "Loading DOM..."
+                && viewController.collectionView.numberOfSections == 0
+        }
+        #expect(readyEmptyStateReady)
+    }
+
+    @Test
     func elementViewRendersSelectedNodeSections() async throws {
         let runtime = WIDOMRuntime()
         seedSelectedNode(

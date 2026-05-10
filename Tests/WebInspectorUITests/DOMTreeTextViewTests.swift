@@ -203,6 +203,22 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func loadingDocumentStateClearsRenderedRows() {
+        let runtime = WIDOMRuntime()
+        runtime.document.replaceDocument(with: .init(root: makeDocumentNode()))
+        let view = makeTreeView(runtime: runtime)
+
+        #expect(view.renderedTextForTesting.contains("<html"))
+        #expect(view.rowCountForTesting > 0)
+
+        runtime.document.beginLoadingDocument(isFreshDocument: true)
+        view.synchronizeDocumentForTesting()
+
+        #expect(view.renderedTextForTesting.isEmpty)
+        #expect(view.rowCountForTesting == 0)
+    }
+
+    @Test
     func usesWebInspectorDynamicHighlightColors() throws {
         let lightTag = try #require(DOMTreeTextView.tokenColorForTesting(kind: "tagName", style: .light))
         let darkTag = try #require(DOMTreeTextView.tokenColorForTesting(kind: "tagName", style: .dark))

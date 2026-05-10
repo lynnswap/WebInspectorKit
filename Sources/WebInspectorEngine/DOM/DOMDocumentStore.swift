@@ -4,9 +4,17 @@ import OSLog
 
 private let domDocumentLogger = Logger(subsystem: "WebInspectorKit", category: "DOMDocumentModel")
 
+public enum DOMDocumentState: Equatable, Sendable {
+    case detached
+    case loading
+    case ready
+    case failed
+}
+
 @MainActor
 @Observable
 public final class DOMDocumentModel {
+    public private(set) var documentState: DOMDocumentState = .detached
     public private(set) var rootNode: DOMNodeModel?
     public private(set) var selectedNode: DOMNodeModel?
     public private(set) var errorMessage: String?
@@ -52,6 +60,25 @@ public final class DOMDocumentModel {
         )
     }
 
+    package func beginLoadingDocument(isFreshDocument: Bool = true) {
+        let previousDocumentIdentity = documentIdentity
+        let previousSelectedNode = selectedNode
+        let previousRootNode = rootNode
+        if isFreshDocument {
+            documentIdentity = UUID()
+        }
+        clearContents()
+        documentState = .loading
+        projectionRevision &+= 1
+        guard previousSelectedNode != nil || previousRootNode != nil else {
+            return
+        }
+        logDocumentDiagnostics(
+            "beginLoadingDocument",
+            extra: "isFreshDocument=\(isFreshDocument) previousDocumentIdentity=\(compactDocumentIdentity(previousDocumentIdentity)) nextDocumentIdentity=\(compactDocumentIdentity(documentIdentity)) previousRoot=\(selectionNodeSummary(previousRootNode))"
+        )
+    }
+
     package func clearDocument(isFreshDocument: Bool = true) {
         let previousDocumentIdentity = documentIdentity
         let previousSelectedNode = selectedNode
@@ -60,6 +87,7 @@ public final class DOMDocumentModel {
             documentIdentity = UUID()
         }
         clearContents()
+        documentState = .detached
         projectionRevision &+= 1
         guard previousSelectedNode != nil || previousRootNode != nil else {
             return
@@ -68,6 +96,13 @@ public final class DOMDocumentModel {
             "clearDocument",
             extra: "isFreshDocument=\(isFreshDocument) previousDocumentIdentity=\(compactDocumentIdentity(previousDocumentIdentity)) nextDocumentIdentity=\(compactDocumentIdentity(documentIdentity)) previousRoot=\(selectionNodeSummary(previousRootNode))"
         )
+    }
+
+    package func failDocumentLoad(_ message: String?) {
+        clearContents()
+        errorMessage = message
+        documentState = .failed
+        projectionRevision &+= 1
     }
 
     package func replaceDocument(
@@ -86,6 +121,7 @@ public final class DOMDocumentModel {
         ) {
             rootNode = buildSubtree(from: snapshot.root, parent: nil)
         }
+        documentState = .ready
         projectionRevision &+= 1
     }
 

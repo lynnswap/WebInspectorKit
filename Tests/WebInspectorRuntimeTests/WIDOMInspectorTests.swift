@@ -589,6 +589,224 @@ struct WIDOMInspectorTests {
     }
 
     @Test
+    func reloadPageReloadsWhenOnlyDocumentUpdatedArrives() async throws {
+        var currentURL = "https://example.com/a"
+        var getDocumentCallCount = 0
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, _, _ in
+                guard method == WITransportMethod.DOM.getDocument else {
+                    return [:]
+                }
+                getDocumentCallCount += 1
+                return makeDocumentResult(url: currentURL)
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let initiallyReady = await waitForCondition {
+            inspector.testIsReady
+                && inspector.document.documentState == .ready
+                && inspector.document.rootNode != nil
+                && inspector.testCurrentDocumentURL == "https://example.com/a"
+        }
+        #expect(initiallyReady)
+
+        inspector.document.applySelectionSnapshot(
+            .init(
+                localID: 5,
+                backendNodeID: 5,
+                attributes: [],
+                path: ["html", "body", "main", "div"],
+                selectorPath: "#target",
+                styleRevision: 0
+            )
+        )
+        #expect(inspector.document.selectedNode?.localID == 5)
+
+        currentURL = "https://example.com/b"
+        try await inspector.reloadPage()
+
+        #expect(inspector.document.documentState == .loading)
+        #expect(inspector.document.rootNode == nil)
+        #expect(inspector.document.selectedNode == nil)
+
+        backend.emitPageEvent(
+            method: "DOM.attributeModified",
+            params: ["nodeId": 5, "name": "class", "value": "stale"],
+            targetIdentifier: "page-A"
+        )
+        let staleMutationStartedLoad = await waitForCondition(maxAttempts: 10) {
+            getDocumentCallCount > 1 || inspector.testIsReady
+        }
+        #expect(staleMutationStartedLoad == false)
+        #expect(inspector.document.documentState == .loading)
+
+        backend.emitPageEvent(method: "DOM.documentUpdated", params: [:], targetIdentifier: "page-A")
+
+        let reloaded = await waitForCondition {
+            inspector.testIsReady
+                && inspector.document.documentState == .ready
+                && inspector.document.rootNode != nil
+                && inspector.testCurrentDocumentURL == "https://example.com/b"
+        }
+        #expect(reloaded)
+    }
+
+    @Test
+    func documentUpdatedDuringActiveBootstrapDoesNotRestartBootstrap() async {
+        var getDocumentCallCount = 0
+        var backend: FakeDOMTransportBackend!
+        backend = FakeDOMTransportBackend()
+        backend.pageResultProvider = { method, _, _ in
+            if method == WITransportMethod.DOM.enable {
+                backend.emitPageEvent(method: "DOM.documentUpdated", params: [:], targetIdentifier: "page-A")
+            }
+            guard method == WITransportMethod.DOM.getDocument else {
+                return [:]
+            }
+            getDocumentCallCount += 1
+            return makeDocumentResult(url: "https://example.com/a")
+        }
+        let inspector = makeInspector(using: backend)
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+
+        let loaded = await waitForCondition {
+            inspector.testIsReady
+                && inspector.document.documentState == .ready
+                && inspector.document.rootNode != nil
+                && inspector.testCurrentDocumentURL == "https://example.com/a"
+        }
+        #expect(loaded)
+        #expect(getDocumentCallCount <= 2)
+    }
+
+    @Test
+    func documentUpdatedAfterFailedBootstrapResetsDocumentStateBeforeRetry() async {
+        var getDocumentCallCount = 0
+        var retryDocumentState: DOMDocumentState?
+        var inspector: WIDOMInspector!
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, _, _ in
+                guard method == WITransportMethod.DOM.getDocument else {
+                    return [:]
+                }
+                getDocumentCallCount += 1
+                if getDocumentCallCount == 1 {
+                    throw DOMOperationError.scriptFailure("initial load failed")
+                }
+                retryDocumentState = inspector.document.documentState
+                return makeDocumentResult(url: "https://example.com/a")
+            }
+        )
+        inspector = makeInspector(using: backend)
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+
+        let failed = await waitForCondition {
+            inspector.document.documentState == .failed
+        }
+        #expect(failed)
+
+        backend.emitPageEvent(method: "DOM.documentUpdated", params: [:], targetIdentifier: "page-A")
+
+        let reloaded = await waitForCondition {
+            inspector.testIsReady
+                && inspector.document.documentState == .ready
+                && inspector.document.rootNode != nil
+        }
+        #expect(reloaded)
+        #expect(retryDocumentState == .loading)
+    }
+
+    @Test
+    func sameWebViewReattachRestartsLoadingDocumentAfterReloadPage() async throws {
+        var currentURL = "https://example.com/a"
+        let backend = FakeDOMTransportBackend(
+            emitsInitialPageTargetCreatedOnAttach: false,
+            pageResultProvider: { method, _, _ in
+                guard method == WITransportMethod.DOM.getDocument else {
+                    return [:]
+                }
+                return makeDocumentResult(url: currentURL)
+            }
+        )
+        let inspector = makeInspector(
+            using: backend,
+            derivedPageTargetIdentifier: "page-A"
+        )
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let initiallyReady = await waitForCondition {
+            inspector.testIsReady
+                && inspector.document.documentState == .ready
+                && inspector.testCurrentDocumentURL == "https://example.com/a"
+        }
+        #expect(initiallyReady)
+
+        currentURL = "https://example.com/b"
+        try await inspector.reloadPage()
+
+        #expect(inspector.document.documentState == .loading)
+        #expect(inspector.document.rootNode == nil)
+
+        await inspector.attach(to: webView)
+
+        let reloaded = await waitForCondition {
+            inspector.testIsReady
+                && inspector.document.documentState == .ready
+                && inspector.document.rootNode != nil
+                && inspector.testCurrentDocumentURL == "https://example.com/b"
+        }
+        #expect(reloaded)
+    }
+
+    @Test
+    func targetCreatedDuringUnknownTargetLoadingStartsDocumentLoad() async {
+        let backend = FakeDOMTransportBackend(
+            emitsInitialPageTargetCreatedOnAttach: false,
+            pageResultProvider: { method, _, _ in
+                guard method == WITransportMethod.DOM.getDocument else {
+                    return [:]
+                }
+                return makeDocumentResult(url: "https://example.com/a")
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+
+        #expect(inspector.document.documentState == .loading)
+        #expect(inspector.testIsReady == false)
+        #expect(inspector.document.rootNode == nil)
+
+        backend.emitRootEvent(
+            method: "Target.targetCreated",
+            params: [
+                "targetInfo": [
+                    "targetId": "page-A",
+                    "type": "page",
+                    "isProvisional": false,
+                ],
+            ]
+        )
+
+        let loaded = await waitForCondition {
+            inspector.testIsReady
+                && inspector.document.documentState == .ready
+                && inspector.document.rootNode != nil
+                && inspector.testCurrentDocumentURL == "https://example.com/a"
+        }
+        #expect(loaded)
+    }
+
+    @Test
     func unknownParentSetChildNodesDoesNotRefreshCurrentDocumentFromTransport() async throws {
         var getDocumentCallCount = 0
         let backend = FakeDOMTransportBackend(

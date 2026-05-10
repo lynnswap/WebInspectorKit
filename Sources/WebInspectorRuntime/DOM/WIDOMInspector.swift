@@ -69,16 +69,14 @@ private final class WIPageWebViewLifetimeObserver {
 public final class WIDOMInspector {
     private enum Phase: Equatable {
         case idle
-        case waitingForTarget(DOMContext)
-        case loadingDocument(DOMContext, targetIdentifier: String)
+        case loadingDocument(DOMContext, targetIdentifier: String?)
         case ready(DOMContext, targetIdentifier: String)
 
         var context: DOMContext? {
             switch self {
             case .idle:
                 nil
-            case let .waitingForTarget(context),
-                 let .loadingDocument(context, _),
+            case let .loadingDocument(context, _),
                  let .ready(context, _):
                 context
             }
@@ -93,9 +91,11 @@ public final class WIDOMInspector {
 
         var targetIdentifier: String? {
             switch self {
-            case .idle, .waitingForTarget:
+            case .idle:
                 return nil
-            case let .loadingDocument(_, targetIdentifier), let .ready(_, targetIdentifier):
+            case let .loadingDocument(_, targetIdentifier):
+                return targetIdentifier
+            case let .ready(_, targetIdentifier):
                 return targetIdentifier
             }
         }
@@ -394,6 +394,7 @@ public final class WIDOMInspector {
                 clearContextState(reason: "attach.transportUnavailable.sameWebView")
                 return
             }
+            ensureDocumentLoadIsActive(reason: "attach.sameWebView")
             return
         }
 
@@ -709,7 +710,7 @@ public final class WIDOMInspector {
         setPhase(.idle)
         inspectSelectionArm = nil
         cancelPendingChildRequestRecords()
-        document.setErrorMessage(nil)
+        document.clearDocument(isFreshDocument: true)
         clearDeleteUndoHistory()
         Task { @MainActor [sharedTransport] in
             await sharedTransport.detach(client: .dom)
@@ -1256,6 +1257,45 @@ private extension WIDOMInspector {
         throw DOMOperationError.contextInvalidated
     }
 
+    func ensureDocumentLoadIsActive(reason: String) {
+        guard case let .loadingDocument(context, activeTargetIdentifier) = phase,
+              currentContext?.contextID == context.contextID,
+              bootstrapTask == nil else {
+            return
+        }
+        guard let targetIdentifier = activeTargetIdentifier
+            ?? sharedTransport.currentObservedPageTargetIdentifier()
+            ?? sharedTransport.currentPageTargetIdentifier()
+            ?? sharedTransport.currentCommittedPageTargetIdentifier()
+        else {
+            logBootstrapDiagnostics("ensureDocumentLoadIsActive awaiting target reason=\(reason) context=\(context.contextID)")
+            return
+        }
+        logBootstrapDiagnostics("ensureDocumentLoadIsActive starting load reason=\(reason) context=\(context.contextID) target=\(targetIdentifier)")
+        startLoadingDocumentEnsuringLoadingState(
+            for: context,
+            targetIdentifier: targetIdentifier,
+            depth: configuration.snapshotDepth,
+            isFreshDocument: false
+        )
+    }
+
+    func documentLoadTargetIdentifier(
+        activeTargetIdentifier: String?,
+        eventTargetIdentifier: String?
+    ) -> String? {
+        if let activeTargetIdentifier {
+            return activeTargetIdentifier
+        }
+        if let eventTargetIdentifier,
+           sharedTransport.targetKind(for: eventTargetIdentifier) != .frame {
+            return eventTargetIdentifier
+        }
+        return sharedTransport.currentObservedPageTargetIdentifier()
+            ?? sharedTransport.currentPageTargetIdentifier()
+            ?? sharedTransport.currentCommittedPageTargetIdentifier()
+    }
+
     func cancelStaleInspectModeBeforeBeginningSelectionIfNeeded() async {
         var shouldCancelStaleInspectMode =
             isSelectingElement
@@ -1375,15 +1415,11 @@ private extension WIDOMInspector {
         nextContextID &+= 1
         currentContext = context
         self.documentURL = documentURL
-        document.clearDocument(isFreshDocument: isFreshDocument)
+        document.beginLoadingDocument(isFreshDocument: isFreshDocument)
         applyRecoverableError(nil)
         inspectSelectionArm = nil
 
-        if loadImmediately, let targetIdentifier {
-            setPhase(.loadingDocument(context, targetIdentifier: targetIdentifier))
-        } else {
-            setPhase(.waitingForTarget(context))
-        }
+        setPhase(.loadingDocument(context, targetIdentifier: targetIdentifier))
 
 #if canImport(UIKit)
         await resetNativeInspectorSelectionStateForFreshContext(
@@ -1396,7 +1432,7 @@ private extension WIDOMInspector {
         )
 
         guard loadImmediately, let targetIdentifier else {
-            logBootstrapDiagnostics("phase waitingForTarget context=\(context.contextID)")
+            logBootstrapDiagnostics("phase loadingDocument awaiting target context=\(context.contextID)")
             return
         }
 
@@ -1404,6 +1440,24 @@ private extension WIDOMInspector {
             for: context,
             targetIdentifier: targetIdentifier,
             depth: configuration.snapshotDepth,
+            isFreshDocument: isFreshDocument
+        )
+    }
+
+    func startLoadingDocumentEnsuringLoadingState(
+        for context: DOMContext,
+        targetIdentifier: String,
+        depth: Int,
+        isFreshDocument: Bool
+    ) {
+        if document.documentState != .loading {
+            document.beginLoadingDocument(isFreshDocument: isFreshDocument)
+            applyRecoverableError(nil)
+        }
+        startLoadingDocument(
+            for: context,
+            targetIdentifier: targetIdentifier,
+            depth: depth,
             isFreshDocument: isFreshDocument
         )
     }
@@ -1437,8 +1491,8 @@ private extension WIDOMInspector {
                 guard let self, self.currentContext?.contextID == context.contextID else {
                     return
                 }
-                self.setPhase(.waitingForTarget(context))
-                self.applyRecoverableError(self.errorMessage(from: error))
+                self.setPhase(.loadingDocument(context, targetIdentifier: targetIdentifier))
+                self.failCurrentDocumentLoad(self.errorMessage(from: error))
             }
         }
     }
@@ -1641,29 +1695,21 @@ private extension WIDOMInspector {
             }
             let observedTargetIdentifier = sharedTransport.currentObservedPageTargetIdentifier()
             switch phase {
-            case let .waitingForTarget(context):
+            case let .loadingDocument(context, activeTargetIdentifier):
                 guard let targetIdentifier = observedTargetIdentifier
                     ?? sharedTransport.currentPageTargetIdentifier()
                     ?? envelope.targetIdentifier
                 else {
                     return
                 }
-                startLoadingDocument(
+                guard activeTargetIdentifier != targetIdentifier || bootstrapTask == nil else {
+                    return
+                }
+                startLoadingDocumentEnsuringLoadingState(
                     for: context,
                     targetIdentifier: targetIdentifier,
                     depth: configuration.snapshotDepth,
-                    isFreshDocument: true
-                )
-            case let .loadingDocument(context, activeTargetIdentifier):
-                guard let observedTargetIdentifier,
-                      observedTargetIdentifier != activeTargetIdentifier else {
-                    return
-                }
-                startLoadingDocument(
-                    for: context,
-                    targetIdentifier: observedTargetIdentifier,
-                    depth: configuration.snapshotDepth,
-                    isFreshDocument: true
+                    isFreshDocument: activeTargetIdentifier != nil && activeTargetIdentifier != targetIdentifier
                 )
             default:
                 return
@@ -1685,7 +1731,8 @@ private extension WIDOMInspector {
             guard transportLifecycleEventIsForPage(envelope) else {
                 return
             }
-            guard envelope.targetIdentifier == phase.targetIdentifier else {
+            guard let activeTargetIdentifier = phase.targetIdentifier,
+                  envelope.targetIdentifier == activeTargetIdentifier else {
                 return
             }
             let replacementTargetIdentifier = sharedTransport.currentObservedPageTargetIdentifier()
@@ -1711,17 +1758,53 @@ private extension WIDOMInspector {
         if isInspectEvent == false,
            case let .loadingDocument(context, activeTargetIdentifier) = phase {
             let matchesLoadingTarget =
-                envelope.targetIdentifier == nil
+                activeTargetIdentifier == nil
+                || envelope.targetIdentifier == nil
                 || envelope.targetIdentifier == activeTargetIdentifier
                 || sharedTransport.targetKind(for: envelope.targetIdentifier) == .frame
-            if matchesLoadingTarget {
-                noteDeferredLoadingMutation(
-                    contextID: context.contextID,
-                    targetIdentifier: activeTargetIdentifier,
-                    method: envelope.method
+
+            guard matchesLoadingTarget else {
+                return
+            }
+
+            if envelope.method == "DOM.documentUpdated" {
+                guard let targetIdentifier = documentLoadTargetIdentifier(
+                    activeTargetIdentifier: activeTargetIdentifier,
+                    eventTargetIdentifier: envelope.targetIdentifier
+                ) else {
+                    return
+                }
+                if activeTargetIdentifier == targetIdentifier, bootstrapTask != nil {
+                    noteDeferredLoadingMutation(
+                        contextID: context.contextID,
+                        targetIdentifier: targetIdentifier,
+                        method: envelope.method
+                    )
+                    return
+                }
+                startLoadingDocumentEnsuringLoadingState(
+                    for: context,
+                    targetIdentifier: targetIdentifier,
+                    depth: configuration.snapshotDepth,
+                    isFreshDocument: true
                 )
                 return
             }
+
+            if let targetIdentifier = documentLoadTargetIdentifier(
+                activeTargetIdentifier: activeTargetIdentifier,
+                eventTargetIdentifier: envelope.targetIdentifier
+            ) {
+                if activeTargetIdentifier != nil {
+                    noteDeferredLoadingMutation(
+                        contextID: context.contextID,
+                        targetIdentifier: targetIdentifier,
+                        method: envelope.method
+                    )
+                }
+                return
+            }
+            return
         }
         guard case let .ready(context, targetIdentifier) = phase,
               isInspectEvent
@@ -3203,14 +3286,6 @@ private extension WIDOMInspector {
             where context.contextID == contextID && activeTargetIdentifier == targetIdentifier:
             break
         case let .loadingDocument(context, _)
-            where context.contextID == contextID:
-            logSelectionDiagnostics(
-                "materializePendingInspectSelection deferred while document is not ready",
-                selector: selectorPath,
-                extra: "nodeID=\(nodeID) target=\(targetIdentifier) phase=\(String(describing: phase))"
-            )
-            return .waitingForMutation
-        case let .waitingForTarget(context)
             where context.contextID == contextID:
             logSelectionDiagnostics(
                 "materializePendingInspectSelection deferred while document is not ready",
@@ -5091,10 +5166,8 @@ private extension WIDOMInspector {
         switch phase {
         case .idle:
             phaseDescription = "idle"
-        case let .waitingForTarget(context):
-            phaseDescription = "waitingForTarget(\(context.contextID))"
         case let .loadingDocument(context, targetIdentifier):
-            phaseDescription = "loadingDocument(\(context.contextID),target=\(targetIdentifier))"
+            phaseDescription = "loadingDocument(\(context.contextID),target=\(targetIdentifier ?? "nil"))"
         case let .ready(context, targetIdentifier):
             phaseDescription = "ready(\(context.contextID),target=\(targetIdentifier))"
         }
@@ -5890,6 +5963,11 @@ private extension WIDOMInspector {
         externalRecoverableErrorHandler?(message)
     }
 
+    func failCurrentDocumentLoad(_ message: String?) {
+        document.failDocumentLoad(message)
+        externalRecoverableErrorHandler?(message)
+    }
+
     func errorMessage(from error: any Error) -> String? {
         if let error = error as? DOMOperationError {
             switch error {
@@ -6096,7 +6174,7 @@ extension WIDOMInspector {
             else {
                 return
             }
-            startLoadingDocument(
+            startLoadingDocumentEnsuringLoadingState(
                 for: context,
                 targetIdentifier: targetIdentifier,
                 depth: configuration.snapshotDepth,
@@ -6144,7 +6222,7 @@ extension WIDOMInspector {
         if let targetIdentifier {
             setPhase(.ready(context, targetIdentifier: targetIdentifier))
         } else {
-            setPhase(.waitingForTarget(context))
+            setPhase(.loadingDocument(context, targetIdentifier: nil))
         }
     }
 
