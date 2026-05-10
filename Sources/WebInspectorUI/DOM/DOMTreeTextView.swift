@@ -110,27 +110,31 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     override var keyCommands: [UIKeyCommand]? {
         [
             UIKeyCommand(
+                title: wiLocalized("Extend Selection Up"),
+                action: #selector(extendMultiSelectionUp),
                 input: UIKeyCommand.inputUpArrow,
                 modifierFlags: .shift,
-                action: #selector(extendMultiSelectionUp),
                 discoverabilityTitle: wiLocalized("Extend Selection Up")
             ),
             UIKeyCommand(
+                title: wiLocalized("Extend Selection Down"),
+                action: #selector(extendMultiSelectionDown),
                 input: UIKeyCommand.inputDownArrow,
                 modifierFlags: .shift,
-                action: #selector(extendMultiSelectionDown),
                 discoverabilityTitle: wiLocalized("Extend Selection Down")
             ),
             UIKeyCommand(
+                title: wiLocalized("Select All"),
+                action: #selector(selectAllRenderedRows),
                 input: "a",
                 modifierFlags: .command,
-                action: #selector(selectAllRenderedRows),
                 discoverabilityTitle: wiLocalized("Select All")
             ),
             UIKeyCommand(
+                title: wiLocalized("Find"),
+                action: #selector(showFindNavigator),
                 input: "f",
                 modifierFlags: .command,
-                action: #selector(showFindNavigator),
                 discoverabilityTitle: wiLocalized("Find")
             )
         ]
@@ -146,16 +150,6 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         updateTextLayoutGeometry()
         layoutManager.textViewportLayoutController.layoutViewport()
         revealPendingSelectedNodeIfPossible()
-    }
-
-    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
-        super.traitCollectionDidChange(previousTraitCollection)
-        guard previousTraitCollection?.hasDifferentColorAppearance(comparedTo: traitCollection) == true else {
-            return
-        }
-
-        reapplyTextAttributes()
-        updateDecorations()
     }
 
     func viewportBounds(for textViewportLayoutController: NSTextViewportLayoutController) -> CGRect {
@@ -445,6 +439,10 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
             gestureRecognizer.require(toFail: tapRecognizer)
         }
         addInteraction(findCoordinator.findInteraction)
+        registerForTraitChanges(UITraitCollection.systemTraitsAffectingColorAppearance) { (self: DOMTreeTextView, _) in
+            self.reapplyTextAttributes()
+            self.updateDecorations()
+        }
     }
 
     private func startObservingDocument() {
@@ -1607,21 +1605,19 @@ extension DOMTreeTextView {
 
     var disclosureAttachmentSnapshotsForTesting: [DisclosureAttachmentSnapshot] {
         var snapshots: [DisclosureAttachmentSnapshot] = []
-        textStorage.enumerateAttribute(
-            .attachment,
-            in: NSRange(location: 0, length: textStorage.length)
-        ) { value, range, _ in
-            guard value != nil,
-                  let row = rows.first(where: {
-                      range.location >= $0.textRange.location && range.location < NSMaxRange($0.textRange)
-                  })
-            else {
-                return
+        for row in rows where row.hasDisclosure {
+            let location = row.textRange.location + row.depth * Self.indentSpacesPerDepth
+            guard location < textStorage.length else {
+                continue
+            }
+            let character = (textStorage.string as NSString).character(at: location)
+            guard character == 0xFFFC else {
+                continue
             }
             snapshots.append(
                 DisclosureAttachmentSnapshot(
                     text: row.text,
-                    column: range.location - row.textRange.location,
+                    column: location - row.textRange.location,
                     expectedColumn: row.depth * Self.indentSpacesPerDepth
                 )
             )
