@@ -70,8 +70,42 @@ struct DOMTreeTextViewTests {
 
         #expect(selectedRect.width >= 470)
         #expect(selectedRect.width > textWidth + 100)
-        #expect(selectedRect.height < view.rowHeightForTesting)
-        #expect(selectedRect.midY == CGFloat(inputLine.rowIndex) * view.rowHeightForTesting + view.rowHeightForTesting / 2)
+        #expect(selectedRect.height > 0)
+        #expect(selectedRect.height <= view.rowHeightForTesting)
+        #expect(selectedRect.midY >= 0)
+    }
+
+    @Test
+    func selectedRowBackgroundUsesTextKitHighlightVerticalGeometry() throws {
+        for (localID, text) in [(FixtureNodeID.body, "<body"), (FixtureNodeID.input, "<input")] {
+            let view = makeTreeView(selectedLocalID: localID)
+            view.frame = CGRect(x: 0, y: 0, width: 500, height: 320)
+            view.layoutIfNeeded()
+
+            let selectedRect = try #require(view.selectedRowRectsForTesting().first)
+            let textRect = try #require(view.textHighlightRectsForTesting(containing: text).first)
+
+            #expect(abs(selectedRect.minY - textRect.minY) < 0.5)
+            #expect(abs(selectedRect.midY - textRect.midY) < 0.5)
+            #expect(abs(selectedRect.height - textRect.height) < 0.5)
+        }
+    }
+
+    @Test
+    func rowHitTestingUsesTextKitLineFragmentGeometry() throws {
+        let view = makeTreeView()
+        view.frame = CGRect(x: 0, y: 0, width: 500, height: 320)
+        view.layoutIfNeeded()
+
+        let targetText = "<input disabled>"
+        let targetRect = try #require(view.textHighlightRectsForTesting(containing: targetText).first)
+        let hitText = try #require(
+            view.hitTestedLineTextForTesting(
+                atContentPoint: CGPoint(x: targetRect.midX, y: targetRect.midY)
+            )
+        )
+
+        #expect(hitText.contains(targetText))
     }
 
     @Test
@@ -618,24 +652,31 @@ private enum FixtureNodeID {
 
 private extension UIColor {
     var wiHexRGBForTesting: String {
-        var red: CGFloat = 0
-        var green: CGFloat = 0
-        var blue: CGFloat = 0
-        var alpha: CGFloat = 0
-        getRed(&red, green: &green, blue: &blue, alpha: &alpha)
-        let value = (Int(round(red * 255)) << 16)
-            | (Int(round(green * 255)) << 8)
-            | Int(round(blue * 255))
-        return String(format: "%06X", value)
+        let components = wiRGBAComponentsForTesting
+        let value = (Int(round(components.red * 255)) << 16)
+            | (Int(round(components.green * 255)) << 8)
+            | Int(round(components.blue * 255))
+        let hex = String(value, radix: 16, uppercase: true)
+        return String(repeating: "0", count: max(0, 6 - hex.count)) + hex
     }
 
     var wiAlphaForTesting: CGFloat {
-        var red: CGFloat = 0
-        var green: CGFloat = 0
-        var blue: CGFloat = 0
-        var alpha: CGFloat = 0
-        getRed(&red, green: &green, blue: &blue, alpha: &alpha)
-        return alpha
+        wiRGBAComponentsForTesting.alpha
+    }
+
+    private var wiRGBAComponentsForTesting: (red: CGFloat, green: CGFloat, blue: CGFloat, alpha: CGFloat) {
+        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)
+        let color = colorSpace.flatMap {
+            cgColor.converted(to: $0, intent: .defaultIntent, options: nil)
+        } ?? cgColor
+        let components = color.components ?? []
+        if components.count >= 4 {
+            return (components[0], components[1], components[2], components[3])
+        }
+        if components.count >= 2 {
+            return (components[0], components[0], components[0], components[1])
+        }
+        return (0, 0, 0, color.alpha)
     }
 }
 #endif

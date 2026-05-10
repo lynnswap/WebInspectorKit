@@ -18,11 +18,17 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     private static var disclosureSlotWidth: CGFloat {
         CGFloat(disclosureSlotSpaces) * characterWidth
     }
+    private static var paragraphLineHeight: CGFloat {
+        ceil(font.lineHeight + lineSpacing)
+    }
+    private static var textBaselineOffset: CGFloat {
+        (paragraphLineHeight - font.lineHeight) / 2
+    }
     private static var paragraphStyle: NSParagraphStyle {
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.lineBreakMode = .byClipping
-        paragraphStyle.minimumLineHeight = ceil(font.lineHeight + lineSpacing)
-        paragraphStyle.maximumLineHeight = ceil(font.lineHeight + lineSpacing)
+        paragraphStyle.minimumLineHeight = paragraphLineHeight
+        paragraphStyle.maximumLineHeight = paragraphLineHeight
         paragraphStyle.paragraphSpacing = 0
         paragraphStyle.paragraphSpacingBefore = 0
         return paragraphStyle
@@ -82,7 +88,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     }
 
     private var rowHeight: CGFloat {
-        ceil(Self.font.lineHeight + Self.lineSpacing)
+        Self.paragraphLineHeight
     }
 
     init(dom: WIDOMRuntime) {
@@ -784,14 +790,32 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     }
 
     private func row(at location: CGPoint) -> DOMTreeLine? {
-        guard location.y >= 0 else {
+        guard location.y >= 0,
+              let textRange = lineFragmentTextRange(at: location),
+              let textOffset = textOffset(for: textRange.location)
+        else {
             return nil
         }
-        let index = Int(location.y / rowHeight)
-        guard rows.indices.contains(index) else {
+        return row(containingTextOffset: textOffset)
+    }
+
+    private func lineFragmentTextRange(at location: CGPoint) -> NSTextRange? {
+        layoutManager.ensureLayout(for: visibleTextRect(horizontalPadding: 0))
+        return layoutManager.lineFragmentRange(
+            for: location,
+            inContainerAt: textContentStorage.documentRange.location
+        )
+    }
+
+    private func textOffset(for location: any NSTextLocation) -> Int? {
+        let offset = textContentStorage.offset(
+            from: textContentStorage.documentRange.location,
+            to: location
+        )
+        guard offset != NSNotFound else {
             return nil
         }
-        return rows[index]
+        return clampedTextOffset(offset)
     }
 
     private func clearHoveredRow() {
@@ -984,6 +1008,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         [
             .font: Self.font,
             .paragraphStyle: Self.paragraphStyle,
+            .baselineOffset: Self.textBaselineOffset,
             .foregroundColor: DOMTreeHighlightTheme.webInspector.baseForeground.resolvedColor(with: traitCollection)
         ]
     }
@@ -1177,7 +1202,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
 
     private func multiSelectionContentRowRects() -> [CGRect] {
         rows.flatMap { row in
-            multiSelectedNodeIDs.contains(row.node.id) ? [contentRowRect(rowIndex: row.rowIndex)] : []
+            multiSelectedNodeIDs.contains(row.node.id) ? contentRowRects(for: row) : []
         }
     }
 
@@ -1194,38 +1219,47 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         else {
             return []
         }
-        return [contentRowRect(rowIndex: rowIndex)]
+        return contentRowRects(for: rows[rowIndex])
     }
 
-    private func contentRowRect(rowIndex: Int) -> CGRect {
-        let highlightHeight = min(rowHeight, ceil(Self.font.lineHeight))
-        let highlightY = CGFloat(rowIndex) * rowHeight + (rowHeight - highlightHeight) / 2
-        return CGRect(
-            x: 0,
-            y: highlightY,
-            width: max(textContentView.bounds.width, contentSize.width - Self.textInsets.left - Self.textInsets.right),
-            height: highlightHeight
-        )
+    private func contentRowRects(for row: DOMTreeLine) -> [CGRect] {
+        textSegmentRects(for: row.textRange, type: .highlight).map { textRect in
+            CGRect(
+                x: 0,
+                y: textRect.minY,
+                width: max(textContentView.bounds.width, contentSize.width - Self.textInsets.left - Self.textInsets.right),
+                height: textRect.height
+            )
+        }
     }
 
-    private func textRects(for range: NSRange, layoutFragmentFrame: CGRect) -> [CGRect] {
+    private func textSegmentRects(for range: NSRange, type: NSTextLayoutManager.SegmentType) -> [CGRect] {
         guard let textRange = textRange(for: range) else {
             return []
         }
 
+        layoutManager.ensureLayout(for: textRange)
         var rects: [CGRect] = []
-        let fragmentLocalBounds = CGRect(origin: .zero, size: layoutFragmentFrame.size)
         layoutManager.enumerateTextSegments(
             in: textRange,
-            type: .standard,
+            type: type,
             options: [.rangeNotRequired]
         ) { _, rect, _, _ in
+            rects.append(rect)
+            return true
+        }
+        return rects
+    }
+
+    private func textRects(for range: NSRange, layoutFragmentFrame: CGRect) -> [CGRect] {
+        var rects: [CGRect] = []
+        let fragmentLocalBounds = CGRect(origin: .zero, size: layoutFragmentFrame.size)
+        for rect in textSegmentRects(for: range, type: .standard) {
             let localRect = rect.offsetBy(dx: -layoutFragmentFrame.minX, dy: -layoutFragmentFrame.minY)
             guard localRect.intersects(fragmentLocalBounds) else {
-                return true
+                continue
             }
             rects.append(localRect)
-            return true
         }
         return rects
     }
@@ -1767,7 +1801,22 @@ extension DOMTreeTextView {
     }
 
     var paragraphLineHeightForTesting: CGFloat {
-        Self.paragraphStyle.minimumLineHeight
+        Self.paragraphLineHeight
+    }
+
+    var textBaselineOffsetForTesting: CGFloat {
+        Self.textBaselineOffset
+    }
+
+    func textHighlightRectsForTesting(containing text: String) -> [CGRect] {
+        guard let row = rows.first(where: { $0.text.contains(text) }) else {
+            return []
+        }
+        return textSegmentRects(for: row.textRange, type: .highlight)
+    }
+
+    func hitTestedLineTextForTesting(atContentPoint point: CGPoint) -> String? {
+        row(at: point)?.text
     }
 
     static func tokenColorForTesting(kind: String, style: UIUserInterfaceStyle) -> UIColor? {
