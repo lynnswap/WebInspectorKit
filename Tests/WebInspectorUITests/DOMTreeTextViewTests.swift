@@ -328,6 +328,43 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func pickerSelectionOpensEmbeddedDocumentAncestorRowsToRevealIframeNode() throws {
+        let runtime = WIDOMRuntime()
+        runtime.document.replaceDocument(with: .init(root: makeIframeDocumentNode()))
+        let view = makeTreeView(runtime: runtime)
+
+        #expect(view.renderedTextForTesting.contains("<iframe src=\"https://cross.example/\">...</iframe>"))
+        #expect(!view.renderedTextForTesting.contains("<button id=\"inside-frame\"></button>"))
+
+        runtime.document.applySelectionSnapshot(
+            DOMSelectionSnapshotPayload(
+                localID: FixtureNodeID.iframeButton,
+                backendNodeID: Int(FixtureNodeID.iframeButton),
+                attributes: [DOMAttribute(name: "id", value: "inside-frame")],
+                path: ["html", "body", "iframe", "#document", "html", "body", "button"],
+                selectorPath: "iframe > #document > html > body > button",
+                styleRevision: 0
+            )
+        )
+        view.synchronizeDocumentForTesting()
+        view.layoutIfNeeded()
+
+        let text = view.renderedTextForTesting
+        let lines = view.renderedLineSnapshotsForTesting
+        let iframeLine = try #require(lines.first { $0.text.contains("<iframe src=\"https://cross.example/\">") })
+        let embeddedDocumentLine = try #require(lines.first { $0.text.contains("#document") })
+        let frameButtonLine = try #require(lines.first { $0.text.contains("<button id=\"inside-frame\"") })
+
+        #expect(text.contains("<button id=\"inside-frame\"></button>"))
+        #expect(!text.contains("<iframe src=\"https://cross.example/\">...</iframe>"))
+        #expect(iframeLine.isOpen)
+        #expect(embeddedDocumentLine.isOpen)
+        #expect(embeddedDocumentLine.depth == iframeLine.depth + 1)
+        #expect(frameButtonLine.depth > embeddedDocumentLine.depth)
+        #expect(view.selectedRowRectsForTesting().count == 1)
+    }
+
+    @Test
     func pickerSelectionReloadsOnlyWhenOpeningHiddenAncestors() async throws {
         let runtime = WIDOMRuntime()
         runtime.document.replaceDocument(with: .init(root: makeDocumentNode()))
@@ -813,6 +850,71 @@ struct DOMTreeTextViewTests {
         )
     }
 
+    private func makeIframeDocumentNode() -> DOMGraphNodeDescriptor {
+        makeNode(
+            localID: FixtureNodeID.document,
+            type: .document,
+            nodeName: "#document",
+            localName: "",
+            children: [
+                makeNode(
+                    localID: FixtureNodeID.html,
+                    nodeName: "HTML",
+                    localName: "html",
+                    children: [
+                        makeNode(
+                            localID: FixtureNodeID.body,
+                            nodeName: "BODY",
+                            localName: "body",
+                            children: [
+                                makeNode(
+                                    localID: FixtureNodeID.iframe,
+                                    nodeName: "IFRAME",
+                                    localName: "iframe",
+                                    attributes: [
+                                        DOMAttribute(name: "src", value: "https://cross.example/"),
+                                    ],
+                                    children: [
+                                        makeNode(
+                                            localID: FixtureNodeID.iframeDocument,
+                                            type: .document,
+                                            nodeName: "#document",
+                                            localName: "",
+                                            children: [
+                                                makeNode(
+                                                    localID: FixtureNodeID.iframeHTML,
+                                                    nodeName: "HTML",
+                                                    localName: "html",
+                                                    children: [
+                                                        makeNode(
+                                                            localID: FixtureNodeID.iframeBody,
+                                                            nodeName: "BODY",
+                                                            localName: "body",
+                                                            children: [
+                                                                makeNode(
+                                                                    localID: FixtureNodeID.iframeButton,
+                                                                    nodeName: "BUTTON",
+                                                                    localName: "button",
+                                                                    attributes: [
+                                                                        DOMAttribute(name: "id", value: "inside-frame"),
+                                                                    ]
+                                                                ),
+                                                            ]
+                                                        ),
+                                                    ]
+                                                ),
+                                            ]
+                                        ),
+                                    ]
+                                ),
+                            ]
+                        ),
+                    ]
+                ),
+            ]
+        )
+    }
+
     private func makeNode(
         localID: UInt64,
         type: DOMNodeType = .element,
@@ -863,6 +965,11 @@ private enum FixtureNodeID {
     static let nestedSpan: UInt64 = 12
     static let text: UInt64 = 13
     static let comment: UInt64 = 14
+    static let iframe: UInt64 = 15
+    static let iframeDocument: UInt64 = 16
+    static let iframeHTML: UInt64 = 17
+    static let iframeBody: UInt64 = 18
+    static let iframeButton: UInt64 = 19
 }
 
 private extension UIColor {

@@ -738,7 +738,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     private func openAncestors(of node: DOMNodeModel) {
         var current = node.parent
         while let ancestor = current {
-            if ancestor.nodeType != .document {
+            if ancestor.nodeType != .document || ancestor.parent != nil {
                 openState[ancestor.id] = true
             }
             current = ancestor.parent
