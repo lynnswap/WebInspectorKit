@@ -5,7 +5,7 @@ import WebInspectorEngine
 import WebInspectorRuntime
 
 @MainActor
-final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutControllerDelegate, UIContextMenuInteractionDelegate {
+final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutControllerDelegate, UITextInput, UITextInteractionDelegate {
     private static let font = UIFont.monospacedSystemFont(ofSize: 13, weight: .regular)
     private static let lineSpacing: CGFloat = 2
     private static let textInsets = UIEdgeInsets(top: 8, left: 10, bottom: 8, right: 16)
@@ -37,6 +37,13 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     private let fragmentViewMap = NSMapTable<NSTextLayoutFragment, DOMTreeTextLayoutFragmentView>.weakToWeakObjects()
     private var lastUsedFragmentViews: Set<DOMTreeTextLayoutFragmentView> = []
     private lazy var findCoordinator = DOMTreeFindCoordinator(textView: self)
+    private lazy var textSelectionInteraction: UITextInteraction = {
+        let interaction = UITextInteraction(for: .nonEditable)
+        interaction.delegate = self
+        interaction.textInput = self
+        return interaction
+    }()
+    private lazy var textInputTokenizer = UITextInputStringTokenizer(textInput: self)
 
     private var rows: [DOMTreeLine] = []
     private var renderedText = ""
@@ -50,6 +57,18 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     private var rowIndexByNodeID: [DOMNodeModel.ID: Int] = [:]
     private var lastObservedSelectedNodeID: DOMNodeModel.ID?
     private var pendingRevealSelectedNodeID: DOMNodeModel.ID?
+    private var multiSelectedNodeIDs: Set<DOMNodeModel.ID> = []
+    private var multiSelectionLastNodeID: DOMNodeModel.ID?
+    private var multiSelectionShiftAnchorNodeID: DOMNodeModel.ID?
+    private var multiSelectionShiftRangeNodeIDs: Set<DOMNodeModel.ID> = []
+    private var menuAnchorButton: UIButton?
+    private var selectedTextNSRange = NSRange(location: 0, length: 0)
+    private var markedTextNSRange: NSRange?
+    private var markedTextStyleStorage: [NSAttributedString.Key: Any]?
+    weak var inputDelegate: UITextInputDelegate?
+#if DEBUG
+    private var lastPresentedDOMMenuTitles: [String] = []
+#endif
 
     private var textStorage: NSTextStorage {
         guard let storage = textContentStorage.textStorage else {
@@ -90,6 +109,24 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
 
     override var keyCommands: [UIKeyCommand]? {
         [
+            UIKeyCommand(
+                input: UIKeyCommand.inputUpArrow,
+                modifierFlags: .shift,
+                action: #selector(extendMultiSelectionUp),
+                discoverabilityTitle: wiLocalized("Extend Selection Up")
+            ),
+            UIKeyCommand(
+                input: UIKeyCommand.inputDownArrow,
+                modifierFlags: .shift,
+                action: #selector(extendMultiSelectionDown),
+                discoverabilityTitle: wiLocalized("Extend Selection Down")
+            ),
+            UIKeyCommand(
+                input: "a",
+                modifierFlags: .command,
+                action: #selector(selectAllRenderedRows),
+                discoverabilityTitle: wiLocalized("Select All")
+            ),
             UIKeyCommand(
                 input: "f",
                 modifierFlags: .command,
@@ -194,14 +231,59 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
             return
         }
 
+        dismissDOMMenuAnchor()
+        clearTextSelection()
         let location = recognizer.location(in: textContentView)
         if row.hasDisclosure,
            location.x >= row.disclosureRect.minX,
            location.x <= row.disclosureRect.maxX {
             toggle(row: row)
+        } else if recognizer.modifierFlags.contains(.shift) {
+            extendMultiSelection(to: row)
+        } else if recognizer.modifierFlags.contains(.command) || recognizer.modifierFlags.contains(.control) {
+            toggleMultiSelection(row: row)
         } else {
+            clearMultiSelection(keepingLast: row.node.id)
             select(row.node)
         }
+    }
+
+    @objc private func handleSecondaryClick(_ recognizer: UITapGestureRecognizer) {
+        guard recognizer.state == .ended,
+              let row = row(at: recognizer.location(in: textContentView))
+        else {
+            return
+        }
+
+        let nodes: [DOMNodeModel]
+        if multiSelectedNodeIDs.count > 1, multiSelectedNodeIDs.contains(row.node.id) {
+            nodes = multiSelectedNodesInDisplayOrder()
+        } else {
+            clearMultiSelection(keepingLast: row.node.id)
+            nodes = [row.node]
+            select(row.node)
+        }
+        presentDOMMenu(for: nodes, at: recognizer.location(in: self))
+    }
+
+    @objc private func extendMultiSelectionUp() {
+        extendMultiSelectionByKeyboard(delta: -1)
+    }
+
+    @objc private func extendMultiSelectionDown() {
+        extendMultiSelectionByKeyboard(delta: 1)
+    }
+
+    @objc private func selectAllRenderedRows() {
+        guard !rows.isEmpty else {
+            clearMultiSelection(keepingLast: nil)
+            return
+        }
+        multiSelectedNodeIDs = Set(rows.map(\.node.id))
+        multiSelectionLastNodeID = rows.last?.node.id
+        multiSelectionShiftAnchorNodeID = rows.first?.node.id
+        multiSelectionShiftRangeNodeIDs = multiSelectedNodeIDs
+        updateContentDecorations()
     }
 
     @objc private func handleHover(_ recognizer: UIHoverGestureRecognizer) {
@@ -224,23 +306,6 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
             Task { @MainActor [dom] in await dom.hideNodeHighlight() }
         default:
             break
-        }
-    }
-
-    func contextMenuInteraction(
-        _ interaction: UIContextMenuInteraction,
-        configurationForMenuAtLocation location: CGPoint
-    ) -> UIContextMenuConfiguration? {
-        guard let row = row(at: convert(location, to: textContentView)) else {
-            return nil
-        }
-
-        select(row.node)
-        return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { [weak self, weak node = row.node] _ in
-            guard let self, let node else {
-                return UIMenu(children: [])
-            }
-            return self.makeContextMenu(for: node)
         }
     }
 
@@ -306,6 +371,47 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         return NSRange(location: lower, length: upper - lower)
     }
 
+    func interactionShouldBegin(_ interaction: UITextInteraction, at point: CGPoint) -> Bool {
+        let contentPoint = convert(point, to: textContentView)
+        if let row = row(at: contentPoint),
+           row.hasDisclosure,
+           contentPoint.x >= row.disclosureRect.minX,
+           contentPoint.x <= row.disclosureRect.maxX {
+            return false
+        }
+        dismissDOMMenuAnchor()
+        clearMultiSelection(keepingLast: multiSelectionLastNodeID)
+        return true
+    }
+
+    func interactionWillBegin(_ interaction: UITextInteraction) {
+        dismissDOMMenuAnchor()
+    }
+
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        if action == #selector(copy(_:)) {
+            return selectedTextNSRange.length > 0
+        }
+        return super.canPerformAction(action, withSender: sender)
+    }
+
+    override func copy(_ sender: Any?) {
+        guard selectedTextNSRange.length > 0,
+              let text = text(in: DOMTreeTextRange(range: selectedTextNSRange))
+        else {
+            return
+        }
+        UIPasteboard.general.string = text
+    }
+
+    func editMenu(for textRange: UITextRange, suggestedActions: [UIMenuElement]) -> UIMenu? {
+        let range = clampedTextRange(nsRange(from: textRange))
+        guard range.length > 0 else {
+            return UIMenu(children: [])
+        }
+        return makeTextSelectionEditMenu(for: range)
+    }
+
     private func configureTextSystem() {
         backgroundColor = .clear
         alwaysBounceVertical = true
@@ -325,10 +431,19 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
 
     private func configureInteractions() {
         let tapRecognizer = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
+        tapRecognizer.buttonMaskRequired = .primary
         addGestureRecognizer(tapRecognizer)
 
+        let secondaryClickRecognizer = UITapGestureRecognizer(target: self, action: #selector(handleSecondaryClick(_:)))
+        secondaryClickRecognizer.buttonMaskRequired = .secondary
+        secondaryClickRecognizer.allowedTouchTypes = [UITouch.TouchType.indirectPointer.rawValue as NSNumber]
+        addGestureRecognizer(secondaryClickRecognizer)
+
         addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(handleHover(_:))))
-        addInteraction(UIContextMenuInteraction(delegate: self))
+        addInteraction(textSelectionInteraction)
+        for gestureRecognizer in textSelectionInteraction.gesturesForFailureRequirements {
+            gestureRecognizer.require(toFail: tapRecognizer)
+        }
         addInteraction(findCoordinator.findInteraction)
     }
 
@@ -349,7 +464,9 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         let buildResult = buildRenderedRows()
         rows = buildResult.rows
         rowIndexByNodeID = Dictionary(uniqueKeysWithValues: rows.map { ($0.node.id, $0.rowIndex) })
+        reconcileMultiSelectionAfterReload()
         renderedText = buildResult.text
+        clampTextSelectionAfterTextChange()
         measuredTextWidth = measureTextWidth(renderedText)
         requestedChildNodeIDs = requestedChildNodeIDs.filter { nodeID in
             dom.document.node(id: nodeID) != nil
@@ -369,6 +486,11 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         let selectedNode = dom.document.selectedNode
         let selectedNodeID = selectedNode?.id
         if selectedNodeID != lastObservedSelectedNodeID {
+            if let selectedNodeID, !multiSelectedNodeIDs.contains(selectedNodeID) {
+                clearMultiSelection(keepingLast: selectedNodeID)
+            } else if selectedNodeID == nil {
+                clearMultiSelection(keepingLast: nil)
+            }
             lastObservedSelectedNodeID = selectedNodeID
             pendingRevealSelectedNodeID = selectedNodeID
         }
@@ -513,9 +635,154 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     }
 
     private func select(_ node: DOMNodeModel) {
+        multiSelectionLastNodeID = node.id
         Task { @MainActor [dom] in
             await dom.selectNode(node)
         }
+    }
+
+    private func toggleMultiSelection(row: DOMTreeLine) {
+        var selectedIDs = multiSelectedNodeIDs
+        if selectedIDs.isEmpty {
+            if let lastNodeID = multiSelectionLastNodeID,
+               rowIndexByNodeID[lastNodeID] != nil {
+                selectedIDs.insert(lastNodeID)
+            } else if let selectedNodeID = dom.document.selectedNode?.id,
+                      rowIndexByNodeID[selectedNodeID] != nil {
+                selectedIDs.insert(selectedNodeID)
+            }
+        }
+
+        if selectedIDs.contains(row.node.id) {
+            selectedIDs.remove(row.node.id)
+        } else {
+            selectedIDs.insert(row.node.id)
+        }
+        if selectedIDs.isEmpty {
+            selectedIDs.insert(row.node.id)
+        }
+
+        multiSelectedNodeIDs = selectedIDs
+        multiSelectionLastNodeID = row.node.id
+        multiSelectionShiftAnchorNodeID = nil
+        multiSelectionShiftRangeNodeIDs.removeAll(keepingCapacity: true)
+        updateContentDecorations()
+    }
+
+    private func extendMultiSelection(to row: DOMTreeLine) {
+        guard let anchorNodeID = multiSelectionAnchorNodeID() else {
+            return
+        }
+        let rangeRows = rowsBetween(anchorNodeID, row.node.id)
+        let rangeNodeIDs = Set(rangeRows.map(\.node.id))
+        guard !rangeNodeIDs.isEmpty else {
+            return
+        }
+
+        var selectedIDs = multiSelectedNodeIDs
+        if selectedIDs.isEmpty,
+           let selectedNodeID = dom.document.selectedNode?.id,
+           rowIndexByNodeID[selectedNodeID] != nil {
+            selectedIDs.insert(selectedNodeID)
+        }
+        selectedIDs.subtract(multiSelectionShiftRangeNodeIDs)
+        selectedIDs.formUnion(rangeNodeIDs)
+
+        multiSelectedNodeIDs = selectedIDs
+        multiSelectionShiftAnchorNodeID = anchorNodeID
+        multiSelectionShiftRangeNodeIDs = rangeNodeIDs
+        multiSelectionLastNodeID = row.node.id
+        updateContentDecorations()
+    }
+
+    private func extendMultiSelectionByKeyboard(delta: Int) {
+        guard !rows.isEmpty else {
+            return
+        }
+
+        let focusedNodeID = multiSelectionLastNodeID
+            ?? dom.document.selectedNode?.id
+            ?? rows.first?.node.id
+        guard let focusedNodeID,
+              let focusedIndex = rowIndexByNodeID[focusedNodeID]
+        else {
+            return
+        }
+
+        let targetIndex = min(max(focusedIndex + delta, 0), rows.count - 1)
+        guard targetIndex != focusedIndex else {
+            return
+        }
+        let targetRow = rows[targetIndex]
+        extendMultiSelection(to: targetRow)
+        scrollRowToVisible(targetRow)
+    }
+
+    private func multiSelectionAnchorNodeID() -> DOMNodeModel.ID? {
+        if let anchorNodeID = multiSelectionShiftAnchorNodeID,
+           rowIndexByNodeID[anchorNodeID] != nil {
+            return anchorNodeID
+        }
+        if let lastNodeID = multiSelectionLastNodeID,
+           rowIndexByNodeID[lastNodeID] != nil {
+            return lastNodeID
+        }
+        if let selectedNodeID = dom.document.selectedNode?.id,
+           rowIndexByNodeID[selectedNodeID] != nil {
+            return selectedNodeID
+        }
+        return rows.first?.node.id
+    }
+
+    private func rowsBetween(_ firstNodeID: DOMNodeModel.ID, _ secondNodeID: DOMNodeModel.ID) -> ArraySlice<DOMTreeLine> {
+        guard let firstIndex = rowIndexByNodeID[firstNodeID],
+              let secondIndex = rowIndexByNodeID[secondNodeID]
+        else {
+            return []
+        }
+        let lowerBound = min(firstIndex, secondIndex)
+        let upperBound = max(firstIndex, secondIndex)
+        return rows[lowerBound...upperBound]
+    }
+
+    private func clearMultiSelection(keepingLast nodeID: DOMNodeModel.ID?) {
+        multiSelectedNodeIDs.removeAll(keepingCapacity: true)
+        multiSelectionLastNodeID = nodeID
+        multiSelectionShiftAnchorNodeID = nil
+        multiSelectionShiftRangeNodeIDs.removeAll(keepingCapacity: true)
+        updateContentDecorations()
+    }
+
+    private func reconcileMultiSelectionAfterReload() {
+        let visibleNodeIDs = Set(rows.map(\.node.id))
+        multiSelectedNodeIDs.formIntersection(visibleNodeIDs)
+        multiSelectionShiftRangeNodeIDs.formIntersection(visibleNodeIDs)
+        if let nodeID = multiSelectionLastNodeID, !visibleNodeIDs.contains(nodeID) {
+            multiSelectionLastNodeID = nil
+        }
+        if let nodeID = multiSelectionShiftAnchorNodeID, !visibleNodeIDs.contains(nodeID) {
+            multiSelectionShiftAnchorNodeID = nil
+            multiSelectionShiftRangeNodeIDs.removeAll(keepingCapacity: true)
+        }
+        if multiSelectedNodeIDs.isEmpty {
+            multiSelectionShiftRangeNodeIDs.removeAll(keepingCapacity: true)
+        }
+    }
+
+    private func multiSelectedNodesInDisplayOrder() -> [DOMNodeModel] {
+        rows.compactMap { row in
+            multiSelectedNodeIDs.contains(row.node.id) ? row.node : nil
+        }
+    }
+
+    private func scrollRowToVisible(_ row: DOMTreeLine) {
+        let targetRect = CGRect(
+            x: Self.textInsets.left + (row.hasDisclosure ? row.disclosureRect.minX : CGFloat(row.markupRange.location) * Self.characterWidth),
+            y: Self.textInsets.top + CGFloat(row.rowIndex) * rowHeight,
+            width: 1,
+            height: rowHeight
+        )
+        scrollRectToVisible(targetRect.insetBy(dx: 0, dy: -rowHeight), animated: true)
     }
 
     private func row(at location: CGPoint) -> DOMTreeLine? {
@@ -535,6 +802,125 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         }
         hoveredNodeID = nil
         updateContentDecorations()
+    }
+
+    private func presentDOMMenu(for nodes: [DOMNodeModel], at location: CGPoint) {
+        let menu = makeDOMMenu(for: nodes)
+#if DEBUG
+        lastPresentedDOMMenuTitles = menu.children.compactMap { ($0 as? UIAction)?.title }
+#endif
+
+        dismissDOMMenuAnchor()
+        let button = UIButton(type: .system)
+        button.alpha = 0.01
+        button.menu = menu
+        button.showsMenuAsPrimaryAction = true
+        button.frame = CGRect(
+            x: contentOffset.x + location.x,
+            y: contentOffset.y + location.y,
+            width: 1,
+            height: 1
+        )
+        addSubview(button)
+        menuAnchorButton = button
+        button.performPrimaryAction()
+        Task { @MainActor [weak self, weak button] in
+            guard let self, self.menuAnchorButton === button else {
+                return
+            }
+            button?.isUserInteractionEnabled = false
+        }
+    }
+
+    private func dismissDOMMenuAnchor() {
+        menuAnchorButton?.menu = nil
+        menuAnchorButton?.removeFromSuperview()
+        menuAnchorButton = nil
+    }
+
+    private func makeDOMMenu(for nodes: [DOMNodeModel]) -> UIMenu {
+        if nodes.count > 1 {
+            makeMultiNodeMenu(for: nodes)
+        } else if let node = nodes.first {
+            makeContextMenu(for: node)
+        } else {
+            UIMenu(children: [])
+        }
+    }
+
+    private func makeTextSelectionEditMenu(for range: NSRange) -> UIMenu {
+        let selectedRows = rowsIntersectingTextRange(range)
+        let nodes = uniqueNodesInDisplayOrder(for: selectedRows)
+        guard !nodes.isEmpty else {
+            return UIMenu(children: [])
+        }
+
+        if selectedRows.count > 1 {
+            return makeMultiNodeMenu(for: nodes)
+        }
+
+        let copyText = UIAction(
+            title: "Copy",
+            image: UIImage(systemName: "doc.on.doc")
+        ) { [weak self] _ in
+            guard let self,
+                  let text = self.text(in: DOMTreeTextRange(range: range)),
+                  !text.isEmpty
+            else {
+                return
+            }
+            UIPasteboard.general.string = text
+        }
+
+        return UIMenu(children: [copyText] + makeDOMMenu(for: nodes).children)
+    }
+
+    private func rowsIntersectingTextRange(_ range: NSRange) -> [DOMTreeLine] {
+        let range = clampedTextRange(range)
+        guard range.length > 0 else {
+            return []
+        }
+        let lowerBound = range.location
+        let upperBound = NSMaxRange(range)
+        return rows.filter { row in
+            lowerBound < NSMaxRange(row.textRange) && upperBound > row.textRange.location
+        }
+    }
+
+    private func uniqueNodesInDisplayOrder(for rows: [DOMTreeLine]) -> [DOMNodeModel] {
+        var seenNodeIDs: Set<DOMNodeModel.ID> = []
+        return rows.compactMap { row in
+            seenNodeIDs.insert(row.node.id).inserted ? row.node : nil
+        }
+    }
+
+    private func makeMultiNodeMenu(for nodes: [DOMNodeModel]) -> UIMenu {
+        let copyHTML = UIAction(title: "Copy HTML") { [weak self] _ in
+            guard let self else {
+                return
+            }
+            Task { @MainActor [dom] in
+                guard let text = try? await dom.copyHTML(for: nodes), !text.isEmpty else {
+                    return
+                }
+                UIPasteboard.general.string = text
+            }
+        }
+
+        let deleteNodes = UIAction(
+            title: "Delete Nodes",
+            image: UIImage(systemName: "trash"),
+            attributes: .destructive
+        ) { [weak self] _ in
+            guard let self else {
+                return
+            }
+            Task { @MainActor [dom, undoManager] in
+                try? await dom.deleteNodes(nodes, undoManager: undoManager)
+            }
+        }
+
+        return UIMenu(children: [copyHTML, deleteNodes])
     }
 
     private func makeContextMenu(for node: DOMNodeModel) -> UIMenu {
@@ -782,10 +1168,19 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     }
 
     private func selectedContentRowRects() -> [CGRect] {
+        guard multiSelectedNodeIDs.isEmpty else {
+            return []
+        }
         guard let selectedNodeID = dom.document.selectedNode?.id else {
             return []
         }
         return rowRects(for: selectedNodeID)
+    }
+
+    private func multiSelectionContentRowRects() -> [CGRect] {
+        rows.flatMap { row in
+            multiSelectedNodeIDs.contains(row.node.id) ? [contentRowRect(rowIndex: row.rowIndex)] : []
+        }
     }
 
     private func hoverContentRowRects() -> [CGRect] {
@@ -858,6 +1253,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     private func updateContentDecorations() {
         textContentView.hoverRowRects = hoverContentRowRects()
         textContentView.selectedRowRects = selectedContentRowRects()
+        textContentView.multiSelectedRowRects = multiSelectionContentRowRects()
         textContentView.setNeedsDisplay()
     }
 
@@ -894,6 +1290,269 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
             animated: window != nil
         )
         pendingRevealSelectedNodeID = nil
+    }
+}
+
+extension DOMTreeTextView {
+    var hasText: Bool {
+        !renderedText.isEmpty
+    }
+
+    func insertText(_ text: String) {}
+
+    func deleteBackward() {}
+
+    var selectedTextRange: UITextRange? {
+        get { DOMTreeTextRange(range: selectedTextNSRange) }
+        set { setSelectedTextRange(newValue) }
+    }
+
+    var markedTextRange: UITextRange? {
+        markedTextNSRange.map(DOMTreeTextRange.init(range:))
+    }
+
+    var markedTextStyle: [NSAttributedString.Key: Any]? {
+        get { markedTextStyleStorage }
+        set { markedTextStyleStorage = newValue }
+    }
+
+    var beginningOfDocument: UITextPosition {
+        DOMTreeTextPosition(offset: 0)
+    }
+
+    var endOfDocument: UITextPosition {
+        DOMTreeTextPosition(offset: renderedTextUTF16Length)
+    }
+
+    var tokenizer: UITextInputTokenizer {
+        textInputTokenizer
+    }
+
+    var textInputView: UIView {
+        self
+    }
+
+    func text(in range: UITextRange) -> String? {
+        let range = clampedTextRange(nsRange(from: range))
+        guard range.length > 0 else {
+            return ""
+        }
+        return (renderedText as NSString).substring(with: range)
+    }
+
+    func replace(_ range: UITextRange, withText text: String) {}
+
+    func setMarkedText(_ markedText: String?, selectedRange: NSRange) {
+        markedTextNSRange = markedText.map { _ in selectedTextNSRange }
+    }
+
+    func unmarkText() {
+        markedTextNSRange = nil
+    }
+
+    func textRange(from fromPosition: UITextPosition, to toPosition: UITextPosition) -> UITextRange? {
+        let startOffset = offset(from: fromPosition)
+        let endOffset = offset(from: toPosition)
+        let lower = min(startOffset, endOffset)
+        let upper = max(startOffset, endOffset)
+        return DOMTreeTextRange(range: clampedTextRange(NSRange(location: lower, length: upper - lower)))
+    }
+
+    func position(from position: UITextPosition, offset: Int) -> UITextPosition? {
+        DOMTreeTextPosition(offset: clampedTextOffset(self.offset(from: position) + offset))
+    }
+
+    func position(from position: UITextPosition, in direction: UITextLayoutDirection, offset: Int) -> UITextPosition? {
+        let signedOffset = switch direction {
+        case .left, .up:
+            -offset
+        case .right, .down:
+            offset
+        @unknown default:
+            offset
+        }
+        return self.position(from: position, offset: signedOffset)
+    }
+
+    func compare(_ position: UITextPosition, to other: UITextPosition) -> ComparisonResult {
+        let lhs = offset(from: position)
+        let rhs = offset(from: other)
+        if lhs == rhs {
+            return .orderedSame
+        }
+        return lhs < rhs ? .orderedAscending : .orderedDescending
+    }
+
+    func offset(from: UITextPosition, to toPosition: UITextPosition) -> Int {
+        offset(from: toPosition) - offset(from: from)
+    }
+
+    func position(within range: UITextRange, farthestIn direction: UITextLayoutDirection) -> UITextPosition? {
+        let range = nsRange(from: range)
+        let offset = switch direction {
+        case .left, .up:
+            range.location
+        case .right, .down:
+            NSMaxRange(range)
+        @unknown default:
+            range.location
+        }
+        return DOMTreeTextPosition(offset: clampedTextOffset(offset))
+    }
+
+    func characterRange(byExtending position: UITextPosition, in direction: UITextLayoutDirection) -> UITextRange? {
+        let offset = offset(from: position)
+        let range: NSRange
+        switch direction {
+        case .left, .up:
+            range = NSRange(location: max(0, offset - 1), length: min(1, offset))
+        case .right, .down:
+            range = NSRange(location: offset, length: offset < renderedTextUTF16Length ? 1 : 0)
+        @unknown default:
+            range = NSRange(location: offset, length: 0)
+        }
+        return DOMTreeTextRange(range: clampedTextRange(range))
+    }
+
+    func baseWritingDirection(for position: UITextPosition, in direction: UITextStorageDirection) -> NSWritingDirection {
+        .leftToRight
+    }
+
+    func setBaseWritingDirection(_ writingDirection: NSWritingDirection, for range: UITextRange) {}
+
+    func firstRect(for range: UITextRange) -> CGRect {
+        selectionRects(for: range).first?.rect ?? .zero
+    }
+
+    func caretRect(for position: UITextPosition) -> CGRect {
+        let offset = offset(from: position)
+        let row = row(containingTextOffset: offset) ?? rows.last
+        guard let row else {
+            return .zero
+        }
+        let column = min(max(0, offset - row.textRange.location), row.textRange.length)
+        let localRect = CGRect(
+            x: CGFloat(column) * Self.characterWidth,
+            y: CGFloat(row.rowIndex) * rowHeight,
+            width: 2,
+            height: rowHeight
+        )
+        return textContentView.convert(localRect, to: self)
+    }
+
+    func selectionRects(for range: UITextRange) -> [UITextSelectionRect] {
+        let range = clampedTextRange(nsRange(from: range))
+        guard range.length > 0,
+              let textRange = textRange(for: range)
+        else {
+            return []
+        }
+
+        var rects: [UITextSelectionRect] = []
+        layoutManager.enumerateTextSegments(
+            in: textRange,
+            type: .standard,
+            options: [.rangeNotRequired]
+        ) { [weak self] _, rect, _, _ in
+            guard let self else {
+                return false
+            }
+            rects.append(
+                DOMTreeTextSelectionRect(
+                    rect: self.textContentView.convert(rect, to: self),
+                    containsStart: rects.isEmpty,
+                    containsEnd: false
+                )
+            )
+            return true
+        }
+        if let lastRect = rects.last as? DOMTreeTextSelectionRect {
+            lastRect.containsSelectionEnd = true
+        }
+        return rects
+    }
+
+    func closestPosition(to point: CGPoint) -> UITextPosition? {
+        DOMTreeTextPosition(offset: textOffset(at: point))
+    }
+
+    func closestPosition(to point: CGPoint, within range: UITextRange) -> UITextPosition? {
+        let range = clampedTextRange(nsRange(from: range))
+        return DOMTreeTextPosition(offset: min(max(textOffset(at: point), range.location), NSMaxRange(range)))
+    }
+
+    func characterRange(at point: CGPoint) -> UITextRange? {
+        let offset = textOffset(at: point)
+        return DOMTreeTextRange(
+            range: clampedTextRange(
+                NSRange(location: offset, length: offset < renderedTextUTF16Length ? 1 : 0)
+            )
+        )
+    }
+
+    private var renderedTextUTF16Length: Int {
+        (renderedText as NSString).length
+    }
+
+    private func setSelectedTextRange(_ range: UITextRange?) {
+        let nextRange = range.map { clampedTextRange(nsRange(from: $0)) } ?? NSRange(location: 0, length: 0)
+        guard selectedTextNSRange != nextRange else {
+            return
+        }
+        inputDelegate?.selectionWillChange(self)
+        selectedTextNSRange = nextRange
+        inputDelegate?.selectionDidChange(self)
+    }
+
+    private func clearTextSelection() {
+        setSelectedTextRange(DOMTreeTextRange(range: NSRange(location: 0, length: 0)))
+    }
+
+    private func clampTextSelectionAfterTextChange() {
+        selectedTextNSRange = clampedTextRange(selectedTextNSRange)
+        if let markedTextNSRange {
+            self.markedTextNSRange = clampedTextRange(markedTextNSRange)
+        }
+    }
+
+    private func nsRange(from range: UITextRange) -> NSRange {
+        guard let range = range as? DOMTreeTextRange else {
+            return NSRange(location: 0, length: 0)
+        }
+        return range.range
+    }
+
+    private func offset(from position: UITextPosition) -> Int {
+        guard let position = position as? DOMTreeTextPosition else {
+            return 0
+        }
+        return clampedTextOffset(position.offset)
+    }
+
+    private func clampedTextOffset(_ offset: Int) -> Int {
+        min(max(0, offset), renderedTextUTF16Length)
+    }
+
+    private func textOffset(at point: CGPoint) -> Int {
+        let contentPoint = convert(point, to: textContentView)
+        guard let row = row(at: contentPoint) else {
+            if contentPoint.y < 0 {
+                return 0
+            }
+            return renderedTextUTF16Length
+        }
+        let column = min(
+            max(0, Int(round(contentPoint.x / Self.characterWidth))),
+            row.textRange.length
+        )
+        return clampedTextOffset(row.textRange.location + column)
+    }
+
+    private func row(containingTextOffset offset: Int) -> DOMTreeLine? {
+        let offset = clampedTextOffset(offset)
+        return rows.first { row in
+            offset >= row.textRange.location && offset <= NSMaxRange(row.textRange)
+        }
     }
 }
 
@@ -992,6 +1651,88 @@ extension DOMTreeTextView {
         toggle(row: row)
     }
 
+    func primaryClickRowForTesting(containing text: String, modifiers: UIKeyModifierFlags = []) {
+        guard let row = rows.first(where: { $0.text.contains(text) }) else {
+            return
+        }
+        dismissDOMMenuAnchor()
+        clearTextSelection()
+        if modifiers.contains(.shift) {
+            extendMultiSelection(to: row)
+        } else if modifiers.contains(.command) || modifiers.contains(.control) {
+            toggleMultiSelection(row: row)
+        } else {
+            clearMultiSelection(keepingLast: row.node.id)
+            multiSelectionLastNodeID = row.node.id
+        }
+    }
+
+    func secondaryClickMenuTitlesForTesting(containing text: String) -> [String] {
+        guard let row = rows.first(where: { $0.text.contains(text) }) else {
+            return []
+        }
+        let nodes: [DOMNodeModel]
+        if multiSelectedNodeIDs.count > 1, multiSelectedNodeIDs.contains(row.node.id) {
+            nodes = multiSelectedNodesInDisplayOrder()
+        } else {
+            clearMultiSelection(keepingLast: row.node.id)
+            nodes = [row.node]
+        }
+        let menu = makeDOMMenu(for: nodes)
+        let titles = menu.children.compactMap { ($0 as? UIAction)?.title }
+        lastPresentedDOMMenuTitles = titles
+        return titles
+    }
+
+    var multiSelectedLocalIDsForTesting: [UInt64] {
+        rows.compactMap { row in
+            multiSelectedNodeIDs.contains(row.node.id) ? row.node.localID : nil
+        }
+    }
+
+    var lastPresentedDOMMenuTitlesForTesting: [String] {
+        lastPresentedDOMMenuTitles
+    }
+
+    func selectTextForTesting(_ text: String) {
+        let nsText = renderedText as NSString
+        let range = nsText.range(of: text)
+        guard range.location != NSNotFound else {
+            return
+        }
+        setSelectedTextRange(DOMTreeTextRange(range: range))
+    }
+
+    func selectTextForTesting(from startText: String, through endText: String) {
+        let nsText = renderedText as NSString
+        let startRange = nsText.range(of: startText)
+        let endRange = nsText.range(of: endText)
+        guard startRange.location != NSNotFound,
+              endRange.location != NSNotFound
+        else {
+            return
+        }
+
+        let lowerBound = min(startRange.location, endRange.location)
+        let upperBound = max(NSMaxRange(startRange), NSMaxRange(endRange))
+        setSelectedTextRange(DOMTreeTextRange(range: NSRange(location: lowerBound, length: upperBound - lowerBound)))
+    }
+
+    var selectedTextForTesting: String {
+        text(in: DOMTreeTextRange(range: selectedTextNSRange)) ?? ""
+    }
+
+    func editMenuTitlesForSelectedTextForTesting() -> [String] {
+        let suggestedActions = [
+            UIAction(title: "Translate") { _ in },
+            UIAction(title: "Share...") { _ in },
+        ]
+        return editMenu(
+            for: DOMTreeTextRange(range: selectedTextNSRange),
+            suggestedActions: suggestedActions
+        )?.children.compactMap { ($0 as? UIAction)?.title } ?? []
+    }
+
     func decorateFindTextForTesting(query: String) {
         clearFindDecorations()
         for range in DOMTreeFindCoordinator.searchRanges(in: renderedText, queryString: query) {
@@ -1006,7 +1747,7 @@ extension DOMTreeTextView {
         guard let row = rows.first(where: { $0.text.contains(text) }) else {
             return nil
         }
-        return makeContextMenu(for: row.node)
+        return makeDOMMenu(for: [row.node])
     }
 
     func contextMenuTitlesForTesting(containing text: String) -> [String] {
@@ -1053,6 +1794,69 @@ extension DOMTreeTextView {
     }
 }
 #endif
+
+private final class DOMTreeTextPosition: UITextPosition {
+    let offset: Int
+
+    init(offset: Int) {
+        self.offset = offset
+        super.init()
+    }
+}
+
+private final class DOMTreeTextRange: UITextRange {
+    let range: NSRange
+
+    init(range: NSRange) {
+        self.range = range
+        super.init()
+    }
+
+    override var start: UITextPosition {
+        DOMTreeTextPosition(offset: range.location)
+    }
+
+    override var end: UITextPosition {
+        DOMTreeTextPosition(offset: NSMaxRange(range))
+    }
+
+    override var isEmpty: Bool {
+        range.length == 0
+    }
+}
+
+private final class DOMTreeTextSelectionRect: UITextSelectionRect {
+    private let storageRect: CGRect
+    private let containsSelectionStart: Bool
+    var containsSelectionEnd: Bool
+
+    init(rect: CGRect, containsStart: Bool, containsEnd: Bool) {
+        self.storageRect = rect
+        self.containsSelectionStart = containsStart
+        self.containsSelectionEnd = containsEnd
+        super.init()
+    }
+
+    override var rect: CGRect {
+        storageRect
+    }
+
+    override var writingDirection: NSWritingDirection {
+        .leftToRight
+    }
+
+    override var containsStart: Bool {
+        containsSelectionStart
+    }
+
+    override var containsEnd: Bool {
+        containsSelectionEnd
+    }
+
+    override var isVertical: Bool {
+        false
+    }
+}
 
 private struct DOMTreeLine {
     let node: DOMNodeModel
@@ -1410,6 +2214,9 @@ private final class DOMTreeTextContentView: UIView {
     var hoverRowRects: [CGRect] = [] {
         didSet { setNeedsDisplay() }
     }
+    var multiSelectedRowRects: [CGRect] = [] {
+        didSet { setNeedsDisplay() }
+    }
     var selectedRowRects: [CGRect] = [] {
         didSet { setNeedsDisplay() }
     }
@@ -1440,6 +2247,9 @@ private final class DOMTreeTextContentView: UIView {
 
         context.saveGState()
         context.setFillColor(DOMTreeHighlightTheme.webInspector.selectedRowBackground.resolvedColor(with: traitCollection).cgColor)
+        for rowRect in multiSelectedRowRects where rowRect.intersects(rect) {
+            context.fill(rowRect)
+        }
         for rowRect in selectedRowRects where rowRect.intersects(rect) {
             context.fill(rowRect)
         }

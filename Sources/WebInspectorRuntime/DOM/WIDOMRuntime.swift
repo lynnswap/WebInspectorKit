@@ -130,6 +130,15 @@ public final class WIDOMRuntime {
         try await inspector.copyNode(nodeID: node.id, kind: .html)
     }
 
+    package func copyHTML(for nodes: [DOMNodeModel]) async throws -> String {
+        var seenNodeIDs: Set<DOMNodeModel.ID> = []
+        var fragments: [String] = []
+        for node in nodes where seenNodeIDs.insert(node.id).inserted {
+            fragments.append(try await copyHTML(for: node))
+        }
+        return fragments.joined(separator: "\n")
+    }
+
     package func copySelectorPath(for node: DOMNodeModel) async throws -> String {
         try await inspector.copyNode(nodeID: node.id, kind: .selectorPath)
     }
@@ -140,6 +149,26 @@ public final class WIDOMRuntime {
 
     package func deleteNode(_ node: DOMNodeModel, undoManager: UndoManager?) async throws {
         try await inspector.deleteNode(nodeID: node.id, undoManager: undoManager)
+    }
+
+    package func deleteNodes(_ nodes: [DOMNodeModel], undoManager: UndoManager?) async throws {
+        var seenNodeIDs: Set<DOMNodeModel.ID> = []
+        let uniqueNodes = nodes.filter { seenNodeIDs.insert($0.id).inserted }
+        for node in uniqueNodes.sorted(by: { $0.depthFromRoot > $1.depthFromRoot }) {
+            try await deleteNode(node, undoManager: undoManager)
+        }
+    }
+}
+
+private extension DOMNodeModel {
+    var depthFromRoot: Int {
+        var depth = 0
+        var current = parent
+        while let ancestor = current {
+            depth += 1
+            current = ancestor.parent
+        }
+        return depth
     }
 }
 

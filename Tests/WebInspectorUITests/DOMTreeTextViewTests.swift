@@ -250,6 +250,159 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func shiftClickSelectsContiguousRowsFromTheAnchor() throws {
+        let view = makeTreeView()
+
+        view.primaryClickRowForTesting(containing: "<div id=\"start-of-content\"")
+        view.primaryClickRowForTesting(containing: "<input disabled>", modifiers: .shift)
+
+        #expect(view.multiSelectedLocalIDsForTesting == [
+            FixtureNodeID.div,
+            FixtureNodeID.unknownElement,
+            FixtureNodeID.image,
+            FixtureNodeID.input,
+        ])
+    }
+
+    @Test
+    func repeatedShiftClickReplacesPreviousShiftRangeButKeepsCommandSelection() throws {
+        let view = makeTreeView()
+
+        view.primaryClickRowForTesting(containing: "<!DOCTYPE", modifiers: .command)
+        view.primaryClickRowForTesting(containing: "<div id=\"start-of-content\"", modifiers: .command)
+        view.primaryClickRowForTesting(containing: "<input disabled>", modifiers: .shift)
+        view.primaryClickRowForTesting(containing: "<article>", modifiers: .shift)
+
+        #expect(view.multiSelectedLocalIDsForTesting == [
+            FixtureNodeID.doctype,
+            FixtureNodeID.div,
+            FixtureNodeID.unknownElement,
+            FixtureNodeID.image,
+            FixtureNodeID.input,
+            FixtureNodeID.article,
+        ])
+    }
+
+    @Test
+    func shiftClickWithoutAnAnchorSelectsFromTheFirstRenderedRow() throws {
+        let view = makeTreeView()
+
+        view.primaryClickRowForTesting(containing: "<body", modifiers: .shift)
+
+        #expect(view.multiSelectedLocalIDsForTesting == [
+            FixtureNodeID.doctype,
+            FixtureNodeID.html,
+            FixtureNodeID.head,
+            FixtureNodeID.body,
+        ])
+    }
+
+    @Test
+    func commandClickBuildsNonContiguousSelectionWithoutChangingDisclosureState() throws {
+        let view = makeTreeView()
+
+        view.primaryClickRowForTesting(containing: "<body")
+        view.primaryClickRowForTesting(containing: "<div id=\"start-of-content\"", modifiers: .command)
+        view.primaryClickRowForTesting(containing: "<input disabled>", modifiers: .command)
+
+        #expect(view.multiSelectedLocalIDsForTesting == [
+            FixtureNodeID.body,
+            FixtureNodeID.div,
+            FixtureNodeID.input,
+        ])
+        let bodyLine = try #require(view.renderedLineSnapshotsForTesting.first { $0.text.contains("<body") })
+        #expect(bodyLine.isOpen)
+    }
+
+    @Test
+    func secondaryClickInsideMultipleSelectionPreservesSelectionAndShowsMultiNodeMenu() {
+        let view = makeTreeView()
+
+        view.primaryClickRowForTesting(containing: "<div id=\"start-of-content\"")
+        view.primaryClickRowForTesting(containing: "<input disabled>", modifiers: .shift)
+        let titles = view.secondaryClickMenuTitlesForTesting(containing: "<img src=")
+
+        #expect(titles == ["Copy HTML", "Delete Nodes"])
+        #expect(view.multiSelectedLocalIDsForTesting == [
+            FixtureNodeID.div,
+            FixtureNodeID.unknownElement,
+            FixtureNodeID.image,
+            FixtureNodeID.input,
+        ])
+    }
+
+    @Test
+    func secondaryClickOutsideMultipleSelectionClearsSelectionAndShowsSingleNodeMenu() {
+        let view = makeTreeView()
+
+        view.primaryClickRowForTesting(containing: "<div id=\"start-of-content\"")
+        view.primaryClickRowForTesting(containing: "<input disabled>", modifiers: .shift)
+        let titles = view.secondaryClickMenuTitlesForTesting(containing: "<article>")
+
+        #expect(titles == [
+            "Copy HTML",
+            "Copy Selector Path",
+            "Copy XPath",
+            "Delete Node",
+        ])
+        #expect(view.multiSelectedLocalIDsForTesting.isEmpty)
+    }
+
+    @Test
+    func primaryClickClearsTextSelectionWithoutPresentingDOMMenu() {
+        let view = makeTreeView()
+
+        view.selectTextForTesting("data-testid")
+        view.primaryClickRowForTesting(containing: "<input disabled>")
+
+        #expect(view.selectedTextForTesting.isEmpty)
+        #expect(view.lastPresentedDOMMenuTitlesForTesting.isEmpty)
+    }
+
+    @Test
+    func customTextInputExposesRenderedTextSelection() {
+        let view = makeTreeView()
+
+        view.selectTextForTesting("data-testid")
+
+        #expect(view.selectedTextForTesting == "data-testid")
+        #expect(view.canPerformAction(#selector(UIResponderStandardEditActions.copy(_:)), withSender: nil))
+    }
+
+    @Test
+    func singleLineTextSelectionEditMenuUsesCustomCopyAndNodeActions() {
+        let view = makeTreeView()
+
+        view.selectTextForTesting("data-testid")
+        let titles = view.editMenuTitlesForSelectedTextForTesting()
+
+        #expect(titles == [
+            "Copy",
+            "Copy HTML",
+            "Copy Selector Path",
+            "Copy XPath",
+            "Delete Node",
+        ])
+        #expect(!titles.contains("Translate"))
+        #expect(!titles.contains("Share..."))
+    }
+
+    @Test
+    func multiLineTextSelectionEditMenuUsesOnlyMultiNodeActions() {
+        let view = makeTreeView()
+
+        view.selectTextForTesting(from: "<div id=\"start-of-content\"", through: "<input disabled>")
+        let titles = view.editMenuTitlesForSelectedTextForTesting()
+
+        #expect(titles == ["Copy HTML", "Delete Nodes"])
+        #expect(!titles.contains("Copy"))
+        #expect(!titles.contains("Copy Selector Path"))
+        #expect(!titles.contains("Copy XPath"))
+        #expect(!titles.contains("Translate"))
+        #expect(!titles.contains("Share..."))
+    }
+
+    @Test
     func treeViewControllerHostsNativeTextViewInsteadOfWebView() {
         let viewController = DOMTreeViewController(dom: WIDOMRuntime())
         viewController.loadViewIfNeeded()
