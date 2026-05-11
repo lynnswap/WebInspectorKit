@@ -281,6 +281,7 @@ public final class WIDOMInspector {
     @ObservationIgnored private var pageWebViewAttachmentGeneration: UInt64 = 0
     @ObservationIgnored private var isDOMTransportAttached = false
     @ObservationIgnored private var deferredLoadingMutationState: DeferredLoadingMutationState?
+    @ObservationIgnored private var highlightedTargetIdentifier: String?
 #if DEBUG
     @ObservationIgnored package private(set) var freshContextDiagnosticsForTesting: [FreshContextDiagnosticEvent] = []
     @ObservationIgnored package private(set) var inspectSelectionDiagnosticsForTesting: [InspectSelectionDiagnosticEvent] = []
@@ -955,7 +956,7 @@ public final class WIDOMInspector {
     }
 
     package func hideNodeHighlight() async {
-        try? await hideHighlight()
+        try? await hideHighlight(targetIdentifier: highlightedTargetIdentifier)
     }
 
     public func setAttribute(
@@ -1312,6 +1313,7 @@ private extension WIDOMInspector {
         acceptsInspectEvents = false
         pendingInspectResolution = nil
         isSelectingElement = false
+        highlightedTargetIdentifier = nil
         selectionGeneration &+= 1
         selectionActivationGeneration &+= 1
         cancelPendingChildRequestRecords()
@@ -2160,10 +2162,18 @@ private extension WIDOMInspector {
                 reveal: reveal
             )
         )
+        highlightedTargetIdentifier = targetIdentifier
     }
 
-    func hideHighlight() async throws {
-        let targetIdentifier = try requireCurrentTargetIdentifier()
+    func hideHighlight(targetIdentifier: String? = nil) async throws {
+        let targetIdentifier = try targetIdentifier
+            ?? highlightedTargetIdentifier
+            ?? requireCurrentTargetIdentifier()
+        defer {
+            if highlightedTargetIdentifier == targetIdentifier {
+                highlightedTargetIdentifier = nil
+            }
+        }
         _ = try await sendDOMCommand(
             WITransportMethod.DOM.hideHighlight,
             targetIdentifier: targetIdentifier
@@ -4499,6 +4509,7 @@ private extension WIDOMInspector {
                     reveal: true
                 )
             )
+            highlightedTargetIdentifier = selectedNode.targetIdentifier
         } catch {
             logSelectionDiagnostics(
                 "syncSelectedNodeHighlight failed",

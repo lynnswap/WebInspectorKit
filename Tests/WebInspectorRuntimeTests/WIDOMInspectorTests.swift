@@ -7024,6 +7024,93 @@ struct WIDOMInspectorTests {
     }
 
     @Test
+    func hideNodeHighlightRoutesToHighlightedFrameTarget() async throws {
+        var commandCalls: [(method: String, targetIdentifier: String, nodeID: Int?)] = []
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, payload, targetIdentifier in
+                let params = runtimeTestDictionaryValue(payload["params"])
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                case WITransportMethod.DOM.highlightNode:
+                    commandCalls.append((
+                        method,
+                        targetIdentifier,
+                        runtimeTestIntValue(params?["nodeId"])
+                    ))
+                    return [:]
+                case WITransportMethod.DOM.hideHighlight:
+                    commandCalls.append((method, targetIdentifier, nil))
+                    return [:]
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        let webView = makeTestWebView()
+        await inspector.attach(to: webView)
+
+        let frameTargetNode = DOMGraphNodeDescriptor(
+            targetIdentifier: "frame-target-A",
+            nodeID: 260,
+            nodeType: 1,
+            nodeName: "SPAN",
+            localName: "span",
+            nodeValue: "",
+            attributes: [.init(name: "id", value: "frame-target")],
+            regularChildCount: 0,
+            regularChildrenAreLoaded: true,
+            layoutFlags: [],
+            isRendered: true,
+            regularChildren: []
+        )
+        let frameDocument = DOMGraphNodeDescriptor(
+            targetIdentifier: "frame-target-A",
+            nodeID: 240,
+            frameID: "frame-child",
+            nodeType: 9,
+            nodeName: "#document",
+            localName: "",
+            nodeValue: "",
+            attributes: [],
+            regularChildCount: 1,
+            regularChildrenAreLoaded: true,
+            layoutFlags: [],
+            isRendered: true,
+            regularChildren: [frameTargetNode]
+        )
+        inspector.document.replaceDocument(
+            with: makeMainDocumentSnapshot(
+                mainChildren: [
+                    makeFrameOwnerDescriptor(
+                        nodeID: 24,
+                        frameID: "frame-child",
+                        idAttribute: "frame-owner",
+                        childCount: 1,
+                        contentDocument: frameDocument
+                    )
+                ]
+            ),
+            isFreshDocument: true
+        )
+
+        let node = try #require(inspector.document.node(key: .init(targetIdentifier: "frame-target-A", nodeID: 260)))
+        await inspector.highlightNode(node, reveal: false)
+        await inspector.hideNodeHighlight()
+
+        #expect(commandCalls.contains {
+            $0.method == WITransportMethod.DOM.highlightNode
+                && $0.targetIdentifier == "frame-target-A"
+                && $0.nodeID == 260
+        })
+        let hideHighlightCall = commandCalls.last {
+            $0.method == WITransportMethod.DOM.hideHighlight
+        }
+        #expect(hideHighlightCall?.targetIdentifier == "frame-target-A")
+    }
+
+    @Test
     func undoDeleteOfFrameNodeRefreshesFrameSubtreeWithoutReplacingPageDocument() async throws {
         var commandCalls: [(method: String, targetIdentifier: String, nodeID: Int?)] = []
         var pageDocumentRequestCount = 0
