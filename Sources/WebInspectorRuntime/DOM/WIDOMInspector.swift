@@ -21,7 +21,7 @@ private enum WIDOMConsoleDiagnostics {
         "beginSelectionMode enabled protocol inspect mode for native inspector backend",
         "requestSelectionModeToggle enabled inspect mode",
         "beginSelectionMode armed inspect selection",
-        "applyPendingInspectSelectionIfPossible resolved transport node",
+        "applyInspectNodeResolutionIfPossible resolved transport node",
         "applySelection updated document",
     ]
 
@@ -67,6 +67,10 @@ private final class WIPageWebViewLifetimeObserver {
 @MainActor
 @Observable
 public final class WIDOMInspector {
+    private static let defaultSubtreeDepth = 3
+    private static let deepSubtreeDepth = 128
+    private static let autoUpdateDebounce: TimeInterval = 0.6
+
     private enum Phase: Equatable {
         case idle
         case loadingDocument(DOMContext, targetIdentifier: String?)
@@ -124,7 +128,7 @@ public final class WIDOMInspector {
 
     fileprivate struct DeleteUndoState {
         let nodeID: Int
-        let nodeLocalID: UInt64?
+        let nodeKey: DOMNodeKey?
         let contextID: DOMContextID
         let targetIdentifier: String
     }
@@ -146,64 +150,18 @@ public final class WIDOMInspector {
         case transportProtocol = "transport-protocol"
     }
 
-    private enum SelectionMaterializationStrategy: String {
-        case frameRelated = "frame-related"
-        case genericIncomplete = "generic-incomplete"
-        case nestedDocumentRoots = "nested-document-roots"
-        case body = "body"
-        case html = "html"
-        case structuredChild = "structured-child"
-        case root = "root"
-        case none = "none"
-    }
-
-    @MainActor
-    private struct SelectionMaterializationPlan {
-        // WebKit materializes iframe contentDocument when serializing the frame owner payload,
-        // not when requestChildNodes is sent to the owner element itself. Keep request candidates
-        // limited to document/canonical nodes and reserve frame owners for fallback selection only.
-        let strategy: SelectionMaterializationStrategy
-        let candidates: [DOMNodeModel]
-        let frameOwnerCandidates: [DOMNodeModel]
-        let frameDocumentCandidates: [DOMNodeModel]
-        let canonicalEmbeddedCandidates: [DOMNodeModel]
-        let genericIncompleteCandidates: [DOMNodeModel]
-
-        var candidateNodeIDs: Set<DOMNodeModel.ID> {
-            Set(candidates.map(\.id))
-        }
-    }
-
-    private enum PendingInspectMaterializationOutcome {
-        case requested
-        case waitingForMutation
-        case exhausted
-    }
-
     private struct InspectSelectionArm: Equatable {
         let contextID: DOMContextID
         let targetIdentifier: String
         let generation: UInt64
     }
 
-    private struct PendingInspectSelection: Equatable {
+    private struct InspectNodeResolution: Equatable {
         let nodeID: Int
         let contextID: DOMContextID
         let selectorPath: String?
         let resolutionTargetIdentifier: String
         let transaction: SelectionTransaction?
-        var scopedMaterializationRootNodeIDs: [DOMNodeModel.ID] = []
-        var materializedAncestorNodeIDs: Set<DOMNodeModel.ID> = []
-        var outstandingMaterializationNodeIDs: Set<DOMNodeModel.ID> = []
-        var activeMaterializationStrategy: SelectionMaterializationStrategy = .none
-        var activeRequestGeneration: UInt64 = 0
-        var genericDispatchDeferralCount: UInt64 = 0
-        var observedMaterializationStrategy: SelectionMaterializationStrategy = .none
-        var observedMaterializationCandidateNodeIDs: Set<DOMNodeModel.ID> = []
-        var observedDocumentBackedFrameIDs: Set<String> = []
-        var lastExhaustedScopedCandidateNodeIDs: Set<DOMNodeModel.ID> = []
-        var lastExhaustedScopedStrategy: SelectionMaterializationStrategy?
-        var progressRevision: UInt64 = 0
     }
 
     private struct InspectorInspectNodeResolution {
@@ -214,6 +172,7 @@ public final class WIDOMInspector {
 
     private struct PendingChildRequestKey: Hashable {
         let nodeID: Int
+        let targetIdentifier: String
         let contextID: DOMContextID
     }
 
@@ -297,7 +256,6 @@ public final class WIDOMInspector {
     public private(set) var hasPageWebView = false
     package private(set) var isPageReadyForSelection = false
 
-    @ObservationIgnored private var configuration: DOMConfiguration
     @ObservationIgnored package weak var pageWebView: WKWebView?
     @ObservationIgnored private var phase: Phase = .idle
     @ObservationIgnored private var currentContext: DOMContext?
@@ -305,6 +263,8 @@ public final class WIDOMInspector {
     @ObservationIgnored private var documentURL: String?
     @ObservationIgnored private var bootstrapTask: Task<Void, Never>?
     @ObservationIgnored private var bootstrapGeneration: UInt64 = 0
+    @ObservationIgnored private var autoUpdateRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private var autoUpdateRefreshGeneration: UInt64 = 0
     @ObservationIgnored private var externalRecoverableErrorHandler: (@MainActor (String?) -> Void)?
     @ObservationIgnored private var inspectModeTargetIdentifier: String?
     @ObservationIgnored package var inspectModeControlBackend: InspectModeControlBackend?
@@ -316,8 +276,7 @@ public final class WIDOMInspector {
     @ObservationIgnored private var selectionGeneration: UInt64 = 0
     @ObservationIgnored private var selectionActivationGeneration: UInt64 = 0
     @ObservationIgnored private var acceptsInspectEvents = false
-    @ObservationIgnored private var pendingInspectSelection: PendingInspectSelection?
-    @ObservationIgnored private var pendingInspectMaterializationTimeoutTask: Task<Void, Never>?
+    @ObservationIgnored private var pendingInspectResolution: InspectNodeResolution?
     @ObservationIgnored var pointerDisconnectObserver: NSObjectProtocol?
     @ObservationIgnored private var pageWebViewAttachmentGeneration: UInt64 = 0
     @ObservationIgnored private var isDOMTransportAttached = false
@@ -335,12 +294,10 @@ public final class WIDOMInspector {
 #endif
 
     public convenience init(
-        configuration: DOMConfiguration = .init(),
         dependencies: WIInspectorDependencies = .liveValue,
         onRecoverableError: (@MainActor (String?) -> Void)? = nil
     ) {
         self.init(
-            configuration: configuration,
             dependencies: dependencies,
             sharedTransport: dependencies.makeSharedTransport(),
             onRecoverableError: onRecoverableError
@@ -348,13 +305,11 @@ public final class WIDOMInspector {
     }
 
     package init(
-        configuration: DOMConfiguration = .init(),
         dependencies: WIInspectorDependencies = .liveValue,
         sharedTransport: WISharedInspectorTransport,
         onRecoverableError: (@MainActor (String?) -> Void)? = nil
     ) {
         self.dependencies = dependencies
-        self.configuration = configuration
         self.sharedTransport = sharedTransport
         self.document = DOMDocumentModel()
         self.externalRecoverableErrorHandler = onRecoverableError
@@ -366,6 +321,7 @@ public final class WIDOMInspector {
 
     isolated deinit {
         bootstrapTask?.cancel()
+        autoUpdateRefreshTask?.cancel()
     }
     package func setRecoverableErrorHandler(_ handler: (@MainActor (String?) -> Void)?) {
         externalRecoverableErrorHandler = handler
@@ -835,8 +791,7 @@ public final class WIDOMInspector {
                 selectorPath: cssSelector,
                 targetIdentifier: targetIdentifier,
                 transaction: nil,
-                showErrorOnFailure: true,
-                allowMaterialization: true
+                showErrorOnFailure: true
             )
             return
         }
@@ -877,16 +832,16 @@ public final class WIDOMInspector {
         _ = try? await refreshCurrentDocumentFromTransport(
             contextID: context.contextID,
             targetIdentifier: targetIdentifier,
-            depth: max(configuration.snapshotDepth, 128),
+            depth: Self.deepSubtreeDepth,
             isFreshDocument: false
         )
 
         _ = await requestTestingChildNodesAndWaitForCompletion(
-            transportNodeID: (try? transportNodeID(for: rootNode)) ?? Int(rootNode.id.localID),
-            frontendNodeID: Int(rootNode.id.localID),
+            transportNodeID: (try? transportNodeID(for: rootNode)) ?? Int(rootNode.id.nodeID),
+            frontendNodeID: Int(rootNode.id.nodeID),
             targetIdentifier: targetIdentifier,
             contextID: context.contextID,
-            depth: max(configuration.snapshotDepth, 128)
+            depth: Self.deepSubtreeDepth
         )
 
         if let node = resolveTestingPreviewNode(preview) {
@@ -926,32 +881,6 @@ public final class WIDOMInspector {
         return try await copyText(for: node, kind: kind)
     }
 
-    package func copyNode(nodeId: Int, kind: DOMSelectionCopyKind) async throws -> String {
-        if let node = nodeForBackendAction(backendNodeID: nodeId) {
-            return try await copyText(for: node, kind: kind)
-        }
-        if kind == .html {
-            let response = try await sendDOMCommand(
-                WITransportMethod.DOM.getOuterHTML,
-                targetIdentifier: try requireCurrentTargetIdentifier(),
-                parameters: DOMNodeIdentifierParameters(nodeId: nodeId)
-            )
-            return stringValue(response["outerHTML"]) ?? ""
-        }
-        let context = try requireCurrentContext()
-        let targetIdentifier = try requireCurrentTargetIdentifier()
-        try await refreshCurrentDocumentFromTransport(
-            contextID: context.contextID,
-            targetIdentifier: targetIdentifier,
-            depth: configuration.snapshotDepth,
-            isFreshDocument: false
-        )
-        if let node = nodeForBackendAction(backendNodeID: nodeId) {
-            return try await copyText(for: node, kind: kind)
-        }
-        return ""
-    }
-
     public func deleteSelection() async throws {
         try await performDeleteSelection(undoManager: nil)
     }
@@ -978,24 +907,10 @@ public final class WIDOMInspector {
         }
         try await deleteNode(
             nodeID: try transportNodeID(for: node),
-            nodeLocalID: node.localID,
+            nodeKey: node.key,
+            targetIdentifier: node.targetIdentifier,
             undoManager: undoManager
         )
-    }
-
-    public func deleteNode(nodeId: Int?, undoManager: UndoManager?) async throws {
-        try await performDeleteNode(nodeId: nodeId, undoManager: undoManager)
-    }
-
-    private func performDeleteNode(nodeId: Int?, undoManager: UndoManager?) async throws {
-        guard let nodeId else {
-            throw DOMOperationError.invalidSelection
-        }
-        if let node = nodeForBackendAction(backendNodeID: nodeId) {
-            try await deleteNode(nodeID: node.id, undoManager: undoManager)
-            return
-        }
-        try await deleteNode(nodeID: nodeId, nodeLocalID: nil, undoManager: undoManager)
     }
 
     package func selectNode(_ node: DOMNodeModel) async {
@@ -1017,30 +932,26 @@ public final class WIDOMInspector {
     package func requestChildNodes(for node: DOMNodeModel, depth: Int) async {
         guard document.contains(node),
               node.hasUnloadedRegularChildren,
-              node.localID <= UInt64(Int.max),
-              let context = currentContext,
-              let targetIdentifier = phase.targetIdentifier ?? sharedTransport.currentPageTargetIdentifier()
+              let context = currentContext
         else {
             return
         }
 
         _ = await requestChildNodesAndWaitForCompletion(
-            transportNodeID: (try? transportNodeID(for: node)) ?? Int(node.localID),
-            frontendNodeID: Int(node.localID),
-            targetIdentifier: targetIdentifier,
+            transportNodeID: (try? transportNodeID(for: node)) ?? node.nodeID,
+            frontendNodeID: node.nodeID,
+            targetIdentifier: node.targetIdentifier,
             contextID: context.contextID,
             depth: depth
         )
     }
 
     package func highlightNode(_ node: DOMNodeModel, reveal: Bool) async {
-        guard document.contains(node),
-              node.localID <= UInt64(Int.max)
-        else {
+        guard document.contains(node) else {
             return
         }
 
-        try? await highlightNode(Int(node.localID), reveal: reveal)
+        try? await highlightNode(node.nodeID, targetIdentifier: node.targetIdentifier, reveal: reveal)
     }
 
     package func hideNodeHighlight() async {
@@ -1056,10 +967,9 @@ public final class WIDOMInspector {
             throw DOMOperationError.invalidSelection
         }
         let context = try requireCurrentContext()
-        let targetIdentifier = try requireCurrentTargetIdentifier()
         _ = try await sendDOMCommand(
             WITransportMethod.DOM.setAttributeValue,
-            targetIdentifier: targetIdentifier,
+            targetIdentifier: node.targetIdentifier,
             parameters: DOMSetAttributeValueParameters(
                 nodeId: try transportNodeID(for: node),
                 name: name,
@@ -1069,8 +979,7 @@ public final class WIDOMInspector {
         _ = document.updateAttribute(
             name: name,
             value: value,
-            localID: node.localID,
-            backendNodeID: node.backendNodeID
+            key: node.key
         )
         applyRecoverableError(nil)
         if currentContext?.contextID != context.contextID {
@@ -1086,10 +995,9 @@ public final class WIDOMInspector {
             throw DOMOperationError.invalidSelection
         }
         let context = try requireCurrentContext()
-        let targetIdentifier = try requireCurrentTargetIdentifier()
         _ = try await sendDOMCommand(
             WITransportMethod.DOM.removeAttribute,
-            targetIdentifier: targetIdentifier,
+            targetIdentifier: node.targetIdentifier,
             parameters: DOMRemoveAttributeParameters(
                 nodeId: try transportNodeID(for: node),
                 name: name
@@ -1097,8 +1005,7 @@ public final class WIDOMInspector {
         )
         _ = document.removeAttribute(
             name: name,
-            localID: node.localID,
-            backendNodeID: node.backendNodeID
+            key: node.key
         )
         applyRecoverableError(nil)
         if currentContext?.contextID != context.contextID {
@@ -1276,7 +1183,7 @@ private extension WIDOMInspector {
         startLoadingDocumentEnsuringLoadingState(
             for: context,
             targetIdentifier: targetIdentifier,
-            depth: configuration.snapshotDepth,
+            depth: Self.defaultSubtreeDepth,
             isFreshDocument: false
         )
     }
@@ -1295,6 +1202,45 @@ private extension WIDOMInspector {
         return sharedTransport.currentObservedPageTargetIdentifier()
             ?? sharedTransport.currentPageTargetIdentifier()
             ?? sharedTransport.currentCommittedPageTargetIdentifier()
+    }
+
+    func scheduleAutoUpdateRefresh(
+        context: DOMContext,
+        targetIdentifier: String,
+        reason: String
+    ) {
+        autoUpdateRefreshGeneration &+= 1
+        let generation = autoUpdateRefreshGeneration
+        autoUpdateRefreshTask?.cancel()
+        let debounce = Self.autoUpdateDebounce
+        autoUpdateRefreshTask = Task { @MainActor [weak self] in
+            if debounce > 0, debounce.isFinite {
+                let nanoseconds = UInt64(min(debounce * 1_000_000_000, Double(UInt64.max)))
+                do {
+                    try await Task.sleep(nanoseconds: nanoseconds)
+                } catch {
+                    return
+                }
+            }
+
+            guard !Task.isCancelled,
+                  let self,
+                  self.autoUpdateRefreshGeneration == generation,
+                  case let .ready(currentContext, currentTargetIdentifier) = self.phase,
+                  currentContext.contextID == context.contextID,
+                  currentTargetIdentifier == targetIdentifier else {
+                return
+            }
+
+            self.autoUpdateRefreshTask = nil
+            await self.beginFreshContext(
+                documentURL: normalizedDocumentURL(self.pageWebView?.url?.absoluteString),
+                targetIdentifier: targetIdentifier,
+                loadImmediately: true,
+                isFreshDocument: true,
+                reason: reason
+            )
+        }
     }
 
     func cancelStaleInspectModeBeforeBeginningSelectionIfNeeded() async {
@@ -1325,23 +1271,13 @@ private extension WIDOMInspector {
         )
     }
 
-    func nodeForBackendAction(backendNodeID: Int) -> DOMNodeModel? {
-        document.node(stableBackendNodeID: backendNodeID)
-            ?? document.node(backendNodeID: backendNodeID)
-    }
-
     func transportNodeID(for node: DOMNodeModel) throws -> Int {
-        guard node.localID <= UInt64(Int.max) else {
-            throw DOMOperationError.invalidSelection
-        }
-        return Int(node.localID)
+        node.nodeID
     }
 
     func transportNodeID(forFrontendNodeID nodeID: Int) throws -> Int {
-        if let node = document.node(localID: UInt64(nodeID)) {
-            return try transportNodeID(for: node)
-        }
-        if let node = document.node(backendNodeID: nodeID) {
+        if let targetIdentifier = phase.targetIdentifier,
+           let node = document.node(targetIdentifier: targetIdentifier, nodeID: nodeID) {
             return try transportNodeID(for: node)
         }
         return nodeID
@@ -1351,6 +1287,12 @@ private extension WIDOMInspector {
         bootstrapTask?.cancel()
         bootstrapTask = nil
         bootstrapGeneration &+= 1
+    }
+
+    func cancelAutoUpdateRefresh() {
+        autoUpdateRefreshTask?.cancel()
+        autoUpdateRefreshTask = nil
+        autoUpdateRefreshGeneration &+= 1
     }
 
     func clearContextState(reason: String = "unspecified") {
@@ -1364,11 +1306,11 @@ private extension WIDOMInspector {
         currentContext = nil
         setPhase(.idle)
         documentURL = nil
+        cancelAutoUpdateRefresh()
         deferredLoadingMutationState = nil
         inspectModeTargetIdentifier = nil
         acceptsInspectEvents = false
-        cancelPendingInspectMaterializationTimeout()
-        pendingInspectSelection = nil
+        pendingInspectResolution = nil
         isSelectingElement = false
         selectionGeneration &+= 1
         selectionActivationGeneration &+= 1
@@ -1393,6 +1335,7 @@ private extension WIDOMInspector {
             "beginFreshContext requested",
             extra: "reason=\(reason) target=\(targetIdentifier ?? "nil") loadImmediately=\(loadImmediately) isFreshDocument=\(isFreshDocument) pageWebView=\(webViewSummary(pageWebView))"
         )
+        cancelAutoUpdateRefresh()
         if isSelectingElement,
            let activeTargetIdentifier = inspectModeTargetIdentifier ?? phase.targetIdentifier {
             await cancelInspectMode(
@@ -1407,7 +1350,6 @@ private extension WIDOMInspector {
         cancelBootstrap()
         payloadNormalizer.resetForDocumentUpdate()
         deferredLoadingMutationState = nil
-        cancelPendingInspectMaterializationTimeout()
 
         let context = DOMContext(
             contextID: nextContextID,
@@ -1440,7 +1382,7 @@ private extension WIDOMInspector {
         startLoadingDocument(
             for: context,
             targetIdentifier: targetIdentifier,
-            depth: configuration.snapshotDepth,
+            depth: Self.defaultSubtreeDepth,
             isFreshDocument: isFreshDocument
         )
     }
@@ -1523,6 +1465,7 @@ private extension WIDOMInspector {
 
         guard let delta = await payloadNormalizer.normalizeDocumentResponseData(
             responseData,
+            targetIdentifier: targetIdentifier,
             resetDocument: isFreshDocument
         ),
         case let .snapshot(snapshot, _) = delta else {
@@ -1543,14 +1486,18 @@ private extension WIDOMInspector {
             "refreshCurrentDocumentFromTransport ready context=\(contextID) target=\(targetIdentifier) root=\(snapshot.root.nodeName)"
         )
 
+        await hydrateInitiallyExpandedNodes(
+            contextID: contextID,
+            targetIdentifier: targetIdentifier,
+            depth: depth
+        )
+
         if consumeDeferredLoadingMutationRefreshIfNeeded(
             contextID: contextID,
             targetIdentifier: targetIdentifier
         ) {
-            logSelectionDiagnostics(
-                "refreshCurrentDocumentFromTransport scheduling follow-up refresh after loading-time mutations",
-                extra: "contextID=\(contextID) target=\(targetIdentifier)",
-                level: .debug
+            logBootstrapDiagnostics(
+                "refreshCurrentDocumentFromTransport follow-up refresh context=\(contextID) target=\(targetIdentifier)"
             )
             try await refreshCurrentDocumentFromTransport(
                 contextID: contextID,
@@ -1560,12 +1507,6 @@ private extension WIDOMInspector {
             )
             return
         }
-
-        await hydrateInitiallyExpandedNodes(
-            contextID: contextID,
-            targetIdentifier: targetIdentifier,
-            depth: depth
-        )
 
         clearDeferredLoadingMutationStateIfSettled(
             contextID: contextID,
@@ -1709,7 +1650,7 @@ private extension WIDOMInspector {
                 startLoadingDocumentEnsuringLoadingState(
                     for: context,
                     targetIdentifier: targetIdentifier,
-                    depth: configuration.snapshotDepth,
+                    depth: Self.defaultSubtreeDepth,
                     isFreshDocument: activeTargetIdentifier != nil && activeTargetIdentifier != targetIdentifier
                 )
             default:
@@ -1786,7 +1727,7 @@ private extension WIDOMInspector {
                 startLoadingDocumentEnsuringLoadingState(
                     for: context,
                     targetIdentifier: targetIdentifier,
-                    depth: configuration.snapshotDepth,
+                    depth: Self.defaultSubtreeDepth,
                     isFreshDocument: true
                 )
                 return
@@ -1857,6 +1798,7 @@ private extension WIDOMInspector {
 
         guard let delta = await payloadNormalizer.normalizeDOMEvent(
             method: envelope.method,
+            targetIdentifier: envelope.targetIdentifier ?? targetIdentifier,
             paramsData: envelope.paramsData
         ) else {
             return
@@ -1865,18 +1807,25 @@ private extension WIDOMInspector {
         switch delta {
         case let .mutations(bundle):
             if bundle.events.contains(where: { if case .documentUpdated = $0 { true } else { false } }) {
-                await beginFreshContext(
-                    documentURL: normalizedDocumentURL(pageWebView?.url?.absoluteString),
+                let eventTargetIdentifier = envelope.targetIdentifier ?? targetIdentifier
+                if eventTargetIdentifier != targetIdentifier
+                    || sharedTransport.targetKind(for: eventTargetIdentifier) == .frame {
+                    _ = await refreshFrameDocumentSubtree(
+                        targetIdentifier: eventTargetIdentifier,
+                        contextID: context.contextID
+                    )
+                    return
+                }
+                scheduleAutoUpdateRefresh(
+                    context: context,
                     targetIdentifier: targetIdentifier,
-                    loadImmediately: true,
-                    isFreshDocument: true,
                     reason: "transport.documentUpdated"
                 )
                 return
             }
             document.applyMutationBundle(bundle)
             let mirrorInvariantViolationReason = document.consumeMirrorInvariantViolationReason()
-            let rejectedStructuralMutationParentLocalIDs = document.consumeRejectedStructuralMutationParentLocalIDs()
+            let rejectedStructuralMutationParentKeys = document.consumeRejectedStructuralMutationParentKeys()
             if let mirrorInvariantViolationReason {
                 logSelectionDiagnostics(
                     "handleDOMEventEnvelope detected canonical mirror invariant violation",
@@ -1892,26 +1841,11 @@ private extension WIDOMInspector {
                 )
                 return
             }
-            recordPendingInspectProgressIfNeeded(
-                from: bundle,
-                contextID: context.contextID,
-                reason: "mutation.bundle",
-                rejectedStructuralMutationParentLocalIDs: rejectedStructuralMutationParentLocalIDs
-            )
-            await applyPendingInspectSelectionIfPossible()
-            await finishPendingInspectMaterialization(
-                from: bundle,
-                contextID: context.contextID,
-                rejectedStructuralMutationParentLocalIDs: rejectedStructuralMutationParentLocalIDs
-            )
-            await applyPendingInspectSelectionIfPossible()
+            await applyInspectNodeResolutionIfPossible()
             await finishPendingChildRequests(
                 from: bundle,
                 contextID: context.contextID,
-                rejectedStructuralMutationParentLocalIDs: rejectedStructuralMutationParentLocalIDs
-            )
-            await advancePendingInspectMaterializationIfIdle(
-                contextID: context.contextID
+                rejectedStructuralMutationParentKeys: rejectedStructuralMutationParentKeys
             )
         case let .selection(selection):
             let previousSelection = selectionNodeSummary(document.selectedNode)
@@ -1925,53 +1859,54 @@ private extension WIDOMInspector {
             document.applySelectorPath(selectorPath)
         case let .snapshot(snapshot, resetDocument):
             document.replaceDocument(with: snapshot, isFreshDocument: resetDocument)
-            await applyPendingInspectSelectionIfPossible()
+            await applyInspectNodeResolutionIfPossible()
         }
     }
 
     func finishPendingChildRequests(
         from bundle: DOMGraphMutationBundle,
         contextID: DOMContextID,
-        rejectedStructuralMutationParentLocalIDs: Set<UInt64>
+        rejectedStructuralMutationParentKeys: Set<DOMNodeKey>
     ) async {
-        let completedNodeIDs = completedChildRequestNodeIDs(
+        let completedKeys = completedChildRequestKeys(
             from: bundle,
-            rejectedStructuralMutationParentLocalIDs: rejectedStructuralMutationParentLocalIDs
+            rejectedStructuralMutationParentKeys: rejectedStructuralMutationParentKeys
         )
-        let shouldLogCompletion = !completedNodeIDs.isEmpty && (
+        let shouldLogCompletion = !completedKeys.isEmpty && (
             !pendingChildRequests.isEmpty
-                || pendingInspectSelection != nil
+                || pendingInspectResolution != nil
         )
         if shouldLogCompletion {
             logSelectionDiagnostics(
                 "finishPendingChildRequests completed child nodes",
-                extra: "contextID=\(contextID) completedNodeIDs=\(completedNodeIDs) mutation=\(mutationBundleSummary(bundle)) pendingInspectOutstanding=\(pendingInspectSelection?.outstandingMaterializationNodeIDs.map { $0.localID }.sorted() ?? []) pendingChildRequests=\(pendingChildRequestDiagnosticsSummary())",
+                extra: "contextID=\(contextID) completedKeys=\(completedKeys.map(keySummary).joined(separator: ",")) mutation=\(mutationBundleSummary(bundle)) pendingInspect=\(pendingInspectResolutionDiagnosticSummary(pendingInspectResolution)) pendingChildRequests=\(pendingChildRequestDiagnosticsSummary())",
                 level: .debug
             )
         }
 
-        for nodeID in completedNodeIDs {
+        for key in completedKeys {
             await completePendingChildRequest(
-                nodeID: nodeID,
+                nodeID: key.nodeID,
+                targetIdentifier: key.targetIdentifier,
                 contextID: contextID,
                 success: true
             )
         }
     }
 
-    private func completedChildRequestNodeIDs(
+    private func completedChildRequestKeys(
         from bundle: DOMGraphMutationBundle,
-        rejectedStructuralMutationParentLocalIDs: Set<UInt64> = []
-    ) -> [Int] {
+        rejectedStructuralMutationParentKeys: Set<DOMNodeKey> = []
+    ) -> [DOMNodeKey] {
         bundle.events.compactMap { event in
             switch event {
-            case let .setChildNodes(parentLocalID, _):
-                guard !rejectedStructuralMutationParentLocalIDs.contains(parentLocalID) else {
+            case let .setChildNodes(parentKey, _):
+                guard !rejectedStructuralMutationParentKeys.contains(parentKey) else {
                     return nil
                 }
-                return Int(parentLocalID)
-            case let .replaceSubtree(root):
-                return Int(root.localID)
+                return parentKey
+            case let .attachFrameDocument(ownerKey, _):
+                return ownerKey
             default:
                 return nil
             }
@@ -1979,8 +1914,12 @@ private extension WIDOMInspector {
     }
 
     func performChildRequest(nodeID: Int, depth: Int, contextID: DOMContextID) async {
+        guard let targetIdentifier = phase.targetIdentifier else {
+            return
+        }
         guard let registration = registerPendingChildRequest(
             nodeID: nodeID,
+            targetIdentifier: targetIdentifier,
             contextID: contextID,
             reportsToFrontend: true
         ) else {
@@ -1990,13 +1929,13 @@ private extension WIDOMInspector {
         do {
             if await completePendingChildRequestIfAlreadySatisfied(
                 nodeID: nodeID,
+                targetIdentifier: targetIdentifier,
                 contextID: contextID
             ) {
                 return
             }
 
             if registration.shouldSendRequest {
-                let targetIdentifier = try requireCurrentTargetIdentifier()
                 let transportNodeID = try transportNodeID(forFrontendNodeID: nodeID)
                 _ = try await sendDOMCommand(
                     WITransportMethod.DOM.requestChildNodes,
@@ -2010,6 +1949,7 @@ private extension WIDOMInspector {
 
             if await completePendingChildRequestIfAlreadySatisfied(
                 nodeID: nodeID,
+                targetIdentifier: targetIdentifier,
                 contextID: contextID
             ) {
                 return
@@ -2018,11 +1958,13 @@ private extension WIDOMInspector {
             _ = await waitForPendingChildRequestCompletion(
                 registration.record,
                 nodeID: nodeID,
+                targetIdentifier: targetIdentifier,
                 contextID: contextID
             )
         } catch {
             await completePendingChildRequest(
                 nodeID: nodeID,
+                targetIdentifier: targetIdentifier,
                 contextID: contextID,
                 success: false
             )
@@ -2031,10 +1973,15 @@ private extension WIDOMInspector {
 
     private func registerPendingChildRequest(
         nodeID: Int,
+        targetIdentifier: String? = nil,
         contextID: DOMContextID,
         reportsToFrontend: Bool
     ) -> (record: PendingChildRequestRecord, shouldSendRequest: Bool)? {
-        let key = PendingChildRequestKey(nodeID: nodeID, contextID: contextID)
+        let key = PendingChildRequestKey(
+            nodeID: nodeID,
+            targetIdentifier: targetIdentifier ?? phase.targetIdentifier ?? "",
+            contextID: contextID
+        )
         if let existing = pendingChildRequests[key] {
             if reportsToFrontend, existing.upgradeToFrontendRequest() == false {
                 return nil
@@ -2049,22 +1996,24 @@ private extension WIDOMInspector {
 
     private func completePendingChildRequestIfAlreadySatisfied(
         nodeID: Int,
+        targetIdentifier: String,
         contextID: DOMContextID
     ) async -> Bool {
-        guard childRequestIsAlreadySatisfied(nodeID: nodeID) else {
+        guard childRequestIsAlreadySatisfied(nodeID: nodeID, targetIdentifier: targetIdentifier) else {
             return false
         }
 
         await completePendingChildRequest(
             nodeID: nodeID,
+            targetIdentifier: targetIdentifier,
             contextID: contextID,
             success: true
         )
         return true
     }
 
-    private func childRequestIsAlreadySatisfied(nodeID: Int) -> Bool {
-        guard let node = document.node(localID: UInt64(nodeID)) else {
+    private func childRequestIsAlreadySatisfied(nodeID: Int, targetIdentifier: String) -> Bool {
+        guard let node = document.node(targetIdentifier: targetIdentifier, nodeID: nodeID) else {
             return false
         }
         return !node.hasUnloadedRegularChildren
@@ -2073,6 +2022,7 @@ private extension WIDOMInspector {
     private func waitForPendingChildRequestCompletion(
         _ record: PendingChildRequestRecord,
         nodeID: Int,
+        targetIdentifier: String,
         contextID: DOMContextID,
         timeout overrideTimeout: Duration? = nil
     ) async -> Bool {
@@ -2090,6 +2040,7 @@ private extension WIDOMInspector {
             }
             await self.completePendingChildRequest(
                 nodeID: nodeID,
+                targetIdentifier: targetIdentifier,
                 contextID: contextID,
                 success: false
             )
@@ -2106,6 +2057,7 @@ private extension WIDOMInspector {
     ) async -> Bool {
         guard let registration = registerPendingChildRequest(
             nodeID: frontendNodeID,
+            targetIdentifier: targetIdentifier,
             contextID: contextID,
             reportsToFrontend: false
         ) else {
@@ -2125,6 +2077,7 @@ private extension WIDOMInspector {
             } catch {
                 await completePendingChildRequest(
                     nodeID: frontendNodeID,
+                    targetIdentifier: targetIdentifier,
                     contextID: contextID,
                     success: false
                 )
@@ -2135,6 +2088,7 @@ private extension WIDOMInspector {
         return await waitForPendingChildRequestCompletion(
             registration.record,
             nodeID: frontendNodeID,
+            targetIdentifier: targetIdentifier,
             contextID: contextID,
             timeout: timeout
         )
@@ -2142,10 +2096,15 @@ private extension WIDOMInspector {
 
     private func completePendingChildRequest(
         nodeID: Int,
+        targetIdentifier: String,
         contextID: DOMContextID,
         success: Bool
     ) async {
-        let key = PendingChildRequestKey(nodeID: nodeID, contextID: contextID)
+        let key = PendingChildRequestKey(
+            nodeID: nodeID,
+            targetIdentifier: targetIdentifier,
+            contextID: contextID
+        )
         guard let record = pendingChildRequests.removeValue(forKey: key) else {
             return
         }
@@ -2154,7 +2113,7 @@ private extension WIDOMInspector {
         record.finish(success)
         logSelectionDiagnostics(
             "completePendingChildRequest",
-            extra: "nodeID=\(nodeID) contextID=\(contextID) success=\(success) reportsToFrontend=\(shouldNotifyFrontend) node=\(selectionNodeSummary(document.node(localID: UInt64(nodeID))))",
+            extra: "nodeID=\(nodeID) target=\(targetIdentifier) contextID=\(contextID) success=\(success) reportsToFrontend=\(shouldNotifyFrontend) node=\(selectionNodeSummary(document.node(targetIdentifier: targetIdentifier, nodeID: nodeID)))",
             level: .debug
         )
 
@@ -2191,89 +2150,8 @@ private extension WIDOMInspector {
         }
     }
 
-    private func cancelPendingInspectMaterializationTimeout() {
-        pendingInspectMaterializationTimeoutTask?.cancel()
-        pendingInspectMaterializationTimeoutTask = nil
-    }
-
-    private func schedulePendingInspectMaterializationTimeout(
-        for pendingSelection: PendingInspectSelection
-    ) {
-        cancelPendingInspectMaterializationTimeout()
-        pendingInspectMaterializationTimeoutTask = Task { @MainActor [weak self] in
-            guard let self else {
-                return
-            }
-
-            let timeout = await self.inspectMaterializationTimeout()
-            do {
-                try await ContinuousClock().sleep(for: timeout)
-            } catch {
-                return
-            }
-
-            guard let currentPendingSelection = self.pendingInspectSelection,
-                  currentPendingSelection == pendingSelection,
-                  self.resolvedAttachedInspectedNodeFromCurrentDocument(nodeID: currentPendingSelection.nodeID) == nil,
-                  self.selectionTransactionIsCurrent(currentPendingSelection.transaction) else {
-                return
-            }
-
-            self.logSelectionDiagnostics(
-                "pending inspect materialization timed out",
-                selector: currentPendingSelection.selectorPath,
-                extra: "timeout=\(String(describing: timeout)) \(self.inspectResolutionDiagnosticSummary(nodeID: currentPendingSelection.nodeID, targetIdentifier: currentPendingSelection.resolutionTargetIdentifier, contextID: currentPendingSelection.contextID))",
-                level: .error
-            )
-
-            let didRefresh = await self.refreshSelectionSubtreeFromTransportIfNeeded(
-                selectorPath: currentPendingSelection.selectorPath,
-                contextID: currentPendingSelection.contextID,
-                targetIdentifier: currentPendingSelection.resolutionTargetIdentifier
-            )
-            self.logSelectionDiagnostics(
-                "pending inspect materialization timeout refresh finished",
-                selector: currentPendingSelection.selectorPath,
-                extra: "nodeID=\(currentPendingSelection.nodeID) didRefresh=\(didRefresh) currentSelection=\(self.selectionNodeSummary(self.document.selectedNode))",
-                level: .debug
-            )
-
-            await self.applyPendingInspectSelectionIfPossible()
-
-            if didRefresh {
-                let materializationOutcome = await self.restartPendingInspectMaterializationAfterRefresh(
-                    currentPendingSelection,
-                    reason: "timeout.refresh"
-                )
-                if materializationOutcome != .exhausted {
-                    return
-                }
-            }
-
-            guard let unresolvedPendingSelection = self.pendingInspectSelection,
-                  selectionTransactionIsCurrent(unresolvedPendingSelection.transaction) else {
-                return
-            }
-
-            self.pendingInspectSelection = nil
-            await self.clearSelectionForFailedResolution(
-                contextID: unresolvedPendingSelection.contextID,
-                transaction: unresolvedPendingSelection.transaction,
-                showError: true,
-                errorMessage: "Failed to resolve selected element."
-            )
-        }
-    }
-
-    private func inspectMaterializationTimeout() async -> Duration {
-        if let responseTimeout = await sharedTransport.attachedSession()?.responseTimeout {
-            return responseTimeout
-        }
-        return .seconds(15)
-    }
-
-    func highlightNode(_ nodeID: Int, reveal: Bool = true) async throws {
-        let targetIdentifier = try requireCurrentTargetIdentifier()
+    func highlightNode(_ nodeID: Int, targetIdentifier: String? = nil, reveal: Bool = true) async throws {
+        let targetIdentifier = try targetIdentifier ?? requireCurrentTargetIdentifier()
         _ = try await sendDOMCommand(
             WITransportMethod.DOM.highlightNode,
             targetIdentifier: targetIdentifier,
@@ -2301,10 +2179,10 @@ private extension WIDOMInspector {
                 )
                 return
             }
-            guard selection.localID != nil else {
-                if inspectSelectionArm != nil || pendingInspectSelection != nil {
+            guard selection.key != nil else {
+                if inspectSelectionArm != nil || pendingInspectResolution != nil {
                     logSelectionDiagnostics(
-                        "handleInspectorSelection ignored frontend selection without localID",
+                        "handleInspectorSelection ignored frontend selection without node key",
                         selector: selection.selectorPath,
                         extra: "payload=\(selectionPayloadSummary(selection)) previous=\(previousSelection)"
                     )
@@ -2319,10 +2197,8 @@ private extension WIDOMInspector {
                 )
                 return
             }
-            if inspectSelectionArm != nil || pendingInspectSelection != nil {
-                if selectionPayloadMatchesCurrentSelection(resolvedSelection)
-                    || selectionPayloadMatchesPendingInspectSelection(resolvedSelection)
-                {
+            if inspectSelectionArm != nil || pendingInspectResolution != nil {
+                if selectionPayloadMatchesCurrentSelection(resolvedSelection) {
                     logSelectionDiagnostics(
                         "handleInspectorSelection ignored frontend selection echo during inspect resolution",
                         selector: resolvedSelection.selectorPath,
@@ -2346,7 +2222,7 @@ private extension WIDOMInspector {
                     selector: resolvedSelection.selectorPath,
                     extra: "payload=\(selectionPayloadSummary(resolvedSelection)) previous=\(previousSelection)"
                 )
-                let transaction = pendingInspectSelection?.transaction
+                let transaction = pendingInspectResolution?.transaction
                     ?? {
                         guard let contextID = currentContext?.contextID else {
                             return nil
@@ -2379,17 +2255,17 @@ private extension WIDOMInspector {
 
     func deleteNode(
         nodeID: Int,
-        nodeLocalID: UInt64?,
+        nodeKey: DOMNodeKey?,
+        targetIdentifier: String,
         undoManager: UndoManager?
     ) async throws {
         let context = try requireCurrentContext()
-        let targetIdentifier = try requireCurrentTargetIdentifier()
         _ = try await sendDOMCommand(
             WITransportMethod.DOM.removeNode,
             targetIdentifier: targetIdentifier,
             parameters: DOMNodeIdentifierParameters(nodeId: nodeID)
         )
-        applyDeletedNode(nodeID: nodeID, nodeLocalID: nodeLocalID)
+        applyDeletedNode(nodeID: nodeID, nodeKey: nodeKey, targetIdentifier: targetIdentifier)
         applyRecoverableError(nil)
 
         if let undoManager {
@@ -2397,7 +2273,7 @@ private extension WIDOMInspector {
             registerUndoDelete(
                 .init(
                     nodeID: nodeID,
-                    nodeLocalID: nodeLocalID,
+                    nodeKey: nodeKey,
                     contextID: context.contextID,
                     targetIdentifier: targetIdentifier
                 ),
@@ -2406,18 +2282,15 @@ private extension WIDOMInspector {
         }
     }
 
-    func applyDeletedNode(nodeID: Int, nodeLocalID: UInt64?) {
-        if let nodeLocalID,
-           let node = document.node(localID: nodeLocalID) {
+    func applyDeletedNode(nodeID: Int, nodeKey: DOMNodeKey?, targetIdentifier: String) {
+        if let nodeKey,
+           let node = document.node(key: nodeKey) {
             document.removeNode(id: node.id)
             return
         }
-        if let node = document.node(localID: UInt64(nodeID)) {
+        if let node = document.node(targetIdentifier: targetIdentifier, nodeID: nodeID) {
             document.removeNode(id: node.id)
             return
-        }
-        if let node = document.node(backendNodeID: nodeID) {
-            document.removeNode(id: node.id)
         }
     }
 
@@ -2440,12 +2313,7 @@ private extension WIDOMInspector {
             WITransportMethod.DOM.undo,
             targetIdentifier: state.targetIdentifier
         )
-        try await refreshCurrentDocumentFromTransport(
-            contextID: state.contextID,
-            targetIdentifier: state.targetIdentifier,
-            depth: configuration.snapshotDepth,
-            isFreshDocument: false
-        )
+        try await refreshDocumentAfterDeleteUndoRedo(state)
         registerRedoDelete(state, undoManager: undoManager)
         applyRecoverableError(nil)
     }
@@ -2469,14 +2337,28 @@ private extension WIDOMInspector {
             WITransportMethod.DOM.redo,
             targetIdentifier: state.targetIdentifier
         )
+        try await refreshDocumentAfterDeleteUndoRedo(state)
+        registerUndoDelete(state, undoManager: undoManager)
+        applyRecoverableError(nil)
+    }
+
+    func refreshDocumentAfterDeleteUndoRedo(_ state: DeleteUndoState) async throws {
+        if shouldMergeTargetDocumentForInspectSelection(targetIdentifier: state.targetIdentifier) {
+            guard await refreshFrameDocumentSubtree(
+                targetIdentifier: state.targetIdentifier,
+                contextID: state.contextID
+            ) else {
+                throw DOMOperationError.scriptFailure("frame document refresh failed")
+            }
+            return
+        }
+
         try await refreshCurrentDocumentFromTransport(
             contextID: state.contextID,
             targetIdentifier: state.targetIdentifier,
-            depth: configuration.snapshotDepth,
+            depth: Self.defaultSubtreeDepth,
             isFreshDocument: false
         )
-        registerUndoDelete(state, undoManager: undoManager)
-        applyRecoverableError(nil)
     }
 
     func rememberDeleteUndoManager(_ undoManager: UndoManager) {
@@ -2500,7 +2382,7 @@ private extension WIDOMInspector {
         backend: InspectModeControlBackend
     ) {
         selectionGeneration &+= 1
-        pendingInspectSelection = nil
+        pendingInspectResolution = nil
         inspectModeTargetIdentifier = targetIdentifier
         inspectModeControlBackend = backend
         armInspectSelection(
@@ -2516,7 +2398,7 @@ private extension WIDOMInspector {
         targetIdentifier: String
     ) -> UInt64 {
         selectionActivationGeneration &+= 1
-        pendingInspectSelection = nil
+        pendingInspectResolution = nil
         inspectModeTargetIdentifier = targetIdentifier
         inspectModeControlBackend = nil
         acceptsInspectEvents = false
@@ -2556,7 +2438,7 @@ private extension WIDOMInspector {
             inspectSelectionArm = nil
         }
         if invalidatePendingSelection {
-            pendingInspectSelection = nil
+            pendingInspectResolution = nil
             selectionGeneration &+= 1
             selectionActivationGeneration &+= 1
         }
@@ -2738,8 +2620,11 @@ private extension WIDOMInspector {
             ),
             level: .debug
         )
-        if resolvedAttachedInspectedNodeFromCurrentDocument(nodeID: nodeID) == nil {
-            _ = upsertPendingInspectSelection(
+        if resolvedAttachedInspectedNodeFromCurrentDocument(
+            nodeID: nodeID,
+            targetIdentifier: resolutionTargetIdentifier
+        ) == nil {
+            _ = upsertInspectNodeResolution(
                 nodeID: nodeID,
                 contextID: contextID,
                 selectorPath: nil,
@@ -2754,10 +2639,7 @@ private extension WIDOMInspector {
             selectorPath: nil,
             targetIdentifier: resolutionTargetIdentifier,
             transaction: transaction,
-            showErrorOnFailure: false,
-            allowMaterialization: allowsInspectSelectionMaterialization(
-                targetIdentifier: resolutionTargetIdentifier
-            )
+            showErrorOnFailure: false
         )
     }
 
@@ -2811,8 +2693,11 @@ private extension WIDOMInspector {
                 ) + " attempts=\(resolution.attemptedTargetIdentifiers.joined(separator: ","))",
                 level: .debug
             )
-            if resolvedAttachedInspectedNodeFromCurrentDocument(nodeID: resolution.nodeID) == nil {
-                _ = upsertPendingInspectSelection(
+            if resolvedAttachedInspectedNodeFromCurrentDocument(
+                nodeID: resolution.nodeID,
+                targetIdentifier: resolution.targetIdentifier
+            ) == nil {
+                _ = upsertInspectNodeResolution(
                     nodeID: resolution.nodeID,
                     contextID: contextID,
                     selectorPath: nil,
@@ -2827,10 +2712,7 @@ private extension WIDOMInspector {
                 selectorPath: nil,
                 targetIdentifier: resolution.targetIdentifier,
                 transaction: transaction,
-                showErrorOnFailure: true,
-                allowMaterialization: allowsInspectSelectionMaterialization(
-                    targetIdentifier: resolution.targetIdentifier
-                )
+                showErrorOnFailure: true
             )
         } catch {
             await completeInspectModeAfterBackendSelection(transaction: transaction)
@@ -2855,8 +2737,7 @@ private extension WIDOMInspector {
         selectorPath: String?,
         targetIdentifier: String,
         transaction: SelectionTransaction?,
-        showErrorOnFailure: Bool,
-        allowMaterialization: Bool
+        showErrorOnFailure: Bool
     ) {
         Task { @MainActor [weak self] in
             guard let self else {
@@ -2869,8 +2750,7 @@ private extension WIDOMInspector {
                 selectorPath: selectorPath,
                 targetIdentifier: targetIdentifier,
                 transaction: transaction,
-                showErrorOnFailure: showErrorOnFailure,
-                allowMaterialization: allowMaterialization
+                showErrorOnFailure: showErrorOnFailure
             )
         }
     }
@@ -2882,15 +2762,17 @@ private extension WIDOMInspector {
         selectorPath: String?,
         targetIdentifier: String,
         transaction: SelectionTransaction?,
-        showErrorOnFailure: Bool,
-        allowMaterialization: Bool
+        showErrorOnFailure: Bool
     ) async {
         guard currentContext?.contextID == contextID,
               selectionTransactionIsCurrent(transaction) else {
             return
         }
 
-        if let node = resolvedAttachedInspectedNodeFromCurrentDocument(nodeID: nodeID) {
+        if let node = resolvedAttachedInspectedNodeFromCurrentDocument(
+            nodeID: nodeID,
+            targetIdentifier: targetIdentifier
+        ) {
             logSelectionDiagnostics(
                 "resolveInspectSelectionAfterTransportDrain resolved attached node before drain",
                 selector: selectorPath,
@@ -2902,8 +2784,7 @@ private extension WIDOMInspector {
                 selectorPath: selectorPath,
                 targetIdentifier: targetIdentifier,
                 transaction: transaction,
-                showErrorOnFailure: showErrorOnFailure,
-                allowMaterialization: false
+                showErrorOnFailure: showErrorOnFailure
             )
             return
         }
@@ -2915,10 +2796,13 @@ private extension WIDOMInspector {
             return
         }
 
-        await applyPendingInspectSelectionIfPossible()
+        await applyInspectNodeResolutionIfPossible()
 
-        if pendingInspectSelection == nil,
-           resolvedAttachedInspectedNodeFromCurrentDocument(nodeID: nodeID) != nil {
+        if pendingInspectResolution == nil,
+           resolvedAttachedInspectedNodeFromCurrentDocument(
+                nodeID: nodeID,
+                targetIdentifier: targetIdentifier
+           ) != nil {
             return
         }
 
@@ -2928,15 +2812,18 @@ private extension WIDOMInspector {
                 contextID: contextID,
                 transaction: transaction
             )
-            await applyPendingInspectSelectionIfPossible()
+            await applyInspectNodeResolutionIfPossible()
 
             guard currentContext?.contextID == contextID,
                   selectionTransactionIsCurrent(transaction) else {
                 return
             }
 
-            if pendingInspectSelection == nil,
-               resolvedAttachedInspectedNodeFromCurrentDocument(nodeID: nodeID) != nil {
+            if pendingInspectResolution == nil,
+               resolvedAttachedInspectedNodeFromCurrentDocument(
+                    nodeID: nodeID,
+                    targetIdentifier: targetIdentifier
+               ) != nil {
                 return
             }
         }
@@ -2952,8 +2839,7 @@ private extension WIDOMInspector {
             selectorPath: selectorPath,
             targetIdentifier: targetIdentifier,
             transaction: transaction,
-            showErrorOnFailure: showErrorOnFailure,
-            allowMaterialization: allowMaterialization
+            showErrorOnFailure: showErrorOnFailure
         )
     }
 
@@ -2963,8 +2849,7 @@ private extension WIDOMInspector {
         selectorPath: String?,
         targetIdentifier: String,
         transaction: SelectionTransaction?,
-        showErrorOnFailure: Bool,
-        allowMaterialization: Bool
+        showErrorOnFailure: Bool
     ) async {
         do {
             try await applyInspectedNode(
@@ -2973,8 +2858,7 @@ private extension WIDOMInspector {
                 selectorPath: selectorPath,
                 targetIdentifier: targetIdentifier,
                 transaction: transaction,
-                showErrorOnFailure: showErrorOnFailure,
-                allowMaterialization: allowMaterialization
+                showErrorOnFailure: showErrorOnFailure
             )
         } catch {
             return
@@ -2985,8 +2869,7 @@ private extension WIDOMInspector {
         guard selectionTransactionIsCurrent(transaction) else {
             return
         }
-        cancelPendingInspectMaterializationTimeout()
-        pendingInspectSelection = nil
+        pendingInspectResolution = nil
         acceptsInspectEvents = false
         inspectSelectionArm = nil
     }
@@ -3056,51 +2939,25 @@ private extension WIDOMInspector {
         }
 
         appendTarget(initialTargetIdentifier)
-
-        guard sharedTransport.targetKind(for: initialTargetIdentifier) != .frame else {
-            return targetIdentifiers
-        }
-
-        for targetIdentifier in sharedTransport.pageTargetIdentifiers() {
-            appendTarget(targetIdentifier)
-        }
-        for targetIdentifier in sharedTransport.frameTargetIdentifiers() {
-            appendTarget(targetIdentifier)
-        }
+        appendTarget(phase.targetIdentifier ?? sharedTransport.currentPageTargetIdentifier())
         return targetIdentifiers
     }
 
-    private func upsertPendingInspectSelection(
+    private func upsertInspectNodeResolution(
         nodeID: Int,
         contextID: DOMContextID,
         selectorPath: String?,
         resolutionTargetIdentifier: String,
         transaction: SelectionTransaction?
-    ) -> PendingInspectSelection {
-        let existing = pendingInspectSelection
-        let shouldPreserveRequestState = existing?.contextID == contextID
-            && existing?.transaction == transaction
-            && existing?.resolutionTargetIdentifier == resolutionTargetIdentifier
-        let pendingSelection = PendingInspectSelection(
+    ) -> InspectNodeResolution {
+        let pendingSelection = InspectNodeResolution(
             nodeID: nodeID,
             contextID: contextID,
             selectorPath: selectorPath,
             resolutionTargetIdentifier: resolutionTargetIdentifier,
-            transaction: transaction,
-            scopedMaterializationRootNodeIDs: shouldPreserveRequestState ? existing?.scopedMaterializationRootNodeIDs ?? [] : [],
-            materializedAncestorNodeIDs: shouldPreserveRequestState ? existing?.materializedAncestorNodeIDs ?? [] : [],
-            outstandingMaterializationNodeIDs: shouldPreserveRequestState ? existing?.outstandingMaterializationNodeIDs ?? [] : [],
-            activeMaterializationStrategy: shouldPreserveRequestState ? existing?.activeMaterializationStrategy ?? .none : .none,
-            activeRequestGeneration: shouldPreserveRequestState ? existing?.activeRequestGeneration ?? 0 : 0,
-            genericDispatchDeferralCount: shouldPreserveRequestState ? existing?.genericDispatchDeferralCount ?? 0 : 0,
-            observedMaterializationStrategy: shouldPreserveRequestState ? existing?.observedMaterializationStrategy ?? .none : .none,
-            observedMaterializationCandidateNodeIDs: shouldPreserveRequestState ? existing?.observedMaterializationCandidateNodeIDs ?? [] : [],
-            observedDocumentBackedFrameIDs: shouldPreserveRequestState ? existing?.observedDocumentBackedFrameIDs ?? [] : [],
-            lastExhaustedScopedCandidateNodeIDs: shouldPreserveRequestState ? existing?.lastExhaustedScopedCandidateNodeIDs ?? [] : [],
-            lastExhaustedScopedStrategy: shouldPreserveRequestState ? existing?.lastExhaustedScopedStrategy : nil,
-            progressRevision: shouldPreserveRequestState ? existing?.progressRevision ?? 0 : 0
+            transaction: transaction
         )
-        pendingInspectSelection = pendingSelection
+        pendingInspectResolution = pendingSelection
         return pendingSelection
     }
 
@@ -3110,15 +2967,17 @@ private extension WIDOMInspector {
         selectorPath: String?,
         targetIdentifier: String,
         transaction: SelectionTransaction?,
-        showErrorOnFailure: Bool,
-        allowMaterialization: Bool
+        showErrorOnFailure: Bool
     ) async throws {
         guard currentContext?.contextID == contextID,
               selectionTransactionIsCurrent(transaction) else {
             return
         }
 
-        if let node = resolvedAttachedInspectedNodeFromCurrentDocument(nodeID: nodeID) {
+        if let node = resolvedAttachedInspectedNodeFromCurrentDocument(
+            nodeID: nodeID,
+            targetIdentifier: targetIdentifier
+        ) {
             logSelectionDiagnostics(
                 "applyInspectedNode resolved transport node",
                 selector: selectorPath,
@@ -3127,8 +2986,7 @@ private extension WIDOMInspector {
             await applySelection(
                 to: node,
                 selectorPath: selectorPath,
-                contextID: contextID,
-                targetIdentifierForMaterialization: targetIdentifier
+                contextID: contextID
             )
             await completeInspectModeAfterBackendSelection(transaction: transaction)
             finishInspectSelectionResolution(transaction: transaction)
@@ -3142,7 +3000,10 @@ private extension WIDOMInspector {
                 contextID: contextID,
                 transaction: transaction
            ),
-           let node = resolvedAttachedInspectedNodeFromCurrentDocument(nodeID: nodeID) {
+           let node = resolvedAttachedInspectedNodeFromCurrentDocument(
+                nodeID: nodeID,
+                targetIdentifier: targetIdentifier
+           ) {
             logSelectionDiagnostics(
                 "applyInspectedNode resolved node after frame document merge",
                 selector: selectorPath,
@@ -3151,8 +3012,29 @@ private extension WIDOMInspector {
             await applySelection(
                 to: node,
                 selectorPath: selectorPath,
-                contextID: contextID,
-                targetIdentifierForMaterialization: targetIdentifier
+                contextID: contextID
+            )
+            await completeInspectModeAfterBackendSelection(transaction: transaction)
+            finishInspectSelectionResolution(transaction: transaction)
+            applyRecoverableError(nil)
+            return
+        }
+
+        if let node = await materializeInspectedNodeIfNeeded(
+            nodeID: nodeID,
+            contextID: contextID,
+            targetIdentifier: targetIdentifier,
+            transaction: transaction
+        ) {
+            logSelectionDiagnostics(
+                "applyInspectedNode resolved node after materialization",
+                selector: selectorPath,
+                extra: selectionNodeSummary(node)
+            )
+            await applySelection(
+                to: node,
+                selectorPath: selectorPath,
+                contextID: contextID
             )
             await completeInspectModeAfterBackendSelection(transaction: transaction)
             finishInspectSelectionResolution(transaction: transaction)
@@ -3164,37 +3046,15 @@ private extension WIDOMInspector {
             return
         }
 
-        let shouldMaterializeCurrentInspectSelection = shouldMaterializeInspectSelection(
-            transaction: transaction,
-            pendingSelection: pendingInspectSelection,
-            showErrorOnFailure: showErrorOnFailure
-        )
-
-        if allowMaterialization, shouldMaterializeCurrentInspectSelection {
-            let outcome = await materializePendingInspectSelection(
-                nodeID: nodeID,
-                selectorPath: selectorPath,
-                contextID: contextID,
-                targetIdentifier: targetIdentifier,
-                transaction: transaction
-            )
-            switch outcome {
-            case .requested, .waitingForMutation:
-                return
-            case .exhausted:
-                break
-            }
-        }
-
         logSelectionDiagnostics(
             "applyInspectedNode could not resolve transport node",
             selector: selectorPath,
             extra: "currentSelection=\(selectionNodeSummary(document.selectedNode)) \(inspectResolutionDiagnosticSummary(nodeID: nodeID, targetIdentifier: targetIdentifier, contextID: contextID))",
             level: .error
         )
-        if pendingInspectSelection?.nodeID == nodeID,
-           pendingInspectSelection?.contextID == contextID {
-            pendingInspectSelection = nil
+        if pendingInspectResolution?.nodeID == nodeID,
+           pendingInspectResolution?.contextID == contextID {
+            pendingInspectResolution = nil
         }
         await clearSelectionForFailedResolution(
             contextID: contextID,
@@ -3205,417 +3065,64 @@ private extension WIDOMInspector {
         throw DOMOperationError.invalidSelection
     }
 
-    private func shouldMaterializeInspectSelection(
-        transaction: SelectionTransaction?,
-        pendingSelection: PendingInspectSelection?,
-        showErrorOnFailure: Bool
-    ) -> Bool {
-        guard transaction != nil else {
-            return true
-        }
-
-        switch selectionMaterializationCandidates(for: pendingSelection).strategy {
-        case .genericIncomplete:
-            return true
-        case .frameRelated, .nestedDocumentRoots:
-            return showErrorOnFailure == false
-        case .body, .html, .structuredChild, .root, .none:
-            return false
-        }
-    }
-
-    @discardableResult
-    private func materializePendingInspectSelection(
+    private func materializeInspectedNodeIfNeeded(
         nodeID: Int,
-        selectorPath: String?,
         contextID: DOMContextID,
         targetIdentifier: String,
         transaction: SelectionTransaction?
-    ) async -> PendingInspectMaterializationOutcome {
-        guard currentContext?.contextID == contextID,
-              selectionTransactionIsCurrent(transaction) else {
-            return .exhausted
-        }
+    ) async -> DOMNodeModel? {
+        var requestedNodeIDs = Set<DOMNodeModel.ID>()
 
-        switch phase {
-        case let .ready(context, activeTargetIdentifier)
-            where context.contextID == contextID && activeTargetIdentifier == targetIdentifier:
-            break
-        case let .loadingDocument(context, _)
-            where context.contextID == contextID:
-            logSelectionDiagnostics(
-                "materializePendingInspectSelection deferred while document is not ready",
-                selector: selectorPath,
-                extra: "nodeID=\(nodeID) target=\(targetIdentifier) phase=\(String(describing: phase))"
-            )
-            return .waitingForMutation
-        default:
-            return .exhausted
-        }
-
-        var pendingInspectSelection = upsertPendingInspectSelection(
-            nodeID: nodeID,
-            contextID: contextID,
-            selectorPath: selectorPath,
-            resolutionTargetIdentifier: targetIdentifier,
-            transaction: transaction
-        )
-
-        if pendingInspectSelection.scopedMaterializationRootNodeIDs.isEmpty == false {
-            pendingInspectSelection.scopedMaterializationRootNodeIDs = normalizedScopedMaterializationRootNodeIDs(
-                for: pendingInspectSelection
-            )
-        }
-
-        let selectionMaterialization = selectionMaterializationCandidates(
-            for: pendingInspectSelection
-        )
-        if pendingInspectSelection.scopedMaterializationRootNodeIDs.isEmpty,
-           selectionMaterialization.strategy == .frameRelated || selectionMaterialization.strategy == .nestedDocumentRoots {
-            pendingInspectSelection.scopedMaterializationRootNodeIDs = selectionMaterialization.candidates.map(\.id)
-        }
-
-        if shouldPreemptPendingInspectRequests(
-            pendingInspectSelection,
-            nextPlan: selectionMaterialization
-        ) {
-            let previousStrategy = pendingInspectSelection.activeMaterializationStrategy
-            let staleOutstandingLocalIDs = pendingInspectSelection.outstandingMaterializationNodeIDs
-                .map(\.localID)
-                .sorted()
-            resetPendingInspectMaterializationState(&pendingInspectSelection)
-            pendingInspectSelection.scopedMaterializationRootNodeIDs = selectionMaterialization.candidates.map(\.id)
-            pendingInspectSelection.activeMaterializationStrategy = selectionMaterialization.strategy
-            pendingInspectSelection.activeRequestGeneration &+= 1
-            pendingInspectSelection.observedMaterializationStrategy = selectionMaterialization.strategy
-            pendingInspectSelection.observedMaterializationCandidateNodeIDs = selectionMaterialization.candidateNodeIDs
-            self.pendingInspectSelection = pendingInspectSelection
-            logSelectionDiagnostics(
-                "pending inspect strategy transitioned",
-                selector: selectorPath,
-                extra: "nodeID=\(nodeID) target=\(targetIdentifier) from=\(previousStrategy.rawValue) to=\(selectionMaterialization.strategy.rawValue) staleOutstanding=\(staleOutstandingLocalIDs) scopedRoots=\(pendingInspectSelection.scopedMaterializationRootNodeIDs.map(\.localID))",
-                level: .debug
-            )
-        }
-
-        if shouldDeferGenericDispatch(
-            pendingInspectSelection,
-            plan: selectionMaterialization
-        ) {
-            pendingInspectSelection.activeMaterializationStrategy = .frameRelated
-            pendingInspectSelection.activeRequestGeneration &+= 1
-            pendingInspectSelection.genericDispatchDeferralCount &+= 1
-            pendingInspectSelection.observedMaterializationStrategy = selectionMaterialization.strategy
-            pendingInspectSelection.observedMaterializationCandidateNodeIDs = selectionMaterialization.candidateNodeIDs
-            self.pendingInspectSelection = pendingInspectSelection
-            logSelectionDiagnostics(
-                "materializePendingInspectSelection deferred generic dispatch while awaiting frame-related candidates",
-                selector: selectorPath,
-                extra: "nodeID=\(nodeID) target=\(targetIdentifier) frameOwnerCount=\(selectionMaterialization.frameOwnerCandidates.count) genericCount=\(selectionMaterialization.genericIncompleteCandidates.count) deferralCount=\(pendingInspectSelection.genericDispatchDeferralCount)",
-                level: .debug
-            )
-            schedulePendingInspectMaterializationTimeout(for: pendingInspectSelection)
-            return .waitingForMutation
-        }
-
-        let candidates = selectionMaterialization.candidates
-        if candidates.isEmpty {
-            pendingInspectSelection.observedMaterializationStrategy = selectionMaterialization.strategy
-            pendingInspectSelection.observedMaterializationCandidateNodeIDs = selectionMaterialization.candidateNodeIDs
-            self.pendingInspectSelection = pendingInspectSelection
-            return .exhausted
-        }
-
-        let unresolvedCandidates = candidates.filter {
-            pendingInspectSelection.materializedAncestorNodeIDs.contains($0.id) == false
-        }
-        if unresolvedCandidates.isEmpty {
-            pendingInspectSelection.observedMaterializationStrategy = selectionMaterialization.strategy
-            pendingInspectSelection.observedMaterializationCandidateNodeIDs = selectionMaterialization.candidateNodeIDs
-            self.pendingInspectSelection = pendingInspectSelection
-            if selectionMaterialization.strategy == .genericIncomplete,
-               pendingInspectSelection.outstandingMaterializationNodeIDs.isEmpty {
-                logSelectionDiagnostics(
-                    "materializePendingInspectSelection waiting after generic candidate completion",
-                    selector: selectorPath,
-                    extra: "nodeID=\(nodeID) target=\(targetIdentifier) plan=\(selectionMaterializationPlanSummary(selectionMaterialization)) pendingInspect=\(pendingInspectSelectionDiagnosticSummary(pendingInspectSelection))",
-                    level: .debug
-                )
-                schedulePendingInspectMaterializationTimeout(for: pendingInspectSelection)
-                return .waitingForMutation
-            }
-            return pendingInspectSelection.outstandingMaterializationNodeIDs.isEmpty ? .exhausted : .requested
-        }
-
-        let requestableCandidates = unresolvedCandidates.filter(\.hasUnloadedRegularChildren)
-        let requestableCandidateIDs = Set(requestableCandidates.map(\.id))
-        if pendingInspectSelection.activeMaterializationStrategy != selectionMaterialization.strategy
-            || pendingInspectSelection.outstandingMaterializationNodeIDs.isEmpty {
-            pendingInspectSelection.activeRequestGeneration &+= 1
-        }
-        pendingInspectSelection.activeMaterializationStrategy = selectionMaterialization.strategy
-        pendingInspectSelection.materializedAncestorNodeIDs.formUnion(requestableCandidateIDs)
-        pendingInspectSelection.outstandingMaterializationNodeIDs.formUnion(requestableCandidateIDs)
-        pendingInspectSelection.observedMaterializationStrategy = selectionMaterialization.strategy
-        pendingInspectSelection.observedMaterializationCandidateNodeIDs = selectionMaterialization.candidateNodeIDs
-        self.pendingInspectSelection = pendingInspectSelection
-
-        guard requestableCandidates.isEmpty == false else {
-            let exhaustedCandidateNodeIDs = selectionMaterialization.candidateNodeIDs
-            let repeatedScopedExhaustion = pendingInspectSelection.lastExhaustedScopedStrategy == selectionMaterialization.strategy
-                && pendingInspectSelection.lastExhaustedScopedCandidateNodeIDs == exhaustedCandidateNodeIDs
-            pendingInspectSelection.lastExhaustedScopedStrategy = selectionMaterialization.strategy
-            pendingInspectSelection.lastExhaustedScopedCandidateNodeIDs = exhaustedCandidateNodeIDs
-            self.pendingInspectSelection = pendingInspectSelection
-
-            guard repeatedScopedExhaustion == false else {
-                return .waitingForMutation
+        for _ in 0..<12 {
+            if let node = resolvedAttachedInspectedNodeFromCurrentDocument(
+                nodeID: nodeID,
+                targetIdentifier: targetIdentifier
+            ) {
+                return node
             }
 
-            logSelectionDiagnostics(
-                "materializePendingInspectSelection skipped fully loaded candidates",
-                selector: selectorPath,
-                extra: "nodeID=\(nodeID) target=\(targetIdentifier) plan=\(selectionMaterializationPlanSummary(selectionMaterialization)) skippedCandidates=\(nodeSummaryList(unresolvedCandidates)) pendingInspect=\(pendingInspectSelectionDiagnosticSummary(pendingInspectSelection))",
-                level: .debug
-            )
-            schedulePendingInspectMaterializationTimeout(for: pendingInspectSelection)
-            return .waitingForMutation
-        }
-
-        pendingInspectSelection.lastExhaustedScopedStrategy = nil
-        pendingInspectSelection.lastExhaustedScopedCandidateNodeIDs.removeAll(keepingCapacity: true)
-        var requestedNodes = 0
-        for candidate in requestableCandidates {
             guard currentContext?.contextID == contextID,
-                  selectionTransactionIsCurrent(transaction) else {
-                return pendingInspectSelection.outstandingMaterializationNodeIDs.isEmpty ? .exhausted : .requested
+                  selectionTransactionIsCurrent(transaction),
+                  let candidate = inspectMaterializationCandidates(targetIdentifier: targetIdentifier).first(where: {
+                      requestedNodeIDs.insert($0.id).inserted
+                  }) else {
+                return nil
             }
-            guard let transportNodeID = try? transportNodeID(for: candidate) else {
-                pendingInspectSelection.materializedAncestorNodeIDs.remove(candidate.id)
-                pendingInspectSelection.outstandingMaterializationNodeIDs.remove(candidate.id)
-                self.pendingInspectSelection = pendingInspectSelection
-                continue
-            }
-            do {
-                _ = try await sendDOMCommand(
-                    WITransportMethod.DOM.requestChildNodes,
-                    targetIdentifier: targetIdentifier,
-                    parameters: DOMRequestChildNodesParameters(
-                        nodeId: transportNodeID,
-                        depth: max(configuration.snapshotDepth, 128)
-                    )
-                )
-                requestedNodes += 1
-            } catch {
-                pendingInspectSelection.materializedAncestorNodeIDs.remove(candidate.id)
-                pendingInspectSelection.outstandingMaterializationNodeIDs.remove(candidate.id)
-                self.pendingInspectSelection = pendingInspectSelection
-                logSelectionDiagnostics(
-                    "materializePendingInspectSelection requestChildNodes failed",
-                    extra: "nodeID=\(transportNodeID) error=\(error.localizedDescription)",
-                    level: .error
-                )
-            }
+
+            _ = await requestChildNodesAndWaitForCompletion(
+                transportNodeID: (try? transportNodeID(for: candidate)) ?? candidate.nodeID,
+                frontendNodeID: candidate.nodeID,
+                targetIdentifier: targetIdentifier,
+                contextID: contextID,
+                depth: Self.defaultSubtreeDepth
+            )
         }
-        self.pendingInspectSelection = pendingInspectSelection
-        logSelectionDiagnostics(
-            "materializePendingInspectSelection requested child nodes",
-            selector: selectorPath,
-            extra: "nodeID=\(nodeID) target=\(targetIdentifier) plan=\(selectionMaterializationPlanSummary(selectionMaterialization)) requestedCandidates=\(nodeSummaryList(requestableCandidates)) requestedNodes=\(requestedNodes) pendingInspect=\(pendingInspectSelectionDiagnosticSummary(pendingInspectSelection)) pendingChildRequests=\(pendingChildRequestDiagnosticsSummary())",
-            level: .debug
+
+        return resolvedAttachedInspectedNodeFromCurrentDocument(
+            nodeID: nodeID,
+            targetIdentifier: targetIdentifier
         )
-        if !pendingInspectSelection.outstandingMaterializationNodeIDs.isEmpty {
-            schedulePendingInspectMaterializationTimeout(for: pendingInspectSelection)
-            return .requested
-        }
-        return .exhausted
     }
 
-    private func normalizedScopedMaterializationRootNodeIDs(
-        for pendingSelection: PendingInspectSelection
-    ) -> [DOMNodeModel.ID] {
+    private func inspectMaterializationCandidates(targetIdentifier: String) -> [DOMNodeModel] {
+        var candidates: [DOMNodeModel] = []
         var seen = Set<DOMNodeModel.ID>()
-        return pendingSelection.scopedMaterializationRootNodeIDs.filter { nodeID in
-            guard document.node(localID: nodeID.localID) != nil else {
-                return false
-            }
-            return seen.insert(nodeID).inserted
-        }
-    }
-
-    private func materializationTraversalRoots(
-        for pendingSelection: PendingInspectSelection?
-    ) -> [DOMNodeModel] {
-        if let pendingSelection {
-            let scopedRootNodeIDs = normalizedScopedMaterializationRootNodeIDs(
-                for: pendingSelection
-            )
-            let scopedRoots = scopedRootNodeIDs.compactMap { scopedRootNodeID in
-                document.node(localID: scopedRootNodeID.localID)
-            }
-            if scopedRoots.isEmpty == false {
-                return scopedRoots
-            }
+        var queue: [DOMNodeModel] = []
+        if let rootNode = document.rootNode {
+            queue.append(rootNode)
         }
 
-        guard let root = document.rootNode else {
-            return []
-        }
-        return [root]
-    }
-
-    private func selectionMaterializationCandidates(
-        for pendingSelection: PendingInspectSelection? = nil
-    ) -> SelectionMaterializationPlan {
-        let traversalRoots = materializationTraversalRoots(for: pendingSelection)
-        guard traversalRoots.isEmpty == false else {
-            return SelectionMaterializationPlan(
-                strategy: .none,
-                candidates: [],
-                frameOwnerCandidates: [],
-                frameDocumentCandidates: [],
-                canonicalEmbeddedCandidates: [],
-                genericIncompleteCandidates: []
-            )
-        }
-
-        let traversalRootIDs = Set(traversalRoots.map(\.id))
-        var queue: [DOMNodeModel] = traversalRoots
-        var traversal: [DOMNodeModel] = []
-        var visited = Set<DOMNodeModel.ID>()
-
-        while !queue.isEmpty {
-            let node = queue.removeFirst()
-            guard visited.insert(node.id).inserted else {
-                continue
+        while let node = queue.first {
+            queue.removeFirst()
+            if node.targetIdentifier == targetIdentifier,
+               node.hasUnloadedRegularChildren,
+               seen.insert(node.id).inserted {
+                candidates.append(node)
             }
-            traversal.append(node)
             queue.append(contentsOf: node.visibleDOMTreeChildren)
         }
 
-        let frameDocumentCandidates = traversal.filter { node in
-            node.hasUnloadedRegularChildren
-                && isFrameDocumentCandidate(node)
-        }
-        let frameOwnerCandidates = traversal.filter { node in
-            traversalRootIDs.contains(node.id) == false
-                && node.hasUnloadedRegularChildren
-                && isFrameOwnerNode(node)
-        }
-        let canonicalEmbeddedCandidates = traversal.filter { node in
-            traversalRootIDs.contains(node.id) == false
-                && isFrameOwnerNode(node) == false
-                && node.hasUnloadedRegularChildren
-                && nodeIsInsideEmbeddedDocument(node)
-                && isFrameDocumentCandidate(node) == false
-        }
-        let requestableFrameCandidates = uniqueNodes(
-            preservingOrder: frameDocumentCandidates + canonicalEmbeddedCandidates
-        )
-        let frameAssociatedCandidates = uniqueNodes(
-            preservingOrder: frameOwnerCandidates + frameDocumentCandidates + canonicalEmbeddedCandidates
-        )
-        let genericIncompleteCandidates = traversal.filter { node in
-            traversalRootIDs.contains(node.id) == false
-                && node.hasUnloadedRegularChildren
-                && frameAssociatedCandidates.contains(where: { $0.id == node.id }) == false
-        }
-
-        if requestableFrameCandidates.isEmpty == false {
-            return SelectionMaterializationPlan(
-                strategy: .frameRelated,
-                candidates: requestableFrameCandidates,
-                frameOwnerCandidates: frameOwnerCandidates,
-                frameDocumentCandidates: frameDocumentCandidates,
-                canonicalEmbeddedCandidates: canonicalEmbeddedCandidates,
-                genericIncompleteCandidates: genericIncompleteCandidates
-            )
-        }
-
-        let nestedDocumentRootsSource: [DOMNodeModel]
-        if let pendingSelection,
-           pendingSelection.scopedMaterializationRootNodeIDs.isEmpty == false {
-            nestedDocumentRootsSource = traversal
-        } else {
-            nestedDocumentRootsSource = knownDocumentRoots()
-        }
-        let nestedDocumentRoots = uniqueNodes(
-            preservingOrder: nestedDocumentRootsSource.filter {
-                isDocumentNode($0)
-                    && traversalRootIDs.contains($0.id) == false
-                    && ($0.hasUnloadedRegularChildren || !$0.children.isEmpty)
-            }
-        )
-        if nestedDocumentRoots.isEmpty == false {
-            return SelectionMaterializationPlan(
-                strategy: .nestedDocumentRoots,
-                candidates: nestedDocumentRoots,
-                frameOwnerCandidates: frameOwnerCandidates,
-                frameDocumentCandidates: frameDocumentCandidates,
-                canonicalEmbeddedCandidates: canonicalEmbeddedCandidates,
-                genericIncompleteCandidates: genericIncompleteCandidates
-            )
-        }
-
-        if genericIncompleteCandidates.isEmpty == false {
-            return SelectionMaterializationPlan(
-                strategy: .genericIncomplete,
-                candidates: genericIncompleteCandidates,
-                frameOwnerCandidates: frameOwnerCandidates,
-                frameDocumentCandidates: frameDocumentCandidates,
-                canonicalEmbeddedCandidates: canonicalEmbeddedCandidates,
-                genericIncompleteCandidates: genericIncompleteCandidates
-            )
-        }
-
-        if let bodyNode = traversal.first(where: {
-            ($0.localName.isEmpty ? $0.nodeName.lowercased() : $0.localName.lowercased()) == "body"
-        }) {
-            return SelectionMaterializationPlan(
-                strategy: .body,
-                candidates: [bodyNode],
-                frameOwnerCandidates: frameOwnerCandidates,
-                frameDocumentCandidates: frameDocumentCandidates,
-                canonicalEmbeddedCandidates: canonicalEmbeddedCandidates,
-                genericIncompleteCandidates: genericIncompleteCandidates
-            )
-        }
-
-        if let htmlNode = traversal.first(where: {
-            ($0.localName.isEmpty ? $0.nodeName.lowercased() : $0.localName.lowercased()) == "html"
-        }) {
-            return SelectionMaterializationPlan(
-                strategy: .html,
-                candidates: [htmlNode],
-                frameOwnerCandidates: frameOwnerCandidates,
-                frameDocumentCandidates: frameDocumentCandidates,
-                canonicalEmbeddedCandidates: canonicalEmbeddedCandidates,
-                genericIncompleteCandidates: genericIncompleteCandidates
-            )
-        }
-
-        if let firstStructuredChild = traversal.first(where: {
-            let name = ($0.localName.isEmpty ? $0.nodeName : $0.localName).lowercased()
-            return !name.isEmpty && !name.hasPrefix("#")
-        }) {
-            return SelectionMaterializationPlan(
-                strategy: .structuredChild,
-                candidates: [firstStructuredChild],
-                frameOwnerCandidates: frameOwnerCandidates,
-                frameDocumentCandidates: frameDocumentCandidates,
-                canonicalEmbeddedCandidates: canonicalEmbeddedCandidates,
-                genericIncompleteCandidates: genericIncompleteCandidates
-            )
-        }
-
-        return SelectionMaterializationPlan(
-            strategy: .root,
-            candidates: traversalRoots,
-            frameOwnerCandidates: frameOwnerCandidates,
-            frameDocumentCandidates: frameDocumentCandidates,
-            canonicalEmbeddedCandidates: canonicalEmbeddedCandidates,
-            genericIncompleteCandidates: genericIncompleteCandidates
-        )
+        return candidates
     }
 
     private func inferredNodeType(for node: DOMNodeModel) -> DOMNodeType {
@@ -3651,577 +3158,6 @@ private extension WIDOMInspector {
         inferredNodeType(for: node) == .document
     }
 
-    private func isFrameDocumentCandidate(_ node: DOMNodeModel) -> Bool {
-        guard isDocumentNode(node) else {
-            return false
-        }
-        if node.frameID != nil {
-            return true
-        }
-        if let parent = node.parent {
-            return isFrameOwnerNode(parent)
-        }
-        return false
-    }
-
-    private func isFrameOwnerNode(_ node: DOMNodeModel) -> Bool {
-        guard inferredNodeType(for: node) == .element else {
-            return false
-        }
-        let nodeName = nodeNameForMatching(node)
-        return nodeName == "iframe" || nodeName == "frame"
-    }
-
-    private func attributeValue(
-        named name: String,
-        for node: DOMNodeModel
-    ) -> String? {
-        node.attributes.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame })?.value
-    }
-
-    private func isAuxiliaryFrameOwner(_ node: DOMNodeModel) -> Bool {
-        guard isFrameOwnerNode(node) else {
-            return false
-        }
-
-        let name = attributeValue(named: "name", for: node)?.lowercased() ?? ""
-        let id = attributeValue(named: "id", for: node)?.lowercased() ?? ""
-        let src = attributeValue(named: "src", for: node)?.lowercased() ?? ""
-
-        let utilityIdentifiers = [
-            "__uspapilocator",
-            "__gpplocator",
-            "googlefcpresent",
-            "googlefcinactive",
-            "googlefcloaded",
-            "__pb_locator__",
-        ]
-        if utilityIdentifiers.contains(name) || utilityIdentifiers.contains(id) {
-            return true
-        }
-
-        if (name.hasPrefix("__") || id.hasPrefix("__")),
-           src == "about:blank" {
-            return true
-        }
-
-        if src.contains("google.com/recaptcha")
-            || src.contains("google.com/recap") {
-            return true
-        }
-
-        return false
-    }
-
-    private func frameIDForSelectionFallback(_ node: DOMNodeModel) -> String? {
-        if let frameID = node.frameID, !frameID.isEmpty {
-            return frameID
-        }
-        if isDocumentNode(node),
-           let parent = node.parent,
-           isFrameOwnerNode(parent),
-           let frameID = parent.frameID,
-           !frameID.isEmpty {
-            return frameID
-        }
-        if isFrameOwnerNode(node),
-           let documentChild = node.contentDocument,
-           let frameID = documentChild.frameID,
-           !frameID.isEmpty {
-            return frameID
-        }
-        return nil
-    }
-
-    private func documentBackedFrameIDs(
-        from selectionMaterialization: SelectionMaterializationPlan
-    ) -> Set<String> {
-        var frameIDs = Set<String>()
-
-        for node in selectionMaterialization.frameDocumentCandidates {
-            if let frameID = frameIDForSelectionFallback(node) {
-                frameIDs.insert(frameID)
-            }
-        }
-        for node in selectionMaterialization.frameOwnerCandidates where node.contentDocument != nil {
-            if let frameID = frameIDForSelectionFallback(node) {
-                frameIDs.insert(frameID)
-            }
-        }
-
-        return frameIDs
-    }
-
-    private func resolveFrameOwnerNode(for frameID: String) -> DOMNodeModel? {
-        if let nestedDocument = canonicalNestedDocumentNode(for: frameID),
-           let parent = nestedDocument.parent,
-           isFrameOwnerNode(parent),
-           isAuxiliaryFrameOwner(parent) == false {
-            return parent
-        }
-
-        return firstNode(in: document.rootNode) { node in
-            isFrameOwnerNode(node) && node.frameID == frameID && isAuxiliaryFrameOwner(node) == false
-        }
-    }
-
-    private func documentBackedFrameOwnerFallbackCandidates(
-        for pendingSelection: PendingInspectSelection
-    ) -> [DOMNodeModel] {
-        let completedMaterializedNodeIDs = pendingSelection.materializedAncestorNodeIDs
-            .subtracting(pendingSelection.outstandingMaterializationNodeIDs)
-        let candidateNodes = completedMaterializedNodeIDs.compactMap {
-            document.node(localID: $0.localID)
-        }
-
-        let currentOwners = uniqueNodes(
-            preservingOrder: candidateNodes.compactMap { candidate in
-                if isFrameOwnerNode(candidate),
-                   isAuxiliaryFrameOwner(candidate) == false,
-                   candidate.contentDocument != nil {
-                    return candidate
-                }
-                guard isDocumentNode(candidate) else {
-                    return nil
-                }
-                if let parent = candidate.parent, isFrameOwnerNode(parent) {
-                    guard isAuxiliaryFrameOwner(parent) == false else {
-                        return nil
-                    }
-                    return parent
-                }
-                if let frameID = candidate.frameID,
-                   let owner = resolveFrameOwnerNode(for: frameID) {
-                    return owner
-                }
-                return nil
-            }
-        )
-
-        let observedOwners: [DOMNodeModel]
-        if pendingSelection.outstandingMaterializationNodeIDs.isEmpty {
-            observedOwners = uniqueNodes(
-                preservingOrder: pendingSelection.observedDocumentBackedFrameIDs
-                    .sorted()
-                    .compactMap(resolveFrameOwnerNode(for:))
-            )
-        } else {
-            observedOwners = []
-        }
-
-        return uniqueNodes(
-            preservingOrder: currentOwners + observedOwners
-        )
-    }
-
-    private func frameOwnerFallbackCandidates(
-        for pendingSelection: PendingInspectSelection
-    ) -> [DOMNodeModel] {
-        let candidateNodes = pendingSelection.materializedAncestorNodeIDs.compactMap {
-            document.node(localID: $0.localID)
-        }
-        let documentDerivedOwners = documentBackedFrameOwnerFallbackCandidates(for: pendingSelection)
-        if documentDerivedOwners.isEmpty == false {
-            return documentDerivedOwners
-        }
-
-        return uniqueNodes(
-            preservingOrder: candidateNodes.compactMap { candidate in
-                isFrameOwnerNode(candidate) && isAuxiliaryFrameOwner(candidate) == false ? candidate : nil
-            }
-        )
-    }
-
-    @discardableResult
-    private func applyFrameOwnerFallbackSelectionIfPossible(
-        for pendingSelection: PendingInspectSelection,
-        allowDirectOwnerFallback: Bool = true
-    ) async -> Bool {
-        let frameOwnerCandidates = allowDirectOwnerFallback
-            ? frameOwnerFallbackCandidates(for: pendingSelection)
-            : documentBackedFrameOwnerFallbackCandidates(for: pendingSelection)
-        guard frameOwnerCandidates.count == 1,
-              let frameOwner = frameOwnerCandidates.first else {
-            if frameOwnerCandidates.isEmpty == false {
-                logSelectionDiagnostics(
-                    "applyFrameOwnerFallbackSelectionIfPossible skipped ambiguous frame owner fallback",
-                    selector: pendingSelection.selectorPath,
-                    extra: "nodeID=\(pendingSelection.nodeID) frameOwnerCandidates=\(frameOwnerCandidates.map { selectionNodeSummary($0) }.joined(separator: ",")) target=\(pendingSelection.resolutionTargetIdentifier)",
-                    level: .debug
-                )
-            }
-            return false
-        }
-
-        logSelectionDiagnostics(
-            "applyFrameOwnerFallbackSelectionIfPossible selected frame owner fallback",
-            selector: pendingSelection.selectorPath,
-            extra: "nodeID=\(pendingSelection.nodeID) frameOwner=\(selectionNodeSummary(frameOwner)) target=\(pendingSelection.resolutionTargetIdentifier)",
-            level: .debug
-        )
-
-        await applySelection(
-            to: frameOwner,
-            selectorPath: pendingSelection.selectorPath,
-            contextID: pendingSelection.contextID,
-            targetIdentifierForMaterialization: pendingSelection.resolutionTargetIdentifier
-        )
-        finishInspectSelectionResolution(transaction: pendingSelection.transaction)
-        applyRecoverableError(nil)
-        return true
-    }
-
-    private func uniqueNodes(preservingOrder nodes: [DOMNodeModel]) -> [DOMNodeModel] {
-        var seen = Set<DOMNodeModel.ID>()
-        var unique: [DOMNodeModel] = []
-
-        for node in nodes where seen.insert(node.id).inserted {
-            unique.append(node)
-        }
-
-        return unique
-    }
-
-    private func selectionMaterializationCountsSummary(_ plan: SelectionMaterializationPlan) -> String {
-        "requestCount=\(plan.candidates.count) frameOwnerCount=\(plan.frameOwnerCandidates.count) frameDocumentCount=\(plan.frameDocumentCandidates.count) canonicalEmbeddedCount=\(plan.canonicalEmbeddedCandidates.count) genericCount=\(plan.genericIncompleteCandidates.count)"
-    }
-
-    private func resetPendingInspectMaterializationState(
-        _ pendingSelection: inout PendingInspectSelection
-    ) {
-        pendingSelection.materializedAncestorNodeIDs.removeAll(keepingCapacity: true)
-        pendingSelection.outstandingMaterializationNodeIDs.removeAll(keepingCapacity: true)
-        pendingSelection.activeMaterializationStrategy = .none
-        pendingSelection.lastExhaustedScopedCandidateNodeIDs.removeAll(keepingCapacity: true)
-        pendingSelection.lastExhaustedScopedStrategy = nil
-    }
-
-    private func materializationStrategyPriority(
-        _ strategy: SelectionMaterializationStrategy
-    ) -> Int {
-        switch strategy {
-        case .frameRelated:
-            7
-        case .nestedDocumentRoots:
-            6
-        case .genericIncomplete:
-            5
-        case .body:
-            4
-        case .html:
-            3
-        case .structuredChild:
-            2
-        case .root:
-            1
-        case .none:
-            0
-        }
-    }
-
-    private func shouldPreemptPendingInspectRequests(
-        _ pendingSelection: PendingInspectSelection,
-        nextPlan: SelectionMaterializationPlan
-    ) -> Bool {
-        guard pendingSelection.outstandingMaterializationNodeIDs.isEmpty == false else {
-            return false
-        }
-        guard nextPlan.strategy == .frameRelated else {
-            return false
-        }
-        return materializationStrategyPriority(nextPlan.strategy)
-            > materializationStrategyPriority(pendingSelection.activeMaterializationStrategy)
-    }
-
-    private func shouldDeferGenericDispatch(
-        _ pendingSelection: PendingInspectSelection,
-        plan: SelectionMaterializationPlan
-    ) -> Bool {
-        guard plan.strategy == .genericIncomplete else {
-            return false
-        }
-        guard plan.frameOwnerCandidates.isEmpty == false else {
-            return false
-        }
-        return pendingSelection.genericDispatchDeferralCount < 2
-    }
-
-    private func normalizeTrackedMaterializationNodeIDs(
-        _ nodeIDs: Set<DOMNodeModel.ID>
-    ) -> Set<DOMNodeModel.ID> {
-        Set(
-            nodeIDs.filter { nodeID in
-                document.node(localID: nodeID.localID) != nil
-            }
-        )
-    }
-
-    private func normalizePendingInspectSelectionState(
-        _ pendingSelection: inout PendingInspectSelection
-    ) -> Bool {
-        var didChange = false
-
-        let normalizedScopedRoots = normalizedScopedMaterializationRootNodeIDs(
-            for: pendingSelection
-        )
-        if normalizedScopedRoots != pendingSelection.scopedMaterializationRootNodeIDs {
-            pendingSelection.scopedMaterializationRootNodeIDs = normalizedScopedRoots
-            didChange = true
-        }
-
-        var normalizedMaterializedNodeIDs = normalizeTrackedMaterializationNodeIDs(
-            pendingSelection.materializedAncestorNodeIDs
-        )
-        let normalizedOutstandingNodeIDs = normalizeTrackedMaterializationNodeIDs(
-            pendingSelection.outstandingMaterializationNodeIDs
-        )
-        normalizedMaterializedNodeIDs.formUnion(normalizedOutstandingNodeIDs)
-
-        if normalizedMaterializedNodeIDs != pendingSelection.materializedAncestorNodeIDs {
-            pendingSelection.materializedAncestorNodeIDs = normalizedMaterializedNodeIDs
-            didChange = true
-        }
-
-        if normalizedOutstandingNodeIDs != pendingSelection.outstandingMaterializationNodeIDs {
-            pendingSelection.outstandingMaterializationNodeIDs = normalizedOutstandingNodeIDs
-            didChange = true
-        }
-
-        if didChange {
-            pendingSelection.lastExhaustedScopedCandidateNodeIDs.removeAll(keepingCapacity: true)
-            pendingSelection.lastExhaustedScopedStrategy = nil
-        }
-
-        return didChange
-    }
-
-    private func markPendingInspectProgress(
-        _ pendingSelection: inout PendingInspectSelection,
-        reason: String,
-        selectionMaterialization: SelectionMaterializationPlan? = nil,
-        extra: String = ""
-    ) {
-        pendingSelection.progressRevision &+= 1
-        if let selectionMaterialization {
-            pendingSelection.observedMaterializationStrategy = selectionMaterialization.strategy
-            pendingSelection.observedMaterializationCandidateNodeIDs = selectionMaterialization.candidateNodeIDs
-            pendingSelection.observedDocumentBackedFrameIDs.formUnion(
-                documentBackedFrameIDs(from: selectionMaterialization)
-            )
-        }
-        pendingSelection.lastExhaustedScopedCandidateNodeIDs.removeAll(keepingCapacity: true)
-        pendingSelection.lastExhaustedScopedStrategy = nil
-        self.pendingInspectSelection = pendingSelection
-
-        let countsSummary = selectionMaterialization.map(selectionMaterializationCountsSummary(_:)) ?? ""
-        let extraParts = [countsSummary, extra]
-            .filter { !$0.isEmpty }
-            .joined(separator: " ")
-        logSelectionDiagnostics(
-            "pending inspect progress observed",
-            selector: pendingSelection.selectorPath,
-            extra: "reason=\(reason) nodeID=\(pendingSelection.nodeID) strategy=\(pendingSelection.observedMaterializationStrategy.rawValue) progressRevision=\(pendingSelection.progressRevision) outstanding=\(pendingSelection.outstandingMaterializationNodeIDs.map { $0.localID }.sorted()) \(extraParts)",
-            level: .debug
-        )
-
-        if !pendingSelection.outstandingMaterializationNodeIDs.isEmpty {
-            schedulePendingInspectMaterializationTimeout(for: pendingSelection)
-        }
-    }
-
-    private func bundleTouchedNodeIDs(
-        from bundle: DOMGraphMutationBundle
-    ) -> Set<DOMNodeModel.ID> {
-        var touchedNodeIDs = Set<DOMNodeModel.ID>()
-        let documentIdentity = document.documentIdentity
-
-        func insert(_ localID: UInt64) {
-            touchedNodeIDs.insert(.init(documentIdentity: documentIdentity, localID: localID))
-        }
-
-        for event in bundle.events {
-            switch event {
-            case let .childNodeInserted(parentLocalID, _, node):
-                insert(parentLocalID)
-                insert(node.localID)
-            case let .childNodeRemoved(parentLocalID, nodeLocalID):
-                insert(parentLocalID)
-                insert(nodeLocalID)
-            case let .shadowRootPushed(hostLocalID, root):
-                insert(hostLocalID)
-                insert(root.localID)
-            case let .shadowRootPopped(hostLocalID, rootLocalID):
-                insert(hostLocalID)
-                insert(rootLocalID)
-            case let .pseudoElementAdded(parentLocalID, node):
-                insert(parentLocalID)
-                insert(node.localID)
-            case let .pseudoElementRemoved(parentLocalID, nodeLocalID):
-                insert(parentLocalID)
-                insert(nodeLocalID)
-            case let .setDetachedRoots(nodes):
-                for node in nodes {
-                    insert(node.localID)
-                }
-            case let .attributeModified(nodeLocalID, _, _, _, _),
-                 let .attributeRemoved(nodeLocalID, _, _, _),
-                 let .characterDataModified(nodeLocalID, _, _, _),
-                 let .childNodeCountUpdated(nodeLocalID, _, _, _),
-                 let .setChildNodes(nodeLocalID, _):
-                insert(nodeLocalID)
-            case let .replaceSubtree(root):
-                insert(root.localID)
-            case .documentUpdated:
-                break
-            }
-        }
-
-        return touchedNodeIDs
-    }
-
-    private func recordPendingInspectProgressIfNeeded(
-        from bundle: DOMGraphMutationBundle,
-        contextID: DOMContextID,
-        reason: String,
-        rejectedStructuralMutationParentLocalIDs: Set<UInt64>
-    ) {
-        guard var pendingInspectSelection,
-              pendingInspectSelection.contextID == contextID,
-              selectionTransactionIsCurrent(pendingInspectSelection.transaction) else {
-            return
-        }
-
-        let didNormalizeState = normalizePendingInspectSelectionState(
-            &pendingInspectSelection
-        )
-        if didNormalizeState {
-            self.pendingInspectSelection = pendingInspectSelection
-        }
-
-        let completedOutstandingNodeIDs = Set(
-            completedChildRequestNodeIDs(
-                from: bundle,
-                rejectedStructuralMutationParentLocalIDs: rejectedStructuralMutationParentLocalIDs
-            ).map {
-                DOMNodeModel.ID(documentIdentity: document.documentIdentity, localID: UInt64($0))
-            }
-        ).intersection(pendingInspectSelection.outstandingMaterializationNodeIDs)
-        guard completedOutstandingNodeIDs.isEmpty else {
-            return
-        }
-
-        let selectionMaterialization = selectionMaterializationCandidates(
-            for: pendingInspectSelection
-        )
-        if shouldPreemptPendingInspectRequests(
-            pendingInspectSelection,
-            nextPlan: selectionMaterialization
-        ) {
-            let previousStrategy = pendingInspectSelection.activeMaterializationStrategy
-            let staleOutstandingLocalIDs = pendingInspectSelection.outstandingMaterializationNodeIDs
-                .map(\.localID)
-                .sorted()
-            resetPendingInspectMaterializationState(&pendingInspectSelection)
-            pendingInspectSelection.scopedMaterializationRootNodeIDs = selectionMaterialization.candidates.map(\.id)
-            pendingInspectSelection.activeMaterializationStrategy = selectionMaterialization.strategy
-            pendingInspectSelection.activeRequestGeneration &+= 1
-            markPendingInspectProgress(
-                &pendingInspectSelection,
-                reason: "strategy.preempted",
-                selectionMaterialization: selectionMaterialization,
-                extra: "from=\(previousStrategy.rawValue) staleOutstanding=\(staleOutstandingLocalIDs) scopedRoots=\(pendingInspectSelection.scopedMaterializationRootNodeIDs.map(\.localID))"
-            )
-            return
-        }
-
-        let touchedNodeIDs = bundleTouchedNodeIDs(from: bundle)
-        let didObserveCandidateChange =
-            selectionMaterialization.strategy != pendingInspectSelection.observedMaterializationStrategy
-            || selectionMaterialization.candidateNodeIDs != pendingInspectSelection.observedMaterializationCandidateNodeIDs
-
-        guard didNormalizeState || didObserveCandidateChange else {
-            return
-        }
-
-        markPendingInspectProgress(
-            &pendingInspectSelection,
-            reason: reason,
-            selectionMaterialization: selectionMaterialization,
-            extra: "normalized=\(didNormalizeState) touched=\(touchedNodeIDs.map { $0.localID }.sorted())"
-        )
-    }
-
-    private func restartPendingInspectMaterializationAfterRefresh(
-        _ pendingSelection: PendingInspectSelection,
-        reason: String
-    ) async -> PendingInspectMaterializationOutcome {
-        guard var refreshedPendingSelection = self.pendingInspectSelection,
-              refreshedPendingSelection == pendingSelection,
-              selectionTransactionIsCurrent(refreshedPendingSelection.transaction) else {
-            return .exhausted
-        }
-
-        resetPendingInspectMaterializationState(&refreshedPendingSelection)
-        markPendingInspectProgress(
-            &refreshedPendingSelection,
-            reason: reason,
-            selectionMaterialization: selectionMaterializationCandidates(
-                for: refreshedPendingSelection
-            )
-        )
-
-        return await materializePendingInspectSelection(
-            nodeID: refreshedPendingSelection.nodeID,
-            selectorPath: refreshedPendingSelection.selectorPath,
-            contextID: refreshedPendingSelection.contextID,
-            targetIdentifier: refreshedPendingSelection.resolutionTargetIdentifier,
-            transaction: refreshedPendingSelection.transaction
-        )
-    }
-
-    private func recoverPendingInspectSelectionAfterMirrorInvariantViolation(
-        _ pendingSelection: PendingInspectSelection,
-        targetIdentifier: String,
-        reason: String
-    ) async -> Bool {
-        guard let currentPendingSelection = pendingInspectSelection,
-              currentPendingSelection == pendingSelection,
-              selectionTransactionIsCurrent(currentPendingSelection.transaction) else {
-            return false
-        }
-
-        let didRefresh = await refreshSelectionSubtreeFromTransportIfNeeded(
-            selectorPath: currentPendingSelection.selectorPath,
-            contextID: currentPendingSelection.contextID,
-            targetIdentifier: currentPendingSelection.resolutionTargetIdentifier
-        )
-
-        logSelectionDiagnostics(
-            "pending inspect invariant refresh finished",
-            selector: currentPendingSelection.selectorPath,
-            extra: "reason=\(reason) target=\(targetIdentifier) didRefresh=\(didRefresh) currentSelection=\(selectionNodeSummary(document.selectedNode))",
-            level: .debug
-        )
-
-        await applyPendingInspectSelectionIfPossible()
-
-        if pendingInspectSelection == nil {
-            return true
-        }
-
-        if didRefresh {
-            let materializationOutcome = await restartPendingInspectMaterializationAfterRefresh(
-                currentPendingSelection,
-                reason: "invariant.refresh"
-            )
-            if materializationOutcome != .exhausted {
-                return true
-            }
-        }
-
-        return false
-    }
-
     private func knownDocumentRoots() -> [DOMNodeModel] {
         guard let rootNode = document.rootNode else {
             return []
@@ -4249,13 +3185,6 @@ private extension WIDOMInspector {
             || targetIdentifier != phase.targetIdentifier
     }
 
-    private func allowsInspectSelectionMaterialization(
-        targetIdentifier: String
-    ) -> Bool {
-        sharedTransport.targetKind(for: targetIdentifier) != .frame
-            && targetIdentifier == phase.targetIdentifier
-    }
-
     private func mergeFrameTargetDocumentIfNeeded(
         targetIdentifier: String,
         contextID: DOMContextID,
@@ -4279,7 +3208,7 @@ private extension WIDOMInspector {
             return false
         }
 
-        guard let nestedDocument = canonicalNestedDocumentNode(for: snapshot.root.frameID) else {
+        guard let frameOwner = canonicalFrameOwnerNode(for: snapshot.root.frameID) else {
             logSelectionDiagnostics(
                 "mergeFrameTargetDocumentIfNeeded missing canonical frame owner",
                 extra: "target=\(targetIdentifier) frameID=\(snapshot.root.frameID ?? "nil")",
@@ -4289,19 +3218,13 @@ private extension WIDOMInspector {
         }
 
         var replacementRoot = snapshot.root
-        replacementRoot.localID = nestedDocument.localID
-        if replacementRoot.backendNodeID == nil {
-            replacementRoot.backendNodeID = nestedDocument.backendNodeID
-            replacementRoot.backendNodeIDIsStable = nestedDocument.backendNodeIDIsStable
-        }
-        replacementRoot.frameID = nestedDocument.frameID ?? replacementRoot.frameID
-        replacementRoot.childCount = max(replacementRoot.childCount, replacementRoot.regularChildren.count)
+        replacementRoot.frameID = frameOwner.frameID ?? replacementRoot.frameID
         document.applyMutationBundle(
-            .init(events: [.replaceSubtree(root: replacementRoot)])
+            .init(events: [.attachFrameDocument(ownerKey: frameOwner.key, documentRoot: replacementRoot)])
         )
         logSelectionDiagnostics(
             "mergeFrameTargetDocumentIfNeeded merged frame document",
-            extra: "target=\(targetIdentifier) frameID=\(replacementRoot.frameID ?? "nil") canonicalRoot=\(selectionNodeSummary(document.node(localID: replacementRoot.localID)))"
+            extra: "target=\(targetIdentifier) frameID=\(replacementRoot.frameID ?? "nil") owner=\(selectionNodeSummary(frameOwner)) root=\(selectionNodeSummary(document.node(key: replacementRoot.key)))"
         )
         return true
     }
@@ -4310,6 +3233,7 @@ private extension WIDOMInspector {
         let responseData = try await loadDocumentResponseData(targetIdentifier: targetIdentifier)
         guard let delta = await payloadNormalizer.normalizeDocumentResponseData(
             responseData,
+            targetIdentifier: targetIdentifier,
             resetDocument: false
         ),
         case let .snapshot(snapshot, _) = delta else {
@@ -4318,7 +3242,33 @@ private extension WIDOMInspector {
         return snapshot
     }
 
-    private func canonicalNestedDocumentNode(for frameID: String?) -> DOMNodeModel? {
+    private func refreshFrameDocumentSubtree(
+        targetIdentifier: String,
+        contextID: DOMContextID
+    ) async -> Bool {
+        guard currentContext?.contextID == contextID else {
+            return false
+        }
+        do {
+            let snapshot = try await loadDocumentSnapshot(targetIdentifier: targetIdentifier)
+            guard let owner = canonicalFrameOwnerNode(for: snapshot.root.frameID) else {
+                return false
+            }
+            document.applyMutationBundle(
+                .init(events: [.attachFrameDocument(ownerKey: owner.key, documentRoot: snapshot.root)])
+            )
+            return true
+        } catch {
+            logSelectionDiagnostics(
+                "refreshFrameDocumentSubtree failed",
+                extra: "target=\(targetIdentifier) error=\(error.localizedDescription)",
+                level: .error
+            )
+            return false
+        }
+    }
+
+    private func canonicalFrameOwnerNode(for frameID: String?) -> DOMNodeModel? {
         guard let frameID else {
             return nil
         }
@@ -4326,183 +3276,19 @@ private extension WIDOMInspector {
         if let nestedDocument = knownDocumentRoots().first(where: {
             $0.parent != nil && $0.frameID == frameID
         }) {
-            return nestedDocument
+            return nestedDocument.parent
         }
 
         return firstNode(in: document.rootNode) { node in
-            nodeNameForMatching(node) == "iframe" && node.frameID == frameID
-        }?.contentDocument
-    }
-
-    private func materializeSelectionSubtreeIfNeeded(
-        selectorPath: String?,
-        contextID: DOMContextID,
-        targetIdentifier: String
-    ) async {
-        var requestedCandidateIDs = Set<DOMNodeModel.ID>()
-        var materializedCandidateIDs = Set<DOMNodeModel.ID>()
-        var requiresSnapshotFallback = false
-
-        for _ in 0..<3 {
-            guard currentContext?.contextID == contextID,
-                  let selectedNode = document.selectedNode else {
-                return
-            }
-
-            let candidates = selectionProjectionMaterializationCandidates(for: selectedNode).filter {
-                requestedCandidateIDs.insert($0.id).inserted
-            }
-            guard !candidates.isEmpty else {
-                break
-            }
-
-            for candidate in candidates {
-                guard let transportNodeID = try? transportNodeID(for: candidate) else {
-                    continue
-                }
-
-                let didComplete = await requestChildNodesAndWaitForCompletion(
-                    transportNodeID: transportNodeID,
-                    frontendNodeID: Int(candidate.id.localID),
-                    targetIdentifier: targetIdentifier,
-                    contextID: contextID,
-                    depth: max(configuration.snapshotDepth, 128)
-                )
-                guard didComplete else {
-                    requiresSnapshotFallback = true
-                    logSelectionDiagnostics(
-                        "materializeSelectionSubtreeIfNeeded child request did not complete",
-                        selector: selectorPath,
-                        extra: "candidate=\(selectionNodeSummary(candidate)) target=\(targetIdentifier)",
-                        level: .debug
-                    )
-                    continue
-                }
-                materializedCandidateIDs.insert(candidate.id)
-            }
+            let nodeName = nodeNameForMatching(node)
+            return (nodeName == "iframe" || nodeName == "frame") && node.frameID == frameID
         }
-
-        if requiresSnapshotFallback,
-           await refreshSelectionSubtreeFromTransportIfNeeded(
-                selectorPath: selectorPath,
-                contextID: contextID,
-                targetIdentifier: targetIdentifier
-           ),
-           let selectedNode = document.selectedNode {
-            await applySelection(
-                to: selectedNode,
-                selectorPath: selectorPath,
-                contextID: contextID,
-                allowPostSelectionMaterialization: false
-            )
-            return
-        }
-
-        guard !materializedCandidateIDs.isEmpty,
-              currentContext?.contextID == contextID,
-              let selectedNode = document.selectedNode else {
-            return
-        }
-
-        await applySelection(
-            to: selectedNode,
-            selectorPath: selectorPath,
-            contextID: contextID,
-            allowPostSelectionMaterialization: false
-        )
-    }
-
-    private func refreshSelectionSubtreeFromTransportIfNeeded(
-        selectorPath: String?,
-        contextID: DOMContextID,
-        targetIdentifier: String
-    ) async -> Bool {
-        guard currentContext?.contextID == contextID else {
-            return false
-        }
-
-        if shouldMergeTargetDocumentForInspectSelection(targetIdentifier: targetIdentifier) {
-            guard await mergeFrameTargetDocumentIfNeeded(
-                targetIdentifier: targetIdentifier,
-                contextID: contextID,
-                transaction: nil
-            ) else {
-                logSelectionDiagnostics(
-                    "refreshSelectionSubtreeFromTransportIfNeeded failed to merge frame document",
-                    selector: selectorPath,
-                    extra: "target=\(targetIdentifier)",
-                    level: .error
-                )
-                return false
-            }
-        } else {
-            do {
-                try await refreshCurrentDocumentFromTransport(
-                    contextID: contextID,
-                    targetIdentifier: targetIdentifier,
-                    depth: max(configuration.snapshotDepth, 128),
-                    isFreshDocument: false
-                )
-            } catch {
-                logSelectionDiagnostics(
-                    "refreshSelectionSubtreeFromTransportIfNeeded failed",
-                    selector: selectorPath,
-                    extra: "target=\(targetIdentifier) error=\(error.localizedDescription)",
-                    level: .error
-                )
-                return false
-            }
-        }
-
-        guard let selectedNode = document.selectedNode else {
-            logSelectionDiagnostics(
-                "refreshSelectionSubtreeFromTransportIfNeeded did not preserve selection",
-                selector: selectorPath,
-                extra: "target=\(targetIdentifier)",
-                level: .debug
-            )
-            return false
-        }
-
-        logSelectionDiagnostics(
-            "refreshSelectionSubtreeFromTransportIfNeeded refreshed selection subtree",
-            selector: selectorPath,
-            extra: "target=\(targetIdentifier) selected=\(selectionNodeSummary(selectedNode))",
-            level: .debug
-        )
-        return true
-    }
-
-    private func selectionProjectionMaterializationCandidates(for node: DOMNodeModel) -> [DOMNodeModel] {
-        var queue: [DOMNodeModel] = [node]
-        var seen = Set<DOMNodeModel.ID>()
-        var candidates: [DOMNodeModel] = []
-
-        while let current = queue.first {
-            queue.removeFirst()
-            if current.hasUnloadedRegularChildren,
-               seen.insert(current.id).inserted {
-                candidates.append(current)
-            }
-            queue.append(contentsOf: current.visibleDOMTreeChildren)
-        }
-
-        if let parent = node.parent,
-           isDocumentNode(parent),
-           parent.hasUnloadedRegularChildren,
-           seen.insert(parent.id).inserted {
-            candidates.append(parent)
-        }
-
-        return candidates
     }
 
     func applySelection(
         to node: DOMNodeModel,
         selectorPath: String?,
-        contextID: DOMContextID,
-        targetIdentifierForMaterialization: String? = nil,
-        allowPostSelectionMaterialization: Bool = true
+        contextID: DOMContextID
     ) async {
         var payload = selectionPayload(for: node)
         if let selectorPath, !selectorPath.isEmpty {
@@ -4516,169 +3302,38 @@ private extension WIDOMInspector {
             extra: selectionNodeSummary(node)
         )
 
-        guard allowPostSelectionMaterialization,
-              let targetIdentifierForMaterialization,
-              currentContext?.contextID == contextID,
-              document.selectedNode != nil else {
-            return
-        }
-
-        Task { @MainActor [weak self] in
-            await self?.materializeSelectionSubtreeIfNeeded(
-                selectorPath: payload.selectorPath,
-                contextID: contextID,
-                targetIdentifier: targetIdentifierForMaterialization
-            )
-        }
     }
 
-    func applyPendingInspectSelectionIfPossible() async {
-        guard let pendingInspectSelection else {
+    func applyInspectNodeResolutionIfPossible() async {
+        guard let pendingInspectResolution else {
             return
         }
-        guard currentContext?.contextID == pendingInspectSelection.contextID,
-              selectionTransactionIsCurrent(pendingInspectSelection.transaction) else {
-            self.pendingInspectSelection = nil
+        guard currentContext?.contextID == pendingInspectResolution.contextID,
+              selectionTransactionIsCurrent(pendingInspectResolution.transaction) else {
+            self.pendingInspectResolution = nil
             return
         }
         guard let node = resolvedAttachedInspectedNodeFromCurrentDocument(
-            nodeID: pendingInspectSelection.nodeID
+            nodeID: pendingInspectResolution.nodeID,
+            targetIdentifier: pendingInspectResolution.resolutionTargetIdentifier
         ) else {
             return
         }
 
-        self.pendingInspectSelection = nil
+        self.pendingInspectResolution = nil
         logSelectionDiagnostics(
-            "applyPendingInspectSelectionIfPossible resolved transport node",
-            selector: pendingInspectSelection.selectorPath,
+            "applyInspectNodeResolutionIfPossible resolved transport node",
+            selector: pendingInspectResolution.selectorPath,
             extra: selectionNodeSummary(node)
         )
         await applySelection(
             to: node,
-            selectorPath: pendingInspectSelection.selectorPath,
-            contextID: pendingInspectSelection.contextID,
-            targetIdentifierForMaterialization: pendingInspectSelection.resolutionTargetIdentifier
+            selectorPath: pendingInspectResolution.selectorPath,
+            contextID: pendingInspectResolution.contextID
         )
-        await completeInspectModeAfterBackendSelection(transaction: pendingInspectSelection.transaction)
-        finishInspectSelectionResolution(transaction: pendingInspectSelection.transaction)
+        await completeInspectModeAfterBackendSelection(transaction: pendingInspectResolution.transaction)
+        finishInspectSelectionResolution(transaction: pendingInspectResolution.transaction)
         applyRecoverableError(nil)
-    }
-
-    private func finishPendingInspectMaterialization(
-        from bundle: DOMGraphMutationBundle,
-        contextID: DOMContextID,
-        rejectedStructuralMutationParentLocalIDs: Set<UInt64>
-    ) async {
-        guard var pendingInspectSelection else {
-            return
-        }
-        guard pendingInspectSelection.contextID == contextID,
-              selectionTransactionIsCurrent(pendingInspectSelection.transaction) else {
-            self.pendingInspectSelection = nil
-            return
-        }
-
-        let completedNodeIDs = Set(
-            completedChildRequestNodeIDs(
-                from: bundle,
-                rejectedStructuralMutationParentLocalIDs: rejectedStructuralMutationParentLocalIDs
-            ).map {
-                DOMNodeModel.ID(documentIdentity: document.documentIdentity, localID: UInt64($0))
-            }
-        )
-        let relevantCompletedNodeIDs = completedNodeIDs.intersection(
-            pendingInspectSelection.outstandingMaterializationNodeIDs
-        )
-        guard relevantCompletedNodeIDs.isEmpty == false else {
-            return
-        }
-
-        pendingInspectSelection.outstandingMaterializationNodeIDs.subtract(relevantCompletedNodeIDs)
-        self.pendingInspectSelection = pendingInspectSelection
-        logSelectionDiagnostics(
-            "finishPendingInspectMaterialization advanced",
-            selector: pendingInspectSelection.selectorPath,
-            extra: "contextID=\(contextID) completed=\(relevantCompletedNodeIDs.map { $0.localID }.sorted()) remaining=\(pendingInspectSelection.outstandingMaterializationNodeIDs.map { $0.localID }.sorted()) nodeID=\(pendingInspectSelection.nodeID)",
-            level: .debug
-        )
-        markPendingInspectProgress(
-            &pendingInspectSelection,
-            reason: "materialization.completed",
-            selectionMaterialization: selectionMaterializationCandidates(
-                for: pendingInspectSelection
-            ),
-            extra: "completed=\(relevantCompletedNodeIDs.map { $0.localID }.sorted())"
-        )
-        guard pendingInspectSelection.outstandingMaterializationNodeIDs.isEmpty else {
-            return
-        }
-        cancelPendingInspectMaterializationTimeout()
-        guard resolvedAttachedInspectedNodeFromCurrentDocument(nodeID: pendingInspectSelection.nodeID) == nil else {
-            return
-        }
-
-        let materializationOutcome = await materializePendingInspectSelection(
-            nodeID: pendingInspectSelection.nodeID,
-            selectorPath: pendingInspectSelection.selectorPath,
-            contextID: pendingInspectSelection.contextID,
-            targetIdentifier: pendingInspectSelection.resolutionTargetIdentifier,
-            transaction: pendingInspectSelection.transaction
-        )
-        if materializationOutcome != .exhausted {
-            return
-        }
-
-        logSelectionDiagnostics(
-            "finishPendingInspectMaterialization exhausted candidates without resolving node",
-            selector: pendingInspectSelection.selectorPath,
-            extra: inspectResolutionDiagnosticSummary(
-                nodeID: pendingInspectSelection.nodeID,
-                targetIdentifier: pendingInspectSelection.resolutionTargetIdentifier,
-                contextID: pendingInspectSelection.contextID
-            ),
-            level: .error
-        )
-        self.pendingInspectSelection = nil
-        await clearSelectionForFailedResolution(
-            contextID: contextID,
-            transaction: pendingInspectSelection.transaction,
-            showError: true,
-            errorMessage: "Failed to resolve selected element."
-        )
-    }
-
-    private func advancePendingInspectMaterializationIfIdle(
-        contextID: DOMContextID
-    ) async {
-        guard let pendingInspectSelection,
-              pendingInspectSelection.contextID == contextID,
-              selectionTransactionIsCurrent(pendingInspectSelection.transaction),
-              pendingInspectSelection.outstandingMaterializationNodeIDs.isEmpty,
-              resolvedAttachedInspectedNodeFromCurrentDocument(nodeID: pendingInspectSelection.nodeID) == nil else {
-            return
-        }
-
-        let materializationOutcome = await materializePendingInspectSelection(
-            nodeID: pendingInspectSelection.nodeID,
-            selectorPath: pendingInspectSelection.selectorPath,
-            contextID: pendingInspectSelection.contextID,
-            targetIdentifier: pendingInspectSelection.resolutionTargetIdentifier,
-            transaction: pendingInspectSelection.transaction
-        )
-        if materializationOutcome != .exhausted {
-            return
-        }
-
-        logSelectionDiagnostics(
-            "advancePendingInspectMaterializationIfIdle kept pending selection unresolved",
-            selector: pendingInspectSelection.selectorPath,
-            extra: inspectResolutionDiagnosticSummary(
-                nodeID: pendingInspectSelection.nodeID,
-                targetIdentifier: pendingInspectSelection.resolutionTargetIdentifier,
-                contextID: pendingInspectSelection.contextID
-            ),
-            level: .debug
-        )
     }
 
     private func selectionSubtreeRoot(
@@ -4727,8 +3382,14 @@ private extension WIDOMInspector {
         topmostAncestor(of: node) === document.rootNode
     }
 
-    private func resolvedAttachedInspectedNodeFromCurrentDocument(nodeID: Int) -> DOMNodeModel? {
-        guard let node = resolvedInspectedNodeFromCurrentDocument(nodeID: nodeID),
+    private func resolvedAttachedInspectedNodeFromCurrentDocument(
+        nodeID: Int,
+        targetIdentifier: String? = nil
+    ) -> DOMNodeModel? {
+        guard let node = resolvedInspectedNodeFromCurrentDocument(
+            nodeID: nodeID,
+            targetIdentifier: targetIdentifier
+        ),
               isNodeAttachedToPrimaryTree(node) else {
             return nil
         }
@@ -4737,9 +3398,8 @@ private extension WIDOMInspector {
 
     private func nodeDescriptor(from node: DOMNodeModel) -> DOMGraphNodeDescriptor {
         DOMGraphNodeDescriptor(
-            localID: node.localID,
-            backendNodeID: node.backendNodeID,
-            backendNodeIDIsStable: node.backendNodeIDIsStable,
+            targetIdentifier: node.targetIdentifier,
+            nodeID: node.nodeID,
             frameID: node.frameID,
             nodeType: inferredNodeType(for: node),
             nodeName: node.nodeName,
@@ -4748,8 +3408,8 @@ private extension WIDOMInspector {
             pseudoType: node.pseudoType,
             shadowRootType: node.shadowRootType,
             attributes: node.attributes,
-            childCount: node.childCount,
-            childCountIsKnown: node.childCountIsKnown,
+            regularChildCount: node.regularChildCount,
+            regularChildrenAreLoaded: !node.hasUnloadedRegularChildren,
             layoutFlags: node.layoutFlags,
             isRendered: node.isRendered,
             regularChildren: node.regularChildren.map(nodeDescriptor(from:)),
@@ -4784,8 +3444,7 @@ private extension WIDOMInspector {
             await completeInspectModeAfterBackendSelection(transaction: transaction)
         }
         if transaction != nil {
-            cancelPendingInspectMaterializationTimeout()
-            pendingInspectSelection = nil
+            pendingInspectResolution = nil
             acceptsInspectEvents = false
             inspectSelectionArm = nil
 #if DEBUG
@@ -4854,7 +3513,7 @@ private extension WIDOMInspector {
             _ = try await refreshCurrentDocumentFromTransport(
                 contextID: contextID,
                 targetIdentifier: targetIdentifier,
-                depth: max(configuration.snapshotDepth, 128),
+                depth: Self.deepSubtreeDepth,
                 isFreshDocument: false
             )
             logSelectionDiagnostics(
@@ -4879,7 +3538,7 @@ private extension WIDOMInspector {
 
         var requestedNodeIDs = Set<DOMNodeModel.ID>()
         for _ in 0..<12 {
-            let candidates = selectorMaterializationCandidatesForTesting().filter {
+            let candidates = selectorExpandableDocumentRootsForTesting().filter {
                 requestedNodeIDs.insert($0.id).inserted
             }
             guard !candidates.isEmpty else {
@@ -4890,10 +3549,10 @@ private extension WIDOMInspector {
                 do {
                     let didComplete = await requestTestingChildNodesAndWaitForCompletion(
                         transportNodeID: try transportNodeID(for: candidate),
-                        frontendNodeID: Int(candidate.id.localID),
+                        frontendNodeID: Int(candidate.id.nodeID),
                         targetIdentifier: targetIdentifier,
                         contextID: contextID,
-                        depth: max(configuration.snapshotDepth, 128)
+                        depth: Self.deepSubtreeDepth
                     )
                     logSelectionDiagnostics(
                         "selectNodeForTesting requested child nodes",
@@ -4921,10 +3580,10 @@ private extension WIDOMInspector {
         do {
             let didComplete = await requestTestingChildNodesAndWaitForCompletion(
                 transportNodeID: try transportNodeID(for: rootNode),
-                frontendNodeID: Int(rootNode.id.localID),
+                frontendNodeID: Int(rootNode.id.nodeID),
                 targetIdentifier: targetIdentifier,
                 contextID: contextID,
-                depth: max(configuration.snapshotDepth, 128)
+                depth: Self.deepSubtreeDepth
             )
             logSelectionDiagnostics(
                 "selectNodeForTesting requested root child nodes",
@@ -4990,14 +3649,8 @@ private extension WIDOMInspector {
         return roots
     }
 
-    func selectorMaterializationCandidatesForTesting() -> [DOMNodeModel] {
-        var candidates = selectionMaterializationCandidates().candidates
-        for nestedDocument in selectorQueryRootsForTesting() where nestedDocument.parent != nil {
-            if candidates.contains(where: { $0.id == nestedDocument.id }) == false {
-                candidates.append(nestedDocument)
-            }
-        }
-        return candidates
+    func selectorExpandableDocumentRootsForTesting() -> [DOMNodeModel] {
+        selectorQueryRootsForTesting().filter(\.hasUnloadedRegularChildren)
     }
 
     func inspectEventResolutionTargetIdentifier(eventTargetIdentifier: String?) -> String? {
@@ -5159,83 +3812,50 @@ private extension WIDOMInspector {
             return "nil"
         }
         let nodeName = node.localName.isEmpty ? node.nodeName : node.localName
-        return "\(nodeName)#local=\(node.localID)#backend=\(node.backendNodeID.map(String.init) ?? "nil")#children=\(node.children.count)/\(node.childCount)#selector=\(node.selectorPath.nilIfEmpty ?? "nil")"
+        return "\(nodeName)#key=\(keySummary(node.key))#children=\(node.children.count)/\(node.regularChildCount)#selector=\(node.selectorPath.nilIfEmpty ?? "nil")"
+    }
+
+    func keySummary(_ key: DOMNodeKey) -> String {
+        "\(key.targetIdentifier):\(key.nodeID)"
+    }
+
+    func previousSiblingSummary(_ previousSibling: DOMGraphPreviousSibling) -> String {
+        switch previousSibling {
+        case .missing:
+            return "missing"
+        case .firstChild:
+            return "firstChild"
+        case let .node(key):
+            return keySummary(key)
+        }
     }
 
     func selectionPayloadSummary(_ payload: DOMSelectionSnapshotPayload?) -> String {
         guard let payload else {
             return "nil"
         }
-        return "localID=\(payload.localID.map(String.init) ?? "nil") backend=\(payload.backendNodeID.map(String.init) ?? "nil") stable=\(payload.backendNodeIDIsStable) selector=\(payload.selectorPath ?? "nil") attributes=\(payload.attributes.count)"
+        return "key=\(payload.key.map(keySummary) ?? "nil") selector=\(payload.selectorPath ?? "nil") attributes=\(payload.attributes.count)"
     }
 
     func selectionPayloadMatchesCurrentSelection(_ payload: DOMSelectionSnapshotPayload) -> Bool {
         if let selectedNode = document.selectedNode {
-            if payload.localID == selectedNode.localID {
-                return true
-            }
-            if let backendNodeID = payload.backendNodeID,
-               selectedNode.backendNodeID == backendNodeID {
+            if payload.key == selectedNode.key {
                 return true
             }
         }
-        return false
-    }
-
-    func selectionPayloadMatchesPendingInspectSelection(_ payload: DOMSelectionSnapshotPayload) -> Bool {
-        guard let pendingInspectSelection else {
-            return false
-        }
-
-        if let localID = payload.localID,
-           localID == UInt64(pendingInspectSelection.nodeID) {
-            return true
-        }
-
-        if let backendNodeID = payload.backendNodeID,
-           backendNodeID == pendingInspectSelection.nodeID {
-            return true
-        }
-
         return false
     }
 
     func resolveFrontendSelectionPayloadForCurrentDocument(
         _ selection: DOMSelectionSnapshotPayload
     ) -> DOMSelectionSnapshotPayload? {
-        guard let localID = selection.localID else {
+        guard let key = selection.key else {
             return nil
         }
 
-        if let node = document.node(localID: localID),
+        if let node = document.node(key: key),
            isNodeAttachedToPrimaryTree(node) {
-            var resolvedSelection = selection
-            resolvedSelection.localID = node.localID
-            if resolvedSelection.backendNodeID == nil {
-                resolvedSelection.backendNodeID = node.backendNodeID
-                resolvedSelection.backendNodeIDIsStable = node.backendNodeIDIsStable
-            }
-            return resolvedSelection
-        }
-
-        if let backendNodeID = selection.backendNodeID {
-            if selection.backendNodeIDIsStable,
-               let node = document.node(stableBackendNodeID: backendNodeID),
-               isNodeAttachedToPrimaryTree(node) {
-                var resolvedSelection = selection
-                resolvedSelection.localID = node.localID
-                resolvedSelection.backendNodeID = node.backendNodeID
-                resolvedSelection.backendNodeIDIsStable = node.backendNodeIDIsStable
-                return resolvedSelection
-            }
-            if let node = document.node(backendNodeID: backendNodeID),
-               isNodeAttachedToPrimaryTree(node) {
-                var resolvedSelection = selection
-                resolvedSelection.localID = node.localID
-                resolvedSelection.backendNodeID = node.backendNodeID
-                resolvedSelection.backendNodeIDIsStable = node.backendNodeIDIsStable
-                return resolvedSelection
-            }
+            return selection
         }
 
         return nil
@@ -5276,7 +3896,7 @@ private extension WIDOMInspector {
 
     private func nodeDescriptorSummary(_ node: DOMGraphNodeDescriptor) -> String {
         let nodeName = node.localName.isEmpty ? node.nodeName : node.localName
-        return "\(nodeName)#local=\(node.localID)#backend=\(node.backendNodeID.map(String.init) ?? "nil")#children=\(node.children.count)/\(node.childCount)#frame=\(node.frameID ?? "nil")"
+        return "\(nodeName)#key=\(keySummary(node.key))#children=\(node.children.count)/\(node.regularChildCount)#frame=\(node.frameID ?? "nil")"
     }
 
     private func nodeSummaryList(_ nodes: [DOMNodeModel]) -> String {
@@ -5308,18 +3928,14 @@ private extension WIDOMInspector {
         }.joined(separator: ";") + "]"
     }
 
-    private func pendingInspectSelectionDiagnosticSummary(_ pendingSelection: PendingInspectSelection?) -> String {
+    private func pendingInspectResolutionDiagnosticSummary(_ pendingSelection: InspectNodeResolution?) -> String {
         guard let pendingSelection else {
             return "nil"
         }
         let transactionSummary = pendingSelection.transaction.map {
             "contextID=\($0.contextID),generation=\($0.generation)"
         } ?? "nil"
-        return "nodeID=\(pendingSelection.nodeID) contextID=\(pendingSelection.contextID) target=\(pendingSelection.resolutionTargetIdentifier) transaction=\(transactionSummary) scopedRoots=\(pendingSelection.scopedMaterializationRootNodeIDs.map(\.localID)) activeStrategy=\(pendingSelection.activeMaterializationStrategy.rawValue) activeGeneration=\(pendingSelection.activeRequestGeneration) genericDeferrals=\(pendingSelection.genericDispatchDeferralCount) observedStrategy=\(pendingSelection.observedMaterializationStrategy.rawValue) materializedCount=\(pendingSelection.materializedAncestorNodeIDs.count) outstandingCount=\(pendingSelection.outstandingMaterializationNodeIDs.count) observedCandidateCount=\(pendingSelection.observedMaterializationCandidateNodeIDs.count) observedFrameIDs=\(pendingSelection.observedDocumentBackedFrameIDs.sorted()) lastExhaustedStrategy=\(pendingSelection.lastExhaustedScopedStrategy?.rawValue ?? "nil") lastExhaustedCount=\(pendingSelection.lastExhaustedScopedCandidateNodeIDs.count) progressRevision=\(pendingSelection.progressRevision)"
-    }
-
-    private func selectionMaterializationPlanSummary(_ plan: SelectionMaterializationPlan) -> String {
-        "strategy=\(plan.strategy.rawValue) candidateCount=\(plan.candidates.count) frameOwnerCount=\(plan.frameOwnerCandidates.count) frameDocumentCount=\(plan.frameDocumentCandidates.count) canonicalEmbeddedCount=\(plan.canonicalEmbeddedCandidates.count) genericIncompleteCount=\(plan.genericIncompleteCandidates.count)"
+        return "nodeID=\(pendingSelection.nodeID) contextID=\(pendingSelection.contextID) target=\(pendingSelection.resolutionTargetIdentifier) transaction=\(transactionSummary)"
     }
 
     private func mutationBundleSummary(_ bundle: DOMGraphMutationBundle) -> String {
@@ -5328,32 +3944,32 @@ private extension WIDOMInspector {
         }
         let eventSummaries = bundle.events.map { event -> String in
             switch event {
-            case let .childNodeInserted(parentLocalID, previousLocalID, node):
-                return "childNodeInserted(parent=\(parentLocalID),previous=\(previousLocalID.map(String.init) ?? "nil"),node=\(nodeDescriptorSummary(node)))"
-            case let .childNodeRemoved(parentLocalID, nodeLocalID):
-                return "childNodeRemoved(parent=\(parentLocalID),node=\(nodeLocalID))"
-            case let .shadowRootPushed(hostLocalID, root):
-                return "shadowRootPushed(host=\(hostLocalID),root=\(nodeDescriptorSummary(root)))"
-            case let .shadowRootPopped(hostLocalID, rootLocalID):
-                return "shadowRootPopped(host=\(hostLocalID),root=\(rootLocalID))"
-            case let .pseudoElementAdded(parentLocalID, node):
-                return "pseudoElementAdded(parent=\(parentLocalID),node=\(nodeDescriptorSummary(node)))"
-            case let .pseudoElementRemoved(parentLocalID, nodeLocalID):
-                return "pseudoElementRemoved(parent=\(parentLocalID),node=\(nodeLocalID))"
-            case let .attributeModified(nodeLocalID, name, value, _, _):
-                return "attributeModified(node=\(nodeLocalID),name=\(name),value=\(value))"
-            case let .attributeRemoved(nodeLocalID, name, _, _):
-                return "attributeRemoved(node=\(nodeLocalID),name=\(name))"
-            case let .characterDataModified(nodeLocalID, value, _, _):
-                return "characterDataModified(node=\(nodeLocalID),value=\(value))"
-            case let .childNodeCountUpdated(nodeLocalID, childCount, _, _):
-                return "childNodeCountUpdated(node=\(nodeLocalID),childCount=\(childCount))"
-            case let .setChildNodes(parentLocalID, nodes):
-                return "setChildNodes(parent=\(parentLocalID),nodes=\(nodeDescriptorSummaryList(nodes)))"
+            case let .childNodeInserted(parentKey, previousSibling, node):
+                return "childNodeInserted(parent=\(keySummary(parentKey)),previous=\(previousSiblingSummary(previousSibling)),node=\(nodeDescriptorSummary(node)))"
+            case let .childNodeRemoved(parentKey, nodeKey):
+                return "childNodeRemoved(parent=\(keySummary(parentKey)),node=\(keySummary(nodeKey)))"
+            case let .shadowRootPushed(hostKey, root):
+                return "shadowRootPushed(host=\(keySummary(hostKey)),root=\(nodeDescriptorSummary(root)))"
+            case let .shadowRootPopped(hostKey, rootKey):
+                return "shadowRootPopped(host=\(keySummary(hostKey)),root=\(keySummary(rootKey)))"
+            case let .pseudoElementAdded(parentKey, node):
+                return "pseudoElementAdded(parent=\(keySummary(parentKey)),node=\(nodeDescriptorSummary(node)))"
+            case let .pseudoElementRemoved(parentKey, nodeKey):
+                return "pseudoElementRemoved(parent=\(keySummary(parentKey)),node=\(keySummary(nodeKey)))"
+            case let .attributeModified(nodeKey, name, value, _, _):
+                return "attributeModified(node=\(keySummary(nodeKey)),name=\(name),value=\(value))"
+            case let .attributeRemoved(nodeKey, name, _, _):
+                return "attributeRemoved(node=\(keySummary(nodeKey)),name=\(name))"
+            case let .characterDataModified(nodeKey, value, _, _):
+                return "characterDataModified(node=\(keySummary(nodeKey)),value=\(value))"
+            case let .childNodeCountUpdated(nodeKey, childCount, _, _):
+                return "childNodeCountUpdated(node=\(keySummary(nodeKey)),childCount=\(childCount))"
+            case let .setChildNodes(parentKey, nodes):
+                return "setChildNodes(parent=\(keySummary(parentKey)),nodes=\(nodeDescriptorSummaryList(nodes)))"
             case let .setDetachedRoots(nodes):
                 return "setDetachedRoots(nodes=\(nodeDescriptorSummaryList(nodes)))"
-            case let .replaceSubtree(root):
-                return "replaceSubtree(root=\(nodeDescriptorSummary(root)))"
+            case let .attachFrameDocument(ownerKey, documentRoot):
+                return "attachFrameDocument(owner=\(keySummary(ownerKey)),root=\(nodeDescriptorSummary(documentRoot)))"
             case .documentUpdated:
                 return "documentUpdated"
             }
@@ -5362,11 +3978,10 @@ private extension WIDOMInspector {
     }
 
     private func nodeResolutionLookupSummary(nodeID: Int) -> String {
-        let localMatch = selectionNodeSummary(document.node(localID: UInt64(nodeID)))
-        let backendMatch = selectionNodeSummary(document.node(backendNodeID: nodeID))
-        let stableBackendMatch = selectionNodeSummary(document.node(stableBackendNodeID: nodeID))
+        let targetIdentifier = phase.targetIdentifier ?? ""
+        let localMatch = selectionNodeSummary(document.node(targetIdentifier: targetIdentifier, nodeID: nodeID))
         let resolvedMatch = selectionNodeSummary(resolvedInspectedNodeFromCurrentDocument(nodeID: nodeID))
-        return "requestedNodeID=\(nodeID) localMatch=\(localMatch) backendMatch=\(backendMatch) stableBackendMatch=\(stableBackendMatch) resolvedMatch=\(resolvedMatch)"
+        return "requestedNodeID=\(nodeID) target=\(targetIdentifier) localMatch=\(localMatch) resolvedMatch=\(resolvedMatch)"
     }
 
     private func inspectResolutionDiagnosticSummary(
@@ -5374,28 +3989,11 @@ private extension WIDOMInspector {
         targetIdentifier: String,
         contextID: DOMContextID
     ) -> String {
-        let relevantPendingSelection: PendingInspectSelection?
-        if let pendingInspectSelection,
-           pendingInspectSelection.nodeID == nodeID,
-           pendingInspectSelection.contextID == contextID,
-           pendingInspectSelection.resolutionTargetIdentifier == targetIdentifier {
-            relevantPendingSelection = pendingInspectSelection
-        } else {
-            relevantPendingSelection = nil
-        }
-        let materializationPlan = selectionMaterializationCandidates(
-            for: relevantPendingSelection
-        )
-        let frameOwnerFallbackCount = pendingInspectSelection.map {
-            frameOwnerFallbackCandidates(for: $0).count
-        } ?? 0
         return [
             nodeResolutionLookupSummary(nodeID: nodeID),
-            "pendingInspect=\(pendingInspectSelectionDiagnosticSummary(pendingInspectSelection))",
+            "pendingInspect=\(pendingInspectResolutionDiagnosticSummary(pendingInspectResolution))",
             "pendingChildRequests=\(pendingChildRequestDiagnosticsSummary())",
-            "materializationPlan=\(selectionMaterializationPlanSummary(materializationPlan))",
             "rootCounts=topLevel:\(document.topLevelRoots().count) knownDocuments:\(knownDocumentRoots().count)",
-            "frameOwnerFallbackCount=\(frameOwnerFallbackCount)",
             "targets=requested=\(targetIdentifier) current=\(phase.targetIdentifier ?? "nil") observedPage=\(sharedTransport.currentObservedPageTargetIdentifier() ?? "nil") page=\(sharedTransport.currentPageTargetIdentifier() ?? "nil") contextID=\(contextID) projectionRevision=\(document.projectionRevision)"
         ].joined(separator: " ")
     }
@@ -5418,11 +4016,14 @@ private extension WIDOMInspector {
         return nil
     }
 
-    func resolvedInspectedNodeFromCurrentDocument(nodeID: Int) -> DOMNodeModel? {
-        if let node = document.node(localID: UInt64(nodeID)) {
-            return node
+    func resolvedInspectedNodeFromCurrentDocument(
+        nodeID: Int,
+        targetIdentifier: String? = nil
+    ) -> DOMNodeModel? {
+        guard let targetIdentifier = targetIdentifier ?? phase.targetIdentifier else {
+            return nil
         }
-        return document.node(backendNodeID: nodeID)
+        return document.node(targetIdentifier: targetIdentifier, nodeID: nodeID)
     }
 
     private func selectionTransaction(for contextID: DOMContextID) -> SelectionTransaction? {
@@ -5442,9 +4043,7 @@ private extension WIDOMInspector {
 
     func selectionPayload(for node: DOMNodeModel) -> DOMSelectionSnapshotPayload {
         .init(
-            localID: node.localID,
-            backendNodeID: node.backendNodeID,
-            backendNodeIDIsStable: node.backendNodeIDIsStable,
+            key: node.key,
             attributes: node.attributes,
             path: selectionPathLabels(for: node),
             selectorPath: node.selectorPath.nilIfEmpty,
@@ -5502,7 +4101,7 @@ private extension WIDOMInspector {
         case .html:
             let response = try await sendDOMCommand(
                 WITransportMethod.DOM.getOuterHTML,
-                targetIdentifier: try requireCurrentTargetIdentifier(),
+                targetIdentifier: node.targetIdentifier,
                 parameters: DOMNodeIdentifierParameters(nodeId: try transportNodeID(for: node))
             )
             return stringValue(response["outerHTML"]) ?? ""
@@ -5777,18 +4376,16 @@ private extension WIDOMInspector {
 
     func nodePayloadDictionary(from node: DOMNodeModel) -> [String: Any] {
         var payload: [String: Any] = [
-            "id": Int(node.localID),
-            "nodeId": Int(node.localID),
-            "backendNodeId": node.backendNodeID as Any,
-            "backendNodeIdIsStable": node.backendNodeIDIsStable,
+            "id": node.nodeID,
+            "nodeId": node.nodeID,
             "nodeType": node.nodeType.rawValue,
             "nodeName": node.nodeName,
             "localName": node.localName,
             "nodeValue": node.nodeValue,
             "frameId": node.frameID as Any,
             "attributes": node.attributes.flatMap { [$0.name, $0.value] },
-            "childNodeCount": node.childCount,
-            "childCount": node.childCount,
+            "childNodeCount": node.regularChildCount,
+            "childCount": node.regularChildCount,
             "layoutFlags": node.layoutFlags,
             "isRendered": node.isRendered,
         ]
@@ -5883,8 +4480,7 @@ private extension WIDOMInspector {
     }
 
     func syncSelectedNodeHighlight(contextID: DOMContextID) async {
-        guard currentContext?.contextID == contextID,
-              let targetIdentifier = phase.targetIdentifier ?? sharedTransport.currentPageTargetIdentifier() else {
+        guard currentContext?.contextID == contextID else {
             return
         }
 
@@ -5896,7 +4492,7 @@ private extension WIDOMInspector {
         do {
             _ = try await sendDOMCommand(
                 WITransportMethod.DOM.highlightNode,
-                targetIdentifier: targetIdentifier,
+                targetIdentifier: selectedNode.targetIdentifier,
                 parameters: DOMHighlightNodeParameters(
                     nodeId: try transportNodeID(for: selectedNode),
                     reveal: true
@@ -6174,7 +4770,7 @@ extension WIDOMInspector {
             startLoadingDocumentEnsuringLoadingState(
                 for: context,
                 targetIdentifier: targetIdentifier,
-                depth: configuration.snapshotDepth,
+                depth: Self.defaultSubtreeDepth,
                 isFreshDocument: false
             )
         }
@@ -6243,53 +4839,20 @@ extension WIDOMInspector {
         )
     }
 
-    package func testSetPendingInspectSelection(
+    package func testSetInspectNodeResolution(
         nodeID: Int,
         contextID: DOMContextID,
-        outstandingLocalIDs: [UInt64],
-        scopedRootLocalIDs: [UInt64]? = nil,
+        outstandingNodeIDs: [UInt64],
+        scopedRootNodeIDs: [UInt64]? = nil,
         activeStrategy: String? = nil,
         activeRequestGeneration: UInt64 = 0
     ) {
-        let trackedIDs = Set(
-            outstandingLocalIDs.map {
-                DOMNodeModel.ID(documentIdentity: document.documentIdentity, localID: $0)
-            }
-        )
-        let scopedRootIDs = (scopedRootLocalIDs ?? outstandingLocalIDs).map {
-            DOMNodeModel.ID(documentIdentity: document.documentIdentity, localID: $0)
-        }
-        let resolvedActiveStrategy: SelectionMaterializationStrategy
-        switch activeStrategy {
-        case SelectionMaterializationStrategy.frameRelated.rawValue:
-            resolvedActiveStrategy = .frameRelated
-        case SelectionMaterializationStrategy.nestedDocumentRoots.rawValue:
-            resolvedActiveStrategy = .nestedDocumentRoots
-        case SelectionMaterializationStrategy.genericIncomplete.rawValue:
-            resolvedActiveStrategy = .genericIncomplete
-        case SelectionMaterializationStrategy.body.rawValue:
-            resolvedActiveStrategy = .body
-        case SelectionMaterializationStrategy.html.rawValue:
-            resolvedActiveStrategy = .html
-        case SelectionMaterializationStrategy.structuredChild.rawValue:
-            resolvedActiveStrategy = .structuredChild
-        case SelectionMaterializationStrategy.root.rawValue:
-            resolvedActiveStrategy = .root
-        default:
-            resolvedActiveStrategy = .none
-        }
-        pendingInspectSelection = PendingInspectSelection(
+        pendingInspectResolution = InspectNodeResolution(
             nodeID: nodeID,
             contextID: contextID,
             selectorPath: nil,
             resolutionTargetIdentifier: phase.targetIdentifier ?? sharedTransport.currentPageTargetIdentifier() ?? "page-test",
-            transaction: selectionTransaction(for: contextID),
-            scopedMaterializationRootNodeIDs: scopedRootIDs,
-            materializedAncestorNodeIDs: trackedIDs,
-            outstandingMaterializationNodeIDs: trackedIDs,
-            activeMaterializationStrategy: resolvedActiveStrategy,
-            activeRequestGeneration: activeRequestGeneration,
-            genericDispatchDeferralCount: 0
+            transaction: selectionTransaction(for: contextID)
         )
     }
 
@@ -6320,43 +4883,16 @@ extension WIDOMInspector {
         deferredLoadingMutationState != nil
     }
 
-    package func testMaterializePendingInspectSelection(
-        nodeID: Int,
-        contextID: DOMContextID,
-        targetIdentifier: String,
-        selectorPath: String? = nil
-    ) async -> String {
-        let outcome = await materializePendingInspectSelection(
-            nodeID: nodeID,
-            selectorPath: selectorPath,
-            contextID: contextID,
-            targetIdentifier: targetIdentifier,
-            transaction: selectionTransaction(for: contextID)
-        )
-        switch outcome {
-        case .requested:
-            return "requested"
-        case .waitingForMutation:
-            return "waitingForMutation"
-        case .exhausted:
-            return "exhausted"
-        }
+    package var testDocumentRootNodeID: Int? {
+        document.rootNode?.nodeID
     }
 
-    package var testPendingInspectScopedMaterializationRootLocalIDs: [UInt64] {
-        pendingInspectSelection?.scopedMaterializationRootNodeIDs.map(\.localID) ?? []
+    package var testDocumentRootChildNodeIDs: [Int] {
+        document.rootNode?.visibleDOMTreeChildren.map(\.nodeID) ?? []
     }
 
-    package var testDocumentRootLocalID: UInt64? {
-        document.rootNode?.localID
-    }
-
-    package var testDocumentRootChildLocalIDs: [UInt64] {
-        document.rootNode?.visibleDOMTreeChildren.map(\.localID) ?? []
-    }
-
-    package var testHasPendingInspectSelection: Bool {
-        pendingInspectSelection != nil
+    package var testHasInspectNodeResolution: Bool {
+        pendingInspectResolution != nil
     }
 
     package var testPendingChildRequestNodeIDs: [Int] {
@@ -6377,32 +4913,17 @@ extension WIDOMInspector {
         )
     }
 
-    package func testApplyMutationBundleAndFinishPendingInspectMaterialization(
+    package func testApplyMutationBundleAndResolveInspectNodeResolution(
         _ bundle: DOMGraphMutationBundle,
         contextID: DOMContextID
     ) async {
         document.applyMutationBundle(bundle)
-        let rejectedStructuralMutationParentLocalIDs = document.consumeRejectedStructuralMutationParentLocalIDs()
-        recordPendingInspectProgressIfNeeded(
-            from: bundle,
-            contextID: contextID,
-            reason: "test.bundle",
-            rejectedStructuralMutationParentLocalIDs: rejectedStructuralMutationParentLocalIDs
-        )
-        await applyPendingInspectSelectionIfPossible()
-        await finishPendingInspectMaterialization(
-            from: bundle,
-            contextID: contextID,
-            rejectedStructuralMutationParentLocalIDs: rejectedStructuralMutationParentLocalIDs
-        )
-        await applyPendingInspectSelectionIfPossible()
+        let rejectedStructuralMutationParentKeys = document.consumeRejectedStructuralMutationParentKeys()
+        await applyInspectNodeResolutionIfPossible()
         await finishPendingChildRequests(
             from: bundle,
             contextID: contextID,
-            rejectedStructuralMutationParentLocalIDs: rejectedStructuralMutationParentLocalIDs
-        )
-        await advancePendingInspectMaterializationIfIdle(
-            contextID: contextID
+            rejectedStructuralMutationParentKeys: rejectedStructuralMutationParentKeys
         )
     }
 
@@ -6411,27 +4932,12 @@ extension WIDOMInspector {
         contextID: DOMContextID
     ) async {
         document.applyMutationBundle(bundle)
-        let rejectedStructuralMutationParentLocalIDs = document.consumeRejectedStructuralMutationParentLocalIDs()
-        recordPendingInspectProgressIfNeeded(
-            from: bundle,
-            contextID: contextID,
-            reason: "test.transportBundle",
-            rejectedStructuralMutationParentLocalIDs: rejectedStructuralMutationParentLocalIDs
-        )
-        await applyPendingInspectSelectionIfPossible()
-        await finishPendingInspectMaterialization(
-            from: bundle,
-            contextID: contextID,
-            rejectedStructuralMutationParentLocalIDs: rejectedStructuralMutationParentLocalIDs
-        )
-        await applyPendingInspectSelectionIfPossible()
+        let rejectedStructuralMutationParentKeys = document.consumeRejectedStructuralMutationParentKeys()
+        await applyInspectNodeResolutionIfPossible()
         await finishPendingChildRequests(
             from: bundle,
             contextID: contextID,
-            rejectedStructuralMutationParentLocalIDs: rejectedStructuralMutationParentLocalIDs
-        )
-        await advancePendingInspectMaterializationIfIdle(
-            contextID: contextID
+            rejectedStructuralMutationParentKeys: rejectedStructuralMutationParentKeys
         )
     }
 }

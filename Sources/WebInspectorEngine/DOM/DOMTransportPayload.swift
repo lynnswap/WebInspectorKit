@@ -1,9 +1,7 @@
 import Foundation
 
 package struct DOMGraphNodeDescriptor: Sendable {
-    package var localID: UInt64
-    package var backendNodeID: Int?
-    package var backendNodeIDIsStable: Bool
+    package var key: DOMNodeKey
     package var frameID: String?
     package var nodeType: DOMNodeType
     package var nodeName: String
@@ -12,8 +10,8 @@ package struct DOMGraphNodeDescriptor: Sendable {
     package var pseudoType: String?
     package var shadowRootType: String?
     package var attributes: [DOMAttribute]
-    package var childCount: Int
-    package var childCountIsKnown: Bool
+    package var regularChildCount: Int
+    package var regularChildrenAreLoaded: Bool
     package var layoutFlags: [String]
     package var isRendered: Bool
     package var regularChildren: [DOMGraphNodeDescriptor]
@@ -90,10 +88,17 @@ package struct DOMGraphNodeDescriptor: Sendable {
         return visibleChildren
     }
 
+    package var targetIdentifier: String {
+        key.targetIdentifier
+    }
+
+    package var nodeID: Int {
+        key.nodeID
+    }
+
     package init(
-        localID: UInt64,
-        backendNodeID: Int?,
-        backendNodeIDIsStable: Bool? = nil,
+        targetIdentifier: String,
+        nodeID: Int,
         frameID: String? = nil,
         nodeType: DOMNodeType,
         nodeName: String,
@@ -102,8 +107,8 @@ package struct DOMGraphNodeDescriptor: Sendable {
         pseudoType: String? = nil,
         shadowRootType: String? = nil,
         attributes: [DOMAttribute],
-        childCount: Int,
-        childCountIsKnown: Bool = true,
+        regularChildCount: Int,
+        regularChildrenAreLoaded: Bool = false,
         layoutFlags: [String],
         isRendered: Bool,
         regularChildren: [DOMGraphNodeDescriptor]? = nil,
@@ -114,9 +119,7 @@ package struct DOMGraphNodeDescriptor: Sendable {
         beforePseudoElement: DOMGraphNodeDescriptor? = nil,
         afterPseudoElement: DOMGraphNodeDescriptor? = nil
     ) {
-        self.localID = localID
-        self.backendNodeID = backendNodeID
-        self.backendNodeIDIsStable = backendNodeIDIsStable ?? (backendNodeID != nil)
+        self.key = DOMNodeKey(targetIdentifier: targetIdentifier, nodeID: nodeID)
         self.frameID = frameID
         self.nodeType = nodeType
         self.nodeName = nodeName
@@ -125,8 +128,8 @@ package struct DOMGraphNodeDescriptor: Sendable {
         self.pseudoType = pseudoType
         self.shadowRootType = shadowRootType
         self.attributes = attributes
-        self.childCount = childCount
-        self.childCountIsKnown = childCountIsKnown
+        self.regularChildCount = max(0, regularChildCount)
+        self.regularChildrenAreLoaded = regularChildrenAreLoaded || regularChildren != nil || !children.isEmpty
         self.layoutFlags = layoutFlags
         self.isRendered = isRendered
         self.regularChildren = regularChildren ?? children
@@ -138,9 +141,8 @@ package struct DOMGraphNodeDescriptor: Sendable {
     }
 
     package init(
-        localID: UInt64,
-        backendNodeID: Int?,
-        backendNodeIDIsStable: Bool? = nil,
+        targetIdentifier: String,
+        nodeID: Int,
         frameID: String? = nil,
         nodeType: Int,
         nodeName: String,
@@ -149,8 +151,8 @@ package struct DOMGraphNodeDescriptor: Sendable {
         pseudoType: String? = nil,
         shadowRootType: String? = nil,
         attributes: [DOMAttribute],
-        childCount: Int,
-        childCountIsKnown: Bool = true,
+        regularChildCount: Int,
+        regularChildrenAreLoaded: Bool = false,
         layoutFlags: [String],
         isRendered: Bool,
         regularChildren: [DOMGraphNodeDescriptor]? = nil,
@@ -162,9 +164,8 @@ package struct DOMGraphNodeDescriptor: Sendable {
         afterPseudoElement: DOMGraphNodeDescriptor? = nil
     ) {
         self.init(
-            localID: localID,
-            backendNodeID: backendNodeID,
-            backendNodeIDIsStable: backendNodeIDIsStable,
+            targetIdentifier: targetIdentifier,
+            nodeID: nodeID,
             frameID: frameID,
             nodeType: DOMNodeType(protocolValue: nodeType),
             nodeName: nodeName,
@@ -173,8 +174,8 @@ package struct DOMGraphNodeDescriptor: Sendable {
             pseudoType: pseudoType,
             shadowRootType: shadowRootType,
             attributes: attributes,
-            childCount: childCount,
-            childCountIsKnown: childCountIsKnown,
+            regularChildCount: regularChildCount,
+            regularChildrenAreLoaded: regularChildrenAreLoaded,
             layoutFlags: layoutFlags,
             isRendered: isRendered,
             regularChildren: regularChildren,
@@ -190,35 +191,29 @@ package struct DOMGraphNodeDescriptor: Sendable {
 
 package struct DOMGraphSnapshot: Sendable {
     package var root: DOMGraphNodeDescriptor
-    package var selectedLocalID: UInt64?
+    package var selectedKey: DOMNodeKey?
 
-    package init(root: DOMGraphNodeDescriptor, selectedLocalID: UInt64? = nil) {
+    package init(root: DOMGraphNodeDescriptor, selectedKey: DOMNodeKey? = nil) {
         self.root = root
-        self.selectedLocalID = selectedLocalID
+        self.selectedKey = selectedKey
     }
 }
 
 package struct DOMSelectionSnapshotPayload: Sendable {
-    package var localID: UInt64?
-    package var backendNodeID: Int?
-    package var backendNodeIDIsStable: Bool
+    package var key: DOMNodeKey?
     package var attributes: [DOMAttribute]
     package var path: [String]
     package var selectorPath: String?
     package var styleRevision: Int
 
     package init(
-        localID: UInt64?,
-        backendNodeID: Int? = nil,
-        backendNodeIDIsStable: Bool? = nil,
+        key: DOMNodeKey?,
         attributes: [DOMAttribute],
         path: [String],
         selectorPath: String?,
         styleRevision: Int
     ) {
-        self.localID = localID
-        self.backendNodeID = backendNodeID
-        self.backendNodeIDIsStable = backendNodeIDIsStable ?? (backendNodeID != nil)
+        self.key = key
         self.attributes = attributes
         self.path = path
         self.selectorPath = selectorPath
@@ -227,11 +222,11 @@ package struct DOMSelectionSnapshotPayload: Sendable {
 }
 
 package struct DOMSelectorPathPayload: Sendable {
-    package var localID: UInt64?
+    package var key: DOMNodeKey?
     package var selectorPath: String
 
-    package init(localID: UInt64?, selectorPath: String) {
-        self.localID = localID
+    package init(key: DOMNodeKey?, selectorPath: String) {
+        self.key = key
         self.selectorPath = selectorPath
     }
 }
@@ -244,19 +239,25 @@ package struct DOMGraphMutationBundle: Sendable {
     }
 }
 
+package enum DOMGraphPreviousSibling: Sendable, Equatable {
+    case missing
+    case firstChild
+    case node(DOMNodeKey)
+}
+
 package enum DOMGraphMutationEvent: Sendable {
-    case childNodeInserted(parentLocalID: UInt64, previousLocalID: UInt64?, node: DOMGraphNodeDescriptor)
-    case childNodeRemoved(parentLocalID: UInt64, nodeLocalID: UInt64)
-    case shadowRootPushed(hostLocalID: UInt64, root: DOMGraphNodeDescriptor)
-    case shadowRootPopped(hostLocalID: UInt64, rootLocalID: UInt64)
-    case pseudoElementAdded(parentLocalID: UInt64, node: DOMGraphNodeDescriptor)
-    case pseudoElementRemoved(parentLocalID: UInt64, nodeLocalID: UInt64)
-    case attributeModified(nodeLocalID: UInt64, name: String, value: String, layoutFlags: [String]?, isRendered: Bool?)
-    case attributeRemoved(nodeLocalID: UInt64, name: String, layoutFlags: [String]?, isRendered: Bool?)
-    case characterDataModified(nodeLocalID: UInt64, value: String, layoutFlags: [String]?, isRendered: Bool?)
-    case childNodeCountUpdated(nodeLocalID: UInt64, childCount: Int, layoutFlags: [String]?, isRendered: Bool?)
-    case setChildNodes(parentLocalID: UInt64, nodes: [DOMGraphNodeDescriptor])
+    case childNodeInserted(parentKey: DOMNodeKey, previousSibling: DOMGraphPreviousSibling, node: DOMGraphNodeDescriptor)
+    case childNodeRemoved(parentKey: DOMNodeKey, nodeKey: DOMNodeKey)
+    case shadowRootPushed(hostKey: DOMNodeKey, root: DOMGraphNodeDescriptor)
+    case shadowRootPopped(hostKey: DOMNodeKey, rootKey: DOMNodeKey)
+    case pseudoElementAdded(parentKey: DOMNodeKey, node: DOMGraphNodeDescriptor)
+    case pseudoElementRemoved(parentKey: DOMNodeKey, nodeKey: DOMNodeKey)
+    case attributeModified(nodeKey: DOMNodeKey, name: String, value: String, layoutFlags: [String]?, isRendered: Bool?)
+    case attributeRemoved(nodeKey: DOMNodeKey, name: String, layoutFlags: [String]?, isRendered: Bool?)
+    case characterDataModified(nodeKey: DOMNodeKey, value: String, layoutFlags: [String]?, isRendered: Bool?)
+    case childNodeCountUpdated(nodeKey: DOMNodeKey, childCount: Int, layoutFlags: [String]?, isRendered: Bool?)
+    case setChildNodes(parentKey: DOMNodeKey, nodes: [DOMGraphNodeDescriptor])
     case setDetachedRoots(nodes: [DOMGraphNodeDescriptor])
-    case replaceSubtree(root: DOMGraphNodeDescriptor)
+    case attachFrameDocument(ownerKey: DOMNodeKey, documentRoot: DOMGraphNodeDescriptor)
     case documentUpdated
 }

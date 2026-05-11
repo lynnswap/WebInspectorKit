@@ -61,7 +61,7 @@ struct DOMTreeTextViewTests {
 
     @Test
     func selectedRowBackgroundSpansViewportWidth() throws {
-        let view = makeTreeView(selectedLocalID: FixtureNodeID.input)
+        let view = makeTreeView(selectedNodeID: FixtureNodeID.input)
         view.frame = CGRect(x: 0, y: 0, width: 500, height: 320)
         view.layoutIfNeeded()
 
@@ -80,8 +80,8 @@ struct DOMTreeTextViewTests {
 
     @Test
     func selectedRowBackgroundUsesTextKitHighlightVerticalGeometry() throws {
-        for (localID, text) in [(FixtureNodeID.body, "<body"), (FixtureNodeID.input, "<input")] {
-            let view = makeTreeView(selectedLocalID: localID)
+        for (nodeID, text) in [(FixtureNodeID.body, "<body"), (FixtureNodeID.input, "<input")] {
+            let view = makeTreeView(selectedNodeID: nodeID)
             view.frame = CGRect(x: 0, y: 0, width: 500, height: 320)
             view.layoutIfNeeded()
 
@@ -152,7 +152,7 @@ struct DOMTreeTextViewTests {
             DOMGraphMutationBundle(
                 events: [
                     .childNodeCountUpdated(
-                        nodeLocalID: FixtureNodeID.article,
+                        nodeKey: key(FixtureNodeID.article),
                         childCount: 0,
                         layoutFlags: nil,
                         isRendered: nil
@@ -180,7 +180,7 @@ struct DOMTreeTextViewTests {
         runtime.document.applyMutationBundle(
             DOMGraphMutationBundle(
                 events: [
-                    .setChildNodes(parentLocalID: FixtureNodeID.article, nodes: []),
+                    .setChildNodes(parentKey: key(FixtureNodeID.article), nodes: []),
                 ]
             )
         )
@@ -204,7 +204,7 @@ struct DOMTreeTextViewTests {
         runtime.document.applyMutationBundle(
             DOMGraphMutationBundle(
                 events: [
-                    .setChildNodes(parentLocalID: FixtureNodeID.article, nodes: []),
+                    .setChildNodes(parentKey: key(FixtureNodeID.article), nodes: []),
                 ]
             )
         )
@@ -254,7 +254,7 @@ struct DOMTreeTextViewTests {
             DOMGraphMutationBundle(
                 events: [
                     .attributeModified(
-                        nodeLocalID: FixtureNodeID.div,
+                        nodeKey: key(FixtureNodeID.div),
                         name: "data-dynamic",
                         value: "1",
                         layoutFlags: nil,
@@ -298,8 +298,7 @@ struct DOMTreeTextViewTests {
 
         runtime.document.applySelectionSnapshot(
             DOMSelectionSnapshotPayload(
-                localID: FixtureNodeID.html,
-                backendNodeID: Int(FixtureNodeID.html),
+                key: key(FixtureNodeID.html),
                 attributes: [DOMAttribute(name: "lang", value: "en")],
                 path: ["html"],
                 selectorPath: "html",
@@ -319,7 +318,7 @@ struct DOMTreeTextViewTests {
     func documentSelectionClearsStaleMultiSelectionForSameSelectedNode() async throws {
         let runtime = WIDOMRuntime()
         runtime.document.replaceDocument(
-            with: .init(root: makeDocumentNode(), selectedLocalID: FixtureNodeID.input)
+            with: .init(root: makeDocumentNode(), selectedKey: key(FixtureNodeID.input))
         )
         let view = makeTreeView(runtime: runtime)
         await waitForObservationDelivery()
@@ -327,7 +326,7 @@ struct DOMTreeTextViewTests {
         view.primaryClickRowForTesting(containing: "<div id=\"start-of-content\"")
         view.primaryClickRowForTesting(containing: "<input disabled>", modifiers: .shift)
 
-        #expect(view.multiSelectedLocalIDsForTesting == [
+        #expect(view.multiSelectedNodeIDsForTesting == [
             FixtureNodeID.div,
             FixtureNodeID.unknownElement,
             FixtureNodeID.image,
@@ -337,8 +336,7 @@ struct DOMTreeTextViewTests {
 
         runtime.document.applySelectionSnapshot(
             DOMSelectionSnapshotPayload(
-                localID: FixtureNodeID.input,
-                backendNodeID: Int(FixtureNodeID.input),
+                key: key(FixtureNodeID.input),
                 attributes: [DOMAttribute(name: "disabled", value: "")],
                 path: ["html", "body", "input"],
                 selectorPath: "input",
@@ -348,7 +346,7 @@ struct DOMTreeTextViewTests {
         await waitForObservationDelivery()
         view.layoutIfNeeded()
 
-        #expect(view.multiSelectedLocalIDsForTesting.isEmpty)
+        #expect(view.multiSelectedNodeIDsForTesting.isEmpty)
         #expect(view.selectedRowRectsForTesting().count == 1)
     }
 
@@ -356,7 +354,7 @@ struct DOMTreeTextViewTests {
     func noOpContentInvalidationRefreshesDrawnSelectionDecoration() async throws {
         let runtime = WIDOMRuntime()
         runtime.document.replaceDocument(
-            with: .init(root: makeDocumentNode(), selectedLocalID: FixtureNodeID.input)
+            with: .init(root: makeDocumentNode(), selectedKey: key(FixtureNodeID.input))
         )
         let view = makeTreeView(runtime: runtime)
         view.synchronizeDocumentForTesting()
@@ -371,7 +369,7 @@ struct DOMTreeTextViewTests {
             DOMGraphMutationBundle(
                 events: [
                     .attributeModified(
-                        nodeLocalID: FixtureNodeID.input,
+                        nodeKey: key(FixtureNodeID.input),
                         name: "disabled",
                         value: "",
                         layoutFlags: nil,
@@ -425,8 +423,7 @@ struct DOMTreeTextViewTests {
 
         runtime.document.applySelectionSnapshot(
             DOMSelectionSnapshotPayload(
-                localID: FixtureNodeID.nestedSpan,
-                backendNodeID: Int(FixtureNodeID.nestedSpan),
+                key: key(FixtureNodeID.nestedSpan),
                 attributes: [DOMAttribute(name: "id", value: "nested-child")],
                 path: ["html", "body", "article", "span"],
                 selectorPath: "article > span",
@@ -460,8 +457,7 @@ struct DOMTreeTextViewTests {
 
         runtime.document.applySelectionSnapshot(
             DOMSelectionSnapshotPayload(
-                localID: FixtureNodeID.iframeButton,
-                backendNodeID: Int(FixtureNodeID.iframeButton),
+                key: key(FixtureNodeID.iframeButton),
                 attributes: [DOMAttribute(name: "id", value: "inside-frame")],
                 path: ["html", "body", "iframe", "#document", "html", "body", "button"],
                 selectorPath: "iframe > #document > html > body > button",
@@ -494,8 +490,7 @@ struct DOMTreeTextViewTests {
 
         runtime.document.applySelectionSnapshot(
             DOMSelectionSnapshotPayload(
-                localID: FixtureNodeID.regularParagraph,
-                backendNodeID: Int(FixtureNodeID.regularParagraph),
+                key: key(FixtureNodeID.regularParagraph),
                 attributes: [],
                 path: ["html", "body", "section", "p"],
                 selectorPath: "section > p",
@@ -551,8 +546,7 @@ struct DOMTreeTextViewTests {
 
         runtime.document.applySelectionSnapshot(
             DOMSelectionSnapshotPayload(
-                localID: FixtureNodeID.nestedSpan,
-                backendNodeID: Int(FixtureNodeID.nestedSpan),
+                key: key(FixtureNodeID.nestedSpan),
                 attributes: [DOMAttribute(name: "id", value: "nested-child")],
                 path: ["html", "body", "article", "span"],
                 selectorPath: "article > span",
@@ -580,7 +574,7 @@ struct DOMTreeTextViewTests {
             DOMGraphMutationBundle(
                 events: [
                     .attributeModified(
-                        nodeLocalID: FixtureNodeID.div,
+                        nodeKey: key(FixtureNodeID.div),
                         name: "data-revision",
                         value: "updated",
                         layoutFlags: nil,
@@ -615,7 +609,7 @@ struct DOMTreeTextViewTests {
             DOMGraphMutationBundle(
                 events: [
                     .attributeModified(
-                        nodeLocalID: FixtureNodeID.div,
+                        nodeKey: key(FixtureNodeID.div),
                         name: "data-after-recreate",
                         value: "1",
                         layoutFlags: nil,
@@ -665,7 +659,7 @@ struct DOMTreeTextViewTests {
         view.primaryClickRowForTesting(containing: "<div id=\"start-of-content\"")
         view.primaryClickRowForTesting(containing: "<input disabled>", modifiers: .shift)
 
-        #expect(view.multiSelectedLocalIDsForTesting == [
+        #expect(view.multiSelectedNodeIDsForTesting == [
             FixtureNodeID.div,
             FixtureNodeID.unknownElement,
             FixtureNodeID.image,
@@ -682,7 +676,7 @@ struct DOMTreeTextViewTests {
         view.primaryClickRowForTesting(containing: "<input disabled>", modifiers: .shift)
         view.primaryClickRowForTesting(containing: "<article>", modifiers: .shift)
 
-        #expect(view.multiSelectedLocalIDsForTesting == [
+        #expect(view.multiSelectedNodeIDsForTesting == [
             FixtureNodeID.doctype,
             FixtureNodeID.div,
             FixtureNodeID.unknownElement,
@@ -698,7 +692,7 @@ struct DOMTreeTextViewTests {
 
         view.primaryClickRowForTesting(containing: "<body", modifiers: .shift)
 
-        #expect(view.multiSelectedLocalIDsForTesting == [
+        #expect(view.multiSelectedNodeIDsForTesting == [
             FixtureNodeID.doctype,
             FixtureNodeID.html,
             FixtureNodeID.head,
@@ -714,7 +708,7 @@ struct DOMTreeTextViewTests {
         view.primaryClickRowForTesting(containing: "<div id=\"start-of-content\"", modifiers: .command)
         view.primaryClickRowForTesting(containing: "<input disabled>", modifiers: .command)
 
-        #expect(view.multiSelectedLocalIDsForTesting == [
+        #expect(view.multiSelectedNodeIDsForTesting == [
             FixtureNodeID.body,
             FixtureNodeID.div,
             FixtureNodeID.input,
@@ -732,7 +726,7 @@ struct DOMTreeTextViewTests {
         let titles = view.secondaryClickMenuTitlesForTesting(containing: "<img src=")
 
         #expect(titles == ["Copy HTML", "Delete Nodes"])
-        #expect(view.multiSelectedLocalIDsForTesting == [
+        #expect(view.multiSelectedNodeIDsForTesting == [
             FixtureNodeID.div,
             FixtureNodeID.unknownElement,
             FixtureNodeID.image,
@@ -754,7 +748,7 @@ struct DOMTreeTextViewTests {
             "Copy XPath",
             "Delete Node",
         ])
-        #expect(view.multiSelectedLocalIDsForTesting.isEmpty)
+        #expect(view.multiSelectedNodeIDsForTesting.isEmpty)
     }
 
     @Test
@@ -820,10 +814,10 @@ struct DOMTreeTextViewTests {
         #expect(!containsWKWebView(in: viewController.view))
     }
 
-    private func makeTreeView(selectedLocalID: UInt64? = nil) -> DOMTreeTextView {
+    private func makeTreeView(selectedNodeID: UInt64? = nil) -> DOMTreeTextView {
         let runtime = WIDOMRuntime()
         runtime.document.replaceDocument(
-            with: .init(root: makeDocumentNode(), selectedLocalID: selectedLocalID)
+            with: .init(root: makeDocumentNode(), selectedKey: selectedNodeID.map { key($0) })
         )
         return makeTreeView(runtime: runtime)
     }
@@ -853,43 +847,43 @@ struct DOMTreeTextViewTests {
 
     private func makeDocumentNode() -> DOMGraphNodeDescriptor {
         makeNode(
-            localID: FixtureNodeID.document,
+            nodeID: FixtureNodeID.document,
             type: .document,
             nodeName: "#document",
             localName: "",
             children: [
                 makeNode(
-                    localID: FixtureNodeID.doctype,
+                    nodeID: FixtureNodeID.doctype,
                     type: .documentType,
                     nodeName: "html",
                     localName: ""
                 ),
                 makeNode(
-                    localID: FixtureNodeID.html,
+                    nodeID: FixtureNodeID.html,
                     nodeName: "HTML",
                     localName: "html",
                     attributes: [DOMAttribute(name: "lang", value: "en")],
                     children: [
                         makeNode(
-                            localID: FixtureNodeID.head,
+                            nodeID: FixtureNodeID.head,
                             nodeName: "HEAD",
                             localName: "head",
                             children: [
                                 makeNode(
-                                    localID: FixtureNodeID.title,
+                                    nodeID: FixtureNodeID.title,
                                     nodeName: "TITLE",
                                     localName: "title"
                                 ),
                             ]
                         ),
                         makeNode(
-                            localID: FixtureNodeID.body,
+                            nodeID: FixtureNodeID.body,
                             nodeName: "BODY",
                             localName: "body",
                             attributes: [DOMAttribute(name: "class", value: "logged-in env-production")],
                             children: [
                                 makeNode(
-                                    localID: FixtureNodeID.div,
+                                    nodeID: FixtureNodeID.div,
                                     nodeName: "DIV",
                                     localName: "div",
                                     attributes: [
@@ -899,7 +893,7 @@ struct DOMTreeTextViewTests {
                                     ]
                                 ),
                                 makeNode(
-                                    localID: FixtureNodeID.unknownElement,
+                                    nodeID: FixtureNodeID.unknownElement,
                                     type: .unknown,
                                     nodeName: "SECTION",
                                     localName: "section",
@@ -908,7 +902,7 @@ struct DOMTreeTextViewTests {
                                     ]
                                 ),
                                 makeNode(
-                                    localID: FixtureNodeID.image,
+                                    nodeID: FixtureNodeID.image,
                                     nodeName: "IMG",
                                     localName: "img",
                                     attributes: [
@@ -917,18 +911,18 @@ struct DOMTreeTextViewTests {
                                     ]
                                 ),
                                 makeNode(
-                                    localID: FixtureNodeID.input,
+                                    nodeID: FixtureNodeID.input,
                                     nodeName: "INPUT",
                                     localName: "input",
                                     attributes: [DOMAttribute(name: "disabled", value: "")]
                                 ),
                                 makeNode(
-                                    localID: FixtureNodeID.article,
+                                    nodeID: FixtureNodeID.article,
                                     nodeName: "ARTICLE",
                                     localName: "article",
                                     children: [
                                         makeNode(
-                                            localID: FixtureNodeID.nestedSpan,
+                                            nodeID: FixtureNodeID.nestedSpan,
                                             nodeName: "SPAN",
                                             localName: "span",
                                             attributes: [DOMAttribute(name: "id", value: "nested-child")]
@@ -936,14 +930,14 @@ struct DOMTreeTextViewTests {
                                     ]
                                 ),
                                 makeNode(
-                                    localID: FixtureNodeID.text,
+                                    nodeID: FixtureNodeID.text,
                                     type: .text,
                                     nodeName: "#text",
                                     localName: "",
                                     nodeValue: "\n  Introducing luma for iOS 26\t"
                                 ),
                                 makeNode(
-                                    localID: FixtureNodeID.comment,
+                                    nodeID: FixtureNodeID.comment,
                                     type: .comment,
                                     nodeName: "#comment",
                                     localName: "",
@@ -959,27 +953,26 @@ struct DOMTreeTextViewTests {
 
     private func makeUnknownChildCountDocumentNode() -> DOMGraphNodeDescriptor {
         makeNode(
-            localID: FixtureNodeID.document,
+            nodeID: FixtureNodeID.document,
             type: .document,
             nodeName: "#document",
             localName: "",
             children: [
                 makeNode(
-                    localID: FixtureNodeID.html,
+                    nodeID: FixtureNodeID.html,
                     nodeName: "HTML",
                     localName: "html",
                     children: [
                         makeNode(
-                            localID: FixtureNodeID.body,
+                            nodeID: FixtureNodeID.body,
                             nodeName: "BODY",
                             localName: "body",
                             children: [
                                 makeNode(
-                                    localID: FixtureNodeID.article,
+                                    nodeID: FixtureNodeID.article,
                                     nodeName: "ARTICLE",
                                     localName: "article",
-                                    childCount: 0,
-                                    childCountIsKnown: false
+                                    childCount: 1
                                 ),
                             ]
                         ),
@@ -991,23 +984,23 @@ struct DOMTreeTextViewTests {
 
     private func makeDeferredChildDocumentNode() -> DOMGraphNodeDescriptor {
         makeNode(
-            localID: FixtureNodeID.document,
+            nodeID: FixtureNodeID.document,
             type: .document,
             nodeName: "#document",
             localName: "",
             children: [
                 makeNode(
-                    localID: FixtureNodeID.html,
+                    nodeID: FixtureNodeID.html,
                     nodeName: "HTML",
                     localName: "html",
                     children: [
                         makeNode(
-                            localID: FixtureNodeID.body,
+                            nodeID: FixtureNodeID.body,
                             nodeName: "BODY",
                             localName: "body",
                             children: [
                                 makeNode(
-                                    localID: FixtureNodeID.article,
+                                    nodeID: FixtureNodeID.article,
                                     nodeName: "ARTICLE",
                                     localName: "article",
                                     childCount: 1
@@ -1022,23 +1015,23 @@ struct DOMTreeTextViewTests {
 
     private func makeWideGlyphDocumentNode() -> DOMGraphNodeDescriptor {
         makeNode(
-            localID: FixtureNodeID.document,
+            nodeID: FixtureNodeID.document,
             type: .document,
             nodeName: "#document",
             localName: "",
             children: [
                 makeNode(
-                    localID: FixtureNodeID.html,
+                    nodeID: FixtureNodeID.html,
                     nodeName: "HTML",
                     localName: "html",
                     children: [
                         makeNode(
-                            localID: FixtureNodeID.body,
+                            nodeID: FixtureNodeID.body,
                             nodeName: "BODY",
                             localName: "body",
                             children: [
                                 makeNode(
-                                    localID: FixtureNodeID.div,
+                                    nodeID: FixtureNodeID.div,
                                     nodeName: "DIV",
                                     localName: "div",
                                     attributes: [
@@ -1058,35 +1051,35 @@ struct DOMTreeTextViewTests {
 
     private func makeSpecialChildrenDocumentNode() -> DOMGraphNodeDescriptor {
         makeNode(
-            localID: FixtureNodeID.document,
+            nodeID: FixtureNodeID.document,
             type: .document,
             nodeName: "#document",
             localName: "",
             children: [
                 makeNode(
-                    localID: FixtureNodeID.html,
+                    nodeID: FixtureNodeID.html,
                     nodeName: "HTML",
                     localName: "html",
                     children: [
                         makeNode(
-                            localID: FixtureNodeID.body,
+                            nodeID: FixtureNodeID.body,
                             nodeName: "BODY",
                             localName: "body",
                             children: [
                                 makeNode(
-                                    localID: FixtureNodeID.specialHost,
+                                    nodeID: FixtureNodeID.specialHost,
                                     nodeName: "SECTION",
                                     localName: "section",
                                     children: [
                                         makeNode(
-                                            localID: FixtureNodeID.regularParagraph,
+                                            nodeID: FixtureNodeID.regularParagraph,
                                             nodeName: "P",
                                             localName: "p"
                                         ),
                                     ],
                                     shadowRoots: [
                                         makeNode(
-                                            localID: FixtureNodeID.shadowRoot,
+                                            nodeID: FixtureNodeID.shadowRoot,
                                             type: .documentFragment,
                                             nodeName: "#shadow-root",
                                             localName: "",
@@ -1094,19 +1087,19 @@ struct DOMTreeTextViewTests {
                                         )
                                     ],
                                     templateContent: makeNode(
-                                        localID: FixtureNodeID.templateContent,
+                                        nodeID: FixtureNodeID.templateContent,
                                         type: .documentFragment,
                                         nodeName: "#document-fragment",
                                         localName: ""
                                     ),
                                     beforePseudoElement: makeNode(
-                                        localID: FixtureNodeID.beforePseudoElement,
+                                        nodeID: FixtureNodeID.beforePseudoElement,
                                         nodeName: "::before",
                                         localName: "",
                                         pseudoType: "before"
                                     ),
                                     afterPseudoElement: makeNode(
-                                        localID: FixtureNodeID.afterPseudoElement,
+                                        nodeID: FixtureNodeID.afterPseudoElement,
                                         nodeName: "::after",
                                         localName: "",
                                         pseudoType: "after"
@@ -1122,23 +1115,23 @@ struct DOMTreeTextViewTests {
 
     private func makeIframeDocumentNode() -> DOMGraphNodeDescriptor {
         makeNode(
-            localID: FixtureNodeID.document,
+            nodeID: FixtureNodeID.document,
             type: .document,
             nodeName: "#document",
             localName: "",
             children: [
                 makeNode(
-                    localID: FixtureNodeID.html,
+                    nodeID: FixtureNodeID.html,
                     nodeName: "HTML",
                     localName: "html",
                     children: [
                         makeNode(
-                            localID: FixtureNodeID.body,
+                            nodeID: FixtureNodeID.body,
                             nodeName: "BODY",
                             localName: "body",
                             children: [
                                 makeNode(
-                                    localID: FixtureNodeID.iframe,
+                                    nodeID: FixtureNodeID.iframe,
                                     nodeName: "IFRAME",
                                     localName: "iframe",
                                     attributes: [
@@ -1146,23 +1139,23 @@ struct DOMTreeTextViewTests {
                                     ],
                                     contentDocument:
                                         makeNode(
-                                            localID: FixtureNodeID.iframeDocument,
+                                            nodeID: FixtureNodeID.iframeDocument,
                                             type: .document,
                                             nodeName: "#document",
                                             localName: "",
                                             children: [
                                                 makeNode(
-                                                    localID: FixtureNodeID.iframeHTML,
+                                                    nodeID: FixtureNodeID.iframeHTML,
                                                     nodeName: "HTML",
                                                     localName: "html",
                                                     children: [
                                                         makeNode(
-                                                            localID: FixtureNodeID.iframeBody,
+                                                            nodeID: FixtureNodeID.iframeBody,
                                                             nodeName: "BODY",
                                                             localName: "body",
                                                             children: [
                                                                 makeNode(
-                                                                    localID: FixtureNodeID.iframeButton,
+                                                                    nodeID: FixtureNodeID.iframeButton,
                                                                     nodeName: "BUTTON",
                                                                     localName: "button",
                                                                     attributes: [
@@ -1186,32 +1179,32 @@ struct DOMTreeTextViewTests {
 
     private func makePseudoElementChildDocumentNode() -> DOMGraphNodeDescriptor {
         makeNode(
-            localID: FixtureNodeID.document,
+            nodeID: FixtureNodeID.document,
             type: .document,
             nodeName: "#document",
             localName: "",
             children: [
                 makeNode(
-                    localID: FixtureNodeID.html,
+                    nodeID: FixtureNodeID.html,
                     nodeName: "HTML",
                     localName: "html",
                     children: [
                         makeNode(
-                            localID: FixtureNodeID.body,
+                            nodeID: FixtureNodeID.body,
                             nodeName: "BODY",
                             localName: "body",
                             children: [
                                 makeNode(
-                                    localID: FixtureNodeID.specialHost,
+                                    nodeID: FixtureNodeID.specialHost,
                                     nodeName: "SECTION",
                                     localName: "section",
                                     beforePseudoElement: makeNode(
-                                        localID: FixtureNodeID.beforePseudoElement,
+                                        nodeID: FixtureNodeID.beforePseudoElement,
                                         nodeName: "::before",
                                         localName: "",
                                         children: [
                                             makeNode(
-                                                localID: FixtureNodeID.beforePseudoSpan,
+                                                nodeID: FixtureNodeID.beforePseudoSpan,
                                                 nodeName: "SPAN",
                                                 localName: "span"
                                             ),
@@ -1228,7 +1221,7 @@ struct DOMTreeTextViewTests {
     }
 
     private func makeNode(
-        localID: UInt64,
+        nodeID: UInt64,
         type: DOMNodeType = .element,
         nodeName: String = "DIV",
         localName: String = "div",
@@ -1242,12 +1235,11 @@ struct DOMTreeTextViewTests {
         afterPseudoElement: DOMGraphNodeDescriptor? = nil,
         pseudoType: String? = nil,
         shadowRootType: String? = nil,
-        childCount: Int? = nil,
-        childCountIsKnown: Bool = true
+        childCount: Int? = nil
     ) -> DOMGraphNodeDescriptor {
         DOMGraphNodeDescriptor(
-            localID: localID,
-            backendNodeID: Int(localID),
+            targetIdentifier: testTargetIdentifier,
+            nodeID: Int(nodeID),
             nodeType: type,
             nodeName: nodeName,
             localName: localName,
@@ -1255,8 +1247,8 @@ struct DOMTreeTextViewTests {
             pseudoType: pseudoType,
             shadowRootType: shadowRootType,
             attributes: attributes,
-            childCount: childCount ?? max(children.count, contentDocument == nil ? 0 : 1),
-            childCountIsKnown: childCountIsKnown,
+            regularChildCount: childCount ?? children.count,
+            regularChildrenAreLoaded: childCount == nil,
             layoutFlags: [],
             isRendered: true,
             children: children,
@@ -1266,6 +1258,14 @@ struct DOMTreeTextViewTests {
             beforePseudoElement: beforePseudoElement,
             afterPseudoElement: afterPseudoElement
         )
+    }
+
+    private var testTargetIdentifier: String {
+        "page"
+    }
+
+    private func key(_ nodeID: UInt64) -> DOMNodeKey {
+        DOMNodeKey(targetIdentifier: testTargetIdentifier, nodeID: Int(nodeID))
     }
 
     private func containsWKWebView(in view: UIView) -> Bool {

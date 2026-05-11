@@ -591,8 +591,8 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
 #if DEBUG
         reloadTreeCallCount += 1
 #endif
-        if case let .content(affectedLocalIDs) = invalidation,
-           applyContentInvalidation(affectedLocalIDs: affectedLocalIDs) {
+        if case let .content(affectedKeys) = invalidation,
+           applyContentInvalidation(affectedKeys: affectedKeys) {
             return
         }
         reloadTree(resetFragments: invalidation?.requiresTextFragmentReset == true, countsCall: false)
@@ -642,14 +642,20 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         revealPendingSelectedNodeIfPossible()
     }
 
-    private func applyContentInvalidation(affectedLocalIDs: Set<UInt64>) -> Bool {
+    private func applyContentInvalidation(affectedKeys: Set<DOMNodeKey>) -> Bool {
         guard dom.document.documentState == .ready, !rows.isEmpty else {
             return false
         }
 
         let documentIdentity = dom.document.documentIdentity
-        let affectedRowIndices = affectedLocalIDs.compactMap {
-            rowIndexByNodeID[DOMNodeModel.ID(documentIdentity: documentIdentity, localID: $0)]
+        let affectedRowIndices = affectedKeys.compactMap {
+            rowIndexByNodeID[
+                DOMNodeModel.ID(
+                    documentIdentity: documentIdentity,
+                    targetIdentifier: $0.targetIdentifier,
+                    nodeID: $0.nodeID
+                )
+            ]
         }
         guard !affectedRowIndices.isEmpty else {
             return true
@@ -919,7 +925,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
             shadowRootType: node.shadowRootType,
             isTemplateContent: node.parent?.templateContent === node,
             attributes: node.attributes,
-            childCount: node.childCount,
+            childCount: node.regularChildCount,
             hasDisclosure: hasDisclosure,
             isOpen: isOpen,
             isClosingTag: isClosingTag
@@ -943,9 +949,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     }
 
     private func nodeHasDisclosure(_ node: DOMNodeModel) -> Bool {
-        node.childCount > 0
-            || !node.visibleDOMTreeChildren.isEmpty
-            || (!node.childCountIsKnown && DOMTreeMarkupBuilder.canContainChildNodes(node))
+        node.hasVisibleDOMTreeChildren
     }
 
     private func isNodeOpen(_ node: DOMNodeModel, depth: Int) -> Bool {
@@ -2462,9 +2466,9 @@ extension DOMTreeTextView {
         return titles
     }
 
-    var multiSelectedLocalIDsForTesting: [UInt64] {
+    var multiSelectedNodeIDsForTesting: [UInt64] {
         rows.compactMap { row in
-            !row.isClosingTag && multiSelectedNodeIDs.contains(row.node.id) ? row.node.localID : nil
+            !row.isClosingTag && multiSelectedNodeIDs.contains(row.node.id) ? UInt64(row.node.nodeID) : nil
         }
     }
 
@@ -3261,9 +3265,9 @@ private extension DOMTreeInvalidation {
         case let (.structural(lhs), .structural(rhs)),
              let (.structural(lhs), .content(rhs)),
              let (.content(lhs), .structural(rhs)):
-            return .structural(affectedLocalIDs: lhs.union(rhs))
+            return .structural(affectedKeys: lhs.union(rhs))
         case let (.content(lhs), .content(rhs)):
-            return .content(affectedLocalIDs: lhs.union(rhs))
+            return .content(affectedKeys: lhs.union(rhs))
         }
     }
 }

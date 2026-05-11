@@ -26,22 +26,69 @@ public struct DOMAttribute: Hashable, Identifiable, Sendable {
     }
 }
 
+public struct DOMNodeKey: Hashable, Sendable {
+    public let targetIdentifier: String
+    public let nodeID: Int
+
+    public init(targetIdentifier: String, nodeID: Int) {
+        self.targetIdentifier = targetIdentifier
+        self.nodeID = nodeID
+    }
+}
+
+package enum DOMRegularChildState {
+    case unrequested(count: Int)
+    case loaded([DOMNodeModel])
+
+    package var loadedChildren: [DOMNodeModel] {
+        get {
+            switch self {
+            case .unrequested:
+                return []
+            case let .loaded(children):
+                return children
+            }
+        }
+        set {
+            self = .loaded(newValue)
+        }
+    }
+
+    package var knownCount: Int {
+        switch self {
+        case let .unrequested(count):
+            return max(0, count)
+        case let .loaded(children):
+            return children.count
+        }
+    }
+
+    package var hasUnrequestedChildren: Bool {
+        switch self {
+        case let .unrequested(count):
+            return count > 0
+        case .loaded:
+            return false
+        }
+    }
+}
+
 @MainActor
 @Observable
 public final class DOMNodeModel: Equatable, Hashable, Identifiable {
     public struct ID: Hashable, Sendable {
         public let documentIdentity: UUID
-        public let localID: UInt64
+        public let targetIdentifier: String
+        public let nodeID: Int
 
-        public init(documentIdentity: UUID, localID: UInt64) {
+        public init(documentIdentity: UUID, targetIdentifier: String, nodeID: Int) {
             self.documentIdentity = documentIdentity
-            self.localID = localID
+            self.targetIdentifier = targetIdentifier
+            self.nodeID = nodeID
         }
     }
 
     public let id: ID
-    package var backendNodeID: Int?
-    package var backendNodeIDIsStable: Bool
     public var frameID: String?
     public var nodeType: DOMNodeType
     public var nodeName: String
@@ -52,7 +99,7 @@ public final class DOMNodeModel: Equatable, Hashable, Identifiable {
     public weak var parent: DOMNodeModel?
     public weak var previousSibling: DOMNodeModel?
     public weak var nextSibling: DOMNodeModel?
-    package var regularChildren: [DOMNodeModel]
+    package var regularChildState: DOMRegularChildState
     public var contentDocument: DOMNodeModel?
     public var shadowRoots: [DOMNodeModel]
     public var templateContent: DOMNodeModel?
@@ -66,6 +113,27 @@ public final class DOMNodeModel: Equatable, Hashable, Identifiable {
             return [contentDocument]
         }
         return shadowRoots + regularChildren
+    }
+
+    public var key: DOMNodeKey {
+        DOMNodeKey(targetIdentifier: id.targetIdentifier, nodeID: id.nodeID)
+    }
+
+    public var targetIdentifier: String {
+        id.targetIdentifier
+    }
+
+    public var nodeID: Int {
+        id.nodeID
+    }
+
+    package var regularChildren: [DOMNodeModel] {
+        get {
+            regularChildState.loadedChildren
+        }
+        set {
+            regularChildState.loadedChildren = newValue
+        }
     }
 
     package var visibleDOMTreeChildren: [DOMNodeModel] {
@@ -84,7 +152,20 @@ public final class DOMNodeModel: Equatable, Hashable, Identifiable {
     }
 
     package var hasUnloadedRegularChildren: Bool {
-        contentDocument == nil && childCount > regularChildren.count
+        contentDocument == nil && regularChildState.hasUnrequestedChildren
+    }
+
+    package var regularChildCount: Int {
+        regularChildState.knownCount
+    }
+
+    public var hasVisibleDOMTreeChildren: Bool {
+        templateContent != nil
+            || beforePseudoElement != nil
+            || contentDocument != nil
+            || !shadowRoots.isEmpty
+            || regularChildState.knownCount > 0
+            || afterPseudoElement != nil
     }
 
     package var ownedChildren: [DOMNodeModel] {
@@ -105,8 +186,6 @@ public final class DOMNodeModel: Equatable, Hashable, Identifiable {
         return ownedChildren
     }
 
-    public var childCount: Int
-    package var childCountIsKnown: Bool
     public var layoutFlags: [String]
     public var isRendered: Bool
     public var styleRevision: Int
@@ -116,8 +195,6 @@ public final class DOMNodeModel: Equatable, Hashable, Identifiable {
 
     package init(
         id: ID,
-        backendNodeID: Int? = nil,
-        backendNodeIDIsStable: Bool? = nil,
         frameID: String? = nil,
         nodeType: DOMNodeType,
         nodeName: String,
@@ -126,6 +203,7 @@ public final class DOMNodeModel: Equatable, Hashable, Identifiable {
         pseudoType: String? = nil,
         shadowRootType: String? = nil,
         attributes: [DOMAttribute],
+        regularChildState: DOMRegularChildState? = nil,
         regularChildren: [DOMNodeModel]? = nil,
         children: [DOMNodeModel] = [],
         contentDocument: DOMNodeModel? = nil,
@@ -133,8 +211,6 @@ public final class DOMNodeModel: Equatable, Hashable, Identifiable {
         templateContent: DOMNodeModel? = nil,
         beforePseudoElement: DOMNodeModel? = nil,
         afterPseudoElement: DOMNodeModel? = nil,
-        childCount: Int,
-        childCountIsKnown: Bool = true,
         layoutFlags: [String] = [],
         isRendered: Bool = true,
         styleRevision: Int = 0,
@@ -143,8 +219,6 @@ public final class DOMNodeModel: Equatable, Hashable, Identifiable {
         selectorPath: String = ""
     ) {
         self.id = id
-        self.backendNodeID = backendNodeID
-        self.backendNodeIDIsStable = backendNodeIDIsStable ?? (backendNodeID != nil)
         self.frameID = frameID
         self.nodeType = nodeType
         self.nodeName = nodeName
@@ -153,14 +227,18 @@ public final class DOMNodeModel: Equatable, Hashable, Identifiable {
         self.pseudoType = pseudoType
         self.shadowRootType = shadowRootType
         self.attributes = attributes
-        self.regularChildren = regularChildren ?? children
+        if let regularChildState {
+            self.regularChildState = regularChildState
+        } else if let regularChildren {
+            self.regularChildState = .loaded(regularChildren)
+        } else {
+            self.regularChildState = .loaded(children)
+        }
         self.contentDocument = contentDocument
         self.shadowRoots = shadowRoots
         self.templateContent = templateContent
         self.beforePseudoElement = beforePseudoElement
         self.afterPseudoElement = afterPseudoElement
-        self.childCount = childCount
-        self.childCountIsKnown = childCountIsKnown
         self.layoutFlags = layoutFlags
         self.isRendered = isRendered
         self.styleRevision = styleRevision
@@ -171,8 +249,6 @@ public final class DOMNodeModel: Equatable, Hashable, Identifiable {
 
     package convenience init(
         id: ID,
-        backendNodeID: Int? = nil,
-        backendNodeIDIsStable: Bool? = nil,
         frameID: String? = nil,
         nodeType: Int,
         nodeName: String,
@@ -181,6 +257,7 @@ public final class DOMNodeModel: Equatable, Hashable, Identifiable {
         pseudoType: String? = nil,
         shadowRootType: String? = nil,
         attributes: [DOMAttribute],
+        regularChildState: DOMRegularChildState? = nil,
         regularChildren: [DOMNodeModel]? = nil,
         children: [DOMNodeModel] = [],
         contentDocument: DOMNodeModel? = nil,
@@ -188,8 +265,6 @@ public final class DOMNodeModel: Equatable, Hashable, Identifiable {
         templateContent: DOMNodeModel? = nil,
         beforePseudoElement: DOMNodeModel? = nil,
         afterPseudoElement: DOMNodeModel? = nil,
-        childCount: Int,
-        childCountIsKnown: Bool = true,
         layoutFlags: [String] = [],
         isRendered: Bool = true,
         styleRevision: Int = 0,
@@ -199,8 +274,6 @@ public final class DOMNodeModel: Equatable, Hashable, Identifiable {
     ) {
         self.init(
             id: id,
-            backendNodeID: backendNodeID,
-            backendNodeIDIsStable: backendNodeIDIsStable,
             frameID: frameID,
             nodeType: DOMNodeType(protocolValue: nodeType),
             nodeName: nodeName,
@@ -209,6 +282,7 @@ public final class DOMNodeModel: Equatable, Hashable, Identifiable {
             pseudoType: pseudoType,
             shadowRootType: shadowRootType,
             attributes: attributes,
+            regularChildState: regularChildState,
             regularChildren: regularChildren,
             children: children,
             contentDocument: contentDocument,
@@ -216,8 +290,6 @@ public final class DOMNodeModel: Equatable, Hashable, Identifiable {
             templateContent: templateContent,
             beforePseudoElement: beforePseudoElement,
             afterPseudoElement: afterPseudoElement,
-            childCount: childCount,
-            childCountIsKnown: childCountIsKnown,
             layoutFlags: layoutFlags,
             isRendered: isRendered,
             styleRevision: styleRevision,
@@ -225,10 +297,6 @@ public final class DOMNodeModel: Equatable, Hashable, Identifiable {
             path: path,
             selectorPath: selectorPath
         )
-    }
-
-    public var localID: UInt64 {
-        id.localID
     }
 
     public nonisolated static func == (lhs: DOMNodeModel, rhs: DOMNodeModel) -> Bool {

@@ -31,8 +31,8 @@ public enum DOMDocumentState: Equatable, Sendable {
 
 package enum DOMTreeInvalidation: Equatable, Sendable {
     case documentReset
-    case structural(affectedLocalIDs: Set<UInt64>)
-    case content(affectedLocalIDs: Set<UInt64>)
+    case structural(affectedKeys: Set<DOMNodeKey>)
+    case content(affectedKeys: Set<DOMNodeKey>)
 }
 
 @MainActor
@@ -49,10 +49,10 @@ public final class DOMDocumentModel {
     package private(set) var selectionRevision: UInt64 = 0
     package private(set) var selectedNodeDetailRevision: UInt64 = 0
     package private(set) var mirrorInvariantViolationReason: String?
-    package private(set) var rejectedStructuralMutationParentLocalIDs: Set<UInt64> = []
+    package private(set) var rejectedStructuralMutationParentKeys: Set<DOMNodeKey> = []
     @ObservationIgnored private var treeInvalidationHandlers: [UUID: @MainActor (DOMTreeInvalidation) -> Void] = [:]
 
-    private var nodesByLocalID: [UInt64: DOMNodeModel] = [:]
+    private var nodesByKey: [DOMNodeKey: DOMNodeModel] = [:]
     private var detachedRoots: [DOMNodeModel] = []
 
     public init() {}
@@ -81,9 +81,9 @@ public final class DOMDocumentModel {
         return mirrorInvariantViolationReason
     }
 
-    package func consumeRejectedStructuralMutationParentLocalIDs() -> Set<UInt64> {
-        defer { rejectedStructuralMutationParentLocalIDs.removeAll(keepingCapacity: true) }
-        return rejectedStructuralMutationParentLocalIDs
+    package func consumeRejectedStructuralMutationParentKeys() -> Set<DOMNodeKey> {
+        defer { rejectedStructuralMutationParentKeys.removeAll(keepingCapacity: true) }
+        return rejectedStructuralMutationParentKeys
     }
 
     package func clearSelection() {
@@ -159,15 +159,15 @@ public final class DOMDocumentModel {
         with snapshot: DOMGraphSnapshot,
         isFreshDocument: Bool = true
     ) {
+        let previousSelectionAnchor = isFreshDocument ? nil : selectionAnchor(for: selectedNode)
         if isFreshDocument {
             documentIdentity = UUID()
         }
-        let previousSelectedLocalID = selectedLocalID
-        let previousSelectedStableBackendNodeID = stableBackendNodeID(for: selectedNode)
-        let nextSelectedLocalID = snapshot.selectedLocalID ?? previousSelectedLocalID
+        let previousSelectedKey = selectedKey
+        let nextSelectedKey = snapshot.selectedKey ?? previousSelectedKey
         replaceContents(
-            selectedLocalID: nextSelectedLocalID,
-            selectedStableBackendNodeID: previousSelectedStableBackendNodeID
+            selectedKey: nextSelectedKey,
+            selectionAnchor: previousSelectionAnchor
         ) {
             rootNode = buildSubtree(from: snapshot.root, parent: nil)
         }
@@ -183,102 +183,99 @@ public final class DOMDocumentModel {
             return
         }
 
-        let previousSelectedLocalID = selectedLocalID
+        let previousSelectedKey = selectedKey
         let previousSelectedNode = selectedNode
-        var structuralLocalIDs = Set<UInt64>()
-        var contentLocalIDs = Set<UInt64>()
+        var structuralKeys = Set<DOMNodeKey>()
+        var contentKeys = Set<DOMNodeKey>()
         for event in bundle.events {
             switch event {
-            case let .childNodeInserted(parentLocalID, previousLocalID, node):
-                structuralLocalIDs.insert(parentLocalID)
-                structuralLocalIDs.insert(node.localID)
-                applyChildNodeInserted(parentLocalID: parentLocalID, previousLocalID: previousLocalID, node: node)
-            case let .childNodeRemoved(parentLocalID, nodeLocalID):
-                structuralLocalIDs.insert(parentLocalID)
-                structuralLocalIDs.insert(nodeLocalID)
-                applyChildNodeRemoved(parentLocalID: parentLocalID, nodeLocalID: nodeLocalID)
-            case let .shadowRootPushed(hostLocalID, root):
-                structuralLocalIDs.insert(hostLocalID)
-                structuralLocalIDs.insert(root.localID)
-                applyShadowRootPushed(hostLocalID: hostLocalID, root: root)
-            case let .shadowRootPopped(hostLocalID, rootLocalID):
-                structuralLocalIDs.insert(hostLocalID)
-                structuralLocalIDs.insert(rootLocalID)
-                applyChildNodeRemoved(parentLocalID: hostLocalID, nodeLocalID: rootLocalID)
-            case let .pseudoElementAdded(parentLocalID, node):
-                structuralLocalIDs.insert(parentLocalID)
-                structuralLocalIDs.insert(node.localID)
-                applyPseudoElementAdded(parentLocalID: parentLocalID, node: node)
-            case let .pseudoElementRemoved(parentLocalID, nodeLocalID):
-                structuralLocalIDs.insert(parentLocalID)
-                structuralLocalIDs.insert(nodeLocalID)
-                applyChildNodeRemoved(parentLocalID: parentLocalID, nodeLocalID: nodeLocalID)
-            case let .attributeModified(nodeLocalID, name, value, layoutFlags, isRendered):
-                contentLocalIDs.insert(nodeLocalID)
+            case let .childNodeInserted(parentKey, previousSibling, node):
+                structuralKeys.insert(parentKey)
+                structuralKeys.insert(node.key)
+                applyChildNodeInserted(parentKey: parentKey, previousSibling: previousSibling, node: node)
+            case let .childNodeRemoved(parentKey, nodeKey):
+                structuralKeys.insert(parentKey)
+                structuralKeys.insert(nodeKey)
+                applyChildNodeRemoved(parentKey: parentKey, nodeKey: nodeKey)
+            case let .shadowRootPushed(hostKey, root):
+                structuralKeys.insert(hostKey)
+                structuralKeys.insert(root.key)
+                applyShadowRootPushed(hostKey: hostKey, root: root)
+            case let .shadowRootPopped(hostKey, rootKey):
+                structuralKeys.insert(hostKey)
+                structuralKeys.insert(rootKey)
+                applyChildNodeRemoved(parentKey: hostKey, nodeKey: rootKey)
+            case let .pseudoElementAdded(parentKey, node):
+                structuralKeys.insert(parentKey)
+                structuralKeys.insert(node.key)
+                applyPseudoElementAdded(parentKey: parentKey, node: node)
+            case let .pseudoElementRemoved(parentKey, nodeKey):
+                structuralKeys.insert(parentKey)
+                structuralKeys.insert(nodeKey)
+                applyChildNodeRemoved(parentKey: parentKey, nodeKey: nodeKey)
+            case let .attributeModified(nodeKey, name, value, layoutFlags, isRendered):
+                contentKeys.insert(nodeKey)
                 applyAttributeModified(
-                    nodeLocalID: nodeLocalID,
+                    nodeKey: nodeKey,
                     name: name,
                     value: value,
                     layoutFlags: layoutFlags,
                     isRendered: isRendered
                 )
-            case let .attributeRemoved(nodeLocalID, name, layoutFlags, isRendered):
-                contentLocalIDs.insert(nodeLocalID)
+            case let .attributeRemoved(nodeKey, name, layoutFlags, isRendered):
+                contentKeys.insert(nodeKey)
                 applyAttributeRemoved(
-                    nodeLocalID: nodeLocalID,
+                    nodeKey: nodeKey,
                     name: name,
                     layoutFlags: layoutFlags,
                     isRendered: isRendered
                 )
-            case let .characterDataModified(nodeLocalID, value, layoutFlags, isRendered):
-                contentLocalIDs.insert(nodeLocalID)
+            case let .characterDataModified(nodeKey, value, layoutFlags, isRendered):
+                contentKeys.insert(nodeKey)
                 applyCharacterDataModified(
-                    nodeLocalID: nodeLocalID,
+                    nodeKey: nodeKey,
                     value: value,
                     layoutFlags: layoutFlags,
                     isRendered: isRendered
                 )
-            case let .childNodeCountUpdated(nodeLocalID, childCount, layoutFlags, isRendered):
-                contentLocalIDs.insert(nodeLocalID)
+            case let .childNodeCountUpdated(nodeKey, childCount, layoutFlags, isRendered):
+                contentKeys.insert(nodeKey)
                 applyChildNodeCountUpdated(
-                    nodeLocalID: nodeLocalID,
+                    nodeKey: nodeKey,
                     childCount: childCount,
                     layoutFlags: layoutFlags,
                     isRendered: isRendered
                 )
-            case let .setChildNodes(parentLocalID, nodes):
-                structuralLocalIDs.insert(parentLocalID)
-                structuralLocalIDs.formUnion(nodes.map(\.localID))
-                applySetChildNodes(parentLocalID: parentLocalID, nodes: nodes)
+            case let .setChildNodes(parentKey, nodes):
+                structuralKeys.insert(parentKey)
+                structuralKeys.formUnion(nodes.map(\.key))
+                applySetChildNodes(parentKey: parentKey, nodes: nodes)
             case let .setDetachedRoots(nodes):
-                structuralLocalIDs.formUnion(nodes.map(\.localID))
+                structuralKeys.formUnion(nodes.map(\.key))
                 applySetDetachedRoots(nodes)
-            case let .replaceSubtree(root):
-                structuralLocalIDs.insert(root.localID)
-                applyReplaceSubtree(root)
+            case let .attachFrameDocument(ownerKey, documentRoot):
+                structuralKeys.insert(ownerKey)
+                structuralKeys.insert(documentRoot.key)
+                attachFrameDocument(ownerKey: ownerKey, documentRoot: documentRoot)
             case .documentUpdated:
                 return
             }
         }
 
         reconcileSelectedNode()
-        if selectedNode == nil, let previousSelectedLocalID {
-            selectedNode = node(forLocalID: previousSelectedLocalID)
-        }
-        if selectedNode == nil,
-           let stableBackendNodeID = stableBackendNodeID(for: previousSelectedNode) {
-            selectedNode = node(stableBackendNodeID: stableBackendNodeID)
+        if selectedNode == nil, let previousSelectedKey {
+            selectedNode = node(forKey: previousSelectedKey)
         }
         projectionRevision &+= 1
         treeRevision &+= 1
         if selectedNode !== previousSelectedNode
-            || selectedNode.map({ contentLocalIDs.contains($0.localID) || structuralLocalIDs.contains($0.localID) }) == true {
+            || selectedNode.map({ contentKeys.contains($0.key) || structuralKeys.contains($0.key) }) == true {
             selectedNodeDetailRevision &+= 1
         }
-        if !structuralLocalIDs.isEmpty {
-            emitTreeInvalidation(.structural(affectedLocalIDs: structuralLocalIDs))
-        } else if !contentLocalIDs.isEmpty {
-            emitTreeInvalidation(.content(affectedLocalIDs: contentLocalIDs))
+        if !structuralKeys.isEmpty {
+            emitTreeInvalidation(.structural(affectedKeys: structuralKeys))
+        } else if !contentKeys.isEmpty {
+            emitTreeInvalidation(.content(affectedKeys: contentKeys))
         }
         logSelectionTransitionIfNeeded(
             action: "applyMutationBundle",
@@ -290,10 +287,10 @@ public final class DOMDocumentModel {
 
     package func applySelectionSnapshot(_ payload: DOMSelectionSnapshotPayload?) {
         let previousSelectedNode = selectedNode
-        if let previousSelectedNode = selectedNode, payload?.localID == nil {
+        if let previousSelectedNode = selectedNode, payload?.key == nil {
             previousSelectedNode.clearSelectionProjectionState()
         }
-        guard let payload, let localID = payload.localID else {
+        guard let payload, let key = payload.key else {
             selectedNode = nil
             projectionRevision &+= 1
             selectionRevision &+= 1
@@ -307,27 +304,14 @@ public final class DOMDocumentModel {
             return
         }
 
-        guard let node = resolveAttachedSelectionNode(
-            localID: localID,
-            backendNodeID: payload.backendNodeID,
-            backendNodeIDIsStable: payload.backendNodeIDIsStable
-        ) else {
+        guard let node = resolveAttachedSelectionNode(key: key) else {
             logSelectionDiagnostics(
                 "applySelectionSnapshot ignored unknown or detached selection",
                 previous: previousSelectedNode,
                 next: previousSelectedNode,
-                extra: "payloadLocalID=\(localID) backendNodeID=\(payload.backendNodeID.map(String.init) ?? "nil") selector=\(payload.selectorPath ?? "nil")"
+                extra: "payloadKey=\(keySummary(key)) selector=\(payload.selectorPath ?? "nil")"
             )
             return
-        }
-        if let payloadBackendNodeID = payload.backendNodeID,
-           node.backendNodeID != payloadBackendNodeID {
-            node.backendNodeID = payloadBackendNodeID
-        }
-        if let payloadBackendNodeID = payload.backendNodeID,
-           node.backendNodeIDIsStable != payload.backendNodeIDIsStable,
-           node.backendNodeID == payloadBackendNodeID {
-            node.backendNodeIDIsStable = payload.backendNodeIDIsStable
         }
         node.path = payload.path
         if let selectorPath = payload.selectorPath {
@@ -336,7 +320,7 @@ public final class DOMDocumentModel {
         node.styleRevision = payload.styleRevision
         let didChangeTree = replaceAttributes(
             on: node,
-            with: normalizeAttributes(payload.attributes, backendNodeID: node.backendNodeID)
+            with: normalizeAttributes(payload.attributes, nodeID: node.nodeID)
         )
         selectedNode = node
         projectionRevision &+= 1
@@ -344,20 +328,20 @@ public final class DOMDocumentModel {
         selectedNodeDetailRevision &+= 1
         if didChangeTree {
             treeRevision &+= 1
-            emitTreeInvalidation(.content(affectedLocalIDs: [node.localID]))
+            emitTreeInvalidation(.content(affectedKeys: [node.key]))
         }
         logSelectionTransitionIfNeeded(
             action: "applySelectionSnapshot",
             previous: previousSelectedNode,
             next: selectedNode,
-            extra: "payloadLocalID=\(localID) backendNodeID=\(payload.backendNodeID.map(String.init) ?? "nil") selector=\(payload.selectorPath ?? "nil")"
+            extra: "payloadKey=\(keySummary(key)) selector=\(payload.selectorPath ?? "nil")"
         )
     }
 
     package func applySelectorPath(_ payload: DOMSelectorPathPayload) {
         guard
-            let localID = payload.localID,
-            let node = node(forLocalID: localID),
+            let key = payload.key,
+            let node = node(forKey: key),
             selectedNode === node
         else {
             return
@@ -386,7 +370,7 @@ public final class DOMDocumentModel {
         if setAttributeValue(on: node, name: name, value: value) {
             selectedNodeDetailRevision &+= 1
             treeRevision &+= 1
-            emitTreeInvalidation(.content(affectedLocalIDs: [node.localID]))
+            emitTreeInvalidation(.content(affectedKeys: [node.key]))
         }
     }
 
@@ -397,36 +381,27 @@ public final class DOMDocumentModel {
         if removeAttributeValue(on: node, name: name) {
             selectedNodeDetailRevision &+= 1
             treeRevision &+= 1
-            emitTreeInvalidation(.content(affectedLocalIDs: [node.localID]))
+            emitTreeInvalidation(.content(affectedKeys: [node.key]))
         }
     }
 
-    package func containsEntry(localID: UInt64, backendNodeID: Int?) -> Bool {
-        guard let node = node(forLocalID: localID) else {
-            return false
-        }
-        return backendNodeID == nil || node.backendNodeID == backendNodeID
+    package func containsEntry(key: DOMNodeKey) -> Bool {
+        node(forKey: key) != nil
     }
 
     package func node(id: DOMNodeModel.ID) -> DOMNodeModel? {
         guard id.documentIdentity == documentIdentity else {
             return nil
         }
-        return node(forLocalID: id.localID)
+        return node(forKey: DOMNodeKey(targetIdentifier: id.targetIdentifier, nodeID: id.nodeID))
     }
 
-    package func node(backendNodeID: Int) -> DOMNodeModel? {
-        nodesByLocalID.values.first(where: { $0.backendNodeID == backendNodeID })
+    package func node(key: DOMNodeKey) -> DOMNodeModel? {
+        node(forKey: key)
     }
 
-    package func node(stableBackendNodeID: Int) -> DOMNodeModel? {
-        nodesByLocalID.values.first {
-            $0.backendNodeIDIsStable && $0.backendNodeID == stableBackendNodeID
-        }
-    }
-
-    package func node(localID: UInt64) -> DOMNodeModel? {
-        node(forLocalID: localID)
+    package func node(targetIdentifier: String, nodeID: Int) -> DOMNodeModel? {
+        node(forKey: DOMNodeKey(targetIdentifier: targetIdentifier, nodeID: nodeID))
     }
 
     package func topLevelRoots() -> [DOMNodeModel] {
@@ -438,18 +413,14 @@ public final class DOMDocumentModel {
     }
 
     package func contains(_ node: DOMNodeModel) -> Bool {
-        nodesByLocalID[node.localID] === node
+        nodesByKey[node.key] === node
     }
 
     package func attributeValue(
         name: String,
-        localID: UInt64,
-        backendNodeID: Int?
+        key: DOMNodeKey
     ) -> String? {
-        guard let node = node(forLocalID: localID) else {
-            return nil
-        }
-        guard backendNodeID == nil || node.backendNodeID == backendNodeID else {
+        guard let node = node(forKey: key) else {
             return nil
         }
         return node.attributes.first(where: { $0.name == name })?.value
@@ -459,13 +430,9 @@ public final class DOMDocumentModel {
     package func updateAttribute(
         name: String,
         value: String,
-        localID: UInt64,
-        backendNodeID: Int?
+        key: DOMNodeKey
     ) -> Bool {
-        guard let node = node(forLocalID: localID) else {
-            return false
-        }
-        guard backendNodeID == nil || node.backendNodeID == backendNodeID else {
+        guard let node = node(forKey: key) else {
             return false
         }
         let didChange = setAttributeValue(on: node, name: name, value: value)
@@ -474,7 +441,7 @@ public final class DOMDocumentModel {
             if selectedNode === node {
                 selectedNodeDetailRevision &+= 1
             }
-            emitTreeInvalidation(.content(affectedLocalIDs: [node.localID]))
+            emitTreeInvalidation(.content(affectedKeys: [node.key]))
         }
         return didChange
     }
@@ -482,13 +449,9 @@ public final class DOMDocumentModel {
     @discardableResult
     package func removeAttribute(
         name: String,
-        localID: UInt64,
-        backendNodeID: Int?
+        key: DOMNodeKey
     ) -> Bool {
-        guard let node = node(forLocalID: localID) else {
-            return false
-        }
-        guard backendNodeID == nil || node.backendNodeID == backendNodeID else {
+        guard let node = node(forKey: key) else {
             return false
         }
         let didChange = removeAttributeValue(on: node, name: name)
@@ -497,13 +460,13 @@ public final class DOMDocumentModel {
             if selectedNode === node {
                 selectedNodeDetailRevision &+= 1
             }
-            emitTreeInvalidation(.content(affectedLocalIDs: [node.localID]))
+            emitTreeInvalidation(.content(affectedKeys: [node.key]))
         }
         return didChange
     }
 
-    package var selectedLocalID: UInt64? {
-        selectedNode?.localID
+    package var selectedKey: DOMNodeKey? {
+        selectedNode?.key
     }
 
     package func removeNode(id: DOMNodeModel.ID) {
@@ -513,11 +476,25 @@ public final class DOMDocumentModel {
         removeSubtree(node, removeFromParent: true)
         treeRevision &+= 1
         selectedNodeDetailRevision &+= 1
-        emitTreeInvalidation(.structural(affectedLocalIDs: [node.localID]))
+        emitTreeInvalidation(.structural(affectedKeys: [node.key]))
     }
 }
 
 private extension DOMDocumentModel {
+    struct SelectionAnchor {
+        let routeFromRoot: [Int]
+        let targetIdentifier: String
+        let nodeType: DOMNodeType
+        let nodeName: String
+        let localName: String
+        let pseudoType: String?
+        let shadowRootType: String?
+        let idAttribute: String?
+        let path: [String]
+        let selectorPath: String
+        let styleRevision: Int
+    }
+
     func emitTreeInvalidation(_ invalidation: DOMTreeInvalidation) {
         for handler in treeInvalidationHandlers.values {
             handler(invalidation)
@@ -525,51 +502,155 @@ private extension DOMDocumentModel {
     }
 
     func replaceContents(
-        selectedLocalID: UInt64?,
-        selectedStableBackendNodeID: Int? = nil,
+        selectedKey: DOMNodeKey?,
+        selectionAnchor: SelectionAnchor?,
         build: () -> Void
     ) {
         clearContents()
         build()
-        if let selectedLocalID {
-            selectedNode = node(forLocalID: selectedLocalID)
+        if let selectedKey {
+            selectedNode = node(forKey: selectedKey)
         }
-        if selectedNode == nil,
-           let selectedStableBackendNodeID {
-            selectedNode = node(stableBackendNodeID: selectedStableBackendNodeID)
+        if selectedNode == nil, let selectionAnchor {
+            selectedNode = resolveSelectionAnchor(selectionAnchor)
         }
         reconcileSelectedNode()
     }
 
+    func selectionAnchor(for node: DOMNodeModel?) -> SelectionAnchor? {
+        guard let node,
+              let routeFromRoot = visibleRouteFromRoot(to: node) else {
+            return nil
+        }
+        return SelectionAnchor(
+            routeFromRoot: routeFromRoot,
+            targetIdentifier: node.targetIdentifier,
+            nodeType: node.nodeType,
+            nodeName: node.nodeName,
+            localName: node.localName,
+            pseudoType: node.pseudoType,
+            shadowRootType: node.shadowRootType,
+            idAttribute: attributeValue("id", on: node),
+            path: node.path,
+            selectorPath: node.selectorPath,
+            styleRevision: node.styleRevision
+        )
+    }
+
+    func visibleRouteFromRoot(to node: DOMNodeModel) -> [Int]? {
+        var route: [Int] = []
+        var current = node
+        while let parent = current.parent {
+            guard let index = parent.visibleDOMTreeChildren.firstIndex(where: { $0 === current }) else {
+                return nil
+            }
+            route.append(index)
+            current = parent
+        }
+        guard current === rootNode else {
+            return nil
+        }
+        return route.reversed()
+    }
+
+    func resolveSelectionAnchor(_ anchor: SelectionAnchor) -> DOMNodeModel? {
+        if let node = resolveSelectionAnchorByRoute(anchor) {
+            return node
+        }
+        guard anchor.idAttribute?.isEmpty == false else {
+            return nil
+        }
+        return firstNodeMatchingAnchor(anchor, in: rootNode)
+    }
+
+    func resolveSelectionAnchorByRoute(_ anchor: SelectionAnchor) -> DOMNodeModel? {
+        guard var current = rootNode else {
+            return nil
+        }
+        for index in anchor.routeFromRoot {
+            let children = current.visibleDOMTreeChildren
+            guard children.indices.contains(index) else {
+                return nil
+            }
+            current = children[index]
+        }
+        guard selectionAnchor(anchor, matches: current) else {
+            return nil
+        }
+        applySelectionProjection(from: anchor, to: current)
+        return current
+    }
+
+    func firstNodeMatchingAnchor(_ anchor: SelectionAnchor, in node: DOMNodeModel?) -> DOMNodeModel? {
+        guard let node else {
+            return nil
+        }
+        if selectionAnchor(anchor, matches: node) {
+            applySelectionProjection(from: anchor, to: node)
+            return node
+        }
+        for child in node.visibleDOMTreeChildren {
+            if let match = firstNodeMatchingAnchor(anchor, in: child) {
+                return match
+            }
+        }
+        return nil
+    }
+
+    func selectionAnchor(_ anchor: SelectionAnchor, matches node: DOMNodeModel) -> Bool {
+        guard node.targetIdentifier == anchor.targetIdentifier,
+              node.nodeType == anchor.nodeType,
+              node.nodeName == anchor.nodeName,
+              node.localName == anchor.localName,
+              node.pseudoType == anchor.pseudoType,
+              node.shadowRootType == anchor.shadowRootType else {
+            return false
+        }
+        if let idAttribute = anchor.idAttribute {
+            return attributeValue("id", on: node) == idAttribute
+        }
+        return true
+    }
+
+    func applySelectionProjection(from anchor: SelectionAnchor, to node: DOMNodeModel) {
+        node.path = anchor.path
+        node.selectorPath = anchor.selectorPath
+        node.styleRevision = anchor.styleRevision
+    }
+
+    func attributeValue(_ name: String, on node: DOMNodeModel) -> String? {
+        node.attributes.first(where: { $0.name == name })?.value
+    }
+
     func clearContents() {
-        nodesByLocalID.removeAll(keepingCapacity: true)
+        nodesByKey.removeAll(keepingCapacity: true)
         rootNode = nil
         detachedRoots.removeAll(keepingCapacity: true)
         selectedNode = nil
         errorMessage = nil
         mirrorInvariantViolationReason = nil
-        rejectedStructuralMutationParentLocalIDs.removeAll(keepingCapacity: true)
+        rejectedStructuralMutationParentKeys.removeAll(keepingCapacity: true)
     }
 
-    func node(forLocalID localID: UInt64) -> DOMNodeModel? {
-        nodesByLocalID[localID]
+    func node(forKey key: DOMNodeKey) -> DOMNodeModel? {
+        nodesByKey[key]
     }
 
-    func insert(_ node: DOMNodeModel, for localID: UInt64) {
-        nodesByLocalID[localID] = node
+    func insert(_ node: DOMNodeModel) {
+        nodesByKey[node.key] = node
     }
 
     func removeNode(_ node: DOMNodeModel) {
-        guard nodesByLocalID[node.localID] === node else {
+        guard nodesByKey[node.key] === node else {
             return
         }
-        nodesByLocalID.removeValue(forKey: node.localID)
+        nodesByKey.removeValue(forKey: node.key)
     }
 
-    func normalizeAttributes(_ attributes: [DOMAttribute], backendNodeID: Int?) -> [DOMAttribute] {
+    func normalizeAttributes(_ attributes: [DOMAttribute], nodeID: Int?) -> [DOMAttribute] {
         attributes.map {
             DOMAttribute(
-                nodeId: $0.nodeId ?? backendNodeID,
+                nodeId: $0.nodeId ?? nodeID,
                 name: $0.name,
                 value: $0.value
             )
@@ -589,7 +670,7 @@ private extension DOMDocumentModel {
             node.attributes[index].value = value
             return true
         }
-        node.attributes.append(DOMAttribute(nodeId: node.backendNodeID, name: name, value: value))
+        node.attributes.append(DOMAttribute(nodeId: node.nodeID, name: name, value: value))
         return true
     }
 
@@ -619,14 +700,19 @@ private extension DOMDocumentModel {
 
     @discardableResult
     func buildSubtree(from descriptor: DOMGraphNodeDescriptor, parent: DOMNodeModel?) -> DOMNodeModel {
-        if let existing = node(forLocalID: descriptor.localID) {
+        if let existing = node(forKey: descriptor.key) {
             removeSubtree(existing, removeFromParent: true)
         }
 
+        let regularChildState: DOMRegularChildState = descriptor.regularChildrenAreLoaded
+            ? .loaded([])
+            : .unrequested(count: descriptor.regularChildCount)
         let node = DOMNodeModel(
-            id: .init(documentIdentity: documentIdentity, localID: descriptor.localID),
-            backendNodeID: descriptor.backendNodeID,
-            backendNodeIDIsStable: descriptor.backendNodeIDIsStable,
+            id: .init(
+                documentIdentity: documentIdentity,
+                targetIdentifier: descriptor.targetIdentifier,
+                nodeID: descriptor.nodeID
+            ),
             frameID: descriptor.frameID,
             nodeType: descriptor.nodeType,
             nodeName: descriptor.nodeName,
@@ -634,18 +720,13 @@ private extension DOMDocumentModel {
             nodeValue: descriptor.nodeValue,
             pseudoType: descriptor.pseudoType,
             shadowRootType: descriptor.shadowRootType,
-            attributes: normalizeAttributes(descriptor.attributes, backendNodeID: descriptor.backendNodeID),
-            childCount: max(
-                descriptor.childCount,
-                descriptor.regularChildren.count,
-                descriptor.contentDocument == nil ? 0 : 1
-            ),
-            childCountIsKnown: descriptor.childCountIsKnown,
+            attributes: normalizeAttributes(descriptor.attributes, nodeID: descriptor.nodeID),
+            regularChildState: regularChildState,
             layoutFlags: descriptor.layoutFlags,
             isRendered: descriptor.isRendered
         )
         node.parent = parent
-        insert(node, for: descriptor.localID)
+        insert(node)
 
         var regularChildren: [DOMNodeModel] = []
         regularChildren.reserveCapacity(descriptor.regularChildren.count)
@@ -653,7 +734,9 @@ private extension DOMDocumentModel {
             let child = buildSubtree(from: childDescriptor, parent: node)
             regularChildren.append(child)
         }
-        node.regularChildren = regularChildren
+        if descriptor.regularChildrenAreLoaded {
+            node.regularChildren = regularChildren
+        }
         node.contentDocument = descriptor.contentDocument.map {
             buildSubtree(from: $0, parent: node)
         }
@@ -705,10 +788,6 @@ private extension DOMDocumentModel {
         return nil
     }
 
-    func minimumLoadedChildCount(for parent: DOMNodeModel) -> Int {
-        max(parent.regularChildren.count, parent.contentDocument == nil ? 0 : 1)
-    }
-
     @discardableResult
     func detachChild(_ child: DOMNodeModel, from parent: DOMNodeModel) -> DOMChildStorageLocation? {
         guard let location = storageLocation(of: child, in: parent) else {
@@ -731,38 +810,38 @@ private extension DOMDocumentModel {
         return location
     }
 
-    func detachChild(localID: UInt64, from parent: DOMNodeModel) -> (DOMNodeModel, DOMChildStorageLocation)? {
-        if let child = parent.regularChildren.first(where: { $0.localID == localID }) {
+    func detachChild(key: DOMNodeKey, from parent: DOMNodeModel) -> (DOMNodeModel, DOMChildStorageLocation)? {
+        if let child = parent.regularChildren.first(where: { $0.key == key }) {
             guard let location = detachChild(child, from: parent) else {
                 return nil
             }
             return (child, location)
         }
-        if let child = parent.contentDocument, child.localID == localID {
+        if let child = parent.contentDocument, child.key == key {
             guard let location = detachChild(child, from: parent) else {
                 return nil
             }
             return (child, location)
         }
-        if let child = parent.shadowRoots.first(where: { $0.localID == localID }) {
+        if let child = parent.shadowRoots.first(where: { $0.key == key }) {
             guard let location = detachChild(child, from: parent) else {
                 return nil
             }
             return (child, location)
         }
-        if let child = parent.templateContent, child.localID == localID {
+        if let child = parent.templateContent, child.key == key {
             guard let location = detachChild(child, from: parent) else {
                 return nil
             }
             return (child, location)
         }
-        if let child = parent.beforePseudoElement, child.localID == localID {
+        if let child = parent.beforePseudoElement, child.key == key {
             guard let location = detachChild(child, from: parent) else {
                 return nil
             }
             return (child, location)
         }
-        if let child = parent.afterPseudoElement, child.localID == localID {
+        if let child = parent.afterPseudoElement, child.key == key {
             guard let location = detachChild(child, from: parent) else {
                 return nil
             }
@@ -795,39 +874,39 @@ private extension DOMDocumentModel {
         child.parent = parent
     }
 
-    func removeExistingNodeBeforeSpecialInsert(localID: UInt64) {
-        guard let existing = node(forLocalID: localID) else {
+    func removeExistingNodeBeforeSpecialInsert(key: DOMNodeKey) {
+        guard let existing = node(forKey: key) else {
             return
         }
         removeSubtree(existing, removeFromParent: true, decrementParentChildCount: false)
     }
 
-    func applyShadowRootPushed(hostLocalID: UInt64, root descriptor: DOMGraphNodeDescriptor) {
-        guard let host = node(forLocalID: hostLocalID) else {
+    func applyShadowRootPushed(hostKey: DOMNodeKey, root descriptor: DOMGraphNodeDescriptor) {
+        guard let host = node(forKey: hostKey) else {
             flagRejectedStructuralMutation(
-                parentLocalID: hostLocalID,
-                reason: "shadowRootPushed missing host localID=\(hostLocalID) rootLocalID=\(descriptor.localID)"
+                parentKey: hostKey,
+                reason: "shadowRootPushed missing host key=\(keySummary(hostKey)) rootKey=\(keySummary(descriptor.key))"
             )
             return
         }
 
-        removeExistingNodeBeforeSpecialInsert(localID: descriptor.localID)
+        removeExistingNodeBeforeSpecialInsert(key: descriptor.key)
         let root = buildSubtree(from: descriptor, parent: host)
-        host.shadowRoots.removeAll { $0.localID == descriptor.localID }
+        host.shadowRoots.removeAll { $0.key == descriptor.key }
         host.shadowRoots.append(root)
         relinkChildren(of: host)
     }
 
-    func applyPseudoElementAdded(parentLocalID: UInt64, node descriptor: DOMGraphNodeDescriptor) {
-        guard let parent = node(forLocalID: parentLocalID) else {
+    func applyPseudoElementAdded(parentKey: DOMNodeKey, node descriptor: DOMGraphNodeDescriptor) {
+        guard let parent = node(forKey: parentKey) else {
             flagRejectedStructuralMutation(
-                parentLocalID: parentLocalID,
-                reason: "pseudoElementAdded missing parent localID=\(parentLocalID) nodeLocalID=\(descriptor.localID)"
+                parentKey: parentKey,
+                reason: "pseudoElementAdded missing parent key=\(keySummary(parentKey)) nodeKey=\(keySummary(descriptor.key))"
             )
             return
         }
 
-        removeExistingNodeBeforeSpecialInsert(localID: descriptor.localID)
+        removeExistingNodeBeforeSpecialInsert(key: descriptor.key)
         let inserted = buildSubtree(from: descriptor, parent: parent)
         switch descriptor.pseudoType {
         case "before":
@@ -843,82 +922,89 @@ private extension DOMDocumentModel {
         default:
             removeSubtree(inserted, removeFromParent: false)
             flagRejectedStructuralMutation(
-                parentLocalID: parentLocalID,
-                reason: "pseudoElementAdded unsupported pseudoType=\(descriptor.pseudoType ?? "nil") nodeLocalID=\(descriptor.localID)"
+                parentKey: parentKey,
+                reason: "pseudoElementAdded unsupported pseudoType=\(descriptor.pseudoType ?? "nil") nodeKey=\(keySummary(descriptor.key))"
             )
             return
         }
         relinkChildren(of: parent)
     }
 
-    func applyChildNodeInserted(parentLocalID: UInt64, previousLocalID: UInt64?, node descriptor: DOMGraphNodeDescriptor) {
-        guard let parent = node(forLocalID: parentLocalID) else {
+    func applyChildNodeInserted(parentKey: DOMNodeKey, previousSibling: DOMGraphPreviousSibling, node descriptor: DOMGraphNodeDescriptor) {
+        guard let parent = node(forKey: parentKey) else {
             flagRejectedStructuralMutation(
-                parentLocalID: parentLocalID,
-                reason: "childNodeInserted missing parent localID=\(parentLocalID) nodeLocalID=\(descriptor.localID)"
+                parentKey: parentKey,
+                reason: "childNodeInserted missing parent key=\(keySummary(parentKey)) nodeKey=\(keySummary(descriptor.key))"
             )
             return
         }
 
-        let hadLoadedChild = parent.regularChildren.contains { $0.localID == descriptor.localID }
-        let previousChildCount = max(parent.childCount, parent.regularChildren.count)
+        if case let .unrequested(count) = parent.regularChildState {
+            if let existing = node(forKey: descriptor.key) {
+                removeSubtree(existing, removeFromParent: true)
+            }
+            parent.regularChildState = .unrequested(count: max(0, count) + 1)
+            relinkChildren(of: parent)
+            return
+        }
+
         let inserted = buildSubtree(from: descriptor, parent: parent)
-        parent.regularChildren.removeAll { $0.localID == descriptor.localID }
+        parent.regularChildren.removeAll { $0.key == descriptor.key }
 
         let insertionIndex: Int
-        if previousLocalID == 0 {
+        switch previousSibling {
+        case .firstChild:
             insertionIndex = 0
-        } else if let previousLocalID,
-                  let previousNode = node(forLocalID: previousLocalID),
-                  let previousIndex = parent.regularChildren.firstIndex(where: { $0 === previousNode }) {
-            insertionIndex = previousIndex + 1
-        } else {
+        case .missing:
             insertionIndex = parent.regularChildren.count
+        case let .node(previousKey):
+            if let previousNode = node(forKey: previousKey),
+               let previousIndex = parent.regularChildren.firstIndex(where: { $0 === previousNode }) {
+                insertionIndex = previousIndex + 1
+            } else {
+                insertionIndex = parent.regularChildren.count
+            }
         }
 
         let boundedIndex = min(max(0, insertionIndex), parent.regularChildren.count)
         parent.regularChildren.insert(inserted, at: boundedIndex)
-        if hadLoadedChild {
-            parent.childCount = max(previousChildCount, parent.regularChildren.count)
-        } else {
-            parent.childCount = max(previousChildCount + 1, parent.regularChildren.count)
-        }
         relinkChildren(of: parent)
     }
 
-    func applyChildNodeRemoved(parentLocalID: UInt64, nodeLocalID: UInt64) {
-        guard let parent = node(forLocalID: parentLocalID) else {
+    func applyChildNodeRemoved(parentKey: DOMNodeKey, nodeKey: DOMNodeKey) {
+        guard let parent = node(forKey: parentKey) else {
             flagRejectedStructuralMutation(
-                parentLocalID: parentLocalID,
-                reason: "childNodeRemoved missing parent localID=\(parentLocalID) nodeLocalID=\(nodeLocalID)"
+                parentKey: parentKey,
+                reason: "childNodeRemoved missing parent key=\(keySummary(parentKey)) nodeKey=\(keySummary(nodeKey))"
             )
             return
         }
 
-        if let (removed, removedLocation) = detachChild(localID: nodeLocalID, from: parent) {
-            if removedLocation.countsTowardChildCount {
-                parent.childCount = max(minimumLoadedChildCount(for: parent), parent.childCount - 1)
-            } else {
-                parent.childCount = max(parent.childCount, minimumLoadedChildCount(for: parent))
-            }
+        if let (removed, _) = detachChild(key: nodeKey, from: parent) {
             relinkChildren(of: parent)
             removeSubtree(removed, removeFromParent: false)
             return
         }
 
-        if let node = node(forLocalID: nodeLocalID) {
+        if case let .unrequested(count) = parent.regularChildState {
+            parent.regularChildState = .unrequested(count: max(0, count - 1))
+            relinkChildren(of: parent)
+            return
+        }
+
+        if let node = node(forKey: nodeKey) {
             removeSubtree(node, removeFromParent: true)
         }
     }
 
     func applyAttributeModified(
-        nodeLocalID: UInt64,
+        nodeKey: DOMNodeKey,
         name: String,
         value: String,
         layoutFlags: [String]?,
         isRendered: Bool?
     ) {
-        guard let node = node(forLocalID: nodeLocalID) else {
+        guard let node = node(forKey: nodeKey) else {
             return
         }
 
@@ -927,12 +1013,12 @@ private extension DOMDocumentModel {
     }
 
     func applyAttributeRemoved(
-        nodeLocalID: UInt64,
+        nodeKey: DOMNodeKey,
         name: String,
         layoutFlags: [String]?,
         isRendered: Bool?
     ) {
-        guard let node = node(forLocalID: nodeLocalID) else {
+        guard let node = node(forKey: nodeKey) else {
             return
         }
 
@@ -941,12 +1027,12 @@ private extension DOMDocumentModel {
     }
 
     func applyCharacterDataModified(
-        nodeLocalID: UInt64,
+        nodeKey: DOMNodeKey,
         value: String,
         layoutFlags: [String]?,
         isRendered: Bool?
     ) {
-        guard let node = node(forLocalID: nodeLocalID) else {
+        guard let node = node(forKey: nodeKey) else {
             return
         }
 
@@ -955,25 +1041,26 @@ private extension DOMDocumentModel {
     }
 
     func applyChildNodeCountUpdated(
-        nodeLocalID: UInt64,
+        nodeKey: DOMNodeKey,
         childCount: Int,
         layoutFlags: [String]?,
         isRendered: Bool?
     ) {
-        guard let node = node(forLocalID: nodeLocalID) else {
+        guard let node = node(forKey: nodeKey) else {
             return
         }
 
-        node.childCount = max(0, childCount, node.regularChildren.count, node.contentDocument == nil ? 0 : 1)
-        node.childCountIsKnown = true
+        if case .unrequested = node.regularChildState {
+            node.regularChildState = .unrequested(count: childCount)
+        }
         applyLayout(into: node, layoutFlags: layoutFlags, isRendered: isRendered)
     }
 
-    func applySetChildNodes(parentLocalID: UInt64, nodes: [DOMGraphNodeDescriptor]) {
-        guard let parent = node(forLocalID: parentLocalID) else {
+    func applySetChildNodes(parentKey: DOMNodeKey, nodes: [DOMGraphNodeDescriptor]) {
+        guard let parent = node(forKey: parentKey) else {
             flagRejectedStructuralMutation(
-                parentLocalID: parentLocalID,
-                reason: "setChildNodes missing parent localID=\(parentLocalID) childCount=\(nodes.count)"
+                parentKey: parentKey,
+                reason: "setChildNodes missing parent key=\(keySummary(parentKey)) childCount=\(nodes.count)"
             )
             return
         }
@@ -998,54 +1085,32 @@ private extension DOMDocumentModel {
         }
 
         parent.regularChildren = nextChildren
-        parent.childCount = parent.regularChildren.count
-        parent.childCountIsKnown = true
         relinkChildren(of: parent)
     }
 
     func applySetDetachedRoots(_ nodes: [DOMGraphNodeDescriptor]) {
         for descriptor in nodes {
-            if let existingRoot = detachedRoots.first(where: { $0.localID == descriptor.localID }) {
+            if let existingRoot = detachedRoots.first(where: { $0.key == descriptor.key }) {
                 removeSubtree(existingRoot, removeFromParent: false)
             }
             detachedRoots.append(buildSubtree(from: descriptor, parent: nil))
         }
     }
 
-    func applyReplaceSubtree(_ root: DOMGraphNodeDescriptor) {
-        if rootNode == nil {
-            rootNode = buildSubtree(from: root, parent: nil)
+    func attachFrameDocument(ownerKey: DOMNodeKey, documentRoot descriptor: DOMGraphNodeDescriptor) {
+        guard let owner = node(forKey: ownerKey) else {
+            flagRejectedStructuralMutation(
+                parentKey: ownerKey,
+                reason: "attachFrameDocument missing owner key=\(keySummary(ownerKey)) rootKey=\(keySummary(descriptor.key))"
+            )
             return
         }
-
-        let existingNode = node(forLocalID: root.localID)
-            ?? (root.backendNodeIDIsStable
-                    ? root.backendNodeID.flatMap {
-                        node(stableBackendNodeID: $0)
-                    }
-                    : nil)
-        if let existing = existingNode {
-            let parent = existing.parent
-            let previousLocation = parent.flatMap { storageLocation(of: existing, in: $0) }
-            let previousParentChildCount = parent.map { max($0.childCount, $0.regularChildren.count) }
-            let isReplacingRoot = rootNode === existing
-            removeSubtree(existing, removeFromParent: true, decrementParentChildCount: false)
-
-            let replacement = buildSubtree(from: root, parent: parent)
-            if let parent {
-                insert(replacement, into: parent, at: previousLocation)
-                if let previousParentChildCount {
-                    parent.childCount = max(previousParentChildCount, parent.regularChildren.count)
-                } else {
-                    parent.childCount = max(parent.childCount, parent.regularChildren.count)
-                }
-                relinkChildren(of: parent)
-            } else if isReplacingRoot {
-                rootNode = replacement
-            } else {
-                detachedRoots.append(replacement)
-            }
+        if let previousDocument = owner.contentDocument {
+            removeSubtree(previousDocument, removeFromParent: false)
         }
+        removeExistingNodeBeforeSpecialInsert(key: descriptor.key)
+        owner.contentDocument = buildSubtree(from: descriptor, parent: owner)
+        relinkChildren(of: owner)
     }
 
     func applyLayout(into node: DOMNodeModel, layoutFlags: [String]?, isRendered: Bool?) {
@@ -1059,12 +1124,7 @@ private extension DOMDocumentModel {
 
     func removeSubtree(_ root: DOMNodeModel, removeFromParent: Bool, decrementParentChildCount: Bool = true) {
         if removeFromParent, let parent = root.parent {
-            let removedLocation = detachChild(root, from: parent)
-            if decrementParentChildCount, removedLocation?.countsTowardChildCount == true {
-                parent.childCount = max(minimumLoadedChildCount(for: parent), parent.childCount - 1)
-            } else {
-                parent.childCount = max(parent.childCount, minimumLoadedChildCount(for: parent))
-            }
+            _ = detachChild(root, from: parent)
             relinkChildren(of: parent)
         }
 
@@ -1087,7 +1147,7 @@ private extension DOMDocumentModel {
         }
         detachedRoots.removeAll { $0 === root }
 
-        root.regularChildren = []
+        root.regularChildState = .loaded([])
         root.contentDocument = nil
         root.shadowRoots = []
         root.templateContent = nil
@@ -1106,15 +1166,15 @@ private extension DOMDocumentModel {
         mirrorInvariantViolationReason = reason
     }
 
-    func flagRejectedStructuralMutation(parentLocalID: UInt64, reason: String) {
-        rejectedStructuralMutationParentLocalIDs.insert(parentLocalID)
+    func flagRejectedStructuralMutation(parentKey: DOMNodeKey, reason: String) {
+        rejectedStructuralMutationParentKeys.insert(parentKey)
     }
 
     func reconcileSelectedNode() {
         guard let currentSelection = selectedNode else {
             return
         }
-        guard let resolvedNode = nodesByLocalID[currentSelection.localID] else {
+        guard let resolvedNode = nodesByKey[currentSelection.key] else {
             logSelectionDiagnostics(
                 "reconcileSelectedNode dropped missing selection",
                 previous: currentSelection,
@@ -1188,20 +1248,15 @@ private extension DOMDocumentModel {
             return "nil"
         }
         let nodeName = node.localName.isEmpty ? node.nodeName : node.localName
-        return "\(nodeName)#local=\(node.localID)#backend=\(node.backendNodeID.map(String.init) ?? "nil")#children=\(node.children.count)/\(node.childCount)#selector=\(node.selectorPath)"
+        return "\(nodeName)#key=\(keySummary(node.key))#children=\(node.children.count)/\(node.regularChildCount)#selector=\(node.selectorPath)"
+    }
+
+    func keySummary(_ key: DOMNodeKey) -> String {
+        "\(key.targetIdentifier):\(key.nodeID)"
     }
 
     func compactDocumentIdentity(_ documentIdentity: UUID) -> String {
         String(documentIdentity.uuidString.prefix(8))
-    }
-
-    func stableBackendNodeID(for node: DOMNodeModel?) -> Int? {
-        guard let node,
-              node.backendNodeIDIsStable,
-              let backendNodeID = node.backendNodeID else {
-            return nil
-        }
-        return backendNodeID
     }
 
     func topmostAncestor(of node: DOMNodeModel) -> DOMNodeModel {
@@ -1217,23 +1272,9 @@ private extension DOMDocumentModel {
     }
 
     func resolveAttachedSelectionNode(
-        localID: UInt64,
-        backendNodeID: Int?,
-        backendNodeIDIsStable: Bool
+        key: DOMNodeKey
     ) -> DOMNodeModel? {
-        if let node = node(forLocalID: localID), isNodeAttachedToPrimaryTree(node) {
-            return node
-        }
-        guard let backendNodeID else {
-            return nil
-        }
-        if backendNodeIDIsStable,
-           let node = node(stableBackendNodeID: backendNodeID),
-           isNodeAttachedToPrimaryTree(node) {
-            return node
-        }
-        if let node = node(backendNodeID: backendNodeID),
-           isNodeAttachedToPrimaryTree(node) {
+        if let node = node(forKey: key), isNodeAttachedToPrimaryTree(node) {
             return node
         }
         return nil

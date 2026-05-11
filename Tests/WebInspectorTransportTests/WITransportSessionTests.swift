@@ -101,14 +101,14 @@ struct WITransportSessionTests {
     @Test
     func waitForPageTargetReturnsTargetThatSurvivesTransientChurn() async throws {
         let backend = FakeSessionBackend(attachHandler: { messageSink in
-            Task { @MainActor in
-                messageSink.didReceiveRootMessage(
-                    #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-A","type":"page","isProvisional":false}}}"#
-                )
-                messageSink.didReceiveRootMessage(
-                    #"{"method":"Target.targetDestroyed","params":{"targetId":"page-A"}}"#
-                )
-            }
+            messageSink.didReceiveRootMessage(
+                #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-A","type":"page","isProvisional":false}}}"#
+            )
+            messageSink.didReceiveRootMessage(
+                #"{"method":"Target.targetDestroyed","params":{"targetId":"page-A"}}"#
+            )
+            await messageSink.waitForPendingMessages()
+
             Task { @MainActor in
                 await Task.yield()
                 messageSink.didReceiveRootMessage(

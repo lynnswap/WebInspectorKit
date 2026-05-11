@@ -15,7 +15,6 @@ public final class WIRuntimeSession {
         let sharedTransport = dependencies.makeSharedTransport()
         self.init(
             dom: WIDOMRuntime(
-                configuration: configuration.dom,
                 dependencies: dependencies,
                 sharedTransport: sharedTransport
             ),

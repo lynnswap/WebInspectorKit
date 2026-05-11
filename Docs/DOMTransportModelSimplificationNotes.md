@@ -156,7 +156,7 @@ Observed complexity:
 - `WIDOMInspector` waits for transport event draining in several selection/materialization paths.
 - `requestChildNodesAndWaitForCompletion` exists because `requestChildNodes` completes via events.
 - `mergeFrameTargetDocumentIfNeeded` rewrites frame-target document snapshots into the main document tree.
-- `DOMConfiguration.snapshotDepth` suggests configurable initial snapshot depth, but WebKit `getDocument` itself is fixed to depth `2`.
+- DOM snapshot/request depth and auto-update debounce are inspector-internal policies; they should not be exposed as DOM model configuration.
 - Deprecated `DOMPageEvent` / `AnySendablePayload` remain for compatibility even though native DOM pipeline no longer emits them.
 - `DOMGraphNodeDescriptor` still carries identity compatibility fields such as synthesized/stable backend IDs.
 - `DOMPayloadNormalizer` is already off-main/actor based and parses `paramsData` / `resultData`, but still:
@@ -180,10 +180,9 @@ Not final yet:
 - Keep `requestChildNodes` as event-driven lazy loading for user expansion; avoid global wait/state unless a caller truly needs an awaitable one-shot.
 - Replace frame document snapshot rewriting with a smaller frame-document attach path keyed by WebKit frame owner / `frameId`.
 - Remove deprecated compatibility types and any string/wrapper/envelope payload paths once no tests or public surface depend on them.
-- Make `snapshotDepth` semantics honest:
-  - either remove it from DOM document load
-  - or rename/scope it to native initial hydration after `getDocument`
+- Keep DOM load depth and initial hydration as internal inspector policy.
   - `DOM.getDocument` itself should be treated as WebKit's fixed depth-2 snapshot.
+  - lazy child loading should remain driven by `DOM.requestChildNodes`.
 - Prefer explicit protocol types:
   - `DOMProtocolNode`
   - `DOMProtocolMutation`
@@ -198,7 +197,7 @@ Not final yet:
 - Which target-routing pieces are still required for cross-origin iframe inspection, and which are artifacts of the old JS frontend?
 - Can selection reveal rely entirely on `requestNode` path-push plus visible ancestor opening?
 - Should document reload clear selection instead of trying to rebind by synthesized stable backend IDs?
-- Is `snapshotDepth` still meaningful, or should it be replaced by explicit initial hydration rules for native UI?
+- Should initial native hydration remain depth 3, or should it be adapted based on viewport/visible row demand?
 - Can transport event draining be narrowed to a per-command DOM path push helper instead of a general runtime primitive?
 
 ## Frame Target Notes
@@ -325,7 +324,7 @@ Keep current identities and selection machinery, but remove obvious dead compati
 Changes:
 
 - Delete deprecated compatibility types.
-- Make `snapshotDepth` naming honest.
+- Keep DOM depth/debounce public configuration but clarify naming.
 - Tidy `DOMPayloadNormalizer` around protocol buckets.
 - Keep `backendNodeID` fallback and existing materialization state machine.
 
@@ -365,8 +364,8 @@ Use Option A, staged:
    - Remove general `replaceSubtree` identity rewriting once frame tests cover the new path.
 
 5. **Configuration cleanup**
-   - Remove or rename `snapshotDepth`.
-   - Keep `subtreeDepth` only for lazy expansion/explicit recursive expansion.
+   - Remove public DOM configuration.
+   - Keep depth and debounce as internal `WIDOMInspector` policies.
 
 This should reduce both code complexity and unnecessary MainActor work. The most important rule is to stop modeling "maybe this selected node is somewhere under an unloaded subtree" as a UI-side search problem. WebKit already exposes that operation as `requestNode` / `pushNodePathToFrontend`.
 
@@ -400,8 +399,8 @@ This should reduce both code complexity and unnecessary MainActor work. The most
   - Move from materialization strategy search to a command-driven selection flow.
   - Make `requestNode` path-push the normal inspect-selection path.
   - Keep a narrow await helper only for commands whose replies are followed by DOM events.
-- `DOMConfiguration`
-  - Remove or rename `snapshotDepth`.
+- DOM configuration
+  - Keep snapshot/request depth and auto-update debounce inside `WIDOMInspector`.
   - `getDocument` should not pretend to honor configurable depth because WebKit backend returns depth `2`.
 
 ### Remove
