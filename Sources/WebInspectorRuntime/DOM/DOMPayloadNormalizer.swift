@@ -264,6 +264,9 @@ private extension DOMPayloadNormalizer {
         }
         let beforePseudoElement = pseudoElements.first { $0.pseudoType == "before" }
         let afterPseudoElement = pseudoElements.first { $0.pseudoType == "after" }
+        let otherPseudoElements = pseudoElements.filter {
+            $0.pseudoType != "before" && $0.pseudoType != "after"
+        }
 
         let explicitChildCount = intValue(object["childNodeCount"])
         let regularChildCount: Int
@@ -296,6 +299,7 @@ private extension DOMPayloadNormalizer {
             shadowRoots: shadowRoots,
             templateContent: templateContent,
             beforePseudoElement: beforePseudoElement,
+            otherPseudoElements: otherPseudoElements,
             afterPseudoElement: afterPseudoElement
         )
     }

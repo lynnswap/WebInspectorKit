@@ -232,6 +232,15 @@ struct WIDOMInspectorTests {
                                 "pseudoType": "before",
                                 "childNodeCount": 0,
                                 "children": [],
+                            ], [
+                                "nodeId": 16,
+                                "nodeType": 1,
+                                "nodeName": "::marker",
+                                "localName": "",
+                                "nodeValue": "",
+                                "pseudoType": "marker",
+                                "childNodeCount": 0,
+                                "children": [],
                             ]],
                         ]],
                     ],
@@ -253,6 +262,8 @@ struct WIDOMInspectorTests {
         #expect(host.templateContent?.nodeID == 11)
         #expect(host.beforePseudoElement?.nodeID == 12)
         #expect(host.beforePseudoElement?.pseudoType == "before")
+        #expect(host.otherPseudoElements.map(\.nodeID) == [16])
+        #expect(host.otherPseudoElements.first?.pseudoType == "marker")
         #expect(host.afterPseudoElement?.nodeID == 15)
         #expect(host.afterPseudoElement?.pseudoType == "after")
         #expect(host.effectiveChildren.map(\.nodeID) == [13, 14])
@@ -503,6 +514,34 @@ struct WIDOMInspectorTests {
         #expect(parentNodeID == 10)
         #expect(pseudoElement.nodeID == 12)
         #expect(pseudoElement.pseudoType == "before")
+
+        let markerPseudoAddedDelta = try #require(
+            await normalizer.normalizeDOMEvent(
+                method: "DOM.pseudoElementAdded",
+                paramsData: jsonData([
+                    "parentId": 10,
+                    "pseudoElement": [
+                        "nodeId": 16,
+                        "nodeType": 1,
+                        "nodeName": "::marker",
+                        "localName": "",
+                        "nodeValue": "",
+                        "pseudoType": "marker",
+                        "childNodeCount": 0,
+                        "children": [],
+                    ],
+                ])
+            )
+        )
+        guard case let .mutations(markerPseudoAddedBundle) = markerPseudoAddedDelta,
+              case let .pseudoElementAdded(markerParentNodeID, markerPseudoElement) = try #require(markerPseudoAddedBundle.events.first)
+        else {
+            Issue.record("Expected marker pseudoElementAdded mutation")
+            return
+        }
+        #expect(markerParentNodeID == 10)
+        #expect(markerPseudoElement.nodeID == 16)
+        #expect(markerPseudoElement.pseudoType == "marker")
 
         let pseudoRemovedDelta = try #require(
             await normalizer.normalizeDOMEvent(

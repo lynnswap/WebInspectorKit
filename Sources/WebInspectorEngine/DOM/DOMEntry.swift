@@ -101,6 +101,7 @@ public final class DOMNodeModel: Equatable, Hashable, Identifiable {
     public var shadowRoots: [DOMNodeModel]
     public var templateContent: DOMNodeModel?
     public var beforePseudoElement: DOMNodeModel?
+    package var otherPseudoElements: [DOMNodeModel]
     public var afterPseudoElement: DOMNodeModel?
     public var pseudoType: String?
     public var shadowRootType: String?
@@ -148,6 +149,10 @@ public final class DOMNodeModel: Equatable, Hashable, Identifiable {
         return visibleChildren
     }
 
+    package var pseudoElements: [DOMNodeModel] {
+        [beforePseudoElement].compactMap { $0 } + otherPseudoElements + [afterPseudoElement].compactMap { $0 }
+    }
+
     package var hasUnloadedRegularChildren: Bool {
         contentDocument == nil && regularChildState.hasUnrequestedChildren
     }
@@ -177,6 +182,7 @@ public final class DOMNodeModel: Equatable, Hashable, Identifiable {
         if let beforePseudoElement {
             ownedChildren.append(beforePseudoElement)
         }
+        ownedChildren.append(contentsOf: otherPseudoElements)
         if let afterPseudoElement {
             ownedChildren.append(afterPseudoElement)
         }
@@ -207,6 +213,7 @@ public final class DOMNodeModel: Equatable, Hashable, Identifiable {
         shadowRoots: [DOMNodeModel] = [],
         templateContent: DOMNodeModel? = nil,
         beforePseudoElement: DOMNodeModel? = nil,
+        otherPseudoElements: [DOMNodeModel] = [],
         afterPseudoElement: DOMNodeModel? = nil,
         layoutFlags: [String] = [],
         isRendered: Bool = true,
@@ -235,6 +242,7 @@ public final class DOMNodeModel: Equatable, Hashable, Identifiable {
         self.shadowRoots = shadowRoots
         self.templateContent = templateContent
         self.beforePseudoElement = beforePseudoElement
+        self.otherPseudoElements = otherPseudoElements
         self.afterPseudoElement = afterPseudoElement
         self.layoutFlags = layoutFlags
         self.isRendered = isRendered
@@ -261,6 +269,7 @@ public final class DOMNodeModel: Equatable, Hashable, Identifiable {
         shadowRoots: [DOMNodeModel] = [],
         templateContent: DOMNodeModel? = nil,
         beforePseudoElement: DOMNodeModel? = nil,
+        otherPseudoElements: [DOMNodeModel] = [],
         afterPseudoElement: DOMNodeModel? = nil,
         layoutFlags: [String] = [],
         isRendered: Bool = true,
@@ -286,6 +295,7 @@ public final class DOMNodeModel: Equatable, Hashable, Identifiable {
             shadowRoots: shadowRoots,
             templateContent: templateContent,
             beforePseudoElement: beforePseudoElement,
+            otherPseudoElements: otherPseudoElements,
             afterPseudoElement: afterPseudoElement,
             layoutFlags: layoutFlags,
             isRendered: isRendered,

@@ -3417,6 +3417,7 @@ private extension WIDOMInspector {
             shadowRoots: node.shadowRoots.map(nodeDescriptor(from:)),
             templateContent: node.templateContent.map(nodeDescriptor(from:)),
             beforePseudoElement: node.beforePseudoElement.map(nodeDescriptor(from:)),
+            otherPseudoElements: node.otherPseudoElements.map(nodeDescriptor(from:)),
             afterPseudoElement: node.afterPseudoElement.map(nodeDescriptor(from:))
         )
     }
@@ -4408,7 +4409,7 @@ private extension WIDOMInspector {
         if let templateContent = node.templateContent {
             payload["templateContent"] = nodePayloadDictionary(from: templateContent)
         }
-        let pseudoElements = [node.beforePseudoElement, node.afterPseudoElement].compactMap { $0 }
+        let pseudoElements = node.pseudoElements
         if !pseudoElements.isEmpty {
             payload["pseudoElements"] = pseudoElements.map(nodePayloadDictionary(from:))
         }

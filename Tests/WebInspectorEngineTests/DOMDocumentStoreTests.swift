@@ -81,6 +81,58 @@ struct DOMDocumentModelTests {
     }
 
     @Test
+    func nonFreshRefreshDoesNotReuseStalePreviousNodeIDBeforeAnchor() {
+        let model = DOMDocumentModel()
+        model.replaceDocument(
+            with: .init(
+                root: makeNode(
+                    nodeID: 1,
+                    children: [
+                        makeNode(
+                            nodeID: 7,
+                            attributes: [.init(name: "id", value: "target")]
+                        )
+                    ]
+                ),
+                selectedNodeID: 7
+            )
+        )
+        model.applySelectionSnapshot(
+            .init(
+                nodeID: 7,
+                attributes: [.init(name: "id", value: "target")],
+                path: ["div"],
+                selectorPath: "#target",
+                styleRevision: 3
+            )
+        )
+
+        model.replaceDocument(
+            with: .init(
+                root: makeNode(
+                    nodeID: 1,
+                    children: [
+                        makeNode(
+                            nodeID: 7,
+                            attributes: [.init(name: "id", value: "inserted")]
+                        ),
+                        makeNode(
+                            nodeID: 8,
+                            attributes: [.init(name: "id", value: "target")]
+                        ),
+                    ]
+                )
+            ),
+            isFreshDocument: false
+        )
+
+        let selectedNode = try! #require(model.selectedNode)
+        #expect(selectedNode.nodeID == 8)
+        #expect(selectedNode.attributes.first(where: { $0.name == "id" })?.value == "target")
+        #expect(selectedNode.selectorPath == "#target")
+    }
+
+    @Test
     func freshDocumentChangesNodeIdentity() {
         let model = DOMDocumentModel()
         model.replaceDocument(
@@ -801,6 +853,72 @@ struct DOMDocumentModelTests {
         #expect(host.beforePseudoElement == nil)
         #expect(host.visibleDOMTreeChildren.isEmpty)
         #expect(model.node(nodeID: 12) == nil)
+    }
+
+    @Test
+    func nonBeforeAfterPseudoElementAddedAndRemovedIsRetained() {
+        let model = DOMDocumentModel()
+        model.replaceDocument(
+            with: .init(
+                root: makeNode(
+                    nodeID: 1,
+                    children: [makeNode(nodeID: 10)],
+                    nodeType: 9,
+                    nodeName: "#document",
+                    localName: ""
+                )
+            )
+        )
+
+        model.applyMutationBundle(
+            .init(events: [
+                .pseudoElementAdded(
+                    parentNodeID: 10,
+                    node: makeNode(
+                        nodeID: 12,
+                        pseudoType: "marker",
+                        nodeName: "::marker",
+                        localName: ""
+                    )
+                )
+            ])
+        )
+
+        var host = try! #require(model.node(nodeID: 10))
+        #expect(host.otherPseudoElements.map(\.nodeID) == [12])
+        #expect(host.otherPseudoElements.first?.pseudoType == "marker")
+        #expect(host.visibleDOMTreeChildren.isEmpty)
+        #expect(model.node(nodeID: 12) != nil)
+        #expect(model.consumeRejectedStructuralMutationParentKeys().isEmpty)
+
+        model.applyMutationBundle(
+            .init(events: [
+                .pseudoElementAdded(
+                    parentNodeID: 10,
+                    node: makeNode(
+                        nodeID: 13,
+                        pseudoType: "marker",
+                        nodeName: "::marker",
+                        localName: ""
+                    )
+                )
+            ])
+        )
+
+        host = try! #require(model.node(nodeID: 10))
+        #expect(host.otherPseudoElements.map(\.nodeID) == [13])
+        #expect(model.node(nodeID: 12) == nil)
+        #expect(model.node(nodeID: 13) != nil)
+
+        model.applyMutationBundle(
+            .init(events: [
+                .pseudoElementRemoved(parentNodeID: 10, nodeNodeID: 13)
+            ])
+        )
+
+        host = try! #require(model.node(nodeID: 10))
+        #expect(host.otherPseudoElements.isEmpty)
+        #expect(model.node(nodeID: 13) == nil)
     }
 
     @Test

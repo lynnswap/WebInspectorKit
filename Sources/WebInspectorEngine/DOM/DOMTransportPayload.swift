@@ -19,6 +19,7 @@ package struct DOMGraphNodeDescriptor: Sendable {
     package var shadowRoots: [DOMGraphNodeDescriptor]
     private var templateContents: [DOMGraphNodeDescriptor]
     private var beforePseudoElements: [DOMGraphNodeDescriptor]
+    package var otherPseudoElements: [DOMGraphNodeDescriptor]
     private var afterPseudoElements: [DOMGraphNodeDescriptor]
 
     package var contentDocument: DOMGraphNodeDescriptor? {
@@ -64,6 +65,10 @@ package struct DOMGraphNodeDescriptor: Sendable {
         set {
             regularChildren = newValue
         }
+    }
+
+    package var pseudoElements: [DOMGraphNodeDescriptor] {
+        beforePseudoElements + otherPseudoElements + afterPseudoElements
     }
 
     package var effectiveChildren: [DOMGraphNodeDescriptor] {
@@ -117,6 +122,7 @@ package struct DOMGraphNodeDescriptor: Sendable {
         shadowRoots: [DOMGraphNodeDescriptor] = [],
         templateContent: DOMGraphNodeDescriptor? = nil,
         beforePseudoElement: DOMGraphNodeDescriptor? = nil,
+        otherPseudoElements: [DOMGraphNodeDescriptor] = [],
         afterPseudoElement: DOMGraphNodeDescriptor? = nil
     ) {
         self.key = DOMNodeKey(targetIdentifier: targetIdentifier, nodeID: nodeID)
@@ -137,6 +143,7 @@ package struct DOMGraphNodeDescriptor: Sendable {
         self.shadowRoots = shadowRoots
         self.templateContents = templateContent.map { [$0] } ?? []
         self.beforePseudoElements = beforePseudoElement.map { [$0] } ?? []
+        self.otherPseudoElements = otherPseudoElements
         self.afterPseudoElements = afterPseudoElement.map { [$0] } ?? []
     }
 
@@ -161,6 +168,7 @@ package struct DOMGraphNodeDescriptor: Sendable {
         shadowRoots: [DOMGraphNodeDescriptor] = [],
         templateContent: DOMGraphNodeDescriptor? = nil,
         beforePseudoElement: DOMGraphNodeDescriptor? = nil,
+        otherPseudoElements: [DOMGraphNodeDescriptor] = [],
         afterPseudoElement: DOMGraphNodeDescriptor? = nil
     ) {
         self.init(
@@ -184,6 +192,7 @@ package struct DOMGraphNodeDescriptor: Sendable {
             shadowRoots: shadowRoots,
             templateContent: templateContent,
             beforePseudoElement: beforePseudoElement,
+            otherPseudoElements: otherPseudoElements,
             afterPseudoElement: afterPseudoElement
         )
     }

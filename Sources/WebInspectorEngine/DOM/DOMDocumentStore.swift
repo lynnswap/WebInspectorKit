@@ -10,13 +10,14 @@ private enum DOMChildStorageLocation {
     case shadowRoot(Int)
     case templateContent
     case beforePseudoElement
+    case otherPseudoElement(Int)
     case afterPseudoElement
 
     var countsTowardChildCount: Bool {
         switch self {
         case .regular, .contentDocument:
             return true
-        case .shadowRoot, .templateContent, .beforePseudoElement, .afterPseudoElement:
+        case .shadowRoot, .templateContent, .beforePseudoElement, .otherPseudoElement, .afterPseudoElement:
             return false
         }
     }
@@ -163,10 +164,8 @@ public final class DOMDocumentModel {
         if isFreshDocument {
             documentIdentity = UUID()
         }
-        let previousSelectedKey = selectedKey
-        let nextSelectedKey = snapshot.selectedKey ?? previousSelectedKey
         replaceContents(
-            selectedKey: nextSelectedKey,
+            selectedKey: snapshot.selectedKey,
             selectionAnchor: previousSelectionAnchor
         ) {
             rootNode = buildSubtree(from: snapshot.root, parent: nil)
@@ -749,6 +748,9 @@ private extension DOMDocumentModel {
         node.beforePseudoElement = descriptor.beforePseudoElement.map {
             buildSubtree(from: $0, parent: node)
         }
+        node.otherPseudoElements = descriptor.otherPseudoElements.map {
+            buildSubtree(from: $0, parent: node)
+        }
         node.afterPseudoElement = descriptor.afterPseudoElement.map {
             buildSubtree(from: $0, parent: node)
         }
@@ -782,6 +784,9 @@ private extension DOMDocumentModel {
         if parent.beforePseudoElement === child {
             return .beforePseudoElement
         }
+        if let index = parent.otherPseudoElements.firstIndex(where: { $0 === child }) {
+            return .otherPseudoElement(index)
+        }
         if parent.afterPseudoElement === child {
             return .afterPseudoElement
         }
@@ -804,6 +809,8 @@ private extension DOMDocumentModel {
             parent.templateContent = nil
         case .beforePseudoElement:
             parent.beforePseudoElement = nil
+        case let .otherPseudoElement(index):
+            parent.otherPseudoElements.remove(at: index)
         case .afterPseudoElement:
             parent.afterPseudoElement = nil
         }
@@ -841,6 +848,12 @@ private extension DOMDocumentModel {
             }
             return (child, location)
         }
+        if let child = parent.otherPseudoElements.first(where: { $0.key == key }) {
+            guard let location = detachChild(child, from: parent) else {
+                return nil
+            }
+            return (child, location)
+        }
         if let child = parent.afterPseudoElement, child.key == key {
             guard let location = detachChild(child, from: parent) else {
                 return nil
@@ -866,6 +879,8 @@ private extension DOMDocumentModel {
             parent.templateContent = child
         case .beforePseudoElement:
             parent.beforePseudoElement = child
+        case let .otherPseudoElement(index):
+            parent.otherPseudoElements.insert(child, at: min(max(0, index), parent.otherPseudoElements.count))
         case .afterPseudoElement:
             parent.afterPseudoElement = child
         case .none:
@@ -920,12 +935,11 @@ private extension DOMDocumentModel {
             }
             parent.afterPseudoElement = inserted
         default:
-            removeSubtree(inserted, removeFromParent: false)
-            flagRejectedStructuralMutation(
-                parentKey: parentKey,
-                reason: "pseudoElementAdded unsupported pseudoType=\(descriptor.pseudoType ?? "nil") nodeKey=\(keySummary(descriptor.key))"
-            )
-            return
+            if let existing = parent.otherPseudoElements.first(where: { $0.pseudoType == descriptor.pseudoType }) {
+                removeSubtree(existing, removeFromParent: true)
+            }
+            parent.otherPseudoElements.removeAll { $0.key == descriptor.key }
+            parent.otherPseudoElements.append(inserted)
         }
         relinkChildren(of: parent)
     }
@@ -1152,6 +1166,7 @@ private extension DOMDocumentModel {
         root.shadowRoots = []
         root.templateContent = nil
         root.beforePseudoElement = nil
+        root.otherPseudoElements = []
         root.afterPseudoElement = nil
         root.parent = nil
         root.previousSibling = nil
