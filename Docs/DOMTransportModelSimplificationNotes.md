@@ -157,7 +157,7 @@ Observed complexity:
 - `requestChildNodesAndWaitForCompletion` exists because `requestChildNodes` completes via events.
 - `mergeFrameTargetDocumentIfNeeded` rewrites frame-target document snapshots into the main document tree.
 - DOM snapshot/request depth and auto-update debounce are inspector-internal policies; they should not be exposed as DOM model configuration.
-- Deprecated `DOMPageEvent` / `AnySendablePayload` remain for compatibility even though native DOM pipeline no longer emits them.
+- `DOMPageEvent` / `AnySendablePayload` compatibility wrappers have been removed because the native DOM pipeline no longer emits untyped snapshot or mutation payloads.
 - `DOMGraphNodeDescriptor` still carries identity compatibility fields such as synthesized/stable backend IDs.
 - `DOMPayloadNormalizer` is already off-main/actor based and parses `paramsData` / `resultData`, but still:
   - synthesizes `backendNodeID` from `nodeId`
@@ -179,7 +179,7 @@ Not final yet:
 - Use `requestNode(objectId)` as the primary inspect-selection materialization path because WebKit already pushes ancestors.
 - Keep `requestChildNodes` as event-driven lazy loading for user expansion; avoid global wait/state unless a caller truly needs an awaitable one-shot.
 - Replace frame document snapshot rewriting with a smaller frame-document attach path keyed by WebKit frame owner / `frameId`.
-- Remove deprecated compatibility types and any string/wrapper/envelope payload paths once no tests or public surface depend on them.
+- Remove any remaining string/wrapper/envelope payload paths once no tests or public surface depend on them.
 - Keep DOM load depth and initial hydration as internal inspector policy.
   - `DOM.getDocument` itself should be treated as WebKit's fixed depth-2 snapshot.
   - lazy child loading should remain driven by `DOM.requestChildNodes`.
@@ -293,7 +293,7 @@ Changes:
 
 - Rename conceptual identity from `localID` to `nodeID` internally where possible.
 - Remove synthesized `backendNodeID` / `backendNodeIDIsStable` from normal DOM tree identity.
-- Remove deprecated `DOMPageEvent`, `AnySendablePayload`, and old wrapper/envelope tests.
+- Remove old wrapper/envelope tests.
 - Replace `childCount + childCountIsKnown + array inference` with an explicit regular-child state:
   - `unrequested(count: Int)`
   - `loaded([DOMNodeModel])`
@@ -323,7 +323,7 @@ Keep current identities and selection machinery, but remove obvious dead compati
 
 Changes:
 
-- Delete deprecated compatibility types.
+- Delete compatibility types.
 - Keep DOM depth/debounce public configuration but clarify naming.
 - Tidy `DOMPayloadNormalizer` around protocol buckets.
 - Keep `backendNodeID` fallback and existing materialization state machine.

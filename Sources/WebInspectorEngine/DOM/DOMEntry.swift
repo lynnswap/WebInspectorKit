@@ -1,9 +1,6 @@
 import Foundation
 import Observation
 
-@available(*, deprecated, renamed: "DOMNodeModel", message: "Use DOMNodeModel.")
-public typealias DOMEntry = DOMNodeModel
-
 public struct DOMAttribute: Hashable, Identifiable, Sendable {
     public var id: String {
         name
