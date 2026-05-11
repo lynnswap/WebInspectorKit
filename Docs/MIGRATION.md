@@ -30,43 +30,24 @@ where it does not depend on the removed AppKit UI.
 | `v0.1.x` | Current |
 | --- | --- |
 | `WebInspectorModel` | `WISession` / `WIViewController` on UIKit |
-| `WebInspectorConfiguration` | `WIModelConfiguration` |
+| `WebInspectorConfiguration` | `WIModelConfiguration` for Network options |
 | `attach(webView:)` | `attach(to:)` |
 | `detach()` | `detach()` |
 
 The old `connect(to:)`, `suspend()`, and `disconnect()` lifecycle path was removed.
-
-The DOM-related configuration fields keep the same meaning, but they now live under `WIModelConfiguration.dom`.
-
-Before:
-
-```swift
-let inspector = WebInspectorModel(
-    configuration: WebInspectorConfiguration(
-        snapshotDepth: 6,
-        subtreeDepth: 4,
-        autoUpdateDebounce: 0.3
-    )
-)
-
-inspector.attach(webView: webView)
-```
+The DOM tree now follows the WebKit DOM protocol directly. Snapshot depth, subtree depth,
+and DOM auto-update debounce are internal policies rather than public configuration.
 
 Current:
 
 ```swift
-let inspector = WIViewController(
-    configuration: WIModelConfiguration(
-        dom: DOMConfiguration(
-            snapshotDepth: 6,
-            subtreeDepth: 4,
-            autoUpdateDebounce: 0.3
-        )
-    )
-)
+let inspector = WIViewController()
 
 await inspector.attach(to: webView)
 ```
+
+Remove any app-side DOM snapshot depth, subtree depth, or auto-update debounce tuning.
+Those values are now owned by the native DOM runtime.
 
 ## 3. Inject side effects through `WIInspectorDependencies`
 

@@ -4,12 +4,12 @@ import Testing
 @MainActor
 struct DOMDocumentModelTests {
     @Test
-    func sameLocalIDReprojectionPreservesNodeIdentity() {
+    func sameNodeIDReprojectionPreservesNodeIdentity() {
         let model = DOMDocumentModel()
         model.replaceDocument(
             with: .init(
-                root: makeNode(localID: 1, children: [makeNode(localID: 7)]),
-                selectedLocalID: 7
+                root: makeNode(nodeID: 1, children: [makeNode(nodeID: 7)]),
+                selectedNodeID: 7
             )
         )
 
@@ -18,10 +18,10 @@ struct DOMDocumentModelTests {
         model.replaceDocument(
             with: .init(
                 root: makeNode(
-                    localID: 1,
-                    children: [makeNode(localID: 7, attributes: [.init(nodeId: 7, name: "class", value: "updated")])]
+                    nodeID: 1,
+                    children: [makeNode(nodeID: 7, attributes: [.init(nodeId: 7, name: "class", value: "updated")])]
                 ),
-                selectedLocalID: 7
+                selectedNodeID: 7
             ),
             isFreshDocument: false
         )
@@ -32,12 +32,113 @@ struct DOMDocumentModelTests {
     }
 
     @Test
+    func nonFreshRefreshReprojectsSelectionWhenNodeIDChangesAtSameTreePath() {
+        let model = DOMDocumentModel()
+        model.replaceDocument(
+            with: .init(
+                root: makeNode(
+                    nodeID: 1,
+                    children: [
+                        makeNode(
+                            nodeID: 7,
+                            attributes: [.init(name: "id", value: "target")]
+                        )
+                    ]
+                ),
+                selectedNodeID: 7
+            )
+        )
+        model.applySelectionSnapshot(
+            .init(
+                nodeID: 7,
+                attributes: [.init(name: "id", value: "target")],
+                path: ["div"],
+                selectorPath: "#target",
+                styleRevision: 3
+            )
+        )
+
+        model.replaceDocument(
+            with: .init(
+                root: makeNode(
+                    nodeID: 1,
+                    children: [
+                        makeNode(
+                            nodeID: 8,
+                            attributes: [.init(name: "id", value: "target")]
+                        )
+                    ]
+                )
+            ),
+            isFreshDocument: false
+        )
+
+        let selectedNode = try! #require(model.selectedNode)
+        #expect(selectedNode.nodeID == 8)
+        #expect(selectedNode.selectorPath == "#target")
+        #expect(selectedNode.path == ["div"])
+        #expect(selectedNode.styleRevision == 3)
+    }
+
+    @Test
+    func nonFreshRefreshDoesNotReuseStalePreviousNodeIDBeforeAnchor() {
+        let model = DOMDocumentModel()
+        model.replaceDocument(
+            with: .init(
+                root: makeNode(
+                    nodeID: 1,
+                    children: [
+                        makeNode(
+                            nodeID: 7,
+                            attributes: [.init(name: "id", value: "target")]
+                        )
+                    ]
+                ),
+                selectedNodeID: 7
+            )
+        )
+        model.applySelectionSnapshot(
+            .init(
+                nodeID: 7,
+                attributes: [.init(name: "id", value: "target")],
+                path: ["div"],
+                selectorPath: "#target",
+                styleRevision: 3
+            )
+        )
+
+        model.replaceDocument(
+            with: .init(
+                root: makeNode(
+                    nodeID: 1,
+                    children: [
+                        makeNode(
+                            nodeID: 7,
+                            attributes: [.init(name: "id", value: "inserted")]
+                        ),
+                        makeNode(
+                            nodeID: 8,
+                            attributes: [.init(name: "id", value: "target")]
+                        ),
+                    ]
+                )
+            ),
+            isFreshDocument: false
+        )
+
+        let selectedNode = try! #require(model.selectedNode)
+        #expect(selectedNode.nodeID == 8)
+        #expect(selectedNode.attributes.first(where: { $0.name == "id" })?.value == "target")
+        #expect(selectedNode.selectorPath == "#target")
+    }
+
+    @Test
     func freshDocumentChangesNodeIdentity() {
         let model = DOMDocumentModel()
         model.replaceDocument(
             with: .init(
-                root: makeNode(localID: 1, children: [makeNode(localID: 7)]),
-                selectedLocalID: 7
+                root: makeNode(nodeID: 1, children: [makeNode(nodeID: 7)]),
+                selectedNodeID: 7
             )
         )
 
@@ -45,8 +146,8 @@ struct DOMDocumentModelTests {
 
         model.replaceDocument(
             with: .init(
-                root: makeNode(localID: 1, children: [makeNode(localID: 7)]),
-                selectedLocalID: 7
+                root: makeNode(nodeID: 1, children: [makeNode(nodeID: 7)]),
+                selectedNodeID: 7
             ),
             isFreshDocument: true
         )
@@ -60,26 +161,26 @@ struct DOMDocumentModelTests {
         let model = DOMDocumentModel()
         model.replaceDocument(
             with: .init(
-                root: makeNode(localID: 1, children: [makeNode(localID: 2)]),
-                selectedLocalID: 2
+                root: makeNode(nodeID: 1, children: [makeNode(nodeID: 2)]),
+                selectedNodeID: 2
             )
         )
 
-        model.applyMutationBundle(.init(events: [.childNodeRemoved(parentLocalID: 1, nodeLocalID: 2)]))
+        model.applyMutationBundle(.init(events: [.childNodeRemoved(parentNodeID: 1, nodeNodeID: 2)]))
 
         #expect(model.selectedNode == nil)
     }
 
     @Test
-    func selectionTracksReplacementOfSameLocalID() {
+    func selectionTracksReplacementOfSameNodeID() {
         let model = DOMDocumentModel()
         model.replaceDocument(
             with: .init(
                 root: makeNode(
-                    localID: 1,
-                    children: [makeNode(localID: 2, attributes: [.init(nodeId: 2, name: "class", value: "before")])]
+                    nodeID: 1,
+                    children: [makeNode(nodeID: 2, attributes: [.init(nodeId: 2, name: "class", value: "before")])]
                 ),
-                selectedLocalID: 2
+                selectedNodeID: 2
             )
         )
 
@@ -88,8 +189,8 @@ struct DOMDocumentModelTests {
             .init(
                 events: [
                     .setChildNodes(
-                        parentLocalID: 1,
-                        nodes: [makeNode(localID: 2, attributes: [.init(nodeId: 2, name: "class", value: "after")])]
+                        parentNodeID: 1,
+                        nodes: [makeNode(nodeID: 2, attributes: [.init(nodeId: 2, name: "class", value: "after")])]
                     )
                 ]
             )
@@ -107,20 +208,18 @@ struct DOMDocumentModelTests {
         model.replaceDocument(
             with: .init(
                 root: makeNode(
-                    localID: 1,
+                    nodeID: 1,
                     children: [
                         makeNode(
-                            localID: 20,
+                            nodeID: 20,
                             frameID: "frame-child",
-                            children: [
+                            contentDocument:
                                 makeNode(
-                                    localID: 24,
-                                    backendNodeID: 24,
+                                    nodeID: 24,
                                     frameID: "frame-child",
                                     children: [
                                         makeNode(
-                                            localID: 26,
-                                            backendNodeID: 26,
+                                            nodeID: 26,
                                             attributes: [.init(nodeId: 26, name: "id", value: "frame-target")],
                                             nodeName: "BUTTON",
                                             localName: "button"
@@ -129,8 +228,7 @@ struct DOMDocumentModelTests {
                                     nodeType: 9,
                                     nodeName: "#document",
                                     localName: ""
-                                )
-                            ],
+                                ),
                             nodeName: "IFRAME",
                             localName: "iframe"
                         )
@@ -142,7 +240,7 @@ struct DOMDocumentModelTests {
             )
         )
 
-        let iframeNode = try! #require(model.node(localID: 20))
+        let iframeNode = try! #require(model.node(nodeID: 20))
         let nestedDocument = try! #require(iframeNode.children.first)
         let nestedButton = try! #require(nestedDocument.children.first)
 
@@ -159,20 +257,18 @@ struct DOMDocumentModelTests {
         model.replaceDocument(
             with: .init(
                 root: makeNode(
-                    localID: 1,
+                    nodeID: 1,
                     children: [
                         makeNode(
-                            localID: 20,
+                            nodeID: 20,
                             frameID: "frame-child",
-                            children: [
+                            contentDocument:
                                 makeNode(
-                                    localID: 24,
-                                    backendNodeID: 24,
+                                    nodeID: 24,
                                     frameID: "frame-child",
                                     children: [
                                         makeNode(
-                                            localID: 26,
-                                            backendNodeID: 26,
+                                            nodeID: 26,
                                             attributes: [.init(nodeId: 26, name: "id", value: "frame-target")],
                                             nodeName: "BUTTON",
                                             localName: "button"
@@ -181,8 +277,7 @@ struct DOMDocumentModelTests {
                                     nodeType: 9,
                                     nodeName: "#document",
                                     localName: ""
-                                )
-                            ],
+                                ),
                             nodeName: "IFRAME",
                             localName: "iframe"
                         )
@@ -197,20 +292,20 @@ struct DOMDocumentModelTests {
         model.applyMutationBundle(
             .init(
                 events: [
-                    .setChildNodes(parentLocalID: 20, nodes: [])
+                    .setChildNodes(parentNodeID: 20, nodes: [])
                 ]
             )
         )
 
-        let iframeNode = try! #require(model.node(localID: 20))
+        let iframeNode = try! #require(model.node(nodeID: 20))
         let nestedDocument = try! #require(iframeNode.children.first)
         let nestedButton = try! #require(nestedDocument.children.first)
 
         #expect(iframeNode.childCount == 1)
         #expect(iframeNode.children.count == 1)
-        #expect(nestedDocument.localID == 24)
+        #expect(nestedDocument.nodeID == 24)
         #expect(nestedDocument.parent === iframeNode)
-        #expect(nestedButton.localID == 26)
+        #expect(nestedButton.nodeID == 26)
     }
 
     @Test
@@ -219,22 +314,20 @@ struct DOMDocumentModelTests {
         model.replaceDocument(
             with: .init(
                 root: makeNode(
-                    localID: 1,
+                    nodeID: 1,
                     children: [
                         makeNode(
-                            localID: 20,
+                            nodeID: 20,
                             frameID: "frame-child",
                             attributes: [],
-                            children: [
+                            contentDocument:
                                 makeNode(
-                                    localID: 24,
-                                    backendNodeID: 24,
+                                    nodeID: 24,
                                     frameID: "frame-child",
                                     attributes: [],
                                     children: [
                                         makeNode(
-                                            localID: 26,
-                                            backendNodeID: 26,
+                                            nodeID: 26,
                                             attributes: [.init(nodeId: 26, name: "id", value: "frame-target")],
                                             nodeType: 0,
                                             nodeName: "IMG",
@@ -244,8 +337,7 @@ struct DOMDocumentModelTests {
                                     nodeType: 0,
                                     nodeName: "#document",
                                     localName: ""
-                                )
-                            ],
+                                ),
                             nodeType: 0,
                             nodeName: "IFRAME",
                             localName: "iframe"
@@ -261,14 +353,14 @@ struct DOMDocumentModelTests {
         model.applyMutationBundle(
             .init(
                 events: [
-                    .setChildNodes(parentLocalID: 20, nodes: [])
+                    .setChildNodes(parentNodeID: 20, nodes: [])
                 ]
             )
         )
 
-        let iframeNode = try! #require(model.node(localID: 20))
-        let nestedDocument = try! #require(model.node(localID: 24))
-        let nestedImage = try! #require(model.node(localID: 26))
+        let iframeNode = try! #require(model.node(nodeID: 20))
+        let nestedDocument = try! #require(model.node(nodeID: 24))
+        let nestedImage = try! #require(model.node(nodeID: 26))
 
         #expect(iframeNode.children.count == 1)
         #expect(nestedDocument.parent === iframeNode)
@@ -276,147 +368,597 @@ struct DOMDocumentModelTests {
     }
 
     @Test
-    func selectionReprojectsInsideNestedDocumentByStableBackendNodeID() {
+    func setChildNodesOnlyReplacesRegularChildrenAndPreservesSpecialChildren() {
         let model = DOMDocumentModel()
         model.replaceDocument(
             with: .init(
                 root: makeNode(
-                    localID: 1,
+                    nodeID: 1,
                     children: [
                         makeNode(
-                            localID: 20,
-                            frameID: "frame-child",
-                            children: [
+                            nodeID: 10,
+                            children: [makeNode(nodeID: 14, nodeName: "P", localName: "p")],
+                            shadowRoots: [
                                 makeNode(
-                                    localID: 24,
-                                    backendNodeID: 24,
-                                    frameID: "frame-child",
-                                    children: [
-                                        makeNode(
-                                            localID: 26,
-                                            backendNodeID: 77,
-                                            backendNodeIDIsStable: true,
-                                            attributes: [.init(nodeId: 77, name: "id", value: "before")],
-                                            nodeName: "BUTTON",
-                                            localName: "button"
-                                        )
-                                    ],
-                                    nodeType: 9,
-                                    nodeName: "#document",
+                                    nodeID: 13,
+                                    shadowRootType: "open",
+                                    nodeType: 11,
+                                    nodeName: "#document-fragment",
                                     localName: ""
                                 )
                             ],
-                            nodeName: "IFRAME",
-                            localName: "iframe"
-                        )
-                    ],
-                    nodeType: 9,
-                    nodeName: "#document",
-                    localName: ""
-                ),
-                selectedLocalID: 26
-            )
-        )
-
-        model.replaceDocument(
-            with: .init(
-                root: makeNode(
-                    localID: 1,
-                    children: [
-                        makeNode(
-                            localID: 200,
-                            frameID: "frame-child",
-                            children: [
-                                makeNode(
-                                    localID: 240,
-                                    backendNodeID: 24,
-                                    frameID: "frame-child",
-                                    children: [
-                                        makeNode(
-                                            localID: 260,
-                                            backendNodeID: 77,
-                                            backendNodeIDIsStable: true,
-                                            attributes: [.init(nodeId: 77, name: "id", value: "after")],
-                                            nodeName: "BUTTON",
-                                            localName: "button"
-                                        )
-                                    ],
-                                    nodeType: 9,
-                                    nodeName: "#document",
-                                    localName: ""
-                                )
-                            ],
-                            nodeName: "IFRAME",
-                            localName: "iframe"
+                            templateContent: makeNode(
+                                nodeID: 11,
+                                nodeType: 11,
+                                nodeName: "#document-fragment",
+                                localName: ""
+                            ),
+                            beforePseudoElement: makeNode(
+                                nodeID: 12,
+                                pseudoType: "before",
+                                nodeName: "::before",
+                                localName: ""
+                            ),
+                            afterPseudoElement: makeNode(
+                                nodeID: 15,
+                                pseudoType: "after",
+                                nodeName: "::after",
+                                localName: ""
+                            )
                         )
                     ],
                     nodeType: 9,
                     nodeName: "#document",
                     localName: ""
                 )
-            ),
-            isFreshDocument: false
-        )
-
-        let reprojected = try! #require(model.selectedNode)
-        #expect(reprojected.localID == 260)
-        #expect(reprojected.backendNodeID == 77)
-        #expect(reprojected.attributes.first(where: { $0.name == "id" })?.value == "after")
-    }
-
-    @Test
-    func sameContextSnapshotReplaceRebindsSelectionByStableBackendNodeID() {
-        let model = DOMDocumentModel()
-        model.replaceDocument(
-            with: .init(
-                root: makeNode(
-                    localID: 1,
-                    children: [
-                        makeNode(
-                            localID: 7,
-                            backendNodeID: 77,
-                            backendNodeIDIsStable: true,
-                            attributes: [.init(nodeId: 77, name: "class", value: "before")]
-                        )
-                    ]
-                ),
-                selectedLocalID: 7
             )
         )
-
-        model.replaceDocument(
-            with: .init(
-                root: makeNode(
-                    localID: 1,
-                    children: [
-                        makeNode(
-                            localID: 70,
-                            backendNodeID: 77,
-                            backendNodeIDIsStable: true,
-                            attributes: [.init(nodeId: 77, name: "class", value: "after")]
-                        )
-                    ]
-                )
-            ),
-            isFreshDocument: false
-        )
-
-        let reprojected = try! #require(model.selectedNode)
-        #expect(reprojected.localID == 70)
-        #expect(reprojected.backendNodeID == 77)
-        #expect(reprojected.attributes.first(where: { $0.name == "class" })?.value == "after")
-    }
-
-    @Test
-    func replaceSubtreeSeedsRootWhenDocumentIsEmpty() {
-        let model = DOMDocumentModel()
 
         model.applyMutationBundle(
-            .init(events: [.replaceSubtree(root: makeNode(localID: 1, children: [makeNode(localID: 2)]))])
+            .init(events: [
+                .setChildNodes(parentNodeID: 10, nodes: [makeNode(nodeID: 16, nodeName: "SPAN", localName: "span")])
+            ])
         )
 
-        #expect(model.rootNode?.backendNodeID == 1)
-        #expect(model.rootNode?.children.first?.backendNodeID == 2)
+        let host = try! #require(model.node(nodeID: 10))
+        #expect(host.regularChildren.map(\.nodeID) == [16])
+        #expect(host.children.map(\.nodeID) == [13, 16])
+        #expect(host.visibleDOMTreeChildren.map(\.nodeID) == [11, 12, 13, 16, 15])
+        #expect(model.node(nodeID: 14) == nil)
+        #expect(model.node(nodeID: 11) != nil)
+        #expect(model.node(nodeID: 12) != nil)
+        #expect(model.node(nodeID: 13) != nil)
+        #expect(model.node(nodeID: 15) != nil)
+    }
+
+    @Test
+    func emptySetChildNodesMarksRegularChildrenAsLoadedEmpty() {
+        let model = DOMDocumentModel()
+        model.replaceDocument(
+            with: .init(
+                root: makeNode(
+                    nodeID: 1,
+                    children: [
+                        makeNode(
+                            nodeID: 10,
+                            children: [],
+                            nodeName: "DIV",
+                            localName: "div",
+                            childCount: 1
+                        )
+                    ],
+                    nodeType: 9,
+                    nodeName: "#document",
+                    localName: ""
+                )
+            )
+        )
+
+        let hostBeforeLoad = try! #require(model.node(nodeID: 10))
+        #expect(hostBeforeLoad.hasUnloadedRegularChildren)
+
+        model.applyMutationBundle(
+            .init(events: [
+                .setChildNodes(parentNodeID: 10, nodes: [])
+            ])
+        )
+
+        let host = try! #require(model.node(nodeID: 10))
+        #expect(host.childCount == 0)
+        #expect(host.regularChildren.isEmpty)
+        #expect(!host.hasUnloadedRegularChildren)
+        #expect(host.visibleDOMTreeChildren.isEmpty)
+    }
+
+    @Test
+    func childNodeInsertedUsesRegularChildOrderWithinVisibleWebKitOrder() {
+        let model = DOMDocumentModel()
+        model.replaceDocument(
+            with: .init(
+                root: makeNode(
+                    nodeID: 1,
+                    children: [
+                        makeNode(
+                            nodeID: 10,
+                            children: [
+                                makeNode(nodeID: 14, nodeName: "A", localName: "a"),
+                                makeNode(nodeID: 16, nodeName: "C", localName: "c"),
+                            ],
+                            shadowRoots: [
+                                makeNode(
+                                    nodeID: 13,
+                                    shadowRootType: "open",
+                                    nodeType: 11,
+                                    nodeName: "#document-fragment",
+                                    localName: ""
+                                )
+                            ],
+                            templateContent: makeNode(nodeID: 11, nodeType: 11, nodeName: "#document-fragment", localName: ""),
+                            beforePseudoElement: makeNode(nodeID: 12, pseudoType: "before", nodeName: "::before", localName: ""),
+                            afterPseudoElement: makeNode(nodeID: 17, pseudoType: "after", nodeName: "::after", localName: "")
+                        )
+                    ],
+                    nodeType: 9,
+                    nodeName: "#document",
+                    localName: ""
+                )
+            )
+        )
+
+        model.applyMutationBundle(
+            .init(events: [
+                .childNodeInserted(
+                    parentNodeID: 10,
+                    previousNodeID: 14,
+                    node: makeNode(nodeID: 15, nodeName: "B", localName: "b")
+                )
+            ])
+        )
+
+        let host = try! #require(model.node(nodeID: 10))
+        #expect(host.regularChildren.map(\.nodeID) == [14, 15, 16])
+        #expect(host.children.map(\.nodeID) == [13, 14, 15, 16])
+        #expect(host.visibleDOMTreeChildren.map(\.nodeID) == [11, 12, 13, 14, 15, 16, 17])
+    }
+
+    @Test
+    func childNodeInsertedWithoutPreviousSiblingAppendsToLoadedChildren() {
+        let model = DOMDocumentModel()
+        model.replaceDocument(
+            with: .init(
+                root: makeNode(
+                    nodeID: 1,
+                    children: [
+                        makeNode(
+                            nodeID: 10,
+                            children: [
+                                makeNode(nodeID: 14, nodeName: "A", localName: "a"),
+                                makeNode(nodeID: 16, nodeName: "C", localName: "c"),
+                            ],
+                            nodeName: "DIV",
+                            localName: "div"
+                        )
+                    ],
+                    nodeType: 9,
+                    nodeName: "#document",
+                    localName: ""
+                )
+            )
+        )
+
+        model.applyMutationBundle(
+            .init(events: [
+                .childNodeInserted(
+                    parentKey: domDocumentStoreTestKey(10),
+                    previousSibling: .missing,
+                    node: makeNode(nodeID: 15, nodeName: "B", localName: "b")
+                )
+            ])
+        )
+
+        let host = try! #require(model.node(nodeID: 10))
+        #expect(host.regularChildren.map(\.nodeID) == [14, 16, 15])
+    }
+
+    @Test
+    func childNodeInsertedWithZeroPreviousSiblingPrependsToLoadedChildren() {
+        let model = DOMDocumentModel()
+        model.replaceDocument(
+            with: .init(
+                root: makeNode(
+                    nodeID: 1,
+                    children: [
+                        makeNode(
+                            nodeID: 10,
+                            children: [
+                                makeNode(nodeID: 14, nodeName: "A", localName: "a"),
+                                makeNode(nodeID: 16, nodeName: "C", localName: "c"),
+                            ],
+                            nodeName: "DIV",
+                            localName: "div"
+                        )
+                    ],
+                    nodeType: 9,
+                    nodeName: "#document",
+                    localName: ""
+                )
+            )
+        )
+
+        model.applyMutationBundle(
+            .init(events: [
+                .childNodeInserted(
+                    parentKey: domDocumentStoreTestKey(10),
+                    previousSibling: .firstChild,
+                    node: makeNode(nodeID: 15, nodeName: "B", localName: "b")
+                )
+            ])
+        )
+
+        let host = try! #require(model.node(nodeID: 10))
+        #expect(host.regularChildren.map(\.nodeID) == [15, 14, 16])
+    }
+
+    @Test
+    func childNodeInsertedKeepsUnrequestedRegularChildrenUnrequested() {
+        let model = DOMDocumentModel()
+        model.replaceDocument(
+            with: .init(
+                root: makeNode(
+                    nodeID: 1,
+                    children: [
+                        makeNode(
+                            nodeID: 10,
+                            children: [],
+                            nodeName: "DIV",
+                            localName: "div",
+                            childCount: 2
+                        )
+                    ],
+                    nodeType: 9,
+                    nodeName: "#document",
+                    localName: ""
+                )
+            )
+        )
+
+        let hostBeforeInsert = try! #require(model.node(nodeID: 10))
+        #expect(hostBeforeInsert.hasUnloadedRegularChildren)
+        #expect(hostBeforeInsert.regularChildCount == 2)
+
+        model.applyMutationBundle(
+            .init(events: [
+                .childNodeInserted(
+                    parentNodeID: 10,
+                    previousNodeID: nil,
+                    node: makeNode(nodeID: 14, nodeName: "SPAN", localName: "span")
+                )
+            ])
+        )
+
+        let host = try! #require(model.node(nodeID: 10))
+        #expect(host.hasUnloadedRegularChildren)
+        #expect(host.regularChildCount == 3)
+        #expect(host.regularChildren.isEmpty)
+        #expect(model.node(nodeID: 14) == nil)
+    }
+
+    @Test
+    func childNodeRemovedDecrementsUnrequestedRegularChildCount() {
+        let model = DOMDocumentModel()
+        model.replaceDocument(
+            with: .init(
+                root: makeNode(
+                    nodeID: 1,
+                    children: [
+                        makeNode(
+                            nodeID: 10,
+                            children: [],
+                            nodeName: "DIV",
+                            localName: "div",
+                            childCount: 2
+                        )
+                    ],
+                    nodeType: 9,
+                    nodeName: "#document",
+                    localName: ""
+                )
+            )
+        )
+
+        model.applyMutationBundle(
+            .init(events: [
+                .childNodeRemoved(
+                    parentKey: domDocumentStoreTestKey(10),
+                    nodeKey: domDocumentStoreTestKey(14)
+                )
+            ])
+        )
+
+        let host = try! #require(model.node(nodeID: 10))
+        #expect(host.hasUnloadedRegularChildren)
+        #expect(host.regularChildCount == 1)
+        #expect(host.regularChildren.isEmpty)
+        #expect(model.node(nodeID: 14) == nil)
+    }
+
+    @Test
+    func childNodeCountUpdatedKeepsLoadedEmptyRegularChildrenLoaded() {
+        let model = DOMDocumentModel()
+        model.replaceDocument(
+            with: .init(
+                root: makeNode(
+                    nodeID: 1,
+                    children: [
+                        makeNode(
+                            nodeID: 10,
+                            children: [],
+                            nodeName: "DIV",
+                            localName: "div",
+                            childCount: 1
+                        )
+                    ],
+                    nodeType: 9,
+                    nodeName: "#document",
+                    localName: ""
+                )
+            )
+        )
+
+        model.applyMutationBundle(
+            .init(events: [
+                .setChildNodes(parentNodeID: 10, nodes: []),
+                .childNodeCountUpdated(
+                    nodeKey: domDocumentStoreTestKey(10),
+                    childCount: 1,
+                    layoutFlags: nil,
+                    isRendered: nil
+                ),
+                .childNodeInserted(
+                    parentNodeID: 10,
+                    previousNodeID: nil,
+                    node: makeNode(nodeID: 14, nodeName: "SPAN", localName: "span")
+                ),
+            ])
+        )
+
+        let host = try! #require(model.node(nodeID: 10))
+        #expect(!host.hasUnloadedRegularChildren)
+        #expect(host.regularChildren.map(\.nodeID) == [14])
+        #expect(host.childCount == 1)
+        #expect(model.node(nodeID: 14) != nil)
+    }
+
+    @Test
+    func childNodeRemovedCanRemoveSpecialChildren() {
+        let model = DOMDocumentModel()
+        model.replaceDocument(
+            with: .init(
+                root: makeNode(
+                    nodeID: 1,
+                    children: [
+                        makeNode(
+                            nodeID: 10,
+                            children: [makeNode(nodeID: 14)],
+                            beforePseudoElement: makeNode(
+                                nodeID: 12,
+                                pseudoType: "before",
+                                nodeName: "::before",
+                                localName: ""
+                            )
+                        )
+                    ],
+                    nodeType: 9,
+                    nodeName: "#document",
+                    localName: ""
+                )
+            )
+        )
+
+        model.applyMutationBundle(
+            .init(events: [.childNodeRemoved(parentNodeID: 10, nodeNodeID: 12)])
+        )
+
+        let host = try! #require(model.node(nodeID: 10))
+        #expect(host.beforePseudoElement == nil)
+        #expect(host.visibleDOMTreeChildren.map(\.nodeID) == [14])
+        #expect(model.node(nodeID: 12) == nil)
+    }
+
+    @Test
+    func shadowRootPushedAddsSpecialChildWithoutChangingRegularChildCount() {
+        let model = DOMDocumentModel()
+        model.replaceDocument(
+            with: .init(
+                root: makeNode(
+                    nodeID: 1,
+                    children: [
+                        makeNode(
+                            nodeID: 10,
+                            children: [makeNode(nodeID: 14)]
+                        )
+                    ],
+                    nodeType: 9,
+                    nodeName: "#document",
+                    localName: ""
+                )
+            )
+        )
+
+        model.applyMutationBundle(
+            .init(events: [
+                .shadowRootPushed(
+                    hostNodeID: 10,
+                    root: makeNode(
+                        nodeID: 13,
+                        shadowRootType: "open",
+                        nodeType: 11,
+                        nodeName: "#shadow-root",
+                        localName: ""
+                    )
+                )
+            ])
+        )
+
+        let host = try! #require(model.node(nodeID: 10))
+        #expect(host.regularChildren.map(\.nodeID) == [14])
+        #expect(host.shadowRoots.map(\.nodeID) == [13])
+        #expect(host.children.map(\.nodeID) == [13, 14])
+        #expect(host.visibleDOMTreeChildren.map(\.nodeID) == [13, 14])
+        #expect(host.childCount == 1)
+        #expect(model.node(nodeID: 13) != nil)
+    }
+
+    @Test
+    func pseudoElementAddedAndRemovedUpdatesSpecialBucket() {
+        let model = DOMDocumentModel()
+        model.replaceDocument(
+            with: .init(
+                root: makeNode(
+                    nodeID: 1,
+                    children: [makeNode(nodeID: 10)],
+                    nodeType: 9,
+                    nodeName: "#document",
+                    localName: ""
+                )
+            )
+        )
+
+        model.applyMutationBundle(
+            .init(events: [
+                .pseudoElementAdded(
+                    parentNodeID: 10,
+                    node: makeNode(
+                        nodeID: 12,
+                        pseudoType: "before",
+                        nodeName: "::before",
+                        localName: ""
+                    )
+                )
+            ])
+        )
+
+        var host = try! #require(model.node(nodeID: 10))
+        #expect(host.beforePseudoElement?.nodeID == 12)
+        #expect(host.visibleDOMTreeChildren.map(\.nodeID) == [12])
+        #expect(model.node(nodeID: 12) != nil)
+
+        model.applyMutationBundle(
+            .init(events: [
+                .pseudoElementRemoved(parentNodeID: 10, nodeNodeID: 12)
+            ])
+        )
+
+        host = try! #require(model.node(nodeID: 10))
+        #expect(host.beforePseudoElement == nil)
+        #expect(host.visibleDOMTreeChildren.isEmpty)
+        #expect(model.node(nodeID: 12) == nil)
+    }
+
+    @Test
+    func nonBeforeAfterPseudoElementAddedAndRemovedIsRetained() {
+        let model = DOMDocumentModel()
+        model.replaceDocument(
+            with: .init(
+                root: makeNode(
+                    nodeID: 1,
+                    children: [makeNode(nodeID: 10)],
+                    nodeType: 9,
+                    nodeName: "#document",
+                    localName: ""
+                )
+            )
+        )
+
+        model.applyMutationBundle(
+            .init(events: [
+                .pseudoElementAdded(
+                    parentNodeID: 10,
+                    node: makeNode(
+                        nodeID: 12,
+                        pseudoType: "marker",
+                        nodeName: "::marker",
+                        localName: ""
+                    )
+                )
+            ])
+        )
+
+        var host = try! #require(model.node(nodeID: 10))
+        #expect(host.otherPseudoElements.map(\.nodeID) == [12])
+        #expect(host.otherPseudoElements.first?.pseudoType == "marker")
+        #expect(host.visibleDOMTreeChildren.map(\.nodeID) == [12])
+        #expect(host.hasVisibleDOMTreeChildren)
+        #expect(model.node(nodeID: 12) != nil)
+        #expect(model.consumeRejectedStructuralMutationParentKeys().isEmpty)
+
+        model.applyMutationBundle(
+            .init(events: [
+                .pseudoElementAdded(
+                    parentNodeID: 10,
+                    node: makeNode(
+                        nodeID: 13,
+                        pseudoType: "marker",
+                        nodeName: "::marker",
+                        localName: ""
+                    )
+                )
+            ])
+        )
+
+        host = try! #require(model.node(nodeID: 10))
+        #expect(host.otherPseudoElements.map(\.nodeID) == [13])
+        #expect(host.visibleDOMTreeChildren.map(\.nodeID) == [13])
+        #expect(model.node(nodeID: 12) == nil)
+        #expect(model.node(nodeID: 13) != nil)
+
+        model.applyMutationBundle(
+            .init(events: [
+                .pseudoElementRemoved(parentNodeID: 10, nodeNodeID: 13)
+            ])
+        )
+
+        host = try! #require(model.node(nodeID: 10))
+        #expect(host.otherPseudoElements.isEmpty)
+        #expect(model.node(nodeID: 13) == nil)
+    }
+
+    @Test
+    func childNodeRemovedCanRemoveContentDocumentFromFrameOwner() {
+        let model = DOMDocumentModel()
+        model.replaceDocument(
+            with: .init(
+                root: makeNode(
+                    nodeID: 1,
+                    children: [
+                        makeNode(
+                            nodeID: 10,
+                            contentDocument: makeNode(
+                                nodeID: 11,
+                                nodeType: 9,
+                                nodeName: "#document",
+                                localName: ""
+                            ),
+                            nodeName: "IFRAME",
+                            localName: "iframe"
+                        )
+                    ],
+                    nodeType: 9,
+                    nodeName: "#document",
+                    localName: ""
+                )
+            )
+        )
+
+        model.applyMutationBundle(
+            .init(events: [.childNodeRemoved(parentNodeID: 10, nodeNodeID: 11)])
+        )
+
+        let frameOwner = try! #require(model.node(nodeID: 10))
+        #expect(frameOwner.contentDocument == nil)
+        #expect(frameOwner.children.isEmpty)
+        #expect(frameOwner.childCount == 0)
+        #expect(model.node(nodeID: 11) == nil)
     }
 
     @Test
@@ -424,7 +966,7 @@ struct DOMDocumentModelTests {
         let model = DOMDocumentModel()
         model.replaceDocument(
             with: .init(
-                root: makeNode(localID: 1, children: [makeNode(localID: 2)])
+                root: makeNode(nodeID: 1, children: [makeNode(nodeID: 2)])
             )
         )
 
@@ -434,12 +976,10 @@ struct DOMDocumentModelTests {
                     .setDetachedRoots(
                         nodes: [
                             makeNode(
-                                localID: 900,
-                                backendNodeID: 900,
+                                nodeID: 900,
                                 children: [
                                     makeNode(
-                                        localID: 901,
-                                        backendNodeID: 1093,
+                                        nodeID: 901,
                                         attributes: [.init(nodeId: 1093, name: "id", value: "detached-target")],
                                         nodeName: "IMG",
                                         localName: "img"
@@ -456,13 +996,13 @@ struct DOMDocumentModelTests {
         )
 
         let mainRoot = try! #require(model.rootNode)
-        let detachedTarget = try! #require(model.node(backendNodeID: 1093))
+        let detachedTarget = try! #require(model.node(nodeID: 901))
 
-        #expect(mainRoot.localID == 1)
-        #expect(mainRoot.children.first?.localID == 2)
-        #expect(model.topLevelRoots().map(\.localID) == [1])
-        #expect(model.detachedRootsForDiagnostics().map(\.localID) == [900])
-        #expect(detachedTarget.localID == 901)
+        #expect(mainRoot.nodeID == 1)
+        #expect(mainRoot.children.first?.nodeID == 2)
+        #expect(model.topLevelRoots().map(\.nodeID) == [1])
+        #expect(model.detachedRootsForDiagnostics().map(\.nodeID) == [900])
+        #expect(detachedTarget.nodeID == 901)
         #expect(detachedTarget.localName == "img")
         #expect(detachedTarget.parent?.nodeType == .document)
     }
@@ -472,7 +1012,7 @@ struct DOMDocumentModelTests {
         let model = DOMDocumentModel()
         model.replaceDocument(
             with: .init(
-                root: makeNode(localID: 1, children: [makeNode(localID: 2)])
+                root: makeNode(nodeID: 1, children: [makeNode(nodeID: 2)])
             )
         )
 
@@ -482,12 +1022,10 @@ struct DOMDocumentModelTests {
                     .setDetachedRoots(
                         nodes: [
                             makeNode(
-                                localID: 900,
-                                backendNodeID: 900,
+                                nodeID: 900,
                                 children: [
                                     makeNode(
-                                        localID: 901,
-                                        backendNodeID: 1093,
+                                        nodeID: 901,
                                         attributes: [.init(nodeId: 1093, name: "id", value: "first-detached-target")],
                                         nodeName: "IMG",
                                         localName: "img"
@@ -509,12 +1047,10 @@ struct DOMDocumentModelTests {
                     .setDetachedRoots(
                         nodes: [
                             makeNode(
-                                localID: 900,
-                                backendNodeID: 900,
+                                nodeID: 900,
                                 children: [
                                     makeNode(
-                                        localID: 902,
-                                        backendNodeID: 2093,
+                                        nodeID: 902,
                                         attributes: [.init(nodeId: 2093, name: "id", value: "replacement-detached-target")],
                                         nodeName: "DIV",
                                         localName: "div"
@@ -525,12 +1061,10 @@ struct DOMDocumentModelTests {
                                 localName: ""
                             ),
                             makeNode(
-                                localID: 910,
-                                backendNodeID: 910,
+                                nodeID: 910,
                                 children: [
                                     makeNode(
-                                        localID: 911,
-                                        backendNodeID: 3093,
+                                        nodeID: 911,
                                         attributes: [.init(nodeId: 3093, name: "id", value: "second-detached-target")],
                                         nodeName: "SPAN",
                                         localName: "span"
@@ -547,17 +1081,17 @@ struct DOMDocumentModelTests {
         )
 
         let mainRoot = try! #require(model.rootNode)
-        let replacementDetachedTarget = try! #require(model.node(backendNodeID: 2093))
-        let secondDetachedTarget = try! #require(model.node(backendNodeID: 3093))
+        let replacementDetachedTarget = try! #require(model.node(nodeID: 902))
+        let secondDetachedTarget = try! #require(model.node(nodeID: 911))
 
-        #expect(mainRoot.localID == 1)
-        #expect(model.topLevelRoots().map(\.localID) == [1])
-        #expect(model.detachedRootsForDiagnostics().map(\.localID).sorted() == [900, 910])
-        #expect(model.node(backendNodeID: 1093) == nil)
-        #expect(replacementDetachedTarget.localID == 902)
-        #expect(replacementDetachedTarget.parent?.localID == 900)
-        #expect(secondDetachedTarget.localID == 911)
-        #expect(secondDetachedTarget.parent?.localID == 910)
+        #expect(mainRoot.nodeID == 1)
+        #expect(model.topLevelRoots().map(\.nodeID) == [1])
+        #expect(model.detachedRootsForDiagnostics().map(\.nodeID).sorted() == [900, 910])
+        #expect(model.node(nodeID: 901) == nil)
+        #expect(replacementDetachedTarget.nodeID == 902)
+        #expect(replacementDetachedTarget.parent?.nodeID == 900)
+        #expect(secondDetachedTarget.nodeID == 911)
+        #expect(secondDetachedTarget.parent?.nodeID == 910)
     }
 
     @Test
@@ -565,7 +1099,7 @@ struct DOMDocumentModelTests {
         let model = DOMDocumentModel()
         model.replaceDocument(
             with: .init(
-                root: makeNode(localID: 1, children: [makeNode(localID: 2)])
+                root: makeNode(nodeID: 1, children: [makeNode(nodeID: 2)])
             )
         )
 
@@ -573,11 +1107,10 @@ struct DOMDocumentModelTests {
             .init(
                 events: [
                     .setChildNodes(
-                        parentLocalID: 900,
+                        parentNodeID: 900,
                         nodes: [
                             makeNode(
-                                localID: 901,
-                                backendNodeID: 1901,
+                                nodeID: 901,
                                 attributes: [.init(nodeId: 1901, name: "id", value: "detached-child")]
                             )
                         ]
@@ -588,36 +1121,35 @@ struct DOMDocumentModelTests {
 
         let mainRoot = try! #require(model.rootNode)
 
-        #expect(mainRoot.localID == 1)
-        #expect(mainRoot.children.first?.localID == 2)
-        #expect(model.topLevelRoots().map(\.localID) == [1])
+        #expect(mainRoot.nodeID == 1)
+        #expect(mainRoot.children.first?.nodeID == 2)
+        #expect(model.topLevelRoots().map(\.nodeID) == [1])
         #expect(model.detachedRootsForDiagnostics().isEmpty)
-        #expect(model.node(localID: 900) == nil)
-        #expect(model.node(backendNodeID: 1901) == nil)
+        #expect(model.node(nodeID: 900) == nil)
+        #expect(model.node(nodeID: 901) == nil)
         #expect(model.consumeMirrorInvariantViolationReason() == nil)
-        #expect(model.consumeRejectedStructuralMutationParentLocalIDs() == Set<UInt64>([900]))
+        #expect(model.consumeRejectedStructuralMutationParentNodeIDs() == Set<UInt64>([900]))
     }
 
     @Test
-    func unknownParentSetChildNodesChainMarksRejectedStructuralMutationWithoutMaterializingLeaf() {
+    func unknownParentSetChildNodesChainMarksRejectedStructuralMutationWithoutCreatingLeaf() {
         let model = DOMDocumentModel()
         model.replaceDocument(
             with: .init(
-                root: makeNode(localID: 1, children: [makeNode(localID: 2)])
+                root: makeNode(nodeID: 1, children: [makeNode(nodeID: 2)])
             )
         )
 
         model.applyMutationBundle(
             .init(
                 events: [
-                    .setChildNodes(parentLocalID: 900, nodes: [makeNode(localID: 901)]),
-                    .setChildNodes(parentLocalID: 901, nodes: [makeNode(localID: 902)]),
+                    .setChildNodes(parentNodeID: 900, nodes: [makeNode(nodeID: 901)]),
+                    .setChildNodes(parentNodeID: 901, nodes: [makeNode(nodeID: 902)]),
                     .setChildNodes(
-                        parentLocalID: 902,
+                        parentNodeID: 902,
                         nodes: [
                             makeNode(
-                                localID: 903,
-                                backendNodeID: 2903,
+                                nodeID: 903,
                                 nodeName: "IMG",
                                 localName: "img"
                             )
@@ -627,11 +1159,11 @@ struct DOMDocumentModelTests {
             )
         )
 
-        #expect(model.topLevelRoots().map(\.localID) == [1])
+        #expect(model.topLevelRoots().map(\.nodeID) == [1])
         #expect(model.detachedRootsForDiagnostics().isEmpty)
-        #expect(model.node(backendNodeID: 2903) == nil)
+        #expect(model.node(nodeID: 903) == nil)
         #expect(model.consumeMirrorInvariantViolationReason() == nil)
-        #expect(model.consumeRejectedStructuralMutationParentLocalIDs() == Set<UInt64>([900, 901, 902]))
+        #expect(model.consumeRejectedStructuralMutationParentNodeIDs() == Set<UInt64>([900, 901, 902]))
     }
 
     @Test
@@ -639,30 +1171,29 @@ struct DOMDocumentModelTests {
         let model = DOMDocumentModel()
         model.replaceDocument(
             with: .init(
-                root: makeNode(localID: 1, children: [makeNode(localID: 2)])
+                root: makeNode(nodeID: 1, children: [makeNode(nodeID: 2)])
             )
         )
 
         model.applyMutationBundle(
             .init(
                 events: [
-                    .setChildNodes(parentLocalID: 900, nodes: [makeNode(localID: 901, backendNodeID: 1901)]),
+                    .setChildNodes(parentNodeID: 900, nodes: [makeNode(nodeID: 901)]),
                 ]
             )
         )
         #expect(model.consumeMirrorInvariantViolationReason() == nil)
-        #expect(model.consumeRejectedStructuralMutationParentLocalIDs() == Set<UInt64>([900]))
+        #expect(model.consumeRejectedStructuralMutationParentNodeIDs() == Set<UInt64>([900]))
 
         model.applyMutationBundle(
             .init(
                 events: [
                     .setChildNodes(
-                        parentLocalID: 2,
+                        parentNodeID: 2,
                         nodes: [
                             makeNode(
-                                localID: 900,
-                                backendNodeID: 900,
-                                children: [makeNode(localID: 902, backendNodeID: 2902)]
+                                nodeID: 900,
+                                children: [makeNode(nodeID: 902)]
                             )
                         ]
                     )
@@ -670,13 +1201,13 @@ struct DOMDocumentModelTests {
             )
         )
 
-        let attachedNode = try! #require(model.node(localID: 900))
-        #expect(model.topLevelRoots().map(\.localID) == [1])
-        #expect(model.node(localID: 901) == nil)
-        #expect(attachedNode.parent?.localID == 2)
-        #expect(attachedNode.children.map(\.localID) == [902])
+        let attachedNode = try! #require(model.node(nodeID: 900))
+        #expect(model.topLevelRoots().map(\.nodeID) == [1])
+        #expect(model.node(nodeID: 901) == nil)
+        #expect(attachedNode.parent?.nodeID == 2)
+        #expect(attachedNode.children.map(\.nodeID) == [902])
         #expect(model.consumeMirrorInvariantViolationReason() == nil)
-        #expect(model.consumeRejectedStructuralMutationParentLocalIDs().isEmpty)
+        #expect(model.consumeRejectedStructuralMutationParentNodeIDs().isEmpty)
     }
 
     @Test
@@ -684,7 +1215,7 @@ struct DOMDocumentModelTests {
         let model = DOMDocumentModel()
         model.replaceDocument(
             with: .init(
-                root: makeNode(localID: 1, children: [makeNode(localID: 2)])
+                root: makeNode(nodeID: 1, children: [makeNode(nodeID: 2)])
             )
         )
 
@@ -692,111 +1223,30 @@ struct DOMDocumentModelTests {
             .init(
                 events: [
                     .childNodeInserted(
-                        parentLocalID: 900,
-                        previousLocalID: nil,
-                        node: makeNode(localID: 901, backendNodeID: 1901)
+                        parentNodeID: 900,
+                        previousNodeID: nil,
+                        node: makeNode(nodeID: 901)
                     )
                 ]
             )
         )
 
-        #expect(model.topLevelRoots().map(\.localID) == [1])
+        #expect(model.topLevelRoots().map(\.nodeID) == [1])
         #expect(model.detachedRootsForDiagnostics().isEmpty)
-        #expect(model.node(localID: 900) == nil)
-        #expect(model.node(backendNodeID: 1901) == nil)
+        #expect(model.node(nodeID: 900) == nil)
+        #expect(model.node(nodeID: 901) == nil)
         #expect(model.consumeMirrorInvariantViolationReason() == nil)
-        #expect(model.consumeRejectedStructuralMutationParentLocalIDs() == Set<UInt64>([900]))
-    }
-
-    @Test
-    func stableBackendLookupIgnoresUnstableBackendIDCollisions() {
-        let model = DOMDocumentModel()
-        model.replaceDocument(
-            with: .init(
-                root: makeNode(
-                    localID: 1,
-                    children: [
-                        makeNode(
-                            localID: 7,
-                            backendNodeID: 7,
-                            backendNodeIDIsStable: false,
-                            attributes: [.init(nodeId: 7, name: "id", value: "collision")]
-                        ),
-                        makeNode(
-                            localID: 70,
-                            backendNodeID: 7,
-                            backendNodeIDIsStable: true,
-                            attributes: [.init(nodeId: 7, name: "id", value: "stable")]
-                        ),
-                    ]
-                )
-            )
-        )
-
-        let resolvedNode = try! #require(model.node(stableBackendNodeID: 7))
-        #expect(resolvedNode.localID == 70)
-        #expect(resolvedNode.attributes.first(where: { $0.name == "id" })?.value == "stable")
-    }
-
-    @Test
-    func replaceSubtreeUsesStableBackendFallbackWhenLocalIDsDrift() {
-        let model = DOMDocumentModel()
-        model.replaceDocument(
-            with: .init(
-                root: makeNode(
-                    localID: 1,
-                    children: [
-                        makeNode(
-                            localID: 7,
-                            backendNodeID: 7,
-                            backendNodeIDIsStable: false,
-                            attributes: [.init(nodeId: 7, name: "id", value: "collision")]
-                        ),
-                        makeNode(
-                            localID: 70,
-                            backendNodeID: 7,
-                            backendNodeIDIsStable: true,
-                            attributes: [.init(nodeId: 7, name: "id", value: "stable")]
-                        ),
-                    ]
-                )
-            )
-        )
-
-        model.applyMutationBundle(
-            .init(
-                events: [
-                    .replaceSubtree(
-                        root: makeNode(
-                            localID: 700,
-                            backendNodeID: 7,
-                            backendNodeIDIsStable: true,
-                            attributes: [.init(nodeId: 7, name: "id", value: "replacement")]
-                        )
-                    )
-                ]
-            )
-        )
-
-        let root = try! #require(model.rootNode)
-        #expect(root.children.count == 2)
-        #expect(root.children.contains { $0.localID == 7 })
-        #expect(root.children.contains { $0.localID == 700 })
-        #expect(root.children.contains { $0.localID == 70 } == false)
-        #expect(root.children.first(where: { $0.localID == 7 })?.attributes.first(where: { $0.name == "id" })?.value == "collision")
-        #expect(root.children.first(where: { $0.localID == 700 })?.attributes.first(where: { $0.name == "id" })?.value == "replacement")
+        #expect(model.consumeRejectedStructuralMutationParentNodeIDs() == Set<UInt64>([900]))
     }
 
     @Test
     func selectionSnapshotIgnoresUnknownNodeWithoutCreatingPlaceholder() {
         let model = DOMDocumentModel()
-        model.replaceDocument(with: .init(root: makeNode(localID: 1)))
+        model.replaceDocument(with: .init(root: makeNode(nodeID: 1)))
 
         model.applySelectionSnapshot(
             .init(
-                localID: 42,
-                backendNodeID: 77,
-                backendNodeIDIsStable: false,
+                nodeID: 42,
                 attributes: [],
                 path: ["html", "body", "div"],
                 selectorPath: "#placeholder",
@@ -805,8 +1255,8 @@ struct DOMDocumentModelTests {
         )
 
         #expect(model.selectedNode == nil)
-        #expect(model.node(localID: 42) == nil)
-        #expect(model.node(backendNodeID: 77) == nil)
+        #expect(model.node(nodeID: 42) == nil)
+        #expect(model.node(nodeID: 77) == nil)
     }
 
     @Test
@@ -814,14 +1264,14 @@ struct DOMDocumentModelTests {
         let model = DOMDocumentModel()
         model.replaceDocument(
             with: .init(
-                root: makeNode(localID: 1, children: [makeNode(localID: 42)]),
-                selectedLocalID: 42
+                root: makeNode(nodeID: 1, children: [makeNode(nodeID: 42)]),
+                selectedNodeID: 42
             )
         )
 
         model.applySelectionSnapshot(
             .init(
-                localID: 42,
+                nodeID: 42,
                 attributes: [.init(nodeId: 42, name: "id", value: "target")],
                 path: ["html", "body", "div"],
                 selectorPath: "#target",
@@ -836,11 +1286,11 @@ struct DOMDocumentModelTests {
     }
 
     @Test
-    func selectionSnapshotWithoutBackendNodeIDIgnoresUnknownNode() {
+    func selectionSnapshotWithUnknownNodeIDIgnoresUnknownNode() {
         let model = DOMDocumentModel()
         model.applySelectionSnapshot(
             .init(
-                localID: 42,
+                nodeID: 42,
                 attributes: [],
                 path: ["html", "body", "div"],
                 selectorPath: "#target",
@@ -849,59 +1299,22 @@ struct DOMDocumentModelTests {
         )
 
         #expect(model.selectedNode == nil)
-        #expect(model.node(localID: 42) == nil)
+        #expect(model.node(nodeID: 42) == nil)
     }
 
     @Test
-    func selectionSnapshotWithStableBackendNodeIDRebindsToExistingAttachedNode() {
+    func selectionSnapshotWithKnownNodeIDPreservesExistingNodeIdentity() {
         let model = DOMDocumentModel()
         model.replaceDocument(
             with: .init(
-                root: makeNode(
-                    localID: 1,
-                    children: [
-                        makeNode(
-                            localID: 70,
-                            backendNodeID: 77,
-                            backendNodeIDIsStable: true,
-                            attributes: [.init(nodeId: 77, name: "id", value: "target")]
-                        )
-                    ]
-                )
+                root: makeNode(nodeID: 1, children: [makeNode(nodeID: 42, attributes: [.init(nodeId: 77, name: "id", value: "target")])]),
+                selectedNodeID: 42
             )
         )
 
         model.applySelectionSnapshot(
             .init(
-                localID: 42,
-                backendNodeID: 77,
-                backendNodeIDIsStable: true,
-                attributes: [.init(nodeId: 77, name: "id", value: "target")],
-                path: ["html", "body", "div"],
-                selectorPath: "#target",
-                styleRevision: 0
-            )
-        )
-
-        let selectedNode = try! #require(model.selectedNode)
-        #expect(selectedNode.localID == 70)
-        #expect(selectedNode.backendNodeID == 77)
-    }
-
-    @Test
-    func selectionSnapshotWithoutBackendNodeIDPreservesExistingLiveBackendNodeID() {
-        let model = DOMDocumentModel()
-        model.replaceDocument(
-            with: .init(
-                root: makeNode(localID: 1, children: [makeNode(localID: 42, attributes: [.init(nodeId: 77, name: "id", value: "target")])]),
-                selectedLocalID: 42
-            )
-        )
-
-        model.applySelectionSnapshot(
-            .init(
-                localID: 42,
-                backendNodeID: nil,
+                nodeID: 42,
                 attributes: [],
                 path: ["html", "body", "div"],
                 selectorPath: "#target",
@@ -910,7 +1323,7 @@ struct DOMDocumentModelTests {
         )
 
         let updatedSelection = try! #require(model.selectedNode)
-        #expect(updatedSelection.backendNodeID == 42)
+        #expect(updatedSelection.nodeID == 42)
         #expect(updatedSelection.styleRevision == 1)
     }
 
@@ -919,13 +1332,13 @@ struct DOMDocumentModelTests {
         let model = DOMDocumentModel()
         model.replaceDocument(
             with: .init(
-                root: makeNode(localID: 1, children: [makeNode(localID: 42)]),
-                selectedLocalID: 42
+                root: makeNode(nodeID: 1, children: [makeNode(nodeID: 42)]),
+                selectedNodeID: 42
             )
         )
         model.applySelectionSnapshot(
             .init(
-                localID: 42,
+                nodeID: 42,
                 attributes: [.init(nodeId: 42, name: "id", value: "target")],
                 path: ["html", "body", "div"],
                 selectorPath: "#target",
@@ -949,8 +1362,8 @@ struct DOMDocumentModelTests {
         let model = DOMDocumentModel()
         model.replaceDocument(
             with: .init(
-                root: makeNode(localID: 1, children: [makeNode(localID: 2)]),
-                selectedLocalID: 2
+                root: makeNode(nodeID: 1, children: [makeNode(nodeID: 2)]),
+                selectedNodeID: 2
             )
         )
 
@@ -962,31 +1375,242 @@ struct DOMDocumentModelTests {
     }
 
     private func makeNode(
-        localID: UInt64,
-        backendNodeID: Int? = nil,
-        backendNodeIDIsStable: Bool? = nil,
+        nodeID: UInt64,
         frameID: String? = nil,
         attributes: [DOMAttribute] = [],
         children: [DOMGraphNodeDescriptor] = [],
+        contentDocument: DOMGraphNodeDescriptor? = nil,
+        shadowRoots: [DOMGraphNodeDescriptor] = [],
+        templateContent: DOMGraphNodeDescriptor? = nil,
+        beforePseudoElement: DOMGraphNodeDescriptor? = nil,
+        afterPseudoElement: DOMGraphNodeDescriptor? = nil,
+        pseudoType: String? = nil,
+        shadowRootType: String? = nil,
         nodeType: Int = 1,
         nodeName: String = "DIV",
         localName: String = "div",
-        nodeValue: String = ""
+        nodeValue: String = "",
+        childCount: Int? = nil
     ) -> DOMGraphNodeDescriptor {
         DOMGraphNodeDescriptor(
-            localID: localID,
-            backendNodeID: backendNodeID ?? Int(localID),
-            backendNodeIDIsStable: backendNodeIDIsStable,
+            nodeID: nodeID,
             frameID: frameID,
             nodeType: nodeType,
             nodeName: nodeName,
             localName: localName,
             nodeValue: nodeValue,
+            pseudoType: pseudoType,
+            shadowRootType: shadowRootType,
             attributes: attributes,
-            childCount: children.count,
+            childCount: childCount ?? max(children.count, contentDocument == nil ? 0 : 1),
             layoutFlags: [],
             isRendered: true,
-            children: children
+            children: children,
+            contentDocument: contentDocument,
+            shadowRoots: shadowRoots,
+            templateContent: templateContent,
+            beforePseudoElement: beforePseudoElement,
+            afterPseudoElement: afterPseudoElement
         )
     }
+}
+
+private let domDocumentStoreTestTargetIdentifier = "page-A"
+
+private func domDocumentStoreTestKey(_ nodeID: UInt64) -> DOMNodeKey {
+    DOMNodeKey(targetIdentifier: domDocumentStoreTestTargetIdentifier, nodeID: Int(nodeID))
+}
+
+private func == (lhs: DOMNodeKey, rhs: UInt64) -> Bool {
+    lhs.nodeID == Int(rhs)
+}
+
+private func == (lhs: UInt64, rhs: DOMNodeKey) -> Bool {
+    rhs == lhs
+}
+
+private func == (lhs: DOMNodeKey, rhs: Int) -> Bool {
+    lhs.nodeID == rhs
+}
+
+private func == (lhs: Int, rhs: DOMNodeKey) -> Bool {
+    rhs == lhs
+}
+
+private extension DOMGraphSnapshot {
+    init(root: DOMGraphNodeDescriptor, selectedNodeID: UInt64?) {
+        self.init(
+            root: root,
+            selectedKey: selectedNodeID.map(domDocumentStoreTestKey)
+        )
+    }
+}
+
+private extension DOMGraphNodeDescriptor {
+    init(
+        nodeID: UInt64,
+        frameID: String? = nil,
+        nodeType: Int,
+        nodeName: String,
+        localName: String,
+        nodeValue: String,
+        pseudoType: String? = nil,
+        shadowRootType: String? = nil,
+        attributes: [DOMAttribute],
+        childCount: Int,
+        layoutFlags: [String],
+        isRendered: Bool,
+        children: [DOMGraphNodeDescriptor] = [],
+        contentDocument: DOMGraphNodeDescriptor? = nil,
+        shadowRoots: [DOMGraphNodeDescriptor] = [],
+        templateContent: DOMGraphNodeDescriptor? = nil,
+        beforePseudoElement: DOMGraphNodeDescriptor? = nil,
+        afterPseudoElement: DOMGraphNodeDescriptor? = nil
+    ) {
+        let regularChildCount = contentDocument == nil ? childCount : children.count
+        self.init(
+            targetIdentifier: domDocumentStoreTestTargetIdentifier,
+            nodeID: Int(nodeID),
+            frameID: frameID,
+            nodeType: nodeType,
+            nodeName: nodeName,
+            localName: localName,
+            nodeValue: nodeValue,
+            pseudoType: pseudoType,
+            shadowRootType: shadowRootType,
+            attributes: attributes,
+            regularChildCount: regularChildCount,
+            regularChildrenAreLoaded: !children.isEmpty || regularChildCount == 0,
+            layoutFlags: layoutFlags,
+            isRendered: isRendered,
+            regularChildren: (!children.isEmpty || regularChildCount == 0) ? children : nil,
+            contentDocument: contentDocument,
+            shadowRoots: shadowRoots,
+            templateContent: templateContent,
+            beforePseudoElement: beforePseudoElement,
+            afterPseudoElement: afterPseudoElement
+        )
+    }
+
+    var childCount: Int {
+        contentDocument == nil ? regularChildCount : 1
+    }
+}
+
+private extension DOMGraphMutationEvent {
+    static func childNodeInserted(
+        parentNodeID: UInt64,
+        previousNodeID: UInt64?,
+        node: DOMGraphNodeDescriptor
+    ) -> DOMGraphMutationEvent {
+        .childNodeInserted(
+            parentKey: domDocumentStoreTestKey(parentNodeID),
+            previousSibling: previousNodeID.map {
+                $0 == 0 ? .firstChild : .node(domDocumentStoreTestKey($0))
+            } ?? .missing,
+            node: node
+        )
+    }
+
+    static func childNodeRemoved(
+        parentNodeID: UInt64,
+        nodeNodeID: UInt64
+    ) -> DOMGraphMutationEvent {
+        .childNodeRemoved(
+            parentKey: domDocumentStoreTestKey(parentNodeID),
+            nodeKey: domDocumentStoreTestKey(nodeNodeID)
+        )
+    }
+
+    static func setChildNodes(
+        parentNodeID: UInt64,
+        nodes: [DOMGraphNodeDescriptor]
+    ) -> DOMGraphMutationEvent {
+        .setChildNodes(
+            parentKey: domDocumentStoreTestKey(parentNodeID),
+            nodes: nodes
+        )
+    }
+
+    static func shadowRootPushed(
+        hostNodeID: UInt64,
+        root: DOMGraphNodeDescriptor
+    ) -> DOMGraphMutationEvent {
+        .shadowRootPushed(
+            hostKey: domDocumentStoreTestKey(hostNodeID),
+            root: root
+        )
+    }
+
+    static func pseudoElementAdded(
+        parentNodeID: UInt64,
+        node: DOMGraphNodeDescriptor
+    ) -> DOMGraphMutationEvent {
+        .pseudoElementAdded(
+            parentKey: domDocumentStoreTestKey(parentNodeID),
+            node: node
+        )
+    }
+
+    static func pseudoElementRemoved(
+        parentNodeID: UInt64,
+        nodeNodeID: UInt64
+    ) -> DOMGraphMutationEvent {
+        .pseudoElementRemoved(
+            parentKey: domDocumentStoreTestKey(parentNodeID),
+            nodeKey: domDocumentStoreTestKey(nodeNodeID)
+        )
+    }
+
+}
+
+private extension DOMSelectionSnapshotPayload {
+    init(
+        nodeID: Int?,
+        attributes: [DOMAttribute],
+        path: [String],
+        selectorPath: String?,
+        styleRevision: Int
+    ) {
+        self.init(
+            key: nodeID.map { domDocumentStoreTestKey(UInt64($0)) },
+            attributes: attributes,
+            path: path,
+            selectorPath: selectorPath,
+            styleRevision: styleRevision
+        )
+    }
+}
+
+private extension DOMSelectorPathPayload {
+    init(
+        nodeID: Int?,
+        attributes _: [DOMAttribute] = [],
+        path _: [String] = [],
+        selectorPath: String,
+        styleRevision _: Int = 0
+    ) {
+        self.init(key: nodeID.map { domDocumentStoreTestKey(UInt64($0)) }, selectorPath: selectorPath)
+    }
+}
+
+private extension DOMDocumentModel {
+    func node(nodeID: UInt64) -> DOMNodeModel? {
+        node(key: domDocumentStoreTestKey(nodeID))
+    }
+
+    func consumeRejectedStructuralMutationParentNodeIDs() -> Set<UInt64> {
+        Set(consumeRejectedStructuralMutationParentKeys().map { UInt64($0.nodeID) })
+    }
+}
+
+private extension DOMNodeModel {
+    var effectiveChildren: [DOMNodeModel] {
+        children
+    }
+
+    var childCount: Int {
+        contentDocument == nil ? regularChildCount : 1
+    }
+
 }

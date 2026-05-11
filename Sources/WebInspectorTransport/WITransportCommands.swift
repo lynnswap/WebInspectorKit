@@ -146,6 +146,8 @@ public final class WITransportDOMNode: Decodable, Sendable {
     public let nodeName: String
     public let localName: String
     public let nodeValue: String
+    public let pseudoType: String?
+    public let shadowRootType: String?
     public let childNodeCount: Int?
     public let children: [WITransportDOMNode]?
     public let attributes: [String]?
@@ -153,6 +155,9 @@ public final class WITransportDOMNode: Decodable, Sendable {
     public let baseURL: String?
     public let frameId: String?
     public let contentDocument: WITransportDOMNode?
+    public let shadowRoots: [WITransportDOMNode]?
+    public let templateContent: WITransportDOMNode?
+    public let pseudoElements: [WITransportDOMNode]?
     public let layoutFlags: [String]?
 
     public init(
@@ -161,6 +166,8 @@ public final class WITransportDOMNode: Decodable, Sendable {
         nodeName: String,
         localName: String,
         nodeValue: String,
+        pseudoType: String? = nil,
+        shadowRootType: String? = nil,
         childNodeCount: Int?,
         children: [WITransportDOMNode]?,
         attributes: [String]?,
@@ -168,6 +175,9 @@ public final class WITransportDOMNode: Decodable, Sendable {
         baseURL: String?,
         frameId: String?,
         contentDocument: WITransportDOMNode? = nil,
+        shadowRoots: [WITransportDOMNode]? = nil,
+        templateContent: WITransportDOMNode? = nil,
+        pseudoElements: [WITransportDOMNode]? = nil,
         layoutFlags: [String]?
     ) {
         self.nodeId = nodeId
@@ -175,6 +185,8 @@ public final class WITransportDOMNode: Decodable, Sendable {
         self.nodeName = nodeName
         self.localName = localName
         self.nodeValue = nodeValue
+        self.pseudoType = pseudoType
+        self.shadowRootType = shadowRootType
         self.childNodeCount = childNodeCount
         self.children = children
         self.attributes = attributes
@@ -182,6 +194,9 @@ public final class WITransportDOMNode: Decodable, Sendable {
         self.baseURL = baseURL
         self.frameId = frameId
         self.contentDocument = contentDocument
+        self.shadowRoots = shadowRoots
+        self.templateContent = templateContent
+        self.pseudoElements = pseudoElements
         self.layoutFlags = layoutFlags
     }
 
@@ -191,6 +206,8 @@ public final class WITransportDOMNode: Decodable, Sendable {
         nodeName: String,
         localName: String,
         nodeValue: String,
+        pseudoType: String? = nil,
+        shadowRootType: String? = nil,
         childNodeCount: Int?,
         children: [WITransportDOMNode]?,
         attributes: [String]?,
@@ -198,6 +215,9 @@ public final class WITransportDOMNode: Decodable, Sendable {
         baseURL: String?,
         frameId: String?,
         contentDocument: WITransportDOMNode? = nil,
+        shadowRoots: [WITransportDOMNode]? = nil,
+        templateContent: WITransportDOMNode? = nil,
+        pseudoElements: [WITransportDOMNode]? = nil,
         layoutFlags: [String]?
     ) {
         self.init(
@@ -206,6 +226,8 @@ public final class WITransportDOMNode: Decodable, Sendable {
             nodeName: nodeName,
             localName: localName,
             nodeValue: nodeValue,
+            pseudoType: pseudoType,
+            shadowRootType: shadowRootType,
             childNodeCount: childNodeCount,
             children: children,
             attributes: attributes,
@@ -213,6 +235,9 @@ public final class WITransportDOMNode: Decodable, Sendable {
             baseURL: baseURL,
             frameId: frameId,
             contentDocument: contentDocument,
+            shadowRoots: shadowRoots,
+            templateContent: templateContent,
+            pseudoElements: pseudoElements,
             layoutFlags: layoutFlags
         )
     }

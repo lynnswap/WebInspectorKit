@@ -34,7 +34,7 @@ struct DOMElementViewControllerTests {
         }
         #expect(loadingStateReady)
 
-        runtime.document.replaceDocument(with: .init(root: makeNode(localID: 1)))
+        runtime.document.replaceDocument(with: .init(root: makeNode(nodeID: 1)))
 
         let readyEmptyStateReady = await waitUntil {
             viewController.contentUnavailableTextForTesting != nil
@@ -228,14 +228,14 @@ struct DOMElementViewControllerTests {
         runtime.document.replaceDocument(
             with: .init(
                 root: makeNode(
-                    localID: 1,
-                    children: [makeNode(localID: 42, attributes: attributes)]
+                    nodeID: 1,
+                    children: [makeNode(nodeID: 42, attributes: attributes)]
                 )
             )
         )
         runtime.document.applySelectionSnapshot(
             .init(
-                localID: 42,
+                key: key(42),
                 attributes: attributes,
                 path: ["html", "body", "div"],
                 selectorPath: selectorPath,
@@ -245,23 +245,32 @@ struct DOMElementViewControllerTests {
     }
 
     private func makeNode(
-        localID: UInt64,
+        nodeID: UInt64,
         attributes: [DOMAttribute] = [],
         children: [DOMGraphNodeDescriptor] = []
     ) -> DOMGraphNodeDescriptor {
         DOMGraphNodeDescriptor(
-            localID: localID,
-            backendNodeID: Int(localID),
+            targetIdentifier: testTargetIdentifier,
+            nodeID: Int(nodeID),
             nodeType: 1,
             nodeName: "DIV",
             localName: "div",
             nodeValue: "",
             attributes: attributes,
-            childCount: children.count,
+            regularChildCount: children.count,
+            regularChildrenAreLoaded: true,
             layoutFlags: [],
             isRendered: true,
             children: children
         )
+    }
+
+    private var testTargetIdentifier: String {
+        "page"
+    }
+
+    private func key(_ nodeID: UInt64) -> DOMNodeKey {
+        DOMNodeKey(targetIdentifier: testTargetIdentifier, nodeID: Int(nodeID))
     }
 
     private func makeHostedElementViewController(

@@ -21,11 +21,12 @@ actor DOMPayloadNormalizer {
 
     func normalizeDocumentResponseData(
         _ data: Data,
+        targetIdentifier: String,
         resetDocument: Bool
     ) -> DOMGraphDelta? {
         guard let object = Self.dictionaryValue(from: data),
               let rootPayload = object["root"],
-              let root = Self.normalizeNodeDescriptor(rootPayload)
+              let root = Self.normalizeNodeDescriptor(rootPayload, targetIdentifier: targetIdentifier)
         else {
             return nil
         }
@@ -34,11 +35,16 @@ actor DOMPayloadNormalizer {
 
     func normalizeDOMEvent(
         method rawMethod: String,
+        targetIdentifier: String,
         paramsData: Data
     ) -> DOMGraphDelta? {
         let params = Self.dictionaryValue(from: paramsData) ?? [:]
         let method = rawMethod.hasPrefix("DOM.") ? String(rawMethod.dropFirst(4)) : rawMethod
-        guard let event = Self.normalizeMutationEvent(method: method, params: params) else {
+        guard let event = Self.normalizeMutationEvent(
+            method: method,
+            targetIdentifier: targetIdentifier,
+            params: params
+        ) else {
             return nil
         }
         return .mutations(.init(events: [event]))
@@ -57,37 +63,95 @@ private extension DOMPayloadNormalizer {
 
     static func normalizeMutationEvent(
         method: String,
+        targetIdentifier: String,
         params: [String: Any]
     ) -> DOMGraphMutationEvent? {
         switch method {
         case "childNodeInserted":
-            guard let parentLocalID = uint64Value(params["parentNodeId"]),
+            guard let parentNodeID = nodeIDValue(params["parentNodeId"]),
                   let nodePayload = params["node"],
-                  let node = normalizeNodeDescriptor(nodePayload)
+                  let node = normalizeNodeDescriptor(nodePayload, targetIdentifier: targetIdentifier)
             else {
                 return nil
             }
-            let previousLocalID = uint64ValueAllowingZero(params["previousNodeId"])
+            let previousSibling: DOMGraphPreviousSibling
+            if let rawPreviousNodeID = params["previousNodeId"] {
+                guard let previousNodeID = nodeIDValueAllowingZero(rawPreviousNodeID) else {
+                    return nil
+                }
+                previousSibling = previousNodeID == 0
+                    ? .firstChild
+                    : .node(DOMNodeKey(targetIdentifier: targetIdentifier, nodeID: previousNodeID))
+            } else {
+                previousSibling = .missing
+            }
             return .childNodeInserted(
-                parentLocalID: parentLocalID,
-                previousLocalID: previousLocalID,
+                parentKey: DOMNodeKey(targetIdentifier: targetIdentifier, nodeID: parentNodeID),
+                previousSibling: previousSibling,
                 node: node
             )
 
         case "childNodeRemoved":
-            guard let parentLocalID = uint64Value(params["parentNodeId"]),
-                  let nodeLocalID = uint64Value(params["nodeId"]) else {
+            guard let parentNodeID = nodeIDValue(params["parentNodeId"]),
+                  let nodeID = nodeIDValue(params["nodeId"]) else {
                 return nil
             }
-            return .childNodeRemoved(parentLocalID: parentLocalID, nodeLocalID: nodeLocalID)
+            return .childNodeRemoved(
+                parentKey: DOMNodeKey(targetIdentifier: targetIdentifier, nodeID: parentNodeID),
+                nodeKey: DOMNodeKey(targetIdentifier: targetIdentifier, nodeID: nodeID)
+            )
+
+        case "shadowRootPushed":
+            guard let hostNodeID = nodeIDValue(params["hostId"]),
+                  let rootPayload = params["root"],
+                  let root = normalizeNodeDescriptor(rootPayload, targetIdentifier: targetIdentifier)
+            else {
+                return nil
+            }
+            return .shadowRootPushed(
+                hostKey: DOMNodeKey(targetIdentifier: targetIdentifier, nodeID: hostNodeID),
+                root: root
+            )
+
+        case "shadowRootPopped":
+            guard let hostNodeID = nodeIDValue(params["hostId"]),
+                  let rootNodeID = nodeIDValue(params["rootId"]) else {
+                return nil
+            }
+            return .shadowRootPopped(
+                hostKey: DOMNodeKey(targetIdentifier: targetIdentifier, nodeID: hostNodeID),
+                rootKey: DOMNodeKey(targetIdentifier: targetIdentifier, nodeID: rootNodeID)
+            )
+
+        case "pseudoElementAdded":
+            guard let parentNodeID = nodeIDValue(params["parentId"]),
+                  let nodePayload = params["pseudoElement"],
+                  let node = normalizeNodeDescriptor(nodePayload, targetIdentifier: targetIdentifier)
+            else {
+                return nil
+            }
+            return .pseudoElementAdded(
+                parentKey: DOMNodeKey(targetIdentifier: targetIdentifier, nodeID: parentNodeID),
+                node: node
+            )
+
+        case "pseudoElementRemoved":
+            guard let parentNodeID = nodeIDValue(params["parentId"]),
+                  let nodeID = nodeIDValue(params["pseudoElementId"]) else {
+                return nil
+            }
+            return .pseudoElementRemoved(
+                parentKey: DOMNodeKey(targetIdentifier: targetIdentifier, nodeID: parentNodeID),
+                nodeKey: DOMNodeKey(targetIdentifier: targetIdentifier, nodeID: nodeID)
+            )
 
         case "attributeModified":
-            guard let nodeLocalID = uint64Value(params["nodeId"]),
+            guard let nodeID = nodeIDValue(params["nodeId"]),
                   let name = stringValue(params["name"]) else {
                 return nil
             }
             return .attributeModified(
-                nodeLocalID: nodeLocalID,
+                nodeKey: DOMNodeKey(targetIdentifier: targetIdentifier, nodeID: nodeID),
                 name: name,
                 value: stringValue(params["value"]) ?? "",
                 layoutFlags: normalizeLayoutFlags(params["layoutFlags"]),
@@ -95,35 +159,35 @@ private extension DOMPayloadNormalizer {
             )
 
         case "attributeRemoved":
-            guard let nodeLocalID = uint64Value(params["nodeId"]),
+            guard let nodeID = nodeIDValue(params["nodeId"]),
                   let name = stringValue(params["name"]) else {
                 return nil
             }
             return .attributeRemoved(
-                nodeLocalID: nodeLocalID,
+                nodeKey: DOMNodeKey(targetIdentifier: targetIdentifier, nodeID: nodeID),
                 name: name,
                 layoutFlags: normalizeLayoutFlags(params["layoutFlags"]),
                 isRendered: boolValue(params["isRendered"])
             )
 
         case "characterDataModified":
-            guard let nodeLocalID = uint64Value(params["nodeId"]) else {
+            guard let nodeID = nodeIDValue(params["nodeId"]) else {
                 return nil
             }
             return .characterDataModified(
-                nodeLocalID: nodeLocalID,
+                nodeKey: DOMNodeKey(targetIdentifier: targetIdentifier, nodeID: nodeID),
                 value: stringValue(params["characterData"]) ?? "",
                 layoutFlags: normalizeLayoutFlags(params["layoutFlags"]),
                 isRendered: boolValue(params["isRendered"])
             )
 
         case "childNodeCountUpdated":
-            guard let nodeLocalID = uint64Value(params["nodeId"]),
+            guard let nodeID = nodeIDValue(params["nodeId"]),
                   let childCount = intValue(params["childNodeCount"]) else {
                 return nil
             }
             return .childNodeCountUpdated(
-                nodeLocalID: nodeLocalID,
+                nodeKey: DOMNodeKey(targetIdentifier: targetIdentifier, nodeID: nodeID),
                 childCount: childCount,
                 layoutFlags: normalizeLayoutFlags(params["layoutFlags"]),
                 isRendered: boolValue(params["isRendered"])
@@ -131,9 +195,15 @@ private extension DOMPayloadNormalizer {
 
         case "setChildNodes":
             let nodesPayload = arrayValue(params["nodes"]) ?? []
-            let nodes = nodesPayload.compactMap(normalizeNodeDescriptor)
-            if let parentLocalID = uint64Value(params["parentId"]) {
-                return .setChildNodes(parentLocalID: parentLocalID, nodes: nodes)
+            let nodes = normalizeNodeDescriptorArray(
+                nodesPayload,
+                targetIdentifier: targetIdentifier
+            ).nodes
+            if let parentNodeID = nodeIDValue(params["parentId"]) {
+                return .setChildNodes(
+                    parentKey: DOMNodeKey(targetIdentifier: targetIdentifier, nodeID: parentNodeID),
+                    nodes: nodes
+                )
             }
             guard !nodes.isEmpty else {
                 return nil
@@ -148,9 +218,9 @@ private extension DOMPayloadNormalizer {
         }
     }
 
-    static func normalizeNodeDescriptor(_ payload: Any) -> DOMGraphNodeDescriptor? {
+    static func normalizeNodeDescriptor(_ payload: Any, targetIdentifier: String) -> DOMGraphNodeDescriptor? {
         guard let object = dictionaryValue(payload),
-              let localID = uint64Value(object["nodeId"])
+              let nodeID = nodeIDValue(object["nodeId"])
         else {
             return nil
         }
@@ -168,53 +238,92 @@ private extension DOMPayloadNormalizer {
             ? (rawLocalName.isEmpty ? rawNodeName : rawLocalName).lowercased()
             : rawLocalName
         let nodeValue = stringValue(object["nodeValue"]) ?? ""
-        let explicitBackendNodeID = intValue(object["backendNodeId"])
-        let backendNodeID = explicitBackendNodeID
-            ?? (localID <= UInt64(Int.max) ? Int(localID) : nil)
 
-        let contentDocumentPayload = object["contentDocument"]
-        let childPayloads = contentDocumentPayload.map { [$0] } ?? (arrayValue(object["children"]) ?? [])
-        var children: [DOMGraphNodeDescriptor] = []
-        children.reserveCapacity(childPayloads.count)
-        var omittedChildren = 0
-        for childPayload in childPayloads {
-            guard let child = normalizeNodeDescriptor(childPayload) else {
-                if isInternalOverlayNodePayload(childPayload) {
-                    omittedChildren += 1
-                }
-                continue
-            }
-            children.append(child)
+        let pseudoType = stringValue(object["pseudoType"])
+        let shadowRootType = stringValue(object["shadowRootType"])
+
+        let hasRegularChildrenPayload = object["children"] != nil
+        let regularChildPayloads = arrayValue(object["children"]) ?? []
+        let (regularChildren, omittedRegularChildren) = normalizeNodeDescriptorArray(
+            regularChildPayloads,
+            targetIdentifier: targetIdentifier
+        )
+        let contentDocument = dictionaryValue(object["contentDocument"]).flatMap {
+            normalizeNodeDescriptor($0, targetIdentifier: targetIdentifier)
+        }
+        let (shadowRoots, _) = normalizeNodeDescriptorArray(
+            arrayValue(object["shadowRoots"]) ?? [],
+            targetIdentifier: targetIdentifier
+        )
+        let templateContent = dictionaryValue(object["templateContent"]).flatMap {
+            normalizeNodeDescriptor($0, targetIdentifier: targetIdentifier)
+        }
+
+        let pseudoElements = (arrayValue(object["pseudoElements"]) ?? []).compactMap {
+            normalizeNodeDescriptor($0, targetIdentifier: targetIdentifier)
+        }
+        let beforePseudoElement = pseudoElements.first { $0.pseudoType == "before" }
+        let afterPseudoElement = pseudoElements.first { $0.pseudoType == "after" }
+        let otherPseudoElements = pseudoElements.filter {
+            $0.pseudoType != "before" && $0.pseudoType != "after"
         }
 
         let explicitChildCount = intValue(object["childNodeCount"])
-        let childCountIsKnown = explicitChildCount != nil
-            || contentDocumentPayload != nil
-            || object["children"] != nil
-        let minimumChildCount = max(children.count, contentDocumentPayload == nil ? 0 : 1)
-        let childCount = explicitChildCount.map {
-            max(max(0, $0 - omittedChildren), minimumChildCount)
-        } ?? minimumChildCount
+        let regularChildCount: Int
+        if hasRegularChildrenPayload {
+            regularChildCount = regularChildren.count
+        } else if let explicitChildCount {
+            let contentDocumentCount = contentDocument == nil ? 0 : 1
+            regularChildCount = max(0, explicitChildCount - contentDocumentCount - omittedRegularChildren)
+        } else {
+            regularChildCount = nodeType.canRequestRegularChildren ? 1 : 0
+        }
 
         return DOMGraphNodeDescriptor(
-            localID: localID,
-            backendNodeID: backendNodeID,
-            backendNodeIDIsStable: explicitBackendNodeID != nil,
+            targetIdentifier: targetIdentifier,
+            nodeID: nodeID,
             frameID: frameID,
             nodeType: nodeType,
             nodeName: nodeName,
             localName: localName,
             nodeValue: nodeValue,
-            attributes: normalizeNodeAttributes(object["attributes"], backendNodeID: backendNodeID),
-            childCount: childCount,
-            childCountIsKnown: childCountIsKnown,
+            pseudoType: pseudoType,
+            shadowRootType: shadowRootType,
+            attributes: normalizeNodeAttributes(object["attributes"], nodeID: nodeID),
+            regularChildCount: regularChildCount,
+            regularChildrenAreLoaded: hasRegularChildrenPayload,
             layoutFlags: normalizeLayoutFlags(object["layoutFlags"]) ?? [],
             isRendered: boolValue(object["isRendered"]) ?? true,
-            children: children
+            regularChildren: hasRegularChildrenPayload ? regularChildren : nil,
+            contentDocument: contentDocument,
+            shadowRoots: shadowRoots,
+            templateContent: templateContent,
+            beforePseudoElement: beforePseudoElement,
+            otherPseudoElements: otherPseudoElements,
+            afterPseudoElement: afterPseudoElement
         )
     }
 
-    static func normalizeNodeAttributes(_ payload: Any?, backendNodeID: Int?) -> [DOMAttribute] {
+    static func normalizeNodeDescriptorArray(
+        _ payloads: [Any],
+        targetIdentifier: String
+    ) -> (nodes: [DOMGraphNodeDescriptor], omittedInternalOverlayNodes: Int) {
+        var nodes: [DOMGraphNodeDescriptor] = []
+        nodes.reserveCapacity(payloads.count)
+        var omittedInternalOverlayNodes = 0
+        for payload in payloads {
+            guard let node = normalizeNodeDescriptor(payload, targetIdentifier: targetIdentifier) else {
+                if isInternalOverlayNodePayload(payload) {
+                    omittedInternalOverlayNodes += 1
+                }
+                continue
+            }
+            nodes.append(node)
+        }
+        return (nodes, omittedInternalOverlayNodes)
+    }
+
+    static func normalizeNodeAttributes(_ payload: Any?, nodeID: Int?) -> [DOMAttribute] {
         guard let values = arrayValue(payload) else {
             return []
         }
@@ -225,7 +334,7 @@ private extension DOMPayloadNormalizer {
         while index + 1 < values.count {
             let name = stringValue(values[index]) ?? ""
             let value = stringValue(values[index + 1]) ?? ""
-            attributes.append(DOMAttribute(nodeId: backendNodeID, name: name, value: value))
+            attributes.append(DOMAttribute(nodeId: nodeID, name: name, value: value))
             index += 2
         }
         return attributes
@@ -302,6 +411,23 @@ private extension DOMPayloadNormalizer {
     }
 
     static func intValue(_ value: Any?) -> Int? {
+        if let value = value as? NSNumber {
+            if CFGetTypeID(value) == CFBooleanGetTypeID() {
+                return nil
+            }
+            let doubleValue = value.doubleValue
+            guard doubleValue.isFinite else {
+                return nil
+            }
+            let truncated = doubleValue.rounded(.towardZero)
+            guard truncated == doubleValue else {
+                return nil
+            }
+            guard truncated >= Double(Int.min), truncated <= Double(Int.max) else {
+                return nil
+            }
+            return Int(truncated)
+        }
         if value is Bool {
             return nil
         }
@@ -326,53 +452,24 @@ private extension DOMPayloadNormalizer {
             }
             return Int(value)
         }
-        if let value = value as? NSNumber {
-            if CFGetTypeID(value) == CFBooleanGetTypeID() {
-                return nil
-            }
-            let doubleValue = value.doubleValue
-            guard doubleValue.isFinite else {
-                return nil
-            }
-            let truncated = doubleValue.rounded(.towardZero)
-            guard truncated == doubleValue else {
-                return nil
-            }
-            guard truncated >= Double(Int.min), truncated <= Double(Int.max) else {
-                return nil
-            }
-            return Int(truncated)
-        }
         if let value = value as? String {
             return Int(value)
         }
         return nil
     }
 
-    static func uint64Value(_ value: Any?) -> UInt64? {
-        if let value = value as? UInt64, value > 0 {
-            return value
-        }
-        if let value = value as? UInt, value > 0 {
-            return UInt64(value)
-        }
+    static func nodeIDValue(_ value: Any?) -> Int? {
         guard let intValue = intValue(value), intValue > 0 else {
             return nil
         }
-        return UInt64(intValue)
+        return intValue
     }
 
-    static func uint64ValueAllowingZero(_ value: Any?) -> UInt64? {
-        if let value = value as? UInt64 {
-            return value
-        }
-        if let value = value as? UInt {
-            return UInt64(value)
-        }
+    static func nodeIDValueAllowingZero(_ value: Any?) -> Int? {
         guard let intValue = intValue(value), intValue >= 0 else {
             return nil
         }
-        return UInt64(intValue)
+        return intValue
     }
 
     static func boolValue(_ value: Any?) -> Bool? {
@@ -386,5 +483,16 @@ private extension DOMPayloadNormalizer {
             return value.intValue != 0
         }
         return nil
+    }
+}
+
+private extension DOMNodeType {
+    var canRequestRegularChildren: Bool {
+        switch self {
+        case .element, .document, .documentFragment:
+            return true
+        default:
+            return false
+        }
     }
 }
