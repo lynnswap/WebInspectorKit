@@ -152,13 +152,159 @@ struct WIDOMInspectorTests {
         let bodyNode = try #require(htmlNode.children.first(where: { $0.localName == "body" }))
         let mainNode = try #require(bodyNode.children.first(where: { $0.localName == "main" }))
         let iframeNode = try #require(mainNode.children.first(where: { $0.localName == "iframe" }))
-        let nestedDocument = try #require(iframeNode.children.first)
+        let nestedDocument = try #require(iframeNode.contentDocument)
 
         #expect(iframeNode.frameID == "frame-child")
         #expect(iframeNode.childCount == 1)
+        #expect(iframeNode.regularChildren.isEmpty)
+        #expect(iframeNode.effectiveChildren.map(\.localID) == [nestedDocument.localID])
         #expect(nestedDocument.nodeType == .document)
         #expect(nestedDocument.frameID == "frame-child")
         #expect(nestedDocument.children.first?.children.first?.localName == "button")
+    }
+
+    @Test
+    func payloadNormalizerKeepsWebKitSpecialChildrenSeparate() async throws {
+        let normalizer = DOMPayloadNormalizer()
+        let delta = try #require(
+            await normalizer.normalizeDocumentResponseData(
+                jsonData([
+                    "root": [
+                        "nodeId": 1,
+                        "backendNodeId": 1,
+                        "nodeType": 9,
+                        "nodeName": "#document",
+                        "localName": "",
+                        "nodeValue": "",
+                        "childNodeCount": 1,
+                        "children": [[
+                            "nodeId": 10,
+                            "backendNodeId": 10,
+                            "nodeType": 1,
+                            "nodeName": "SECTION",
+                            "localName": "section",
+                            "nodeValue": "",
+                            "attributes": [],
+                            "childNodeCount": 1,
+                            "children": [[
+                                "nodeId": 14,
+                                "backendNodeId": 14,
+                                "nodeType": 1,
+                                "nodeName": "P",
+                                "localName": "p",
+                                "nodeValue": "",
+                                "attributes": [],
+                                "childNodeCount": 0,
+                                "children": [],
+                            ]],
+                            "shadowRoots": [[
+                                "nodeId": 13,
+                                "backendNodeId": 13,
+                                "nodeType": 11,
+                                "nodeName": "#shadow-root",
+                                "localName": "",
+                                "nodeValue": "",
+                                "shadowRootType": "open",
+                                "childNodeCount": 0,
+                                "children": [],
+                            ]],
+                            "templateContent": [
+                                "nodeId": 11,
+                                "backendNodeId": 11,
+                                "nodeType": 11,
+                                "nodeName": "#document-fragment",
+                                "localName": "",
+                                "nodeValue": "",
+                                "childNodeCount": 0,
+                                "children": [],
+                            ],
+                            "pseudoElements": [[
+                                "nodeId": 15,
+                                "backendNodeId": 15,
+                                "nodeType": 1,
+                                "nodeName": "::after",
+                                "localName": "",
+                                "nodeValue": "",
+                                "pseudoType": "after",
+                                "childNodeCount": 0,
+                                "children": [],
+                            ], [
+                                "nodeId": 12,
+                                "backendNodeId": 12,
+                                "nodeType": 1,
+                                "nodeName": "::before",
+                                "localName": "",
+                                "nodeValue": "",
+                                "pseudoType": "before",
+                                "childNodeCount": 0,
+                                "children": [],
+                            ]],
+                        ]],
+                    ],
+                ]),
+                resetDocument: true
+            )
+        )
+        guard case let .snapshot(snapshot, _) = delta else {
+            Issue.record("Expected DOM snapshot")
+            return
+        }
+
+        let host = try #require(snapshot.root.children.first)
+
+        #expect(host.regularChildren.map(\.localID) == [14])
+        #expect(host.contentDocument == nil)
+        #expect(host.shadowRoots.map(\.localID) == [13])
+        #expect(host.shadowRoots.first?.shadowRootType == "open")
+        #expect(host.templateContent?.localID == 11)
+        #expect(host.beforePseudoElement?.localID == 12)
+        #expect(host.beforePseudoElement?.pseudoType == "before")
+        #expect(host.afterPseudoElement?.localID == 15)
+        #expect(host.afterPseudoElement?.pseudoType == "after")
+        #expect(host.effectiveChildren.map(\.localID) == [13, 14])
+        #expect(host.visibleDOMTreeChildren.map(\.localID) == [11, 12, 13, 14, 15])
+    }
+
+    @Test
+    func payloadNormalizerTreatsPresentEmptyChildrenAsLoadedEmpty() async throws {
+        let normalizer = DOMPayloadNormalizer()
+        let delta = try #require(
+            await normalizer.normalizeDocumentResponseData(
+                jsonData([
+                    "root": [
+                        "nodeId": 1,
+                        "backendNodeId": 1,
+                        "nodeType": 9,
+                        "nodeName": "#document",
+                        "localName": "",
+                        "nodeValue": "",
+                        "childNodeCount": 1,
+                        "children": [[
+                            "nodeId": 10,
+                            "backendNodeId": 10,
+                            "nodeType": 1,
+                            "nodeName": "DIV",
+                            "localName": "div",
+                            "nodeValue": "",
+                            "attributes": [],
+                            "childNodeCount": 1,
+                            "children": [],
+                        ]],
+                    ],
+                ]),
+                resetDocument: true
+            )
+        )
+        guard case let .snapshot(snapshot, _) = delta else {
+            Issue.record("Expected DOM snapshot")
+            return
+        }
+
+        let div = try #require(snapshot.root.regularChildren.first)
+        #expect(div.childCount == 0)
+        #expect(div.childCountIsKnown)
+        #expect(div.regularChildren.isEmpty)
+        #expect(div.visibleDOMTreeChildren.isEmpty)
     }
 
     @Test
@@ -4166,15 +4312,13 @@ struct WIDOMInspectorTests {
                         frameID: "frame-child",
                         idAttribute: "frame-owner",
                         childCount: 1,
-                        children: [
-                            makeFrameDocumentDescriptor(
-                                localID: 24,
-                                backendNodeID: 24,
-                                frameID: "frame-child",
-                                childCount: 1,
-                                children: []
-                            )
-                        ]
+                        contentDocument: makeFrameDocumentDescriptor(
+                            localID: 24,
+                            backendNodeID: 24,
+                            frameID: "frame-child",
+                            childCount: 1,
+                            children: []
+                        )
                     )
                 ]
             ),
@@ -5144,15 +5288,13 @@ struct WIDOMInspectorTests {
                         frameID: "frame-owner",
                         idAttribute: "frame-owner",
                         childCount: 1,
-                        children: [
-                            makeFrameDocumentDescriptor(
-                                localID: 801,
-                                backendNodeID: 801,
-                                frameID: "frame-owner",
-                                childCount: 0,
-                                children: []
-                            )
-                        ]
+                        contentDocument: makeFrameDocumentDescriptor(
+                            localID: 801,
+                            backendNodeID: 801,
+                            frameID: "frame-owner",
+                            childCount: 0,
+                            children: []
+                        )
                     )
                 ]
             ),
@@ -5266,23 +5408,21 @@ struct WIDOMInspectorTests {
                         childCount: 1,
                         layoutFlags: [],
                         isRendered: true,
-                        children: [
-                            DOMGraphNodeDescriptor(
-                                localID: 801,
-                                backendNodeID: 801,
-                                backendNodeIDIsStable: true,
-                                frameID: "frame-owner",
-                                nodeType: 0,
-                                nodeName: "#document",
-                                localName: "",
-                                nodeValue: "",
-                                attributes: [],
-                                childCount: 0,
-                                layoutFlags: [],
-                                isRendered: true,
-                                children: []
-                            )
-                        ]
+                        contentDocument: DOMGraphNodeDescriptor(
+                            localID: 801,
+                            backendNodeID: 801,
+                            backendNodeIDIsStable: true,
+                            frameID: "frame-owner",
+                            nodeType: 0,
+                            nodeName: "#document",
+                            localName: "",
+                            nodeValue: "",
+                            attributes: [],
+                            childCount: 0,
+                            layoutFlags: [],
+                            isRendered: true,
+                            children: []
+                        )
                     )
                 ]
             ),
@@ -5390,15 +5530,13 @@ struct WIDOMInspectorTests {
                         frameID: "frame-owner",
                         idAttribute: "frame-owner",
                         childCount: 1,
-                        children: [
-                            makeFrameDocumentDescriptor(
-                                localID: 775,
-                                backendNodeID: 775,
-                                frameID: "frame-owner",
-                                childCount: 1,
-                                children: []
-                            )
-                        ]
+                        contentDocument: makeFrameDocumentDescriptor(
+                            localID: 775,
+                            backendNodeID: 775,
+                            frameID: "frame-owner",
+                            childCount: 1,
+                            children: []
+                        )
                     )
                 ]
             ),
@@ -5501,15 +5639,13 @@ struct WIDOMInspectorTests {
                         frameID: "frame-owner",
                         idAttribute: "frame-owner",
                         childCount: 1,
-                        children: [
-                            makeFrameDocumentDescriptor(
-                                localID: 775,
-                                backendNodeID: 775,
-                                frameID: "frame-owner",
-                                childCount: 1,
-                                children: []
-                            )
-                        ]
+                        contentDocument: makeFrameDocumentDescriptor(
+                            localID: 775,
+                            backendNodeID: 775,
+                            frameID: "frame-owner",
+                            childCount: 1,
+                            children: []
+                        )
                     )
                 ]
             ),
@@ -5724,15 +5860,13 @@ struct WIDOMInspectorTests {
                         frameID: "frame-owner",
                         idAttribute: "frame-owner",
                         childCount: 1,
-                        children: [
-                            makeFrameDocumentDescriptor(
-                                localID: 775,
-                                backendNodeID: 775,
-                                frameID: "frame-owner",
-                                childCount: 1,
-                                children: []
-                            )
-                        ]
+                        contentDocument: makeFrameDocumentDescriptor(
+                            localID: 775,
+                            backendNodeID: 775,
+                            frameID: "frame-owner",
+                            childCount: 1,
+                            children: []
+                        )
                     )
                 ]
             ),
@@ -7503,6 +7637,7 @@ private func makeFrameOwnerDescriptor(
     idAttribute: String,
     titleAttribute: String? = nil,
     childCount: Int,
+    contentDocument: DOMGraphNodeDescriptor? = nil,
     children: [DOMGraphNodeDescriptor] = []
 ) -> DOMGraphNodeDescriptor {
     var attributes = [DOMAttribute(name: "id", value: idAttribute)]
@@ -7521,7 +7656,8 @@ private func makeFrameOwnerDescriptor(
         childCount: childCount,
         layoutFlags: [],
         isRendered: true,
-        children: children
+        children: children,
+        contentDocument: contentDocument
     )
 }
 

@@ -9,12 +9,86 @@ package struct DOMGraphNodeDescriptor: Sendable {
     package var nodeName: String
     package var localName: String
     package var nodeValue: String
+    package var pseudoType: String?
+    package var shadowRootType: String?
     package var attributes: [DOMAttribute]
     package var childCount: Int
     package var childCountIsKnown: Bool
     package var layoutFlags: [String]
     package var isRendered: Bool
-    package var children: [DOMGraphNodeDescriptor]
+    package var regularChildren: [DOMGraphNodeDescriptor]
+    private var contentDocuments: [DOMGraphNodeDescriptor]
+    package var shadowRoots: [DOMGraphNodeDescriptor]
+    private var templateContents: [DOMGraphNodeDescriptor]
+    private var beforePseudoElements: [DOMGraphNodeDescriptor]
+    private var afterPseudoElements: [DOMGraphNodeDescriptor]
+
+    package var contentDocument: DOMGraphNodeDescriptor? {
+        get {
+            contentDocuments.first
+        }
+        set {
+            contentDocuments = newValue.map { [$0] } ?? []
+        }
+    }
+
+    package var templateContent: DOMGraphNodeDescriptor? {
+        get {
+            templateContents.first
+        }
+        set {
+            templateContents = newValue.map { [$0] } ?? []
+        }
+    }
+
+    package var beforePseudoElement: DOMGraphNodeDescriptor? {
+        get {
+            beforePseudoElements.first
+        }
+        set {
+            beforePseudoElements = newValue.map { [$0] } ?? []
+        }
+    }
+
+    package var afterPseudoElement: DOMGraphNodeDescriptor? {
+        get {
+            afterPseudoElements.first
+        }
+        set {
+            afterPseudoElements = newValue.map { [$0] } ?? []
+        }
+    }
+
+    package var children: [DOMGraphNodeDescriptor] {
+        get {
+            regularChildren
+        }
+        set {
+            regularChildren = newValue
+        }
+    }
+
+    package var effectiveChildren: [DOMGraphNodeDescriptor] {
+        if let contentDocument {
+            return [contentDocument]
+        }
+        return shadowRoots + regularChildren
+    }
+
+    package var visibleDOMTreeChildren: [DOMGraphNodeDescriptor] {
+        var visibleChildren: [DOMGraphNodeDescriptor] = []
+        if let templateContent {
+            visibleChildren.append(templateContent)
+        }
+        if let beforePseudoElement {
+            visibleChildren.append(beforePseudoElement)
+        }
+        visibleChildren.append(contentsOf: effectiveChildren)
+        if let afterPseudoElement {
+            visibleChildren.append(afterPseudoElement)
+        }
+        return visibleChildren
+    }
 
     package init(
         localID: UInt64,
@@ -25,12 +99,20 @@ package struct DOMGraphNodeDescriptor: Sendable {
         nodeName: String,
         localName: String,
         nodeValue: String,
+        pseudoType: String? = nil,
+        shadowRootType: String? = nil,
         attributes: [DOMAttribute],
         childCount: Int,
         childCountIsKnown: Bool = true,
         layoutFlags: [String],
         isRendered: Bool,
-        children: [DOMGraphNodeDescriptor]
+        regularChildren: [DOMGraphNodeDescriptor]? = nil,
+        children: [DOMGraphNodeDescriptor] = [],
+        contentDocument: DOMGraphNodeDescriptor? = nil,
+        shadowRoots: [DOMGraphNodeDescriptor] = [],
+        templateContent: DOMGraphNodeDescriptor? = nil,
+        beforePseudoElement: DOMGraphNodeDescriptor? = nil,
+        afterPseudoElement: DOMGraphNodeDescriptor? = nil
     ) {
         self.localID = localID
         self.backendNodeID = backendNodeID
@@ -40,12 +122,19 @@ package struct DOMGraphNodeDescriptor: Sendable {
         self.nodeName = nodeName
         self.localName = localName
         self.nodeValue = nodeValue
+        self.pseudoType = pseudoType
+        self.shadowRootType = shadowRootType
         self.attributes = attributes
         self.childCount = childCount
         self.childCountIsKnown = childCountIsKnown
         self.layoutFlags = layoutFlags
         self.isRendered = isRendered
-        self.children = children
+        self.regularChildren = regularChildren ?? children
+        self.contentDocuments = contentDocument.map { [$0] } ?? []
+        self.shadowRoots = shadowRoots
+        self.templateContents = templateContent.map { [$0] } ?? []
+        self.beforePseudoElements = beforePseudoElement.map { [$0] } ?? []
+        self.afterPseudoElements = afterPseudoElement.map { [$0] } ?? []
     }
 
     package init(
@@ -57,12 +146,20 @@ package struct DOMGraphNodeDescriptor: Sendable {
         nodeName: String,
         localName: String,
         nodeValue: String,
+        pseudoType: String? = nil,
+        shadowRootType: String? = nil,
         attributes: [DOMAttribute],
         childCount: Int,
         childCountIsKnown: Bool = true,
         layoutFlags: [String],
         isRendered: Bool,
-        children: [DOMGraphNodeDescriptor]
+        regularChildren: [DOMGraphNodeDescriptor]? = nil,
+        children: [DOMGraphNodeDescriptor] = [],
+        contentDocument: DOMGraphNodeDescriptor? = nil,
+        shadowRoots: [DOMGraphNodeDescriptor] = [],
+        templateContent: DOMGraphNodeDescriptor? = nil,
+        beforePseudoElement: DOMGraphNodeDescriptor? = nil,
+        afterPseudoElement: DOMGraphNodeDescriptor? = nil
     ) {
         self.init(
             localID: localID,
@@ -73,12 +170,20 @@ package struct DOMGraphNodeDescriptor: Sendable {
             nodeName: nodeName,
             localName: localName,
             nodeValue: nodeValue,
+            pseudoType: pseudoType,
+            shadowRootType: shadowRootType,
             attributes: attributes,
             childCount: childCount,
             childCountIsKnown: childCountIsKnown,
             layoutFlags: layoutFlags,
             isRendered: isRendered,
-            children: children
+            regularChildren: regularChildren,
+            children: children,
+            contentDocument: contentDocument,
+            shadowRoots: shadowRoots,
+            templateContent: templateContent,
+            beforePseudoElement: beforePseudoElement,
+            afterPseudoElement: afterPseudoElement
         )
     }
 }

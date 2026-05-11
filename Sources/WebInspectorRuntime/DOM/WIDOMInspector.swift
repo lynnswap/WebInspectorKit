@@ -1016,7 +1016,7 @@ public final class WIDOMInspector {
 
     package func requestChildNodes(for node: DOMNodeModel, depth: Int) async {
         guard document.contains(node),
-              node.childCount > node.children.count,
+              node.hasUnloadedRegularChildren,
               node.localID <= UInt64(Int.max),
               let context = currentContext,
               let targetIdentifier = phase.targetIdentifier ?? sharedTransport.currentPageTargetIdentifier()
@@ -1665,10 +1665,10 @@ private extension WIDOMInspector {
             guard shouldHydrateInitiallyExpandedNode(node, depth: depth) else {
                 return
             }
-            if node.childCount > node.children.count {
+            if node.hasUnloadedRegularChildren {
                 nodes.append(node)
             }
-            for child in node.children {
+            for child in node.visibleDOMTreeChildren {
                 visit(child, depth: depth + 1)
             }
         }
@@ -2067,7 +2067,7 @@ private extension WIDOMInspector {
         guard let node = document.node(localID: UInt64(nodeID)) else {
             return false
         }
-        return node.childCount <= node.children.count
+        return !node.hasUnloadedRegularChildren
     }
 
     private func waitForPendingChildRequestCompletion(
@@ -3347,9 +3347,7 @@ private extension WIDOMInspector {
             return pendingInspectSelection.outstandingMaterializationNodeIDs.isEmpty ? .exhausted : .requested
         }
 
-        let requestableCandidates = unresolvedCandidates.filter {
-            $0.childCount > $0.children.count
-        }
+        let requestableCandidates = unresolvedCandidates.filter(\.hasUnloadedRegularChildren)
         let requestableCandidateIDs = Set(requestableCandidates.map(\.id))
         if pendingInspectSelection.activeMaterializationStrategy != selectionMaterialization.strategy
             || pendingInspectSelection.outstandingMaterializationNodeIDs.isEmpty {
@@ -3492,22 +3490,22 @@ private extension WIDOMInspector {
                 continue
             }
             traversal.append(node)
-            queue.append(contentsOf: node.children)
+            queue.append(contentsOf: node.visibleDOMTreeChildren)
         }
 
         let frameDocumentCandidates = traversal.filter { node in
-            node.childCount > node.children.count
+            node.hasUnloadedRegularChildren
                 && isFrameDocumentCandidate(node)
         }
         let frameOwnerCandidates = traversal.filter { node in
             traversalRootIDs.contains(node.id) == false
-                && node.childCount > node.children.count
+                && node.hasUnloadedRegularChildren
                 && isFrameOwnerNode(node)
         }
         let canonicalEmbeddedCandidates = traversal.filter { node in
             traversalRootIDs.contains(node.id) == false
                 && isFrameOwnerNode(node) == false
-                && node.childCount > node.children.count
+                && node.hasUnloadedRegularChildren
                 && nodeIsInsideEmbeddedDocument(node)
                 && isFrameDocumentCandidate(node) == false
         }
@@ -3519,7 +3517,7 @@ private extension WIDOMInspector {
         )
         let genericIncompleteCandidates = traversal.filter { node in
             traversalRootIDs.contains(node.id) == false
-                && node.childCount > node.children.count
+                && node.hasUnloadedRegularChildren
                 && frameAssociatedCandidates.contains(where: { $0.id == node.id }) == false
         }
 
@@ -3545,7 +3543,7 @@ private extension WIDOMInspector {
             preservingOrder: nestedDocumentRootsSource.filter {
                 isDocumentNode($0)
                     && traversalRootIDs.contains($0.id) == false
-                    && ($0.childCount > $0.children.count || !$0.children.isEmpty)
+                    && ($0.hasUnloadedRegularChildren || !$0.children.isEmpty)
             }
         )
         if nestedDocumentRoots.isEmpty == false {
@@ -3727,7 +3725,7 @@ private extension WIDOMInspector {
             return frameID
         }
         if isFrameOwnerNode(node),
-           let documentChild = node.children.first(where: { isDocumentNode($0) }),
+           let documentChild = node.contentDocument,
            let frameID = documentChild.frameID,
            !frameID.isEmpty {
             return frameID
@@ -3745,7 +3743,7 @@ private extension WIDOMInspector {
                 frameIDs.insert(frameID)
             }
         }
-        for node in selectionMaterialization.frameOwnerCandidates where node.children.contains(where: { isDocumentNode($0) }) {
+        for node in selectionMaterialization.frameOwnerCandidates where node.contentDocument != nil {
             if let frameID = frameIDForSelectionFallback(node) {
                 frameIDs.insert(frameID)
             }
@@ -3780,7 +3778,7 @@ private extension WIDOMInspector {
             preservingOrder: candidateNodes.compactMap { candidate in
                 if isFrameOwnerNode(candidate),
                    isAuxiliaryFrameOwner(candidate) == false,
-                   candidate.children.contains(where: { isDocumentNode($0) }) {
+                   candidate.contentDocument != nil {
                     return candidate
                 }
                 guard isDocumentNode(candidate) else {
@@ -4226,7 +4224,7 @@ private extension WIDOMInspector {
             if isDocumentNode(node), seen.insert(node.id).inserted {
                 roots.append(node)
             }
-            queue.append(contentsOf: node.children)
+            queue.append(contentsOf: node.visibleDOMTreeChildren)
         }
 
         return roots
@@ -4285,7 +4283,7 @@ private extension WIDOMInspector {
             replacementRoot.backendNodeIDIsStable = nestedDocument.backendNodeIDIsStable
         }
         replacementRoot.frameID = nestedDocument.frameID ?? replacementRoot.frameID
-        replacementRoot.childCount = max(replacementRoot.childCount, replacementRoot.children.count)
+        replacementRoot.childCount = max(replacementRoot.childCount, replacementRoot.regularChildren.count)
         document.applyMutationBundle(
             .init(events: [.replaceSubtree(root: replacementRoot)])
         )
@@ -4321,7 +4319,7 @@ private extension WIDOMInspector {
 
         return firstNode(in: document.rootNode) { node in
             nodeNameForMatching(node) == "iframe" && node.frameID == frameID
-        }?.children.first(where: { isDocumentNode($0) })
+        }?.contentDocument
     }
 
     private func materializeSelectionSubtreeIfNeeded(
@@ -4470,16 +4468,16 @@ private extension WIDOMInspector {
 
         while let current = queue.first {
             queue.removeFirst()
-            if current.childCount > current.children.count,
+            if current.hasUnloadedRegularChildren,
                seen.insert(current.id).inserted {
                 candidates.append(current)
             }
-            queue.append(contentsOf: current.children)
+            queue.append(contentsOf: current.visibleDOMTreeChildren)
         }
 
         if let parent = node.parent,
            isDocumentNode(parent),
-           parent.childCount > parent.children.count,
+           parent.hasUnloadedRegularChildren,
            seen.insert(parent.id).inserted {
             candidates.append(parent)
         }
@@ -4735,12 +4733,19 @@ private extension WIDOMInspector {
             nodeName: node.nodeName,
             localName: node.localName,
             nodeValue: node.nodeValue,
+            pseudoType: node.pseudoType,
+            shadowRootType: node.shadowRootType,
             attributes: node.attributes,
             childCount: node.childCount,
             childCountIsKnown: node.childCountIsKnown,
             layoutFlags: node.layoutFlags,
             isRendered: node.isRendered,
-            children: node.children.map(nodeDescriptor(from:))
+            regularChildren: node.regularChildren.map(nodeDescriptor(from:)),
+            contentDocument: node.contentDocument.map(nodeDescriptor(from:)),
+            shadowRoots: node.shadowRoots.map(nodeDescriptor(from:)),
+            templateContent: node.templateContent.map(nodeDescriptor(from:)),
+            beforePseudoElement: node.beforePseudoElement.map(nodeDescriptor(from:)),
+            afterPseudoElement: node.afterPseudoElement.map(nodeDescriptor(from:))
         )
     }
 
@@ -4968,7 +4973,7 @@ private extension WIDOMInspector {
             if isDocumentNode(node), seen.insert(node.id).inserted {
                 roots.append(node)
             }
-            queue.append(contentsOf: node.children)
+            queue.append(contentsOf: node.visibleDOMTreeChildren)
         }
         return roots
     }
@@ -5238,7 +5243,7 @@ private extension WIDOMInspector {
                 return
             }
             collected.append(selectionNodeSummary(node))
-            for child in node.children {
+            for child in node.visibleDOMTreeChildren {
                 visit(child)
                 if collected.count >= limit {
                     return
@@ -5385,7 +5390,7 @@ private extension WIDOMInspector {
         if predicate(root) {
             return root
         }
-        for child in root.children {
+        for child in root.visibleDOMTreeChildren {
             if let match = firstNode(in: child, where: predicate) {
                 return match
             }
@@ -5454,10 +5459,10 @@ private extension WIDOMInspector {
         for index in path {
             guard let node = current,
                   index >= 0,
-                  index < node.children.count else {
+                  index < node.visibleDOMTreeChildren.count else {
                 return nil
             }
-            current = node.children[index]
+            current = node.visibleDOMTreeChildren[index]
         }
         return current
     }
@@ -5642,7 +5647,7 @@ private extension WIDOMInspector {
             return 0
         }
 
-        let siblings = parent.children
+        let siblings = parent.regularChildren
         if siblings.count <= 1 {
             return 0
         }
@@ -5692,7 +5697,7 @@ private extension WIDOMInspector {
         guard let parent = node.parent else {
             return [node]
         }
-        return parent.children.filter(nodeIsElementLike)
+        return parent.regularChildren.filter(nodeIsElementLike)
     }
 
     func selectorNodeName(for node: DOMNodeModel) -> String {
@@ -5768,11 +5773,27 @@ private extension WIDOMInspector {
             "isRendered": node.isRendered,
         ]
 
-        if isFrameOwnerNode(node),
-           let contentDocument = node.children.first(where: { isDocumentNode($0) }) {
+        if let pseudoType = node.pseudoType {
+            payload["pseudoType"] = pseudoType
+        }
+        if let shadowRootType = node.shadowRootType {
+            payload["shadowRootType"] = shadowRootType
+        }
+
+        if let contentDocument = node.contentDocument {
             payload["contentDocument"] = nodePayloadDictionary(from: contentDocument)
         } else {
-            payload["children"] = node.children.map(nodePayloadDictionary(from:))
+            payload["children"] = node.regularChildren.map(nodePayloadDictionary(from:))
+        }
+        if !node.shadowRoots.isEmpty {
+            payload["shadowRoots"] = node.shadowRoots.map(nodePayloadDictionary(from:))
+        }
+        if let templateContent = node.templateContent {
+            payload["templateContent"] = nodePayloadDictionary(from: templateContent)
+        }
+        let pseudoElements = [node.beforePseudoElement, node.afterPseudoElement].compactMap { $0 }
+        if !pseudoElements.isEmpty {
+            payload["pseudoElements"] = pseudoElements.map(nodePayloadDictionary(from:))
         }
 
         return payload
@@ -6311,7 +6332,7 @@ extension WIDOMInspector {
     }
 
     package var testDocumentRootChildLocalIDs: [UInt64] {
-        document.rootNode?.children.map(\.localID) ?? []
+        document.rootNode?.visibleDOMTreeChildren.map(\.localID) ?? []
     }
 
     package var testHasPendingInspectSelection: Bool {

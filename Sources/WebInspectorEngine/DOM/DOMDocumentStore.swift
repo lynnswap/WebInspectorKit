@@ -4,6 +4,24 @@ import OSLog
 
 private let domDocumentLogger = Logger(subsystem: "WebInspectorKit", category: "DOMDocumentModel")
 
+private enum DOMChildStorageLocation {
+    case regular(Int)
+    case contentDocument
+    case shadowRoot(Int)
+    case templateContent
+    case beforePseudoElement
+    case afterPseudoElement
+
+    var countsTowardChildCount: Bool {
+        switch self {
+        case .regular, .contentDocument:
+            return true
+        case .shadowRoot, .templateContent, .beforePseudoElement, .afterPseudoElement:
+            return false
+        }
+    }
+}
+
 public enum DOMDocumentState: Equatable, Sendable {
     case detached
     case loading
@@ -598,8 +616,14 @@ private extension DOMDocumentModel {
             nodeName: descriptor.nodeName,
             localName: descriptor.localName,
             nodeValue: descriptor.nodeValue,
+            pseudoType: descriptor.pseudoType,
+            shadowRootType: descriptor.shadowRootType,
             attributes: normalizeAttributes(descriptor.attributes, backendNodeID: descriptor.backendNodeID),
-            childCount: max(descriptor.childCount, descriptor.children.count),
+            childCount: max(
+                descriptor.childCount,
+                descriptor.regularChildren.count,
+                descriptor.contentDocument == nil ? 0 : 1
+            ),
             childCountIsKnown: descriptor.childCountIsKnown,
             layoutFlags: descriptor.layoutFlags,
             isRendered: descriptor.isRendered
@@ -607,24 +631,152 @@ private extension DOMDocumentModel {
         node.parent = parent
         insert(node, for: descriptor.localID)
 
-        var children: [DOMNodeModel] = []
-        children.reserveCapacity(descriptor.children.count)
-        for childDescriptor in descriptor.children {
+        var regularChildren: [DOMNodeModel] = []
+        regularChildren.reserveCapacity(descriptor.regularChildren.count)
+        for childDescriptor in descriptor.regularChildren {
             let child = buildSubtree(from: childDescriptor, parent: node)
-            children.append(child)
+            regularChildren.append(child)
         }
-        node.children = children
+        node.regularChildren = regularChildren
+        node.contentDocument = descriptor.contentDocument.map {
+            buildSubtree(from: $0, parent: node)
+        }
+        node.shadowRoots = descriptor.shadowRoots.map {
+            buildSubtree(from: $0, parent: node)
+        }
+        node.templateContent = descriptor.templateContent.map {
+            buildSubtree(from: $0, parent: node)
+        }
+        node.beforePseudoElement = descriptor.beforePseudoElement.map {
+            buildSubtree(from: $0, parent: node)
+        }
+        node.afterPseudoElement = descriptor.afterPseudoElement.map {
+            buildSubtree(from: $0, parent: node)
+        }
         relinkChildren(of: node)
 
         return node
     }
 
     func relinkChildren(of parent: DOMNodeModel) {
-        for (index, child) in parent.children.enumerated() {
+        let children = parent.children
+        for (index, child) in children.enumerated() {
             child.parent = parent
-            child.previousSibling = index > 0 ? parent.children[index - 1] : nil
-            child.nextSibling = index + 1 < parent.children.count ? parent.children[index + 1] : nil
+            child.previousSibling = index > 0 ? children[index - 1] : nil
+            child.nextSibling = index + 1 < children.count ? children[index + 1] : nil
         }
+    }
+
+    func storageLocation(of child: DOMNodeModel, in parent: DOMNodeModel) -> DOMChildStorageLocation? {
+        if let index = parent.regularChildren.firstIndex(where: { $0 === child }) {
+            return .regular(index)
+        }
+        if parent.contentDocument === child {
+            return .contentDocument
+        }
+        if let index = parent.shadowRoots.firstIndex(where: { $0 === child }) {
+            return .shadowRoot(index)
+        }
+        if parent.templateContent === child {
+            return .templateContent
+        }
+        if parent.beforePseudoElement === child {
+            return .beforePseudoElement
+        }
+        if parent.afterPseudoElement === child {
+            return .afterPseudoElement
+        }
+        return nil
+    }
+
+    func minimumLoadedChildCount(for parent: DOMNodeModel) -> Int {
+        max(parent.regularChildren.count, parent.contentDocument == nil ? 0 : 1)
+    }
+
+    @discardableResult
+    func detachChild(_ child: DOMNodeModel, from parent: DOMNodeModel) -> DOMChildStorageLocation? {
+        guard let location = storageLocation(of: child, in: parent) else {
+            return nil
+        }
+        switch location {
+        case let .regular(index):
+            parent.regularChildren.remove(at: index)
+        case .contentDocument:
+            parent.contentDocument = nil
+        case let .shadowRoot(index):
+            parent.shadowRoots.remove(at: index)
+        case .templateContent:
+            parent.templateContent = nil
+        case .beforePseudoElement:
+            parent.beforePseudoElement = nil
+        case .afterPseudoElement:
+            parent.afterPseudoElement = nil
+        }
+        return location
+    }
+
+    func detachChild(localID: UInt64, from parent: DOMNodeModel) -> (DOMNodeModel, DOMChildStorageLocation)? {
+        if let child = parent.regularChildren.first(where: { $0.localID == localID }) {
+            guard let location = detachChild(child, from: parent) else {
+                return nil
+            }
+            return (child, location)
+        }
+        if let child = parent.contentDocument, child.localID == localID {
+            guard let location = detachChild(child, from: parent) else {
+                return nil
+            }
+            return (child, location)
+        }
+        if let child = parent.shadowRoots.first(where: { $0.localID == localID }) {
+            guard let location = detachChild(child, from: parent) else {
+                return nil
+            }
+            return (child, location)
+        }
+        if let child = parent.templateContent, child.localID == localID {
+            guard let location = detachChild(child, from: parent) else {
+                return nil
+            }
+            return (child, location)
+        }
+        if let child = parent.beforePseudoElement, child.localID == localID {
+            guard let location = detachChild(child, from: parent) else {
+                return nil
+            }
+            return (child, location)
+        }
+        if let child = parent.afterPseudoElement, child.localID == localID {
+            guard let location = detachChild(child, from: parent) else {
+                return nil
+            }
+            return (child, location)
+        }
+        return nil
+    }
+
+    func insert(
+        _ child: DOMNodeModel,
+        into parent: DOMNodeModel,
+        at location: DOMChildStorageLocation?
+    ) {
+        switch location {
+        case let .regular(index):
+            parent.regularChildren.insert(child, at: min(max(0, index), parent.regularChildren.count))
+        case .contentDocument:
+            parent.contentDocument = child
+        case let .shadowRoot(index):
+            parent.shadowRoots.insert(child, at: min(max(0, index), parent.shadowRoots.count))
+        case .templateContent:
+            parent.templateContent = child
+        case .beforePseudoElement:
+            parent.beforePseudoElement = child
+        case .afterPseudoElement:
+            parent.afterPseudoElement = child
+        case .none:
+            parent.regularChildren.append(child)
+        }
+        child.parent = parent
     }
 
     func applyChildNodeInserted(parentLocalID: UInt64, previousLocalID: UInt64?, node descriptor: DOMGraphNodeDescriptor) {
@@ -636,28 +788,28 @@ private extension DOMDocumentModel {
             return
         }
 
-        let hadLoadedChild = parent.children.contains { $0.localID == descriptor.localID }
-        let previousChildCount = max(parent.childCount, parent.children.count)
+        let hadLoadedChild = parent.regularChildren.contains { $0.localID == descriptor.localID }
+        let previousChildCount = max(parent.childCount, parent.regularChildren.count)
         let inserted = buildSubtree(from: descriptor, parent: parent)
-        parent.children.removeAll { $0.localID == descriptor.localID }
+        parent.regularChildren.removeAll { $0.localID == descriptor.localID }
 
         let insertionIndex: Int
         if previousLocalID == 0 {
             insertionIndex = 0
         } else if let previousLocalID,
                   let previousNode = node(forLocalID: previousLocalID),
-                  let previousIndex = parent.children.firstIndex(where: { $0 === previousNode }) {
+                  let previousIndex = parent.regularChildren.firstIndex(where: { $0 === previousNode }) {
             insertionIndex = previousIndex + 1
         } else {
-            insertionIndex = parent.children.count
+            insertionIndex = parent.regularChildren.count
         }
 
-        let boundedIndex = min(max(0, insertionIndex), parent.children.count)
-        parent.children.insert(inserted, at: boundedIndex)
+        let boundedIndex = min(max(0, insertionIndex), parent.regularChildren.count)
+        parent.regularChildren.insert(inserted, at: boundedIndex)
         if hadLoadedChild {
-            parent.childCount = max(previousChildCount, parent.children.count)
+            parent.childCount = max(previousChildCount, parent.regularChildren.count)
         } else {
-            parent.childCount = max(previousChildCount + 1, parent.children.count)
+            parent.childCount = max(previousChildCount + 1, parent.regularChildren.count)
         }
         relinkChildren(of: parent)
     }
@@ -671,9 +823,12 @@ private extension DOMDocumentModel {
             return
         }
 
-        if let index = parent.children.firstIndex(where: { $0.localID == nodeLocalID }) {
-            let removed = parent.children.remove(at: index)
-            parent.childCount = max(parent.children.count, parent.childCount - 1)
+        if let (removed, removedLocation) = detachChild(localID: nodeLocalID, from: parent) {
+            if removedLocation.countsTowardChildCount {
+                parent.childCount = max(minimumLoadedChildCount(for: parent), parent.childCount - 1)
+            } else {
+                parent.childCount = max(parent.childCount, minimumLoadedChildCount(for: parent))
+            }
             relinkChildren(of: parent)
             removeSubtree(removed, removeFromParent: false)
             return
@@ -737,7 +892,7 @@ private extension DOMDocumentModel {
             return
         }
 
-        node.childCount = max(0, childCount, node.children.count)
+        node.childCount = max(0, childCount, node.regularChildren.count, node.contentDocument == nil ? 0 : 1)
         node.childCountIsKnown = true
         applyLayout(into: node, layoutFlags: layoutFlags, isRendered: isRendered)
     }
@@ -757,7 +912,7 @@ private extension DOMDocumentModel {
             return
         }
 
-        let previousChildren = parent.children
+        let previousChildren = parent.regularChildren
         var nextChildren: [DOMNodeModel] = []
         nextChildren.reserveCapacity(nodes.count)
 
@@ -770,8 +925,8 @@ private extension DOMDocumentModel {
             removeSubtree(previous, removeFromParent: false)
         }
 
-        parent.children = nextChildren
-        parent.childCount = max(parent.childCount, nextChildren.count)
+        parent.regularChildren = nextChildren
+        parent.childCount = parent.regularChildren.count
         parent.childCountIsKnown = true
         relinkChildren(of: parent)
     }
@@ -799,19 +954,18 @@ private extension DOMDocumentModel {
                     : nil)
         if let existing = existingNode {
             let parent = existing.parent
-            let previousIndex = parent?.children.firstIndex(where: { $0 === existing })
-            let previousParentChildCount = parent.map { max($0.childCount, $0.children.count) }
+            let previousLocation = parent.flatMap { storageLocation(of: existing, in: $0) }
+            let previousParentChildCount = parent.map { max($0.childCount, $0.regularChildren.count) }
             let isReplacingRoot = rootNode === existing
             removeSubtree(existing, removeFromParent: true, decrementParentChildCount: false)
 
             let replacement = buildSubtree(from: root, parent: parent)
             if let parent {
-                let insertionIndex = min(previousIndex ?? parent.children.count, parent.children.count)
-                parent.children.insert(replacement, at: insertionIndex)
+                insert(replacement, into: parent, at: previousLocation)
                 if let previousParentChildCount {
-                    parent.childCount = max(previousParentChildCount, parent.children.count)
+                    parent.childCount = max(previousParentChildCount, parent.regularChildren.count)
                 } else {
-                    parent.childCount = max(parent.childCount, parent.children.count)
+                    parent.childCount = max(parent.childCount, parent.regularChildren.count)
                 }
                 relinkChildren(of: parent)
             } else if isReplacingRoot {
@@ -833,18 +987,16 @@ private extension DOMDocumentModel {
 
     func removeSubtree(_ root: DOMNodeModel, removeFromParent: Bool, decrementParentChildCount: Bool = true) {
         if removeFromParent, let parent = root.parent {
-            let previousLoadedChildCount = parent.children.count
-            parent.children.removeAll { $0 === root }
-            let removedLoadedChild = parent.children.count < previousLoadedChildCount
-            if decrementParentChildCount, removedLoadedChild {
-                parent.childCount = max(parent.children.count, parent.childCount - 1)
+            let removedLocation = detachChild(root, from: parent)
+            if decrementParentChildCount, removedLocation?.countsTowardChildCount == true {
+                parent.childCount = max(minimumLoadedChildCount(for: parent), parent.childCount - 1)
             } else {
-                parent.childCount = max(parent.childCount, parent.children.count)
+                parent.childCount = max(parent.childCount, minimumLoadedChildCount(for: parent))
             }
             relinkChildren(of: parent)
         }
 
-        for child in root.children {
+        for child in root.ownedChildren {
             removeSubtree(child, removeFromParent: false)
         }
 
@@ -863,7 +1015,12 @@ private extension DOMDocumentModel {
         }
         detachedRoots.removeAll { $0 === root }
 
-        root.children = []
+        root.regularChildren = []
+        root.contentDocument = nil
+        root.shadowRoots = []
+        root.templateContent = nil
+        root.beforePseudoElement = nil
+        root.afterPseudoElement = nil
         root.parent = nil
         root.previousSibling = nil
         root.nextSibling = nil
@@ -1014,7 +1171,7 @@ private extension DOMDocumentModel {
         guard isFrameOwnerNode(node) else {
             return false
         }
-        return node.children.contains(where: isDocumentNode)
+        return node.contentDocument != nil
     }
 
     func isDocumentNode(_ node: DOMNodeModel) -> Bool {

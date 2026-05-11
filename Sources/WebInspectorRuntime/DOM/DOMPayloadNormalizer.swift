@@ -172,29 +172,34 @@ private extension DOMPayloadNormalizer {
         let backendNodeID = explicitBackendNodeID
             ?? (localID <= UInt64(Int.max) ? Int(localID) : nil)
 
-        let contentDocumentPayload = object["contentDocument"]
-        let childPayloads = contentDocumentPayload.map { [$0] } ?? (arrayValue(object["children"]) ?? [])
-        var children: [DOMGraphNodeDescriptor] = []
-        children.reserveCapacity(childPayloads.count)
-        var omittedChildren = 0
-        for childPayload in childPayloads {
-            guard let child = normalizeNodeDescriptor(childPayload) else {
-                if isInternalOverlayNodePayload(childPayload) {
-                    omittedChildren += 1
-                }
-                continue
-            }
-            children.append(child)
-        }
+        let pseudoType = stringValue(object["pseudoType"])
+        let shadowRootType = stringValue(object["shadowRootType"])
+
+        let hasRegularChildrenPayload = object["children"] != nil
+        let regularChildPayloads = arrayValue(object["children"]) ?? []
+        let (regularChildren, omittedRegularChildren) = normalizeNodeDescriptorArray(regularChildPayloads)
+        let contentDocument = dictionaryValue(object["contentDocument"]).flatMap(normalizeNodeDescriptor)
+        let (shadowRoots, _) = normalizeNodeDescriptorArray(arrayValue(object["shadowRoots"]) ?? [])
+        let templateContent = dictionaryValue(object["templateContent"]).flatMap(normalizeNodeDescriptor)
+
+        let pseudoElements = (arrayValue(object["pseudoElements"]) ?? []).compactMap(normalizeNodeDescriptor)
+        let beforePseudoElement = pseudoElements.first { $0.pseudoType == "before" }
+        let afterPseudoElement = pseudoElements.first { $0.pseudoType == "after" }
 
         let explicitChildCount = intValue(object["childNodeCount"])
         let childCountIsKnown = explicitChildCount != nil
-            || contentDocumentPayload != nil
-            || object["children"] != nil
-        let minimumChildCount = max(children.count, contentDocumentPayload == nil ? 0 : 1)
-        let childCount = explicitChildCount.map {
-            max(max(0, $0 - omittedChildren), minimumChildCount)
-        } ?? minimumChildCount
+            || contentDocument != nil
+            || hasRegularChildrenPayload
+        let childCount: Int
+        if contentDocument != nil {
+            childCount = 1
+        } else if hasRegularChildrenPayload {
+            childCount = regularChildren.count
+        } else if let explicitChildCount {
+            childCount = max(0, explicitChildCount - omittedRegularChildren)
+        } else {
+            childCount = 0
+        }
 
         return DOMGraphNodeDescriptor(
             localID: localID,
@@ -205,13 +210,38 @@ private extension DOMPayloadNormalizer {
             nodeName: nodeName,
             localName: localName,
             nodeValue: nodeValue,
+            pseudoType: pseudoType,
+            shadowRootType: shadowRootType,
             attributes: normalizeNodeAttributes(object["attributes"], backendNodeID: backendNodeID),
             childCount: childCount,
             childCountIsKnown: childCountIsKnown,
             layoutFlags: normalizeLayoutFlags(object["layoutFlags"]) ?? [],
             isRendered: boolValue(object["isRendered"]) ?? true,
-            children: children
+            regularChildren: regularChildren,
+            contentDocument: contentDocument,
+            shadowRoots: shadowRoots,
+            templateContent: templateContent,
+            beforePseudoElement: beforePseudoElement,
+            afterPseudoElement: afterPseudoElement
         )
+    }
+
+    static func normalizeNodeDescriptorArray(
+        _ payloads: [Any]
+    ) -> (nodes: [DOMGraphNodeDescriptor], omittedInternalOverlayNodes: Int) {
+        var nodes: [DOMGraphNodeDescriptor] = []
+        nodes.reserveCapacity(payloads.count)
+        var omittedInternalOverlayNodes = 0
+        for payload in payloads {
+            guard let node = normalizeNodeDescriptor(payload) else {
+                if isInternalOverlayNodePayload(payload) {
+                    omittedInternalOverlayNodes += 1
+                }
+                continue
+            }
+            nodes.append(node)
+        }
+        return (nodes, omittedInternalOverlayNodes)
     }
 
     static func normalizeNodeAttributes(_ payload: Any?, backendNodeID: Int?) -> [DOMAttribute] {

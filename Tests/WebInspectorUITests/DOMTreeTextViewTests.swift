@@ -16,13 +16,13 @@ struct DOMTreeTextViewTests {
         #expect(!text.contains("#document"))
         #expect(text.contains("<!DOCTYPE html>"))
         #expect(text.contains("<html lang=\"en\">"))
-        #expect(text.contains("<head>...</head>"))
+        #expect(text.contains("<head>…</head>"))
         #expect(text.contains("<body class=\"logged-in env-production\">"))
         #expect(text.contains("<section data-runtime=\"unknown-node-type\"></section>"))
         #expect(text.contains("<div id=\"start-of-content\" class=\"show-on-focus\" data-testid=\"cellInnerDiv\"></div>"))
         #expect(text.contains("<img src=\"/preview.webp\" alt=\"preview\">"))
         #expect(text.contains("<input disabled>"))
-        #expect(text.contains("<article>...</article>"))
+        #expect(text.contains("<article>…</article>"))
         #expect(!text.contains("<span id=\"nested-child\"></span>"))
         #expect(!text.contains("disabled=\"\""))
         #expect(text.contains("\"Introducing luma for iOS 26\""))
@@ -164,7 +164,7 @@ struct DOMTreeTextViewTests {
 
         let articleLine = try #require(view.renderedLineSnapshotsForTesting.first { $0.text.contains("<article") })
         #expect(articleLine.hasDisclosure)
-        #expect(articleLine.text.contains("<article>...</article>"))
+        #expect(articleLine.text.contains("<article>…</article>"))
     }
 
     @Test
@@ -175,7 +175,7 @@ struct DOMTreeTextViewTests {
 
         var articleLine = try #require(view.renderedLineSnapshotsForTesting.first { $0.text.contains("<article") })
         #expect(articleLine.hasDisclosure)
-        #expect(articleLine.text.contains("<article>...</article>"))
+        #expect(articleLine.text.contains("<article>…</article>"))
 
         runtime.document.applyMutationBundle(
             DOMGraphMutationBundle(
@@ -189,6 +189,57 @@ struct DOMTreeTextViewTests {
         articleLine = try #require(view.renderedLineSnapshotsForTesting.first { $0.text.contains("<article") })
         #expect(!articleLine.hasDisclosure)
         #expect(articleLine.text.contains("<article></article>"))
+    }
+
+    @Test
+    func knownChildCountElementRemovesDisclosureWhenLoadedEmpty() throws {
+        let runtime = WIDOMRuntime()
+        runtime.document.replaceDocument(with: .init(root: makeDeferredChildDocumentNode()))
+        let view = makeTreeView(runtime: runtime)
+
+        var articleLine = try #require(view.renderedLineSnapshotsForTesting.first { $0.text.contains("<article") })
+        #expect(articleLine.hasDisclosure)
+        #expect(articleLine.text.contains("<article>…</article>"))
+
+        runtime.document.applyMutationBundle(
+            DOMGraphMutationBundle(
+                events: [
+                    .setChildNodes(parentLocalID: FixtureNodeID.article, nodes: []),
+                ]
+            )
+        )
+        view.synchronizeDocumentForTesting()
+
+        articleLine = try #require(view.renderedLineSnapshotsForTesting.first { $0.text.contains("<article") })
+        #expect(!articleLine.hasDisclosure)
+        #expect(articleLine.text.contains("<article></article>"))
+    }
+
+    @Test
+    func expandedElementRendersClosingTagRowAndLeavesEmptyChildInline() throws {
+        let view = makeTreeView()
+
+        view.toggleRowForTesting(containing: "<article")
+
+        let lines = view.renderedLineSnapshotsForTesting
+        let articleIndex = try #require(lines.firstIndex { $0.text.contains("<article") })
+        let childIndex = articleIndex + 1
+        let closeIndex = articleIndex + 2
+        #expect(lines.indices.contains(childIndex))
+        #expect(lines.indices.contains(closeIndex))
+
+        #expect(lines[articleIndex].hasDisclosure)
+        #expect(lines[articleIndex].isOpen)
+        #expect(lines[articleIndex].text.contains("<article>"))
+        #expect(!lines[articleIndex].text.contains("</article>"))
+
+        #expect(lines[childIndex].text.contains("<span id=\"nested-child\"></span>"))
+        #expect(!lines[childIndex].hasDisclosure)
+        #expect(!lines[childIndex].isClosingTag)
+
+        #expect(lines[closeIndex].text.contains("</article>"))
+        #expect(!lines[closeIndex].hasDisclosure)
+        #expect(lines[closeIndex].isClosingTag)
     }
 
     @Test
@@ -368,7 +419,7 @@ struct DOMTreeTextViewTests {
         let previousHorizontalOffset = max(0, view.contentSize.width - view.bounds.width)
         view.contentOffset.x = previousHorizontalOffset
 
-        #expect(view.renderedTextForTesting.contains("<article>...</article>"))
+        #expect(view.renderedTextForTesting.contains("<article>…</article>"))
         #expect(!view.renderedTextForTesting.contains("<span id=\"nested-child\"></span>"))
         #expect(previousHorizontalOffset > 0)
 
@@ -391,7 +442,7 @@ struct DOMTreeTextViewTests {
         let spanLine = try #require(lines.first { $0.text.contains("<span id=\"nested-child\"") })
 
         #expect(text.contains("<span id=\"nested-child\"></span>"))
-        #expect(!text.contains("<article>...</article>"))
+        #expect(!text.contains("<article>…</article>"))
         #expect(spanLine.depth == articleLine.depth + 1)
         #expect(view.selectedRowRectsForTesting().count == 1)
         #expect(view.contentOffset.x < previousHorizontalOffset)
@@ -404,7 +455,7 @@ struct DOMTreeTextViewTests {
         runtime.document.replaceDocument(with: .init(root: makeIframeDocumentNode()))
         let view = makeTreeView(runtime: runtime)
 
-        #expect(view.renderedTextForTesting.contains("<iframe src=\"https://cross.example/\">...</iframe>"))
+        #expect(view.renderedTextForTesting.contains("<iframe src=\"https://cross.example/\">…</iframe>"))
         #expect(!view.renderedTextForTesting.contains("<button id=\"inside-frame\"></button>"))
 
         runtime.document.applySelectionSnapshot(
@@ -427,12 +478,44 @@ struct DOMTreeTextViewTests {
         let frameButtonLine = try #require(lines.first { $0.text.contains("<button id=\"inside-frame\"") })
 
         #expect(text.contains("<button id=\"inside-frame\"></button>"))
-        #expect(!text.contains("<iframe src=\"https://cross.example/\">...</iframe>"))
+        #expect(!text.contains("<iframe src=\"https://cross.example/\">…</iframe>"))
         #expect(iframeLine.isOpen)
         #expect(embeddedDocumentLine.isOpen)
         #expect(embeddedDocumentLine.depth == iframeLine.depth + 1)
         #expect(frameButtonLine.depth > embeddedDocumentLine.depth)
         #expect(view.selectedRowRectsForTesting().count == 1)
+    }
+
+    @Test
+    func rendersWebKitSpecialChildrenInCanonicalOrder() throws {
+        let runtime = WIDOMRuntime()
+        runtime.document.replaceDocument(with: .init(root: makeSpecialChildrenDocumentNode()))
+        let view = makeTreeView(runtime: runtime)
+
+        runtime.document.applySelectionSnapshot(
+            DOMSelectionSnapshotPayload(
+                localID: FixtureNodeID.regularParagraph,
+                backendNodeID: Int(FixtureNodeID.regularParagraph),
+                attributes: [],
+                path: ["html", "body", "section", "p"],
+                selectorPath: "section > p",
+                styleRevision: 0
+            )
+        )
+        view.synchronizeDocumentForTesting()
+        view.layoutIfNeeded()
+
+        let orderedTexts = view.renderedLineSnapshotsForTesting.map(\.text)
+        let templateIndex = try #require(orderedTexts.firstIndex { $0.contains("Template Content") })
+        let beforeIndex = try #require(orderedTexts.firstIndex { $0.contains("::before") })
+        let shadowIndex = try #require(orderedTexts.firstIndex { $0.contains("Shadow Content (Open)") })
+        let regularIndex = try #require(orderedTexts.firstIndex { $0.contains("<p></p>") })
+        let afterIndex = try #require(orderedTexts.firstIndex { $0.contains("::after") })
+
+        #expect(templateIndex < beforeIndex)
+        #expect(beforeIndex < shadowIndex)
+        #expect(shadowIndex < regularIndex)
+        #expect(regularIndex < afterIndex)
     }
 
     @Test
@@ -442,7 +525,7 @@ struct DOMTreeTextViewTests {
         let view = makeTreeView(runtime: runtime)
         await waitForObservationDelivery()
 
-        #expect(view.renderedTextForTesting.contains("<article>...</article>"))
+        #expect(view.renderedTextForTesting.contains("<article>…</article>"))
         view.resetPerformanceCountersForTesting()
 
         runtime.document.applySelectionSnapshot(
@@ -885,6 +968,37 @@ struct DOMTreeTextViewTests {
         )
     }
 
+    private func makeDeferredChildDocumentNode() -> DOMGraphNodeDescriptor {
+        makeNode(
+            localID: FixtureNodeID.document,
+            type: .document,
+            nodeName: "#document",
+            localName: "",
+            children: [
+                makeNode(
+                    localID: FixtureNodeID.html,
+                    nodeName: "HTML",
+                    localName: "html",
+                    children: [
+                        makeNode(
+                            localID: FixtureNodeID.body,
+                            nodeName: "BODY",
+                            localName: "body",
+                            children: [
+                                makeNode(
+                                    localID: FixtureNodeID.article,
+                                    nodeName: "ARTICLE",
+                                    localName: "article",
+                                    childCount: 1
+                                ),
+                            ]
+                        ),
+                    ]
+                ),
+            ]
+        )
+    }
+
     private func makeWideGlyphDocumentNode() -> DOMGraphNodeDescriptor {
         makeNode(
             localID: FixtureNodeID.document,
@@ -921,6 +1035,70 @@ struct DOMTreeTextViewTests {
         )
     }
 
+    private func makeSpecialChildrenDocumentNode() -> DOMGraphNodeDescriptor {
+        makeNode(
+            localID: FixtureNodeID.document,
+            type: .document,
+            nodeName: "#document",
+            localName: "",
+            children: [
+                makeNode(
+                    localID: FixtureNodeID.html,
+                    nodeName: "HTML",
+                    localName: "html",
+                    children: [
+                        makeNode(
+                            localID: FixtureNodeID.body,
+                            nodeName: "BODY",
+                            localName: "body",
+                            children: [
+                                makeNode(
+                                    localID: FixtureNodeID.specialHost,
+                                    nodeName: "SECTION",
+                                    localName: "section",
+                                    children: [
+                                        makeNode(
+                                            localID: FixtureNodeID.regularParagraph,
+                                            nodeName: "P",
+                                            localName: "p"
+                                        ),
+                                    ],
+                                    shadowRoots: [
+                                        makeNode(
+                                            localID: FixtureNodeID.shadowRoot,
+                                            type: .documentFragment,
+                                            nodeName: "#shadow-root",
+                                            localName: "",
+                                            shadowRootType: "open"
+                                        )
+                                    ],
+                                    templateContent: makeNode(
+                                        localID: FixtureNodeID.templateContent,
+                                        type: .documentFragment,
+                                        nodeName: "#document-fragment",
+                                        localName: ""
+                                    ),
+                                    beforePseudoElement: makeNode(
+                                        localID: FixtureNodeID.beforePseudoElement,
+                                        nodeName: "::before",
+                                        localName: "",
+                                        pseudoType: "before"
+                                    ),
+                                    afterPseudoElement: makeNode(
+                                        localID: FixtureNodeID.afterPseudoElement,
+                                        nodeName: "::after",
+                                        localName: "",
+                                        pseudoType: "after"
+                                    )
+                                ),
+                            ]
+                        ),
+                    ]
+                ),
+            ]
+        )
+    }
+
     private func makeIframeDocumentNode() -> DOMGraphNodeDescriptor {
         makeNode(
             localID: FixtureNodeID.document,
@@ -945,7 +1123,7 @@ struct DOMTreeTextViewTests {
                                     attributes: [
                                         DOMAttribute(name: "src", value: "https://cross.example/"),
                                     ],
-                                    children: [
+                                    contentDocument:
                                         makeNode(
                                             localID: FixtureNodeID.iframeDocument,
                                             type: .document,
@@ -976,7 +1154,6 @@ struct DOMTreeTextViewTests {
                                                 ),
                                             ]
                                         ),
-                                    ]
                                 ),
                             ]
                         ),
@@ -994,6 +1171,13 @@ struct DOMTreeTextViewTests {
         nodeValue: String = "",
         attributes: [DOMAttribute] = [],
         children: [DOMGraphNodeDescriptor] = [],
+        contentDocument: DOMGraphNodeDescriptor? = nil,
+        shadowRoots: [DOMGraphNodeDescriptor] = [],
+        templateContent: DOMGraphNodeDescriptor? = nil,
+        beforePseudoElement: DOMGraphNodeDescriptor? = nil,
+        afterPseudoElement: DOMGraphNodeDescriptor? = nil,
+        pseudoType: String? = nil,
+        shadowRootType: String? = nil,
         childCount: Int? = nil,
         childCountIsKnown: Bool = true
     ) -> DOMGraphNodeDescriptor {
@@ -1004,12 +1188,19 @@ struct DOMTreeTextViewTests {
             nodeName: nodeName,
             localName: localName,
             nodeValue: nodeValue,
+            pseudoType: pseudoType,
+            shadowRootType: shadowRootType,
             attributes: attributes,
-            childCount: childCount ?? children.count,
+            childCount: childCount ?? max(children.count, contentDocument == nil ? 0 : 1),
             childCountIsKnown: childCountIsKnown,
             layoutFlags: [],
             isRendered: true,
-            children: children
+            children: children,
+            contentDocument: contentDocument,
+            shadowRoots: shadowRoots,
+            templateContent: templateContent,
+            beforePseudoElement: beforePseudoElement,
+            afterPseudoElement: afterPseudoElement
         )
     }
 
@@ -1041,6 +1232,12 @@ private enum FixtureNodeID {
     static let iframeHTML: UInt64 = 17
     static let iframeBody: UInt64 = 18
     static let iframeButton: UInt64 = 19
+    static let specialHost: UInt64 = 20
+    static let templateContent: UInt64 = 21
+    static let beforePseudoElement: UInt64 = 22
+    static let shadowRoot: UInt64 = 23
+    static let regularParagraph: UInt64 = 24
+    static let afterPseudoElement: UInt64 = 25
 }
 
 private extension UIColor {
