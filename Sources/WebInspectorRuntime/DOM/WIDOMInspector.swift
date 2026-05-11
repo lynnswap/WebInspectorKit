@@ -3083,7 +3083,7 @@ private extension WIDOMInspector {
     ) async -> DOMNodeModel? {
         var requestedNodeIDs = Set<DOMNodeModel.ID>()
 
-        for _ in 0..<12 {
+        while true {
             if let node = resolvedAttachedInspectedNodeFromCurrentDocument(
                 nodeID: nodeID,
                 targetIdentifier: targetIdentifier
@@ -3104,14 +3104,9 @@ private extension WIDOMInspector {
                 frontendNodeID: candidate.nodeID,
                 targetIdentifier: targetIdentifier,
                 contextID: contextID,
-                depth: Self.defaultSubtreeDepth
+                depth: Self.deepSubtreeDepth
             )
         }
-
-        return resolvedAttachedInspectedNodeFromCurrentDocument(
-            nodeID: nodeID,
-            targetIdentifier: targetIdentifier
-        )
     }
 
     private func inspectMaterializationCandidates(targetIdentifier: String) -> [DOMNodeModel] {

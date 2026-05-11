@@ -887,7 +887,8 @@ struct DOMDocumentModelTests {
         var host = try! #require(model.node(nodeID: 10))
         #expect(host.otherPseudoElements.map(\.nodeID) == [12])
         #expect(host.otherPseudoElements.first?.pseudoType == "marker")
-        #expect(host.visibleDOMTreeChildren.isEmpty)
+        #expect(host.visibleDOMTreeChildren.map(\.nodeID) == [12])
+        #expect(host.hasVisibleDOMTreeChildren)
         #expect(model.node(nodeID: 12) != nil)
         #expect(model.consumeRejectedStructuralMutationParentKeys().isEmpty)
 
@@ -907,6 +908,7 @@ struct DOMDocumentModelTests {
 
         host = try! #require(model.node(nodeID: 10))
         #expect(host.otherPseudoElements.map(\.nodeID) == [13])
+        #expect(host.visibleDOMTreeChildren.map(\.nodeID) == [13])
         #expect(model.node(nodeID: 12) == nil)
         #expect(model.node(nodeID: 13) != nil)
 

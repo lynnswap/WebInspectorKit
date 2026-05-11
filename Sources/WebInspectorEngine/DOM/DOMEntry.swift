@@ -142,6 +142,7 @@ public final class DOMNodeModel: Equatable, Hashable, Identifiable {
         if let beforePseudoElement {
             visibleChildren.append(beforePseudoElement)
         }
+        visibleChildren.append(contentsOf: otherPseudoElements)
         visibleChildren.append(contentsOf: children)
         if let afterPseudoElement {
             visibleChildren.append(afterPseudoElement)
@@ -164,6 +165,7 @@ public final class DOMNodeModel: Equatable, Hashable, Identifiable {
     public var hasVisibleDOMTreeChildren: Bool {
         templateContent != nil
             || beforePseudoElement != nil
+            || !otherPseudoElements.isEmpty
             || contentDocument != nil
             || !shadowRoots.isEmpty
             || regularChildState.knownCount > 0

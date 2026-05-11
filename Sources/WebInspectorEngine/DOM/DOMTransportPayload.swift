@@ -86,6 +86,7 @@ package struct DOMGraphNodeDescriptor: Sendable {
         if let beforePseudoElement {
             visibleChildren.append(beforePseudoElement)
         }
+        visibleChildren.append(contentsOf: otherPseudoElements)
         visibleChildren.append(contentsOf: effectiveChildren)
         if let afterPseudoElement {
             visibleChildren.append(afterPseudoElement)

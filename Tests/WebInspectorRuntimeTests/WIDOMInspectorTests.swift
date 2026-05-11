@@ -267,7 +267,7 @@ struct WIDOMInspectorTests {
         #expect(host.afterPseudoElement?.nodeID == 15)
         #expect(host.afterPseudoElement?.pseudoType == "after")
         #expect(host.effectiveChildren.map(\.nodeID) == [13, 14])
-        #expect(host.visibleDOMTreeChildren.map(\.nodeID) == [11, 12, 13, 14, 15])
+        #expect(host.visibleDOMTreeChildren.map(\.nodeID) == [11, 12, 16, 13, 14, 15])
     }
 
     @Test
@@ -4455,6 +4455,7 @@ struct WIDOMInspectorTests {
     @Test
     func domInspectMaterializesUnloadedMainTreeAncestor() async throws {
         var requestedChildNodeIDs: [Int] = []
+        var requestedDepths: [Int] = []
         var backend: FakeDOMTransportBackend!
         backend = FakeDOMTransportBackend(
             pageResultProvider: { method, payload, targetIdentifier in
@@ -4479,10 +4480,16 @@ struct WIDOMInspectorTests {
                     let requestedNodeID = params.flatMap {
                         runtimeTestIntValue($0["nodeId"]) ?? ($0["nodeId"] as? NSNumber)?.intValue
                     }
+                    let requestedDepth = params.flatMap {
+                        runtimeTestIntValue($0["depth"]) ?? ($0["depth"] as? NSNumber)?.intValue
+                    }
                     if let requestedNodeID {
                         requestedChildNodeIDs.append(requestedNodeID)
                     }
-                    if requestedNodeID == 10 {
+                    if let requestedDepth {
+                        requestedDepths.append(requestedDepth)
+                    }
+                    if requestedNodeID == 10, requestedDepth == 128 {
                         backend.emitPageEvent(
                             method: "DOM.setChildNodes",
                             params: [
@@ -4526,6 +4533,91 @@ struct WIDOMInspectorTests {
         }
         #expect(selected)
         #expect(requestedChildNodeIDs == [10])
+        #expect(requestedDepths == [128])
+    }
+
+    @Test
+    func domInspectMaterializationContinuesPastTwelveUnloadedSiblings() async throws {
+        var requestedChildNodeIDs: [Int] = []
+        let unloadedSiblings = (10...22).map { nodeID in
+            [
+                "nodeId": nodeID,
+                "nodeType": 1,
+                "nodeName": "SECTION",
+                "localName": "section",
+                "nodeValue": "",
+                "attributes": ["data-index", "\(nodeID)"],
+                "childNodeCount": 1,
+            ] as [String: Any]
+        }
+        var backend: FakeDOMTransportBackend!
+        backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, payload, targetIdentifier in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(
+                        url: "https://example.com/a",
+                        mainChildren: unloadedSiblings
+                    )
+                case WITransportMethod.DOM.setInspectModeEnabled:
+                    return [:]
+                case WITransportMethod.DOM.requestChildNodes:
+                    let params = runtimeTestDictionaryValue(payload["params"])
+                    let requestedNodeID = params.flatMap {
+                        runtimeTestIntValue($0["nodeId"]) ?? ($0["nodeId"] as? NSNumber)?.intValue
+                    }
+                    guard let requestedNodeID else {
+                        return [:]
+                    }
+                    requestedChildNodeIDs.append(requestedNodeID)
+                    let nodes: [[String: Any]]
+                    if requestedNodeID == 22 {
+                        nodes = [[
+                            "nodeId": 260,
+                            "nodeType": 1,
+                            "nodeName": "BUTTON",
+                            "localName": "button",
+                            "nodeValue": "",
+                            "attributes": ["id", "late-materialized-target"],
+                            "childNodeCount": 0,
+                            "children": [],
+                        ]]
+                    } else {
+                        nodes = []
+                    }
+                    backend.emitPageEvent(
+                        method: "DOM.setChildNodes",
+                        params: [
+                            "parentId": requestedNodeID,
+                            "nodes": nodes,
+                        ],
+                        targetIdentifier: targetIdentifier
+                    )
+                    return [:]
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        try await inspector.beginSelectionMode()
+        backend.emitPageEvent(method: "DOM.inspect", params: ["nodeId": 260])
+
+        let selected = await waitForCondition {
+            inspector.document.selectedNode?.nodeID == 260
+                && inspector.document.selectedNode?.attributes.contains(where: { $0.name == "id" && $0.value == "late-materialized-target" }) == true
+                && inspector.isSelectingElement == false
+        }
+        #expect(selected)
+        #expect(requestedChildNodeIDs == Array(10...22))
     }
 
     @Test
