@@ -247,6 +247,10 @@ package struct DOMGraphMutationBundle: Sendable {
 package enum DOMGraphMutationEvent: Sendable {
     case childNodeInserted(parentLocalID: UInt64, previousLocalID: UInt64?, node: DOMGraphNodeDescriptor)
     case childNodeRemoved(parentLocalID: UInt64, nodeLocalID: UInt64)
+    case shadowRootPushed(hostLocalID: UInt64, root: DOMGraphNodeDescriptor)
+    case shadowRootPopped(hostLocalID: UInt64, rootLocalID: UInt64)
+    case pseudoElementAdded(parentLocalID: UInt64, node: DOMGraphNodeDescriptor)
+    case pseudoElementRemoved(parentLocalID: UInt64, nodeLocalID: UInt64)
     case attributeModified(nodeLocalID: UInt64, name: String, value: String, layoutFlags: [String]?, isRendered: Bool?)
     case attributeRemoved(nodeLocalID: UInt64, name: String, layoutFlags: [String]?, isRendered: Bool?)
     case characterDataModified(nodeLocalID: UInt64, value: String, layoutFlags: [String]?, isRendered: Bool?)

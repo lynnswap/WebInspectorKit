@@ -2999,6 +2999,9 @@ private enum DOMTreeMarkupBuilder {
         guard inferredNodeType(for: node) == .element else {
             return false
         }
+        guard node.pseudoType == nil else {
+            return false
+        }
         return !voidElementNames.contains(elementName(for: node))
     }
 

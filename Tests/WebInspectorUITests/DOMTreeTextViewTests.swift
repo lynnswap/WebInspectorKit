@@ -519,6 +519,27 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func expandedPseudoElementDoesNotRenderInvalidClosingTagRow() throws {
+        let runtime = WIDOMRuntime()
+        runtime.document.replaceDocument(with: .init(root: makePseudoElementChildDocumentNode()))
+        let view = makeTreeView(runtime: runtime)
+
+        view.toggleRowForTesting(containing: "<section")
+        view.toggleRowForTesting(containing: "::before")
+
+        let lines = view.renderedLineSnapshotsForTesting
+        let pseudoIndex = try #require(lines.firstIndex { $0.text.contains("::before") })
+        let childIndex = try #require(lines.firstIndex { $0.text.contains("<span></span>") })
+
+        #expect(lines[pseudoIndex].hasDisclosure)
+        #expect(lines[pseudoIndex].isOpen)
+        #expect(childIndex > pseudoIndex)
+        #expect(lines[childIndex].depth == lines[pseudoIndex].depth + 1)
+        #expect(!lines.contains { $0.text.contains("</::before>") })
+        #expect(!lines.contains { $0.isClosingTag && $0.text.contains("::before") })
+    }
+
+    @Test
     func pickerSelectionReloadsOnlyWhenOpeningHiddenAncestors() async throws {
         let runtime = WIDOMRuntime()
         runtime.document.replaceDocument(with: .init(root: makeDocumentNode()))
@@ -1163,6 +1184,49 @@ struct DOMTreeTextViewTests {
         )
     }
 
+    private func makePseudoElementChildDocumentNode() -> DOMGraphNodeDescriptor {
+        makeNode(
+            localID: FixtureNodeID.document,
+            type: .document,
+            nodeName: "#document",
+            localName: "",
+            children: [
+                makeNode(
+                    localID: FixtureNodeID.html,
+                    nodeName: "HTML",
+                    localName: "html",
+                    children: [
+                        makeNode(
+                            localID: FixtureNodeID.body,
+                            nodeName: "BODY",
+                            localName: "body",
+                            children: [
+                                makeNode(
+                                    localID: FixtureNodeID.specialHost,
+                                    nodeName: "SECTION",
+                                    localName: "section",
+                                    beforePseudoElement: makeNode(
+                                        localID: FixtureNodeID.beforePseudoElement,
+                                        nodeName: "::before",
+                                        localName: "",
+                                        children: [
+                                            makeNode(
+                                                localID: FixtureNodeID.beforePseudoSpan,
+                                                nodeName: "SPAN",
+                                                localName: "span"
+                                            ),
+                                        ],
+                                        pseudoType: "before"
+                                    )
+                                ),
+                            ]
+                        ),
+                    ]
+                ),
+            ]
+        )
+    }
+
     private func makeNode(
         localID: UInt64,
         type: DOMNodeType = .element,
@@ -1238,6 +1302,7 @@ private enum FixtureNodeID {
     static let shadowRoot: UInt64 = 23
     static let regularParagraph: UInt64 = 24
     static let afterPseudoElement: UInt64 = 25
+    static let beforePseudoSpan: UInt64 = 26
 }
 
 private extension UIColor {

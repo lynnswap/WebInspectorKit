@@ -197,6 +197,22 @@ public final class DOMDocumentModel {
                 structuralLocalIDs.insert(parentLocalID)
                 structuralLocalIDs.insert(nodeLocalID)
                 applyChildNodeRemoved(parentLocalID: parentLocalID, nodeLocalID: nodeLocalID)
+            case let .shadowRootPushed(hostLocalID, root):
+                structuralLocalIDs.insert(hostLocalID)
+                structuralLocalIDs.insert(root.localID)
+                applyShadowRootPushed(hostLocalID: hostLocalID, root: root)
+            case let .shadowRootPopped(hostLocalID, rootLocalID):
+                structuralLocalIDs.insert(hostLocalID)
+                structuralLocalIDs.insert(rootLocalID)
+                applyChildNodeRemoved(parentLocalID: hostLocalID, nodeLocalID: rootLocalID)
+            case let .pseudoElementAdded(parentLocalID, node):
+                structuralLocalIDs.insert(parentLocalID)
+                structuralLocalIDs.insert(node.localID)
+                applyPseudoElementAdded(parentLocalID: parentLocalID, node: node)
+            case let .pseudoElementRemoved(parentLocalID, nodeLocalID):
+                structuralLocalIDs.insert(parentLocalID)
+                structuralLocalIDs.insert(nodeLocalID)
+                applyChildNodeRemoved(parentLocalID: parentLocalID, nodeLocalID: nodeLocalID)
             case let .attributeModified(nodeLocalID, name, value, layoutFlags, isRendered):
                 contentLocalIDs.insert(nodeLocalID)
                 applyAttributeModified(
@@ -777,6 +793,62 @@ private extension DOMDocumentModel {
             parent.regularChildren.append(child)
         }
         child.parent = parent
+    }
+
+    func removeExistingNodeBeforeSpecialInsert(localID: UInt64) {
+        guard let existing = node(forLocalID: localID) else {
+            return
+        }
+        removeSubtree(existing, removeFromParent: true, decrementParentChildCount: false)
+    }
+
+    func applyShadowRootPushed(hostLocalID: UInt64, root descriptor: DOMGraphNodeDescriptor) {
+        guard let host = node(forLocalID: hostLocalID) else {
+            flagRejectedStructuralMutation(
+                parentLocalID: hostLocalID,
+                reason: "shadowRootPushed missing host localID=\(hostLocalID) rootLocalID=\(descriptor.localID)"
+            )
+            return
+        }
+
+        removeExistingNodeBeforeSpecialInsert(localID: descriptor.localID)
+        let root = buildSubtree(from: descriptor, parent: host)
+        host.shadowRoots.removeAll { $0.localID == descriptor.localID }
+        host.shadowRoots.append(root)
+        relinkChildren(of: host)
+    }
+
+    func applyPseudoElementAdded(parentLocalID: UInt64, node descriptor: DOMGraphNodeDescriptor) {
+        guard let parent = node(forLocalID: parentLocalID) else {
+            flagRejectedStructuralMutation(
+                parentLocalID: parentLocalID,
+                reason: "pseudoElementAdded missing parent localID=\(parentLocalID) nodeLocalID=\(descriptor.localID)"
+            )
+            return
+        }
+
+        removeExistingNodeBeforeSpecialInsert(localID: descriptor.localID)
+        let inserted = buildSubtree(from: descriptor, parent: parent)
+        switch descriptor.pseudoType {
+        case "before":
+            if let existing = parent.beforePseudoElement {
+                removeSubtree(existing, removeFromParent: false)
+            }
+            parent.beforePseudoElement = inserted
+        case "after":
+            if let existing = parent.afterPseudoElement {
+                removeSubtree(existing, removeFromParent: false)
+            }
+            parent.afterPseudoElement = inserted
+        default:
+            removeSubtree(inserted, removeFromParent: false)
+            flagRejectedStructuralMutation(
+                parentLocalID: parentLocalID,
+                reason: "pseudoElementAdded unsupported pseudoType=\(descriptor.pseudoType ?? "nil") nodeLocalID=\(descriptor.localID)"
+            )
+            return
+        }
+        relinkChildren(of: parent)
     }
 
     func applyChildNodeInserted(parentLocalID: UInt64, previousLocalID: UInt64?, node descriptor: DOMGraphNodeDescriptor) {

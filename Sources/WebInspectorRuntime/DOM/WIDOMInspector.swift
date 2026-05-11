@@ -4047,6 +4047,18 @@ private extension WIDOMInspector {
             case let .childNodeRemoved(parentLocalID, nodeLocalID):
                 insert(parentLocalID)
                 insert(nodeLocalID)
+            case let .shadowRootPushed(hostLocalID, root):
+                insert(hostLocalID)
+                insert(root.localID)
+            case let .shadowRootPopped(hostLocalID, rootLocalID):
+                insert(hostLocalID)
+                insert(rootLocalID)
+            case let .pseudoElementAdded(parentLocalID, node):
+                insert(parentLocalID)
+                insert(node.localID)
+            case let .pseudoElementRemoved(parentLocalID, nodeLocalID):
+                insert(parentLocalID)
+                insert(nodeLocalID)
             case let .setDetachedRoots(nodes):
                 for node in nodes {
                     insert(node.localID)
@@ -5320,6 +5332,14 @@ private extension WIDOMInspector {
                 return "childNodeInserted(parent=\(parentLocalID),previous=\(previousLocalID.map(String.init) ?? "nil"),node=\(nodeDescriptorSummary(node)))"
             case let .childNodeRemoved(parentLocalID, nodeLocalID):
                 return "childNodeRemoved(parent=\(parentLocalID),node=\(nodeLocalID))"
+            case let .shadowRootPushed(hostLocalID, root):
+                return "shadowRootPushed(host=\(hostLocalID),root=\(nodeDescriptorSummary(root)))"
+            case let .shadowRootPopped(hostLocalID, rootLocalID):
+                return "shadowRootPopped(host=\(hostLocalID),root=\(rootLocalID))"
+            case let .pseudoElementAdded(parentLocalID, node):
+                return "pseudoElementAdded(parent=\(parentLocalID),node=\(nodeDescriptorSummary(node)))"
+            case let .pseudoElementRemoved(parentLocalID, nodeLocalID):
+                return "pseudoElementRemoved(parent=\(parentLocalID),node=\(nodeLocalID))"
             case let .attributeModified(nodeLocalID, name, value, _, _):
                 return "attributeModified(node=\(nodeLocalID),name=\(name),value=\(value))"
             case let .attributeRemoved(nodeLocalID, name, _, _):

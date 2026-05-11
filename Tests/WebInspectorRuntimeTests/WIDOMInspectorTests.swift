@@ -355,6 +355,105 @@ struct WIDOMInspectorTests {
     }
 
     @Test
+    func payloadNormalizerNormalizesLiveSpecialChildEvents() async throws {
+        let normalizer = DOMPayloadNormalizer()
+
+        let shadowPushDelta = try #require(
+            await normalizer.normalizeDOMEvent(
+                method: "DOM.shadowRootPushed",
+                paramsData: jsonData([
+                    "hostId": 10,
+                    "root": [
+                        "nodeId": 13,
+                        "backendNodeId": 13,
+                        "nodeType": 11,
+                        "nodeName": "#shadow-root",
+                        "localName": "",
+                        "nodeValue": "",
+                        "shadowRootType": "open",
+                        "childNodeCount": 0,
+                        "children": [],
+                    ],
+                ])
+            )
+        )
+        guard case let .mutations(shadowPushBundle) = shadowPushDelta,
+              case let .shadowRootPushed(hostLocalID, root) = try #require(shadowPushBundle.events.first)
+        else {
+            Issue.record("Expected shadowRootPushed mutation")
+            return
+        }
+        #expect(hostLocalID == 10)
+        #expect(root.localID == 13)
+        #expect(root.shadowRootType == "open")
+
+        let shadowPopDelta = try #require(
+            await normalizer.normalizeDOMEvent(
+                method: "DOM.shadowRootPopped",
+                paramsData: jsonData([
+                    "hostId": 10,
+                    "rootId": 13,
+                ])
+            )
+        )
+        guard case let .mutations(shadowPopBundle) = shadowPopDelta,
+              case let .shadowRootPopped(poppedHostLocalID, rootLocalID) = try #require(shadowPopBundle.events.first)
+        else {
+            Issue.record("Expected shadowRootPopped mutation")
+            return
+        }
+        #expect(poppedHostLocalID == 10)
+        #expect(rootLocalID == 13)
+
+        let pseudoAddedDelta = try #require(
+            await normalizer.normalizeDOMEvent(
+                method: "DOM.pseudoElementAdded",
+                paramsData: jsonData([
+                    "parentId": 10,
+                    "pseudoElement": [
+                        "nodeId": 12,
+                        "backendNodeId": 12,
+                        "nodeType": 1,
+                        "nodeName": "::before",
+                        "localName": "",
+                        "nodeValue": "",
+                        "pseudoType": "before",
+                        "childNodeCount": 0,
+                        "children": [],
+                    ],
+                ])
+            )
+        )
+        guard case let .mutations(pseudoAddedBundle) = pseudoAddedDelta,
+              case let .pseudoElementAdded(parentLocalID, pseudoElement) = try #require(pseudoAddedBundle.events.first)
+        else {
+            Issue.record("Expected pseudoElementAdded mutation")
+            return
+        }
+        #expect(parentLocalID == 10)
+        #expect(pseudoElement.localID == 12)
+        #expect(pseudoElement.pseudoType == "before")
+
+        let pseudoRemovedDelta = try #require(
+            await normalizer.normalizeDOMEvent(
+                method: "DOM.pseudoElementRemoved",
+                paramsData: jsonData([
+                    "parentId": 10,
+                    "pseudoElementId": 12,
+                ])
+            )
+        )
+        guard case let .mutations(pseudoRemovedBundle) = pseudoRemovedDelta,
+              case let .pseudoElementRemoved(removedParentLocalID, pseudoElementLocalID) = try #require(pseudoRemovedBundle.events.first)
+        else {
+            Issue.record("Expected pseudoElementRemoved mutation")
+            return
+        }
+        #expect(removedParentLocalID == 10)
+        #expect(pseudoElementLocalID == 12)
+    }
+
+    @Test
     func payloadNormalizerMarksFallbackProtocolNodeIDsUnstable() async throws {
         let normalizer = DOMPayloadNormalizer()
         let delta = try #require(

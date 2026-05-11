@@ -463,6 +463,96 @@ struct DOMDocumentModelTests {
     }
 
     @Test
+    func shadowRootPushedAddsSpecialChildWithoutChangingRegularChildCount() {
+        let model = DOMDocumentModel()
+        model.replaceDocument(
+            with: .init(
+                root: makeNode(
+                    localID: 1,
+                    children: [
+                        makeNode(
+                            localID: 10,
+                            children: [makeNode(localID: 14)]
+                        )
+                    ],
+                    nodeType: 9,
+                    nodeName: "#document",
+                    localName: ""
+                )
+            )
+        )
+
+        model.applyMutationBundle(
+            .init(events: [
+                .shadowRootPushed(
+                    hostLocalID: 10,
+                    root: makeNode(
+                        localID: 13,
+                        shadowRootType: "open",
+                        nodeType: 11,
+                        nodeName: "#shadow-root",
+                        localName: ""
+                    )
+                )
+            ])
+        )
+
+        let host = try! #require(model.node(localID: 10))
+        #expect(host.regularChildren.map(\.localID) == [14])
+        #expect(host.shadowRoots.map(\.localID) == [13])
+        #expect(host.children.map(\.localID) == [13, 14])
+        #expect(host.visibleDOMTreeChildren.map(\.localID) == [13, 14])
+        #expect(host.childCount == 1)
+        #expect(model.node(localID: 13) != nil)
+    }
+
+    @Test
+    func pseudoElementAddedAndRemovedUpdatesSpecialBucket() {
+        let model = DOMDocumentModel()
+        model.replaceDocument(
+            with: .init(
+                root: makeNode(
+                    localID: 1,
+                    children: [makeNode(localID: 10)],
+                    nodeType: 9,
+                    nodeName: "#document",
+                    localName: ""
+                )
+            )
+        )
+
+        model.applyMutationBundle(
+            .init(events: [
+                .pseudoElementAdded(
+                    parentLocalID: 10,
+                    node: makeNode(
+                        localID: 12,
+                        pseudoType: "before",
+                        nodeName: "::before",
+                        localName: ""
+                    )
+                )
+            ])
+        )
+
+        var host = try! #require(model.node(localID: 10))
+        #expect(host.beforePseudoElement?.localID == 12)
+        #expect(host.visibleDOMTreeChildren.map(\.localID) == [12])
+        #expect(model.node(localID: 12) != nil)
+
+        model.applyMutationBundle(
+            .init(events: [
+                .pseudoElementRemoved(parentLocalID: 10, nodeLocalID: 12)
+            ])
+        )
+
+        host = try! #require(model.node(localID: 10))
+        #expect(host.beforePseudoElement == nil)
+        #expect(host.visibleDOMTreeChildren.isEmpty)
+        #expect(model.node(localID: 12) == nil)
+    }
+
+    @Test
     func childNodeRemovedCanRemoveContentDocumentFromFrameOwner() {
         let model = DOMDocumentModel()
         model.replaceDocument(

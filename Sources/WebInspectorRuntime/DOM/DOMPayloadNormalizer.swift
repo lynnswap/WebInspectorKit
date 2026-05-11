@@ -81,6 +81,38 @@ private extension DOMPayloadNormalizer {
             }
             return .childNodeRemoved(parentLocalID: parentLocalID, nodeLocalID: nodeLocalID)
 
+        case "shadowRootPushed":
+            guard let hostLocalID = uint64Value(params["hostId"]),
+                  let rootPayload = params["root"],
+                  let root = normalizeNodeDescriptor(rootPayload)
+            else {
+                return nil
+            }
+            return .shadowRootPushed(hostLocalID: hostLocalID, root: root)
+
+        case "shadowRootPopped":
+            guard let hostLocalID = uint64Value(params["hostId"]),
+                  let rootLocalID = uint64Value(params["rootId"]) else {
+                return nil
+            }
+            return .shadowRootPopped(hostLocalID: hostLocalID, rootLocalID: rootLocalID)
+
+        case "pseudoElementAdded":
+            guard let parentLocalID = uint64Value(params["parentId"]),
+                  let nodePayload = params["pseudoElement"],
+                  let node = normalizeNodeDescriptor(nodePayload)
+            else {
+                return nil
+            }
+            return .pseudoElementAdded(parentLocalID: parentLocalID, node: node)
+
+        case "pseudoElementRemoved":
+            guard let parentLocalID = uint64Value(params["parentId"]),
+                  let nodeLocalID = uint64Value(params["pseudoElementId"]) else {
+                return nil
+            }
+            return .pseudoElementRemoved(parentLocalID: parentLocalID, nodeLocalID: nodeLocalID)
+
         case "attributeModified":
             guard let nodeLocalID = uint64Value(params["nodeId"]),
                   let name = stringValue(params["name"]) else {
