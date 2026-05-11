@@ -30,7 +30,6 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         paragraphStyle.paragraphSpacingBefore = 0
         return paragraphStyle
     }()
-
     private let dom: WIDOMRuntime
     private let observationScope = ObservationScope()
     private let textContentStorage = NSTextContentStorage()
@@ -55,6 +54,9 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     private var requestedChildNodeIDs: Set<DOMNodeModel.ID> = []
     private var findFoundRanges: [NSRange] = []
     private var findHighlightedRanges: [NSRange] = []
+    private var hoverRowRects: [CGRect] = []
+    private var selectedRowRects: [CGRect] = []
+    private var multiSelectedRowRects: [CGRect] = []
     private var findDecorationBatchDepth = 0
     private var pendingFindDecorationInvalidationRanges: [NSRange] = []
     private var measuredTextWidth: CGFloat = 0
@@ -215,6 +217,10 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
             y: layoutFrame.minY - surfaceFrame.minY
         )
         configureHighlights(
+            for: fragmentView,
+            surfaceFrame: surfaceFrame
+        )
+        configureRowBackgrounds(
             for: fragmentView,
             surfaceFrame: surfaceFrame
         )
@@ -558,7 +564,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     private func handleSelectedNodeChange() {
         let previousOpenState = openState
         prepareSelectionForRendering(clearsMultiSelectionForDocumentSelection: true)
-        if previousOpenState != openState {
+        if previousOpenState != openState || selectedNodeNeedsRowReload() {
             reloadTree(resetFragments: false)
             return
         }
@@ -1776,6 +1782,13 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         return rowRects(for: selectedNodeID)
     }
 
+    private func selectedNodeNeedsRowReload() -> Bool {
+        guard let selectedNodeID = dom.document.selectedNode?.id else {
+            return false
+        }
+        return rowIndexByNodeID[selectedNodeID] == nil
+    }
+
     private func multiSelectionContentRowRects() -> [CGRect] {
         rows.flatMap { row in
             !row.isClosingTag && multiSelectedNodeIDs.contains(row.node.id) ? contentRowRects(for: row) : []
@@ -1913,6 +1926,27 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         return rects
     }
 
+    private func localRowRects(in layoutFragmentFrame: CGRect, contentRects: [CGRect]) -> [CGRect] {
+        guard !contentRects.isEmpty else {
+            return []
+        }
+
+        var rects: [CGRect] = []
+        let fragmentLocalBounds = CGRect(origin: .zero, size: layoutFragmentFrame.size)
+        for rowRect in contentRects {
+            let localRect = rowRect.offsetBy(dx: -layoutFragmentFrame.minX, dy: -layoutFragmentFrame.minY)
+            guard localRect.intersects(fragmentLocalBounds) else {
+                continue
+            }
+            let clippedRect = localRect.intersection(fragmentLocalBounds)
+            guard !clippedRect.isNull, clippedRect.width > 0, clippedRect.height > 0 else {
+                continue
+            }
+            rects.append(clippedRect)
+        }
+        return rects
+    }
+
     private func textRange(for layoutFragment: NSTextLayoutFragment) -> NSRange {
         let fragmentStart = textOffset(for: layoutFragment.rangeInElement.location) ?? 0
         let fragmentEnd = textOffset(for: layoutFragment.rangeInElement.endLocation) ?? fragmentStart
@@ -1959,10 +1993,19 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     }
 
     private func updateContentDecorations() {
-        textContentView.hoverRowRects = hoverContentRowRects()
-        textContentView.selectedRowRects = selectedContentRowRects()
-        textContentView.multiSelectedRowRects = multiSelectionContentRowRects()
-        textContentView.setNeedsDisplay()
+        hoverRowRects = hoverContentRowRects()
+        selectedRowRects = selectedContentRowRects()
+        multiSelectedRowRects = multiSelectionContentRowRects()
+        updateRowBackgroundFragmentViews()
+    }
+
+    private func updateRowBackgroundFragmentViews() {
+        for case let fragmentView as DOMTreeTextLayoutFragmentView in textContentView.subviews {
+            configureRowBackgrounds(
+                for: fragmentView,
+                surfaceFrame: fragmentView.frame
+            )
+        }
     }
 
     private func updateFindHighlightFragmentViews() {
@@ -1971,6 +2014,35 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
                 for: fragmentView,
                 surfaceFrame: fragmentView.frame
             )
+        }
+    }
+
+    private func configureRowBackgrounds(
+        for fragmentView: DOMTreeTextLayoutFragmentView,
+        surfaceFrame: CGRect
+    ) {
+        let hoverRects = localRowRects(in: surfaceFrame, contentRects: hoverRowRects)
+        let selectedRects = localRowRects(in: surfaceFrame, contentRects: selectedRowRects)
+        let multiSelectedRects = localRowRects(in: surfaceFrame, contentRects: multiSelectedRowRects)
+        let hoverColor = hoverRects.isEmpty
+            ? nil
+            : DOMTreeHighlightTheme.webInspector.hoverRowBackground.resolvedColor(with: traitCollection).cgColor
+        let selectedColor = selectedRects.isEmpty && multiSelectedRects.isEmpty
+            ? nil
+            : DOMTreeHighlightTheme.webInspector.selectedRowBackground.resolvedColor(with: traitCollection).cgColor
+        let changed = fragmentView.hoverRowRects != hoverRects
+            || !Self.optionalColorsEqual(fragmentView.hoverRowColor, hoverColor)
+            || fragmentView.selectedRowRects != selectedRects
+            || fragmentView.multiSelectedRowRects != multiSelectedRects
+            || !Self.optionalColorsEqual(fragmentView.selectedRowColor, selectedColor)
+
+        fragmentView.hoverRowRects = hoverRects
+        fragmentView.hoverRowColor = hoverColor
+        fragmentView.selectedRowRects = selectedRects
+        fragmentView.multiSelectedRowRects = multiSelectedRects
+        fragmentView.selectedRowColor = selectedColor
+        if changed {
+            fragmentView.setNeedsDisplay()
         }
     }
 
@@ -2357,6 +2429,13 @@ extension DOMTreeTextView {
         }
     }
 
+    func removeRowIndexForTesting(containing text: String) {
+        guard let row = rows.first(where: { $0.text.contains(text) }) else {
+            return
+        }
+        rowIndexByNodeID.removeValue(forKey: row.node.id)
+    }
+
     var disclosureAttachmentSnapshotsForTesting: [DisclosureAttachmentSnapshot] {
         rows.compactMap { row in
             guard row.hasDisclosure,
@@ -2549,11 +2628,12 @@ extension DOMTreeTextView {
     }
 
     var drawnSelectedRowRectsForTesting: [CGRect] {
-        textContentView.selectedRowRects
+        selectedRowRects
     }
 
     func clearDrawnSelectedRowRectsForTesting() {
-        textContentView.selectedRowRects = []
+        selectedRowRects = []
+        updateRowBackgroundFragmentViews()
     }
 
     var fragmentSubviewCountForTesting: Int {
@@ -3273,31 +3353,6 @@ private extension DOMTreeInvalidation {
 }
 
 private final class DOMTreeTextContentView: UIView {
-    var hoverRowRects: [CGRect] = [] {
-        didSet {
-            guard hoverRowRects != oldValue else {
-                return
-            }
-            setNeedsDisplay()
-        }
-    }
-    var multiSelectedRowRects: [CGRect] = [] {
-        didSet {
-            guard multiSelectedRowRects != oldValue else {
-                return
-            }
-            setNeedsDisplay()
-        }
-    }
-    var selectedRowRects: [CGRect] = [] {
-        didSet {
-            guard selectedRowRects != oldValue else {
-                return
-            }
-            setNeedsDisplay()
-        }
-    }
-
     override init(frame: CGRect) {
         super.init(frame: frame)
         isOpaque = false
@@ -3309,34 +3364,16 @@ private final class DOMTreeTextContentView: UIView {
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
-
-    override func draw(_ rect: CGRect) {
-        guard let context = UIGraphicsGetCurrentContext() else {
-            return
-        }
-
-        context.saveGState()
-        context.setFillColor(DOMTreeHighlightTheme.webInspector.hoverRowBackground.resolvedColor(with: traitCollection).cgColor)
-        for rowRect in hoverRowRects where rowRect.intersects(rect) {
-            context.fill(rowRect)
-        }
-        context.restoreGState()
-
-        context.saveGState()
-        context.setFillColor(DOMTreeHighlightTheme.webInspector.selectedRowBackground.resolvedColor(with: traitCollection).cgColor)
-        for rowRect in multiSelectedRowRects where rowRect.intersects(rect) {
-            context.fill(rowRect)
-        }
-        for rowRect in selectedRowRects where rowRect.intersects(rect) {
-            context.fill(rowRect)
-        }
-        context.restoreGState()
-    }
 }
 
 private final class DOMTreeTextLayoutFragmentView: UIView {
     let layoutFragment: NSTextLayoutFragment
     var layoutFragmentDrawPoint = CGPoint.zero
+    var hoverRowRects: [CGRect] = []
+    var hoverRowColor: CGColor?
+    var selectedRowRects: [CGRect] = []
+    var multiSelectedRowRects: [CGRect] = []
+    var selectedRowColor: CGColor?
     var findHighlightRects: [CGRect] = []
     var findHighlightColor: CGColor?
     var currentFindHighlightRects: [CGRect] = []
@@ -3358,6 +3395,27 @@ private final class DOMTreeTextLayoutFragmentView: UIView {
     override func draw(_ rect: CGRect) {
         guard let context = UIGraphicsGetCurrentContext() else {
             return
+        }
+
+        if let hoverRowColor, !hoverRowRects.isEmpty {
+            context.saveGState()
+            context.setFillColor(hoverRowColor)
+            for rowRect in hoverRowRects where rowRect.intersects(rect) {
+                context.fill(rowRect)
+            }
+            context.restoreGState()
+        }
+
+        if let selectedRowColor, !selectedRowRects.isEmpty || !multiSelectedRowRects.isEmpty {
+            context.saveGState()
+            context.setFillColor(selectedRowColor)
+            for rowRect in multiSelectedRowRects where rowRect.intersects(rect) {
+                context.fill(rowRect)
+            }
+            for rowRect in selectedRowRects where rowRect.intersects(rect) {
+                context.fill(rowRect)
+            }
+            context.restoreGState()
         }
 
         if let findHighlightColor, !findHighlightRects.isEmpty {

@@ -315,6 +315,31 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func selectionChangeReloadsWhenSelectedRowIndexIsStale() async throws {
+        let runtime = WIDOMRuntime()
+        runtime.document.replaceDocument(with: .init(root: makeDocumentNode()))
+        let view = makeTreeView(runtime: runtime)
+        await waitForObservationDelivery()
+        view.removeRowIndexForTesting(containing: "<input disabled>")
+        view.resetPerformanceCountersForTesting()
+
+        runtime.document.applySelectionSnapshot(
+            DOMSelectionSnapshotPayload(
+                key: key(FixtureNodeID.input),
+                attributes: [DOMAttribute(name: "disabled", value: "")],
+                path: ["html", "body", "input"],
+                selectorPath: "input",
+                styleRevision: 0
+            )
+        )
+
+        #expect(await waitUntilReloadCount(1, in: view))
+        #expect(view.reloadTreeCallCountForTesting == 1)
+        #expect(view.rebuildTextStorageCallCountForTesting == 0)
+        #expect(view.selectedRowRectsForTesting().count == 1)
+    }
+
+    @Test
     func documentSelectionClearsStaleMultiSelectionForSameSelectedNode() async throws {
         let runtime = WIDOMRuntime()
         runtime.document.replaceDocument(
