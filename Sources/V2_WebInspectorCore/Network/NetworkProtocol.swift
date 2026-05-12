@@ -1,4 +1,4 @@
-package struct NetworkRequestIdentifier: RawRepresentable, Hashable, Sendable, CustomStringConvertible {
+package struct NetworkRequestIdentifier: RawRepresentable, Hashable, Codable, Sendable, CustomStringConvertible {
     package let rawValue: String
 
     package init(_ rawValue: String) {
@@ -34,7 +34,7 @@ package struct NetworkRedirectHopIdentifier: Hashable, Sendable {
     }
 }
 
-package struct NetworkBackendResourceIdentifier: Hashable, Sendable {
+package struct NetworkBackendResourceIdentifier: Hashable, Codable, Sendable {
     package var sourceProcessID: String
     package var resourceID: String
 

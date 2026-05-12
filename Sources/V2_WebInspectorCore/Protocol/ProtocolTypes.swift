@@ -1,4 +1,4 @@
-package struct ProtocolTargetIdentifier: RawRepresentable, Hashable, Sendable, CustomStringConvertible {
+package struct ProtocolTargetIdentifier: RawRepresentable, Hashable, Codable, Sendable, CustomStringConvertible {
     package let rawValue: String
 
     package init(_ rawValue: String) {
@@ -14,7 +14,7 @@ package struct ProtocolTargetIdentifier: RawRepresentable, Hashable, Sendable, C
     }
 }
 
-package struct DOMFrameIdentifier: RawRepresentable, Hashable, Sendable, CustomStringConvertible {
+package struct DOMFrameIdentifier: RawRepresentable, Hashable, Codable, Sendable, CustomStringConvertible {
     package let rawValue: String
 
     package init(_ rawValue: String) {
@@ -30,7 +30,7 @@ package struct DOMFrameIdentifier: RawRepresentable, Hashable, Sendable, CustomS
     }
 }
 
-package struct ExecutionContextID: RawRepresentable, Hashable, Sendable {
+package struct ExecutionContextID: RawRepresentable, Hashable, Codable, Sendable {
     package let rawValue: Int
 
     package init(_ rawValue: Int) {
@@ -48,6 +48,21 @@ package enum ProtocolTargetKind: Equatable, Sendable {
     case worker
     case serviceWorker
     case other(String)
+
+    package init(protocolType: String) {
+        switch protocolType {
+        case "page":
+            self = .page
+        case "frame":
+            self = .frame
+        case "worker":
+            self = .worker
+        case "service-worker":
+            self = .serviceWorker
+        default:
+            self = .other(protocolType)
+        }
+    }
 }
 
 package struct ProtocolTargetRecord: Equatable, Sendable {

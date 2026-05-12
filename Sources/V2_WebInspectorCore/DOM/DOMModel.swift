@@ -30,6 +30,12 @@ package final class ProtocolTarget {
     }
 }
 
+private extension ProtocolTarget {
+    var isTopLevelPage: Bool {
+        kind == .page && parentFrameID == nil
+    }
+}
+
 @MainActor
 @Observable
 package final class DOMPage {
@@ -268,16 +274,49 @@ package final class DOMSession {
             return
         }
 
-        let mainFrameID = record.frameID ?? DOMFrame.ID("main:\(record.id.rawValue)")
+        promoteTargetToCurrentPage(record.id)
+    }
+
+    package func promoteTargetToCurrentPage(_ targetID: ProtocolTarget.ID) {
+        guard let target = targetsByID[targetID],
+              target.kind == .page,
+              target.parentFrameID == nil else {
+            return
+        }
+
+        let mainFrameID = target.frameID ?? DOMFrame.ID("main:\(targetID.rawValue)")
         let mainFrame = frameWithID(mainFrameID, parentFrameID: nil)
-        mainFrame.targetID = record.id
+        mainFrame.targetID = targetID
         target.frameID = mainFrameID
-        currentPage = DOMPage(id: record.id, mainTargetID: record.id, mainFrameID: mainFrameID)
+        currentPage = DOMPage(id: targetID, mainTargetID: targetID, mainFrameID: mainFrameID)
+    }
+
+    package func applyTargetCommitted(targetID: ProtocolTarget.ID) {
+        guard let target = targetsByID[targetID] else {
+            return
+        }
+
+        target.isProvisional = false
+        if let frameID = target.frameID {
+            let frame = frameWithID(frameID, parentFrameID: target.parentFrameID)
+            frame.targetID = targetID
+        }
     }
 
     package func applyTargetCommitted(oldTargetID: ProtocolTarget.ID, newTargetID: ProtocolTarget.ID) {
-        guard oldTargetID != newTargetID,
-              let oldTarget = targetsByID.removeValue(forKey: oldTargetID) else {
+        guard oldTargetID != newTargetID else {
+            applyTargetCommitted(targetID: newTargetID)
+            return
+        }
+
+        if currentPage?.mainTargetID == oldTargetID,
+           let existingNewTarget = targetsByID[newTargetID],
+           !existingNewTarget.isTopLevelPage {
+            applyTargetCommitted(targetID: newTargetID)
+            return
+        }
+
+        guard let oldTarget = targetsByID.removeValue(forKey: oldTargetID) else {
             return
         }
 

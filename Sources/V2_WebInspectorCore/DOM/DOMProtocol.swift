@@ -1,4 +1,4 @@
-package struct DOMProtocolNodeID: RawRepresentable, Hashable, Sendable {
+package struct DOMProtocolNodeID: RawRepresentable, Hashable, Codable, Sendable {
     package let rawValue: Int
 
     package init(_ rawValue: Int) {
@@ -10,7 +10,7 @@ package struct DOMProtocolNodeID: RawRepresentable, Hashable, Sendable {
     }
 }
 
-package struct DOMDocumentGeneration: RawRepresentable, Hashable, Comparable, Sendable {
+package struct DOMDocumentGeneration: RawRepresentable, Hashable, Comparable, Codable, Sendable {
     package let rawValue: UInt64
 
     package init(_ rawValue: UInt64) {
