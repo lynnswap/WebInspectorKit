@@ -96,6 +96,12 @@ let package = Package(
             swiftSettings: strictSwiftSettings
         ),
         .target(
+            name: "WebInspectorDOMV2",
+            dependencies: [],
+            exclude: ["README.md"],
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
             name: "WebInspectorBridgeObjCShim",
             path: "Sources/WebInspectorBridge/ObjCShim",
             publicHeadersPath: "include",
@@ -181,6 +187,14 @@ let package = Package(
                 "WebInspectorTestSupport"
             ],
             path: "Tests/WebInspectorTransportTests",
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
+            name: "WebInspectorDOMV2Tests",
+            dependencies: [
+                "WebInspectorDOMV2"
+            ],
+            path: "Tests/WebInspectorDOMV2Tests",
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(
