@@ -43,7 +43,9 @@ package enum WITransportMethod {
     }
 
     package enum Runtime {
+        package static let enable = "Runtime.enable"
         package static let evaluate = "Runtime.evaluate"
+        package static let executionContextCreated = "Runtime.executionContextCreated"
     }
 }
 

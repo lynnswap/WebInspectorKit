@@ -155,7 +155,7 @@ struct WIDOMInspectorTests {
         let nestedDocument = try #require(iframeNode.contentDocument)
 
         #expect(iframeNode.frameID == "frame-child")
-        #expect(iframeNode.childCount == 1)
+        #expect(iframeNode.childCount == 0)
         #expect(iframeNode.regularChildCount == 0)
         #expect(iframeNode.regularChildren.isEmpty)
         #expect(iframeNode.effectiveChildren.map(\.nodeID) == [nestedDocument.nodeID])
@@ -814,6 +814,120 @@ struct WIDOMInspectorTests {
     }
 
     @Test
+    func nonDerivedPageCommitDoesNotReloadAuthoritativeWebViewDocument() async throws {
+        var inspectModeTargets: [String] = []
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, _, targetIdentifier in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(
+                        url: targetIdentifier == "page-subframe"
+                            ? "https://ads.example.com/subframe"
+                            : "https://example.com/a"
+                    )
+                case WITransportMethod.DOM.setInspectModeEnabled:
+                    inspectModeTargets.append(targetIdentifier)
+                    return [:]
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(
+            using: backend,
+            derivedPageTargetIdentifier: "page-A"
+        )
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let initiallyReady = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(initiallyReady)
+        let firstContextID = try #require(inspector.testCurrentContextID)
+
+        backend.emitRootEvent(
+            method: "Target.targetCreated",
+            params: [
+                    "targetInfo": [
+                        "targetId": "page-subframe",
+                        "type": "page",
+                        "frameId": "frame-subframe",
+                        "parentFrameId": "main-frame",
+                        "isProvisional": true,
+                    ],
+            ]
+        )
+        backend.emitRootEvent(
+            method: "Target.didCommitProvisionalTarget",
+            params: [
+                "oldTargetId": "page-A",
+                "newTargetId": "page-subframe",
+            ]
+        )
+        await backend.waitForPendingMessages()
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        #expect(inspector.testIsReady)
+        #expect(inspector.testCurrentContextID == firstContextID)
+        #expect(inspector.testCurrentDocumentURL == "https://example.com/a")
+        #expect(
+            inspector.freshContextDiagnosticsForTesting.contains {
+                $0 == .beginFreshContext(
+                    reason: "transport.targetDidCommitProvisionalTarget",
+                    isFreshDocument: true
+                )
+            } == false
+        )
+
+        try await inspector.beginSelectionMode()
+
+        #expect(inspectModeTargets == ["page-A"])
+    }
+
+    @Test
+    func ambiguousTargetCommitDoesNotReloadReadyPageDocument() async throws {
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, _, targetIdentifier in
+                guard method == WITransportMethod.DOM.getDocument else {
+                    return [:]
+                }
+                return makeDocumentResult(url: targetIdentifier == "page-stale" ? "https://example.com/stale" : "https://example.com/a")
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let initiallyReady = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(initiallyReady)
+
+        let firstContextID = try #require(inspector.testCurrentContextID)
+        backend.emitRootEvent(
+            method: "Target.didCommitProvisionalTarget",
+            params: [
+                "newTargetId": "page-stale",
+            ]
+        )
+        await backend.waitForPendingMessages()
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        #expect(inspector.testIsReady)
+        #expect(inspector.testCurrentContextID == firstContextID)
+        #expect(inspector.testCurrentDocumentURL == "https://example.com/a")
+        #expect(
+            inspector.freshContextDiagnosticsForTesting.contains {
+                $0 == .beginFreshContext(
+                    reason: "transport.targetDidCommitProvisionalTarget",
+                    isFreshDocument: true
+                )
+            } == false
+        )
+    }
+
+    @Test
     func targetCreatedPrefersCommittedTargetOverProvisionalEnvelopeWhenObservedTargetIsNil() async {
         let backend = FakeDOMTransportBackend(
             emitsInitialPageTargetCreatedOnAttach: false,
@@ -918,13 +1032,19 @@ struct WIDOMInspectorTests {
 
     @Test
     func targetCreatedDoesNotReplaceAlreadyLoadedDerivedDocumentWithoutLifecycleTransition() async throws {
+        var inspectModeTargets: [String] = []
         let backend = FakeDOMTransportBackend(
             emitsInitialPageTargetCreatedOnAttach: false,
             pageResultProvider: { method, _, targetIdentifier in
-                guard method == WITransportMethod.DOM.getDocument else {
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: targetIdentifier == "page-B" ? "https://example.com/b" : "https://example.com/a")
+                case WITransportMethod.DOM.setInspectModeEnabled:
+                    inspectModeTargets.append(targetIdentifier)
+                    return [:]
+                default:
                     return [:]
                 }
-                return makeDocumentResult(url: targetIdentifier == "page-B" ? "https://example.com/b" : "https://example.com/a")
             }
         )
         let inspector = makeInspector(
@@ -958,10 +1078,14 @@ struct WIDOMInspectorTests {
                 && inspector.testCurrentDocumentURL == "https://example.com/a"
         }
         #expect(stayedOnDerivedDocument)
+
+        try await inspector.beginSelectionMode()
+
+        #expect(inspectModeTargets == ["page-A"])
     }
 
     @Test
-    func documentUpdatedInvalidatesAndReloadsFreshDocument() async throws {
+    func documentUpdatedRefreshesCurrentDocumentWithoutFreshContext() async throws {
         let backend = FakeDOMTransportBackend(
             pageResultProvider: { method, _, _ in
                 guard method == WITransportMethod.DOM.getDocument else {
@@ -991,10 +1115,525 @@ struct WIDOMInspectorTests {
         let reloaded = await waitForCondition {
             inspector.testIsReady
                 && inspector.document.rootNode != nil
-                && inspector.testCurrentContextID != firstContextID
+                && inspector.testCurrentContextID == firstContextID
                 && inspector.testCurrentDocumentURL == "https://example.com/updated"
         }
         #expect(reloaded)
+    }
+
+    @Test
+    func frameTargetDocumentUpdatedReplacesOnlyFrameContentDocument() async throws {
+        var pageDocumentRequestCount = 0
+        var frameDocumentRequestCount = 0
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, _, targetIdentifier in
+                guard method == WITransportMethod.DOM.getDocument else {
+                    return [:]
+                }
+                if targetIdentifier == "frame-target-A" {
+                    frameDocumentRequestCount += 1
+                    return [
+                        "root": [
+                            "nodeId": 240,
+                            "nodeType": 9,
+                            "nodeName": "#document",
+                            "localName": "",
+                            "nodeValue": "",
+                            "documentURL": "https://ads.example.com/frame",
+                            "frameId": "frame-child",
+                            "childNodeCount": 1,
+                            "children": [[
+                                "nodeId": 260,
+                                "nodeType": 1,
+                                "nodeName": "DIV",
+                                "localName": "div",
+                                "nodeValue": "",
+                                "attributes": ["id", "updated-ad"],
+                                "childNodeCount": 0,
+                                "children": [],
+                            ]],
+                        ],
+                    ]
+                }
+                pageDocumentRequestCount += 1
+                return makeIFrameDocumentResultWithEmptyNestedDocument(url: "https://example.com/a")
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let initiallyReady = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(initiallyReady)
+        let firstContextID = try #require(inspector.testCurrentContextID)
+        let initialDocumentIdentity = inspector.document.documentIdentity
+
+        backend.emitRootEvent(
+            method: "Target.targetCreated",
+            params: [
+                "targetInfo": [
+                    "targetId": "frame-target-A",
+                    "type": "frame",
+                    "isProvisional": false,
+                ],
+            ]
+        )
+        await backend.waitForPendingMessages()
+        backend.emitPageEvent(method: "DOM.documentUpdated", params: [:], targetIdentifier: "frame-target-A")
+
+        let attachedFrameSnapshot = await waitForCondition {
+            let frameOwner = inspector.document.node(nodeID: 20)
+            return frameOwner?.contentDocument?.nodeID == 240
+                && frameOwner?.contentDocument?.targetIdentifier == "frame-target-A"
+                && inspector.document.node(nodeID: 260)?.attributes.contains(where: {
+                    $0.name == "id" && $0.value == "updated-ad"
+                }) == true
+        }
+        #expect(attachedFrameSnapshot)
+        #expect(inspector.testCurrentContextID == firstContextID)
+        #expect(inspector.document.documentIdentity == initialDocumentIdentity)
+        #expect(pageDocumentRequestCount == 1)
+        #expect(frameDocumentRequestCount == 1)
+        #expect(inspector.document.node(nodeID: 20) != nil)
+    }
+
+    @Test
+    func frameTargetDocumentUpdatedQueuesSnapshotUntilFrameOwnerAppears() async throws {
+        var pageDocumentRequestCount = 0
+        var frameDocumentRequestCount = 0
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, _, targetIdentifier in
+                guard method == WITransportMethod.DOM.getDocument else {
+                    return [:]
+                }
+                if targetIdentifier == "frame-target-A" {
+                    frameDocumentRequestCount += 1
+                    return [
+                        "root": [
+                            "nodeId": 240,
+                            "nodeType": 9,
+                            "nodeName": "#document",
+                            "localName": "",
+                            "nodeValue": "",
+                            "documentURL": "https://ads.example.com/frame",
+                            "frameId": "frame-child",
+                            "childNodeCount": 1,
+                            "children": [[
+                                "nodeId": 260,
+                                "nodeType": 1,
+                                "nodeName": "DIV",
+                                "localName": "div",
+                                "nodeValue": "",
+                                "attributes": ["id", "pending-ad"],
+                                "childNodeCount": 0,
+                                "children": [],
+                            ]],
+                        ],
+                    ]
+                }
+                pageDocumentRequestCount += 1
+                return makeDocumentResult(url: "https://example.com/a", mainChildren: [])
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let initiallyReady = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(initiallyReady)
+        let firstContextID = try #require(inspector.testCurrentContextID)
+
+        backend.emitRootEvent(
+            method: "Target.targetCreated",
+            params: [
+                "targetInfo": [
+                    "targetId": "frame-target-A",
+                    "type": "frame",
+                    "isProvisional": false,
+                ],
+            ]
+        )
+        await backend.waitForPendingMessages()
+        backend.emitPageEvent(method: "DOM.documentUpdated", params: [:], targetIdentifier: "frame-target-A")
+
+        let frameSnapshotRequested = await waitForCondition {
+            frameDocumentRequestCount == 1
+        }
+        #expect(frameSnapshotRequested)
+        #expect(inspector.document.node(nodeID: 240) == nil)
+        #expect(inspector.testCurrentContextID == firstContextID)
+
+        backend.emitPageEvent(
+            method: "DOM.setChildNodes",
+            params: [
+                "parentId": 4,
+                "nodes": [[
+                    "nodeId": 20,
+                    "nodeType": 1,
+                    "nodeName": "IFRAME",
+                    "localName": "iframe",
+                    "nodeValue": "",
+                    "attributes": ["id", "frame-owner"],
+                    "frameId": "frame-child",
+                    "childNodeCount": 0,
+                    "children": [],
+                ]],
+            ],
+            targetIdentifier: "page-A"
+        )
+
+        let attachedAfterOwnerAppeared = await waitForCondition {
+            let frameOwner = inspector.document.node(nodeID: 20)
+            return frameOwner?.contentDocument?.nodeID == 240
+                && frameOwner?.contentDocument?.targetIdentifier == "frame-target-A"
+                && inspector.document.node(nodeID: 260) != nil
+        }
+        #expect(attachedAfterOwnerAppeared)
+        #expect(inspector.testCurrentContextID == firstContextID)
+        #expect(pageDocumentRequestCount == 1)
+        #expect(frameDocumentRequestCount == 1)
+    }
+
+    @Test
+    func frameTargetCommitDoesNotBeginFreshPageContext() async throws {
+        var frameDocumentRequestCount = 0
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, _, targetIdentifier in
+                guard method == WITransportMethod.DOM.getDocument else {
+                    return [:]
+                }
+                if targetIdentifier == "frame-target-B" {
+                    frameDocumentRequestCount += 1
+                    return [
+                        "root": [
+                            "nodeId": 340,
+                            "nodeType": 9,
+                            "nodeName": "#document",
+                            "localName": "",
+                            "nodeValue": "",
+                            "documentURL": "https://ads.example.com/next",
+                            "frameId": "frame-child",
+                            "childNodeCount": 0,
+                            "children": [],
+                        ],
+                    ]
+                }
+                return makeIFrameDocumentResultWithEmptyNestedDocument(url: "https://example.com/a")
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let initiallyReady = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(initiallyReady)
+        let firstContextID = try #require(inspector.testCurrentContextID)
+
+        backend.emitRootEvent(
+            method: "Target.targetCreated",
+            params: [
+                "targetInfo": [
+                    "targetId": "frame-target-A",
+                    "type": "frame",
+                    "isProvisional": false,
+                ],
+            ]
+        )
+        await backend.waitForPendingMessages()
+        backend.emitRootEvent(
+            method: "Target.didCommitProvisionalTarget",
+            params: [
+                "oldTargetId": "frame-target-A",
+                "newTargetId": "frame-target-B",
+            ]
+        )
+
+        let frameDocumentAttached = await waitForCondition {
+            inspector.document.node(nodeID: 20)?.contentDocument?.nodeID == 340
+        }
+        #expect(frameDocumentAttached)
+        #expect(inspector.testCurrentContextID == firstContextID)
+        #expect(frameDocumentRequestCount == 1)
+        #expect(
+            inspector.freshContextDiagnosticsForTesting.contains {
+                $0 == .beginFreshContext(
+                    reason: "transport.targetDidCommitProvisionalTarget",
+                    isFreshDocument: true
+                )
+            } == false
+        )
+    }
+
+    @Test
+    func pageTypedFrameTargetCommitAttachesByFrameIDWithoutReloadingPage() async throws {
+        var frameDocumentRequestCount = 0
+        var inspectModeTargets: [String] = []
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, _, targetIdentifier in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    if targetIdentifier == "frame-target-B" {
+                        frameDocumentRequestCount += 1
+                        return [
+                            "root": [
+                                "nodeId": 340,
+                                "nodeType": 9,
+                                "nodeName": "#document",
+                                "localName": "",
+                            "nodeValue": "",
+                            "documentURL": "https://ads.example.com/frame",
+                            "frameId": "frame-1",
+                            "childNodeCount": 1,
+                                "children": [[
+                                    "nodeId": 360,
+                                    "nodeType": 1,
+                                    "nodeName": "IMG",
+                                    "localName": "img",
+                                    "nodeValue": "",
+                                    "attributes": ["id", "ad-image"],
+                                    "childNodeCount": 0,
+                                    "children": [],
+                                ]],
+                            ],
+                        ]
+                    }
+                    return makeDocumentResult(
+                        url: "https://example.com/a",
+                        mainChildren: [[
+                            "nodeId": 20,
+                            "nodeType": 1,
+                            "nodeName": "IFRAME",
+                            "localName": "iframe",
+                            "nodeValue": "",
+                            "attributes": ["id", "ad-frame", "src", "https://ads.example.com/frame"],
+                            "frameId": "frame-1",
+                            "childNodeCount": 0,
+                            "children": [],
+                        ]]
+                    )
+                case WITransportMethod.DOM.setInspectModeEnabled:
+                    inspectModeTargets.append(targetIdentifier)
+                    return [:]
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let initiallyReady = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(initiallyReady)
+        let firstContextID = try #require(inspector.testCurrentContextID)
+        let initialDocumentIdentity = inspector.document.documentIdentity
+
+        backend.emitRootEvent(
+            method: "Target.targetCreated",
+            params: [
+                    "targetInfo": [
+                        "targetId": "frame-target-B",
+                        "type": "page",
+                        "frameId": "frame-1",
+                        "parentFrameId": "main-frame",
+                        "isProvisional": true,
+                    ],
+            ]
+        )
+        backend.emitRootEvent(
+            method: "Target.didCommitProvisionalTarget",
+            params: [
+                "oldTargetId": "page-A",
+                "newTargetId": "frame-target-B",
+            ]
+        )
+
+        let frameDocumentAttached = await waitForCondition {
+            let frameOwner = inspector.document.node(nodeID: 20)
+            return frameOwner?.contentDocument?.nodeID == 340
+                && frameOwner?.contentDocument?.targetIdentifier == "frame-target-B"
+                && inspector.document.node(nodeID: 360)?.attributes.contains(where: {
+                    $0.name == "id" && $0.value == "ad-image"
+                }) == true
+        }
+        #expect(frameDocumentAttached)
+        #expect(inspector.testCurrentContextID == firstContextID)
+        #expect(inspector.document.documentIdentity == initialDocumentIdentity)
+        #expect(frameDocumentRequestCount == 1)
+        #expect(
+            inspector.freshContextDiagnosticsForTesting.contains {
+                $0 == .beginFreshContext(
+                    reason: "transport.targetDidCommitProvisionalTarget",
+                    isFreshDocument: true
+                )
+            } == false
+        )
+
+        try await inspector.beginSelectionMode()
+        #expect(inspectModeTargets == ["page-A"])
+    }
+
+    @Test
+    func pageTypedFrameTargetCommitWithoutParentFrameIDDoesNotReloadPageDocument() async throws {
+        var pageDocumentRequestCount = 0
+        var frameDocumentRequestCount = 0
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, _, targetIdentifier in
+                guard method == WITransportMethod.DOM.getDocument else {
+                    return [:]
+                }
+                if targetIdentifier == "page-ad" {
+                    frameDocumentRequestCount += 1
+                    return [
+                        "root": [
+                            "nodeId": 340,
+                            "nodeType": 9,
+                            "nodeName": "#document",
+                            "localName": "",
+                            "nodeValue": "",
+                            "documentURL": "https://ads.example.com/frame",
+                            "frameId": "frame-1",
+                            "childNodeCount": 1,
+                            "children": [[
+                                "nodeId": 360,
+                                "nodeType": 1,
+                                "nodeName": "IMG",
+                                "localName": "img",
+                                "nodeValue": "",
+                                "attributes": ["id", "updated-ad"],
+                                "childNodeCount": 0,
+                                "children": [],
+                            ]],
+                        ],
+                    ]
+                }
+                pageDocumentRequestCount += 1
+                return makeDocumentResult(
+                    url: "https://example.com/a",
+                    mainChildren: [[
+                        "nodeId": 20,
+                        "nodeType": 1,
+                        "nodeName": "IFRAME",
+                        "localName": "iframe",
+                        "nodeValue": "",
+                        "attributes": ["id", "ad-frame", "src", "https://ads.example.com/frame"],
+                        "frameId": "frame-1",
+                        "childNodeCount": 0,
+                        "children": [],
+                    ], [
+                        "nodeId": 30,
+                        "nodeType": 1,
+                        "nodeName": "MAIN",
+                        "localName": "main",
+                        "nodeValue": "",
+                        "attributes": ["id", "page-content"],
+                        "childNodeCount": 0,
+                        "children": [],
+                    ]]
+                )
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let initiallyReady = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(initiallyReady)
+        let firstContextID = try #require(inspector.testCurrentContextID)
+        let initialDocumentIdentity = inspector.document.documentIdentity
+
+        backend.emitRootEvent(
+            method: "Target.targetCreated",
+            params: [
+                "targetInfo": [
+                    "targetId": "page-ad",
+                    "type": "page",
+                    "frameId": "frame-1",
+                    "isProvisional": true,
+                ],
+            ]
+        )
+        backend.emitRootEvent(
+            method: "Target.didCommitProvisionalTarget",
+            params: [
+                "newTargetId": "page-ad",
+            ]
+        )
+
+        let frameDocumentAttached = await waitForCondition {
+            let frameOwner = inspector.document.node(nodeID: 20)
+            return frameOwner?.contentDocument?.nodeID == 340
+                && frameOwner?.contentDocument?.targetIdentifier == "page-ad"
+                && inspector.document.node(nodeID: 30) != nil
+                && inspector.document.node(key: .init(targetIdentifier: "page-ad", nodeID: 360)) != nil
+        }
+        #expect(frameDocumentAttached)
+        #expect(inspector.testCurrentContextID == firstContextID)
+        #expect(inspector.document.documentIdentity == initialDocumentIdentity)
+        #expect(pageDocumentRequestCount == 1)
+        #expect(frameDocumentRequestCount == 1)
+        #expect(
+            inspector.freshContextDiagnosticsForTesting.contains {
+                $0 == .beginFreshContext(
+                    reason: "transport.targetDidCommitProvisionalTarget",
+                    isFreshDocument: true
+                )
+            } == false
+        )
+    }
+
+    @Test
+    func documentUpdatedAppliesEmptyBodySnapshotWithoutRecoveryRefresh() async throws {
+        var documentVersion = 0
+        var getDocumentCallCount = 0
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, _, _ in
+                guard method == WITransportMethod.DOM.getDocument else {
+                    return [:]
+                }
+                getDocumentCallCount += 1
+                if documentVersion == 0 {
+                    return makeDocumentResult(url: "https://example.com/a")
+                }
+                return makeDocumentResult(
+                    url: "https://example.com/a",
+                    bodyChildren: []
+                )
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let initiallyReady = await waitForCondition {
+            inspector.testIsReady
+                && inspector.document.node(nodeID: 5) != nil
+        }
+        #expect(initiallyReady)
+        let firstContextID = try #require(inspector.testCurrentContextID)
+
+        documentVersion = 1
+        backend.emitPageEvent(method: "DOM.documentUpdated", params: [:])
+
+        let refreshAttempted = await waitForCondition {
+            inspector.testIsReady
+                && getDocumentCallCount >= 2
+        }
+        #expect(refreshAttempted)
+        #expect(inspector.testCurrentContextID == firstContextID)
+        #expect(inspector.document.node(nodeID: 3) != nil)
+        #expect(inspector.document.node(nodeID: 5) == nil)
+        #expect(inspector.testCurrentDocumentURL == "https://example.com/a")
     }
 
     @Test
@@ -1277,7 +1916,7 @@ struct WIDOMInspectorTests {
     }
 
     @Test
-    func documentUpdatedFreshContextAllowsSelectionModeAgain() async throws {
+    func documentUpdatedRefreshAllowsSelectionModeAgain() async throws {
         var inspectModeEnabledValues: [Bool] = []
         var documentVersion = 0
         let backend = FakeDOMTransportBackend(
@@ -1344,14 +1983,14 @@ struct WIDOMInspectorTests {
         documentVersion = 1
         backend.emitPageEvent(method: "DOM.documentUpdated", params: [:])
 
-        let freshContextReady = await waitForCondition {
+        let refreshedContextReady = await waitForCondition {
             inspector.testIsReady
                 && inspector.document.rootNode != nil
-                && inspector.testCurrentContextID != firstContextID
+                && inspector.testCurrentContextID == firstContextID
                 && inspector.testCurrentDocumentURL == "https://example.com/b"
                 && inspector.document.selectedNode == nil
         }
-        #expect(freshContextReady)
+        #expect(refreshedContextReady)
 
         try await inspector.beginSelectionMode()
         backend.emitPageEvent(method: "DOM.inspect", params: ["nodeId": 16])
@@ -1364,6 +2003,61 @@ struct WIDOMInspectorTests {
         #expect(reselectionReady)
         #expect(inspector.document.selectedNode?.nodeID != 6)
         #expect(inspectModeEnabledValues == [true, false, true, false])
+    }
+
+    @Test
+    func cancelSelectionModeClearsStaleSelectionWhenPersistentHighlightFails() async throws {
+        var highlightAttempts = 0
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, _, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                case WITransportMethod.DOM.setInspectModeEnabled,
+                     WITransportMethod.DOM.hideHighlight:
+                    return [:]
+                case WITransportMethod.DOM.highlightNode:
+                    highlightAttempts += 1
+                    throw DOMOperationError.pageUnavailable
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.node(nodeID: 5) != nil
+        }
+        #expect(ready)
+
+        inspector.document.applySelectionSnapshot(
+            .init(
+                nodeID: 5,
+                attributes: [],
+                path: ["html", "body", "main", "div"],
+                selectorPath: "#target",
+                styleRevision: 0
+            )
+        )
+        #expect(inspector.document.selectedNode?.nodeID == 5)
+
+        try await inspector.beginSelectionMode()
+        await inspector.cancelSelectionMode()
+
+        let staleSelectionCleared = await waitForCondition {
+            inspector.document.selectedNode == nil && inspector.isSelectingElement == false
+        }
+        #expect(staleSelectionCleared)
+        #expect(highlightAttempts == 1)
+
+        try await inspector.beginSelectionMode()
+        await inspector.cancelSelectionMode()
+
+        #expect(inspector.document.selectedNode == nil)
+        #expect(highlightAttempts == 1)
     }
 
     @Test
@@ -1612,7 +2306,7 @@ struct WIDOMInspectorTests {
     }
 
     @Test
-    func freshContextRefreshesNativeDocumentAfterDocumentUpdated() async throws {
+    func documentUpdatedRefreshesNativeDocumentInCurrentContext() async throws {
         var documentVersion = 0
         let backend = FakeDOMTransportBackend(
             pageResultProvider: { method, _, _ in
@@ -1638,25 +2332,14 @@ struct WIDOMInspectorTests {
         documentVersion = 1
         backend.emitPageEvent(method: "DOM.documentUpdated", params: [:])
 
-        let advancedToFreshContext = await waitForCondition {
-            guard let currentContextID = inspector.testCurrentContextID,
-                  currentContextID != firstContextID
-            else {
-                return false
-            }
-            return true
-        }
-        #expect(advancedToFreshContext)
-
-        let currentContextID = try #require(inspector.testCurrentContextID)
         let refreshedDocumentReady = await waitForCondition {
-            inspector.testCurrentContextID == currentContextID
+            inspector.testCurrentContextID == firstContextID
                 && inspector.document.rootNode != nil
                 && inspector.testCurrentDocumentURL == "https://example.com/b"
         }
         #expect(refreshedDocumentReady)
 
-        #expect(inspector.testCurrentContextID == currentContextID)
+        #expect(inspector.testCurrentContextID == firstContextID)
     }
 
     @Test
@@ -2414,7 +3097,7 @@ struct WIDOMInspectorTests {
     }
 
     @Test
-    func beginSelectionModeUsesNativeInspectorOnUIKitWhenPrivateInspectorIsAvailable() async throws {
+    func beginSelectionModeUsesProtocolInspectModeWhenPrivateInspectorIsAvailable() async throws {
         var inspectModeEnabledValues: [Bool] = []
         var inspectModeHighlightConfigs: [[String: Any]?] = []
         var connectCallCount = 0
@@ -2504,10 +3187,10 @@ struct WIDOMInspectorTests {
 
         try await inspector.beginSelectionMode()
         #expect(inspector.isSelectingElement)
-        #expect(connectCallCount == 1)
+        #expect(connectCallCount == 0)
         #expect(toggleCallCount == 0)
         #expect(nativeSelectionActive == false)
-        #expect(nodeSearchEnabledValues.contains(true))
+        #expect(nodeSearchEnabledValues.contains(true) == false)
         #expect(inspectModeEnabledValues == [true])
         #expect(runtimeTestHasVisibleHighlightConfig(inspectModeHighlightConfigs.last ?? nil))
 
@@ -2515,7 +3198,7 @@ struct WIDOMInspectorTests {
         #expect(inspector.isSelectingElement == false)
         #expect(toggleCallCount == 0)
         #expect(nativeSelectionActive == false)
-        #expect(nodeSearchEnabledValues.last == false)
+        #expect(nodeSearchEnabledValues.isEmpty)
         #expect(inspectModeEnabledValues == [true, false])
     }
 
@@ -2614,7 +3297,7 @@ struct WIDOMInspectorTests {
         await #expect(throws: DOMOperationError.contextInvalidated) {
             try await inspector.beginSelectionMode()
         }
-        #expect(connectCallCount == 1)
+        #expect(connectCallCount == 0)
         #expect(toggleCallCount == 0)
         #expect(nativeSelectionActive == false)
         #expect(nodeSearchEnabledValues.isEmpty)
@@ -2623,7 +3306,7 @@ struct WIDOMInspectorTests {
     }
 
     @Test
-    func beginSelectionModeDoesNotArmSelectionWhenProtocolEnableFailsWithStaleNativeNodeSearch() async throws {
+    func beginSelectionModeDoesNotArmSelectionWhenProtocolEnableFailsAfterClearingStaleNativeNodeSearch() async throws {
         var inspectModeEnableAttempts = 0
         var connectCallCount = 0
         var toggleCallCount = 0
@@ -2711,10 +3394,10 @@ struct WIDOMInspectorTests {
             Issue.record("Expected selection mode activation to fail")
         } catch {}
 
-        #expect(inspectModeEnableAttempts == 3)
-        #expect(connectCallCount == 1)
+        #expect(inspectModeEnableAttempts == 1)
+        #expect(connectCallCount == 0)
         #expect(toggleCallCount == 0)
-        #expect(nodeSearchEnabledValues == [false, true, false])
+        #expect(nodeSearchEnabledValues == [false])
         #expect(nodeSearchActive == false)
         #expect(inspector.isSelectingElement == false)
         #expect(
@@ -2728,7 +3411,7 @@ struct WIDOMInspectorTests {
     }
 
     @Test
-    func beginSelectionModeRetriesProtocolEnableAfterNativeInspectorWakeupOnUIKit() async throws {
+    func beginSelectionModeDoesNotWakeNativeInspectorWhenProtocolEnableFailsOnUIKit() async throws {
         var inspectModeEnableAttempts = 0
         var inspectModeEnabledValues: [Bool] = []
         var connectCallCount = 0
@@ -2824,23 +3507,19 @@ struct WIDOMInspectorTests {
         }
         #expect(ready)
 
-        try await inspector.beginSelectionMode()
-        #expect(inspector.isSelectingElement)
-        #expect(inspectModeEnableAttempts == 2)
-        #expect(connectCallCount == 1)
-        #expect(toggleCallCount == 0)
-        #expect(nodeSearchEnabledValues == [true, true])
-        #expect(inspectModeEnabledValues == [true])
-
-        await inspector.cancelSelectionMode()
+        await #expect(throws: DOMOperationError.self) {
+            try await inspector.beginSelectionMode()
+        }
         #expect(inspector.isSelectingElement == false)
+        #expect(inspectModeEnableAttempts == 1)
+        #expect(connectCallCount == 0)
         #expect(toggleCallCount == 0)
-        #expect(nodeSearchEnabledValues == [true, true, false])
-        #expect(inspectModeEnabledValues == [true, false])
+        #expect(nodeSearchEnabledValues.isEmpty)
+        #expect(inspectModeEnabledValues.isEmpty)
     }
 
     @Test
-    func beginSelectionModeRefreshesActiveNativeNodeSearchAfterProtocolEnableOnUIKit() async throws {
+    func beginSelectionModeClearsActiveNativeNodeSearchBeforeProtocolEnableOnUIKit() async throws {
         var inspectModeEnabledValues: [Bool] = []
         var connectCallCount = 0
         var toggleCallCount = 0
@@ -2933,15 +3612,15 @@ struct WIDOMInspectorTests {
 
         try await inspector.beginSelectionMode()
         #expect(inspector.isSelectingElement)
-        #expect(connectCallCount == 1)
+        #expect(connectCallCount == 0)
         #expect(toggleCallCount == 0)
-        #expect(nodeSearchEnabledValues == [false, true])
+        #expect(nodeSearchEnabledValues == [false])
         #expect(inspectModeEnabledValues == [true])
 
         await inspector.cancelSelectionMode()
         #expect(inspector.isSelectingElement == false)
-        #expect(toggleCallCount == 1)
-        #expect(nodeSearchEnabledValues == [false, true])
+        #expect(toggleCallCount == 0)
+        #expect(nodeSearchEnabledValues == [false])
         #expect(inspectModeEnabledValues == [true, false])
     }
 
@@ -3039,19 +3718,19 @@ struct WIDOMInspectorTests {
         try await inspector.beginSelectionMode()
 
         #expect(inspector.isSelectingElement)
-        #expect(connectCallCount == 1)
+        #expect(connectCallCount == 0)
         #expect(toggleCallCount == 0)
-        #expect(nodeSearchEnabledValues == [true, false, true])
+        #expect(nodeSearchEnabledValues.isEmpty)
         #expect(inspectModeEnabledValues == [true, false, true])
 
         await inspector.cancelSelectionMode()
         #expect(inspector.isSelectingElement == false)
-        #expect(nodeSearchEnabledValues == [true, false, true, false])
+        #expect(nodeSearchEnabledValues.isEmpty)
         #expect(inspectModeEnabledValues == [true, false, true, false])
     }
 
     @Test
-    func beginSelectionModeKeepsNativeInspectorWhenActivationProbeIsUnavailableOnUIKit() async throws {
+    func beginSelectionModeUsesProtocolWhenTransportActivationProbeSucceedsOnUIKit() async throws {
         var inspectModeEnabledValues: [Bool] = []
         var connectCallCount = 0
         var toggleCallCount = 0
@@ -3133,20 +3812,20 @@ struct WIDOMInspectorTests {
 
         try await inspector.beginSelectionMode()
         #expect(inspector.isSelectingElement)
-        #expect(connectCallCount == 1)
-        #expect(toggleCallCount == 1)
-        #expect(nodeSearchEnabledValues == [true])
+        #expect(connectCallCount == 0)
+        #expect(toggleCallCount == 0)
+        #expect(nodeSearchEnabledValues.isEmpty)
         #expect(inspectModeEnabledValues == [true])
 
         await inspector.cancelSelectionMode()
         #expect(inspector.isSelectingElement == false)
-        #expect(toggleCallCount == 2)
-        #expect(nodeSearchEnabledValues == [true, false])
+        #expect(toggleCallCount == 0)
+        #expect(nodeSearchEnabledValues.isEmpty)
         #expect(inspectModeEnabledValues == [true, false])
     }
 
     @Test
-    func beginSelectionModeFallsBackToTransportWhenNativeInspectorEnableFailsOnUIKit() async throws {
+    func beginSelectionModeIgnoresNativeInspectorEnableFailureWhenProtocolModeWorksOnUIKit() async throws {
         var inspectModeEnabledValues: [Bool] = []
         var connectCallCount = 0
         var toggleCallCount = 0
@@ -3231,21 +3910,21 @@ struct WIDOMInspectorTests {
 
         try await inspector.beginSelectionMode()
         #expect(inspector.isSelectingElement)
-        #expect(connectCallCount == 1)
-        #expect(toggleCallCount == 1)
+        #expect(connectCallCount == 0)
+        #expect(toggleCallCount == 0)
         #expect(nativeSelectionActive == false)
-        #expect(nodeSearchEnabledValues.contains(true))
+        #expect(nodeSearchEnabledValues.contains(true) == false)
         #expect(inspectModeEnabledValues == [true])
 
         await inspector.cancelSelectionMode()
         #expect(inspector.isSelectingElement == false)
-        #expect(toggleCallCount == 1)
+        #expect(toggleCallCount == 0)
         #expect(nativeSelectionActive == false)
         #expect(inspectModeEnabledValues == [true, false])
     }
 
     @Test
-    func beginSelectionModeFallsBackToTransportWhenNativeInspectorDoesNotActivateOnUIKit() async throws {
+    func beginSelectionModeDoesNotUseNativeInspectorWhenProtocolModeActivatesOnUIKit() async throws {
         var inspectModeEnabledValues: [Bool] = []
         var connectCallCount = 0
         var toggleCallCount = 0
@@ -3331,15 +4010,15 @@ struct WIDOMInspectorTests {
 
         try await inspector.beginSelectionMode()
         #expect(inspector.isSelectingElement)
-        #expect(connectCallCount == 1)
-        #expect(toggleCallCount == 1)
+        #expect(connectCallCount == 0)
+        #expect(toggleCallCount == 0)
         #expect(nativeSelectionActive == false)
-        #expect(nodeSearchEnabledValues.contains(true))
+        #expect(nodeSearchEnabledValues.contains(true) == false)
         #expect(inspectModeEnabledValues == [true])
 
         await inspector.cancelSelectionMode()
         #expect(inspector.isSelectingElement == false)
-        #expect(toggleCallCount == 1)
+        #expect(toggleCallCount == 0)
         #expect(nativeSelectionActive == false)
         #expect(inspectModeEnabledValues == [true, false])
     }
@@ -4311,13 +4990,669 @@ struct WIDOMInspectorTests {
     }
 
     @Test
-    func inspectorInspectDoesNotProbeUnrelatedPageTargetsForRequestNode() async throws {
+    func inspectorInspectRoutesInjectedScriptObjectToExecutionContextTarget() async throws {
+        let frameObjectID = #"{"injectedScriptId":4,"id":1}"#
         var requestNodeTargets: [String] = []
         let backend = FakeDOMTransportBackend()
         backend.pageResultProvider = { method, payload, targetIdentifier in
             switch method {
             case WITransportMethod.DOM.getDocument:
-                if targetIdentifier == "page-frame-A" {
+                if targetIdentifier == "frame-target-A" {
+                    return [
+                        "root": [
+                            "nodeId": 240,
+                            "nodeType": 9,
+                            "nodeName": "#document",
+                            "localName": "",
+                            "nodeValue": "",
+                            "documentURL": "https://example.com/frame",
+                            "frameId": "frame-child",
+                            "childNodeCount": 1,
+                            "children": [[
+                                "nodeId": 260,
+                                "nodeType": 1,
+                                "nodeName": "BUTTON",
+                                "localName": "button",
+                                "nodeValue": "",
+                                "attributes": ["id", "frame-target"],
+                                "childNodeCount": 0,
+                                "children": [],
+                            ]],
+                        ],
+                    ]
+                }
+                return makeIFrameDocumentResultWithEmptyNestedDocument(url: "https://example.com/a")
+            case WITransportMethod.DOM.setInspectModeEnabled:
+                return [:]
+            case WITransportMethod.DOM.requestNode:
+                let params = runtimeTestDictionaryValue(payload["params"])
+                if params?["objectId"] as? String == frameObjectID {
+                    requestNodeTargets.append(targetIdentifier)
+                    if targetIdentifier == "frame-target-A" {
+                        return ["nodeId": 260]
+                    }
+                }
+                return [:]
+            default:
+                return [:]
+            }
+        }
+        let inspector = makeInspector(using: backend)
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        backend.emitRootEvent(
+            method: "Target.targetCreated",
+            params: [
+                "targetInfo": [
+                    "targetId": "frame-target-A",
+                    "type": "frame",
+                    "isProvisional": false,
+                ],
+            ]
+        )
+        await backend.waitForPendingMessages()
+        backend.emitPageEvent(
+            method: WITransportMethod.Runtime.executionContextCreated,
+            params: [
+                "context": [
+                    "id": 4,
+                    "frameId": "frame-child",
+                ],
+            ],
+            targetIdentifier: "frame-target-A"
+        )
+        await backend.waitForPendingMessages()
+
+        try await inspector.beginSelectionMode()
+        backend.emitPageEvent(
+            method: "Inspector.inspect",
+            params: [
+                "object": [
+                    "type": "object",
+                    "subtype": "node",
+                    "objectId": frameObjectID,
+                ],
+                "hints": [:],
+            ],
+            targetIdentifier: "page-A"
+        )
+
+        let selected = await waitForCondition {
+            inspector.document.selectedNode?.nodeID == 260
+                && inspector.document.selectedNode?.targetIdentifier == "frame-target-A"
+                && inspector.isSelectingElement == false
+        }
+        #expect(selected)
+        #expect(requestNodeTargets == ["frame-target-A"])
+    }
+
+    @Test
+    func frameTargetCreationEnablesRuntimeBeforeInjectedScriptSelection() async throws {
+        let frameObjectID = #"{"injectedScriptId":4,"id":1}"#
+        var runtimeEnableTargets: [String] = []
+        var requestNodeTargets: [String] = []
+        let backend = FakeDOMTransportBackend()
+        backend.pageResultProvider = { method, payload, targetIdentifier in
+            switch method {
+            case WITransportMethod.DOM.getDocument:
+                if targetIdentifier == "frame-target-A" {
+                    return [
+                        "root": [
+                            "nodeId": 240,
+                            "nodeType": 9,
+                            "nodeName": "#document",
+                            "localName": "",
+                            "nodeValue": "",
+                            "documentURL": "https://ads.example.com/frame",
+                            "frameId": "frame-child",
+                            "childNodeCount": 1,
+                            "children": [[
+                                "nodeId": 260,
+                                "nodeType": 1,
+                                "nodeName": "DIV",
+                                "localName": "div",
+                                "nodeValue": "",
+                                "attributes": ["id", "ad-target"],
+                                "childNodeCount": 0,
+                                "children": [],
+                            ]],
+                        ],
+                    ]
+                }
+                return makeIFrameDocumentResultWithEmptyNestedDocument(url: "https://example.com/a")
+            case WITransportMethod.Runtime.enable:
+                runtimeEnableTargets.append(targetIdentifier)
+                if targetIdentifier == "frame-target-A" {
+                    backend.emitPageEvent(
+                        method: WITransportMethod.Runtime.executionContextCreated,
+                        params: [
+                            "context": [
+                                "id": 4,
+                                "frameId": "frame-child",
+                            ]
+                        ],
+                        targetIdentifier: targetIdentifier
+                    )
+                }
+                return [:]
+            case WITransportMethod.DOM.setInspectModeEnabled:
+                return [:]
+            case WITransportMethod.DOM.requestNode:
+                let params = runtimeTestDictionaryValue(payload["params"])
+                if params?["objectId"] as? String == frameObjectID {
+                    requestNodeTargets.append(targetIdentifier)
+                    if targetIdentifier == "frame-target-A" {
+                        return ["nodeId": 260]
+                    }
+                }
+                return [:]
+            default:
+                return [:]
+            }
+        }
+        let inspector = makeInspector(using: backend)
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        backend.emitRootEvent(
+            method: "Target.targetCreated",
+            params: [
+                "targetInfo": [
+                    "targetId": "frame-target-A",
+                    "type": "frame",
+                    "frameId": "frame-child",
+                    "parentFrameId": "main-frame",
+                    "isProvisional": false,
+                ],
+            ]
+        )
+        await backend.waitForPendingMessages()
+
+        #expect(runtimeEnableTargets.contains("frame-target-A"))
+
+        try await inspector.beginSelectionMode()
+        backend.emitPageEvent(
+            method: "Inspector.inspect",
+            params: [
+                "object": [
+                    "type": "object",
+                    "subtype": "node",
+                    "className": "HTMLDivElement",
+                    "description": #"<div id="ad-target">"#,
+                    "objectId": frameObjectID,
+                ],
+                "hints": [:],
+            ],
+            targetIdentifier: "page-A"
+        )
+
+        let selected = await waitForCondition {
+            inspector.document.selectedNode?.nodeID == 260
+                && inspector.document.selectedNode?.targetIdentifier == "frame-target-A"
+                && inspector.isSelectingElement == false
+        }
+        #expect(selected)
+        #expect(requestNodeTargets == ["frame-target-A"])
+    }
+
+    @Test
+    func inspectorInspectDoesNotProbeStaleFrameTargetsWhenExecutionContextRouteExists() async throws {
+        let frameObjectID = #"{"injectedScriptId":4,"id":1}"#
+        var requestNodeTargets: [String] = []
+        let backend = FakeDOMTransportBackend()
+        backend.pageResultProvider = { method, payload, targetIdentifier in
+            switch method {
+            case WITransportMethod.DOM.getDocument:
+                if targetIdentifier == "frame-target-new" {
+                    return [
+                        "root": [
+                            "nodeId": 240,
+                            "nodeType": 9,
+                            "nodeName": "#document",
+                            "localName": "",
+                            "nodeValue": "",
+                            "documentURL": "https://ads.example.com/frame",
+                            "frameId": "frame-child",
+                            "childNodeCount": 1,
+                            "children": [[
+                                "nodeId": 260,
+                                "nodeType": 1,
+                                "nodeName": "BUTTON",
+                                "localName": "button",
+                                "nodeValue": "",
+                                "attributes": ["id", "fresh-frame-target"],
+                                "childNodeCount": 0,
+                                "children": [],
+                            ]],
+                        ],
+                    ]
+                }
+                return makeIFrameDocumentResultWithEmptyNestedDocument(url: "https://example.com/a")
+            case WITransportMethod.DOM.setInspectModeEnabled:
+                return [:]
+            case WITransportMethod.DOM.requestNode:
+                let params = runtimeTestDictionaryValue(payload["params"])
+                if params?["objectId"] as? String == frameObjectID {
+                    requestNodeTargets.append(targetIdentifier)
+                    if targetIdentifier == "frame-target-old" {
+                        return ["nodeId": 999]
+                    }
+                    if targetIdentifier == "frame-target-new" {
+                        return ["nodeId": 260]
+                    }
+                }
+                return [:]
+            default:
+                return [:]
+            }
+        }
+        let inspector = makeInspector(using: backend)
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        for targetIdentifier in ["frame-target-old", "frame-target-new"] {
+            backend.emitRootEvent(
+                method: "Target.targetCreated",
+                params: [
+                    "targetInfo": [
+                        "targetId": targetIdentifier,
+                        "type": "frame",
+                        "isProvisional": false,
+                    ],
+                ]
+            )
+        }
+        await backend.waitForPendingMessages()
+        backend.emitPageEvent(
+            method: WITransportMethod.Runtime.executionContextCreated,
+            params: [
+                "context": [
+                    "id": 4,
+                    "frameId": "frame-child",
+                ],
+            ],
+            targetIdentifier: "frame-target-new"
+        )
+        await backend.waitForPendingMessages()
+
+        try await inspector.beginSelectionMode()
+        backend.emitPageEvent(
+            method: "Inspector.inspect",
+            params: [
+                "object": [
+                    "type": "object",
+                    "subtype": "node",
+                    "objectId": frameObjectID,
+                ],
+                "hints": [:],
+            ],
+            targetIdentifier: "page-A"
+        )
+
+        let selected = await waitForCondition {
+            inspector.document.selectedNode?.nodeID == 260
+                && inspector.document.selectedNode?.targetIdentifier == "frame-target-new"
+                && inspector.isSelectingElement == false
+        }
+        #expect(selected)
+        #expect(requestNodeTargets == ["frame-target-new"])
+    }
+
+    @Test
+    func inspectorInspectHydratesFrameDocumentBeforeRetryingFrameRequestNode() async throws {
+        let frameObjectID = #"{"injectedScriptId":4,"id":1}"#
+        var requestNodeTargets: [String] = []
+        var frameDocumentRequestCount = 0
+        var frameDocumentRequested = false
+        let backend = FakeDOMTransportBackend()
+        backend.pageResultProvider = { method, payload, targetIdentifier in
+            switch method {
+            case WITransportMethod.DOM.getDocument:
+                if targetIdentifier == "frame-target-A" {
+                    frameDocumentRequestCount += 1
+                    frameDocumentRequested = true
+                    return [
+                        "root": [
+                            "nodeId": 240,
+                            "nodeType": 9,
+                            "nodeName": "#document",
+                            "localName": "",
+                            "nodeValue": "",
+                            "documentURL": "https://example.com/frame",
+                            "frameId": "frame-child",
+                            "childNodeCount": 1,
+                            "children": [[
+                                "nodeId": 260,
+                                "nodeType": 1,
+                                "nodeName": "BUTTON",
+                                "localName": "button",
+                                "nodeValue": "",
+                                "attributes": ["id", "frame-target"],
+                                "childNodeCount": 0,
+                                "children": [],
+                            ]],
+                        ],
+                    ]
+                }
+                return makeIFrameDocumentResultWithEmptyNestedDocument(url: "https://example.com/a")
+            case WITransportMethod.DOM.setInspectModeEnabled,
+                 WITransportMethod.Inspector.enable,
+                 WITransportMethod.Inspector.initialized,
+                 WITransportMethod.DOM.enable:
+                return [:]
+            case WITransportMethod.DOM.requestNode:
+                let params = runtimeTestDictionaryValue(payload["params"])
+                if params?["objectId"] as? String == frameObjectID {
+                    requestNodeTargets.append(targetIdentifier)
+                    if targetIdentifier == "frame-target-A", frameDocumentRequested {
+                        return ["nodeId": 260]
+                    }
+                }
+                return [:]
+            default:
+                return [:]
+            }
+        }
+        let inspector = makeInspector(using: backend)
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        backend.emitRootEvent(
+            method: "Target.targetCreated",
+            params: [
+                "targetInfo": [
+                    "targetId": "frame-target-A",
+                    "type": "frame",
+                    "isProvisional": false,
+                ],
+            ]
+        )
+        await backend.waitForPendingMessages()
+        backend.emitPageEvent(
+            method: WITransportMethod.Runtime.executionContextCreated,
+            params: [
+                "context": [
+                    "id": 4,
+                    "frameId": "frame-child",
+                ],
+            ],
+            targetIdentifier: "frame-target-A"
+        )
+        await backend.waitForPendingMessages()
+
+        try await inspector.beginSelectionMode()
+        backend.emitPageEvent(
+            method: "Inspector.inspect",
+            params: [
+                "object": [
+                    "type": "object",
+                    "subtype": "node",
+                    "objectId": frameObjectID,
+                ],
+                "hints": [:],
+            ],
+            targetIdentifier: "page-A"
+        )
+
+        let selected = await waitForCondition {
+            inspector.document.selectedNode?.nodeID == 260
+                && inspector.document.selectedNode?.targetIdentifier == "frame-target-A"
+                && inspector.isSelectingElement == false
+        }
+        #expect(selected)
+        #expect(frameDocumentRequestCount == 1)
+        #expect(requestNodeTargets == ["frame-target-A", "frame-target-A"])
+    }
+
+    @Test
+    func inspectorInspectDoesNotRefreshActiveDocumentBeforeRetryingInjectedScriptRequestNode() async throws {
+        let objectID = #"{"injectedScriptId":4,"id":1}"#
+        var pageDocumentRequestCount = 0
+        var requestNodeTargets: [String] = []
+        let backend = FakeDOMTransportBackend()
+        backend.pageResultProvider = { method, payload, targetIdentifier in
+            switch method {
+            case WITransportMethod.DOM.getDocument:
+                pageDocumentRequestCount += 1
+                if pageDocumentRequestCount == 1 {
+                    return makeDocumentResult(url: "https://example.com/a")
+                }
+                return makeDocumentResult(
+                    url: "https://example.com/a",
+                    mainChildren: [[
+                        "nodeId": 1600,
+                        "nodeType": 1,
+                        "nodeName": "DIV",
+                        "localName": "div",
+                        "nodeValue": "",
+                        "attributes": ["id", "gsm_mainImage"],
+                        "childNodeCount": 0,
+                        "children": [],
+                    ]]
+                )
+            case WITransportMethod.DOM.setInspectModeEnabled:
+                return [:]
+            case WITransportMethod.DOM.requestNode:
+                let params = runtimeTestDictionaryValue(payload["params"])
+                if params?["objectId"] as? String == objectID {
+                    requestNodeTargets.append(targetIdentifier)
+                    if targetIdentifier == "page-A", pageDocumentRequestCount >= 2 {
+                        return ["nodeId": 1600]
+                    }
+                }
+                return [:]
+            default:
+                return [:]
+            }
+        }
+        let inspector = makeInspector(using: backend)
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        try await inspector.beginSelectionMode()
+        backend.emitPageEvent(
+            method: "Inspector.inspect",
+            params: [
+                "object": [
+                    "type": "object",
+                    "subtype": "node",
+                    "className": "HTMLDivElement",
+                    "description": #"<div id="gsm_mainImage">"#,
+                    "objectId": objectID,
+                ],
+                "hints": [:],
+            ],
+            targetIdentifier: "page-A"
+        )
+
+        let failed = await waitForCondition(maxAttempts: 300) {
+            inspector.document.selectedNode == nil
+                && inspector.document.errorMessage == "Failed to resolve selected element."
+                && inspector.testHasInspectNodeResolution == false
+                && inspector.isSelectingElement == false
+        }
+        #expect(failed)
+        #expect(pageDocumentRequestCount == 1)
+        #expect(requestNodeTargets == ["page-A"])
+    }
+
+    @Test
+    func inspectorInspectWaitsForFrameOwnerBeforeAttachingUpdatedFrameDocument() async throws {
+        let objectID = #"{"injectedScriptId":4,"id":1}"#
+        var pageDocumentRequestCount = 0
+        var frameDocumentRequestCount = 0
+        var requestNodeTargets: [String] = []
+        let backend = FakeDOMTransportBackend()
+        backend.pageResultProvider = { method, payload, targetIdentifier in
+            switch method {
+            case WITransportMethod.DOM.getDocument:
+                if targetIdentifier == "frame-target-A" {
+                    frameDocumentRequestCount += 1
+                    return [
+                        "root": [
+                            "nodeId": 240,
+                            "nodeType": 9,
+                            "nodeName": "#document",
+                            "localName": "",
+                            "nodeValue": "",
+                            "documentURL": "https://ads.example.com/frame",
+                            "frameId": "frame-child",
+                            "childNodeCount": 1,
+                            "children": [[
+                                "nodeId": 260,
+                                "nodeType": 1,
+                                "nodeName": "DIV",
+                                "localName": "div",
+                                "nodeValue": "",
+                                "attributes": ["id", "ad-target"],
+                                "childNodeCount": 0,
+                                "children": [],
+                            ]],
+                        ],
+                    ]
+                }
+
+                pageDocumentRequestCount += 1
+                return makeDocumentResult(url: "https://example.com/a", mainChildren: [])
+            case WITransportMethod.DOM.setInspectModeEnabled,
+                 WITransportMethod.Inspector.enable,
+                 WITransportMethod.Inspector.initialized,
+                 WITransportMethod.DOM.enable:
+                return [:]
+            case WITransportMethod.DOM.requestNode:
+                let params = runtimeTestDictionaryValue(payload["params"])
+                if params?["objectId"] as? String == objectID {
+                    requestNodeTargets.append(targetIdentifier)
+                    if targetIdentifier == "frame-target-A", frameDocumentRequestCount > 0 {
+                        return ["nodeId": 260]
+                    }
+                }
+                return [:]
+            default:
+                return [:]
+            }
+        }
+        let inspector = makeInspector(using: backend)
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        backend.emitRootEvent(
+            method: "Target.targetCreated",
+            params: [
+                "targetInfo": [
+                    "targetId": "frame-target-A",
+                    "type": "frame",
+                    "isProvisional": false,
+                ],
+            ]
+        )
+        await backend.waitForPendingMessages()
+        backend.emitPageEvent(
+            method: WITransportMethod.Runtime.executionContextCreated,
+            params: [
+                "context": [
+                    "id": 4,
+                    "frameId": "frame-child",
+                ],
+            ],
+            targetIdentifier: "frame-target-A"
+        )
+        await backend.waitForPendingMessages()
+
+        try await inspector.beginSelectionMode()
+        backend.emitPageEvent(
+            method: "Inspector.inspect",
+            params: [
+                "object": [
+                    "type": "object",
+                    "subtype": "node",
+                    "className": "HTMLDivElement",
+                    "description": #"<div id="ad-target">"#,
+                    "objectId": objectID,
+                ],
+                "hints": [:],
+            ],
+            targetIdentifier: "page-A"
+        )
+
+        let frameSnapshotQueued = await waitForCondition {
+            frameDocumentRequestCount == 1
+                && requestNodeTargets == ["frame-target-A", "frame-target-A"]
+                && inspector.document.selectedNode == nil
+                && inspector.testCurrentDocumentURL == "https://example.com/a"
+        }
+        #expect(frameSnapshotQueued)
+        #expect(pageDocumentRequestCount == 1)
+
+        backend.emitPageEvent(
+            method: "DOM.setChildNodes",
+            params: [
+                "parentId": 4,
+                "nodes": [[
+                    "nodeId": 20,
+                    "nodeType": 1,
+                    "nodeName": "IFRAME",
+                    "localName": "iframe",
+                    "nodeValue": "",
+                    "attributes": ["id", "frame-owner"],
+                    "frameId": "frame-child",
+                    "childNodeCount": 0,
+                    "children": [],
+                ]],
+            ],
+            targetIdentifier: "page-A"
+        )
+
+        let selected = await waitForCondition {
+            inspector.document.selectedNode?.nodeID == 260
+                && inspector.document.selectedNode?.targetIdentifier == "frame-target-A"
+                && inspector.isSelectingElement == false
+        }
+        #expect(selected)
+        #expect(pageDocumentRequestCount == 1)
+        #expect(frameDocumentRequestCount == 1)
+        #expect(requestNodeTargets == ["frame-target-A", "frame-target-A"])
+    }
+
+    @Test
+    func inspectorInspectDoesNotProbeUnrelatedFrameTargetsForRequestNode() async throws {
+        var requestNodeTargets: [String] = []
+        let backend = FakeDOMTransportBackend()
+        backend.pageResultProvider = { method, payload, targetIdentifier in
+            switch method {
+            case WITransportMethod.DOM.getDocument:
+                if targetIdentifier == "unrelated-frame-A" {
                     return [
                         "root": [
                             "nodeId": 240,
@@ -4356,7 +5691,7 @@ struct WIDOMInspectorTests {
                 let params = runtimeTestDictionaryValue(payload["params"])
                 if params?["objectId"] as? String == "node-object-frame-target" {
                     requestNodeTargets.append(targetIdentifier)
-                    if targetIdentifier == "page-frame-A" {
+                    if targetIdentifier == "unrelated-frame-A" {
                         return ["nodeId": 260]
                     }
                 }
@@ -4378,8 +5713,10 @@ struct WIDOMInspectorTests {
             method: "Target.targetCreated",
             params: [
                 "targetInfo": [
-                    "targetId": "page-frame-A",
-                    "type": "page",
+                    "targetId": "unrelated-frame-A",
+                    "type": "frame",
+                    "frameId": "unrelated-frame",
+                    "parentFrameId": "main-frame",
                     "isProvisional": false,
                 ],
             ]
@@ -4400,9 +5737,10 @@ struct WIDOMInspectorTests {
             targetIdentifier: "page-A"
         )
 
-        let failed = await waitForCondition {
+        let failed = await waitForCondition(maxAttempts: 300) {
             inspector.document.selectedNode == nil
                 && inspector.document.errorMessage == "Failed to resolve selected element."
+                && inspector.testHasInspectNodeResolution == false
                 && inspector.isSelectingElement == false
         }
         #expect(failed)
@@ -4453,7 +5791,7 @@ struct WIDOMInspectorTests {
     }
 
     @Test
-    func domInspectMaterializesUnloadedMainTreeAncestor() async throws {
+    func domInspectDoesNotClientMaterializeUnloadedMainTreeAncestor() async throws {
         var requestedChildNodeIDs: [Int] = []
         var requestedDepths: [Int] = []
         var backend: FakeDOMTransportBackend!
@@ -4526,18 +5864,19 @@ struct WIDOMInspectorTests {
         try await inspector.beginSelectionMode()
         backend.emitPageEvent(method: "DOM.inspect", params: ["nodeId": 26])
 
-        let selected = await waitForCondition {
-            inspector.document.selectedNode?.nodeID == 26
-                && inspector.document.selectedNode?.attributes.contains(where: { $0.name == "id" && $0.value == "materialized-target" }) == true
+        let failed = await waitForCondition(maxAttempts: 300) {
+            inspector.document.selectedNode == nil
+                && inspector.document.errorMessage == nil
+                && inspector.testHasInspectNodeResolution == false
                 && inspector.isSelectingElement == false
         }
-        #expect(selected)
-        #expect(requestedChildNodeIDs == [10])
-        #expect(requestedDepths == [128])
+        #expect(failed)
+        #expect(requestedChildNodeIDs.isEmpty)
+        #expect(requestedDepths.isEmpty)
     }
 
     @Test
-    func domInspectMaterializationContinuesPastTwelveUnloadedSiblings() async throws {
+    func domInspectDoesNotScanUnloadedSiblingSubtrees() async throws {
         var requestedChildNodeIDs: [Int] = []
         let unloadedSiblings = (10...22).map { nodeID in
             [
@@ -4611,17 +5950,18 @@ struct WIDOMInspectorTests {
         try await inspector.beginSelectionMode()
         backend.emitPageEvent(method: "DOM.inspect", params: ["nodeId": 260])
 
-        let selected = await waitForCondition {
-            inspector.document.selectedNode?.nodeID == 260
-                && inspector.document.selectedNode?.attributes.contains(where: { $0.name == "id" && $0.value == "late-materialized-target" }) == true
+        let failed = await waitForCondition(maxAttempts: 300) {
+            inspector.document.selectedNode == nil
+                && inspector.document.errorMessage == nil
+                && inspector.testHasInspectNodeResolution == false
                 && inspector.isSelectingElement == false
         }
-        #expect(selected)
-        #expect(requestedChildNodeIDs == Array(10...22))
+        #expect(failed)
+        #expect(requestedChildNodeIDs.isEmpty)
     }
 
     @Test
-    func domInspectMaterializesUnloadedSameTargetFrameDocument() async throws {
+    func domInspectDoesNotClientMaterializeUnloadedSameTargetFrameDocument() async throws {
         var requestedChildNodeIDs: [Int] = []
         var backend: FakeDOMTransportBackend!
         backend = FakeDOMTransportBackend(
@@ -4705,15 +6045,14 @@ struct WIDOMInspectorTests {
         backend.emitPageEvent(method: "DOM.inspect", params: ["nodeId": 26])
 
         await backend.waitForPendingMessages()
-        let resolved = await waitForCondition(maxAttempts: 120) {
-            inspector.document.selectedNode?.nodeID == 26
-                && inspector.document.selectedNode?.attributes.contains(where: { $0.name == "id" && $0.value == "frame-target" }) == true
+        let failed = await waitForCondition(maxAttempts: 300) {
+            inspector.document.selectedNode == nil
                 && inspector.testHasInspectNodeResolution == false
                 && inspector.document.errorMessage == nil
                 && inspector.isSelectingElement == false
         }
-        #expect(resolved)
-        #expect(requestedChildNodeIDs == [24])
+        #expect(failed)
+        #expect(requestedChildNodeIDs.isEmpty)
     }
 
     @Test
@@ -4933,7 +6272,7 @@ struct WIDOMInspectorTests {
     }
 
     @Test
-    func inspectorInspectMaterializesUnloadedFrameTargetDocumentRoot() async throws {
+    func inspectorInspectDoesNotClientMaterializeUnloadedFrameTargetDocumentRoot() async throws {
         var requestNodeTargets: [String] = []
         var requestedChildNodes: [(targetIdentifier: String, nodeID: Int)] = []
         var backend: FakeDOMTransportBackend!
@@ -5046,16 +6385,15 @@ struct WIDOMInspectorTests {
             targetIdentifier: "frame-target-A"
         )
 
-        let selected = await waitForCondition {
-            inspector.document.selectedNode?.nodeID == 260
-                && inspector.document.selectedNode?.targetIdentifier == "frame-target-A"
+        let failed = await waitForCondition(maxAttempts: 300) {
+            inspector.document.selectedNode == nil
+                && inspector.document.errorMessage == "Failed to resolve selected element."
+                && inspector.testHasInspectNodeResolution == false
                 && inspector.isSelectingElement == false
         }
-        #expect(selected)
+        #expect(failed)
         #expect(requestNodeTargets == ["frame-target-A"])
-        #expect(requestedChildNodes.count == 1)
-        #expect(requestedChildNodes.first?.targetIdentifier == "frame-target-A")
-        #expect(requestedChildNodes.first?.nodeID == 240)
+        #expect(requestedChildNodes.isEmpty)
     }
 
     @Test
@@ -5296,7 +6634,7 @@ struct WIDOMInspectorTests {
     }
 
     @Test
-    func inspectorInspectMaterializesAttachedIncompleteAncestorWhenRequestNodeReturnsUnresolvedNode() async throws {
+    func inspectorInspectDoesNotClientMaterializeAttachedIncompleteAncestorWhenRequestNodeReturnsUnresolvedNode() async throws {
         var requestedChildNodeIDs: [Int] = []
         var backend: FakeDOMTransportBackend!
         backend = FakeDOMTransportBackend(
@@ -5384,14 +6722,14 @@ struct WIDOMInspectorTests {
             ]
         )
 
-        let resolved = await waitForCondition(maxAttempts: 120) {
-            requestedChildNodeIDs == [20]
-                && inspector.document.selectedNode?.nodeID == 341
-                && inspector.document.selectedNode?.attributes.contains(where: { $0.name == "id" && $0.value == "resolved-target" }) == true
-                && inspector.document.errorMessage == nil
+        let failed = await waitForCondition(maxAttempts: 300) {
+            requestedChildNodeIDs.isEmpty
+                && inspector.document.selectedNode == nil
+                && inspector.document.errorMessage == "Failed to resolve selected element."
+                && inspector.testHasInspectNodeResolution == false
                 && inspector.isSelectingElement == false
         }
-        #expect(resolved)
+        #expect(failed)
     }
 
     @Test
@@ -7788,6 +9126,88 @@ struct WIDOMInspectorTests {
     }
 
     @Test
+    func selectedNodeRemovalHidesPersistentHighlightBeforeNextSelection() async throws {
+        var pageCalls: [(method: String, targetIdentifier: String)] = []
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, _, targetIdentifier in
+                pageCalls.append((method: method, targetIdentifier: targetIdentifier))
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(
+                        url: "https://example.com/a",
+                        mainChildren: [[
+                            "nodeId": 6,
+                            "nodeType": 1,
+                            "nodeName": "A",
+                            "localName": "a",
+                            "nodeValue": "",
+                            "attributes": ["href", "/target"],
+                            "childNodeCount": 0,
+                            "children": [],
+                        ]]
+                    )
+                case WITransportMethod.DOM.setInspectModeEnabled,
+                     WITransportMethod.DOM.highlightNode,
+                     WITransportMethod.DOM.hideHighlight:
+                    return [:]
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        try await inspector.beginSelectionMode()
+        backend.emitPageEvent(method: "DOM.inspect", params: ["nodeId": 6])
+        let selected = await waitForCondition {
+            inspector.document.selectedNode?.nodeID == 6
+                && inspector.isSelectingElement == false
+                && pageCalls.contains(where: { $0.method == WITransportMethod.DOM.highlightNode })
+        }
+        #expect(selected)
+
+        let highlightIndex = pageCalls.lastIndex(where: {
+            $0.method == WITransportMethod.DOM.highlightNode
+        })
+
+        backend.emitPageEvent(
+            method: "DOM.childNodeRemoved",
+            params: ["parentNodeId": 4, "nodeId": 6]
+        )
+
+        let removed = await waitForCondition {
+            inspector.document.selectedNode == nil
+                && pageCalls.contains(where: { $0.method == WITransportMethod.DOM.hideHighlight })
+        }
+        #expect(removed)
+
+        let hideHighlightIndex = pageCalls.lastIndex(where: {
+            $0.method == WITransportMethod.DOM.hideHighlight
+        })
+        #expect(highlightIndex != nil)
+        #expect(hideHighlightIndex != nil)
+        if let highlightIndex, let hideHighlightIndex {
+            #expect(hideHighlightIndex > highlightIndex)
+            #expect(pageCalls[hideHighlightIndex].targetIdentifier == "page-A")
+        }
+
+        try await inspector.beginSelectionMode()
+        backend.emitPageEvent(method: "DOM.inspect", params: ["nodeId": 4])
+        let reselectedParent = await waitForCondition {
+            inspector.document.selectedNode?.nodeID == 4
+                && inspector.isSelectingElement == false
+        }
+        #expect(reselectedParent)
+    }
+
+    @Test
     func frontendHoverHighlightPreservesRevealFalse() async throws {
         var lastHighlightReveal: Bool?
         var lastHighlightConfig: [String: Any]?
@@ -8382,7 +9802,7 @@ private func makeIFrameDocumentResult(url: String) -> [String: Any] {
             "nodeValue": "",
             "attributes": ["id", "frame-owner"],
             "frameId": "frame-child",
-            "childNodeCount": 1,
+            "childNodeCount": 0,
             "contentDocument": [
                 "nodeId": 24,
                 "nodeType": 9,
@@ -8426,7 +9846,7 @@ private func makeIFrameDocumentResultWithEmptyNestedDocument(url: String) -> [St
             "nodeValue": "",
             "attributes": ["id", "frame-owner"],
             "frameId": "frame-child",
-            "childNodeCount": 1,
+            "childNodeCount": 0,
             "contentDocument": [
                 "nodeId": 24,
                 "nodeType": 9,
@@ -8656,7 +10076,6 @@ private final class FakeDOMTransportBackend: WITransportPlatformBackend {
         pageResultProvider: ((String, [String: Any], String) throws -> [String: Any])? = nil
     ) {
         self.supportSnapshot = .supported(
-            backendKind: .macOSNativeInspector,
             capabilities: capabilities
         )
         self.emitsInitialPageTargetCreatedOnAttach = emitsInitialPageTargetCreatedOnAttach
@@ -8859,7 +10278,7 @@ private extension DOMGraphNodeDescriptor {
     }
 
     var childCount: Int {
-        contentDocument == nil ? regularChildCount : 1
+        regularChildCount
     }
 }
 
@@ -8989,7 +10408,7 @@ private extension DOMNodeModel {
     }
 
     var childCount: Int {
-        contentDocument == nil ? regularChildCount : 1
+        regularChildCount
     }
 
 }

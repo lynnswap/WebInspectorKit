@@ -13,8 +13,8 @@ struct WIBackendFactoryTests {
         )
 
         #expect(String(describing: type(of: backend)) == "WINetworkUnsupportedBackend")
-        #expect(backend.support.isSupported == false)
-        #expect(backend.support.failureReason == "test")
+        #expect(backend.isSupported == false)
+        #expect(backend.failureReason == "test")
     }
 
     @Test
@@ -22,7 +22,6 @@ struct WIBackendFactoryTests {
         let backend = WIBackendFactory.makeNetworkBackend(
             configuration: .init(),
             supportSnapshot: .supported(
-                backendKind: .iOSNativeInspector,
                 capabilities: [.networkDomain]
             )
         )
@@ -38,14 +37,13 @@ struct WIBackendFactoryTests {
             WIBackendFactory.makeNetworkBackend(
                 configuration: .init(),
                 supportSnapshot: .supported(
-                    backendKind: .iOSNativeInspector,
                     capabilities: [.networkDomain]
                 )
             )
         }
 
         #expect(String(describing: type(of: backend)) == "WINetworkUnsupportedBackend")
-        #expect(backend.support.failureReason == "override")
+        #expect(backend.failureReason == "override")
     }
 
     @Test

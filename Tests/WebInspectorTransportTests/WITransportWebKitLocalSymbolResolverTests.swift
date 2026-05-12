@@ -31,11 +31,6 @@ struct WITransportNativeInspectorSymbolResolverTests {
         #expect(resolution.destroyStringImplAddress != 0)
         #expect(resolution.backendDispatcherDispatchAddress != 0)
         #expect(resolution.supportSnapshot.isSupported)
-        #if os(iOS)
-        #expect(resolution.backendKind == .iOSNativeInspector)
-        #elseif os(macOS)
-        #expect(resolution.backendKind == .macOSNativeInspector)
-        #endif
         #endif
     }
 

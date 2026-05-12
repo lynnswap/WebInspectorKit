@@ -516,25 +516,20 @@ struct NetworkTransportDriverTests {
                     return nil
                 }
                 shouldFailInitialEnable = false
-                Task { @MainActor [backend] in
-                    guard let backend else {
-                        return
-                    }
-                    backend.emitRootEvent(
-                        method: "Target.targetDestroyed",
-                        params: ["targetId": "page-A"]
-                    )
-                    backend.emitRootEvent(
-                        method: "Target.targetCreated",
-                        params: [
-                            "targetInfo": [
-                                "targetId": "page-B",
-                                "type": "page",
-                                "isProvisional": false,
-                            ]
+                backend.emitRootEvent(
+                    method: "Target.targetDestroyed",
+                    params: ["targetId": "page-A"]
+                )
+                backend.emitRootEvent(
+                    method: "Target.targetCreated",
+                    params: [
+                        "targetInfo": [
+                            "targetId": "page-B",
+                            "type": "page",
+                            "isProvisional": false,
                         ]
-                    )
-                }
+                    ]
+                )
                 throw WITransportError.remoteError(
                     scope: .root,
                     method: "Target.sendMessageToTarget",
@@ -591,25 +586,20 @@ struct NetworkTransportDriverTests {
                     return nil
                 }
                 shouldReplaceTargetAfterInitialEnable = false
-                Task { @MainActor [backend] in
-                    guard let backend else {
-                        return
-                    }
-                    backend.emitRootEvent(
-                        method: "Target.targetDestroyed",
-                        params: ["targetId": "page-A"]
-                    )
-                    backend.emitRootEvent(
-                        method: "Target.targetCreated",
-                        params: [
-                            "targetInfo": [
-                                "targetId": "page-B",
-                                "type": "page",
-                                "isProvisional": false,
-                            ]
+                backend.emitRootEvent(
+                    method: "Target.targetDestroyed",
+                    params: ["targetId": "page-A"]
+                )
+                backend.emitRootEvent(
+                    method: "Target.targetCreated",
+                    params: [
+                        "targetInfo": [
+                            "targetId": "page-B",
+                            "type": "page",
+                            "isProvisional": false,
                         ]
-                    )
-                }
+                    ]
+                )
                 return [:]
             }
         )
@@ -1235,7 +1225,6 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
         attachHandler: ((any WITransportBackendMessageSink) async -> Void)? = nil
     ) {
         supportSnapshot = .supported(
-            backendKind: .macOSNativeInspector,
             capabilities: capabilities
         )
         self.failingAttachCount = failingAttachCount

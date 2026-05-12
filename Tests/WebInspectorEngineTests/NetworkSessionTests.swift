@@ -17,7 +17,6 @@ struct NetworkSessionTests {
         let session = NetworkSession()
 
         #expect(session.testBackendTypeName() == "WINetworkUnsupportedBackend")
-        #expect(session.backendSupport.isSupported == false)
     }
 
     @Test

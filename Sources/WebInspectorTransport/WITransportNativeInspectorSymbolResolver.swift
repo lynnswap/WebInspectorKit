@@ -191,8 +191,8 @@ private enum WITransportNativeInspectorResolver {
     private static let frameInspectorControllerConnectSymbol = WITransportNativeInspectorObfuscation.deobfuscate(["bb", "15FrontendChannelE", "RN9Inspector", "15connectFrontendE", "24FrameInspectorController", "7WebCore", "__ZN"])
     // __ZN7WebCore24FrameInspectorController18disconnectFrontendERN9Inspector15FrontendChannelE
     private static let frameInspectorControllerDisconnectSymbol = WITransportNativeInspectorObfuscation.deobfuscate(["E", "15FrontendChannel", "ERN9Inspector", "18disconnectFrontend", "24FrameInspectorController", "7WebCore", "__ZN"])
+    private static let backendName = "native-inspector"
     #if os(iOS)
-    fileprivate static let backendKind: WITransportBackendKind = .iOSNativeInspector
     private static let sharedCacheDirectoryCandidates = [
         // /System/Library/Caches/com.apple.dyld
         WITransportNativeInspectorObfuscation.deobfuscate([".dyld", "om.apple", "Caches/c", "Library/", "/System/"]),
@@ -202,7 +202,6 @@ private enum WITransportNativeInspectorResolver {
         WITransportNativeInspectorObfuscation.deobfuscate(["ld", "apple.dy", "hes/com.", "rary/Cac", "stem/Lib", "es/OS/Sy", "/Cryptex", "/preboot", "/private"]),
     ]
     #else
-    fileprivate static let backendKind: WITransportBackendKind = .macOSNativeInspector
     private static let sharedCacheDirectoryCandidates = [
         // /System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld
         WITransportNativeInspectorObfuscation.deobfuscate(["ary/dyld", "tem/Libr", "s/OS/Sys", "Cryptexe", "Preboot/", "Volumes/", "/System/"]),
@@ -1008,7 +1007,7 @@ private enum WITransportNativeInspectorResolver {
         usedConnectDisconnectFallback: Bool
     ) -> WITransportNativeInspectorSymbolResolution {
         if let phase, WITransportConsoleDiagnostics.verboseConsoleDiagnosticsEnabled {
-            NSLog(successLogFormat, backendKind.rawValue, phase.message)
+            NSLog(successLogFormat, backendName, phase.message)
         }
         return WITransportNativeInspectorSymbolResolution(
             functionAddresses: functionAddresses,
@@ -1827,7 +1826,7 @@ private enum WITransportNativeInspectorResolver {
             missingFunctions: missingFunctions,
             usedConnectDisconnectFallback: usedConnectDisconnectFallback
         )
-        NSLog(failureLogFormat, backendKind.rawValue, reason)
+        NSLog(failureLogFormat, backendName, reason)
         return WITransportNativeInspectorSymbolResolution(
             functionAddresses: .zero,
             failureReason: reason,
@@ -1871,7 +1870,6 @@ private enum WITransportNativeInspectorResolver {
 }
 
 struct WITransportAttachSymbolResolution: Sendable {
-    let backendKind: WITransportBackendKind
     let connectFrontendAddress: UInt64
     let disconnectFrontendAddress: UInt64
     let stringFromUTF8Address: UInt64
@@ -1911,7 +1909,6 @@ struct WITransportAttachSymbolResolution: Sendable {
     var supportSnapshot: WITransportSupportSnapshot {
         if isSupported {
             .supported(
-                backendKind: backendKind,
                 capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain]
             )
         } else {
@@ -2032,7 +2029,6 @@ enum WITransportNativeInspectorSymbolResolver {
 
     private static func makeAttachResolution(from resolution: WITransportNativeInspectorSymbolResolution) -> WITransportAttachSymbolResolution {
         WITransportAttachSymbolResolution(
-            backendKind: WITransportNativeInspectorResolver.backendKind,
             connectFrontendAddress: resolution.functionAddresses.connectFrontendAddress,
             disconnectFrontendAddress: resolution.functionAddresses.disconnectFrontendAddress,
             stringFromUTF8Address: resolution.functionAddresses.stringFromUTF8Address,
@@ -2052,7 +2048,6 @@ enum WITransportNativeInspectorSymbolResolver {
 
 #if !os(iOS) && !os(macOS)
 struct WITransportAttachSymbolResolution: Sendable {
-    let backendKind: WITransportBackendKind
     let connectFrontendAddress: UInt64
     let disconnectFrontendAddress: UInt64
     let stringFromUTF8Address: UInt64
@@ -2087,7 +2082,6 @@ struct WITransportAttachSymbolResolution: Sendable {
 enum WITransportNativeInspectorSymbolResolver {
     static func currentAttachResolution() -> WITransportAttachSymbolResolution {
         WITransportAttachSymbolResolution(
-            backendKind: .unsupported,
             connectFrontendAddress: 0,
             disconnectFrontendAddress: 0,
             stringFromUTF8Address: 0,

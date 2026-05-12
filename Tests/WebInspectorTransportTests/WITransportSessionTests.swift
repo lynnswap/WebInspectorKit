@@ -8,10 +8,11 @@ import WebKit
 @Suite(.serialized, .webKitIsolated)
 struct WITransportSessionTests {
     @Test
-    func macOSDefaultBackendFactoryUsesNativeInspectorBackend() {
+    func macOSDefaultBackendFactoryIsUnsupported() {
         #if os(macOS)
         let backend = WITransportPlatformBackendFactory.makeDefaultBackend(configuration: .init())
-        #expect(backend is WITransportMacNativeInspectorPlatformBackend)
+        #expect(backend.supportSnapshot.isSupported == false)
+        #expect(backend.supportSnapshot.failureReason == "WebInspectorTransport currently supports iOS only.")
         #endif
     }
 
@@ -58,12 +59,10 @@ struct WITransportSessionTests {
     func attachRefreshesSupportSnapshotFromResolvedBackendMode() async throws {
         let backend = FakeSessionBackend(
             supportSnapshot: .supported(
-                backendKind: .macOSNativeInspector,
                 capabilities: [.rootMessaging],
                 failureReason: "preflight snapshot"
             ),
             supportSnapshotAfterAttach: .supported(
-                backendKind: .macOSNativeInspector,
                 capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain]
             )
         )
@@ -76,7 +75,6 @@ struct WITransportSessionTests {
 
         try await session.attach(to: webView)
 
-        #expect(session.supportSnapshot.backendKind == .macOSNativeInspector)
         #expect(session.supportSnapshot.capabilities.contains(.domDomain))
         #expect(session.supportSnapshot.capabilities.contains(.networkDomain))
         #expect(session.supportSnapshot.failureReason == nil)
@@ -218,7 +216,6 @@ struct WITransportSessionTests {
     func compatibilityResponseAllowsDOMEnableWithoutSendingPageMessage() async throws {
         let backend = FakeSessionBackend(
             supportSnapshot: .supported(
-                backendKind: .iOSNativeInspector,
                 capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain]
             ),
             compatibilityResponseProvider: { scope, method in
@@ -273,7 +270,7 @@ struct WITransportSessionTests {
     }
 
     @Test
-    func pageCommandsFollowCommittedTargetWithoutOldIdentifier() async throws {
+    func ambiguousCommitWithoutKnownLineageDoesNotReplaceCurrentPageTarget() async throws {
         let backend = FakeSessionBackend()
         let recorder = PageDispatchRecorder()
         backend.onSendPageMessage = { message, targetIdentifier, outerIdentifier in
@@ -321,7 +318,204 @@ struct WITransportSessionTests {
 
         _ = try await Self.pageGetResourceTree(using: session)
 
+        #expect(await recorder.snapshot() == ["page-A"])
+        #expect(session.currentPageTargetIdentifier() == "page-A")
+    }
+
+    @Test
+    func nonProvisionalPageTargetCreationDoesNotReplaceCurrentPageTargetWithoutCommit() async throws {
+        let backend = FakeSessionBackend()
+        let recorder = PageDispatchRecorder()
+        backend.onSendPageMessage = { message, targetIdentifier, outerIdentifier in
+            await recorder.record(targetIdentifier: targetIdentifier)
+            let identifier = try Self.identifier(from: message)
+            #expect(identifier == outerIdentifier)
+            backend.emitRootMessage(
+                Self.jsonString([
+                    "id": outerIdentifier,
+                    "result": [:],
+                ])
+            )
+            backend.emitPageMessage(
+                Self.jsonString([
+                    "id": identifier,
+                    "result": [:],
+                ]),
+                targetIdentifier: targetIdentifier
+            )
+        }
+        let session = WITransportSession(
+            configuration: .init(responseTimeout: .seconds(1)),
+            backendFactory: { _ in backend }
+        )
+        session.derivedPageTargetIdentifierProviderForTesting = { _ in nil }
+        let webView = makeIsolatedTestWebView()
+
+        try await session.attach(to: webView)
+
+        backend.emitRootMessage(
+            #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-subframe","type":"page","isProvisional":false}}}"#
+        )
+        await backend.waitForPendingMessages()
+        _ = try await session.sendPageData(method: WITransportMethod.DOM.enable)
+
+        backend.emitRootMessage(
+            #"{"method":"Target.didCommitProvisionalTarget","params":{"newTargetId":"page-subframe"}}"#
+        )
+        await backend.waitForPendingMessages()
+        _ = try await session.sendPageData(method: WITransportMethod.DOM.enable)
+
+        #expect(await recorder.snapshot() == ["page-A", "page-A"])
+        #expect(session.currentPageTargetIdentifier() == "page-A")
+    }
+
+    @Test
+    func nonDerivedPageCommitDoesNotReplaceAuthoritativeWebViewPageTarget() async throws {
+        let backend = FakeSessionBackend()
+        let recorder = PageDispatchRecorder()
+        backend.onSendPageMessage = { message, targetIdentifier, outerIdentifier in
+            await recorder.record(targetIdentifier: targetIdentifier)
+            let identifier = try Self.identifier(from: message)
+            #expect(identifier == outerIdentifier)
+            backend.emitPageMessage(
+                Self.jsonString([
+                    "id": identifier,
+                    "result": [:],
+                ]),
+                targetIdentifier: targetIdentifier
+            )
+        }
+        let session = WITransportSession(
+            configuration: .init(responseTimeout: .seconds(1)),
+            backendFactory: { _ in backend }
+        )
+        session.derivedPageTargetIdentifierProviderForTesting = { _ in "page-A" }
+        let webView = makeIsolatedTestWebView()
+
+        try await session.attach(to: webView)
+        #expect(session.currentPageTargetIdentifier() == "page-A")
+
+        backend.emitRootMessage(
+            #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-subframe","type":"page","frameId":"frame-subframe","parentFrameId":"main-frame","isProvisional":true}}}"#
+        )
+        backend.emitRootMessage(
+            #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-A","newTargetId":"page-subframe"}}"#
+        )
+        await backend.waitForPendingMessages()
+
+        _ = try await session.sendPageData(method: WITransportMethod.DOM.enable)
+
+        #expect(await recorder.snapshot() == ["page-A"])
+        #expect(session.currentPageTargetIdentifier() == "page-A")
+        #expect(session.currentCommittedPageTargetIdentifier() == "page-A")
+    }
+
+    @Test
+    func provisionalFramePageTargetWithoutParentFrameIDDoesNotReplaceCurrentPageTarget() async throws {
+        let backend = FakeSessionBackend()
+        let recorder = PageDispatchRecorder()
+        backend.onSendPageMessage = { message, targetIdentifier, outerIdentifier in
+            await recorder.record(targetIdentifier: targetIdentifier)
+            let identifier = try Self.identifier(from: message)
+            #expect(identifier == outerIdentifier)
+            backend.emitRootMessage(
+                Self.jsonString([
+                    "id": outerIdentifier,
+                    "result": [:],
+                ])
+            )
+            backend.emitPageMessage(
+                Self.jsonString([
+                    "id": identifier,
+                    "result": [:],
+                ]),
+                targetIdentifier: targetIdentifier
+            )
+        }
+        let session = WITransportSession(
+            configuration: .init(responseTimeout: .seconds(1)),
+            backendFactory: { _ in backend }
+        )
+        session.derivedPageTargetIdentifierProviderForTesting = { _ in nil }
+        let webView = makeIsolatedTestWebView()
+
+        try await session.attach(to: webView)
+        #expect(session.currentPageTargetIdentifier() == "page-A")
+
+        backend.emitRootMessage(
+            #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-ad","type":"page","frameId":"frame-ad","isProvisional":true}}}"#
+        )
+        backend.emitRootMessage(
+            #"{"method":"Target.didCommitProvisionalTarget","params":{"newTargetId":"page-ad"}}"#
+        )
+        await backend.waitForPendingMessages()
+
+        _ = try await session.sendPageData(method: WITransportMethod.DOM.enable)
+
+        #expect(await recorder.snapshot() == ["page-A"])
+        #expect(session.currentPageTargetIdentifier() == "page-A")
+        #expect(session.currentCommittedPageTargetIdentifier() == nil)
+        #expect(session.targetKind(for: "page-ad") == .frame)
+        #expect(session.frameTargetIdentifiers() == ["page-ad"])
+        #expect(session.targetIdentifier(forFrameID: "frame-ad") == "page-ad")
+    }
+
+    @Test
+    func authoritativeProvisionalPageTargetWithoutOldIdentifierBecomesCurrentPageTarget() async throws {
+        let backend = FakeSessionBackend()
+        let recorder = PageDispatchRecorder()
+        backend.onSendPageMessage = { message, targetIdentifier, outerIdentifier in
+            await recorder.record(targetIdentifier: targetIdentifier)
+            let identifier = try Self.identifier(from: message)
+            #expect(identifier == outerIdentifier)
+            backend.emitRootMessage(
+                Self.jsonString([
+                    "id": outerIdentifier,
+                    "result": [:],
+                ])
+            )
+            backend.emitPageMessage(
+                Self.jsonString([
+                    "id": identifier,
+                    "result": [
+                        "frameTree": [
+                            "frame": [
+                                "id": "frame-\(targetIdentifier)",
+                                "loaderId": "loader-\(targetIdentifier)",
+                                "url": "https://example.com/\(targetIdentifier)",
+                                "securityOrigin": "https://example.com",
+                                "mimeType": "text/html",
+                            ],
+                            "resources": [],
+                        ],
+                    ],
+                ]),
+                targetIdentifier: targetIdentifier
+            )
+        }
+        let session = WITransportSession(
+            configuration: .init(responseTimeout: .seconds(1)),
+            backendFactory: { _ in backend }
+        )
+        var authoritativePageTargetIdentifier = "page-A"
+        session.derivedPageTargetIdentifierProviderForTesting = { _ in authoritativePageTargetIdentifier }
+        let webView = makeIsolatedTestWebView()
+
+        try await session.attach(to: webView)
+        authoritativePageTargetIdentifier = "page-C"
+
+        backend.emitRootMessage(
+            #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-C","type":"page","frameId":"main-frame","isProvisional":true}}}"#
+        )
+        backend.emitRootMessage(
+            #"{"method":"Target.didCommitProvisionalTarget","params":{"newTargetId":"page-C"}}"#
+        )
+        await backend.waitForPendingMessages()
+
+        _ = try await Self.pageGetResourceTree(using: session)
+
         #expect(await recorder.snapshot() == ["page-C"])
+        #expect(session.currentPageTargetIdentifier() == "page-C")
     }
 
     @Test
@@ -417,6 +611,163 @@ struct WITransportSessionTests {
         #expect(session.targetKind(for: "frame-A") == .frame)
         #expect(session.frameTargetIdentifiers().isEmpty)
         #expect(session.currentPageTargetIdentifier() == "page-A")
+    }
+
+    @Test
+    func runtimeExecutionContextCreatedRoutesContextToFrameTarget() async throws {
+        let backend = FakeSessionBackend()
+        let session = WITransportSession(
+            configuration: .init(responseTimeout: .seconds(1)),
+            backendFactory: { _ in backend }
+        )
+        session.derivedPageTargetIdentifierProviderForTesting = { _ in nil }
+        let webView = makeIsolatedTestWebView()
+
+        try await session.attach(to: webView)
+
+        let stream = session.pageEvents()
+        var iterator = stream.makeAsyncIterator()
+        _ = await iterator.next()
+
+        backend.emitRootMessage(
+            #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-A","type":"frame","isProvisional":false}}}"#
+        )
+        await backend.waitForPendingMessages()
+        _ = await iterator.next()
+
+        backend.emitPageMessage(
+            #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":4,"frameId":"frame-child"}}}"#,
+            targetIdentifier: "frame-A"
+        )
+        await backend.waitForPendingMessages()
+
+        let contextEvent = await iterator.next()
+        #expect(contextEvent?.method == WITransportMethod.Runtime.executionContextCreated)
+        #expect(contextEvent?.targetIdentifier == "frame-A")
+        #expect(session.targetIdentifier(forExecutionContext: 4) == "frame-A")
+        #expect(session.targetIdentifier(forFrameID: "frame-child") == "frame-A")
+    }
+
+    @Test
+    func rootRuntimeExecutionContextCreatedUsesFrameIDToRouteFrameTarget() async throws {
+        let backend = FakeSessionBackend()
+        let session = WITransportSession(
+            configuration: .init(responseTimeout: .seconds(1)),
+            backendFactory: { _ in backend }
+        )
+        session.derivedPageTargetIdentifierProviderForTesting = { _ in nil }
+        let webView = makeIsolatedTestWebView()
+
+        try await session.attach(to: webView)
+
+        let stream = session.pageEvents()
+        var iterator = stream.makeAsyncIterator()
+        _ = await iterator.next()
+
+        backend.emitRootMessage(
+            #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-A","type":"page","isProvisional":false}}}"#
+        )
+        await backend.waitForPendingMessages()
+        _ = await iterator.next()
+
+        backend.emitRootMessage(
+            #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-21474836526-1001","type":"frame","isProvisional":false}}}"#
+        )
+        await backend.waitForPendingMessages()
+        _ = await iterator.next()
+        #expect(session.targetIdentifier(forFrameID: "frame-21474836526") == "frame-21474836526-1001")
+
+        backend.emitRootMessage(
+            #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":4,"frameId":"frame-21474836526"}}}"#
+        )
+        await backend.waitForPendingMessages()
+
+        let contextEvent = await iterator.next()
+        #expect(contextEvent?.method == WITransportMethod.Runtime.executionContextCreated)
+        #expect(contextEvent?.targetIdentifier == "frame-21474836526-1001")
+        #expect(session.targetIdentifier(forExecutionContext: 4) == "frame-21474836526-1001")
+        #expect(session.targetIdentifier(forFrameID: "frame-21474836526") == "frame-21474836526-1001")
+    }
+
+    @Test
+    func destroyedFrameTargetDropsExecutionContextRoute() async throws {
+        let backend = FakeSessionBackend()
+        let session = WITransportSession(
+            configuration: .init(responseTimeout: .seconds(1)),
+            backendFactory: { _ in backend }
+        )
+        session.derivedPageTargetIdentifierProviderForTesting = { _ in nil }
+        let webView = makeIsolatedTestWebView()
+
+        try await session.attach(to: webView)
+
+        let stream = session.pageEvents()
+        var iterator = stream.makeAsyncIterator()
+        _ = await iterator.next()
+
+        backend.emitRootMessage(
+            #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-A","type":"frame","isProvisional":false}}}"#
+        )
+        await backend.waitForPendingMessages()
+        _ = await iterator.next()
+
+        backend.emitPageMessage(
+            #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":4,"frameId":"frame-child"}}}"#,
+            targetIdentifier: "frame-A"
+        )
+        await backend.waitForPendingMessages()
+        _ = await iterator.next()
+        #expect(session.targetIdentifier(forExecutionContext: 4) == "frame-A")
+
+        backend.emitRootMessage(
+            #"{"method":"Target.targetDestroyed","params":{"targetId":"frame-A"}}"#
+        )
+        await backend.waitForPendingMessages()
+
+        _ = await iterator.next()
+        #expect(session.targetIdentifier(forExecutionContext: 4) == nil)
+        #expect(session.targetIdentifier(forFrameID: "frame-child") == nil)
+    }
+
+    @Test
+    func committedFrameTargetMovesExecutionContextRoute() async throws {
+        let backend = FakeSessionBackend()
+        let session = WITransportSession(
+            configuration: .init(responseTimeout: .seconds(1)),
+            backendFactory: { _ in backend }
+        )
+        session.derivedPageTargetIdentifierProviderForTesting = { _ in nil }
+        let webView = makeIsolatedTestWebView()
+
+        try await session.attach(to: webView)
+
+        let stream = session.pageEvents()
+        var iterator = stream.makeAsyncIterator()
+        _ = await iterator.next()
+
+        backend.emitRootMessage(
+            #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-provisional","type":"frame","isProvisional":true}}}"#
+        )
+        await backend.waitForPendingMessages()
+        _ = await iterator.next()
+
+        backend.emitPageMessage(
+            #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":4,"frameId":"frame-child"}}}"#,
+            targetIdentifier: "frame-provisional"
+        )
+        await backend.waitForPendingMessages()
+        _ = await iterator.next()
+        #expect(session.targetIdentifier(forExecutionContext: 4) == "frame-provisional")
+
+        backend.emitRootMessage(
+            #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"frame-provisional","newTargetId":"frame-A"}}"#
+        )
+        await backend.waitForPendingMessages()
+
+        _ = await iterator.next()
+        #expect(session.targetIdentifier(forExecutionContext: 4) == "frame-A")
+        #expect(session.targetIdentifier(forFrameID: "frame-child") == "frame-A")
+        #expect(session.frameTargetIdentifiers() == ["frame-A"])
     }
 
     @Test
@@ -671,7 +1022,7 @@ struct WITransportSessionTests {
     }
 
     @Test
-    func pageEventBufferKeepsNewestEnvelopesForSlowConsumersAfterSubscriptionStarts() async throws {
+    func pageEventStreamKeepsAllEnvelopesAfterSubscriptionStarts() async throws {
         let backend = FakeSessionBackend()
         let session = WITransportSession(
             configuration: .init(
@@ -716,12 +1067,17 @@ struct WITransportSessionTests {
 
         let secondEvent = await iterator.next()
         let thirdEvent = await iterator.next()
+        let fourthEvent = await iterator.next()
 
-        #expect([secondEvent?.method, thirdEvent?.method] == [
+        #expect([secondEvent?.method, thirdEvent?.method, fourthEvent?.method] == [
+            "Network.requestWillBeSent",
             "Network.responseReceived",
             "Target.targetDestroyed",
         ])
-        #expect([secondEvent?.targetIdentifier, thirdEvent?.targetIdentifier] == ["page-B", "page-B"])
+        #expect(
+            [secondEvent?.targetIdentifier, thirdEvent?.targetIdentifier, fourthEvent?.targetIdentifier]
+                == ["page-B", "page-B", "page-B"]
+        )
     }
 
     @Test
@@ -814,7 +1170,7 @@ struct WITransportSessionTests {
     }
 
     @Test
-    func waitForPostActivePageEventsToDrainCompletesAfterDroppedBufferedEvent() async throws {
+    func waitForPostActivePageEventsToDrainWaitsForQueuedActiveEvent() async throws {
         let backend = FakeSessionBackend()
         let session = WITransportSession(
             configuration: .init(
@@ -853,12 +1209,24 @@ struct WITransportSessionTests {
         )
         await backend.waitForPendingMessages()
 
-        let drainedAfterDroppedBufferedEvent = await Self.task(
+        let drainedBeforeDeliveringQueuedEvent = await Self.task(
             drainTask,
             completesWithinNanoseconds: 200_000_000
         )
 
-        #expect(drainedAfterDroppedBufferedEvent)
+        #expect(drainedBeforeDeliveringQueuedEvent == false)
+
+        let committedTargetEvent = await iterator.next()
+        #expect(committedTargetEvent?.method == "Target.didCommitProvisionalTarget")
+        session.beginPageEventDelivery()
+        session.finishPageEventDelivery()
+
+        let drainedAfterDeliveringQueuedEvent = await Self.task(
+            drainTask,
+            completesWithinNanoseconds: 200_000_000
+        )
+
+        #expect(drainedAfterDeliveringQueuedEvent)
     }
 
     @Test
@@ -958,7 +1326,19 @@ struct WITransportSessionTests {
             completesWithinNanoseconds: 200_000_000
         )
 
-        #expect(drainedAfterFinishingActiveEvent)
+        #expect(drainedAfterFinishingActiveEvent == false)
+
+        let committedTargetEvent = await iterator.next()
+        #expect(committedTargetEvent?.method == "Target.didCommitProvisionalTarget")
+        session.beginPageEventDelivery()
+        session.finishPageEventDelivery()
+
+        let drainedAfterDeliveringQueuedEvent = await Self.task(
+            drainTask,
+            completesWithinNanoseconds: 200_000_000
+        )
+
+        #expect(drainedAfterDeliveringQueuedEvent)
     }
 
     @Test
@@ -1054,25 +1434,22 @@ struct WITransportSessionTests {
     }
 
     @Test
-    func supportedSnapshotFactoryPreservesBackendCapabilitiesAndFailureReason() {
+    func supportedSnapshotFactoryPreservesCapabilitiesAndFailureReason() {
         let snapshot = WITransportSupportSnapshot.supported(
-            backendKind: .iOSNativeInspector,
             capabilities: [.rootMessaging, .domDomain],
             failureReason: "preflight snapshot"
         )
 
         #expect(snapshot.availability == .supported)
-        #expect(snapshot.backendKind == .iOSNativeInspector)
         #expect(snapshot.capabilities == [.rootMessaging, .domDomain])
         #expect(snapshot.failureReason == "preflight snapshot")
     }
 
     @Test
-    func unsupportedSnapshotFactoryClearsCapabilitiesAndUsesUnsupportedBackendKind() {
+    func unsupportedSnapshotFactoryClearsCapabilities() {
         let snapshot = WITransportSupportSnapshot.unsupported(reason: "backend unavailable")
 
         #expect(snapshot.availability == .unsupported)
-        #expect(snapshot.backendKind == .unsupported)
         #expect(snapshot.capabilities.isEmpty)
         #expect(snapshot.failureReason == "backend unavailable")
     }
@@ -1101,7 +1478,6 @@ private final class FakeSessionBackend: WITransportPlatformBackend {
         attachHandler: ((any WITransportBackendMessageSink) async -> Void)? = nil
     ) {
         self.supportSnapshot = supportSnapshot ?? .supported(
-            backendKind: Self.defaultSupportedBackendKind,
             capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain]
         )
         self.supportSnapshotAfterAttach = supportSnapshotAfterAttach
@@ -1172,14 +1548,6 @@ private final class FakeSessionBackend: WITransportPlatformBackend {
 
     func waitForPendingMessages() async {
         await messageSink?.waitForPendingMessages()
-    }
-
-    private static var defaultSupportedBackendKind: WITransportBackendKind {
-#if os(macOS)
-        .macOSNativeInspector
-#else
-        .iOSNativeInspector
-#endif
     }
 }
 

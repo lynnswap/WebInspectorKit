@@ -61,6 +61,8 @@ package extension NetworkWire.Transport {
                 let targetId: String
                 let type: String
                 let isProvisional: Bool?
+                let frameId: String?
+                let parentFrameId: String?
             }
 
             let targetInfo: TargetInfo

@@ -466,3 +466,234 @@ The current broad subtree-search behavior should become exceptional. The protoco
 - Verify full `DOM.documentUpdated` resets document generation and does not try to rebind by unstable IDs.
 - Verify UI reveal opens ancestors after path-push and does not force broad subtree hydration.
 - Verify frame target lifecycle remains handled by transport, not DOM store.
+
+## 2026-05-12 Raw Model Recheck Notes
+
+These notes are intentionally rough. The current direction above may still be too incremental. The iframe-ad update failure suggests the model needs to be reconsidered from the actual WebKit actors before choosing names or layers.
+
+### User Mental Model To Validate
+
+The native model should match a structure closer to:
+
+```mermaid
+flowchart TD
+    Page["Page / inspected web page"]
+    MainFrame["Main frame"]
+    MainDocument["Main frame Document"]
+    MainDOM["Main document DOM tree"]
+    IFrameElement["iframe element / frame owner node"]
+    ChildFrame["Child frame"]
+    ChildDocument["Child frame Document"]
+    ChildDOM["Child document DOM tree"]
+
+    Page --> MainFrame
+    MainFrame --> MainDocument
+    MainDocument --> MainDOM
+    MainDOM --> IFrameElement
+    IFrameElement --> ChildFrame
+    ChildFrame --> ChildDocument
+    ChildDocument --> ChildDOM
+```
+
+Important nuance: the visual DOM tree wants to show the child document under the `iframe` element, but the child document is not a regular DOM child of the iframe element. It is a frame owner `contentDocument` relationship. In cross-origin / process-isolated cases, that child document may be served by a different protocol target.
+
+### Actors To Name Before Refactoring
+
+- **Inspected Page**
+  - The user-visible page in the `WKWebView`.
+  - Has one current main page target.
+  - A main page navigation resets the main document mirror.
+  - A child frame navigation must not reset the main document mirror.
+
+- **Frame**
+  - Browsing context inside the page.
+  - Has WebKit frame identity (`frameId` in protocol form).
+  - May be main frame or child frame.
+  - Cross-origin iframe content can have a separate frame target / process.
+  - The parent DOM contains an `iframe` / `frame` owner element, but frame lifecycle is not itself a DOM child mutation.
+
+- **Target**
+  - Inspector protocol endpoint.
+  - Page targets and frame targets are transport/routing concepts, not DOM nodes.
+  - Frame target identifier can encode frame identity plus process identity.
+  - `nodeId` is scoped to the DOM agent / target mirror. It is not globally unique.
+
+- **Execution Context**
+  - Runtime context that owns `RemoteObject.objectId` / `injectedScriptId`.
+  - `Inspector.inspect` gives a remote object. `DOM.requestNode(objectId)` must be sent to the target that owns that execution context.
+  - If execution context routing is missing or stale, selection fails before the DOM model gets a meaningful mutation.
+
+- **Document**
+  - A DOM document belongs to a frame.
+  - There can be many documents visible in one Elements tree: main document plus frame documents attached under frame owner nodes.
+  - Frame document update should replace only that frame owner's `contentDocument`.
+  - The current single `documentIdentity` is suspicious because document generation is actually per target/frame document, not globally per Elements tree.
+
+- **DOM Node**
+  - Protocol mirror entity keyed by `(targetIdentifier, nodeId)` at minimum.
+  - Better conceptual identity may need `(targetIdentifier, documentGeneration, nodeId)` because `nodeId` validity is tied to the target DOM mirror generation.
+  - DOM node records should not decide target routing, frame owner lookup, or selection fallback policy.
+
+- **Frame Owner Link**
+  - Separate relationship from regular DOM children.
+  - Required mappings:
+    - `frameID -> owner DOM node key`
+    - `targetIdentifier -> frameID`
+    - `frameID -> current frame document root key`
+  - `contentDocument` in the rendered tree is a projection of these mappings.
+
+- **DOM Tree Projection**
+  - UI-facing flattened/visible tree derived from DOM records and frame-owner links.
+  - Visible order remains WebKit-shaped:
+    - `templateContent`
+    - `::before`
+    - effective children
+    - `::after`
+  - For a frame owner, effective children should be `[contentDocument]` when a frame document is attached.
+
+- **Selection**
+  - Should be a selection key/locator, not primarily an object reference.
+  - `selectedNode` as a retained `DOMNodeModel` reference is fragile when a node is removed or a frame document generation changes.
+  - Selection failure should not mutate the DOM mirror except for clearing selection state.
+
+- **Element Details View**
+  - Can be rebuilt from selected node details.
+  - It should not force the DOM mirror to be `@Observable` object graph if a snapshot/projection model is cleaner.
+
+### WebKit Facts Rechecked
+
+- WebInspectorUI `DOMManager._initializeFrameTarget(target)` creates a `WI.DOMNode` for the frame target document and stores it in frame-target DOM data before splicing it into the page DOM tree as the matching iframe's `contentDocument`.
+- WebInspectorUI `_spliceFrameDocumentIntoPageTree` is currently URL-based and has a FIXME saying this is fragile; the desired fix is to use frame identity from target lifecycle.
+- WebInspectorUI `WI.DOMNode` can be constructed with `{frameTarget}`. In that case:
+  - `id` becomes `frameTarget.identifier + ":" + payload.nodeId`
+  - `_owningTarget` is the frame target
+  - `ownerDocument` for a document node is itself
+  - `contentDocument` becomes `_children = [contentDocument]`
+- WebCore `FrameRuntimeAgent.frameIdForProtocol()` returns protocol frame IDs in the form `frame-<frameIdentifier>`.
+- WebKit `FrameInspectorTarget::toTargetID` returns target IDs in the form `frame-<frameIdentifier>-<processIdentifier>`.
+- WebCore `FrameDOMAgent` has a FIXME around setting `frameId` for frame targets so the frontend can associate frame documents with frame targets. This means WebInspectorKit should not assume a frame target `DOM.getDocument` root always carries `frameId`.
+
+### Current WebInspectorKit Shape That Looks Wrong
+
+- `DOMDocumentModel` is not just a document model. It currently combines:
+  - document load state
+  - root node reference
+  - selected node reference
+  - node index
+  - graph mutation reducer
+  - frame document attach operation
+  - selection repair / rebind behavior
+  - tree invalidation emission
+- The name `DOMDocumentModel` suggests one document, but the rendered tree actually contains multiple documents: the main document plus attached child-frame documents.
+- `documentIdentity` is global to the model, while frame document updates should have per-frame/per-target generations.
+- `DOMNodeModel.contentDocument` can represent the visual attachment, but the model does not have an explicit `FrameDocument` entity. That makes iframe document replacement look like a child subtree mutation even though it is a frame-document lifecycle event.
+- `DOMFrameDocumentCoordinator` attaches by `root.frameID`. That is too weak because WebKit frame-target documents may omit `frameId`; the correct identity may be target registry state, not the snapshot root alone.
+- `WIDOMInspector` still owns too many responsibilities:
+  - target lifecycle interpretation
+  - runtime execution-context routing
+  - DOM command execution
+  - frame document hydration/attach
+  - selection transaction state
+  - DOM store mutation
+  - UI-related selection/highlight side effects
+- `Inspector.inspect` failures showing `attempts=page-*` while frame targets are known indicate a model/routing mismatch before tree rendering. The selected remote object belongs to a frame execution context, but `DOM.requestNode` is sent only to the page target.
+
+### Possible Better Model Shape
+
+Names are placeholders, not final API:
+
+```mermaid
+flowchart TD
+    Transport["Transport / protocol session"]
+    TargetRegistry["TargetRegistry<br/>targets, frames, execution contexts"]
+    DOMMirrors["DOMMirrorStore<br/>per target document generations + nodes"]
+    FrameGraph["FrameGraph<br/>frameID -> owner node -> document root"]
+    Selection["SelectionState<br/>selected node locator + transaction"]
+    Projection["DOMTreeProjection<br/>visible rows / tree traversal"]
+    ElementView["Element details view<br/>rebuildable from selected node"]
+
+    Transport --> TargetRegistry
+    Transport --> DOMMirrors
+    TargetRegistry --> FrameGraph
+    DOMMirrors --> FrameGraph
+    FrameGraph --> Projection
+    DOMMirrors --> Projection
+    Selection --> Projection
+    Projection --> ElementView
+```
+
+Potential responsibilities:
+
+- `DOMTargetRegistry`
+  - Owns target kind, target identifier, frame ID, parent frame ID, current main page target, and execution context mapping.
+  - Answers: "which target owns this objectId / injectedScriptId?"
+  - Answers: "which target currently represents this frameID?"
+
+- `DOMMirrorStore`
+  - Owns per-target DOM mirror state.
+  - Applies strict WebKit DOM mutations only to the target mirror that emitted them.
+  - Does not know UIKit, TextKit, selection fallback, or broad recovery.
+  - Could be actor-backed or non-MainActor if node records become value types.
+
+- `DOMFrameGraph`
+  - Owns page/frame/document relationships.
+  - Attaches a frame document root to a frame owner by frame identity.
+  - Maintains pending frame documents only as unresolved frame-owner links, not as document replacement logic.
+
+- `DOMTreeProjection`
+  - Produces the visible tree from `DOMMirrorStore + DOMFrameGraph`.
+  - This is where `contentDocument` becomes visible under an iframe.
+  - This could be rebuilt/replaced cheaply enough for the Element view if TextKit row cache is also rebuilt.
+
+- `DOMSelectionState`
+  - Stores selected node as a stable locator:
+    - target identifier
+    - document generation
+    - node ID
+    - optional selector/path for detail recovery
+  - Does not retain selected object identity as the primary source of truth.
+
+- `DOMElementDetailModel`
+  - Derived from selected locator + current mirror snapshot.
+  - Can be recreated when selection changes or selected node generation changes.
+
+### MainActor / Observation Reconsideration
+
+If rebuilding the Element view is acceptable, the model no longer has to be a large `@MainActor @Observable` object graph.
+
+Possible shift:
+
+- Keep transport parse and DOM mirror mutation off MainActor where possible.
+- Use value-type node records in an actor-owned mirror.
+- Publish only:
+  - document phase
+  - selected node locator
+  - tree projection revision
+  - detail snapshot
+  - error state
+- Let UIKit/TextKit2 consume snapshots or revisions on MainActor.
+
+This is a bigger break, but it would remove the pressure to keep every DOM node as an observable reference type. Observation can remain for small UI-facing state, but it does not need to be the DOM mirror itself.
+
+### Invariants The New Model Should Enforce Upstream
+
+- Main page navigation resets only the main page document generation and clears frame attachments that belong to the old main page.
+- Frame target navigation/document update resets only that frame target document generation.
+- Frame document update never replaces or clears the parent page document.
+- `contentDocument` is a frame-owner projection link, not a regular child list mutation.
+- `DOM.requestNode(objectId)` is sent to the target that owns the object's execution context.
+- If the owning target cannot be resolved, selection resolution should fail without mutating the DOM mirror.
+- A known frame target without an owner node should stay pending until a protocol mutation introduces the owner node. No polling and no parent document refresh as recovery.
+- Removing a selected node clears selection only; it should not reset inspect mode, reload parent document, or rebuild unrelated frame documents.
+
+### Correction To Previous Direction
+
+Earlier notes were still too centered on improving the existing `DOMDocumentModel` / `DOMFrameDocumentCoordinator` boundary. That may be a symptom fix. The deeper issue is likely that the model lacks first-class concepts for:
+
+- frame
+- frame document generation
+- target-owned DOM mirror
+- frame owner link
+- selected node locator
+
+Before implementing more patches, the next design pass should draw the actor/model graph around those concepts and only then decide which current types survive.

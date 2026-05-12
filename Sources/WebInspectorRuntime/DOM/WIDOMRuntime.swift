@@ -110,7 +110,8 @@ public final class WIDOMRuntime {
         await inspector.selectNode(node)
     }
 
-    package func requestChildNodes(for node: DOMNodeModel, depth: Int) async {
+    @discardableResult
+    package func requestChildNodes(for node: DOMNodeModel, depth: Int) async -> Bool {
         await inspector.requestChildNodes(for: node, depth: depth)
     }
 

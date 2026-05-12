@@ -273,8 +273,7 @@ private extension DOMPayloadNormalizer {
         if hasRegularChildrenPayload {
             regularChildCount = regularChildren.count
         } else if let explicitChildCount {
-            let contentDocumentCount = contentDocument == nil ? 0 : 1
-            regularChildCount = max(0, explicitChildCount - contentDocumentCount - omittedRegularChildren)
+            regularChildCount = max(0, explicitChildCount - omittedRegularChildren)
         } else {
             regularChildCount = nodeType.canRequestRegularChildren ? 1 : 0
         }

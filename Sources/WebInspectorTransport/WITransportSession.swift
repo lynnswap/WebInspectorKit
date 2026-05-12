@@ -218,6 +218,9 @@ public final class WITransportSession {
     }
 
     package func currentPageTargetIdentifier() -> String? {
+        if let authoritativeIdentifier = currentAuthoritativePageTargetIdentifierIfKnown() {
+            return authoritativeIdentifier
+        }
         if let currentIdentifier = pageTargetTracker.currentIdentifier {
             return currentIdentifier
         }
@@ -232,11 +235,24 @@ public final class WITransportSession {
     }
 
     package func currentCommittedPageTargetIdentifier() -> String? {
-        pageTargetTracker.committedIdentifier
+        currentAuthoritativePageTargetIdentifierIfKnown()
+            ?? pageTargetTracker.committedIdentifier
     }
 
     package func targetKind(for identifier: String?) -> WITransportTargetKind? {
         pageTargetTracker.targetKind(for: identifier)
+    }
+
+    package func targetIdentifier(forExecutionContext identifier: Int) -> String? {
+        pageTargetTracker.targetIdentifier(forExecutionContext: identifier)
+    }
+
+    package func targetIdentifier(forFrameID frameID: String) -> String? {
+        pageTargetTracker.targetIdentifier(forFrameID: frameID)
+    }
+
+    package func frameID(forTargetIdentifier identifier: String) -> String? {
+        pageTargetTracker.frameID(forTargetIdentifier: identifier)
     }
 
     package var responseTimeout: Duration {
@@ -293,7 +309,7 @@ public final class WITransportSession {
         let resolvedTargetIdentifier: String
         if let targetIdentifier {
             resolvedTargetIdentifier = targetIdentifier
-        } else if let currentTargetIdentifier = refreshDerivedPageTargetIdentifierIfNeeded() ?? pageTargetTracker.currentIdentifier {
+        } else if let currentTargetIdentifier = currentPageTargetIdentifier() {
             resolvedTargetIdentifier = currentTargetIdentifier
         } else {
             resolvedTargetIdentifier = try await waitForPageTarget(timeout: configuration.responseTimeout)
@@ -347,7 +363,9 @@ public final class WITransportSession {
         let isClosed = pageEventQueueClosed
         hasAttachedPageEventConsumer = true
 
-        return AsyncStream(bufferingPolicy: .bufferingNewest(configuration.eventBufferLimit)) { continuation in
+        // Active DOM/Network consumers need ordered, lossless page events. Dropping a
+        // single DOM mutation can permanently corrupt the mirrored tree.
+        return AsyncStream(bufferingPolicy: .unbounded) { continuation in
             self.pageEventStreamContinuation = continuation
             self.pendingPageEventDeliverySequences = bufferedEventSequences
             continuation.onTermination = { [weak self] _ in
@@ -516,6 +534,18 @@ package final class WISharedInspectorTransport {
 
     package func targetKind(for identifier: String?) -> WITransportTargetKind? {
         session?.targetKind(for: identifier)
+    }
+
+    package func targetIdentifier(forExecutionContext identifier: Int) -> String? {
+        session?.targetIdentifier(forExecutionContext: identifier)
+    }
+
+    package func targetIdentifier(forFrameID frameID: String) -> String? {
+        session?.targetIdentifier(forFrameID: frameID)
+    }
+
+    package func frameID(forTargetIdentifier identifier: String) -> String? {
+        session?.frameID(forTargetIdentifier: identifier)
     }
 }
 
@@ -800,7 +830,10 @@ extension WITransportSession {
             return
         }
 
-        if method.hasPrefix("Target.") || method.hasPrefix("DOM.") || method == "Inspector.inspect" {
+        if method.hasPrefix("Target.")
+            || method.hasPrefix("DOM.")
+            || method == "Inspector.inspect"
+            || method == WITransportMethod.Runtime.executionContextCreated {
             log("received root event method=\(method)")
         }
 
@@ -808,6 +841,20 @@ extension WITransportSession {
             enqueuePageEvent(
                 method: method,
                 targetIdentifier: inspectEventTargetIdentifier(from: parsed.paramsData),
+                paramsData: parsed.paramsData
+            )
+            return
+        }
+
+        if method == WITransportMethod.Runtime.executionContextCreated {
+            let targetIdentifier = runtimeExecutionContextTargetIdentifier(from: parsed.paramsData)
+            trackRuntimeExecutionContextCreated(
+                paramsData: parsed.paramsData,
+                targetIdentifier: targetIdentifier
+            )
+            enqueuePageEvent(
+                method: method,
+                targetIdentifier: targetIdentifier,
                 paramsData: parsed.paramsData
             )
             return
@@ -854,7 +901,14 @@ extension WITransportSession {
             return
         }
 
-        if method.hasPrefix("DOM.") || method.hasPrefix("Target.") {
+        if method == WITransportMethod.Runtime.executionContextCreated {
+            trackRuntimeExecutionContextCreated(
+                paramsData: parsed.paramsData,
+                targetIdentifier: targetIdentifier
+            )
+        }
+
+        if method.hasPrefix("DOM.") || method.hasPrefix("Target.") || method == WITransportMethod.Runtime.executionContextCreated {
             log("received page event method=\(method) target=\(targetIdentifier)")
         }
 
@@ -862,6 +916,25 @@ extension WITransportSession {
             method: method,
             targetIdentifier: targetIdentifier,
             paramsData: parsed.paramsData
+        )
+    }
+
+    func trackRuntimeExecutionContextCreated(paramsData: Data, targetIdentifier: String?) {
+        guard let targetIdentifier,
+              let params = dictionaryObject(from: paramsData),
+              let context = params["context"] as? [String: Any],
+              let contextIdentifier = identifierValue(context["id"]) else {
+            return
+        }
+
+        let frameID = stringValue(context["frameId"])
+        pageTargetTracker.didCreateExecutionContext(
+            identifier: contextIdentifier,
+            frameID: frameID,
+            targetIdentifier: targetIdentifier
+        )
+        log(
+            "runtime execution context created context=\(contextIdentifier) frame=\(frameID ?? "nil") target=\(targetIdentifier)"
         )
     }
 
@@ -883,7 +956,10 @@ extension WITransportSession {
             let targetKind = pageTargetTracker.didCreateTarget(
                 identifier: targetIdentifier,
                 type: targetType,
-                isProvisional: boolValue(targetInfo["isProvisional"]) == true
+                frameID: stringValue(targetInfo["frameId"]),
+                parentFrameID: stringValue(targetInfo["parentFrameId"]),
+                isProvisional: boolValue(targetInfo["isProvisional"]) == true,
+                authoritativePageTargetIdentifier: currentDerivedPageTargetIdentifier()
             )
             guard targetKind == .page || targetKind == .frame else {
                 return
@@ -903,10 +979,10 @@ extension WITransportSession {
             guard let newTargetIdentifier = stringValue(params["newTargetId"]) else {
                 return
             }
-
             let committedTarget = pageTargetTracker.didCommitTarget(
                 oldIdentifier: stringValue(params["oldTargetId"]),
-                newIdentifier: newTargetIdentifier
+                newIdentifier: newTargetIdentifier,
+                authoritativePageTargetIdentifier: currentDerivedPageTargetIdentifier()
             )
             guard committedTarget.kind == .page || committedTarget.kind == .frame else {
                 return
@@ -1213,6 +1289,26 @@ extension WITransportSession {
             ?? stringValue((params["target"] as? [String: Any])?["targetId"])
     }
 
+    func runtimeExecutionContextTargetIdentifier(from paramsData: Data) -> String? {
+        if let explicitTargetIdentifier = inspectEventTargetIdentifier(from: paramsData) {
+            return explicitTargetIdentifier
+        }
+        if let frameID = runtimeExecutionContextFrameID(from: paramsData),
+           let frameTargetIdentifier = pageTargetTracker.targetIdentifier(forFrameID: frameID) {
+            return frameTargetIdentifier
+        }
+        return currentPageTargetIdentifier()
+            ?? refreshDerivedPageTargetIdentifierIfNeeded()
+    }
+
+    func runtimeExecutionContextFrameID(from paramsData: Data) -> String? {
+        guard let params = dictionaryObject(from: paramsData),
+              let context = params["context"] as? [String: Any] else {
+            return nil
+        }
+        return stringValue(context["frameId"])
+    }
+
     func refreshDerivedPageTargetIdentifierIfNeeded() -> String? {
         guard pageTargetTracker.allowsDerivedCommittedSeed,
               let webView,
@@ -1221,6 +1317,22 @@ extension WITransportSession {
         }
         pageTargetTracker.seedCommittedPageTarget(identifier: targetIdentifier)
         return targetIdentifier
+    }
+
+    func currentAuthoritativePageTargetIdentifierIfKnown() -> String? {
+        guard let webView,
+              let targetIdentifier = derivedPageTargetIdentifier(from: webView),
+              pageTargetTracker.hasKnownPageTarget(identifier: targetIdentifier) else {
+            return nil
+        }
+        return targetIdentifier
+    }
+
+    func currentDerivedPageTargetIdentifier() -> String? {
+        guard let webView else {
+            return nil
+        }
+        return derivedPageTargetIdentifier(from: webView)
     }
 
     func derivedPageTargetIdentifier(from webView: WKWebView) -> String? {
@@ -1376,8 +1488,16 @@ private final class WITransportPageTargetTracker {
     private struct KnownTarget {
         let identifier: String
         let kind: WITransportTargetKind
+        let frameID: String?
+        let parentFrameID: String?
         let isProvisional: Bool
         let creationOrder: Int
+    }
+
+    private struct KnownExecutionContext {
+        let identifier: Int
+        let frameID: String?
+        let targetIdentifier: String
     }
 
     struct CommitResult {
@@ -1392,6 +1512,8 @@ private final class WITransportPageTargetTracker {
 
     private var targetsByIdentifier: [String: KnownPageTarget] = [:]
     private var knownTargetsByIdentifier: [String: KnownTarget] = [:]
+    private var executionContextsByIdentifier: [Int: KnownExecutionContext] = [:]
+    private var targetIdentifiersByFrameID: [String: String] = [:]
     private var recentlyDestroyedTargetKinds: [String: WITransportTargetKind] = [:]
     private var hasObservedLifecycleEvents = false
     private var hasDerivedCommittedSeed = false
@@ -1453,17 +1575,71 @@ private final class WITransportPageTargetTracker {
             ?? recentlyDestroyedTargetKinds[identifier]
     }
 
+    func hasKnownPageTarget(identifier: String) -> Bool {
+        targetsByIdentifier[identifier] != nil
+            || knownTargetsByIdentifier[identifier]?.kind == .page
+    }
+
+    func targetIdentifier(forExecutionContext identifier: Int) -> String? {
+        executionContextsByIdentifier[identifier]?.targetIdentifier
+    }
+
+    func targetIdentifier(forFrameID frameID: String) -> String? {
+        targetIdentifiersByFrameID[frameID]
+    }
+
+    func frameID(forTargetIdentifier identifier: String) -> String? {
+        knownTargetsByIdentifier[identifier]?.frameID
+    }
+
+    func didCreateExecutionContext(identifier: Int, frameID: String?, targetIdentifier: String) {
+        executionContextsByIdentifier[identifier] = KnownExecutionContext(
+            identifier: identifier,
+            frameID: frameID,
+            targetIdentifier: targetIdentifier
+        )
+        if let frameID {
+            let currentMappedTargetKind = targetKind(for: targetIdentifiersByFrameID[frameID])
+            let newTargetKind = targetKind(for: targetIdentifier)
+            if currentMappedTargetKind != .frame || newTargetKind == .frame {
+                targetIdentifiersByFrameID[frameID] = targetIdentifier
+            }
+        }
+    }
+
     @discardableResult
-    func didCreateTarget(identifier: String, type: String, isProvisional: Bool) -> WITransportTargetKind {
-        let kind = targetKind(forType: type)
+    func didCreateTarget(
+        identifier: String,
+        type: String,
+        frameID: String? = nil,
+        parentFrameID: String? = nil,
+        isProvisional: Bool,
+        authoritativePageTargetIdentifier: String?
+    ) -> WITransportTargetKind {
+        let kind = targetKind(
+            identifier: identifier,
+            type: type,
+            frameID: frameID,
+            parentFrameID: parentFrameID,
+            authoritativePageTargetIdentifier: authoritativePageTargetIdentifier
+        )
         recentlyDestroyedTargetKinds.removeValue(forKey: identifier)
+        let resolvedFrameID = frameID ?? Self.protocolFrameID(
+            fromTargetIdentifier: identifier,
+            kind: kind
+        )
         let creationOrder = knownTargetsByIdentifier[identifier]?.creationOrder ?? nextCreationOrderValue()
         knownTargetsByIdentifier[identifier] = KnownTarget(
             identifier: identifier,
             kind: kind,
+            frameID: resolvedFrameID,
+            parentFrameID: parentFrameID,
             isProvisional: isProvisional,
             creationOrder: creationOrder
         )
+        if let resolvedFrameID {
+            targetIdentifiersByFrameID[resolvedFrameID] = identifier
+        }
 
         hasObservedLifecycleEvents = true
         guard kind == .page else {
@@ -1473,7 +1649,8 @@ private final class WITransportPageTargetTracker {
            let committedIdentifierStorage {
             if committedIdentifierStorage == identifier {
                 hasDerivedCommittedSeed = false
-            } else if isProvisional == false {
+            } else if isProvisional == false,
+                      currentIdentifierStorage == nil {
                 targetsByIdentifier.removeValue(forKey: committedIdentifierStorage)
                 self.committedIdentifierStorage = nil
                 hasDerivedCommittedSeed = false
@@ -1488,18 +1665,55 @@ private final class WITransportPageTargetTracker {
         return kind
     }
 
-    func didCommitTarget(oldIdentifier: String?, newIdentifier: String) -> CommitResult {
-        recentlyDestroyedTargetKinds.removeValue(forKey: newIdentifier)
+    func didCommitTarget(
+        oldIdentifier: String?,
+        newIdentifier: String,
+        authoritativePageTargetIdentifier: String?
+    ) -> CommitResult {
         let effectiveOldIdentifier = oldIdentifier ?? inferredCommittedOldIdentifier(excluding: newIdentifier)
-        let kind = knownTargetsByIdentifier[newIdentifier]?.kind
-            ?? effectiveOldIdentifier.flatMap { knownTargetsByIdentifier[$0]?.kind }
-            ?? .page
+        let existingTarget = knownTargetsByIdentifier[newIdentifier]
+        let previousTarget = effectiveOldIdentifier.flatMap { knownTargetsByIdentifier[$0] }
+
+        guard shouldAcceptCommittedTarget(
+            oldIdentifier: oldIdentifier,
+            effectiveOldIdentifier: effectiveOldIdentifier,
+            newIdentifier: newIdentifier,
+            existingTarget: existingTarget,
+            previousTarget: previousTarget
+        ) else {
+            return CommitResult(effectiveOldIdentifier: effectiveOldIdentifier, kind: .other)
+        }
+
+        recentlyDestroyedTargetKinds.removeValue(forKey: newIdentifier)
+        let kind: WITransportTargetKind
+        if existingTarget?.kind == .frame {
+            kind = .frame
+        } else if let previousTarget,
+           previousTarget.kind == .page || previousTarget.kind == .frame {
+            kind = previousTarget.kind
+        } else if authoritativePageTargetIdentifier == newIdentifier {
+            kind = .page
+        } else if let existingTarget {
+            kind = existingTarget.kind
+        } else {
+            kind = .other
+        }
+
+        let shouldMovePreviousTarget = previousTarget?.kind == kind
 
         if let effectiveOldIdentifier,
+           shouldMovePreviousTarget {
+            moveExecutionContextRoutes(from: effectiveOldIdentifier, to: newIdentifier)
+        }
+
+        if let effectiveOldIdentifier,
+           shouldMovePreviousTarget,
            let previousTarget = knownTargetsByIdentifier.removeValue(forKey: effectiveOldIdentifier) {
             knownTargetsByIdentifier[newIdentifier] = KnownTarget(
                 identifier: newIdentifier,
                 kind: previousTarget.kind,
+                frameID: previousTarget.frameID,
+                parentFrameID: previousTarget.parentFrameID,
                 isProvisional: false,
                 creationOrder: previousTarget.creationOrder
             )
@@ -1507,6 +1721,8 @@ private final class WITransportPageTargetTracker {
             knownTargetsByIdentifier[newIdentifier] = KnownTarget(
                 identifier: newIdentifier,
                 kind: existingTarget.kind,
+                frameID: existingTarget.frameID,
+                parentFrameID: existingTarget.parentFrameID,
                 isProvisional: false,
                 creationOrder: existingTarget.creationOrder
             )
@@ -1514,6 +1730,8 @@ private final class WITransportPageTargetTracker {
             knownTargetsByIdentifier[newIdentifier] = KnownTarget(
                 identifier: newIdentifier,
                 kind: kind,
+                frameID: nil,
+                parentFrameID: nil,
                 isProvisional: false,
                 creationOrder: nextCreationOrderValue()
             )
@@ -1526,6 +1744,7 @@ private final class WITransportPageTargetTracker {
         hasObservedLifecycleEvents = true
         hasDerivedCommittedSeed = false
         if let effectiveOldIdentifier,
+           shouldMovePreviousTarget,
            let previous = targetsByIdentifier.removeValue(forKey: effectiveOldIdentifier) {
             targetsByIdentifier[newIdentifier] = KnownPageTarget(
                 identifier: newIdentifier,
@@ -1557,6 +1776,7 @@ private final class WITransportPageTargetTracker {
             return nil
         }
         recentlyDestroyedTargetKinds[identifier] = kind
+        removeExecutionContextRoutes(forTargetIdentifier: identifier)
 
         guard kind == .page else {
             return kind
@@ -1581,6 +1801,8 @@ private final class WITransportPageTargetTracker {
         knownTargetsByIdentifier[identifier] = KnownTarget(
             identifier: identifier,
             kind: .page,
+            frameID: nil,
+            parentFrameID: nil,
             isProvisional: false,
             creationOrder: creationOrder
         )
@@ -1650,6 +1872,8 @@ private final class WITransportPageTargetTracker {
     func reset() {
         targetsByIdentifier.removeAll(keepingCapacity: true)
         knownTargetsByIdentifier.removeAll(keepingCapacity: true)
+        executionContextsByIdentifier.removeAll(keepingCapacity: true)
+        targetIdentifiersByFrameID.removeAll(keepingCapacity: true)
         recentlyDestroyedTargetKinds.removeAll(keepingCapacity: true)
         hasObservedLifecycleEvents = false
         hasDerivedCommittedSeed = false
@@ -1685,6 +1909,12 @@ private final class WITransportPageTargetTracker {
             return committedIdentifier
         }
 
+        if let currentIdentifierStorage,
+           let target = targetsByIdentifier[currentIdentifierStorage],
+           !target.isProvisional {
+            return currentIdentifierStorage
+        }
+
         return targetsByIdentifier.values
             .filter { !$0.isProvisional }
             .sorted { $0.creationOrder > $1.creationOrder }
@@ -1702,9 +1932,88 @@ private final class WITransportPageTargetTracker {
         return provisionalTargets.first?.identifier
     }
 
-    private func targetKind(forType type: String) -> WITransportTargetKind {
+    private func shouldAcceptCommittedTarget(
+        oldIdentifier: String?,
+        effectiveOldIdentifier: String?,
+        newIdentifier: String,
+        existingTarget: KnownTarget?,
+        previousTarget: KnownTarget?
+    ) -> Bool {
+        if let oldIdentifier {
+            return previousTarget != nil
+                || oldIdentifier == currentIdentifierStorage
+                || oldIdentifier == committedIdentifierStorage
+        }
+
+        if effectiveOldIdentifier != nil || previousTarget != nil {
+            return true
+        }
+
+        guard let existingTarget else {
+            return currentIdentifierStorage == nil
+        }
+
+        if existingTarget.isProvisional {
+            return true
+        }
+
+        switch existingTarget.kind {
+        case .page:
+            return currentIdentifierStorage == nil
+                || currentIdentifierStorage == newIdentifier
+                || committedIdentifierStorage == newIdentifier
+        case .frame:
+            return true
+        case .other:
+            return false
+        }
+    }
+
+    private func moveExecutionContextRoutes(from oldIdentifier: String, to newIdentifier: String) {
+        guard oldIdentifier != newIdentifier else {
+            return
+        }
+
+        for (contextIdentifier, context) in executionContextsByIdentifier where context.targetIdentifier == oldIdentifier {
+            executionContextsByIdentifier[contextIdentifier] = KnownExecutionContext(
+                identifier: context.identifier,
+                frameID: context.frameID,
+                targetIdentifier: newIdentifier
+            )
+        }
+
+        for (frameID, targetIdentifier) in targetIdentifiersByFrameID where targetIdentifier == oldIdentifier {
+            targetIdentifiersByFrameID[frameID] = newIdentifier
+        }
+    }
+
+    private func removeExecutionContextRoutes(forTargetIdentifier targetIdentifier: String) {
+        executionContextsByIdentifier = executionContextsByIdentifier.filter {
+            $0.value.targetIdentifier != targetIdentifier
+        }
+        targetIdentifiersByFrameID = targetIdentifiersByFrameID.filter {
+            $0.value != targetIdentifier
+        }
+    }
+
+    private func targetKind(
+        identifier: String,
+        type: String,
+        frameID: String?,
+        parentFrameID: String?,
+        authoritativePageTargetIdentifier: String?
+    ) -> WITransportTargetKind {
         switch type {
         case "page":
+            if parentFrameID != nil {
+                return .frame
+            }
+            if authoritativePageTargetIdentifier == identifier {
+                return .page
+            }
+            if frameID != nil {
+                return .frame
+            }
             return .page
         case "frame":
             return .frame
@@ -1716,6 +2025,23 @@ private final class WITransportPageTargetTracker {
     private func nextCreationOrderValue() -> Int {
         defer { nextCreationOrder += 1 }
         return nextCreationOrder
+    }
+
+    private static func protocolFrameID(
+        fromTargetIdentifier identifier: String,
+        kind: WITransportTargetKind
+    ) -> String? {
+        guard kind == .frame,
+              identifier.hasPrefix("frame-") else {
+            return nil
+        }
+        let parts = identifier.split(separator: "-", omittingEmptySubsequences: false)
+        guard parts.count >= 2,
+              parts[0] == "frame",
+              !parts[1].isEmpty else {
+            return nil
+        }
+        return "frame-\(parts[1])"
     }
 
     private func cancelAvailabilityWaiter(id: UUID) {

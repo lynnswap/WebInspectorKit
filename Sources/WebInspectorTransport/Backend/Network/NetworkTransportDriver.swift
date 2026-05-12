@@ -13,7 +13,6 @@ final class NetworkTransportDriver: WINetworkBackend, InspectorTransportCapabili
     private let transportClient = NetworkTransportClient()
     private let sharedTransport: WISharedInspectorTransport
     private let resolver = NetworkTimelineResolver()
-    private let initialSupport: WIBackendSupport
     private var deferredEnvelopesByTargetIdentifier: [String: [WITransportEventEnvelope]] = [:]
     private var attachTask: Task<Void, Never>?
     private var bootstrapRecoveryTask: Task<Void, Never>?
@@ -22,11 +21,9 @@ final class NetworkTransportDriver: WINetworkBackend, InspectorTransportCapabili
 
     init(
         sharedTransport: WISharedInspectorTransport? = nil,
-        transportSessionFactory: @escaping @MainActor () -> WITransportSession = { WITransportSession() },
-        initialSupport: WIBackendSupport = WITransportSession().supportSnapshot.backendSupport
+        transportSessionFactory: @escaping @MainActor () -> WITransportSession = { WITransportSession() }
     ) {
         self.sharedTransport = sharedTransport ?? WISharedInspectorTransport(sessionFactory: transportSessionFactory)
-        self.initialSupport = initialSupport
         store.setRecording(true)
         self.sharedTransport.setEventHandler({ [weak self] envelope in
             await self?.handleSharedTransportEvent(envelope)
@@ -60,8 +57,12 @@ final class NetworkTransportDriver: WINetworkBackend, InspectorTransportCapabili
         sharedTransport.supportSnapshot.isSupported ? sharedTransport.supportSnapshot : nil
     }
 
-    var support: WIBackendSupport {
-        inspectorTransportSupportSnapshot?.backendSupport ?? initialSupport
+    var isSupported: Bool {
+        sharedTransport.supportSnapshot.isSupported
+    }
+
+    var failureReason: String? {
+        sharedTransport.supportSnapshot.failureReason
     }
 
     package func supportsDeferredLoading(for role: NetworkBody.Role) -> Bool {
@@ -316,6 +317,7 @@ private extension NetworkTransportDriver {
             do {
                 try await enableNetworkIfNeeded(for: targetIdentifier, session: transportSession)
                 await yieldToMainQueue()
+                await transportSession.waitForPendingMessages()
                 guard transportSession.currentPageTargetIdentifier() == targetIdentifier else {
                     targetIdentifier = try await transportSession.waitForReplacementPageTarget(after: targetIdentifier)
                     continue
@@ -390,6 +392,7 @@ private extension NetworkTransportDriver {
                 return nil
             }
             await yieldToMainQueue()
+            await session.waitForPendingMessages()
             if let currentPageTargetIdentifier = session.currentPageTargetIdentifier(),
                currentPageTargetIdentifier != targetIdentifier {
                 return currentPageTargetIdentifier

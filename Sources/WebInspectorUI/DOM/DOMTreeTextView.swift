@@ -52,6 +52,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     private var openState: [DOMNodeModel.ID: Bool] = [:]
     private var hoveredNodeID: DOMNodeModel.ID?
     private var requestedChildNodeIDs: Set<DOMNodeModel.ID> = []
+    private var childRequestRetryCounts: [DOMNodeModel.ID: Int] = [:]
     private var findFoundRanges: [NSRange] = []
     private var findHighlightedRanges: [NSRange] = []
     private var hoverRowRects: [CGRect] = []
@@ -624,9 +625,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         clampTextSelectionAfterTextChange()
         maxLineDisplayColumnCount = buildResult.maxLineDisplayColumnCount
         updateMeasuredTextWidth()
-        requestedChildNodeIDs = requestedChildNodeIDs.filter { nodeID in
-            dom.document.node(id: nodeID) != nil
-        }
+        pruneChildRequestState()
         requestChildrenForOpenRowsIfNeeded()
         if resetFragments {
             resetTextFragmentViews()
@@ -723,9 +722,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
             ? recomputeMaxLineDisplayColumnCount()
             : nextMaxLineDisplayColumnCount
         updateMeasuredTextWidth()
-        requestedChildNodeIDs = requestedChildNodeIDs.filter { nodeID in
-            dom.document.node(id: nodeID) != nil
-        }
+        pruneChildRequestState()
         requestChildrenForOpenRowsIfNeeded()
 
         textContentStorage.performEditingTransaction {
@@ -1005,6 +1002,21 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         measuredTextWidth = CGFloat(maxLineDisplayColumnCount) * Self.characterWidth
     }
 
+    private func pruneChildRequestState() {
+        requestedChildNodeIDs = requestedChildNodeIDs.filter { nodeID in
+            guard let node = dom.document.node(id: nodeID) else {
+                return false
+            }
+            return node.hasUnloadedRegularChildren
+        }
+        childRequestRetryCounts = childRequestRetryCounts.filter { nodeID, _ in
+            guard let node = dom.document.node(id: nodeID) else {
+                return false
+            }
+            return node.hasUnloadedRegularChildren
+        }
+    }
+
     private func requestChildrenForOpenRowsIfNeeded() {
         guard dom.document.documentState == .ready else {
             return
@@ -1030,11 +1042,30 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         else {
             return
         }
-        Task { @MainActor [dom, weak node] in
-            guard let node else {
+        let attempt = childRequestRetryCounts[node.id, default: 0] + 1
+        childRequestRetryCounts[node.id] = attempt
+        Task { @MainActor [weak self, weak node] in
+            guard let self, let node else {
                 return
             }
-            await dom.requestChildNodes(for: node, depth: 3)
+            let succeeded = await self.dom.requestChildNodes(for: node, depth: 3)
+            self.requestedChildNodeIDs.remove(node.id)
+            guard self.dom.document.node(id: node.id) === node else {
+                self.childRequestRetryCounts.removeValue(forKey: node.id)
+                return
+            }
+            if succeeded || !node.hasUnloadedRegularChildren {
+                self.childRequestRetryCounts.removeValue(forKey: node.id)
+                return
+            }
+            guard attempt < 3 else {
+                return
+            }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled else {
+                return
+            }
+            self.requestChildrenIfNeeded(for: node)
         }
     }
 

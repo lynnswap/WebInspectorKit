@@ -55,7 +55,6 @@ struct WIInspectorDependenciesTests {
             $0.transport = WIInspectorTransportClient(
                 supportSnapshot: {
                     .supported(
-                        backendKind: .iOSNativeInspector,
                         capabilities: [.networkDomain]
                     )
                 },
@@ -78,7 +77,6 @@ struct WIInspectorDependenciesTests {
         let runtime = WINetworkRuntime(dependencies: .testValue)
 
         #expect(runtime.model.session.testBackendTypeName() == "WINetworkUnsupportedBackend")
-        #expect(runtime.model.session.backendSupport.isSupported == false)
     }
 
 #if canImport(UIKit)

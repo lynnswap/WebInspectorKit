@@ -1,5 +1,4 @@
 import Foundation
-import WebInspectorEngine
 
 public enum WITransportTargetScope: String, Sendable {
     case root
@@ -10,12 +9,6 @@ package enum WITransportTargetKind: String, Sendable {
     case page
     case frame
     case other
-}
-
-package enum WITransportBackendKind: String, Sendable {
-    case iOSNativeInspector
-    case macOSNativeInspector
-    case unsupported
 }
 
 public enum WITransportCapability: String, Hashable, Sendable {
@@ -33,31 +26,25 @@ public struct WITransportSupportSnapshot: Sendable {
     }
 
     public let availability: Availability
-    package let backendKind: WITransportBackendKind
     public let capabilities: Set<WITransportCapability>
     public let failureReason: String?
 
     private init(
         availability: Availability,
-        backendKind: WITransportBackendKind,
         capabilities: Set<WITransportCapability> = [],
         failureReason: String?
     ) {
         self.availability = availability
-        self.backendKind = backendKind
         self.capabilities = capabilities
         self.failureReason = failureReason
     }
 
     package static func supported(
-        backendKind: WITransportBackendKind,
         capabilities: Set<WITransportCapability> = [],
         failureReason: String? = nil
     ) -> Self {
-        precondition(backendKind != .unsupported, "Use unsupported(reason:) for unsupported transport snapshots.")
         return Self(
             availability: .supported,
-            backendKind: backendKind,
             capabilities: capabilities,
             failureReason: failureReason
         )
@@ -66,7 +53,6 @@ public struct WITransportSupportSnapshot: Sendable {
     package static func unsupported(reason: String) -> Self {
         Self(
             availability: .unsupported,
-            backendKind: .unsupported,
             capabilities: [],
             failureReason: reason
         )
@@ -74,31 +60,6 @@ public struct WITransportSupportSnapshot: Sendable {
 
     public var isSupported: Bool {
         availability == .supported
-    }
-
-    package var backendSupport: WIBackendSupport {
-        let resolvedBackendKind: WIBackendKind
-        switch backendKind {
-        case .iOSNativeInspector:
-            resolvedBackendKind = .nativeInspectorIOS
-        case .macOSNativeInspector:
-            resolvedBackendKind = .nativeInspectorMacOS
-        case .unsupported:
-            resolvedBackendKind = .unsupported
-        }
-
-        let mappedCapabilities = Set(
-            capabilities.compactMap { capability in
-                WIBackendCapability(rawValue: capability.rawValue)
-            }
-        )
-
-        return WIBackendSupport(
-            availability: availability == .supported ? .supported : .unsupported,
-            backendKind: resolvedBackendKind,
-            capabilities: mappedCapabilities,
-            failureReason: failureReason
-        )
     }
 }
 

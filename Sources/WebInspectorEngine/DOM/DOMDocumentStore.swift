@@ -15,9 +15,9 @@ private enum DOMChildStorageLocation {
 
     var countsTowardChildCount: Bool {
         switch self {
-        case .regular, .contentDocument:
+        case .regular:
             return true
-        case .shadowRoot, .templateContent, .beforePseudoElement, .otherPseudoElement, .afterPseudoElement:
+        case .contentDocument, .shadowRoot, .templateContent, .beforePseudoElement, .otherPseudoElement, .afterPseudoElement:
             return false
         }
     }

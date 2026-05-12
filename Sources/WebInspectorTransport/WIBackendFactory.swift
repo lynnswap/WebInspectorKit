@@ -16,8 +16,7 @@ package enum WIBackendFactory {
             )
         }
         return NetworkTransportDriver(
-            sharedTransport: sharedTransport,
-            initialSupport: resolvedSupport.backendSupport
+            sharedTransport: sharedTransport
         )
     }
 }

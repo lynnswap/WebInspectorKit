@@ -28,14 +28,6 @@ public final class NetworkSession: PageSession {
         runtime.hasAttachedPageWebView
     }
 
-    package var backendSupport: WIBackendSupport {
-        runtime.backendSupport
-    }
-
-    package var transportCapabilities: Set<WIBackendCapability> {
-        runtime.transportCapabilities
-    }
-
     package var onPrepareForNavigationReconnect: (@MainActor () -> Void)?
 
     public convenience init(configuration: NetworkConfiguration = .init()) {

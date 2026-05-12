@@ -8,13 +8,15 @@ import WebInspectorTestSupport
 
 @MainActor
 final class WITransportSessionMacOSTests: XCTestCase {
-    func testSessionAttachesToHostedWKWebViewAndReadsDOM() async throws {
+    func testSessionReportsUnsupportedOnMacOS() async throws {
         try await withWebKitTestIsolation {
             let hostedWebView = makeIsolatedTestWebView(frame: NSRect(x: 0, y: 0, width: 640, height: 480))
             let window = makeHostWindow(with: hostedWebView)
             hostedWebView.isInspectable = true
-            try await loadHTML("<html><body><p id='greeting'>Hello transport</p></body></html>", in: hostedWebView)
-            let baselineVisibleWindowIdentifiers = Set(NSApp.windows.filter(\.isVisible).map(ObjectIdentifier.init))
+            defer {
+                window.orderOut(nil)
+                window.close()
+            }
 
             let session = WITransportSession(
                 configuration: .init(
@@ -23,37 +25,18 @@ final class WITransportSessionMacOSTests: XCTestCase {
                     dropEventsWithoutSubscribers: true
                 )
             )
-            var didCleanup = false
 
-            try await session.attach(to: hostedWebView)
-            defer {
-                if !didCleanup {
-                    session.detach()
-                    window.orderOut(nil)
-                    window.close()
+            do {
+                try await session.attach(to: hostedWebView)
+                XCTFail("Expected macOS transport to be unsupported")
+            } catch let error as WITransportError {
+                guard case .unsupported(let reason) = error else {
+                    XCTFail("Expected WITransportError.unsupported, got \(error)")
+                    return
                 }
+                XCTAssertEqual(reason, "WebInspectorTransport currently supports iOS only.")
             }
-
-            XCTAssertTrue(window.isVisible)
-            XCTAssertEqual(
-                Set(NSApp.windows.filter(\.isVisible).map(ObjectIdentifier.init)),
-                baselineVisibleWindowIdentifiers
-            )
-            XCTAssertTrue(session.supportSnapshot.isSupported)
-            XCTAssertEqual(session.supportSnapshot.backendKind, .macOSNativeInspector)
-
-            try await domEnable(using: session)
-            let document = try await domGetDocument(using: session, depth: 4)
-            let outerHTMLNodeID = document.root.children?.first?.nodeId ?? document.root.nodeId
-            let outerHTML = try await domGetOuterHTML(using: session, nodeID: outerHTMLNodeID)
-
-            XCTAssertEqual(document.root.nodeName, "#document")
-            XCTAssertTrue(outerHTML.outerHTML.contains("Hello transport"))
-
-            session.detach()
-            window.orderOut(nil)
-            window.close()
-            didCleanup = true
+            XCTAssertFalse(session.supportSnapshot.isSupported)
         }
     }
 }

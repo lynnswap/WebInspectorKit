@@ -47,11 +47,14 @@ enum WITransportPlatformBackendFactory {
         #if os(iOS)
         return WITransportIOSPlatformBackend(configuration: configuration)
         #elseif os(macOS)
-        return WITransportMacNativeInspectorPlatformBackend(configuration: configuration)
+        return WITransportUnsupportedPlatformBackend(
+            configuration: configuration,
+            reason: "WebInspectorTransport currently supports iOS only."
+        )
         #else
         return WITransportUnsupportedPlatformBackend(
             configuration: configuration,
-            reason: "WebInspectorTransport is only available on iOS and macOS."
+            reason: "WebInspectorTransport currently supports iOS only."
         )
         #endif
     }
@@ -101,50 +104,6 @@ private final class WITransportIOSPlatformBackend: WITransportPlatformBackend {
             configuration: configuration,
             resolution: WITransportNativeInspectorSymbolResolver.currentAttachResolution()
         )
-    }
-
-    var supportSnapshot: WITransportSupportSnapshot {
-        endpoint.supportSnapshot
-    }
-
-    func attach(to webView: WKWebView, messageSink: any WITransportBackendMessageSink) async throws {
-        try endpoint.attach(to: webView, messageSink: messageSink)
-    }
-
-    func detach() {
-        endpoint.detach()
-    }
-
-    func sendRootMessage(_ message: String) throws {
-        try endpoint.sendRootMessage(message)
-    }
-
-    func sendPageMessage(_ message: String, targetIdentifier: String, outerIdentifier: Int) throws {
-        try endpoint.sendPageMessage(message, targetIdentifier: targetIdentifier, outerIdentifier: outerIdentifier)
-    }
-
-    func compatibilityResponse(scope: WITransportTargetScope, method: String) -> Data? {
-        WITransportCompatibilityResponse.pageCompatibilityResponse(
-            scope: scope,
-            method: method,
-            allowsCSSEnableCompatibilityResponse: true
-        )
-    }
-}
-
-@MainActor
-final class WITransportMacNativeInspectorPlatformBackend: WITransportPlatformBackend {
-    private let endpoint: WITransportNativeInspectorMessageEndpoint
-
-    init(configuration: WITransportConfiguration) {
-        endpoint = WITransportNativeInspectorMessageEndpoint(
-            configuration: configuration,
-            resolution: WITransportNativeInspectorSymbolResolver.currentAttachResolution()
-        )
-    }
-
-    init(endpoint: WITransportNativeInspectorMessageEndpoint) {
-        self.endpoint = endpoint
     }
 
     var supportSnapshot: WITransportSupportSnapshot {

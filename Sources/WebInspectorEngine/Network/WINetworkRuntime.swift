@@ -46,14 +46,6 @@ package final class WINetworkRuntime {
         backend.webView != nil
     }
 
-    package var backendSupport: WIBackendSupport {
-        backend.support
-    }
-
-    package var transportCapabilities: Set<WIBackendCapability> {
-        backend.support.capabilities
-    }
-
     package func attach(pageWebView webView: WKWebView) async {
         if let currentWebView = backend.webView, currentWebView !== webView {
             await backend.detachPageWebView(preparing: mode)
@@ -147,14 +139,11 @@ package final class WINetworkUnsupportedBackend: WINetworkBackend {
     }
 
     package let store = NetworkStore()
-    package let support: WIBackendSupport
+    package let isSupported = false
+    package let failureReason: String?
 
     package init(reason: String = "Network backend is unsupported.") {
-        self.support = WIBackendSupport(
-            availability: .unsupported,
-            backendKind: .unsupported,
-            failureReason: reason
-        )
+        self.failureReason = reason
     }
 
     package func setMode(_ mode: NetworkLoggingMode) async {
@@ -198,11 +187,8 @@ package final class WINetworkUnsupportedBackend: WINetworkBackend {
 private final class WINetworkBodyFetchingBackend: WINetworkBackend {
     weak var webView: WKWebView?
     let store = NetworkStore()
-    let support = WIBackendSupport(
-        availability: .unsupported,
-        backendKind: .unsupported,
-        failureReason: "Test body fetch backend."
-    )
+    let isSupported = false
+    let failureReason: String? = "Test body fetch backend."
 
     private let bodyFetcher: any NetworkBodyFetching
 
