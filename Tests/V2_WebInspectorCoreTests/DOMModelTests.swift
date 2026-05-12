@@ -20,6 +20,97 @@ func pageTargetCreationCreatesCurrentPageAndMainFrame() async throws {
 }
 
 @Test
+func pageTargetCreationWithoutMainPageFlagOnlyRegistersTarget() async throws {
+    let pageTargetID = ProtocolTarget.ID("page-candidate")
+    let session = await DOMSession()
+
+    await session.applyTargetCreated(.init(id: pageTargetID, kind: .page))
+    let snapshot = await session.snapshot()
+
+    #expect(snapshot.currentPage == nil)
+    #expect(snapshot.targetsByID[pageTargetID]?.kind == .page)
+}
+
+@Test
+func serviceWorkerTargetAndLifecycleFlagsArePreservedInSnapshot() async throws {
+    let targetID = ProtocolTarget.ID("service-worker")
+    let session = await DOMSession()
+
+    await session.applyTargetCreated(
+        .init(
+            id: targetID,
+            kind: .serviceWorker,
+            isProvisional: true,
+            isPaused: true
+        )
+    )
+    let snapshot = await session.snapshot()
+
+    #expect(snapshot.targetsByID[targetID]?.kind == .serviceWorker)
+    #expect(snapshot.targetsByID[targetID]?.isProvisional == true)
+    #expect(snapshot.targetsByID[targetID]?.isPaused == true)
+}
+
+@Test
+func provisionalPageCommitUpdatesMainPageTargetWithoutKeepingOldDocument() async throws {
+    let provisionalTargetID = ProtocolTarget.ID("page-provisional")
+    let committedTargetID = ProtocolTarget.ID("page-committed")
+    let mainFrameID = DOMFrame.ID("main-frame")
+    let session = await DOMSession()
+
+    await session.applyTargetCreated(
+        .init(id: provisionalTargetID, kind: .page, frameID: mainFrameID, isProvisional: true),
+        makeCurrentMainPage: true
+    )
+    _ = await session.replaceDocumentRoot(pageDocumentWithoutIframe(), targetID: provisionalTargetID)
+    let before = await session.snapshot()
+    let oldDocumentID = try #require(before.targetsByID[provisionalTargetID]?.currentDocumentID)
+
+    await session.applyTargetCommitted(oldTargetID: provisionalTargetID, newTargetID: committedTargetID)
+    let after = await session.snapshot()
+
+    #expect(after.currentPage?.mainTargetID == committedTargetID)
+    #expect(after.targetsByID[provisionalTargetID] == nil)
+    #expect(after.targetsByID[committedTargetID]?.isProvisional == false)
+    #expect(after.framesByID[mainFrameID]?.targetID == committedTargetID)
+    #expect(after.documentsByID[oldDocumentID] == nil)
+}
+
+@Test
+func provisionalFrameCommitDoesNotResetParentPageDocument() async throws {
+    let pageTargetID = ProtocolTarget.ID("page-main")
+    let mainFrameID = DOMFrame.ID("main-frame")
+    let provisionalFrameTargetID = ProtocolTarget.ID("frame-provisional")
+    let committedFrameTargetID = ProtocolTarget.ID("frame-committed")
+    let frameID = DOMFrame.ID("frame-ad")
+    let session = await DOMSession()
+
+    await session.applyTargetCreated(.init(id: pageTargetID, kind: .page, frameID: mainFrameID), makeCurrentMainPage: true)
+    await session.applyTargetCreated(
+        .init(
+            id: provisionalFrameTargetID,
+            kind: .frame,
+            frameID: frameID,
+            parentFrameID: mainFrameID,
+            isProvisional: true
+        )
+    )
+    _ = await session.replaceDocumentRoot(pageDocument(iframeFrameID: frameID), targetID: pageTargetID)
+    let frameRootID = await session.replaceDocumentRoot(frameDocument(rootNodeID: 101), targetID: provisionalFrameTargetID)
+    let before = await session.snapshot()
+    let pageDocumentID = try #require(before.targetsByID[pageTargetID]?.currentDocumentID)
+
+    await session.applyTargetCommitted(oldTargetID: provisionalFrameTargetID, newTargetID: committedFrameTargetID)
+    let after = await session.snapshot()
+
+    #expect(after.targetsByID[pageTargetID]?.currentDocumentID == pageDocumentID)
+    #expect(after.targetsByID[provisionalFrameTargetID] == nil)
+    #expect(after.targetsByID[committedFrameTargetID]?.kind == .frame)
+    #expect(after.framesByID[frameID]?.targetID == committedFrameTargetID)
+    #expect(after.nodesByID[frameRootID] == nil)
+}
+
+@Test
 func frameTargetCreationLinksProtocolTargetToFrame() async throws {
     let pageTargetID = ProtocolTarget.ID("page-main")
     let mainFrameID = DOMFrame.ID("main-frame")
@@ -46,7 +137,7 @@ func executionContextRoutesRequestNodeToProtocolTarget() async throws {
 
     await session.applyTargetCreated(.init(id: frameTargetID, kind: .frame, frameID: frameID))
     _ = await session.replaceDocumentRoot(document(nodeID: 1), targetID: frameTargetID)
-    await session.applyExecutionContextCreated(executionContextID, targetID: frameTargetID)
+    await session.applyExecutionContextCreated(.init(id: executionContextID, targetID: frameTargetID, frameID: frameID))
 
     let result = await session.resolveInspectSelection(
         remoteObject: .init(objectID: "remote-node", injectedScriptID: executionContextID)
@@ -58,6 +149,7 @@ func executionContextRoutesRequestNodeToProtocolTarget() async throws {
     }
     #expect(targetID == frameTargetID)
     #expect(objectID == "remote-node")
+    #expect((await session.snapshot()).executionContextsByID[executionContextID]?.frameID == frameID)
 }
 
 @Test

@@ -54,6 +54,7 @@ package final class NetworkRequest {
     package var documentURL: String?
     package var resourceType: NetworkResourceType?
     package var originatingTargetID: ProtocolTargetIdentifier?
+    package var backendResourceIdentifier: NetworkBackendResourceIdentifier?
     package var initiator: NetworkInitiatorPayload?
     package var request: NetworkRequestPayload
     package var response: NetworkResponsePayload?
@@ -82,6 +83,7 @@ package final class NetworkRequest {
         request: NetworkRequestPayload,
         resourceType: NetworkResourceType?,
         originatingTargetID: ProtocolTargetIdentifier?,
+        backendResourceIdentifier: NetworkBackendResourceIdentifier?,
         initiator: NetworkInitiatorPayload?,
         timestamp: Double,
         walltime: Double?
@@ -92,6 +94,7 @@ package final class NetworkRequest {
         self.documentURL = documentURL
         self.resourceType = resourceType
         self.originatingTargetID = originatingTargetID
+        self.backendResourceIdentifier = backendResourceIdentifier
         self.initiator = initiator
         self.request = request
         self.response = nil
@@ -175,6 +178,7 @@ package struct NetworkRequestSnapshot: Equatable, Sendable {
     package var documentURL: String?
     package var resourceType: NetworkResourceType?
     package var originatingTargetID: ProtocolTargetIdentifier?
+    package var backendResourceIdentifier: NetworkBackendResourceIdentifier?
     package var initiator: NetworkInitiatorPayload?
     package var request: NetworkRequestPayload
     package var response: NetworkResponsePayload?
@@ -222,6 +226,7 @@ package final class NetworkSession {
         request: NetworkRequestPayload,
         resourceType: NetworkResourceType? = nil,
         originatingTargetID: ProtocolTargetIdentifier? = nil,
+        backendResourceIdentifier: NetworkBackendResourceIdentifier? = nil,
         initiator: NetworkInitiatorPayload? = nil,
         redirectResponse: NetworkResponsePayload? = nil,
         timestamp: Double,
@@ -236,8 +241,11 @@ package final class NetworkSession {
                 existing.documentURL = documentURL ?? existing.documentURL
                 existing.resourceType = resourceType ?? existing.resourceType
                 existing.originatingTargetID = originatingTargetID ?? existing.originatingTargetID
+                existing.backendResourceIdentifier = backendResourceIdentifier ?? existing.backendResourceIdentifier
                 existing.initiator = initiator ?? existing.initiator
                 existing.applyRedirect(to: request, redirectResponse: redirectResponse, timestamp: timestamp, walltime: walltime)
+            } else {
+                existing.backendResourceIdentifier = backendResourceIdentifier ?? existing.backendResourceIdentifier
             }
             return key
         }
@@ -250,6 +258,7 @@ package final class NetworkSession {
             request: request,
             resourceType: resourceType,
             originatingTargetID: originatingTargetID,
+            backendResourceIdentifier: backendResourceIdentifier,
             initiator: initiator,
             timestamp: timestamp,
             walltime: walltime
@@ -353,6 +362,7 @@ package final class NetworkSession {
             request: .init(url: resource.url),
             resourceType: resource.type,
             originatingTargetID: nil,
+            backendResourceIdentifier: nil,
             initiator: initiator,
             timestamp: timestamp,
             walltime: nil
@@ -405,6 +415,7 @@ package final class NetworkSession {
             request: .init(url: url),
             resourceType: .webSocket,
             originatingTargetID: nil,
+            backendResourceIdentifier: nil,
             initiator: nil,
             timestamp: 0,
             walltime: nil
@@ -504,6 +515,18 @@ package final class NetworkSession {
         requestsByID[id].map(snapshot(for:))
     }
 
+    package func responseBodyCommandIntent(for id: NetworkRequest.ID) -> NetworkCommandIntent? {
+        requestsByID[id].map {
+            .getResponseBody(requestKey: id, backendResourceIdentifier: $0.backendResourceIdentifier)
+        }
+    }
+
+    package func serializedCertificateCommandIntent(for id: NetworkRequest.ID) -> NetworkCommandIntent? {
+        requestsByID[id].map {
+            .getSerializedCertificate(requestKey: id, backendResourceIdentifier: $0.backendResourceIdentifier)
+        }
+    }
+
     package func snapshot() -> NetworkSessionSnapshot {
         NetworkSessionSnapshot(
             orderedRequestIDs: orderedRequestIDs,
@@ -521,6 +544,7 @@ package final class NetworkSession {
             documentURL: request.documentURL,
             resourceType: request.resourceType,
             originatingTargetID: request.originatingTargetID,
+            backendResourceIdentifier: request.backendResourceIdentifier,
             initiator: request.initiator,
             request: request.request,
             response: request.response,

@@ -45,6 +45,8 @@ package struct ProtocolTargetSnapshot: Equatable, Sendable {
     package var kind: ProtocolTargetKind
     package var frameID: DOMFrameIdentifier?
     package var parentFrameID: DOMFrameIdentifier?
+    package var isProvisional: Bool
+    package var isPaused: Bool
     package var currentDocumentID: DOMDocumentIdentifier?
 }
 
@@ -140,5 +142,6 @@ package struct DOMSessionSnapshot: Equatable, Sendable {
     package var documentsByID: [DOMDocumentIdentifier: DOMDocumentSnapshot]
     package var nodesByID: [DOMNodeIdentifier: DOMNodeSnapshot]
     package var currentNodeIDByKey: [DOMNodeCurrentKey: DOMNodeIdentifier]
+    package var executionContextsByID: [ExecutionContextID: ExecutionContextRecord]
     package var selection: DOMSelectionSnapshot
 }

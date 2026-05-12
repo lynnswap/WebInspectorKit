@@ -34,6 +34,27 @@ package struct NetworkRedirectHopIdentifier: Hashable, Sendable {
     }
 }
 
+package struct NetworkBackendResourceIdentifier: Hashable, Sendable {
+    package var sourceProcessID: String
+    package var resourceID: String
+
+    package init(sourceProcessID: String, resourceID: String) {
+        self.sourceProcessID = sourceProcessID
+        self.resourceID = resourceID
+    }
+}
+
+package enum NetworkCommandIntent: Equatable, Sendable {
+    case getResponseBody(
+        requestKey: NetworkRequestIdentifierKey,
+        backendResourceIdentifier: NetworkBackendResourceIdentifier?
+    )
+    case getSerializedCertificate(
+        requestKey: NetworkRequestIdentifierKey,
+        backendResourceIdentifier: NetworkBackendResourceIdentifier?
+    )
+}
+
 package struct ConsoleCallFramePayload: Equatable, Sendable {
     package var functionName: String
     package var url: String

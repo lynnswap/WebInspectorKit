@@ -9,18 +9,24 @@ package final class ProtocolTarget {
     package var kind: ProtocolTargetKind
     package var frameID: DOMFrame.ID?
     package var parentFrameID: DOMFrame.ID?
+    package var isProvisional: Bool
+    package var isPaused: Bool
     package var currentDocumentID: DOMDocument.ID?
 
     package init(
         id: ID,
         kind: ProtocolTargetKind,
         frameID: DOMFrame.ID?,
-        parentFrameID: DOMFrame.ID?
+        parentFrameID: DOMFrame.ID?,
+        isProvisional: Bool,
+        isPaused: Bool
     ) {
         self.id = id
         self.kind = kind
         self.frameID = frameID
         self.parentFrameID = parentFrameID
+        self.isProvisional = isProvisional
+        self.isPaused = isPaused
     }
 }
 
@@ -34,11 +40,16 @@ package final class DOMPage {
     package let mainFrameID: DOMFrame.ID
     package var navigationGeneration: UInt64
 
-    package init(id: ID, mainTargetID: ProtocolTarget.ID, mainFrameID: DOMFrame.ID) {
+    package init(
+        id: ID,
+        mainTargetID: ProtocolTarget.ID,
+        mainFrameID: DOMFrame.ID,
+        navigationGeneration: UInt64 = 0
+    ) {
         self.id = id
         self.mainTargetID = mainTargetID
         self.mainFrameID = mainFrameID
-        self.navigationGeneration = 0
+        self.navigationGeneration = navigationGeneration
     }
 }
 
@@ -208,7 +219,7 @@ package final class DOMSession {
 
     private var targetsByID: [ProtocolTarget.ID: ProtocolTarget]
     private var framesByID: [DOMFrame.ID: DOMFrame]
-    private var targetIDByExecutionContextID: [ExecutionContextID: ProtocolTarget.ID]
+    private var executionContextsByID: [ExecutionContextID: ExecutionContextRecord]
     private var documentsByID: [DOMDocument.ID: DOMDocument]
     private var nodesByID: [DOMNode.ID: DOMNode]
     private var currentNodeIDByKey: [DOMNodeCurrentKey: DOMNode.ID]
@@ -219,7 +230,7 @@ package final class DOMSession {
     package init() {
         targetsByID = [:]
         framesByID = [:]
-        targetIDByExecutionContextID = [:]
+        executionContextsByID = [:]
         documentsByID = [:]
         nodesByID = [:]
         currentNodeIDByKey = [:]
@@ -236,11 +247,15 @@ package final class DOMSession {
             id: record.id,
             kind: record.kind,
             frameID: record.frameID,
-            parentFrameID: record.parentFrameID
+            parentFrameID: record.parentFrameID,
+            isProvisional: record.isProvisional,
+            isPaused: record.isPaused
         )
         target.kind = record.kind
         target.frameID = record.frameID
         target.parentFrameID = record.parentFrameID
+        target.isProvisional = record.isProvisional
+        target.isPaused = record.isPaused
         targetsByID[record.id] = target
 
         if let frameID = record.frameID {
@@ -249,7 +264,7 @@ package final class DOMSession {
             target.frameID = frameID
         }
 
-        guard record.kind == .page || makeCurrentMainPage else {
+        guard makeCurrentMainPage, record.kind == .page else {
             return
         }
 
@@ -260,11 +275,75 @@ package final class DOMSession {
         currentPage = DOMPage(id: record.id, mainTargetID: record.id, mainFrameID: mainFrameID)
     }
 
+    package func applyTargetCommitted(oldTargetID: ProtocolTarget.ID, newTargetID: ProtocolTarget.ID) {
+        guard oldTargetID != newTargetID,
+              let oldTarget = targetsByID.removeValue(forKey: oldTargetID) else {
+            return
+        }
+
+        let existingNewTarget = targetsByID[newTargetID]
+        let frameID = existingNewTarget?.frameID ?? oldTarget.frameID
+        let parentFrameID = existingNewTarget?.parentFrameID ?? oldTarget.parentFrameID
+        let committedTarget = existingNewTarget ?? ProtocolTarget(
+            id: newTargetID,
+            kind: oldTarget.kind,
+            frameID: frameID,
+            parentFrameID: parentFrameID,
+            isProvisional: false,
+            isPaused: oldTarget.isPaused
+        )
+        committedTarget.kind = existingNewTarget?.kind ?? oldTarget.kind
+        committedTarget.frameID = frameID
+        committedTarget.parentFrameID = parentFrameID
+        committedTarget.isProvisional = false
+        committedTarget.isPaused = existingNewTarget?.isPaused ?? oldTarget.isPaused
+        targetsByID[newTargetID] = committedTarget
+
+        if let oldDocumentID = oldTarget.currentDocumentID {
+            removeDocument(oldDocumentID)
+            if committedTarget.currentDocumentID == oldDocumentID {
+                committedTarget.currentDocumentID = nil
+            }
+        }
+
+        if let frameID {
+            let frame = frameWithID(frameID, parentFrameID: parentFrameID)
+            if frame.targetID == oldTargetID || frame.targetID == nil {
+                frame.targetID = newTargetID
+            }
+            if frame.currentDocumentID == oldTarget.currentDocumentID {
+                frame.currentDocumentID = committedTarget.currentDocumentID
+            }
+        }
+
+        for (contextID, record) in executionContextsByID where record.targetID == oldTargetID {
+            executionContextsByID[contextID] = ExecutionContextRecord(
+                id: record.id,
+                targetID: newTargetID,
+                frameID: record.frameID
+            )
+        }
+
+        if let previousPage = currentPage, previousPage.mainTargetID == oldTargetID {
+            currentPage = DOMPage(
+                id: newTargetID,
+                mainTargetID: newTargetID,
+                mainFrameID: previousPage.mainFrameID,
+                navigationGeneration: previousPage.navigationGeneration
+            )
+            if framesByID[previousPage.mainFrameID]?.targetID == oldTargetID {
+                framesByID[previousPage.mainFrameID]?.targetID = newTargetID
+            }
+        }
+
+        reconcileSelection()
+    }
+
     package func applyTargetDestroyed(_ targetID: ProtocolTarget.ID) {
         guard let target = targetsByID.removeValue(forKey: targetID) else {
             return
         }
-        targetIDByExecutionContextID = targetIDByExecutionContextID.filter { $0.value != targetID }
+        executionContextsByID = executionContextsByID.filter { $0.value.targetID != targetID }
         if let documentID = target.currentDocumentID {
             removeDocument(documentID)
         }
@@ -278,11 +357,19 @@ package final class DOMSession {
         reconcileSelection()
     }
 
-    package func applyExecutionContextCreated(_ id: ExecutionContextID, targetID: ProtocolTarget.ID) {
-        guard targetsByID[targetID] != nil else {
+    package func applyExecutionContextCreated(_ record: ExecutionContextRecord) {
+        guard targetsByID[record.targetID] != nil else {
             return
         }
-        targetIDByExecutionContextID[id] = targetID
+        executionContextsByID[record.id] = record
+    }
+
+    package func applyExecutionContextCreated(
+        _ id: ExecutionContextID,
+        targetID: ProtocolTarget.ID,
+        frameID: DOMFrame.ID? = nil
+    ) {
+        applyExecutionContextCreated(.init(id: id, targetID: targetID, frameID: frameID))
     }
 
     @discardableResult
@@ -366,7 +453,7 @@ package final class DOMSession {
         guard let executionContextID = remoteObject.injectedScriptID else {
             return failSelection(.missingInjectedScriptID)
         }
-        guard let targetID = targetIDByExecutionContextID[executionContextID] else {
+        guard let targetID = executionContextsByID[executionContextID]?.targetID else {
             return failSelection(.unknownExecutionContext(executionContextID))
         }
         guard let documentID = targetsByID[targetID]?.currentDocumentID else {
@@ -453,6 +540,8 @@ package final class DOMSession {
                     kind: $0.kind,
                     frameID: $0.frameID,
                     parentFrameID: $0.parentFrameID,
+                    isProvisional: $0.isProvisional,
+                    isPaused: $0.isPaused,
                     currentDocumentID: $0.currentDocumentID
                 )
             },
@@ -499,6 +588,7 @@ package final class DOMSession {
                 )
             },
             currentNodeIDByKey: currentNodeIDByKey,
+            executionContextsByID: executionContextsByID,
             selection: DOMSelectionSnapshot(
                 selectedNodeID: selection.selectedNodeID,
                 pendingRequest: selection.pendingRequest.map {

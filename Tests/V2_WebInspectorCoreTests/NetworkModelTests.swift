@@ -35,6 +35,130 @@ func networkRequestIdentityIsScopedByTargetAndRequestID() async throws {
 }
 
 @Test
+func networkRequestIdentityDoesNotIncludeRedirectIndex() async throws {
+    let session = await NetworkSession()
+    let targetID = ProtocolTargetIdentifier("page")
+    let requestID = NetworkRequestIdentifier("0.43")
+
+    let key = await session.applyRequestWillBeSent(
+        targetID: targetID,
+        requestID: requestID,
+        frameID: .init("main-frame"),
+        loaderID: "loader",
+        documentURL: "https://example.com",
+        request: .init(url: "http://example.com"),
+        timestamp: 1
+    )
+    let redirectKey = await session.applyRequestWillBeSent(
+        targetID: targetID,
+        requestID: requestID,
+        frameID: .init("main-frame"),
+        loaderID: "loader",
+        documentURL: "https://example.com",
+        request: .init(url: "https://example.com"),
+        redirectResponse: .init(url: "http://example.com", status: 302),
+        timestamp: 2
+    )
+    let snapshot = await session.snapshot()
+
+    #expect(redirectKey == key)
+    #expect(snapshot.orderedRequestIDs == [key])
+    #expect(snapshot.requestsByID[key]?.redirects.first?.id == .init(requestKey: key, redirectIndex: 0))
+}
+
+@Test
+func requestKeepsEnvelopeTargetOriginatingTargetAndBackendResourceIdentitySeparate() async throws {
+    let session = await NetworkSession()
+    let pageProxyTargetID = ProtocolTargetIdentifier("page-proxy")
+    let frameOriginTargetID = ProtocolTargetIdentifier("frame-ad")
+    let requestID = NetworkRequestIdentifier("0.44")
+    let backendResourceIdentifier = NetworkBackendResourceIdentifier(
+        sourceProcessID: "web-content-2",
+        resourceID: "resource-44"
+    )
+
+    let key = await session.applyRequestWillBeSent(
+        targetID: pageProxyTargetID,
+        requestID: requestID,
+        frameID: .init("ad-frame"),
+        loaderID: "loader-ad",
+        documentURL: "https://ads.example",
+        request: .init(url: "https://ads.example/ad.js"),
+        originatingTargetID: frameOriginTargetID,
+        backendResourceIdentifier: backendResourceIdentifier,
+        timestamp: 1
+    )
+    let request = try #require(await session.requestSnapshot(for: key))
+
+    #expect(request.id == .init(targetID: pageProxyTargetID, requestID: requestID))
+    #expect(request.originatingTargetID == frameOriginTargetID)
+    #expect(request.backendResourceIdentifier == backendResourceIdentifier)
+}
+
+@Test
+func backendResourceIdentifierPropagatesToLazyCommandIntents() async throws {
+    let session = await NetworkSession()
+    let targetID = ProtocolTargetIdentifier("page-proxy")
+    let requestID = NetworkRequestIdentifier("0.45")
+    let backendResourceIdentifier = NetworkBackendResourceIdentifier(
+        sourceProcessID: "web-content-3",
+        resourceID: "resource-45"
+    )
+
+    let key = await session.applyRequestWillBeSent(
+        targetID: targetID,
+        requestID: requestID,
+        frameID: .init("main-frame"),
+        loaderID: "loader",
+        documentURL: "https://example.com",
+        request: .init(url: "https://example.com/app.js"),
+        backendResourceIdentifier: backendResourceIdentifier,
+        timestamp: 1
+    )
+    let bodyIntent = await session.responseBodyCommandIntent(for: key)
+    let certificateIntent = await session.serializedCertificateCommandIntent(for: key)
+
+    #expect(bodyIntent == .getResponseBody(requestKey: key, backendResourceIdentifier: backendResourceIdentifier))
+    #expect(certificateIntent == .getSerializedCertificate(requestKey: key, backendResourceIdentifier: backendResourceIdentifier))
+}
+
+@Test
+func backendResourceIdentifierDoesNotChangeRequestGrouping() async throws {
+    let session = await NetworkSession()
+    let targetID = ProtocolTargetIdentifier("page-proxy")
+    let requestID = NetworkRequestIdentifier("0.46")
+    let firstBackendIdentifier = NetworkBackendResourceIdentifier(sourceProcessID: "process-a", resourceID: "resource-a")
+    let secondBackendIdentifier = NetworkBackendResourceIdentifier(sourceProcessID: "process-b", resourceID: "resource-b")
+
+    let key = await session.applyRequestWillBeSent(
+        targetID: targetID,
+        requestID: requestID,
+        frameID: .init("frame-a"),
+        loaderID: "loader-a",
+        documentURL: "https://example.com",
+        request: .init(url: "https://example.com/first"),
+        backendResourceIdentifier: firstBackendIdentifier,
+        timestamp: 1
+    )
+    let duplicateKey = await session.applyRequestWillBeSent(
+        targetID: targetID,
+        requestID: requestID,
+        frameID: .init("frame-b"),
+        loaderID: "loader-b",
+        documentURL: "https://example.com",
+        request: .init(url: "https://example.com/second"),
+        backendResourceIdentifier: secondBackendIdentifier,
+        timestamp: 2
+    )
+    let snapshot = await session.snapshot()
+
+    #expect(duplicateKey == key)
+    #expect(snapshot.orderedRequestIDs == [key])
+    #expect(snapshot.requestsByID[key]?.backendResourceIdentifier == secondBackendIdentifier)
+    #expect(snapshot.requestsByID[key]?.request.url == "https://example.com/first")
+}
+
+@Test
 func redirectUpdatesSameRequestAndCreatesDerivedHopIdentity() async throws {
     let session = await NetworkSession()
     let targetID = ProtocolTargetIdentifier("page")
