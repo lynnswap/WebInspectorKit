@@ -2,12 +2,7 @@ import Foundation
 import V2_WebInspectorCore
 
 package protocol TransportBackend: Sendable {
-    func sendRootJSONString(_ message: String) async throws
-    func sendTargetJSONString(
-        _ message: String,
-        targetIdentifier: ProtocolTargetIdentifier,
-        outerIdentifier: UInt64
-    ) async throws
+    func sendJSONString(_ message: String) async throws
     func detach() async
 }
 
@@ -24,63 +19,67 @@ package struct SentTargetMessage: Equatable, Sendable {
 }
 
 package actor FakeTransportBackend: TransportBackend {
-    private var rootMessages: [String]
-    private var targetMessages: [SentTargetMessage]
-    private var rootSendError: (any Error)?
-    private var targetSendError: (any Error)?
+    private var messages: [String]
+    private var sendError: (any Error)?
     private var detached: Bool
 
     package init() {
-        rootMessages = []
-        targetMessages = []
+        messages = []
         detached = false
     }
 
-    package func sendRootJSONString(_ message: String) async throws {
-        if let rootSendError {
-            throw rootSendError
+    package func sendJSONString(_ message: String) async throws {
+        if let sendError {
+            throw sendError
         }
-        rootMessages.append(message)
-    }
-
-    package func sendTargetJSONString(
-        _ message: String,
-        targetIdentifier: ProtocolTargetIdentifier,
-        outerIdentifier: UInt64
-    ) async throws {
-        if let targetSendError {
-            throw targetSendError
-        }
-        targetMessages.append(
-            SentTargetMessage(
-                message: message,
-                targetIdentifier: targetIdentifier,
-                outerIdentifier: outerIdentifier
-            )
-        )
+        messages.append(message)
     }
 
     package func detach() async {
         detached = true
     }
 
-    package func setRootSendError(_ error: (any Error)?) {
-        rootSendError = error
+    package func setSendError(_ error: (any Error)?) {
+        sendError = error
     }
 
-    package func setTargetSendError(_ error: (any Error)?) {
-        targetSendError = error
-    }
-
-    package func sentRootMessages() -> [String] {
-        rootMessages
+    package func sentMessages() -> [String] {
+        messages
     }
 
     package func sentTargetMessages() -> [SentTargetMessage] {
-        targetMessages
+        messages.compactMap { Self.sentTargetMessage(from: $0) }
     }
 
     package func isDetached() -> Bool {
         detached
+    }
+
+    private static func sentTargetMessage(from message: String) -> SentTargetMessage? {
+        guard let data = message.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let method = object["method"] as? String,
+              method == "Target.sendMessageToTarget",
+              let params = object["params"] as? [String: Any],
+              let targetIdentifier = params["targetId"] as? String,
+              let innerMessage = params["message"] as? String else {
+            return nil
+        }
+
+        let outerIdentifier: UInt64
+        if let number = object["id"] as? NSNumber {
+            outerIdentifier = number.uint64Value
+        } else if let string = object["id"] as? String,
+                  let identifier = UInt64(string) {
+            outerIdentifier = identifier
+        } else {
+            return nil
+        }
+
+        return SentTargetMessage(
+            message: innerMessage,
+            targetIdentifier: ProtocolTargetIdentifier(targetIdentifier),
+            outerIdentifier: outerIdentifier
+        )
     }
 }

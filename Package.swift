@@ -105,9 +105,20 @@ let package = Package(
             name: "V2_WebInspectorTransport",
             dependencies: [
                 "V2_WebInspectorCore",
-                "WebInspectorTransportObjCShim"
+                "V2_WebInspectorNativeBridge"
             ],
             swiftSettings: strictSwiftSettings
+        ),
+        .target(
+            name: "V2_WebInspectorNativeBridge",
+            path: "Sources/V2_WebInspectorNativeBridge",
+            publicHeadersPath: "include",
+            linkerSettings: [
+                .linkedFramework("Foundation"),
+                .linkedFramework("JavaScriptCore"),
+                .linkedFramework("WebKit"),
+                .linkedFramework("AppKit", .when(platforms: [.macOS])),
+            ]
         ),
         .target(
             name: "WebInspectorBridgeObjCShim",
@@ -212,6 +223,14 @@ let package = Package(
                 "V2_WebInspectorTransport"
             ],
             path: "Tests/V2_WebInspectorTransportTests",
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
+            name: "V2_WebInspectorNativeBridgeTests",
+            dependencies: [
+                "V2_WebInspectorNativeBridge"
+            ],
+            path: "Tests/V2_WebInspectorNativeBridgeTests",
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(

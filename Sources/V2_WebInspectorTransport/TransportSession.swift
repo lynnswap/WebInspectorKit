@@ -9,11 +9,6 @@ package actor TransportSession {
         var promise: ReplyPromise<ProtocolCommandResult>
     }
 
-    private enum InboundMessage: Sendable {
-        case root(String)
-        case target(String, ProtocolTargetIdentifier)
-    }
-
     private let backend: any TransportBackend
     private let responseTimeout: Duration
     private var nextCommandID: UInt64
@@ -27,7 +22,7 @@ package actor TransportSession {
     private var executionContextsByID: [ExecutionContextID: ExecutionContextRecord]
     private var currentMainPageTargetID: ProtocolTargetIdentifier?
     private var subscribers: [ProtocolDomain: [UInt64: AsyncStream<ProtocolEventEnvelope>.Continuation]]
-    private var inboundMessages: [InboundMessage]
+    private var inboundMessages: [String]
     private var isDrainingInboundMessages: Bool
     private var closed: Bool
 
@@ -85,12 +80,7 @@ package actor TransportSession {
     }
 
     package func receiveRootMessage(_ message: String) async {
-        inboundMessages.append(.root(message))
-        await drainInboundMessages()
-    }
-
-    package func receiveTargetMessage(_ message: String, targetID: ProtocolTargetIdentifier) async {
-        inboundMessages.append(.target(message, targetID))
+        inboundMessages.append(message)
         await drainInboundMessages()
     }
 
@@ -151,7 +141,7 @@ package actor TransportSession {
                 method: command.method,
                 parametersData: command.parametersData
             )
-            try await backend.sendRootJSONString(message)
+            try await backend.sendJSONString(message)
         } catch {
             rootReplies.removeValue(forKey: commandID)
             await promise.fulfill(.failure(error))
@@ -186,11 +176,12 @@ package actor TransportSession {
                 method: command.method,
                 parametersData: command.parametersData
             )
-            try await backend.sendTargetJSONString(
-                message,
-                targetIdentifier: targetID,
-                outerIdentifier: outerCommandID
+            let wrapperMessage = try TransportMessageParser.makeTargetWrapperCommandString(
+                id: outerCommandID,
+                targetIdentifier: targetID.rawValue,
+                message: message
             )
+            try await backend.sendJSONString(wrapperMessage)
         } catch {
             _ = removeTargetReply(for: key)
             await promise.fulfill(.failure(error))
@@ -220,19 +211,11 @@ package actor TransportSession {
         }
 
         while !inboundMessages.isEmpty {
-            let message = inboundMessages.removeFirst()
-            switch message {
-            case let .root(rawMessage):
-                guard let parsed = try? await TransportMessageParser.parse(rawMessage) else {
-                    continue
-                }
-                await handleRootMessage(parsed)
-            case let .target(rawMessage, targetID):
-                guard let parsed = try? await TransportMessageParser.parse(rawMessage) else {
-                    continue
-                }
-                await handleTargetMessage(parsed, targetID: targetID)
+            let rawMessage = inboundMessages.removeFirst()
+            guard let parsed = try? await TransportMessageParser.parse(rawMessage) else {
+                continue
             }
+            await handleRootMessage(parsed)
         }
     }
 

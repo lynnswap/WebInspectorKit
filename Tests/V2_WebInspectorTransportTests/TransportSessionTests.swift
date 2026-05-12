@@ -37,9 +37,15 @@ func targetCommandUsesNestedReplyKey() async throws {
     }
     let sent = try await waitForTargetMessage(backend)
     let innerID = try messageID(sent.message)
+    let rawWrapper = try #require(await backend.sentMessages().last)
 
+    #expect(try messageMethod(rawWrapper) == "Target.sendMessageToTarget")
     #expect(sent.targetIdentifier == ProtocolTargetIdentifier("frame-A"))
-    await session.receiveTargetMessage(##"{"id":\##(innerID),"result":{"root":{"nodeId":1,"nodeType":9,"nodeName":"#document"}}}"##, targetID: .init("frame-A"))
+    await receiveTargetDispatch(
+        session,
+        targetID: .init("frame-A"),
+        message: ##"{"id":\##(innerID),"result":{"root":{"nodeId":1,"nodeType":9,"nodeName":"#document"}}}"##
+    )
     let result = try await sendTask.value
 
     #expect(result.method == "DOM.getDocument")
@@ -270,7 +276,11 @@ func targetCommitRetargetsPendingRepliesToCommittedTarget() async throws {
     let innerID = try messageID(sent.message)
 
     await session.receiveRootMessage(#"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"frame-provisional","newTargetId":"frame-committed"}}"#)
-    await session.receiveTargetMessage(##"{"id":\##(innerID),"result":{"root":{"nodeId":1,"nodeType":9,"nodeName":"#document"}}}"##, targetID: .init("frame-committed"))
+    await receiveTargetDispatch(
+        session,
+        targetID: .init("frame-committed"),
+        message: ##"{"id":\##(innerID),"result":{"root":{"nodeId":1,"nodeType":9,"nodeName":"#document"}}}"##
+    )
     let result = try await sendTask.value
 
     #expect(result.targetID == ProtocolTargetIdentifier("frame-committed"))
@@ -292,7 +302,11 @@ func oldlessTargetCommitInfersSoleProvisionalTarget() async throws {
     let innerID = try messageID(sent.message)
 
     await session.receiveRootMessage(#"{"method":"Target.didCommitProvisionalTarget","params":{"newTargetId":"frame-committed"}}"#)
-    await session.receiveTargetMessage(##"{"id":\##(innerID),"result":{"root":{"nodeId":1,"nodeType":9,"nodeName":"#document"}}}"##, targetID: .init("frame-committed"))
+    await receiveTargetDispatch(
+        session,
+        targetID: .init("frame-committed"),
+        message: ##"{"id":\##(innerID),"result":{"root":{"nodeId":1,"nodeType":9,"nodeName":"#document"}}}"##
+    )
     let result = try await sendTask.value
     let snapshot = await session.snapshot()
 
@@ -376,9 +390,10 @@ func runtimeExecutionContextMapsToDeliveringTarget() async throws {
     let session = TransportSession(backend: backend)
     await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-A","type":"frame","frameId":"frame-A","isProvisional":false}}}"#)
 
-    await session.receiveTargetMessage(
-        #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"frame-A"}}}"#,
-        targetID: .init("frame-A")
+    await receiveTargetDispatch(
+        session,
+        targetID: .init("frame-A"),
+        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"frame-A"}}}"#
     )
     let snapshot = await session.snapshot()
 
@@ -393,9 +408,10 @@ func runtimeContextOnPagePreservesExistingFrameTargetRoute() async throws {
 
     await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#)
     await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-A","type":"frame","frameId":"frame-A","parentFrameId":"main-frame","isProvisional":false}}}"#)
-    await session.receiveTargetMessage(
-        #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"frame-A"}}}"#,
-        targetID: .init("page-main")
+    await receiveTargetDispatch(
+        session,
+        targetID: .init("page-main"),
+        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"frame-A"}}}"#
     )
     let snapshot = await session.snapshot()
 
@@ -417,10 +433,10 @@ func domainStreamsReceiveIndependentTargetEventsInOrder() async throws {
     let consoleTask = firstEvent(from: consoleStream)
     let networkTask = firstEvent(from: networkStream)
 
-    await session.receiveTargetMessage(#"{"method":"DOM.setChildNodes","params":{"parentId":1,"nodes":[]}}"#, targetID: .init("frame-A"))
-    await session.receiveTargetMessage(#"{"method":"CSS.styleSheetChanged","params":{"styleSheetId":"s1"}}"#, targetID: .init("frame-A"))
-    await session.receiveTargetMessage(#"{"method":"Console.messageAdded","params":{"message":{"text":"hello"}}}"#, targetID: .init("frame-A"))
-    await session.receiveTargetMessage(#"{"method":"Network.requestWillBeSent","params":{"requestId":"r1","request":{"url":"https://example.com"},"timestamp":1}}"#, targetID: .init("page-main"))
+    await receiveTargetDispatch(session, targetID: .init("frame-A"), message: #"{"method":"DOM.setChildNodes","params":{"parentId":1,"nodes":[]}}"#)
+    await receiveTargetDispatch(session, targetID: .init("frame-A"), message: #"{"method":"CSS.styleSheetChanged","params":{"styleSheetId":"s1"}}"#)
+    await receiveTargetDispatch(session, targetID: .init("frame-A"), message: #"{"method":"Console.messageAdded","params":{"message":{"text":"hello"}}}"#)
+    await receiveTargetDispatch(session, targetID: .init("page-main"), message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"r1","request":{"url":"https://example.com"},"timestamp":1}}"#)
 
     #expect(await domTask.value?.method == "DOM.setChildNodes")
     #expect(await cssTask.value?.method == "CSS.styleSheetChanged")
@@ -1024,7 +1040,7 @@ private func firstEvent(from stream: AsyncStream<ProtocolEventEnvelope>) -> Task
 
 private func waitForRootMessage(_ backend: FakeTransportBackend) async throws -> String {
     try await waitUntil {
-        await backend.sentRootMessages().last
+        await backend.sentMessages().last
     }
 }
 
@@ -1045,6 +1061,29 @@ private func waitUntil<Value: Sendable>(_ body: @escaping @Sendable () async -> 
     throw TransportError.replyTimeout(method: "test wait", targetID: nil)
 }
 
+private func receiveTargetDispatch(
+    _ session: TransportSession,
+    targetID: ProtocolTargetIdentifier,
+    message: String
+) async {
+    await session.receiveRootMessage(targetDispatchMessage(targetID: targetID, message: message))
+}
+
+private func targetDispatchMessage(
+    targetID: ProtocolTargetIdentifier,
+    message: String
+) -> String {
+    let escapedTargetID = jsonEscapedString(targetID.rawValue)
+    let escapedMessage = jsonEscapedString(message)
+    return #"{"method":"Target.dispatchMessageFromTarget","params":{"targetId":"\#(escapedTargetID)","message":"\#(escapedMessage)"}}"#
+}
+
+private func jsonEscapedString(_ string: String) -> String {
+    string
+        .replacingOccurrences(of: #"\"#, with: #"\\"#)
+        .replacingOccurrences(of: #"""#, with: #"\""#)
+}
+
 private func messageID(_ message: String) throws -> UInt64 {
     let data = try #require(message.data(using: .utf8))
     let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -1056,4 +1095,10 @@ private func messageID(_ message: String) throws -> UInt64 {
         return id
     }
     throw TransportError.malformedMessage
+}
+
+private func messageMethod(_ message: String) throws -> String? {
+    let data = try #require(message.data(using: .utf8))
+    let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+    return object["method"] as? String
 }

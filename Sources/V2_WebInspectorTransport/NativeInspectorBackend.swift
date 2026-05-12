@@ -1,63 +1,46 @@
 import Foundation
 import WebKit
-@unsafe @preconcurrency import WebInspectorTransportObjCShim
+@unsafe @preconcurrency import V2_WebInspectorNativeBridge
 import V2_WebInspectorCore
 
 @MainActor
 package final class NativeInspectorBackend: TransportBackend {
     private let webView: WKWebView
-    private let resolvedFunctions: WITransportResolvedFunctions
-    private nonisolated let rootMessageHandler: @Sendable (String) -> Void
+    private let resolvedSymbols: V2WINativeResolvedSymbols
+    private nonisolated let messageHandler: @Sendable (String) -> Void
     private nonisolated let fatalFailureHandler: @Sendable (String) -> Void
-    private var bridge: WITransportBridge?
+    private var bridge: V2WINativeInspectorBridge?
 
     package init(
         webView: WKWebView,
-        resolvedFunctions: WITransportResolvedFunctions,
-        rootMessageHandler: @escaping @Sendable (String) -> Void,
+        resolvedSymbols: V2WINativeResolvedSymbols,
+        messageHandler: @escaping @Sendable (String) -> Void,
         fatalFailureHandler: @escaping @Sendable (String) -> Void = { _ in }
     ) {
         self.webView = webView
-        self.resolvedFunctions = resolvedFunctions
-        self.rootMessageHandler = rootMessageHandler
+        self.resolvedSymbols = resolvedSymbols
+        self.messageHandler = messageHandler
         self.fatalFailureHandler = fatalFailureHandler
     }
 
     package func attach() throws {
-        let bridge = WITransportBridge(webView: webView)
-        bridge.rootMessageHandler = { [rootMessageHandler] message in
-            rootMessageHandler(message)
+        let bridge = V2WINativeInspectorBridge(webView: webView)
+        bridge.messageHandler = { [messageHandler] message in
+            messageHandler(message)
         }
         bridge.fatalFailureHandler = { [fatalFailureHandler] message in
             fatalFailureHandler(message)
         }
-        try bridge.attach(with: resolvedFunctions)
+        try bridge.attach(with: resolvedSymbols)
         self.bridge = bridge
     }
 
-    package nonisolated func sendRootJSONString(_ message: String) async throws {
+    package nonisolated func sendJSONString(_ message: String) async throws {
         try await MainActor.run {
             guard let bridge else {
                 throw TransportError.transportClosed
             }
-            try bridge.sendRootJSONString(message)
-        }
-    }
-
-    package nonisolated func sendTargetJSONString(
-        _ message: String,
-        targetIdentifier: ProtocolTargetIdentifier,
-        outerIdentifier: UInt64
-    ) async throws {
-        try await MainActor.run {
-            guard let bridge else {
-                throw TransportError.transportClosed
-            }
-            try bridge.sendPageJSONString(
-                message,
-                targetIdentifier: targetIdentifier.rawValue,
-                outerIdentifier: NSNumber(value: outerIdentifier)
-            )
+            try bridge.sendJSONString(message)
         }
     }
 

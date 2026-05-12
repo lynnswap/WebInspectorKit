@@ -42,6 +42,26 @@ package enum TransportMessageParser {
         return string
     }
 
+    package static func makeTargetWrapperCommandString(
+        id: UInt64,
+        targetIdentifier: String,
+        message: String
+    ) throws -> String {
+        let object: [String: Any] = [
+            "id": id,
+            "method": "Target.sendMessageToTarget",
+            "params": [
+                "targetId": targetIdentifier,
+                "message": message,
+            ],
+        ]
+        let data = try JSONSerialization.data(withJSONObject: object, options: [])
+        guard let string = String(data: data, encoding: .utf8) else {
+            throw TransportError.malformedMessage
+        }
+        return string
+    }
+
     package static func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
         try JSONDecoder().decode(type, from: data)
     }
