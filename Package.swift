@@ -96,9 +96,9 @@ let package = Package(
             swiftSettings: strictSwiftSettings
         ),
         .target(
-            name: "WebInspectorDOMV2",
+            name: "V2_WebInspectorCore",
             dependencies: [],
-            exclude: ["README.md"],
+            exclude: ["README.md", "Docs"],
             swiftSettings: strictSwiftSettings
         ),
         .target(
@@ -190,11 +190,11 @@ let package = Package(
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(
-            name: "WebInspectorDOMV2Tests",
+            name: "V2_WebInspectorCoreTests",
             dependencies: [
-                "WebInspectorDOMV2"
+                "V2_WebInspectorCore"
             ],
-            path: "Tests/WebInspectorDOMV2Tests",
+            path: "Tests/V2_WebInspectorCoreTests",
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(

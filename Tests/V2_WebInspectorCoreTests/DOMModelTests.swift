@@ -1,5 +1,5 @@
 import Testing
-@testable import WebInspectorDOMV2
+@testable import V2_WebInspectorCore
 
 @Test
 func pageTargetCreationCreatesCurrentPageAndMainFrame() async throws {
