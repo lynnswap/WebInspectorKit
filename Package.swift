@@ -106,6 +106,13 @@ let package = Package(
             dependencies: [
                 "V2_WebInspectorCore",
                 "V2_WebInspectorNativeBridge",
+                "V2_WebInspectorNativeSymbols"
+            ],
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
+            name: "V2_WebInspectorNativeSymbols",
+            dependencies: [
                 .product(name: "MachOKit", package: "MachOKit")
             ],
             swiftSettings: strictSwiftSettings
@@ -232,6 +239,14 @@ let package = Package(
                 "V2_WebInspectorTransport"
             ],
             path: "Tests/V2_WebInspectorTransportTests",
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
+            name: "V2_WebInspectorNativeSymbolsTests",
+            dependencies: [
+                "V2_WebInspectorNativeSymbols"
+            ],
+            path: "Tests/V2_WebInspectorNativeSymbolsTests",
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(

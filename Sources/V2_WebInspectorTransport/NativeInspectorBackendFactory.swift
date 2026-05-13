@@ -1,4 +1,5 @@
 import WebKit
+import V2_WebInspectorNativeSymbols
 @unsafe @preconcurrency import V2_WebInspectorNativeBridge
 
 package enum NativeInspectorBackendFactory {
@@ -17,7 +18,7 @@ package enum NativeInspectorBackendFactory {
     }
 
     package static func resolvedSymbols() throws -> V2WINativeResolvedSymbols {
-        let resolution = V2_TransportNativeInspectorSymbolResolver.currentAttachResolution()
+        let resolution = NativeInspectorSymbolResolver.resolveCurrent()
         guard resolution.isSupported else {
             throw NativeInspectorBackendFactoryError.missingSymbols(resolution.missingFunctions)
         }

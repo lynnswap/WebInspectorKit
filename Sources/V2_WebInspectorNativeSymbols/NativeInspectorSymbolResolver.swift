@@ -3,31 +3,21 @@ import Foundation
 import MachO
 import MachOKit
 
-enum V2_TransportSupportSnapshot: Sendable, Equatable {
-    enum Capability: Sendable, Equatable {
-        case rootMessaging
-        case pageMessaging
-        case pageTargetRouting
-        case domDomain
-        case networkDomain
-    }
+struct ObfuscatedSymbolName: Sendable {
+    let key: UInt8
+    let encodedBytes: [UInt8]
 
-    case supported(capabilities: [Capability])
-    case unsupported(reason: String)
-}
-
-private enum V2_TransportNativeInspectorObfuscation {
-    static func deobfuscate(_ reverseTokens: [String]) -> String {
-        reverseTokens.reversed().joined()
+    func decodedString() -> String {
+        String(decoding: encodedBytes.map { $0 ^ key }, as: UTF8.self)
     }
 }
 
-private enum V2_TransportConsoleDiagnostics {
+private enum NativeInspectorSymbolDiagnostics {
     static let verboseConsoleDiagnosticsEnabled =
         ProcessInfo.processInfo.environment["WEBSPECTOR_VERBOSE_CONSOLE_LOGS"] == "1"
 }
 
-private enum V2_TransportNativeInspectorSymbolFailure {
+private enum NativeInspectorSymbolFailure {
     case sharedCacheUnavailable
     case localSymbolsUnavailable
     case inspectorImageMissing
@@ -41,37 +31,28 @@ private enum V2_TransportNativeInspectorSymbolFailure {
     var message: String {
         switch self {
         case .sharedCacheUnavailable:
-            // runtime cache unavailable
-            return V2_TransportNativeInspectorObfuscation.deobfuscate(["e", "availabl", "cache un", "runtime "])
+            return "runtime cache unavailable"
         case .localSymbolsUnavailable:
-            // local symbol lookup unavailable
-            return V2_TransportNativeInspectorObfuscation.deobfuscate(["ailable", "kup unav", "mbol loo", "local sy"])
+            return "local symbol lookup unavailable"
         case .inspectorImageMissing:
-            // inspector image unavailable
-            return V2_TransportNativeInspectorObfuscation.deobfuscate(["ble", "unavaila", "r image ", "inspecto"])
+            return "inspector image unavailable"
         case .supportImageMissing:
-            // support image unavailable
-            return V2_TransportNativeInspectorObfuscation.deobfuscate(["e", "availabl", "image un", "support "])
+            return "support image unavailable"
         case .localSymbolEntryMissing:
-            // local symbol entry unavailable
-            return V2_TransportNativeInspectorObfuscation.deobfuscate(["ilable", "ry unava", "mbol ent", "local sy"])
+            return "local symbol entry unavailable"
         case .connectDisconnectSymbolMissing:
-            // attach entry point unavailable
-            return V2_TransportNativeInspectorObfuscation.deobfuscate(["ilable", "nt unava", "ntry poi", "attach e"])
+            return "attach entry point unavailable"
         case .runtimeFunctionSymbolMissing:
-            // runtime helper unavailable
-            return V2_TransportNativeInspectorObfuscation.deobfuscate(["le", "navailab", "helper u", "runtime "])
+            return "runtime helper unavailable"
         case .resolvedAddressOutsideText:
-            // resolved address invalid
-            return V2_TransportNativeInspectorObfuscation.deobfuscate([" invalid", " address", "resolved"])
+            return "resolved address invalid"
         case .resolvedAddressImageMismatch:
-            // resolved address image mismatch
-            return V2_TransportNativeInspectorObfuscation.deobfuscate(["ismatch", " image m", " address", "resolved"])
+            return "resolved address image mismatch"
         }
     }
 }
 
-private enum V2_TransportNativeInspectorResolutionPhase {
+private enum NativeInspectorSymbolResolutionPhase {
     case loadedImage
     case sharedCache
     case sharedCacheFile
@@ -79,19 +60,16 @@ private enum V2_TransportNativeInspectorResolutionPhase {
     var message: String {
         switch self {
         case .loadedImage:
-            // loaded-image
-            return V2_TransportNativeInspectorObfuscation.deobfuscate(["mage", "loaded-i"])
+            return "loaded-image"
         case .sharedCache:
-            // shared-cache
-            return V2_TransportNativeInspectorObfuscation.deobfuscate(["ache", "shared-c"])
+            return "shared-cache"
         case .sharedCacheFile:
-            // shared-cache-file
-            return V2_TransportNativeInspectorObfuscation.deobfuscate(["e", "ache-fil", "shared-c"])
+            return "shared-cache-file"
         }
     }
 }
 
-private struct V2_TransportLoadedWebKitImage {
+private struct LoadedNativeInspectorImage {
     let headerAddress: UInt
 
     var header: UnsafePointer<mach_header> {
@@ -99,129 +77,132 @@ private struct V2_TransportLoadedWebKitImage {
     }
 }
 
-private struct V2_TransportFileBackedLocalSymbols {
+private struct MachOKitFileBackedLocalSymbols {
     let symbols: MachOFile.Symbols64
     let symbolRange: Range<Int>
 }
 
-private struct V2_TransportLookupFailure: Error {
-    let kind: V2_TransportNativeInspectorSymbolFailure
+private struct NativeInspectorSymbolLookupFailure: Error {
+    let kind: NativeInspectorSymbolFailure
     let detail: String?
 }
 
-private enum V2_TransportResolvedAddress {
+private enum ResolvedNativeInspectorAddress {
     case found(UInt64)
     case missing
     case outsideText(UInt64)
 }
 
-private struct V2_TransportResolvedFunctionAddresses: Sendable {
-    let connectFrontendAddress: UInt64
-    let disconnectFrontendAddress: UInt64
-    let stringFromUTF8Address: UInt64
-    let stringImplToNSStringAddress: UInt64
-    let destroyStringImplAddress: UInt64
-    let backendDispatcherDispatchAddress: UInt64
-
-    static let zero = V2_TransportResolvedFunctionAddresses(
-        connectFrontendAddress: 0,
-        disconnectFrontendAddress: 0,
-        stringFromUTF8Address: 0,
-        stringImplToNSStringAddress: 0,
-        destroyStringImplAddress: 0,
-        backendDispatcherDispatchAddress: 0
-    )
-}
-
-private struct V2_TransportNativeInspectorSymbolResolution: Sendable {
-    let functionAddresses: V2_TransportResolvedFunctionAddresses
+private struct NativeInspectorSymbolLookupResult: Sendable {
+    let functionAddresses: NativeInspectorSymbolAddresses
     let failureReason: String?
-    let failureKind: V2_TransportNativeInspectorSymbolFailure?
-    let phase: V2_TransportNativeInspectorResolutionPhase?
+    let failureKind: NativeInspectorSymbolFailure?
+    let phase: NativeInspectorSymbolResolutionPhase?
     let missingFunctions: [String]
     let source: String?
     let usedConnectDisconnectFallback: Bool
 }
 
-private struct V2_TransportNativeInspectorSymbolNames {
-    let connectFrontend: [String]
-    let disconnectFrontend: [String]
-    let inspectorControllerConnectTargets: [String]
-    let inspectorControllerDisconnectTargets: [String]
-    let stringFromUTF8: [String]
-    let stringImplToNSString: [String]
-    let destroyStringImpl: [String]
-    let backendDispatcherDispatch: [String]
+private enum NativeInspectorSymbolRole: String, Sendable {
+    case connectFrontend
+    case disconnectFrontend
+    case stringFromUTF8
+    case stringImplToNSString
+    case destroyStringImpl
+    case backendDispatcherDispatch
+    case inspectorControllerConnectTarget
+    case inspectorControllerDisconnectTarget
 }
 
-private struct V2_TransportNativeInspectorResolvedSymbols {
-    let connectFrontend: V2_TransportResolvedAddress
-    let disconnectFrontend: V2_TransportResolvedAddress
-    let stringFromUTF8: V2_TransportResolvedAddress
-    let stringImplToNSString: V2_TransportResolvedAddress
-    let destroyStringImpl: V2_TransportResolvedAddress
-    let backendDispatcherDispatch: V2_TransportResolvedAddress
+private enum NativeInspectorSymbolOwnerImage: Sendable {
+    case webKit
+    case javaScriptCore
+    case webCore
 }
 
-private struct V2_TransportResolvedConnectDisconnectFallbackResult {
-    let symbols: V2_TransportNativeInspectorResolvedSymbols
+private enum NativeInspectorSymbolResolutionPolicy: Sendable {
+    case requiredTextSymbol
+    case fallbackCallTarget
+}
+
+private struct NativeInspectorRequiredSymbol: Sendable {
+    let role: NativeInspectorSymbolRole
+    let ownerImage: NativeInspectorSymbolOwnerImage
+    let candidates: [ObfuscatedSymbolName]
+    let resolutionPolicy: NativeInspectorSymbolResolutionPolicy
+
+    func decodedCandidates() -> [String] {
+        candidates.map { $0.decodedString() }
+    }
+}
+
+private struct NativeInspectorSymbols {
+    let connectFrontend: NativeInspectorRequiredSymbol
+    let disconnectFrontend: NativeInspectorRequiredSymbol
+    let inspectorControllerConnectTargets: NativeInspectorRequiredSymbol
+    let inspectorControllerDisconnectTargets: NativeInspectorRequiredSymbol
+    let stringFromUTF8: NativeInspectorRequiredSymbol
+    let stringImplToNSString: NativeInspectorRequiredSymbol
+    let destroyStringImpl: NativeInspectorRequiredSymbol
+    let backendDispatcherDispatch: NativeInspectorRequiredSymbol
+}
+
+private struct NativeInspectorResolvedSymbolSet {
+    let connectFrontend: ResolvedNativeInspectorAddress
+    let disconnectFrontend: ResolvedNativeInspectorAddress
+    let stringFromUTF8: ResolvedNativeInspectorAddress
+    let stringImplToNSString: ResolvedNativeInspectorAddress
+    let destroyStringImpl: ResolvedNativeInspectorAddress
+    let backendDispatcherDispatch: ResolvedNativeInspectorAddress
+}
+
+private struct NativeInspectorAttachEntryPointFallbackResult {
+    let symbols: NativeInspectorResolvedSymbolSet
     let usedFallback: Bool
 }
 
-private enum V2_TransportNativeInspectorResolver {
+private enum NativeInspectorSymbolResolverCore {
     fileprivate static let webKitImagePathSuffixes = [
-        // /System/Library/Frameworks/WebKit.framework/WebKit
-        V2_TransportNativeInspectorObfuscation.deobfuscate(["it", "ork/WebK", "t.framew", "ks/WebKi", "Framewor", "Library/", "/System/"]),
-        // /System/Library/Frameworks/WebKit.framework/Versions/A/WebKit
-        V2_TransportNativeInspectorObfuscation.deobfuscate(["ebKit", "ions/A/W", "ork/Vers", "t.framew", "ks/WebKi", "Framewor", "Library/", "/System/"]),
+        "/System/Library/Frameworks/WebKit.framework/WebKit",
+        "/System/Library/Frameworks/WebKit.framework/Versions/A/WebKit",
     ]
     fileprivate static let javaScriptCoreImagePathSuffixes = [
-        // /System/Library/Frameworks/JavaScriptCore.framework/JavaScriptCore
-        V2_TransportNativeInspectorObfuscation.deobfuscate(["re", "ScriptCo", "ork/Java", "e.framew", "criptCor", "ks/JavaS", "Framewor", "Library/", "/System/"]),
-        // /System/Library/Frameworks/JavaScriptCore.framework/Versions/A/JavaScriptCore
-        V2_TransportNativeInspectorObfuscation.deobfuscate(["tCore", "avaScrip", "ions/A/J", "ork/Vers", "e.framew", "criptCor", "ks/JavaS", "Framewor", "Library/", "/System/"]),
+        "/System/Library/Frameworks/JavaScriptCore.framework/JavaScriptCore",
+        "/System/Library/Frameworks/JavaScriptCore.framework/Versions/A/JavaScriptCore",
     ]
     fileprivate static let webCoreImagePathSuffixes = [
         "/System/Library/PrivateFrameworks/WebCore.framework/WebCore",
         "/System/Library/PrivateFrameworks/WebCore.framework/Versions/A/WebCore",
     ]
-    private static let textSegmentName = V2_TransportNativeInspectorObfuscation.deobfuscate(["__TEXT"])
-    private static let sharedCacheFilePrefix = V2_TransportNativeInspectorObfuscation.deobfuscate(["e_", "red_cach", "dyld_sha"])
-    private static let sharedCacheFileSuffix = V2_TransportNativeInspectorObfuscation.deobfuscate([".symbols"])
-    private static let arm64eArchitecture = V2_TransportNativeInspectorObfuscation.deobfuscate(["arm64e"])
-    private static let arm64Architecture = V2_TransportNativeInspectorObfuscation.deobfuscate(["arm64"])
-    fileprivate static let connectFrontendSymbol = V2_TransportNativeInspectorObfuscation.deobfuscate(["annelEbb", "ontendCh", "ctor15Fr", "RN9Inspe", "rontendE", "connectF", "roller15", "ctorCont", "ageInspe", "it26WebP", "WebK", "ZN6", "__"])
-    fileprivate static let disconnectFrontendSymbol = V2_TransportNativeInspectorObfuscation.deobfuscate(["ChannelE", "Frontend", "pector15", "dERN9Ins", "tFronten", "isconnec", "oller18d", "torContr", "geInspec", "t26WebPa", "WebKi", "ZN6", "__"])
-    private static let successLogFormat = V2_TransportNativeInspectorObfuscation.deobfuscate(["se=%@", "d=%@ pha", "d backen", " resolve", " symbols", "nspector", "native i", "nsport] ", "ectorTra", "[WebInsp"])
-    private static let failureLogFormat = V2_TransportNativeInspectorObfuscation.deobfuscate(["%@", " reason=", "ckend=%@", "ailed ba", "lookup f", " symbol ", "nspector", "native i", "nsport] ", "ectorTra", "[WebInsp"])
-    private static let stringFromUTF8Symbol = V2_TransportNativeInspectorObfuscation.deobfuscate(["51615EEE", "40737095", "m1844674", "panIKDuL", "St3__14s", "omUTF8EN", "tring8fr", "ZN3WTF6S", "__"])
-    private static let stringImplToNSStringSymbol = V2_TransportNativeInspectorObfuscation.deobfuscate(["StringEv", "plcvP8NS", "StringIm", "ZN3WTF10", "__"])
-    private static let destroyStringImplSymbol = V2_TransportNativeInspectorObfuscation.deobfuscate(["royEPS0_", "mpl7dest", "0StringI", "_ZN3WTF1", "_"])
-    private static let backendDispatcherDispatchSymbol = V2_TransportNativeInspectorObfuscation.deobfuscate(["6StringE", "ERKN3WTF", "dispatch", "patcher8", "ckendDis", "ctor17Ba", "ZN9Inspe", "__"])
-    private static let pageInspectorControllerConnectSymbol = V2_TransportNativeInspectorObfuscation.deobfuscate(["bb", "15FrontendChannelE", "RN9Inspector", "15connectFrontendE", "Controller", "Inspector", "23Page", "Core", "Web", "7", "__ZN"])
-    private static let pageInspectorControllerDisconnectSymbol = V2_TransportNativeInspectorObfuscation.deobfuscate(["E", "15FrontendChannel", "ERN9Inspector", "18disconnectFrontend", "Controller", "Inspector", "23Page", "Core", "Web", "7", "__ZN"])
-    // __ZN7WebCore24FrameInspectorController15connectFrontendERN9Inspector15FrontendChannelEbb
-    private static let frameInspectorControllerConnectSymbol = V2_TransportNativeInspectorObfuscation.deobfuscate(["bb", "15FrontendChannelE", "RN9Inspector", "15connectFrontendE", "24FrameInspectorController", "7WebCore", "__ZN"])
-    // __ZN7WebCore24FrameInspectorController18disconnectFrontendERN9Inspector15FrontendChannelE
-    private static let frameInspectorControllerDisconnectSymbol = V2_TransportNativeInspectorObfuscation.deobfuscate(["E", "15FrontendChannel", "ERN9Inspector", "18disconnectFrontend", "24FrameInspectorController", "7WebCore", "__ZN"])
+    private static let textSegmentName = "__TEXT"
+    private static let sharedCacheFilePrefix = "dyld_shared_cache_"
+    private static let sharedCacheFileSuffix = ".symbols"
+    private static let arm64eArchitecture = "arm64e"
+    private static let arm64Architecture = "arm64"
+    fileprivate static let connectFrontendSymbol = ObfuscatedSymbolName(key: 0xA7, encodedBytes: [0xF8, 0xF8, 0xFD, 0xE9, 0x91, 0xF0, 0xC2, 0xC5, 0xEC, 0xCE, 0xD3, 0x95, 0x91, 0xF0, 0xC2, 0xC5, 0xF7, 0xC6, 0xC0, 0xC2, 0xEE, 0xC9, 0xD4, 0xD7, 0xC2, 0xC4, 0xD3, 0xC8, 0xD5, 0xE4, 0xC8, 0xC9, 0xD3, 0xD5, 0xC8, 0xCB, 0xCB, 0xC2, 0xD5, 0x96, 0x92, 0xC4, 0xC8, 0xC9, 0xC9, 0xC2, 0xC4, 0xD3, 0xE1, 0xD5, 0xC8, 0xC9, 0xD3, 0xC2, 0xC9, 0xC3, 0xE2, 0xF5, 0xE9, 0x9E, 0xEE, 0xC9, 0xD4, 0xD7, 0xC2, 0xC4, 0xD3, 0xC8, 0xD5, 0x96, 0x92, 0xE1, 0xD5, 0xC8, 0xC9, 0xD3, 0xC2, 0xC9, 0xC3, 0xE4, 0xCF, 0xC6, 0xC9, 0xC9, 0xC2, 0xCB, 0xE2, 0xC5, 0xC5])
+    fileprivate static let disconnectFrontendSymbol = ObfuscatedSymbolName(key: 0xA7, encodedBytes: [0xF8, 0xF8, 0xFD, 0xE9, 0x91, 0xF0, 0xC2, 0xC5, 0xEC, 0xCE, 0xD3, 0x95, 0x91, 0xF0, 0xC2, 0xC5, 0xF7, 0xC6, 0xC0, 0xC2, 0xEE, 0xC9, 0xD4, 0xD7, 0xC2, 0xC4, 0xD3, 0xC8, 0xD5, 0xE4, 0xC8, 0xC9, 0xD3, 0xD5, 0xC8, 0xCB, 0xCB, 0xC2, 0xD5, 0x96, 0x9F, 0xC3, 0xCE, 0xD4, 0xC4, 0xC8, 0xC9, 0xC9, 0xC2, 0xC4, 0xD3, 0xE1, 0xD5, 0xC8, 0xC9, 0xD3, 0xC2, 0xC9, 0xC3, 0xE2, 0xF5, 0xE9, 0x9E, 0xEE, 0xC9, 0xD4, 0xD7, 0xC2, 0xC4, 0xD3, 0xC8, 0xD5, 0x96, 0x92, 0xE1, 0xD5, 0xC8, 0xC9, 0xD3, 0xC2, 0xC9, 0xC3, 0xE4, 0xCF, 0xC6, 0xC9, 0xC9, 0xC2, 0xCB, 0xE2])
+    private static let successLogFormat = "[V2_WebInspectorNativeSymbols] native inspector symbols resolved backend=%@ phase=%@"
+    private static let failureLogFormat = "[V2_WebInspectorNativeSymbols] native inspector symbol lookup failed backend=%@ reason=%@"
+    fileprivate static let stringFromUTF8Symbol = ObfuscatedSymbolName(key: 0xA7, encodedBytes: [0xF8, 0xF8, 0xFD, 0xE9, 0x94, 0xF0, 0xF3, 0xE1, 0x91, 0xF4, 0xD3, 0xD5, 0xCE, 0xC9, 0xC0, 0x9F, 0xC1, 0xD5, 0xC8, 0xCA, 0xF2, 0xF3, 0xE1, 0x9F, 0xE2, 0xE9, 0xF4, 0xD3, 0x94, 0xF8, 0xF8, 0x96, 0x93, 0xD4, 0xD7, 0xC6, 0xC9, 0xEE, 0xEC, 0xE3, 0xD2, 0xEB, 0xCA, 0x96, 0x9F, 0x93, 0x93, 0x91, 0x90, 0x93, 0x93, 0x97, 0x90, 0x94, 0x90, 0x97, 0x9E, 0x92, 0x92, 0x96, 0x91, 0x96, 0x92, 0xE2, 0xE2, 0xE2])
+    fileprivate static let stringImplToNSStringSymbol = ObfuscatedSymbolName(key: 0xA7, encodedBytes: [0xF8, 0xF8, 0xFD, 0xE9, 0x94, 0xF0, 0xF3, 0xE1, 0x96, 0x97, 0xF4, 0xD3, 0xD5, 0xCE, 0xC9, 0xC0, 0xEE, 0xCA, 0xD7, 0xCB, 0xC4, 0xD1, 0xF7, 0x9F, 0xE9, 0xF4, 0xF4, 0xD3, 0xD5, 0xCE, 0xC9, 0xC0, 0xE2, 0xD1])
+    fileprivate static let destroyStringImplSymbol = ObfuscatedSymbolName(key: 0xA7, encodedBytes: [0xF8, 0xF8, 0xFD, 0xE9, 0x94, 0xF0, 0xF3, 0xE1, 0x96, 0x97, 0xF4, 0xD3, 0xD5, 0xCE, 0xC9, 0xC0, 0xEE, 0xCA, 0xD7, 0xCB, 0x90, 0xC3, 0xC2, 0xD4, 0xD3, 0xD5, 0xC8, 0xDE, 0xE2, 0xF7, 0xF4, 0x97, 0xF8])
+    fileprivate static let backendDispatcherDispatchSymbol = ObfuscatedSymbolName(key: 0xA7, encodedBytes: [0xF8, 0xF8, 0xFD, 0xE9, 0x9E, 0xEE, 0xC9, 0xD4, 0xD7, 0xC2, 0xC4, 0xD3, 0xC8, 0xD5, 0x96, 0x90, 0xE5, 0xC6, 0xC4, 0xCC, 0xC2, 0xC9, 0xC3, 0xE3, 0xCE, 0xD4, 0xD7, 0xC6, 0xD3, 0xC4, 0xCF, 0xC2, 0xD5, 0x9F, 0xC3, 0xCE, 0xD4, 0xD7, 0xC6, 0xD3, 0xC4, 0xCF, 0xE2, 0xF5, 0xEC, 0xE9, 0x94, 0xF0, 0xF3, 0xE1, 0x91, 0xF4, 0xD3, 0xD5, 0xCE, 0xC9, 0xC0, 0xE2])
+    fileprivate static let pageInspectorControllerConnectSymbol = ObfuscatedSymbolName(key: 0xA7, encodedBytes: [0xF8, 0xF8, 0xFD, 0xE9, 0x90, 0xF0, 0xC2, 0xC5, 0xE4, 0xC8, 0xD5, 0xC2, 0x95, 0x94, 0xF7, 0xC6, 0xC0, 0xC2, 0xEE, 0xC9, 0xD4, 0xD7, 0xC2, 0xC4, 0xD3, 0xC8, 0xD5, 0xE4, 0xC8, 0xC9, 0xD3, 0xD5, 0xC8, 0xCB, 0xCB, 0xC2, 0xD5, 0x96, 0x92, 0xC4, 0xC8, 0xC9, 0xC9, 0xC2, 0xC4, 0xD3, 0xE1, 0xD5, 0xC8, 0xC9, 0xD3, 0xC2, 0xC9, 0xC3, 0xE2, 0xF5, 0xE9, 0x9E, 0xEE, 0xC9, 0xD4, 0xD7, 0xC2, 0xC4, 0xD3, 0xC8, 0xD5, 0x96, 0x92, 0xE1, 0xD5, 0xC8, 0xC9, 0xD3, 0xC2, 0xC9, 0xC3, 0xE4, 0xCF, 0xC6, 0xC9, 0xC9, 0xC2, 0xCB, 0xE2, 0xC5, 0xC5])
+    fileprivate static let pageInspectorControllerDisconnectSymbol = ObfuscatedSymbolName(key: 0xA7, encodedBytes: [0xF8, 0xF8, 0xFD, 0xE9, 0x90, 0xF0, 0xC2, 0xC5, 0xE4, 0xC8, 0xD5, 0xC2, 0x95, 0x94, 0xF7, 0xC6, 0xC0, 0xC2, 0xEE, 0xC9, 0xD4, 0xD7, 0xC2, 0xC4, 0xD3, 0xC8, 0xD5, 0xE4, 0xC8, 0xC9, 0xD3, 0xD5, 0xC8, 0xCB, 0xCB, 0xC2, 0xD5, 0x96, 0x9F, 0xC3, 0xCE, 0xD4, 0xC4, 0xC8, 0xC9, 0xC9, 0xC2, 0xC4, 0xD3, 0xE1, 0xD5, 0xC8, 0xC9, 0xD3, 0xC2, 0xC9, 0xC3, 0xE2, 0xF5, 0xE9, 0x9E, 0xEE, 0xC9, 0xD4, 0xD7, 0xC2, 0xC4, 0xD3, 0xC8, 0xD5, 0x96, 0x92, 0xE1, 0xD5, 0xC8, 0xC9, 0xD3, 0xC2, 0xC9, 0xC3, 0xE4, 0xCF, 0xC6, 0xC9, 0xC9, 0xC2, 0xCB, 0xE2])
+    fileprivate static let frameInspectorControllerConnectSymbol = ObfuscatedSymbolName(key: 0xA7, encodedBytes: [0xF8, 0xF8, 0xFD, 0xE9, 0x90, 0xF0, 0xC2, 0xC5, 0xE4, 0xC8, 0xD5, 0xC2, 0x95, 0x93, 0xE1, 0xD5, 0xC6, 0xCA, 0xC2, 0xEE, 0xC9, 0xD4, 0xD7, 0xC2, 0xC4, 0xD3, 0xC8, 0xD5, 0xE4, 0xC8, 0xC9, 0xD3, 0xD5, 0xC8, 0xCB, 0xCB, 0xC2, 0xD5, 0x96, 0x92, 0xC4, 0xC8, 0xC9, 0xC9, 0xC2, 0xC4, 0xD3, 0xE1, 0xD5, 0xC8, 0xC9, 0xD3, 0xC2, 0xC9, 0xC3, 0xE2, 0xF5, 0xE9, 0x9E, 0xEE, 0xC9, 0xD4, 0xD7, 0xC2, 0xC4, 0xD3, 0xC8, 0xD5, 0x96, 0x92, 0xE1, 0xD5, 0xC8, 0xC9, 0xD3, 0xC2, 0xC9, 0xC3, 0xE4, 0xCF, 0xC6, 0xC9, 0xC9, 0xC2, 0xCB, 0xE2, 0xC5, 0xC5])
+    fileprivate static let frameInspectorControllerDisconnectSymbol = ObfuscatedSymbolName(key: 0xA7, encodedBytes: [0xF8, 0xF8, 0xFD, 0xE9, 0x90, 0xF0, 0xC2, 0xC5, 0xE4, 0xC8, 0xD5, 0xC2, 0x95, 0x93, 0xE1, 0xD5, 0xC6, 0xCA, 0xC2, 0xEE, 0xC9, 0xD4, 0xD7, 0xC2, 0xC4, 0xD3, 0xC8, 0xD5, 0xE4, 0xC8, 0xC9, 0xD3, 0xD5, 0xC8, 0xCB, 0xCB, 0xC2, 0xD5, 0x96, 0x9F, 0xC3, 0xCE, 0xD4, 0xC4, 0xC8, 0xC9, 0xC9, 0xC2, 0xC4, 0xD3, 0xE1, 0xD5, 0xC8, 0xC9, 0xD3, 0xC2, 0xC9, 0xC3, 0xE2, 0xF5, 0xE9, 0x9E, 0xEE, 0xC9, 0xD4, 0xD7, 0xC2, 0xC4, 0xD3, 0xC8, 0xD5, 0x96, 0x92, 0xE1, 0xD5, 0xC8, 0xC9, 0xD3, 0xC2, 0xC9, 0xC3, 0xE4, 0xCF, 0xC6, 0xC9, 0xC9, 0xC2, 0xCB, 0xE2])
     private static let backendName = "native-inspector"
     #if os(iOS)
     private static let sharedCacheDirectoryCandidates = [
-        // /System/Library/Caches/com.apple.dyld
-        V2_TransportNativeInspectorObfuscation.deobfuscate([".dyld", "om.apple", "Caches/c", "Library/", "/System/"]),
-        // /System/Cryptexes/OS/System/Library/Caches/com.apple.dyld
-        V2_TransportNativeInspectorObfuscation.deobfuscate(["ple.dyld", "s/com.ap", "ry/Cache", "em/Libra", "/OS/Syst", "ryptexes", "System/C", "/"]),
-        // /private/preboot/Cryptexes/OS/System/Library/Caches/com.apple.dyld
-        V2_TransportNativeInspectorObfuscation.deobfuscate(["ld", "apple.dy", "hes/com.", "rary/Cac", "stem/Lib", "es/OS/Sy", "/Cryptex", "/preboot", "/private"]),
+        "/System/Library/Caches/com.apple.dyld",
+        "/System/Cryptexes/OS/System/Library/Caches/com.apple.dyld",
+        "/private/preboot/Cryptexes/OS/System/Library/Caches/com.apple.dyld",
     ]
     #else
     private static let sharedCacheDirectoryCandidates = [
-        // /System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld
-        V2_TransportNativeInspectorObfuscation.deobfuscate(["ary/dyld", "tem/Libr", "s/OS/Sys", "Cryptexe", "Preboot/", "Volumes/", "/System/"]),
-        // /System/Library/dyld
-        V2_TransportNativeInspectorObfuscation.deobfuscate(["dyld", "Library/", "/System/"]),
-        // /System/Cryptexes/OS/System/Library/dyld
-        V2_TransportNativeInspectorObfuscation.deobfuscate(["ary/dyld", "tem/Libr", "s/OS/Sys", "Cryptexe", "/System/"]),
+        "/System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld",
+        "/System/Library/dyld",
+        "/System/Cryptexes/OS/System/Library/dyld",
     ]
     #endif
 
@@ -231,67 +212,147 @@ private enum V2_TransportNativeInspectorResolver {
         symbols: currentSymbolNames()
     )
 
-    static func resolveCurrentWebKitAttachSymbols() -> V2_TransportNativeInspectorSymbolResolution {
+    static func resolveCurrentWebKitAttachSymbols() -> NativeInspectorSymbolLookupResult {
         cachedResolution
     }
 
     static func resolveForTesting(
         imagePathSuffixes: [String] = webKitImagePathSuffixes,
-        connectSymbol: String = connectFrontendSymbol,
-        disconnectSymbol: String = disconnectFrontendSymbol,
-        alternateConnectSymbols: [String] = [],
-        alternateDisconnectSymbols: [String] = [],
-        stringFromUTF8Symbol: String? = nil,
-        stringImplToNSStringSymbol: String? = nil,
-        destroyStringImplSymbol: String? = nil,
-        backendDispatcherDispatchSymbol: String? = nil
-    ) -> V2_TransportNativeInspectorSymbolResolution {
+        connectSymbol: ObfuscatedSymbolName = connectFrontendSymbol,
+        disconnectSymbol: ObfuscatedSymbolName = disconnectFrontendSymbol,
+        alternateConnectSymbols: [ObfuscatedSymbolName] = [],
+        alternateDisconnectSymbols: [ObfuscatedSymbolName] = [],
+        stringFromUTF8Symbol: ObfuscatedSymbolName? = nil,
+        stringImplToNSStringSymbol: ObfuscatedSymbolName? = nil,
+        destroyStringImplSymbol: ObfuscatedSymbolName? = nil,
+        backendDispatcherDispatchSymbol: ObfuscatedSymbolName? = nil
+    ) -> NativeInspectorSymbolLookupResult {
         resolve(
             imagePathSuffixes: imagePathSuffixes,
             javaScriptCorePathSuffixes: javaScriptCoreImagePathSuffixes,
-            symbols: V2_TransportNativeInspectorSymbolNames(
-                connectFrontend: [connectSymbol] + alternateConnectSymbols,
-                disconnectFrontend: [disconnectSymbol] + alternateDisconnectSymbols,
-                inspectorControllerConnectTargets: [
-                    pageInspectorControllerConnectSymbol,
-                    frameInspectorControllerConnectSymbol,
-                ],
-                inspectorControllerDisconnectTargets: [
-                    pageInspectorControllerDisconnectSymbol,
-                    frameInspectorControllerDisconnectSymbol,
-                ],
-                stringFromUTF8: [stringFromUTF8Symbol ?? self.stringFromUTF8Symbol],
-                stringImplToNSString: [stringImplToNSStringSymbol ?? self.stringImplToNSStringSymbol],
-                destroyStringImpl: [destroyStringImplSymbol ?? self.destroyStringImplSymbol],
-                backendDispatcherDispatch: [backendDispatcherDispatchSymbol ?? self.backendDispatcherDispatchSymbol]
+            symbols: NativeInspectorSymbols(
+                connectFrontend: NativeInspectorRequiredSymbol(
+                    role: .connectFrontend,
+                    ownerImage: .webKit,
+                    candidates: [connectSymbol] + alternateConnectSymbols,
+                    resolutionPolicy: .requiredTextSymbol
+                ),
+                disconnectFrontend: NativeInspectorRequiredSymbol(
+                    role: .disconnectFrontend,
+                    ownerImage: .webKit,
+                    candidates: [disconnectSymbol] + alternateDisconnectSymbols,
+                    resolutionPolicy: .requiredTextSymbol
+                ),
+                inspectorControllerConnectTargets: NativeInspectorRequiredSymbol(
+                    role: .inspectorControllerConnectTarget,
+                    ownerImage: .webCore,
+                    candidates: [
+                        pageInspectorControllerConnectSymbol,
+                        frameInspectorControllerConnectSymbol,
+                    ],
+                    resolutionPolicy: .fallbackCallTarget
+                ),
+                inspectorControllerDisconnectTargets: NativeInspectorRequiredSymbol(
+                    role: .inspectorControllerDisconnectTarget,
+                    ownerImage: .webCore,
+                    candidates: [
+                        pageInspectorControllerDisconnectSymbol,
+                        frameInspectorControllerDisconnectSymbol,
+                    ],
+                    resolutionPolicy: .fallbackCallTarget
+                ),
+                stringFromUTF8: NativeInspectorRequiredSymbol(
+                    role: .stringFromUTF8,
+                    ownerImage: .javaScriptCore,
+                    candidates: [stringFromUTF8Symbol ?? self.stringFromUTF8Symbol],
+                    resolutionPolicy: .requiredTextSymbol
+                ),
+                stringImplToNSString: NativeInspectorRequiredSymbol(
+                    role: .stringImplToNSString,
+                    ownerImage: .javaScriptCore,
+                    candidates: [stringImplToNSStringSymbol ?? self.stringImplToNSStringSymbol],
+                    resolutionPolicy: .requiredTextSymbol
+                ),
+                destroyStringImpl: NativeInspectorRequiredSymbol(
+                    role: .destroyStringImpl,
+                    ownerImage: .javaScriptCore,
+                    candidates: [destroyStringImplSymbol ?? self.destroyStringImplSymbol],
+                    resolutionPolicy: .requiredTextSymbol
+                ),
+                backendDispatcherDispatch: NativeInspectorRequiredSymbol(
+                    role: .backendDispatcherDispatch,
+                    ownerImage: .webKit,
+                    candidates: [backendDispatcherDispatchSymbol ?? self.backendDispatcherDispatchSymbol],
+                    resolutionPolicy: .requiredTextSymbol
+                )
             )
         )
     }
 
-    private static func currentSymbolNames() -> V2_TransportNativeInspectorSymbolNames {
-        V2_TransportNativeInspectorSymbolNames(
-            connectFrontend: [connectFrontendSymbol],
-            disconnectFrontend: [disconnectFrontendSymbol],
-            inspectorControllerConnectTargets: [
-                pageInspectorControllerConnectSymbol,
-                frameInspectorControllerConnectSymbol,
-            ],
-            inspectorControllerDisconnectTargets: [
-                pageInspectorControllerDisconnectSymbol,
-                frameInspectorControllerDisconnectSymbol,
-            ],
-            stringFromUTF8: [stringFromUTF8Symbol],
-            stringImplToNSString: [stringImplToNSStringSymbol],
-            destroyStringImpl: [destroyStringImplSymbol],
-            backendDispatcherDispatch: [backendDispatcherDispatchSymbol]
+    private static func currentSymbolNames() -> NativeInspectorSymbols {
+        NativeInspectorSymbols(
+            connectFrontend: NativeInspectorRequiredSymbol(
+                role: .connectFrontend,
+                ownerImage: .webKit,
+                candidates: [connectFrontendSymbol],
+                resolutionPolicy: .requiredTextSymbol
+            ),
+            disconnectFrontend: NativeInspectorRequiredSymbol(
+                role: .disconnectFrontend,
+                ownerImage: .webKit,
+                candidates: [disconnectFrontendSymbol],
+                resolutionPolicy: .requiredTextSymbol
+            ),
+            inspectorControllerConnectTargets: NativeInspectorRequiredSymbol(
+                role: .inspectorControllerConnectTarget,
+                ownerImage: .webCore,
+                candidates: [
+                    pageInspectorControllerConnectSymbol,
+                    frameInspectorControllerConnectSymbol,
+                ],
+                resolutionPolicy: .fallbackCallTarget
+            ),
+            inspectorControllerDisconnectTargets: NativeInspectorRequiredSymbol(
+                role: .inspectorControllerDisconnectTarget,
+                ownerImage: .webCore,
+                candidates: [
+                    pageInspectorControllerDisconnectSymbol,
+                    frameInspectorControllerDisconnectSymbol,
+                ],
+                resolutionPolicy: .fallbackCallTarget
+            ),
+            stringFromUTF8: NativeInspectorRequiredSymbol(
+                role: .stringFromUTF8,
+                ownerImage: .javaScriptCore,
+                candidates: [stringFromUTF8Symbol],
+                resolutionPolicy: .requiredTextSymbol
+            ),
+            stringImplToNSString: NativeInspectorRequiredSymbol(
+                role: .stringImplToNSString,
+                ownerImage: .javaScriptCore,
+                candidates: [stringImplToNSStringSymbol],
+                resolutionPolicy: .requiredTextSymbol
+            ),
+            destroyStringImpl: NativeInspectorRequiredSymbol(
+                role: .destroyStringImpl,
+                ownerImage: .javaScriptCore,
+                candidates: [destroyStringImplSymbol],
+                resolutionPolicy: .requiredTextSymbol
+            ),
+            backendDispatcherDispatch: NativeInspectorRequiredSymbol(
+                role: .backendDispatcherDispatch,
+                ownerImage: .webKit,
+                candidates: [backendDispatcherDispatchSymbol],
+                resolutionPolicy: .requiredTextSymbol
+            )
         )
     }
 
     private static func resolve(
         imagePathSuffixes: [String],
         javaScriptCorePathSuffixes: [String],
-        symbols: V2_TransportNativeInspectorSymbolNames
-    ) -> V2_TransportNativeInspectorSymbolResolution {
+        symbols: NativeInspectorSymbols
+    ) -> NativeInspectorSymbolLookupResult {
         guard let loadedImage = loadedWebKitImage(pathSuffixes: imagePathSuffixes) else {
             return failure(.inspectorImageMissing)
         }
@@ -311,15 +372,15 @@ private enum V2_TransportNativeInspectorResolver {
         let webCoreImage = loadedWebCoreImage.map { unsafe MachOImage(ptr: $0.header) }
         let webCoreText = webCoreImage.flatMap { $0.is64Bit ? textSegment(in: $0) : nil }
 
-        let loadedImageResults = V2_TransportNativeInspectorResolvedSymbols(
-            connectFrontend: resolveLoadedImageSymbol(namedAnyOf: symbols.connectFrontend, in: image, text: text),
-            disconnectFrontend: resolveLoadedImageSymbol(namedAnyOf: symbols.disconnectFrontend, in: image, text: text),
-            stringFromUTF8: resolveLoadedImageSymbol(namedAnyOf: symbols.stringFromUTF8, in: javaScriptCoreImage, text: javaScriptCoreText),
-            stringImplToNSString: resolveLoadedImageSymbol(namedAnyOf: symbols.stringImplToNSString, in: javaScriptCoreImage, text: javaScriptCoreText),
-            destroyStringImpl: resolveLoadedImageSymbol(namedAnyOf: symbols.destroyStringImpl, in: javaScriptCoreImage, text: javaScriptCoreText),
+        let loadedImageResults = NativeInspectorResolvedSymbolSet(
+            connectFrontend: resolveLoadedImageSymbol(namedAnyOf: symbols.connectFrontend.decodedCandidates(), in: image, text: text),
+            disconnectFrontend: resolveLoadedImageSymbol(namedAnyOf: symbols.disconnectFrontend.decodedCandidates(), in: image, text: text),
+            stringFromUTF8: resolveLoadedImageSymbol(namedAnyOf: symbols.stringFromUTF8.decodedCandidates(), in: javaScriptCoreImage, text: javaScriptCoreText),
+            stringImplToNSString: resolveLoadedImageSymbol(namedAnyOf: symbols.stringImplToNSString.decodedCandidates(), in: javaScriptCoreImage, text: javaScriptCoreText),
+            destroyStringImpl: resolveLoadedImageSymbol(namedAnyOf: symbols.destroyStringImpl.decodedCandidates(), in: javaScriptCoreImage, text: javaScriptCoreText),
             backendDispatcherDispatch: preferredResolvedAddress(
-                resolveLoadedImageSymbol(namedAnyOf: symbols.backendDispatcherDispatch, in: image, text: text),
-                fallback: resolveLoadedImageSymbol(namedAnyOf: symbols.backendDispatcherDispatch, in: javaScriptCoreImage, text: javaScriptCoreText)
+                resolveLoadedImageSymbol(namedAnyOf: symbols.backendDispatcherDispatch.decodedCandidates(), in: image, text: text),
+                fallback: resolveLoadedImageSymbol(namedAnyOf: symbols.backendDispatcherDispatch.decodedCandidates(), in: javaScriptCoreImage, text: javaScriptCoreText)
             )
         )
         let loadedImageResultsWithFallback = unsafe resolveConnectDisconnectFallbackIfNeeded(
@@ -369,21 +430,14 @@ private enum V2_TransportNativeInspectorResolver {
     }
 
     private static func resolveUsingSharedCache(
-        loadedImage: V2_TransportLoadedWebKitImage,
+        loadedImage: LoadedNativeInspectorImage,
         imagePathSuffixes: [String],
-        loadedJavaScriptCoreImage: V2_TransportLoadedWebKitImage,
+        loadedJavaScriptCoreImage: LoadedNativeInspectorImage,
         javaScriptCorePathSuffixes: [String],
-        loadedImageSymbols: V2_TransportNativeInspectorResolvedSymbols,
-        symbols: V2_TransportNativeInspectorSymbolNames
-    ) -> V2_TransportNativeInspectorSymbolResolution {
-        guard let sharedCacheRange = unsafe V2_TransportDyldRuntime.sharedCacheRange() else {
-            return failure(.sharedCacheUnavailable)
-        }
-
-        let cache: DyldCacheLoaded
-        do {
-            cache = try unsafe DyldCacheLoaded(ptr: sharedCacheRange.pointer)
-        } catch {
+        loadedImageSymbols: NativeInspectorResolvedSymbolSet,
+        symbols: NativeInspectorSymbols
+    ) -> NativeInspectorSymbolLookupResult {
+        guard let cache = unsafe MachOKitSymbolLookup.currentSharedCache else {
             return failure(.sharedCacheUnavailable)
         }
 
@@ -411,7 +465,7 @@ private enum V2_TransportNativeInspectorResolver {
         let javaScriptCoreTextStart = UInt64(loadedJavaScriptCoreImage.headerAddress)
         let javaScriptCoreTextRange = javaScriptCoreTextStart ..< javaScriptCoreTextStart + UInt64(javaScriptCoreText.virtualMemorySize)
         let javaScriptCoreDylibOffset = UInt64(javaScriptCoreText.virtualMemoryAddress) - cache.mainCacheHeader.sharedRegionStart
-        var lastResolvedSymbols: V2_TransportNativeInspectorResolvedSymbols?
+        var lastResolvedSymbols: NativeInspectorResolvedSymbolSet?
 
         if let localSymbolsInfo = cache.localSymbolsInfo {
             if let entry = localSymbolsInfo.entries(in: cache).first(where: { UInt64($0.dylibOffset) == dylibOffset }),
@@ -427,9 +481,9 @@ private enum V2_TransportNativeInspectorResolver {
                    javaScriptCoreLowerBound >= 0,
                    javaScriptCoreUpperBound >= javaScriptCoreLowerBound,
                    javaScriptCoreUpperBound <= symbols64.count {
-                    let resolvedSymbols = V2_TransportNativeInspectorResolvedSymbols(
+                    let resolvedSymbols = NativeInspectorResolvedSymbolSet(
                         connectFrontend: resolveSharedCacheSymbol(
-                            namedAnyOf: symbols.connectFrontend,
+                            namedAnyOf: symbols.connectFrontend.decodedCandidates(),
                             symbols: symbols64,
                             symbolRange: lowerBound ..< upperBound,
                             textVMAddress: UInt64(text.virtualMemoryAddress),
@@ -437,7 +491,7 @@ private enum V2_TransportNativeInspectorResolver {
                             slide: UInt64(slide)
                         ),
                         disconnectFrontend: resolveSharedCacheSymbol(
-                            namedAnyOf: symbols.disconnectFrontend,
+                            namedAnyOf: symbols.disconnectFrontend.decodedCandidates(),
                             symbols: symbols64,
                             symbolRange: lowerBound ..< upperBound,
                             textVMAddress: UInt64(text.virtualMemoryAddress),
@@ -445,7 +499,7 @@ private enum V2_TransportNativeInspectorResolver {
                             slide: UInt64(slide)
                         ),
                         stringFromUTF8: resolveSharedCacheSymbol(
-                            namedAnyOf: symbols.stringFromUTF8,
+                            namedAnyOf: symbols.stringFromUTF8.decodedCandidates(),
                             symbols: symbols64,
                             symbolRange: javaScriptCoreLowerBound ..< javaScriptCoreUpperBound,
                             textVMAddress: UInt64(javaScriptCoreText.virtualMemoryAddress),
@@ -453,7 +507,7 @@ private enum V2_TransportNativeInspectorResolver {
                             slide: UInt64(slide)
                         ),
                         stringImplToNSString: resolveSharedCacheSymbol(
-                            namedAnyOf: symbols.stringImplToNSString,
+                            namedAnyOf: symbols.stringImplToNSString.decodedCandidates(),
                             symbols: symbols64,
                             symbolRange: javaScriptCoreLowerBound ..< javaScriptCoreUpperBound,
                             textVMAddress: UInt64(javaScriptCoreText.virtualMemoryAddress),
@@ -461,7 +515,7 @@ private enum V2_TransportNativeInspectorResolver {
                             slide: UInt64(slide)
                         ),
                         destroyStringImpl: resolveSharedCacheSymbol(
-                            namedAnyOf: symbols.destroyStringImpl,
+                            namedAnyOf: symbols.destroyStringImpl.decodedCandidates(),
                             symbols: symbols64,
                             symbolRange: javaScriptCoreLowerBound ..< javaScriptCoreUpperBound,
                             textVMAddress: UInt64(javaScriptCoreText.virtualMemoryAddress),
@@ -470,7 +524,7 @@ private enum V2_TransportNativeInspectorResolver {
                         ),
                         backendDispatcherDispatch: preferredResolvedAddress(
                             resolveSharedCacheSymbol(
-                                namedAnyOf: symbols.backendDispatcherDispatch,
+                                namedAnyOf: symbols.backendDispatcherDispatch.decodedCandidates(),
                                 symbols: symbols64,
                                 symbolRange: lowerBound ..< upperBound,
                                 textVMAddress: UInt64(text.virtualMemoryAddress),
@@ -478,7 +532,7 @@ private enum V2_TransportNativeInspectorResolver {
                                 slide: UInt64(slide)
                             ),
                             fallback: resolveSharedCacheSymbol(
-                                namedAnyOf: symbols.backendDispatcherDispatch,
+                                namedAnyOf: symbols.backendDispatcherDispatch.decodedCandidates(),
                                 symbols: symbols64,
                                 symbolRange: javaScriptCoreLowerBound ..< javaScriptCoreUpperBound,
                                 textVMAddress: UInt64(javaScriptCoreText.virtualMemoryAddress),
@@ -533,9 +587,9 @@ private enum V2_TransportNativeInspectorResolver {
                 mainCacheHeader: cache.mainCacheHeader,
                 dylibOffset: javaScriptCoreDylibOffset
             )
-            let resolvedSymbols = V2_TransportNativeInspectorResolvedSymbols(
+            let resolvedSymbols = NativeInspectorResolvedSymbolSet(
                 connectFrontend: resolveSharedCacheSymbol(
-                    namedAnyOf: symbols.connectFrontend,
+                    namedAnyOf: symbols.connectFrontend.decodedCandidates(),
                     symbols: fileBackedSymbols.symbols,
                     symbolRange: fileBackedSymbols.symbolRange,
                     textVMAddress: UInt64(text.virtualMemoryAddress),
@@ -543,7 +597,7 @@ private enum V2_TransportNativeInspectorResolver {
                     slide: UInt64(slide)
                 ),
                 disconnectFrontend: resolveSharedCacheSymbol(
-                    namedAnyOf: symbols.disconnectFrontend,
+                    namedAnyOf: symbols.disconnectFrontend.decodedCandidates(),
                     symbols: fileBackedSymbols.symbols,
                     symbolRange: fileBackedSymbols.symbolRange,
                     textVMAddress: UInt64(text.virtualMemoryAddress),
@@ -551,7 +605,7 @@ private enum V2_TransportNativeInspectorResolver {
                     slide: UInt64(slide)
                 ),
                 stringFromUTF8: resolveSharedCacheSymbol(
-                    namedAnyOf: symbols.stringFromUTF8,
+                    namedAnyOf: symbols.stringFromUTF8.decodedCandidates(),
                     symbols: javaScriptCoreFileBackedSymbols.symbols,
                     symbolRange: javaScriptCoreFileBackedSymbols.symbolRange,
                     textVMAddress: UInt64(javaScriptCoreText.virtualMemoryAddress),
@@ -559,7 +613,7 @@ private enum V2_TransportNativeInspectorResolver {
                     slide: UInt64(slide)
                 ),
                 stringImplToNSString: resolveSharedCacheSymbol(
-                    namedAnyOf: symbols.stringImplToNSString,
+                    namedAnyOf: symbols.stringImplToNSString.decodedCandidates(),
                     symbols: javaScriptCoreFileBackedSymbols.symbols,
                     symbolRange: javaScriptCoreFileBackedSymbols.symbolRange,
                     textVMAddress: UInt64(javaScriptCoreText.virtualMemoryAddress),
@@ -567,7 +621,7 @@ private enum V2_TransportNativeInspectorResolver {
                     slide: UInt64(slide)
                 ),
                 destroyStringImpl: resolveSharedCacheSymbol(
-                    namedAnyOf: symbols.destroyStringImpl,
+                    namedAnyOf: symbols.destroyStringImpl.decodedCandidates(),
                     symbols: javaScriptCoreFileBackedSymbols.symbols,
                     symbolRange: javaScriptCoreFileBackedSymbols.symbolRange,
                     textVMAddress: UInt64(javaScriptCoreText.virtualMemoryAddress),
@@ -576,7 +630,7 @@ private enum V2_TransportNativeInspectorResolver {
                 ),
                 backendDispatcherDispatch: preferredResolvedAddress(
                     resolveSharedCacheSymbol(
-                        namedAnyOf: symbols.backendDispatcherDispatch,
+                        namedAnyOf: symbols.backendDispatcherDispatch.decodedCandidates(),
                         symbols: fileBackedSymbols.symbols,
                         symbolRange: fileBackedSymbols.symbolRange,
                         textVMAddress: UInt64(text.virtualMemoryAddress),
@@ -584,7 +638,7 @@ private enum V2_TransportNativeInspectorResolver {
                         slide: UInt64(slide)
                     ),
                     fallback: resolveSharedCacheSymbol(
-                        namedAnyOf: symbols.backendDispatcherDispatch,
+                        namedAnyOf: symbols.backendDispatcherDispatch.decodedCandidates(),
                         symbols: javaScriptCoreFileBackedSymbols.symbols,
                         symbolRange: javaScriptCoreFileBackedSymbols.symbolRange,
                         textVMAddress: UInt64(javaScriptCoreText.virtualMemoryAddress),
@@ -626,7 +680,7 @@ private enum V2_TransportNativeInspectorResolver {
                 ) {
                 return resolution
             }
-        } catch let lookupFailure as V2_TransportLookupFailure {
+        } catch let lookupFailure as NativeInspectorSymbolLookupFailure {
             if let lastResolvedSymbols {
                 return finalizeResolution(
                     lastResolvedSymbols,
@@ -669,9 +723,9 @@ private enum V2_TransportNativeInspectorResolver {
     }
 
     private static func preferredResolvedAddress(
-        _ primary: V2_TransportResolvedAddress,
-        fallback: V2_TransportResolvedAddress
-    ) -> V2_TransportResolvedAddress {
+        _ primary: ResolvedNativeInspectorAddress,
+        fallback: ResolvedNativeInspectorAddress
+    ) -> ResolvedNativeInspectorAddress {
         switch primary {
         case .missing:
             return fallback
@@ -681,10 +735,10 @@ private enum V2_TransportNativeInspectorResolver {
     }
 
     private static func applyingLoadedImageRuntimeFallback(
-        to resolvedSymbols: V2_TransportNativeInspectorResolvedSymbols,
-        loadedImageSymbols: V2_TransportNativeInspectorResolvedSymbols
-    ) -> V2_TransportNativeInspectorResolvedSymbols {
-        V2_TransportNativeInspectorResolvedSymbols(
+        to resolvedSymbols: NativeInspectorResolvedSymbolSet,
+        loadedImageSymbols: NativeInspectorResolvedSymbolSet
+    ) -> NativeInspectorResolvedSymbolSet {
+        NativeInspectorResolvedSymbolSet(
             connectFrontend: resolvedSymbols.connectFrontend,
             disconnectFrontend: resolvedSymbols.disconnectFrontend,
             stringFromUTF8: preferredResolvedAddress(
@@ -707,10 +761,10 @@ private enum V2_TransportNativeInspectorResolver {
     }
 
     private static func usesLoadedImageRuntimeFallback(
-        resolvedSymbols: V2_TransportNativeInspectorResolvedSymbols,
-        loadedImageSymbols: V2_TransportNativeInspectorResolvedSymbols
+        resolvedSymbols: NativeInspectorResolvedSymbolSet,
+        loadedImageSymbols: NativeInspectorResolvedSymbolSet
     ) -> Bool {
-        let symbolPairs: [(V2_TransportResolvedAddress, V2_TransportResolvedAddress)] = [
+        let symbolPairs: [(ResolvedNativeInspectorAddress, ResolvedNativeInspectorAddress)] = [
             (resolvedSymbols.stringFromUTF8, loadedImageSymbols.stringFromUTF8),
             (resolvedSymbols.stringImplToNSString, loadedImageSymbols.stringImplToNSString),
             (resolvedSymbols.destroyStringImpl, loadedImageSymbols.destroyStringImpl),
@@ -742,9 +796,9 @@ private enum V2_TransportNativeInspectorResolver {
     }
 
     private static func mergedResolution(
-        preferred: V2_TransportNativeInspectorSymbolResolution?,
-        fallback: V2_TransportNativeInspectorSymbolResolution
-    ) -> V2_TransportNativeInspectorSymbolResolution {
+        preferred: NativeInspectorSymbolLookupResult?,
+        fallback: NativeInspectorSymbolLookupResult
+    ) -> NativeInspectorSymbolLookupResult {
         guard let preferred else {
             return fallback
         }
@@ -755,7 +809,7 @@ private enum V2_TransportNativeInspectorResolver {
             return fallback
         }
 
-        let genericFailureKinds: Set<V2_TransportNativeInspectorSymbolFailure> = [
+        let genericFailureKinds: Set<NativeInspectorSymbolFailure> = [
             .sharedCacheUnavailable,
             .localSymbolsUnavailable,
             .localSymbolEntryMissing,
@@ -774,7 +828,7 @@ private enum V2_TransportNativeInspectorResolver {
                 return value
             }
             .joined(separator: " | loaded-image=")
-        return V2_TransportNativeInspectorSymbolResolution(
+        return NativeInspectorSymbolLookupResult(
             functionAddresses: .zero,
             failureReason: reason.isEmpty ? fallback.failureReason : reason,
             failureKind: fallback.failureKind ?? preferred.failureKind,
@@ -789,7 +843,7 @@ private enum V2_TransportNativeInspectorResolver {
         namedAnyOf symbolNames: [String],
         in image: MachOImage,
         text: SegmentCommand64
-    ) -> V2_TransportResolvedAddress {
+    ) -> ResolvedNativeInspectorAddress {
         resolveFirstAvailableSymbol(namedAnyOf: symbolNames) { symbolName in
             resolveLoadedImageSymbol(named: symbolName, in: image, text: text)
         }
@@ -802,7 +856,7 @@ private enum V2_TransportNativeInspectorResolver {
         textVMAddress: UInt64,
         textRange: Range<UInt64>,
         slide: UInt64
-    ) -> V2_TransportResolvedAddress {
+    ) -> ResolvedNativeInspectorAddress {
         resolveFirstAvailableSymbol(namedAnyOf: symbolNames) { symbolName in
             resolveSharedCacheSymbol(
                 named: symbolName,
@@ -822,7 +876,7 @@ private enum V2_TransportNativeInspectorResolver {
         textVMAddress: UInt64,
         textRange: Range<UInt64>,
         slide: UInt64
-    ) -> V2_TransportResolvedAddress {
+    ) -> ResolvedNativeInspectorAddress {
         resolveFirstAvailableSymbol(namedAnyOf: symbolNames) { symbolName in
             resolveSharedCacheSymbol(
                 named: symbolName,
@@ -837,9 +891,9 @@ private enum V2_TransportNativeInspectorResolver {
 
     private static func resolveFirstAvailableSymbol(
         namedAnyOf symbolNames: [String],
-        resolver: (String) -> V2_TransportResolvedAddress
-    ) -> V2_TransportResolvedAddress {
-        var outsideTextResult: V2_TransportResolvedAddress?
+        resolver: (String) -> ResolvedNativeInspectorAddress
+    ) -> ResolvedNativeInspectorAddress {
+        var outsideTextResult: ResolvedNativeInspectorAddress?
         for symbolName in symbolNames {
             let result = resolver(symbolName)
             switch result {
@@ -857,15 +911,15 @@ private enum V2_TransportNativeInspectorResolver {
     }
 
     @unsafe private static func resolveConnectDisconnectFallbackIfNeeded(
-        _ resolvedSymbols: V2_TransportNativeInspectorResolvedSymbols,
+        _ resolvedSymbols: NativeInspectorResolvedSymbolSet,
         image: MachOImage,
         text: SegmentCommand64,
         webCoreImage: MachOImage?,
         webCoreText: SegmentCommand64?,
         javaScriptCoreImage: MachOImage,
         javaScriptCoreText: SegmentCommand64,
-        symbols: V2_TransportNativeInspectorSymbolNames
-    ) -> V2_TransportResolvedConnectDisconnectFallbackResult {
+        symbols: NativeInspectorSymbols
+    ) -> NativeInspectorAttachEntryPointFallbackResult {
         let connectNeedsFallback: Bool
         switch resolvedSymbols.connectFrontend {
         case .missing, .outsideText:
@@ -890,21 +944,21 @@ private enum V2_TransportNativeInspectorResolver {
         }
 
         let webCoreConnectTargets = unsafe resolvedCallTargetAddresses(
-            symbolNames: symbols.inspectorControllerConnectTargets,
+            symbolNames: symbols.inspectorControllerConnectTargets.decodedCandidates(),
             in: webCoreImage,
             text: webCoreText
         )
         let webCoreDisconnectTargets = unsafe resolvedCallTargetAddresses(
-            symbolNames: symbols.inspectorControllerDisconnectTargets,
+            symbolNames: symbols.inspectorControllerDisconnectTargets.decodedCandidates(),
             in: webCoreImage,
             text: webCoreText
         )
         let webKitBoundConnectTargets = unsafe boundCallTargetAddresses(
-            symbolNames: symbols.inspectorControllerConnectTargets,
+            symbolNames: symbols.inspectorControllerConnectTargets.decodedCandidates(),
             in: image
         )
         let webKitBoundDisconnectTargets = unsafe boundCallTargetAddresses(
-            symbolNames: symbols.inspectorControllerDisconnectTargets,
+            symbolNames: symbols.inspectorControllerDisconnectTargets.decodedCandidates(),
             in: image
         )
 
@@ -913,7 +967,7 @@ private enum V2_TransportNativeInspectorResolver {
 
         guard let functionStarts = image.functionStarts else {
             #if DEBUG
-            if V2_TransportConsoleDiagnostics.verboseConsoleDiagnosticsEnabled {
+            if NativeInspectorSymbolDiagnostics.verboseConsoleDiagnosticsEnabled {
                 NSLog(
                     "[V2_WebInspectorTransport] native inspector text scan unavailable functionStarts=nil webCoreConnectTargets=%lu webCoreDisconnectTargets=%lu webKitBoundConnectTargets=%lu webKitBoundDisconnectTargets=%lu",
                     webCoreConnectTargets.count,
@@ -949,7 +1003,7 @@ private enum V2_TransportNativeInspectorResolver {
         )
 
         #if DEBUG
-        if V2_TransportConsoleDiagnostics.verboseConsoleDiagnosticsEnabled {
+        if NativeInspectorSymbolDiagnostics.verboseConsoleDiagnosticsEnabled {
             NSLog(
                 "[V2_WebInspectorTransport] native inspector text scan webCoreConnectTargets=%lu webCoreDisconnectTargets=%lu webKitBoundConnectTargets=%lu webKitBoundDisconnectTargets=%lu connectTargets=%lu disconnectTargets=%lu resolvedConnect=%@ resolvedDisconnect=%@",
                 webCoreConnectTargets.count,
@@ -964,7 +1018,7 @@ private enum V2_TransportNativeInspectorResolver {
         }
         #endif
 
-        let resolvedWrapperSymbols = V2_TransportNativeInspectorResolvedSymbols(
+        let resolvedWrapperSymbols = NativeInspectorResolvedSymbolSet(
             connectFrontend: connectNeedsFallback && isFound(resolvedConnect) ? resolvedConnect : resolvedSymbols.connectFrontend,
             disconnectFrontend: disconnectNeedsFallback && isFound(resolvedDisconnect) ? resolvedDisconnect : resolvedSymbols.disconnectFrontend,
             stringFromUTF8: resolvedSymbols.stringFromUTF8,
@@ -983,8 +1037,8 @@ private enum V2_TransportNativeInspectorResolver {
     }
 
     private static func resolvedFunctionAddresses(
-        from resolvedSymbols: V2_TransportNativeInspectorResolvedSymbols
-    ) -> V2_TransportResolvedFunctionAddresses? {
+        from resolvedSymbols: NativeInspectorResolvedSymbolSet
+    ) -> NativeInspectorSymbolAddresses? {
         guard
             case let .found(connectAddress) = resolvedSymbols.connectFrontend,
             case let .found(disconnectAddress) = resolvedSymbols.disconnectFrontend,
@@ -996,7 +1050,7 @@ private enum V2_TransportNativeInspectorResolver {
             return nil
         }
 
-        return V2_TransportResolvedFunctionAddresses(
+        return NativeInspectorSymbolAddresses(
             connectFrontendAddress: connectAddress,
             disconnectFrontendAddress: disconnectAddress,
             stringFromUTF8Address: stringFromUTF8Address,
@@ -1014,15 +1068,15 @@ private enum V2_TransportNativeInspectorResolver {
     }
 
     private static func successResolution(
-        _ functionAddresses: V2_TransportResolvedFunctionAddresses,
-        phase: V2_TransportNativeInspectorResolutionPhase?,
+        _ functionAddresses: NativeInspectorSymbolAddresses,
+        phase: NativeInspectorSymbolResolutionPhase?,
         source: String?,
         usedConnectDisconnectFallback: Bool
-    ) -> V2_TransportNativeInspectorSymbolResolution {
-        if let phase, V2_TransportConsoleDiagnostics.verboseConsoleDiagnosticsEnabled {
+    ) -> NativeInspectorSymbolLookupResult {
+        if let phase, NativeInspectorSymbolDiagnostics.verboseConsoleDiagnosticsEnabled {
             NSLog(successLogFormat, backendName, phase.message)
         }
-        return V2_TransportNativeInspectorSymbolResolution(
+        return NativeInspectorSymbolLookupResult(
             functionAddresses: functionAddresses,
             failureReason: nil,
             failureKind: nil,
@@ -1034,13 +1088,13 @@ private enum V2_TransportNativeInspectorResolver {
     }
 
     private static func successfulResolutionIfComplete(
-        _ resolvedSymbols: V2_TransportNativeInspectorResolvedSymbols,
-        phase: V2_TransportNativeInspectorResolutionPhase?,
+        _ resolvedSymbols: NativeInspectorResolvedSymbolSet,
+        phase: NativeInspectorSymbolResolutionPhase?,
         source: String?,
         webKitHeaderAddress: UInt,
         javaScriptCoreHeaderAddress: UInt,
         usedConnectDisconnectFallback: Bool
-    ) -> V2_TransportNativeInspectorSymbolResolution? {
+    ) -> NativeInspectorSymbolLookupResult? {
         let allResults = [
             resolvedSymbols.connectFrontend,
             resolvedSymbols.disconnectFrontend,
@@ -1069,7 +1123,7 @@ private enum V2_TransportNativeInspectorResolver {
             webKitHeaderAddress: webKitHeaderAddress,
             javaScriptCoreHeaderAddress: javaScriptCoreHeaderAddress
         )
-        let expectedHeadersBySymbol: [(V2_TransportResolvedAddress, [UInt])] = [
+        let expectedHeadersBySymbol: [(ResolvedNativeInspectorAddress, [UInt])] = [
             (resolvedSymbols.connectFrontend, attachHeaders),
             (resolvedSymbols.disconnectFrontend, attachHeaders),
             (resolvedSymbols.stringFromUTF8, [javaScriptCoreHeaderAddress]),
@@ -1098,13 +1152,13 @@ private enum V2_TransportNativeInspectorResolver {
     }
 
     private static func finalizeResolution(
-        _ resolvedSymbols: V2_TransportNativeInspectorResolvedSymbols,
-        phase: V2_TransportNativeInspectorResolutionPhase?,
+        _ resolvedSymbols: NativeInspectorResolvedSymbolSet,
+        phase: NativeInspectorSymbolResolutionPhase?,
         source: String?,
         webKitHeaderAddress: UInt,
         javaScriptCoreHeaderAddress: UInt,
         usedConnectDisconnectFallback: Bool
-    ) -> V2_TransportNativeInspectorSymbolResolution? {
+    ) -> NativeInspectorSymbolLookupResult? {
         let allResults = [
             resolvedSymbols.connectFrontend,
             resolvedSymbols.disconnectFrontend,
@@ -1130,7 +1184,7 @@ private enum V2_TransportNativeInspectorResolver {
             webKitHeaderAddress: webKitHeaderAddress,
             javaScriptCoreHeaderAddress: javaScriptCoreHeaderAddress
         )
-        let expectedHeadersBySymbol: [(V2_TransportResolvedAddress, [UInt])] = [
+        let expectedHeadersBySymbol: [(ResolvedNativeInspectorAddress, [UInt])] = [
             (resolvedSymbols.connectFrontend, attachHeaders),
             (resolvedSymbols.disconnectFrontend, attachHeaders),
             (resolvedSymbols.stringFromUTF8, [javaScriptCoreHeaderAddress]),
@@ -1197,25 +1251,14 @@ private enum V2_TransportNativeInspectorResolver {
         )
     }
 
-    fileprivate static func loadedWebKitImage(pathSuffixes: [String]) -> V2_TransportLoadedWebKitImage? {
-        let imageCount = _dyld_image_count()
-        for imageIndex in 0 ..< imageCount {
-            guard let imageName = unsafe _dyld_get_image_name(imageIndex) else {
-                continue
-            }
-
-            let path = unsafe String(cString: imageName)
-            guard imagePathMatches(path, suffixes: pathSuffixes),
-                  let header = unsafe _dyld_get_image_header(imageIndex) else {
-                continue
-            }
-
-            return V2_TransportLoadedWebKitImage(
-                headerAddress: UInt(bitPattern: header)
-            )
+    fileprivate static func loadedWebKitImage(pathSuffixes: [String]) -> LoadedNativeInspectorImage? {
+        guard let image = unsafe MachOKitSymbolLookup.loadedImage(matching: pathSuffixes) else {
+            return nil
         }
 
-        return nil
+        return LoadedNativeInspectorImage(
+            headerAddress: unsafe UInt(bitPattern: image.ptr)
+        )
     }
 
     private static func imagePathMatches(_ path: String?, suffixes: [String]) -> Bool {
@@ -1230,7 +1273,7 @@ private enum V2_TransportNativeInspectorResolver {
     }
 
     private static func sharedCacheSymbolFileURLs() -> [URL] {
-        sharedCacheSymbolFileURLs(activeSharedCachePath: unsafe V2_TransportDyldRuntime.sharedCacheFilePath())
+        sharedCacheSymbolFileURLs(activeSharedCachePath: unsafe MachOKitSymbolLookup.hostSharedCachePath)
     }
 
     fileprivate static func sharedCacheSymbolFileURLs(activeSharedCachePath: String?) -> [URL] {
@@ -1299,16 +1342,16 @@ private enum V2_TransportNativeInspectorResolver {
     private static func fileBackedLocalSymbols(
         mainCacheHeader: DyldCacheHeader,
         dylibOffset: UInt64
-    ) throws -> V2_TransportFileBackedLocalSymbols {
+    ) throws -> MachOKitFileBackedLocalSymbols {
         let symbolCacheURLs = sharedCacheSymbolFileURLs()
         guard !symbolCacheURLs.isEmpty else {
-            throw V2_TransportLookupFailure(
+            throw NativeInspectorSymbolLookupFailure(
                 kind: .localSymbolsUnavailable,
                 detail: nil
             )
         }
 
-        var lastFailure: V2_TransportLookupFailure?
+        var lastFailure: NativeInspectorSymbolLookupFailure?
 
         for symbolCacheURL in symbolCacheURLs {
             do {
@@ -1317,40 +1360,40 @@ private enum V2_TransportNativeInspectorResolver {
                     mainCacheHeader: mainCacheHeader
                 )
                 guard let localSymbolsInfo = symbolCache.localSymbolsInfo else {
-                    lastFailure = V2_TransportLookupFailure(
+                    lastFailure = NativeInspectorSymbolLookupFailure(
                         kind: .localSymbolsUnavailable,
                         detail: nil
                     )
                     continue
                 }
                 guard let entry = localSymbolsInfo.entries(in: symbolCache).first(where: { UInt64($0.dylibOffset) == dylibOffset }) else {
-                    lastFailure = V2_TransportLookupFailure(
+                    lastFailure = NativeInspectorSymbolLookupFailure(
                         kind: .localSymbolEntryMissing,
                         detail: nil
                     )
                     continue
                 }
                 guard let symbols = localSymbolsInfo.symbols64(in: symbolCache) else {
-                    lastFailure = V2_TransportLookupFailure(
+                    lastFailure = NativeInspectorSymbolLookupFailure(
                         kind: .localSymbolsUnavailable,
                         detail: nil
                     )
                     continue
                 }
 
-                return V2_TransportFileBackedLocalSymbols(
+                return MachOKitFileBackedLocalSymbols(
                     symbols: symbols,
                     symbolRange: entry.nlistRange
                 )
             } catch {
-                lastFailure = V2_TransportLookupFailure(
+                lastFailure = NativeInspectorSymbolLookupFailure(
                     kind: .localSymbolsUnavailable,
                     detail: nil
                 )
             }
         }
 
-        throw lastFailure ?? V2_TransportLookupFailure(
+        throw lastFailure ?? NativeInspectorSymbolLookupFailure(
             kind: .localSymbolsUnavailable,
             detail: nil
         )
@@ -1360,7 +1403,7 @@ private enum V2_TransportNativeInspectorResolver {
         named symbolName: String,
         in image: MachOImage,
         text: SegmentCommand64
-    ) -> V2_TransportResolvedAddress {
+    ) -> ResolvedNativeInspectorAddress {
         guard let symbol = image.symbol(named: symbolName, mangled: true, inSection: 0, isGlobalOnly: false) else {
             return unsafe resolveLoadedImageExportedSymbol(
                 named: symbolName,
@@ -1385,7 +1428,7 @@ private enum V2_TransportNativeInspectorResolver {
         named symbolName: String,
         in image: MachOImage,
         text: SegmentCommand64
-    ) -> V2_TransportResolvedAddress {
+    ) -> ResolvedNativeInspectorAddress {
         let exportTrie = image.exportTrie
         if let exportedSymbol = exportTrie?.search(by: symbolName),
            let offset = exportedSymbol.offset,
@@ -1406,7 +1449,7 @@ private enum V2_TransportNativeInspectorResolver {
             return .found(address)
         }
 
-        guard let address = unsafe V2_TransportDyldRuntime.symbolAddress(named: symbolName) else {
+        guard let address = unsafe MachOKitSymbolLookup.exportedRuntimeSymbolAddress(named: symbolName) else {
             logLoadedImageExportLookup(
                 symbolName: symbolName,
                 image: image,
@@ -1457,7 +1500,7 @@ private enum V2_TransportNativeInspectorResolver {
         failedReason: String
     ) {
         #if DEBUG
-        if V2_TransportConsoleDiagnostics.verboseConsoleDiagnosticsEnabled {
+        if NativeInspectorSymbolDiagnostics.verboseConsoleDiagnosticsEnabled {
             let headerAddress = unsafe UInt(bitPattern: image.ptr)
             let dlsymDescription: String
             if let dlsymAddress {
@@ -1485,7 +1528,7 @@ private enum V2_TransportNativeInspectorResolver {
         textVMAddress: UInt64,
         textRange: Range<UInt64>,
         slide: UInt64
-    ) -> V2_TransportResolvedAddress {
+    ) -> ResolvedNativeInspectorAddress {
         for symbolIndex in symbolRange {
             let symbol = symbols[symbolIndex]
             guard symbol.name == symbolName else {
@@ -1519,7 +1562,7 @@ private enum V2_TransportNativeInspectorResolver {
         textVMAddress: UInt64,
         textRange: Range<UInt64>,
         slide: UInt64
-    ) -> V2_TransportResolvedAddress {
+    ) -> ResolvedNativeInspectorAddress {
         for symbolIndex in symbolRange {
             let symbol = symbols[symbolIndex]
             guard symbol.name == symbolName else {
@@ -1616,7 +1659,7 @@ private enum V2_TransportNativeInspectorResolver {
         text: SegmentCommand64,
         functionStartAddresses: [UInt64],
         callTargetAddresses: Set<UInt64>
-    ) -> V2_TransportResolvedAddress {
+    ) -> ResolvedNativeInspectorAddress {
         guard !callTargetAddresses.isEmpty else {
             return .missing
         }
@@ -1777,9 +1820,9 @@ private enum V2_TransportNativeInspectorResolver {
     }
 
     @unsafe private static func missingFunctionNames(
-        in resolvedSymbols: V2_TransportNativeInspectorResolvedSymbols
+        in resolvedSymbols: NativeInspectorResolvedSymbolSet
     ) -> [String] {
-        let symbolResults: [(String, V2_TransportResolvedAddress)] = [
+        let symbolResults: [(String, ResolvedNativeInspectorAddress)] = [
             ("connectFrontend", resolvedSymbols.connectFrontend),
             ("disconnectFrontend", resolvedSymbols.disconnectFrontend),
             ("stringFromUTF8", resolvedSymbols.stringFromUTF8),
@@ -1795,14 +1838,14 @@ private enum V2_TransportNativeInspectorResolver {
         }
     }
 
-    private static func isFound(_ result: V2_TransportResolvedAddress) -> Bool {
+    private static func isFound(_ result: ResolvedNativeInspectorAddress) -> Bool {
         if case .found = result {
             return true
         }
         return false
     }
 
-    private static func debugResolvedAddress(_ result: V2_TransportResolvedAddress) -> String {
+    private static func debugResolvedAddress(_ result: ResolvedNativeInspectorAddress) -> String {
         switch result {
         case let .found(address):
             return unsafe String(format: "found(0x%llx)", address)
@@ -1817,20 +1860,20 @@ private enum V2_TransportNativeInspectorResolver {
         _ address: UInt64,
         belongsToAnyOf expectedHeaderAddresses: [UInt]
     ) -> Bool {
-        guard let header = unsafe V2_TransportDyldRuntime.imageHeader(containingAddress: address) else {
+        guard let image = unsafe MachOKitSymbolLookup.image(containingAddress: address) else {
             return false
         }
-        return expectedHeaderAddresses.contains(UInt(bitPattern: header))
+        return expectedHeaderAddresses.contains(unsafe UInt(bitPattern: image.ptr))
     }
 
     private static func failure(
-        _ kind: V2_TransportNativeInspectorSymbolFailure,
+        _ kind: NativeInspectorSymbolFailure,
         detail: String? = nil,
-        phase: V2_TransportNativeInspectorResolutionPhase? = nil,
+        phase: NativeInspectorSymbolResolutionPhase? = nil,
         source: String? = nil,
         missingFunctions: [String] = [],
         usedConnectDisconnectFallback: Bool = false
-    ) -> V2_TransportNativeInspectorSymbolResolution {
+    ) -> NativeInspectorSymbolLookupResult {
         let reason = formattedFailureReason(
             kind: kind,
             detail: detail,
@@ -1840,7 +1883,7 @@ private enum V2_TransportNativeInspectorResolver {
             usedConnectDisconnectFallback: usedConnectDisconnectFallback
         )
         NSLog(failureLogFormat, backendName, reason)
-        return V2_TransportNativeInspectorSymbolResolution(
+        return NativeInspectorSymbolLookupResult(
             functionAddresses: .zero,
             failureReason: reason,
             failureKind: kind,
@@ -1852,9 +1895,9 @@ private enum V2_TransportNativeInspectorResolver {
     }
 
     private static func formattedFailureReason(
-        kind: V2_TransportNativeInspectorSymbolFailure,
+        kind: NativeInspectorSymbolFailure,
         detail: String?,
-        phase: V2_TransportNativeInspectorResolutionPhase?,
+        phase: NativeInspectorSymbolResolutionPhase?,
         source: String?,
         missingFunctions: [String],
         usedConnectDisconnectFallback: Bool
@@ -1882,82 +1925,24 @@ private enum V2_TransportNativeInspectorResolver {
     }
 }
 
-struct V2_TransportAttachSymbolResolution: Sendable {
-    let connectFrontendAddress: UInt64
-    let disconnectFrontendAddress: UInt64
-    let stringFromUTF8Address: UInt64
-    let stringImplToNSStringAddress: UInt64
-    let destroyStringImplAddress: UInt64
-    let backendDispatcherDispatchAddress: UInt64
-    let failureReason: String?
-    let failureKind: String?
-    let phase: String?
-    let missingFunctions: [String]
-    let source: String?
-    let usedConnectDisconnectFallback: Bool
-
-    var diagnosticsSummary: String? {
-        var parts = [String]()
-        if let phase, !phase.isEmpty {
-            parts.append("phase=\(phase)")
-        }
-        if let source, !source.isEmpty {
-            parts.append("source=\(source)")
-        }
-        if let failureKind, !failureKind.isEmpty {
-            parts.append("failure=\(failureKind)")
-        }
-        if !missingFunctions.isEmpty {
-            parts.append("missing=\(missingFunctions.joined(separator: ","))")
-        }
-        if usedConnectDisconnectFallback {
-            parts.append("fallback=text-scan")
-        }
-        guard !parts.isEmpty else {
-            return nil
-        }
-        return parts.joined(separator: " ")
-    }
-
-    var supportSnapshot: V2_TransportSupportSnapshot {
-        if isSupported {
-            .supported(
-                capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain]
-            )
-        } else {
-            .unsupported(reason: failureReason ?? "inspector backend unavailable")
-        }
-    }
-
-    var isSupported: Bool {
-        connectFrontendAddress != 0
-            && disconnectFrontendAddress != 0
-            && stringFromUTF8Address != 0
-            && stringImplToNSStringAddress != 0
-            && destroyStringImplAddress != 0
-            && backendDispatcherDispatchAddress != 0
-            && failureReason == nil
-    }
-}
-
-enum V2_TransportNativeInspectorSymbolResolver {
-    static func currentAttachResolution() -> V2_TransportAttachSymbolResolution {
-        makeAttachResolution(from: V2_TransportNativeInspectorResolver.resolveCurrentWebKitAttachSymbols())
+package enum NativeInspectorSymbolResolver {
+    package static func resolveCurrent() -> NativeInspectorSymbolResolution {
+        makeAttachResolution(from: NativeInspectorSymbolResolverCore.resolveCurrentWebKitAttachSymbols())
     }
 
     static func resolveForTesting(
-        imagePathSuffixes: [String] = V2_TransportNativeInspectorResolver.webKitImagePathSuffixes,
-        connectSymbol: String = V2_TransportNativeInspectorResolver.connectFrontendSymbol,
-        disconnectSymbol: String = V2_TransportNativeInspectorResolver.disconnectFrontendSymbol,
-        alternateConnectSymbols: [String] = [],
-        alternateDisconnectSymbols: [String] = [],
-        stringFromUTF8Symbol: String? = nil,
-        stringImplToNSStringSymbol: String? = nil,
-        destroyStringImplSymbol: String? = nil,
-        backendDispatcherDispatchSymbol: String? = nil
-    ) -> V2_TransportAttachSymbolResolution {
+        imagePathSuffixes: [String] = NativeInspectorSymbolResolverCore.webKitImagePathSuffixes,
+        connectSymbol: ObfuscatedSymbolName = NativeInspectorSymbolResolverCore.connectFrontendSymbol,
+        disconnectSymbol: ObfuscatedSymbolName = NativeInspectorSymbolResolverCore.disconnectFrontendSymbol,
+        alternateConnectSymbols: [ObfuscatedSymbolName] = [],
+        alternateDisconnectSymbols: [ObfuscatedSymbolName] = [],
+        stringFromUTF8Symbol: ObfuscatedSymbolName? = nil,
+        stringImplToNSStringSymbol: ObfuscatedSymbolName? = nil,
+        destroyStringImplSymbol: ObfuscatedSymbolName? = nil,
+        backendDispatcherDispatchSymbol: ObfuscatedSymbolName? = nil
+    ) -> NativeInspectorSymbolResolution {
         makeAttachResolution(
-            from: V2_TransportNativeInspectorResolver.resolveForTesting(
+            from: NativeInspectorSymbolResolverCore.resolveForTesting(
                 imagePathSuffixes: imagePathSuffixes,
                 connectSymbol: connectSymbol,
                 disconnectSymbol: disconnectSymbol,
@@ -1972,10 +1957,10 @@ enum V2_TransportNativeInspectorSymbolResolver {
     }
 
     static func loadedImageHeaderAddressesForTesting() -> (webKit: UInt, javaScriptCore: UInt)? {
-        guard let loadedImage = V2_TransportNativeInspectorResolver.loadedWebKitImage(
-            pathSuffixes: V2_TransportNativeInspectorResolver.webKitImagePathSuffixes
-        ), let loadedJavaScriptCoreImage = V2_TransportNativeInspectorResolver.loadedWebKitImage(
-            pathSuffixes: V2_TransportNativeInspectorResolver.javaScriptCoreImagePathSuffixes
+        guard let loadedImage = NativeInspectorSymbolResolverCore.loadedWebKitImage(
+            pathSuffixes: NativeInspectorSymbolResolverCore.webKitImagePathSuffixes
+        ), let loadedJavaScriptCoreImage = NativeInspectorSymbolResolverCore.loadedWebKitImage(
+            pathSuffixes: NativeInspectorSymbolResolverCore.javaScriptCoreImagePathSuffixes
         ) else {
             return nil
         }
@@ -1990,14 +1975,14 @@ enum V2_TransportNativeInspectorSymbolResolver {
         _ address: UInt64,
         expectedHeaderAddresses: [UInt]
     ) -> Bool {
-        V2_TransportNativeInspectorResolver.resolvedAddress(
+        NativeInspectorSymbolResolverCore.resolvedAddress(
             address,
             belongsToAnyOf: expectedHeaderAddresses
         )
     }
 
     static func sharedCacheSymbolFileURLsForTesting(activeSharedCachePath: String?) -> [URL] {
-        V2_TransportNativeInspectorResolver.sharedCacheSymbolFileURLs(
+        NativeInspectorSymbolResolverCore.sharedCacheSymbolFileURLs(
             activeSharedCachePath: activeSharedCachePath
         )
     }
@@ -2008,18 +1993,33 @@ enum V2_TransportNativeInspectorSymbolResolver {
         webCore: [String]
     ) {
         (
-            webKit: V2_TransportNativeInspectorResolver.webKitImagePathSuffixes,
-            javaScriptCore: V2_TransportNativeInspectorResolver.javaScriptCoreImagePathSuffixes,
-            webCore: V2_TransportNativeInspectorResolver.webCoreImagePathSuffixes
+            webKit: NativeInspectorSymbolResolverCore.webKitImagePathSuffixes,
+            javaScriptCore: NativeInspectorSymbolResolverCore.javaScriptCoreImagePathSuffixes,
+            webCore: NativeInspectorSymbolResolverCore.webCoreImagePathSuffixes
         )
     }
 
-    static func connectSymbolsForTesting() -> [String] {
-        [V2_TransportNativeInspectorResolver.connectFrontendSymbol]
+    static func connectSymbolsForTesting() -> [ObfuscatedSymbolName] {
+        [NativeInspectorSymbolResolverCore.connectFrontendSymbol]
     }
 
-    static func disconnectSymbolsForTesting() -> [String] {
-        [V2_TransportNativeInspectorResolver.disconnectFrontendSymbol]
+    static func disconnectSymbolsForTesting() -> [ObfuscatedSymbolName] {
+        [NativeInspectorSymbolResolverCore.disconnectFrontendSymbol]
+    }
+
+    static func sensitiveSymbolsForBinarySafetyTesting() -> [ObfuscatedSymbolName] {
+        [
+            NativeInspectorSymbolResolverCore.connectFrontendSymbol,
+            NativeInspectorSymbolResolverCore.disconnectFrontendSymbol,
+            NativeInspectorSymbolResolverCore.stringFromUTF8Symbol,
+            NativeInspectorSymbolResolverCore.stringImplToNSStringSymbol,
+            NativeInspectorSymbolResolverCore.destroyStringImplSymbol,
+            NativeInspectorSymbolResolverCore.backendDispatcherDispatchSymbol,
+            NativeInspectorSymbolResolverCore.pageInspectorControllerConnectSymbol,
+            NativeInspectorSymbolResolverCore.pageInspectorControllerDisconnectSymbol,
+            NativeInspectorSymbolResolverCore.frameInspectorControllerConnectSymbol,
+            NativeInspectorSymbolResolverCore.frameInspectorControllerDisconnectSymbol,
+        ]
     }
 
     @unsafe static func uniqueFunctionStartContainingCallTargetsForTesting(
@@ -2030,7 +2030,7 @@ enum V2_TransportNativeInspectorSymbolResolver {
         functionStartAddresses: [UInt64],
         callTargetAddresses: Set<UInt64>
     ) -> UInt64? {
-        unsafe V2_TransportNativeInspectorResolver.uniqueFunctionStartContainingCallTargets(
+        unsafe NativeInspectorSymbolResolverCore.uniqueFunctionStartContainingCallTargets(
             architecture: architecture,
             textBaseAddress: textBaseAddress,
             textPointer: textPointer,
@@ -2040,14 +2040,9 @@ enum V2_TransportNativeInspectorSymbolResolver {
         )
     }
 
-    private static func makeAttachResolution(from resolution: V2_TransportNativeInspectorSymbolResolution) -> V2_TransportAttachSymbolResolution {
-        V2_TransportAttachSymbolResolution(
-            connectFrontendAddress: resolution.functionAddresses.connectFrontendAddress,
-            disconnectFrontendAddress: resolution.functionAddresses.disconnectFrontendAddress,
-            stringFromUTF8Address: resolution.functionAddresses.stringFromUTF8Address,
-            stringImplToNSStringAddress: resolution.functionAddresses.stringImplToNSStringAddress,
-            destroyStringImplAddress: resolution.functionAddresses.destroyStringImplAddress,
-            backendDispatcherDispatchAddress: resolution.functionAddresses.backendDispatcherDispatchAddress,
+    private static func makeAttachResolution(from resolution: NativeInspectorSymbolLookupResult) -> NativeInspectorSymbolResolution {
+        NativeInspectorSymbolResolution(
+            addresses: resolution.functionAddresses,
             failureReason: resolution.failureReason,
             failureKind: resolution.failureKind?.message,
             phase: resolution.phase?.message,
@@ -2060,47 +2055,10 @@ enum V2_TransportNativeInspectorSymbolResolver {
 #endif
 
 #if !os(iOS) && !os(macOS)
-struct V2_TransportAttachSymbolResolution: Sendable {
-    let connectFrontendAddress: UInt64
-    let disconnectFrontendAddress: UInt64
-    let stringFromUTF8Address: UInt64
-    let stringImplToNSStringAddress: UInt64
-    let destroyStringImplAddress: UInt64
-    let backendDispatcherDispatchAddress: UInt64
-    let failureReason: String?
-    let failureKind: String?
-    let phase: String?
-    let missingFunctions: [String]
-    let source: String?
-    let usedConnectDisconnectFallback: Bool
-
-    var diagnosticsSummary: String? {
-        var parts = [String]()
-        if let failureKind, !failureKind.isEmpty {
-            parts.append("failure=\(failureKind)")
-        }
-        if let source, !source.isEmpty {
-            parts.append("source=\(source)")
-        }
-        return parts.isEmpty ? nil : parts.joined(separator: " ")
-    }
-
-    var supportSnapshot: V2_TransportSupportSnapshot {
-        .unsupported(reason: failureReason ?? "V2_WebInspectorTransport is only available on iOS and macOS.")
-    }
-
-    var isSupported: Bool { false }
-}
-
-enum V2_TransportNativeInspectorSymbolResolver {
-    static func currentAttachResolution() -> V2_TransportAttachSymbolResolution {
-        V2_TransportAttachSymbolResolution(
-            connectFrontendAddress: 0,
-            disconnectFrontendAddress: 0,
-            stringFromUTF8Address: 0,
-            stringImplToNSStringAddress: 0,
-            destroyStringImplAddress: 0,
-            backendDispatcherDispatchAddress: 0,
+package enum NativeInspectorSymbolResolver {
+    package static func resolveCurrent() -> NativeInspectorSymbolResolution {
+        NativeInspectorSymbolResolution(
+            addresses: .zero,
             failureReason: "V2_WebInspectorTransport is only available on iOS and macOS.",
             failureKind: "unsupported",
             phase: nil,
@@ -2120,8 +2078,8 @@ enum V2_TransportNativeInspectorSymbolResolver {
         stringImplToNSStringSymbol: String? = nil,
         destroyStringImplSymbol: String? = nil,
         backendDispatcherDispatchSymbol: String? = nil
-    ) -> V2_TransportAttachSymbolResolution {
-        return currentAttachResolution()
+    ) -> NativeInspectorSymbolResolution {
+        return resolveCurrent()
     }
 }
 #endif
