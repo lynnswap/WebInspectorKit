@@ -53,6 +53,62 @@ func targetCommandUsesNestedReplyKey() async throws {
 }
 
 @Test
+func targetScopedCompatibilityCommandsResolveWithoutBackendSend() async throws {
+    let backend = FakeTransportBackend()
+    let session = TransportSession(backend: backend, responseTimeout: .seconds(1))
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#)
+
+    let domResult = try await session.send(
+        ProtocolCommand(domain: .dom, method: "DOM.enable", routing: .target(.init("page-main")))
+    )
+    let cssResult = try await session.send(
+        ProtocolCommand(domain: .css, method: "CSS.enable", routing: .octopus(pageTarget: .init("page-main")))
+    )
+
+    #expect(domResult.targetID == ProtocolTargetIdentifier("page-main"))
+    #expect(cssResult.targetID == ProtocolTargetIdentifier("page-main"))
+    #expect(String(data: domResult.resultData, encoding: .utf8) == "{}")
+    #expect(String(data: cssResult.resultData, encoding: .utf8) == "{}")
+    #expect(await backend.sentMessages().isEmpty)
+}
+
+@Test
+func targetReplyCarriesPerDomainSequenceWatermarks() async throws {
+    let backend = FakeTransportBackend()
+    let session = TransportSession(backend: backend, responseTimeout: .seconds(1))
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#)
+
+    let sendTask = Task {
+        try await session.send(
+            ProtocolCommand(domain: .dom, method: "DOM.requestNode", routing: .target(.init("page-main")))
+        )
+    }
+    let sent = try await waitForTargetMessage(backend)
+    let innerID = try messageID(sent.message)
+
+    await receiveTargetDispatch(
+        session,
+        targetID: .init("page-main"),
+        message: #"{"method":"DOM.setChildNodes","params":{"parentId":2,"nodes":[{"nodeId":3,"nodeType":1,"nodeName":"DIV"}]}}"#
+    )
+    await receiveTargetDispatch(
+        session,
+        targetID: .init("page-main"),
+        message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-1","request":{"url":"https://example.com/"},"timestamp":1}}"#
+    )
+    await receiveTargetDispatch(
+        session,
+        targetID: .init("page-main"),
+        message: #"{"id":\#(innerID),"result":{"nodeId":3}}"#
+    )
+    let result = try await sendTask.value
+
+    #expect(result.receivedSequence > result.receivedSequence(for: .dom))
+    #expect(result.receivedSequence(for: .network) == result.receivedSequence)
+    #expect(result.receivedSequence(for: .dom) > 0)
+}
+
+@Test
 func targetCommandWrapperErrorFailsPendingReplyImmediately() async throws {
     let backend = FakeTransportBackend()
     let session = TransportSession(backend: backend, responseTimeout: .seconds(1))
@@ -166,6 +222,22 @@ func detachFailsPendingRepliesAndClosesStreams() async throws {
     let event = await streamTask.value
     #expect(event == nil)
     #expect(await backend.isDetached())
+}
+
+@Test
+func waitForCurrentMainPageTargetFailsAfterDetach() async throws {
+    let backend = FakeTransportBackend()
+    let session = TransportSession(backend: backend, responseTimeout: .seconds(1))
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#)
+
+    let target = try await session.waitForCurrentMainPageTarget()
+    #expect(target.targetID == ProtocolTargetIdentifier("page-main"))
+
+    await session.detach()
+
+    await #expect(throws: TransportError.transportClosed) {
+        try await session.waitForCurrentMainPageTarget()
+    }
 }
 
 @Test
@@ -1017,18 +1089,23 @@ func domAdapterSubframeCommitDoesNotConsumeCurrentMainPage() async throws {
 }
 
 @Test
-func networkCommandIntentRoutesThroughOctopusPageTarget() throws {
+func networkCommandIntentRoutesThroughCurrentPageOctopusTarget() throws {
     let requestKey = NetworkRequestIdentifierKey(
-        targetID: .init("page-proxy"),
+        targetID: .init("frame-ad"),
         requestID: .init("request-1")
     )
-    let command = try NetworkTransportAdapter.command(
+    let bodyCommand = try NetworkTransportAdapter.command(
         for: .getResponseBody(requestKey: requestKey, backendResourceIdentifier: nil)
     )
+    let certificateCommand = try NetworkTransportAdapter.command(
+        for: .getSerializedCertificate(requestKey: requestKey, backendResourceIdentifier: nil)
+    )
 
-    #expect(command.method == "Network.getResponseBody")
-    #expect(command.routing == .octopus(pageTarget: .init("page-proxy")))
-    #expect(String(data: command.parametersData, encoding: .utf8)?.contains(#""requestId":"request-1""#) == true)
+    #expect(bodyCommand.method == "Network.getResponseBody")
+    #expect(bodyCommand.routing == .octopus(pageTarget: nil))
+    #expect(certificateCommand.method == "Network.getSerializedCertificate")
+    #expect(certificateCommand.routing == .octopus(pageTarget: nil))
+    #expect(String(data: bodyCommand.parametersData, encoding: .utf8)?.contains(#""requestId":"request-1""#) == true)
 }
 
 private func firstEvent(from stream: AsyncStream<ProtocolEventEnvelope>) -> Task<ProtocolEventEnvelope?, Never> {

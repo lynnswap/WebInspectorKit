@@ -245,6 +245,19 @@ package final class DOMSession {
         selection = DOMSelection()
     }
 
+    package func reset() {
+        currentPage = nil
+        targetsByID.removeAll()
+        framesByID.removeAll()
+        executionContextsByID.removeAll()
+        documentsByID.removeAll()
+        nodesByID.removeAll()
+        currentNodeIDByKey.removeAll()
+        nextGenerationByTargetID.removeAll()
+        nextSelectionRequestRawID = 0
+        selection = DOMSelection()
+    }
+
     package func applyTargetCreated(
         _ record: ProtocolTargetRecord,
         makeCurrentMainPage: Bool = false

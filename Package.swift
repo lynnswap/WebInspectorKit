@@ -105,7 +105,16 @@ let package = Package(
             name: "V2_WebInspectorTransport",
             dependencies: [
                 "V2_WebInspectorCore",
-                "V2_WebInspectorNativeBridge"
+                "V2_WebInspectorNativeBridge",
+                .product(name: "MachOKit", package: "MachOKit")
+            ],
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
+            name: "V2_WebInspectorRuntime",
+            dependencies: [
+                "V2_WebInspectorCore",
+                "V2_WebInspectorTransport"
             ],
             swiftSettings: strictSwiftSettings
         ),
@@ -231,6 +240,16 @@ let package = Package(
                 "V2_WebInspectorNativeBridge"
             ],
             path: "Tests/V2_WebInspectorNativeBridgeTests",
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
+            name: "V2_WebInspectorRuntimeTests",
+            dependencies: [
+                "V2_WebInspectorCore",
+                "V2_WebInspectorTransport",
+                "V2_WebInspectorRuntime"
+            ],
+            path: "Tests/V2_WebInspectorRuntimeTests",
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(

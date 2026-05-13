@@ -8,7 +8,7 @@ package enum NetworkTransportAdapter {
             return ProtocolCommand(
                 domain: .network,
                 method: "Network.getResponseBody",
-                routing: .octopus(pageTarget: requestKey.targetID),
+                routing: .octopus(pageTarget: nil),
                 parametersData: try parameters(
                     requestKey: requestKey,
                     backendResourceIdentifier: backendResourceIdentifier
@@ -18,7 +18,7 @@ package enum NetworkTransportAdapter {
             return ProtocolCommand(
                 domain: .network,
                 method: "Network.getSerializedCertificate",
-                routing: .octopus(pageTarget: requestKey.targetID),
+                routing: .octopus(pageTarget: nil),
                 parametersData: try parameters(
                     requestKey: requestKey,
                     backendResourceIdentifier: backendResourceIdentifier

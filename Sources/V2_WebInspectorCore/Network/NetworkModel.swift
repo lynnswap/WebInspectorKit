@@ -216,6 +216,11 @@ package final class NetworkSession {
         requestsByID = [:]
     }
 
+    package func reset() {
+        orderedRequestIDs.removeAll()
+        requestsByID.removeAll()
+    }
+
     @discardableResult
     package func applyRequestWillBeSent(
         targetID: ProtocolTargetIdentifier,

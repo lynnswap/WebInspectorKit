@@ -13,10 +13,13 @@ package actor TransportSession {
     private let responseTimeout: Duration
     private var nextCommandID: UInt64
     private var nextSequence: UInt64
+    private var lastSequenceByDomain: [ProtocolDomain: UInt64]
     private var nextSubscriberID: UInt64
+    private var nextMainPageTargetWaiterID: UInt64
     private var rootReplies: [UInt64: PendingReply]
     private var targetReplies: [TargetReplyKey: PendingReply]
     private var targetReplyKeysByRootWrapperID: [UInt64: TargetReplyKey]
+    private var mainPageTargetWaiters: [UInt64: ReplyPromise<TransportMainPageTarget>]
     private var targetsByID: [ProtocolTargetIdentifier: ProtocolTargetRecord]
     private var frameTargetIDsByFrameID: [DOMFrameIdentifier: ProtocolTargetIdentifier]
     private var executionContextsByID: [ExecutionContextID: ExecutionContextRecord]
@@ -31,10 +34,13 @@ package actor TransportSession {
         self.responseTimeout = responseTimeout
         nextCommandID = 0
         nextSequence = 0
+        lastSequenceByDomain = [:]
         nextSubscriberID = 0
+        nextMainPageTargetWaiterID = 0
         rootReplies = [:]
         targetReplies = [:]
         targetReplyKeysByRootWrapperID = [:]
+        mainPageTargetWaiters = [:]
         targetsByID = [:]
         frameTargetIDsByFrameID = [:]
         executionContextsByID = [:]
@@ -69,11 +75,17 @@ package actor TransportSession {
             guard targetsByID[targetID] != nil else {
                 throw TransportError.missingTarget(targetID)
             }
+            if let result = compatibilityResult(for: command, targetID: targetID) {
+                return result
+            }
             return try await sendTarget(command, targetID: targetID)
         case let .octopus(pageTarget):
             let resolvedTarget = try pageTarget ?? currentMainPageTarget()
             guard targetsByID[resolvedTarget] != nil else {
                 throw TransportError.missingTarget(resolvedTarget)
+            }
+            if let result = compatibilityResult(for: command, targetID: resolvedTarget) {
+                return result
             }
             return try await sendTarget(command, targetID: resolvedTarget)
         }
@@ -95,9 +107,13 @@ package actor TransportSession {
         for (_, pending) in targetReplies {
             await pending.promise.fulfill(.failure(TransportError.transportClosed))
         }
+        for (_, waiter) in mainPageTargetWaiters {
+            await waiter.fulfill(.failure(TransportError.transportClosed))
+        }
         rootReplies.removeAll()
         targetReplies.removeAll()
         targetReplyKeysByRootWrapperID.removeAll()
+        mainPageTargetWaiters.removeAll()
         for continuations in subscribers.values {
             for continuation in continuations.values {
                 continuation.finish()
@@ -105,6 +121,47 @@ package actor TransportSession {
         }
         subscribers.removeAll()
         await backend.detach()
+    }
+
+    package func waitForCurrentMainPageTarget(timeout: Duration? = nil) async throws -> TransportMainPageTarget {
+        guard !closed else {
+            throw TransportError.transportClosed
+        }
+        if let currentMainPageTargetID {
+            return TransportMainPageTarget(targetID: currentMainPageTargetID, receivedSequence: nextSequence)
+        }
+
+        nextMainPageTargetWaiterID &+= 1
+        let waiterID = nextMainPageTargetWaiterID
+        let promise = ReplyPromise<TransportMainPageTarget>()
+        mainPageTargetWaiters[waiterID] = promise
+
+        let timeoutTask: Task<Void, Never>? = timeout.map { timeout in
+            Task {
+                do {
+                    try await Task.sleep(for: timeout)
+                } catch {
+                    return
+                }
+                await self.failMainPageTargetWaiter(waiterID, error: TransportError.missingMainPageTarget)
+            }
+        }
+        defer {
+            timeoutTask?.cancel()
+        }
+
+        do {
+            return try await withTaskCancellationHandler {
+                try await promise.value()
+            } onCancel: {
+                Task {
+                    await self.failMainPageTargetWaiter(waiterID, error: CancellationError())
+                }
+            }
+        } catch {
+            mainPageTargetWaiters.removeValue(forKey: waiterID)
+            throw error
+        }
     }
 
     package func snapshot() -> TransportSnapshot {
@@ -200,6 +257,25 @@ package actor TransportSession {
         case target(TargetReplyKey)
     }
 
+    private func compatibilityResult(
+        for command: ProtocolCommand,
+        targetID: ProtocolTargetIdentifier
+    ) -> ProtocolCommandResult? {
+        switch command.method {
+        case "DOM.enable", "CSS.enable":
+            ProtocolCommandResult(
+                domain: command.domain,
+                method: command.method,
+                targetID: targetID,
+                receivedSequence: nextSequence,
+                receivedDomainSequences: lastSequenceByDomain,
+                resultData: Data("{}".utf8)
+            )
+        default:
+            nil
+        }
+    }
+
     private func drainInboundMessages() async {
         guard !isDrainingInboundMessages else {
             return
@@ -285,7 +361,7 @@ package actor TransportSession {
         }
 
         await updateRegistryFromRootEvent(method: method, paramsData: parsed.paramsData)
-        emit(domain: ProtocolDomain(method: method), method: method, targetID: targetIDForRootEvent(method: method, paramsData: parsed.paramsData), paramsData: parsed.paramsData)
+        await emit(domain: ProtocolDomain(method: method), method: method, targetID: targetIDForRootEvent(method: method, paramsData: parsed.paramsData), paramsData: parsed.paramsData)
     }
 
     private func handleTargetMessage(_ parsed: ParsedProtocolMessage, targetID: ProtocolTargetIdentifier) async {
@@ -302,7 +378,7 @@ package actor TransportSession {
         }
 
         updateRegistryFromTargetEvent(method: method, targetID: targetID, paramsData: parsed.paramsData)
-        emit(domain: ProtocolDomain(method: method), method: method, targetID: targetID, paramsData: parsed.paramsData)
+        await emit(domain: ProtocolDomain(method: method), method: method, targetID: targetID, paramsData: parsed.paramsData)
     }
 
     private func resolve(_ pending: PendingReply, parsed: ParsedProtocolMessage) async {
@@ -324,6 +400,8 @@ package actor TransportSession {
                     domain: pending.domain,
                     method: pending.method,
                     targetID: pending.targetID,
+                    receivedSequence: nextSequence,
+                    receivedDomainSequences: lastSequenceByDomain,
                     resultData: parsed.resultData
                 )
             )
@@ -554,8 +632,9 @@ package actor TransportSession {
         return nextCommandID
     }
 
-    private func emit(domain: ProtocolDomain, method: String, targetID: ProtocolTargetIdentifier?, paramsData: Data) {
+    private func emit(domain: ProtocolDomain, method: String, targetID: ProtocolTargetIdentifier?, paramsData: Data) async {
         nextSequence &+= 1
+        lastSequenceByDomain[domain] = nextSequence
         let envelope = ProtocolEventEnvelope(
             sequence: nextSequence,
             domain: domain,
@@ -563,12 +642,32 @@ package actor TransportSession {
             targetID: targetID,
             paramsData: paramsData
         )
-        guard let continuations = subscribers[domain]?.values else {
-            return
-        }
+        let continuations = subscribers[domain].map { Array($0.values) } ?? []
         for continuation in continuations {
             continuation.yield(envelope)
         }
+        await notifyMainPageTargetWaitersIfNeeded(receivedSequence: nextSequence)
+    }
+
+    private func notifyMainPageTargetWaitersIfNeeded(receivedSequence: UInt64) async {
+        guard let currentMainPageTargetID,
+              !mainPageTargetWaiters.isEmpty else {
+            return
+        }
+        let waiters = mainPageTargetWaiters
+        mainPageTargetWaiters.removeAll()
+        let result = TransportMainPageTarget(
+            targetID: currentMainPageTargetID,
+            receivedSequence: receivedSequence
+        )
+        for waiter in waiters.values {
+            await waiter.fulfill(.success(result))
+        }
+    }
+
+    private func failMainPageTargetWaiter(_ waiterID: UInt64, error: any Error) async {
+        let waiter = mainPageTargetWaiters.removeValue(forKey: waiterID)
+        await waiter?.fulfill(.failure(error))
     }
 
     private func removeSubscriber(_ subscriberID: UInt64, domain: ProtocolDomain) {

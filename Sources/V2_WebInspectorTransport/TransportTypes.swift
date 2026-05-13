@@ -97,13 +97,28 @@ package struct ProtocolCommandResult: Equatable, Sendable {
     package var domain: ProtocolDomain
     package var method: String
     package var targetID: ProtocolTargetIdentifier?
+    package var receivedSequence: UInt64
+    package var receivedDomainSequences: [ProtocolDomain: UInt64]
     package var resultData: Data
 
-    package init(domain: ProtocolDomain, method: String, targetID: ProtocolTargetIdentifier?, resultData: Data) {
+    package init(
+        domain: ProtocolDomain,
+        method: String,
+        targetID: ProtocolTargetIdentifier?,
+        receivedSequence: UInt64 = 0,
+        receivedDomainSequences: [ProtocolDomain: UInt64] = [:],
+        resultData: Data
+    ) {
         self.domain = domain
         self.method = method
         self.targetID = targetID
+        self.receivedSequence = receivedSequence
+        self.receivedDomainSequences = receivedDomainSequences
         self.resultData = resultData
+    }
+
+    package func receivedSequence(for domain: ProtocolDomain) -> UInt64 {
+        receivedDomainSequences[domain] ?? 0
     }
 }
 
@@ -151,6 +166,16 @@ package struct TransportSnapshot: Equatable, Sendable {
         self.executionContextsByID = executionContextsByID
         self.pendingRootReplyIDs = pendingRootReplyIDs
         self.pendingTargetReplyKeys = pendingTargetReplyKeys
+    }
+}
+
+package struct TransportMainPageTarget: Equatable, Sendable {
+    package var targetID: ProtocolTargetIdentifier
+    package var receivedSequence: UInt64
+
+    package init(targetID: ProtocolTargetIdentifier, receivedSequence: UInt64) {
+        self.targetID = targetID
+        self.receivedSequence = receivedSequence
     }
 }
 
