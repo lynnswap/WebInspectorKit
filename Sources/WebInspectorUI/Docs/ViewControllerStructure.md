@@ -1,16 +1,25 @@
 # ViewController Structure
 
-`Sources/WebInspectorUI` で作っている ViewController の親子構造だけを示します。
-View、処理、状態、モデル、タブ定義は省略します。
+This document shows only the view-controller containment tree in
+`Sources/WebInspectorUI`. Views, processing, state, models, and tab definitions
+are intentionally omitted.
 
-矢印は child ViewController を表します。
+Arrows represent child view controllers.
+
+For V2 runtime/model UI wiring, see
+[`V2UIIntegration.md`](V2UIIntegration.md).
 
 ## Source Layout
 
-- `Containers`: host / wrapper ViewController。`UINavigationController` / `UITabBarController` / split root など、UIKit container の責務を持つ型。
-- `Tabs`: public tab API、layout 別 display item projection、content cache、content factory。
-- `DOM`: DOM 固有の content ViewController、navigation item、built-in DOM tab controller。
-- `Network`: Network 固有の container / built-in tab controller。`List` に一覧 UI、`Detail` に選択 entry の detail UI を置く。
+- `Containers`: host/wrapper view controllers. These own UIKit container
+  responsibilities such as `UINavigationController`, `UITabBarController`, and
+  split roots.
+- `Tabs`: public tab API, layout-specific display item projection, content
+  cache, and content factory.
+- `DOM`: DOM-specific content view controllers, navigation items, and built-in
+  DOM tab controllers.
+- `Network`: Network-specific containers and built-in tab controllers. `List`
+  contains the request list UI; `Detail` contains the selected entry detail UI.
 
 ```mermaid
 flowchart TD

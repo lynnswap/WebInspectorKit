@@ -96,6 +96,7 @@ See [`MIGRATION.md`](Docs/MIGRATION.md) for details on breaking changes.
 
 - Consumers of the Swift package do not need `node`, `pnpm`, or `esbuild`.
 - The DOM tree inspector UI is native UIKit/TextKit2. There is no bundled JavaScript DOM tree frontend or generated script regeneration step.
+- For internal V2 architecture notes, see [`V2ArchitectureOverview.md`](Docs/V2ArchitectureOverview.md).
 
 ## License
 

@@ -18,6 +18,7 @@ The target exists to validate a cleaner WebKit-shaped transport/model architectu
 - [Transport research](Docs/TransportResearch.md)
 - [DOM model research](Docs/DOMModelResearch.md)
 - [Network model research](Docs/NetworkModelResearch.md)
+- [WebInspector V2 architecture overview](../../Docs/V2ArchitectureOverview.md)
 
 ## Model Boundary
 
