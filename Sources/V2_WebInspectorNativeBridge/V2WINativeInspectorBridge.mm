@@ -43,17 +43,20 @@ enum ErrorCode : NSInteger {
     ErrorCodeEncodingFailed = 4,
 };
 
-static NSString *deobfuscateSymbol(NSArray<NSString *> *reverseTokens)
+static constexpr uint8_t obfuscatedSymbolKey = 0xA7;
+
+static NSString *deobfuscateXORBytes(const uint8_t *encodedBytes, size_t length)
 {
-    NSMutableString *result = [NSMutableString string];
-    for (NSString *token in [reverseTokens reverseObjectEnumerator])
-        [result appendString:token];
-    return result;
+    std::vector<char> decodedBytes(length + 1);
+    for (size_t index = 0; index < length; ++index)
+        decodedBytes[index] = static_cast<char>(encodedBytes[index] ^ obfuscatedSymbolKey);
+    decodedBytes[length] = '\0';
+    return [NSString stringWithUTF8String:decodedBytes.data()];
 }
 
-static SEL selectorFromReverseTokens(NSArray<NSString *> *reverseTokens)
+static SEL selectorFromXORBytes(const uint8_t *encodedBytes, size_t length)
 {
-    return NSSelectorFromString(deobfuscateSymbol(reverseTokens));
+    return NSSelectorFromString(deobfuscateXORBytes(encodedBytes, length));
 }
 
 static id objectResult(id target, SEL selector)
@@ -223,7 +226,9 @@ static ptrdiff_t ivarOffset(Class cls, NSString *name)
 
 static void *pageProxyPointer(WKWebView *webView)
 {
-    ptrdiff_t offset = ivarOffset(WKWebView.class, deobfuscateSymbol(@[@"page", @"_"]));
+    // Original: _page
+    static const uint8_t encodedPageIvarName[] = { 0xF8, 0xD7, 0xC6, 0xC0, 0xC2 };
+    ptrdiff_t offset = ivarOffset(WKWebView.class, deobfuscateXORBytes(encodedPageIvarName, sizeof(encodedPageIvarName)));
     if (offset == NSNotFound)
         return nullptr;
 
@@ -635,7 +640,12 @@ private:
     _disconnectFrontendAddress = resolvedSymbols.disconnectFrontendAddress;
     _resolvedSymbols = resolvedSymbols;
 
-    SEL inspectorSelector = V2WINativeInspectorBridgePrivate::selectorFromReverseTokens(@[@"inspector", @"_"]);
+    // Original: _inspector
+    static const uint8_t encodedInspectorSelectorName[] = { 0xF8, 0xCE, 0xC9, 0xD4, 0xD7, 0xC2, 0xC4, 0xD3, 0xC8, 0xD5 };
+    SEL inspectorSelector = V2WINativeInspectorBridgePrivate::selectorFromXORBytes(
+        encodedInspectorSelectorName,
+        sizeof(encodedInspectorSelectorName)
+    );
     _inspector = V2WINativeInspectorBridgePrivate::objectResult(self.webView, inspectorSelector);
     void *page = V2WINativeInspectorBridgePrivate::pageProxyPointer(self.webView);
     ptrdiff_t preferredCachedOffset = _controllerOffset;
@@ -660,7 +670,7 @@ private:
     BOOL requiresInspectorConnection = YES;
 #endif
 
-    SEL connectSelector = V2WINativeInspectorBridgePrivate::selectorFromReverseTokens(@[@"connect"]);
+    SEL connectSelector = @selector(connect);
     if ((requiresInspectorConnection && (!_inspector || ![_inspector respondsToSelector:connectSelector]))
         || !_controller
         || !_backendDispatcher) {
