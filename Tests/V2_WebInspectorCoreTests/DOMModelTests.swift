@@ -342,6 +342,43 @@ func directNodeSelectionUpdatesProjectionWithoutSnapshotModel() async throws {
 }
 
 @Test
+func clearingNodeSelectionCancelsPendingInspectSelection() async throws {
+    let pageTargetID = ProtocolTarget.ID("page-main")
+    let executionContextID = ExecutionContextID(7)
+    let session = await DOMSession()
+
+    await session.applyTargetCreated(.init(id: pageTargetID, kind: .page), makeCurrentMainPage: true)
+    _ = await session.replaceDocumentRoot(pageDocumentWithoutIframe(), targetID: pageTargetID)
+    await session.applyExecutionContextCreated(executionContextID, targetID: pageTargetID)
+
+    let command = await session.resolveInspectSelection(
+        remoteObject: .init(objectID: "page-object", injectedScriptID: executionContextID)
+    )
+    let requestID: SelectionRequestIdentifier
+    guard case let .success(.requestNode(id, _, _)) = command else {
+        Issue.record("Expected pending requestNode selection")
+        return
+    }
+    requestID = id
+
+    await session.selectNode(nil)
+    #expect((await session.snapshot()).selection.pendingRequest == nil)
+
+    let result = await session.applyRequestNodeResult(
+        selectionRequestID: requestID,
+        targetID: pageTargetID,
+        nodeID: .init(2)
+    )
+    guard case let .failure(.staleSelectionRequest(expected, received)) = result else {
+        Issue.record("Expected cancelled request to be rejected as stale")
+        return
+    }
+    #expect(expected == nil)
+    #expect(received == requestID)
+    #expect(await session.selectedNodeID == nil)
+}
+
+@Test
 func requestChildNodesIntentUsesNodeOwningTargetAndDepth() async throws {
     let pageTargetID = ProtocolTarget.ID("page-main")
     let session = await DOMSession()

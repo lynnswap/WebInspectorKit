@@ -558,9 +558,14 @@ package final class DOMSession {
         return parent.templateContentID == node.id
     }
 
-    package func selectNode(_ nodeID: DOMNode.ID) {
-        guard nodesByID[nodeID] != nil,
-              selection.selectedNodeID != nodeID else {
+    package func selectNode(_ nodeID: DOMNode.ID?) {
+        if let nodeID, nodesByID[nodeID] == nil {
+            return
+        }
+        let hasSelectionStateChange = selection.selectedNodeID != nodeID
+            || selection.pendingRequest != nil
+            || selection.failure != nil
+        guard hasSelectionStateChange else {
             return
         }
         selection.selectedNodeID = nodeID
