@@ -259,33 +259,17 @@ final class BrowserInspectorCoordinator {
 
     func presentSheet(
         from presenter: UIViewController,
-        browserStore: BrowserStore,
         inspectorRuntime: WIRuntimeSession,
-        tabs: [WITab] = [.dom, .network],
-        launchConfiguration: BrowserLaunchConfiguration? = nil
+        tabs: [WITab] = [.dom, .network]
     ) -> Bool {
         guard isPresentingInspector(presenter: presenter) == false else {
             return false
         }
 
         let anchor = resolvePresentationAnchor(from: presenter)
-        let configuration = launchConfiguration ?? BrowserLaunchConfiguration(
-            initialURL: browserStore.currentURL ?? URL(string: "about:blank")!
+        let sheetController = WIViewController(
+            session: WISession(runtime: inspectorRuntime, tabs: tabs)
         )
-
-        let sheetController: UIViewController
-        if let launchConfiguration, launchConfiguration.uiTestScenario != nil {
-            sheetController = BrowserInspectorSheetHostingController(
-                browserStore: browserStore,
-                inspectorRuntime: inspectorRuntime,
-                launchConfiguration: configuration,
-                tabs: tabs
-            )
-        } else {
-            sheetController = WIViewController(
-                session: WISession(runtime: inspectorRuntime, tabs: tabs)
-            )
-        }
         sheetController.modalPresentationStyle = .pageSheet
         applyDefaultDetents(to: sheetController)
         presentedSheetController = sheetController
@@ -428,22 +412,6 @@ final class BrowserInspectorCoordinator {
 
     static func clearInspectorWindowPresentation() {
         inspectorWindowRegistry.clear()
-    }
-
-    static func setInspectorWindowContextForTesting(_ context: BrowserInspectorWindowContext?) {
-        inspectorWindowRegistry.setContext(context)
-    }
-
-    static func inspectorWindowPresentationStateForTesting(
-        hasContext: Bool,
-        isPendingPresentation: Bool,
-        attachedSceneCount: Int
-    ) -> Bool {
-        InspectorWindowRegistry.isPresentationActive(
-            hasContext: hasContext,
-            isPendingPresentation: isPendingPresentation,
-            attachedSceneCount: attachedSceneCount
-        )
     }
 
     private static func makeInspectorWindowUserActivity() -> NSUserActivity {

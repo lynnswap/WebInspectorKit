@@ -67,9 +67,6 @@ final class BrowserRootViewController: UINavigationController {
 
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
-        if launchConfiguration.uiTestScenario == .domRemoteURL {
-            return
-        }
         if pageViewController?.isPresentingInspectorForRuntimeAttachment == true {
             return
         }
@@ -110,9 +107,6 @@ final class BrowserRootViewController: UINavigationController {
         viewControllers.first as? BrowserPageViewController
     }
 
-    var pageViewControllerForTesting: BrowserPageViewController? {
-        pageViewController
-    }
 }
 
 private extension BrowserRootViewController {
