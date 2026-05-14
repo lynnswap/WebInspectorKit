@@ -10,13 +10,18 @@ enum V2_NetworkPreviewFixtures {
     }
 
     static func makePanelModel(mode: Mode) -> V2_NetworkPanelModel {
-        let network = NetworkSession()
-        applySampleData(to: network, mode: mode)
+        let network = makeNetworkSession(mode: mode)
         let model = V2_NetworkPanelModel(network: network)
         if mode == .detail {
             model.selectRequest(model.displayRequests.first)
         }
         return model
+    }
+
+    static func makeNetworkSession(mode: Mode) -> NetworkSession {
+        let network = NetworkSession()
+        applySampleData(to: network, mode: mode)
+        return network
     }
 
     static func applySampleData(to network: NetworkSession, mode: Mode) {
