@@ -196,6 +196,7 @@ let package = Package(
             name: "WebInspectorKit",
             dependencies: [
                 "WebInspectorUI",
+                "V2_WebInspectorUI",
                 "WebInspectorEngine",
                 "WebInspectorRuntime",
                 "WebInspectorBridge"

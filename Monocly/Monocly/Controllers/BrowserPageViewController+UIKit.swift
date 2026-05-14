@@ -1,6 +1,6 @@
 #if canImport(UIKit)
 import UIKit
-@_spi(Monocly) import WebInspectorKit
+import WebInspectorKit
 #if os(iOS)
 import WKViewportCoordinator
 #endif
@@ -13,7 +13,7 @@ final class BrowserPageViewController: UIViewController {
     }
 
     private let store: BrowserStore
-    private let inspectorRuntime: WIRuntimeSession
+    private let inspectorSession: WebInspectorSession
     private let launchConfiguration: BrowserLaunchConfiguration
     private let inspectorCoordinator = BrowserInspectorCoordinator()
 
@@ -53,11 +53,11 @@ final class BrowserPageViewController: UIViewController {
 
     init(
         store: BrowserStore,
-        inspectorRuntime: WIRuntimeSession,
+        inspectorSession: WebInspectorSession,
         launchConfiguration: BrowserLaunchConfiguration
     ) {
         self.store = store
-        self.inspectorRuntime = inspectorRuntime
+        self.inspectorSession = inspectorSession
         self.launchConfiguration = launchConfiguration
         super.init(nibName: nil, bundle: nil)
         inspectorCoordinator.onPresentationStateChange = { [weak self] in
@@ -135,7 +135,7 @@ final class BrowserPageViewController: UIViewController {
 
     @objc
     private func handleOpenInspectorAction(_ sender: Any?) {
-        _ = openInspectorAsSheet(tabs: [.dom, .network])
+        _ = openInspectorAsSheet()
     }
 
     private func configureViewHierarchy() {
@@ -310,7 +310,7 @@ final class BrowserPageViewController: UIViewController {
             guard let self else {
                 return
             }
-            _ = self.openInspectorAsSheet(tabs: [.dom, .network])
+            _ = self.openInspectorAsSheet()
         }
     }
 
@@ -328,7 +328,7 @@ final class BrowserPageViewController: UIViewController {
             guard let self else {
                 return
             }
-            _ = self.openInspectorAsSheet(tabs: [.dom, .network])
+            _ = self.openInspectorAsSheet()
         }
         let openInWindow = UIAction(
             title: "Open in New Window",
@@ -338,7 +338,7 @@ final class BrowserPageViewController: UIViewController {
             guard let self else {
                 return
             }
-            _ = self.openInspectorInNewWindow(tabs: [.dom, .network])
+            _ = self.openInspectorInNewWindow()
         }
 
         return UIMenu(title: "", children: [openAsSheet, openInWindow])
@@ -422,18 +422,17 @@ final class BrowserPageViewController: UIViewController {
             return
         }
 
-        didAutoPresentInspector = openInspectorAsSheet(tabs: launchConfiguration.autoOpenInspectorTabs)
+        didAutoPresentInspector = openInspectorAsSheet()
     }
 
-    private func openInspectorAsSheet(tabs: [WITab]) -> Bool {
+    private func openInspectorAsSheet() -> Bool {
         inspectorCoordinator.presentSheet(
             from: navigationController ?? self,
-            inspectorRuntime: inspectorRuntime,
-            tabs: tabs
+            inspectorSession: inspectorSession
         )
     }
 
-    private func openInspectorInNewWindow(tabs: [WITab]) -> Bool {
+    private func openInspectorInNewWindow() -> Bool {
         guard supportsMultipleScenesForInspectorMenu else {
             return false
         }
@@ -441,12 +440,11 @@ final class BrowserPageViewController: UIViewController {
         return inspectorCoordinator.presentWindow(
             from: navigationController ?? self,
             browserStore: store,
-            inspectorRuntime: inspectorRuntime,
-            tabs: tabs
+            inspectorSession: inspectorSession
         )
     }
 
-    var isPresentingInspectorForRuntimeAttachment: Bool {
+    var isPresentingInspectorForSessionAttachment: Bool {
         inspectorCoordinator.isPresentingInspector(presenter: navigationController ?? self)
     }
 }

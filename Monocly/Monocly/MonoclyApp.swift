@@ -290,7 +290,7 @@ final class MonoclyMainSceneDelegate: NSObject, UIWindowSceneDelegate {
             ?? BrowserRootViewController(launchConfiguration: launchConfiguration)
         if preservedRootViewController === rootViewController {
             BrowserInspectorCoordinator.setInspectorWindowReleaseHandler(
-                for: rootViewController.inspectorRuntime,
+                for: rootViewController.inspectorSession,
                 nil
             )
             preservedRootViewController = nil
@@ -311,11 +311,11 @@ final class MonoclyMainSceneDelegate: NSObject, UIWindowSceneDelegate {
 
     func disconnect(windowScene: UIWindowScene) {
         if let rootViewController {
-            if BrowserInspectorCoordinator.hasInspectorWindow(for: rootViewController.inspectorRuntime) {
+            if BrowserInspectorCoordinator.hasInspectorWindow(for: rootViewController.inspectorSession) {
                 preservedRootViewController = rootViewController
                 rootViewController.prepareForSceneDisconnectionPreservingInspectorSession()
                 BrowserInspectorCoordinator.setInspectorWindowReleaseHandler(
-                    for: rootViewController.inspectorRuntime
+                    for: rootViewController.inspectorSession
                 ) { [weak self, rootViewController] in
                     if self?.preservedRootViewController === rootViewController {
                         self?.preservedRootViewController = nil

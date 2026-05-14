@@ -5,12 +5,11 @@ import WebInspectorKit
 @MainActor
 final class BrowserInspectorWindowHostingController: UIViewController {
     private struct AppliedInspectorContext: Equatable {
-        let inspectorRuntimeID: ObjectIdentifier
+        let inspectorSessionID: ObjectIdentifier
         let browserStoreID: ObjectIdentifier
-        let tabIDs: [WITab.ID]
     }
 
-    private var inspectorContainer: WIViewController?
+    private var inspectorContainer: WebInspectorViewController?
     private let placeholderLabel = UILabel()
     private var lastAppliedContext: AppliedInspectorContext?
 
@@ -40,9 +39,8 @@ final class BrowserInspectorWindowHostingController: UIViewController {
         }
 
         let appliedContext = AppliedInspectorContext(
-            inspectorRuntimeID: ObjectIdentifier(inspectorContext.inspectorRuntime),
-            browserStoreID: ObjectIdentifier(inspectorContext.browserStore),
-            tabIDs: inspectorContext.tabs.map(\.id)
+            inspectorSessionID: ObjectIdentifier(inspectorContext.inspectorSession),
+            browserStoreID: ObjectIdentifier(inspectorContext.browserStore)
         )
 
         if lastAppliedContext == appliedContext {
@@ -52,12 +50,7 @@ final class BrowserInspectorWindowHostingController: UIViewController {
         removeInspectorContainerIfNeeded()
 
         placeholderLabel.removeFromSuperview()
-        let container = WIViewController(
-            session: WISession(
-                runtime: inspectorContext.inspectorRuntime,
-                tabs: inspectorContext.tabs
-            )
-        )
+        let container = WebInspectorViewController(session: inspectorContext.inspectorSession)
         addChild(container)
         container.view.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(container.view)
