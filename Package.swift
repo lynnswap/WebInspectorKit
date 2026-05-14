@@ -33,6 +33,10 @@ let package = Package(
             targets: ["WebInspectorUI"]
         ),
         .library(
+            name: "V2_WebInspectorUI",
+            targets: ["V2_WebInspectorUI"]
+        ),
+        .library(
             name: "WebInspectorKit",
             targets: ["WebInspectorKit"]
         ),
@@ -276,6 +280,15 @@ let package = Package(
                 "V2_WebInspectorRuntime"
             ],
             path: "Tests/V2_WebInspectorRuntimeTests",
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
+            name: "V2_WebInspectorUITests",
+            dependencies: [
+                "V2_WebInspectorCore",
+                "V2_WebInspectorUI"
+            ],
+            path: "Tests/V2_WebInspectorUITests",
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(

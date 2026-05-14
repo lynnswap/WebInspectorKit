@@ -216,6 +216,14 @@ package final class NetworkSession {
         requestsByID = [:]
     }
 
+    package var requests: [NetworkRequest] {
+        orderedRequestIDs.compactMap { requestsByID[$0] }
+    }
+
+    package func request(for id: NetworkRequest.ID) -> NetworkRequest? {
+        requestsByID[id]
+    }
+
     package func reset() {
         orderedRequestIDs.removeAll()
         requestsByID.removeAll()
