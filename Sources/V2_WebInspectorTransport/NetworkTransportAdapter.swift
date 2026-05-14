@@ -28,6 +28,17 @@ package enum NetworkTransportAdapter {
     }
 
     @MainActor
+    package static func applyResponseBodyResult(_ result: ProtocolCommandResult, to request: NetworkRequest) throws {
+        let payload = try TransportMessageParser.decode(ResponseBodyResult.self, from: result.resultData)
+        request.applyResponseBody(
+            NetworkBodyPayload(
+                body: payload.body,
+                base64Encoded: payload.base64Encoded
+            )
+        )
+    }
+
+    @MainActor
     package static func applyNetworkEvent(_ event: ProtocolEventEnvelope, to session: NetworkSession) throws {
         guard event.domain == .network,
               let targetID = event.targetID else {
@@ -176,6 +187,11 @@ package enum NetworkTransportAdapter {
         }
         return try JSONSerialization.data(withJSONObject: object, options: [])
     }
+}
+
+private struct ResponseBodyResult: Decodable {
+    var body: String
+    var base64Encoded: Bool
 }
 
 private struct RequestWillBeSentParams: Decodable {

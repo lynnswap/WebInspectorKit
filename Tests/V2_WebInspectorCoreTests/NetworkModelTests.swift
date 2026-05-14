@@ -115,11 +115,91 @@ func backendResourceIdentifierPropagatesToLazyCommandIntents() async throws {
         backendResourceIdentifier: backendResourceIdentifier,
         timestamp: 1
     )
+    await session.applyResponseReceived(
+        targetID: targetID,
+        requestID: requestID,
+        response: .init(url: "https://example.com/app.js", status: 200),
+        timestamp: 2
+    )
     let bodyIntent = await session.responseBodyCommandIntent(for: key)
     let certificateIntent = await session.serializedCertificateCommandIntent(for: key)
 
     #expect(bodyIntent == .getResponseBody(requestKey: key, backendResourceIdentifier: backendResourceIdentifier))
     #expect(certificateIntent == .getSerializedCertificate(requestKey: key, backendResourceIdentifier: backendResourceIdentifier))
+}
+
+@Test
+@MainActor
+func requestPostDataCreatesObservableRequestBody() throws {
+    let session = NetworkSession()
+    let targetID = ProtocolTargetIdentifier("page")
+    let requestID = NetworkRequestIdentifier("0.body")
+
+    let key = session.applyRequestWillBeSent(
+        targetID: targetID,
+        requestID: requestID,
+        frameID: .init("main-frame"),
+        loaderID: "loader",
+        documentURL: "https://example.com",
+        request: .init(
+            url: "https://example.com/form",
+            method: "POST",
+            headers: ["content-type": "application/x-www-form-urlencoded"],
+            postData: "name=Jane+Doe&city=Tokyo%20East"
+        ),
+        timestamp: 1
+    )
+    let body = try #require(session.request(for: key)?.requestBody)
+
+    #expect(body.fetchState == .loaded)
+    #expect(body.textRepresentation == "name=Jane Doe\ncity=Tokyo East")
+    #expect(body.textRepresentationSyntaxKind == .plainText)
+}
+
+@Test
+@MainActor
+func responseReceivedCreatesFetchableResponseBodyAndAppliesFetchedContent() throws {
+    let session = NetworkSession()
+    let targetID = ProtocolTargetIdentifier("page")
+    let requestID = NetworkRequestIdentifier("0.response-body")
+
+    let key = session.applyRequestWillBeSent(
+        targetID: targetID,
+        requestID: requestID,
+        frameID: .init("main-frame"),
+        loaderID: "loader",
+        documentURL: "https://example.com",
+        request: .init(url: "https://example.com/api/data.json"),
+        timestamp: 1
+    )
+    session.applyResponseReceived(
+        targetID: targetID,
+        requestID: requestID,
+        response: .init(
+            url: "https://example.com/api/data.json",
+            status: 200,
+            headers: ["content-type": "application/json"],
+            mimeType: "application/json"
+        ),
+        timestamp: 2
+    )
+    let request = try #require(session.request(for: key))
+    let body = try #require(request.responseBody)
+
+    #expect(body.fetchState == .available)
+    #expect(body.needsFetch)
+
+    request.applyResponseBody(
+        NetworkBodyPayload(
+            body: #"{"name":"codex","value":42}"#,
+            base64Encoded: false
+        )
+    )
+
+    #expect(body.fetchState == .loaded)
+    #expect(body.textRepresentation?.contains("\n") == true)
+    #expect(body.textRepresentation?.contains(#""name""#) == true)
+    #expect(body.textRepresentationSyntaxKind == .json)
 }
 
 @Test

@@ -21,7 +21,7 @@ package final class V2_NetworkListViewController: UICollectionViewController, UI
         )
     )
 
-    private let model: V2_NetworkListModel
+    private let model: V2_NetworkPanelModel
     private var requestSelectionAction: RequestSelectionAction
     private let observationScope = ObservationScope()
 
@@ -45,7 +45,7 @@ package final class V2_NetworkListViewController: UICollectionViewController, UI
     }()
     private lazy var dataSource = makeDataSource()
 
-    package init(model: V2_NetworkListModel) {
+    package init(model: V2_NetworkPanelModel) {
         self.model = model
         requestSelectionAction = { [model] request in
             model.selectRequest(request)
@@ -380,7 +380,7 @@ import SwiftUI
 #Preview("V2 Network List") {
     UINavigationController(
         rootViewController: V2_NetworkListViewController(
-            model: V2_NetworkPreviewFixtures.makeListModel(mode: .root)
+            model: V2_NetworkPreviewFixtures.makePanelModel(mode: .root)
         )
     )
 }
@@ -388,7 +388,7 @@ import SwiftUI
 #Preview("V2 Network List Long Title") {
     UINavigationController(
         rootViewController: V2_NetworkListViewController(
-            model: V2_NetworkPreviewFixtures.makeListModel(mode: .rootLongTitle)
+            model: V2_NetworkPreviewFixtures.makePanelModel(mode: .rootLongTitle)
         )
     )
 }

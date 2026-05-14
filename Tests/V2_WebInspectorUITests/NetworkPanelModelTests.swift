@@ -31,7 +31,7 @@ func displayRequestsApplySearchFilterAndNewestFirstOrder() async throws {
         timestamp: 3
     )
 
-    let model = V2_NetworkListModel(network: network)
+    let model = V2_NetworkPanelModel(network: network)
     model.setSearchText("cdn")
     model.setResourceFilter(.script, enabled: true)
 
@@ -51,7 +51,7 @@ func clearRequestsClearsSelectionButPreservesDisplayCriteria() async throws {
         mimeType: "text/javascript",
         timestamp: 1
     )
-    let model = V2_NetworkListModel(network: network)
+    let model = V2_NetworkPanelModel(network: network)
 
     model.setSearchText("cdn")
     model.setResourceFilter(.script, enabled: true)

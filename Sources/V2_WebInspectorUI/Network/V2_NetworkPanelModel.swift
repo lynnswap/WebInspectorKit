@@ -3,7 +3,9 @@ import V2_WebInspectorCore
 
 @MainActor
 @Observable
-package final class V2_NetworkListModel {
+package final class V2_NetworkPanelModel {
+    package typealias ResponseBodyFetchAction = @MainActor (NetworkRequest.ID) async -> Void
+
     package let network: NetworkSession
     package var selectedRequestID: NetworkRequest.ID?
     package var searchText: String = ""
@@ -16,9 +18,14 @@ package final class V2_NetworkListModel {
         }
     }
     package private(set) var effectiveResourceFilters: Set<V2_NetworkResourceFilter> = []
+    @ObservationIgnored private let responseBodyFetchAction: ResponseBodyFetchAction?
 
-    package init(network: NetworkSession) {
+    package init(
+        network: NetworkSession,
+        responseBodyFetchAction: ResponseBodyFetchAction? = nil
+    ) {
         self.network = network
+        self.responseBodyFetchAction = responseBodyFetchAction
     }
 
     package var displayRequests: [NetworkRequest] {
@@ -84,5 +91,15 @@ package final class V2_NetworkListModel {
     package func clearRequests() {
         selectedRequestID = nil
         network.reset()
+    }
+
+    package func fetchResponseBodyIfNeeded(for request: NetworkRequest) {
+        guard request.responseBody?.needsFetch == true,
+              let responseBodyFetchAction else {
+            return
+        }
+        Task { @MainActor in
+            await responseBodyFetchAction(request.id)
+        }
     }
 }

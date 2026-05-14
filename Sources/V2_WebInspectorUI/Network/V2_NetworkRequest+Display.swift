@@ -15,6 +15,26 @@ extension NetworkRequest {
         return request.url
     }
 
+    package var host: String? {
+        URL(string: request.url)?.host
+    }
+
+    package var statusLabel: String {
+        if let status = response?.status, status > 0 {
+            return String(status)
+        }
+        switch state {
+        case .failed:
+            return "Failed"
+        case .pending:
+            return "Pending"
+        case .responded:
+            return "Pending"
+        case .finished:
+            return "Finished"
+        }
+    }
+
     package var fileTypeLabel: String {
         if let mimeType = response?.mimeType,
            let subtype = mimeType
@@ -80,6 +100,33 @@ extension NetworkRequest {
             fileTypeLabel,
         ]
         return candidates.contains { $0.localizedStandardContains(query) }
+    }
+
+    package var duration: TimeInterval? {
+        guard let end = finishedOrFailedTimestamp ?? lastDataReceivedTimestamp ?? responseReceivedTimestamp else {
+            return nil
+        }
+        return max(0, end - requestSentTimestamp)
+    }
+
+    package func durationText(for value: TimeInterval) -> String {
+        if value < 1 {
+            let milliseconds = Int((value * 1000).rounded())
+            return "\(milliseconds) ms"
+        }
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.minimumFractionDigits = 2
+        formatter.maximumFractionDigits = 2
+        formatter.usesGroupingSeparator = false
+        let seconds = formatter.string(from: NSNumber(value: value)) ?? String(value)
+        return "\(seconds) s"
+    }
+
+    package func sizeText(for length: Int) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .binary
+        return formatter.string(fromByteCount: Int64(length))
     }
 }
 

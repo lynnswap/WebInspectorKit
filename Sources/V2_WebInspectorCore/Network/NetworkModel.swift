@@ -57,7 +57,9 @@ package final class NetworkRequest {
     package var backendResourceIdentifier: NetworkBackendResourceIdentifier?
     package var initiator: NetworkInitiatorPayload?
     package var request: NetworkRequestPayload
+    package var requestBody: NetworkBody?
     package var response: NetworkResponsePayload?
+    package var responseBody: NetworkBody?
     package var sourceMapURL: String?
     package var metrics: NetworkLoadMetricsPayload?
     package var cachedResourceBodySize: Int?
@@ -97,7 +99,9 @@ package final class NetworkRequest {
         self.backendResourceIdentifier = backendResourceIdentifier
         self.initiator = initiator
         self.request = request
+        self.requestBody = NetworkBody.makeRequestBody(for: request)
         self.response = nil
+        self.responseBody = nil
         self.sourceMapURL = nil
         self.metrics = nil
         self.cachedResourceBodySize = nil
@@ -127,9 +131,11 @@ package final class NetworkRequest {
             )
         )
         request = nextRequest
+        requestBody = NetworkBody.makeRequestBody(for: nextRequest)
         requestSentTimestamp = timestamp
         requestSentWalltime = walltime
         response = nil
+        responseBody = nil
         sourceMapURL = nil
         metrics = nil
         cachedResourceBodySize = nil
@@ -149,6 +155,7 @@ package final class NetworkRequest {
         self.metrics = metrics
         if let requestHeaders = metrics.requestHeaders {
             request.headers = requestHeaders
+            refreshRequestBodyHints()
         }
         if let responseBodyBytesReceived = metrics.responseBodyBytesReceived {
             encodedDataLength = max(0, responseBodyBytesReceived)
@@ -161,6 +168,56 @@ package final class NetworkRequest {
             responseSecurity.connection = securityConnection
             response?.security = responseSecurity
         }
+    }
+
+    package func applyResponseBody(_ payload: NetworkBodyPayload) {
+        ensureResponseBody()
+        responseBody?.apply(payload)
+    }
+
+    package func markResponseBodyFetching() {
+        ensureResponseBody()
+        responseBody?.markFetching()
+    }
+
+    package func markResponseBodyFailed(_ error: NetworkBodyFetchError) {
+        ensureResponseBody()
+        responseBody?.markFailed(error)
+    }
+
+    package func ensureResponseBody() {
+        guard let response else {
+            return
+        }
+        guard resourceType != .webSocket else {
+            responseBody = nil
+            return
+        }
+        if let responseBody {
+            let hints = NetworkBody.bodyHints(
+                mimeType: response.mimeType,
+                headers: response.headers,
+                url: response.url,
+                role: .response
+            )
+            responseBody.updateHints(kind: hints.kind, sourceSyntaxKind: hints.syntaxKind)
+        } else {
+            responseBody = NetworkBody.makeResponseBody(for: response)
+        }
+    }
+
+    private func refreshRequestBodyHints() {
+        guard let requestBody else {
+            self.requestBody = NetworkBody.makeRequestBody(for: request)
+            return
+        }
+        let hints = NetworkBody.bodyHints(
+            mimeType: nil,
+            headers: request.headers,
+            url: request.url,
+            role: .request
+        )
+        requestBody.updateHints(kind: hints.kind, sourceSyntaxKind: hints.syntaxKind)
     }
 }
 
@@ -300,8 +357,10 @@ package final class NetworkSession {
         request.resourceType = resourceType ?? request.resourceType
         if let requestHeaders = response.requestHeaders {
             request.request.headers = requestHeaders
+            request.requestBody = NetworkBody.makeRequestBody(for: request.request)
         }
         request.response = response
+        request.ensureResponseBody()
         request.responseReceivedTimestamp = timestamp
         request.state = .responded
     }
@@ -390,6 +449,7 @@ package final class NetworkSession {
         if var response = resource.response {
             response.source = response.source ?? .memoryCache
             networkRequest.response = response
+            networkRequest.ensureResponseBody()
             networkRequest.responseReceivedTimestamp = timestamp
         }
         networkRequest.sourceMapURL = resource.sourceMapURL
@@ -475,6 +535,7 @@ package final class NetworkSession {
             statusText: response.statusText,
             headers: response.headers
         )
+        networkRequest.ensureResponseBody()
         networkRequest.responseReceivedTimestamp = timestamp
         networkRequest.webSocketReadyState = .open
         networkRequest.state = .responded
@@ -529,9 +590,14 @@ package final class NetworkSession {
     }
 
     package func responseBodyCommandIntent(for id: NetworkRequest.ID) -> NetworkCommandIntent? {
-        requestsByID[id].map {
-            .getResponseBody(requestKey: id, backendResourceIdentifier: $0.backendResourceIdentifier)
+        guard let request = requestsByID[id],
+              request.responseBody != nil else {
+            return nil
         }
+        return .getResponseBody(
+            requestKey: id,
+            backendResourceIdentifier: request.backendResourceIdentifier
+        )
     }
 
     package func serializedCertificateCommandIntent(for id: NetworkRequest.ID) -> NetworkCommandIntent? {

@@ -3,7 +3,7 @@ import SwiftUI
 
 @MainActor
 package struct V2_NetworkListFilterMenuView: View {
-    package var model: V2_NetworkListModel
+    package var model: V2_NetworkPanelModel
 
     package var body: some View {
         Toggle(

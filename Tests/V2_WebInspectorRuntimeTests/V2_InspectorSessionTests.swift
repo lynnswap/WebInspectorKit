@@ -81,6 +81,47 @@ func networkLazyFetchReturnsCommandResultFromPageTarget() async throws {
 }
 
 @Test
+func networkResponseBodyFetchAppliesResultToCoreRequest() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .seconds(1))
+    let session = await V2_InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-2","frameId":"main-frame","request":{"url":"https://example.com/api.json"},"timestamp":1}}"#
+    )
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"Network.responseReceived","params":{"requestId":"request-2","timestamp":2,"type":"XHR","response":{"url":"https://example.com/api.json","status":200,"mimeType":"application/json","headers":{"content-type":"application/json"}}}}"#
+    )
+    let request = try await waitUntil {
+        await session.network.request(for: .init(targetID: .pageMain, requestID: .init("request-2")))
+    }
+    let body = try await #require(request.responseBody)
+    #expect(await body.fetchState == .available)
+
+    let sentCount = await backend.sentTargetMessages().count
+    let fetchTask = Task {
+        await session.fetchResponseBody(for: request.id)
+    }
+    let sent = try await waitForTargetMessage(backend, method: "Network.getResponseBody", after: sentCount)
+    await receiveTargetReply(
+        transport,
+        targetID: sent.targetIdentifier,
+        messageID: try messageID(sent.message),
+        result: #"{"body":"{\"ok\":true}","base64Encoded":false}"#
+    )
+    await fetchTask.value
+
+    #expect(await body.fetchState == .loaded)
+    #expect(await body.textRepresentation?.contains("\n") == true)
+    #expect(await body.textRepresentation?.contains(#""ok""#) == true)
+}
+
+@Test
 func frameDocumentRefreshUpdatesOnlyFrameDocument() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .seconds(1))

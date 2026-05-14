@@ -193,6 +193,28 @@ package final class V2_InspectorSession {
         return result
     }
 
+    package func fetchResponseBody(for id: NetworkRequest.ID) async {
+        guard let request = network.request(for: id) else {
+            return
+        }
+        guard request.responseBody?.needsFetch == true else {
+            return
+        }
+        guard let intent = network.responseBodyCommandIntent(for: id) else {
+            request.markResponseBodyFailed(.unavailable)
+            return
+        }
+
+        request.markResponseBodyFetching()
+        do {
+            let result = try await perform(intent)
+            try NetworkTransportAdapter.applyResponseBodyResult(result, to: request)
+        } catch {
+            request.markResponseBodyFailed(.unknown(String(describing: error)))
+            lastError = V2_InspectorSessionError(String(describing: error))
+        }
+    }
+
     private func bootstrap(mainTargetID: ProtocolTargetIdentifier, transport: TransportSession) async throws {
         _ = try await sendTargetCommand(domain: .inspector, method: "Inspector.enable", targetID: mainTargetID, transport: transport)
         try ensureCurrentTransport(transport)

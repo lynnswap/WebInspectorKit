@@ -6,12 +6,17 @@ enum V2_NetworkPreviewFixtures {
     enum Mode {
         case root
         case rootLongTitle
+        case detail
     }
 
-    static func makeListModel(mode: Mode) -> V2_NetworkListModel {
+    static func makePanelModel(mode: Mode) -> V2_NetworkPanelModel {
         let network = NetworkSession()
         applySampleData(to: network, mode: mode)
-        return V2_NetworkListModel(network: network)
+        let model = V2_NetworkPanelModel(network: network)
+        if mode == .detail {
+            model.selectRequest(model.displayRequests.first)
+        }
+        return model
     }
 
     static func applySampleData(to network: NetworkSession, mode: Mode) {
@@ -54,6 +59,7 @@ enum V2_NetworkPreviewFixtures {
         }
     }
 
+    @discardableResult
     private static func applyRequest(
         to network: NetworkSession,
         requestID: String,
@@ -65,10 +71,10 @@ enum V2_NetworkPreviewFixtures {
         statusText: String,
         timestamp: Double,
         encodedBodyLength: Int
-    ) {
+    ) -> NetworkRequest.ID {
         let targetID = ProtocolTargetIdentifier("preview-page")
         let requestID = NetworkRequestIdentifier(requestID)
-        network.applyRequestWillBeSent(
+        let key = network.applyRequestWillBeSent(
             targetID: targetID,
             requestID: requestID,
             frameID: DOMFrameIdentifier("preview-frame"),
@@ -112,6 +118,15 @@ enum V2_NetworkPreviewFixtures {
             requestID: requestID,
             timestamp: timestamp + 0.2
         )
+        if responseMimeType == "application/json" {
+            network.request(for: key)?.applyResponseBody(
+                NetworkBodyPayload(
+                    body: #"{"result":"ok","items":[1,2,3],"source":"preview"}"#,
+                    base64Encoded: false
+                )
+            )
+        }
+        return key
     }
 }
 #endif
