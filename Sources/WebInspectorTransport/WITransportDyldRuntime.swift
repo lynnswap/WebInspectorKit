@@ -12,16 +12,6 @@ import MachO
         let length: UInt
     }
 
-    private static let fallbackLibraryPath = "/usr/lib/system/libdyld.dylib"
-    nonisolated(unsafe) private static let fallbackHandle = unsafe dlopen(
-        fallbackLibraryPath,
-        RTLD_LAZY | RTLD_LOCAL
-    )
-    nonisolated(unsafe) private static let symbolSearchHandles: [UnsafeMutableRawPointer?] = unsafe [
-        unsafe UnsafeMutableRawPointer(bitPattern: -2),
-        fallbackHandle,
-    ]
-
     private static let sharedCacheRangeFunction = unsafe resolveSymbol(
         named: deobfuscate(["_range", "_cache", "_shared", "_get", "dyld", "_"]),
         as: SharedCacheRangeFunction.self
@@ -74,15 +64,10 @@ import MachO
     }
 
     static func symbolAddress(named symbolName: String) -> UInt64? {
-        var iterator = unsafe symbolSearchHandles.makeIterator()
-        while let candidate = unsafe iterator.next() {
-            guard let handle = unsafe candidate,
-                  let symbol = unsafe dlsym(handle, symbolName) else {
-                continue
-            }
-            return UInt64(UInt(bitPattern: symbol))
+        guard let symbol = unsafe dlsym(UnsafeMutableRawPointer(bitPattern: -2), symbolName) else {
+            return nil
         }
-        return nil
+        return UInt64(UInt(bitPattern: symbol))
     }
 
     private static func deobfuscate(_ reverseTokens: [String]) -> String {
@@ -94,16 +79,10 @@ import MachO
         as type: T.Type
     ) -> T? {
 
-        var iterator = unsafe symbolSearchHandles.makeIterator()
-        while let candidate = unsafe iterator.next() {
-            guard let handle = unsafe candidate,
-                  let symbol = unsafe dlsym(handle, symbolName) else {
-                continue
-            }
-            return unsafe unsafeBitCast(symbol, to: T.self)
+        guard let symbol = unsafe dlsym(UnsafeMutableRawPointer(bitPattern: -2), symbolName) else {
+            return nil
         }
-
-        return nil
+        return unsafe unsafeBitCast(symbol, to: T.self)
     }
 }
 #endif

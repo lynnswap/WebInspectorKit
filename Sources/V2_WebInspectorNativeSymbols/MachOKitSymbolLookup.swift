@@ -4,8 +4,6 @@ import MachO
 import MachOKit
 
 @unsafe enum MachOKitSymbolLookup {
-    private static let fallbackLibraryPath = "/usr/lib/system/libdyld.dylib"
-
     static var currentSharedCache: DyldCacheLoaded? {
         DyldCacheLoaded.current
     }
@@ -35,14 +33,10 @@ import MachOKit
     }
 
     static func exportedRuntimeSymbolAddress(named symbolName: String) -> UInt64? {
-        if let symbol = unsafe dlsym(UnsafeMutableRawPointer(bitPattern: -2), symbolName) {
-            return UInt64(UInt(bitPattern: symbol))
+        guard let symbol = unsafe dlsym(UnsafeMutableRawPointer(bitPattern: -2), symbolName) else {
+            return nil
         }
-        if let fallbackHandle = unsafe dlopen(fallbackLibraryPath, RTLD_LAZY | RTLD_LOCAL),
-           let symbol = unsafe dlsym(fallbackHandle, symbolName) {
-            return UInt64(UInt(bitPattern: symbol))
-        }
-        return nil
+        return UInt64(UInt(bitPattern: symbol))
     }
 }
 #endif

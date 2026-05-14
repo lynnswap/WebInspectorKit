@@ -1,21 +1,27 @@
 #if os(iOS) || os(macOS)
 import Foundation
 import Testing
+import WebKit
 @testable import V2_WebInspectorNativeSymbols
 
 struct NativeInspectorSymbolResolverTests {
     @Test
+    @MainActor
     func machOKitLookupProvidesSharedCacheAndLoadedImages() throws {
         #if os(iOS) && !targetEnvironment(simulator)
         throw Skip("The runtime smoke test is covered separately on device-backed flows.")
         #else
-        let currentSharedCache = unsafe MachOKitSymbolLookup.currentSharedCache
-        let webKitImage = unsafe MachOKitSymbolLookup.loadedImage(
-            matching: NativeInspectorSymbolResolver.imagePathSuffixesForTesting().webKit
-        )
-        let javaScriptCoreImage = unsafe MachOKitSymbolLookup.loadedImage(
-            matching: NativeInspectorSymbolResolver.imagePathSuffixesForTesting().javaScriptCore
-        )
+        let (currentSharedCache, webKitImage, javaScriptCoreImage) = withWebKitLoaded {
+            (
+                unsafe MachOKitSymbolLookup.currentSharedCache,
+                unsafe MachOKitSymbolLookup.loadedImage(
+                    matching: NativeInspectorSymbolResolver.imagePathSuffixesForTesting().webKit
+                ),
+                unsafe MachOKitSymbolLookup.loadedImage(
+                    matching: NativeInspectorSymbolResolver.imagePathSuffixesForTesting().javaScriptCore
+                )
+            )
+        }
         #expect(currentSharedCache != nil)
         #expect(webKitImage != nil)
         #expect(javaScriptCoreImage != nil)
@@ -23,8 +29,11 @@ struct NativeInspectorSymbolResolverTests {
     }
 
     @Test
+    @MainActor
     func resolveCurrentReturnsCompleteAddressSetOnSupportedPlatforms() throws {
-        let resolution = NativeInspectorSymbolResolver.resolveCurrent()
+        let resolution = withWebKitLoaded {
+            NativeInspectorSymbolResolver.resolveCurrent()
+        }
 
         #if os(iOS) && !targetEnvironment(simulator)
         throw Skip("The runtime smoke test is covered separately on device-backed flows.")
@@ -36,10 +45,13 @@ struct NativeInspectorSymbolResolverTests {
     }
 
     @Test
+    @MainActor
     func resolveForTestingReportsOnlyMissingSymbolState() {
-        let resolution = NativeInspectorSymbolResolver.resolveForTesting(
-            stringFromUTF8Symbol: obfuscated(["Ev", "27definitelyMissingFromUTF8Foo", "6String", "3WTF", "__ZN"])
-        )
+        let resolution = withWebKitLoaded {
+            NativeInspectorSymbolResolver.resolveForTesting(
+                stringFromUTF8Symbol: obfuscated(["Ev", "27definitelyMissingFromUTF8Foo", "6String", "3WTF", "__ZN"])
+            )
+        }
         let failureReason = resolution.failureReason
 
         #expect(failureReason != nil)
@@ -66,16 +78,19 @@ struct NativeInspectorSymbolResolverTests {
     }
 
     @Test
+    @MainActor
     func resolveForTestingUsesAlternateConnectDisconnectCandidates() throws {
         let primaryConnect = try #require(NativeInspectorSymbolResolver.connectSymbolsForTesting().first)
         let primaryDisconnect = try #require(NativeInspectorSymbolResolver.disconnectSymbolsForTesting().first)
 
-        let resolution = NativeInspectorSymbolResolver.resolveForTesting(
-            connectSymbol: obfuscated(["Ev", "26DefinitelyWrongConnectName", "7Missing", "__ZN"]),
-            disconnectSymbol: obfuscated(["Ev", "29DefinitelyWrongDisconnectName", "7Missing", "__ZN"]),
-            alternateConnectSymbols: [primaryConnect],
-            alternateDisconnectSymbols: [primaryDisconnect]
-        )
+        let resolution = withWebKitLoaded {
+            NativeInspectorSymbolResolver.resolveForTesting(
+                connectSymbol: obfuscated(["Ev", "26DefinitelyWrongConnectName", "7Missing", "__ZN"]),
+                disconnectSymbol: obfuscated(["Ev", "29DefinitelyWrongDisconnectName", "7Missing", "__ZN"]),
+                alternateConnectSymbols: [primaryConnect],
+                alternateDisconnectSymbols: [primaryDisconnect]
+            )
+        }
 
         #if os(iOS) && !targetEnvironment(simulator)
         throw Skip("The runtime smoke test is covered separately on device-backed flows.")
@@ -119,13 +134,17 @@ struct NativeInspectorSymbolResolverTests {
     }
 
     @Test
+    @MainActor
     func resolvedAddressHeaderValidationAcceptsMatchingImageAndRejectsUnexpectedImage() throws {
-        let resolution = NativeInspectorSymbolResolver.resolveCurrent()
-
         #if os(iOS) && !targetEnvironment(simulator)
         throw Skip("The runtime smoke test is covered separately on device-backed flows.")
         #else
-        let headers = try #require(NativeInspectorSymbolResolver.loadedImageHeaderAddressesForTesting())
+        let (resolution, headers) = try withWebKitLoaded {
+            (
+                NativeInspectorSymbolResolver.resolveCurrent(),
+                try #require(NativeInspectorSymbolResolver.loadedImageHeaderAddressesForTesting())
+            )
+        }
 
         #expect(
             NativeInspectorSymbolResolver.resolvedAddressMatchesExpectedImageForTesting(
@@ -213,10 +232,13 @@ struct NativeInspectorSymbolResolverTests {
     }
 
     @Test
+    @MainActor
     func diagnosticsDoNotExposeDecodedMangledSymbols() {
-        let resolution = NativeInspectorSymbolResolver.resolveForTesting(
-            stringFromUTF8Symbol: obfuscated(["Ev", "27definitelyMissingFromUTF8Foo", "6String", "3WTF", "__ZN"])
-        )
+        let resolution = withWebKitLoaded {
+            NativeInspectorSymbolResolver.resolveForTesting(
+                stringFromUTF8Symbol: obfuscated(["Ev", "27definitelyMissingFromUTF8Foo", "6String", "3WTF", "__ZN"])
+            )
+        }
         let diagnostics = [
             resolution.failureReason,
             resolution.failureKind,
@@ -249,6 +271,14 @@ struct NativeInspectorSymbolResolverTests {
                 #expect(data.range(of: symbolData) == nil)
             }
         }
+    }
+}
+
+@MainActor
+private func withWebKitLoaded<T>(_ body: () throws -> T) rethrows -> T {
+    let webView = WKWebView(frame: .zero)
+    return try withExtendedLifetime(webView) {
+        try body()
     }
 }
 
