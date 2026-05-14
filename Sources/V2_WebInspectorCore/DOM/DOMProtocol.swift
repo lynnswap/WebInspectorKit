@@ -165,9 +165,10 @@ package struct SelectionRequestIdentifier: RawRepresentable, Hashable, Sendable 
 
 package enum DOMCommandIntent: Equatable, Sendable {
     case getDocument(targetID: ProtocolTargetIdentifier)
-    case requestChildNodes(targetID: ProtocolTargetIdentifier, nodeID: DOMProtocolNodeID)
+    case requestChildNodes(targetID: ProtocolTargetIdentifier, nodeID: DOMProtocolNodeID, depth: Int)
     case requestNode(selectionRequestID: SelectionRequestIdentifier, targetID: ProtocolTargetIdentifier, objectID: String)
     case highlightNode(targetID: ProtocolTargetIdentifier, nodeID: DOMProtocolNodeID)
+    case hideHighlight(targetID: ProtocolTargetIdentifier)
 }
 
 package enum SelectionResolutionFailure: Error, Equatable, Sendable {

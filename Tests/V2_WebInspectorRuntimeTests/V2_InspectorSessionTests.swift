@@ -196,9 +196,11 @@ func requestNodeWaitsForPathPushBeforeSelectingNode() async throws {
     )
     try await performTask.value
 
-    let detail = try #require(await session.dom.elementDetailSnapshot())
-    #expect(detail.nodeName == "DIV")
-    #expect(detail.attributes == [DOMAttribute(name: "id", value: "selected")])
+    let selectedNode = try #require(await session.dom.selectedNode)
+    let nodeName = await selectedNode.nodeName
+    let attributes = await selectedNode.attributes
+    #expect(nodeName == "DIV")
+    #expect(attributes == [DOMAttribute(name: "id", value: "selected")])
 }
 
 @Test

@@ -54,6 +54,7 @@ package final class V2_InspectorSession {
     @ObservationIgnored private var pumps: [ProtocolDomain: V2_DomainEventPump]
     @ObservationIgnored private weak var inspectableWebView: WKWebView?
     @ObservationIgnored private var originalInspectability: Bool?
+    @ObservationIgnored private var highlightedDOMTargetID: ProtocolTargetIdentifier?
 
     package init(
         configuration: V2_InspectorSessionConfiguration = .init(),
@@ -69,6 +70,7 @@ package final class V2_InspectorSession {
         pumps = [:]
         inspectableWebView = nil
         originalInspectability = nil
+        highlightedDOMTargetID = nil
     }
 
     package func attach(to webView: WKWebView) async throws {
@@ -153,6 +155,7 @@ package final class V2_InspectorSession {
         restoreInspectabilityIfNeeded()
         dom.reset()
         network.reset()
+        highlightedDOMTargetID = nil
         lastError = nil
         attachmentState = .detached
     }
@@ -180,8 +183,50 @@ package final class V2_InspectorSession {
             if case let .failure(failure) = selectionResult {
                 lastError = V2_InspectorSessionError(String(describing: failure))
             }
-        case .requestChildNodes, .highlightNode:
+        case .requestChildNodes:
             break
+        case let .highlightNode(targetID, _):
+            highlightedDOMTargetID = targetID
+        case let .hideHighlight(targetID):
+            if highlightedDOMTargetID == targetID {
+                highlightedDOMTargetID = nil
+            }
+        }
+    }
+
+    @discardableResult
+    package func requestChildNodes(for nodeID: DOMNodeIdentifier, depth: Int = 3) async -> Bool {
+        guard let intent = dom.requestChildNodesIntent(for: nodeID, depth: depth) else {
+            return false
+        }
+        do {
+            try await perform(intent)
+            return true
+        } catch {
+            lastError = V2_InspectorSessionError(String(describing: error))
+            return false
+        }
+    }
+
+    package func highlightNode(for nodeID: DOMNodeIdentifier) async {
+        guard let intent = dom.highlightNodeIntent(for: nodeID) else {
+            return
+        }
+        do {
+            try await perform(intent)
+        } catch {
+            lastError = V2_InspectorSessionError(String(describing: error))
+        }
+    }
+
+    package func hideNodeHighlight() async {
+        guard let intent = dom.hideHighlightIntent(targetID: highlightedDOMTargetID) else {
+            return
+        }
+        do {
+            try await perform(intent)
+        } catch {
+            lastError = V2_InspectorSessionError(String(describing: error))
         }
     }
 

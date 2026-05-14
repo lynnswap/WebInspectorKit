@@ -710,7 +710,8 @@ func domAdapterCompletesInspectSelectionThroughRequestNodeResult() async throws 
     }
 
     #expect(selectedNodeID.nodeID == DOMProtocolNodeID(2))
-    #expect(await dom.elementDetailSnapshot()?.nodeName == "DIV")
+    let selectedNodeName = await dom.selectedNode?.nodeName
+    #expect(selectedNodeName == "DIV")
 }
 
 @Test
@@ -1108,6 +1109,20 @@ func networkCommandIntentRoutesThroughCurrentPageOctopusTarget() throws {
     #expect(String(data: bodyCommand.parametersData, encoding: .utf8)?.contains(#""requestId":"request-1""#) == true)
 }
 
+@Test
+func domHighlightCommandUsesNonRevealingVisibleHighlightConfig() throws {
+    let command = try DOMTransportAdapter.command(
+        for: .highlightNode(targetID: .init("page-A"), nodeID: .init(42))
+    )
+    let parameters = try jsonObject(from: command.parametersData)
+
+    #expect(command.method == "DOM.highlightNode")
+    #expect(command.routing == .target(.init("page-A")))
+    #expect(integerValue(parameters["nodeId"]) == 42)
+    #expect(parameters["reveal"] as? Bool == false)
+    #expect(hasVisibleHighlightConfig(parameters["highlightConfig"] as? [String: Any]) == true)
+}
+
 private func firstEvent(from stream: AsyncStream<ProtocolEventEnvelope>) -> Task<ProtocolEventEnvelope?, Never> {
     Task {
         var iterator = stream.makeAsyncIterator()
@@ -1178,4 +1193,45 @@ private func messageMethod(_ message: String) throws -> String? {
     let data = try #require(message.data(using: .utf8))
     let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
     return object["method"] as? String
+}
+
+private func jsonObject(from data: Data) throws -> [String: Any] {
+    try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+}
+
+private func integerValue(_ value: Any?) -> Int? {
+    if let value = value as? Int {
+        return value
+    }
+    if let value = value as? NSNumber,
+       CFGetTypeID(value) != CFBooleanGetTypeID() {
+        return value.intValue
+    }
+    return nil
+}
+
+private func doubleValue(_ value: Any?) -> Double? {
+    if let value = value as? Double {
+        return value
+    }
+    if let value = value as? Int {
+        return Double(value)
+    }
+    if let value = value as? NSNumber,
+       CFGetTypeID(value) != CFBooleanGetTypeID() {
+        return value.doubleValue
+    }
+    return nil
+}
+
+private func hasVisibleHighlightConfig(_ config: [String: Any]?) -> Bool {
+    guard let config else {
+        return false
+    }
+    return ["contentColor", "paddingColor", "borderColor", "marginColor"].allSatisfy { key in
+        guard let color = config[key] as? [String: Any] else {
+            return false
+        }
+        return doubleValue(color["a"]).map { $0 > 0 } == true
+    }
 }

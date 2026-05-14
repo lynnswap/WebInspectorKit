@@ -222,6 +222,8 @@ package struct DOMSelection {
 @Observable
 package final class DOMSession {
     package private(set) var currentPage: DOMPage?
+    package private(set) var treeRevision: UInt64
+    package private(set) var selectionRevision: UInt64
 
     private var targetsByID: [ProtocolTarget.ID: ProtocolTarget]
     private var framesByID: [DOMFrame.ID: DOMFrame]
@@ -243,6 +245,8 @@ package final class DOMSession {
         nextGenerationByTargetID = [:]
         nextSelectionRequestRawID = 0
         selection = DOMSelection()
+        treeRevision = 0
+        selectionRevision = 0
     }
 
     package func reset() {
@@ -256,6 +260,8 @@ package final class DOMSession {
         nextGenerationByTargetID.removeAll()
         nextSelectionRequestRawID = 0
         selection = DOMSelection()
+        treeRevision &+= 1
+        selectionRevision &+= 1
     }
 
     package func applyTargetCreated(
@@ -302,6 +308,7 @@ package final class DOMSession {
         mainFrame.targetID = targetID
         target.frameID = mainFrameID
         currentPage = DOMPage(id: targetID, mainTargetID: targetID, mainFrameID: mainFrameID)
+        treeRevision &+= 1
     }
 
     package func applyTargetCommitted(targetID: ProtocolTarget.ID) {
@@ -389,6 +396,7 @@ package final class DOMSession {
         }
 
         reconcileSelection()
+        treeRevision &+= 1
     }
 
     package func applyTargetDestroyed(_ targetID: ProtocolTarget.ID) {
@@ -407,6 +415,7 @@ package final class DOMSession {
             currentPage = nil
         }
         reconcileSelection()
+        treeRevision &+= 1
     }
 
     package func applyExecutionContextCreated(_ record: ExecutionContextRecord) {
@@ -449,6 +458,7 @@ package final class DOMSession {
         }
 
         reconcileSelection()
+        treeRevision &+= 1
         return rootNodeID
     }
 
@@ -466,6 +476,7 @@ package final class DOMSession {
         )
         relinkProtocolEffectiveChildren(of: parent)
         reconcileSelection()
+        treeRevision &+= 1
     }
 
     @discardableResult
@@ -488,12 +499,100 @@ package final class DOMSession {
         parent.regularChildren = .loaded(children)
         relinkProtocolEffectiveChildren(of: parent)
         reconcileSelection()
+        treeRevision &+= 1
         return childID
     }
 
     package func applyNodeRemoved(_ nodeID: DOMNode.ID) {
         removeNodeSubtree(nodeID, detachFromParent: true)
         reconcileSelection()
+        treeRevision &+= 1
+    }
+
+    package var currentPageTargetID: ProtocolTarget.ID? {
+        currentPage?.mainTargetID
+    }
+
+    package var selectedNodeID: DOMNode.ID? {
+        selection.selectedNodeID
+    }
+
+    package var selectedNode: DOMNode? {
+        selection.selectedNodeID.flatMap { nodesByID[$0] }
+    }
+
+    package var currentPageRootNode: DOMNode? {
+        guard let targetID = currentPage?.mainTargetID,
+              let documentID = targetsByID[targetID]?.currentDocumentID,
+              let rootNodeID = documentsByID[documentID]?.rootNodeID
+        else {
+            return nil
+        }
+        return nodesByID[rootNodeID]
+    }
+
+    package func node(for id: DOMNode.ID) -> DOMNode? {
+        nodesByID[id]
+    }
+
+    package func visibleDOMTreeChildren(of node: DOMNode) -> [DOMNode] {
+        projectedVisibleChildren(of: node).compactMap { nodesByID[$0] }
+    }
+
+    package func hasVisibleDOMTreeChildren(_ node: DOMNode) -> Bool {
+        !projectedVisibleChildren(of: node).isEmpty || node.regularChildren.knownCount > 0
+    }
+
+    package func hasUnloadedRegularChildren(_ node: DOMNode) -> Bool {
+        guard case let .unrequested(count) = node.regularChildren else {
+            return false
+        }
+        return count > 0
+    }
+
+    package func isTemplateContent(_ node: DOMNode) -> Bool {
+        guard let parentID = node.parentID,
+              let parent = nodesByID[parentID] else {
+            return false
+        }
+        return parent.templateContentID == node.id
+    }
+
+    package func selectNode(_ nodeID: DOMNode.ID) {
+        guard nodesByID[nodeID] != nil,
+              selection.selectedNodeID != nodeID else {
+            return
+        }
+        selection.selectedNodeID = nodeID
+        selection.pendingRequest = nil
+        selection.failure = nil
+        selectionRevision &+= 1
+    }
+
+    package func requestChildNodesIntent(for nodeID: DOMNode.ID, depth: Int = 3) -> DOMCommandIntent? {
+        guard let node = nodesByID[nodeID],
+              hasUnloadedRegularChildren(node) else {
+            return nil
+        }
+        return .requestChildNodes(
+            targetID: nodeID.documentID.targetID,
+            nodeID: node.protocolNodeID,
+            depth: max(1, depth)
+        )
+    }
+
+    package func highlightNodeIntent(for nodeID: DOMNode.ID) -> DOMCommandIntent? {
+        guard let node = nodesByID[nodeID] else {
+            return nil
+        }
+        return .highlightNode(targetID: nodeID.documentID.targetID, nodeID: node.protocolNodeID)
+    }
+
+    package func hideHighlightIntent(targetID: ProtocolTarget.ID? = nil) -> DOMCommandIntent? {
+        guard let targetID = targetID ?? currentPage?.mainTargetID else {
+            return nil
+        }
+        return .hideHighlight(targetID: targetID)
     }
 
     package func resolveInspectSelection(
@@ -551,6 +650,7 @@ package final class DOMSession {
         selection.selectedNodeID = selectedNodeID
         selection.pendingRequest = nil
         selection.failure = nil
+        selectionRevision &+= 1
         return .success(selectedNodeID)
     }
 
@@ -562,18 +662,6 @@ package final class DOMSession {
             appendProjectionRows(rootNodeID, depth: 0, visited: &visited, rows: &rows)
         }
         return DOMTreeProjection(rows: rows)
-    }
-
-    package func elementDetailSnapshot() -> DOMElementDetailSnapshot? {
-        guard let selectedNodeID = selection.selectedNodeID,
-              let node = nodesByID[selectedNodeID] else {
-            return nil
-        }
-        return DOMElementDetailSnapshot(
-            nodeID: selectedNodeID,
-            nodeName: node.nodeName,
-            attributes: node.attributes
-        )
     }
 
     package func snapshot() -> DOMSessionSnapshot {
@@ -855,17 +943,22 @@ package final class DOMSession {
         }
         selection.selectedNodeID = nil
         selection.failure = nil
+        selectionRevision &+= 1
     }
 
     private func failSelection(
         _ failure: SelectionResolutionFailure,
         clearSelected: Bool = true
     ) -> Result<DOMCommandIntent, SelectionResolutionFailure> {
+        let previousSelectedNodeID = selection.selectedNodeID
         if clearSelected {
             selection.selectedNodeID = nil
         }
         selection.pendingRequest = nil
         selection.failure = failure
+        if clearSelected, previousSelectedNodeID != nil {
+            selectionRevision &+= 1
+        }
         return .failure(failure)
     }
 
@@ -873,11 +966,15 @@ package final class DOMSession {
         _ failure: SelectionResolutionFailure,
         clearSelected: Bool = true
     ) -> Result<DOMNode.ID, SelectionResolutionFailure> {
+        let previousSelectedNodeID = selection.selectedNodeID
         if clearSelected {
             selection.selectedNodeID = nil
         }
         selection.pendingRequest = nil
         selection.failure = failure
+        if clearSelected, previousSelectedNodeID != nil {
+            selectionRevision &+= 1
+        }
         return .failure(failure)
     }
 }

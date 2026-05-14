@@ -325,6 +325,46 @@ func visibleOrderMatchesWebKitDOMTreeOrder() async throws {
 }
 
 @Test
+func directNodeSelectionUpdatesProjectionWithoutSnapshotModel() async throws {
+    let pageTargetID = ProtocolTarget.ID("page-main")
+    let session = await DOMSession()
+
+    await session.applyTargetCreated(.init(id: pageTargetID, kind: .page), makeCurrentMainPage: true)
+    _ = await session.replaceDocumentRoot(pageDocumentWithoutIframe(), targetID: pageTargetID)
+    let snapshot = await session.snapshot()
+    let htmlID = try #require(snapshot.currentNodeIDByKey[.init(targetID: pageTargetID, nodeID: .init(2))])
+
+    await session.selectNode(htmlID)
+    let projection = await session.treeProjection(rootTargetID: pageTargetID)
+
+    #expect(await session.selectedNodeID == htmlID)
+    #expect(projection.rows.contains { $0.nodeID == htmlID && $0.isSelected })
+}
+
+@Test
+func requestChildNodesIntentUsesNodeOwningTargetAndDepth() async throws {
+    let pageTargetID = ProtocolTarget.ID("page-main")
+    let session = await DOMSession()
+
+    await session.applyTargetCreated(.init(id: pageTargetID, kind: .page), makeCurrentMainPage: true)
+    _ = await session.replaceDocumentRoot(
+        DOMNodePayload(
+            nodeID: .init(1),
+            nodeType: .element,
+            nodeName: "article",
+            localName: "article",
+            regularChildren: .unrequested(count: 2)
+        ),
+        targetID: pageTargetID
+    )
+    let rootID = try #require(await session.currentPageRootNode?.id)
+
+    let intent = await session.requestChildNodesIntent(for: rootID, depth: 4)
+
+    #expect(intent == .requestChildNodes(targetID: pageTargetID, nodeID: .init(1), depth: 4))
+}
+
+@Test
 func mainDocumentSelectionRequestsPageTarget() async throws {
     let pageTargetID = ProtocolTarget.ID("page-main")
     let executionContextID = ExecutionContextID(7)

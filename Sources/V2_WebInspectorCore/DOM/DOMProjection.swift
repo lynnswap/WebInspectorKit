@@ -28,18 +28,6 @@ package struct DOMTreeProjection: Equatable, Sendable {
     }
 }
 
-package struct DOMElementDetailSnapshot: Equatable, Sendable {
-    package var nodeID: DOMNodeIdentifier
-    package var nodeName: String
-    package var attributes: [DOMAttribute]
-
-    package init(nodeID: DOMNodeIdentifier, nodeName: String, attributes: [DOMAttribute]) {
-        self.nodeID = nodeID
-        self.nodeName = nodeName
-        self.attributes = attributes
-    }
-}
-
 package struct ProtocolTargetSnapshot: Equatable, Sendable {
     package var id: ProtocolTargetIdentifier
     package var kind: ProtocolTargetKind

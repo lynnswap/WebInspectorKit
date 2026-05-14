@@ -10,12 +10,15 @@ package enum DOMTransportAdapter {
                 method: "DOM.getDocument",
                 routing: .target(targetID)
             )
-        case let .requestChildNodes(targetID, nodeID):
+        case let .requestChildNodes(targetID, nodeID, depth):
             return ProtocolCommand(
                 domain: .dom,
                 method: "DOM.requestChildNodes",
                 routing: .target(targetID),
-                parametersData: try data(["nodeId": nodeID.rawValue])
+                parametersData: try data([
+                    "nodeId": nodeID.rawValue,
+                    "depth": max(1, depth),
+                ])
             )
         case let .requestNode(_, targetID, objectID):
             return ProtocolCommand(
@@ -29,7 +32,17 @@ package enum DOMTransportAdapter {
                 domain: .dom,
                 method: "DOM.highlightNode",
                 routing: .target(targetID),
-                parametersData: try data(["nodeId": nodeID.rawValue])
+                parametersData: try data([
+                    "nodeId": nodeID.rawValue,
+                    "reveal": false,
+                    "highlightConfig": highlightConfig(),
+                ])
+            )
+        case let .hideHighlight(targetID):
+            return ProtocolCommand(
+                domain: .dom,
+                method: "DOM.hideHighlight",
+                routing: .target(targetID)
             )
         }
     }
@@ -148,6 +161,25 @@ package enum DOMTransportAdapter {
 
     private static func data(_ object: [String: Any]) throws -> Data {
         try JSONSerialization.data(withJSONObject: object, options: [])
+    }
+
+    private static func highlightConfig() -> [String: Any] {
+        [
+            "showInfo": false,
+            "contentColor": highlightColor(red: 111, green: 168, blue: 220, alpha: 0.66),
+            "paddingColor": highlightColor(red: 147, green: 196, blue: 125, alpha: 0.66),
+            "borderColor": highlightColor(red: 255, green: 229, blue: 153, alpha: 0.66),
+            "marginColor": highlightColor(red: 246, green: 178, blue: 107, alpha: 0.66),
+        ]
+    }
+
+    private static func highlightColor(red: Int, green: Int, blue: Int, alpha: Double) -> [String: Any] {
+        [
+            "r": red,
+            "g": green,
+            "b": blue,
+            "a": alpha,
+        ]
     }
 
     private static func inferredOldTargetIDForOldlessCommit(
