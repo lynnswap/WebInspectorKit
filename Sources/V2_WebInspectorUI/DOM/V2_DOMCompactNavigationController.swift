@@ -1,8 +1,11 @@
 #if canImport(UIKit)
 import UIKit
+import V2_WebInspectorRuntime
 
 @MainActor
 package final class V2_DOMCompactNavigationController: UINavigationController {
+    private var domNavigationItems: V2_DOMNavigationItems?
+
     package override init(rootViewController: UIViewController) {
         rootViewController.v2WIDetachFromContainerForReuse()
         super.init(rootViewController: rootViewController)
@@ -10,6 +13,23 @@ package final class V2_DOMCompactNavigationController: UINavigationController {
         navigationBar.prefersLargeTitles = false
         v2WIApplyClearNavigationBarStyle(to: self)
         rootViewController.navigationItem.style = .browser
+    }
+
+    package init(
+        rootViewController: UIViewController,
+        session: V2_InspectorSession
+    ) {
+        rootViewController.v2WIDetachFromContainerForReuse()
+        super.init(rootViewController: rootViewController)
+        view.backgroundColor = .clear
+        navigationBar.prefersLargeTitles = false
+        v2WIApplyClearNavigationBarStyle(to: self)
+        rootViewController.navigationItem.style = .browser
+        let navigationItems = V2_DOMNavigationItems(session: session)
+        navigationItems.install(on: rootViewController.navigationItem) { [weak self] in
+            self?.undoManager
+        }
+        domNavigationItems = navigationItems
     }
 
     @available(*, unavailable)

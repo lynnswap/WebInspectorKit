@@ -6,6 +6,8 @@ import V2_WebInspectorRuntime
 package final class V2_DOMSplitViewController: UISplitViewController {
     private let treeViewController: V2_DOMTreeViewController
     private let elementViewController: V2_DOMElementViewController
+    private let session: V2_InspectorSession?
+    private var domNavigationItems: V2_DOMNavigationItems?
     private lazy var treeNavigationController = V2_RegularSplitColumnNavigationController(
         rootViewController: treeViewController
     )
@@ -16,16 +18,19 @@ package final class V2_DOMSplitViewController: UISplitViewController {
     package convenience init(session: V2_InspectorSession) {
         self.init(
             treeViewController: V2_DOMTreeViewController(session: session),
-            elementViewController: V2_DOMElementViewController(dom: session.dom)
+            elementViewController: V2_DOMElementViewController(dom: session.dom),
+            session: session
         )
     }
 
     package init(
         treeViewController: V2_DOMTreeViewController,
-        elementViewController: V2_DOMElementViewController
+        elementViewController: V2_DOMElementViewController,
+        session: V2_InspectorSession? = nil
     ) {
         self.treeViewController = treeViewController
         self.elementViewController = elementViewController
+        self.session = session
         super.init(style: .doubleColumn)
     }
 
@@ -38,6 +43,7 @@ package final class V2_DOMSplitViewController: UISplitViewController {
         super.viewDidLoad()
         view.backgroundColor = .clear
         configureSplitViewLayout()
+        configureNavigationItem()
     }
 
     private func configureSplitViewLayout() {
@@ -61,6 +67,17 @@ package final class V2_DOMSplitViewController: UISplitViewController {
             maximumPrimaryColumnWidth = .greatestFiniteMagnitude
             preferredPrimaryColumnWidthFraction = 0.7
         }
+    }
+
+    private func configureNavigationItem() {
+        guard let session else {
+            return
+        }
+        let navigationItems = V2_DOMNavigationItems(session: session)
+        navigationItems.install(on: navigationItem) { [weak self] in
+            self?.undoManager
+        }
+        domNavigationItems = navigationItems
     }
 }
 

@@ -2,6 +2,7 @@
 import Testing
 import UIKit
 @testable import V2_WebInspectorCore
+@testable import V2_WebInspectorRuntime
 @testable import V2_WebInspectorUI
 
 @MainActor
@@ -43,6 +44,22 @@ struct V2_DOMContainerTests {
     }
 
     @Test
+    func compactContainerInstallsSessionNavigationActions() throws {
+        let session = V2_InspectorSession(dom: makeDOMSession())
+        let treeViewController = V2_DOMTreeViewController(session: session)
+        let navigationController = V2_DOMCompactNavigationController(
+            rootViewController: treeViewController,
+            session: session
+        )
+
+        let pickItem = try #require(treeViewController.navigationItem.trailingItemGroups.first?.barButtonItems.first)
+
+        #expect(navigationController.viewControllers == [treeViewController])
+        #expect(pickItem.accessibilityIdentifier == "WebInspector.DOM.PickButton.V2")
+        #expect(treeViewController.navigationItem.additionalOverflowItems != nil)
+    }
+
+    @Test
     func splitContainerInstallsTreeAndElementColumns() throws {
         let dom = makeDOMSession()
         let treeViewController = V2_DOMTreeViewController(dom: dom)
@@ -75,6 +92,35 @@ struct V2_DOMContainerTests {
             #expect(elementNavigationController.viewControllers.first === elementViewController)
             #expect(splitViewController.preferredDisplayMode == .oneBesideSecondary)
         }
+    }
+
+    @Test
+    func splitContainerInstallsSessionNavigationActions() throws {
+        let session = V2_InspectorSession(dom: makeDOMSession())
+        let splitViewController = V2_DOMSplitViewController(session: session)
+
+        splitViewController.loadViewIfNeeded()
+
+        let pickItem = try #require(splitViewController.navigationItem.trailingItemGroups.first?.barButtonItems.first)
+        #expect(pickItem.accessibilityIdentifier == "WebInspector.DOM.PickButton.V2")
+        #expect(splitViewController.navigationItem.additionalOverflowItems != nil)
+    }
+
+    @Test
+    func overflowMenuDisablesActionsWhenSessionIsDetached() throws {
+        let dom = makeDOMSession()
+        let session = V2_InspectorSession(dom: dom)
+        let navigationItems = V2_DOMNavigationItems(session: session)
+
+        let emptyMenu = navigationItems.overflowMenuForTesting()
+        #expect(action(titled: "HTML", in: emptyMenu)?.attributes.contains(.disabled) == true)
+
+        let selectedNode = try #require(firstElement(named: "input", in: dom))
+        dom.selectNode(selectedNode.id)
+
+        let selectedMenu = navigationItems.overflowMenuForTesting()
+        #expect(action(titled: "HTML", in: selectedMenu)?.attributes.contains(.disabled) == true)
+        #expect(destructiveAction(in: selectedMenu)?.attributes.contains(.disabled) == true)
     }
 
     private func makeDOMSession() -> DOMSession {
@@ -153,6 +199,33 @@ struct V2_DOMContainerTests {
 
     private func contentUnavailableSecondaryText(in viewController: UIViewController) -> String? {
         (viewController.contentUnavailableConfiguration as? UIContentUnavailableConfiguration)?.secondaryText
+    }
+
+    private func action(titled title: String, in menu: UIMenu) -> UIAction? {
+        for child in menu.children {
+            if let action = child as? UIAction, action.title == title {
+                return action
+            }
+            if let childMenu = child as? UIMenu,
+               let action = action(titled: title, in: childMenu) {
+                return action
+            }
+        }
+        return nil
+    }
+
+    private func destructiveAction(in menu: UIMenu) -> UIAction? {
+        for child in menu.children {
+            if let action = child as? UIAction,
+               action.attributes.contains(.destructive) {
+                return action
+            }
+            if let childMenu = child as? UIMenu,
+               let action = destructiveAction(in: childMenu) {
+                return action
+            }
+        }
+        return nil
     }
 
     private func waitUntil(

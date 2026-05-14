@@ -27,13 +27,13 @@ package enum DOMTransportAdapter {
                 routing: .target(targetID),
                 parametersData: try data(["objectId": objectID])
             )
-        case let .highlightNode(targetID, nodeID):
+        case let .highlightNode(identity):
             return ProtocolCommand(
                 domain: .dom,
                 method: "DOM.highlightNode",
-                routing: .target(targetID),
+                routing: .target(identity.commandTargetID),
                 parametersData: try data([
-                    "nodeId": nodeID.rawValue,
+                    "nodeId": nodeIDValue(identity.commandNodeID),
                     "reveal": false,
                     "highlightConfig": highlightConfig(),
                 ])
@@ -42,6 +42,43 @@ package enum DOMTransportAdapter {
             return ProtocolCommand(
                 domain: .dom,
                 method: "DOM.hideHighlight",
+                routing: .target(targetID)
+            )
+        case let .setInspectModeEnabled(targetID, enabled):
+            var parameters: [String: Any] = ["enabled": enabled]
+            if enabled {
+                parameters["highlightConfig"] = highlightConfig()
+            }
+            return ProtocolCommand(
+                domain: .dom,
+                method: "DOM.setInspectModeEnabled",
+                routing: .target(targetID),
+                parametersData: try data(parameters)
+            )
+        case let .getOuterHTML(identity):
+            return ProtocolCommand(
+                domain: .dom,
+                method: "DOM.getOuterHTML",
+                routing: .target(identity.commandTargetID),
+                parametersData: try data(["nodeId": nodeIDValue(identity.commandNodeID)])
+            )
+        case let .removeNode(identity):
+            return ProtocolCommand(
+                domain: .dom,
+                method: "DOM.removeNode",
+                routing: .target(identity.commandTargetID),
+                parametersData: try data(["nodeId": nodeIDValue(identity.commandNodeID)])
+            )
+        case let .undo(targetID):
+            return ProtocolCommand(
+                domain: .dom,
+                method: "DOM.undo",
+                routing: .target(targetID)
+            )
+        case let .redo(targetID):
+            return ProtocolCommand(
+                domain: .dom,
+                method: "DOM.redo",
                 routing: .target(targetID)
             )
         }
@@ -124,6 +161,33 @@ package enum DOMTransportAdapter {
         )
     }
 
+    package static func outerHTML(from result: ProtocolCommandResult) throws -> String {
+        let payload = try TransportMessageParser.decode(GetOuterHTMLResult.self, from: result.resultData)
+        return payload.outerHTML
+    }
+
+    package static func inspectEvent(from event: ProtocolEventEnvelope) throws -> DOMInspectEvent? {
+        switch event.method {
+        case "DOM.inspect":
+            guard let targetID = event.targetID else {
+                return nil
+            }
+            let payload = try TransportMessageParser.decode(DOMInspectParams.self, from: event.paramsData)
+            return .protocolNode(targetID: targetID, nodeID: payload.nodeId)
+        case "Inspector.inspect":
+            let payload = try TransportMessageParser.decode(InspectorInspectParams.self, from: event.paramsData)
+            return .remoteObject(
+                targetID: event.targetID,
+                remoteObject: RemoteObject(
+                    objectID: payload.object.objectId,
+                    injectedScriptID: injectedScriptID(from: payload.object.objectId)
+                )
+            )
+        default:
+            return nil
+        }
+    }
+
     @MainActor
     package static func applyDOMEvent(_ event: ProtocolEventEnvelope, to session: DOMSession) throws {
         guard let targetID = event.targetID else {
@@ -163,6 +227,15 @@ package enum DOMTransportAdapter {
         try JSONSerialization.data(withJSONObject: object, options: [])
     }
 
+    private static func nodeIDValue(_ nodeID: DOMCommandNodeID) -> Any {
+        switch nodeID {
+        case let .protocolNode(nodeID):
+            return nodeID.rawValue
+        case let .scoped(targetID, nodeID):
+            return "\(targetID.rawValue):\(nodeID.rawValue)"
+        }
+    }
+
     private static func highlightConfig() -> [String: Any] {
         [
             "showInfo": false,
@@ -195,6 +268,25 @@ package enum DOMTransportAdapter {
             .filter { $0.value.isProvisional }
             .map(\.key)
         return provisionalTargetIDs.count == 1 ? provisionalTargetIDs[0] : nil
+    }
+
+    private static func injectedScriptID(from objectID: String) -> ExecutionContextID? {
+        guard let data = objectID.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        if let injectedScriptID = object["injectedScriptId"] as? Int {
+            return ExecutionContextID(injectedScriptID)
+        }
+        if let injectedScriptID = object["injectedScriptId"] as? NSNumber,
+           CFGetTypeID(injectedScriptID) != CFBooleanGetTypeID() {
+            return ExecutionContextID(injectedScriptID.intValue)
+        }
+        if let injectedScriptID = object["injectedScriptId"] as? String,
+           let rawValue = Int(injectedScriptID) {
+            return ExecutionContextID(rawValue)
+        }
+        return nil
     }
 }
 
@@ -266,6 +358,22 @@ private struct GetDocumentResult: Decodable {
 
 private struct RequestNodeResult: Decodable {
     var nodeId: DOMProtocolNodeID
+}
+
+private struct GetOuterHTMLResult: Decodable {
+    var outerHTML: String
+}
+
+private struct DOMInspectParams: Decodable {
+    var nodeId: DOMProtocolNodeID
+}
+
+private struct InspectorInspectParams: Decodable {
+    var object: InspectorRemoteObject
+}
+
+private struct InspectorRemoteObject: Decodable {
+    var objectId: String
 }
 
 private struct SetChildNodesParams: Decodable {

@@ -286,6 +286,7 @@ let package = Package(
             name: "V2_WebInspectorUITests",
             dependencies: [
                 "V2_WebInspectorCore",
+                "V2_WebInspectorRuntime",
                 "V2_WebInspectorUI"
             ],
             path: "Tests/V2_WebInspectorUITests",

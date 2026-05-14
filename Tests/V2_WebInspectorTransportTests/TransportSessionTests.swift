@@ -688,7 +688,7 @@ func domAdapterCompletesInspectSelectionThroughRequestNodeResult() async throws 
         ),
         to: dom
     )
-    let intent = await dom.resolveInspectSelection(remoteObject: .init(objectID: "node-object", injectedScriptID: .init(9)))
+    let intent = await dom.beginInspectSelectionRequest(targetID: .init("frame-A"), objectID: "node-object")
     guard case let .success(.requestNode(selectionRequestID, targetID, _)) = intent else {
         Issue.record("Expected DOM.requestNode intent")
         return
@@ -1112,7 +1112,14 @@ func networkCommandIntentRoutesThroughCurrentPageOctopusTarget() throws {
 @Test
 func domHighlightCommandUsesNonRevealingVisibleHighlightConfig() throws {
     let command = try DOMTransportAdapter.command(
-        for: .highlightNode(targetID: .init("page-A"), nodeID: .init(42))
+        for: .highlightNode(
+            identity: .init(
+                documentTargetID: .init("page-A"),
+                rawNodeID: .init(42),
+                commandTargetID: .init("page-A"),
+                commandNodeID: .protocolNode(.init(42))
+            )
+        )
     )
     let parameters = try jsonObject(from: command.parametersData)
 
@@ -1121,6 +1128,118 @@ func domHighlightCommandUsesNonRevealingVisibleHighlightConfig() throws {
     #expect(integerValue(parameters["nodeId"]) == 42)
     #expect(parameters["reveal"] as? Bool == false)
     #expect(hasVisibleHighlightConfig(parameters["highlightConfig"] as? [String: Any]) == true)
+}
+
+@Test
+func domNavigationActionCommandsUseExpectedProtocolPayloads() throws {
+    let targetID = ProtocolTargetIdentifier("page-A")
+
+    let enablePicker = try DOMTransportAdapter.command(
+        for: .setInspectModeEnabled(targetID: targetID, enabled: true)
+    )
+    let enableParameters = try jsonObject(from: enablePicker.parametersData)
+    #expect(enablePicker.method == "DOM.setInspectModeEnabled")
+    #expect(enablePicker.routing == .target(targetID))
+    #expect(enableParameters["enabled"] as? Bool == true)
+    #expect(hasVisibleHighlightConfig(enableParameters["highlightConfig"] as? [String: Any]) == true)
+
+    let disablePicker = try DOMTransportAdapter.command(
+        for: .setInspectModeEnabled(targetID: targetID, enabled: false)
+    )
+    let disableParameters = try jsonObject(from: disablePicker.parametersData)
+    #expect(disablePicker.method == "DOM.setInspectModeEnabled")
+    #expect(disableParameters["enabled"] as? Bool == false)
+    #expect(disableParameters["highlightConfig"] == nil)
+
+    let identity = DOMActionIdentity(
+        documentTargetID: targetID,
+        rawNodeID: .init(42),
+        commandTargetID: targetID,
+        commandNodeID: .protocolNode(.init(42))
+    )
+
+    let outerHTML = try DOMTransportAdapter.command(for: .getOuterHTML(identity: identity))
+    #expect(outerHTML.method == "DOM.getOuterHTML")
+    #expect(integerValue(try jsonObject(from: outerHTML.parametersData)["nodeId"]) == 42)
+
+    let removeNode = try DOMTransportAdapter.command(for: .removeNode(identity: identity))
+    #expect(removeNode.method == "DOM.removeNode")
+    #expect(integerValue(try jsonObject(from: removeNode.parametersData)["nodeId"]) == 42)
+
+    #expect(try DOMTransportAdapter.command(for: .undo(targetID: targetID)).method == "DOM.undo")
+    #expect(try DOMTransportAdapter.command(for: .redo(targetID: targetID)).method == "DOM.redo")
+}
+
+@Test
+func domActionCommandsEncodeScopedCommandNodeIDs() throws {
+    let identity = DOMActionIdentity(
+        documentTargetID: .init("frame-A"),
+        rawNodeID: .init(42),
+        commandTargetID: .init("page-main"),
+        commandNodeID: .scoped(targetID: .init("frame-A"), nodeID: .init(42))
+    )
+
+    let outerHTML = try DOMTransportAdapter.command(for: .getOuterHTML(identity: identity))
+    let outerHTMLParameters = try jsonObject(from: outerHTML.parametersData)
+    #expect(outerHTML.routing == .target(.init("page-main")))
+    #expect(outerHTMLParameters["nodeId"] as? String == "frame-A:42")
+
+    let removeNode = try DOMTransportAdapter.command(for: .removeNode(identity: identity))
+    let removeNodeParameters = try jsonObject(from: removeNode.parametersData)
+    #expect(removeNode.routing == .target(.init("page-main")))
+    #expect(removeNodeParameters["nodeId"] as? String == "frame-A:42")
+}
+
+@Test
+func domAdapterDecodesOuterHTMLResultAndInspectEvents() throws {
+    let html = try DOMTransportAdapter.outerHTML(
+        from: ProtocolCommandResult(
+            domain: .dom,
+            method: "DOM.getOuterHTML",
+            targetID: .init("page-A"),
+            resultData: Data(#"{"outerHTML":"<main></main>"}"#.utf8)
+        )
+    )
+    #expect(html == "<main></main>")
+
+    let domInspect = try DOMTransportAdapter.inspectEvent(
+        from: ProtocolEventEnvelope(
+            sequence: 1,
+            domain: .dom,
+            method: "DOM.inspect",
+            targetID: .init("page-A"),
+            paramsData: Data(#"{"nodeId":42}"#.utf8)
+        )
+    )
+    #expect(domInspect == .protocolNode(targetID: .init("page-A"), nodeID: .init(42)))
+
+    let inspectorInspect = try DOMTransportAdapter.inspectEvent(
+        from: ProtocolEventEnvelope(
+            sequence: 2,
+            domain: .inspector,
+            method: "Inspector.inspect",
+            targetID: nil,
+            paramsData: Data(#"{"object":{"objectId":"{\"injectedScriptId\":7,\"id\":99}"},"hints":{}}"#.utf8)
+        )
+    )
+    #expect(inspectorInspect == .remoteObject(
+        targetID: nil,
+        remoteObject: .init(objectID: #"{"injectedScriptId":7,"id":99}"#, injectedScriptID: .init(7))
+    ))
+
+    let targetScopedInspectorInspect = try DOMTransportAdapter.inspectEvent(
+        from: ProtocolEventEnvelope(
+            sequence: 3,
+            domain: .inspector,
+            method: "Inspector.inspect",
+            targetID: .init("frame-A"),
+            paramsData: Data(#"{"object":{"objectId":"opaque-object"},"hints":{}}"#.utf8)
+        )
+    )
+    #expect(targetScopedInspectorInspect == .remoteObject(
+        targetID: .init("frame-A"),
+        remoteObject: .init(objectID: "opaque-object", injectedScriptID: nil)
+    ))
 }
 
 private func firstEvent(from stream: AsyncStream<ProtocolEventEnvelope>) -> Task<ProtocolEventEnvelope?, Never> {

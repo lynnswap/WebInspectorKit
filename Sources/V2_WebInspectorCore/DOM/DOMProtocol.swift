@@ -151,6 +151,54 @@ package struct RemoteObject: Equatable, Sendable {
     }
 }
 
+package enum DOMNodeCopyTextKind: Equatable, Sendable {
+    case html
+    case selectorPath
+    case xPath
+}
+
+package enum DOMCommandNodeID: Equatable, Hashable, Sendable {
+    case protocolNode(DOMProtocolNodeID)
+
+    /// WebInspectorUI represents frame-owned DOM nodes as
+    /// `<frame target identifier>:<raw node id>` and sends that identifier to
+    /// the page DOM agent for node-editing commands that FrameDOMAgent stubs.
+    /// See WebKit's `DOMNode.js` `constructor`, `getOuterHTML`, and `removeNode`.
+    case scoped(targetID: ProtocolTargetIdentifier, nodeID: DOMProtocolNodeID)
+
+    package var rawProtocolNodeID: DOMProtocolNodeID {
+        switch self {
+        case let .protocolNode(nodeID),
+             let .scoped(_, nodeID):
+            return nodeID
+        }
+    }
+}
+
+package struct DOMActionIdentity: Equatable, Hashable, Sendable {
+    package var documentTargetID: ProtocolTargetIdentifier
+    package var rawNodeID: DOMProtocolNodeID
+    package var commandTargetID: ProtocolTargetIdentifier
+    package var commandNodeID: DOMCommandNodeID
+
+    package init(
+        documentTargetID: ProtocolTargetIdentifier,
+        rawNodeID: DOMProtocolNodeID,
+        commandTargetID: ProtocolTargetIdentifier,
+        commandNodeID: DOMCommandNodeID
+    ) {
+        self.documentTargetID = documentTargetID
+        self.rawNodeID = rawNodeID
+        self.commandTargetID = commandTargetID
+        self.commandNodeID = commandNodeID
+    }
+}
+
+package enum DOMInspectEvent: Equatable, Sendable {
+    case remoteObject(targetID: ProtocolTargetIdentifier?, remoteObject: RemoteObject)
+    case protocolNode(targetID: ProtocolTargetIdentifier, nodeID: DOMProtocolNodeID)
+}
+
 package struct SelectionRequestIdentifier: RawRepresentable, Hashable, Sendable {
     package let rawValue: UInt64
 
@@ -167,8 +215,13 @@ package enum DOMCommandIntent: Equatable, Sendable {
     case getDocument(targetID: ProtocolTargetIdentifier)
     case requestChildNodes(targetID: ProtocolTargetIdentifier, nodeID: DOMProtocolNodeID, depth: Int)
     case requestNode(selectionRequestID: SelectionRequestIdentifier, targetID: ProtocolTargetIdentifier, objectID: String)
-    case highlightNode(targetID: ProtocolTargetIdentifier, nodeID: DOMProtocolNodeID)
+    case highlightNode(identity: DOMActionIdentity)
     case hideHighlight(targetID: ProtocolTargetIdentifier)
+    case setInspectModeEnabled(targetID: ProtocolTargetIdentifier, enabled: Bool)
+    case getOuterHTML(identity: DOMActionIdentity)
+    case removeNode(identity: DOMActionIdentity)
+    case undo(targetID: ProtocolTargetIdentifier)
+    case redo(targetID: ProtocolTargetIdentifier)
 }
 
 package enum SelectionResolutionFailure: Error, Equatable, Sendable {
