@@ -2,6 +2,123 @@
 
 This note records the WebKit DOM model behavior that `V2_WebInspectorCore` is intentionally matching.
 
+## 2026-05-14 Corrections
+
+The earlier debugging direction was too flow-oriented. The model boundary must
+be fixed first. The important WebKit facts are:
+
+- `DOM.Node.frameId` is not the iframe owner's child-frame id. The protocol
+  defines it as the "Identifier of the containing frame" and
+  `InspectorDOMAgent::buildObjectForNode` fills it from the node's own
+  document/frame. For a page-target iframe element, that value is the page
+  document's frame, not the out-of-process child document.
+- `Target.TargetInfo` in current WebKit protocol contains `targetId`, `type`,
+  `isProvisional`, and `isPaused`; it does not expose `frameId` or
+  `parentFrameId` as protocol fields. WebKit's implementation-generated frame
+  target id currently has the shape `frame-<frameID>-<processID>`, but that is
+  an implementation detail, not a DOM model identity contract.
+- `Runtime.ExecutionContextDescription.frameId` is "Id of the owning frame".
+  It can supplement target/frame mapping, but it is not an iframe owner
+  relation by itself.
+- `DOM.Node.contentDocument` is the protocol field for frame owner elements,
+  but Site Isolation means a cross-origin frame document often arrives through
+  the frame target's `DOM.getDocument`, not as the page-target iframe payload's
+  `contentDocument`.
+- WebInspectorUI keeps frame-target DOM nodes target-scoped by prefixing the
+  raw node id with the frame target id. It does not let raw protocol node ids
+  collide across page/frame targets.
+- WebInspectorUI does not use page reload as iframe recovery. A frame-target
+  `DOM.documentUpdated` calls `_frameTargetDocumentUpdated`, which cleans up
+  only that frame target and reinitializes that target's document.
+- `_ensurePageBodyChildrenLoaded` is not a generic missing-parent repair
+  mechanism. It exists because `_unsplicedFrameDocuments` need iframe owner
+  nodes to be present in `_idToDOMNode`; it requests `<html>` children if
+  needed, then `<body>` children, and then retries frame document splice.
+- `InspectorDOMAgent` only emits DOM mutation events for nodes it has already
+  bound for the frontend. `didInsertDOMNode` returns if the parent has no bound
+  node id. If the parent is bound but its children were not requested, it emits
+  `childNodeCountUpdated`; only when children were requested does it emit
+  `childNodeInserted`. Therefore a V2-side `missingParent` for a page-target
+  `childNodeInserted` means V2 lost, replaced, or misrouted a node that the
+  backend believes was already sent. It is an invariant breach in V2's target /
+  document / node mirror, not a picker problem and not something to solve by
+  blindly reloading the page document.
+
+The immediate modeling conclusion is:
+
+```text
+Target-scoped document identity must be primary.
+Frame document projection must be explicit state.
+Page DOM mutation handling must preserve the current target/document mirror.
+Iframe owner discovery may request page html/body children, but only as part of
+pending frame-document splice, not as a standalone event-drop workaround.
+```
+
+## Source Evidence
+
+| Area | WebKit source | Relevant fact |
+| --- | --- | --- |
+| DOM protocol node identity | `Source/JavaScriptCore/inspector/protocol/DOM.json` | `DOM.Node.frameId` is the containing frame; `contentDocument` is the frame owner document field; `requestChildNodes(depth: -1)` means entire subtree but default is depth 1. |
+| Backend node payload | `Source/WebCore/inspector/agents/InspectorDOMAgent.cpp` | `buildObjectForNode` sets `frameId` from the node's document frame and sets `contentDocument` only when a frame owner has an accessible content document. |
+| Backend mutation contract | `Source/WebCore/inspector/agents/InspectorDOMAgent.cpp` | `didInsertDOMNode` returns when parent is not bound; otherwise it emits `childNodeCountUpdated` or `childNodeInserted` depending on whether children were requested. |
+| Target protocol | `Source/JavaScriptCore/inspector/protocol/Target.json` | `TargetInfo` has no protocol-level frame id fields; `didCommitProvisionalTarget` swaps old/new target ids. |
+| Frame target id implementation | `Source/WebKit/WebProcess/Inspector/FrameInspectorTarget.cpp` | Current implementation formats frame target ids as `frame-<frameID>-<processID>`. This is useful evidence, not a substitute for explicit model fields. |
+| Target frontend | `Source/WebInspectorUI/UserInterface/Controllers/TargetManager.js` | WebInspectorUI creates `WI.FrameTarget` from target type and dispatches provisional messages after commit. |
+| Target transport | `Source/WebInspectorUI/UserInterface/Protocol/TargetObserver.js` and `Connection.js` | `Target.dispatchMessageFromTarget` is routed to the target connection before domain dispatch. |
+| Frame target DOM flow | `Source/WebInspectorUI/UserInterface/Controllers/DOMManager.js` | `_initializeFrameTarget` sends `DOM.getDocument` to the frame target, stores the frame document separately, and attempts splice. |
+| Pending splice | `Source/WebInspectorUI/UserInterface/Controllers/DOMManager.js` | `_unsplicedFrameDocuments` holds frame documents until owner iframes are available; `_ensurePageBodyChildrenLoaded` requests page html/body children. |
+| Projection attach | `Source/WebInspectorUI/UserInterface/Controllers/DOMManager.js` | `_trySpliceFrameDocumentIntoNode` attaches the frame document as iframe `_contentDocument`; current fallback is exact/resolved URL match with a WebKit FIXME to use frame/target identity later. |
+| Frame target document refresh | `Source/WebInspectorUI/UserInterface/Controllers/DOMManager.js` | `_frameTargetDocumentUpdated` cleans up and reinitializes only that frame target. |
+| Node scoping/projection | `Source/WebInspectorUI/UserInterface/Models/DOMNode.js` | Frame-target node ids are scoped as `<target id>:<raw node id>`; `_setChildrenPayload` returns if `_contentDocument` exists. |
+| DOM event dispatch | `Source/WebInspectorUI/UserInterface/Protocol/DOMObserver.js` | DOM events are target-aware; frame-target document updates and setChildNodes route to frame-target handlers. |
+
+## What This Means for V2
+
+V2 must model these as separate concepts:
+
+- `ProtocolTarget`: protocol routing endpoint. Owns target-local agent commands
+  and target-local DOM events.
+- `FrameIdentity`: WebKit frame id when known. It may come from document
+  payload `frameId`, execution context `frameId`, or implementation-specific
+  target id decoding only when deliberately supported.
+- `DOMDocument`: target-scoped document generation and root node. Page target
+  and frame target documents are never substitutes for each other.
+- `DOMNode`: node mirror scoped by target document generation plus raw
+  protocol node id. `ownerFrameID` means containing frame, not child frame.
+- `FrameDocumentProjection`: relation between one iframe/frame owner node and
+  one frame-target document root. This is not a regular `children` array.
+- `PendingFrameDocument`: frame-target document that exists but has not yet
+  found its iframe owner in the page DOM.
+- `PageOwnerHydration`: the WebKit `_ensurePageBodyChildrenLoaded` equivalent.
+  It is keyed by page document generation and exists only to make pending
+  projections discover owner iframe nodes.
+
+The invalid model is:
+
+```text
+DOM.Node.frameId == child frame id
+or
+frame target DOM.getDocument replaces/repairs page target document
+or
+missing page mutation parent -> reload page DOM
+```
+
+The valid model is:
+
+```text
+ProtocolTarget(page)
+  currentDocument -> DOMDocument(page generation N)
+    node ids scoped to page target/generation
+    iframe owner node
+      projection -> DOMDocument(frame target generation M)
+
+ProtocolTarget(frame)
+  currentDocument -> DOMDocument(frame target generation M)
+    node ids scoped to frame target/generation
+
+FrameDocumentProjection(owner node, frame document root, state: pending|attached)
+```
+
 ## WebKit Shape
 
 - `DOMManager` owns the frontend node index and current document state.
@@ -99,6 +216,9 @@ not a signal to replace the current page document.
 - `DOMSession` is the source of truth for page, frame, document, node, execution-context, and selection state.
 - `DOMNode.ID` is `targetID + documentGeneration + nodeID`, so the same protocol `nodeID` in different targets or document generations cannot collide.
 - `DOMNodeCurrentKey` is only a current mirror lookup key: `targetID + nodeID`.
+- `DOMNode.ownerFrameID` is the containing frame id from protocol
+  `DOM.Node.frameId`. It must never be used as the iframe owner node's child
+  frame id.
 - iframe documents are not stored as regular DOM children. Projection renders `DOMFrame.currentDocumentID` under the iframe owner node.
 - Frame document refresh updates only that frame's current document generation and does not mutate the parent page document.
 - Selection stores node identifiers and request generation, not stale node object references.
@@ -107,29 +227,47 @@ not a signal to replace the current page document.
 
 ```text
 DOMSession
-  └─ DOMPage
-      └─ DOMFrame tree
-          └─ DOMDocument
-              └─ #document DOMNode
-                  └─ iframe DOMNode
-                      └─ projected DOMFrame.currentDocument
+  ├─ ProtocolTarget(page)
+  │   └─ currentDocumentID -> DOMDocument(page target, generation N)
+  │       └─ DOMNode tree scoped by page target/generation
+  │           └─ iframe/frame owner node
+  │               └─ projected contentDocumentID -> frame document root
+  ├─ ProtocolTarget(frame)
+  │   └─ currentDocumentID -> DOMDocument(frame target, generation M)
+  │       └─ DOMNode tree scoped by frame target/generation
+  ├─ DOMFrame / FrameIdentity
+  │   ├─ targetID?
+  │   ├─ currentDocumentID?
+  │   └─ ownerNodeID?
+  └─ FrameDocumentProjection
+      └─ pending or attached owner/contentDocument relation
 ```
 
 ## Identity Rules
 
 - `ProtocolTarget.ID`: WebKit target identifier.
-- `DOMFrame.ID`: WebKit frame identifier.
+- `DOMFrame.ID`: WebKit frame identifier when known. Do not assume current
+  `TargetInfo` exposes this directly.
 - `DOMDocument.ID`: `targetID + documentGeneration`.
 - `DOMNode.ID`: `documentID + nodeID`.
 - `DOMNodeCurrentKey`: `targetID + nodeID` for resolving the current node mirror within one target.
 
-`backendNodeId`, URL strings, and `page-*` naming are not DOM identity.
+`backendNodeId`, URL strings, raw node ids, and `page-*` naming are not global
+DOM identity. The current `frame-<frameID>-<processID>` target-id shape is
+implementation evidence only; it may be decoded deliberately as a WebKit
+compatibility signal, but the Core model still needs explicit fields for
+target, frame, document, node, and projection.
 
 ## Frame Documents
 
-Frame documents are owned by `DOMFrame.currentDocumentID`.
+Frame documents are owned by the frame target's current document and projected
+through `DOMFrame.currentDocumentID` / `FrameDocumentProjection`.
 
-An iframe node may point to a frame with `frameID`, and projection renders that frame's current document under the iframe row. The projected document is not stored as an iframe regular child.
+An iframe node does not get its child frame identity from protocol
+`DOM.Node.frameId`. That value is the iframe node's containing frame. A future
+explicit child-frame field can directly bind the owner; until then, owner
+discovery is a separate projection step. The projected document is not stored
+as an iframe regular child.
 
 This preserves the parent page DOM when an iframe ad refreshes or navigates.
 
@@ -161,7 +299,10 @@ For frame owner nodes, effective children prefer the projected frame document. R
 
 ## Intentional Differences
 
-- V2 does not use URL matching as identity. Frame ownership should come from frame/target metadata.
+- V2 does not use URL matching as document or node identity. URL matching is
+  allowed only as WebKit-compatible iframe owner discovery when there is a
+  single exact/resolved match and no explicit child-frame identity is
+  available.
 - V2 does not use `backendNodeId`, URL strings, or target name prefixes as DOM identity.
 - V2 does not refresh the parent page document as recovery for frame document updates.
 - V2 keeps UIKit/TextKit2 out of the core model. UI rows are projection output, not source-of-truth model objects.
