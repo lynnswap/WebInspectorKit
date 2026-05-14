@@ -126,6 +126,17 @@ let package = Package(
             swiftSettings: strictSwiftSettings
         ),
         .target(
+            name: "V2_WebInspectorUI",
+            dependencies: [
+                "V2_WebInspectorCore",
+                "V2_WebInspectorRuntime",
+                .product(name: "ObservationBridge", package: "ObservationBridge"),
+                .product(name: "UIHostingMenu", package: "UIHostingMenu", condition: .when(platforms: [.iOS])),
+                .product(name: "SyntaxEditorUI", package: "SyntaxEditorUI", condition: .when(platforms: [.iOS]))
+            ],
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
             name: "V2_WebInspectorNativeBridge",
             path: "Sources/V2_WebInspectorNativeBridge",
             publicHeadersPath: "include",
