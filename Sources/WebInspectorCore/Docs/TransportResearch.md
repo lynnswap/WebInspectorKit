@@ -162,6 +162,133 @@ WebInspectorUI keeps target routing and domain models separate.
 
 WebInspector should preserve the good boundary from WebInspectorUI, but avoid inheriting its URL-based frame document splice fallback.
 
+## WebKit Frontend Containers
+
+The current WebKit frontend does not expose or maintain a separate stable
+`pageID` protocol concept that is independent from targets and frames.
+The top-level WebInspectorUI shape is split across singleton containers.
+
+The global current-target pointers are:
+
+```mermaid
+flowchart TB
+    subgraph WI["WI globals"]
+        backendTarget["WI.backendTarget"]
+        pageTarget["WI.pageTarget<br/>current page pointer"]
+        mainTarget["WI.mainTarget<br/>getter"]
+    end
+```
+
+`WI.mainTarget` is not a container. It is a getter returning
+`WI.pageTarget || WI.backendTarget`.
+
+Target objects are owned by `WI.targetManager`:
+
+```mermaid
+flowchart TB
+    subgraph TM["WI.targetManager"]
+        subgraph TargetMap["_targets: Map target.identifier -> WI.Target"]
+            page["WI.PageTarget"]
+            frame["WI.FrameTarget"]
+            worker["WI.WorkerTarget"]
+        end
+    end
+```
+
+The page frame/resource tree is owned by `WI.networkManager`:
+
+```mermaid
+flowchart TB
+    subgraph NM["WI.networkManager"]
+        frameMap["_frameIdentifierMap<br/>Map frame.id -> WI.Frame"]
+        subgraph MainFrame["_mainFrame: WI.Frame"]
+            mainResource["mainResource"]
+            childFrames["childFrameCollection"]
+            resources["resourceCollection"]
+        end
+    end
+```
+
+The DOM container summary is owned by `WI.domManager`; detailed DOM nesting
+lives in `DOMModelResearch.md`:
+
+```mermaid
+flowchart TB
+    subgraph DM["WI.domManager"]
+        document["_document<br/>page #document"]
+        frameData["_frameTargetDOMData<br/>FrameTarget -> document"]
+        nodeIndex["_idToDOMNode"]
+        pending["_unsplicedFrameDocuments"]
+    end
+```
+
+Together, the containment relationship is:
+
+```text
+WI globals
+  backendTarget
+  pageTarget
+  mainTarget getter
+
+WI.targetManager
+  _targets
+    WI.PageTarget
+    WI.FrameTarget
+    WI.WorkerTarget
+
+WI.networkManager
+  _mainFrame
+    resources
+    child frames
+  _frameIdentifierMap
+
+WI.domManager
+  page document
+  frame target DOM data
+  node index
+  pending frame documents
+```
+
+So Target is the protocol routing unit, but it is not the whole page model by
+itself. A page boundary in WebInspectorUI is the current `WI.pageTarget`
+together with the current `WI.networkManager.mainFrame` tree. DOM is then
+target-scoped: page DOM belongs to the page target, and frame DOM belongs to the
+frame target when that target exposes the DOM domain.
+
+On page target transition, WebInspectorUI swaps the current page target instead
+of mutating a stable page id:
+
+```mermaid
+sequenceDiagram
+    participant Backend as Target domain
+    participant TM as WI.TargetManager
+    participant Page as WI.pageTarget
+    participant DOM as WI.DOMManager
+    participant Network as WI.NetworkManager
+
+    Backend->>TM: targetCreated(targetInfo)
+    TM->>TM: create target from targetInfo.targetId
+    alt provisional target
+        Backend->>TM: dispatchMessageFromTarget(newTargetId, message)
+        TM->>TM: buffer on provisional target connection
+    end
+    Backend->>TM: didCommitProvisionalTarget(oldTargetId, newTargetId)
+    TM->>TM: targetDestroyed(oldTargetId)
+    TM->>TM: target.didCommitProvisionalTarget()
+    TM->>Page: WI.pageTarget = committed target
+    TM->>DOM: transitionPageTarget()
+    DOM->>DOM: _documentUpdated()
+    TM->>Network: transitionPageTarget()
+    Network->>Backend: Page.getResourceTree()
+    Network->>Network: rebuild mainFrame and _frameIdentifierMap
+```
+
+The important negative result is that `TargetInfo` gives `targetId`, `type`,
+`isProvisional`, and `isPaused`, but not `frameId`, `parentFrameId`, or iframe
+owner node id. If WebInspector needs a page lifetime bucket, it must be aligned
+with the current page target/main-frame lifetime rather than treated as a new
+protocol identity.
+
 ## External Site Isolation Report
 
 The inspectdev issue [iOS 26+ Support: Adapt to WebKit Site Isolation and Frame Target Architecture](https://github.com/inspectdev/inspect-issues/issues/241) reports the same architecture shift:

@@ -103,6 +103,10 @@ Follow WebInspectorUI closely where the implementation is already a stable
 contract:
 
 - target-scoped protocol delivery via `Target.dispatchMessageFromTarget`;
+- current page switching through `WI.pageTarget`, with `WI.mainTarget` resolving
+  to `WI.pageTarget || WI.backendTarget`;
+- current page frame-tree refresh through `NetworkManager.mainFrame` and
+  `_frameIdentifierMap`;
 - per-target domain availability through `target.hasDomain("DOM")`;
 - page-target and frame-target documents are separate state;
 - frame target document updates do not reset the parent page document;
@@ -147,8 +151,10 @@ use conservative fallback behavior only at the edge.
 | Backend mutation contract | `Source/WebCore/inspector/agents/InspectorDOMAgent.cpp` | `didInsertDOMNode` returns when parent is not bound; otherwise it emits `childNodeCountUpdated` or `childNodeInserted` depending on whether children were requested. |
 | Target protocol | `Source/JavaScriptCore/inspector/protocol/Target.json` | `TargetInfo` has no protocol-level frame id fields; `didCommitProvisionalTarget` swaps old/new target ids. |
 | Frame target id implementation | `Source/WebKit/WebProcess/Inspector/FrameInspectorTarget.cpp`, captured runtime logs | Local source formats frame target ids as `frame-<frameID>-<processID>`, while runtime logs show `frame-<integer>`; target id shape is useful evidence, not a substitute for explicit model fields. |
-| Target frontend | `Source/WebInspectorUI/UserInterface/Controllers/TargetManager.js` | WebInspectorUI creates `WI.FrameTarget` from target type and dispatches provisional messages after commit. |
+| Main target globals | `Source/WebInspectorUI/UserInterface/Base/Main.js` | WebInspectorUI has `WI.backendTarget` and `WI.pageTarget`. `WI.mainTarget` is a getter returning `WI.pageTarget || WI.backendTarget`; there is no separate protocol page-id object. |
+| Target frontend | `Source/WebInspectorUI/UserInterface/Controllers/TargetManager.js` | WebInspectorUI creates `WI.PageTarget` / `WI.FrameTarget` directly from `TargetInfo.targetId`. On provisional commit, the old target is destroyed, the new target is marked committed, and page transition managers run. |
 | Target transport | `Source/WebInspectorUI/UserInterface/Protocol/TargetObserver.js` and `Connection.js` | `Target.dispatchMessageFromTarget` is routed to the target connection before domain dispatch. |
+| Page frame tree | `Source/WebInspectorUI/UserInterface/Controllers/NetworkManager.js`, `Source/WebInspectorUI/UserInterface/Models/Frame.js` | Page navigation refreshes the main frame resource tree through `Page.getResourceTree`; frames are keyed by protocol frame id in `_frameIdentifierMap`. |
 | Frame target DOM flow | `Source/WebInspectorUI/UserInterface/Controllers/DOMManager.js` | `initializeTarget` returns unless `target.hasDomain("DOM")`; only DOM-capable frame targets run `_initializeFrameTarget`, store a frame document separately, and attempt splice. |
 | Pending splice | `Source/WebInspectorUI/UserInterface/Controllers/DOMManager.js` | `_unsplicedFrameDocuments` holds frame documents until owner iframes are available; `_ensurePageBodyChildrenLoaded` requests page html/body children. |
 | Projection attach | `Source/WebInspectorUI/UserInterface/Controllers/DOMManager.js` | `_trySpliceFrameDocumentIntoNode` attaches the frame document as iframe `_contentDocument`; current fallback is exact/resolved URL match with a WebKit FIXME to use frame/target identity later. |
@@ -157,6 +163,87 @@ use conservative fallback behavior only at the edge.
 | DOM event dispatch | `Source/WebInspectorUI/UserInterface/Protocol/DOMObserver.js` | DOM events are target-aware, but current frame-target routing is limited: `documentUpdated` and `setChildNodes` route to frame handlers, while many mutations still return early with a FIXME. |
 | Frame target lifecycle | `Source/WebKit/UIProcess/Inspector/WebPageInspectorController.cpp`, `Source/WebKit/WebProcess/Inspector/FrameInspectorTarget.cpp` | Latest source creates frame targets only when Site Isolation frame target management is enabled. Target ids are currently formatted from frame id plus process id, and provisional frame commit sends `Target.didCommitProvisionalTarget` from old process target id to new process target id. This is implementation evidence, not a protocol-level DOM identity contract. |
 | Frame DOM backend state | `Source/WebCore/inspector/agents/frame/FrameDOMAgent.cpp` | `FrameDOMAgent` exists as a frame-scoped backend DOM agent, but upstream FIXME comments still call out duplicated tree-building/binding logic and child-frame handling that should be refined. |
+
+## 2026-05-15 DOMManager Containment
+
+The target/page/network container shape belongs in `TransportResearch.md`.
+This DOM note keeps only the WebKit DOM ownership shape.
+
+`WI.DOMManager` is not one physical DOM tree. It owns both the page document
+bucket and the frame-target document bucket. Projection connects those buckets
+for display, but it does not move the frame document into the page document's
+ordinary children.
+
+```mermaid
+flowchart TB
+    subgraph DM["WI.domManager"]
+        direction TB
+
+        subgraph PageDoc["_document<br/>page #document DOMNode"]
+            direction TB
+            pageDoctype["DOCTYPE"]
+            subgraph PageHTML["html DOMNode"]
+                direction TB
+                subgraph PageHead["head DOMNode"]
+                    pageHeadChildren["head children"]
+                end
+                subgraph PageBody["body DOMNode"]
+                    direction TB
+                    pageBodyChildren["ordinary page children"]
+                    subgraph IframeOwner["iframe/frame owner DOMNode"]
+                        direction TB
+                        ownerChildren["_children<br/>page-target children"]
+                        contentDocumentSlot["_contentDocument<br/>reference to frame document"]
+                    end
+                end
+            end
+        end
+
+        subgraph FrameData["_frameTargetDOMData"]
+            direction TB
+            subgraph FrameEntry["entry keyed by WI.FrameTarget"]
+                direction TB
+                frameTargetRef["target"]
+                subgraph FrameDoc["document: frame #document DOMNode"]
+                    direction TB
+                    frameDocumentRoot["#document root"]
+                    subgraph FrameHTML["html DOMNode"]
+                        frameHead["head DOMNode"]
+                        frameBody["body DOMNode"]
+                    end
+                end
+            end
+        end
+
+        subgraph Indexes["side indexes"]
+            direction TB
+            nodeIndex["_idToDOMNode"]
+            pending["_unsplicedFrameDocuments"]
+        end
+    end
+```
+
+This is the core containment answer:
+
+```text
+WI.domManager
+  page document DOMNode
+    page DOMNode tree
+      iframe owner DOMNode
+        _contentDocument pointer to frame document after projection
+  frame target DOM data
+    WI.FrameTarget object
+      frame document DOMNode
+        frame DOMNode tree
+  node index
+    page nodes and frame-target nodes
+  pending frame documents
+    frame documents waiting for owner discovery
+```
+
+The frame document is displayed under the iframe owner, but the frame document
+is stored in the frame-target data bucket. That is the distinction WebInspector
+must preserve: displayed nesting is not the same thing as ownership.
 
 ## What This Means for WebInspector
 
@@ -392,9 +479,14 @@ projected child document is preferable to corrupting the parent page tree.
 
 ## WebInspector Model Decisions
 
-- `DOMSession` is the source of truth for page, frame, document, node, execution-context, and selection state.
-- `DOMSession` must know target capabilities before issuing target-scoped DOM
-  commands. A target kind of `frame` is insufficient.
+- The transport/session root owns protocol target records and dispatch. It
+  should not make page DOM state global by accident.
+- Page-scoped DOM state should be owned by the page boundary that corresponds
+  to the active `WI.pageTarget` / `NetworkManager.mainFrame` lifetime. When that
+  page boundary is discarded, its documents, nodes, hydration requests,
+  projections, revisions, and selection state should be discarded together.
+- Target capabilities must be known before issuing target-scoped DOM commands.
+  A target kind of `frame` is insufficient.
 - `DOMNode.ID` is `targetID + documentGeneration + nodeID`, so the same protocol `nodeID` in different targets or document generations cannot collide.
 - `DOMNodeCurrentKey` is only a current mirror lookup key: `targetID + nodeID`.
 - `DOMNode.ownerFrameID` is the containing frame id from protocol
@@ -414,29 +506,34 @@ projected child document is preferable to corrupting the parent page tree.
 
 ## Model Shape
 
-```text
-DOMSession
-  ├─ ProtocolTarget(page)
-  │   ├─ capabilities -> DOM, Runtime, Network, ... as advertised
-  │   └─ currentDocumentID -> DOMDocument(page target, generation N)
-  │       └─ DOMNode tree scoped by page target/generation
-  │           └─ iframe/frame owner node
-  │               └─ projected contentDocumentID -> frame document root
-  ├─ ProtocolTarget(frame)
-  │   ├─ capabilities -> DOM? Runtime? ...
-  │   └─ currentDocumentID? -> DOMDocument(frame target, generation M)
-  │       └─ DOMNode tree scoped by frame target/generation, only if DOM-capable
-  ├─ DOMFrame / FrameIdentity
-  │   ├─ targetID?
-  │   ├─ currentDocumentID?
-  │   └─ ownerNodeID?
-  └─ FrameDocumentProjection
-      └─ pending or attached owner/contentDocument relation
+```mermaid
+flowchart TD
+    session["Transport/session root<br/>protocol target dispatch"]
+    pageBoundary["Page boundary<br/>active page target + main frame tree"]
+    pageTarget["ProtocolTarget(page)<br/>capabilities from frontend metadata"]
+    frameTarget["ProtocolTarget(frame)<br/>capabilities from frontend metadata"]
+    pageState["Page-scoped DOM state<br/>documents, nodes, requests, projections, selection"]
+    pageDoc["DOMDocument(page target, generation N)"]
+    frameDoc["DOMDocument(frame target, generation M)"]
+    iframe["iframe/frame owner node<br/>ownerFrameID = containing frame"]
+    projection["FrameDocumentProjection<br/>pending | attached | ambiguous"]
+
+    session --> pageBoundary
+    session --> pageTarget
+    session --> frameTarget
+    pageBoundary --> pageState
+    pageState --> pageDoc
+    pageState --> frameDoc
+    pageDoc --> iframe
+    iframe --> projection
+    projection --> frameDoc
 ```
 
 ## Identity Rules
 
 - `ProtocolTarget.ID`: WebKit target identifier.
+- Page boundary: the current page target lifetime plus current main frame tree.
+  WebKit frontend does not expose a separate stable protocol page id.
 - `DOMFrame.ID`: WebKit frame identifier when known. Do not assume current
   `TargetInfo` exposes this directly.
 - `DOMDocument.ID`: `targetID + documentGeneration`.
