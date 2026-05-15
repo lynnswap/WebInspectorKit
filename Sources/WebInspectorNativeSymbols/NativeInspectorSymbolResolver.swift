@@ -12,10 +12,53 @@ struct ObfuscatedSymbolName: Sendable {
     }
 }
 
+#if DEBUG
 private enum NativeInspectorSymbolDiagnostics {
-    static let verboseConsoleDiagnosticsEnabled =
-        ProcessInfo.processInfo.environment["WEBSPECTOR_VERBOSE_CONSOLE_LOGS"] == "1"
+    private static let similarAttachSymbolLogState = NativeInspectorSimilarAttachSymbolLogState()
+
+    static func reserveSimilarAttachSymbolLog() -> Bool {
+        similarAttachSymbolLogState.reserve()
+    }
 }
+
+private final class NativeInspectorSimilarAttachSymbolLogState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var didLog = false
+
+    func reserve() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard !didLog else {
+            return false
+        }
+        didLog = true
+        return true
+    }
+}
+
+private enum NativeInspectorAttachSymbolRole: String {
+    case connect
+    case disconnect
+    case unknown
+}
+
+private struct NativeInspectorAttachSymbolCandidate {
+    let role: NativeInspectorAttachSymbolRole
+    let source: String
+    let imageName: String
+    let ownerKey: String
+    let name: String
+    let address: UInt64
+    let score: Int
+}
+
+private struct NativeInspectorAttachSymbolScan {
+    var scannedCount: Int = 0
+    var matchedCount: Int = 0
+    var candidates: [NativeInspectorAttachSymbolCandidate] = []
+}
+#endif
 
 private enum NativeInspectorSymbolFailure {
     case sharedCacheUnavailable
@@ -443,10 +486,23 @@ private enum NativeInspectorSymbolResolverCore {
             loadedImageSymbols: loadedImageResultsWithFallback.symbols,
             symbols: symbols
         )
-        return mergedResolution(
+        let mergedLookupResult = mergedResolution(
             preferred: loadedImageResolution,
             fallback: sharedCacheResolution
         )
+        #if DEBUG
+        unsafe debugLogSimilarAttachSymbolsIfNeeded(
+            for: mergedLookupResult,
+            loadedWebKitImage: image,
+            loadedWebKitText: text,
+            loadedWebKitHeaderAddress: loadedImage.headerAddress,
+            loadedWebCoreImage: webCoreImage,
+            loadedWebCoreText: webCoreText,
+            loadedWebCoreHeaderAddress: loadedWebCoreImage?.headerAddress,
+            imagePathSuffixes: imagePathSuffixes
+        )
+        #endif
+        return mergedLookupResult
     }
 
     private static func resolveUsingSharedCache(
@@ -987,15 +1043,13 @@ private enum NativeInspectorSymbolResolverCore {
 
         guard let functionStarts = image.functionStarts else {
             #if DEBUG
-            if NativeInspectorSymbolDiagnostics.verboseConsoleDiagnosticsEnabled {
-                NSLog(
-                    "[WebInspectorTransport] native inspector text scan unavailable functionStarts=nil webCoreConnectTargets=%lu webCoreDisconnectTargets=%lu webKitBoundConnectTargets=%lu webKitBoundDisconnectTargets=%lu",
-                    webCoreConnectTargets.count,
-                    webCoreDisconnectTargets.count,
-                    webKitBoundConnectTargets.count,
-                    webKitBoundDisconnectTargets.count
-                )
-            }
+            NSLog(
+                "[WebInspectorTransport] native inspector text scan unavailable functionStarts=nil webCoreConnectTargets=%lu webCoreDisconnectTargets=%lu webKitBoundConnectTargets=%lu webKitBoundDisconnectTargets=%lu",
+                webCoreConnectTargets.count,
+                webCoreDisconnectTargets.count,
+                webKitBoundConnectTargets.count,
+                webKitBoundDisconnectTargets.count
+            )
             #endif
             return .init(
                 symbols: resolvedSymbols,
@@ -1023,19 +1077,17 @@ private enum NativeInspectorSymbolResolverCore {
         )
 
         #if DEBUG
-        if NativeInspectorSymbolDiagnostics.verboseConsoleDiagnosticsEnabled {
-            NSLog(
-                "[WebInspectorTransport] native inspector text scan webCoreConnectTargets=%lu webCoreDisconnectTargets=%lu webKitBoundConnectTargets=%lu webKitBoundDisconnectTargets=%lu connectTargets=%lu disconnectTargets=%lu resolvedConnect=%@ resolvedDisconnect=%@",
-                webCoreConnectTargets.count,
-                webCoreDisconnectTargets.count,
-                webKitBoundConnectTargets.count,
-                webKitBoundDisconnectTargets.count,
-                connectTargetAddresses.count,
-                disconnectTargetAddresses.count,
-                debugResolvedAddress(resolvedConnect),
-                debugResolvedAddress(resolvedDisconnect)
-            )
-        }
+        NSLog(
+            "[WebInspectorTransport] native inspector text scan webCoreConnectTargets=%lu webCoreDisconnectTargets=%lu webKitBoundConnectTargets=%lu webKitBoundDisconnectTargets=%lu connectTargets=%lu disconnectTargets=%lu resolvedConnect=%@ resolvedDisconnect=%@",
+            webCoreConnectTargets.count,
+            webCoreDisconnectTargets.count,
+            webKitBoundConnectTargets.count,
+            webKitBoundDisconnectTargets.count,
+            connectTargetAddresses.count,
+            disconnectTargetAddresses.count,
+            debugResolvedAddress(resolvedConnect),
+            debugResolvedAddress(resolvedDisconnect)
+        )
         #endif
 
         let resolvedWrapperSymbols = NativeInspectorResolvedSymbolSet(
@@ -1093,13 +1145,19 @@ private enum NativeInspectorSymbolResolverCore {
         source: String?,
         usedConnectDisconnectFallback: Bool
     ) -> NativeInspectorSymbolLookupResult {
-        if let phase, NativeInspectorSymbolDiagnostics.verboseConsoleDiagnosticsEnabled {
+        #if DEBUG
+        if let phase {
             NSLog(
-                "[WebInspectorNativeSymbols] native inspector symbols resolved backend=%@ phase=%@",
+                "[WebInspectorNativeSymbols] native inspector symbols resolved backend=%@ phase=%@ source=%@ connectFrontend=0x%llx disconnectFrontend=0x%llx fallback=%@",
                 "native-inspector",
-                phase.message
+                phase.message,
+                source ?? "unknown",
+                functionAddresses.connectFrontendAddress,
+                functionAddresses.disconnectFrontendAddress,
+                usedConnectDisconnectFallback ? "true" : "false"
             )
         }
+        #endif
         return NativeInspectorSymbolLookupResult(
             functionAddresses: functionAddresses,
             failureReason: nil,
@@ -1423,6 +1481,542 @@ private enum NativeInspectorSymbolResolverCore {
         )
     }
 
+    #if DEBUG
+    @unsafe private static func debugLogSimilarAttachSymbolsIfNeeded(
+        for result: NativeInspectorSymbolLookupResult,
+        loadedWebKitImage: MachOImage,
+        loadedWebKitText: SegmentCommand64,
+        loadedWebKitHeaderAddress: UInt,
+        loadedWebCoreImage: MachOImage?,
+        loadedWebCoreText: SegmentCommand64?,
+        loadedWebCoreHeaderAddress: UInt?,
+        imagePathSuffixes: [String]
+    ) {
+        let missingAttachFunctions = result.missingFunctions.filter {
+            $0 == "connectFrontend" || $0 == "disconnectFrontend"
+        }
+        guard !missingAttachFunctions.isEmpty,
+              NativeInspectorSymbolDiagnostics.reserveSimilarAttachSymbolLog() else {
+            return
+        }
+
+        var scans = [
+            unsafe debugSimilarLoadedImageAttachSymbols(
+                source: "loaded-image",
+                imageName: "WebKit",
+                image: loadedWebKitImage,
+                text: loadedWebKitText
+            ),
+            unsafe debugSimilarLoadedImageExportAttachSymbols(
+                source: "loaded-image-export",
+                imageName: "WebKit",
+                image: loadedWebKitImage,
+                text: loadedWebKitText
+            ),
+        ]
+
+        if let loadedWebCoreImage, let loadedWebCoreText {
+            scans.append(
+                unsafe debugSimilarLoadedImageAttachSymbols(
+                    source: "loaded-image",
+                    imageName: "WebCore",
+                    image: loadedWebCoreImage,
+                    text: loadedWebCoreText
+                )
+            )
+            scans.append(
+                unsafe debugSimilarLoadedImageExportAttachSymbols(
+                    source: "loaded-image-export",
+                    imageName: "WebCore",
+                    image: loadedWebCoreImage,
+                    text: loadedWebCoreText
+                )
+            )
+        }
+
+        scans.append(contentsOf: unsafe debugSimilarSharedCacheAttachSymbols(
+            loadedWebKitHeaderAddress: loadedWebKitHeaderAddress,
+            loadedWebCoreHeaderAddress: loadedWebCoreHeaderAddress,
+            imagePathSuffixes: imagePathSuffixes
+        ))
+
+        let candidates = scans.flatMap(\.candidates)
+        let scannedCount = scans.reduce(0) { $0 + $1.scannedCount }
+        let matchedCount = scans.reduce(0) { $0 + $1.matchedCount }
+        let scanSummary = scans
+            .enumerated()
+            .filter { _, scan in scan.scannedCount > 0 || !scan.candidates.isEmpty }
+            .map { index, scan in
+                "scan\(index)=scanned:\(scan.scannedCount),matched:\(scan.matchedCount),kept:\(scan.candidates.count)"
+            }
+            .joined(separator: ";")
+
+        NSLog(
+            "[WebInspectorNativeSymbols] similar attach symbol scan missing=%@ scanned=%d matched=%d kept=%d %@",
+            missingAttachFunctions.joined(separator: ","),
+            scannedCount,
+            matchedCount,
+            candidates.count,
+            scanSummary
+        )
+
+        debugLogSimilarAttachSymbolPairs(candidates)
+        debugLogSimilarAttachSymbolSingles(candidates)
+    }
+
+    @unsafe private static func debugSimilarLoadedImageAttachSymbols(
+        source: String,
+        imageName: String,
+        image: MachOImage,
+        text: SegmentCommand64
+    ) -> NativeInspectorAttachSymbolScan {
+        var scan = NativeInspectorAttachSymbolScan()
+        let imageBaseAddress = unsafe UInt64(UInt(bitPattern: image.ptr))
+        for symbol in image.symbols {
+            scan.scannedCount += 1
+            let name = symbol.name
+            guard debugAttachSymbolNamePassesPrefilter(name) else {
+                continue
+            }
+            scan.matchedCount += 1
+            guard symbol.offset >= 0 else {
+                continue
+            }
+            let offset = UInt64(symbol.offset)
+            guard offset < UInt64(text.virtualMemorySize) else {
+                continue
+            }
+            let address = imageBaseAddress + offset
+            if let candidate = debugAttachSymbolCandidate(
+                name: name,
+                address: address,
+                source: source,
+                imageName: imageName
+            ) {
+                debugAppendTopAttachSymbolCandidate(candidate, to: &scan.candidates)
+            }
+        }
+        return scan
+    }
+
+    @unsafe private static func debugSimilarLoadedImageExportAttachSymbols(
+        source: String,
+        imageName: String,
+        image: MachOImage,
+        text: SegmentCommand64
+    ) -> NativeInspectorAttachSymbolScan {
+        var scan = NativeInspectorAttachSymbolScan()
+        let imageBaseAddress = unsafe UInt64(UInt(bitPattern: image.ptr))
+        for symbol in image.exportedSymbols {
+            scan.scannedCount += 1
+            let name = symbol.name
+            guard debugAttachSymbolNamePassesPrefilter(name) else {
+                continue
+            }
+            scan.matchedCount += 1
+            guard let symbolOffset = symbol.offset,
+                  symbolOffset >= 0 else {
+                continue
+            }
+            let offset = UInt64(symbolOffset)
+            guard offset < UInt64(text.virtualMemorySize) else {
+                continue
+            }
+            let address = imageBaseAddress + offset
+            if let candidate = debugAttachSymbolCandidate(
+                name: name,
+                address: address,
+                source: source,
+                imageName: imageName
+            ) {
+                debugAppendTopAttachSymbolCandidate(candidate, to: &scan.candidates)
+            }
+        }
+        return scan
+    }
+
+    @unsafe private static func debugSimilarSharedCacheAttachSymbols(
+        loadedWebKitHeaderAddress: UInt,
+        loadedWebCoreHeaderAddress: UInt?,
+        imagePathSuffixes: [String]
+    ) -> [NativeInspectorAttachSymbolScan] {
+        guard let cache = unsafe MachOKitSymbolLookup.currentSharedCache,
+              let slide = cache.slide,
+              slide >= 0,
+              let webKitImage = cache.machOImages().first(where: { imagePathMatches($0.path, suffixes: imagePathSuffixes) }),
+              webKitImage.is64Bit,
+              let webKitText = textSegment(in: webKitImage) else {
+            return []
+        }
+
+        var scans = [NativeInspectorAttachSymbolScan]()
+        let unsignedSlide = UInt64(slide)
+        let webKitTextRange = UInt64(loadedWebKitHeaderAddress) ..< UInt64(loadedWebKitHeaderAddress) + UInt64(webKitText.virtualMemorySize)
+        let webKitDylibOffset = UInt64(webKitText.virtualMemoryAddress) - cache.mainCacheHeader.sharedRegionStart
+
+        let webCoreImage = cache.machOImages().first(where: { imagePathMatches($0.path, suffixes: webCoreImagePathSuffixes) })
+        let webCoreText = webCoreImage.flatMap { $0.is64Bit ? textSegment(in: $0) : nil }
+        let webCoreContext: (image: MachOImage, text: SegmentCommand64, textRange: Range<UInt64>, dylibOffset: UInt64)?
+        if let webCoreImage,
+           let webCoreText,
+           let loadedWebCoreHeaderAddress {
+            webCoreContext = (
+                image: webCoreImage,
+                text: webCoreText,
+                textRange: UInt64(loadedWebCoreHeaderAddress) ..< UInt64(loadedWebCoreHeaderAddress) + UInt64(webCoreText.virtualMemorySize),
+                dylibOffset: UInt64(webCoreText.virtualMemoryAddress) - cache.mainCacheHeader.sharedRegionStart
+            )
+        } else {
+            webCoreContext = nil
+        }
+
+        if let localSymbolsInfo = cache.localSymbolsInfo,
+           let symbols64 = localSymbolsInfo.symbols64(in: cache) {
+            let entries = localSymbolsInfo.entries(in: cache)
+            if let entry = entries.first(where: { UInt64($0.dylibOffset) == webKitDylibOffset }) {
+                let symbolRange = entry.nlistStartIndex ..< entry.nlistStartIndex + entry.nlistCount
+                if symbolRange.lowerBound >= 0, symbolRange.upperBound <= symbols64.count {
+                    scans.append(debugSimilarSharedCacheAttachSymbols(
+                        source: "shared-cache",
+                        imageName: "WebKit",
+                        symbols: symbols64,
+                        symbolRange: symbolRange,
+                        textVMAddress: UInt64(webKitText.virtualMemoryAddress),
+                        textRange: webKitTextRange,
+                        slide: unsignedSlide
+                    ))
+                }
+            }
+            if let webCoreContext,
+               let entry = entries.first(where: { UInt64($0.dylibOffset) == webCoreContext.dylibOffset }) {
+                let symbolRange = entry.nlistStartIndex ..< entry.nlistStartIndex + entry.nlistCount
+                if symbolRange.lowerBound >= 0, symbolRange.upperBound <= symbols64.count {
+                    scans.append(debugSimilarSharedCacheAttachSymbols(
+                        source: "shared-cache",
+                        imageName: "WebCore",
+                        symbols: symbols64,
+                        symbolRange: symbolRange,
+                        textVMAddress: UInt64(webCoreContext.text.virtualMemoryAddress),
+                        textRange: webCoreContext.textRange,
+                        slide: unsignedSlide
+                    ))
+                }
+            }
+        }
+
+        if let fileBackedSymbols = try? fileBackedLocalSymbols(
+            mainCacheHeader: cache.mainCacheHeader,
+            dylibOffset: webKitDylibOffset
+        ) {
+            scans.append(debugSimilarSharedCacheAttachSymbols(
+                source: "shared-cache-file",
+                imageName: "WebKit",
+                symbols: fileBackedSymbols.symbols,
+                symbolRange: fileBackedSymbols.symbolRange,
+                textVMAddress: UInt64(webKitText.virtualMemoryAddress),
+                textRange: webKitTextRange,
+                slide: unsignedSlide
+            ))
+        }
+        if let webCoreContext,
+           let fileBackedSymbols = try? fileBackedLocalSymbols(
+                mainCacheHeader: cache.mainCacheHeader,
+                dylibOffset: webCoreContext.dylibOffset
+           ) {
+            scans.append(debugSimilarSharedCacheAttachSymbols(
+                source: "shared-cache-file",
+                imageName: "WebCore",
+                symbols: fileBackedSymbols.symbols,
+                symbolRange: fileBackedSymbols.symbolRange,
+                textVMAddress: UInt64(webCoreContext.text.virtualMemoryAddress),
+                textRange: webCoreContext.textRange,
+                slide: unsignedSlide
+            ))
+        }
+
+        return scans
+    }
+
+    private static func debugSimilarSharedCacheAttachSymbols(
+        source: String,
+        imageName: String,
+        symbols: MachOImage.Symbols64,
+        symbolRange: Range<Int>,
+        textVMAddress: UInt64,
+        textRange: Range<UInt64>,
+        slide: UInt64
+    ) -> NativeInspectorAttachSymbolScan {
+        var scan = NativeInspectorAttachSymbolScan()
+        for symbolIndex in symbolRange {
+            let symbol = symbols[symbolIndex]
+            debugScanSharedCacheAttachSymbol(
+                name: symbol.name,
+                offset: symbol.offset,
+                source: source,
+                imageName: imageName,
+                textVMAddress: textVMAddress,
+                textRange: textRange,
+                slide: slide,
+                scan: &scan
+            )
+        }
+        return scan
+    }
+
+    private static func debugSimilarSharedCacheAttachSymbols(
+        source: String,
+        imageName: String,
+        symbols: MachOFile.Symbols64,
+        symbolRange: Range<Int>,
+        textVMAddress: UInt64,
+        textRange: Range<UInt64>,
+        slide: UInt64
+    ) -> NativeInspectorAttachSymbolScan {
+        var scan = NativeInspectorAttachSymbolScan()
+        for symbolIndex in symbolRange {
+            let symbol = symbols[symbolIndex]
+            debugScanSharedCacheAttachSymbol(
+                name: symbol.name,
+                offset: symbol.offset,
+                source: source,
+                imageName: imageName,
+                textVMAddress: textVMAddress,
+                textRange: textRange,
+                slide: slide,
+                scan: &scan
+            )
+        }
+        return scan
+    }
+
+    private static func debugScanSharedCacheAttachSymbol(
+        name: String,
+        offset: Int,
+        source: String,
+        imageName: String,
+        textVMAddress: UInt64,
+        textRange: Range<UInt64>,
+        slide: UInt64,
+        scan: inout NativeInspectorAttachSymbolScan
+    ) {
+        scan.scannedCount += 1
+        guard debugAttachSymbolNamePassesPrefilter(name) else {
+            return
+        }
+        scan.matchedCount += 1
+        guard offset >= 0 else {
+            return
+        }
+
+        let unslidAddress = UInt64(offset)
+        guard unslidAddress >= textVMAddress else {
+            return
+        }
+        let actualAddress = slide + unslidAddress
+        let offsetWithinText = unslidAddress - textVMAddress
+        let resolvedAddress = textRange.lowerBound + offsetWithinText
+        guard textRange.contains(resolvedAddress), resolvedAddress == actualAddress else {
+            return
+        }
+
+        if let candidate = debugAttachSymbolCandidate(
+            name: name,
+            address: actualAddress,
+            source: source,
+            imageName: imageName
+        ) {
+            debugAppendTopAttachSymbolCandidate(candidate, to: &scan.candidates)
+        }
+    }
+
+    private static func debugAttachSymbolNamePassesPrefilter(_ name: String) -> Bool {
+        name.contains("connectFrontend")
+            || name.contains("disconnectFrontend")
+            || name.contains("InspectorController")
+            || name.contains("FrontendChannel")
+    }
+
+    private static func debugAttachSymbolCandidate(
+        name: String,
+        address: UInt64,
+        source: String,
+        imageName: String
+    ) -> NativeInspectorAttachSymbolCandidate? {
+        let role = debugAttachSymbolRole(for: name)
+        let ownerKey = debugAttachSymbolOwnerKey(for: name)
+        let score = debugAttachSymbolScore(name: name, role: role)
+        guard score >= 150 else {
+            return nil
+        }
+
+        return NativeInspectorAttachSymbolCandidate(
+            role: role,
+            source: source,
+            imageName: imageName,
+            ownerKey: ownerKey,
+            name: name,
+            address: address,
+            score: score
+        )
+    }
+
+    private static func debugAttachSymbolRole(for name: String) -> NativeInspectorAttachSymbolRole {
+        if name.contains("disconnectFrontend") {
+            return .disconnect
+        }
+        if name.contains("connectFrontend") {
+            return .connect
+        }
+        return .unknown
+    }
+
+    private static func debugAttachSymbolOwnerKey(for name: String) -> String {
+        if name.contains("WebPageInspectorController") {
+            return "WebKit::WebPageInspectorController"
+        }
+        if name.contains("FrameInspectorController") {
+            return "WebCore::FrameInspectorController"
+        }
+        if name.contains("PageInspectorController") {
+            return "WebCore::PageInspectorController"
+        }
+        if name.contains("WorkerInspectorController") {
+            return "WebCore::WorkerInspectorController"
+        }
+        if name.contains("ServiceWorkerInspector") {
+            return "WebCore::ServiceWorkerInspector"
+        }
+        if name.contains("InspectorController") {
+            return "InspectorController"
+        }
+        return "unknown"
+    }
+
+    private static func debugAttachSymbolScore(
+        name: String,
+        role: NativeInspectorAttachSymbolRole
+    ) -> Int {
+        var score = 0
+        if role != .unknown {
+            score += 100
+        }
+        if name.contains("FrontendChannel") {
+            score += 80
+        }
+        if name.contains("WebPageInspectorController") {
+            score += 70
+        } else if name.contains("PageInspectorController") || name.contains("FrameInspectorController") {
+            score += 55
+        }
+        if name.contains("WebKit") || name.contains("WebCore") {
+            score += 35
+        }
+        if name.contains("InspectorController") {
+            score += 25
+        }
+        score += 20
+
+        if name.contains("WorkerInspectorController") || name.contains("ServiceWorker") {
+            score -= 60
+        }
+        if role != .unknown && !name.contains("FrontendChannel") {
+            score -= 80
+        }
+        return score
+    }
+
+    private static func debugAppendTopAttachSymbolCandidate(
+        _ candidate: NativeInspectorAttachSymbolCandidate,
+        to candidates: inout [NativeInspectorAttachSymbolCandidate]
+    ) {
+        candidates.append(candidate)
+        candidates.sort {
+            if $0.score != $1.score {
+                return $0.score > $1.score
+            }
+            return $0.name < $1.name
+        }
+        if candidates.count > 80 {
+            candidates.removeLast(candidates.count - 80)
+        }
+    }
+
+    private static func debugLogSimilarAttachSymbolPairs(
+        _ candidates: [NativeInspectorAttachSymbolCandidate]
+    ) {
+        let groupedCandidates = Dictionary(grouping: candidates) {
+            "\($0.source)|\($0.imageName)|\($0.ownerKey)"
+        }
+        let pairs = groupedCandidates.compactMap { _, candidates -> (score: Int, connect: NativeInspectorAttachSymbolCandidate, disconnect: NativeInspectorAttachSymbolCandidate)? in
+            guard let connect = candidates.filter({ $0.role == .connect }).max(by: { $0.score < $1.score }),
+                  let disconnect = candidates.filter({ $0.role == .disconnect }).max(by: { $0.score < $1.score }) else {
+                return nil
+            }
+            return (connect.score + disconnect.score + 50, connect, disconnect)
+        }
+        .sorted {
+            if $0.score != $1.score {
+                return $0.score > $1.score
+            }
+            return $0.connect.ownerKey < $1.connect.ownerKey
+        }
+        .prefix(3)
+
+        for pair in pairs {
+            NSLog(
+                "[WebInspectorNativeSymbols] similar attach pair score=%d source=%@ image=%@ owner=%@ connectAddress=0x%llx disconnectAddress=0x%llx connect=%@ disconnect=%@",
+                pair.score,
+                pair.connect.source,
+                pair.connect.imageName,
+                pair.connect.ownerKey,
+                pair.connect.address,
+                pair.disconnect.address,
+                debugTruncatedAttachSymbolName(pair.connect.name),
+                debugTruncatedAttachSymbolName(pair.disconnect.name)
+            )
+        }
+    }
+
+    private static func debugLogSimilarAttachSymbolSingles(
+        _ candidates: [NativeInspectorAttachSymbolCandidate]
+    ) {
+        let sortedCandidates = candidates.sorted {
+            if $0.score != $1.score {
+                return $0.score > $1.score
+            }
+            return $0.name < $1.name
+        }
+        for role in [NativeInspectorAttachSymbolRole.connect, .disconnect, .unknown] {
+            var emittedCount = 0
+            for candidate in sortedCandidates where candidate.role == role {
+                guard emittedCount < 5 else {
+                    break
+                }
+                emittedCount += 1
+                NSLog(
+                    "[WebInspectorNativeSymbols] similar attach candidate score=%d role=%@ source=%@ image=%@ owner=%@ address=0x%llx name=%@",
+                    candidate.score,
+                    candidate.role.rawValue,
+                    candidate.source,
+                    candidate.imageName,
+                    candidate.ownerKey,
+                    candidate.address,
+                    debugTruncatedAttachSymbolName(candidate.name)
+                )
+            }
+        }
+    }
+
+    private static func debugTruncatedAttachSymbolName(_ name: String) -> String {
+        let maximumLength = 240
+        guard name.count > maximumLength else {
+            return name
+        }
+        let endIndex = name.index(name.startIndex, offsetBy: maximumLength)
+        return String(name[..<endIndex]) + "...[truncated]"
+    }
+    #endif
+
     private static func resolveLoadedImageSymbol(
         named symbolName: String,
         in image: MachOImage,
@@ -1460,41 +2054,17 @@ private enum NativeInspectorSymbolResolverCore {
             let unsignedOffset = UInt64(offset)
             let address = unsafe UInt64(UInt(bitPattern: image.ptr)) + unsignedOffset
             guard unsignedOffset < UInt64(text.virtualMemorySize) else {
-                logLoadedImageExportLookup(
-                    symbolName: symbolName,
-                    image: image,
-                    exportTrieAvailable: exportTrie != nil,
-                    exportTrieFound: true,
-                    dlsymAddress: nil,
-                    failedReason: "export-trie-outside-text"
-                )
                 return .outsideText(address)
             }
             return .found(address)
         }
 
         guard let address = unsafe MachOKitSymbolLookup.exportedRuntimeSymbolAddress(named: symbolName) else {
-            logLoadedImageExportLookup(
-                symbolName: symbolName,
-                image: image,
-                exportTrieAvailable: exportTrie != nil,
-                exportTrieFound: false,
-                dlsymAddress: nil,
-                failedReason: "dlsym-missing"
-            )
             return .missing
         }
 
         let expectedHeaderAddress = unsafe UInt(bitPattern: image.ptr)
         guard resolvedAddress(address, belongsToAnyOf: [expectedHeaderAddress]) else {
-            logLoadedImageExportLookup(
-                symbolName: symbolName,
-                image: image,
-                exportTrieAvailable: exportTrie != nil,
-                exportTrieFound: false,
-                dlsymAddress: address,
-                failedReason: "dlsym-header-mismatch"
-            )
             return .missing
         }
 
@@ -1502,47 +2072,9 @@ private enum NativeInspectorSymbolResolverCore {
         let textStart = imageBaseAddress
         let textEnd = textStart + UInt64(text.virtualMemorySize)
         guard address >= textStart, address < textEnd else {
-            logLoadedImageExportLookup(
-                symbolName: symbolName,
-                image: image,
-                exportTrieAvailable: exportTrie != nil,
-                exportTrieFound: false,
-                dlsymAddress: address,
-                failedReason: "dlsym-outside-text"
-            )
             return .outsideText(address)
         }
         return .found(address)
-    }
-
-    private static func logLoadedImageExportLookup(
-        symbolName: String,
-        image: MachOImage,
-        exportTrieAvailable: Bool,
-        exportTrieFound: Bool,
-        dlsymAddress: UInt64?,
-        failedReason: String
-    ) {
-        #if DEBUG
-        if NativeInspectorSymbolDiagnostics.verboseConsoleDiagnosticsEnabled {
-            let headerAddress = unsafe UInt(bitPattern: image.ptr)
-            let dlsymDescription: String
-            if let dlsymAddress {
-                dlsymDescription = unsafe String(format: "0x%llx", dlsymAddress)
-            } else {
-                dlsymDescription = "nil"
-            }
-            NSLog(
-                "[WebInspectorTransport] native inspector export lookup failed symbol=%@ header=0x%llx exportTrieAvailable=%@ exportTrieFound=%@ dlsym=%@ reason=%@",
-                symbolName,
-                UInt64(headerAddress),
-                exportTrieAvailable ? "true" : "false",
-                exportTrieFound ? "true" : "false",
-                dlsymDescription,
-                failedReason
-            )
-        }
-        #endif
     }
 
     private static func resolveSharedCacheSymbol(
