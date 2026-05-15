@@ -10,7 +10,7 @@ UIKit Web Inspector for `WKWebView`.
 - Network request logging with native list/detail presentation
 - Built-in DOM and Network tabs
 - Explicit lifecycle via `WebInspectorSession` / `WebInspectorViewController` (`attach(to:)`, `detach()`)
-- Observation-backed V2 model state
+- Observation-backed WebInspector model state
 
 ## Requirements
 
@@ -63,7 +63,7 @@ See [`MIGRATION.md`](Docs/MIGRATION.md) for details on breaking changes.
 
 - Consumers of the Swift package do not need `node`, `pnpm`, or `esbuild`.
 - The DOM tree inspector UI is native UIKit/TextKit2. There is no bundled JavaScript DOM tree frontend or generated script regeneration step.
-- For internal V2 architecture notes, see [`V2ArchitectureOverview.md`](Docs/V2ArchitectureOverview.md).
+- For internal WebInspector architecture notes, see [`ArchitectureOverview.md`](Docs/ArchitectureOverview.md).
 
 ## License
 

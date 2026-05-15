@@ -1,24 +1,17 @@
 #if canImport(UIKit)
 import SwiftUI
-import WebInspectorRuntime
 
 @MainActor
-struct NetworkListOverflowMenuView: View {
-    var inspector: WINetworkModel
+package struct NetworkListOverflowMenuView: View {
+    package var model: NetworkPanelModel
 
-    var body: some View {
+    package var body: some View {
         Button(role: .destructive) {
-            clearEntries()
+            model.clearRequests()
         } label: {
-            Label(wiLocalized("network.controls.clear"), systemImage: "trash")
+            Label(webInspectorLocalized("network.controls.clear", default: "Clear"), systemImage: "trash")
         }
-        .disabled(inspector.store.entries.isEmpty)
-    }
-
-    private func clearEntries() {
-        Task { @MainActor in
-            await inspector.clear()
-        }
+        .disabled(model.isEmpty)
     }
 }
 #endif

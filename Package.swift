@@ -17,32 +17,12 @@ let package = Package(
     ],
     products: [
         .library(
-            name: "WebInspectorEngine",
-            targets: ["WebInspectorEngine"]
-        ),
-        .library(
-            name: "WebInspectorRuntime",
-            targets: ["WebInspectorRuntime"]
-        ),
-        .library(
-            name: "WebInspectorBridge",
-            targets: ["WebInspectorBridge"]
-        ),
-        .library(
-            name: "WebInspectorUI",
-            targets: ["WebInspectorUI"]
-        ),
-        .library(
-            name: "V2_WebInspectorUI",
-            targets: ["V2_WebInspectorUI"]
-        ),
-        .library(
             name: "WebInspectorKit",
             targets: ["WebInspectorKit"]
         ),
         .library(
-            name: "WebInspectorKitSPI",
-            targets: ["WebInspectorKitSPI"]
+            name: "WebInspectorUI",
+            targets: ["WebInspectorUI"]
         )
     ],
     dependencies: [
@@ -65,120 +45,50 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "WebInspectorEngine",
+            name: "WebInspectorCore",
+            dependencies: [],
+            exclude: ["README.md", "Docs"],
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
+            name: "WebInspectorNativeBridge",
+            publicHeadersPath: "include",
+            linkerSettings: [
+                .linkedFramework("Foundation"),
+                .linkedFramework("JavaScriptCore"),
+                .linkedFramework("WebKit"),
+                .linkedFramework("AppKit", .when(platforms: [.macOS])),
+            ]
+        ),
+        .target(
+            name: "WebInspectorNativeSymbols",
             dependencies: [
-                "WebInspectorBridge",
+                .product(name: "MachOKit", package: "MachOKit")
+            ],
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
+            name: "WebInspectorTransport",
+            dependencies: [
+                "WebInspectorCore",
+                "WebInspectorNativeBridge",
+                "WebInspectorNativeSymbols"
             ],
             swiftSettings: strictSwiftSettings
         ),
         .target(
             name: "WebInspectorRuntime",
             dependencies: [
-                "WebInspectorEngine",
-                "WebInspectorTransport",
-                "WebInspectorBridge",
-                .product(name: "ObservationBridge", package: "ObservationBridge")
+                "WebInspectorCore",
+                "WebInspectorTransport"
             ],
             swiftSettings: strictSwiftSettings
-        ),
-        .target(
-            name: "WebInspectorBridge",
-            dependencies: [
-                "WebInspectorBridgeObjCShim",
-                .product(name: "MachOKit", package: "MachOKit")
-            ],
-            exclude: ["ObjCShim"],
-            swiftSettings: strictSwiftSettings
-        ),
-        .target(
-            name: "WebInspectorTransport",
-            dependencies: [
-                "WebInspectorEngine",
-                "WebInspectorTransportObjCShim",
-                .product(name: "MachOKit", package: "MachOKit")
-            ],
-            swiftSettings: strictSwiftSettings
-        ),
-        .target(
-            name: "V2_WebInspectorCore",
-            dependencies: [],
-            exclude: ["README.md", "Docs"],
-            swiftSettings: strictSwiftSettings
-        ),
-        .target(
-            name: "V2_WebInspectorTransport",
-            dependencies: [
-                "V2_WebInspectorCore",
-                "V2_WebInspectorNativeBridge",
-                "V2_WebInspectorNativeSymbols"
-            ],
-            swiftSettings: strictSwiftSettings
-        ),
-        .target(
-            name: "V2_WebInspectorNativeSymbols",
-            dependencies: [
-                .product(name: "MachOKit", package: "MachOKit")
-            ],
-            swiftSettings: strictSwiftSettings
-        ),
-        .target(
-            name: "V2_WebInspectorRuntime",
-            dependencies: [
-                "V2_WebInspectorCore",
-                "V2_WebInspectorTransport"
-            ],
-            swiftSettings: strictSwiftSettings
-        ),
-        .target(
-            name: "V2_WebInspectorUI",
-            dependencies: [
-                "V2_WebInspectorCore",
-                "V2_WebInspectorRuntime",
-                .product(name: "ObservationBridge", package: "ObservationBridge"),
-                .product(name: "UIHostingMenu", package: "UIHostingMenu", condition: .when(platforms: [.iOS])),
-                .product(name: "SyntaxEditorUI", package: "SyntaxEditorUI", condition: .when(platforms: [.iOS]))
-            ],
-            swiftSettings: strictSwiftSettings
-        ),
-        .target(
-            name: "V2_WebInspectorNativeBridge",
-            path: "Sources/V2_WebInspectorNativeBridge",
-            publicHeadersPath: "include",
-            linkerSettings: [
-                .linkedFramework("Foundation"),
-                .linkedFramework("JavaScriptCore"),
-                .linkedFramework("WebKit"),
-                .linkedFramework("AppKit", .when(platforms: [.macOS])),
-            ]
-        ),
-        .target(
-            name: "WebInspectorBridgeObjCShim",
-            path: "Sources/WebInspectorBridge/ObjCShim",
-            publicHeadersPath: "include",
-            linkerSettings: [
-                .linkedFramework("Foundation"),
-                .linkedFramework("WebKit"),
-                .linkedFramework("AppKit", .when(platforms: [.macOS])),
-            ]
-        ),
-        .target(
-            name: "WebInspectorTransportObjCShim",
-            path: "Sources/WebInspectorTransportObjCShim",
-            publicHeadersPath: "include",
-            linkerSettings: [
-                .linkedFramework("Foundation"),
-                .linkedFramework("JavaScriptCore"),
-                .linkedFramework("WebKit"),
-                .linkedFramework("AppKit", .when(platforms: [.macOS])),
-            ]
         ),
         .target(
             name: "WebInspectorUI",
             dependencies: [
+                "WebInspectorCore",
                 "WebInspectorRuntime",
-                "WebInspectorEngine",
-                "WebInspectorBridge",
-                "WebInspectorBridgeObjCShim",
                 .product(name: "ObservationBridge", package: "ObservationBridge"),
                 .product(name: "UIHostingMenu", package: "UIHostingMenu", condition: .when(platforms: [.iOS])),
                 .product(name: "SyntaxEditorUI", package: "SyntaxEditorUI", condition: .when(platforms: [.iOS]))
@@ -186,120 +96,54 @@ let package = Package(
             exclude: [
                 "Docs"
             ],
-            resources: [
-                .process("Localizable.xcstrings"),
-                .process("Resources/Preview")
-            ],
             swiftSettings: strictSwiftSettings
         ),
         .target(
             name: "WebInspectorKit",
             dependencies: [
-                "WebInspectorUI",
-                "V2_WebInspectorUI",
-                "WebInspectorEngine",
-                "WebInspectorRuntime",
-                "WebInspectorBridge"
+                "WebInspectorUI"
             ],
-            swiftSettings: strictSwiftSettings
-        ),
-        .target(
-            name: "WebInspectorKitSPI",
-            dependencies: [
-                "WebInspectorKit",
-                "WebInspectorBridge",
-                "WebInspectorBridgeObjCShim"
-            ],
-            swiftSettings: strictSwiftSettings
-        ),
-        .target(
-            name: "WebInspectorTestSupport",
-            dependencies: [
-                "WebInspectorEngine",
-                .product(name: "ObservationBridge", package: "ObservationBridge")
-            ],
-            path: "Tests/WebInspectorTestSupport",
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(
-            name: "WebInspectorEngineTests",
+            name: "WebInspectorCoreTests",
             dependencies: [
-                "WebInspectorEngine",
-                "WebInspectorTestSupport"
+                "WebInspectorCore"
             ],
-            path: "Tests/WebInspectorEngineTests",
+            path: "Tests/WebInspectorCoreTests",
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(
             name: "WebInspectorTransportTests",
             dependencies: [
-                "WebInspectorTransport",
-                "WebInspectorEngine",
-                "WebInspectorTestSupport"
+                "WebInspectorCore",
+                "WebInspectorTransport"
             ],
             path: "Tests/WebInspectorTransportTests",
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(
-            name: "V2_WebInspectorCoreTests",
+            name: "WebInspectorNativeSymbolsTests",
             dependencies: [
-                "V2_WebInspectorCore"
+                "WebInspectorNativeSymbols"
             ],
-            path: "Tests/V2_WebInspectorCoreTests",
+            path: "Tests/WebInspectorNativeSymbolsTests",
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(
-            name: "V2_WebInspectorTransportTests",
+            name: "WebInspectorNativeBridgeTests",
             dependencies: [
-                "V2_WebInspectorCore",
-                "V2_WebInspectorTransport"
+                "WebInspectorNativeBridge"
             ],
-            path: "Tests/V2_WebInspectorTransportTests",
-            swiftSettings: strictSwiftSettings
-        ),
-        .testTarget(
-            name: "V2_WebInspectorNativeSymbolsTests",
-            dependencies: [
-                "V2_WebInspectorNativeSymbols"
-            ],
-            path: "Tests/V2_WebInspectorNativeSymbolsTests",
-            swiftSettings: strictSwiftSettings
-        ),
-        .testTarget(
-            name: "V2_WebInspectorNativeBridgeTests",
-            dependencies: [
-                "V2_WebInspectorNativeBridge"
-            ],
-            path: "Tests/V2_WebInspectorNativeBridgeTests",
-            swiftSettings: strictSwiftSettings
-        ),
-        .testTarget(
-            name: "V2_WebInspectorRuntimeTests",
-            dependencies: [
-                "V2_WebInspectorCore",
-                "V2_WebInspectorTransport",
-                "V2_WebInspectorRuntime"
-            ],
-            path: "Tests/V2_WebInspectorRuntimeTests",
-            swiftSettings: strictSwiftSettings
-        ),
-        .testTarget(
-            name: "V2_WebInspectorUITests",
-            dependencies: [
-                "V2_WebInspectorCore",
-                "V2_WebInspectorRuntime",
-                "V2_WebInspectorUI"
-            ],
-            path: "Tests/V2_WebInspectorUITests",
+            path: "Tests/WebInspectorNativeBridgeTests",
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(
             name: "WebInspectorRuntimeTests",
             dependencies: [
-                "WebInspectorRuntime",
-                "WebInspectorEngine",
-                "WebInspectorUI",
-                "WebInspectorTestSupport"
+                "WebInspectorCore",
+                "WebInspectorTransport",
+                "WebInspectorRuntime"
             ],
             path: "Tests/WebInspectorRuntimeTests",
             swiftSettings: strictSwiftSettings
@@ -307,51 +151,13 @@ let package = Package(
         .testTarget(
             name: "WebInspectorUITests",
             dependencies: [
-                "WebInspectorUI",
+                "WebInspectorCore",
                 "WebInspectorRuntime",
-                "WebInspectorEngine",
-                "WebInspectorBridge",
-                "WebInspectorTestSupport",
-                .product(name: "SyntaxEditorUI", package: "SyntaxEditorUI", condition: .when(platforms: [.iOS]))
+                "WebInspectorUI"
             ],
             path: "Tests/WebInspectorUITests",
             swiftSettings: strictSwiftSettings
-        ),
-        .testTarget(
-            name: "WebInspectorIntegrationTests",
-            dependencies: [
-                "WebInspectorKit",
-                "WebInspectorUI",
-                "WebInspectorRuntime",
-                "WebInspectorEngine",
-                "WebInspectorTestSupport"
-            ],
-            path: "Tests/WebInspectorIntegrationTests",
-            swiftSettings: strictSwiftSettings
-        ),
-        .testTarget(
-            name: "WebInspectorIntegrationLongTests",
-            dependencies: [
-                "WebInspectorKit",
-                "WebInspectorUI",
-                "WebInspectorRuntime",
-                "WebInspectorEngine",
-                "WebInspectorTestSupport"
-            ],
-            path: "Tests/WebInspectorIntegrationLongTests",
-            swiftSettings: strictSwiftSettings
-        ),
-        .testTarget(
-            name: "WebInspectorSPITests",
-            dependencies: [
-                "WebInspectorKitSPI",
-                "WebInspectorBridge",
-                "WebInspectorTestSupport"
-            ],
-            path: "Tests/WebInspectorSPITests",
-            swiftSettings: strictSwiftSettings
         )
-
     ],
     cxxLanguageStandard: .gnucxx20
 )

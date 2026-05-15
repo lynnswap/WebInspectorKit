@@ -1,11 +1,10 @@
-import ObservationBridge
-import WebInspectorEngine
-
 #if canImport(UIKit)
+import ObservationBridge
 import UIKit
+import WebInspectorCore
 
 @MainActor
-final class NetworkListCell: UICollectionViewListCell {
+package final class NetworkListCell: UICollectionViewListCell {
     private let observationScope = ObservationScope()
     private let statusIndicatorView = UIView(frame: CGRect(origin: .zero, size: CGSize(width: 8, height: 8)))
     private let fileTypeLabel = UILabel()
@@ -24,17 +23,22 @@ final class NetworkListCell: UICollectionViewListCell {
         observationScope.cancelAll()
     }
 
-    func bind(item: NetworkEntry) {
-        render(displayName: item.displayName)
-        renderAccessories(item: item)
+    override package func prepareForReuse() {
+        super.prepareForReuse()
+        observationScope.cancelAll()
+    }
+
+    package func bind(request: NetworkRequest) {
+        render(displayName: request.displayName)
+        renderAccessories(request: request)
 
         observationScope.update {
-            item.observe([\.url, \.fileTypeLabel, \.statusSeverity]) { [weak self, weak item] in
-                guard let item else {
+            request.observe([\.request, \.response, \.resourceType, \.state]) { [weak self, weak request] in
+                guard let request else {
                     return
                 }
-                self?.render(displayName: item.displayName)
-                self?.renderAccessories(item: item)
+                self?.render(displayName: request.displayName)
+                self?.renderAccessories(request: request)
             }
             .store(in: observationScope)
         }
@@ -67,7 +71,7 @@ final class NetworkListCell: UICollectionViewListCell {
                     maintainsFixedSize: false
                 )
             ),
-            .disclosureIndicator()
+            .disclosureIndicator(),
         ]
     }
 
@@ -80,10 +84,9 @@ final class NetworkListCell: UICollectionViewListCell {
         contentConfiguration = content
     }
 
-    private func renderAccessories(item: NetworkEntry) {
-        let statusColor = item.statusSeverity.color
-        statusIndicatorView.backgroundColor = statusColor
-        fileTypeLabel.text = item.fileTypeLabel
+    private func renderAccessories(request: NetworkRequest) {
+        statusIndicatorView.backgroundColor = request.statusSeverity.color
+        fileTypeLabel.text = request.fileTypeLabel
     }
 
     private static func makeContentConfiguration() -> UIListContentConfiguration {
@@ -100,5 +103,4 @@ final class NetworkListCell: UICollectionViewListCell {
         return content
     }
 }
-
 #endif

@@ -49,13 +49,13 @@ try await inspector.attach(to: webView)
 Remove any app-side DOM snapshot depth, subtree depth, or auto-update debounce tuning.
 Those values are now owned by the native DOM runtime.
 
-## 3. Remove legacy dependency injection code
+## 3. Remove old dependency injection code
 
-The V1 dependency injection and model configuration APIs are not part of the
+The `v0.1.x` dependency injection and model configuration APIs are not part of the
 current public API.
 
 Remove app-side configuration of transport timeouts, runtime factories, and DOM reload
-policies. Those boundaries are internal to the V2 runtime.
+policies. Those boundaries are internal to the WebInspector runtime.
 
 ## 4. Remove `WebInspectorScripts` imports
 
@@ -82,11 +82,10 @@ let controller = WebInspectorViewController(
 
 If you only use the built-in tabs, keep using `.dom` and `.network`.
 
-## 6. Remove V1 DOM model usage
+## 6. Remove old DOM model usage
 
-The V1 DOM model APIs are legacy-only and should not be used by apps moving to the
-current public surface.
+The `v0.1.x` DOM model APIs are not part of the current public surface.
 
-Do not migrate app code from one V1 DOM API to another V1 DOM API. V2 DOM and
-Network models are internal implementation details until their app-facing command
-surface is explicitly published.
+Do not migrate app code from one removed DOM API to another removed DOM API. DOM
+and Network models are internal implementation details until their app-facing
+command surface is explicitly published.

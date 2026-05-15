@@ -2,11 +2,11 @@
 import UIKit
 
 @MainActor
-struct DOMTabController: BuiltInTabController {
-    let tabID = WITab.dom.id
-    let descriptor = TabDisplayDescriptor(
-        title: WITab.dom.title,
-        image: WITab.dom.image
+package struct DOMTabController: BuiltInTabController {
+    package let tabID = WebInspectorTab.dom.id
+    package let descriptor = TabDisplayDescriptor(
+        title: WebInspectorTab.dom.title,
+        image: WebInspectorTab.dom.image
     )
 
     private let elementDescriptor = TabDisplayDescriptor(
@@ -19,7 +19,7 @@ struct DOMTabController: BuiltInTabController {
         static let element = "element"
     }
 
-    func displayItems(for layout: WITabHostLayout) -> [TabDisplayItem] {
+    package func displayItems(for layout: WebInspectorTabHostLayout) -> [TabDisplayItem] {
         switch layout {
         case .compact:
             [.tab(tabID), .domElement(parent: tabID)]
@@ -28,7 +28,7 @@ struct DOMTabController: BuiltInTabController {
         }
     }
 
-    func descriptor(for displayItem: TabDisplayItem) -> TabDisplayDescriptor? {
+    package func descriptor(for displayItem: TabDisplayItem) -> TabDisplayDescriptor? {
         switch displayItem {
         case let .tab(tabID):
             tabID == self.tabID ? descriptor : nil
@@ -37,8 +37,8 @@ struct DOMTabController: BuiltInTabController {
         }
     }
 
-    func contentKeys(
-        for layout: WITabHostLayout,
+    package func contentKeys(
+        for layout: WebInspectorTabHostLayout,
         displayItem: TabDisplayItem
     ) -> [TabContentKey] {
         switch (layout, displayItem) {
@@ -54,42 +54,42 @@ struct DOMTabController: BuiltInTabController {
         }
     }
 
-    func makeViewController(
+    package func makeViewController(
         for displayItem: TabDisplayItem,
-        session: WISession,
-        layout: WITabHostLayout
+        session: WebInspectorSession,
+        layout: WebInspectorTabHostLayout
     ) -> UIViewController {
         switch (layout, displayItem) {
         case (.compact, .tab):
-            DOMCompactTabNavigationController(
-                rootViewController: cachedDOMTreeViewController(session: session),
-                dom: session.runtime.dom
+            DOMCompactNavigationController(
+                rootViewController: cachedTreeViewController(session: session),
+                session: session.inspector
             )
         case (.compact, .domElement):
-            DOMCompactTabNavigationController(
-                rootViewController: cachedDOMElementViewController(session: session),
-                dom: session.runtime.dom
+            DOMCompactNavigationController(
+                rootViewController: cachedElementViewController(session: session),
+                session: session.inspector
             )
         case (.regular, _):
-            WIRegularSplitRootViewController(
+            RegularSplitRootViewController(
                 contentViewController: DOMSplitViewController(
-                    dom: session.runtime.dom,
-                    treeViewController: cachedDOMTreeViewController(session: session),
-                    elementViewController: cachedDOMElementViewController(session: session)
+                    treeViewController: cachedTreeViewController(session: session),
+                    elementViewController: cachedElementViewController(session: session),
+                    session: session.inspector
                 )
             )
         }
     }
 
-    private func cachedDOMTreeViewController(session: WISession) -> DOMTreeViewController {
+    private func cachedTreeViewController(session: WebInspectorSession) -> DOMTreeViewController {
         session.interface.viewController(for: contentKey(ContentID.tree)) {
-            DOMTreeViewController(dom: session.runtime.dom)
+            DOMTreeViewController(session: session.inspector)
         }
     }
 
-    private func cachedDOMElementViewController(session: WISession) -> DOMElementViewController {
+    private func cachedElementViewController(session: WebInspectorSession) -> DOMElementViewController {
         session.interface.viewController(for: contentKey(ContentID.element)) {
-            DOMElementViewController(dom: session.runtime.dom)
+            DOMElementViewController(dom: session.inspector.dom)
         }
     }
 

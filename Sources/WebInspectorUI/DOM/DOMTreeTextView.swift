@@ -1,11 +1,14 @@
 #if canImport(UIKit)
 import ObservationBridge
 import UIKit
-import WebInspectorEngine
-import WebInspectorRuntime
+import WebInspectorCore
 
 @MainActor
 final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutControllerDelegate, UITextInput, UITextInteractionDelegate {
+    typealias RequestChildrenAction = @MainActor (DOMNode.ID) async -> Bool
+    typealias HighlightNodeAction = @MainActor (DOMNode.ID) async -> Void
+    typealias HideHighlightAction = @MainActor () async -> Void
+
     fileprivate static let font = UIFont.monospacedSystemFont(ofSize: 13, weight: .regular)
     private static let lineSpacing: CGFloat = 2
     private static let textInsets = UIEdgeInsets(top: 8, left: 10, bottom: 8, right: 16)
@@ -30,7 +33,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         paragraphStyle.paragraphSpacingBefore = 0
         return paragraphStyle
     }()
-    private let dom: WIDOMRuntime
+    private let dom: DOMSession
     private let observationScope = ObservationScope()
     private let textContentStorage = NSTextContentStorage()
     private let layoutManager = NSTextLayoutManager()
@@ -49,10 +52,10 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
 
     private var rows: [DOMTreeLine] = []
     private var renderedText = ""
-    private var openState: [DOMNodeModel.ID: Bool] = [:]
-    private var hoveredNodeID: DOMNodeModel.ID?
-    private var requestedChildNodeIDs: Set<DOMNodeModel.ID> = []
-    private var childRequestRetryCounts: [DOMNodeModel.ID: Int] = [:]
+    private var openState: [DOMNode.ID: Bool] = [:]
+    private var hoveredNodeID: DOMNode.ID?
+    private var requestedChildNodeIDs: Set<DOMNode.ID> = []
+    private var childRequestRetryCounts: [DOMNode.ID: Int] = [:]
     private var findFoundRanges: [NSRange] = []
     private var findHighlightedRanges: [NSRange] = []
     private var hoverRowRects: [CGRect] = []
@@ -62,26 +65,27 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     private var pendingFindDecorationInvalidationRanges: [NSRange] = []
     private var measuredTextWidth: CGFloat = 0
     private var lastBoundsSize: CGSize = .zero
-    private var rowIndexByNodeID: [DOMNodeModel.ID: Int] = [:]
-    private var lastObservedSelectedNodeID: DOMNodeModel.ID?
-    private var pendingRevealSelectedNodeID: DOMNodeModel.ID?
+    private var rowIndexByNodeID: [DOMNode.ID: Int] = [:]
+    private var lastObservedSelectedNodeID: DOMNode.ID?
+    private var pendingRevealSelectedNodeID: DOMNode.ID?
     private var pendingTreeInvalidation: DOMTreeInvalidation?
     private var scheduledTreeReloadTask: Task<Void, Never>?
-    private var treeInvalidationHandlerID: UUID?
-    private var lastDocumentReloadSignature: DOMTreeDocumentReloadSignature?
     private var resolvedTextAttributesCache: DOMTreeResolvedTextAttributes?
     private var disclosureSymbolImageCache: [DisclosureSymbolImageCacheKey: UIImage] = [:]
     private var renderedLinePrefixCache: [Int: String] = [:]
-    private var markupCache: [DOMNodeModel.ID: DOMTreeCachedMarkup] = [:]
+    private var markupCache: [DOMNode.ID: DOMTreeCachedMarkup] = [:]
     private var maxLineDisplayColumnCount = 0
-    private var multiSelectedNodeIDs: Set<DOMNodeModel.ID> = []
-    private var multiSelectionLastNodeID: DOMNodeModel.ID?
-    private var multiSelectionShiftAnchorNodeID: DOMNodeModel.ID?
-    private var multiSelectionShiftRangeNodeIDs: Set<DOMNodeModel.ID> = []
+    private var multiSelectedNodeIDs: Set<DOMNode.ID> = []
+    private var multiSelectionLastNodeID: DOMNode.ID?
+    private var multiSelectionShiftAnchorNodeID: DOMNode.ID?
+    private var multiSelectionShiftRangeNodeIDs: Set<DOMNode.ID> = []
     private var menuAnchorButton: UIButton?
     private var selectedTextNSRange = NSRange(location: 0, length: 0)
     private var markedTextNSRange: NSRange?
     private var markedTextStyleStorage: [NSAttributedString.Key: Any]?
+    private let requestChildrenAction: RequestChildrenAction?
+    private let highlightNodeAction: HighlightNodeAction?
+    private let hideHighlightAction: HideHighlightAction?
     weak var inputDelegate: UITextInputDelegate?
 #if DEBUG
     private var lastPresentedDOMMenuTitles: [String] = []
@@ -107,8 +111,16 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         Self.paragraphLineHeight
     }
 
-    init(dom: WIDOMRuntime) {
+    init(
+        dom: DOMSession,
+        requestChildrenAction: RequestChildrenAction? = nil,
+        highlightNodeAction: HighlightNodeAction? = nil,
+        hideHighlightAction: HideHighlightAction? = nil
+    ) {
         self.dom = dom
+        self.requestChildrenAction = requestChildrenAction
+        self.highlightNodeAction = highlightNodeAction
+        self.hideHighlightAction = hideHighlightAction
         super.init(frame: .zero)
         configureTextSystem()
         configureInteractions()
@@ -122,9 +134,6 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     }
 
     isolated deinit {
-        if let treeInvalidationHandlerID {
-            dom.document.removeTreeInvalidationHandler(id: treeInvalidationHandlerID)
-        }
         scheduledTreeReloadTask?.cancel()
         observationScope.cancelAll()
     }
@@ -136,32 +145,32 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     override var keyCommands: [UIKeyCommand]? {
         [
             UIKeyCommand(
-                title: wiLocalized("Extend Selection Up"),
+                title: webInspectorLocalized("dom.tree.extend_selection_up", default: "Extend Selection Up"),
                 action: #selector(extendMultiSelectionUp),
                 input: UIKeyCommand.inputUpArrow,
                 modifierFlags: .shift,
-                discoverabilityTitle: wiLocalized("Extend Selection Up")
+                discoverabilityTitle: webInspectorLocalized("dom.tree.extend_selection_up", default: "Extend Selection Up")
             ),
             UIKeyCommand(
-                title: wiLocalized("Extend Selection Down"),
+                title: webInspectorLocalized("dom.tree.extend_selection_down", default: "Extend Selection Down"),
                 action: #selector(extendMultiSelectionDown),
                 input: UIKeyCommand.inputDownArrow,
                 modifierFlags: .shift,
-                discoverabilityTitle: wiLocalized("Extend Selection Down")
+                discoverabilityTitle: webInspectorLocalized("dom.tree.extend_selection_down", default: "Extend Selection Down")
             ),
             UIKeyCommand(
-                title: wiLocalized("Select All"),
+                title: webInspectorLocalized("dom.tree.select_all", default: "Select All"),
                 action: #selector(selectAllRenderedRows),
                 input: "a",
                 modifierFlags: .command,
-                discoverabilityTitle: wiLocalized("Select All")
+                discoverabilityTitle: webInspectorLocalized("dom.tree.select_all", default: "Select All")
             ),
             UIKeyCommand(
-                title: wiLocalized("Find"),
+                title: webInspectorLocalized("dom.tree.find", default: "Find"),
                 action: #selector(showFindNavigator),
                 input: "f",
                 modifierFlags: .command,
-                discoverabilityTitle: wiLocalized("Find")
+                discoverabilityTitle: webInspectorLocalized("dom.tree.find", default: "Find")
             )
         ]
     }
@@ -277,7 +286,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
             return
         }
 
-        let nodes: [DOMNodeModel]
+        let nodes: [DOMNode]
         if multiSelectedNodeIDs.count > 1, multiSelectedNodeIDs.contains(row.node.id) {
             nodes = multiSelectedNodesInDisplayOrder()
         } else {
@@ -313,19 +322,19 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         case .began, .changed:
             guard let row = row(at: recognizer.location(in: textContentView)) else {
                 clearHoveredRow()
-                Task { @MainActor [dom] in await dom.hideNodeHighlight() }
+                Task { @MainActor [hideHighlightAction] in await hideHighlightAction?() }
                 return
             }
             if hoveredNodeID != row.node.id {
                 hoveredNodeID = row.node.id
                 updateContentDecorations()
             }
-            Task { @MainActor [dom, node = row.node] in
-                await dom.highlightNode(node, reveal: false)
+            Task { @MainActor [highlightNodeAction, nodeID = row.node.id] in
+                await highlightNodeAction?(nodeID)
             }
         case .ended, .cancelled, .failed:
             clearHoveredRow()
-            Task { @MainActor [dom] in await dom.hideNodeHighlight() }
+            Task { @MainActor [hideHighlightAction] in await hideHighlightAction?() }
         default:
             break
         }
@@ -527,39 +536,15 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     }
 
     private func startObservingDocument() {
-        if let treeInvalidationHandlerID {
-            dom.document.removeTreeInvalidationHandler(id: treeInvalidationHandlerID)
-        }
-        treeInvalidationHandlerID = dom.document.addTreeInvalidationHandler { [weak self] invalidation in
-            self?.scheduleTreeReload(for: invalidation)
-        }
-
-        lastDocumentReloadSignature = documentReloadSignature()
-        dom.document.observe([\.documentState, \.rootNode, \.errorMessage]) { [weak self] in
-            guard let self else {
-                return
-            }
-            let signature = self.documentReloadSignature()
-            guard signature != self.lastDocumentReloadSignature else {
-                return
-            }
-            self.lastDocumentReloadSignature = signature
-            self.scheduleTreeReload(for: .documentReset)
+        dom.observe(\.treeRevision) { [weak self] _ in
+            self?.scheduleTreeReload(for: .documentReset)
         }
         .store(in: observationScope)
 
-        dom.document.observe([\.selectedNode, \.selectionRevision]) { [weak self] in
+        dom.observe(\.selectionRevision) { [weak self] _ in
             self?.handleSelectedNodeChange()
         }
         .store(in: observationScope)
-    }
-
-    private func documentReloadSignature() -> DOMTreeDocumentReloadSignature {
-        DOMTreeDocumentReloadSignature(
-            documentState: dom.document.documentState,
-            rootNodeID: dom.document.rootNode?.id,
-            errorMessage: dom.document.errorMessage
-        )
     }
 
     private func handleSelectedNodeChange() {
@@ -647,21 +632,12 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         revealPendingSelectedNodeIfPossible()
     }
 
-    private func applyContentInvalidation(affectedKeys: Set<DOMNodeKey>) -> Bool {
-        guard dom.document.documentState == .ready, !rows.isEmpty else {
+    private func applyContentInvalidation(affectedKeys: Set<DOMNode.ID>) -> Bool {
+        guard !rows.isEmpty else {
             return false
         }
 
-        let documentIdentity = dom.document.documentIdentity
-        let affectedRowIndices = affectedKeys.compactMap {
-            rowIndexByNodeID[
-                DOMNodeModel.ID(
-                    documentIdentity: documentIdentity,
-                    targetIdentifier: $0.targetIdentifier,
-                    nodeID: $0.nodeID
-                )
-            ]
-        }
+        let affectedRowIndices = affectedKeys.compactMap { rowIndexByNodeID[$0] }
         guard !affectedRowIndices.isEmpty else {
             return true
         }
@@ -747,7 +723,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     }
 
     private func prepareSelectionForRendering(clearsMultiSelectionForDocumentSelection: Bool = false) {
-        let selectedNode = dom.document.selectedNode
+        let selectedNode = dom.selectedNode
         let selectedNodeID = selectedNode?.id
         let selectedNodeIDChanged = selectedNodeID != lastObservedSelectedNodeID
         if selectedNodeIDChanged {
@@ -768,7 +744,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     }
 
     private func reconcileMultiSelectionForRenderedSelection(
-        selectedNodeID: DOMNodeModel.ID?,
+        selectedNodeID: DOMNode.ID?,
         selectedNodeIDChanged: Bool,
         clearsMultiSelectionForDocumentSelection: Bool
     ) {
@@ -799,13 +775,13 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         }
     }
 
-    private func openAncestors(of node: DOMNodeModel) {
-        var current = node.parent
+    private func openAncestors(of node: DOMNode) {
+        var current = node.parentID.flatMap { dom.node(for: $0) }
         while let ancestor = current {
-            if ancestor.nodeType != .document || ancestor.parent != nil {
+            if ancestor.nodeType != .document || ancestor.parentID != nil {
                 openState[ancestor.id] = true
             }
-            current = ancestor.parent
+            current = ancestor.parentID.flatMap { dom.node(for: $0) }
         }
     }
 
@@ -813,10 +789,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
 #if DEBUG
         buildRenderedRowsCallCount += 1
 #endif
-        guard dom.document.documentState == .ready else {
-            return ([], "", 0)
-        }
-        guard let rootNode = dom.document.rootNode else {
+        guard let rootNode = dom.currentPageRootNode else {
             return ([], "", 0)
         }
 
@@ -827,7 +800,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         var utf16Location = 0
         var maxLineDisplayColumnCount = 0
 
-        func appendLine(_ node: DOMNodeModel, depth: Int, isClosingTag: Bool) -> DOMTreeLine {
+        func appendLine(_ node: DOMNode, depth: Int, isClosingTag: Bool) -> DOMTreeLine {
             let rowIndex = nextRows.count
             let row = renderedRow(
                 for: node,
@@ -847,12 +820,12 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
             return row
         }
 
-        func append(_ node: DOMNodeModel, depth: Int) {
+        func append(_ node: DOMNode, depth: Int) {
             let row = appendLine(node, depth: depth, isClosingTag: false)
             guard row.hasDisclosure, row.isOpen else {
                 return
             }
-            for child in node.visibleDOMTreeChildren {
+            for child in dom.visibleDOMTreeChildren(of: node) {
                 append(child, depth: depth + 1)
             }
             if DOMTreeMarkupBuilder.rendersClosingTagRow(for: node) {
@@ -860,7 +833,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
             }
         }
 
-        let displayRoots = rootNode.nodeType == .document ? rootNode.visibleDOMTreeChildren : [rootNode]
+        let displayRoots = rootNode.nodeType == .document ? dom.visibleDOMTreeChildren(of: rootNode) : [rootNode]
         for node in displayRoots {
             append(node, depth: 0)
         }
@@ -869,7 +842,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     }
 
     private func renderedRow(
-        for node: DOMNodeModel,
+        for node: DOMNode,
         depth: Int,
         rowIndex: Int,
         utf16Location: Int,
@@ -914,7 +887,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     }
 
     private func cachedMarkup(
-        for node: DOMNodeModel,
+        for node: DOMNode,
         hasDisclosure: Bool,
         isOpen: Bool,
         isClosingTag: Bool
@@ -926,9 +899,9 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
             nodeValue: node.nodeValue,
             pseudoType: node.pseudoType,
             shadowRootType: node.shadowRootType,
-            isTemplateContent: node.parent?.templateContent === node,
+            isTemplateContent: dom.isTemplateContent(node),
             attributes: node.attributes,
-            childCount: node.regularChildCount,
+            childCount: node.regularChildren.knownCount,
             hasDisclosure: hasDisclosure,
             isOpen: isOpen,
             isClosingTag: isClosingTag
@@ -941,21 +914,22 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
             for: node,
             hasDisclosure: hasDisclosure,
             isOpen: isOpen,
-            isClosingTag: isClosingTag
+            isClosingTag: isClosingTag,
+            isTemplateContent: dom.isTemplateContent(node)
         )
         markupCache[node.id] = DOMTreeCachedMarkup(signature: signature, markup: markup)
         return markup
     }
 
-    private func pruneMarkupCache(keeping nodeIDs: Set<DOMNodeModel.ID>) {
+    private func pruneMarkupCache(keeping nodeIDs: Set<DOMNode.ID>) {
         markupCache = markupCache.filter { nodeIDs.contains($0.key) }
     }
 
-    private func nodeHasDisclosure(_ node: DOMNodeModel) -> Bool {
-        node.hasVisibleDOMTreeChildren
+    private func nodeHasDisclosure(_ node: DOMNode) -> Bool {
+        dom.hasVisibleDOMTreeChildren(node)
     }
 
-    private func isNodeOpen(_ node: DOMNodeModel, depth: Int) -> Bool {
+    private func isNodeOpen(_ node: DOMNode, depth: Int) -> Bool {
         if let explicitState = openState[node.id] {
             return explicitState
         }
@@ -976,9 +950,9 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     }
 
     private func rebuildRowIndexAndPruneMarkupCache() {
-        var nextRowIndexByNodeID: [DOMNodeModel.ID: Int] = [:]
+        var nextRowIndexByNodeID: [DOMNode.ID: Int] = [:]
         nextRowIndexByNodeID.reserveCapacity(rows.count)
-        var visibleNodeIDs = Set<DOMNodeModel.ID>()
+        var visibleNodeIDs = Set<DOMNode.ID>()
         visibleNodeIDs.reserveCapacity(rows.count)
         for row in rows {
             if !row.isClosingTag, nextRowIndexByNodeID[row.node.id] == nil {
@@ -1004,21 +978,21 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
 
     private func pruneChildRequestState() {
         requestedChildNodeIDs = requestedChildNodeIDs.filter { nodeID in
-            guard let node = dom.document.node(id: nodeID) else {
+            guard let node = dom.node(for: nodeID) else {
                 return false
             }
-            return node.hasUnloadedRegularChildren
+            return dom.hasUnloadedRegularChildren(node)
         }
         childRequestRetryCounts = childRequestRetryCounts.filter { nodeID, _ in
-            guard let node = dom.document.node(id: nodeID) else {
+            guard let node = dom.node(for: nodeID) else {
                 return false
             }
-            return node.hasUnloadedRegularChildren
+            return dom.hasUnloadedRegularChildren(node)
         }
     }
 
     private func requestChildrenForOpenRowsIfNeeded() {
-        guard dom.document.documentState == .ready else {
+        guard dom.currentPageRootNode != nil else {
             return
         }
         for row in rows where row.hasDisclosure && row.isOpen {
@@ -1026,36 +1000,36 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         }
     }
 
-    private func nodeName(for node: DOMNodeModel) -> String {
+    private func nodeName(for node: DOMNode) -> String {
         if !node.localName.isEmpty {
             return node.localName
         }
         if !node.nodeName.isEmpty {
             return node.nodeName
         }
-        return node.preview
+        return node.nodeValue.isEmpty ? node.nodeName : node.nodeValue
     }
 
-    private func requestChildrenIfNeeded(for node: DOMNodeModel) {
-        guard node.hasUnloadedRegularChildren,
+    private func requestChildrenIfNeeded(for node: DOMNode) {
+        guard dom.hasUnloadedRegularChildren(node),
               requestedChildNodeIDs.insert(node.id).inserted
         else {
             return
         }
         let attempt = childRequestRetryCounts[node.id, default: 0] + 1
         childRequestRetryCounts[node.id] = attempt
-        Task { @MainActor [weak self, weak node] in
-            guard let self, let node else {
+        Task { @MainActor [weak self, requestChildrenAction, nodeID = node.id] in
+            guard let self else {
                 return
             }
-            let succeeded = await self.dom.requestChildNodes(for: node, depth: 3)
-            self.requestedChildNodeIDs.remove(node.id)
-            guard self.dom.document.node(id: node.id) === node else {
-                self.childRequestRetryCounts.removeValue(forKey: node.id)
+            let succeeded = await requestChildrenAction?(nodeID) ?? false
+            self.requestedChildNodeIDs.remove(nodeID)
+            guard let node = self.dom.node(for: nodeID) else {
+                self.childRequestRetryCounts.removeValue(forKey: nodeID)
                 return
             }
-            if succeeded || !node.hasUnloadedRegularChildren {
-                self.childRequestRetryCounts.removeValue(forKey: node.id)
+            if succeeded || !self.dom.hasUnloadedRegularChildren(node) {
+                self.childRequestRetryCounts.removeValue(forKey: nodeID)
                 return
             }
             guard attempt < 3 else {
@@ -1074,11 +1048,9 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         reloadTree(resetFragments: false)
     }
 
-    private func select(_ node: DOMNodeModel) {
+    private func select(_ node: DOMNode) {
         multiSelectionLastNodeID = node.id
-        Task { @MainActor [dom] in
-            await dom.selectNode(node)
-        }
+        dom.selectNode(node.id)
     }
 
     private func toggleMultiSelection(row: DOMTreeLine) {
@@ -1087,7 +1059,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
             if let lastNodeID = multiSelectionLastNodeID,
                rowIndexByNodeID[lastNodeID] != nil {
                 selectedIDs.insert(lastNodeID)
-            } else if let selectedNodeID = dom.document.selectedNode?.id,
+            } else if let selectedNodeID = dom.selectedNodeID,
                       rowIndexByNodeID[selectedNodeID] != nil {
                 selectedIDs.insert(selectedNodeID)
             }
@@ -1121,7 +1093,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
 
         var selectedIDs = multiSelectedNodeIDs
         if selectedIDs.isEmpty,
-           let selectedNodeID = dom.document.selectedNode?.id,
+           let selectedNodeID = dom.selectedNodeID,
            rowIndexByNodeID[selectedNodeID] != nil {
             selectedIDs.insert(selectedNodeID)
         }
@@ -1141,7 +1113,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         }
 
         let focusedNodeID = multiSelectionLastNodeID
-            ?? dom.document.selectedNode?.id
+            ?? dom.selectedNodeID
             ?? rows.first?.node.id
         guard let focusedNodeID,
               let focusedIndex = rowIndexByNodeID[focusedNodeID]
@@ -1158,7 +1130,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         scrollRowToVisible(targetRow)
     }
 
-    private func multiSelectionAnchorNodeID() -> DOMNodeModel.ID? {
+    private func multiSelectionAnchorNodeID() -> DOMNode.ID? {
         if let anchorNodeID = multiSelectionShiftAnchorNodeID,
            rowIndexByNodeID[anchorNodeID] != nil {
             return anchorNodeID
@@ -1167,14 +1139,14 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
            rowIndexByNodeID[lastNodeID] != nil {
             return lastNodeID
         }
-        if let selectedNodeID = dom.document.selectedNode?.id,
+        if let selectedNodeID = dom.selectedNodeID,
            rowIndexByNodeID[selectedNodeID] != nil {
             return selectedNodeID
         }
         return rows.first?.node.id
     }
 
-    private func rowsBetween(_ firstNodeID: DOMNodeModel.ID, _ secondNodeID: DOMNodeModel.ID) -> ArraySlice<DOMTreeLine> {
+    private func rowsBetween(_ firstNodeID: DOMNode.ID, _ secondNodeID: DOMNode.ID) -> ArraySlice<DOMTreeLine> {
         guard let firstIndex = rowIndexByNodeID[firstNodeID],
               let secondIndex = rowIndexByNodeID[secondNodeID]
         else {
@@ -1185,7 +1157,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         return rows[lowerBound...upperBound]
     }
 
-    private func clearMultiSelection(keepingLast nodeID: DOMNodeModel.ID?) {
+    private func clearMultiSelection(keepingLast nodeID: DOMNode.ID?) {
         multiSelectedNodeIDs.removeAll(keepingCapacity: true)
         multiSelectionLastNodeID = nodeID
         multiSelectionShiftAnchorNodeID = nil
@@ -1209,7 +1181,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         }
     }
 
-    private func multiSelectedNodesInDisplayOrder() -> [DOMNodeModel] {
+    private func multiSelectedNodesInDisplayOrder() -> [DOMNode] {
         rows.compactMap { row in
             !row.isClosingTag && multiSelectedNodeIDs.contains(row.node.id) ? row.node : nil
         }
@@ -1266,7 +1238,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         updateContentDecorations()
     }
 
-    private func presentDOMMenu(for nodes: [DOMNodeModel], at location: CGPoint) {
+    private func presentDOMMenu(for nodes: [DOMNode], at location: CGPoint) {
         let menu = makeDOMMenu(for: nodes)
 #if DEBUG
         lastPresentedDOMMenuTitles = menu.children.compactMap { ($0 as? UIAction)?.title }
@@ -1300,7 +1272,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         menuAnchorButton = nil
     }
 
-    private func makeDOMMenu(for nodes: [DOMNodeModel]) -> UIMenu {
+    private func makeDOMMenu(for nodes: [DOMNode]) -> UIMenu {
         if nodes.count > 1 {
             makeMultiNodeMenu(for: nodes)
         } else if let node = nodes.first {
@@ -1349,93 +1321,44 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         }
     }
 
-    private func uniqueNodesInDisplayOrder(for rows: [DOMTreeLine]) -> [DOMNodeModel] {
-        var seenNodeIDs: Set<DOMNodeModel.ID> = []
+    private func uniqueNodesInDisplayOrder(for rows: [DOMTreeLine]) -> [DOMNode] {
+        var seenNodeIDs: Set<DOMNode.ID> = []
         return rows.compactMap { row in
             seenNodeIDs.insert(row.node.id).inserted ? row.node : nil
         }
     }
 
-    private func makeMultiNodeMenu(for nodes: [DOMNodeModel]) -> UIMenu {
-        let copyHTML = UIAction(title: "Copy HTML") { [weak self] _ in
+    private func makeMultiNodeMenu(for nodes: [DOMNode]) -> UIMenu {
+        let copyMarkup = UIAction(title: "Copy Markup") { [weak self] _ in
             guard let self else {
                 return
             }
-            Task { @MainActor [dom] in
-                guard let text = try? await dom.copyHTML(for: nodes), !text.isEmpty else {
-                    return
-                }
-                UIPasteboard.general.string = text
-            }
-        }
-
-        let deleteNodes = UIAction(
-            title: "Delete Nodes",
-            image: UIImage(systemName: "trash"),
-            attributes: .destructive
-        ) { [weak self] _ in
-            guard let self else {
+            let nodeIDs = Set(nodes.map(\.id))
+            let text = self.rows
+                .filter { !$0.isClosingTag && nodeIDs.contains($0.node.id) }
+                .map(\.text)
+                .joined(separator: "\n")
+            guard !text.isEmpty else {
                 return
             }
-            Task { @MainActor [dom, undoManager] in
-                try? await dom.deleteNodes(nodes, undoManager: undoManager)
-            }
+            UIPasteboard.general.string = text
         }
 
-        return UIMenu(children: [copyHTML, deleteNodes])
+        return UIMenu(children: [copyMarkup])
     }
 
-    private func makeContextMenu(for node: DOMNodeModel) -> UIMenu {
-        let copyHTML = UIAction(title: "Copy HTML") { [weak self, weak node] _ in
+    private func makeContextMenu(for node: DOMNode) -> UIMenu {
+        let copyMarkup = UIAction(title: "Copy Markup") { [weak self, weak node] _ in
             guard let self, let node else {
                 return
             }
-            Task { @MainActor [dom] in
-                guard let text = try? await dom.copyHTML(for: node), !text.isEmpty else {
-                    return
-                }
-                UIPasteboard.general.string = text
-            }
-        }
-
-        let copySelectorPath = UIAction(title: "Copy Selector Path") { [weak self, weak node] _ in
-            guard let self, let node else {
+            guard let row = self.rows.first(where: { !$0.isClosingTag && $0.node.id == node.id }) else {
                 return
             }
-            Task { @MainActor [dom] in
-                guard let text = try? await dom.copySelectorPath(for: node), !text.isEmpty else {
-                    return
-                }
-                UIPasteboard.general.string = text
-            }
+            UIPasteboard.general.string = row.text
         }
 
-        let copyXPath = UIAction(title: "Copy XPath") { [weak self, weak node] _ in
-            guard let self, let node else {
-                return
-            }
-            Task { @MainActor [dom] in
-                guard let text = try? await dom.copyXPath(for: node), !text.isEmpty else {
-                    return
-                }
-                UIPasteboard.general.string = text
-            }
-        }
-
-        let deleteNode = UIAction(
-            title: "Delete Node",
-            image: UIImage(systemName: "trash"),
-            attributes: .destructive
-        ) { [weak self, weak node] _ in
-            guard let self, let node else {
-                return
-            }
-            Task { @MainActor [dom, undoManager] in
-                try? await dom.deleteNode(node, undoManager: undoManager)
-            }
-        }
-
-        return UIMenu(children: [copyHTML, copySelectorPath, copyXPath, deleteNode])
+        return UIMenu(children: [copyMarkup])
     }
 
     private func applyRowAttributes(to attributedText: NSMutableAttributedString) {
@@ -1807,14 +1730,14 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         guard multiSelectedNodeIDs.isEmpty else {
             return []
         }
-        guard let selectedNodeID = dom.document.selectedNode?.id else {
+        guard let selectedNodeID = dom.selectedNodeID else {
             return []
         }
         return rowRects(for: selectedNodeID)
     }
 
     private func selectedNodeNeedsRowReload() -> Bool {
-        guard let selectedNodeID = dom.document.selectedNode?.id else {
+        guard let selectedNodeID = dom.selectedNodeID else {
             return false
         }
         return rowIndexByNodeID[selectedNodeID] == nil
@@ -1833,7 +1756,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         return rowRects(for: hoveredNodeID)
     }
 
-    private func rowRects(for nodeID: DOMNodeModel.ID) -> [CGRect] {
+    private func rowRects(for nodeID: DOMNode.ID) -> [CGRect] {
         guard let rowIndex = rowIndexByNodeID[nodeID],
               rows.indices.contains(rowIndex)
         else {
@@ -2563,7 +2486,7 @@ extension DOMTreeTextView {
         guard let row = rows.first(where: { $0.text.contains(text) }) else {
             return []
         }
-        let nodes: [DOMNodeModel]
+        let nodes: [DOMNode]
         if multiSelectedNodeIDs.count > 1, multiSelectedNodeIDs.contains(row.node.id) {
             nodes = multiSelectedNodesInDisplayOrder()
         } else {
@@ -2578,7 +2501,7 @@ extension DOMTreeTextView {
 
     var multiSelectedNodeIDsForTesting: [UInt64] {
         rows.compactMap { row in
-            !row.isClosingTag && multiSelectedNodeIDs.contains(row.node.id) ? UInt64(row.node.nodeID) : nil
+            !row.isClosingTag && multiSelectedNodeIDs.contains(row.node.id) ? UInt64(row.node.protocolNodeID.rawValue) : nil
         }
     }
 
@@ -2780,7 +2703,7 @@ private final class DOMTreeTextSelectionRect: UITextSelectionRect {
 
 @MainActor
 private struct DOMTreeLine {
-    let node: DOMNodeModel
+    let node: DOMNode
     let depth: Int
     let rowIndex: Int
     let text: String
@@ -2832,10 +2755,10 @@ private struct DOMTreeRowDiff {
     let nextEnd: Int
 }
 
-private struct DOMTreeDocumentReloadSignature: Equatable {
-    let documentState: DOMDocumentState
-    let rootNodeID: DOMNodeModel.ID?
-    let errorMessage: String?
+private enum DOMTreeInvalidation: Equatable {
+    case documentReset
+    case structural(affectedKeys: Set<DOMNode.ID>)
+    case content(affectedKeys: Set<DOMNode.ID>)
 }
 
 private struct DOMTreeMarkupSignature: Hashable {
@@ -3079,10 +3002,11 @@ private enum DOMTreeMarkupBuilder {
     ]
 
     static func markup(
-        for node: DOMNodeModel,
+        for node: DOMNode,
         hasDisclosure: Bool,
         isOpen: Bool,
-        isClosingTag: Bool
+        isClosingTag: Bool,
+        isTemplateContent: Bool
     ) -> DOMTreeMarkup {
         if isClosingTag {
             return closingElementMarkup(for: node)
@@ -3098,7 +3022,7 @@ private enum DOMTreeMarkupBuilder {
         case .documentType:
             return documentTypeMarkup(for: node)
         case .documentFragment:
-            return documentFragmentMarkup(for: node)
+            return documentFragmentMarkup(for: node, isTemplateContent: isTemplateContent)
         case .cdataSection:
             return cdataMarkup(for: node)
         case .processingInstruction:
@@ -3110,7 +3034,7 @@ private enum DOMTreeMarkupBuilder {
         }
     }
 
-    static func rendersClosingTagRow(for node: DOMNodeModel) -> Bool {
+    static func rendersClosingTagRow(for node: DOMNode) -> Bool {
         guard inferredNodeType(for: node) == .element else {
             return false
         }
@@ -3120,7 +3044,7 @@ private enum DOMTreeMarkupBuilder {
         return !voidElementNames.contains(elementName(for: node))
     }
 
-    static func canContainChildNodes(_ node: DOMNodeModel) -> Bool {
+    static func canContainChildNodes(_ node: DOMNode) -> Bool {
         switch inferredNodeType(for: node) {
         case .document, .documentFragment:
             return true
@@ -3131,12 +3055,12 @@ private enum DOMTreeMarkupBuilder {
         }
     }
 
-    private static func inferredNodeType(for node: DOMNodeModel) -> DOMNodeType {
-        if node.nodeType != .unknown {
+    private static func inferredNodeType(for node: DOMNode) -> DOMNodeType {
+        let name = (node.localName.isEmpty ? node.nodeName : node.localName).lowercased()
+        if node.nodeType != .element || name.isEmpty {
             return node.nodeType
         }
 
-        let name = (node.localName.isEmpty ? node.nodeName : node.localName).lowercased()
         switch name {
         case "#document":
             return .document
@@ -3153,11 +3077,11 @@ private enum DOMTreeMarkupBuilder {
         case let name where !name.isEmpty && !name.hasPrefix("#"):
             return .element
         default:
-            return .unknown
+            return node.nodeType
         }
     }
 
-    private static func elementMarkup(for node: DOMNodeModel, hasDisclosure: Bool, isOpen: Bool) -> DOMTreeMarkup {
+    private static func elementMarkup(for node: DOMNode, hasDisclosure: Bool, isOpen: Bool) -> DOMTreeMarkup {
         if let pseudoType = node.pseudoType {
             return fallbackMarkup("::\(pseudoType)")
         }
@@ -3187,7 +3111,7 @@ private enum DOMTreeMarkupBuilder {
         return markup
     }
 
-    private static func closingElementMarkup(for node: DOMNodeModel) -> DOMTreeMarkup {
+    private static func closingElementMarkup(for node: DOMNode) -> DOMTreeMarkup {
         let name = elementName(for: node)
         var markup = DOMTreeMarkup()
         markup.append("</", kind: .punctuation)
@@ -3196,12 +3120,11 @@ private enum DOMTreeMarkupBuilder {
         return markup
     }
 
-    private static func documentFragmentMarkup(for node: DOMNodeModel) -> DOMTreeMarkup {
+    private static func documentFragmentMarkup(for node: DOMNode, isTemplateContent: Bool) -> DOMTreeMarkup {
         if let shadowRootType = node.shadowRootType {
             return fallbackMarkup("Shadow Content (\(shadowRootTypeDisplayName(shadowRootType)))")
         }
-        if let parent = node.parent,
-           parent.templateContent === node {
+        if isTemplateContent {
             return fallbackMarkup("Template Content")
         }
         return fallbackMarkup("Document Fragment")
@@ -3234,7 +3157,7 @@ private enum DOMTreeMarkupBuilder {
         markup.appendQuotedAttributeValue(escapedAttributeValue(attribute.value))
     }
 
-    private static func textMarkup(for node: DOMNodeModel) -> DOMTreeMarkup {
+    private static func textMarkup(for node: DOMNode) -> DOMTreeMarkup {
         let text = escapedTextValue(normalizedValue(for: node))
         guard !text.isEmpty else {
             return fallbackMarkup("#text")
@@ -3244,7 +3167,7 @@ private enum DOMTreeMarkupBuilder {
         return markup
     }
 
-    private static func commentMarkup(for node: DOMNodeModel) -> DOMTreeMarkup {
+    private static func commentMarkup(for node: DOMNode) -> DOMTreeMarkup {
         var markup = DOMTreeMarkup()
         markup.append("<!--", kind: .punctuation)
         let text = escapedCommentValue(normalizedValue(for: node))
@@ -3257,7 +3180,7 @@ private enum DOMTreeMarkupBuilder {
         return markup
     }
 
-    private static func documentTypeMarkup(for node: DOMNodeModel) -> DOMTreeMarkup {
+    private static func documentTypeMarkup(for node: DOMNode) -> DOMTreeMarkup {
         var markup = DOMTreeMarkup()
         let name = elementName(for: node, fallback: "html")
         markup.append("<!", kind: .punctuation)
@@ -3268,7 +3191,7 @@ private enum DOMTreeMarkupBuilder {
         return markup
     }
 
-    private static func cdataMarkup(for node: DOMNodeModel) -> DOMTreeMarkup {
+    private static func cdataMarkup(for node: DOMNode) -> DOMTreeMarkup {
         var markup = DOMTreeMarkup()
         markup.append("<![CDATA[", kind: .punctuation)
         markup.append(lineSafeValue(normalizedValue(for: node)), kind: .text)
@@ -3276,7 +3199,7 @@ private enum DOMTreeMarkupBuilder {
         return markup
     }
 
-    private static func processingInstructionMarkup(for node: DOMNodeModel) -> DOMTreeMarkup {
+    private static func processingInstructionMarkup(for node: DOMNode) -> DOMTreeMarkup {
         var markup = DOMTreeMarkup()
         markup.append("<?", kind: .punctuation)
         markup.append(elementName(for: node, fallback: "instruction"), kind: .tagName)
@@ -3299,7 +3222,7 @@ private enum DOMTreeMarkupBuilder {
         attribute.value.isEmpty && booleanAttributeNames.contains(attribute.name.lowercased())
     }
 
-    private static func elementName(for node: DOMNodeModel, fallback: String = "element") -> String {
+    private static func elementName(for node: DOMNode, fallback: String = "element") -> String {
         let rawName: String
         if !node.localName.isEmpty {
             rawName = node.localName
@@ -3312,10 +3235,7 @@ private enum DOMTreeMarkupBuilder {
         return (name.isEmpty ? fallback : name).lowercased()
     }
 
-    private static func fallbackPreview(for node: DOMNodeModel) -> String {
-        if !node.preview.isEmpty {
-            return node.preview
-        }
+    private static func fallbackPreview(for node: DOMNode) -> String {
         if !node.nodeValue.isEmpty {
             return node.nodeValue
         }
@@ -3325,8 +3245,8 @@ private enum DOMTreeMarkupBuilder {
         return node.nodeName
     }
 
-    private static func normalizedValue(for node: DOMNodeModel) -> String {
-        let source = node.nodeValue.isEmpty ? node.preview : node.nodeValue
+    private static func normalizedValue(for node: DOMNode) -> String {
+        let source = node.nodeValue.isEmpty ? node.nodeName : node.nodeValue
         return source
             .split(whereSeparator: \.isWhitespace)
             .joined(separator: " ")

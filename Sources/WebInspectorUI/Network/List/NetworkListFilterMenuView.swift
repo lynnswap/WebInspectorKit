@@ -1,13 +1,11 @@
 #if canImport(UIKit)
 import SwiftUI
-import WebInspectorEngine
-import WebInspectorRuntime
 
 @MainActor
-struct NetworkListFilterMenuView: View {
-    var inspector: WINetworkModel
+package struct NetworkListFilterMenuView: View {
+    package var model: NetworkPanelModel
 
-    var body: some View {
+    package var body: some View {
         Toggle(
             NetworkResourceFilter.all.localizedTitle,
             isOn: allFiltersBinding
@@ -26,19 +24,19 @@ struct NetworkListFilterMenuView: View {
 
     private var allFiltersBinding: Binding<Bool> {
         Binding {
-            inspector.effectiveResourceFilters.isEmpty
+            model.effectiveResourceFilters.isEmpty
         } set: { isOn in
             if isOn {
-                inspector.clearResourceFilters()
+                model.clearResourceFilters()
             }
         }
     }
 
     private func binding(for filter: NetworkResourceFilter) -> Binding<Bool> {
         Binding {
-            inspector.activeResourceFilters.contains(filter)
+            model.activeResourceFilters.contains(filter)
         } set: { isOn in
-            inspector.setResourceFilter(filter, enabled: isOn)
+            model.setResourceFilter(filter, enabled: isOn)
         }
     }
 }

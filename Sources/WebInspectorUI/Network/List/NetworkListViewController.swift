@@ -1,15 +1,12 @@
-import Foundation
-import ObservationBridge
-import WebInspectorEngine
-import WebInspectorRuntime
-
 #if canImport(UIKit)
+import ObservationBridge
 import UIHostingMenu
 import UIKit
+import WebInspectorCore
 
 @MainActor
-class NetworkListViewController: UICollectionViewController, UISearchResultsUpdating {
-    typealias EntrySelectionAction = @MainActor (NetworkEntry?) -> Void
+package final class NetworkListViewController: UICollectionViewController, UISearchResultsUpdating {
+    package typealias RequestSelectionAction = @MainActor (NetworkRequest?) -> Void
 
     private enum SectionIdentifier: Hashable {
         case main
@@ -24,37 +21,37 @@ class NetworkListViewController: UICollectionViewController, UISearchResultsUpda
         )
     )
 
-    private let inspector: WINetworkModel
-    private var entrySelectionAction: EntrySelectionAction
+    private let model: NetworkPanelModel
+    private var requestSelectionAction: RequestSelectionAction
     private let observationScope = ObservationScope()
 
     private var needsSnapshotReloadOnNextAppearance = false
     private var isApplyingSearchPresentation = false
     private var activeSearchController: UISearchController?
     private lazy var filterHostingMenu = UIHostingMenu(
-        rootView: NetworkListFilterMenuView(inspector: inspector)
+        rootView: NetworkListFilterMenuView(model: model)
     )
     private lazy var overflowHostingMenu = UIHostingMenu(
-        rootView: NetworkListOverflowMenuView(inspector: inspector)
+        rootView: NetworkListOverflowMenuView(model: model)
     )
     private lazy var filterItem: UIBarButtonItem = {
         let item = UIBarButtonItem(
             image: UIImage(systemName: "line.3.horizontal.decrease"),
             menu: makeFilterMenu()
         )
-        item.accessibilityIdentifier = "WI.Network.FilterButton"
-        item.isSelected = inspector.effectiveResourceFilters.isEmpty == false
+        item.accessibilityIdentifier = "WebInspector.Network.FilterButton"
+        item.isSelected = model.effectiveResourceFilters.isEmpty == false
         return item
     }()
     private lazy var dataSource = makeDataSource()
 
-    init(inspector: WINetworkModel) {
-        self.inspector = inspector
-        entrySelectionAction = { [inspector] entry in
-            inspector.selectEntry(entry)
+    package init(model: NetworkPanelModel) {
+        self.model = model
+        requestSelectionAction = { [model] request in
+            model.selectRequest(request)
         }
         super.init(collectionViewLayout: Self.makeListLayout())
-        startObservingInspector()
+        startObservingModel()
     }
 
     @available(*, unavailable)
@@ -67,11 +64,11 @@ class NetworkListViewController: UICollectionViewController, UISearchResultsUpda
         detachSearchPresentation()
     }
 
-    func setEntrySelectionAction(_ action: @escaping EntrySelectionAction) {
-        entrySelectionAction = action
+    package func setRequestSelectionAction(_ action: @escaping RequestSelectionAction) {
+        requestSelectionAction = action
     }
 
-    override func viewDidLoad() {
+    override package func viewDidLoad() {
         super.viewDidLoad()
         title = nil
         view.accessibilityIdentifier = "WebInspector.Network.ListPane"
@@ -81,21 +78,21 @@ class NetworkListViewController: UICollectionViewController, UISearchResultsUpda
         collectionView.accessibilityIdentifier = "WebInspector.Network.List"
 
         configureNavigationItem()
-        reloadDataFromInspector()
+        reloadDataFromModel()
     }
 
-    override func viewWillAppear(_ animated: Bool) {
+    override package func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         configureNavigationItem()
         navigationController?.setNavigationBarHidden(false, animated: animated)
     }
 
-    override func viewIsAppearing(_ animated: Bool) {
+    override package func viewIsAppearing(_ animated: Bool) {
         super.viewIsAppearing(animated)
         flushPendingSnapshotUpdateIfNeeded()
     }
 
-    override func willMove(toParent parent: UIViewController?) {
+    override package func willMove(toParent parent: UIViewController?) {
         if parent == nil {
             detachSearchPresentation()
         }
@@ -118,18 +115,18 @@ class NetworkListViewController: UICollectionViewController, UISearchResultsUpda
         }
     }
 
-    private func startObservingInspector() {
-        inspector.observe(\.displayEntries, options: Self.snapshotObservationOptions) { [weak self] displayEntries in
-            self?.reloadDataFromInspector(displayEntries: displayEntries)
+    private func startObservingModel() {
+        model.observe(\.displayRequests, options: Self.snapshotObservationOptions) { [weak self] displayRequests in
+            self?.reloadDataFromModel(displayRequests: displayRequests)
         }
         .store(in: observationScope)
 
-        inspector.observe(\.searchText) { [weak self] searchText in
+        model.observe(\.searchText) { [weak self] searchText in
             self?.renderSearchText(searchText)
         }
         .store(in: observationScope)
 
-        inspector.observe(\.effectiveResourceFilters) { [weak self] _ in
+        model.observe(\.effectiveResourceFilters) { [weak self] _ in
             self?.resourceFilterSelectionDidChange()
         }
         .store(in: observationScope)
@@ -146,15 +143,15 @@ class NetworkListViewController: UICollectionViewController, UISearchResultsUpda
             UIBarButtonItemGroup(
                 barButtonItems: [filterItem],
                 representativeItem: nil
-            )
+            ),
         ]
         navigationItem.additionalOverflowItems = makeOverflowMenuElement()
 
-        renderSearchText(inspector.searchText)
+        renderSearchText(model.searchText)
         renderFilterItem()
     }
 
-    func updateSearchResults(for searchController: UISearchController) {
+    package func updateSearchResults(for searchController: UISearchController) {
         guard
             isApplyingSearchPresentation == false,
             searchController === activeSearchController
@@ -162,10 +159,10 @@ class NetworkListViewController: UICollectionViewController, UISearchResultsUpda
             return
         }
         let searchText = searchController.searchBar.text ?? ""
-        guard searchText != inspector.searchText else {
+        guard searchText != model.searchText else {
             return
         }
-        inspector.setSearchText(searchText)
+        model.setSearchText(searchText)
     }
 
     private func attachSearchPresentation() {
@@ -198,8 +195,8 @@ class NetworkListViewController: UICollectionViewController, UISearchResultsUpda
     private func makeSearchController() -> UISearchController {
         let searchController = UISearchController(searchResultsController: nil)
         searchController.obscuresBackgroundDuringPresentation = false
-        searchController.searchBar.placeholder = wiLocalized("network.search.placeholder")
-        searchController.searchBar.text = inspector.searchText
+        searchController.searchBar.placeholder = webInspectorLocalized("network.search.placeholder", default: "Search requests")
+        searchController.searchBar.text = model.searchText
         searchController.searchResultsUpdater = self
         return searchController
     }
@@ -223,7 +220,7 @@ class NetworkListViewController: UICollectionViewController, UISearchResultsUpda
         guard isViewLoaded else {
             return
         }
-        filterItem.isSelected = inspector.effectiveResourceFilters.isEmpty == false
+        filterItem.isSelected = model.effectiveResourceFilters.isEmpty == false
     }
 
     private func resourceFilterSelectionDidChange() {
@@ -247,11 +244,14 @@ class NetworkListViewController: UICollectionViewController, UISearchResultsUpda
         (try? overflowHostingMenu.menu()) ?? UIMenu()
     }
 
-    private func makeDataSource() -> UICollectionViewDiffableDataSource<SectionIdentifier, NetworkEntry> {
-        let listCellRegistration = UICollectionView.CellRegistration<NetworkListCell, NetworkEntry> { cell, _, item in
-            cell.bind(item: item)
+    private func makeDataSource() -> UICollectionViewDiffableDataSource<SectionIdentifier, NetworkRequest.ID> {
+        let listCellRegistration = UICollectionView.CellRegistration<NetworkListCell, NetworkRequest.ID> { [weak model] cell, _, id in
+            guard let request = model?.request(for: id) else {
+                return
+            }
+            cell.bind(request: request)
         }
-        return UICollectionViewDiffableDataSource<SectionIdentifier, NetworkEntry>(
+        return UICollectionViewDiffableDataSource<SectionIdentifier, NetworkRequest.ID>(
             collectionView: collectionView
         ) { collectionView, indexPath, item in
             collectionView.dequeueConfiguredReusableCell(
@@ -263,16 +263,17 @@ class NetworkListViewController: UICollectionViewController, UISearchResultsUpda
     }
 
     private func makeSnapshot(
-        displayEntries: [NetworkEntry]
-    ) -> NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkEntry> {
+        displayRequests: [NetworkRequest]
+    ) -> NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkRequest.ID> {
+        let requestIDs = displayRequests.map(\.id)
         precondition(
-            displayEntries.count == Set(displayEntries.map(\.id)).count,
+            requestIDs.count == Set(requestIDs).count,
             "Duplicate row IDs detected in NetworkListViewController"
         )
 
-        var snapshot = NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkEntry>()
+        var snapshot = NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkRequest.ID>()
         snapshot.appendSections([.main])
-        snapshot.appendItems(displayEntries, toSection: .main)
+        snapshot.appendItems(requestIDs, toSection: .main)
         return snapshot
     }
 
@@ -280,14 +281,14 @@ class NetworkListViewController: UICollectionViewController, UISearchResultsUpda
         isViewLoaded && view.window != nil
     }
 
-    private func requestSnapshotUpdate(displayEntries: [NetworkEntry]) {
+    private func requestSnapshotUpdate(displayRequests: [NetworkRequest]) {
         guard isCollectionViewVisible else {
             needsSnapshotReloadOnNextAppearance = true
             return
         }
         needsSnapshotReloadOnNextAppearance = false
         Task {
-            let snapshot = self.makeSnapshot(displayEntries: displayEntries)
+            let snapshot = self.makeSnapshot(displayRequests: displayRequests)
             await self.dataSource.apply(snapshot, animatingDifferences: false)
         }
     }
@@ -298,22 +299,25 @@ class NetworkListViewController: UICollectionViewController, UISearchResultsUpda
         }
         needsSnapshotReloadOnNextAppearance = false
         Task {
-            let snapshot = self.makeSnapshot(displayEntries: self.inspector.displayEntries)
+            let snapshot = self.makeSnapshot(displayRequests: self.model.displayRequests)
             await self.dataSource.applySnapshotUsingReloadData(snapshot)
         }
     }
 
-    private func reloadDataFromInspector(displayEntries: [NetworkEntry]? = nil) {
-        let resolvedDisplayEntries = displayEntries ?? inspector.displayEntries
-        requestSnapshotUpdate(displayEntries: resolvedDisplayEntries)
+    private func reloadDataFromModel(displayRequests: [NetworkRequest]? = nil) {
+        let resolvedDisplayRequests = displayRequests ?? model.displayRequests
+        requestSnapshotUpdate(displayRequests: resolvedDisplayRequests)
         overflowHostingMenu.requestUpdate()
 
-        let shouldShowEmptyState = resolvedDisplayEntries.isEmpty
+        let shouldShowEmptyState = resolvedDisplayRequests.isEmpty
         collectionView.isHidden = shouldShowEmptyState
         if shouldShowEmptyState {
             var configuration = UIContentUnavailableConfiguration.empty()
-            configuration.text = wiLocalized("network.empty.title")
-            configuration.secondaryText = wiLocalized("network.empty.description")
+            configuration.text = webInspectorLocalized("network.empty.title", default: "No requests yet")
+            configuration.secondaryText = webInspectorLocalized(
+                "network.empty.description",
+                default: "Trigger a network request to see activity."
+            )
             configuration.image = UIImage(systemName: "waveform.path.ecg.rectangle")
             contentUnavailableConfiguration = configuration
         } else {
@@ -321,22 +325,25 @@ class NetworkListViewController: UICollectionViewController, UISearchResultsUpda
         }
     }
 
-    override func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
-        guard let entry = dataSource.itemIdentifier(for: indexPath) else {
-            entrySelectionAction(nil)
+    override package func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
+        guard
+            let requestID = dataSource.itemIdentifier(for: indexPath),
+            let request = model.request(for: requestID)
+        else {
+            requestSelectionAction(nil)
             return
         }
-        entrySelectionAction(entry)
+        requestSelectionAction(request)
     }
 }
 
 #if DEBUG
 extension NetworkListViewController {
-    var collectionViewForTesting: UICollectionView {
+    package var collectionViewForTesting: UICollectionView {
         collectionView
     }
 
-    var searchControllerForTesting: UISearchController {
+    package var searchControllerForTesting: UISearchController {
         loadViewIfNeeded()
         configureNavigationItem()
         guard let activeSearchController else {
@@ -345,15 +352,15 @@ extension NetworkListViewController {
         return activeSearchController
     }
 
-    var filterItemForTesting: UIBarButtonItem {
+    package var filterItemForTesting: UIBarButtonItem {
         filterItem
     }
 
-    var filterMenuForTesting: UIMenu {
+    package var filterMenuForTesting: UIMenu {
         materializedMenuForTesting(filterHostingMenu)
     }
 
-    var overflowMenuForTesting: UIMenu {
+    package var overflowMenuForTesting: UIMenu {
         materializedMenuForTesting(overflowHostingMenu)
     }
 
@@ -371,13 +378,19 @@ extension NetworkListViewController {
 import SwiftUI
 
 #Preview("Network List") {
-    WIUIKitPreviewContainer {
-        UINavigationController(
-            rootViewController: NetworkListViewController(
-                inspector: WINetworkPreviewFixtures.makeInspector(mode: .root)
-            )
+    UINavigationController(
+        rootViewController: NetworkListViewController(
+            model: NetworkPreviewFixtures.makePanelModel(mode: .root)
         )
-    }
+    )
+}
+
+#Preview("Network List Long Title") {
+    UINavigationController(
+        rootViewController: NetworkListViewController(
+            model: NetworkPreviewFixtures.makePanelModel(mode: .rootLongTitle)
+        )
+    )
 }
 #endif
 #endif
