@@ -126,16 +126,16 @@ Implemented in the V2 model:
 - memory cache event
 - target-scoped request identity
 - WebSocket handshake, frames, errors, and close state
+- body and serialized certificate command intents
 
 Not implemented yet:
 
 - initial Page resource tree import
 - request interception
-- body/certificate lazy fetch command intents
 - initiator node/script stack modeling
 - resource override/local resource integration
 
-These are intentionally left out until the transport boundary is added. The current model should not fake them with placeholder state.
+These should not be faked with placeholder state.
 
 ## Source References
 

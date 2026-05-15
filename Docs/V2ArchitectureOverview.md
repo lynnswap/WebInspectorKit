@@ -1,37 +1,38 @@
 # WebInspector V2 Architecture Overview
 
-This document is an orientation map for the V2 inspector stack. It focuses on
-module boundaries, runtime ownership, and transport flow. Detailed UIKit
-containment and view-controller wiring lives in
-[`V2UIIntegration.md`](../Sources/WebInspectorUI/Docs/V2UIIntegration.md).
+This document is an orientation map for the current V2 inspector stack. It
+focuses on module boundaries, runtime ownership, and transport flow. Detailed
+UIKit containment and view-controller wiring lives in
+[`V2UIIntegration.md`](../Sources/V2_WebInspectorUI/Docs/V2UIIntegration.md).
 
-The V2 prefix is temporary. While V1 still exists, new targets and runtime types
-use `V2_` names so both implementations can coexist. After V1 is removed, the
-intended public owner name is `WebInspectorSession`, and the V2 prefixes can be
-dropped.
+The `V2_` prefix is an implementation name. The app-facing entry points are
+already `WebInspectorSession` and `WebInspectorViewController` through
+`WebInspectorKit` aliases. After the V1 sources are deleted, the implementation
+targets and types can be renamed in one pass to remove the prefix.
 
 ## Naming Direction
 
-| During V1/V2 coexistence | After V1 removal | Role |
-| --- | --- | --- |
-| `V2_InspectorSession` | `WebInspectorSession` | Runtime/orchestration owner observed by UI |
-| `V2_WebInspectorRuntime` | `WebInspectorRuntime` | Session assembly target |
-| `V2_WebInspectorTransport` | `WebInspectorTransport` | Protocol command/reply and target multiplexing |
-| `V2_WebInspectorCore` | `WebInspectorCore` | DOM/Network semantic model target |
-| `V2_WebInspectorNativeBridge` | `WebInspectorNativeBridge` | Raw native inspector JSON bridge |
-| `V2_WebInspectorNativeSymbols` | `WebInspectorNativeSymbols` | Native symbol resolution for attach bootstrap |
+| Public / final name | Role |
+| --- | --- |
+| `WebInspectorSession` | UI-facing session and lifecycle owner |
+| `WebInspectorViewController` | UIKit inspector container |
+| `WebInspectorTab` | Public tab descriptor |
+| `WebInspectorRuntime` | Session assembly target |
+| `WebInspectorTransport` | Protocol command/reply and target multiplexing |
+| `WebInspectorCore` | DOM/Network semantic model target |
+| `WebInspectorNativeBridge` | Raw native inspector JSON bridge |
+| `WebInspectorNativeSymbols` | Native symbol resolution for attach bootstrap |
 
-`WebInspectorUI` does not need a separate `V2_WebInspectorUI` target. The existing
-UI target should be rewired to observe `WebInspectorSession` while keeping the
-same UIKit/TextKit2 presentation.
+`V2_WebInspectorUI` is the current UIKit implementation target. After V1 deletion
+there should be one UI implementation target and one app-facing product surface.
 
 ## Layer Overview
 
 ```mermaid
 flowchart TD
     Host["Host app / WKWebView"]
-    UI["WebInspectorUI<br/>existing visible UI"]
-    PublicSession["WebInspectorSession<br/>final public owner"]
+    UI["V2_WebInspectorUI<br/>current UIKit UI"]
+    PublicSession["WebInspectorSession<br/>public session owner"]
     Runtime["V2_InspectorSession<br/>current runtime owner"]
     Core["V2_WebInspectorCore<br/>DOMSession + NetworkSession"]
     Transport["V2_WebInspectorTransport<br/>target multiplexing + replies"]
@@ -41,7 +42,7 @@ flowchart TD
 
     Host --> UI
     UI --> PublicSession
-    PublicSession -. "coexistence wrapper / future rename" .-> Runtime
+    PublicSession --> Runtime
     Runtime --> Core
     Runtime --> Transport
     Transport --> Bridge
@@ -58,7 +59,7 @@ Responsibilities stay intentionally narrow:
   events to semantic sessions, perform command intents.
 - `V2_WebInspectorCore`: hold `@MainActor @Observable` semantic model state for
   DOM and Network.
-- `WebInspectorUI`: render and interact with native UIKit/TextKit2 views.
+- `V2_WebInspectorUI`: render and interact with native UIKit/TextKit2 views.
 
 ## Event And Command Flow
 
@@ -94,7 +95,8 @@ belong to transport.
 
 ## Session Shape
 
-`WebInspectorSession` should become the single UI-facing source of truth:
+`WebInspectorSession` is the UI-facing lifecycle owner. Package-internal UI
+controllers observe the semantic sessions through the runtime owner:
 
 ```mermaid
 flowchart TD
@@ -125,46 +127,43 @@ model boundary:
 
 ## UI Integration Boundary
 
-`WebInspectorUI` should keep the current UIKit/TextKit2 presentation and replace
-only its runtime/model wiring. The root container should observe
-`WebInspectorSession`; DOM and Network controllers should observe the semantic
-sessions exposed from it.
+`V2_WebInspectorUI` owns the current UIKit/TextKit2 presentation. The root
+container observes `WebInspectorSession`; DOM and Network controllers observe
+the semantic sessions exposed from it.
 
 Detailed UI diagrams are intentionally kept with the UI source:
 
-- [`V2UIIntegration.md`](../Sources/WebInspectorUI/Docs/V2UIIntegration.md)
-- [`ViewControllerStructure.md`](../Sources/WebInspectorUI/Docs/ViewControllerStructure.md)
+- [`V2UIIntegration.md`](../Sources/V2_WebInspectorUI/Docs/V2UIIntegration.md)
+- [`ViewControllerStructure.md`](../Sources/V2_WebInspectorUI/Docs/ViewControllerStructure.md)
 
 ## Public Surface Direction
 
-The final public shape can be simple:
+The current public shape is intentionally small:
 
 ```swift
 let session = WebInspectorSession()
-let viewController = WIViewController(session: session)
+let viewController = WebInspectorViewController(session: session)
 
 try await session.attach(to: webView)
 ```
 
-The container name can be decided separately. The important boundary is that the
-container observes `WebInspectorSession`, not V1 runtime/model objects.
+The important boundary is that the container observes `WebInspectorSession`, not
+legacy runtime/model objects.
 
-## Migration Order
+## Cleanup Order
 
-1. Add `WebInspectorSession` as the public name or thin wrapper over
-   `V2_InspectorSession`.
-2. Rewire DOM UI to read from `session.dom` and submit `DOMCommandIntent` through
-   the session.
-3. Rewire Network UI to read from `session.network` and submit
-   `NetworkCommandIntent` through the session.
-4. Remove V1 DOM/Network runtime dependencies from `WebInspectorUI`.
-5. Delete V1 runtime/transport/model targets.
-6. Rename V2 targets/types by dropping the `V2_` prefix.
+1. Keep README, migration notes, and architecture notes pointed at the V2 public
+   API.
+2. Keep V2 regression tests for DOM, Network, transport, runtime, and UI
+   behavior.
+3. Delete legacy V1 sources and tests from `Package.swift`.
+4. Simplify `WebInspectorKit` exports to the V2-only surface.
+5. Rename V2 targets/types by dropping the `V2_` prefix.
 
 ## Avoided Shapes
 
-- Do not add a `V2_WebInspectorUI` target just to mirror the existing UI.
 - Do not keep a compatibility model that copies V2 state into V1 model objects.
+- Do not keep two long-term UI implementation targets.
 - Do not let UI parse raw protocol messages.
 - Do not let the native bridge understand target routing.
 - Do not store iframe documents as regular DOM children.

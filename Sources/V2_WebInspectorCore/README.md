@@ -1,8 +1,8 @@
 # V2_WebInspectorCore
 
-`V2_WebInspectorCore` is an experimental, package-internal inspector core target. It is intentionally not connected to the existing runtime or UI yet.
+`V2_WebInspectorCore` is the package-internal semantic model target for the V2 inspector stack.
 
-The target exists to validate a cleaner WebKit-shaped transport/model architecture before replacing the current inspector pipeline.
+The target models WebKit protocol concepts before they reach UIKit presentation code. Runtime and transport targets decode protocol traffic and apply semantic events here.
 
 ## Goals
 
@@ -11,7 +11,7 @@ The target exists to validate a cleaner WebKit-shaped transport/model architectu
 - Treat iframe documents as frame-document projections, not regular DOM children.
 - Treat Network redirects as request history, not separate request identities.
 - Make iframe refresh and cross-origin selection behavior testable without UIKit/TextKit2.
-- Avoid legacy compatibility paths from the old WebView-rendered DOM tree.
+- Avoid compatibility paths from the old WebView-rendered DOM tree.
 
 ## Domain Notes
 
@@ -22,7 +22,7 @@ The target exists to validate a cleaner WebKit-shaped transport/model architectu
 
 ## Model Boundary
 
-Mutable model classes are `@MainActor @Observable` so the future native UI can observe the same semantic source of truth directly. Expensive work must stay outside this boundary:
+Mutable model classes are `@MainActor @Observable` so the native UI can observe the same semantic source of truth directly. Expensive work must stay outside this boundary:
 
 - raw transport I/O
 - JSON parsing

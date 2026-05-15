@@ -1,6 +1,6 @@
 # Migration from v0.1.x
 
-This guide lists only the source changes that matter when upgrading from `v0.1.x` to the current API.
+This guide lists only the source changes that matter when upgrading from `v0.1.x` to the current public API.
 
 Internal refactors, transport rewrites, module splits, and cache changes are intentionally omitted unless they require changes in app code.
 
@@ -8,13 +8,13 @@ Internal refactors, transport rewrites, module splits, and cache changes are int
 
 `WebInspectorView` was removed.
 
-Use `WIViewController` or `WISession`.
+Use `WebInspectorViewController` or `WebInspectorSession`.
 
 ```swift
 @objc private func presentInspector() {
-    let inspector = WIViewController()
+    let inspector = WebInspectorViewController()
     Task { @MainActor in
-        await inspector.attach(to: pageWebView)
+        try await inspector.attach(to: pageWebView)
         present(inspector, animated: true)
     }
 }
@@ -29,8 +29,8 @@ where it does not depend on the removed AppKit UI.
 
 | `v0.1.x` | Current |
 | --- | --- |
-| `WebInspectorModel` | `WISession` / `WIViewController` on UIKit |
-| `WebInspectorConfiguration` | `WIModelConfiguration` for Network options |
+| `WebInspectorModel` | `WebInspectorSession` / `WebInspectorViewController` on UIKit |
+| `WebInspectorConfiguration` | no current app-facing replacement |
 | `attach(webView:)` | `attach(to:)` |
 | `detach()` | `detach()` |
 
@@ -41,85 +41,52 @@ and DOM auto-update debounce are internal policies rather than public configurat
 Current:
 
 ```swift
-let inspector = WIViewController()
+let inspector = WebInspectorViewController()
 
-await inspector.attach(to: webView)
+try await inspector.attach(to: webView)
 ```
 
 Remove any app-side DOM snapshot depth, subtree depth, or auto-update debounce tuning.
 Those values are now owned by the native DOM runtime.
 
-## 3. Inject side effects through `WIInspectorDependencies`
+## 3. Remove legacy dependency injection code
 
-`WIModelConfiguration` now stays focused on value-only configuration. Runtime factories,
-WebKit SPI, transport, sleep/timeout behavior, and UIKit scene activation can be
-injected through `WIInspectorDependencies`.
+The V1 dependency injection and model configuration APIs are not part of the
+current public API.
 
-```swift
-let dependencies = WIInspectorDependencies.testing {
-    $0.transport.configuration.responseTimeout = .milliseconds(250)
-}
-
-let inspector = WIViewController(
-    configuration: WIModelConfiguration(),
-    dependencies: dependencies,
-    tabs: [.dom, .network]
-)
-```
-
-Use `WIInspectorDependencies.liveValue` for production defaults and
-`WIInspectorDependencies.testing { ... }` for tests.
+Remove app-side configuration of transport timeouts, runtime factories, and DOM reload
+policies. Those boundaries are internal to the V2 runtime.
 
 ## 4. Remove `WebInspectorScripts` imports
 
 The DOM tree frontend is now native UIKit/TextKit2. The `WebInspectorScripts` product and
 `@_exported import WebInspectorScripts` are gone.
 
-Remove direct `WebInspectorScripts` imports and any custom `WIInspectorDOMFrontendClient`
-injection. Apps no longer need to run or ship the DOM tree JavaScript bundling workflow.
+Remove direct `WebInspectorScripts` imports and any custom DOM frontend client
+injection. Apps no longer need to run or ship the DOM tree JavaScript bundling
+workflow.
 
-## 5. Update custom tab definitions
+## 5. Update tab definitions
 
 The important source-level changes are:
 
-- UIKit custom tabs should use `WITab`.
-- The old `WITabBuilder`-based `WebInspectorView { ... }` API is gone.
-- Custom tabs provide a `UIViewController`.
+- Use the built-in tabs exposed by `WebInspectorViewController`.
+- The old custom-tab builder API is gone.
+- Custom tabs are not part of the current public surface.
 
 ```swift
-let customTab = WITab.custom(
-    id: "custom",
-    title: "Custom",
-    systemImage: "folder"
-) { context in
-    _ = context.runtime
-    MyCustomViewController()
-}
-
-let controller = WIViewController(
-    tabs: [.dom, .network, customTab]
+let controller = WebInspectorViewController(
+    tabs: [.dom, .network]
 )
 ```
 
 If you only use the built-in tabs, keep using `.dom` and `.network`.
 
-## 5. Use intent-based DOM APIs
+## 6. Remove V1 DOM model usage
 
-The DOM model no longer exposes low-level `nodeId`-driven editing and reload APIs.
+The V1 DOM model APIs are legacy-only and should not be used by apps moving to the
+current public surface.
 
-Use `WIDOMModel` intent methods instead.
-
-| Previous | Current |
-| --- | --- |
-| `reloadInspector(preserveState: false)` | `reloadDocument()` |
-| `reloadInspector(preserveState: true)` | `reloadDocumentPreservingInspectorState()` |
-| `selectedEntry` on `WIDOMModel` | `documentStore.selectedEntry` |
-| `errorMessage` on `WIDOMModel` | `documentStore.errorMessage` |
-| `copySelection(.html)` | `copySelectedHTML()` |
-| `copySelection(.selectorPath)` | `copySelectedSelectorPath()` |
-| `copySelection(.xpath)` | `copySelectedXPath()` |
-| `deleteSelectedNode()` | `deleteSelection()` |
-| `updateAttributeValue(name:value:)` | `updateSelectedAttribute(name:value:)` |
-| `removeAttribute(name:)` | `removeSelectedAttribute(name:)` |
-
-Low-level `DOMSession` APIs such as `removeNode(nodeId:)`, `setAttribute(nodeId:...)`, and `selectorPath(nodeId:)` are no longer part of the supported app-facing API.
+Do not migrate app code from one V1 DOM API to another V1 DOM API. V2 DOM and
+Network models are internal implementation details until their app-facing command
+surface is explicitly published.

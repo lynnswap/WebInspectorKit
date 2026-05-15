@@ -18,9 +18,9 @@ source and captured V2 logs from cross-origin iframe pages.
   `parentFrameId` as protocol fields. The captured logs also show frame targets
   arriving with `frame=nil parentFrame=nil`.
 - Frame target id decoding is not a model contract. Local WebKit source formats
-  frame target ids as `frame-<frameID>-<processID>`, while the iOS 26.4 runtime
-  logs contain ids such as `frame-8589934597`. Treat target-id parsing only as a
-  version-specific compatibility hint.
+  frame target ids as `frame-<frameID>-<processID>`, while captured runtime logs
+  contain ids such as `frame-8589934597`. Treat target-id parsing only as a
+  compatibility hint.
 - `Runtime.ExecutionContextDescription.frameId` is "Id of the owning frame".
   It can supplement target/frame mapping, but it is not an iframe owner
   relation by itself.
@@ -34,8 +34,8 @@ source and captured V2 logs from cross-origin iframe pages.
 - The earlier "frame target created -> send `DOM.getDocument`" hypothesis was
   incomplete. WebInspectorUI first checks `target.hasDomain("DOM")`.
   `DOM.json` in local WebKit source has `targetTypes: ["itml", "frame",
-  "page"]`, but the WebInspectorUI legacy command tables for iOS/macOS 26.4
-  register `DOM` only for `["itml", "page"]`. Therefore V2 needs a target
+  "page"]`, but the checked WebInspectorUI frontend metadata registers `DOM`
+  only for `["itml", "page"]`. Therefore V2 needs a target
   capability model; target type alone is not permission to send `DOM` commands.
   Captured V2 iframe-page logs confirm the failure mode: 61 frame
   targets, 15 frame `DOM.getDocument` sends, 15 wrapper acknowledgements, 0
@@ -142,11 +142,11 @@ use conservative fallback behavior only at the edge.
 | Area | WebKit source | Relevant fact |
 | --- | --- | --- |
 | DOM protocol node identity | `Source/JavaScriptCore/inspector/protocol/DOM.json` | `DOM.Node.frameId` is the containing frame; `contentDocument` is the frame owner document field; `requestChildNodes(depth: -1)` means entire subtree but default is depth 1. |
-| DOM target availability | `Source/JavaScriptCore/inspector/protocol/DOM.json`, `Source/WebInspectorUI/UserInterface/Protocol/Legacy/iOS/26.4/InspectorBackendCommands.js`, `Source/WebInspectorUI/UserInterface/Protocol/Target.js` | Local current protocol lists `frame` in `DOM.targetTypes`, but iOS/macOS 26.4 legacy frontend metadata registers `DOM` only for `itml` and `page`. WebInspectorUI builds each target's agents from `InspectorBackend.supportedDomainsForTargetType(target.type)`, so runtime capability must come from active frontend protocol metadata, not from target kind. |
+| DOM target availability | `Source/JavaScriptCore/inspector/protocol/DOM.json`, `Source/WebInspectorUI/UserInterface/Protocol/Legacy/iOS/26.4/InspectorBackendCommands.js`, `Source/WebInspectorUI/UserInterface/Protocol/Target.js` | Local current protocol lists `frame` in `DOM.targetTypes`, but the checked WebInspectorUI frontend metadata registers `DOM` only for `itml` and `page`. WebInspectorUI builds each target's agents from `InspectorBackend.supportedDomainsForTargetType(target.type)`, so runtime capability must come from active frontend protocol metadata, not from target kind. |
 | Backend node payload | `Source/WebCore/inspector/agents/InspectorDOMAgent.cpp` | `buildObjectForNode` sets `frameId` from the node's document frame and sets `contentDocument` only when a frame owner has an accessible content document. |
 | Backend mutation contract | `Source/WebCore/inspector/agents/InspectorDOMAgent.cpp` | `didInsertDOMNode` returns when parent is not bound; otherwise it emits `childNodeCountUpdated` or `childNodeInserted` depending on whether children were requested. |
 | Target protocol | `Source/JavaScriptCore/inspector/protocol/Target.json` | `TargetInfo` has no protocol-level frame id fields; `didCommitProvisionalTarget` swaps old/new target ids. |
-| Frame target id implementation | `Source/WebKit/WebProcess/Inspector/FrameInspectorTarget.cpp`, captured iOS 26.4 logs | Local source formats frame target ids as `frame-<frameID>-<processID>`, while runtime logs show `frame-<integer>`; target id shape is useful evidence, not a substitute for explicit model fields. |
+| Frame target id implementation | `Source/WebKit/WebProcess/Inspector/FrameInspectorTarget.cpp`, captured runtime logs | Local source formats frame target ids as `frame-<frameID>-<processID>`, while runtime logs show `frame-<integer>`; target id shape is useful evidence, not a substitute for explicit model fields. |
 | Target frontend | `Source/WebInspectorUI/UserInterface/Controllers/TargetManager.js` | WebInspectorUI creates `WI.FrameTarget` from target type and dispatches provisional messages after commit. |
 | Target transport | `Source/WebInspectorUI/UserInterface/Protocol/TargetObserver.js` and `Connection.js` | `Target.dispatchMessageFromTarget` is routed to the target connection before domain dispatch. |
 | Frame target DOM flow | `Source/WebInspectorUI/UserInterface/Controllers/DOMManager.js` | `initializeTarget` returns unless `target.hasDomain("DOM")`; only DOM-capable frame targets run `_initializeFrameTarget`, store a frame document separately, and attempt splice. |
@@ -506,9 +506,9 @@ this order:
 
 1. Target capabilities: confirm the frame target actually has the `DOM` domain
    in the active `InspectorBackend` frontend metadata before sending
-   `DOM.getDocument`. In iOS/macOS 26.4 legacy metadata, `DOM` is registered for
-   `itml` and `page`, not `frame`, so a frame target must not be hydrated just
-   because its `TargetInfo.type` is `frame`.
+   `DOM.getDocument`. In the checked WebInspectorUI frontend metadata, `DOM` is
+   registered for `itml` and `page`, not `frame`, so a frame target must not be
+   hydrated just because its `TargetInfo.type` is `frame`.
 2. Target lifecycle: confirm the frame target survived provisional commit and
    the model now points at the committed target id.
 3. Frame document ownership: confirm `DOM.getDocument` result for the frame

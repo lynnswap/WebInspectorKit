@@ -1,12 +1,10 @@
 # Transport Research
 
-This note records the WebKit inspector transport behavior that the future V2 transport should match.
+This note records the WebKit inspector transport behavior that `V2_WebInspectorTransport` is intentionally matching.
 
 ## Scope
 
-The current V2 core target has headless DOM and Network models only. Transport is still intentionally out of tree.
-
-The transport research target is:
+Transport owns:
 
 - private WebKit inspector API communication
 - root protocol command/reply handling
@@ -29,7 +27,7 @@ flowchart TD
     FrameTarget["Frame target connection"]
     PageAgents["Page target agents<br/>legacy and fallback domains"]
     UIProcessAgents["UIProcess proxy agents<br/>Network Page Browser"]
-    FrameAgents["Frame target agents<br/>Console Runtime future DOM/CSS"]
+    FrameAgents["Frame target agents<br/>Console Runtime DOM/CSS when exposed"]
 
     Host --> Root
     Root --> TargetAgent
@@ -118,7 +116,7 @@ V2 transport should route by protocol domain category, not by a blanket "send ev
 ```mermaid
 flowchart LR
     Domain["Protocol domain command"]
-    PerFrame["Per-frame domain<br/>Console Runtime future DOM/CSS"]
+    PerFrame["Per-frame domain<br/>Console Runtime DOM/CSS when exposed"]
     Octopus["Octopus domain<br/>Network Page"]
     UIOnly["UIProcess-only domain<br/>Browser Target"]
     FrameTarget["Frame/Page target chosen by frame or execution context"]
@@ -177,7 +175,8 @@ This is consistent with the WebKit source findings above.
 
 ## V2 Transport Design Consequences
 
-The future V2 transport should own protocol routing facts and produce decoded semantic events/command results for domain models.
+The V2 transport owns protocol routing facts and produces decoded semantic
+events/command results for domain models.
 
 Recommended ownership:
 
@@ -277,9 +276,9 @@ Transport should keep expensive and order-sensitive work outside domain models:
 - Clearing or rebuilding domain models from transport failures that only affect one target.
 - Reinitializing inspect mode because the selected node disappeared; selection state should clear without mutating DOM transport state.
 
-## Future Headless Tests
+## Headless Test Coverage
 
-Transport tests should be added before UI connection:
+Transport tests should cover:
 
 - root command reply, timeout, and remote error handling
 - target command wrapping through `Target.sendMessageToTarget`

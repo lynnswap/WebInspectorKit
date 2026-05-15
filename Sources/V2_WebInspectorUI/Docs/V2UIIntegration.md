@@ -1,27 +1,24 @@
-# WebInspectorUI V2 Integration
+# V2 UI Integration
 
-This document describes how the existing UIKit UI should connect to the V2
-runtime/model stack. It intentionally stays inside `Sources/WebInspectorUI`
-because these diagrams are about view-controller containment and presentation
-wiring, not core transport semantics.
+This document describes the current V2 UIKit inspector UI. It focuses on view
+controller ownership and the boundary between UIKit presentation state and the
+V2 runtime/model stack.
 
-The visible UI should not change. V2 changes the source of truth and command
-flow beneath the existing controllers.
+The visible UI is native UIKit/TextKit2. DOM and Network views render semantic
+V2 model state; they do not keep copied DOM graphs, copied Network requests, or
+protocol target registries.
 
 ## Current View Controller Tree
 
-The current visual container structure remains valid. V2 should change model and
-command wiring, not the visible layout.
-
 ```mermaid
 flowchart TD
-    Root["WIViewController"]
-    Compact["WICompactTabBarController"]
-    Regular["WIRegularTabContentViewController"]
-    DOMTree["DOMTreeViewController"]
-    DOMElement["DOMElementViewController"]
-    NetworkList["NetworkListViewController"]
-    NetworkDetail["NetworkEntryDetailViewController"]
+    Root["WebInspectorViewController"]
+    Compact["V2_CompactTabBarController"]
+    Regular["V2_RegularTabContentViewController"]
+    DOMTree["V2_DOMTreeViewController"]
+    DOMElement["V2_DOMElementViewController"]
+    NetworkList["V2_NetworkListViewController"]
+    NetworkDetail["V2_NetworkDetailViewController"]
 
     Root --> Compact
     Root --> Regular
@@ -42,45 +39,49 @@ For the full UIKit containment map, see
 
 ```mermaid
 flowchart TD
-    Session["WebInspectorSession"]
+    PublicSession["WebInspectorSession"]
+    Runtime["V2_InspectorSession"]
     DOMSession["DOMSession"]
     NetworkSession["NetworkSession"]
-    DOMTree["DOMTreeViewController"]
-    DOMElement["DOMElementViewController"]
-    NetworkList["NetworkListViewController"]
-    NetworkDetail["NetworkEntryDetailViewController"]
+    DOMTree["V2_DOMTreeViewController"]
+    DOMElement["V2_DOMElementViewController"]
+    NetworkPanel["V2_NetworkPanelModel"]
+    NetworkList["V2_NetworkListViewController"]
+    NetworkDetail["V2_NetworkDetailViewController"]
     DOMCommands["DOMCommandIntent"]
     NetworkCommands["NetworkCommandIntent"]
 
-    Session --> DOMSession
-    Session --> NetworkSession
+    PublicSession --> Runtime
+    Runtime --> DOMSession
+    Runtime --> NetworkSession
     DOMSession --> DOMTree
     DOMSession --> DOMElement
-    NetworkSession --> NetworkList
-    NetworkSession --> NetworkDetail
+    NetworkSession --> NetworkPanel
+    NetworkPanel --> NetworkList
+    NetworkPanel --> NetworkDetail
     DOMTree --> DOMCommands
     DOMElement --> DOMCommands
     NetworkList --> NetworkCommands
     NetworkDetail --> NetworkCommands
-    DOMCommands --> Session
-    NetworkCommands --> Session
+    DOMCommands --> Runtime
+    NetworkCommands --> Runtime
 ```
 
-The UI should receive `WebInspectorSession` and avoid direct ownership of
-transport or native bridge objects.
+The UI receives `WebInspectorSession` and must not own transport or native bridge
+objects directly.
 
 ## DOM Presentation
 
-The DOM UI should render a projection generated from the semantic DOM model, not
-own a second DOM graph.
+The DOM UI renders a projection generated from the semantic DOM model, not a
+second DOM graph.
 
 ```mermaid
 flowchart TD
     DOMSession["DOMSession<br/>page / frame / document / node / selection"]
     DOMProjection["DOM tree projection<br/>visible rows"]
-    DOMTree["DOMTreeViewController<br/>DOMTreeTextView / TextKit2"]
+    DOMTree["V2_DOMTreeViewController<br/>V2_DOMTreeTextView / TextKit2"]
     DetailSnapshot["DOM element detail snapshot"]
-    ElementView["DOMElementViewController"]
+    ElementView["V2_DOMElementViewController"]
     Commands["DOM command intents<br/>request children / inspect / highlight"]
 
     DOMSession --> DOMProjection
@@ -117,24 +118,28 @@ This invariant prevents iframe refresh from corrupting the parent document.
 
 ## Network Presentation
 
-Network UI should observe request lifecycle state from `NetworkSession` and keep
-only view-local state in UIKit controllers.
+Network UI observes request lifecycle state through `V2_NetworkPanelModel` and
+keeps only view-local state in UIKit controllers.
 
 ```mermaid
 flowchart TD
     NetworkSession["NetworkSession<br/>request lifecycle source of truth"]
+    Panel["V2_NetworkPanelModel<br/>selection / filter / lazy body fetch"]
     RequestOrder["ordered request identifiers"]
     Requests["requests by target-scoped request ID"]
     Redirects["redirect history"]
-    List["NetworkListViewController"]
-    Detail["NetworkEntryDetailViewController"]
+    List["V2_NetworkListViewController"]
+    Detail["V2_NetworkDetailViewController"]
     Commands["Network command intents<br/>body / certificate / websocket detail"]
 
+    NetworkSession --> Panel
     NetworkSession --> RequestOrder
     NetworkSession --> Requests
     Requests --> Redirects
     RequestOrder --> List
     Requests --> Detail
+    Panel --> List
+    Panel --> Detail
     List --> Commands
     Detail --> Commands
 ```
@@ -144,8 +149,8 @@ are request history, not separate top-level requests.
 
 ## UI-Owned State
 
-The semantic source of truth should live in `WebInspectorSession`, `DOMSession`,
-and `NetworkSession`. UIKit controllers may keep only local presentation state:
+The semantic source of truth lives in `WebInspectorSession`, `DOMSession`, and
+`NetworkSession`. UIKit controllers may keep only local presentation state:
 
 - selected tab and split layout state
 - scroll position
@@ -157,11 +162,12 @@ and `NetworkSession`. UIKit controllers may keep only local presentation state:
 The UI should not keep copied DOM nodes, copied network requests, or protocol
 target registries.
 
-## Migration Checkpoints
+## Cleanup Checkpoints
 
-1. Pass `WebInspectorSession` into the root inspector container.
-2. Replace V1 DOM runtime references in DOM controllers with `session.dom`.
-3. Replace V1 Network model references in Network controllers with
-   `session.network`.
-4. Route DOM and Network commands through `WebInspectorSession.perform(...)`.
-5. Remove UI dependencies on V1 runtime/transport types.
+1. Keep V2 UI code reading from `WebInspectorSession`.
+2. Keep DOM controllers reading from `DOMSession` projections and submitting
+   `DOMCommandIntent`.
+3. Keep Network controllers reading from `NetworkSession` through
+   `V2_NetworkPanelModel` and submitting `NetworkCommandIntent`.
+4. Move this documentation with the final UI target when the V2 target is
+   renamed.

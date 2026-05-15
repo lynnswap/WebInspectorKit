@@ -1,30 +1,21 @@
 # WebInspectorKit
 
-[日本語版 README](README.ja.md)
-
 ![WebInspectorKit preview](Resources/preview.webp)
 
-Web Inspector for `WKWebView` (iOS / macOS).
-
-## Products
-
-- `WebInspectorKit`: UIKit container UI, `WITab`-based tab composition, Observation state
-- `WebInspectorEngine`: DOM/Network engines, runtime actors, bundled inspector scripts
-
-`WebInspectorKit` depends on `WebInspectorEngine`.
+UIKit Web Inspector for `WKWebView`.
 
 ## Features
 
-- DOM tree browsing (element picking, highlights, deletion, attribute editing)
-- Network request logging (fetch/XHR/WebSocket) with buffering/active mode switching
-- Configurable tabs via `WITab`
-- Explicit lifecycle via `WISession` / `WIViewController` (`attach(to:)`, `detach()`)
-- Dependency injection via `WIInspectorDependencies`
+- DOM tree browsing with native UIKit/TextKit2 presentation
+- Network request logging with native list/detail presentation
+- Built-in DOM and Network tabs
+- Explicit lifecycle via `WebInspectorSession` / `WebInspectorViewController` (`attach(to:)`, `detach()`)
+- Observation-backed V2 model state
 
 ## Requirements
 
 - Swift 6.2+
-- iOS 18 / macOS 15+
+- iOS 18+
 - WKWebView with JavaScript enabled
 
 ## Quick Start
@@ -40,53 +31,29 @@ final class BrowserViewController: UIViewController {
     private let pageWebView = WKWebView(frame: .zero)
 
     @objc private func presentInspector() {
-        let inspector = WIViewController()
+        let inspector = WebInspectorViewController()
         inspector.modalPresentationStyle = .pageSheet
         if let sheet = inspector.sheetPresentationController {
             sheet.detents = [.medium(), .large()]
             sheet.selectedDetentIdentifier = .medium
         }
         Task { @MainActor in
-            await inspector.attach(to: pageWebView)
+            try await inspector.attach(to: pageWebView)
             present(inspector, animated: true)
         }
     }
 }
 ```
 
-## Custom Tab
+## Tabs
 
 ```swift
-let customTab = WITab.custom(
-    id: "my_custom_tab",
-    title: "Custom",
-    systemImage: "folder"
-) { context in
-    _ = context.runtime
-    return UIViewController()
-}
-
-let inspector = WIViewController(
-    tabs: [.dom, .network, customTab]
-)
-```
-
-## Dependency Injection
-
-Keep value-only settings in `WIModelConfiguration`, and inject side-effectful runtime
-boundaries through `WIInspectorDependencies`.
-
-```swift
-let dependencies = WIInspectorDependencies.testing {
-    $0.transport.configuration.responseTimeout = .milliseconds(250)
-}
-
-let inspector = WIViewController(
-    configuration: WIModelConfiguration(),
-    dependencies: dependencies,
+let inspector = WebInspectorViewController(
     tabs: [.dom, .network]
 )
 ```
+
+The current public tab surface exposes the built-in DOM and Network tabs.
 
 ## Migration
 
