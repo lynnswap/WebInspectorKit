@@ -56,7 +56,7 @@ package struct NativeInspectorSymbolResolution: Sendable, Equatable {
             parts.append("missing=\(missingFunctions.joined(separator: ","))")
         }
         if usedConnectDisconnectFallback {
-            parts.append("fallback=text-scan")
+            parts.append("textScanFallback=true")
         }
         guard !parts.isEmpty else {
             return nil

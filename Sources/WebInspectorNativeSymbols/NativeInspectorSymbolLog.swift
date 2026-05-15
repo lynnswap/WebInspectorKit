@@ -10,5 +10,9 @@ enum NativeInspectorSymbolLog {
     static func info(_ message: String) {
         logger.info("\(message, privacy: .public)")
     }
+
+    static func warning(_ message: String) {
+        logger.warning("\(message, privacy: .public)")
+    }
 }
 #endif

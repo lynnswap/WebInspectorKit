@@ -676,7 +676,7 @@ private:
         || !_controller
         || !_backendDispatcher) {
         NSString *diagnostics = WebInspectorNativeBridgePrivate::controllerResolutionDiagnosticsString(resolution.stats);
-        os_log_info(WebInspectorNativeBridgePrivate::nativeBridgeLog(), "controller resolution failed %{public}@", diagnostics);
+        os_log_error(WebInspectorNativeBridgePrivate::nativeBridgeLog(), "controller resolution failed %{public}@", diagnostics);
         NSError *transportError = WebInspectorNativeBridgePrivate::selectorFailureError(
             _inspector,
             page,

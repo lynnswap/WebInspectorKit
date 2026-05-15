@@ -47,7 +47,8 @@ extension NativeInspectorSymbolResolverCore {
         phase: NativeInspectorSymbolResolutionPhase? = nil,
         source: String? = nil,
         missingFunctions: [String] = [],
-        usedConnectDisconnectFallback: Bool = false
+        usedConnectDisconnectFallback: Bool = false,
+        shouldLog: Bool = true
     ) -> NativeInspectorSymbolLookupResult {
         let reason = formattedFailureReason(
             kind: kind,
@@ -57,9 +58,11 @@ extension NativeInspectorSymbolResolverCore {
             missingFunctions: missingFunctions,
             usedConnectDisconnectFallback: usedConnectDisconnectFallback
         )
-        NativeInspectorSymbolLog.info(
-            "[WebInspectorNativeSymbols] native inspector symbol lookup failed backend=native-inspector reason=\(reason)"
-        )
+        if shouldLog {
+            NativeInspectorSymbolLog.warning(
+                "[WebInspectorNativeSymbols] native inspector symbol lookup failed backend=native-inspector reason=\(reason)"
+            )
+        }
         return NativeInspectorSymbolLookupResult(
             functionAddresses: .zero,
             failureReason: reason,
@@ -68,6 +71,18 @@ extension NativeInspectorSymbolResolverCore {
             missingFunctions: missingFunctions,
             source: source,
             usedConnectDisconnectFallback: usedConnectDisconnectFallback
+        )
+    }
+
+    static func logResolutionAttemptIncomplete(
+        _ result: NativeInspectorSymbolLookupResult,
+        nextAttempt: String
+    ) {
+        guard let reason = result.failureReason, !reason.isEmpty else {
+            return
+        }
+        NativeInspectorSymbolLog.info(
+            "[WebInspectorNativeSymbols] native inspector symbol resolution attempt incomplete backend=native-inspector reason=\(reason) next=\(nextAttempt)"
         )
     }
 
@@ -90,7 +105,7 @@ extension NativeInspectorSymbolResolverCore {
             parts.append("missing=\(missingFunctions.joined(separator: ","))")
         }
         if usedConnectDisconnectFallback {
-            parts.append("fallback=text-scan")
+            parts.append("textScanFallback=true")
         }
         if let detail, !detail.isEmpty {
             parts.append(detail)

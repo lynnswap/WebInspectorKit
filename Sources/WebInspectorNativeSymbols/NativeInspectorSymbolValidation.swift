@@ -43,7 +43,7 @@ extension NativeInspectorSymbolResolverCore {
         if let phase {
             NativeInspectorSymbolLog.info(
                 unsafe String(
-                    format: "[WebInspectorNativeSymbols] native inspector symbols resolved backend=native-inspector status=complete phase=%@ source=%@ connectFrontend=0x%llx disconnectFrontend=0x%llx stringFromUTF8=0x%llx stringImplToNSString=0x%llx destroyStringImpl=0x%llx backendDispatcherDispatch=0x%llx fallback=%@",
+                    format: "[WebInspectorNativeSymbols] native inspector symbols resolved backend=native-inspector status=complete phase=%@ source=%@ connectFrontend=0x%llx disconnectFrontend=0x%llx stringFromUTF8=0x%llx stringImplToNSString=0x%llx destroyStringImpl=0x%llx backendDispatcherDispatch=0x%llx textScanFallback=%@",
                     phase.message,
                     source ?? "unknown",
                     functionAddresses.connectFrontendAddress,
@@ -138,7 +138,8 @@ extension NativeInspectorSymbolResolverCore {
         source: String?,
         webKitHeaderAddress: UInt,
         javaScriptCoreHeaderAddress: UInt,
-        usedConnectDisconnectFallback: Bool
+        usedConnectDisconnectFallback: Bool,
+        shouldLogFailure: Bool = true
     ) -> NativeInspectorSymbolLookupResult? {
         let allResults = [
             resolvedSymbols.connectFrontend,
@@ -156,7 +157,8 @@ extension NativeInspectorSymbolResolverCore {
                     phase: phase,
                     source: source,
                     missingFunctions: unsafe missingFunctionNames(in: resolvedSymbols),
-                    usedConnectDisconnectFallback: usedConnectDisconnectFallback
+                    usedConnectDisconnectFallback: usedConnectDisconnectFallback,
+                    shouldLog: shouldLogFailure
                 )
             }
         }
@@ -183,7 +185,8 @@ extension NativeInspectorSymbolResolverCore {
                     phase: phase,
                     source: source,
                     missingFunctions: unsafe missingFunctionNames(in: resolvedSymbols),
-                    usedConnectDisconnectFallback: usedConnectDisconnectFallback
+                    usedConnectDisconnectFallback: usedConnectDisconnectFallback,
+                    shouldLog: shouldLogFailure
                 )
             }
         }
@@ -198,7 +201,8 @@ extension NativeInspectorSymbolResolverCore {
                 phase: phase,
                 source: source,
                 missingFunctions: missingConnectDisconnect,
-                usedConnectDisconnectFallback: usedConnectDisconnectFallback
+                usedConnectDisconnectFallback: usedConnectDisconnectFallback,
+                shouldLog: shouldLogFailure
             )
         }
 
@@ -211,7 +215,8 @@ extension NativeInspectorSymbolResolverCore {
                 phase: phase,
                 source: source,
                 missingFunctions: missingRuntimeFunctions,
-                usedConnectDisconnectFallback: usedConnectDisconnectFallback
+                usedConnectDisconnectFallback: usedConnectDisconnectFallback,
+                shouldLog: shouldLogFailure
             )
         }
 
@@ -221,7 +226,8 @@ extension NativeInspectorSymbolResolverCore {
                 phase: phase,
                 source: source,
                 missingFunctions: unsafe missingFunctionNames(in: resolvedSymbols),
-                usedConnectDisconnectFallback: usedConnectDisconnectFallback
+                usedConnectDisconnectFallback: usedConnectDisconnectFallback,
+                shouldLog: shouldLogFailure
             )
         }
         return successResolution(

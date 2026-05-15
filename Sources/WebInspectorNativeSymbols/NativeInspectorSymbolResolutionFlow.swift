@@ -63,13 +63,21 @@ extension NativeInspectorSymbolResolverCore {
                 source: loadedImageResultsWithFallback.usedFallback ? "loaded-image+text-scan" : "loaded-image",
                 webKitHeaderAddress: loadedImage.headerAddress,
                 javaScriptCoreHeaderAddress: loadedJavaScriptCoreImage.headerAddress,
-                usedConnectDisconnectFallback: loadedImageResultsWithFallback.usedFallback
+                usedConnectDisconnectFallback: loadedImageResultsWithFallback.usedFallback,
+                shouldLogFailure: false
             )
-            ?? failure(.runtimeFunctionSymbolMissing)
+            ?? failure(.runtimeFunctionSymbolMissing, shouldLog: false)
 
         if loadedImageResolution.failureReason == nil {
             return loadedImageResolution
         }
+
+        #if DEBUG
+        logResolutionAttemptIncomplete(
+            loadedImageResolution,
+            nextAttempt: "shared-cache"
+        )
+        #endif
 
         let sharedCacheResolution = resolveUsingSharedCache(
             loadedImage: loadedImage,

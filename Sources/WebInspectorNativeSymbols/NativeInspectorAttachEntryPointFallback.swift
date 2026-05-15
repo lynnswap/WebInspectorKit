@@ -63,7 +63,7 @@ extension NativeInspectorSymbolResolverCore {
             #if DEBUG
             NativeInspectorSymbolLog.info(
                 unsafe String(
-                    format: "[WebInspectorTransport] native inspector text scan unavailable functionStarts=nil webCoreConnectTargets=%lu webCoreDisconnectTargets=%lu webKitBoundConnectTargets=%lu webKitBoundDisconnectTargets=%lu",
+                    format: "[WebInspectorNativeSymbols] attach entry point text-scan fallback status=skipped reason=function-starts-unavailable webCoreConnectTargets=%lu webCoreDisconnectTargets=%lu webKitBoundConnectTargets=%lu webKitBoundDisconnectTargets=%lu",
                     webCoreConnectTargets.count,
                     webCoreDisconnectTargets.count,
                     webKitBoundConnectTargets.count,
@@ -96,22 +96,6 @@ extension NativeInspectorSymbolResolverCore {
             callTargetAddresses: disconnectTargetAddresses
         )
 
-        #if DEBUG
-        NativeInspectorSymbolLog.info(
-            unsafe String(
-                format: "[WebInspectorTransport] native inspector text scan webCoreConnectTargets=%lu webCoreDisconnectTargets=%lu webKitBoundConnectTargets=%lu webKitBoundDisconnectTargets=%lu connectTargets=%lu disconnectTargets=%lu resolvedConnect=%@ resolvedDisconnect=%@",
-                webCoreConnectTargets.count,
-                webCoreDisconnectTargets.count,
-                webKitBoundConnectTargets.count,
-                webKitBoundDisconnectTargets.count,
-                connectTargetAddresses.count,
-                disconnectTargetAddresses.count,
-                debugResolvedAddress(resolvedConnect),
-                debugResolvedAddress(resolvedDisconnect)
-            )
-        )
-        #endif
-
         let resolvedWrapperSymbols = NativeInspectorResolvedSymbolSet(
             connectFrontend: connectNeedsFallback && isFound(resolvedConnect) ? resolvedConnect : resolvedSymbols.connectFrontend,
             disconnectFrontend: disconnectNeedsFallback && isFound(resolvedDisconnect) ? resolvedDisconnect : resolvedSymbols.disconnectFrontend,
@@ -123,6 +107,34 @@ extension NativeInspectorSymbolResolverCore {
         let usedWrapperFallback =
             (connectNeedsFallback && isFound(resolvedConnect))
             || (disconnectNeedsFallback && isFound(resolvedDisconnect))
+
+        #if DEBUG
+        let textScanResolvedAllRequested =
+            (!connectNeedsFallback || isFound(resolvedConnect))
+            && (!disconnectNeedsFallback || isFound(resolvedDisconnect))
+        let textScanStatus = textScanResolvedAllRequested ? "complete" : "incomplete"
+        let requestedFallbacks = [
+            connectNeedsFallback ? "connectFrontend" : nil,
+            disconnectNeedsFallback ? "disconnectFrontend" : nil,
+        ]
+            .compactMap { $0 }
+            .joined(separator: ",")
+        NativeInspectorSymbolLog.info(
+            unsafe String(
+                format: "[WebInspectorNativeSymbols] attach entry point text-scan fallback status=%@ requested=%@ webCoreConnectTargets=%lu webCoreDisconnectTargets=%lu webKitBoundConnectTargets=%lu webKitBoundDisconnectTargets=%lu connectTargets=%lu disconnectTargets=%lu connectResult=%@ disconnectResult=%@",
+                textScanStatus,
+                requestedFallbacks,
+                webCoreConnectTargets.count,
+                webCoreDisconnectTargets.count,
+                webKitBoundConnectTargets.count,
+                webKitBoundDisconnectTargets.count,
+                connectTargetAddresses.count,
+                disconnectTargetAddresses.count,
+                debugResolvedAddress(resolvedConnect),
+                debugResolvedAddress(resolvedDisconnect)
+            )
+        )
+        #endif
 
         return .init(
             symbols: resolvedWrapperSymbols,
