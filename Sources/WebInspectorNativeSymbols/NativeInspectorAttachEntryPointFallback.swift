@@ -62,7 +62,7 @@ extension NativeInspectorSymbolResolverCore {
         guard let functionStarts = image.functionStarts else {
             #if DEBUG
             NativeInspectorSymbolLog.info(
-                String(
+                unsafe String(
                     format: "[WebInspectorTransport] native inspector text scan unavailable functionStarts=nil webCoreConnectTargets=%lu webCoreDisconnectTargets=%lu webKitBoundConnectTargets=%lu webKitBoundDisconnectTargets=%lu",
                     webCoreConnectTargets.count,
                     webCoreDisconnectTargets.count,
@@ -98,7 +98,7 @@ extension NativeInspectorSymbolResolverCore {
 
         #if DEBUG
         NativeInspectorSymbolLog.info(
-            String(
+            unsafe String(
                 format: "[WebInspectorTransport] native inspector text scan webCoreConnectTargets=%lu webCoreDisconnectTargets=%lu webKitBoundConnectTargets=%lu webKitBoundDisconnectTargets=%lu connectTargets=%lu disconnectTargets=%lu resolvedConnect=%@ resolvedDisconnect=%@",
                 webCoreConnectTargets.count,
                 webCoreDisconnectTargets.count,

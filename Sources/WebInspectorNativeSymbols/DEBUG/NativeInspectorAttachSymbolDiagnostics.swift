@@ -120,7 +120,7 @@ extension NativeInspectorSymbolResolverCore {
             .joined(separator: ";")
 
         NativeInspectorSymbolLog.info(
-            String(
+            unsafe String(
                 format: "[WebInspectorNativeSymbols] similar attach symbol scan missing=%@ scanned=%d matched=%d kept=%d %@",
                 missingAttachFunctions.joined(separator: ","),
                 scannedCount,

@@ -139,7 +139,7 @@ extension NativeInspectorSymbolResolverCore {
 
         for pair in pairs {
             NativeInspectorSymbolLog.info(
-                String(
+                unsafe String(
                     format: "[WebInspectorNativeSymbols] similar attach pair score=%d source=%@ image=%@ owner=%@ connectAddress=0x%llx disconnectAddress=0x%llx connect=%@ disconnect=%@",
                     pair.score,
                     pair.connect.source,
@@ -171,7 +171,7 @@ extension NativeInspectorSymbolResolverCore {
                 }
                 emittedCount += 1
                 NativeInspectorSymbolLog.info(
-                    String(
+                    unsafe String(
                         format: "[WebInspectorNativeSymbols] similar attach candidate score=%d role=%@ source=%@ image=%@ owner=%@ address=0x%llx name=%@",
                         candidate.score,
                         candidate.role.rawValue,

@@ -42,12 +42,16 @@ extension NativeInspectorSymbolResolverCore {
         #if DEBUG
         if let phase {
             NativeInspectorSymbolLog.info(
-                String(
-                    format: "[WebInspectorNativeSymbols] native inspector symbols resolved backend=native-inspector phase=%@ source=%@ connectFrontend=0x%llx disconnectFrontend=0x%llx fallback=%@",
+                unsafe String(
+                    format: "[WebInspectorNativeSymbols] native inspector symbols resolved backend=native-inspector status=complete phase=%@ source=%@ connectFrontend=0x%llx disconnectFrontend=0x%llx stringFromUTF8=0x%llx stringImplToNSString=0x%llx destroyStringImpl=0x%llx backendDispatcherDispatch=0x%llx fallback=%@",
                     phase.message,
                     source ?? "unknown",
                     functionAddresses.connectFrontendAddress,
                     functionAddresses.disconnectFrontendAddress,
+                    functionAddresses.stringFromUTF8Address,
+                    functionAddresses.stringImplToNSStringAddress,
+                    functionAddresses.destroyStringImplAddress,
+                    functionAddresses.backendDispatcherDispatchAddress,
                     usedConnectDisconnectFallback ? "true" : "false"
                 )
             )
