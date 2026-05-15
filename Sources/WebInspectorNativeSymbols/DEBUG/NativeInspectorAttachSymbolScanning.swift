@@ -1,10 +1,9 @@
-#if os(iOS) || os(macOS)
+#if DEBUG
 import Foundation
 import MachO
 import MachOKit
 
 extension NativeInspectorSymbolResolverCore {
-    #if DEBUG
     @unsafe static func debugSimilarLoadedImageAttachSymbols(
         source: String,
         imageName: String,
@@ -269,6 +268,5 @@ extension NativeInspectorSymbolResolverCore {
             debugAppendTopAttachSymbolCandidate(candidate, to: &scan.candidates)
         }
     }
-    #endif
 }
 #endif

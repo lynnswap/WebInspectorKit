@@ -1,10 +1,9 @@
-#if os(iOS) || os(macOS)
+#if DEBUG
 import Foundation
 import MachO
 import MachOKit
 
 extension NativeInspectorSymbolResolverCore {
-    #if DEBUG
     static func debugAttachSymbolNamePassesPrefilter(_ name: String) -> Bool {
         name.contains("connectFrontend")
             || name.contains("disconnectFrontend")
@@ -191,6 +190,5 @@ extension NativeInspectorSymbolResolverCore {
         let endIndex = name.index(name.startIndex, offsetBy: maximumLength)
         return String(name[..<endIndex]) + "...[truncated]"
     }
-    #endif
 }
 #endif

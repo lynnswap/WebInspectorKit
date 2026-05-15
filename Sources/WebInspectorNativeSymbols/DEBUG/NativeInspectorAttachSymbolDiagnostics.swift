@@ -1,9 +1,8 @@
-#if os(iOS) || os(macOS)
+#if DEBUG
 import Foundation
 import MachO
 import MachOKit
 
-#if DEBUG
 private enum NativeInspectorSymbolDiagnostics {
     private static let similarAttachSymbolLogState = NativeInspectorSimilarAttachSymbolLogState()
 
@@ -49,10 +48,8 @@ struct NativeInspectorAttachSymbolScan {
     var matchedCount: Int = 0
     var candidates: [NativeInspectorAttachSymbolCandidate] = []
 }
-#endif
 
 extension NativeInspectorSymbolResolverCore {
-    #if DEBUG
     @unsafe static func debugLogSimilarAttachSymbolsIfNeeded(
         for result: NativeInspectorSymbolLookupResult,
         loadedWebKitImage: MachOImage,
@@ -134,6 +131,5 @@ extension NativeInspectorSymbolResolverCore {
         debugLogSimilarAttachSymbolPairs(candidates)
         debugLogSimilarAttachSymbolSingles(candidates)
     }
-    #endif
 }
 #endif
