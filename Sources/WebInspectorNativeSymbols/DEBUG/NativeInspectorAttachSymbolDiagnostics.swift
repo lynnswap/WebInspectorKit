@@ -119,13 +119,15 @@ extension NativeInspectorSymbolResolverCore {
             }
             .joined(separator: ";")
 
-        NSLog(
-            "[WebInspectorNativeSymbols] similar attach symbol scan missing=%@ scanned=%d matched=%d kept=%d %@",
-            missingAttachFunctions.joined(separator: ","),
-            scannedCount,
-            matchedCount,
-            candidates.count,
-            scanSummary
+        NativeInspectorSymbolLog.info(
+            String(
+                format: "[WebInspectorNativeSymbols] similar attach symbol scan missing=%@ scanned=%d matched=%d kept=%d %@",
+                missingAttachFunctions.joined(separator: ","),
+                scannedCount,
+                matchedCount,
+                candidates.count,
+                scanSummary
+            )
         )
 
         debugLogSimilarAttachSymbolPairs(candidates)

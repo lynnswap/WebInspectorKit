@@ -5,6 +5,7 @@
 #import <WebKit/WebKit.h>
 #import <malloc/malloc.h>
 #import <mach/mach.h>
+#import <os/log.h>
 #import <algorithm>
 #import <atomic>
 #import <memory>
@@ -29,6 +30,12 @@ static constexpr size_t fallbackControllerScanBytes = 0x1000;
 static std::atomic<ptrdiff_t> cachedControllerOffset { invalidControllerOffset };
 
 static NSString *const errorDomain = @"WebInspectorNativeBridge.Transport";
+
+static os_log_t nativeBridgeLog()
+{
+    static os_log_t log = os_log_create("com.lynnswap.WebInspectorKit", "NativeBridge");
+    return log;
+}
 
 enum ErrorCode : NSInteger {
     ErrorCodeUnsupported = 1,
@@ -669,7 +676,7 @@ private:
         || !_controller
         || !_backendDispatcher) {
         NSString *diagnostics = WebInspectorNativeBridgePrivate::controllerResolutionDiagnosticsString(resolution.stats);
-        NSLog(@"[WebInspectorNativeBridge] controller resolution failed %@", diagnostics);
+        os_log_info(WebInspectorNativeBridgePrivate::nativeBridgeLog(), "controller resolution failed %{public}@", diagnostics);
         NSError *transportError = WebInspectorNativeBridgePrivate::selectorFailureError(
             _inspector,
             page,
@@ -698,7 +705,7 @@ private:
     connectFrontend(_frontendConnectionTarget, *_frontendChannel, false, false);
     _frontendAttached = YES;
 #if DEBUG
-    NSLog(@"[WebInspectorNativeBridge] native inspector attach succeeded mode=controller-wrapper");
+    os_log_info(WebInspectorNativeBridgePrivate::nativeBridgeLog(), "native inspector attach succeeded mode=controller-wrapper");
 #endif
     return YES;
 }

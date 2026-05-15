@@ -41,14 +41,15 @@ extension NativeInspectorSymbolResolverCore {
     ) -> NativeInspectorSymbolLookupResult {
         #if DEBUG
         if let phase {
-            NSLog(
-                "[WebInspectorNativeSymbols] native inspector symbols resolved backend=%@ phase=%@ source=%@ connectFrontend=0x%llx disconnectFrontend=0x%llx fallback=%@",
-                "native-inspector",
-                phase.message,
-                source ?? "unknown",
-                functionAddresses.connectFrontendAddress,
-                functionAddresses.disconnectFrontendAddress,
-                usedConnectDisconnectFallback ? "true" : "false"
+            NativeInspectorSymbolLog.info(
+                String(
+                    format: "[WebInspectorNativeSymbols] native inspector symbols resolved backend=native-inspector phase=%@ source=%@ connectFrontend=0x%llx disconnectFrontend=0x%llx fallback=%@",
+                    phase.message,
+                    source ?? "unknown",
+                    functionAddresses.connectFrontendAddress,
+                    functionAddresses.disconnectFrontendAddress,
+                    usedConnectDisconnectFallback ? "true" : "false"
+                )
             )
         }
         #endif

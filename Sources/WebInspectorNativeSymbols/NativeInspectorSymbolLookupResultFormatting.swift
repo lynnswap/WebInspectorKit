@@ -57,10 +57,8 @@ extension NativeInspectorSymbolResolverCore {
             missingFunctions: missingFunctions,
             usedConnectDisconnectFallback: usedConnectDisconnectFallback
         )
-        NSLog(
-            "[WebInspectorNativeSymbols] native inspector symbol lookup failed backend=%@ reason=%@",
-            "native-inspector",
-            reason
+        NativeInspectorSymbolLog.info(
+            "[WebInspectorNativeSymbols] native inspector symbol lookup failed backend=native-inspector reason=\(reason)"
         )
         return NativeInspectorSymbolLookupResult(
             functionAddresses: .zero,

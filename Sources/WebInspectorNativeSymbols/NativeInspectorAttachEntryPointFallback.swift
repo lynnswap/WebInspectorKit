@@ -61,12 +61,14 @@ extension NativeInspectorSymbolResolverCore {
 
         guard let functionStarts = image.functionStarts else {
             #if DEBUG
-            NSLog(
-                "[WebInspectorTransport] native inspector text scan unavailable functionStarts=nil webCoreConnectTargets=%lu webCoreDisconnectTargets=%lu webKitBoundConnectTargets=%lu webKitBoundDisconnectTargets=%lu",
-                webCoreConnectTargets.count,
-                webCoreDisconnectTargets.count,
-                webKitBoundConnectTargets.count,
-                webKitBoundDisconnectTargets.count
+            NativeInspectorSymbolLog.info(
+                String(
+                    format: "[WebInspectorTransport] native inspector text scan unavailable functionStarts=nil webCoreConnectTargets=%lu webCoreDisconnectTargets=%lu webKitBoundConnectTargets=%lu webKitBoundDisconnectTargets=%lu",
+                    webCoreConnectTargets.count,
+                    webCoreDisconnectTargets.count,
+                    webKitBoundConnectTargets.count,
+                    webKitBoundDisconnectTargets.count
+                )
             )
             #endif
             return .init(
@@ -95,16 +97,18 @@ extension NativeInspectorSymbolResolverCore {
         )
 
         #if DEBUG
-        NSLog(
-            "[WebInspectorTransport] native inspector text scan webCoreConnectTargets=%lu webCoreDisconnectTargets=%lu webKitBoundConnectTargets=%lu webKitBoundDisconnectTargets=%lu connectTargets=%lu disconnectTargets=%lu resolvedConnect=%@ resolvedDisconnect=%@",
-            webCoreConnectTargets.count,
-            webCoreDisconnectTargets.count,
-            webKitBoundConnectTargets.count,
-            webKitBoundDisconnectTargets.count,
-            connectTargetAddresses.count,
-            disconnectTargetAddresses.count,
-            debugResolvedAddress(resolvedConnect),
-            debugResolvedAddress(resolvedDisconnect)
+        NativeInspectorSymbolLog.info(
+            String(
+                format: "[WebInspectorTransport] native inspector text scan webCoreConnectTargets=%lu webCoreDisconnectTargets=%lu webKitBoundConnectTargets=%lu webKitBoundDisconnectTargets=%lu connectTargets=%lu disconnectTargets=%lu resolvedConnect=%@ resolvedDisconnect=%@",
+                webCoreConnectTargets.count,
+                webCoreDisconnectTargets.count,
+                webKitBoundConnectTargets.count,
+                webKitBoundDisconnectTargets.count,
+                connectTargetAddresses.count,
+                disconnectTargetAddresses.count,
+                debugResolvedAddress(resolvedConnect),
+                debugResolvedAddress(resolvedDisconnect)
+            )
         )
         #endif
 

@@ -138,16 +138,18 @@ extension NativeInspectorSymbolResolverCore {
         .prefix(3)
 
         for pair in pairs {
-            NSLog(
-                "[WebInspectorNativeSymbols] similar attach pair score=%d source=%@ image=%@ owner=%@ connectAddress=0x%llx disconnectAddress=0x%llx connect=%@ disconnect=%@",
-                pair.score,
-                pair.connect.source,
-                pair.connect.imageName,
-                pair.connect.ownerKey,
-                pair.connect.address,
-                pair.disconnect.address,
-                debugTruncatedAttachSymbolName(pair.connect.name),
-                debugTruncatedAttachSymbolName(pair.disconnect.name)
+            NativeInspectorSymbolLog.info(
+                String(
+                    format: "[WebInspectorNativeSymbols] similar attach pair score=%d source=%@ image=%@ owner=%@ connectAddress=0x%llx disconnectAddress=0x%llx connect=%@ disconnect=%@",
+                    pair.score,
+                    pair.connect.source,
+                    pair.connect.imageName,
+                    pair.connect.ownerKey,
+                    pair.connect.address,
+                    pair.disconnect.address,
+                    debugTruncatedAttachSymbolName(pair.connect.name),
+                    debugTruncatedAttachSymbolName(pair.disconnect.name)
+                )
             )
         }
     }
@@ -168,15 +170,17 @@ extension NativeInspectorSymbolResolverCore {
                     break
                 }
                 emittedCount += 1
-                NSLog(
-                    "[WebInspectorNativeSymbols] similar attach candidate score=%d role=%@ source=%@ image=%@ owner=%@ address=0x%llx name=%@",
-                    candidate.score,
-                    candidate.role.rawValue,
-                    candidate.source,
-                    candidate.imageName,
-                    candidate.ownerKey,
-                    candidate.address,
-                    debugTruncatedAttachSymbolName(candidate.name)
+                NativeInspectorSymbolLog.info(
+                    String(
+                        format: "[WebInspectorNativeSymbols] similar attach candidate score=%d role=%@ source=%@ image=%@ owner=%@ address=0x%llx name=%@",
+                        candidate.score,
+                        candidate.role.rawValue,
+                        candidate.source,
+                        candidate.imageName,
+                        candidate.ownerKey,
+                        candidate.address,
+                        debugTruncatedAttachSymbolName(candidate.name)
+                    )
                 )
             }
         }
