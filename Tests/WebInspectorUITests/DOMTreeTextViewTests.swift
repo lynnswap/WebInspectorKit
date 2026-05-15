@@ -36,6 +36,18 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func primaryClickingRowUpdatesCoreSelection() throws {
+        let session = makeDOMSession()
+        let view = makeTreeView(session: session)
+
+        view.primaryClickRowForTesting(containing: "<input disabled>")
+        view.layoutIfNeeded()
+
+        #expect(session.selectedNode?.localName == "input")
+        #expect(view.selectedRowRectsForTesting().count == 1)
+    }
+
+    @Test
     func expandedElementRendersChildrenAndClosingTag() throws {
         let view = makeTreeView()
 

@@ -2,6 +2,12 @@ import Foundation
 import WebInspectorCore
 
 package enum DOMTransportAdapter {
+#if DEBUG
+    private static func domAdapterTrace(_ message: @autoclosure () -> String) {}
+#else
+    private static func domAdapterTrace(_ message: @autoclosure () -> String) {}
+#endif
+
     package static func command(for intent: DOMCommandIntent) throws -> ProtocolCommand {
         switch intent {
         case let .getDocument(targetID):
@@ -85,20 +91,23 @@ package enum DOMTransportAdapter {
     }
 
     @MainActor
-    package static func applyTargetEvent(_ event: ProtocolEventEnvelope, to session: DOMSession) throws {
+    @discardableResult
+    package static func applyTargetEvent(_ event: ProtocolEventEnvelope, to session: DOMSession) throws -> ProtocolTargetRecord? {
         switch event.method {
         case "Target.targetCreated":
             let params = try TransportMessageParser.decode(TargetCreatedParams.self, from: event.paramsData)
             let snapshot = session.snapshot()
-            let record = params.targetInfo.record(currentMainFrameID: snapshot.currentPage?.mainFrameID)
-            let makeCurrentMainPage = snapshot.currentPage == nil
+            let record = params.targetInfo.record(currentMainFrameID: snapshot.mainFrameID)
+            let makeCurrentMainPage = snapshot.currentPageTargetID == nil
                 && record.kind == .page
                 && record.parentFrameID == nil
                 && !record.isProvisional
             session.applyTargetCreated(record, makeCurrentMainPage: makeCurrentMainPage)
+            return record
         case "Target.targetDestroyed":
             let params = try TransportMessageParser.decode(TargetDestroyedParams.self, from: event.paramsData)
             session.applyTargetDestroyed(params.targetId)
+            return nil
         case "Target.didCommitProvisionalTarget":
             let params = try TransportMessageParser.decode(TargetCommittedParams.self, from: event.paramsData)
             let snapshotBeforeCommit = session.snapshot()
@@ -108,14 +117,15 @@ package enum DOMTransportAdapter {
                 session.applyTargetCommitted(targetID: params.newTargetId)
             }
             let snapshot = session.snapshot()
-            if snapshotBeforeCommit.currentPage == nil,
+            if snapshotBeforeCommit.currentPageTargetID == nil,
                let target = snapshot.targetsByID[params.newTargetId],
                target.kind == .page,
                target.parentFrameID == nil {
                 session.promoteTargetToCurrentPage(params.newTargetId)
             }
+            return nil
         default:
-            break
+            return nil
         }
     }
 
@@ -149,9 +159,9 @@ package enum DOMTransportAdapter {
         _ result: ProtocolCommandResult,
         selectionRequestID: SelectionRequestIdentifier,
         to session: DOMSession
-    ) throws -> Result<DOMNodeIdentifier, SelectionResolutionFailure> {
+    ) throws -> DOMRequestNodeResolution {
         guard let targetID = result.targetID else {
-            return .failure(.targetMismatch(expected: ProtocolTargetIdentifier(""), received: ProtocolTargetIdentifier("")))
+            return .failed(.targetMismatch(expected: ProtocolTargetIdentifier(""), received: ProtocolTargetIdentifier("")))
         }
         let payload = try TransportMessageParser.decode(RequestNodeResult.self, from: result.resultData)
         return session.applyRequestNodeResult(
@@ -197,14 +207,30 @@ package enum DOMTransportAdapter {
         case "DOM.setChildNodes":
             let params = try TransportMessageParser.decode(SetChildNodesParams.self, from: event.paramsData)
             let snapshot = session.snapshot()
-            guard let parentID = snapshot.currentNodeIDByKey[.init(targetID: targetID, nodeID: params.parentId)] else {
+            if params.parentId.rawValue == 0 {
+                guard snapshot.targetsByID[targetID]?.kind != .frame,
+                      let detachedRoot = params.nodes.first?.payload else {
+                    return
+                }
+                session.applyDetachedRoot(targetID: targetID, payload: detachedRoot, eventSequence: event.sequence)
                 return
             }
-            session.applySetChildNodes(parent: parentID, children: params.nodes.map(\.payload))
+            if let parentID = snapshot.currentNodeIDByKey[.init(targetID: targetID, nodeID: params.parentId)] {
+                session.applySetChildNodes(parent: parentID, children: params.nodes.map(\.payload), eventSequence: event.sequence)
+            } else {
+                domAdapterTrace("setChildNodes.fragment target=\(targetID.rawValue) parent=\(params.parentId.rawValue) reason=missingCurrentNode children=\(nodeSummary(params.nodes.map(\.payload)))")
+                session.applySetChildNodes(
+                    targetID: targetID,
+                    parentRawNodeID: params.parentId,
+                    children: params.nodes.map(\.payload),
+                    eventSequence: event.sequence
+                )
+            }
         case "DOM.childNodeInserted":
             let params = try TransportMessageParser.decode(ChildNodeInsertedParams.self, from: event.paramsData)
             let snapshot = session.snapshot()
             guard let parentID = snapshot.currentNodeIDByKey[.init(targetID: targetID, nodeID: params.parentNodeId)] else {
+                domAdapterTrace("childNodeInserted.drop target=\(targetID.rawValue) parent=\(params.parentNodeId.rawValue) reason=missingCurrentNode child=\(nodeSummary(params.node.payload))")
                 return
             }
             let previousSiblingID = params.previousNodeId.flatMap {
@@ -215,12 +241,55 @@ package enum DOMTransportAdapter {
             let params = try TransportMessageParser.decode(ChildNodeRemovedParams.self, from: event.paramsData)
             let snapshot = session.snapshot()
             guard let nodeID = snapshot.currentNodeIDByKey[.init(targetID: targetID, nodeID: params.nodeId)] else {
+                domAdapterTrace("childNodeRemoved.drop target=\(targetID.rawValue) node=\(params.nodeId.rawValue) reason=missingCurrentNode")
                 return
             }
             session.applyNodeRemoved(nodeID)
+        case "DOM.childNodeCountUpdated":
+            let params = try TransportMessageParser.decode(ChildNodeCountUpdatedParams.self, from: event.paramsData)
+            let snapshot = session.snapshot()
+            guard let nodeID = snapshot.currentNodeIDByKey[.init(targetID: targetID, nodeID: params.nodeId)] else {
+                return
+            }
+            session.applyChildNodeCountUpdated(nodeID, count: params.childNodeCount)
+        case "DOM.attributeModified":
+            let params = try TransportMessageParser.decode(AttributeModifiedParams.self, from: event.paramsData)
+            let snapshot = session.snapshot()
+            guard let nodeID = snapshot.currentNodeIDByKey[.init(targetID: targetID, nodeID: params.nodeId)] else {
+                domAdapterTrace("attributeModified.drop target=\(targetID.rawValue) node=\(params.nodeId.rawValue) name=\(params.name) reason=missingCurrentNode")
+                return
+            }
+            session.applyAttributeModified(nodeID, name: params.name, value: params.value)
+        case "DOM.attributeRemoved":
+            let params = try TransportMessageParser.decode(AttributeRemovedParams.self, from: event.paramsData)
+            let snapshot = session.snapshot()
+            guard let nodeID = snapshot.currentNodeIDByKey[.init(targetID: targetID, nodeID: params.nodeId)] else {
+                domAdapterTrace("attributeRemoved.drop target=\(targetID.rawValue) node=\(params.nodeId.rawValue) name=\(params.name) reason=missingCurrentNode")
+                return
+            }
+            session.applyAttributeRemoved(nodeID, name: params.name)
         default:
             break
         }
+    }
+
+    private static func nodeSummary(_ node: DOMNodeSnapshot?) -> String {
+        guard let node else {
+            return "nil"
+        }
+        return "\(node.nodeName)#\(node.protocolNodeID.rawValue)"
+    }
+
+    private static func nodeSummary(_ payload: DOMNodePayload) -> String {
+        "\(payload.nodeName)#\(payload.nodeID.rawValue)"
+    }
+
+    private static func nodeSummary(_ payloads: [DOMNodePayload]) -> String {
+        let prefix = payloads.prefix(8).map(nodeSummary).joined(separator: ",")
+        if payloads.count > 8 {
+            return "[\(prefix),... total=\(payloads.count)]"
+        }
+        return "[\(prefix)]"
     }
 
     private static func data(_ object: [String: Any]) throws -> Data {
@@ -259,8 +328,20 @@ package enum DOMTransportAdapter {
         _ params: TargetCommittedParams,
         snapshot: DOMSessionSnapshot
     ) -> ProtocolTargetIdentifier? {
-        guard params.oldTargetId == nil,
-              snapshot.targetsByID[params.newTargetId] == nil else {
+        guard params.oldTargetId == nil else {
+            return nil
+        }
+
+        if let newTarget = snapshot.targetsByID[params.newTargetId],
+           newTarget.isProvisional,
+           newTarget.kind == .page,
+           newTarget.parentFrameID == nil,
+           let currentPageTargetID = snapshot.currentPageTargetID,
+           currentPageTargetID != params.newTargetId {
+            return currentPageTargetID
+        }
+
+        guard snapshot.targetsByID[params.newTargetId] == nil else {
             return nil
         }
 
@@ -299,18 +380,28 @@ private struct TargetInfoPayload: Decodable {
     var type: String
     var frameId: DOMFrameIdentifier?
     var parentFrameId: DOMFrameIdentifier?
+    var domains: [String]?
     var isProvisional: Bool?
     var isPaused: Bool?
 
     func record(currentMainFrameID: DOMFrameIdentifier?) -> ProtocolTargetRecord {
-        ProtocolTargetRecord(
+        let kind = targetKind(currentMainFrameID: currentMainFrameID)
+        return ProtocolTargetRecord(
             id: targetId,
-            kind: targetKind(currentMainFrameID: currentMainFrameID),
+            kind: kind,
             frameID: frameId,
             parentFrameID: parentFrameId,
+            capabilities: capabilities(for: kind),
             isProvisional: isProvisional ?? false,
             isPaused: isPaused ?? false
         )
+    }
+
+    private func capabilities(for kind: ProtocolTargetKind) -> ProtocolTargetCapabilities {
+        if let domains {
+            return ProtocolTargetCapabilities(domainNames: domains)
+        }
+        return ProtocolTargetCapabilities.protocolDefault(for: kind)
     }
 
     private func targetKind(currentMainFrameID: DOMFrameIdentifier?) -> ProtocolTargetKind {
@@ -391,6 +482,22 @@ private struct ChildNodeRemovedParams: Decodable {
     var nodeId: DOMProtocolNodeID
 }
 
+private struct ChildNodeCountUpdatedParams: Decodable {
+    var nodeId: DOMProtocolNodeID
+    var childNodeCount: Int
+}
+
+private struct AttributeModifiedParams: Decodable {
+    var nodeId: DOMProtocolNodeID
+    var name: String
+    var value: String
+}
+
+private struct AttributeRemovedParams: Decodable {
+    var nodeId: DOMProtocolNodeID
+    var name: String
+}
+
 private final class DOMNodeWirePayload: Decodable {
     var nodeId: DOMProtocolNodeID
     var nodeType: Int
@@ -398,6 +505,8 @@ private final class DOMNodeWirePayload: Decodable {
     var localName: String?
     var nodeValue: String?
     var frameId: DOMFrameIdentifier?
+    var documentURL: String?
+    var baseURL: String?
     var attributes: [String]?
     var childNodeCount: Int?
     var children: [DOMNodeWirePayload]?
@@ -427,7 +536,9 @@ private final class DOMNodeWirePayload: Decodable {
             nodeName: nodeName,
             localName: localName ?? "",
             nodeValue: nodeValue ?? "",
-            frameID: frameId,
+            ownerFrameID: frameId,
+            documentURL: documentURL,
+            baseURL: baseURL,
             attributes: attributePairs(attributes ?? []),
             regularChildren: regularChildren,
             contentDocument: contentDocument?.payload,

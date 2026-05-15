@@ -1,4 +1,5 @@
 #if canImport(UIKit)
+import ObservationBridge
 import UIKit
 import WebInspectorCore
 import WebInspectorRuntime
@@ -6,8 +7,12 @@ import WebInspectorRuntime
 @MainActor
 package final class DOMTreeViewController: UIViewController {
     private let treeView: DOMTreeTextView
+    private weak var session: InspectorSession?
+    private let observationScope = ObservationScope()
+    private var isEnsuringDOMDocumentLoaded = false
 
     package init(session: InspectorSession) {
+        self.session = session
         self.treeView = DOMTreeTextView(
             dom: session.dom,
             requestChildrenAction: { [weak session] nodeID in
@@ -21,9 +26,11 @@ package final class DOMTreeViewController: UIViewController {
             }
         )
         super.init(nibName: nil, bundle: nil)
+        startObservingDOMRoot(session: session)
     }
 
     package init(dom: DOMSession) {
+        self.session = nil
         self.treeView = DOMTreeTextView(dom: dom)
         super.init(nibName: nil, bundle: nil)
     }
@@ -33,10 +40,43 @@ package final class DOMTreeViewController: UIViewController {
         nil
     }
 
+    isolated deinit {
+        observationScope.cancelAll()
+    }
+
     override package func loadView() {
         treeView.backgroundColor = .clear
         treeView.accessibilityIdentifier = "WebInspector.DOM.Tree.NativeTextView"
         view = treeView
+    }
+
+    override package func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        ensureDOMDocumentLoadedIfNeeded()
+    }
+
+    private func startObservingDOMRoot(session: InspectorSession) {
+        session.dom.observe(\.treeRevision) { [weak self] _ in
+            self?.ensureDOMDocumentLoadedIfNeeded()
+        }
+        .store(in: observationScope)
+    }
+
+    private func ensureDOMDocumentLoadedIfNeeded() {
+        guard let session,
+              viewIfLoaded?.window != nil,
+              !isEnsuringDOMDocumentLoaded,
+              session.dom.currentPageRootNode == nil else {
+            return
+        }
+
+        isEnsuringDOMDocumentLoaded = true
+        Task { @MainActor [weak self, weak session] in
+            defer {
+                self?.isEnsuringDOMDocumentLoaded = false
+            }
+            _ = await session?.ensureDOMDocumentLoaded()
+        }
     }
 }
 

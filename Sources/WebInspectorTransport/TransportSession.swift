@@ -1,6 +1,12 @@
 import Foundation
 import WebInspectorCore
 
+#if DEBUG
+private func transportTrace(_ message: @autoclosure () -> String) {}
+#else
+private func transportTrace(_ message: @autoclosure () -> String) {}
+#endif
+
 package actor TransportSession {
     private struct PendingReply: Sendable {
         var domain: ProtocolDomain
@@ -21,10 +27,12 @@ package actor TransportSession {
     private var targetReplyKeysByRootWrapperID: [UInt64: TargetReplyKey]
     private var mainPageTargetWaiters: [UInt64: ReplyPromise<TransportMainPageTarget>]
     private var targetsByID: [ProtocolTargetIdentifier: ProtocolTargetRecord]
+    private var provisionalTargetMessagesByTargetID: [ProtocolTargetIdentifier: [ParsedProtocolMessage]]
     private var frameTargetIDsByFrameID: [DOMFrameIdentifier: ProtocolTargetIdentifier]
     private var executionContextsByID: [ExecutionContextID: ExecutionContextRecord]
     private var currentMainPageTargetID: ProtocolTargetIdentifier?
     private var subscribers: [ProtocolDomain: [UInt64: AsyncStream<ProtocolEventEnvelope>.Continuation]]
+    private var orderedSubscribers: [UInt64: AsyncStream<ProtocolEventEnvelope>.Continuation]
     private var inboundMessages: [String]
     private var isDrainingInboundMessages: Bool
     private var closed: Bool
@@ -42,9 +50,12 @@ package actor TransportSession {
         targetReplyKeysByRootWrapperID = [:]
         mainPageTargetWaiters = [:]
         targetsByID = [:]
+        provisionalTargetMessagesByTargetID = [:]
         frameTargetIDsByFrameID = [:]
         executionContextsByID = [:]
+        currentMainPageTargetID = nil
         subscribers = [:]
+        orderedSubscribers = [:]
         inboundMessages = []
         isDrainingInboundMessages = false
         closed = false
@@ -58,6 +69,20 @@ package actor TransportSession {
         pair.continuation.onTermination = { [weak self] _ in
             Task {
                 await self?.removeSubscriber(subscriberID, domain: domain)
+            }
+        }
+        return pair.stream
+    }
+
+    package func orderedEvents() -> AsyncStream<ProtocolEventEnvelope> {
+        let pair = AsyncStream<ProtocolEventEnvelope>.makeStream(bufferingPolicy: .unbounded)
+        nextSubscriberID &+= 1
+        let subscriberID = nextSubscriberID
+        orderedSubscribers[subscriberID] = pair.continuation
+        transportTrace("ordered.subscribe id=\(subscriberID)")
+        pair.continuation.onTermination = { [weak self] _ in
+            Task {
+                await self?.removeOrderedSubscriber(subscriberID)
             }
         }
         return pair.stream
@@ -114,12 +139,17 @@ package actor TransportSession {
         targetReplies.removeAll()
         targetReplyKeysByRootWrapperID.removeAll()
         mainPageTargetWaiters.removeAll()
+        provisionalTargetMessagesByTargetID.removeAll()
         for continuations in subscribers.values {
             for continuation in continuations.values {
                 continuation.finish()
             }
         }
+        for continuation in orderedSubscribers.values {
+            continuation.finish()
+        }
         subscribers.removeAll()
+        orderedSubscribers.removeAll()
         await backend.detach()
     }
 
@@ -336,6 +366,7 @@ package actor TransportSession {
            let key = targetReplyKeysByRootWrapperID.removeValue(forKey: id) {
             if parsed.errorMessage != nil,
                let pending = removeTargetReply(for: key) {
+                traceReply(pending, parsed: parsed)
                 await resolve(pending, parsed: parsed)
             }
             return
@@ -343,6 +374,7 @@ package actor TransportSession {
 
         if let id = parsed.id,
            let pending = rootReplies.removeValue(forKey: id) {
+            traceReply(pending, parsed: parsed)
             await resolve(pending, parsed: parsed)
             return
         }
@@ -364,18 +396,35 @@ package actor TransportSession {
 
         await updateRegistryFromRootEvent(method: method, paramsData: parsed.paramsData)
         await emit(domain: ProtocolDomain(method: method), method: method, targetID: targetIDForRootEvent(method: method, paramsData: parsed.paramsData), paramsData: parsed.paramsData)
+        await dispatchCommittedProvisionalTargetMessagesIfNeeded(method: method, paramsData: parsed.paramsData)
     }
 
     private func handleTargetMessage(_ parsed: ParsedProtocolMessage, targetID: ProtocolTargetIdentifier) async {
+        if targetsByID[targetID]?.isProvisional == true {
+            transportTrace("target.buffer provisional target=\(targetID.rawValue) method=\(parsed.method ?? "reply") id=\(String(describing: parsed.id))")
+            provisionalTargetMessagesByTargetID[targetID, default: []].append(parsed)
+            return
+        }
+
         if let id = parsed.id {
             let key = TargetReplyKey(targetID: targetID, commandID: id)
             if let pending = removeTargetReply(for: key) {
+                traceReply(pending, parsed: parsed)
                 await resolve(pending, parsed: parsed)
                 return
             }
         }
 
         guard let method = parsed.method else {
+            return
+        }
+
+        if method == "Target.dispatchMessageFromTarget" {
+            guard let dispatch = try? TransportMessageParser.decode(TargetDispatchParams.self, from: parsed.paramsData),
+                  let targetMessage = try? await TransportMessageParser.parse(dispatch.message) else {
+                return
+            }
+            await handleTargetMessage(targetMessage, targetID: dispatch.targetId)
             return
         }
 
@@ -469,14 +518,23 @@ package actor TransportSession {
     }
 
     private func record(for targetInfo: TargetInfoPayload) -> ProtocolTargetRecord {
-        ProtocolTargetRecord(
+        let kind = targetKind(for: targetInfo)
+        return ProtocolTargetRecord(
             id: targetInfo.targetId,
-            kind: targetKind(for: targetInfo),
+            kind: kind,
             frameID: targetInfo.frameId,
             parentFrameID: targetInfo.parentFrameId,
+            capabilities: capabilities(for: targetInfo, kind: kind),
             isProvisional: targetInfo.isProvisional ?? false,
             isPaused: targetInfo.isPaused ?? false
         )
+    }
+
+    private func capabilities(for targetInfo: TargetInfoPayload, kind: ProtocolTargetKind) -> ProtocolTargetCapabilities {
+        if let domains = targetInfo.domains {
+            return ProtocolTargetCapabilities(domainNames: domains)
+        }
+        return ProtocolTargetCapabilities.protocolDefault(for: kind)
     }
 
     private func targetKind(for targetInfo: TargetInfoPayload) -> ProtocolTargetKind {
@@ -518,6 +576,7 @@ package actor TransportSession {
 
     private func applyTargetDestroyed(_ targetID: ProtocolTargetIdentifier) async {
         targetsByID.removeValue(forKey: targetID)
+        provisionalTargetMessagesByTargetID.removeValue(forKey: targetID)
         frameTargetIDsByFrameID = frameTargetIDsByFrameID.filter { $0.value != targetID }
         executionContextsByID = executionContextsByID.filter { $0.value.targetID != targetID }
         let pendingReplies = targetReplies.keys
@@ -586,9 +645,30 @@ package actor TransportSession {
         }
     }
 
+    private func dispatchCommittedProvisionalTargetMessagesIfNeeded(method: String, paramsData: Data) async {
+        guard method == "Target.didCommitProvisionalTarget",
+              let params = try? TransportMessageParser.decode(TargetCommittedParams.self, from: paramsData),
+              let messages = provisionalTargetMessagesByTargetID.removeValue(forKey: params.newTargetId) else {
+            return
+        }
+
+        transportTrace("target.flush provisional target=\(params.newTargetId.rawValue) count=\(messages.count)")
+        for message in messages {
+            await handleTargetMessage(message, targetID: params.newTargetId)
+        }
+    }
+
     private func inferredOldTargetIDForOldlessCommit(
         newTargetID: ProtocolTargetIdentifier
     ) -> ProtocolTargetIdentifier? {
+        if let newRecord = targetsByID[newTargetID],
+           newRecord.isProvisional,
+           newRecord.isTopLevelPage,
+           let currentMainPageTargetID,
+           currentMainPageTargetID != newTargetID {
+            return currentMainPageTargetID
+        }
+
         guard targetsByID[newTargetID] == nil else {
             return nil
         }
@@ -612,6 +692,8 @@ package actor TransportSession {
                 return frameTargetIDsByFrameID[frameID] ?? currentMainPageTargetID
             }
             return currentMainPageTargetID
+        case "DOM.documentUpdated":
+            return nil
         default:
             switch ProtocolDomain(method: method) {
             case .dom, .runtime, .network, .page, .storage:
@@ -642,10 +724,15 @@ package actor TransportSession {
             domain: domain,
             method: method,
             targetID: targetID,
+            receivedDomainSequences: lastSequenceByDomain,
             paramsData: paramsData
         )
         let continuations = subscribers[domain].map { Array($0.values) } ?? []
+        traceEvent(envelope)
         for continuation in continuations {
+            continuation.yield(envelope)
+        }
+        for continuation in orderedSubscribers.values {
             continuation.yield(envelope)
         }
         await notifyMainPageTargetWaitersIfNeeded(receivedSequence: nextSequence)
@@ -676,6 +763,33 @@ package actor TransportSession {
         subscribers[domain]?.removeValue(forKey: subscriberID)
         if subscribers[domain]?.isEmpty == true {
             subscribers.removeValue(forKey: domain)
+        }
+    }
+
+    private func removeOrderedSubscriber(_ subscriberID: UInt64) {
+        transportTrace("ordered.unsubscribe id=\(subscriberID)")
+        orderedSubscribers.removeValue(forKey: subscriberID)
+    }
+
+    private func traceEvent(_ event: ProtocolEventEnvelope) {
+        switch event.domain {
+        case .target:
+            transportTrace("emit seq=\(event.sequence) domain=\(event.domain) method=\(event.method) target=\(event.targetID?.rawValue ?? "nil") targetSeq=\(event.receivedSequence(for: .target)) domSeq=\(event.receivedSequence(for: .dom))")
+        case .dom where event.method == "DOM.documentUpdated" || event.method == "DOM.inspect":
+            transportTrace("emit seq=\(event.sequence) domain=\(event.domain) method=\(event.method) target=\(event.targetID?.rawValue ?? "nil") targetSeq=\(event.receivedSequence(for: .target)) domSeq=\(event.receivedSequence(for: .dom))")
+        case .inspector where event.method == "Inspector.inspect":
+            transportTrace("emit seq=\(event.sequence) domain=\(event.domain) method=\(event.method) target=\(event.targetID?.rawValue ?? "nil") targetSeq=\(event.receivedSequence(for: .target)) domSeq=\(event.receivedSequence(for: .dom))")
+        default:
+            break
+        }
+    }
+
+    private func traceReply(_ pending: PendingReply, parsed: ParsedProtocolMessage) {
+        switch pending.method {
+        case "DOM.getDocument", "DOM.requestNode":
+            transportTrace("reply method=\(pending.method) target=\(pending.targetID?.rawValue ?? "nil") nextSeq=\(nextSequence) domSeq=\(lastSequenceByDomain[.dom] ?? 0) error=\(parsed.errorMessage ?? "nil")")
+        default:
+            break
         }
     }
 
@@ -748,6 +862,7 @@ private struct TargetInfoPayload: Decodable {
     var type: String
     var frameId: DOMFrameIdentifier?
     var parentFrameId: DOMFrameIdentifier?
+    var domains: [String]?
     var isProvisional: Bool?
     var isPaused: Bool?
 
