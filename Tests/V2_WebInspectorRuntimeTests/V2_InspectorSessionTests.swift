@@ -156,6 +156,200 @@ func frameDocumentRefreshUpdatesOnlyFrameDocument() async throws {
     #expect(snapshot.targetsByID[.frameAd]?.currentDocumentID != pageDocumentID)
 }
 
+@Test("Lazy iframe insertion and frame document update keep the parent page tree intact")
+func lazyIframeInsertionAndFrameDocumentUpdateKeepParentPageTree() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .seconds(1))
+    let session = await V2_InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"DOM.setChildNodes","params":{"parentId":2,"nodes":[{"nodeId":3,"nodeType":1,"nodeName":"HEAD","localName":"head"},{"nodeId":4,"nodeType":1,"nodeName":"BODY","localName":"body","children":[{"nodeId":5,"nodeType":1,"nodeName":"MAIN","localName":"main","attributes":["id","content"]}]}]}}"#
+    )
+    let mainNodeID = try await waitForCurrentNode(
+        in: session,
+        targetID: .pageMain,
+        protocolNodeID: .init(5)
+    )
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
+    )
+    _ = try await waitUntil {
+        await session.dom.snapshot().targetsByID[.frameAd]
+    }
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"DOM.childNodeInserted","params":{"parentNodeId":4,"previousNodeId":5,"node":{"nodeId":6,"nodeType":1,"nodeName":"IFRAME","localName":"iframe","frameId":"ad-frame","attributes":["src","https://frame.example/ad"]}}}"#
+    )
+    let iframeNodeID = try await waitForCurrentNode(
+        in: session,
+        targetID: .pageMain,
+        protocolNodeID: .init(6)
+    )
+
+    let sentCountBeforeFirstFrameDocument = await backend.sentTargetMessages().count
+    let firstFrameDocumentTask = Task {
+        try await session.perform(.getDocument(targetID: .frameAd))
+    }
+    let firstFrameDocumentRequest = try await waitForTargetMessage(
+        backend,
+        method: "DOM.getDocument",
+        after: sentCountBeforeFirstFrameDocument
+    )
+    #expect(firstFrameDocumentRequest.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    await receiveTargetReply(
+        transport,
+        targetID: firstFrameDocumentRequest.targetIdentifier,
+        messageID: try messageID(firstFrameDocumentRequest.message),
+        result: firstLazyFrameDocumentResult
+    )
+    _ = try await firstFrameDocumentTask.value
+
+    let beforeUpdate = await session.dom.snapshot()
+    let pageDocumentID = try #require(beforeUpdate.currentPageDocumentID)
+    let firstFrameDocumentID = try #require(beforeUpdate.targetsByID[.frameAd]?.currentDocumentID)
+    let firstFrameRootID = try #require(beforeUpdate.documentsByID[firstFrameDocumentID]?.rootNodeID)
+    assertProjectionContainsFrameDocument(
+        in: await session.dom.treeProjection(rootTargetID: .pageMain),
+        iframeNodeID: iframeNodeID,
+        frameRootNodeID: firstFrameRootID
+    )
+
+    let sentCountBeforeFrameUpdate = await backend.sentTargetMessages().count
+    await receiveTargetDispatch(
+        transport,
+        targetID: .frameAd,
+        message: #"{"method":"DOM.documentUpdated","params":{}}"#
+    )
+    let frameDocumentReload = try await waitForTargetMessage(
+        backend,
+        method: "DOM.getDocument",
+        after: sentCountBeforeFrameUpdate
+    )
+    #expect(frameDocumentReload.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    await receiveTargetReply(
+        transport,
+        targetID: frameDocumentReload.targetIdentifier,
+        messageID: try messageID(frameDocumentReload.message),
+        result: secondLazyFrameDocumentResult
+    )
+
+    let afterUpdate: DOMSessionSnapshot = try await waitUntil {
+        let snapshot = await session.dom.snapshot()
+        guard snapshot.targetsByID[.frameAd]?.currentDocumentID != firstFrameDocumentID else {
+            return nil
+        }
+        return snapshot
+    }
+    let secondFrameDocumentID = try #require(afterUpdate.targetsByID[.frameAd]?.currentDocumentID)
+    let secondFrameRootID = try #require(afterUpdate.documentsByID[secondFrameDocumentID]?.rootNodeID)
+
+    #expect(afterUpdate.currentPageDocumentID == pageDocumentID)
+    #expect(afterUpdate.nodesByID[mainNodeID] != nil)
+    #expect(afterUpdate.nodesByID[iframeNodeID] != nil)
+    #expect(afterUpdate.nodesByID[firstFrameRootID] == nil)
+    assertProjectionContainsFrameDocument(
+        in: await session.dom.treeProjection(rootTargetID: .pageMain),
+        iframeNodeID: iframeNodeID,
+        frameRootNodeID: secondFrameRootID
+    )
+}
+
+@Test("DOM.Node.frameId on an iframe owner is the owner frame, not the child frame identity")
+func lazyIframeOwnerFrameIdIsNotTreatedAsChildFrameIdentity() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .seconds(1))
+    let session = await V2_InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"DOM.setChildNodes","params":{"parentId":2,"nodes":[{"nodeId":3,"nodeType":1,"nodeName":"HEAD","localName":"head"},{"nodeId":4,"nodeType":1,"nodeName":"BODY","localName":"body","children":[{"nodeId":5,"nodeType":1,"nodeName":"MAIN","localName":"main","attributes":["id","content"]}]}]}}"#
+    )
+    _ = try await waitForCurrentNode(
+        in: session,
+        targetID: .pageMain,
+        protocolNodeID: .init(5)
+    )
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
+    )
+    _ = try await waitUntil {
+        await session.dom.snapshot().targetsByID[.frameAd]
+    }
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"DOM.childNodeInserted","params":{"parentNodeId":4,"previousNodeId":5,"node":{"nodeId":6,"nodeType":1,"nodeName":"IFRAME","localName":"iframe","frameId":"main-frame","attributes":["src","https://frame.example/ad"]}}}"#
+    )
+    let iframeNodeID = try await waitForCurrentNode(
+        in: session,
+        targetID: .pageMain,
+        protocolNodeID: .init(6)
+    )
+
+    let sentCountBeforeFrameDocument = await backend.sentTargetMessages().count
+    let frameDocumentTask = Task {
+        try await session.perform(.getDocument(targetID: .frameAd))
+    }
+    let frameDocumentRequest = try await waitForTargetMessage(
+        backend,
+        method: "DOM.getDocument",
+        after: sentCountBeforeFrameDocument
+    )
+    await receiveTargetReply(
+        transport,
+        targetID: frameDocumentRequest.targetIdentifier,
+        messageID: try messageID(frameDocumentRequest.message),
+        result: firstLazyFrameDocumentResult
+    )
+    _ = try await frameDocumentTask.value
+    let firstFrameDocumentID = try #require(await session.dom.snapshot().targetsByID[.frameAd]?.currentDocumentID)
+
+    let sentCountBeforeFrameUpdate = await backend.sentTargetMessages().count
+    await receiveTargetDispatch(
+        transport,
+        targetID: .frameAd,
+        message: #"{"method":"DOM.documentUpdated","params":{}}"#
+    )
+    let frameDocumentReload = try await waitForTargetMessage(
+        backend,
+        method: "DOM.getDocument",
+        after: sentCountBeforeFrameUpdate
+    )
+    #expect(frameDocumentReload.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    await receiveTargetReply(
+        transport,
+        targetID: frameDocumentReload.targetIdentifier,
+        messageID: try messageID(frameDocumentReload.message),
+        result: secondLazyFrameDocumentResult
+    )
+
+    let snapshot: DOMSessionSnapshot = try await waitUntil {
+        let snapshot = await session.dom.snapshot()
+        guard snapshot.targetsByID[.frameAd]?.currentDocumentID != firstFrameDocumentID else {
+            return nil
+        }
+        return snapshot
+    }
+    let frameDocumentID = try #require(snapshot.targetsByID[.frameAd]?.currentDocumentID)
+    let frameRootID = try #require(snapshot.documentsByID[frameDocumentID]?.rootNodeID)
+    let projectionRows = await session.dom.treeProjection(rootTargetID: .pageMain).rows.map(\.nodeID)
+
+    #expect(snapshot.framesByID[DOMFrameIdentifier("main-frame")]?.ownerNodeID == nil)
+    #expect(snapshot.framesByID[DOMFrameIdentifier("ad-frame")]?.ownerNodeID == nil)
+    #expect(snapshot.nodesByID[iframeNodeID] != nil)
+    #expect(projectionRows.contains(frameRootID) == false)
+}
+
 @Test
 func targetCommitBootstrapsCommittedMainPageDocument() async throws {
     let backend = FakeTransportBackend()
@@ -1360,6 +1554,8 @@ private func beginPicker(
 
 private let mainDocumentResult = ##"{"root":{"nodeId":1,"nodeType":9,"nodeName":"#document","children":[{"nodeId":2,"nodeType":1,"nodeName":"HTML","localName":"html","children":[]}]}}"##
 private let nestedDocumentResult = ##"{"root":{"nodeId":1,"nodeType":9,"nodeName":"#document","children":[{"nodeId":2,"nodeType":1,"nodeName":"HTML","localName":"html","children":[{"nodeId":3,"nodeType":1,"nodeName":"BODY","localName":"body","children":[{"nodeId":4,"nodeType":1,"nodeName":"DIV","localName":"div"}]}]}]}}"##
+private let firstLazyFrameDocumentResult = ##"{"root":{"nodeId":101,"nodeType":9,"nodeName":"#document","children":[{"nodeId":102,"nodeType":1,"nodeName":"HTML","localName":"html","children":[{"nodeId":103,"nodeType":1,"nodeName":"BODY","localName":"body","children":[{"nodeId":104,"nodeType":1,"nodeName":"CANVAS","localName":"canvas"}]}]}]}}"##
+private let secondLazyFrameDocumentResult = ##"{"root":{"nodeId":201,"nodeType":9,"nodeName":"#document","children":[{"nodeId":202,"nodeType":1,"nodeName":"HTML","localName":"html","children":[{"nodeId":203,"nodeType":1,"nodeName":"BODY","localName":"body","children":[{"nodeId":204,"nodeType":1,"nodeName":"VIDEO","localName":"video"}]}]}]}}"##
 
 private func targetMessageMethods(_ backend: FakeTransportBackend) async -> [String?] {
     await backend.sentTargetMessages().map { try? messageMethod($0.message) }
@@ -1385,6 +1581,40 @@ private func waitUntil<Value: Sendable>(_ body: @escaping @Sendable () async -> 
         try await Task.sleep(for: .milliseconds(5))
     }
     throw TransportError.replyTimeout(method: "test wait", targetID: nil)
+}
+
+private func waitForCurrentNode(
+    in session: V2_InspectorSession,
+    targetID: ProtocolTargetIdentifier,
+    protocolNodeID: DOMProtocolNodeID
+) async throws -> DOMNodeIdentifier {
+    try await waitUntil {
+        await session.dom.snapshot().currentNodeIDByKey[
+            .init(targetID: targetID, nodeID: protocolNodeID)
+        ]
+    }
+}
+
+private func assertProjectionContainsFrameDocument(
+    in projection: DOMTreeProjection,
+    iframeNodeID: DOMNodeIdentifier,
+    frameRootNodeID: DOMNodeIdentifier,
+    sourceLocation: SourceLocation = #_sourceLocation
+) {
+    let rowIDs = projection.rows.map(\.nodeID)
+    guard let iframeIndex = rowIDs.firstIndex(of: iframeNodeID) else {
+        Issue.record("Expected iframe owner in DOM projection", sourceLocation: sourceLocation)
+        return
+    }
+    guard let frameRootIndex = rowIDs.firstIndex(of: frameRootNodeID) else {
+        Issue.record("Expected projected frame document in DOM projection", sourceLocation: sourceLocation)
+        return
+    }
+    #expect(frameRootIndex > iframeIndex, sourceLocation: sourceLocation)
+    #expect(
+        projection.rows[frameRootIndex].depth == projection.rows[iframeIndex].depth + 1,
+        sourceLocation: sourceLocation
+    )
 }
 
 private func receiveTargetDispatch(
