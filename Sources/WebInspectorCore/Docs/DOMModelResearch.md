@@ -642,3 +642,23 @@ document.
 - `Source/WebCore/inspector/agents/frame/FrameDOMAgent.cpp`
 - `Source/JavaScriptCore/inspector/protocol/DOM.json`
 - `Source/WebInspectorUI/UserInterface/Protocol/Legacy/iOS/26.4/InspectorBackendCommands.js`
+
+## Relationship to CSS Styles
+
+Element styles are intentionally documented separately in `CSSModelResearch.md`.
+The DOM-side contract is only the boundary:
+
+- DOM owns target/document/node identity, selection, and frame-document
+  projection.
+- CSS owns style refresh, cascade ordering, computed properties, stylesheet
+  invalidation, and style-specific protocol events.
+- The handoff from DOM to CSS is the selected live DOM node plus its command
+  identity: owning target, active document generation, and raw protocol node id
+  for that target.
+- CSS must not repair DOM selection or mutate DOM projection. If the selected
+  node is not an element, is stale, or belongs to a target without CSS support,
+  CSS reports an unavailable state.
+
+See `CSSModelResearch.md` for the WebKit `WI.DOMNodeStyles` / `CSSManager`
+research, protocol payloads, cascade order, and first native implementation
+milestone.

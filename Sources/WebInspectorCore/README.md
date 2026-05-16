@@ -17,6 +17,7 @@ The target models WebKit protocol concepts before they reach UIKit presentation 
 
 - [Transport research](Docs/TransportResearch.md)
 - [DOM model research](Docs/DOMModelResearch.md)
+- [CSS model research](Docs/CSSModelResearch.md)
 - [Network model research](Docs/NetworkModelResearch.md)
 - [WebInspector architecture overview](../../Docs/ArchitectureOverview.md)
 
