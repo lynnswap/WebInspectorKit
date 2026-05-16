@@ -1,12 +1,15 @@
 # DOM Model Research
 
-This note records the WebKit DOM model behavior that `WebInspectorCore` is intentionally matching.
+This note records the WebKit DOM model behavior that `WebInspectorCore` is
+comparing against.
 
 ## 2026-05-14 Hypothesis Validation
 
-The earlier debugging direction was too flow-oriented. The model boundary must
-be fixed first. This section validates the current hypotheses against WebKit
-source and captured WebInspector logs from cross-origin iframe pages.
+The earlier debugging direction was too flow-oriented. The useful evidence is
+at the model boundary: protocol payloads, target ownership, document
+generation, and frame projection. This section validates the current
+hypotheses against WebKit source and captured WebInspector logs from
+cross-origin iframe pages.
 
 - `DOM.Node.frameId` is not the iframe owner's child-frame id. The protocol
   defines it as the "Identifier of the containing frame" and
@@ -17,7 +20,7 @@ source and captured WebInspector logs from cross-origin iframe pages.
   `isProvisional`, and `isPaused`; it does not expose `frameId` or
   `parentFrameId` as protocol fields. The captured logs also show frame targets
   arriving with `frame=nil parentFrame=nil`.
-- Frame target id decoding is not a model contract. Local WebKit source formats
+- Frame target id decoding is not a model contract. Checked WebKit source formats
   frame target ids as `frame-<frameID>-<processID>`, while captured runtime logs
   contain ids such as `frame-8589934597`. Treat target-id parsing only as a
   compatibility hint.
@@ -33,10 +36,10 @@ source and captured WebInspector logs from cross-origin iframe pages.
   collide across page/frame targets.
 - The earlier "frame target created -> send `DOM.getDocument`" hypothesis was
   incomplete. WebInspectorUI first checks `target.hasDomain("DOM")`.
-  `DOM.json` in local WebKit source has `targetTypes: ["itml", "frame",
+  `DOM.json` in checked WebKit source has `targetTypes: ["itml", "frame",
   "page"]`, but the checked WebInspectorUI frontend metadata registers `DOM`
-  only for `["itml", "page"]`. Therefore WebInspector needs a target
-  capability model; target type alone is not permission to send `DOM` commands.
+  only for `["itml", "page"]`. This separates target capability from target
+  type; target type alone is not permission to send `DOM` commands.
   Captured WebInspector iframe-page logs confirm the failure mode: 61 frame
   targets, 15 frame `DOM.getDocument` sends, 15 wrapper acknowledgements, 0
   frame `DOM.getDocument` replies, and 11 frame hydrate failures.
@@ -65,42 +68,39 @@ source and captured WebInspector logs from cross-origin iframe pages.
     children were not requested. A missing node after `DOM.documentUpdated` can
     be stale epoch fallout, not proof that iframe projection itself is wrong.
   - `setChildNodes`: this can be the response to `DOM.requestChildNodes` or a
-    path push from `DOM.requestNode`. A missing parent means the outgoing
-    request must be correlated with target id, document generation, and raw
-    node id before drawing conclusions.
+    path push from `DOM.requestNode`. A missing parent is only meaningful
+    after correlating the outgoing request with target id, document generation,
+    and raw node id.
   The same captured logs show 169 `childNodeCountUpdated` drops,
   371 `setChildNodes` drops, and 73 `childNodeInserted` drops after page
   document replacement. That points at document-generation/request correlation
   failure, not a picker-only problem and not something to solve by blindly
   reloading the page document.
-- The current WebInspectorUI frame DOM code is not a complete, copy-and-paste
-  answer for WebInspector. It is guarded by target capability metadata, relies on a
-  fragile URL fallback to find iframe owners, and still has FIXME markers for
-  routing most frame-target DOM mutation events. WebInspector should match the invariants
-  of WebInspectorUI, but it should not treat the current URL splice code as a
-  stable identity model.
+- The current WebInspectorUI frame DOM code is transitional. It is guarded by
+  target capability metadata, relies on a fragile URL fallback to find iframe
+  owners, and still has FIXME markers for routing most frame-target DOM
+  mutation events. The stable signal is the invariant shape, not the current
+  URL splice fallback.
 
-The immediate modeling conclusion is:
+The derived invariant summary is:
 
 ```text
-Target-scoped document identity must be primary.
-Target capabilities must be explicit before issuing target-scoped DOM commands.
-DOM.documentUpdated must invalidate a target document generation.
-DOM requests and DOM events must be correlated to the active target generation.
-Frame document projection must be explicit state.
-Page DOM mutation handling must preserve the current target/document mirror.
+Target-scoped document identity is primary.
+Target capabilities are explicit before target-scoped DOM commands are sent.
+DOM.documentUpdated invalidates a target document generation.
+DOM requests and DOM events are correlated to the active target generation.
+Frame document projection is explicit state.
+Page DOM mutation handling preserves the current target/document mirror.
 Iframe owner discovery may request page html/body children, but only as part of
 pending frame-document splice, not as a standalone event-drop workaround.
 ```
 
-## Reference Strategy
+## Reference Interpretation
 
 WebKit is the reference for protocol semantics and stable frontend invariants,
-not a blanket source-level template. WebInspector should intentionally split WebKit
-behavior into two groups.
+not a blanket source-level template. The source evidence falls into two groups.
 
-Follow WebInspectorUI closely where the implementation is already a stable
-contract:
+Stable WebInspectorUI contracts:
 
 - target-scoped protocol delivery via `Target.dispatchMessageFromTarget`;
 - current page switching through `WI.pageTarget`, with `WI.mainTarget` resolving
@@ -110,16 +110,15 @@ contract:
 - per-target domain availability through `target.hasDomain("DOM")`;
 - page-target and frame-target documents are separate state;
 - frame target document updates do not reset the parent page document;
-- raw DOM node ids are target-local and must be scoped before entering the
+- raw DOM node ids are target-local and are scoped before entering the
   frontend model;
 - `DOM.documentUpdated` clears/invalidates the target document instead of
   synchronously repairing another target;
 - `DOM.requestNode` path materialization arrives as `setChildNodes`;
-- iframe projected documents must not be erased by later ordinary
+- iframe projected documents are not erased by later ordinary
   `setChildNodes` on the owner element.
 
-Design WebInspector independently where upstream WebInspectorUI is explicitly
-transitional or incomplete:
+Transitional or incomplete upstream areas:
 
 - iframe owner discovery: upstream currently uses fragile URL matching and has
   a FIXME to replace it with frame/target identity;
@@ -130,23 +129,22 @@ transitional or incomplete:
   tree-building/binding logic and avoid traversing child frames that have their
   own frame agent;
 - frame target identity threading: current `TargetInfo` does not carry
-  `frameId`, `parentFrameId`, or owner node id even though the desired model
-  needs that relation;
+  `frameId`, `parentFrameId`, or owner node id even though the model relation
+  exists conceptually;
 - ad iframe refresh and provisional frame commit behavior: upstream has target
-  commit plumbing, but WebInspector still needs explicit generation/projection state to
-  avoid corrupting the parent page DOM.
+  commit plumbing, while document generation/projection state remains the
+  relevant invariant for parent page DOM integrity.
 
-The balance is: match WebKit's proven boundaries, but do not inherit WebKit's
-temporary URL fallback or missing frame-event handlers as WebInspector architecture. When
-the upstream code says FIXME, WebInspector should model the intended final invariant and
-use conservative fallback behavior only at the edge.
+The research separates WebKit's proven boundaries from temporary fallback code.
+Upstream FIXME markers are evidence that the surrounding invariant is more
+stable than the current fallback code.
 
 ## Source Evidence
 
 | Area | WebKit source | Relevant fact |
 | --- | --- | --- |
 | DOM protocol node identity | `Source/JavaScriptCore/inspector/protocol/DOM.json` | `DOM.Node.frameId` is the containing frame; `contentDocument` is the frame owner document field; `requestChildNodes(depth: -1)` means entire subtree but default is depth 1. |
-| DOM target availability | `Source/JavaScriptCore/inspector/protocol/DOM.json`, `Source/WebInspectorUI/UserInterface/Protocol/Legacy/iOS/26.4/InspectorBackendCommands.js`, `Source/WebInspectorUI/UserInterface/Protocol/Target.js` | Local current protocol lists `frame` in `DOM.targetTypes`, but the checked WebInspectorUI frontend metadata registers `DOM` only for `itml` and `page`. WebInspectorUI builds each target's agents from `InspectorBackend.supportedDomainsForTargetType(target.type)`, so runtime capability must come from active frontend protocol metadata, not from target kind. |
+| DOM target availability | `Source/JavaScriptCore/inspector/protocol/DOM.json`, `Source/WebInspectorUI/UserInterface/Protocol/Legacy/iOS/26.4/InspectorBackendCommands.js`, `Source/WebInspectorUI/UserInterface/Protocol/Target.js` | Local current protocol lists `frame` in `DOM.targetTypes`, but the checked WebInspectorUI frontend metadata registers `DOM` only for `itml` and `page`. WebInspectorUI builds each target's agents from `InspectorBackend.supportedDomainsForTargetType(target.type)`, so runtime capability comes from active frontend protocol metadata, not from target kind. |
 | Backend node payload | `Source/WebCore/inspector/agents/InspectorDOMAgent.cpp` | `buildObjectForNode` sets `frameId` from the node's document frame and sets `contentDocument` only when a frame owner has an accessible content document. |
 | Backend mutation contract | `Source/WebCore/inspector/agents/InspectorDOMAgent.cpp` | `didInsertDOMNode` returns when parent is not bound; otherwise it emits `childNodeCountUpdated` or `childNodeInserted` depending on whether children were requested. |
 | Target protocol | `Source/JavaScriptCore/inspector/protocol/Target.json` | `TargetInfo` has no protocol-level frame id fields; `didCommitProvisionalTarget` swaps old/new target ids. |
@@ -159,10 +157,46 @@ use conservative fallback behavior only at the edge.
 | Pending splice | `Source/WebInspectorUI/UserInterface/Controllers/DOMManager.js` | `_unsplicedFrameDocuments` holds frame documents until owner iframes are available; `_ensurePageBodyChildrenLoaded` requests page html/body children. |
 | Projection attach | `Source/WebInspectorUI/UserInterface/Controllers/DOMManager.js` | `_trySpliceFrameDocumentIntoNode` attaches the frame document as iframe `_contentDocument`; current fallback is exact/resolved URL match with a WebKit FIXME to use frame/target identity later. |
 | Frame target document refresh | `Source/WebInspectorUI/UserInterface/Controllers/DOMManager.js` | `_frameTargetDocumentUpdated` cleans up and reinitializes only that frame target. |
-| Node scoping/projection | `Source/WebInspectorUI/UserInterface/Models/DOMNode.js` | Frame-target node ids are scoped as `<target id>:<raw node id>`; commands use `backendNodeId` against the owning target; `_setChildrenPayload` returns if `_contentDocument` exists. |
+| Node scoping/projection | `Source/WebInspectorUI/UserInterface/Models/DOMNode.js` | Frame-target node ids are scoped as `<target id>:<raw node id>`; hydration commands such as `requestChildNodes` use `backendNodeId` against the owning target; `_setChildrenPayload` returns if `_contentDocument` exists. |
 | DOM event dispatch | `Source/WebInspectorUI/UserInterface/Protocol/DOMObserver.js` | DOM events are target-aware, but current frame-target routing is limited: `documentUpdated` and `setChildNodes` route to frame handlers, while many mutations still return early with a FIXME. |
-| Frame target lifecycle | `Source/WebKit/UIProcess/Inspector/WebPageInspectorController.cpp`, `Source/WebKit/WebProcess/Inspector/FrameInspectorTarget.cpp` | Latest source creates frame targets only when Site Isolation frame target management is enabled. Target ids are currently formatted from frame id plus process id, and provisional frame commit sends `Target.didCommitProvisionalTarget` from old process target id to new process target id. This is implementation evidence, not a protocol-level DOM identity contract. |
-| Frame DOM backend state | `Source/WebCore/inspector/agents/frame/FrameDOMAgent.cpp` | `FrameDOMAgent` exists as a frame-scoped backend DOM agent, but upstream FIXME comments still call out duplicated tree-building/binding logic and child-frame handling that should be refined. |
+| Frame target lifecycle | `Source/WebKit/UIProcess/Inspector/WebPageInspectorController.cpp`, `Source/WebKit/WebProcess/Inspector/FrameInspectorTarget.cpp` | Checked source creates frame targets only when Site Isolation frame target management is enabled. Target ids are currently formatted from frame id plus process id, and provisional frame commit sends `Target.didCommitProvisionalTarget` from old process target id to new process target id. This is implementation evidence, not a protocol-level DOM identity contract. |
+| Frame DOM backend state | `Source/WebCore/inspector/agents/frame/FrameDOMAgent.cpp` | `FrameDOMAgent` exists as a frame-scoped backend DOM agent, but upstream FIXME comments still call out duplicated tree-building/binding logic, child-frame handling marked for refinement, and missing `frameId` on frame-target document payloads. |
+
+## 2026-05-16 WebKit Source Reverification
+
+The DOM research was rechecked against WebKit source. No source-backed
+conclusion changed, but two overbroad notes were
+narrowed: frame-target hydration uses `backendNodeId`, not every DOM command;
+and `FrameDOMAgent` still lacks `frameId` on frame-target document payloads.
+
+- `Source/JavaScriptCore/inspector/protocol/DOM.json` still declares
+  `targetTypes: ["itml", "frame", "page"]`, while the checked iOS/macOS 26.4
+  frontend metadata still registers `DOM` for `["itml", "page"]` and
+  activates it for `["itml", "web-page"]`.
+- `Source/JavaScriptCore/inspector/protocol/Target.json` still exposes
+  `TargetInfo.targetId`, `type`, `isProvisional`, and `isPaused`; it still has
+  no protocol `frameId`, `parentFrameId`, or owner-node field.
+- `InspectorDOMAgent::buildObjectForNode` still sets `DOM.Node.frameId` from
+  the containing frame and sets `contentDocument` only for accessible frame
+  owner content documents.
+- `InspectorDOMAgent::didInsertDOMNode` still returns when the parent is not
+  bound, otherwise emitting `childNodeCountUpdated` or `childNodeInserted`
+  depending on whether children were requested.
+- `WI.DOMManager.initializeTarget` still returns unless
+  `target.hasDomain("DOM")`. Frame target DOM state still lives in
+  `_frameTargetDOMData`, pending frame documents still live in
+  `_unsplicedFrameDocuments`, and owner discovery still uses the URL fallback
+  guarded by the upstream FIXME.
+- `WI.DOMNode` still scopes frame-target frontend ids as
+  `<target id>:<raw node id>`. Hydration commands such as `requestChildNodes`
+  route to `owningTarget` and use `backendNodeId`; `_setChildrenPayload` still
+  returns early when `_contentDocument` is already present.
+- `WI.DOMObserver` still routes frame-target `documentUpdated` and
+  `setChildNodes`, while many other frame-target mutation events still return
+  early with the `webkit.org/b/298980` FIXME.
+- `FrameDOMAgent::buildObjectForNode` still has a FIXME to set `frameId` for
+  frame targets, and `FrameInspectorTarget::toTargetID` still formats target
+  ids as `frame-<frameID>-<processID>`.
 
 ## 2026-05-15 DOMManager Containment
 
@@ -242,30 +276,31 @@ WI.domManager
 ```
 
 The frame document is displayed under the iframe owner, but the frame document
-is stored in the frame-target data bucket. That is the distinction WebInspector
-must preserve: displayed nesting is not the same thing as ownership.
+is stored in the frame-target data bucket. Displayed nesting is not the same
+thing as ownership.
 
-## What This Means for WebInspector
+## Derived Concepts
 
-WebInspector must model these as separate concepts:
+The source evidence implies these separate concepts:
 
 - `ProtocolTarget`: protocol routing endpoint. Owns target-local agent commands
   and target-local DOM events.
 - `TargetCapabilities`: per-target domain/command/event availability. A
-  `FrameTarget` without `DOM` domain support must not receive `DOM.getDocument`.
+  `FrameTarget` without `DOM` domain support does not receive
+  `DOM.getDocument`.
 - `FrameIdentity`: WebKit frame id when known. It may come from document
   payload `frameId`, execution context `frameId`, or implementation-specific
   target id decoding only when deliberately supported.
 - `DOMDocument`: target-scoped document generation and root node. Page target
   and frame target documents are never substitutes for each other.
 - `DOMDocumentEpoch`: invalidation boundary created by `DOM.documentUpdated`.
-  In-flight `requestChildNodes`, `requestNode`, and DOM events must be accepted
-  only when they match the active target/document generation.
+  In-flight `requestChildNodes`, `requestNode`, and DOM events are meaningful
+  only relative to the active target/document generation.
 - `DOMNode`: node mirror scoped by target document generation plus raw
   protocol node id. `ownerFrameID` means containing frame, not child frame.
 - `DOMHydrationRequest`: outgoing DOM request state keyed by target, document
-  generation, and raw node id. `setChildNodes` must be interpreted through this
-  request context instead of as an unqualified tree repair.
+  generation, and raw node id. `setChildNodes` is interpreted through this
+  request context instead of as an unqualified tree mutation.
 - `FrameDocumentProjection`: relation between one iframe/frame owner node and
   one frame-target document root. This is not a regular `children` array.
 - `PendingFrameDocument`: frame-target document that exists but has not yet
@@ -274,7 +309,7 @@ WebInspector must model these as separate concepts:
   It is keyed by page document generation and exists only to make pending
   projections discover owner iframe nodes.
 
-The invalid model is:
+Contradicted interpretations:
 
 ```text
 DOM.Node.frameId == child frame id
@@ -289,7 +324,7 @@ or
 any missing page mutation parent -> reload page DOM
 ```
 
-The valid model is:
+Source-backed interpretation:
 
 ```text
 ProtocolTarget(page)
@@ -330,14 +365,14 @@ just another subtree inside the page target:
   frame target. The frontend receives frame events as
   `Target.dispatchMessageFromTarget(targetId, message)`.
 - Cross-origin iframe navigation can produce a provisional frame target before
-  commit. The frontend must handle `Target.didCommitProvisionalTarget` and must
-  not keep using the first provisional target as the final frame target.
+  commit. WebInspectorUI handles `Target.didCommitProvisionalTarget` by
+  destroying the old target and marking the new target as committed.
 
 For DOM specifically, current WebKit source expresses the important model split
 through separate page and frame target plumbing: page documents are handled by
 the page target, while out-of-process frame documents can be fetched from
-frame targets through `FrameDOMAgent`. WebInspector should preserve that split instead
-of exposing an out-of-process frame document as ordinary page-target children.
+frame targets through `FrameDOMAgent`. The source does not expose an
+out-of-process frame document as ordinary page-target children.
 
 This means a cross-origin iframe is represented by two related but separate
 things:
@@ -396,25 +431,24 @@ and Site Isolation frame targets:
   `documentUpdated` and `setChildNodes` are handled, but attribute, character
   data, child insertion/removal, pseudo-element, and shadow-root events still
   return early with FIXME comments. So even the latest WebInspectorUI source is
-  a transitional implementation, not the final shape of frame DOM mutation
-  handling.
+  a transitional source state, not the final shape of frame DOM mutation
+  routing.
 - `DOMNode._setChildrenPayload` returns early when the node already has a
-  `contentDocument`. So a later `DOM.setChildNodes` on an iframe owner must not
+  `contentDocument`. A later `DOM.setChildNodes` on an iframe owner does not
   replace or erase the frame document projection.
 
 `DOM.requestNode` explicitly promises that the node path up to the root is sent
 as `setChildNodes` notifications. `DOM.setChildNodes(parentId: 0)` is the
 detached-root variant used by `pushNodePathToFrontend` when the pushed node has
 no parent. For normal inspect selection, WebKit walks up to the nearest bound
-ancestor and then emits `setChildNodes` for real parent ids. Therefore WebInspector must
-not drop `requestNode` path fragments just because the immediate parent is not
-yet bound locally; it must keep those fragments in the active request/document
-context and splice them when their parent appears. This is still not a reason
-to reload or replace the page document.
+ancestor and then emits `setChildNodes` for real parent ids. The observed
+contract means missing parents in this path are request/document correlation
+evidence, not a generic reason to reload or replace the page document.
 
-## URL Splice Fallback Is Not a Stable Model
+## URL Splice Fallback
 
-The upstream FIXME around `_trySpliceFrameDocumentIntoNode` is central to WebInspector:
+The upstream FIXME around `_trySpliceFrameDocumentIntoNode` is central source
+evidence:
 
 ```text
 URL-based matching is fragile (breaks with redirects, blob: URLs,
@@ -438,24 +472,22 @@ Important consequences:
   navigates or commits in another process while the page owner node remains
   the same.
 - It is order-sensitive: current WebInspectorUI attaches the first matching
-  node. WebInspector should not copy that as-is. A URL fallback should attach only when
-  there is a single unambiguous exact/resolved match, and otherwise leave the
-  frame document pending.
+  node. That behavior is not a stable identity contract; ambiguity maps to the
+  existing pending-frame-document state.
 - `DOM.Node.frameId` does not solve this. It is the containing frame id of the
   node that the payload belongs to, not the child frame id owned by an iframe
   element.
 - Current `Target.TargetInfo` also does not solve this. The protocol payload
   exposes `targetId`, `type`, `isProvisional`, and `isPaused`, but no
   `frameId`, `parentFrameId`, or iframe owner node id.
-- Latest WebKit source encodes frame id and process id into the frame target
+- Checked WebKit source encodes frame id and process id into the frame target
   id (`frame-<frameID>-<processID>`), and provisional frame commit maps old and
   new target ids through `Target.didCommitProvisionalTarget`. That is useful
   evidence for a compatibility adapter, but it is not enough to identify the
   owner iframe node unless the owner relation is also exposed or derived from a
   trusted protocol path.
 
-Therefore WebInspector needs an explicit model slot for future correct data even if the
-current runtime cannot fill it:
+The missing relation can be represented conceptually as:
 
 ```text
 FrameIdentity
@@ -472,32 +504,31 @@ FrameDocumentProjection
   state: pending | attached | ambiguous
 ```
 
-The correctness baseline is conservative: if WebInspector cannot resolve the owner with
-explicit identity or one unambiguous URL fallback, it should keep the page DOM
-intact and keep the frame document pending. Showing an iframe owner without a
-projected child document is preferable to corrupting the parent page tree.
+Research implication: explicit identity or one unambiguous URL fallback is
+needed before attaching a frame document to an owner. Otherwise the existing
+pending-frame-document category is the safer interpretation than corrupting
+the parent page tree.
 
-## WebInspector Model Decisions
+## Derived Model Invariants
 
 - The transport/session root owns protocol target records and dispatch. It
-  should not make page DOM state global by accident.
-- Page-scoped DOM state should be owned by the page boundary that corresponds
+  is distinct from page DOM state.
+- Page-scoped DOM state is bounded by the page boundary that corresponds
   to the active `WI.pageTarget` / `NetworkManager.mainFrame` lifetime. When that
   page boundary is discarded, its documents, nodes, hydration requests,
-  projections, revisions, and selection state should be discarded together.
-- Target capabilities must be known before issuing target-scoped DOM commands.
+  projections, revisions, and selection state form one lifetime group.
+- Target capabilities are known before target-scoped DOM commands are sent.
   A target kind of `frame` is insufficient.
 - `DOMNode.ID` is `targetID + documentGeneration + nodeID`, so the same protocol `nodeID` in different targets or document generations cannot collide.
 - `DOMNodeCurrentKey` is only a current mirror lookup key: `targetID + nodeID`.
 - `DOMNode.ownerFrameID` is the containing frame id from protocol
-  `DOM.Node.frameId`. It must never be used as the iframe owner node's child
-  frame id.
+  `DOM.Node.frameId`, not the iframe owner node's child frame id.
 - `DOM.documentUpdated` advances or invalidates the target's document
   generation. Pending DOM command replies and DOM events from the old
-  generation must not be applied to the new document root.
+  generation belong to the old document root.
 - `DOM.requestChildNodes` and `DOM.requestNode` are tracked as hydration
   requests against a target/document generation. `requestChildNodes`
-  `setChildNodes` must match the requested parent. `requestNode`
+  `setChildNodes` matches the requested parent. `requestNode`
   `setChildNodes` may arrive as ordered path fragments; unknown parents are
   retained as request-node path fragments within the active document generation.
 - iframe documents are not stored as regular DOM children. Projection renders `DOMFrame.currentDocumentID` under the iframe owner node.
@@ -543,9 +574,8 @@ flowchart TD
 `backendNodeId`, URL strings, raw node ids, and `page-*` naming are not global
 DOM identity. Frame target-id shape is implementation/version evidence only;
 local source and captured runtime logs do not agree on a single string form. It
-may be decoded deliberately as a WebKit compatibility signal, but the Core
-model still needs explicit fields for target, frame, document, node, and
-projection.
+may be decoded deliberately as a WebKit compatibility signal, but this research
+treats target, frame, document, node, and projection as separate fields.
 
 ## Frame Documents
 
@@ -562,14 +592,14 @@ This preserves the parent page DOM when an iframe ad refreshes or navigates.
 
 For cross-origin frames, a page-target iframe node may initially be known
 before the frame-target document arrives, or the frame-target document may
-arrive before the iframe owner is loaded. The model needs an explicit pending
-frame-document state for this gap. Recovery should load or hydrate the missing
-owner path; it should not collapse the frame document into the page document or
-rebuild the page document from a shallow `DOM.getDocument` response.
+arrive before the iframe owner is loaded. WebKit represents this gap with
+pending frame documents and owner-path hydration, not by collapsing the frame
+document into the page document or rebuilding the page document from a shallow
+`DOM.getDocument` response.
 
 ## Selection
 
-Selection is transaction based:
+The observed inspect-selection flow is transaction based:
 
 1. Resolve `RemoteObject.injectedScriptID` to the owning protocol target.
 2. Return a `DOM.requestNode` command intent for that target.
@@ -578,7 +608,7 @@ Selection is transaction based:
 
 ## WebKit Order
 
-WebInspector projection uses the WebKit DOM tree order:
+WebInspectorUI projection uses the WebKit DOM tree order:
 
 ```text
 templateContent -> ::before -> effective children -> ::after
@@ -586,44 +616,43 @@ templateContent -> ::before -> effective children -> ::after
 
 For frame owner nodes, effective children prefer the projected frame document. Regular children are not used to store the projected document.
 
-## Intentional Differences
+## Non-Identity Inputs and Fallbacks
 
-- WebInspector does not use URL matching as document or node identity. URL matching is
-  allowed only as WebKit-compatible iframe owner discovery when there is a
-  single exact/resolved match and no explicit child-frame identity is
-  available.
-- WebInspector does not use `backendNodeId`, URL strings, or target name prefixes as DOM identity.
-- WebInspector does not refresh the parent page document as recovery for frame document updates.
-- WebInspector keeps UIKit/TextKit2 out of the core model. UI rows are projection output, not source-of-truth model objects.
+- URL matching appears only as iframe owner discovery fallback. It is not
+  document or node identity.
+- `backendNodeId`, URL strings, and target name prefixes are not global DOM
+  identity.
+- Frame document updates are target-scoped in WebInspectorUI; they are not
+  parent page document recovery.
+- Display rows are projection output, not source-of-truth DOM model objects.
 
-## Debugging Implications for Cross-Origin Iframes
+## Failure Signals in Captured Cross-Origin Iframe Logs
 
-When a cross-origin iframe disappears from the DOM tree view, investigate in
-this order:
+When a cross-origin iframe disappears from the DOM tree view, the useful
+signals are:
 
-1. Target capabilities: confirm the frame target actually has the `DOM` domain
+1. Target capabilities: whether the frame target actually has the `DOM` domain
    in the active `InspectorBackend` frontend metadata before sending
    `DOM.getDocument`. In the checked WebInspectorUI frontend metadata, `DOM` is
-   registered for `itml` and `page`, not `frame`, so a frame target must not be
-   hydrated just because its `TargetInfo.type` is `frame`.
-2. Target lifecycle: confirm the frame target survived provisional commit and
-   the model now points at the committed target id.
-3. Frame document ownership: confirm `DOM.getDocument` result for the frame
+   registered for `itml` and `page`, not `frame`.
+2. Target lifecycle: whether the frame target survived provisional commit and
+   the model points at the committed target id.
+3. Frame document ownership: whether `DOM.getDocument` result for the frame
    target is stored as a frame-owned document, not as a page document
    replacement.
-4. Splice state: confirm the frame document is either projected under the iframe
+4. Splice state: whether the frame document is either projected under the iframe
    owner or kept pending until the owner node is hydrated.
-5. Page document updates: confirm page-target `DOM.documentUpdated` invalidates
+5. Page document updates: whether page-target `DOM.documentUpdated` invalidates
    the page document generation and does not synchronously replace an existing
    expanded page tree with a shallow `DOM.getDocument` result while old DOM
    events/requests are still in flight.
 6. Request/event correlation: for `setChildNodes` and `childNodeInserted`
-   drops, inspect the target id, document generation, and originating DOM
-   request before treating the event as a page-tree repair signal.
+   drops, the target id, document generation, and originating DOM request
+   determine whether the event belongs to the active tree.
 7. Selection hydration: if `DOM.requestNode` emits `setChildNodes` for missing
-   parents, keep those fragments in the request-node path buffer for the active
-   document generation and attach them when the parent fragment arrives. Do not
-   use missing-parent logs as a reason to reload the page document.
+   parents, those fragments belong to the request-node path for the active
+   document generation. Missing-parent logs alone are not evidence for a page
+   document reload.
 
 The core invariant is: a frame document is target-scoped state. Page DOM events
 may reveal or remove the iframe owner, but they do not own the frame target
@@ -638,10 +667,13 @@ document.
 - `Source/WebInspectorUI/UserInterface/Protocol/DOMObserver.js`
 - `Source/WebKit/UIProcess/Inspector/WebPageInspectorController.cpp`
 - `Source/WebKit/UIProcess/Inspector/FrameInspectorTargetProxy.cpp`
+- `Source/WebKit/WebProcess/Inspector/FrameInspectorTarget.cpp`
 - `Source/WebCore/inspector/agents/InspectorDOMAgent.cpp`
 - `Source/WebCore/inspector/agents/frame/FrameDOMAgent.cpp`
 - `Source/JavaScriptCore/inspector/protocol/DOM.json`
+- `Source/JavaScriptCore/inspector/protocol/Target.json`
 - `Source/WebInspectorUI/UserInterface/Protocol/Legacy/iOS/26.4/InspectorBackendCommands.js`
+- `Source/WebInspectorUI/UserInterface/Protocol/Legacy/macOS/26.4/InspectorBackendCommands.js`
 
 ## Relationship to CSS Styles
 
@@ -655,10 +687,9 @@ The DOM-side contract is only the boundary:
 - The handoff from DOM to CSS is the selected live DOM node plus its command
   identity: owning target, active document generation, and raw protocol node id
   for that target.
-- CSS must not repair DOM selection or mutate DOM projection. If the selected
+- CSS does not repair DOM selection or mutate DOM projection. If the selected
   node is not an element, is stale, or belongs to a target without CSS support,
   CSS reports an unavailable state.
 
 See `CSSModelResearch.md` for the WebKit `WI.DOMNodeStyles` / `CSSManager`
-research, protocol payloads, cascade order, and first native implementation
-milestone.
+research, protocol payloads, cascade order, and property toggle behavior.
