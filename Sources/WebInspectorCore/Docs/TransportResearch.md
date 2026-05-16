@@ -1,262 +1,144 @@
 # Transport Research
 
-This note records the WebKit inspector transport behavior that `WebInspectorTransport` is intentionally matching.
-
-## Scope
-
-Transport owns:
-
-- private WebKit inspector API communication
-- root protocol command/reply handling
-- `Target` domain lifecycle and subtarget routing
-- frame/execution-context ownership facts needed by DOM, CSS, Runtime, Console, and Network
-- off-main raw parsing and protocol payload decode before semantic events reach `@MainActor` models
-
-UI, TextKit2 rows, and model mutation are not transport responsibilities.
+This note records the WebKit inspector transport behavior that
+`WebInspectorCore` is comparing against.
 
 ## WebKit Transport Shape
 
 WebKit uses one root inspector connection plus target-scoped sub-connections.
+The root connection receives the `Target` domain. Page, frame, worker, and
+service-worker targets are exposed through `Target.targetCreated`, then nested
+protocol messages are routed with `Target.sendMessageToTarget` and
+`Target.dispatchMessageFromTarget`.
 
 ```mermaid
 flowchart TD
-    Host["Native frontend or WebInspectorKit bridge"]
+    Host["Frontend bridge"]
     Root["Root inspector connection"]
     TargetAgent["Target domain agent"]
-    PageTarget["Page target connection"]
-    FrameTarget["Frame target connection"]
-    PageAgents["Page target agents<br/>legacy and fallback domains"]
-    UIProcessAgents["UIProcess proxy agents<br/>Network Page Browser"]
-    FrameAgents["Frame target agents<br/>Console Runtime DOM/CSS when exposed"]
+    PageConnection["Page target connection"]
+    FrameConnection["Frame target connection"]
+    WorkerConnection["Worker target connection"]
 
     Host --> Root
     Root --> TargetAgent
-    TargetAgent -- "Target.targetCreated" --> Host
-    Host -- "Target.sendMessageToTarget(page)" --> TargetAgent
-    Host -- "Target.sendMessageToTarget(frame)" --> TargetAgent
-    TargetAgent -- "Target.dispatchMessageFromTarget(page)" --> PageTarget
-    TargetAgent -- "Target.dispatchMessageFromTarget(frame)" --> FrameTarget
-    PageTarget --> PageAgents
-    PageTarget --> UIProcessAgents
-    FrameTarget --> FrameAgents
+    TargetAgent -- "targetCreated / targetDestroyed" --> Host
+    Host -- "sendMessageToTarget(targetId, inner JSON)" --> TargetAgent
+    TargetAgent -- "dispatchMessageFromTarget(targetId, inner JSON)" --> PageConnection
+    TargetAgent -- "dispatchMessageFromTarget(targetId, inner JSON)" --> FrameConnection
+    TargetAgent -- "dispatchMessageFromTarget(targetId, inner JSON)" --> WorkerConnection
 ```
 
-Important details:
+`Target.TargetInfo` contains `targetId`, `type`, optional `isProvisional`,
+and optional `isPaused`. It does not contain `frameId`, `parentFrameId`, or an
+iframe owner node id.
 
-- `Target.TargetInfo` contains `targetId`, `type`, optional `isProvisional`, and optional `isPaused`.
-- Target types include `page`, `frame`, `service-worker`, and `worker`.
-- `Target.sendMessageToTarget` sends a JSON protocol command string to a target's agents.
-- `Target.dispatchMessageFromTarget` returns a JSON protocol response or event string from that target.
-- `Target.didCommitProvisionalTarget` swaps an old target id with a committed target id.
-- WebInspectorUI represents each subtarget with `InspectorBackend.TargetConnection`; that connection sends through the parent target's `TargetAgent.sendMessageToTarget`.
+## Source Evidence
 
-## Official Site Isolation Explainer
+| Area | WebKit source | Relevant fact |
+| --- | --- | --- |
+| Target protocol | `Source/JavaScriptCore/inspector/protocol/Target.json` | `TargetInfo` exposes `targetId`, `type`, `isProvisional`, and `isPaused`; commands include `sendMessageToTarget`; events include `targetCreated`, `targetDestroyed`, `didCommitProvisionalTarget`, and `dispatchMessageFromTarget`. |
+| Root and target connections | `Source/WebInspectorUI/UserInterface/Protocol/Connection.js` | `BackendConnection` sends directly to `InspectorFrontendHost`. `TargetConnection` sends inner JSON through `parentTarget.TargetAgent.sendMessageToTarget(targetId, message)`. Each connection owns its own pending response table. |
+| Target event dispatch | `Source/WebInspectorUI/UserInterface/Protocol/TargetObserver.js`, `Source/WebInspectorUI/UserInterface/Controllers/TargetManager.js` | `dispatchMessageFromTarget` is looked up by target id and dispatched on that target's connection. Provisional target messages are buffered until commit. |
+| Target lifecycle | `Source/WebInspectorUI/UserInterface/Controllers/TargetManager.js` | `targetCreated` creates a target-specific connection and `WI.PageTarget`, `WI.FrameTarget`, or `WI.WorkerTarget`. `didCommitProvisionalTarget` destroys the old target id, marks the new target committed, checks page transition, and dispatches buffered messages. |
+| Target capabilities | `Source/WebInspectorUI/UserInterface/Protocol/Target.js` | A target builds agents from `InspectorBackend.supportedDomainsForTargetType(target.type)`. `hasDomain` checks the created agent table, so target type and domain availability are separate facts. |
+| Current main target globals | `Source/WebInspectorUI/UserInterface/Base/Main.js` | `WI.mainTarget` is a getter returning `WI.pageTarget || WI.backendTarget`; it is not a separate protocol page identity. |
+| Page and frame target classes | `Source/WebInspectorUI/UserInterface/Protocol/PageTarget.js`, `Source/WebInspectorUI/UserInterface/Protocol/FrameTarget.js`, `Source/WebInspectorUI/UserInterface/Protocol/WorkerTarget.js` | `PageTarget` has a top-level execution context. `FrameTarget` keeps an execution-context list and replaces prior normal contexts on navigation. Worker targets use the worker id as target identifier. |
+| UIProcess target proxies | `Source/WebKit/UIProcess/Inspector/WebPageInspectorController.cpp`, `Source/WebKit/UIProcess/Inspector/PageInspectorTargetProxy.cpp`, `Source/WebKit/UIProcess/Inspector/FrameInspectorTargetProxy.cpp` | The UIProcess creates page and frame target proxies, emits target lifecycle events through the target agent, and sends target messages to either `WebPage` or `WebFrame` IPC endpoints. |
+| Target id implementation | `Source/WebKit/WebProcess/Inspector/PageInspectorTarget.cpp`, `Source/WebKit/WebProcess/Inspector/FrameInspectorTarget.cpp` | Checked source formats page target ids as `page-<pageID>` and frame target ids as `frame-<frameID>-<processID>`. This is implementation evidence, not a protocol-level ownership field. |
+| Site Isolation frame targets | `Source/WebKit/UIProcess/Inspector/WebPageInspectorController.cpp`, `Source/WebKit/UIProcess/Inspector/FrameInspectorTargetProxy.cpp` | Frame target management is gated by `shouldManageFrameTargets()`, which reads the Site Isolation preference. Frame proxies are created for frame creation, provisional frames, and process commits. |
+| Runtime frame context routing | `Source/WebInspectorUI/UserInterface/Protocol/RuntimeObserver.js`, `Source/WebCore/inspector/agents/page/PageRuntimeAgent.cpp`, `Source/WebCore/inspector/agents/frame/FrameRuntimeAgent.cpp` | Page runtime execution contexts carry `frameId` from the identifier registry. Frame runtime contexts are delivered on the frame target and stored on that `WI.FrameTarget`. |
+| Shared frame/loader ids | `Source/WebCore/inspector/InspectorIdentifierRegistry.h`, `Source/WebCore/inspector/InspectorIdentifierRegistry.cpp` | Page, Runtime, Network, CSS, and DOM agents use a shared identifier registry for frame and loader ids. The Site Isolation registry is declared to produce deterministic frame ids, but the checked implementation body is not present in the same source file. |
+| Domain-specific gaps | `Source/WebInspectorUI/UserInterface/Controllers/NetworkManager.js`, `Source/WebInspectorUI/UserInterface/Protocol/DOMObserver.js`, `Source/WebInspectorUI/UserInterface/Protocol/CSSObserver.js` | Network, DOM, and CSS all contain FIXME notes around incomplete frame-target routing or support. Current WebInspectorUI is transitional in those areas. |
 
-The official WebKit Site Isolation explainer confirms and refines this model:
+## 2026-05-16 WebKit Source Reverification
 
-- In Site Isolation mode, each `WebFrameProxy` gets a `FrameInspectorTargetProxy` and a frontend `FrameTarget`.
-- Frame targets represent individual frames and may point at different WebContent processes.
-- Frame parent/child relationships are optional data. They must not drive target lifetime semantics.
-- Commands targeted at a frame are routed through the target system to that frame's `FrameInspectorController`.
-- Frame targets can be provisional. The frontend must handle `Target.didCommitProvisionalTarget` and must not keep using the old provisional target id.
-- Domains fall into two migration patterns:
-  - per-frame domains: command/event IDs are scoped per target, and the frontend must pair protocol IDs with the target that produced them.
-  - octopus domains: each WebContent process has a proxy agent and UIProcess owns an aggregator/proxying agent that presents one unified frontend domain.
+The transport research was rechecked against WebKit source. The target routing
+conclusion is unchanged: transport identity is target based, and nested
+messages are delivered through per-target connections. The review narrowed
+several points:
 
-This changes one important design point from the earlier local-source-only read: `Network` and `Page` should not be treated as ordinary frame-target domains. WebKit's Site Isolation design keeps them as page/UIProcess proxy domains with per-WebContent instrumentation feeding the UIProcess aggregator.
+- `TargetInfo` has no protocol frame ownership fields. Any target-to-frame
+  relation has to come from other source signals, such as runtime frame ids,
+  page frame tree data, target id implementation evidence, or domain payloads.
+- `WI.mainTarget` is only `WI.pageTarget || WI.backendTarget`. It is not a
+  stable page object separate from targets.
+- `TargetConnection` uses the same generic `InspectorBackend.Connection`
+  response machinery as the root connection, but its outbound path is wrapped
+  in `Target.sendMessageToTarget`.
+- Provisional target messages are explicitly buffered on the target connection
+  and replayed after `didCommitProvisionalTarget`.
+- Site Isolation frame target creation is gated by the page preference, and
+  frame target ids include both frame and process implementation ids.
+- The checked source has declarations and comments for deterministic Site
+  Isolation identifier registry behavior, but only the legacy registry
+  implementation body was present in the inspected file.
 
-## Backend Target Lifecycle
+## Derived Concepts
 
-WebKit's UIProcess inspector controller creates target proxies and sends target lifecycle events to the frontend.
+The source evidence implies these separate concepts:
 
-```mermaid
-flowchart TD
-    Controller["WebPageInspectorController"]
-    PageProxy["PageInspectorTargetProxy"]
-    FrameProxy["FrameInspectorTargetProxy"]
-    TargetAgent["InspectorTargetAgent"]
-    Frontend["Frontend TargetManager"]
+- `RootConnection`: the direct inspector frontend/backend connection. It owns
+  root protocol ids and receives the `Target` domain.
+- `ProtocolTarget`: a page, frame, worker, or service-worker protocol endpoint
+  identified by `TargetInfo.targetId`.
+- `TargetConnection`: a frontend connection object scoped to one
+  `ProtocolTarget`. It has target-local pending replies and dispatches target
+  events/responses.
+- `TargetCapabilities`: the domain/command/event surface created from active
+  frontend protocol metadata for that target type.
+- `ProvisionalTarget`: target whose messages are buffered until
+  `didCommitProvisionalTarget` marks it committed.
+- `PageBoundary`: the current page target plus the current page frame/resource
+  tree. WebInspectorUI does not expose a separate stable protocol `pageID`.
+- `FrameIdentity`: WebKit frame id when available through Page, Runtime,
+  Network, DOM, CSS, or target-id implementation evidence.
+- `ExecutionContextOwnership`: mapping from execution context id to the target
+  connection that delivered it and, when available, the associated frame id.
+- `DomainEventStream`: decoded events for one protocol domain under one
+  target connection.
 
-    Controller -- "initial page" --> PageProxy
-    Controller -- "frame created" --> FrameProxy
-    Controller -- "provisional page/frame" --> PageProxy
-    Controller -- "provisional frame" --> FrameProxy
-    PageProxy --> TargetAgent
-    FrameProxy --> TargetAgent
-    TargetAgent -- "targetCreated / targetDestroyed / didCommitProvisionalTarget" --> Frontend
-```
+## Derived Model Invariants
 
-Transport implications:
+- Root command ids and target command ids are correlated in separate
+  connection scopes.
+- `Target.sendMessageToTarget` is transport delivery. The domain command result
+  arrives later as the nested response in `Target.dispatchMessageFromTarget`.
+- Target type does not imply domain support. Domain availability comes from the
+  target's active agent table.
+- Page target commit and frame target commit are different lifecycle events.
+  Frame target commit is not a page document reset.
+- Protocol ids emitted by target-scoped domains are meaningful only together
+  with the target that emitted them.
+- Frame ownership is not derived from URL, target id prefix, DOM nesting, or
+  selected UI row state.
+- Runtime execution-context ownership is target-scoped. Frame target runtime
+  contexts are attached to the `WI.FrameTarget`, while page target contexts are
+  routed through the page frame tree.
+- Network and Page have transitional multi-target behavior in WebInspectorUI.
+  Current FIXME notes are evidence of incomplete upstream routing, not stable
+  identity semantics.
 
-- Page and frame targets are first-class protocol targets.
-- Frame target lifecycle is not a page document reset.
-- A committed provisional page target can reset the main page model, but a committed provisional frame target should update only frame-target ownership.
-- Target identity must come from WebKit target ids. Prefixes, URLs, and current DOM document shape are not identity.
-- Target commands must be routed by target id and domain support, not by "current page" guessing.
-
-## WebCore Inspector Agents
-
-`Source/WebCore/inspector` confirms that protocol domains are implemented as per-target agents.
-
-Key findings:
-
-- `FrameDOMAgent` exists separately from page `InspectorDOMAgent`.
-- `FrameRuntimeAgent` and `PageRuntimeAgent` both emit `Runtime.executionContextCreated` with `frameId`.
-- `InspectorNetworkAgent` emits `Network.requestWillBeSent` with `requestId`, `frameId`, `loaderId`, optional protocol resource type, and optional payload `targetId`.
-- `InspectorIdentifierRegistry` is the shared frame/loader id source used by Page, Runtime, Network, CSS, and other agents.
-- Under Site Isolation, `BackendIdentifierRegistry` derives deterministic protocol frame ids so UIProcess and WebProcess can agree without ad-hoc frontend sync.
-- `FrameDOMAgent` currently has a FIXME to set `frameId` on frame-target document payloads, so target-to-frame association cannot rely on the DOM root payload alone.
-
-This means the WebInspector transport needs to capture target/frame/execution-context facts at the protocol envelope boundary and pass them to domain models as already-resolved semantic ownership.
-
-## Domain Routing Categories
-
-WebInspector transport should route by protocol domain category, not by a blanket "send every command to the selected node's target" rule.
-
-```mermaid
-flowchart LR
-    Domain["Protocol domain command"]
-    PerFrame["Per-frame domain<br/>Console Runtime DOM/CSS when exposed"]
-    Octopus["Octopus domain<br/>Network Page"]
-    UIOnly["UIProcess-only domain<br/>Browser Target"]
-    FrameTarget["Frame/Page target chosen by frame or execution context"]
-    PageProxy["Page/UIProcess proxy target"]
-    Root["Root connection"]
-
-    Domain --> PerFrame --> FrameTarget
-    Domain --> Octopus --> PageProxy
-    Domain --> UIOnly --> Root
-```
-
-Rules:
-
-- Per-frame domains use target-based multiplexing directly. Protocol IDs such as node ids, stylesheet ids, script ids, and execution context ids must be paired with the target that produced them.
-- Octopus domains present a unified page-level domain. The UIProcess proxy agent handles command dispatch, source-process lookup, ID remapping, and aggregation.
-- UIProcess-only domains stay on the root/page inspector controller and should not be projected into DOM or Network models.
-- Domain support is capability based. WebInspector should not assume that every target exposes every domain.
-
-## WebInspectorUI Behavior
-
-WebInspectorUI keeps target routing and domain models separate.
-
-`TargetManager`:
-
-- stores targets by `target.identifier`
-- creates `PageTarget`, `FrameTarget`, and worker targets from `Target.targetCreated`
-- destroys targets from `Target.targetDestroyed`
-- commits provisional targets via `Target.didCommitProvisionalTarget`
-- dispatches target messages into each target's own connection
-
-`NetworkManager`:
-
-- initializes `Page`, `Network`, and other agents per target when available
-- maps `Runtime.executionContextCreated.frameId` to a frame
-- under Site Isolation, expects frame targets to report their own contexts
-- explicitly notes incomplete advanced multi-target support for some Network commands
-
-`DOMManager`:
-
-- stores frame documents separately before splicing into an iframe
-- still has a FIXME for URL-based iframe matching
-- notes that frame identity should be threaded through target/frame information instead of URL matching
-
-WebInspector should preserve the good boundary from WebInspectorUI, but avoid inheriting its URL-based frame document splice fallback.
-
-## WebKit Frontend Containers
-
-The current WebKit frontend does not expose or maintain a separate stable
-`pageID` protocol concept that is independent from targets and frames.
-The top-level WebInspectorUI shape is split across singleton containers.
-
-The global current-target pointers are:
-
-```mermaid
-flowchart TB
-    subgraph WI["WI globals"]
-        backendTarget["WI.backendTarget"]
-        pageTarget["WI.pageTarget<br/>current page pointer"]
-        mainTarget["WI.mainTarget<br/>getter"]
-    end
-```
-
-`WI.mainTarget` is not a container. It is a getter returning
-`WI.pageTarget || WI.backendTarget`.
-
-Target objects are owned by `WI.targetManager`:
-
-```mermaid
-flowchart TB
-    subgraph TM["WI.targetManager"]
-        subgraph TargetMap["_targets: Map target.identifier -> WI.Target"]
-            page["WI.PageTarget"]
-            frame["WI.FrameTarget"]
-            worker["WI.WorkerTarget"]
-        end
-    end
-```
-
-The page frame/resource tree is owned by `WI.networkManager`:
-
-```mermaid
-flowchart TB
-    subgraph NM["WI.networkManager"]
-        frameMap["_frameIdentifierMap<br/>Map frame.id -> WI.Frame"]
-        subgraph MainFrame["_mainFrame: WI.Frame"]
-            mainResource["mainResource"]
-            childFrames["childFrameCollection"]
-            resources["resourceCollection"]
-        end
-    end
-```
-
-The DOM container summary is owned by `WI.domManager`; detailed DOM nesting
-lives in `DOMModelResearch.md`:
-
-```mermaid
-flowchart TB
-    subgraph DM["WI.domManager"]
-        document["_document<br/>page #document"]
-        frameData["_frameTargetDOMData<br/>FrameTarget -> document"]
-        nodeIndex["_idToDOMNode"]
-        pending["_unsplicedFrameDocuments"]
-    end
-```
-
-Together, the containment relationship is:
+## Message Flow
 
 ```text
-WI globals
-  backendTarget
-  pageTarget
-  mainTarget getter
+Root command
+  -> BackendConnection.sendMessageToBackend(root JSON)
+  -> root response/event on BackendConnection
 
-WI.targetManager
-  _targets
-    WI.PageTarget
-    WI.FrameTarget
-    WI.WorkerTarget
+Target command
+  -> TargetConnection builds inner JSON
+  -> parentTarget.TargetAgent.sendMessageToTarget(targetId, inner JSON)
+  -> Target.dispatchMessageFromTarget(targetId, inner response JSON)
+  -> target.connection.dispatch(inner response JSON)
 
-WI.networkManager
-  _mainFrame
-    resources
-    child frames
-  _frameIdentifierMap
-
-WI.domManager
-  page document
-  frame target DOM data
-  node index
-  pending frame documents
+Target event
+  -> Target.dispatchMessageFromTarget(targetId, inner event JSON)
+  -> target.connection.dispatch(inner event JSON)
+  -> domain observer for that target
 ```
 
-So Target is the protocol routing unit, but it is not the whole page model by
-itself. A page boundary in WebInspectorUI is the current `WI.pageTarget`
-together with the current `WI.networkManager.mainFrame` tree. DOM is then
-target-scoped: page DOM belongs to the page target, and frame DOM belongs to the
-frame target when that target exposes the DOM domain.
-
-On page target transition, WebInspectorUI swaps the current page target instead
-of mutating a stable page id:
+## Page and Frame Target Lifecycle
 
 ```mermaid
 sequenceDiagram
@@ -267,7 +149,7 @@ sequenceDiagram
     participant Network as WI.NetworkManager
 
     Backend->>TM: targetCreated(targetInfo)
-    TM->>TM: create target from targetInfo.targetId
+    TM->>TM: create target and TargetConnection
     alt provisional target
         Backend->>TM: dispatchMessageFromTarget(newTargetId, message)
         TM->>TM: buffer on provisional target connection
@@ -275,165 +157,102 @@ sequenceDiagram
     Backend->>TM: didCommitProvisionalTarget(oldTargetId, newTargetId)
     TM->>TM: targetDestroyed(oldTargetId)
     TM->>TM: target.didCommitProvisionalTarget()
-    TM->>Page: WI.pageTarget = committed target
-    TM->>DOM: transitionPageTarget()
-    DOM->>DOM: _documentUpdated()
-    TM->>Network: transitionPageTarget()
-    Network->>Backend: Page.getResourceTree()
-    Network->>Network: rebuild mainFrame and _frameIdentifierMap
+    TM->>TM: dispatch buffered messages
+    alt committed page target
+        TM->>Page: WI.pageTarget = committed target
+        TM->>DOM: transitionPageTarget()
+        TM->>Network: transitionPageTarget()
+    end
 ```
 
-The important negative result is that `TargetInfo` gives `targetId`, `type`,
-`isProvisional`, and `isPaused`, but not `frameId`, `parentFrameId`, or iframe
-owner node id. If WebInspector needs a page lifetime bucket, it must be aligned
-with the current page target/main-frame lifetime rather than treated as a new
-protocol identity.
+The page transition path is specific to committed page targets. Frame target
+creation, destruction, and commit are target lifecycle events, but they are not
+the same as replacing the page target/main-frame boundary.
 
-## External Site Isolation Report
+## Domain Routing Categories
 
-The inspectdev issue [iOS 26+ Support: Adapt to WebKit Site Isolation and Frame Target Architecture](https://github.com/inspectdev/inspect-issues/issues/241) reports the same architecture shift:
+The checked source supports a distinction between target-scoped domains and
+page/UIProcess-proxy domains, but the boundaries are not fully finalized in
+WebInspectorUI.
 
-- iOS 26 moves toward Frame targets as first-class inspection targets.
-- Domains such as DOM, CSS, Runtime, Debugger, and Console may live on frame targets.
-- Clients that expect all domains on a Page target fail with "domain was not found" errors.
-- Safari Web Inspector works because it tracks targets and routes commands through the new target architecture.
+- Target-scoped domains use target connections directly. DOM, CSS, Runtime,
+  Debugger, and Console have frame-target-related code paths or FIXME markers.
+- Page/UIProcess-proxy domains can aggregate or proxy data from multiple
+  processes. Network and Page have explicit source notes around incomplete
+  advanced multi-target support.
+- UIProcess/root domains remain on the root or page inspector controller path.
+- The capability check is the stable frontend guard: send only to targets whose
+  active protocol metadata exposes the domain/command.
 
-This is consistent with the WebKit source findings above.
+## Relationship to DOM, CSS, and Network
 
-## WebInspector Transport Design Consequences
+- DOM owns document/node projection and frame document containment. Transport
+  owns the target envelope and any target/frame/execution-context facts needed
+  to interpret DOM payloads.
+- CSS owns style state. Transport only carries the target-scoped command and
+  event envelope used to reach the CSS agent for a node's owning target.
+- Network owns request/resource identity. Transport preserves the event target
+  and optional payload `targetId` separately so Network can distinguish routing
+  from origin/placement metadata.
+- Runtime owns execution contexts. Transport preserves the target connection
+  that delivered each context and the frame id carried by the context payload.
 
-The WebInspector transport owns protocol routing facts and produces decoded semantic
-events/command results for domain models.
-
-Recommended ownership:
+## Contradicted Interpretations
 
 ```text
-WebInspector transport
-  ├─ root connection
-  ├─ command id / reply table
-  ├─ target table
-  │   ├─ target id
-  │   ├─ target kind
-  │   ├─ provisional / paused state
-  │   └─ known frame id when available
-  ├─ frame/execution-context index
-  │   ├─ frame id -> target id candidates
-  │   └─ execution context id -> target id
-  └─ ordered domain event streams
-      ├─ DOM
-      ├─ CSS
-      ├─ Runtime
-      ├─ Console
-      └─ Network
+TargetInfo.targetId prefix == protocol frame ownership field
+or
+TargetInfo has frameId / parentFrameId / ownerNodeID
+or
+WI.mainTarget == stable page identity independent of targets
+or
+Target.sendMessageToTarget response == domain command result
+or
+frame target commit == page document reset
+or
+domain support follows target type without checking target capabilities
+or
+Network.requestWillBeSent.targetId == protocol event envelope target
 ```
 
-Domain models should not parse raw nested target messages and should not infer target ownership from URLs, target prefixes, or stale selection state.
+## Failure Signals
 
-## Command Routing Rules
+Useful signals when transport routing looks wrong:
 
-Root commands:
-
-- Use the root connection directly.
-- Examples: target lifecycle setup commands such as `Target.setPauseOnStart`, `Target.resume`, and `Target.sendMessageToTarget`.
-
-Target commands:
-
-- Encode the inner protocol command as JSON.
-- Send it through root `Target.sendMessageToTarget(targetId, message)`.
-- Track the inner command reply under `(targetId, innerCommandId)`.
-- Treat `Target.sendMessageToTarget` itself as transport delivery, not the domain command result.
-- Decode the actual domain response when it returns through `Target.dispatchMessageFromTarget(targetId, message)`.
-
-Octopus domain commands:
-
-- Route to the page/UIProcess proxy domain, not to a frame target.
-- Preserve the user-facing protocol id and any source-process/resource key metadata carried by the command result.
-- Do not make domain models guess source process from URL, frame tree position, or request timing.
-
-Event routing:
-
-- Decode the root event envelope first.
-- If it is `Target.dispatchMessageFromTarget`, parse the nested message off-main and route it to that target's domain stream.
-- Preserve target-local ordering for events and replies.
-- Do not let a slow DOM or Network decoder block delivery to unrelated domains.
-
-## Frame and Execution Context Rules
-
-Frame ownership is a transport-level fact, not a DOM tree guess.
-
-- Prefer explicit frame metadata from target lifecycle, Page frame tree, and Runtime execution contexts.
-- Use `Runtime.executionContextCreated.frameId` plus the target connection that delivered it to map `executionContextID -> targetID`.
-- Use deterministic Site Isolation frame ids as stable frame graph keys.
-- If a frame target document payload lacks `frameId`, attach it through transport's `targetID -> frameID` knowledge.
-- If target-to-frame is unknown, keep the frame document pending. Do not refresh or replace the parent page document as recovery.
-
-## Network / Page Octopus Notes
-
-Network and Page are special under Site Isolation:
-
-- Network/Page commands are handled by UIProcess proxy agents.
-- WebContent-side proxy agents capture instrumentation data and forward it to UIProcess.
-- `Network.getResponseBody` must be routed by the UIProcess proxy to the WebContent process that actually loaded the resource.
-- `ResourceLoaderIdentifier` can collide across WebContent processes, so backend-facing lookup needs a source-process-qualified resource key.
-- WebInspector's frontend-facing `NetworkRequest.ID` can remain `targetID + requestID`, but transport must be ready to carry a separate backend resource identity for body/certificate/lazy fetch commands.
-- `requestWillBeSent.targetId` in the Network payload is not the same thing as the protocol envelope target id. Keep both if both are present.
-
-## MainActor Boundary
-
-Transport should keep expensive and order-sensitive work outside domain models:
-
-- raw private-API I/O
-- root JSON parsing
-- nested target JSON parsing
-- command/reply correlation
-- target/frame/execution-context routing
-- protocol payload decoding
-
-`@MainActor @Observable` domain models should receive already-decoded semantic events and command results.
-
-## Failure Modes to Avoid
-
-- Treating every new `page-*` target id as a main page navigation.
-- Treating frame target commit/destroy as parent document reset.
-- Sending DOM/CSS/Runtime commands to the page target because the selected node is displayed under the page tree.
-- Sending Network/Page octopus commands to a frame target because the resource belongs to that frame.
-- Using iframe URL, `src`, document URL, or target id prefix as frame identity.
-- Treating `Network.requestWillBeSent.targetId` as the same thing as the protocol envelope target id.
-- Treating WebKit protocol IDs as globally unique when the Site Isolation design says they are target-scoped or source-process-scoped.
-- Clearing or rebuilding domain models from transport failures that only affect one target.
-- Reinitializing inspect mode because the selected node disappeared; selection state should clear without mutating DOM transport state.
-
-## Headless Test Coverage
-
-Transport tests should cover:
-
-- root command reply, timeout, and remote error handling
-- target command wrapping through `Target.sendMessageToTarget`
-- nested response/event delivery through `Target.dispatchMessageFromTarget`
-- independent reply tables for root and target-scoped commands
-- targetCreated / targetDestroyed / didCommitProvisionalTarget for page and frame targets
-- frame target commit does not reset page DOM or Network state
-- executionContextCreated from a frame target maps that execution context to the frame target
-- DOM.requestNode for a frame remote object is sent to the frame target
-- CSS.getMatchedStylesForNode for a selected frame node is sent to that node's owning target
-- Network/Page commands route through the page/UIProcess proxy path
-- Network lazy body fetch preserves backend resource identity separately from frontend request identity
-- Network events preserve both envelope target id and payload `targetId`
-- slow decode in one domain does not reorder or block another domain's stream
+1. A command is sent to a target whose active agent table does not include the
+   domain or command.
+2. A nested response is matched against the root reply table instead of the
+   target connection reply table.
+3. A provisional target emits messages that are processed before
+   `didCommitProvisionalTarget`.
+4. A page target transition path is triggered for a frame target commit.
+5. DOM/CSS node or style ids are used without the target connection that
+   produced them.
+6. Network request origin `targetId` is treated as the event envelope target.
+7. Frame identity is inferred from URL or target id string shape without a
+   stronger source signal.
 
 ## Source References
 
-- `Web Inspector and Site Isolation` in WebKit Documentation
 - `Source/JavaScriptCore/inspector/protocol/Target.json`
-- `Source/WebInspectorUI/UserInterface/Controllers/TargetManager.js`
 - `Source/WebInspectorUI/UserInterface/Protocol/Connection.js`
+- `Source/WebInspectorUI/UserInterface/Protocol/TargetObserver.js`
+- `Source/WebInspectorUI/UserInterface/Controllers/TargetManager.js`
+- `Source/WebInspectorUI/UserInterface/Protocol/Target.js`
+- `Source/WebInspectorUI/UserInterface/Protocol/PageTarget.js`
+- `Source/WebInspectorUI/UserInterface/Protocol/FrameTarget.js`
+- `Source/WebInspectorUI/UserInterface/Protocol/WorkerTarget.js`
+- `Source/WebInspectorUI/UserInterface/Base/Main.js`
+- `Source/WebInspectorUI/UserInterface/Protocol/RuntimeObserver.js`
 - `Source/WebInspectorUI/UserInterface/Controllers/DOMManager.js`
 - `Source/WebInspectorUI/UserInterface/Controllers/NetworkManager.js`
+- `Source/WebInspectorUI/UserInterface/Protocol/CSSObserver.js`
 - `Source/WebKit/UIProcess/Inspector/WebPageInspectorController.cpp`
 - `Source/WebKit/UIProcess/Inspector/PageInspectorTargetProxy.cpp`
 - `Source/WebKit/UIProcess/Inspector/FrameInspectorTargetProxy.cpp`
+- `Source/WebKit/WebProcess/Inspector/PageInspectorTarget.cpp`
+- `Source/WebKit/WebProcess/Inspector/FrameInspectorTarget.cpp`
 - `Source/WebCore/inspector/InspectorIdentifierRegistry.h`
-- `Source/WebCore/inspector/agents/frame/FrameDOMAgent.cpp`
-- `Source/WebCore/inspector/agents/frame/FrameRuntimeAgent.cpp`
+- `Source/WebCore/inspector/InspectorIdentifierRegistry.cpp`
 - `Source/WebCore/inspector/agents/page/PageRuntimeAgent.cpp`
-- `Source/WebCore/inspector/agents/InspectorNetworkAgent.cpp`
+- `Source/WebCore/inspector/agents/frame/FrameRuntimeAgent.cpp`
