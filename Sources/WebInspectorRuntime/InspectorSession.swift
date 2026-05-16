@@ -1190,9 +1190,6 @@ package final class InspectorSession {
         rememberDeleteUndoManager(undoManager)
         trackDeleteUndoState(state)
         undoManager.registerUndo(withTarget: self) { target in
-            guard target.deleteUndoStateIsCurrent(state, undoManager: undoManager, operation: "undo") else {
-                return
-            }
             target.registerRedoDelete(state, undoManager: undoManager)
             Task { @MainActor in
                 await target.performUndoDelete(state, undoManager: undoManager)
@@ -1205,9 +1202,6 @@ package final class InspectorSession {
         rememberDeleteUndoManager(undoManager)
         trackDeleteUndoState(state)
         undoManager.registerUndo(withTarget: self) { target in
-            guard target.deleteUndoStateIsCurrent(state, undoManager: undoManager, operation: "redo") else {
-                return
-            }
             target.registerUndoDelete(state, undoManager: undoManager)
             Task { @MainActor in
                 await target.performRedoDelete(state, undoManager: undoManager)

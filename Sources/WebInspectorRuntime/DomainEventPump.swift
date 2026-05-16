@@ -11,6 +11,10 @@ package final class DomainEventPump {
         appliedSequence = 0
     }
 
+    deinit {
+        task?.cancel()
+    }
+
     package func start(
         stream: AsyncStream<ProtocolEventEnvelope>,
         apply: @escaping @MainActor @Sendable (ProtocolEventEnvelope) async -> Void
