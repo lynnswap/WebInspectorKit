@@ -2036,32 +2036,43 @@ package final class DOMSession {
         frameRoot: DOMNode
     ) -> Bool {
         guard let document = currentDocument(for: ownerNodeID.documentID),
-              let ownerNode = document.nodesByID[ownerNodeID],
-              let frameDocumentURL = frameRoot.documentURL,
-              frameDocumentURL.isEmpty == false else {
+              let ownerNode = document.nodesByID[ownerNodeID] else {
             return false
         }
+        let frameTargetID = frameRoot.id.documentID.targetID
         return ownerNode.isFrameOwner
-            && ownerDocument(forFrameTargetID: frameRoot.id.documentID.targetID)?.id == document.id
+            && ownerDocument(forFrameTargetID: frameTargetID)?.id == document.id
             && nodeIsConnectedToDocumentTree(ownerNodeID, in: document)
-            && frameOwner(ownerNode, matchesFrameDocumentURL: frameDocumentURL)
+            && frameOwner(ownerNode, matchesFrameTargetID: frameTargetID, frameDocumentURL: frameRoot.documentURL)
             && frameDocumentProjections.values.allSatisfy {
                 $0 === projection || $0.ownerNodeID != ownerNodeID || $0.state != .attached
             }
     }
 
     private func ownerCandidates(forFrameDocumentRoot frameRoot: DOMNode) -> [DOMNode.ID] {
-        guard let frameDocumentURL = frameRoot.documentURL,
-              frameDocumentURL.isEmpty == false,
-              let ownerDocument = ownerDocument(forFrameTargetID: frameRoot.id.documentID.targetID) else {
+        let frameTargetID = frameRoot.id.documentID.targetID
+        guard let ownerDocument = ownerDocument(forFrameTargetID: frameTargetID) else {
             return []
         }
 
-        return ownerCandidateNodes(in: ownerDocument)
-            .filter { entry in
-                projectionCanAttach(to: entry.node, in: entry.document)
-                    && frameOwner(entry.node, matchesFrameDocumentURL: frameDocumentURL)
+        let attachableCandidates = ownerCandidateNodes(in: ownerDocument)
+            .filter { projectionCanAttach(to: $0.node, in: $0.document) }
+        if let frameID = targetsByID[frameTargetID]?.frameID {
+            let frameIDMatches = attachableCandidates
+                .filter { $0.node.ownerFrameID == frameID }
+            if frameIDMatches.isEmpty == false {
+                return frameIDMatches
+                    .map { $0.node.id }
+                    .sorted(by: sortNodeIDs)
             }
+        }
+
+        guard let frameDocumentURL = frameRoot.documentURL,
+              frameDocumentURL.isEmpty == false else {
+            return []
+        }
+        return attachableCandidates
+            .filter { frameOwner($0.node, matchesFrameDocumentURL: frameDocumentURL) }
             .map { $0.node.id }
             .sorted(by: sortNodeIDs)
     }
@@ -2123,6 +2134,22 @@ package final class DOMSession {
             return false
         }
         return resolvedSource == resolvedFrameDocumentURL
+    }
+
+    private func frameOwner(
+        _ owner: DOMNode,
+        matchesFrameTargetID frameTargetID: ProtocolTarget.ID,
+        frameDocumentURL: String?
+    ) -> Bool {
+        if let frameID = targetsByID[frameTargetID]?.frameID,
+           owner.ownerFrameID == frameID {
+            return true
+        }
+        guard let frameDocumentURL,
+              frameDocumentURL.isEmpty == false else {
+            return false
+        }
+        return frameOwner(owner, matchesFrameDocumentURL: frameDocumentURL)
     }
 
     private func explicitFrameSource(for owner: DOMNode) -> String? {

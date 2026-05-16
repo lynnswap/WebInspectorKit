@@ -497,6 +497,28 @@ func ambiguousURLFallbackLeavesFrameDocumentPending() async throws {
 }
 
 @Test
+func frameIDMatchDisambiguatesDuplicateURLFrameOwners() async throws {
+    let pageTargetID = ProtocolTarget.ID("page-main")
+    let frameTargetID = ProtocolTarget.ID("frame-b-target")
+    let frameID = DOMFrame.ID("frame-b")
+    let session = await DOMSession()
+
+    await session.applyTargetCreated(.init(id: pageTargetID, kind: .page), makeCurrentMainPage: true)
+    await session.applyTargetCreated(.init(id: frameTargetID, kind: .frame, frameID: frameID))
+    _ = await session.replaceDocumentRoot(pageDocumentWithDuplicateIframeURLsAndFrameIDs(), targetID: pageTargetID)
+    let frameRootID = await session.replaceDocumentRoot(frameDocument(rootNodeID: 101), targetID: frameTargetID)
+
+    let snapshot = await session.snapshot()
+    let projection = await session.treeProjection(rootTargetID: pageTargetID)
+    let expectedIframeID = try #require(snapshot.currentNodeIDByKey[.init(targetID: pageTargetID, nodeID: .init(21))])
+    let projectionState = try #require(snapshot.frameDocumentProjections[frameTargetID])
+
+    #expect(projectionState.ownerNodeID == expectedIframeID)
+    #expect(projectionState.state == .attached)
+    #expect(projection.rows.contains { $0.nodeID == frameRootID && $0.depth > iframeDepth(in: projection, iframeID: expectedIframeID) })
+}
+
+@Test
 func iframeOwnerSrcMutationReevaluatesFrameDocumentProjection() async throws {
     let pageTargetID = ProtocolTarget.ID("page-main")
     let frameTargetID = ProtocolTarget.ID("frame-ad-target")
@@ -1310,6 +1332,40 @@ private func pageDocumentWithDuplicateIframeURLs() -> DOMNodePayload {
                                 nodeID: 21,
                                 name: "iframe",
                                 ownerFrameID: .init("main-frame"),
+                                attributes: [.init(name: "src", value: "https://frame.example/ad")]
+                            ),
+                        ]
+                    ),
+                ]
+            ),
+        ]
+    )
+}
+
+private func pageDocumentWithDuplicateIframeURLsAndFrameIDs() -> DOMNodePayload {
+    document(
+        nodeID: 1,
+        documentURL: "https://page.example/",
+        baseURL: "https://page.example/",
+        children: [
+            .element(
+                nodeID: 2,
+                name: "html",
+                children: [
+                    .element(
+                        nodeID: 3,
+                        name: "body",
+                        children: [
+                            .element(
+                                nodeID: 20,
+                                name: "iframe",
+                                ownerFrameID: .init("frame-a"),
+                                attributes: [.init(name: "src", value: "https://frame.example/ad")]
+                            ),
+                            .element(
+                                nodeID: 21,
+                                name: "iframe",
+                                ownerFrameID: .init("frame-b"),
                                 attributes: [.init(name: "src", value: "https://frame.example/ad")]
                             ),
                         ]
