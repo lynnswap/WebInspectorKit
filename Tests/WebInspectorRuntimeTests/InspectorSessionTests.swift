@@ -2361,9 +2361,6 @@ func performIsRejectedUntilBootstrapAttaches() async throws {
 @MainActor
 @Test
 func attachInspectabilityPreparationRestoresOriginalValue() throws {
-    guard #available(iOS 16.4, macOS 13.3, *) else {
-        return
-    }
     let webView = WKWebView(frame: .zero)
     let initialValue = webView.isInspectable
     webView.isInspectable = false

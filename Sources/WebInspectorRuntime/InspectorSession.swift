@@ -1206,19 +1206,14 @@ package final class InspectorSession {
         }
     }
 
-    package static func prepareInspectability(for webView: WKWebView) -> Bool? {
-        guard #available(iOS 16.4, macOS 13.3, *) else {
-            return nil
-        }
-
+    package static func prepareInspectability(for webView: WKWebView) -> Bool {
         let originalValue = webView.isInspectable
         webView.isInspectable = true
         return originalValue
     }
 
     package static func restoreInspectabilityIfNeeded(on webView: WKWebView, originalValue: Bool?) {
-        guard #available(iOS 16.4, macOS 13.3, *),
-              let originalValue else {
+        guard let originalValue else {
             return
         }
         webView.isInspectable = originalValue
