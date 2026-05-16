@@ -17,7 +17,6 @@ func connectBootstrapsMainPageDocumentInOrder() async throws {
     #expect(methods == [
         "Inspector.enable",
         "Inspector.initialized",
-        // DOM.enable is resolved by TransportSession compatibility and is not routed to the backend.
         "Runtime.enable",
         "DOM.getDocument",
         "Network.enable",
@@ -48,11 +47,14 @@ func domainPumpsApplyNetworkEventsToNetworkSession() async throws {
 }
 
 @Test
-func networkLazyFetchReturnsCommandResultFromPageTarget() async throws {
+func networkLazyFetchReturnsCommandResultFromRequestTarget() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","domains":["Network"],"isProvisional":false}}}"#
+    )
 
     let sentCount = await backend.sentTargetMessages().count
     let performTask = Task {
@@ -65,7 +67,7 @@ func networkLazyFetchReturnsCommandResultFromPageTarget() async throws {
     }
     let sent = try await waitForTargetMessage(backend, method: "Network.getResponseBody", after: sentCount)
 
-    #expect(sent.targetIdentifier == ProtocolTargetIdentifier.pageMain)
+    #expect(sent.targetIdentifier == ProtocolTargetIdentifier.frameAd)
     #expect(String(data: Data(sent.message.utf8), encoding: .utf8)?.contains(#""requestId":"request-1""#) == true)
 
     await receiveTargetReply(
@@ -77,7 +79,7 @@ func networkLazyFetchReturnsCommandResultFromPageTarget() async throws {
     let result = try await performTask.value
 
     #expect(result.method == "Network.getResponseBody")
-    #expect(result.targetID == ProtocolTargetIdentifier.pageMain)
+    #expect(result.targetID == ProtocolTargetIdentifier.frameAd)
     #expect(String(data: result.resultData, encoding: .utf8)?.contains(#""body":"hello""#) == true)
 }
 
@@ -258,7 +260,7 @@ func domCapableFrameTargetDiscoveredBeforeAttachHydratesAfterConnect() async thr
 }
 
 @Test
-func provisionalFrameDocumentResolvedBeforeCommitRehydratesCommittedFrame() async throws {
+func provisionalFrameDocumentReplyBeforeCommitRehydratesCommittedFrame() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
     let session = await InspectorSession(configuration: .test)
@@ -281,9 +283,7 @@ func provisionalFrameDocumentResolvedBeforeCommitRehydratesCommittedFrame() asyn
         messageID: try messageID(firstRequest.message),
         result: firstLazyFrameDocumentResult
     )
-    let _: DOMDocumentIdentifier = try await waitUntil {
-        await session.dom.snapshot().targetsByID[provisionalTargetID]?.currentDocumentID
-    }
+    #expect(await session.dom.snapshot().targetsByID[provisionalTargetID]?.currentDocumentID == nil)
 
     let sentCountBeforeCommit = await backend.sentTargetMessages().count
     await transport.receiveRootMessage(
@@ -3174,7 +3174,6 @@ private func completeBootstrap(
 ) async throws -> [SentTargetMessage] {
     var sentCount = initialSentCount
     var sentMessages: [SentTargetMessage] = []
-    // DOM.enable is resolved by TransportSession compatibility, so this helper only replies to backend-routed commands.
     for method in ["Inspector.enable", "Inspector.initialized", "Runtime.enable"] {
         let sent = try await waitForTargetMessage(backend, method: method, after: sentCount)
         sentMessages.append(sent)
