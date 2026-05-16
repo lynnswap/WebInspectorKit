@@ -784,12 +784,17 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     }
 
     private func openAncestors(of node: DOMNode) {
-        var current = node.parentID.flatMap { dom.node(for: $0) }
-        while let ancestor = current {
-            if ancestor.nodeType != .document || ancestor.parentID != nil {
+        guard let rootTargetID = dom.currentPageTargetID else {
+            return
+        }
+        let projection = dom.treeProjection(rootTargetID: rootTargetID)
+        for ancestorID in projection.ancestorNodeIDs(of: node.id) {
+            guard let ancestor = dom.node(for: ancestorID) else {
+                continue
+            }
+            if ancestor.nodeType != .document || projection.parent(of: ancestor.id) != nil {
                 openState[ancestor.id] = true
             }
-            current = ancestor.parentID.flatMap { dom.node(for: $0) }
         }
     }
 

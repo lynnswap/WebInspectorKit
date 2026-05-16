@@ -22,9 +22,40 @@ package struct DOMTreeRow: Equatable, Sendable {
 
 package struct DOMTreeProjection: Equatable, Sendable {
     package var rows: [DOMTreeRow]
+    package var rootNodeIDs: [DOMNodeIdentifier]
+    package var childrenByNodeID: [DOMNodeIdentifier: [DOMNodeIdentifier]]
+    package var parentByNodeID: [DOMNodeIdentifier: DOMNodeIdentifier]
 
-    package init(rows: [DOMTreeRow]) {
+    package init(
+        rows: [DOMTreeRow] = [],
+        rootNodeIDs: [DOMNodeIdentifier] = [],
+        childrenByNodeID: [DOMNodeIdentifier: [DOMNodeIdentifier]] = [:],
+        parentByNodeID: [DOMNodeIdentifier: DOMNodeIdentifier] = [:]
+    ) {
         self.rows = rows
+        self.rootNodeIDs = rootNodeIDs
+        self.childrenByNodeID = childrenByNodeID
+        self.parentByNodeID = parentByNodeID
+    }
+
+    package func children(of nodeID: DOMNodeIdentifier) -> [DOMNodeIdentifier] {
+        childrenByNodeID[nodeID] ?? []
+    }
+
+    package func parent(of nodeID: DOMNodeIdentifier) -> DOMNodeIdentifier? {
+        parentByNodeID[nodeID]
+    }
+
+    package func ancestorNodeIDs(of nodeID: DOMNodeIdentifier) -> [DOMNodeIdentifier] {
+        var ancestors: [DOMNodeIdentifier] = []
+        var visited = Set<DOMNodeIdentifier>()
+        var current = parentByNodeID[nodeID]
+        while let ancestorID = current,
+              visited.insert(ancestorID).inserted {
+            ancestors.append(ancestorID)
+            current = parentByNodeID[ancestorID]
+        }
+        return ancestors
     }
 }
 

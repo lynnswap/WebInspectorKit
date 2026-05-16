@@ -269,6 +269,8 @@ func iframeOwnerProjectsFrameDocumentWithoutStoringItAsRegularChild() async thro
     #expect(snapshot.nodesByID[frameRootID]?.parentID == nil)
     #expect(projectionState.ownerNodeID == iframeID)
     #expect(projectionState.state == .attached)
+    #expect(projection.parent(of: frameRootID) == iframeID)
+    #expect(projection.children(of: iframeID) == [frameRootID])
     #expect(projection.rows.contains { $0.nodeID == frameRootID && $0.depth > iframeDepth(in: projection, iframeID: iframeID) })
 }
 
@@ -548,6 +550,8 @@ func iframeOwnerSrcMutationReevaluatesFrameDocumentProjection() async throws {
     #expect(after.nodesByID[iframeID]?.attributes.first { $0.name == "src" }?.value == "https://frame.example/ad")
     #expect(after.frameDocumentProjections[frameTargetID]?.ownerNodeID == iframeID)
     #expect(after.frameDocumentProjections[frameTargetID]?.state == .attached)
+    #expect(after.nodesByID[frameRootID]?.parentID == nil)
+    #expect(projection.parent(of: frameRootID) == iframeID)
     #expect(projection.rows.contains { $0.nodeID == frameRootID && $0.depth > iframeDepth(in: projection, iframeID: iframeID) })
 
     await session.applyAttributeModified(iframeID, name: "src", value: "https://other.example/ad")
@@ -555,16 +559,22 @@ func iframeOwnerSrcMutationReevaluatesFrameDocumentProjection() async throws {
     let mismatchedProjection = await session.treeProjection(rootTargetID: pageTargetID)
     #expect(afterMismatch.frameDocumentProjections[frameTargetID]?.ownerNodeID == nil)
     #expect(afterMismatch.frameDocumentProjections[frameTargetID]?.state == .pending)
+    #expect(afterMismatch.nodesByID[frameRootID]?.parentID == nil)
     #expect(mismatchedProjection.rows.map(\.nodeID).contains(frameRootID) == false)
 
     await session.applyAttributeModified(iframeID, name: "src", value: "https://frame.example/ad")
-    #expect(await session.snapshot().frameDocumentProjections[frameTargetID]?.ownerNodeID == iframeID)
+    let reattached = await session.snapshot()
+    let reattachedProjection = await session.treeProjection(rootTargetID: pageTargetID)
+    #expect(reattached.frameDocumentProjections[frameTargetID]?.ownerNodeID == iframeID)
+    #expect(reattached.nodesByID[frameRootID]?.parentID == nil)
+    #expect(reattachedProjection.parent(of: frameRootID) == iframeID)
 
     await session.applyAttributeRemoved(iframeID, name: "src")
     let afterRemoval = await session.snapshot()
     let removedProjection = await session.treeProjection(rootTargetID: pageTargetID)
     #expect(afterRemoval.frameDocumentProjections[frameTargetID]?.ownerNodeID == nil)
     #expect(afterRemoval.frameDocumentProjections[frameTargetID]?.state == .pending)
+    #expect(afterRemoval.nodesByID[frameRootID]?.parentID == nil)
     #expect(removedProjection.rows.map(\.nodeID).contains(frameRootID) == false)
 }
 
@@ -1131,10 +1141,17 @@ func iframeAdRefreshSelectionUsesNewFrameDocumentGenerationAndSelectedProjection
     ).get()
     let snapshot = await session.snapshot()
     let projection = await session.treeProjection(rootTargetID: pageTargetID)
+    let iframeID = try #require(snapshot.currentNodeIDByKey[.init(targetID: pageTargetID, nodeID: .init(20))])
 
     #expect(snapshot.framesByID[frameID]?.currentDocumentID == refreshedFrameRootID.documentID)
     #expect(selectedNodeID.documentID == refreshedFrameRootID.documentID)
+    #expect(snapshot.nodesByID[refreshedFrameRootID]?.parentID == nil)
+    #expect(projection.parent(of: refreshedFrameRootID) == iframeID)
+    #expect(projection.ancestorNodeIDs(of: selectedNodeID).contains(iframeID))
+    #expect(projection.ancestorNodeIDs(of: selectedNodeID).contains(refreshedFrameRootID))
     #expect(projection.rows.contains { $0.nodeID == selectedNodeID && $0.isSelected })
+    #expect(await session.selectedNodeCopyText(.selectorPath) == "#ad-node")
+    #expect(await session.selectedNodeCopyText(.xPath) == "/html/body/div")
 }
 
 @Test

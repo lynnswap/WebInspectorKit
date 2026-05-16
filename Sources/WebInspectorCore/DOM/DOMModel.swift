@@ -51,12 +51,6 @@ private extension UnicodeScalar {
     }
 }
 
-private extension ProtocolTarget {
-    var isTopLevelPage: Bool {
-        kind == .page && parentFrameID == nil
-    }
-}
-
 @MainActor
 @Observable
 package final class DOMTargetState {
@@ -227,27 +221,6 @@ package final class DOMDocumentState {
 
 package typealias DOMDocument = DOMDocumentState
 
-@MainActor
-@Observable
-package final class FrameDocumentProjection {
-    package var ownerNodeID: DOMNode.ID?
-    package var frameTargetID: ProtocolTarget.ID
-    package var frameDocumentID: DOMDocument.ID
-    package var state: FrameDocumentProjectionState
-
-    package init(
-        ownerNodeID: DOMNode.ID?,
-        frameTargetID: ProtocolTarget.ID,
-        frameDocumentID: DOMDocument.ID,
-        state: FrameDocumentProjectionState
-    ) {
-        self.ownerNodeID = ownerNodeID
-        self.frameTargetID = frameTargetID
-        self.frameDocumentID = frameDocumentID
-        self.state = state
-    }
-}
-
 package struct DOMTransaction {
     package typealias ID = DOMTransactionIdentifier
 
@@ -395,12 +368,10 @@ package final class DOMSession {
     package private(set) var treeRevision: UInt64
     package private(set) var selectionRevision: UInt64
 
-    private var targetsByID: [ProtocolTarget.ID: ProtocolTarget]
-    private var targetStatesByID: [ProtocolTarget.ID: DOMTargetState]
-    private var framesByID: [DOMFrame.ID: DOMFrame]
-    private var frameDocumentProjections: [ProtocolTarget.ID: FrameDocumentProjection]
+    private var targetGraph: DOMTargetGraph
+    private var documentStore: DOMDocumentStore
+    private var frameDocumentProjectionIndex: FrameDocumentProjectionIndex
     private var selection: DOMSelection
-    private var executionContextsByID: [ExecutionContextID: ExecutionContextRecord]
     private var nextSelectionRequestRawID: UInt64
 
     package init() {
@@ -408,88 +379,42 @@ package final class DOMSession {
         mainFrameID = nil
         treeRevision = 0
         selectionRevision = 0
-        targetsByID = [:]
-        targetStatesByID = [:]
-        framesByID = [:]
-        frameDocumentProjections = [:]
+        targetGraph = DOMTargetGraph()
+        documentStore = DOMDocumentStore()
+        frameDocumentProjectionIndex = FrameDocumentProjectionIndex()
         selection = DOMSelection()
-        executionContextsByID = [:]
         nextSelectionRequestRawID = 0
     }
 
     private func targetBelongsToCurrentPage(_ targetID: ProtocolTarget.ID) -> Bool {
-        guard targetsByID[targetID] != nil else {
-            return false
-        }
-        guard currentPageTargetID != targetID else {
-            return true
-        }
-        guard let frameID = targetsByID[targetID]?.frameID else {
-            return false
-        }
-
-        var currentFrameID: DOMFrame.ID? = frameID
-        var visitedFrameIDs = Set<DOMFrame.ID>()
-        while let candidateFrameID = currentFrameID,
-              visitedFrameIDs.insert(candidateFrameID).inserted {
-            if candidateFrameID == mainFrameID {
-                return true
-            }
-            currentFrameID = framesByID[candidateFrameID]?.parentFrameID
-        }
-        return false
+        targetGraph.targetBelongsToCurrentPage(
+            targetID,
+            currentPageTargetID: currentPageTargetID,
+            mainFrameID: mainFrameID
+        )
     }
 
     private func state(for targetID: ProtocolTarget.ID) -> DOMTargetState {
-        let state = targetStatesByID[targetID] ?? DOMTargetState(targetID: targetID)
-        targetStatesByID[targetID] = state
-        return state
+        documentStore.state(for: targetID)
     }
 
     private func currentState(for targetID: ProtocolTarget.ID) -> DOMTargetState? {
         guard targetBelongsToCurrentPage(targetID) || currentPageTargetID == nil else {
             return nil
         }
-        return targetStatesByID[targetID]
+        return documentStore.stateIfPresent(for: targetID)
     }
 
     private func currentDocument(for documentID: DOMDocument.ID) -> DOMDocument? {
-        guard let document = targetStatesByID[documentID.targetID]?.currentDocument,
-              document.id == documentID,
-              document.lifecycle == .loaded else {
-            return nil
-        }
-        return document
+        documentStore.currentDocument(for: documentID)
     }
 
     private func document(for nodeID: DOMNode.ID) -> DOMDocument? {
         currentDocument(for: nodeID.documentID)
     }
 
-    private func attachFrameTarget(_ target: ProtocolTarget) {
-        guard let frameID = target.frameID else {
-            return
-        }
-        let frame = frameWithID(frameID, parentFrameID: target.parentFrameID)
-        frame.targetID = target.id
-        _ = state(for: target.id)
-    }
-
     private func attachKnownFrameTargets() {
-        var attachedTargetIDs = Set<ProtocolTarget.ID>()
-        var didAttach = true
-        while didAttach {
-            didAttach = false
-            for target in targetsByID.values where target.kind == .frame && attachedTargetIDs.contains(target.id) == false {
-                guard let parentFrameID = target.parentFrameID,
-                      parentFrameID == mainFrameID || framesByID[parentFrameID] != nil else {
-                    continue
-                }
-                attachFrameTarget(target)
-                attachedTargetIDs.insert(target.id)
-                didAttach = true
-            }
-        }
+        targetGraph.attachKnownFrameTargets(mainFrameID: mainFrameID)
     }
 
     package func reset() {
@@ -497,12 +422,10 @@ package final class DOMSession {
         mainFrameID = nil
         treeRevision = 0
         selectionRevision = 0
-        targetsByID.removeAll()
-        targetStatesByID.removeAll()
-        framesByID.removeAll()
-        frameDocumentProjections.removeAll()
+        targetGraph.reset()
+        documentStore.reset()
+        frameDocumentProjectionIndex.removeAll()
         selection = DOMSelection()
-        executionContextsByID.removeAll()
         nextSelectionRequestRawID = 0
     }
 
@@ -510,26 +433,11 @@ package final class DOMSession {
         _ record: ProtocolTargetRecord,
         makeCurrentMainPage: Bool = false
     ) {
-        let target = targetsByID[record.id] ?? ProtocolTarget(
-            id: record.id,
-            kind: record.kind,
-            frameID: record.frameID,
-            parentFrameID: record.parentFrameID,
-            capabilities: record.capabilities,
-            isProvisional: record.isProvisional,
-            isPaused: record.isPaused
-        )
-        target.kind = record.kind
-        target.frameID = record.frameID
-        target.parentFrameID = record.parentFrameID
-        target.capabilities = record.capabilities
-        target.isProvisional = record.isProvisional
-        target.isPaused = record.isPaused
-        targetsByID[record.id] = target
+        targetGraph.upsertTarget(from: record)
         _ = state(for: record.id)
 
         if record.kind == .frame {
-            attachFrameTarget(target)
+            targetGraph.attachFrameTarget(record.id)
         }
 
         guard makeCurrentMainPage, record.kind == .page else {
@@ -540,13 +448,11 @@ package final class DOMSession {
     }
 
     package func promoteTargetToCurrentPage(_ targetID: ProtocolTarget.ID) {
-        guard let target = targetsByID[targetID],
-              target.kind == .page,
-              target.parentFrameID == nil else {
+        guard targetGraph.isTopLevelPageTarget(targetID) else {
             return
         }
 
-        let resolvedMainFrameID = target.frameID ?? DOMFrame.ID("main:\(targetID.rawValue)")
+        let resolvedMainFrameID = targetGraph.targetFrameID(for: targetID) ?? DOMFrame.ID("main:\(targetID.rawValue)")
         if let currentPageTargetID, currentPageTargetID != targetID {
             selection = DOMSelection()
             selectionRevision &+= 1
@@ -554,22 +460,13 @@ package final class DOMSession {
         currentPageTargetID = targetID
         mainFrameID = resolvedMainFrameID
         _ = state(for: targetID)
-        let mainFrame = frameWithID(resolvedMainFrameID, parentFrameID: nil)
-        mainFrame.targetID = targetID
-        target.frameID = resolvedMainFrameID
+        targetGraph.assignMainFrame(resolvedMainFrameID, to: targetID)
         attachKnownFrameTargets()
         treeRevision &+= 1
     }
 
     package func applyTargetCommitted(targetID: ProtocolTarget.ID) {
-        guard let target = targetsByID[targetID] else {
-            return
-        }
-
-        target.isProvisional = false
-        if target.kind == .frame {
-            attachFrameTarget(target)
-        }
+        targetGraph.markTargetCommitted(targetID)
     }
 
     package func applyTargetCommitted(oldTargetID: ProtocolTarget.ID, newTargetID: ProtocolTarget.ID) {
@@ -579,71 +476,40 @@ package final class DOMSession {
         }
 
         if currentPageTargetID == oldTargetID,
-           let existingNewTarget = targetsByID[newTargetID],
-           !existingNewTarget.isTopLevelPage {
+           targetGraph.containsTarget(newTargetID),
+           !targetGraph.isTopLevelPageTarget(newTargetID) {
             applyTargetCommitted(targetID: newTargetID)
             return
         }
 
-        guard let oldTarget = targetsByID.removeValue(forKey: oldTargetID) else {
+        guard let commit = targetGraph.commitTarget(oldTargetID: oldTargetID, newTargetID: newTargetID) else {
             return
         }
 
-        let existingNewTarget = targetsByID[newTargetID]
-        let frameID = existingNewTarget?.frameID ?? oldTarget.frameID
-        let parentFrameID = existingNewTarget?.parentFrameID ?? oldTarget.parentFrameID
-        let committedTarget = existingNewTarget ?? ProtocolTarget(
-            id: newTargetID,
-            kind: oldTarget.kind,
-            frameID: frameID,
-            parentFrameID: parentFrameID,
-            capabilities: oldTarget.capabilities,
-            isProvisional: false,
-            isPaused: oldTarget.isPaused
-        )
-        committedTarget.kind = existingNewTarget?.kind ?? oldTarget.kind
-        committedTarget.frameID = frameID
-        committedTarget.parentFrameID = parentFrameID
-        committedTarget.capabilities = existingNewTarget?.capabilities ?? oldTarget.capabilities
-        committedTarget.isProvisional = false
-        committedTarget.isPaused = existingNewTarget?.isPaused ?? oldTarget.isPaused
-        targetsByID[newTargetID] = committedTarget
-
-        if let oldState = targetStatesByID.removeValue(forKey: oldTargetID) {
+        if let oldState = documentStore.removeState(for: oldTargetID) {
             oldState.currentDocument?.transactions.removeAll()
             let newState = state(for: newTargetID)
             if let oldDocument = oldState.currentDocument {
                 oldDocument.lifecycle = .invalidated
-                clearCurrentDocumentReference(oldDocument.id, target: oldTarget)
+                clearCurrentDocumentReference(
+                    oldDocument.id,
+                    targetID: oldTargetID,
+                    targetFrameID: commit.oldFrameID
+                )
                 newState.currentDocument = nil
             }
         }
 
-        if let frameID {
-            let frame = frameWithID(frameID, parentFrameID: parentFrameID)
-            if frame.targetID == oldTargetID || frame.targetID == nil {
-                frame.targetID = newTargetID
-            }
+        if frameDocumentProjectionIndex.moveProjection(from: oldTargetID, to: newTargetID) != nil {
+            updateFrameDocumentProjectionState(frameTargetID: newTargetID)
         }
 
-        if let projection = frameDocumentProjections.removeValue(forKey: oldTargetID) {
-            projection.frameTargetID = newTargetID
-            frameDocumentProjections[newTargetID] = projection
-            updateFrameDocumentProjectionState(projection)
-        }
-
-        for (contextID, record) in executionContextsByID where record.targetID == oldTargetID {
-            executionContextsByID[contextID] = ExecutionContextRecord(
-                id: record.id,
-                targetID: newTargetID,
-                frameID: record.frameID
-            )
-        }
+        targetGraph.retargetExecutionContexts(from: oldTargetID, to: newTargetID)
 
         if currentPageTargetID == oldTargetID {
             currentPageTargetID = newTargetID
             if let mainFrameID {
-                frameWithID(mainFrameID, parentFrameID: nil).targetID = newTargetID
+                targetGraph.setFrameTargetID(newTargetID, for: mainFrameID)
             }
         }
 
@@ -652,34 +518,34 @@ package final class DOMSession {
     }
 
     package func applyTargetDestroyed(_ targetID: ProtocolTarget.ID) {
-        guard let target = targetsByID.removeValue(forKey: targetID) else {
+        guard let removal = targetGraph.removeTarget(targetID) else {
             return
         }
-        executionContextsByID = executionContextsByID.filter { $0.value.targetID != targetID }
-        if let documentID = targetStatesByID[targetID]?.currentDocument?.id {
+        targetGraph.removeExecutionContexts(targetID: targetID)
+        if let documentID = documentStore.currentDocument(forTargetID: targetID)?.id {
             removeDocument(documentID)
         }
-        frameDocumentProjections.removeValue(forKey: targetID)
-        if let frameID = target.frameID,
-           framesByID[frameID]?.targetID == targetID {
-            framesByID[frameID]?.targetID = nil
-            framesByID[frameID]?.currentDocumentID = nil
+        frameDocumentProjectionIndex.removeValue(forKey: targetID)
+        if let frameID = removal.frameID,
+           targetGraph.frameTargetID(frameID) == targetID {
+            targetGraph.setFrameTargetID(nil, for: frameID)
+            targetGraph.setFrameCurrentDocumentID(nil, for: frameID)
         }
         if currentPageTargetID == targetID {
             currentPageTargetID = nil
             mainFrameID = nil
             selection = DOMSelection()
         }
-        targetStatesByID.removeValue(forKey: targetID)
+        documentStore.removeState(for: targetID)
         reconcileSelection()
         treeRevision &+= 1
     }
 
     package func applyExecutionContextCreated(_ record: ExecutionContextRecord) {
-        guard targetsByID[record.targetID] != nil else {
+        guard targetGraph.containsTarget(record.targetID) else {
             return
         }
-        executionContextsByID[record.id] = record
+        targetGraph.recordExecutionContext(record)
     }
 
     package func applyExecutionContextCreated(
@@ -692,7 +558,7 @@ package final class DOMSession {
 
     @discardableResult
     package func replaceDocumentRoot(_ root: DOMNodePayload, targetID: ProtocolTarget.ID) -> DOMNode.ID {
-        guard let target = targetsByID[targetID] else {
+        guard targetGraph.containsTarget(targetID) else {
             preconditionFailure("replaceDocumentRoot requires a known ProtocolTarget")
         }
         let targetState = state(for: targetID)
@@ -718,14 +584,14 @@ package final class DOMSession {
         )
         targetState.currentDocument = document
 
-        if let frameID = target.frameID {
-            framesByID[frameID]?.currentDocumentID = documentID
+        if let frameID = targetGraph.targetFrameID(for: targetID) {
+            targetGraph.setFrameCurrentDocumentID(documentID, for: frameID)
         }
         if currentPageTargetID == targetID,
            let mainFrameID {
-            framesByID[mainFrameID]?.currentDocumentID = documentID
+            targetGraph.setFrameCurrentDocumentID(documentID, for: mainFrameID)
         }
-        if target.kind == .frame {
+        if targetGraph.targetKind(for: targetID) == .frame {
             setFrameDocumentProjection(frameTargetID: targetID, frameDocumentID: documentID)
         }
         updateAllFrameDocumentProjectionStates()
@@ -736,26 +602,24 @@ package final class DOMSession {
     }
 
     package func invalidateDocument(targetID: ProtocolTarget.ID) {
-        guard let target = targetsByID[targetID],
-              let targetState = targetStatesByID[targetID],
+        guard let targetState = documentStore.stateIfPresent(for: targetID),
               let document = targetState.currentDocument else {
             return
         }
         let documentID = document.id
         document.lifecycle = .invalidated
         document.transactions.removeAll()
-        if let frameID = target.frameID,
-           framesByID[frameID]?.currentDocumentID == documentID {
-            framesByID[frameID]?.currentDocumentID = nil
+        if let frameID = targetGraph.targetFrameID(for: targetID),
+           targetGraph.frameCurrentDocumentID(frameID) == documentID {
+            targetGraph.setFrameCurrentDocumentID(nil, for: frameID)
         }
         if currentPageTargetID == targetID,
            let mainFrameID {
-            framesByID[mainFrameID]?.currentDocumentID = nil
+            targetGraph.clearFrameCurrentDocumentID(mainFrameID, matching: documentID)
         }
-        if let projection = frameDocumentProjections[targetID],
+        if let projection = frameDocumentProjectionIndex[targetID],
            projection.frameDocumentID == documentID {
-            projection.ownerNodeID = nil
-            projection.state = .pending
+            detachFrameDocumentProjection(frameTargetID: targetID)
         }
         reconcileSelection()
         treeRevision &+= 1
@@ -771,7 +635,7 @@ package final class DOMSession {
         children payloads: [DOMNodePayload],
         eventSequence: UInt64
     ) {
-        guard let document = targetStatesByID[targetID]?.currentDocument,
+        guard let document = documentStore.currentDocument(forTargetID: targetID),
               document.lifecycle == .loaded else {
             return
         }
@@ -787,7 +651,7 @@ package final class DOMSession {
         payload: DOMNodePayload,
         eventSequence _: UInt64
     ) {
-        guard let document = targetStatesByID[targetID]?.currentDocument,
+        guard let document = documentStore.currentDocument(forTargetID: targetID),
               document.lifecycle == .loaded else {
             return
         }
@@ -946,19 +810,15 @@ package final class DOMSession {
     }
 
     package func currentDocumentID(for targetID: ProtocolTarget.ID) -> DOMDocument.ID? {
-        guard let document = targetStatesByID[targetID]?.currentDocument,
-              document.lifecycle == .loaded else {
-            return nil
-        }
-        return document.id
+        documentStore.currentLoadedDocumentID(for: targetID)
     }
 
     package func targetCapabilities(for targetID: ProtocolTarget.ID) -> ProtocolTargetCapabilities {
-        targetsByID[targetID]?.capabilities ?? []
+        targetGraph.targetCapabilities(for: targetID)
     }
 
     package func targetKind(for targetID: ProtocolTarget.ID) -> ProtocolTargetKind? {
-        targetsByID[targetID]?.kind
+        targetGraph.targetKind(for: targetID)
     }
 
     package func getDocumentIntent(targetID: ProtocolTarget.ID) -> DOMCommandIntent? {
@@ -981,7 +841,7 @@ package final class DOMSession {
 
     package var currentPageRootNode: DOMNode? {
         guard let targetID = currentPageTargetID,
-              let document = targetStatesByID[targetID]?.currentDocument,
+              let document = documentStore.currentDocument(forTargetID: targetID),
               document.lifecycle == .loaded
         else {
             return nil
@@ -990,7 +850,7 @@ package final class DOMSession {
     }
 
     package func node(for id: DOMNode.ID) -> DOMNode? {
-        currentDocument(for: id.documentID)?.nodesByID[id]
+        documentStore.node(for: id)
     }
 
     package func visibleDOMTreeChildren(of node: DOMNode) -> [DOMNode] {
@@ -1048,7 +908,7 @@ package final class DOMSession {
         targetID: ProtocolTarget.ID,
         nodeID: DOMProtocolNodeID
     ) -> Result<DOMNode.ID, SelectionResolutionFailure> {
-        guard let document = targetStatesByID[targetID]?.currentDocument,
+        guard let document = documentStore.currentDocument(forTargetID: targetID),
               document.lifecycle == .loaded else {
             return failSelection(.missingCurrentDocument(targetID), clearSelected: false)
         }
@@ -1081,11 +941,12 @@ package final class DOMSession {
     }
 
     package func pendingFrameOwnerHydrationIntent(issuedSequence: UInt64 = 0) -> DOMCommandIntent? {
-        guard let (frameTargetID, _) = frameDocumentProjections
-            .sorted(by: { $0.key.rawValue < $1.key.rawValue })
-            .first(where: { $0.value.state == .pending }) else {
+        guard let pendingProjection = frameDocumentProjectionIndex.values
+            .sorted(by: { $0.frameTargetID.rawValue < $1.frameTargetID.rawValue })
+            .first(where: { $0.state == .pending }) else {
             return nil
         }
+        let frameTargetID = pendingProjection.frameTargetID
         guard let ownerDocument = ownerDocument(forFrameTargetID: frameTargetID),
               let node = ownerHydrationNode(in: ownerDocument) else {
             return nil
@@ -1099,7 +960,7 @@ package final class DOMSession {
     }
 
     package func clearOwnerHydrationTransactions(targetID: ProtocolTarget.ID) {
-        targetStatesByID[targetID]?.currentDocument?.removeOwnerHydrationTransactions()
+        documentStore.clearOwnerHydrationTransactions(targetID: targetID)
     }
 
     package func actionIdentity(
@@ -1108,7 +969,7 @@ package final class DOMSession {
     ) -> DOMActionIdentity? {
         guard let node = node(for: nodeID),
               let resolvedCommandTargetID = commandTargetID ?? currentPageTargetID,
-              targetsByID[resolvedCommandTargetID] != nil else {
+              targetGraph.containsTarget(resolvedCommandTargetID) else {
             return nil
         }
 
@@ -1150,7 +1011,7 @@ package final class DOMSession {
         enabled: Bool
     ) -> DOMCommandIntent? {
         guard let targetID = targetID ?? currentPageTargetID,
-              targetsByID[targetID] != nil else {
+              targetGraph.containsTarget(targetID) else {
             return nil
         }
         return .setInspectModeEnabled(targetID: targetID, enabled: enabled)
@@ -1244,7 +1105,7 @@ package final class DOMSession {
         guard objectID.isEmpty == false else {
             return failSelection(.missingObjectID)
         }
-        guard let document = targetStatesByID[targetID]?.currentDocument,
+        guard let document = documentStore.currentDocument(forTargetID: targetID),
               document.lifecycle == .loaded,
               document.nodesByID[document.rootNodeID] != nil else {
             return failSelection(.missingCurrentDocument(targetID))
@@ -1273,7 +1134,7 @@ package final class DOMSession {
         targetID: ProtocolTarget.ID,
         nodeID: DOMProtocolNodeID
     ) -> DOMRequestNodeResolution {
-        guard let document = targetStatesByID[targetID]?.currentDocument,
+        guard let document = documentStore.currentDocument(forTargetID: targetID),
               document.lifecycle == .loaded else {
             return failSelection(.missingCurrentDocument(targetID), clearSelected: false)
         }
@@ -1314,68 +1175,39 @@ package final class DOMSession {
     }
 
     package func treeProjection(rootTargetID: ProtocolTarget.ID) -> DOMTreeProjection {
-        var rows: [DOMTreeRow] = []
-        var visited = Set<DOMNode.ID>()
-        if let document = targetStatesByID[rootTargetID]?.currentDocument,
-           document.lifecycle == .loaded {
-            appendProjectionRows(document.rootNodeID, depth: 0, visited: &visited, rows: &rows)
+        guard let document = documentStore.currentDocument(forTargetID: rootTargetID),
+              document.lifecycle == .loaded else {
+            return DOMTreeProjection()
         }
-        return DOMTreeProjection(rows: rows)
+        return DOMTreeProjectionBuilder(
+            rootDocument: document,
+            selectedNodeID: selection.selectedNodeID,
+            nodeProvider: { [weak self] nodeID in
+                self?.node(for: nodeID)
+            },
+            frameDocumentRootResolver: { [weak self] ownerNodeID in
+                self?.projectedFrameDocumentRootID(for: ownerNodeID)
+            }
+        )
+        .build()
     }
 
     package func snapshot() -> DOMSessionSnapshot {
-        let documents = targetStatesByID.values.compactMap(\.currentDocument)
+        let documents = documentStore.currentDocuments
         let documentsByID = Dictionary(uniqueKeysWithValues: documents.map { ($0.id, $0) })
         let nodesByID = Dictionary(uniqueKeysWithValues: documents.flatMap { document in
             document.nodesByID.map { ($0.key, $0.value) }
         })
-        let currentNodeIDByKey = Dictionary(uniqueKeysWithValues: targetStatesByID.values.compactMap { state -> [(DOMNodeCurrentKey, DOMNode.ID)]? in
-            guard let document = state.currentDocument else {
-                return nil
-            }
-            guard document.lifecycle == .loaded else {
-                return []
-            }
-            return document.currentNodeIDByProtocolNodeID.map {
-                (DOMNodeCurrentKey(targetID: state.targetID, nodeID: $0.key), $0.value)
-            }
-        }.flatMap { $0 })
-        let transactions = documents.flatMap { document in
-            document.transactions.values
-        }
+        let currentNodeIDByKey = documentStore.currentNodeIDsByKey()
+        let transactions = documentStore.transactions()
         return DOMSessionSnapshot(
             currentPageTargetID: currentPageTargetID,
             mainFrameID: mainFrameID,
             treeRevision: treeRevision,
             selectionRevision: selectionRevision,
-            targetsByID: targetsByID.mapValues {
-                ProtocolTargetSnapshot(
-                    id: $0.id,
-                    kind: $0.kind,
-                    frameID: $0.frameID,
-                    parentFrameID: $0.parentFrameID,
-                    capabilities: $0.capabilities,
-                    isProvisional: $0.isProvisional,
-                    isPaused: $0.isPaused,
-                    currentDocumentID: currentDocumentID(for: $0.id)
-                )
-            },
-            targetStatesByID: targetStatesByID.mapValues { state in
-                DOMTargetStateSnapshot(
-                    targetID: state.targetID,
-                    currentDocumentID: currentDocumentID(for: state.targetID),
-                    transactionIDs: state.currentDocument.map { Array($0.transactions.keys) } ?? []
-                )
-            },
-            framesByID: framesByID.mapValues {
-                DOMFrameSnapshot(
-                    id: $0.id,
-                    parentFrameID: $0.parentFrameID,
-                    childFrameIDs: $0.childFrameIDs,
-                    targetID: $0.targetID,
-                    currentDocumentID: $0.currentDocumentID
-                )
-            },
+            targetsByID: targetGraph.targetSnapshots(currentDocumentID: currentDocumentID(for:)),
+            targetStatesByID: documentStore.targetStateSnapshots(currentDocumentID: currentDocumentID(for:)),
+            framesByID: targetGraph.frameSnapshots(),
             documentsByID: documentsByID.mapValues {
                 DOMDocumentSnapshot(
                     id: $0.id,
@@ -1411,14 +1243,7 @@ package final class DOMSession {
                     shadowRootType: node.shadowRootType
                 )
             },
-            frameDocumentProjections: frameDocumentProjections.mapValues {
-                FrameDocumentProjectionSnapshot(
-                    ownerNodeID: $0.ownerNodeID,
-                    frameTargetID: $0.frameTargetID,
-                    frameDocumentID: $0.frameDocumentID,
-                    state: $0.state
-                )
-            },
+            frameDocumentProjections: frameDocumentProjectionIndex.snapshots(),
             transactions: transactions.map {
                 DOMTransactionSnapshot(
                     id: $0.id,
@@ -1430,7 +1255,7 @@ package final class DOMSession {
                 )
             },
             currentNodeIDByKey: currentNodeIDByKey,
-            executionContextsByID: executionContextsByID,
+            executionContextsByID: targetGraph.executionContextSnapshots(),
             selection: DOMSelectionSnapshot(
                 selectedNodeID: selection.selectedNodeID,
                 pendingRequest: selection.pendingRequest.map {
@@ -1439,17 +1264,6 @@ package final class DOMSession {
                 failure: selection.failure
             )
         )
-    }
-
-    private func frameWithID(_ frameID: DOMFrame.ID, parentFrameID: DOMFrame.ID?) -> DOMFrame {
-        let frame = framesByID[frameID] ?? DOMFrame(id: frameID, parentFrameID: parentFrameID)
-        frame.parentFrameID = parentFrameID
-        framesByID[frameID] = frame
-        if let parentFrameID {
-            let parent = frameWithID(parentFrameID, parentFrameID: nil)
-            parent.childFrameIDs.insert(frameID)
-        }
-        return frame
     }
 
     private func buildSubtree(
@@ -1529,14 +1343,14 @@ package final class DOMSession {
     }
 
     private func removeDocuments(for targetID: ProtocolTarget.ID) {
-        guard let documentID = targetStatesByID[targetID]?.currentDocument?.id else {
+        guard let documentID = documentStore.currentDocument(forTargetID: targetID)?.id else {
             return
         }
         removeDocument(documentID)
     }
 
     private func removeDocument(_ documentID: DOMDocument.ID) {
-        guard let targetState = targetStatesByID[documentID.targetID],
+        guard let targetState = documentStore.stateIfPresent(for: documentID.targetID),
               let document = targetState.currentDocument,
               document.id == documentID else {
             return
@@ -1544,9 +1358,8 @@ package final class DOMSession {
         document.lifecycle = .invalidated
         targetState.currentDocument = nil
         document.transactions.removeAll()
-        if let target = targetsByID[document.targetID] {
-            clearCurrentDocumentReference(documentID, target: target)
-        }
+        clearCurrentDocumentReference(documentID, targetID: document.targetID)
+        updateAllFrameDocumentProjectionStates()
         if selection.selectedNodeID?.documentID == documentID {
             selection.selectedNodeID = nil
             selection.failure = nil
@@ -1554,16 +1367,26 @@ package final class DOMSession {
         }
     }
 
-    private func clearCurrentDocumentReference(_ documentID: DOMDocument.ID, target: ProtocolTarget) {
-        if let frameID = target.frameID,
-           framesByID[frameID]?.currentDocumentID == documentID {
-            framesByID[frameID]?.currentDocumentID = nil
-        }
-        if currentPageTargetID == target.id,
-           let mainFrameID,
-           framesByID[mainFrameID]?.currentDocumentID == documentID {
-            framesByID[mainFrameID]?.currentDocumentID = nil
-        }
+    private func clearCurrentDocumentReference(_ documentID: DOMDocument.ID, targetID: ProtocolTarget.ID) {
+        clearCurrentDocumentReference(
+            documentID,
+            targetID: targetID,
+            targetFrameID: targetGraph.targetFrameID(for: targetID)
+        )
+    }
+
+    private func clearCurrentDocumentReference(
+        _ documentID: DOMDocument.ID,
+        targetID: ProtocolTarget.ID,
+        targetFrameID: DOMFrame.ID?
+    ) {
+        targetGraph.clearCurrentDocumentReference(
+            documentID,
+            targetFrameID: targetFrameID,
+            targetID: targetID,
+            currentPageTargetID: currentPageTargetID,
+            mainFrameID: mainFrameID
+        )
     }
 
     @discardableResult
@@ -1573,7 +1396,7 @@ package final class DOMSession {
         kind: DOMTransactionKind,
         issuedSequence: UInt64
     ) -> DOMTransaction.ID? {
-        guard let targetState = targetStatesByID[targetID],
+        guard let targetState = documentStore.stateIfPresent(for: targetID),
               targetState.currentDocument === document else {
             return nil
         }
@@ -1581,20 +1404,14 @@ package final class DOMSession {
     }
 
     private func removeTransaction(_ transactionID: DOMTransaction.ID, targetID: ProtocolTarget.ID?) {
-        if let targetID {
-            targetStatesByID[targetID]?.currentDocument?.removeTransaction(transactionID)
-            return
-        }
-        for state in targetStatesByID.values {
-            state.currentDocument?.removeTransaction(transactionID)
-        }
+        documentStore.removeTransaction(transactionID, targetID: targetID)
     }
 
     private func hasActiveOwnerHydrationTransaction(
         targetID: ProtocolTarget.ID,
         documentID: DOMDocument.ID
     ) -> Bool {
-        guard let document = targetStatesByID[targetID]?.currentDocument,
+        guard let document = documentStore.currentDocument(forTargetID: targetID),
               document.id == documentID else {
             return false
         }
@@ -1833,7 +1650,7 @@ package final class DOMSession {
     }
 
     private func canApplyDOMEvent(to nodeID: DOMNode.ID) -> Bool {
-        guard let document = targetStatesByID[nodeID.documentID.targetID]?.currentDocument,
+        guard let document = documentStore.currentDocument(forTargetID: nodeID.documentID.targetID),
               document.id == nodeID.documentID,
               document.lifecycle == .loaded else {
             return false
@@ -1882,7 +1699,7 @@ package final class DOMSession {
     }
 
     private func removeNodeSubtree(_ nodeID: DOMNode.ID, detachFromParent: Bool) {
-        guard let document = targetStatesByID[nodeID.documentID.targetID]?.currentDocument,
+        guard let document = documentStore.currentDocument(forTargetID: nodeID.documentID.targetID),
               document.id == nodeID.documentID,
               let node = document.nodesByID[nodeID] else {
             return
@@ -1893,9 +1710,8 @@ package final class DOMSession {
         for childID in node.protocolOwnedChildren {
             removeNodeSubtree(childID, detachFromParent: false)
         }
-        for projection in frameDocumentProjections.values where projection.ownerNodeID == nodeID {
-            projection.ownerNodeID = nil
-            projection.state = .pending
+        for projection in frameDocumentProjectionIndex.values where projection.ownerNodeID == nodeID {
+            detachFrameDocumentProjection(frameTargetID: projection.frameTargetID)
         }
         if document.currentNodeIDByProtocolNodeID[node.protocolNodeID] == nodeID {
             document.currentNodeIDByProtocolNodeID.removeValue(forKey: node.protocolNodeID)
@@ -1950,84 +1766,76 @@ package final class DOMSession {
     }
 
     private func projectedFrameOwnerKeys(inSubtree rootID: DOMNode.ID) -> [ProtocolTarget.ID: DOMNodeCurrentKey] {
-        var keys: [ProtocolTarget.ID: DOMNodeCurrentKey] = [:]
-        var stack = [rootID]
-        while let nodeID = stack.popLast() {
-            guard let node = node(for: nodeID) else {
-                continue
-            }
-            for projection in frameDocumentProjections.values where projection.ownerNodeID == nodeID {
-                keys[projection.frameTargetID] = DOMNodeCurrentKey(
-                    targetID: nodeID.documentID.targetID,
-                    nodeID: node.protocolNodeID
-                )
-            }
-            stack.append(contentsOf: node.protocolOwnedChildren)
+        frameDocumentProjectionIndex.ownerKeys(inSubtree: rootID) { [weak self] nodeID in
+            self?.node(for: nodeID)
         }
-        return keys
     }
 
     private func reattachFrameDocumentProjections(using ownerKeys: [ProtocolTarget.ID: DOMNodeCurrentKey]) {
         for (frameTargetID, ownerKey) in ownerKeys {
-            guard let projection = frameDocumentProjections[frameTargetID],
-                  let ownerNodeID = targetStatesByID[ownerKey.targetID]?.currentDocument?.currentNodeIDByProtocolNodeID[ownerKey.nodeID],
+            guard frameDocumentProjectionIndex[frameTargetID] != nil,
+                  let ownerNodeID = documentStore.currentNodeID(targetID: ownerKey.targetID, rawNodeID: ownerKey.nodeID),
                   let ownerNode = node(for: ownerNodeID),
                   ownerNode.isFrameOwner,
                   canApplyDOMEvent(to: ownerNodeID) else {
                 continue
             }
-            projection.ownerNodeID = ownerNodeID
-            projection.state = .attached
+            attachFrameDocumentProjection(frameTargetID: frameTargetID, to: ownerNodeID)
         }
     }
 
     private func setFrameDocumentProjection(frameTargetID: ProtocolTarget.ID, frameDocumentID: DOMDocument.ID) {
-        let projection = frameDocumentProjections[frameTargetID] ?? FrameDocumentProjection(
-            ownerNodeID: nil,
+        frameDocumentProjectionIndex.setFrameDocument(
             frameTargetID: frameTargetID,
-            frameDocumentID: frameDocumentID,
-            state: .pending
+            frameDocumentID: frameDocumentID
         )
-        projection.frameTargetID = frameTargetID
-        projection.frameDocumentID = frameDocumentID
-        projection.ownerNodeID = nil
-        projection.state = .pending
-        frameDocumentProjections[frameTargetID] = projection
     }
 
     private func updateAllFrameDocumentProjectionStates() {
-        for projection in frameDocumentProjections.values {
-            updateFrameDocumentProjectionState(projection)
+        for frameTargetID in frameDocumentProjectionIndex.frameTargetIDs {
+            updateFrameDocumentProjectionState(frameTargetID: frameTargetID)
         }
     }
 
-    private func updateFrameDocumentProjectionState(_ projection: FrameDocumentProjection) {
+    private func updateFrameDocumentProjectionState(frameTargetID: ProtocolTarget.ID) {
+        guard let projection = frameDocumentProjectionIndex[frameTargetID] else {
+            return
+        }
         guard let document = currentDocument(for: projection.frameDocumentID),
               let frameRoot = document.nodesByID[document.rootNodeID] else {
-            projection.ownerNodeID = nil
-            projection.state = .pending
+            detachFrameDocumentProjection(frameTargetID: frameTargetID)
             return
         }
 
         if let ownerNodeID = projection.ownerNodeID,
            frameDocumentProjection(projection, canRemainAttachedTo: ownerNodeID, frameRoot: frameRoot) {
-            projection.state = .attached
+            attachFrameDocumentProjection(frameTargetID: frameTargetID, to: ownerNodeID)
             return
         }
 
-        projection.ownerNodeID = nil
         let candidates = ownerCandidates(forFrameDocumentRoot: frameRoot)
         switch candidates.count {
         case 0:
-            projection.ownerNodeID = nil
-            projection.state = .pending
+            detachFrameDocumentProjection(frameTargetID: frameTargetID)
         case 1:
-            projection.ownerNodeID = candidates[0]
-            projection.state = .attached
+            attachFrameDocumentProjection(frameTargetID: frameTargetID, to: candidates[0])
         default:
-            projection.ownerNodeID = nil
-            projection.state = .ambiguous
+            detachFrameDocumentProjection(frameTargetID: frameTargetID, state: .ambiguous)
         }
+    }
+
+    private func attachFrameDocumentProjection(
+        frameTargetID: ProtocolTarget.ID,
+        to ownerNodeID: DOMNode.ID
+    ) {
+        frameDocumentProjectionIndex.attach(frameTargetID: frameTargetID, to: ownerNodeID)
+    }
+
+    private func detachFrameDocumentProjection(
+        frameTargetID: ProtocolTarget.ID,
+        state: FrameDocumentProjectionState = .pending
+    ) {
+        frameDocumentProjectionIndex.detach(frameTargetID: frameTargetID, state: state)
     }
 
     private func frameDocumentProjection(
@@ -2044,8 +1852,8 @@ package final class DOMSession {
             && ownerDocument(forFrameTargetID: frameTargetID)?.id == document.id
             && nodeIsConnectedToDocumentTree(ownerNodeID, in: document)
             && frameOwner(ownerNode, matchesFrameTargetID: frameTargetID, frameDocumentURL: frameRoot.documentURL)
-            && frameDocumentProjections.values.allSatisfy {
-                $0 === projection || $0.ownerNodeID != ownerNodeID || $0.state != .attached
+            && frameDocumentProjectionIndex.values.allSatisfy {
+                $0.frameTargetID == projection.frameTargetID || $0.ownerNodeID != ownerNodeID || $0.state != .attached
             }
     }
 
@@ -2057,7 +1865,7 @@ package final class DOMSession {
 
         let attachableCandidates = ownerCandidateNodes(in: ownerDocument)
             .filter { projectionCanAttach(to: $0.node, in: $0.document) }
-        if let frameID = targetsByID[frameTargetID]?.frameID {
+        if let frameID = targetGraph.targetFrameID(for: frameTargetID) {
             let frameIDMatches = attachableCandidates
                 .filter { $0.node.ownerFrameID == frameID }
             if frameIDMatches.isEmpty == false {
@@ -2082,18 +1890,18 @@ package final class DOMSession {
     }
 
     private func ownerDocument(forFrameTargetID frameTargetID: ProtocolTarget.ID) -> DOMDocument? {
-        guard let target = targetsByID[frameTargetID] else {
+        guard targetGraph.containsTarget(frameTargetID) else {
             return nil
         }
 
-        if let parentFrameID = target.parentFrameID {
-            guard let parentDocumentID = framesByID[parentFrameID]?.currentDocumentID else {
+        if let parentFrameID = targetGraph.targetParentFrameID(for: frameTargetID) {
+            guard let parentDocumentID = targetGraph.frameCurrentDocumentID(parentFrameID) else {
                 return nil
             }
             return currentDocument(for: parentDocumentID)
         }
         guard let pageTargetID = currentPageTargetID,
-              let pageDocument = targetStatesByID[pageTargetID]?.currentDocument,
+              let pageDocument = documentStore.currentDocument(forTargetID: pageTargetID),
               pageDocument.lifecycle == .loaded else {
             return nil
         }
@@ -2107,7 +1915,7 @@ package final class DOMSession {
     }
 
     private func frameOwnerIsAlreadyAttached(_ nodeID: DOMNode.ID) -> Bool {
-        frameDocumentProjections.values.contains {
+        frameDocumentProjectionIndex.values.contains {
             $0.ownerNodeID == nodeID && $0.state == .attached
         }
     }
@@ -2141,7 +1949,7 @@ package final class DOMSession {
         matchesFrameTargetID frameTargetID: ProtocolTarget.ID,
         frameDocumentURL: String?
     ) -> Bool {
-        if let frameID = targetsByID[frameTargetID]?.frameID,
+        if let frameID = targetGraph.targetFrameID(for: frameTargetID),
            owner.ownerFrameID == frameID {
             return true
         }
@@ -2186,64 +1994,14 @@ package final class DOMSession {
     }
 
     private func projectedFrameDocumentRootID(for ownerNodeID: DOMNode.ID) -> DOMNode.ID? {
-        for projection in frameDocumentProjections.values where projection.ownerNodeID == ownerNodeID && projection.state == .attached {
-            guard let document = currentDocument(for: projection.frameDocumentID) else {
-                continue
-            }
-            return document.rootNodeID
+        frameDocumentProjectionIndex.projectedFrameDocumentRootID(forOwnerNodeID: ownerNodeID) { [weak self] documentID in
+            self?.currentDocument(for: documentID)
         }
-        return nil
     }
 
     private func projectedVisibleChildren(of node: DOMNode) -> [DOMNode.ID] {
-        var children: [DOMNode.ID] = []
-        if let templateContentID = node.templateContentID {
-            children.append(templateContentID)
-        }
-        if let beforePseudoElementID = node.beforePseudoElementID {
-            children.append(beforePseudoElementID)
-        }
-        children.append(contentsOf: node.otherPseudoElementIDs)
-        children.append(contentsOf: projectedEffectiveChildren(of: node))
-        if let afterPseudoElementID = node.afterPseudoElementID {
-            children.append(afterPseudoElementID)
-        }
-        return children
-    }
-
-    private func projectedEffectiveChildren(of node: DOMNode) -> [DOMNode.ID] {
-        if node.isFrameOwner,
-           let rootNodeID = projectedFrameDocumentRootID(for: node.id) {
-            return [rootNodeID]
-        }
-        if let contentDocumentID = node.contentDocumentID {
-            return [contentDocumentID]
-        }
-        return node.shadowRootIDs + node.regularChildren.loadedChildren
-    }
-
-    private func appendProjectionRows(
-        _ nodeID: DOMNode.ID,
-        depth: Int,
-        visited: inout Set<DOMNode.ID>,
-        rows: inout [DOMTreeRow]
-    ) {
-        guard visited.insert(nodeID).inserted,
-              let node = node(for: nodeID) else {
-            return
-        }
-        let visibleChildren = projectedVisibleChildren(of: node)
-        rows.append(
-            DOMTreeRow(
-                nodeID: nodeID,
-                depth: depth,
-                nodeName: node.nodeName,
-                isSelected: selection.selectedNodeID == nodeID,
-                hasVisibleChildren: !visibleChildren.isEmpty || node.regularChildren.knownCount > 0
-            )
-        )
-        for childID in visibleChildren {
-            appendProjectionRows(childID, depth: depth + 1, visited: &visited, rows: &rows)
+        DOMTreeProjectionBuilder.visibleChildIDs(of: node) { [weak self] ownerNodeID in
+            self?.projectedFrameDocumentRootID(for: ownerNodeID)
         }
     }
 
