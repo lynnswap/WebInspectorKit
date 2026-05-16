@@ -410,8 +410,8 @@ package final class DOMSession {
     package func reset() {
         currentPageTargetID = nil
         mainFrameID = nil
-        treeRevision = 0
-        selectionRevision = 0
+        treeRevision &+= 1
+        selectionRevision &+= 1
         targetGraph.reset()
         documentStore.reset()
         frameDocumentProjectionIndex.removeAll()
@@ -827,6 +827,38 @@ package final class DOMSession {
             return nil
         }
         return node(for: selectedNodeID)
+    }
+
+    package func selectedCSSNodeStyleIdentity() -> Result<CSSNodeStyleIdentity, CSSNodeStylesUnavailableReason> {
+        guard let selectedNodeID = selection.selectedNodeID else {
+            return .failure(.noSelection)
+        }
+        return cssNodeStyleIdentity(for: selectedNodeID)
+    }
+
+    package func cssNodeStyleIdentity(
+        for nodeID: DOMNode.ID
+    ) -> Result<CSSNodeStyleIdentity, CSSNodeStylesUnavailableReason> {
+        guard let node = node(for: nodeID) else {
+            return .failure(.staleNode(nodeID))
+        }
+        guard node.nodeType == .element else {
+            return .failure(.nonElementNode(node.nodeType))
+        }
+        let targetID = nodeID.documentID.targetID
+        let capabilities = targetCapabilities(for: targetID)
+        guard capabilities.contains(.css) else {
+            return .failure(.cssUnavailableForTarget(targetID))
+        }
+        return .success(
+            CSSNodeStyleIdentity(
+                nodeID: nodeID,
+                targetID: targetID,
+                documentID: nodeID.documentID,
+                protocolNodeID: node.protocolNodeID,
+                targetCapabilities: capabilities
+            )
+        )
     }
 
     package var currentPageRootNode: DOMNode? {

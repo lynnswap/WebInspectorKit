@@ -258,8 +258,12 @@ func resetDoesNotReuseDocumentLifetimeForSameTargetID() async throws {
     )
     _ = await session.replaceDocumentRoot(pageDocumentWithoutIframe(), targetID: pageTargetID)
     let firstDocumentID = try #require(await session.snapshot().targetsByID[pageTargetID]?.currentDocumentID)
+    let revisionBeforeReset = await session.treeRevision
+    let selectionRevisionBeforeReset = await session.selectionRevision
 
     await session.reset()
+    #expect(await session.treeRevision > revisionBeforeReset)
+    #expect(await session.selectionRevision > selectionRevisionBeforeReset)
     await session.applyTargetCreated(
         .init(id: pageTargetID, kind: .page, frameID: mainFrameID),
         makeCurrentMainPage: true

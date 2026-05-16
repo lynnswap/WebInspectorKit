@@ -665,6 +665,50 @@ func domainStreamsReceiveIndependentTargetEventsInOrder() async throws {
 }
 
 @Test
+func rootCSSStyleSheetEventsResolveFrameTargetFromFrameIDAndStyleSheetOwnership() async throws {
+    let backend = FakeTransportBackend()
+    let session = TransportSession(backend: backend)
+    let cssStream = await session.events(for: .css)
+    let eventsTask = firstEvents(4, from: cssStream)
+
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#)
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-A","type":"frame","frameId":"frame-A","parentFrameId":"main-frame","isProvisional":false}}}"#)
+    await session.receiveRootMessage(#"{"method":"CSS.styleSheetAdded","params":{"header":{"styleSheetId":"sheet-frame","frameId":"frame-A"}}}"#)
+    await session.receiveRootMessage(#"{"method":"CSS.styleSheetChanged","params":{"styleSheetId":"sheet-frame"}}"#)
+    await session.receiveRootMessage(#"{"method":"CSS.styleSheetRemoved","params":{"styleSheetId":"sheet-frame"}}"#)
+    await session.receiveRootMessage(#"{"method":"CSS.styleSheetChanged","params":{"styleSheetId":"sheet-frame"}}"#)
+
+    let events = await eventsTask.value
+    #expect(events.map(\.method) == ["CSS.styleSheetAdded", "CSS.styleSheetChanged", "CSS.styleSheetRemoved", "CSS.styleSheetChanged"])
+    #expect(events.map(\.targetID) == [
+        ProtocolTargetIdentifier("frame-A"),
+        ProtocolTargetIdentifier("frame-A"),
+        ProtocolTargetIdentifier("frame-A"),
+        nil,
+    ])
+}
+
+@Test
+func rootCSSStyleSheetAddedBeforeFrameTargetDoesNotPinSheetToPage() async throws {
+    let backend = FakeTransportBackend()
+    let session = TransportSession(backend: backend)
+    let cssStream = await session.events(for: .css)
+    let eventsTask = firstEvents(2, from: cssStream)
+
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#)
+    await session.receiveRootMessage(#"{"method":"CSS.styleSheetAdded","params":{"header":{"styleSheetId":"sheet-late-frame","frameId":"late-frame"}}}"#)
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-late","type":"frame","frameId":"late-frame","parentFrameId":"main-frame","isProvisional":false}}}"#)
+    await session.receiveRootMessage(#"{"method":"CSS.styleSheetChanged","params":{"styleSheetId":"sheet-late-frame"}}"#)
+
+    let events = await eventsTask.value
+    #expect(events.map(\.method) == ["CSS.styleSheetAdded", "CSS.styleSheetChanged"])
+    #expect(events.map(\.targetID) == [
+        nil,
+        ProtocolTargetIdentifier("frame-late"),
+    ])
+}
+
+@Test
 func orderedStreamReceivesTargetEventsAcrossDomainsInTransportOrder() async throws {
     let backend = FakeTransportBackend()
     let session = TransportSession(backend: backend)
