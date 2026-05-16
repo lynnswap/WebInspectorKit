@@ -614,6 +614,7 @@ package final class DOMSession {
             let newState = state(for: newTargetID)
             if let oldDocument = oldState.currentDocument {
                 oldDocument.lifecycle = .invalidated
+                clearCurrentDocumentReference(oldDocument.id, target: oldTarget)
                 newState.currentDocument = nil
             }
         }
@@ -1544,19 +1545,25 @@ package final class DOMSession {
         document.lifecycle = .invalidated
         targetState.currentDocument = nil
         document.transactions.removeAll()
-        if let frameID = targetsByID[document.targetID]?.frameID,
-           framesByID[frameID]?.currentDocumentID == documentID {
-            framesByID[frameID]?.currentDocumentID = nil
-        }
-        if currentPageTargetID == document.targetID,
-           let mainFrameID,
-           framesByID[mainFrameID]?.currentDocumentID == documentID {
-            framesByID[mainFrameID]?.currentDocumentID = nil
+        if let target = targetsByID[document.targetID] {
+            clearCurrentDocumentReference(documentID, target: target)
         }
         if selection.selectedNodeID?.documentID == documentID {
             selection.selectedNodeID = nil
             selection.failure = nil
             selectionRevision &+= 1
+        }
+    }
+
+    private func clearCurrentDocumentReference(_ documentID: DOMDocument.ID, target: ProtocolTarget) {
+        if let frameID = target.frameID,
+           framesByID[frameID]?.currentDocumentID == documentID {
+            framesByID[frameID]?.currentDocumentID = nil
+        }
+        if currentPageTargetID == target.id,
+           let mainFrameID,
+           framesByID[mainFrameID]?.currentDocumentID == documentID {
+            framesByID[mainFrameID]?.currentDocumentID = nil
         }
     }
 

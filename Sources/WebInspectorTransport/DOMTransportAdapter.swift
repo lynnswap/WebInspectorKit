@@ -2,6 +2,11 @@ import Foundation
 import WebInspectorCore
 
 package enum DOMTransportAdapter {
+    package struct TargetCommitResolution: Equatable, Sendable {
+        package var oldTargetID: ProtocolTargetIdentifier?
+        package var newTargetID: ProtocolTargetIdentifier
+    }
+
     package static func command(for intent: DOMCommandIntent) throws -> ProtocolCommand {
         switch intent {
         case let .getDocument(targetID):
@@ -103,24 +108,40 @@ package enum DOMTransportAdapter {
             session.applyTargetDestroyed(params.targetId)
             return nil
         case "Target.didCommitProvisionalTarget":
-            let params = try TransportMessageParser.decode(TargetCommittedParams.self, from: event.paramsData)
             let snapshotBeforeCommit = session.snapshot()
-            if let oldTargetId = params.oldTargetId ?? inferredOldTargetIDForOldlessCommit(params, snapshot: snapshotBeforeCommit) {
-                session.applyTargetCommitted(oldTargetID: oldTargetId, newTargetID: params.newTargetId)
+            guard let commit = try targetCommitResolution(from: event, snapshot: snapshotBeforeCommit) else {
+                return nil
+            }
+            if let oldTargetID = commit.oldTargetID {
+                session.applyTargetCommitted(oldTargetID: oldTargetID, newTargetID: commit.newTargetID)
             } else {
-                session.applyTargetCommitted(targetID: params.newTargetId)
+                session.applyTargetCommitted(targetID: commit.newTargetID)
             }
             let snapshot = session.snapshot()
             if snapshotBeforeCommit.currentPageTargetID == nil,
-               let target = snapshot.targetsByID[params.newTargetId],
+               let target = snapshot.targetsByID[commit.newTargetID],
                target.kind == .page,
                target.parentFrameID == nil {
-                session.promoteTargetToCurrentPage(params.newTargetId)
+                session.promoteTargetToCurrentPage(commit.newTargetID)
             }
             return nil
         default:
             return nil
         }
+    }
+
+    package static func targetCommitResolution(
+        from event: ProtocolEventEnvelope,
+        snapshot: DOMSessionSnapshot
+    ) throws -> TargetCommitResolution? {
+        guard event.method == "Target.didCommitProvisionalTarget" else {
+            return nil
+        }
+        let params = try TransportMessageParser.decode(TargetCommittedParams.self, from: event.paramsData)
+        return TargetCommitResolution(
+            oldTargetID: params.oldTargetId ?? inferredOldTargetIDForOldlessCommit(params, snapshot: snapshot),
+            newTargetID: params.newTargetId
+        )
     }
 
     @MainActor

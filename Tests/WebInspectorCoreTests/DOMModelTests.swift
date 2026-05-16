@@ -107,6 +107,7 @@ func provisionalFrameCommitDoesNotResetParentPageDocument() async throws {
     #expect(after.targetsByID[provisionalFrameTargetID] == nil)
     #expect(after.targetsByID[committedFrameTargetID]?.kind == .frame)
     #expect(after.framesByID[frameID]?.targetID == committedFrameTargetID)
+    #expect(after.framesByID[frameID]?.currentDocumentID == nil)
     #expect(after.nodesByID[frameRootID] == nil)
     #expect(after.frameDocumentProjections[committedFrameTargetID]?.state == .pending)
     #expect(after.frameDocumentProjections[committedFrameTargetID]?.ownerNodeID == nil)

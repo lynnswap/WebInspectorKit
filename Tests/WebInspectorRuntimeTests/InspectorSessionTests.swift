@@ -364,6 +364,59 @@ func provisionalFrameCommitCancelsInFlightDocumentRequestBeforeRehydrating() asy
     #expect(snapshot.currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(101))] == nil)
 }
 
+@Test
+func oldlessProvisionalFrameCommitCancelsInFlightDocumentRequestBeforeRehydrating() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    let provisionalTargetID = ProtocolTargetIdentifier("frame-provisional")
+    let sentCountBeforeFrameTarget = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-provisional","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["DOM","Runtime"],"isProvisional":true}}}"#
+    )
+    let firstRequest = try await waitForTargetMessage(
+        backend,
+        method: "DOM.getDocument",
+        after: sentCountBeforeFrameTarget
+    )
+    #expect(firstRequest.targetIdentifier == provisionalTargetID)
+    let firstRequestMessageID = try messageID(firstRequest.message)
+
+    let sentCountBeforeCommit = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"newTargetId":"frame-ad"}}"#
+    )
+    let committedRequest = try await waitForTargetMessage(
+        backend,
+        method: "DOM.getDocument",
+        after: sentCountBeforeCommit
+    )
+    #expect(committedRequest.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    await receiveTargetReply(
+        transport,
+        targetID: committedRequest.targetIdentifier,
+        messageID: try messageID(committedRequest.message),
+        result: secondLazyFrameDocumentResult
+    )
+    _ = try await waitUntil {
+        await session.dom.snapshot().currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(201))]
+    }
+
+    await receiveTargetReply(
+        transport,
+        targetID: .frameAd,
+        messageID: firstRequestMessageID,
+        result: firstLazyFrameDocumentResult
+    )
+    try await Task.sleep(for: .milliseconds(25))
+
+    let snapshot = await session.dom.snapshot()
+    #expect(snapshot.currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(201))] != nil)
+    #expect(snapshot.currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(101))] == nil)
+}
+
 @Test("Regression: frame getDocument request does not block page DOM events")
 func frameDocumentRequestDoesNotBlockPageDOMEvents() async throws {
     let backend = FakeTransportBackend()

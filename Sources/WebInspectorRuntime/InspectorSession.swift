@@ -148,11 +148,6 @@ private struct TargetDestroyedEventParams: Decodable {
     var targetId: ProtocolTargetIdentifier
 }
 
-private struct TargetCommittedEventParams: Decodable {
-    var oldTargetId: ProtocolTargetIdentifier?
-    var newTargetId: ProtocolTargetIdentifier
-}
-
 @MainActor
 @Observable
 package final class InspectorSession {
@@ -718,11 +713,12 @@ package final class InspectorSession {
     private func handleTargetEvent(_ event: ProtocolEventEnvelope) async {
         do {
             let destroyedTargetID = targetDestroyedID(from: event)
+            let targetCommit = try DOMTransportAdapter.targetCommitResolution(from: event, snapshot: dom.snapshot())
             let createdTarget = try DOMTransportAdapter.applyTargetEvent(event, to: dom)
             if let destroyedTargetID {
                 cancelDOMDocumentRequest(targetID: destroyedTargetID, reason: "targetDestroyed")
             }
-            applyElementPickerTargetLifecycle(event)
+            applyElementPickerTargetLifecycle(event, targetCommit: targetCommit)
             if isAttached,
                let createdTarget,
                createdTarget.kind == .frame {
@@ -737,11 +733,11 @@ package final class InspectorSession {
                 startPageTargetDocumentRequestAfterCommit(targetID: targetID, connection: connection)
             }
             if event.method == "Target.didCommitProvisionalTarget",
-               let committedTarget = targetCommittedParams(from: event) {
-                if let oldTargetID = committedTarget.oldTargetId {
+               let targetCommit {
+                if let oldTargetID = targetCommit.oldTargetID {
                     cancelDOMDocumentRequest(targetID: oldTargetID, reason: "frameTargetCommit")
                 }
-                startFrameTargetDocumentRequestAfterCommit(targetID: committedTarget.newTargetId)
+                startFrameTargetDocumentRequestAfterCommit(targetID: targetCommit.newTargetID)
             }
         } catch {
             lastError = InspectorSessionError("\(event.method): \(error)")
@@ -1097,17 +1093,6 @@ package final class InspectorSession {
         return params.targetId
     }
 
-    private func targetCommittedParams(from event: ProtocolEventEnvelope) -> TargetCommittedEventParams? {
-        guard event.method == "Target.didCommitProvisionalTarget",
-              let params = try? TransportMessageParser.decode(
-                  TargetCommittedEventParams.self,
-                  from: event.paramsData
-              ) else {
-            return nil
-        }
-        return params
-    }
-
     private func clearOwnerHydrationTransaction(for intent: DOMCommandIntent) {
         guard case let .requestChildNodes(targetID, _, _) = intent else {
             return
@@ -1147,7 +1132,10 @@ package final class InspectorSession {
         connection?.eventPump?.appliedSequence ?? 0
     }
 
-    private func applyElementPickerTargetLifecycle(_ event: ProtocolEventEnvelope) {
+    private func applyElementPickerTargetLifecycle(
+        _ event: ProtocolEventEnvelope,
+        targetCommit: DOMTransportAdapter.TargetCommitResolution?
+    ) {
         guard let activeTargetID = elementPickerTargetID else {
             return
         }
@@ -1164,17 +1152,14 @@ package final class InspectorSession {
             recordElementPickerFailure(reason: "targetDestroyedBeforeInspectEvent", targetID: activeTargetID)
             clearElementPickerState(invalidatePendingSelection: true)
         case "Target.didCommitProvisionalTarget":
-            guard let params = try? TransportMessageParser.decode(
-                TargetCommittedEventParams.self,
-                from: event.paramsData
-            ),
-                params.oldTargetId == activeTargetID else {
+            guard let targetCommit,
+                  targetCommit.oldTargetID == activeTargetID else {
                 return
             }
             recordElementPickerFailure(
                 reason: "targetCommitBeforeInspectEvent",
                 targetID: activeTargetID,
-                details: "newTarget=\(params.newTargetId.rawValue)"
+                details: "newTarget=\(targetCommit.newTargetID.rawValue)"
             )
             clearElementPickerState(invalidatePendingSelection: true)
         default:
