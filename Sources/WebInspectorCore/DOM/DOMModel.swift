@@ -1085,36 +1085,14 @@ package final class DOMSession {
             .first(where: { $0.value.state == .pending }) else {
             return nil
         }
-        guard let pageTargetID = currentPageTargetID,
-              let pageDocument = targetStatesByID[pageTargetID]?.currentDocument,
-              pageDocument.lifecycle == .loaded else {
-            return nil
-        }
-        if let body = bodyElement(in: pageDocument),
-           let intent = ownerHydrationIntent(
-            frameTargetID: frameTargetID,
-            document: pageDocument,
-            node: body,
-            issuedSequence: issuedSequence
-           ) {
-            return intent
-        }
-        if let html = documentElement(in: pageDocument),
-           let intent = ownerHydrationIntent(
-            frameTargetID: frameTargetID,
-            document: pageDocument,
-            node: html,
-            issuedSequence: issuedSequence
-           ) {
-            return intent
-        }
-        guard let root = pageDocument.nodesByID[pageDocument.rootNodeID] else {
+        guard let ownerDocument = ownerDocument(forFrameTargetID: frameTargetID),
+              let node = ownerHydrationNode(in: ownerDocument) else {
             return nil
         }
         return ownerHydrationIntent(
             frameTargetID: frameTargetID,
-            document: pageDocument,
-            node: root,
+            document: ownerDocument,
+            node: node,
             issuedSequence: issuedSequence
         )
     }
@@ -1635,6 +1613,26 @@ package final class DOMSession {
         )
     }
 
+    private func ownerHydrationNode(in document: DOMDocument) -> DOMNode? {
+        let roots = [bodyElement(in: document), documentElement(in: document), document.nodesByID[document.rootNodeID]]
+            .compactMap { $0 }
+        var pending = roots
+        var visited = Set<DOMNode.ID>()
+        while pending.isEmpty == false {
+            let node = pending.removeFirst()
+            guard visited.insert(node.id).inserted else {
+                continue
+            }
+            if hasUnloadedRegularChildren(node) {
+                return node
+            }
+            pending.append(
+                contentsOf: node.regularChildren.loadedChildren.compactMap { document.nodesByID[$0] }
+            )
+        }
+        return nil
+    }
+
     private func documentElement(in document: DOMDocument) -> DOMNode? {
         guard let root = document.nodesByID[document.rootNodeID] else {
             return nil
@@ -2034,6 +2032,7 @@ package final class DOMSession {
             return false
         }
         return ownerNode.isFrameOwner
+            && ownerDocument(forFrameTargetID: frameRoot.id.documentID.targetID)?.id == document.id
             && nodeIsConnectedToDocumentTree(ownerNodeID, in: document)
             && frameOwner(ownerNode, matchesFrameDocumentURL: frameDocumentURL)
             && frameDocumentProjections.values.allSatisfy {
@@ -2043,11 +2042,12 @@ package final class DOMSession {
 
     private func ownerCandidates(forFrameDocumentRoot frameRoot: DOMNode) -> [DOMNode.ID] {
         guard let frameDocumentURL = frameRoot.documentURL,
-              frameDocumentURL.isEmpty == false else {
+              frameDocumentURL.isEmpty == false,
+              let ownerDocument = ownerDocument(forFrameTargetID: frameRoot.id.documentID.targetID) else {
             return []
         }
 
-        return ownerCandidateNodes()
+        return ownerCandidateNodes(in: ownerDocument)
             .filter { entry in
                 projectionCanAttach(to: entry.node, in: entry.document)
                     && frameOwner(entry.node, matchesFrameDocumentURL: frameDocumentURL)
@@ -2056,12 +2056,22 @@ package final class DOMSession {
             .sorted(by: sortNodeIDs)
     }
 
-    private func ownerCandidateNodes() -> [(document: DOMDocument, node: DOMNode)] {
-        targetStatesByID.values
-            .compactMap(\.currentDocument)
-            .flatMap { document in
-                document.nodesByID.values.map { (document, $0) }
-            }
+    private func ownerCandidateNodes(in document: DOMDocument) -> [(document: DOMDocument, node: DOMNode)] {
+        document.nodesByID.values.map { (document, $0) }
+    }
+
+    private func ownerDocument(forFrameTargetID frameTargetID: ProtocolTarget.ID) -> DOMDocument? {
+        if let parentFrameID = targetsByID[frameTargetID]?.parentFrameID,
+           let parentDocumentID = framesByID[parentFrameID]?.currentDocumentID,
+           let parentDocument = currentDocument(for: parentDocumentID) {
+            return parentDocument
+        }
+        guard let pageTargetID = currentPageTargetID,
+              let pageDocument = targetStatesByID[pageTargetID]?.currentDocument,
+              pageDocument.lifecycle == .loaded else {
+            return nil
+        }
+        return pageDocument
     }
 
     private func projectionCanAttach(to candidate: DOMNode, in document: DOMDocument) -> Bool {

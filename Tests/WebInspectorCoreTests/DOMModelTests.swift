@@ -272,6 +272,67 @@ func iframeOwnerProjectsFrameDocumentWithoutStoringItAsRegularChild() async thro
 }
 
 @Test
+func pendingFrameOwnerHydrationWalksLoadedDescendants() async throws {
+    let pageTargetID = ProtocolTarget.ID("page-main")
+    let mainFrameID = DOMFrame.ID("main-frame")
+    let frameTargetID = ProtocolTarget.ID("frame-ad-target")
+    let frameID = DOMFrame.ID("frame-ad")
+    let session = await DOMSession()
+
+    await session.applyTargetCreated(.init(id: pageTargetID, kind: .page, frameID: mainFrameID), makeCurrentMainPage: true)
+    await session.applyTargetCreated(.init(id: frameTargetID, kind: .frame, frameID: frameID, parentFrameID: mainFrameID))
+    _ = await session.replaceDocumentRoot(pageDocumentWithNestedUnloadedOwner(), targetID: pageTargetID)
+    _ = await session.replaceDocumentRoot(frameDocument(rootNodeID: 101), targetID: frameTargetID)
+
+    let wrapperID = try #require(
+        await session.snapshot().currentNodeIDByKey[.init(targetID: pageTargetID, nodeID: .init(30))]
+    )
+    #expect(await session.pendingFrameOwnerHydrationIntent() == .requestChildNodes(targetID: pageTargetID, nodeID: .init(30), depth: 1))
+
+    await session.applySetChildNodes(
+        parent: wrapperID,
+        children: [
+            .element(
+                nodeID: 31,
+                name: "iframe",
+                ownerFrameID: mainFrameID,
+                attributes: [.init(name: "src", value: "https://frame.example/ad")]
+            ),
+        ]
+    )
+    let snapshot = await session.snapshot()
+    let iframeID = try #require(snapshot.currentNodeIDByKey[.init(targetID: pageTargetID, nodeID: .init(31))])
+    #expect(snapshot.frameDocumentProjections[frameTargetID]?.ownerNodeID == iframeID)
+    #expect(snapshot.frameDocumentProjections[frameTargetID]?.state == .attached)
+}
+
+@Test
+func frameOwnerCandidatesAreScopedToParentFrameDocument() async throws {
+    let pageTargetID = ProtocolTarget.ID("page-main")
+    let mainFrameID = DOMFrame.ID("main-frame")
+    let childFrameTargetID = ProtocolTarget.ID("frame-child-target")
+    let childFrameID = DOMFrame.ID("frame-child")
+    let nestedFrameTargetID = ProtocolTarget.ID("frame-nested-target")
+    let nestedFrameID = DOMFrame.ID("frame-nested")
+    let session = await DOMSession()
+
+    await session.applyTargetCreated(.init(id: pageTargetID, kind: .page, frameID: mainFrameID), makeCurrentMainPage: true)
+    await session.applyTargetCreated(.init(id: childFrameTargetID, kind: .frame, frameID: childFrameID, parentFrameID: mainFrameID))
+    await session.applyTargetCreated(.init(id: nestedFrameTargetID, kind: .frame, frameID: nestedFrameID, parentFrameID: childFrameID))
+    _ = await session.replaceDocumentRoot(pageDocument(iframeFrameID: childFrameID, ownerFrameID: mainFrameID), targetID: pageTargetID)
+    _ = await session.replaceDocumentRoot(pageDocument(iframeFrameID: nestedFrameID, ownerFrameID: childFrameID), targetID: childFrameTargetID)
+    _ = await session.replaceDocumentRoot(frameDocument(rootNodeID: 201), targetID: nestedFrameTargetID)
+
+    let snapshot = await session.snapshot()
+    let childDocumentIframeID = try #require(
+        snapshot.currentNodeIDByKey[.init(targetID: childFrameTargetID, nodeID: .init(20))]
+    )
+
+    #expect(snapshot.frameDocumentProjections[nestedFrameTargetID]?.ownerNodeID == childDocumentIframeID)
+    #expect(snapshot.frameDocumentProjections[nestedFrameTargetID]?.state == .attached)
+}
+
+@Test
 func frameDocumentProjectionRemainsPendingWhenURLDoesNotMatch() async throws {
     let pageTargetID = ProtocolTarget.ID("page-main")
     let frameTargetID = ProtocolTarget.ID("frame-ad-target")
@@ -1196,6 +1257,36 @@ private func pageDocumentWithoutIframe() -> DOMNodePayload {
                 children: [
                     .element(nodeID: 3, name: "head"),
                     .element(nodeID: 4, name: "body"),
+                ]
+            ),
+        ]
+    )
+}
+
+private func pageDocumentWithNestedUnloadedOwner() -> DOMNodePayload {
+    document(
+        nodeID: 1,
+        documentURL: "https://page.example/",
+        baseURL: "https://page.example/",
+        children: [
+            .element(
+                nodeID: 2,
+                name: "html",
+                children: [
+                    .element(nodeID: 3, name: "head"),
+                    .element(
+                        nodeID: 4,
+                        name: "body",
+                        children: [
+                            DOMNodePayload(
+                                nodeID: .init(30),
+                                nodeType: .element,
+                                nodeName: "div",
+                                localName: "div",
+                                regularChildren: .unrequested(count: 1)
+                            ),
+                        ]
+                    ),
                 ]
             ),
         ]
