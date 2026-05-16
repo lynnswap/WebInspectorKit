@@ -1,15 +1,14 @@
 # CSS Model Research
 
 This note records the WebKit CSS model and Element styles sidebar behavior that
-`WebInspectorCore` should intentionally match. It is split from
-`DOMModelResearch.md` so DOM ownership/projection rules stay focused on DOM,
-while CSS keeps the protocol, cascade, and UI rendering shape in one place.
+`WebInspectorCore` is comparing against. It is split from `DOMModelResearch.md`
+so DOM ownership/projection rules stay focused on DOM, while CSS keeps the
+protocol, cascade, and UI rendering shape in one place.
 
 ## 2026-05-16 Element Styles Sidebar Research
 
-This is the continuation log for replacing the native Element detail
-placeholder with the Web Inspector-style rules/computed styles view shown in
-the Elements tab.
+This is the continuation log for the Web Inspector-style rules/computed styles
+view shown in the Elements tab.
 
 ## DOM Boundary
 
@@ -19,14 +18,13 @@ CSS is node-scoped, but it is not DOM-owned state.
   projection.
 - CSS owns node style refresh, cascade ordering, computed properties,
   stylesheet invalidation, and style-specific protocol events.
-- The Element detail view should connect the currently selected live DOM node
-  to a CSS node-styles object. It should not copy the selected DOM node into a
-  long-lived UIKit-only view model.
-- CSS commands must use the selected node's command identity: owning target,
-  active document generation, and raw protocol node id for that target.
+- The DOM/CSS handoff is the currently selected live DOM node plus a CSS
+  node-styles object.
+- CSS commands use the selected node's command identity: owning target, active
+  document generation, and raw protocol node id for that target.
 - If the selected node is non-element, stale, or owned by a target that does
-  not expose CSS, the CSS model should report an unavailable state instead of
-  mutating DOM state or repairing selection.
+  not expose CSS, CSS reports an unavailable state instead of mutating DOM
+  state or repairing selection.
 
 The high-level dependency is:
 
@@ -35,7 +33,7 @@ DOM selection -> selected DOMNode.ID
   -> CSSSession stylesForNode(selected node command identity)
     -> matched rules + inline styles + computed styles
     -> observable DOMNodeStyles-like object
-      -> native UIKit rules list and computed list render directly
+      -> style rules list and computed list render directly
 ```
 
 ## Current WebInspectorKit State
@@ -47,10 +45,6 @@ DOM selection -> selected DOMNode.ID
 - `WebInspectorCore` currently models DOM identity, projection, and selection,
   but it has no CSS domain model, no CSS transport adapter, and no node-scoped
   style state equivalent to WebKit's `WI.DOMNodeStyles`.
-- The existing architecture preference still applies: the selected element
-  detail should observe live source-of-truth objects. A future style list may
-  use transient diffable snapshots or cells, but CSS rule/style/property state
-  should not be duplicated into a long-lived UIKit-only view model.
 
 ## WebKit UI Ownership Map
 
@@ -74,14 +68,14 @@ DOM selection -> selected DOMNode.ID
 - `Source/JavaScriptCore/inspector/protocol/CSS.json` declares the CSS domain
   for `targetTypes: ["itml", "page"]`. The generated iOS 26.4 frontend
   metadata also registers `CSS` for `["itml", "page"]` and activates it for
-  `["itml", "web-page"]`. For WebInspectorKit, CSS should be treated as a
-  page-target domain, not as a frame-target DOM domain.
+  `["itml", "web-page"]`. In the checked source, CSS is a page-target domain,
+  not a frame-target DOM domain.
 - `InspectorCSSAgent` resolves CSS node ids through the persistent DOM agent:
   `elementForId` / `nodeForId` call `persistentDOMAgent().assertElement` /
   `assertNode`. CSS styling is therefore coupled to a DOM-enabled target and
-  the node id namespace for that target. A future frame-target CSS path must be
-  verified against backend support instead of assuming WebInspectorUI's
-  target-scoped frontend string ids are valid CSS protocol node ids.
+  the node id namespace for that target. A future frame-target CSS path needs
+  backend verification before assuming WebInspectorUI's target-scoped frontend
+  string ids are valid CSS protocol node ids.
 - The read path for the screenshot-level rules/computed view is:
   - `CSS.getMatchedStylesForNode(nodeId, includePseudo: true, includeInherited: true)`
     returns `matchedCSSRules`, `pseudoElements`, and `inherited`.
@@ -90,7 +84,7 @@ DOM selection -> selected DOMNode.ID
   - `CSS.getComputedStyleForNode(nodeId)` returns a flat array of computed
     `{name, value}` properties.
   - `CSS.getFontDataForNode(nodeId)` is optional and powers the separate Font
-    details panel, not the first rules-list milestone.
+    details panel, not the rules list itself.
 - `InspectorCSSAgent::getMatchedStylesForNode` resolves a DOM node id to a
   connected `Element`, handles pseudo-element nodes by switching to their host,
   builds matched rules from the element style resolver, optionally includes
@@ -106,11 +100,11 @@ DOM selection -> selected DOMNode.ID
   `status`, `implicit`, and source `range` where available. These fields are
   enough to render disabled/overridden/invalid/implicit property states.
 
-## CSS Payloads for a Read-Only Rules List
+## CSS Payloads for Styles and Computed Lists
 
-The decoder must preserve protocol optionality. Optional fields improve source
-links, editing, grouping labels, and diagnostics, but their absence is valid
-for user-agent, attribute, inline, source-less, or non-editable styles.
+Protocol optionality is part of the payload contract. Optional fields improve
+source links, editing, grouping labels, and diagnostics, but their absence is
+valid for user-agent, attribute, inline, source-less, or non-editable styles.
 
 | Protocol payload | Required by protocol | Optional but useful | Why it matters |
 | --- | --- | --- | --- |
@@ -135,75 +129,82 @@ for user-agent, attribute, inline, source-less, or non-editable styles.
   inherited styles. Pseudo-element styles are rendered as their own group
   before inherited rules in the rules panel.
 - `DOMNodeStyles.uniqueOrderedStyles` deduplicates rule styles that refer to
-  the same backend rule. The rules panel should render from this list rather
-  than directly dumping every payload array.
+  the same backend rule. The rules panel renders from this list rather than
+  directly dumping every payload array.
 - `_markOverriddenProperties` and `_associateRelatedProperties` compute the
-  effective property map. The first native milestone can render protocol
-  `status` / `parsedOk` / `implicit` directly, but proper overridden styling
-  requires the same cascade pass or an intentionally smaller local equivalent.
+  effective property map. Protocol `status` / `parsedOk` / `implicit` cover
+  useful row state, but proper overridden styling requires the same cascade
+  pass or an intentionally smaller local equivalent.
 - CSS invalidation is not driven only by CSS events. WebKit marks node styles
   dirty when DOM attributes or pseudo-class state change for the node or its
   descendants, when style sheets are changed/added/removed, and when the main
-  resource changes. WebInspectorKit should keep refresh ownership in the CSS
-  session/model layer, not in individual cells.
+  resource changes.
 
-## Local Implementation Entry Points
+## WebKit Property Toggle Behavior
 
-- `Sources/WebInspectorTransport/TransportTypes.swift` already has
-  `ProtocolDomain.css`, and `TransportSession.compatibilityResult` already
-  accepts `CSS.enable` as a no-op compatibility success.
-- `Sources/WebInspectorCore/Protocol/ProtocolTypes.swift` does not yet include
-  a CSS bit in `ProtocolTargetCapabilities`; `pageDefault` also lacks CSS and
-  `init(domainNames:)` ignores `"css"`. The first model change should add a
-  `.css` capability and make page targets CSS-capable when protocol metadata
-  advertises CSS or when the default WebKit page-target path is used.
-- `Sources/WebInspectorRuntime/InspectorSession.swift` bootstraps
-  `Inspector.enable`, `Inspector.initialized`, `DOM.enable`, `Runtime.enable`,
-  `DOM.getDocument`, and `Network.enable`, but it does not send `CSS.enable`
-  and `handleProtocolEvent` currently ignores `.css`. A CSS session should
-  subscribe to CSS events after self-checking which events are needed for the
-  read-only milestone.
-- `Sources/WebInspectorUI/DOM/DOMElementViewController.swift` is the native
-  placeholder to replace. It already observes `DOMSession.treeRevision` and
-  `DOMSession.selectionRevision`; the CSS view should attach to the selected
-  live DOM node/style object rather than copy selected-node state into a new
-  long-lived UIKit view model.
+For a rule such as:
 
-## First Native Milestone
+```css
+body {
+    margin: 0;
+    box-sizing: border-box;
+}
+```
 
-The first native milestone should be read-only:
+WebKit represents `body` as the style declaration section and `margin` /
+`box-sizing` as property rows inside that section. Each property row has state
+for active/overridden/disabled/invalid and may expose an enable/disable toggle
+when the owning declaration is editable.
 
-- add page-target CSS capability and bootstrap `CSS.enable`;
-- decode CSS protocol payloads needed by the three read calls;
-- create a node-scoped observable style object keyed by selected node command
-  identity and DOM document generation;
-- refresh that object when selection changes, the active document generation
-  changes, relevant DOM attributes/pseudo-state changes, or CSS stylesheet
-  events arrive;
-- render a Styles list with sections for inline style, matched author rules,
-  attribute style, user/user-agent styles, pseudo-elements, and inherited
-  sections in WebKit cascade order;
-- render a Computed list from `getComputedStyleForNode`, initially as a
-  searchable/sorted property list without full box-model or trace UI;
-- render disabled/inactive/invalid/implicit property states from protocol
-  fields, but defer editing, new rule insertion, class toggles, forced
-  pseudo-classes, box model, variables grouping, font details, and jump-to-rule
-  trace interactions.
+WebKit does not have a dedicated `CSS.toggleProperty` command. Its toggle path
+is text-based:
 
-## Open Implementation Questions
+- `SpreadsheetStyleProperty` renders an `<input type="checkbox">` only when
+  the property is editable. The checkbox's checked state is `property.enabled`.
+- Clicking the checkbox calls `CSSProperty.commentOut(property.enabled)`.
+- `commentOut(true)` changes the property text from `name: value;` to
+  `/* name: value; */`; `commentOut(false)` strips that comment wrapper.
+- Changing `CSSProperty.text` regenerates the owning style declaration text via
+  `CSSStyleDeclaration.generateFormattedText(...)`.
+- The generated declaration text is committed with
+  `CSS.setStyleText(styleId, text)`.
+- On success, WebKit refreshes `DOMNodeStyles`; if the changed rule no longer
+  matches the selected node, it also parses the returned style payload to keep
+  validity state current.
+
+Protocol status maps to row state as follows:
+
+| `CSS.CSSProperty.status` | WebKit property state | UI meaning |
+| --- | --- | --- |
+| `active` | `enabled = true`, `overridden = false` | checked, effective within this declaration |
+| `inactive` | `enabled = true`, `overridden = true` | checked, present but overridden by another property in the same style |
+| `disabled` | `enabled = false` | unchecked, rendered/commented as disabled |
+| absent / `style` | `enabled = true`, anonymous/style-generated | checked unless non-editable; often source-less or computed-style data |
+
+Toggle availability follows style editability, not just row display:
+
+- Rule declarations are editable only when the rule has an editable `ruleId`
+  and is not from a user-agent stylesheet.
+- Inline declarations are editable when the node has an inline `styleId` and
+  the node is not in a user-agent shadow tree, unless that backend supports
+  editing user-agent shadow trees.
+- Attribute styles, computed styles, source-less user-agent styles, and styles
+  without `styleId` render rows but do not expose an enabled toggle.
+- A disabled property remains part of the declaration text and WebKit keeps it
+  as a row. It is not the same operation as deleting the property.
+
+## Open Research Questions
 
 - Whether Safari's inspected `WKWebView` exposes CSS only on the page target in
   the same way as current WebKit source. If frame-target DOM support becomes
-  available, the CSS node-id namespace must be tested before enabling styles
-  for frame-owned nodes.
-- Whether WebInspectorKit should show "styles unavailable" for selected
-  non-element nodes, frame-target nodes without CSS support, and stale
-  selection generations, or keep the existing generic placeholder until a
-  recoverable selection is available.
+  available, the CSS node-id namespace needs source-level or runtime
+  verification before assuming frame-owned nodes can be styled through CSS
+  commands.
+- How WebKit surfaces selected non-element nodes, frame-target nodes without
+  CSS support, and stale selection generations in the Styles sidebar.
 - How much of WebKit's overridden-property calculation is required for the
-  first visible milestone. A simple read-only list can be useful without full
-  cascade conflict styling, but the screenshot-level quality needs overridden
-  and invalid property classes.
+  screenshot-level Styles list. Protocol row state covers some cases, while
+  full cascade conflict styling depends on the `DOMNodeStyles` cascade pass.
 
 ## Source References
 
