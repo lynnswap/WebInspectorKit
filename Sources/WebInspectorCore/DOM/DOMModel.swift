@@ -56,20 +56,10 @@ private extension UnicodeScalar {
 package final class DOMTargetState {
     package let targetID: ProtocolTarget.ID
     package var currentDocument: DOMDocumentState?
-    package var nextDocumentLifetimeID: UInt64
 
     package init(targetID: ProtocolTarget.ID) {
         self.targetID = targetID
         currentDocument = nil
-        nextDocumentLifetimeID = 0
-    }
-
-    package func nextDocumentID() -> DOMDocument.ID {
-        nextDocumentLifetimeID &+= 1
-        return DOMDocument.ID(
-            targetID: targetID,
-            localDocumentLifetimeID: DOMDocumentLifetimeIdentifier(nextDocumentLifetimeID)
-        )
     }
 }
 
@@ -564,7 +554,7 @@ package final class DOMSession {
         let targetState = state(for: targetID)
         removeDocuments(for: targetID)
 
-        let documentID = targetState.nextDocumentID()
+        let documentID = documentStore.nextDocumentID(for: targetID)
         var nodesByID: [DOMNode.ID: DOMNode] = [:]
         var currentNodeIDByProtocolNodeID: [DOMProtocolNodeID: DOMNode.ID] = [:]
         let rootNodeID = buildSubtree(

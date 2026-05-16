@@ -25,9 +25,10 @@ package final class DOMCompactNavigationController: UINavigationController {
         navigationBar.prefersLargeTitles = false
         webInspectorApplyClearNavigationBarStyle(to: self)
         rootViewController.navigationItem.style = .browser
+        let treeViewController = rootViewController as? DOMTreeViewController
         let navigationItems = DOMNavigationItems(session: session)
-        navigationItems.install(on: rootViewController.navigationItem) { [weak self] in
-            self?.undoManager
+        navigationItems.install(on: rootViewController.navigationItem) { [weak self, weak treeViewController] in
+            treeViewController?.domTreeUndoManager ?? self?.undoManager
         }
         domNavigationItems = navigationItems
     }

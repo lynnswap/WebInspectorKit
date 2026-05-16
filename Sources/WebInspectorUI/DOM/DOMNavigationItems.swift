@@ -1,14 +1,15 @@
 #if canImport(UIKit)
 import ObservationBridge
 import UIKit
-import WebInspectorCore
 import WebInspectorRuntime
 
 @MainActor
 package final class DOMNavigationItems: NSObject {
+    private typealias UndoManagerProvider = @MainActor () -> UndoManager?
+
     private let session: InspectorSession
     private let observationScope = ObservationScope()
-    private var undoManagerProvider: (@MainActor () -> UndoManager?)?
+    private var undoManagerProvider: UndoManagerProvider = { nil }
 
     private lazy var pickItem: UIBarButtonItem = {
         let item = UIBarButtonItem(
@@ -63,83 +64,84 @@ package final class DOMNavigationItems: NSObject {
                 completion([])
                 return
             }
-            completion(makeOverflowMenu(undoManager: undoManagerProvider?()).children)
+            completion(makeOverflowMenu(undoManagerProvider: undoManagerProvider).children)
         }
     }
 
-    private func makeOverflowMenu(undoManager: UndoManager?) -> UIMenu {
+    private func makeOverflowMenu(undoManagerProvider: @escaping UndoManagerProvider) -> UIMenu {
         UIMenu(children: [
-            makeCopyMenu(),
-            makeReloadMenu(),
-            makeDeleteAction(undoManager: undoManager),
+            UIMenu(options: .displayInline, children: [
+                makeUndoAction(undoManagerProvider: undoManagerProvider),
+                makeRedoAction(undoManagerProvider: undoManagerProvider),
+            ]),
+            UIMenu(options: .displayInline, children: [
+                makeReloadAction(),
+            ]),
+            UIMenu(options: .displayInline, children: [
+                makeDeleteAction(undoManagerProvider: undoManagerProvider),
+            ]),
         ])
     }
 
-    private func makeCopyMenu() -> UIMenu {
-        UIMenu(
-            title: webInspectorLocalized("Copy", default: "Copy"),
-            image: UIImage(systemName: "document.on.document"),
-            children: [
-                copyAction(title: "HTML", kind: .html),
-                copyAction(
-                    title: webInspectorLocalized("dom.element.copy.selector_path", default: "Selector Path"),
-                    kind: .selectorPath
-                ),
-                copyAction(title: "XPath", kind: .xPath),
-            ]
-        )
+    private func makeUndoAction(undoManagerProvider: @escaping UndoManagerProvider) -> UIAction {
+        let undoManager = undoManagerProvider()
+        return UIAction(
+            title: webInspectorLocalized("undo", default: "Undo"),
+            image: UIImage(systemName: "arrow.uturn.backward"),
+            attributes: undoManager?.canUndo == true ? [] : [.disabled]
+        ) { _ in
+            Task { @MainActor in
+                guard let undoManager = undoManagerProvider(), undoManager.canUndo else {
+                    return
+                }
+                undoManager.undo()
+            }
+        }
     }
 
-    private func makeReloadMenu() -> UIMenu {
-        UIMenu(
+    private func makeRedoAction(undoManagerProvider: @escaping UndoManagerProvider) -> UIAction {
+        let undoManager = undoManagerProvider()
+        return UIAction(
+            title: webInspectorLocalized("redo", default: "Redo"),
+            image: UIImage(systemName: "arrow.uturn.forward"),
+            attributes: undoManager?.canRedo == true ? [] : [.disabled]
+        ) { _ in
+            Task { @MainActor in
+                guard let undoManager = undoManagerProvider(), undoManager.canRedo else {
+                    return
+                }
+                undoManager.redo()
+            }
+        }
+    }
+
+    private func makeReloadAction() -> UIAction {
+        UIAction(
             title: webInspectorLocalized("reload", default: "Reload"),
             image: UIImage(systemName: "arrow.clockwise"),
-            children: [
-                UIAction(
-                    title: webInspectorLocalized("reload.target.inspector", default: "Reload Inspector"),
-                    image: UIImage(systemName: "arrow.clockwise"),
-                    attributes: session.canReloadDOMDocument ? [] : [.disabled]
-                ) { [weak session] _ in
-                    Task { @MainActor in
-                        try? await session?.reloadDOMDocument()
-                    }
-                },
-                UIAction(
-                    title: webInspectorLocalized("reload.target.page", default: "Reload Page"),
-                    image: UIImage(systemName: "arrow.clockwise"),
-                    attributes: session.hasInspectablePageWebView ? [] : [.disabled]
-                ) { [weak session] _ in
-                    Task { @MainActor in
-                        try? await session?.reloadPage()
-                    }
-                },
-            ]
-        )
+            attributes: (session.hasInspectablePageWebView || session.canReloadDOMDocument) ? [] : [.disabled]
+        ) { [weak session] _ in
+            Task { @MainActor in
+                guard let session else {
+                    return
+                }
+                if session.hasInspectablePageWebView {
+                    try? await session.reloadPage()
+                } else {
+                    try? await session.reloadDOMDocument()
+                }
+            }
+        }
     }
 
-    private func makeDeleteAction(undoManager: UndoManager?) -> UIAction {
+    private func makeDeleteAction(undoManagerProvider: @escaping UndoManagerProvider) -> UIAction {
         UIAction(
             title: webInspectorLocalized("inspector.delete_node", default: "Delete Node"),
             image: UIImage(systemName: "trash"),
             attributes: session.canDeleteSelectedDOMNode ? [.destructive] : [.disabled, .destructive]
         ) { [weak session] _ in
             Task { @MainActor in
-                try? await session?.deleteSelectedDOMNode(undoManager: undoManager)
-            }
-        }
-    }
-
-    private func copyAction(title: String, kind: DOMNodeCopyTextKind) -> UIAction {
-        UIAction(
-            title: title,
-            attributes: session.canCopySelectedDOMNodeText ? [] : [.disabled]
-        ) { [weak session] _ in
-            Task { @MainActor in
-                guard let text = try? await session?.copySelectedDOMNodeText(kind),
-                      text.isEmpty == false else {
-                    return
-                }
-                UIPasteboard.general.string = text
+                try? await session?.deleteSelectedDOMNode(undoManager: undoManagerProvider())
             }
         }
     }
@@ -164,7 +166,7 @@ extension DOMNavigationItems {
     }
 
     package func overflowMenuForTesting(undoManager: UndoManager? = nil) -> UIMenu {
-        makeOverflowMenu(undoManager: undoManager)
+        makeOverflowMenu(undoManagerProvider: { undoManager })
     }
 }
 #endif

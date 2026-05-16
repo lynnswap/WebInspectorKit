@@ -306,13 +306,25 @@ package final class DOMTargetGraph {
 @MainActor
 package final class DOMDocumentStore {
     private var targetStatesByID: [ProtocolTarget.ID: DOMTargetState]
+    private var lastDocumentLifetimeIDByTargetID: [ProtocolTarget.ID: UInt64]
 
     package init() {
         targetStatesByID = [:]
+        lastDocumentLifetimeIDByTargetID = [:]
     }
 
     package func reset() {
+        // Document identifiers are scoped to the DOMSession lifetime; reset only drops current document state.
         targetStatesByID.removeAll()
+    }
+
+    package func nextDocumentID(for targetID: ProtocolTarget.ID) -> DOMDocument.ID {
+        let nextDocumentLifetimeID = (lastDocumentLifetimeIDByTargetID[targetID] ?? 0) + 1
+        lastDocumentLifetimeIDByTargetID[targetID] = nextDocumentLifetimeID
+        return DOMDocument.ID(
+            targetID: targetID,
+            localDocumentLifetimeID: DOMDocumentLifetimeIdentifier(nextDocumentLifetimeID)
+        )
     }
 
     package func state(for targetID: ProtocolTarget.ID) -> DOMTargetState {

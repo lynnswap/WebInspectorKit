@@ -108,20 +108,42 @@ struct DOMContainerTests {
     }
 
     @Test
-    func overflowMenuDisablesActionsWhenSessionIsDetached() throws {
+    func overflowMenuUsesPageReloadAndDeleteOnlyWhenSessionIsDetached() throws {
         let dom = makeDOMSession()
         let session = InspectorSession(dom: dom)
         let navigationItems = DOMNavigationItems(session: session)
 
         let emptyMenu = navigationItems.overflowMenuForTesting()
-        #expect(action(titled: "HTML", in: emptyMenu)?.attributes.contains(.disabled) == true)
+        #expect(inlineSectionCount(in: emptyMenu) == 3)
+        #expect(action(titled: "Undo", in: emptyMenu)?.attributes.contains(.disabled) == true)
+        #expect(action(titled: "Redo", in: emptyMenu)?.attributes.contains(.disabled) == true)
+        #expect(action(titled: "HTML", in: emptyMenu) == nil)
+        #expect(action(titled: "Selector Path", in: emptyMenu) == nil)
+        #expect(action(titled: "XPath", in: emptyMenu) == nil)
+        #expect(action(titled: "Reload", in: emptyMenu)?.attributes.contains(.disabled) == true)
+        #expect(action(titled: "Reload Inspector", in: emptyMenu) == nil)
+        #expect(action(titled: "Reload Page", in: emptyMenu) == nil)
 
         let selectedNode = try #require(firstElement(named: "input", in: dom))
         dom.selectNode(selectedNode.id)
 
         let selectedMenu = navigationItems.overflowMenuForTesting()
-        #expect(action(titled: "HTML", in: selectedMenu)?.attributes.contains(.disabled) == true)
+        #expect(inlineSectionCount(in: selectedMenu) == 3)
+        #expect(action(titled: "Undo", in: selectedMenu)?.attributes.contains(.disabled) == true)
+        #expect(action(titled: "Redo", in: selectedMenu)?.attributes.contains(.disabled) == true)
+        #expect(action(titled: "HTML", in: selectedMenu) == nil)
+        #expect(action(titled: "Selector Path", in: selectedMenu) == nil)
+        #expect(action(titled: "XPath", in: selectedMenu) == nil)
+        #expect(action(titled: "Reload", in: selectedMenu)?.attributes.contains(.disabled) == true)
+        #expect(action(titled: "Reload Inspector", in: selectedMenu) == nil)
+        #expect(action(titled: "Reload Page", in: selectedMenu) == nil)
         #expect(destructiveAction(in: selectedMenu)?.attributes.contains(.disabled) == true)
+
+        let undoManager = UndoManager()
+        undoManager.registerUndo(withTarget: UndoTarget()) { _ in }
+        let undoableMenu = navigationItems.overflowMenuForTesting(undoManager: undoManager)
+        #expect(action(titled: "Undo", in: undoableMenu)?.attributes.contains(.disabled) == false)
+        #expect(action(titled: "Redo", in: undoableMenu)?.attributes.contains(.disabled) == true)
     }
 
     private func makeDOMSession() -> DOMSession {
@@ -215,6 +237,13 @@ struct DOMContainerTests {
         return nil
     }
 
+    private func inlineSectionCount(in menu: UIMenu) -> Int {
+        menu.children
+            .compactMap { $0 as? UIMenu }
+            .filter { $0.options.contains(.displayInline) }
+            .count
+    }
+
     private func destructiveAction(in menu: UIMenu) -> UIAction? {
         for child in menu.children {
             if let action = child as? UIAction,
@@ -242,4 +271,6 @@ struct DOMContainerTests {
         return false
     }
 }
+
+private final class UndoTarget {}
 #endif

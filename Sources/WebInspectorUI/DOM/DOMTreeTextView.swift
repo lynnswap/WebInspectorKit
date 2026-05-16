@@ -72,6 +72,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     private var measuredTextWidth: CGFloat = 0
     private var lastBoundsSize: CGSize = .zero
     private var rowIndexByNodeID: [DOMNode.ID: Int] = [:]
+    private var lastRenderedDocumentRootID: DOMNode.ID?
     private var lastObservedSelectedNodeID: DOMNode.ID?
     private var pendingRevealSelectedNodeID: DOMNode.ID?
     private var pendingTreeInvalidation: DOMTreeInvalidation?
@@ -617,6 +618,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
             reloadTreeCallCount += 1
         }
 #endif
+        resetLocalDocumentStateIfNeeded()
         let previousRows = rows
         let previousText = renderedText
         if resetFragments {
@@ -651,6 +653,32 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         updateContentDecorations()
         setNeedsLayout()
         revealPendingSelectedNodeIfPossible()
+    }
+
+    private func resetLocalDocumentStateIfNeeded() {
+        let rootID = dom.currentPageRootNode?.id
+        defer {
+            lastRenderedDocumentRootID = rootID
+        }
+        guard rootID == nil
+                || (lastRenderedDocumentRootID != nil && lastRenderedDocumentRootID != rootID) else {
+            return
+        }
+
+        openState.removeAll(keepingCapacity: true)
+        hoveredNodeID = nil
+        requestedChildNodeIDs.removeAll(keepingCapacity: true)
+        hoverRowRects.removeAll(keepingCapacity: true)
+        selectedRowRects.removeAll(keepingCapacity: true)
+        multiSelectedRowRects.removeAll(keepingCapacity: true)
+        lastObservedSelectedNodeID = nil
+        pendingRevealSelectedNodeID = nil
+        multiSelectedNodeIDs.removeAll(keepingCapacity: true)
+        multiSelectionLastNodeID = nil
+        multiSelectionShiftAnchorNodeID = nil
+        multiSelectionShiftRangeNodeIDs.removeAll(keepingCapacity: true)
+        dismissDOMMenuAnchor()
+        clearTextSelection()
     }
 
     private func applyContentInvalidation(affectedKeys: Set<DOMNode.ID>) -> Bool {
