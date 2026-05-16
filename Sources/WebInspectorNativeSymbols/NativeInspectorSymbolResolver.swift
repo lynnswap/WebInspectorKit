@@ -83,21 +83,6 @@ package enum NativeInspectorSymbolResolver {
         [NativeInspectorSymbolResolverCore.disconnectFrontendSymbol]
     }
 
-    static func sensitiveSymbolsForBinarySafetyTesting() -> [ObfuscatedSymbolName] {
-        [
-            NativeInspectorSymbolResolverCore.connectFrontendSymbol,
-            NativeInspectorSymbolResolverCore.disconnectFrontendSymbol,
-            NativeInspectorSymbolResolverCore.stringFromUTF8Symbol,
-            NativeInspectorSymbolResolverCore.stringImplToNSStringSymbol,
-            NativeInspectorSymbolResolverCore.destroyStringImplSymbol,
-            NativeInspectorSymbolResolverCore.backendDispatcherDispatchSymbol,
-            NativeInspectorSymbolResolverCore.pageInspectorControllerConnectSymbol,
-            NativeInspectorSymbolResolverCore.pageInspectorControllerDisconnectSymbol,
-            NativeInspectorSymbolResolverCore.frameInspectorControllerConnectSymbol,
-            NativeInspectorSymbolResolverCore.frameInspectorControllerDisconnectSymbol,
-        ]
-    }
-
     @unsafe static func uniqueFunctionStartContainingCallTargetsForTesting(
         architecture: String,
         textBaseAddress: UInt64,

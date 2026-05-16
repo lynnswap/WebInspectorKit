@@ -101,7 +101,8 @@ func networkResponseBodyFetchAppliesResultToCoreRequest() async throws {
     let request = try await waitUntil {
         await session.network.request(for: .init(targetID: .pageMain, requestID: .init("request-2")))
     }
-    let body = try await #require(request.responseBody)
+    let responseBody = await request.responseBody
+    let body = try #require(responseBody)
     #expect(await body.fetchState == .available)
 
     let sentCount = await backend.sentTargetMessages().count

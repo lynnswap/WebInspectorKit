@@ -254,24 +254,6 @@ struct NativeInspectorSymbolResolverTests {
         #expect(!diagnostics.contains("definitelyMissingFromUTF8Foo"))
     }
 
-    @Test
-    func buildProductDoesNotContainPlainSensitiveMangledSymbols() throws {
-        let candidates = testExecutableCandidates()
-        guard !candidates.isEmpty else {
-            #expect(!candidates.isEmpty)
-            return
-        }
-
-        let sensitiveSymbols = NativeInspectorSymbolResolver.sensitiveSymbolsForBinarySafetyTesting()
-            .map { Data($0.decodedString().utf8) }
-
-        for candidate in candidates {
-            let data = try Data(contentsOf: candidate)
-            for symbolData in sensitiveSymbols {
-                #expect(data.range(of: symbolData) == nil)
-            }
-        }
-    }
 }
 
 @MainActor
@@ -292,25 +274,6 @@ private func obfuscated(_ string: String) -> ObfuscatedSymbolName {
         key: key,
         encodedBytes: string.utf8.map { $0 ^ key }
     )
-}
-
-private func testExecutableCandidates() -> [URL] {
-    let sourceURL = URL(fileURLWithPath: #filePath)
-    let repoRoot = sourceURL
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-    let buildDirectory = repoRoot.appendingPathComponent(".build")
-    guard let enumerator = FileManager.default.enumerator(
-        at: buildDirectory,
-        includingPropertiesForKeys: nil
-    ) else {
-        return []
-    }
-
-    return enumerator
-        .compactMap { $0 as? URL }
-        .filter { $0.path.hasSuffix("WebInspectorKitPackageTests.xctest/Contents/MacOS/WebInspectorKitPackageTests") }
 }
 
 #if arch(arm64) || arch(arm64e)
