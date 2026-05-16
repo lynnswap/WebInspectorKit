@@ -2001,11 +2001,12 @@ package final class DOMSession {
         }
 
         if let ownerNodeID = projection.ownerNodeID,
-           node(for: ownerNodeID) != nil {
+           frameDocumentProjection(projection, canRemainAttachedTo: ownerNodeID, frameRoot: frameRoot) {
             projection.state = .attached
             return
         }
 
+        projection.ownerNodeID = nil
         let candidates = ownerCandidates(forFrameDocumentRoot: frameRoot)
         switch candidates.count {
         case 0:
@@ -2018,6 +2019,25 @@ package final class DOMSession {
             projection.ownerNodeID = nil
             projection.state = .ambiguous
         }
+    }
+
+    private func frameDocumentProjection(
+        _ projection: FrameDocumentProjection,
+        canRemainAttachedTo ownerNodeID: DOMNode.ID,
+        frameRoot: DOMNode
+    ) -> Bool {
+        guard let document = currentDocument(for: ownerNodeID.documentID),
+              let ownerNode = document.nodesByID[ownerNodeID],
+              let frameDocumentURL = frameRoot.documentURL,
+              frameDocumentURL.isEmpty == false else {
+            return false
+        }
+        return ownerNode.isFrameOwner
+            && nodeIsConnectedToDocumentTree(ownerNodeID, in: document)
+            && frameOwner(ownerNode, matchesFrameDocumentURL: frameDocumentURL)
+            && frameDocumentProjections.values.allSatisfy {
+                $0 === projection || $0.ownerNodeID != ownerNodeID || $0.state != .attached
+            }
     }
 
     private func ownerCandidates(forFrameDocumentRoot frameRoot: DOMNode) -> [DOMNode.ID] {
@@ -2066,9 +2086,8 @@ package final class DOMSession {
     }
 
     private func frameOwner(_ owner: DOMNode, matchesFrameDocumentURL frameDocumentURL: String) -> Bool {
-        guard let source = attribute(named: "src", in: owner),
-              source.isEmpty == false else {
-            return false
+        guard let source = explicitFrameSource(for: owner) else {
+            return frameDocumentURLIsDefaultBlank(frameDocumentURL)
         }
         if source == frameDocumentURL {
             return true
@@ -2078,6 +2097,18 @@ package final class DOMSession {
             return false
         }
         return resolvedSource == resolvedFrameDocumentURL
+    }
+
+    private func explicitFrameSource(for owner: DOMNode) -> String? {
+        guard let source = attribute(named: "src", in: owner),
+              source.isEmpty == false else {
+            return nil
+        }
+        return source
+    }
+
+    private func frameDocumentURLIsDefaultBlank(_ url: String) -> Bool {
+        url == "about:blank" || resolvedURL(url, relativeTo: nil) == "about:blank"
     }
 
     private func attribute(named name: String, in node: DOMNode) -> String? {

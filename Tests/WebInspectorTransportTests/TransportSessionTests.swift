@@ -360,6 +360,31 @@ func targetCommitRetargetsPendingRepliesToCommittedTarget() async throws {
 }
 
 @Test
+func provisionalTargetReplyResolvesBeforeBufferedEvents() async throws {
+    let backend = FakeTransportBackend()
+    let session = TransportSession(backend: backend, responseTimeout: .seconds(1))
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-provisional","type":"frame","frameId":"ad-frame","isProvisional":true}}}"#)
+
+    let sendTask = Task {
+        try await session.send(
+            ProtocolCommand(domain: .dom, method: "DOM.getDocument", routing: .target(.init("frame-provisional")))
+        )
+    }
+    let sent = try await waitForTargetMessage(backend)
+    let innerID = try messageID(sent.message)
+
+    await receiveTargetDispatch(
+        session,
+        targetID: .init("frame-provisional"),
+        message: ##"{"id":\##(innerID),"result":{"root":{"nodeId":1,"nodeType":9,"nodeName":"#document"}}}"##
+    )
+    let result = try await sendTask.value
+
+    #expect(result.targetID == ProtocolTargetIdentifier("frame-provisional"))
+    #expect(await session.snapshot().pendingTargetReplyKeys.isEmpty)
+}
+
+@Test
 func oldlessTargetCommitInfersSoleProvisionalTarget() async throws {
     let backend = FakeTransportBackend()
     let session = TransportSession(backend: backend, responseTimeout: .seconds(1))

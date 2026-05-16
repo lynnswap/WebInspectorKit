@@ -391,17 +391,17 @@ package actor TransportSession {
     }
 
     private func handleTargetMessage(_ parsed: ParsedProtocolMessage, targetID: ProtocolTargetIdentifier) async {
-        if targetsByID[targetID]?.isProvisional == true {
-            provisionalTargetMessagesByTargetID[targetID, default: []].append(parsed)
-            return
-        }
-
         if let id = parsed.id {
             let key = TargetReplyKey(targetID: targetID, commandID: id)
             if let pending = removeTargetReply(for: key) {
                 await resolve(pending, parsed: parsed)
                 return
             }
+        }
+
+        if targetsByID[targetID]?.isProvisional == true {
+            provisionalTargetMessagesByTargetID[targetID, default: []].append(parsed)
+            return
         }
 
         guard let method = parsed.method else {

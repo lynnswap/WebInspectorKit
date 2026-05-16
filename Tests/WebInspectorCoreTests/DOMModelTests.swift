@@ -303,6 +303,33 @@ func frameDocumentProjectionRemainsPendingWhenURLDoesNotMatch() async throws {
 }
 
 @Test
+func srcLessIframeOwnerProjectsAboutBlankFrameDocument() async throws {
+    let pageTargetID = ProtocolTarget.ID("page-main")
+    let frameTargetID = ProtocolTarget.ID("frame-ad-target")
+    let frameID = DOMFrame.ID("frame-ad")
+    let session = await DOMSession()
+
+    await session.applyTargetCreated(.init(id: pageTargetID, kind: .page), makeCurrentMainPage: true)
+    await session.applyTargetCreated(.init(id: frameTargetID, kind: .frame, frameID: frameID))
+    _ = await session.replaceDocumentRoot(
+        pageDocument(iframeFrameID: frameID, iframeAttributes: []),
+        targetID: pageTargetID
+    )
+    let frameRootID = await session.replaceDocumentRoot(
+        frameDocument(rootNodeID: 101, documentURL: "about:blank"),
+        targetID: frameTargetID
+    )
+
+    let snapshot = await session.snapshot()
+    let projection = await session.treeProjection(rootTargetID: pageTargetID)
+    let iframeID = try #require(snapshot.currentNodeIDByKey[.init(targetID: pageTargetID, nodeID: .init(20))])
+
+    #expect(snapshot.frameDocumentProjections[frameTargetID]?.ownerNodeID == iframeID)
+    #expect(snapshot.frameDocumentProjections[frameTargetID]?.state == .attached)
+    #expect(projection.rows.contains { $0.nodeID == frameRootID && $0.depth > iframeDepth(in: projection, iframeID: iframeID) })
+}
+
+@Test
 func iframeOwnerSetChildNodesDoesNotRemoveAttachedFrameDocumentProjection() async throws {
     let pageTargetID = ProtocolTarget.ID("page-main")
     let frameTargetID = ProtocolTarget.ID("frame-ad-target")
@@ -386,6 +413,23 @@ func iframeOwnerSrcMutationReevaluatesFrameDocumentProjection() async throws {
     #expect(after.frameDocumentProjections[frameTargetID]?.ownerNodeID == iframeID)
     #expect(after.frameDocumentProjections[frameTargetID]?.state == .attached)
     #expect(projection.rows.contains { $0.nodeID == frameRootID && $0.depth > iframeDepth(in: projection, iframeID: iframeID) })
+
+    await session.applyAttributeModified(iframeID, name: "src", value: "https://other.example/ad")
+    let afterMismatch = await session.snapshot()
+    let mismatchedProjection = await session.treeProjection(rootTargetID: pageTargetID)
+    #expect(afterMismatch.frameDocumentProjections[frameTargetID]?.ownerNodeID == nil)
+    #expect(afterMismatch.frameDocumentProjections[frameTargetID]?.state == .pending)
+    #expect(mismatchedProjection.rows.map(\.nodeID).contains(frameRootID) == false)
+
+    await session.applyAttributeModified(iframeID, name: "src", value: "https://frame.example/ad")
+    #expect(await session.snapshot().frameDocumentProjections[frameTargetID]?.ownerNodeID == iframeID)
+
+    await session.applyAttributeRemoved(iframeID, name: "src")
+    let afterRemoval = await session.snapshot()
+    let removedProjection = await session.treeProjection(rootTargetID: pageTargetID)
+    #expect(afterRemoval.frameDocumentProjections[frameTargetID]?.ownerNodeID == nil)
+    #expect(afterRemoval.frameDocumentProjections[frameTargetID]?.state == .pending)
+    #expect(removedProjection.rows.map(\.nodeID).contains(frameRootID) == false)
 }
 
 @Test

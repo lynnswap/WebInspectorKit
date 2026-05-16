@@ -261,6 +261,7 @@ package final class InspectorSession {
             pendingConnection = nil
             connection = nextConnection
             isAttached = true
+            startDOMDocumentRequestsForAttachedFrameTargets()
             lastError = nil
         } catch {
             guard connection === nextConnection || pendingConnection === nextConnection else {
@@ -737,6 +738,15 @@ package final class InspectorSession {
         }
     }
 
+    private func startDOMDocumentRequestsForAttachedFrameTargets() {
+        for target in dom.snapshot().targetsByID.values
+        where target.kind == .frame
+            && target.capabilities.contains(.dom)
+            && target.currentDocumentID == nil {
+            startDOMDocumentRequest(targetID: target.id, reason: "attachedFrameTarget")
+        }
+    }
+
     private func handleDOMEvent(_ event: ProtocolEventEnvelope) async {
         do {
             if let inspectEvent = try DOMTransportAdapter.inspectEvent(from: event) {
@@ -1018,7 +1028,7 @@ package final class InspectorSession {
     }
 
     private func refreshDOMDocumentAfterBackendUpdate(_ event: ProtocolEventEnvelope) {
-        guard let targetID = event.targetID,
+        guard let targetID = event.targetID ?? dom.currentPageTargetID,
               dom.currentDocumentID(for: targetID) != nil || dom.currentPageTargetID == targetID else {
             return
         }

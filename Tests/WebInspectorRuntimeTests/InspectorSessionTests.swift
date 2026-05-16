@@ -221,6 +221,41 @@ func frameTargetWithAdvertisedDOMCapabilityHydratesOnCreation() async throws {
     #expect(await session.dom.snapshot().targetsByID[.frameAd]?.currentDocumentID != nil)
 }
 
+@Test
+func domCapableFrameTargetDiscoveredBeforeAttachHydratesAfterConnect() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["DOM","Runtime"],"isProvisional":false}}}"#
+    )
+
+    let connectTask = Task {
+        try await session.connect(transport: transport)
+    }
+    let bootstrapMessages = try await completeBootstrap(transport: transport, backend: backend)
+    try await connectTask.value
+
+    let frameRequest = try await waitForTargetMessage(
+        backend,
+        method: "DOM.getDocument",
+        after: bootstrapMessages.count
+    )
+    #expect(frameRequest.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    await receiveTargetReply(
+        transport,
+        targetID: frameRequest.targetIdentifier,
+        messageID: try messageID(frameRequest.message),
+        result: firstLazyFrameDocumentResult
+    )
+
+    #expect(await session.dom.snapshot().targetsByID[.frameAd]?.currentDocumentID != nil)
+}
+
 @Test("Regression: frame getDocument request does not block page DOM events")
 func frameDocumentRequestDoesNotBlockPageDOMEvents() async throws {
     let backend = FakeTransportBackend()
@@ -502,8 +537,8 @@ func staleSetChildNodesAfterPageNavigationDoesNotMoveHeadChildrenIntoNewBody() a
     #expect(snapshot.nodesByID[newBodyID]?.regularChildIDs.isEmpty == true)
 }
 
-@Test("Regression: targetless iframe DOM update does not invalidate parent page selection")
-func targetlessIframeDocumentUpdateDoesNotInvalidateParentPageSelection() async throws {
+@Test("Regression: root-scoped documentUpdated invalidates the current page document")
+func rootScopedDocumentUpdatedInvalidatesCurrentPageDocument() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
     let session = await InspectorSession(configuration: .test)
@@ -548,7 +583,7 @@ func targetlessIframeDocumentUpdateDoesNotInvalidateParentPageSelection() async 
     )
 
     let beforeUpdate = await session.dom.snapshot()
-    let pageDocumentID = try #require(beforeUpdate.currentPageDocumentID)
+    _ = try #require(beforeUpdate.currentPageDocumentID)
     let frameDocumentID = try #require(beforeUpdate.targetsByID[.frameAd]?.currentDocumentID)
     let frameRootID = try #require(beforeUpdate.documentsByID[frameDocumentID]?.rootNodeID)
     await session.dom.selectNode(mainNodeID)
@@ -560,20 +595,19 @@ func targetlessIframeDocumentUpdateDoesNotInvalidateParentPageSelection() async 
 
     let sentCountBeforeTargetlessUpdate = await backend.sentTargetMessages().count
     await transport.receiveRootMessage(#"{"method":"DOM.documentUpdated","params":{}}"#)
-    try await Task.sleep(for: .milliseconds(25))
 
-    let afterUpdate = await session.dom.snapshot()
-    #expect(afterUpdate.currentPageDocumentID == pageDocumentID)
-    #expect(afterUpdate.targetsByID[.frameAd]?.currentDocumentID == frameDocumentID)
-    #expect(afterUpdate.selection.selectedNodeID == mainNodeID)
-    #expect(afterUpdate.nodesByID[mainNodeID] != nil)
-    #expect(afterUpdate.nodesByID[iframeNodeID] != nil)
+    let afterUpdate: DOMSessionSnapshot = try await waitUntil {
+        let snapshot = await session.dom.snapshot()
+        guard snapshot.currentPageDocumentID == nil else {
+            return nil
+        }
+        return snapshot
+    }
+    #expect(afterUpdate.currentPageDocumentID == nil)
+    #expect(afterUpdate.targetsByID[ProtocolTargetIdentifier.frameAd]?.currentDocumentID == frameDocumentID)
+    #expect(afterUpdate.selection.selectedNodeID == nil)
     #expect(await backend.sentTargetMessages().count == sentCountBeforeTargetlessUpdate)
-    assertProjectionContainsFrameDocument(
-        in: await session.dom.treeProjection(rootTargetID: .pageMain),
-        iframeNodeID: iframeNodeID,
-        frameRootNodeID: frameRootID
-    )
+    #expect((await session.dom.treeProjection(rootTargetID: .pageMain)).rows.map(\.nodeID).contains(frameRootID) == false)
 }
 
 @Test("Lazy iframe insertion and frame document update keep the parent page tree intact")
