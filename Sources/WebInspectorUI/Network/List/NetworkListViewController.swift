@@ -355,22 +355,6 @@ extension NetworkListViewController {
     package var filterItemForTesting: UIBarButtonItem {
         filterItem
     }
-
-    package var filterMenuForTesting: UIMenu {
-        materializedMenuForTesting(filterHostingMenu)
-    }
-
-    package var overflowMenuForTesting: UIMenu {
-        materializedMenuForTesting(overflowHostingMenu)
-    }
-
-    private func materializedMenuForTesting<Content>(_ hostingMenu: UIHostingMenu<Content>) -> UIMenu {
-        if let cachedMenu = hostingMenu.cachedMenu {
-            return cachedMenu
-        }
-        _ = try? hostingMenu.menu()
-        return hostingMenu.cachedMenu ?? UIMenu()
-    }
 }
 #endif
 
