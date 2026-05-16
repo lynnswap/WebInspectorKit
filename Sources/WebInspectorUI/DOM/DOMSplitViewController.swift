@@ -75,7 +75,7 @@ package final class DOMSplitViewController: UISplitViewController {
         }
         let navigationItems = DOMNavigationItems(session: session)
         navigationItems.install(on: navigationItem) { [weak self] in
-            self?.undoManager
+            self?.treeViewController.domTreeUndoManager ?? self?.undoManager
         }
         domNavigationItems = navigationItems
     }

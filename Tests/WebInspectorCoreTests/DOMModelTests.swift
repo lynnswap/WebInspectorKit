@@ -247,6 +247,33 @@ func mainPageNavigationDoesNotMixFrameDocumentsIntoParentDocument() async throws
 }
 
 @Test
+func resetDoesNotReuseDocumentLifetimeForSameTargetID() async throws {
+    let pageTargetID = ProtocolTarget.ID("page-main")
+    let mainFrameID = DOMFrame.ID("main-frame")
+    let session = await DOMSession()
+
+    await session.applyTargetCreated(
+        .init(id: pageTargetID, kind: .page, frameID: mainFrameID),
+        makeCurrentMainPage: true
+    )
+    _ = await session.replaceDocumentRoot(pageDocumentWithoutIframe(), targetID: pageTargetID)
+    let firstDocumentID = try #require(await session.snapshot().targetsByID[pageTargetID]?.currentDocumentID)
+
+    await session.reset()
+    await session.applyTargetCreated(
+        .init(id: pageTargetID, kind: .page, frameID: mainFrameID),
+        makeCurrentMainPage: true
+    )
+    _ = await session.replaceDocumentRoot(pageDocumentWithoutIframe(), targetID: pageTargetID)
+    let secondDocumentID = try #require(await session.snapshot().targetsByID[pageTargetID]?.currentDocumentID)
+
+    #expect(firstDocumentID.targetID == pageTargetID)
+    #expect(secondDocumentID.targetID == pageTargetID)
+    #expect(firstDocumentID.localDocumentLifetimeID == .init(1))
+    #expect(secondDocumentID.localDocumentLifetimeID == .init(2))
+}
+
+@Test
 func iframeOwnerProjectsFrameDocumentWithoutStoringItAsRegularChild() async throws {
     let pageTargetID = ProtocolTarget.ID("page-main")
     let frameTargetID = ProtocolTarget.ID("frame-ad-target")

@@ -61,6 +61,33 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func documentResetClearsLocalExpansionStateEvenWhenNodeIDsRepeat() async throws {
+        let session = makeDOMSession()
+        let view = makeTreeView(session: session)
+
+        view.toggleRowForTesting(containing: "<article")
+        #expect(view.renderedTextForTesting.contains("<span id=\"nested-child\"></span>"))
+
+        let targetID = ProtocolTargetIdentifier("page-main")
+        session.reset()
+        session.applyTargetCreated(
+            ProtocolTargetRecord(
+                id: targetID,
+                kind: .page,
+                frameID: DOMFrameIdentifier("main-frame")
+            ),
+            makeCurrentMainPage: true
+        )
+        _ = session.replaceDocumentRoot(documentNode(), targetID: targetID)
+        await waitForObservationDelivery()
+        view.layoutIfNeeded()
+
+        let text = view.renderedTextForTesting
+        #expect(text.contains("<article>…</article>"))
+        #expect(!text.contains("<span id=\"nested-child\"></span>"))
+    }
+
+    @Test
     func openingUnloadedRowRequestsChildrenThroughInjectedAction() async throws {
         let session = makeDOMSession(root: documentWithDeferredArticle())
         var requestedNodeID: DOMNode.ID?

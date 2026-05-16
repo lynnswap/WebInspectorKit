@@ -11,6 +11,10 @@ package final class DOMTreeViewController: UIViewController {
     private let observationScope = ObservationScope()
     private var isEnsuringDOMDocumentLoaded = false
 
+    package var domTreeUndoManager: UndoManager? {
+        treeView.undoManager
+    }
+
     package init(session: InspectorSession) {
         self.session = session
         self.treeView = DOMTreeTextView(
