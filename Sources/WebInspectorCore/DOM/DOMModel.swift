@@ -727,9 +727,8 @@ package final class DOMSession {
         }
         if target.kind == .frame {
             setFrameDocumentProjection(frameTargetID: targetID, frameDocumentID: documentID)
-        } else {
-            updateAllFrameDocumentProjectionStates()
         }
+        updateAllFrameDocumentProjectionStates()
 
         reconcileSelection()
         treeRevision &+= 1
@@ -1994,7 +1993,6 @@ package final class DOMSession {
         projection.ownerNodeID = nil
         projection.state = .pending
         frameDocumentProjections[frameTargetID] = projection
-        updateFrameDocumentProjectionState(projection)
     }
 
     private func updateAllFrameDocumentProjectionStates() {
@@ -2073,10 +2071,15 @@ package final class DOMSession {
     }
 
     private func ownerDocument(forFrameTargetID frameTargetID: ProtocolTarget.ID) -> DOMDocument? {
-        if let parentFrameID = targetsByID[frameTargetID]?.parentFrameID,
-           let parentDocumentID = framesByID[parentFrameID]?.currentDocumentID,
-           let parentDocument = currentDocument(for: parentDocumentID) {
-            return parentDocument
+        guard let target = targetsByID[frameTargetID] else {
+            return nil
+        }
+
+        if let parentFrameID = target.parentFrameID {
+            guard let parentDocumentID = framesByID[parentFrameID]?.currentDocumentID else {
+                return nil
+            }
+            return currentDocument(for: parentDocumentID)
         }
         guard let pageTargetID = currentPageTargetID,
               let pageDocument = targetStatesByID[pageTargetID]?.currentDocument,

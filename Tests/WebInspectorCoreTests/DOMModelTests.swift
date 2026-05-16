@@ -337,6 +337,55 @@ func frameOwnerCandidatesAreScopedToParentFrameDocument() async throws {
 }
 
 @Test
+func nestedFrameProjectionWaitsForParentFrameDocumentBeforeOwnerMatching() async throws {
+    let pageTargetID = ProtocolTarget.ID("page-main")
+    let mainFrameID = DOMFrame.ID("main-frame")
+    let childFrameTargetID = ProtocolTarget.ID("frame-child-target")
+    let childFrameID = DOMFrame.ID("frame-child")
+    let nestedFrameTargetID = ProtocolTarget.ID("frame-nested-target")
+    let nestedFrameID = DOMFrame.ID("frame-nested")
+    let session = await DOMSession()
+
+    await session.applyTargetCreated(.init(id: pageTargetID, kind: .page, frameID: mainFrameID), makeCurrentMainPage: true)
+    await session.applyTargetCreated(.init(id: childFrameTargetID, kind: .frame, frameID: childFrameID, parentFrameID: mainFrameID))
+    await session.applyTargetCreated(.init(id: nestedFrameTargetID, kind: .frame, frameID: nestedFrameID, parentFrameID: childFrameID))
+    _ = await session.replaceDocumentRoot(
+        pageDocument(
+            iframeFrameID: childFrameID,
+            ownerFrameID: mainFrameID,
+            iframeAttributes: [.init(name: "src", value: "https://frame.example/child")]
+        ),
+        targetID: pageTargetID
+    )
+    let nestedRootID = await session.replaceDocumentRoot(
+        frameDocument(rootNodeID: 201, documentURL: "https://frame.example/nested"),
+        targetID: nestedFrameTargetID
+    )
+
+    var snapshot = await session.snapshot()
+    #expect(snapshot.frameDocumentProjections[nestedFrameTargetID]?.ownerNodeID == nil)
+    #expect(snapshot.frameDocumentProjections[nestedFrameTargetID]?.state == .pending)
+
+    _ = await session.replaceDocumentRoot(
+        nestedOwnerFrameDocument(
+            documentURL: "https://frame.example/child",
+            nestedFrameURL: "https://frame.example/nested",
+            ownerFrameID: childFrameID
+        ),
+        targetID: childFrameTargetID
+    )
+    snapshot = await session.snapshot()
+    let childDocumentIframeID = try #require(
+        snapshot.currentNodeIDByKey[.init(targetID: childFrameTargetID, nodeID: .init(20))]
+    )
+    let projection = await session.treeProjection(rootTargetID: pageTargetID)
+
+    #expect(snapshot.frameDocumentProjections[nestedFrameTargetID]?.ownerNodeID == childDocumentIframeID)
+    #expect(snapshot.frameDocumentProjections[nestedFrameTargetID]?.state == .attached)
+    #expect(projection.rows.map(\.nodeID).contains(nestedRootID))
+}
+
+@Test
 func frameDocumentProjectionRemainsPendingWhenURLDoesNotMatch() async throws {
     let pageTargetID = ProtocolTarget.ID("page-main")
     let frameTargetID = ProtocolTarget.ID("frame-ad-target")
@@ -1281,6 +1330,39 @@ private func pageDocumentWithoutIframe() -> DOMNodePayload {
                 children: [
                     .element(nodeID: 3, name: "head"),
                     .element(nodeID: 4, name: "body"),
+                ]
+            ),
+        ]
+    )
+}
+
+private func nestedOwnerFrameDocument(
+    documentURL: String,
+    nestedFrameURL: String,
+    ownerFrameID: DOMFrame.ID
+) -> DOMNodePayload {
+    document(
+        nodeID: 1,
+        documentURL: documentURL,
+        baseURL: documentURL,
+        children: [
+            .element(
+                nodeID: 2,
+                name: "html",
+                children: [
+                    .element(nodeID: 3, name: "head"),
+                    .element(
+                        nodeID: 4,
+                        name: "body",
+                        children: [
+                            .element(
+                                nodeID: 20,
+                                name: "iframe",
+                                ownerFrameID: ownerFrameID,
+                                attributes: [.init(name: "src", value: nestedFrameURL)]
+                            ),
+                        ]
+                    ),
                 ]
             ),
         ]
