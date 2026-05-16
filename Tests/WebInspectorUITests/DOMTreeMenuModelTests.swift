@@ -21,7 +21,7 @@ struct DOMTreeMenuModelTests {
                     return "/html/body/div"
                 }
             },
-            deleteNodesAction: { _, _ in }
+            deleteNodesAction: { _, _ in true }
         )
 
         model.configure(
@@ -76,7 +76,7 @@ struct DOMTreeMenuModelTests {
             copyNodeTextAction: { _, kind in
                 kind == .html ? "<node></node>" : nil
             },
-            deleteNodesAction: { _, _ in }
+            deleteNodesAction: { _, _ in true }
         )
 
         model.configure(
@@ -97,6 +97,56 @@ struct DOMTreeMenuModelTests {
         #expect(!model.canCopyXPath)
         #expect(model.deleteTitle == "Delete Nodes")
         #expect(model.canDelete)
+    }
+
+    @Test
+    func deleteSelectionClearsLocalSelectionOnlyAfterSuccessfulAction() async throws {
+        let fixture = try makeMenuFixture()
+        var clearCount = 0
+        let failingModel = DOMTreeMenuModel(
+            dom: fixture.session,
+            copyNodeTextAction: nil,
+            deleteNodesAction: { _, _ in false }
+        )
+
+        failingModel.configure(
+            nodeIDs: [fixture.divID],
+            selectedText: nil,
+            undoManager: nil,
+            localMarkupTextByNodeID: [:],
+            clearLocalSelection: {
+                clearCount += 1
+            }
+        )
+
+        let failingTask = try #require(failingModel.deleteSelection())
+        await failingTask.value
+        #expect(clearCount == 0)
+
+        var deletedNodeIDs: [DOMNode.ID] = []
+        let successfulModel = DOMTreeMenuModel(
+            dom: fixture.session,
+            copyNodeTextAction: nil,
+            deleteNodesAction: { nodeIDs, _ in
+                deletedNodeIDs = nodeIDs
+                return true
+            }
+        )
+
+        successfulModel.configure(
+            nodeIDs: [fixture.divID],
+            selectedText: nil,
+            undoManager: nil,
+            localMarkupTextByNodeID: [:],
+            clearLocalSelection: {
+                clearCount += 1
+            }
+        )
+
+        let successfulTask = try #require(successfulModel.deleteSelection())
+        await successfulTask.value
+        #expect(deletedNodeIDs == [fixture.divID])
+        #expect(clearCount == 1)
     }
 }
 

@@ -31,7 +31,15 @@ package final class DOMTreeViewController: UIViewController {
                 return try? await session.copyDOMNodeText(kind, for: nodeID)
             },
             deleteNodesAction: { [weak session] nodeIDs, undoManager in
-                try? await session?.deleteDOMNodes(nodeIDs, undoManager: undoManager)
+                guard let session else {
+                    return false
+                }
+                do {
+                    try await session.deleteDOMNodes(nodeIDs, undoManager: undoManager)
+                    return true
+                } catch {
+                    return false
+                }
             }
         )
         super.init(nibName: nil, bundle: nil)

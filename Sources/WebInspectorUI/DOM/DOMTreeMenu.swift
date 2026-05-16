@@ -5,7 +5,7 @@ import UIKit
 import WebInspectorCore
 
 typealias DOMTreeMenuCopyNodeTextAction = @MainActor (DOMNode.ID, DOMNodeCopyTextKind) async -> String?
-typealias DOMTreeMenuDeleteNodesAction = @MainActor ([DOMNode.ID], UndoManager?) async -> Void
+typealias DOMTreeMenuDeleteNodesAction = @MainActor ([DOMNode.ID], UndoManager?) async -> Bool
 
 @MainActor
 @Observable
@@ -110,7 +110,8 @@ final class DOMTreeMenuModel {
         copy(.xPath, for: nodeID)
     }
 
-    func deleteSelection() {
+    @discardableResult
+    func deleteSelection() -> Task<Void, Never>? {
         delete(deleteNodeIDs)
     }
 
@@ -158,14 +159,20 @@ final class DOMTreeMenuModel {
         }
     }
 
-    private func delete(_ nodeIDs: [DOMNode.ID]) {
+    @discardableResult
+    private func delete(_ nodeIDs: [DOMNode.ID]) -> Task<Void, Never>? {
         guard let deleteNodesAction else {
-            return
+            return nil
         }
         let sortedNodeIDs = uniqueNodeIDsInOrder(nodeIDs)
             .sorted { depthFromRoot(for: $0) > depthFromRoot(for: $1) }
-        Task { @MainActor in
-            await deleteNodesAction(sortedNodeIDs, undoManager)
+        guard !sortedNodeIDs.isEmpty else {
+            return nil
+        }
+        return Task { @MainActor in
+            guard await deleteNodesAction(sortedNodeIDs, undoManager) else {
+                return
+            }
             clearLocalSelection()
         }
     }
