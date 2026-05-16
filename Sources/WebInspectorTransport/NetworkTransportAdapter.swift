@@ -2,12 +2,6 @@ import Foundation
 import WebInspectorCore
 
 package enum NetworkTransportAdapter {
-#if DEBUG
-    private static func networkTrace(_ message: @autoclosure () -> String) {}
-#else
-    private static func networkTrace(_ message: @autoclosure () -> String) {}
-#endif
-
     package static func command(for intent: NetworkCommandIntent) throws -> ProtocolCommand {
         switch intent {
         case let .getResponseBody(requestKey, backendResourceIdentifier):
@@ -54,9 +48,6 @@ package enum NetworkTransportAdapter {
         switch event.method {
         case "Network.requestWillBeSent":
             let params = try TransportMessageParser.decode(RequestWillBeSentParams.self, from: event.paramsData)
-            if shouldTraceNavigationResource(type: params.type, url: params.request.url, documentURL: params.documentURL) {
-                networkTrace("navigation.request target=\(targetID.rawValue) request=\(params.requestId.rawValue) frame=\(params.frameId?.rawValue ?? "nil") type=\(params.type ?? "nil") url=\(params.request.url) documentURL=\(params.documentURL ?? "nil") originatingTarget=\(params.targetId?.rawValue ?? "nil")")
-            }
             let existingRequestURL = session.requestSnapshot(
                 for: .init(targetID: targetID, requestID: params.requestId)
             )?.request.url
@@ -77,9 +68,6 @@ package enum NetworkTransportAdapter {
             )
         case "Network.responseReceived":
             let params = try TransportMessageParser.decode(ResponseReceivedParams.self, from: event.paramsData)
-            if shouldTraceNavigationResource(type: params.type, url: params.response.url ?? "", documentURL: nil) {
-                networkTrace("navigation.response target=\(targetID.rawValue) request=\(params.requestId.rawValue) frame=\(params.frameId?.rawValue ?? "nil") type=\(params.type ?? "nil") url=\(params.response.url ?? "nil") status=\(params.response.status)")
-            }
             session.applyResponseReceived(
                 targetID: targetID,
                 requestID: params.requestId,
@@ -113,7 +101,6 @@ package enum NetworkTransportAdapter {
             )
         case "Network.loadingFailed":
             let params = try TransportMessageParser.decode(LoadingFailedParams.self, from: event.paramsData)
-            networkTrace("failed target=\(targetID.rawValue) request=\(params.requestId.rawValue) error=\(params.errorText) canceled=\(params.canceled ?? false)")
             session.applyLoadingFailed(
                 targetID: targetID,
                 requestID: params.requestId,
@@ -170,9 +157,6 @@ package enum NetworkTransportAdapter {
             session.applyWebSocketClosed(targetID: targetID, requestID: params.requestId, timestamp: params.timestamp)
         case "Network.requestServedFromMemoryCache":
             let params = try TransportMessageParser.decode(RequestServedFromMemoryCacheParams.self, from: event.paramsData)
-            if shouldTraceNavigationResource(type: params.resource.type, url: params.resource.url, documentURL: params.documentURL) {
-                networkTrace("navigation.memoryCache target=\(targetID.rawValue) request=\(params.requestId.rawValue) frame=\(params.frameId.rawValue) url=\(params.resource.url) documentURL=\(params.documentURL)")
-            }
             _ = session.applyRequestServedFromMemoryCache(
                 targetID: targetID,
                 requestID: params.requestId,
@@ -204,12 +188,6 @@ package enum NetworkTransportAdapter {
         return try JSONSerialization.data(withJSONObject: object, options: [])
     }
 
-    private static func shouldTraceNavigationResource(type: String?, url: String, documentURL: String?) -> Bool {
-        if type == "Document" {
-            return true
-        }
-        return documentURL == url
-    }
 }
 
 private struct ResponseBodyResult: Decodable {

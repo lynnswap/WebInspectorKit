@@ -1,14 +1,6 @@
 import Foundation
 import Observation
 
-#if DEBUG
-private func domProjectionTrace(_ message: @autoclosure () -> String) {
-    print("[WebInspectorCore.DOM.Projection] \(message())")
-}
-#else
-private func domProjectionTrace(_ message: @autoclosure () -> String) {}
-#endif
-
 @MainActor
 @Observable
 package final class ProtocolTarget {
@@ -824,7 +816,6 @@ package final class DOMSession {
             document.removeChildNodesTransactions(parentRawNodeID: parent.protocolNodeID)
             return
         }
-        let hadOwnerHydration = document.hasActiveOwnerHydrationTransaction()
         var replacementOwnerKeys: [ProtocolTarget.ID: DOMNodeCurrentKey] = [:]
         for childID in parent.regularChildren.loadedChildren {
             replacementOwnerKeys.merge(projectedFrameOwnerKeys(inSubtree: childID)) { current, _ in current }
@@ -846,11 +837,6 @@ package final class DOMSession {
             treeRevision &+= 1
         } else {
             completePendingSelectionIfPossible(in: document)
-        }
-        if hadOwnerHydration {
-            domProjectionTrace(
-                "ownerHydration.setChildNodes target=\(document.targetID.rawValue) parent=\(traceNode(parent)) children=\(payloads.count) projections=\(frameProjectionTraceSummary())"
-            )
         }
     }
 
@@ -1641,9 +1627,6 @@ package final class DOMSession {
             kind: .ownerHydration(frameTargetID: frameTargetID),
             issuedSequence: issuedSequence
         )
-        domProjectionTrace(
-            "ownerHydration.request frameTarget=\(frameTargetID.rawValue) target=\(document.targetID.rawValue) node=\(traceNode(node)) issuedSequence=\(issuedSequence)"
-        )
         return .requestChildNodes(
             targetID: document.targetID,
             nodeID: node.protocolNodeID,
@@ -2001,9 +1984,6 @@ package final class DOMSession {
         projection.state = .pending
         frameDocumentProjections[frameTargetID] = projection
         updateFrameDocumentProjectionState(projection)
-        domProjectionTrace(
-            "frameDocument.register frameTarget=\(frameTargetID.rawValue) document=\(traceDocument(frameDocumentID)) state=\(projection.state) owner=\(traceNodeID(projection.ownerNodeID)) candidates=\(traceOwnerCandidateCount(for: frameDocumentID))"
-        )
     }
 
     private func updateAllFrameDocumentProjectionStates() {
@@ -2013,24 +1993,12 @@ package final class DOMSession {
     }
 
     private func updateFrameDocumentProjectionState(_ projection: FrameDocumentProjection) {
-        let previousState = projection.state
-        let previousOwnerNodeID = projection.ownerNodeID
-        var candidateCount: Int?
-        var frameDocumentURL: String?
-        defer {
-            if previousState != projection.state || previousOwnerNodeID != projection.ownerNodeID {
-                domProjectionTrace(
-                    "projection.update frameTarget=\(projection.frameTargetID.rawValue) document=\(traceDocument(projection.frameDocumentID)) url=\(frameDocumentURL ?? "nil") state=\(previousState)->\(projection.state) owner=\(traceNodeID(previousOwnerNodeID))->\(traceNodeID(projection.ownerNodeID)) candidates=\(candidateCount.map(String.init) ?? "n/a")"
-                )
-            }
-        }
         guard let document = currentDocument(for: projection.frameDocumentID),
               let frameRoot = document.nodesByID[document.rootNodeID] else {
             projection.ownerNodeID = nil
             projection.state = .pending
             return
         }
-        frameDocumentURL = frameRoot.documentURL
 
         if let ownerNodeID = projection.ownerNodeID,
            node(for: ownerNodeID) != nil {
@@ -2039,7 +2007,6 @@ package final class DOMSession {
         }
 
         let candidates = ownerCandidates(forFrameDocumentRoot: frameRoot)
-        candidateCount = candidates.count
         switch candidates.count {
         case 0:
             projection.ownerNodeID = nil
@@ -2096,48 +2063,6 @@ package final class DOMSession {
             return lhs.documentID.localDocumentLifetimeID < rhs.documentID.localDocumentLifetimeID
         }
         return lhs.nodeID.rawValue < rhs.nodeID.rawValue
-    }
-
-    private func frameProjectionTraceSummary() -> String {
-        let entries = frameDocumentProjections.values
-            .sorted { $0.frameTargetID.rawValue < $1.frameTargetID.rawValue }
-            .prefix(8)
-            .map { projection in
-                "\(projection.frameTargetID.rawValue):\(projection.state):owner=\(traceNodeID(projection.ownerNodeID)):candidates=\(traceOwnerCandidateCount(for: projection.frameDocumentID)):doc=\(traceDocument(projection.frameDocumentID))"
-            }
-        let suffix = frameDocumentProjections.count > entries.count ? ",..." : ""
-        return "[" + entries.joined(separator: ",") + suffix + "]"
-    }
-
-    private func traceOwnerCandidateCount(for frameDocumentID: DOMDocument.ID) -> String {
-        guard let document = currentDocument(for: frameDocumentID),
-              let root = document.nodesByID[document.rootNodeID] else {
-            return "n/a"
-        }
-        return String(ownerCandidates(forFrameDocumentRoot: root).count)
-    }
-
-    private func traceDocument(_ documentID: DOMDocument.ID) -> String {
-        guard let document = currentDocument(for: documentID),
-              let root = document.nodesByID[document.rootNodeID] else {
-            return "\(documentID.targetID.rawValue)#\(documentID.localDocumentLifetimeID.rawValue):missing"
-        }
-        let url = root.documentURL ?? "nil"
-        return "\(documentID.targetID.rawValue)#\(documentID.localDocumentLifetimeID.rawValue):url=\(url)"
-    }
-
-    private func traceNodeID(_ nodeID: DOMNode.ID?) -> String {
-        guard let nodeID else {
-            return "nil"
-        }
-        guard let node = node(for: nodeID) else {
-            return "\(nodeID.documentID.targetID.rawValue)#\(nodeID.nodeID.rawValue):missing"
-        }
-        return traceNode(node)
-    }
-
-    private func traceNode(_ node: DOMNode) -> String {
-        "\(node.id.documentID.targetID.rawValue)#\(node.protocolNodeID.rawValue)<\(node.nodeName)>"
     }
 
     private func frameOwner(_ owner: DOMNode, matchesFrameDocumentURL frameDocumentURL: String) -> Bool {

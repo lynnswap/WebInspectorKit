@@ -2,12 +2,6 @@ import Foundation
 import WebInspectorCore
 
 package enum DOMTransportAdapter {
-#if DEBUG
-    private static func domAdapterTrace(_ message: @autoclosure () -> String) {}
-#else
-    private static func domAdapterTrace(_ message: @autoclosure () -> String) {}
-#endif
-
     package static func command(for intent: DOMCommandIntent) throws -> ProtocolCommand {
         switch intent {
         case let .getDocument(targetID):
@@ -218,7 +212,6 @@ package enum DOMTransportAdapter {
             if let parentID = snapshot.currentNodeIDByKey[.init(targetID: targetID, nodeID: params.parentId)] {
                 session.applySetChildNodes(parent: parentID, children: params.nodes.map(\.payload), eventSequence: event.sequence)
             } else {
-                domAdapterTrace("setChildNodes.fragment target=\(targetID.rawValue) parent=\(params.parentId.rawValue) reason=missingCurrentNode children=\(nodeSummary(params.nodes.map(\.payload)))")
                 session.applySetChildNodes(
                     targetID: targetID,
                     parentRawNodeID: params.parentId,
@@ -230,7 +223,6 @@ package enum DOMTransportAdapter {
             let params = try TransportMessageParser.decode(ChildNodeInsertedParams.self, from: event.paramsData)
             let snapshot = session.snapshot()
             guard let parentID = snapshot.currentNodeIDByKey[.init(targetID: targetID, nodeID: params.parentNodeId)] else {
-                domAdapterTrace("childNodeInserted.drop target=\(targetID.rawValue) parent=\(params.parentNodeId.rawValue) reason=missingCurrentNode child=\(nodeSummary(params.node.payload))")
                 return
             }
             let previousSiblingID = params.previousNodeId.flatMap {
@@ -241,7 +233,6 @@ package enum DOMTransportAdapter {
             let params = try TransportMessageParser.decode(ChildNodeRemovedParams.self, from: event.paramsData)
             let snapshot = session.snapshot()
             guard let nodeID = snapshot.currentNodeIDByKey[.init(targetID: targetID, nodeID: params.nodeId)] else {
-                domAdapterTrace("childNodeRemoved.drop target=\(targetID.rawValue) node=\(params.nodeId.rawValue) reason=missingCurrentNode")
                 return
             }
             session.applyNodeRemoved(nodeID)
@@ -256,7 +247,6 @@ package enum DOMTransportAdapter {
             let params = try TransportMessageParser.decode(AttributeModifiedParams.self, from: event.paramsData)
             let snapshot = session.snapshot()
             guard let nodeID = snapshot.currentNodeIDByKey[.init(targetID: targetID, nodeID: params.nodeId)] else {
-                domAdapterTrace("attributeModified.drop target=\(targetID.rawValue) node=\(params.nodeId.rawValue) name=\(params.name) reason=missingCurrentNode")
                 return
             }
             session.applyAttributeModified(nodeID, name: params.name, value: params.value)
@@ -264,32 +254,12 @@ package enum DOMTransportAdapter {
             let params = try TransportMessageParser.decode(AttributeRemovedParams.self, from: event.paramsData)
             let snapshot = session.snapshot()
             guard let nodeID = snapshot.currentNodeIDByKey[.init(targetID: targetID, nodeID: params.nodeId)] else {
-                domAdapterTrace("attributeRemoved.drop target=\(targetID.rawValue) node=\(params.nodeId.rawValue) name=\(params.name) reason=missingCurrentNode")
                 return
             }
             session.applyAttributeRemoved(nodeID, name: params.name)
         default:
             break
         }
-    }
-
-    private static func nodeSummary(_ node: DOMNodeSnapshot?) -> String {
-        guard let node else {
-            return "nil"
-        }
-        return "\(node.nodeName)#\(node.protocolNodeID.rawValue)"
-    }
-
-    private static func nodeSummary(_ payload: DOMNodePayload) -> String {
-        "\(payload.nodeName)#\(payload.nodeID.rawValue)"
-    }
-
-    private static func nodeSummary(_ payloads: [DOMNodePayload]) -> String {
-        let prefix = payloads.prefix(8).map(nodeSummary).joined(separator: ",")
-        if payloads.count > 8 {
-            return "[\(prefix),... total=\(payloads.count)]"
-        }
-        return "[\(prefix)]"
     }
 
     private static func data(_ object: [String: Any]) throws -> Data {

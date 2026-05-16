@@ -1,28 +1,25 @@
 import Foundation
 import Observation
+import OSLog
 import Synchronization
 import WebKit
 import WebInspectorCore
 import WebInspectorTransport
 
-#if DEBUG
-private func inspectorRuntimeTrace(_ message: @autoclosure () -> String) {}
+private enum InspectorRuntimeLog {
+    private static let logger = Logger(
+        subsystem: "com.lynnswap.WebInspectorKit",
+        category: "Runtime"
+    )
 
-private func inspectorRuntimeFailureTrace(_ message: @autoclosure () -> String) {
-    print("[WebInspectorRuntime.Failure] \(message())")
+    static func error(_ message: String) {
+        logger.error("\(message, privacy: .public)")
+    }
+
+    static func warning(_ message: String) {
+        logger.warning("\(message, privacy: .public)")
+    }
 }
-
-private func inspectorRuntimeDOMTrace(_ message: @autoclosure () -> String) {
-    print("[WebInspectorRuntime.DOM] \(message())")
-}
-
-private func inspectorRuntimeVerboseTrace(_ message: @autoclosure () -> String) {}
-#else
-private func inspectorRuntimeTrace(_ message: @autoclosure () -> String) {}
-private func inspectorRuntimeFailureTrace(_ message: @autoclosure () -> String) {}
-private func inspectorRuntimeDOMTrace(_ message: @autoclosure () -> String) {}
-private func inspectorRuntimeVerboseTrace(_ message: @autoclosure () -> String) {}
-#endif
 
 package struct InspectorSessionError: Error, Equatable, Sendable, CustomStringConvertible {
     package var message: String
@@ -111,61 +108,6 @@ private struct TargetDestroyedEventParams: Decodable {
 private struct TargetCommittedEventParams: Decodable {
     var oldTargetId: ProtocolTargetIdentifier?
     var newTargetId: ProtocolTargetIdentifier
-}
-
-private struct DOMGetDocumentTracePayload: Decodable {
-    var root: DOMNodeTracePayload
-}
-
-private struct DOMNodeTracePayload: Decodable {
-    var nodeId: Int?
-    var nodeName: String?
-    var documentURL: String?
-    var baseURL: String?
-    var childNodeCount: Int?
-    var children: [DOMNodeTracePayload]?
-
-    var summary: String {
-        let name = nodeName ?? "?"
-        let id = nodeId.map(String.init) ?? "?"
-        let url = documentURL.map { " url=\(shortTraceValue($0))" } ?? ""
-        let base = baseURL.map { " base=\(shortTraceValue($0))" } ?? ""
-        let count = childNodeCount.map { " count=\($0)" } ?? ""
-        let childSummary = (children ?? [])
-            .prefix(4)
-            .map(\.shallowSummary)
-            .joined(separator: ",")
-        if childSummary.isEmpty {
-            return "\(name)#\(id)\(url)\(base)\(count)"
-        }
-        return "\(name)#\(id)\(url)\(base)\(count)[\(childSummary)]"
-    }
-
-    private var shallowSummary: String {
-        let name = nodeName ?? "?"
-        let id = nodeId.map(String.init) ?? "?"
-        let count = childNodeCount.map { " count=\($0)" } ?? ""
-        let childSummary = (children ?? [])
-            .prefix(4)
-            .map { child in
-                let childName = child.nodeName ?? "?"
-                let childID = child.nodeId.map(String.init) ?? "?"
-                let childCount = child.childNodeCount.map { " count=\($0)" } ?? ""
-                return "\(childName)#\(childID)\(childCount)"
-            }
-            .joined(separator: ",")
-        if childSummary.isEmpty {
-            return "\(name)#\(id)\(count)"
-        }
-        return "\(name)#\(id)\(count)[\(childSummary)]"
-    }
-}
-
-private func shortTraceValue(_ value: String, limit: Int = 160) -> String {
-    guard value.count > limit else {
-        return value
-    }
-    return "\(value.prefix(limit))..."
 }
 
 @MainActor
@@ -408,9 +350,6 @@ package final class InspectorSession {
 
     package func cancelElementPicker() async {
         let targetID = elementPickerTargetID ?? dom.currentPageTargetID
-        if isSelectingElement {
-            inspectorRuntimeTrace("picker.cancel target=\(targetID?.rawValue ?? "nil")")
-        }
         clearElementPickerState(invalidatePendingSelection: true)
         guard let targetID,
               let intent = dom.setInspectModeEnabledIntent(targetID: targetID, enabled: false) else {
@@ -493,7 +432,6 @@ package final class InspectorSession {
         }
 
         do {
-            inspectorRuntimeTrace("documentEnsure.request target=\(targetID.rawValue)")
             try await reloadDOMDocument(targetID: targetID)
             return dom.currentPageRootNode != nil
         } catch is CancellationError {
@@ -502,7 +440,6 @@ package final class InspectorSession {
                 return dom.currentPageRootNode != nil
             }
             do {
-                inspectorRuntimeTrace("documentEnsure.retry target=\(targetID.rawValue)")
                 try await reloadDOMDocument(targetID: targetID)
                 return dom.currentPageRootNode != nil
             } catch {
@@ -533,15 +470,13 @@ package final class InspectorSession {
         let connection = try activeConnection()
         let transport = connection.transport
         let command = try DOMTransportAdapter.command(for: intent)
-        traceCommandSend(command)
         let result: ProtocolCommandResult
         do {
             result = try await transport.send(command)
         } catch {
-            inspectorRuntimeFailureTrace("command.error method=\(command.method) routing=\(command.routing) error=\(error)")
+            InspectorRuntimeLog.error("command.error method=\(command.method) routing=\(command.routing) error=\(error)")
             throw error
         }
-        traceCommandReply(command, result: result)
         try ensureCurrentConnection(connection)
 
         switch intent {
@@ -554,12 +489,10 @@ package final class InspectorSession {
                 to: dom
             )
             switch selectionResult {
-            case let .resolved(nodeID):
-                inspectorRuntimeVerboseTrace("requestNode.select success target=\(targetID.rawValue) node=\(nodeID.nodeID.rawValue) document=\(nodeID.documentID)")
-            case let .pending(key):
-                inspectorRuntimeTrace("requestNode.select pending target=\(targetID.rawValue) node=\(key.nodeID.rawValue) reason=awaiting-setChildNodes")
+            case .resolved, .pending:
+                break
             case let .failed(failure):
-                inspectorRuntimeFailureTrace("requestNode.selectFailure target=\(targetID.rawValue) failure=\(failure)")
+                InspectorRuntimeLog.warning("requestNode.selectFailure target=\(targetID.rawValue) failure=\(failure)")
                 lastError = InspectorSessionError(String(describing: failure))
             }
         case .requestChildNodes:
@@ -652,7 +585,6 @@ package final class InspectorSession {
     }
 
     private func bootstrap(mainTargetID: ProtocolTargetIdentifier, connection: InspectorConnection) async throws {
-        inspectorRuntimeDOMTrace("bootstrap.start target=\(mainTargetID.rawValue)")
         _ = try await sendTargetCommand(domain: .inspector, method: "Inspector.enable", targetID: mainTargetID, connection: connection)
         try ensureCurrentConnection(connection)
         _ = try await sendTargetCommand(domain: .inspector, method: "Inspector.initialized", targetID: mainTargetID, connection: connection)
@@ -675,7 +607,6 @@ package final class InspectorSession {
         )
         try ensureCurrentConnection(connection)
         connection.bootstrappedTargetIDs.insert(mainTargetID)
-        inspectorRuntimeDOMTrace("bootstrap.done target=\(mainTargetID.rawValue)")
     }
 
     private func sendTargetCommand(
@@ -704,10 +635,6 @@ package final class InspectorSession {
     }
 
     private func handleProtocolEvent(_ event: ProtocolEventEnvelope) async {
-        traceEvent(event, phase: "begin")
-        defer {
-            traceEvent(event, phase: "end")
-        }
         switch event.domain {
         case .target:
             await handleTargetEvent(event)
@@ -733,7 +660,6 @@ package final class InspectorSession {
             guard let inspectEvent = try DOMTransportAdapter.inspectEvent(from: event) else {
                 return
             }
-            inspectorRuntimeVerboseTrace("inspect.event seq=\(event.sequence) target=\(event.targetID?.rawValue ?? "nil") activePicker=\(elementPickerTargetID?.rawValue ?? "nil") selecting=\(isSelectingElement)")
             await handleInspectEvent(inspectEvent)
         } catch {
             lastError = InspectorSessionError("\(event.method): \(error)")
@@ -752,14 +678,7 @@ package final class InspectorSession {
                let createdTarget,
                createdTarget.kind == .frame {
                 if createdTarget.capabilities.contains(.dom) {
-                    inspectorRuntimeDOMTrace(
-                        "frameTarget.created action=getDocument target=\(createdTarget.id.rawValue) frame=\(createdTarget.frameID?.rawValue ?? "nil") parentFrame=\(createdTarget.parentFrameID?.rawValue ?? "nil") caps=\(createdTarget.capabilities.rawValue)"
-                    )
                     startDOMDocumentRequest(targetID: createdTarget.id, reason: "frameTargetCreated")
-                } else {
-                    inspectorRuntimeTrace(
-                        "frameTarget.created action=skipNoDOM target=\(createdTarget.id.rawValue) frame=\(createdTarget.frameID?.rawValue ?? "nil") parentFrame=\(createdTarget.parentFrameID?.rawValue ?? "nil") caps=\(createdTarget.capabilities.rawValue)"
-                    )
                 }
             }
             if event.method == "Target.didCommitProvisionalTarget",
@@ -796,7 +715,6 @@ package final class InspectorSession {
         guard let intent = dom.pendingFrameOwnerHydrationIntent(issuedSequence: currentAppliedDOMSequence) else {
             return
         }
-        inspectorRuntimeDOMTrace("frameOwnerHydration.perform intent=\(intent)")
         Task { @MainActor [weak self] in
             guard let self else {
                 return
@@ -804,7 +722,7 @@ package final class InspectorSession {
             do {
                 try await perform(intent)
             } catch {
-                inspectorRuntimeFailureTrace("frameOwnerHydration.failed intent=\(intent) error=\(error)")
+                InspectorRuntimeLog.warning("frameOwnerHydration.failed intent=\(intent) error=\(error)")
                 lastError = InspectorSessionError(String(describing: error))
             }
         }
@@ -839,7 +757,6 @@ package final class InspectorSession {
     ) async throws {
         switch inspectRoute(for: event, activeTargetID: activeTargetID) {
         case let .remoteObject(targetID, objectID):
-            inspectorRuntimeVerboseTrace("inspect.route remoteObject target=\(targetID.rawValue) object=\(objectID) hasDocument=\(dom.currentDocumentID(for: targetID) != nil)")
             if dom.currentDocumentID(for: targetID) == nil {
                 try await reloadDOMDocument(targetID: targetID)
             }
@@ -858,7 +775,6 @@ package final class InspectorSession {
                 throw InspectorSessionError("DOM.requestNode could not be issued: \(failure)")
             }
         case let .protocolNode(targetID, nodeID):
-            inspectorRuntimeVerboseTrace("inspect.route protocolNode target=\(targetID.rawValue) node=\(nodeID.rawValue)")
             let result = dom.selectProtocolNode(targetID: targetID, nodeID: nodeID)
             if case let .failure(failure) = result {
                 guard case .unresolvedNode = failure else {
@@ -897,11 +813,6 @@ package final class InspectorSession {
         if let executionContextID = remoteObject.injectedScriptID,
            let targetID = dom.snapshot().executionContextsByID[executionContextID]?.targetID {
             return targetID
-        }
-        if let executionContextID = remoteObject.injectedScriptID {
-            inspectorRuntimeTrace(
-                "inspect.routeFallback reason=unknownExecutionContext injectedScriptID=\(executionContextID.rawValue) eventTarget=\(eventTargetID?.rawValue ?? "nil") activeTarget=\(activeTargetID.rawValue)"
-            )
         }
         return eventTargetID ?? activeTargetID
     }
@@ -959,7 +870,7 @@ package final class InspectorSession {
         if !details.isEmpty {
             message += " \(details)"
         }
-        inspectorRuntimeFailureTrace(message)
+        InspectorRuntimeLog.warning(message)
     }
 
     private func completeElementPicker() async {
@@ -996,21 +907,14 @@ package final class InspectorSession {
         if force {
             cancelDOMDocumentRequest(targetID: targetID, reason: "force-\(reason)")
         } else if let activeHandle = domDocumentRequestHandlesByTargetID[targetID] {
-            inspectorRuntimeTrace("documentRequest.pending target=\(targetID.rawValue) reason=active-request caller=\(reason)")
             return activeHandle
         }
         guard let intent = dom.getDocumentIntent(targetID: targetID) else {
-            inspectorRuntimeDOMTrace(
-                "getDocument.skip target=\(targetID.rawValue) reason=noDOMCapability kind=\(String(describing: dom.targetKind(for: targetID)))"
-            )
             return nil
         }
 
         let targetKind = dom.targetKind(for: targetID)
         let handle = DOMDocumentRequestHandle(targetID: targetID, targetKind: targetKind)
-        inspectorRuntimeDOMTrace(
-            "getDocument.start target=\(targetID.rawValue) kind=\(String(describing: targetKind)) reason=\(reason)"
-        )
         let task = Task { @MainActor [weak self] in
             guard let self else {
                 return
@@ -1023,26 +927,21 @@ package final class InspectorSession {
             do {
                 let connection = try activeConnection()
                 let command = try DOMTransportAdapter.command(for: intent)
-                traceCommandSend(command)
                 let result = try await connection.transport.send(command)
                 try Task.checkCancellation()
                 try ensureCurrentConnection(connection)
-                traceCommandReply(command, result: result)
                 guard domDocumentRequestHandlesByTargetID[targetID] === handle else {
-                    inspectorRuntimeDOMTrace("getDocument.dropReply target=\(targetID.rawValue) reason=request-gate-reset")
                     return
                 }
                 try applyGetDocumentResult(result)
                 lastError = nil
             } catch is CancellationError {
-                inspectorRuntimeDOMTrace("getDocument.cancelled target=\(targetID.rawValue) reason=\(reason)")
                 throw CancellationError()
             } catch {
                 if handle.targetKind == .frame, shouldIgnoreFrameDocumentRequestError(error) {
-                    inspectorRuntimeDOMTrace("getDocument.frameDrop target=\(targetID.rawValue) reason=\(reason) error=\(error)")
                     return
                 }
-                inspectorRuntimeFailureTrace("getDocument.failed target=\(targetID.rawValue) reason=\(reason) error=\(error)")
+                InspectorRuntimeLog.error("getDocument.failed target=\(targetID.rawValue) reason=\(reason) error=\(error)")
                 lastError = InspectorSessionError(String(describing: error))
                 throw error
             }
@@ -1076,15 +975,12 @@ package final class InspectorSession {
     private func refreshDOMDocumentAfterBackendUpdate(_ event: ProtocolEventEnvelope) {
         guard let targetID = event.targetID,
               dom.currentDocumentID(for: targetID) != nil || dom.currentPageTargetID == targetID else {
-            inspectorRuntimeTrace("documentUpdated.drop seq=\(event.sequence) target=\(event.targetID?.rawValue ?? "nil") currentPage=\(dom.currentPageTargetID?.rawValue ?? "nil")")
             return
         }
         let targetKind = dom.targetKind(for: targetID)
-        inspectorRuntimeTrace("documentUpdated.invalidate seq=\(event.sequence) target=\(targetID.rawValue) kind=\(String(describing: targetKind)) currentDocument=\(String(describing: dom.currentDocumentID(for: targetID)))")
         cancelDOMDocumentRequest(targetID: targetID, reason: "documentUpdated")
         dom.invalidateDocument(targetID: targetID)
         if targetKind == .frame {
-            inspectorRuntimeTrace("documentUpdated.requestFrame target=\(targetID.rawValue)")
             startDOMDocumentRequest(targetID: targetID, force: true, reason: "frameDocumentUpdated")
         }
     }
@@ -1093,13 +989,11 @@ package final class InspectorSession {
         guard let handle = domDocumentRequestHandlesByTargetID.removeValue(forKey: targetID) else {
             return
         }
-        inspectorRuntimeTrace("documentRequest.cancel target=\(targetID.rawValue) reason=\(reason)")
         handle.task?.cancel()
     }
 
     private func cancelDOMDocumentRequests() {
-        for (targetID, handle) in domDocumentRequestHandlesByTargetID {
-            inspectorRuntimeTrace("documentRequest.cancel target=\(targetID.rawValue) reason=session-reset")
+        for handle in domDocumentRequestHandlesByTargetID.values {
             handle.task?.cancel()
         }
         domDocumentRequestHandlesByTargetID.removeAll()
@@ -1134,14 +1028,11 @@ package final class InspectorSession {
 
     private func applyGetDocumentResult(_ result: ProtocolCommandResult) throws {
         guard let targetID = result.targetID else {
-            inspectorRuntimeTrace("getDocument.drop reason=missing-target")
             return
         }
         guard dom.targetKind(for: targetID) != nil else {
-            inspectorRuntimeTrace("getDocument.drop target=\(targetID.rawValue) reason=missing-target-kind")
             return
         }
-        traceGetDocumentResult(result)
         try DOMTransportAdapter.applyGetDocumentResult(result, to: dom)
         startPendingFrameOwnerHydration()
         lastError = nil
@@ -1313,40 +1204,6 @@ package final class InspectorSession {
         guard connection === candidate || pendingConnection === candidate else {
             throw TransportError.transportClosed
         }
-    }
-
-    private func traceCommandSend(_ command: ProtocolCommand) {
-        switch command.method {
-        case "DOM.getDocument", "DOM.requestNode":
-            inspectorRuntimeTrace("command.send method=\(command.method) routing=\(command.routing) appliedSeq=\(currentAppliedDOMSequence)")
-        default:
-            break
-        }
-    }
-
-    private func traceCommandReply(_ command: ProtocolCommand, result: ProtocolCommandResult) {
-        switch command.method {
-        case "DOM.getDocument", "DOM.requestNode":
-            inspectorRuntimeTrace("command.reply method=\(command.method) target=\(result.targetID?.rawValue ?? "nil") replySeq=\(result.receivedSequence) domSeq=\(result.receivedSequence(for: .dom))")
-        default:
-            break
-        }
-    }
-
-    private func traceEvent(_ event: ProtocolEventEnvelope, phase: String) {
-        switch event.domain {
-        case .target:
-            inspectorRuntimeTrace("event.\(phase) seq=\(event.sequence) domain=\(event.domain) method=\(event.method) target=\(event.targetID?.rawValue ?? "nil")")
-        case .dom where event.method == "DOM.documentUpdated" || event.method == "DOM.inspect":
-            inspectorRuntimeTrace("event.\(phase) seq=\(event.sequence) domain=\(event.domain) method=\(event.method) target=\(event.targetID?.rawValue ?? "nil")")
-        default:
-            break
-        }
-    }
-
-    private func traceGetDocumentResult(_ result: ProtocolCommandResult) {
-        let summary = (try? JSONDecoder().decode(DOMGetDocumentTracePayload.self, from: result.resultData).root.summary) ?? "decode-failed"
-        inspectorRuntimeDOMTrace("getDocument.apply target=\(result.targetID?.rawValue ?? "nil") replySeq=\(result.receivedSequence) domSeq=\(result.receivedSequence(for: .dom)) root=\(summary)")
     }
 
     package static func prepareInspectability(for webView: WKWebView) -> Bool? {
