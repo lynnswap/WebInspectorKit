@@ -26,19 +26,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: iOS 18 latest if available
-            runner: macos-26
+          - name: iOS 18 latest
+            runner: macos-15
             xcode_channel: stable
             xcode_major: '26'
             ios_major: '18'
             test_scope: native
-            optional: 'true'
+            optional: 'false'
           - name: iOS 26 latest
             runner: macos-26
             xcode_channel: stable
             xcode_major: '26'
             ios_major: '26'
             test_scope: full
+            optional: 'false'
           - name: latest iOS beta if available
             runner: macos-26
             xcode_channel: prerelease
