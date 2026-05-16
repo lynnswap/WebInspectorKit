@@ -733,6 +733,10 @@ package final class InspectorSession {
                let connection {
                 startPageTargetDocumentRequestAfterCommit(targetID: targetID, connection: connection)
             }
+            if event.method == "Target.didCommitProvisionalTarget",
+               let committedTargetID = targetCommittedID(from: event) {
+                startFrameTargetDocumentRequestAfterCommit(targetID: committedTargetID)
+            }
         } catch {
             lastError = InspectorSessionError("\(event.method): \(error)")
         }
@@ -745,6 +749,17 @@ package final class InspectorSession {
             && target.currentDocumentID == nil {
             startDOMDocumentRequest(targetID: target.id, reason: "attachedFrameTarget")
         }
+    }
+
+    private func startFrameTargetDocumentRequestAfterCommit(targetID: ProtocolTargetIdentifier) {
+        guard isAttached,
+              let target = dom.snapshot().targetsByID[targetID],
+              target.kind == .frame,
+              target.capabilities.contains(.dom),
+              target.currentDocumentID == nil else {
+            return
+        }
+        startDOMDocumentRequest(targetID: targetID, reason: "frameTargetCommit")
     }
 
     private func handleDOMEvent(_ event: ProtocolEventEnvelope) async {
@@ -1063,6 +1078,17 @@ package final class InspectorSession {
             return nil
         }
         return params.targetId
+    }
+
+    private func targetCommittedID(from event: ProtocolEventEnvelope) -> ProtocolTargetIdentifier? {
+        guard event.method == "Target.didCommitProvisionalTarget",
+              let params = try? TransportMessageParser.decode(
+                  TargetCommittedEventParams.self,
+                  from: event.paramsData
+              ) else {
+            return nil
+        }
+        return params.newTargetId
     }
 
     private func shouldIgnoreFrameDocumentRequestError(_ error: any Error) -> Bool {

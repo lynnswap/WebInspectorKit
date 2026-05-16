@@ -256,6 +256,61 @@ func domCapableFrameTargetDiscoveredBeforeAttachHydratesAfterConnect() async thr
     #expect(await session.dom.snapshot().targetsByID[.frameAd]?.currentDocumentID != nil)
 }
 
+@Test
+func provisionalFrameDocumentResolvedBeforeCommitRehydratesCommittedFrame() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    let provisionalTargetID = ProtocolTargetIdentifier("frame-provisional")
+    let sentCountBeforeFrameTarget = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-provisional","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["DOM","Runtime"],"isProvisional":true}}}"#
+    )
+    let firstRequest = try await waitForTargetMessage(
+        backend,
+        method: "DOM.getDocument",
+        after: sentCountBeforeFrameTarget
+    )
+    #expect(firstRequest.targetIdentifier == provisionalTargetID)
+    await receiveTargetReply(
+        transport,
+        targetID: firstRequest.targetIdentifier,
+        messageID: try messageID(firstRequest.message),
+        result: firstLazyFrameDocumentResult
+    )
+    let _: DOMDocumentIdentifier = try await waitUntil {
+        await session.dom.snapshot().targetsByID[provisionalTargetID]?.currentDocumentID
+    }
+
+    let sentCountBeforeCommit = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"frame-provisional","newTargetId":"frame-ad"}}"#
+    )
+    let committedRequest = try await waitForTargetMessage(
+        backend,
+        method: "DOM.getDocument",
+        after: sentCountBeforeCommit
+    )
+    #expect(committedRequest.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    await receiveTargetReply(
+        transport,
+        targetID: committedRequest.targetIdentifier,
+        messageID: try messageID(committedRequest.message),
+        result: secondLazyFrameDocumentResult
+    )
+
+    let snapshot: DOMSessionSnapshot = try await waitUntil {
+        let snapshot = await session.dom.snapshot()
+        guard snapshot.targetsByID[ProtocolTargetIdentifier.frameAd]?.currentDocumentID != nil else {
+            return nil
+        }
+        return snapshot
+    }
+    #expect(snapshot.targetsByID[provisionalTargetID] == nil)
+}
+
 @Test("Regression: frame getDocument request does not block page DOM events")
 func frameDocumentRequestDoesNotBlockPageDOMEvents() async throws {
     let backend = FakeTransportBackend()
@@ -1134,6 +1189,64 @@ func detachedSetChildNodesRootKeepsRequestNodeSelectable() async throws {
     let selectedNode = try #require(await session.dom.selectedNode)
     #expect(await selectedNode.nodeName == "IMG")
     #expect(await selectedNode.attributes == [DOMAttribute(name: "src", value: "https://ads.example/detached.webp")])
+}
+
+@Test("Regression: detached frame setChildNodes root keeps requestNode selectable")
+func detachedFrameSetChildNodesRootKeepsRequestNodeSelectable() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    let sentCountBeforeFrameTarget = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["DOM","Runtime"],"isProvisional":false}}}"#
+    )
+    let frameDocumentRequest = try await waitForTargetMessage(
+        backend,
+        method: "DOM.getDocument",
+        after: sentCountBeforeFrameTarget
+    )
+    await receiveTargetReply(
+        transport,
+        targetID: frameDocumentRequest.targetIdentifier,
+        messageID: try messageID(frameDocumentRequest.message),
+        result: firstLazyFrameDocumentResult
+    )
+    _ = try await waitUntil {
+        await session.dom.snapshot().targetsByID[ProtocolTargetIdentifier.frameAd]?.currentDocumentID
+    }
+
+    let intent = await session.dom.beginInspectSelectionRequest(
+        targetID: .frameAd,
+        objectID: "detached-frame-object"
+    )
+    guard case let .success(commandIntent) = intent else {
+        Issue.record("Expected DOM.requestNode intent")
+        return
+    }
+
+    let sentCount = await backend.sentTargetMessages().count
+    let performTask = Task {
+        try await session.perform(commandIntent)
+    }
+    let sent = try await waitForTargetMessage(backend, method: "DOM.requestNode", after: sentCount)
+    await receiveTargetDispatch(
+        transport,
+        targetID: .frameAd,
+        message: #"{"method":"DOM.setChildNodes","params":{"parentId":0,"nodes":[{"nodeId":300,"nodeType":1,"nodeName":"DIV","localName":"div","children":[{"nodeId":301,"nodeType":1,"nodeName":"IMG","localName":"img"}]}]}}"#
+    )
+    await receiveTargetReply(
+        transport,
+        targetID: sent.targetIdentifier,
+        messageID: try messageID(sent.message),
+        result: #"{"nodeId":301}"#
+    )
+    _ = try await performTask.value
+
+    let selectedNode = try #require(await session.dom.selectedNode)
+    #expect(await selectedNode.nodeName == "IMG")
+    #expect(await session.dom.selectedNodeID?.documentID.targetID == ProtocolTargetIdentifier.frameAd)
 }
 
 @Test

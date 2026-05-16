@@ -202,8 +202,7 @@ package enum DOMTransportAdapter {
             let params = try TransportMessageParser.decode(SetChildNodesParams.self, from: event.paramsData)
             let snapshot = session.snapshot()
             if params.parentId.rawValue == 0 {
-                guard snapshot.targetsByID[targetID]?.kind != .frame,
-                      let detachedRoot = params.nodes.first?.payload else {
+                guard let detachedRoot = params.nodes.first?.payload else {
                     return
                 }
                 session.applyDetachedRoot(targetID: targetID, payload: detachedRoot, eventSequence: event.sequence)

@@ -581,6 +581,9 @@ package actor TransportSession {
 
     private func applyTargetCommitted(oldTargetID: ProtocolTargetIdentifier?, newTargetID: ProtocolTargetIdentifier) {
         let committedOldTargetID = oldTargetID ?? inferredOldTargetIDForOldlessCommit(newTargetID: newTargetID)
+        if let committedOldTargetID {
+            moveBufferedProvisionalTargetMessages(from: committedOldTargetID, to: newTargetID)
+        }
         if let oldTargetID = committedOldTargetID,
            oldTargetID == currentMainPageTargetID,
            let existingNewRecord = targetsByID[newTargetID],
@@ -632,6 +635,18 @@ package actor TransportSession {
            newRecord.parentFrameID == nil {
             currentMainPageTargetID = newTargetID
         }
+    }
+
+    private func moveBufferedProvisionalTargetMessages(
+        from oldTargetID: ProtocolTargetIdentifier,
+        to newTargetID: ProtocolTargetIdentifier
+    ) {
+        guard oldTargetID != newTargetID,
+              let messages = provisionalTargetMessagesByTargetID.removeValue(forKey: oldTargetID),
+              messages.isEmpty == false else {
+            return
+        }
+        provisionalTargetMessagesByTargetID[newTargetID, default: []].append(contentsOf: messages)
     }
 
     private func dispatchCommittedProvisionalTargetMessagesIfNeeded(method: String, paramsData: Data) async {

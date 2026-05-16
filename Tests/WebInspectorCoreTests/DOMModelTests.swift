@@ -1039,6 +1039,42 @@ func staleSelectionRequestIsRejectedAfterFrameDocumentRefresh() async throws {
 }
 
 @Test
+func requestNodeReplyAfterDocumentInvalidationIsRejected() async throws {
+    let pageTargetID = ProtocolTarget.ID("page-main")
+    let session = await DOMSession()
+
+    await session.applyTargetCreated(.init(id: pageTargetID, kind: .page), makeCurrentMainPage: true)
+    _ = await session.replaceDocumentRoot(pageDocumentWithoutIframe(), targetID: pageTargetID)
+
+    let command = await session.beginInspectSelectionRequest(
+        targetID: pageTargetID,
+        objectID: "page-object"
+    )
+    let requestID: SelectionRequestIdentifier
+    guard case let .success(.requestNode(id, _, _)) = command else {
+        Issue.record("Expected pending requestNode selection")
+        return
+    }
+    requestID = id
+
+    await session.invalidateDocument(targetID: pageTargetID)
+    let result = await session.applyRequestNodeResult(
+        selectionRequestID: requestID,
+        targetID: pageTargetID,
+        nodeID: .init(2)
+    )
+    let snapshot = await session.snapshot()
+
+    guard case let .failed(.missingCurrentDocument(targetID)) = result else {
+        Issue.record("Expected missing current document failure")
+        return
+    }
+    #expect(targetID == pageTargetID)
+    #expect(snapshot.selection.selectedNodeID == nil)
+    #expect(snapshot.selection.pendingRequest == nil)
+}
+
+@Test
 func selectionFailureDoesNotMutateTreeFrameOrDocumentModel() async throws {
     let pageTargetID = ProtocolTarget.ID("page-main")
     let session = await DOMSession()

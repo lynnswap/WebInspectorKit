@@ -1290,7 +1290,8 @@ package final class DOMSession {
         targetID: ProtocolTarget.ID,
         nodeID: DOMProtocolNodeID
     ) -> DOMRequestNodeResolution {
-        guard let document = targetStatesByID[targetID]?.currentDocument else {
+        guard let document = targetStatesByID[targetID]?.currentDocument,
+              document.lifecycle == .loaded else {
             return failSelection(.missingCurrentDocument(targetID), clearSelected: false)
         }
         guard let pendingRequest = selection.pendingRequest,

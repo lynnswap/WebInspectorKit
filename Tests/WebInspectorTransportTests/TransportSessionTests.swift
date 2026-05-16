@@ -444,6 +444,35 @@ func provisionalTargetMessagesAreDispatchedAfterCommitTargetEvent() async throws
 }
 
 @Test
+func oldProvisionalTargetMessagesAreDispatchedAfterCommitTargetEvent() async throws {
+    let backend = FakeTransportBackend()
+    let session = TransportSession(backend: backend, responseTimeout: .seconds(1))
+
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-provisional","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","isProvisional":true}}}"#)
+
+    let targetStream = await session.events(for: .target)
+    let domStream = await session.events(for: .dom)
+    let targetTask = firstEvent(from: targetStream)
+    let domTask = firstEvent(from: domStream)
+
+    await receiveTargetDispatch(
+        session,
+        targetID: .init("frame-provisional"),
+        message: #"{"method":"DOM.childNodeCountUpdated","params":{"nodeId":3,"childNodeCount":1}}"#
+    )
+    await session.receiveRootMessage(#"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"frame-provisional","newTargetId":"frame-committed"}}"#)
+
+    let targetEvent = try #require(await targetTask.value)
+    let domEvent = try #require(await domTask.value)
+
+    #expect(targetEvent.method == "Target.didCommitProvisionalTarget")
+    #expect(domEvent.method == "DOM.childNodeCountUpdated")
+    #expect(domEvent.targetID == ProtocolTargetIdentifier("frame-committed"))
+    #expect(domEvent.sequence > targetEvent.sequence)
+    #expect(domEvent.receivedSequence(for: .target) == targetEvent.sequence)
+}
+
+@Test
 func retargetedPendingReplyStillTimesOutAfterCommit() async throws {
     let backend = FakeTransportBackend()
     let session = TransportSession(backend: backend, responseTimeout: .milliseconds(20))
