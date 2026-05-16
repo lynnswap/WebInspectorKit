@@ -51,15 +51,18 @@ private final class DOMDeleteUndoState {
     let documentTargetID: ProtocolTargetIdentifier
     let commandTargetID: ProtocolTargetIdentifier
     var documentID: DOMDocumentIdentifier
+    var actionName: String
 
     init(
         documentTargetID: ProtocolTargetIdentifier,
         commandTargetID: ProtocolTargetIdentifier,
-        documentID: DOMDocumentIdentifier
+        documentID: DOMDocumentIdentifier,
+        actionName: String = "Delete Node"
     ) {
         self.documentTargetID = documentTargetID
         self.commandTargetID = commandTargetID
         self.documentID = documentID
+        self.actionName = actionName
     }
 }
 
@@ -421,17 +424,31 @@ package final class InspectorSession {
         guard let nodeID = dom.selectedNodeID else {
             throw InspectorSessionError("No DOM node is selected.")
         }
+        return try await copyDOMNodeText(kind, for: nodeID)
+    }
 
+    package func copyDOMNodeText(_ kind: DOMNodeCopyTextKind, for nodeID: WebInspectorCore.DOMNode.ID) async throws -> String {
+        guard isAttached else {
+            throw InspectorSessionError("Inspector session is not attached.")
+        }
         switch kind {
         case .html:
             let commandTargetID = try currentPageTargetForDOMAction()
             guard let intent = dom.outerHTMLIntent(for: nodeID, commandTargetID: commandTargetID) else {
-                throw InspectorSessionError("Selected DOM node is no longer available.")
+                throw InspectorSessionError("DOM node is no longer available.")
             }
             let result = try await perform(intent)
             return try DOMTransportAdapter.outerHTML(from: result)
-        case .selectorPath, .xPath:
-            return dom.selectedNodeCopyText(kind) ?? ""
+        case .selectorPath:
+            guard let node = dom.node(for: nodeID) else {
+                throw InspectorSessionError("DOM node is no longer available.")
+            }
+            return dom.selectorPath(for: node)
+        case .xPath:
+            guard let node = dom.node(for: nodeID) else {
+                throw InspectorSessionError("DOM node is no longer available.")
+            }
+            return dom.xPath(for: node)
         }
     }
 
@@ -442,27 +459,65 @@ package final class InspectorSession {
         guard let nodeID = dom.selectedNodeID else {
             throw InspectorSessionError("No DOM node is selected.")
         }
+        try await deleteDOMNode(nodeID, undoManager: undoManager)
+    }
+
+    package func deleteDOMNodes(_ nodeIDs: [WebInspectorCore.DOMNode.ID], undoManager: UndoManager?) async throws {
+        var seenNodeIDs: Set<WebInspectorCore.DOMNode.ID> = []
+        let uniqueNodeIDs = nodeIDs.filter { seenNodeIDs.insert($0).inserted }
+        let actionName = uniqueNodeIDs.count > 1 ? "Delete Nodes" : "Delete Node"
+        var undoStates: [DOMDeleteUndoState] = []
+
+        do {
+            for nodeID in uniqueNodeIDs.sorted(by: { depthFromRoot(for: $0) > depthFromRoot(for: $1) }) {
+                undoStates.append(try await performDeleteDOMNode(nodeID))
+            }
+        } catch {
+            registerUndoDeletes(undoStates, undoManager: undoManager, actionName: actionName)
+            throw error
+        }
+        registerUndoDeletes(undoStates, undoManager: undoManager, actionName: actionName)
+    }
+
+    package func deleteDOMNode(_ nodeID: WebInspectorCore.DOMNode.ID, undoManager: UndoManager?) async throws {
+        let undoState = try await performDeleteDOMNode(nodeID)
+        if let undoManager {
+            registerUndoDelete(undoState, undoManager: undoManager)
+        }
+    }
+
+    private func performDeleteDOMNode(_ nodeID: WebInspectorCore.DOMNode.ID) async throws -> DOMDeleteUndoState {
+        guard isAttached else {
+            throw InspectorSessionError("Inspector session is not attached.")
+        }
         let commandTargetID = try currentPageTargetForDOMAction()
         guard let identity = dom.actionIdentity(for: nodeID, commandTargetID: commandTargetID),
               let intent = dom.removeNodeIntent(for: nodeID, commandTargetID: identity.commandTargetID) else {
-            throw InspectorSessionError("Selected DOM node is no longer available.")
+            throw InspectorSessionError("DOM node is no longer available.")
         }
         let documentID = nodeID.documentID
 
         try await perform(intent)
         dom.applyNodeRemoved(nodeID)
+        dom.selectNode(nil)
         lastError = nil
 
-        if let undoManager {
-            registerUndoDelete(
-                DOMDeleteUndoState(
-                    documentTargetID: identity.documentTargetID,
-                    commandTargetID: identity.commandTargetID,
-                    documentID: documentID
-                ),
-                undoManager: undoManager
-            )
+        return DOMDeleteUndoState(
+            documentTargetID: identity.documentTargetID,
+            commandTargetID: identity.commandTargetID,
+            documentID: documentID
+        )
+    }
+
+    private func depthFromRoot(for nodeID: WebInspectorCore.DOMNode.ID) -> Int {
+        var depth = 0
+        var currentNode = dom.node(for: nodeID)
+        while let parentID = currentNode?.parentID,
+              let parent = dom.node(for: parentID) {
+            depth += 1
+            currentNode = parent
         }
+        return depth
     }
 
     package func reloadDOMDocument() async throws {
@@ -1199,7 +1254,7 @@ package final class InspectorSession {
                 await target?.performUndoDelete(state, undoManager: undoManager, generation: generation)
             }
         }
-        undoManager.setActionName("Delete Node")
+        undoManager.setActionName(state.actionName)
     }
 
     private func registerRedoDelete(_ state: DOMDeleteUndoState, undoManager: UndoManager) {
@@ -1211,7 +1266,34 @@ package final class InspectorSession {
                 await target?.performRedoDelete(state, undoManager: undoManager, generation: generation)
             }
         }
-        undoManager.setActionName("Delete Node")
+        undoManager.setActionName(state.actionName)
+    }
+
+    private func registerUndoDeletes(
+        _ states: [DOMDeleteUndoState],
+        undoManager: UndoManager?,
+        actionName: String
+    ) {
+        guard let undoManager, !states.isEmpty else {
+            return
+        }
+        for state in states {
+            state.actionName = actionName
+        }
+
+        guard states.count > 1 else {
+            registerUndoDelete(states[0], undoManager: undoManager)
+            return
+        }
+
+        undoManager.beginUndoGrouping()
+        defer {
+            undoManager.setActionName(actionName)
+            undoManager.endUndoGrouping()
+        }
+        for state in states {
+            registerUndoDelete(state, undoManager: undoManager)
+        }
     }
 
     private func enqueueDeleteUndoOperation(_ operation: @escaping @MainActor (UInt64) async -> Void) {

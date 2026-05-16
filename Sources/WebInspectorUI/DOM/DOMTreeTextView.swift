@@ -1,5 +1,6 @@
 #if canImport(UIKit)
 import ObservationBridge
+import UIHostingMenu
 import UIKit
 import WebInspectorCore
 
@@ -8,6 +9,8 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     typealias RequestChildrenAction = @MainActor (DOMNode.ID) async -> Bool
     typealias HighlightNodeAction = @MainActor (DOMNode.ID) async -> Void
     typealias HideHighlightAction = @MainActor () async -> Void
+    typealias CopyNodeTextAction = DOMTreeMenuCopyNodeTextAction
+    typealias DeleteNodesAction = DOMTreeMenuDeleteNodesAction
 
     fileprivate static let font = UIFont.monospacedSystemFont(ofSize: 13, weight: .regular)
     private static let lineSpacing: CGFloat = 2
@@ -34,6 +37,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         return paragraphStyle
     }()
     private let dom: DOMSession
+    private let menuModel: DOMTreeMenuModel
     private let observationScope = ObservationScope()
     private let textContentStorage = NSTextContentStorage()
     private let layoutManager = NSTextLayoutManager()
@@ -49,6 +53,9 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         return interaction
     }()
     private lazy var textInputTokenizer = UITextInputStringTokenizer(textInput: self)
+    private lazy var domMenuHostingMenu = UIHostingMenu(
+        rootView: DOMTreeMenuView(model: menuModel)
+    )
 
     private var rows: [DOMTreeLine] = []
     private var renderedText = ""
@@ -87,7 +94,6 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     private let hideHighlightAction: HideHighlightAction?
     weak var inputDelegate: UITextInputDelegate?
 #if DEBUG
-    private var lastPresentedDOMMenuTitles: [String] = []
     private var reloadTreeCallCount = 0
     private var buildRenderedRowsCallCount = 0
     private var rebuildTextStorageCallCount = 0
@@ -114,12 +120,19 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         dom: DOMSession,
         requestChildrenAction: RequestChildrenAction? = nil,
         highlightNodeAction: HighlightNodeAction? = nil,
-        hideHighlightAction: HideHighlightAction? = nil
+        hideHighlightAction: HideHighlightAction? = nil,
+        copyNodeTextAction: CopyNodeTextAction? = nil,
+        deleteNodesAction: DeleteNodesAction? = nil
     ) {
         self.dom = dom
         self.requestChildrenAction = requestChildrenAction
         self.highlightNodeAction = highlightNodeAction
         self.hideHighlightAction = hideHighlightAction
+        self.menuModel = DOMTreeMenuModel(
+            dom: dom,
+            copyNodeTextAction: copyNodeTextAction,
+            deleteNodesAction: deleteNodesAction
+        )
         super.init(frame: .zero)
         configureTextSystem()
         configureInteractions()
@@ -1231,9 +1244,6 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
 
     private func presentDOMMenu(for nodes: [DOMNode], at location: CGPoint) {
         let menu = makeDOMMenu(for: nodes)
-#if DEBUG
-        lastPresentedDOMMenuTitles = menu.children.compactMap { ($0 as? UIAction)?.title }
-#endif
 
         dismissDOMMenuAnchor()
         let button = UIButton(type: .system)
@@ -1263,14 +1273,11 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         menuAnchorButton = nil
     }
 
-    private func makeDOMMenu(for nodes: [DOMNode]) -> UIMenu {
-        if nodes.count > 1 {
-            makeMultiNodeMenu(for: nodes)
-        } else if let node = nodes.first {
-            makeContextMenu(for: node)
-        } else {
-            UIMenu(children: [])
-        }
+    private func makeDOMMenu(for nodes: [DOMNode], selectedText: String? = nil) -> UIMenu {
+        makeMenu(
+            for: uniqueNodeIDsInDisplayOrder(for: nodes),
+            selectedText: selectedText
+        )
     }
 
     private func makeTextSelectionEditMenu(for range: NSRange) -> UIMenu {
@@ -1279,25 +1286,8 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         guard !nodes.isEmpty else {
             return UIMenu(children: [])
         }
-
-        if selectedRows.count > 1 {
-            return makeMultiNodeMenu(for: nodes)
-        }
-
-        let copyText = UIAction(
-            title: "Copy",
-            image: UIImage(systemName: "doc.on.doc")
-        ) { [weak self] _ in
-            guard let self,
-                  let text = self.text(in: DOMTreeTextRange(range: range)),
-                  !text.isEmpty
-            else {
-                return
-            }
-            UIPasteboard.general.string = text
-        }
-
-        return UIMenu(children: [copyText] + makeDOMMenu(for: nodes).children)
+        let selectedText = selectedRows.count == 1 ? text(in: DOMTreeTextRange(range: range)) : nil
+        return makeDOMMenu(for: nodes, selectedText: selectedText)
     }
 
     private func rowsIntersectingTextRange(_ range: NSRange) -> [DOMTreeLine] {
@@ -1319,37 +1309,38 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         }
     }
 
-    private func makeMultiNodeMenu(for nodes: [DOMNode]) -> UIMenu {
-        let copyMarkup = UIAction(title: "Copy Markup") { [weak self] _ in
-            guard let self else {
-                return
+    private func makeMenu(for nodeIDs: [DOMNode.ID], selectedText: String?) -> UIMenu {
+        menuModel.configure(
+            nodeIDs: nodeIDs,
+            selectedText: selectedText,
+            undoManager: undoManager,
+            localMarkupTextByNodeID: localMarkupTextByNodeID(for: nodeIDs),
+            clearLocalSelection: { [weak self] in
+                self?.clearTextSelection()
+                self?.clearMultiSelection(keepingLast: nil)
             }
-            let nodeIDs = Set(nodes.map(\.id))
-            let text = self.rows
-                .filter { !$0.isClosingTag && nodeIDs.contains($0.node.id) }
-                .map(\.text)
-                .joined(separator: "\n")
-            guard !text.isEmpty else {
-                return
-            }
-            UIPasteboard.general.string = text
-        }
-
-        return UIMenu(children: [copyMarkup])
+        )
+        domMenuHostingMenu.setNeedsUpdate()
+        return (try? domMenuHostingMenu.menu()) ?? UIMenu(children: [])
     }
 
-    private func makeContextMenu(for node: DOMNode) -> UIMenu {
-        let copyMarkup = UIAction(title: "Copy Markup") { [weak self, weak node] _ in
-            guard let self, let node else {
-                return
-            }
-            guard let row = self.rows.first(where: { !$0.isClosingTag && $0.node.id == node.id }) else {
-                return
-            }
-            UIPasteboard.general.string = row.text
-        }
+    private func localMarkupText(for nodeID: DOMNode.ID) -> String? {
+        rows.first { !$0.isClosingTag && $0.node.id == nodeID }?.text
+    }
 
-        return UIMenu(children: [copyMarkup])
+    private func uniqueNodeIDsInDisplayOrder(for nodes: [DOMNode]) -> [DOMNode.ID] {
+        var seenNodeIDs: Set<DOMNode.ID> = []
+        return nodes.compactMap { node in
+            seenNodeIDs.insert(node.id).inserted ? node.id : nil
+        }
+    }
+
+    private func localMarkupTextByNodeID(for nodeIDs: [DOMNode.ID]) -> [DOMNode.ID: String] {
+        Dictionary(
+            uniqueKeysWithValues: nodeIDs.compactMap { nodeID in
+                localMarkupText(for: nodeID).map { (nodeID, $0) }
+            }
+        )
     }
 
     private func applyRowAttributes(to attributedText: NSMutableAttributedString) {
@@ -2473,72 +2464,6 @@ extension DOMTreeTextView {
         }
     }
 
-    func secondaryClickMenuTitlesForTesting(containing text: String) -> [String] {
-        guard let row = rows.first(where: { $0.text.contains(text) }) else {
-            return []
-        }
-        let nodes: [DOMNode]
-        if multiSelectedNodeIDs.count > 1, multiSelectedNodeIDs.contains(row.node.id) {
-            nodes = multiSelectedNodesInDisplayOrder()
-        } else {
-            clearMultiSelection(keepingLast: row.node.id)
-            nodes = [row.node]
-        }
-        let menu = makeDOMMenu(for: nodes)
-        let titles = menu.children.compactMap { ($0 as? UIAction)?.title }
-        lastPresentedDOMMenuTitles = titles
-        return titles
-    }
-
-    var multiSelectedNodeIDsForTesting: [UInt64] {
-        rows.compactMap { row in
-            !row.isClosingTag && multiSelectedNodeIDs.contains(row.node.id) ? UInt64(row.node.protocolNodeID.rawValue) : nil
-        }
-    }
-
-    var lastPresentedDOMMenuTitlesForTesting: [String] {
-        lastPresentedDOMMenuTitles
-    }
-
-    func selectTextForTesting(_ text: String) {
-        let nsText = renderedText as NSString
-        let range = nsText.range(of: text)
-        guard range.location != NSNotFound else {
-            return
-        }
-        setSelectedTextRange(DOMTreeTextRange(range: range))
-    }
-
-    func selectTextForTesting(from startText: String, through endText: String) {
-        let nsText = renderedText as NSString
-        let startRange = nsText.range(of: startText)
-        let endRange = nsText.range(of: endText)
-        guard startRange.location != NSNotFound,
-              endRange.location != NSNotFound
-        else {
-            return
-        }
-
-        let lowerBound = min(startRange.location, endRange.location)
-        let upperBound = max(NSMaxRange(startRange), NSMaxRange(endRange))
-        setSelectedTextRange(DOMTreeTextRange(range: NSRange(location: lowerBound, length: upperBound - lowerBound)))
-    }
-
-    var selectedTextForTesting: String {
-        text(in: DOMTreeTextRange(range: selectedTextNSRange)) ?? ""
-    }
-
-    func editMenuTitlesForSelectedTextForTesting() -> [String] {
-        let suggestedActions = [
-            UIAction(title: "Translate") { _ in },
-            UIAction(title: "Share...") { _ in },
-        ]
-        return editMenu(
-            for: DOMTreeTextRange(range: selectedTextNSRange),
-            suggestedActions: suggestedActions
-        )?.children.compactMap { ($0 as? UIAction)?.title } ?? []
-    }
-
     func decorateFindTextForTesting(query: String) {
         clearFindDecorations()
         for range in DOMTreeFindCoordinator.searchRanges(in: renderedText, queryString: query) {
@@ -2551,17 +2476,6 @@ extension DOMTreeTextView {
 
     func decorateStaleFindTextForTesting(query: String) {
         findCoordinator.decorateStaleFoundTextForTesting(queryString: query)
-    }
-
-    func contextMenuForTesting(containing text: String) -> UIMenu? {
-        guard let row = rows.first(where: { $0.text.contains(text) }) else {
-            return nil
-        }
-        return makeDOMMenu(for: [row.node])
-    }
-
-    func contextMenuTitlesForTesting(containing text: String) -> [String] {
-        contextMenuForTesting(containing: text)?.children.compactMap { ($0 as? UIAction)?.title } ?? []
     }
 
     func synchronizeDocumentForTesting() {
