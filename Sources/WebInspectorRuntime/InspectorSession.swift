@@ -572,6 +572,13 @@ package final class InspectorSession {
         webView.reload()
     }
 
+    package func waitUntilProtocolEventApplied(_ sequence: UInt64) async -> Bool {
+        guard let eventPump = connection?.eventPump else {
+            return false
+        }
+        return await eventPump.waitUntilApplied(sequence)
+    }
+
     @discardableResult
     package func perform(_ intent: DOMCommandIntent) async throws -> ProtocolCommandResult {
         let connection = try activeConnection()

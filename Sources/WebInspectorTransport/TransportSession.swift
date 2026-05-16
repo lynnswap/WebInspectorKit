@@ -109,9 +109,11 @@ package actor TransportSession {
         }
     }
 
-    package func receiveRootMessage(_ message: String) async {
+    @discardableResult
+    package func receiveRootMessage(_ message: String) async -> UInt64 {
         inboundMessages.append(message)
         await drainInboundMessages()
+        return nextSequence
     }
 
     package func detach() async {

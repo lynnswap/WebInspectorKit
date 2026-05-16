@@ -110,6 +110,11 @@ jobs:
 
           ios_major = ENV.fetch("IOS_MAJOR", "")
           optional = ENV.fetch("OPTIONAL_CONFIGURATION", "") == "true"
+          required_ios_version = nil
+          if ENV.fetch("XCODE_CHANNEL", "") == "prerelease" && ios_major.empty?
+            sdk_versions = `xcodebuild -showsdks`.scan(/-sdk iphonesimulator(\d+(?:\.\d+)*)/).flatten
+            required_ios_version = sdk_versions.max_by { |version| version.split(".").map(&:to_i) }
+          end
           devices = JSON.parse(`xcrun simctl list devices available --json`).fetch("devices")
           matches = []
 
@@ -118,6 +123,7 @@ jobs:
 
             version = Regexp.last_match(1).tr("-", ".")
             next if !ios_major.empty? && version.split(".").first != ios_major
+            next if required_ios_version && version != required_ios_version
 
             available_devices = runtime_devices.select { |device| device.fetch("isAvailable", true) }
             preferred_devices = available_devices.select { |device| device["name"].start_with?("iPhone") }
@@ -129,7 +135,14 @@ jobs:
           end
 
           if matches.empty?
-            message = "No available iOS #{ios_major.empty? ? "" : "#{ios_major}.x "}simulator found"
+            requested_runtime = if required_ios_version
+                                  "iOS #{required_ios_version}"
+                                elsif ios_major.empty?
+                                  "iOS"
+                                else
+                                  "iOS #{ios_major}.x"
+                                end
+            message = "No available #{requested_runtime} simulator found"
             if optional
               File.open(ENV.fetch("GITHUB_ENV"), "a") { |env| env.puts "SKIP_TESTS=1" }
               puts "#{message}; skipping optional job"

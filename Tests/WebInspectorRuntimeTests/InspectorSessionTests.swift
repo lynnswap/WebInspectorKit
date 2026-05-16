@@ -351,13 +351,17 @@ func provisionalFrameCommitCancelsInFlightDocumentRequestBeforeRehydrating() asy
         await session.dom.snapshot().currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(201))]
     }
 
+    #expect(
+        await pendingTargetReplyKeys(transport).contains(
+            TargetReplyKey(targetID: .frameAd, commandID: firstRequestMessageID)
+        ) == false
+    )
     await receiveTargetReply(
         transport,
         targetID: .frameAd,
         messageID: firstRequestMessageID,
         result: firstLazyFrameDocumentResult
     )
-    try await Task.sleep(for: .milliseconds(25))
 
     let snapshot = await session.dom.snapshot()
     #expect(snapshot.currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(201))] != nil)
@@ -404,13 +408,17 @@ func oldlessProvisionalFrameCommitCancelsInFlightDocumentRequestBeforeRehydratin
         await session.dom.snapshot().currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(201))]
     }
 
+    #expect(
+        await pendingTargetReplyKeys(transport).contains(
+            TargetReplyKey(targetID: .frameAd, commandID: firstRequestMessageID)
+        ) == false
+    )
     await receiveTargetReply(
         transport,
         targetID: .frameAd,
         messageID: firstRequestMessageID,
         result: firstLazyFrameDocumentResult
     )
-    try await Task.sleep(for: .milliseconds(25))
 
     let snapshot = await session.dom.snapshot()
     #expect(snapshot.currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(201))] != nil)
@@ -589,13 +597,17 @@ func documentUpdatedAllowsNewDocumentRequestWhilePreviousRequestIsPending() asyn
     )
     #expect(await ensureTask.value)
 
+    #expect(
+        await pendingTargetReplyKeys(transport).contains(
+            TargetReplyKey(targetID: firstRequest.targetIdentifier, commandID: try messageID(firstRequest.message))
+        ) == false
+    )
     await receiveTargetReply(
         transport,
         targetID: firstRequest.targetIdentifier,
         messageID: try messageID(firstRequest.message),
         result: staleReloadDocumentResult
     )
-    try await Task.sleep(for: .milliseconds(25))
 
     let finalSnapshot = await session.dom.snapshot()
     #expect(finalSnapshot.currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(40))] != nil)
@@ -951,13 +963,17 @@ func repeatedFrameDocumentUpdatedReissuesInFlightFrameReload() async throws {
     #expect(secondReload.targetIdentifier == ProtocolTargetIdentifier.frameAd)
     #expect(try messageID(secondReload.message) != messageID(firstReload.message))
 
+    #expect(
+        await pendingTargetReplyKeys(transport).contains(
+            TargetReplyKey(targetID: firstReload.targetIdentifier, commandID: try messageID(firstReload.message))
+        ) == false
+    )
     await receiveTargetReply(
         transport,
         targetID: firstReload.targetIdentifier,
         messageID: try messageID(firstReload.message),
         result: firstLazyFrameDocumentResult
     )
-    try await Task.sleep(for: .milliseconds(25))
     #expect(await session.dom.snapshot().currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(101))] == nil)
 
     await receiveTargetReply(
@@ -1359,11 +1375,12 @@ func detachedSetChildNodesRootKeepsRequestNodeSelectable() async throws {
         targetID: .pageMain,
         message: #"{"method":"DOM.setChildNodes","params":{"parentId":0,"nodes":[{"nodeId":200,"nodeType":1,"nodeName":"DIV","localName":"div","children":[{"nodeId":201,"nodeType":1,"nodeName":"IMG","localName":"img"}]}]}}"#
     )
-    await receiveTargetDispatch(
+    let attributeSequence = await receiveTargetDispatch(
         transport,
         targetID: .pageMain,
         message: #"{"method":"DOM.attributeModified","params":{"nodeId":201,"name":"src","value":"https://ads.example/detached.webp"}}"#
     )
+    await expectProtocolEventApplied(attributeSequence, in: session)
     await receiveTargetReply(
         transport,
         targetID: sent.targetIdentifier,
@@ -1666,8 +1683,8 @@ func elementPickerIgnoresInspectEventBeforeInspectModeReply() async throws {
     #expect(await session.isSelectingElement)
 
     let sentCountBeforeInspect = await backend.sentTargetMessages().count
-    await transport.receiveRootMessage(#"{"method":"Inspector.inspect","params":{"object":{"objectId":"{\"injectedScriptId\":7,\"id\":99}"},"hints":{}}}"#)
-    try await Task.sleep(for: .milliseconds(25))
+    let inspectBeforeEnableSequence = await transport.receiveRootMessage(#"{"method":"Inspector.inspect","params":{"object":{"objectId":"{\"injectedScriptId\":7,\"id\":99}"},"hints":{}}}"#)
+    await expectProtocolEventApplied(inspectBeforeEnableSequence, in: session)
     let messagesBeforeEnableReply = await backend.sentTargetMessages().dropFirst(sentCountBeforeInspect)
     #expect(messagesBeforeEnableReply.allSatisfy { (try? messageMethod($0.message)) != "DOM.requestNode" })
     #expect(await session.isSelectingElement)
@@ -1778,8 +1795,8 @@ func restartedElementPickerIgnoresStaleInspectEventBeforeInspectModeReply() asyn
     #expect(await session.isSelectingElement)
 
     let sentCountBeforeStaleInspect = await backend.sentTargetMessages().count
-    await transport.receiveRootMessage(#"{"method":"Inspector.inspect","params":{"object":{"objectId":"{\"injectedScriptId\":7,\"id\":99}"},"hints":{}}}"#)
-    try await Task.sleep(for: .milliseconds(25))
+    let staleInspectSequence = await transport.receiveRootMessage(#"{"method":"Inspector.inspect","params":{"object":{"objectId":"{\"injectedScriptId\":7,\"id\":99}"},"hints":{}}}"#)
+    await expectProtocolEventApplied(staleInspectSequence, in: session)
     let messagesAfterStaleInspect = await backend.sentTargetMessages().dropFirst(sentCountBeforeStaleInspect)
     #expect(messagesAfterStaleInspect.allSatisfy { (try? messageMethod($0.message)) != "DOM.requestNode" })
     #expect(messagesAfterStaleInspect.allSatisfy { (try? messageMethod($0.message)) != "DOM.setInspectModeEnabled" })
@@ -1859,7 +1876,7 @@ func staleInspectEventCompletionDoesNotCancelRestartedPicker() async throws {
     try await beginPicker(session: session, transport: transport, backend: backend)
 
     let sentCountBeforeInspect = await backend.sentTargetMessages().count
-    await transport.receiveRootMessage(#"{"method":"Inspector.inspect","params":{"object":{"objectId":"{\"injectedScriptId\":7,\"id\":99}"},"hints":{}}}"#)
+    let inspectSequence = await transport.receiveRootMessage(#"{"method":"Inspector.inspect","params":{"object":{"objectId":"{\"injectedScriptId\":7,\"id\":99}"},"hints":{}}}"#)
     let requestNode = try await waitForTargetMessage(
         backend,
         method: "DOM.requestNode",
@@ -1915,7 +1932,7 @@ func staleInspectEventCompletionDoesNotCancelRestartedPicker() async throws {
         messageID: try messageID(requestNode.message),
         result: #"{"nodeId":3}"#
     )
-    try await Task.sleep(for: .milliseconds(25))
+    await expectProtocolEventApplied(inspectSequence, in: session)
 
     let messagesAfterStaleReply = await backend.sentTargetMessages().dropFirst(sentCountBeforeStaleReply)
     #expect(await session.isSelectingElement)
@@ -2774,7 +2791,6 @@ func reloadDOMDocumentCancelsQueuedDeleteUndoOperationsBeforeTheySend() async th
 
     try await session.reloadDOMDocument()
     try await reloadReplyTask.value
-    try await Task.sleep(for: .milliseconds(50))
 
     let methodsAfterReload = await targetMessageMethods(backend).dropFirst(countBeforeQueuedOperations)
     #expect(methodsAfterReload.contains("DOM.getDocument"))
@@ -3335,11 +3351,12 @@ private func assertProjectionContainsFrameDocument(
     )
 }
 
+@discardableResult
 private func receiveTargetDispatch(
     _ transport: TransportSession,
     targetID: ProtocolTargetIdentifier,
     message: String
-) async {
+) async -> UInt64 {
     await transport.receiveRootMessage(targetDispatchMessage(targetID: targetID, message: message))
 }
 
@@ -3354,6 +3371,18 @@ private func receiveTargetReply(
         targetID: targetID,
         message: #"{"id":\#(messageID),"result":\#(result)}"#
     )
+}
+
+private func expectProtocolEventApplied(
+    _ sequence: UInt64,
+    in session: InspectorSession,
+    sourceLocation: SourceLocation = #_sourceLocation
+) async {
+    #expect(await session.waitUntilProtocolEventApplied(sequence), sourceLocation: sourceLocation)
+}
+
+private func pendingTargetReplyKeys(_ transport: TransportSession) async -> [TargetReplyKey] {
+    await transport.snapshot().pendingTargetReplyKeys
 }
 
 private func targetDispatchMessage(
