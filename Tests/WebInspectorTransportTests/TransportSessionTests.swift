@@ -669,20 +669,22 @@ func rootCSSStyleSheetEventsResolveFrameTargetFromFrameIDAndStyleSheetOwnership(
     let backend = FakeTransportBackend()
     let session = TransportSession(backend: backend)
     let cssStream = await session.events(for: .css)
-    let eventsTask = firstEvents(3, from: cssStream)
+    let eventsTask = firstEvents(4, from: cssStream)
 
     await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#)
     await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-A","type":"frame","frameId":"frame-A","parentFrameId":"main-frame","isProvisional":false}}}"#)
     await session.receiveRootMessage(#"{"method":"CSS.styleSheetAdded","params":{"header":{"styleSheetId":"sheet-frame","frameId":"frame-A"}}}"#)
     await session.receiveRootMessage(#"{"method":"CSS.styleSheetChanged","params":{"styleSheetId":"sheet-frame"}}"#)
     await session.receiveRootMessage(#"{"method":"CSS.styleSheetRemoved","params":{"styleSheetId":"sheet-frame"}}"#)
+    await session.receiveRootMessage(#"{"method":"CSS.styleSheetChanged","params":{"styleSheetId":"sheet-frame"}}"#)
 
     let events = await eventsTask.value
-    #expect(events.map(\.method) == ["CSS.styleSheetAdded", "CSS.styleSheetChanged", "CSS.styleSheetRemoved"])
+    #expect(events.map(\.method) == ["CSS.styleSheetAdded", "CSS.styleSheetChanged", "CSS.styleSheetRemoved", "CSS.styleSheetChanged"])
     #expect(events.map(\.targetID) == [
         ProtocolTargetIdentifier("frame-A"),
         ProtocolTargetIdentifier("frame-A"),
         ProtocolTargetIdentifier("frame-A"),
+        nil,
     ])
 }
 

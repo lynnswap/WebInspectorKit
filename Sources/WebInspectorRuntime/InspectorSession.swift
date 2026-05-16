@@ -507,6 +507,7 @@ package final class InspectorSession {
         try await perform(intent)
         dom.applyNodeRemoved(nodeID)
         dom.selectNode(nil)
+        css.removeStyles(targetID: documentID.targetID)
         lastError = nil
 
         return DOMDeleteUndoState(

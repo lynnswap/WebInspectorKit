@@ -274,6 +274,9 @@ func cssAndDOMStyleInvalidationsMarkSelectedNodeStylesNeedsRefresh() async throw
     try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
     let bodyID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(4))
     await session.dom.selectNode(bodyID)
+    await transport.receiveRootMessage(
+        #"{"method":"CSS.styleSheetAdded","params":{"header":{"styleSheetId":"sheet-body"}}}"#
+    )
 
     let sentCount = await backend.sentTargetMessages().count
     let refreshTask = Task {
@@ -422,6 +425,43 @@ func domMutationRemovingSelectedNodeClearsSelectedCSSNodeStyles() async throws {
         await session.dom.selectedNodeID == nil ? true : nil
     }
 
+    #expect(await session.css.selectedNodeStyles == nil)
+    #expect(await session.css.selectedState == .unavailable(.staleNode(bodyID)))
+}
+
+@Test
+func localDOMDeleteClearsSelectedCSSNodeStylesWithoutBackendMutationEvent() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
+    let bodyID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(4))
+    await session.dom.selectNode(bodyID)
+
+    let sentCount = await backend.sentTargetMessages().count
+    let refreshTask = Task {
+        await session.refreshStylesForSelectedNode()
+    }
+    let messages = try await waitForCSSRefreshMessages(backend, after: sentCount)
+    try await replyCSSRefresh(transport: transport, messages: messages, selector: "body", styleSheetID: "sheet-body")
+    await refreshTask.value
+    #expect(await session.css.selectedState == .loaded)
+
+    let countBeforeDelete = await backend.sentTargetMessages().count
+    let deleteTask = Task {
+        try await session.deleteDOMNode(bodyID, undoManager: nil)
+    }
+    let removeNode = try await waitForTargetMessage(backend, method: "DOM.removeNode", after: countBeforeDelete)
+    await receiveTargetReply(
+        transport,
+        targetID: removeNode.targetIdentifier,
+        messageID: try messageID(removeNode.message),
+        result: "{}"
+    )
+    try await deleteTask.value
+
+    #expect(await session.dom.selectedNodeID == nil)
     #expect(await session.css.selectedNodeStyles == nil)
     #expect(await session.css.selectedState == .unavailable(.staleNode(bodyID)))
 }
@@ -620,7 +660,7 @@ func domCapableFrameTargetDiscoveredBeforeAttachHydratesAfterConnect() async thr
     let session = await InspectorSession(configuration: .test)
 
     await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#
+        cssCapablePageTargetCreatedMessage(targetID: "page-main", frameID: "main-frame", isProvisional: false)
     )
     await transport.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["DOM","Runtime"],"isProvisional":false}}}"#
@@ -1577,7 +1617,7 @@ func targetCommitBootstrapsCommittedMainPageTarget() async throws {
 
     let sentCountBeforeCommit = await backend.sentTargetMessages().count
     await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-next","type":"page","isProvisional":true}}}"#
+        cssCapablePageTargetCreatedMessage(targetID: "page-next", isProvisional: true)
     )
     await transport.receiveRootMessage(
         #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-main","newTargetId":"page-next"}}"#
@@ -1614,7 +1654,7 @@ func linkNavigationBuffersProvisionalDOMEventsUntilCommit() async throws {
 
     let sentCountBeforeNavigation = await backend.sentTargetMessages().count
     await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-next","type":"page","isProvisional":true}}}"#
+        cssCapablePageTargetCreatedMessage(targetID: "page-next", isProvisional: true)
     )
     await receiveTargetDispatch(
         transport,
@@ -1985,7 +2025,7 @@ func targetCommitClearsElementPickerForOldTarget() async throws {
 
     let sentCountBeforeNavigation = await backend.sentTargetMessages().count
     await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-next","type":"page","isProvisional":true}}}"#
+        cssCapablePageTargetCreatedMessage(targetID: "page-next", isProvisional: true)
     )
     await transport.receiveRootMessage(
         #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-main","newTargetId":"page-next"}}"#
@@ -2013,7 +2053,7 @@ func elementPickerUsesBootstrappedTargetAfterTargetCommit() async throws {
 
     let sentCountBeforeNavigation = await backend.sentTargetMessages().count
     await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-next","type":"page","isProvisional":true}}}"#
+        cssCapablePageTargetCreatedMessage(targetID: "page-next", isProvisional: true)
     )
     await transport.receiveRootMessage(
         #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-main","newTargetId":"page-next"}}"#
@@ -3444,7 +3484,7 @@ func detachDuringConnectKeepsSessionDetached() async throws {
     let transport = testTransport(backend)
     let session = await InspectorSession(configuration: .test)
     await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#
+        cssCapablePageTargetCreatedMessage(targetID: "page-main", frameID: "main-frame", isProvisional: false)
     )
 
     let connectTask = Task {
@@ -3492,7 +3532,7 @@ func performIsRejectedUntilBootstrapAttaches() async throws {
     let transport = testTransport(backend)
     let session = await InspectorSession(configuration: .test)
     await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#
+        cssCapablePageTargetCreatedMessage(targetID: "page-main", frameID: "main-frame", isProvisional: false)
     )
 
     let connectTask = Task {
@@ -3533,7 +3573,7 @@ private func connect(
     backend: FakeTransportBackend
 ) async throws {
     await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#
+        cssCapablePageTargetCreatedMessage(targetID: "page-main", frameID: "main-frame", isProvisional: false)
     )
     let connectTask = Task {
         try await session.connect(transport: transport)
@@ -3553,6 +3593,15 @@ private func connect(
 
 private func testTransport(_ backend: FakeTransportBackend) -> TransportSession {
     TransportSession(backend: backend, responseTimeout: nil)
+}
+
+private func cssCapablePageTargetCreatedMessage(
+    targetID: String,
+    frameID: String? = nil,
+    isProvisional: Bool
+) -> String {
+    let framePair = frameID.map { #","frameId":"\#($0)""# } ?? ""
+    return #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"\#(targetID)","type":"page"\#(framePair),"domains":["DOM","Runtime","Target","Inspector","Network","CSS"],"isProvisional":\#(isProvisional)}}}"#
 }
 
 @discardableResult

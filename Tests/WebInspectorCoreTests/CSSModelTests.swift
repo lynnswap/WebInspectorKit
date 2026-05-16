@@ -2,9 +2,9 @@ import Testing
 @testable import WebInspectorCore
 
 @Test
-func protocolTargetCapabilitiesIncludeCSSForPageTargetsAndDomainParsing() {
-    #expect(ProtocolTargetCapabilities.pageDefault.contains(.css))
-    #expect(ProtocolTargetCapabilities.protocolDefault(for: .page).contains(.css))
+func protocolTargetCapabilitiesRequireExplicitCSSDomainParsing() {
+    #expect(ProtocolTargetCapabilities.pageDefault.contains(.css) == false)
+    #expect(ProtocolTargetCapabilities.protocolDefault(for: .page).contains(.css) == false)
     #expect(ProtocolTargetCapabilities.protocolDefault(for: .frame).contains(.css) == false)
     #expect(ProtocolTargetCapabilities(domainNames: ["DOM", "CSS"]).contains(.css))
 }

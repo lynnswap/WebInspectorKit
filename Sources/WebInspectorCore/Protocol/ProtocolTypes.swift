@@ -79,7 +79,7 @@ package struct ProtocolTargetCapabilities: OptionSet, Equatable, Hashable, Senda
     package static let network = Self(rawValue: 1 << 4)
     package static let css = Self(rawValue: 1 << 5)
 
-    package static let pageDefault: Self = [.dom, .runtime, .target, .inspector, .network, .css]
+    package static let pageDefault: Self = [.dom, .runtime, .target, .inspector, .network]
     package static let frameDefault: Self = []
     package static let workerDefault: Self = [.runtime]
     package static let serviceWorkerDefault: Self = [.runtime, .network]

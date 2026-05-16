@@ -760,7 +760,7 @@ package actor TransportSession {
         if unresolvedStyleSheetFrameIDsByStyleSheetID[params.styleSheetID] != nil {
             return nil
         }
-        return styleSheetTargetIDsByStyleSheetID[params.styleSheetID] ?? currentMainPageTargetID
+        return styleSheetTargetIDsByStyleSheetID[params.styleSheetID]
     }
 
     private func updateCSSStyleSheetRegistry(

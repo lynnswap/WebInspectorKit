@@ -410,8 +410,8 @@ package final class DOMSession {
     package func reset() {
         currentPageTargetID = nil
         mainFrameID = nil
-        treeRevision = 0
-        selectionRevision = 0
+        treeRevision &+= 1
+        selectionRevision &+= 1
         targetGraph.reset()
         documentStore.reset()
         frameDocumentProjectionIndex.removeAll()
