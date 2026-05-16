@@ -5,6 +5,7 @@ import UIKit
 @testable import WebInspectorUI
 
 @MainActor
+@Suite(.serialized)
 struct NetworkDetailViewControllerTests {
     @Test
     func detailShowsEmptyStateWithoutSelection() {
@@ -141,7 +142,7 @@ struct NetworkDetailViewControllerTests {
         #expect(didPush)
 
         model.selectRequest(nil)
-        let didPop = await waitUntil {
+        let didPop = await waitUntilAllowingAnimations {
             navigationController.viewControllers == [listViewController]
         }
         #expect(didPop)
@@ -251,6 +252,20 @@ struct NetworkDetailViewControllerTests {
                 return true
             }
             await Task.yield()
+        }
+        return false
+    }
+
+    private func waitUntilAllowingAnimations(
+        maxTicks: Int = 256,
+        _ condition: @MainActor () -> Bool
+    ) async -> Bool {
+        for _ in 0..<maxTicks {
+            if condition() {
+                return true
+            }
+            await Task.yield()
+            try? await Task.sleep(nanoseconds: 10_000_000)
         }
         return false
     }

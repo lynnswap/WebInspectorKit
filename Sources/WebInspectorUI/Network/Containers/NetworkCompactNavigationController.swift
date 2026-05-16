@@ -10,6 +10,8 @@ package final class NetworkCompactNavigationController: UINavigationController, 
     private let detailViewController: NetworkDetailViewController
     private let observationScope = ObservationScope()
     private var isSyncingStack = false
+    private var isStackSyncScheduledAfterTransition = false
+    private var pendingStackSyncAnimates = false
 
     package init(
         model: NetworkPanelModel,
@@ -77,6 +79,10 @@ package final class NetworkCompactNavigationController: UINavigationController, 
     }
 
     private func syncStack(with request: NetworkRequest?, animated: Bool) {
+        guard scheduleStackSyncAfterCurrentTransitionIfNeeded(animated: animated) == false else {
+            return
+        }
+
         guard request != nil else {
             popRequestDetailIfNeeded(animated: animated)
             return
@@ -109,6 +115,40 @@ package final class NetworkCompactNavigationController: UINavigationController, 
             return
         }
         setViewControllers([listViewController], animated: animated)
+    }
+
+    private func scheduleStackSyncAfterCurrentTransitionIfNeeded(animated: Bool) -> Bool {
+        guard let transitionCoordinator else {
+            return false
+        }
+
+        pendingStackSyncAnimates = pendingStackSyncAnimates || animated
+        guard isStackSyncScheduledAfterTransition == false else {
+            return true
+        }
+
+        isStackSyncScheduledAfterTransition = true
+        let didSchedule = transitionCoordinator.animate(alongsideTransition: nil) { [weak self] _ in
+            self?.performPendingStackSyncAfterTransition()
+        }
+        if didSchedule {
+            return true
+        }
+
+        isStackSyncScheduledAfterTransition = false
+        pendingStackSyncAnimates = false
+        return false
+    }
+
+    private func performPendingStackSyncAfterTransition() {
+        guard isStackSyncScheduledAfterTransition else {
+            return
+        }
+
+        isStackSyncScheduledAfterTransition = false
+        let shouldAnimate = pendingStackSyncAnimates
+        pendingStackSyncAnimates = false
+        syncStack(with: model.selectedRequest, animated: shouldAnimate)
     }
 }
 #endif
