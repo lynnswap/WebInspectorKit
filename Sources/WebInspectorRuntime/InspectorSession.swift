@@ -1,9 +1,25 @@
 import Foundation
 import Observation
+import OSLog
 import Synchronization
 import WebKit
 import WebInspectorCore
 import WebInspectorTransport
+
+private enum InspectorRuntimeLog {
+    private static let logger = Logger(
+        subsystem: "com.lynnswap.WebInspectorKit",
+        category: "Runtime"
+    )
+
+    static func error(_ message: String) {
+        logger.error("\(message, privacy: .public)")
+    }
+
+    static func warning(_ message: String) {
+        logger.warning("\(message, privacy: .public)")
+    }
+}
 
 package struct InspectorSessionError: Error, Equatable, Sendable, CustomStringConvertible {
     package var message: String
@@ -20,16 +36,13 @@ package struct InspectorSessionError: Error, Equatable, Sendable, CustomStringCo
 package struct InspectorSessionConfiguration: Equatable, Sendable {
     package var responseTimeout: Duration
     package var bootstrapTimeout: Duration
-    package var eventApplicationTimeout: Duration
 
     package init(
         responseTimeout: Duration = .seconds(5),
-        bootstrapTimeout: Duration = .seconds(5),
-        eventApplicationTimeout: Duration = .milliseconds(250)
+        bootstrapTimeout: Duration = .seconds(5)
     ) {
         self.responseTimeout = responseTimeout
         self.bootstrapTimeout = bootstrapTimeout
-        self.eventApplicationTimeout = eventApplicationTimeout
     }
 }
 
@@ -51,11 +64,54 @@ private final class DOMDeleteUndoState {
 }
 
 @MainActor
+private final class DOMDeleteUndoOperationQueue {
+    private var generation: UInt64 = 0
+    private var tail: Task<Void, Never>?
+    private var tasksByID: [UInt64: Task<Void, Never>] = [:]
+    private var nextTaskID: UInt64 = 0
+
+    func enqueue(_ operation: @escaping @MainActor (UInt64) async -> Void) {
+        let previousOperation = tail
+        let operationGeneration = generation
+        nextTaskID &+= 1
+        let taskID = nextTaskID
+        let task = Task { @MainActor [weak self] in
+            await previousOperation?.value
+            guard let self else {
+                return
+            }
+            defer {
+                tasksByID[taskID] = nil
+            }
+            guard isCurrent(operationGeneration) else {
+                return
+            }
+            await operation(operationGeneration)
+        }
+        tail = task
+        tasksByID[taskID] = task
+    }
+
+    func invalidate() {
+        generation &+= 1
+        for task in tasksByID.values {
+            task.cancel()
+        }
+        tasksByID.removeAll()
+        tail = nil
+    }
+
+    func isCurrent(_ operationGeneration: UInt64) -> Bool {
+        Task.isCancelled == false && generation == operationGeneration
+    }
+}
+
+@MainActor
 private final class InspectorConnection {
     let transport: TransportSession
     weak var webView: WKWebView?
     let originalInspectability: Bool?
-    var pumps: [ProtocolDomain: DomainEventPump]
+    var eventPump: DomainEventPump?
     var bootstrappedTargetIDs: Set<ProtocolTargetIdentifier>
 
     init(
@@ -66,14 +122,30 @@ private final class InspectorConnection {
         self.transport = transport
         self.webView = webView
         self.originalInspectability = originalInspectability
-        pumps = [:]
+        eventPump = nil
         bootstrappedTargetIDs = []
+    }
+}
+
+@MainActor
+private final class DOMDocumentRequestHandle {
+    let targetID: ProtocolTargetIdentifier
+    let targetKind: ProtocolTargetKind?
+    var task: Task<Void, Error>?
+
+    init(targetID: ProtocolTargetIdentifier, targetKind: ProtocolTargetKind?) {
+        self.targetID = targetID
+        self.targetKind = targetKind
     }
 }
 
 private enum DOMInspectRoute {
     case remoteObject(targetID: ProtocolTargetIdentifier, objectID: String)
     case protocolNode(targetID: ProtocolTargetIdentifier, nodeID: DOMProtocolNodeID)
+}
+
+private struct TargetDestroyedEventParams: Decodable {
+    var targetId: ProtocolTargetIdentifier
 }
 
 @MainActor
@@ -91,9 +163,11 @@ package final class InspectorSession {
     @ObservationIgnored private var highlightedDOMTargetID: ProtocolTargetIdentifier?
     @ObservationIgnored private var elementPickerTargetID: ProtocolTargetIdentifier?
     @ObservationIgnored private var elementPickerGeneration: UInt64
-    @ObservationIgnored private var acceptsElementPickerEvents: Bool
+    @ObservationIgnored private var elementPickerAcceptsInspectEvents: Bool
     @ObservationIgnored private weak var deleteUndoManager: UndoManager?
     @ObservationIgnored private var deleteUndoStates: [DOMDeleteUndoState]
+    @ObservationIgnored private let deleteUndoOperationQueue: DOMDeleteUndoOperationQueue
+    @ObservationIgnored private var domDocumentRequestHandlesByTargetID: [ProtocolTargetIdentifier: DOMDocumentRequestHandle]
 
     package init(
         configuration: InspectorSessionConfiguration = .init(),
@@ -111,9 +185,11 @@ package final class InspectorSession {
         highlightedDOMTargetID = nil
         elementPickerTargetID = nil
         elementPickerGeneration = 0
-        acceptsElementPickerEvents = false
+        elementPickerAcceptsInspectEvents = false
         deleteUndoManager = nil
         deleteUndoStates = []
+        deleteUndoOperationQueue = DOMDeleteUndoOperationQueue()
+        domDocumentRequestHandlesByTargetID = [:]
     }
 
     package func attach(to webView: WKWebView) async throws {
@@ -184,6 +260,7 @@ package final class InspectorSession {
             pendingConnection = nil
             connection = nextConnection
             isAttached = true
+            startDOMDocumentRequestsForAttachedFrameTargets()
             lastError = nil
         } catch {
             guard connection === nextConnection || pendingConnection === nextConnection else {
@@ -230,6 +307,7 @@ package final class InspectorSession {
         }
         dom.reset()
         network.reset()
+        cancelDOMDocumentRequests()
         highlightedDOMTargetID = nil
         clearElementPickerState(invalidatePendingSelection: true)
         clearDeleteUndoHistory()
@@ -269,8 +347,25 @@ package final class InspectorSession {
     }
 
     package func beginElementPicker() async throws {
-        let targetID = try currentPageTargetForDOMAction()
+        var targetID = try currentPageTargetForDOMAction()
+        if dom.currentPageRootNode == nil {
+            let loaded = await ensureDOMDocumentLoaded()
+            guard loaded else {
+                recordElementPickerFailure(
+                    reason: "documentNotReady",
+                    targetID: targetID,
+                    details: "current=\(dom.currentPageTargetID?.rawValue ?? "nil") root=false"
+                )
+                throw InspectorSessionError("DOM is not ready for element selection.")
+            }
+            targetID = try currentPageTargetForDOMAction()
+        }
         guard canSelectElement else {
+            recordElementPickerFailure(
+                reason: "documentNotReady",
+                targetID: targetID,
+                details: "current=\(dom.currentPageTargetID?.rawValue ?? "nil") root=\(dom.currentPageRootNode != nil) attached=\(isAttached)"
+            )
             throw InspectorSessionError("DOM is not ready for element selection.")
         }
         if isSelectingElement {
@@ -278,25 +373,29 @@ package final class InspectorSession {
         }
 
         elementPickerGeneration &+= 1
-        let generation = elementPickerGeneration
+        let pickerGeneration = elementPickerGeneration
         elementPickerTargetID = targetID
-        acceptsElementPickerEvents = false
+        elementPickerAcceptsInspectEvents = false
         isSelectingElement = true
 
         do {
             guard let intent = dom.setInspectModeEnabledIntent(targetID: targetID, enabled: true) else {
+                recordElementPickerFailure(reason: "inspectModeUnavailable", targetID: targetID)
                 throw InspectorSessionError("DOM inspect mode is not available.")
             }
             try await perform(intent)
-            guard isCurrentElementPickerGeneration(generation) else {
+            guard isElementPickerSession(generation: pickerGeneration, targetID: targetID) else {
                 return
             }
-            acceptsElementPickerEvents = true
+            elementPickerAcceptsInspectEvents = true
             lastError = nil
         } catch {
-            if isCurrentElementPickerGeneration(generation) {
-                clearElementPickerState(invalidatePendingSelection: true)
-            }
+            recordElementPickerFailure(
+                reason: "inspectModeCommandFailed",
+                targetID: targetID,
+                details: "error=\(error)"
+            )
+            clearElementPickerState(invalidatePendingSelection: true)
             throw error
         }
     }
@@ -371,7 +470,38 @@ package final class InspectorSession {
             await cancelElementPicker()
         }
         clearDeleteUndoHistory()
-        try await reloadDOMDocument(targetID: currentPageTargetForDOMAction())
+        try await reloadDOMDocument(targetID: currentPageTargetForDOMAction(), force: true)
+    }
+
+    @discardableResult
+    package func ensureDOMDocumentLoaded() async -> Bool {
+        guard isAttached,
+              let targetID = dom.currentPageTargetID else {
+            return false
+        }
+        guard dom.currentPageRootNode == nil else {
+            return true
+        }
+
+        do {
+            try await reloadDOMDocument(targetID: targetID)
+            return dom.currentPageRootNode != nil
+        } catch is CancellationError {
+            guard isAttached,
+                  dom.currentPageRootNode == nil else {
+                return dom.currentPageRootNode != nil
+            }
+            do {
+                try await reloadDOMDocument(targetID: targetID)
+                return dom.currentPageRootNode != nil
+            } catch {
+                lastError = InspectorSessionError(String(describing: error))
+                return false
+            }
+        } catch {
+            lastError = InspectorSessionError(String(describing: error))
+            return false
+        }
     }
 
     package func reloadPage() async throws {
@@ -380,6 +510,7 @@ package final class InspectorSession {
         clearDeleteUndoHistory()
         dom.reset()
         network.reset()
+        cancelDOMDocumentRequests()
         if let connection {
             seedDOMSession(from: await connection.transport.snapshot())
         }
@@ -391,24 +522,29 @@ package final class InspectorSession {
         let connection = try activeConnection()
         let transport = connection.transport
         let command = try DOMTransportAdapter.command(for: intent)
-        let result = try await transport.send(command)
+        let result: ProtocolCommandResult
+        do {
+            result = try await transport.send(command)
+        } catch {
+            InspectorRuntimeLog.error("command.error method=\(command.method) routing=\(command.routing) error=\(error)")
+            throw error
+        }
         try ensureCurrentConnection(connection)
 
         switch intent {
         case .getDocument:
-            try DOMTransportAdapter.applyGetDocumentResult(result, to: dom)
+            try applyGetDocumentResult(result)
         case let .requestNode(selectionRequestID, targetID, _):
-            let domSequence = result.receivedSequence(for: .dom)
-            if requestNodeResultMayNeedDOMPathPush(result, targetID: targetID, domSequence: domSequence) {
-                await waitForAppliedSequence(domSequence, domain: .dom, connection: connection)
-                try ensureCurrentConnection(connection)
-            }
             let selectionResult = try DOMTransportAdapter.applyRequestNodeResult(
                 result,
                 selectionRequestID: selectionRequestID,
                 to: dom
             )
-            if case let .failure(failure) = selectionResult {
+            switch selectionResult {
+            case .resolved, .pending:
+                break
+            case let .failed(failure):
+                InspectorRuntimeLog.warning("requestNode.selectFailure target=\(targetID.rawValue) failure=\(failure)")
                 lastError = InspectorSessionError(String(describing: failure))
             }
         case .requestChildNodes:
@@ -431,7 +567,11 @@ package final class InspectorSession {
 
     @discardableResult
     package func requestChildNodes(for nodeID: DOMNodeIdentifier, depth: Int = 3) async -> Bool {
-        guard let intent = dom.requestChildNodesIntent(for: nodeID, depth: depth) else {
+        guard let intent = dom.requestChildNodesIntent(
+            for: nodeID,
+            depth: depth,
+            issuedSequence: currentAppliedDOMSequence
+        ) else {
             return false
         }
         do {
@@ -508,7 +648,7 @@ package final class InspectorSession {
 
         let documentResult = try await sendTargetCommand(domain: .dom, method: "DOM.getDocument", targetID: mainTargetID, connection: connection)
         try ensureCurrentConnection(connection)
-        try DOMTransportAdapter.applyGetDocumentResult(documentResult, to: dom)
+        try applyGetDocumentResult(documentResult)
 
         _ = try await connection.transport.send(
             ProtocolCommand(
@@ -539,42 +679,32 @@ package final class InspectorSession {
     private func startPumps(connection: InspectorConnection) async {
         stopPumps(connection)
         let transport = connection.transport
-        let targetPump = DomainEventPump()
-        targetPump.start(stream: await transport.events(for: .target)) { [weak self] event in
-            await self?.handleTargetEvent(event)
+        let eventPump = DomainEventPump()
+        eventPump.start(stream: await transport.orderedEvents()) { [weak self] event in
+            await self?.handleProtocolEvent(event)
         }
+        connection.eventPump = eventPump
+    }
 
-        let runtimePump = DomainEventPump()
-        runtimePump.start(stream: await transport.events(for: .runtime)) { [weak self] event in
-            self?.applyEvent(event) {
+    private func handleProtocolEvent(_ event: ProtocolEventEnvelope) async {
+        switch event.domain {
+        case .target:
+            await handleTargetEvent(event)
+        case .runtime:
+            applyEvent(event) {
                 try DOMTransportAdapter.applyRuntimeEvent(event, to: $0.dom)
             }
-        }
-
-        let inspectorPump = DomainEventPump()
-        inspectorPump.start(stream: await transport.events(for: .inspector)) { [weak self] event in
-            await self?.handleInspectorEvent(event)
-        }
-
-        let domPump = DomainEventPump()
-        domPump.start(stream: await transport.events(for: .dom)) { [weak self] event in
-            await self?.handleDOMEvent(event)
-        }
-
-        let networkPump = DomainEventPump()
-        networkPump.start(stream: await transport.events(for: .network)) { [weak self] event in
-            self?.applyEvent(event) {
+        case .inspector:
+            await handleInspectorEvent(event)
+        case .dom:
+            await handleDOMEvent(event)
+        case .network:
+            applyEvent(event) {
                 try NetworkTransportAdapter.applyNetworkEvent(event, to: $0.network)
             }
+        default:
+            break
         }
-
-        connection.pumps = [
-            .target: targetPump,
-            .runtime: runtimePump,
-            .inspector: inspectorPump,
-            .dom: domPump,
-            .network: networkPump,
-        ]
     }
 
     private func handleInspectorEvent(_ event: ProtocolEventEnvelope) async {
@@ -590,20 +720,56 @@ package final class InspectorSession {
 
     private func handleTargetEvent(_ event: ProtocolEventEnvelope) async {
         do {
-            try DOMTransportAdapter.applyTargetEvent(event, to: dom)
+            let destroyedTargetID = targetDestroyedID(from: event)
+            let targetCommit = try DOMTransportAdapter.targetCommitResolution(from: event, snapshot: dom.snapshot())
+            let createdTarget = try DOMTransportAdapter.applyTargetEvent(event, to: dom)
+            if let destroyedTargetID {
+                cancelDOMDocumentRequest(targetID: destroyedTargetID, reason: "targetDestroyed")
+            }
+            applyElementPickerTargetLifecycle(event, targetCommit: targetCommit)
+            if isAttached,
+               let createdTarget,
+               createdTarget.kind == .frame {
+                if createdTarget.capabilities.contains(.dom) {
+                    startDOMDocumentRequest(targetID: createdTarget.id, reason: "frameTargetCreated")
+                }
+            }
             if event.method == "Target.didCommitProvisionalTarget",
                dom.currentPageRootNode == nil,
                let targetID = dom.currentPageTargetID,
                let connection {
-                if connection.bootstrappedTargetIDs.contains(targetID) {
-                    try await reloadDOMDocument(targetID: targetID)
-                } else {
-                    try await bootstrap(mainTargetID: targetID, connection: connection)
+                startPageTargetDocumentRequestAfterCommit(targetID: targetID, connection: connection)
+            }
+            if event.method == "Target.didCommitProvisionalTarget",
+               let targetCommit {
+                if let oldTargetID = targetCommit.oldTargetID {
+                    cancelDOMDocumentRequest(targetID: oldTargetID, reason: "frameTargetCommit")
                 }
+                startFrameTargetDocumentRequestAfterCommit(targetID: targetCommit.newTargetID)
             }
         } catch {
             lastError = InspectorSessionError("\(event.method): \(error)")
         }
+    }
+
+    private func startDOMDocumentRequestsForAttachedFrameTargets() {
+        for target in dom.snapshot().targetsByID.values
+        where target.kind == .frame
+            && target.capabilities.contains(.dom)
+            && target.currentDocumentID == nil {
+            startDOMDocumentRequest(targetID: target.id, reason: "attachedFrameTarget")
+        }
+    }
+
+    private func startFrameTargetDocumentRequestAfterCommit(targetID: ProtocolTargetIdentifier) {
+        guard isAttached,
+              let target = dom.snapshot().targetsByID[targetID],
+              target.kind == .frame,
+              target.capabilities.contains(.dom),
+              target.currentDocumentID == nil else {
+            return
+        }
+        startDOMDocumentRequest(targetID: targetID, reason: "frameTargetCommit")
     }
 
     private func handleDOMEvent(_ event: ProtocolEventEnvelope) async {
@@ -613,30 +779,62 @@ package final class InspectorSession {
                 return
             }
             if event.method == "DOM.documentUpdated" {
-                try await refreshDOMDocumentAfterBackendUpdate(event)
+                refreshDOMDocumentAfterBackendUpdate(event)
                 return
             }
             try DOMTransportAdapter.applyDOMEvent(event, to: dom)
+            if event.method == "DOM.setChildNodes" {
+                startPendingFrameOwnerHydration()
+            }
         } catch {
             lastError = InspectorSessionError("\(event.method): \(error)")
         }
     }
 
-    private func handleInspectEvent(_ event: DOMInspectEvent) async {
-        guard acceptsElementPickerEvents,
-              let activeTargetID = elementPickerTargetID else {
+    private func startPendingFrameOwnerHydration() {
+        guard let intent = dom.pendingFrameOwnerHydrationIntent(issuedSequence: currentAppliedDOMSequence) else {
             return
         }
-        let generation = elementPickerGeneration
-        acceptsElementPickerEvents = false
+        Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+            do {
+                try await perform(intent)
+            } catch {
+                InspectorRuntimeLog.warning("frameOwnerHydration.failed intent=\(intent) error=\(error)")
+                clearOwnerHydrationTransaction(for: intent)
+                lastError = InspectorSessionError(String(describing: error))
+            }
+        }
+    }
 
+    private func handleInspectEvent(_ event: DOMInspectEvent) async {
+        guard isSelectingElement,
+              elementPickerAcceptsInspectEvents,
+              let activeTargetID = elementPickerTargetID else {
+            recordElementPickerFailure(
+                reason: "inspectEventWithoutActivePicker",
+                details: "activeTarget=\(elementPickerTargetID?.rawValue ?? "nil")"
+            )
+            return
+        }
+        let pickerGeneration = elementPickerGeneration
         do {
             try await resolvePickerSelection(event, activeTargetID: activeTargetID)
         } catch {
+            guard isCurrentElementPicker(generation: pickerGeneration, targetID: activeTargetID) else {
+                return
+            }
+            recordElementPickerFailure(
+                reason: "selectionResolveFailed",
+                targetID: activeTargetID,
+                details: "error=\(error)"
+            )
             lastError = InspectorSessionError(String(describing: error))
         }
 
-        await completeElementPicker(generation: generation)
+        await completeElementPicker(generation: pickerGeneration, targetID: activeTargetID)
     }
 
     private func resolvePickerSelection(
@@ -648,24 +846,30 @@ package final class InspectorSession {
             if dom.currentDocumentID(for: targetID) == nil {
                 try await reloadDOMDocument(targetID: targetID)
             }
-            let intentResult = dom.beginInspectSelectionRequest(targetID: targetID, objectID: objectID)
+            let intentResult = dom.beginInspectSelectionRequest(
+                targetID: targetID,
+                objectID: objectID,
+                issuedSequence: currentAppliedDOMSequence
+            )
             switch intentResult {
             case let .success(intent):
                 try await perform(intent)
+                if let failure = dom.snapshot().selection.failure {
+                    throw InspectorSessionError("DOM.requestNode failed: \(failure)")
+                }
             case let .failure(failure):
-                lastError = InspectorSessionError(String(describing: failure))
+                throw InspectorSessionError("DOM.requestNode could not be issued: \(failure)")
             }
         case let .protocolNode(targetID, nodeID):
             let result = dom.selectProtocolNode(targetID: targetID, nodeID: nodeID)
             if case let .failure(failure) = result {
                 guard case .unresolvedNode = failure else {
-                    lastError = InspectorSessionError(String(describing: failure))
-                    return
+                    throw InspectorSessionError("DOM protocol-node selection failed: \(failure)")
                 }
                 try await reloadDOMDocument(targetID: targetID)
                 let retryResult = dom.selectProtocolNode(targetID: targetID, nodeID: nodeID)
                 if case let .failure(retryFailure) = retryResult {
-                    lastError = InspectorSessionError(String(describing: retryFailure))
+                    throw InspectorSessionError("DOM protocol-node selection failed after reload: \(retryFailure)")
                 }
             }
         }
@@ -700,10 +904,8 @@ package final class InspectorSession {
     }
 
     private func stopPumps(_ connection: InspectorConnection) {
-        for pump in connection.pumps.values {
-            pump.stop()
-        }
-        connection.pumps.removeAll()
+        connection.eventPump?.stop()
+        connection.eventPump = nil
     }
 
     private func applyEvent(
@@ -733,27 +935,46 @@ package final class InspectorSession {
     }
 
     private func clearElementPickerState(invalidatePendingSelection: Bool = false) {
+        elementPickerGeneration &+= 1
         elementPickerTargetID = nil
-        acceptsElementPickerEvents = false
+        elementPickerAcceptsInspectEvents = false
         isSelectingElement = false
         if invalidatePendingSelection {
             dom.selectNode(dom.selectedNodeID)
         }
-        elementPickerGeneration &+= 1
     }
 
-    private func isCurrentElementPickerGeneration(_ generation: UInt64) -> Bool {
-        generation == elementPickerGeneration && isSelectingElement
+    private func recordElementPickerFailure(
+        reason: String,
+        targetID: ProtocolTargetIdentifier? = nil,
+        details: String = ""
+    ) {
+        let resolvedTargetID = targetID ?? elementPickerTargetID
+        var message = "picker.failure reason=\(reason)"
+        message += " target=\(resolvedTargetID?.rawValue ?? "nil")"
+        message += " currentPage=\(dom.currentPageTargetID?.rawValue ?? "nil")"
+        message += " hasRoot=\(dom.currentPageRootNode != nil)"
+        message += " selecting=\(isSelectingElement)"
+        if !details.isEmpty {
+            message += " \(details)"
+        }
+        InspectorRuntimeLog.warning(message)
     }
 
-    private func completeElementPicker(generation: UInt64) async {
-        guard isCurrentElementPickerGeneration(generation) else {
+    private func isElementPickerSession(generation: UInt64, targetID: ProtocolTargetIdentifier) -> Bool {
+        isSelectingElement && elementPickerGeneration == generation && elementPickerTargetID == targetID
+    }
+
+    private func isCurrentElementPicker(generation: UInt64, targetID: ProtocolTargetIdentifier) -> Bool {
+        isElementPickerSession(generation: generation, targetID: targetID) && elementPickerAcceptsInspectEvents
+    }
+
+    private func completeElementPicker(generation: UInt64, targetID: ProtocolTargetIdentifier) async {
+        guard isCurrentElementPicker(generation: generation, targetID: targetID) else {
             return
         }
-        let targetID = elementPickerTargetID ?? dom.currentPageTargetID
         clearElementPickerState()
-        guard let targetID,
-              let intent = dom.setInspectModeEnabledIntent(targetID: targetID, enabled: false) else {
+        guard let intent = dom.setInspectModeEnabledIntent(targetID: targetID, enabled: false) else {
             return
         }
         do {
@@ -763,30 +984,219 @@ package final class InspectorSession {
         }
     }
 
-    private func reloadDOMDocument(targetID: ProtocolTargetIdentifier) async throws {
-        try await perform(.getDocument(targetID: targetID))
+    private func reloadDOMDocument(
+        targetID: ProtocolTargetIdentifier,
+        force: Bool = false
+    ) async throws {
+        guard let handle = startDOMDocumentRequest(targetID: targetID, force: force, reason: "explicit") else {
+            return
+        }
+        try await handle.task?.value
         lastError = nil
     }
 
-    private func refreshDOMDocumentAfterBackendUpdate(_ event: ProtocolEventEnvelope) async throws {
-        let targetID = event.targetID ?? dom.currentPageTargetID
-        guard let targetID,
-              dom.currentDocumentID(for: targetID) != nil || dom.currentPageTargetID == targetID else {
+    @discardableResult
+    private func startDOMDocumentRequest(
+        targetID: ProtocolTargetIdentifier,
+        force: Bool = false,
+        reason: String
+    ) -> DOMDocumentRequestHandle? {
+        if force {
+            cancelDOMDocumentRequest(targetID: targetID, reason: "force-\(reason)")
+        } else if let activeHandle = domDocumentRequestHandlesByTargetID[targetID] {
+            return activeHandle
+        }
+        guard let intent = dom.getDocumentIntent(targetID: targetID) else {
+            return nil
+        }
+
+        let targetKind = dom.targetKind(for: targetID)
+        let handle = DOMDocumentRequestHandle(targetID: targetID, targetKind: targetKind)
+        let task = Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+            defer {
+                if domDocumentRequestHandlesByTargetID[targetID] === handle {
+                    domDocumentRequestHandlesByTargetID.removeValue(forKey: targetID)
+                }
+            }
+            do {
+                let connection = try activeConnection()
+                let command = try DOMTransportAdapter.command(for: intent)
+                let result = try await connection.transport.send(command)
+                try Task.checkCancellation()
+                try ensureCurrentConnection(connection)
+                guard domDocumentRequestHandlesByTargetID[targetID] === handle else {
+                    return
+                }
+                try applyGetDocumentResult(result)
+                lastError = nil
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                if handle.targetKind == .frame, shouldIgnoreFrameDocumentRequestError(error) {
+                    return
+                }
+                InspectorRuntimeLog.error("getDocument.failed target=\(targetID.rawValue) reason=\(reason) error=\(error)")
+                lastError = InspectorSessionError(String(describing: error))
+                throw error
+            }
+        }
+        handle.task = task
+        domDocumentRequestHandlesByTargetID[targetID] = handle
+        return handle
+    }
+
+    private func startPageTargetDocumentRequestAfterCommit(
+        targetID: ProtocolTargetIdentifier,
+        connection: InspectorConnection
+    ) {
+        if connection.bootstrappedTargetIDs.contains(targetID) {
+            startDOMDocumentRequest(targetID: targetID, reason: "pageTargetCommit")
             return
         }
-        try await reloadDOMDocument(targetID: targetID)
+
+        Task { @MainActor [weak self, connection] in
+            guard let self else {
+                return
+            }
+            do {
+                try await bootstrap(mainTargetID: targetID, connection: connection)
+            } catch {
+                lastError = InspectorSessionError(String(describing: error))
+            }
+        }
+    }
+
+    private func refreshDOMDocumentAfterBackendUpdate(_ event: ProtocolEventEnvelope) {
+        guard let targetID = event.targetID ?? dom.currentPageTargetID else {
+            return
+        }
+        let activeRequest = domDocumentRequestHandlesByTargetID[targetID]
+        let targetKind = dom.targetKind(for: targetID) ?? activeRequest?.targetKind
+        let isCurrentPageTarget = dom.currentPageTargetID == targetID
+        let hasCurrentDocument = dom.currentDocumentID(for: targetID) != nil
+        let hasActiveFrameDocumentRequest = targetKind == .frame && activeRequest != nil
+        guard hasCurrentDocument || isCurrentPageTarget || hasActiveFrameDocumentRequest else {
+            return
+        }
+
+        dom.invalidateDocument(targetID: targetID)
+        if targetKind == .frame {
+            startDOMDocumentRequest(targetID: targetID, force: true, reason: "frameDocumentUpdated")
+            return
+        }
+
+        cancelDOMDocumentRequest(targetID: targetID, reason: "documentUpdated")
+    }
+
+    private func cancelDOMDocumentRequest(targetID: ProtocolTargetIdentifier, reason: String) {
+        guard let handle = domDocumentRequestHandlesByTargetID.removeValue(forKey: targetID) else {
+            return
+        }
+        handle.task?.cancel()
+    }
+
+    private func cancelDOMDocumentRequests() {
+        for handle in domDocumentRequestHandlesByTargetID.values {
+            handle.task?.cancel()
+        }
+        domDocumentRequestHandlesByTargetID.removeAll()
+    }
+
+    private func targetDestroyedID(from event: ProtocolEventEnvelope) -> ProtocolTargetIdentifier? {
+        guard event.method == "Target.targetDestroyed",
+              let params = try? TransportMessageParser.decode(
+                  TargetDestroyedEventParams.self,
+                  from: event.paramsData
+              ) else {
+            return nil
+        }
+        return params.targetId
+    }
+
+    private func clearOwnerHydrationTransaction(for intent: DOMCommandIntent) {
+        guard case let .requestChildNodes(targetID, _, _) = intent else {
+            return
+        }
+        dom.clearOwnerHydrationTransactions(targetID: targetID)
+    }
+
+    private func shouldIgnoreFrameDocumentRequestError(_ error: any Error) -> Bool {
+        switch error {
+        case is CancellationError:
+            return true
+        case let error as TransportError:
+            switch error {
+            case .missingTarget, .replyTimeout:
+                return true
+            default:
+                return false
+            }
+        default:
+            return false
+        }
+    }
+
+    private func applyGetDocumentResult(_ result: ProtocolCommandResult) throws {
+        guard let targetID = result.targetID else {
+            return
+        }
+        guard dom.targetKind(for: targetID) != nil else {
+            return
+        }
+        try DOMTransportAdapter.applyGetDocumentResult(result, to: dom)
+        startPendingFrameOwnerHydration()
+        lastError = nil
+    }
+
+    private var currentAppliedDOMSequence: UInt64 {
+        connection?.eventPump?.appliedSequence ?? 0
+    }
+
+    private func applyElementPickerTargetLifecycle(
+        _ event: ProtocolEventEnvelope,
+        targetCommit: DOMTransportAdapter.TargetCommitResolution?
+    ) {
+        guard let activeTargetID = elementPickerTargetID else {
+            return
+        }
+
+        switch event.method {
+        case "Target.targetDestroyed":
+            guard let params = try? TransportMessageParser.decode(
+                TargetDestroyedEventParams.self,
+                from: event.paramsData
+            ),
+                params.targetId == activeTargetID else {
+                return
+            }
+            recordElementPickerFailure(reason: "targetDestroyedBeforeInspectEvent", targetID: activeTargetID)
+            clearElementPickerState(invalidatePendingSelection: true)
+        case "Target.didCommitProvisionalTarget":
+            guard let targetCommit,
+                  targetCommit.oldTargetID == activeTargetID else {
+                return
+            }
+            recordElementPickerFailure(
+                reason: "targetCommitBeforeInspectEvent",
+                targetID: activeTargetID,
+                details: "newTarget=\(targetCommit.newTargetID.rawValue)"
+            )
+            clearElementPickerState(invalidatePendingSelection: true)
+        default:
+            return
+        }
     }
 
     private func registerUndoDelete(_ state: DOMDeleteUndoState, undoManager: UndoManager) {
         rememberDeleteUndoManager(undoManager)
         trackDeleteUndoState(state)
         undoManager.registerUndo(withTarget: self) { target in
-            guard target.deleteUndoStateIsCurrent(state, undoManager: undoManager, operation: "undo") else {
-                return
-            }
             target.registerRedoDelete(state, undoManager: undoManager)
-            Task { @MainActor in
-                await target.performUndoDelete(state, undoManager: undoManager)
+            target.enqueueDeleteUndoOperation { [weak target] generation in
+                await target?.performUndoDelete(state, undoManager: undoManager, generation: generation)
             }
         }
         undoManager.setActionName("Delete Node")
@@ -796,43 +1206,86 @@ package final class InspectorSession {
         rememberDeleteUndoManager(undoManager)
         trackDeleteUndoState(state)
         undoManager.registerUndo(withTarget: self) { target in
-            guard target.deleteUndoStateIsCurrent(state, undoManager: undoManager, operation: "redo") else {
-                return
-            }
             target.registerUndoDelete(state, undoManager: undoManager)
-            Task { @MainActor in
-                await target.performRedoDelete(state, undoManager: undoManager)
+            target.enqueueDeleteUndoOperation { [weak target] generation in
+                await target?.performRedoDelete(state, undoManager: undoManager, generation: generation)
             }
         }
         undoManager.setActionName("Delete Node")
     }
 
-    private func performUndoDelete(_ state: DOMDeleteUndoState, undoManager: UndoManager) async {
+    private func enqueueDeleteUndoOperation(_ operation: @escaping @MainActor (UInt64) async -> Void) {
+        deleteUndoOperationQueue.enqueue(operation)
+    }
+
+    private func performUndoDelete(_ state: DOMDeleteUndoState, undoManager: UndoManager, generation: UInt64) async {
+        guard deleteUndoOperationIsCurrent(generation) else {
+            return
+        }
         guard deleteUndoStateIsCurrent(state, undoManager: undoManager, operation: "undo") else {
             return
         }
         do {
+            try Task.checkCancellation()
             try await perform(.undo(targetID: state.commandTargetID))
+            try Task.checkCancellation()
+            guard deleteUndoOperationIsCurrent(generation) else {
+                return
+            }
             try await reloadDOMDocument(targetID: state.documentTargetID)
+            try Task.checkCancellation()
+            guard deleteUndoOperationIsCurrent(generation) else {
+                return
+            }
             updateDeleteUndoDocumentID(state, undoManager: undoManager)
+        } catch is CancellationError {
+            handleDeleteUndoOperationError(CancellationError(), undoManager: undoManager, generation: generation)
         } catch {
-            clearDeleteUndoHistory(using: undoManager)
-            lastError = InspectorSessionError(String(describing: error))
+            handleDeleteUndoOperationError(error, undoManager: undoManager, generation: generation)
         }
     }
 
-    private func performRedoDelete(_ state: DOMDeleteUndoState, undoManager: UndoManager) async {
+    private func performRedoDelete(_ state: DOMDeleteUndoState, undoManager: UndoManager, generation: UInt64) async {
+        guard deleteUndoOperationIsCurrent(generation) else {
+            return
+        }
         guard deleteUndoStateIsCurrent(state, undoManager: undoManager, operation: "redo") else {
             return
         }
         do {
+            try Task.checkCancellation()
             try await perform(.redo(targetID: state.commandTargetID))
+            try Task.checkCancellation()
+            guard deleteUndoOperationIsCurrent(generation) else {
+                return
+            }
             try await reloadDOMDocument(targetID: state.documentTargetID)
+            try Task.checkCancellation()
+            guard deleteUndoOperationIsCurrent(generation) else {
+                return
+            }
             updateDeleteUndoDocumentID(state, undoManager: undoManager)
+        } catch is CancellationError {
+            handleDeleteUndoOperationError(CancellationError(), undoManager: undoManager, generation: generation)
         } catch {
-            clearDeleteUndoHistory(using: undoManager)
-            lastError = InspectorSessionError(String(describing: error))
+            handleDeleteUndoOperationError(error, undoManager: undoManager, generation: generation)
         }
+    }
+
+    private func deleteUndoOperationIsCurrent(_ generation: UInt64) -> Bool {
+        deleteUndoOperationQueue.isCurrent(generation)
+    }
+
+    private func handleDeleteUndoOperationError(
+        _ error: any Error,
+        undoManager: UndoManager,
+        generation: UInt64
+    ) {
+        guard deleteUndoOperationIsCurrent(generation) else {
+            return
+        }
+        clearDeleteUndoHistory(using: undoManager)
+        lastError = InspectorSessionError(String(describing: error))
     }
 
     private func deleteUndoStateIsCurrent(
@@ -882,6 +1335,7 @@ package final class InspectorSession {
             deleteUndoManager = nil
         }
         deleteUndoStates.removeAll()
+        deleteUndoOperationQueue.invalidate()
     }
 
     private func seedDOMSession(from snapshot: TransportSnapshot) {
@@ -898,17 +1352,6 @@ package final class InspectorSession {
         }
     }
 
-    private func waitForAppliedSequence(
-        _ sequence: UInt64,
-        domain: ProtocolDomain,
-        connection: InspectorConnection
-    ) async {
-        await connection.pumps[domain]?.waitUntilApplied(
-            sequence,
-            timeout: configuration.eventApplicationTimeout
-        )
-    }
-
     private func activeConnection() throws -> InspectorConnection {
         guard isAttached,
               let connection else {
@@ -923,32 +1366,14 @@ package final class InspectorSession {
         }
     }
 
-    private func requestNodeResultMayNeedDOMPathPush(
-        _ result: ProtocolCommandResult,
-        targetID: ProtocolTargetIdentifier,
-        domSequence: UInt64
-    ) -> Bool {
-        guard domSequence > 0,
-              let payload = try? TransportMessageParser.decode(RequestNodeResultPayload.self, from: result.resultData) else {
-            return false
-        }
-        let key = DOMNodeCurrentKey(targetID: targetID, nodeID: payload.nodeId)
-        return dom.snapshot().currentNodeIDByKey[key] == nil
-    }
-
-    package static func prepareInspectability(for webView: WKWebView) -> Bool? {
-        guard #available(iOS 16.4, macOS 13.3, *) else {
-            return nil
-        }
-
+    package static func prepareInspectability(for webView: WKWebView) -> Bool {
         let originalValue = webView.isInspectable
         webView.isInspectable = true
         return originalValue
     }
 
     package static func restoreInspectabilityIfNeeded(on webView: WKWebView, originalValue: Bool?) {
-        guard #available(iOS 16.4, macOS 13.3, *),
-              let originalValue else {
+        guard let originalValue else {
             return
         }
         webView.isInspectable = originalValue

@@ -6,6 +6,7 @@ import UIKit
 @testable import WebInspectorUI
 
 @MainActor
+@Suite(.serialized)
 struct ParentContainerTests {
     @Test
     func sessionAndViewControllerUseDOMAndNetworkTabsByDefault() {

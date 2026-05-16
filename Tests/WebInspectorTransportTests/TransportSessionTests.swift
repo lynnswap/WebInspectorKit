@@ -360,6 +360,31 @@ func targetCommitRetargetsPendingRepliesToCommittedTarget() async throws {
 }
 
 @Test
+func provisionalTargetReplyResolvesBeforeBufferedEvents() async throws {
+    let backend = FakeTransportBackend()
+    let session = TransportSession(backend: backend, responseTimeout: .seconds(1))
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-provisional","type":"frame","frameId":"ad-frame","isProvisional":true}}}"#)
+
+    let sendTask = Task {
+        try await session.send(
+            ProtocolCommand(domain: .dom, method: "DOM.getDocument", routing: .target(.init("frame-provisional")))
+        )
+    }
+    let sent = try await waitForTargetMessage(backend)
+    let innerID = try messageID(sent.message)
+
+    await receiveTargetDispatch(
+        session,
+        targetID: .init("frame-provisional"),
+        message: ##"{"id":\##(innerID),"result":{"root":{"nodeId":1,"nodeType":9,"nodeName":"#document"}}}"##
+    )
+    let result = try await sendTask.value
+
+    #expect(result.targetID == ProtocolTargetIdentifier("frame-provisional"))
+    #expect(await session.snapshot().pendingTargetReplyKeys.isEmpty)
+}
+
+@Test
 func oldlessTargetCommitInfersSoleProvisionalTarget() async throws {
     let backend = FakeTransportBackend()
     let session = TransportSession(backend: backend, responseTimeout: .seconds(1))
@@ -386,6 +411,65 @@ func oldlessTargetCommitInfersSoleProvisionalTarget() async throws {
     #expect(snapshot.targetsByID[ProtocolTargetIdentifier("frame-provisional")] == nil)
     #expect(snapshot.targetsByID[ProtocolTargetIdentifier("frame-committed")]?.frameID == DOMFrameIdentifier("ad-frame"))
     #expect(snapshot.frameTargetIDsByFrameID[DOMFrameIdentifier("ad-frame")] == ProtocolTargetIdentifier("frame-committed"))
+}
+
+@Test
+func provisionalTargetMessagesAreDispatchedAfterCommitTargetEvent() async throws {
+    let backend = FakeTransportBackend()
+    let session = TransportSession(backend: backend, responseTimeout: .seconds(1))
+
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#)
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-next","type":"page","frameId":"main-frame","isProvisional":true}}}"#)
+
+    let targetStream = await session.events(for: .target)
+    let domStream = await session.events(for: .dom)
+    let targetTask = firstEvent(from: targetStream)
+    let domTask = firstEvent(from: domStream)
+
+    await receiveTargetDispatch(
+        session,
+        targetID: .init("page-next"),
+        message: #"{"method":"DOM.childNodeCountUpdated","params":{"nodeId":3,"childNodeCount":0}}"#
+    )
+    await session.receiveRootMessage(#"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-main","newTargetId":"page-next"}}"#)
+
+    let targetEvent = try #require(await targetTask.value)
+    let domEvent = try #require(await domTask.value)
+
+    #expect(targetEvent.method == "Target.didCommitProvisionalTarget")
+    #expect(domEvent.method == "DOM.childNodeCountUpdated")
+    #expect(domEvent.targetID == ProtocolTargetIdentifier("page-next"))
+    #expect(domEvent.sequence > targetEvent.sequence)
+    #expect(domEvent.receivedSequence(for: .target) == targetEvent.sequence)
+}
+
+@Test
+func oldProvisionalTargetMessagesAreDispatchedAfterCommitTargetEvent() async throws {
+    let backend = FakeTransportBackend()
+    let session = TransportSession(backend: backend, responseTimeout: .seconds(1))
+
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-provisional","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","isProvisional":true}}}"#)
+
+    let targetStream = await session.events(for: .target)
+    let domStream = await session.events(for: .dom)
+    let targetTask = firstEvent(from: targetStream)
+    let domTask = firstEvent(from: domStream)
+
+    await receiveTargetDispatch(
+        session,
+        targetID: .init("frame-provisional"),
+        message: #"{"method":"DOM.childNodeCountUpdated","params":{"nodeId":3,"childNodeCount":1}}"#
+    )
+    await session.receiveRootMessage(#"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"frame-provisional","newTargetId":"frame-committed"}}"#)
+
+    let targetEvent = try #require(await targetTask.value)
+    let domEvent = try #require(await domTask.value)
+
+    #expect(targetEvent.method == "Target.didCommitProvisionalTarget")
+    #expect(domEvent.method == "DOM.childNodeCountUpdated")
+    #expect(domEvent.targetID == ProtocolTargetIdentifier("frame-committed"))
+    #expect(domEvent.sequence > targetEvent.sequence)
+    #expect(domEvent.receivedSequence(for: .target) == targetEvent.sequence)
 }
 
 @Test
@@ -425,7 +509,7 @@ func ambiguousTargetCommitPreservesExistingMetadataAndDoesNotInventTarget() asyn
 }
 
 @Test
-func rootScopedRuntimeAndDOMEventsResolveToCurrentPageTarget() async throws {
+func rootScopedRuntimeAndDOMMutationEventsResolveToCurrentPageTarget() async throws {
     let backend = FakeTransportBackend()
     let session = TransportSession(backend: backend)
     let runtimeStream = await session.events(for: .runtime)
@@ -435,12 +519,25 @@ func rootScopedRuntimeAndDOMEventsResolveToCurrentPageTarget() async throws {
 
     await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#)
     await session.receiveRootMessage(#"{"method":"Runtime.executionContextCreated","params":{"context":{"id":11,"frameId":"main-frame"}}}"#)
-    await session.receiveRootMessage(#"{"method":"DOM.documentUpdated","params":{}}"#)
+    await session.receiveRootMessage(#"{"method":"DOM.childNodeCountUpdated","params":{"nodeId":1,"childNodeCount":2}}"#)
     let snapshot = await session.snapshot()
 
     #expect(snapshot.executionContextsByID[ExecutionContextID(11)]?.targetID == ProtocolTargetIdentifier("page-main"))
     #expect(await runtimeTask.value?.targetID == ProtocolTargetIdentifier("page-main"))
     #expect(await domTask.value?.targetID == ProtocolTargetIdentifier("page-main"))
+}
+
+@Test
+func rootScopedDocumentUpdatedRemainsTargetless() async throws {
+    let backend = FakeTransportBackend()
+    let session = TransportSession(backend: backend)
+    let domStream = await session.events(for: .dom)
+    let domTask = firstEvent(from: domStream)
+
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#)
+    await session.receiveRootMessage(#"{"method":"DOM.documentUpdated","params":{}}"#)
+
+    #expect(await domTask.value?.targetID == nil)
 }
 
 @Test
@@ -514,6 +611,28 @@ func domainStreamsReceiveIndependentTargetEventsInOrder() async throws {
     #expect(await cssTask.value?.method == "CSS.styleSheetChanged")
     #expect(await consoleTask.value?.method == "Console.messageAdded")
     #expect(await networkTask.value?.method == "Network.requestWillBeSent")
+}
+
+@Test
+func orderedStreamReceivesTargetEventsAcrossDomainsInTransportOrder() async throws {
+    let backend = FakeTransportBackend()
+    let session = TransportSession(backend: backend)
+    let stream = await session.orderedEvents()
+    let eventsTask = firstEvents(4, from: stream)
+
+    await receiveTargetDispatch(session, targetID: .init("page-main"), message: #"{"method":"DOM.documentUpdated","params":{}}"#)
+    await receiveTargetDispatch(session, targetID: .init("page-main"), message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"r1","request":{"url":"https://example.com"},"timestamp":1}}"#)
+    await receiveTargetDispatch(session, targetID: .init("page-main"), message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7}}}"#)
+    await receiveTargetDispatch(session, targetID: .init("page-main"), message: #"{"method":"DOM.childNodeCountUpdated","params":{"nodeId":3,"childNodeCount":2}}"#)
+
+    let events = await eventsTask.value
+    #expect(events.map(\.method) == [
+        "DOM.documentUpdated",
+        "Network.requestWillBeSent",
+        "Runtime.executionContextCreated",
+        "DOM.childNodeCountUpdated",
+    ])
+    #expect(events.map(\.sequence) == [1, 2, 3, 4])
 }
 
 @Test
@@ -704,7 +823,7 @@ func domAdapterCompletesInspectSelectionThroughRequestNodeResult() async throws 
         selectionRequestID: selectionRequestID,
         to: dom
     )
-    guard case let .success(selectedNodeID) = result else {
+    guard case let .resolved(selectedNodeID) = result else {
         Issue.record("Expected selected node")
         return
     }
@@ -808,7 +927,7 @@ func domAdapterAmbiguousTargetCommitDoesNotOverwriteExistingTargetMetadata() asy
 
     #expect(snapshot.targetsByID[ProtocolTargetIdentifier("frame-ad")]?.kind == .frame)
     #expect(snapshot.targetsByID[ProtocolTargetIdentifier("frame-ad")]?.frameID == DOMFrameIdentifier("ad-frame"))
-    #expect(snapshot.currentPage == nil)
+    #expect(snapshot.currentPageTargetID == nil)
 }
 
 @Test
@@ -827,7 +946,7 @@ func domAdapterPageTargetWithParentFrameIsClassifiedAsFrame() async throws {
     let snapshot = await dom.snapshot()
 
     #expect(snapshot.targetsByID[ProtocolTargetIdentifier("iframe-page")]?.kind == .frame)
-    #expect(snapshot.currentPage == nil)
+    #expect(snapshot.currentPageTargetID == nil)
     #expect(snapshot.framesByID[DOMFrameIdentifier("child-frame")]?.targetID == ProtocolTargetIdentifier("iframe-page"))
 }
 
@@ -856,7 +975,7 @@ func domAdapterPageTargetWithKnownNonMainFrameIsClassifiedAsFrame() async throws
     )
     let snapshot = await dom.snapshot()
 
-    #expect(snapshot.currentPage?.mainTargetID == ProtocolTargetIdentifier("page-main"))
+    #expect(snapshot.currentPageTargetID == ProtocolTargetIdentifier("page-main"))
     #expect(snapshot.targetsByID[ProtocolTargetIdentifier("iframe-page")]?.kind == .frame)
     #expect(snapshot.framesByID[DOMFrameIdentifier("child-frame")]?.targetID == ProtocolTargetIdentifier("iframe-page"))
 }
@@ -896,7 +1015,7 @@ func domAdapterPageTargetWithoutFrameIDCanCommitAsCurrentPage() async throws {
     )
     let snapshot = await dom.snapshot()
 
-    #expect(snapshot.currentPage?.mainTargetID == ProtocolTargetIdentifier("page-new"))
+    #expect(snapshot.currentPageTargetID == ProtocolTargetIdentifier("page-new"))
     #expect(snapshot.targetsByID[ProtocolTargetIdentifier("page-new")]?.kind == .page)
     #expect(snapshot.targetsByID[ProtocolTargetIdentifier("page-new")]?.isProvisional == false)
 }
@@ -925,7 +1044,7 @@ func domAdapterCommittedTopLevelProvisionalPageBecomesCurrentPage() async throws
         ),
         to: dom
     )
-    #expect(await dom.snapshot().currentPage?.mainTargetID == ProtocolTargetIdentifier("page-old"))
+    #expect(await dom.snapshot().currentPageTargetID == ProtocolTargetIdentifier("page-old"))
 
     try await DOMTransportAdapter.applyTargetEvent(
         ProtocolEventEnvelope(
@@ -939,8 +1058,8 @@ func domAdapterCommittedTopLevelProvisionalPageBecomesCurrentPage() async throws
     )
     let snapshot = await dom.snapshot()
 
-    #expect(snapshot.currentPage?.mainTargetID == ProtocolTargetIdentifier("page-main"))
-    #expect(snapshot.currentPage?.mainFrameID == DOMFrameIdentifier("main-frame"))
+    #expect(snapshot.currentPageTargetID == ProtocolTargetIdentifier("page-main"))
+    #expect(snapshot.mainFrameID == DOMFrameIdentifier("main-frame"))
 }
 
 @Test
@@ -956,7 +1075,7 @@ func domAdapterOldlessCommittedProvisionalPageWithoutMainContextStaysFrameScoped
         ),
         to: dom
     )
-    #expect(await dom.snapshot().currentPage == nil)
+    #expect(await dom.snapshot().currentPageTargetID == nil)
 
     try await DOMTransportAdapter.applyTargetEvent(
         ProtocolEventEnvelope(
@@ -970,7 +1089,7 @@ func domAdapterOldlessCommittedProvisionalPageWithoutMainContextStaysFrameScoped
     )
     let snapshot = await dom.snapshot()
 
-    #expect(snapshot.currentPage == nil)
+    #expect(snapshot.currentPageTargetID == nil)
     #expect(snapshot.targetsByID[ProtocolTargetIdentifier("page-main")]?.kind == .frame)
     #expect(snapshot.targetsByID[ProtocolTargetIdentifier("page-main")]?.isProvisional == false)
 }
@@ -1001,7 +1120,7 @@ func domAdapterOldlessCommitInfersSoleProvisionalFrameTarget() async throws {
     )
     let snapshot = await dom.snapshot()
 
-    #expect(snapshot.currentPage == nil)
+    #expect(snapshot.currentPageTargetID == nil)
     #expect(snapshot.targetsByID[ProtocolTargetIdentifier("page-provisional")] == nil)
     #expect(snapshot.targetsByID[ProtocolTargetIdentifier("page-main")]?.kind == .frame)
     #expect(snapshot.targetsByID[ProtocolTargetIdentifier("page-main")]?.frameID == DOMFrameIdentifier("main-frame"))
@@ -1044,7 +1163,7 @@ func domAdapterCommittedSecondaryPageDoesNotReplaceCurrentPage() async throws {
     )
     let snapshot = await dom.snapshot()
 
-    #expect(snapshot.currentPage?.mainTargetID == ProtocolTargetIdentifier("page-main"))
+    #expect(snapshot.currentPageTargetID == ProtocolTargetIdentifier("page-main"))
     #expect(snapshot.targetsByID[ProtocolTargetIdentifier("page-popup")]?.frameID == DOMFrameIdentifier("popup-frame"))
 }
 
@@ -1084,7 +1203,7 @@ func domAdapterSubframeCommitDoesNotConsumeCurrentMainPage() async throws {
     )
     let snapshot = await dom.snapshot()
 
-    #expect(snapshot.currentPage?.mainTargetID == ProtocolTargetIdentifier("page-main"))
+    #expect(snapshot.currentPageTargetID == ProtocolTargetIdentifier("page-main"))
     #expect(snapshot.targetsByID[ProtocolTargetIdentifier("page-main")]?.kind == .page)
     #expect(snapshot.targetsByID[ProtocolTargetIdentifier("frame-committed")]?.isProvisional == false)
 }
@@ -1242,10 +1361,55 @@ func domAdapterDecodesOuterHTMLResultAndInspectEvents() throws {
     ))
 }
 
-private func firstEvent(from stream: AsyncStream<ProtocolEventEnvelope>) -> Task<ProtocolEventEnvelope?, Never> {
+private func firstEvent(
+    from stream: AsyncStream<ProtocolEventEnvelope>,
+    timeout: Duration = .seconds(1)
+) -> Task<ProtocolEventEnvelope?, Never> {
     Task {
-        var iterator = stream.makeAsyncIterator()
-        return await iterator.next()
+        await withTaskGroup(of: ProtocolEventEnvelope?.self) { group in
+            group.addTask {
+                var iterator = stream.makeAsyncIterator()
+                return await iterator.next()
+            }
+            group.addTask {
+                try? await Task.sleep(for: timeout)
+                return nil
+            }
+
+            let result = await group.next() ?? nil
+            group.cancelAll()
+            return result
+        }
+    }
+}
+
+private func firstEvents(
+    _ count: Int,
+    from stream: AsyncStream<ProtocolEventEnvelope>,
+    timeout: Duration = .seconds(1)
+) -> Task<[ProtocolEventEnvelope], Never> {
+    Task {
+        await withTaskGroup(of: [ProtocolEventEnvelope].self) { group in
+            group.addTask {
+                var iterator = stream.makeAsyncIterator()
+                var events: [ProtocolEventEnvelope] = []
+                while events.count < count {
+                    guard let event = await iterator.next() else {
+                        break
+                    }
+                    events.append(event)
+                }
+                return events
+            }
+            group.addTask {
+                try? await Task.sleep(for: timeout)
+                return []
+            }
+
+            let result = await group.next() ?? []
+            group.cancelAll()
+            return result
+        }
     }
 }
 

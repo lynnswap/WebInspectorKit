@@ -55,7 +55,6 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     private var openState: [DOMNode.ID: Bool] = [:]
     private var hoveredNodeID: DOMNode.ID?
     private var requestedChildNodeIDs: Set<DOMNode.ID> = []
-    private var childRequestRetryCounts: [DOMNode.ID: Int] = [:]
     private var findFoundRanges: [NSRange] = []
     private var findHighlightedRanges: [NSRange] = []
     private var hoverRowRects: [CGRect] = []
@@ -258,16 +257,18 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     }
 
     @objc private func handleTap(_ recognizer: UITapGestureRecognizer) {
-        guard recognizer.state == .ended,
-              let row = row(at: recognizer.location(in: textContentView))
-        else {
+        guard recognizer.state == .ended else {
             return
         }
+        let location = recognizer.location(in: textContentView)
+        guard let row = row(at: location) else {
+            return
+        }
+        let disclosureHit = isDisclosureHit(at: location, in: row)
 
         dismissDOMMenuAnchor()
         clearTextSelection()
-        let location = recognizer.location(in: textContentView)
-        if isDisclosureHit(at: location, in: row) {
+        if disclosureHit {
             toggle(row: row)
         } else if recognizer.modifierFlags.contains(.shift) {
             extendMultiSelection(to: row)
@@ -559,6 +560,14 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     }
 
     private func scheduleTreeReload(for invalidation: DOMTreeInvalidation) {
+        if invalidation.requiresImmediateReload {
+            pendingTreeInvalidation = nil
+            scheduledTreeReloadTask?.cancel()
+            scheduledTreeReloadTask = nil
+            reloadTree(for: invalidation)
+            return
+        }
+
         if let pending = pendingTreeInvalidation {
             pendingTreeInvalidation = pending.merged(with: invalidation)
         } else {
@@ -568,7 +577,6 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
             return
         }
         scheduledTreeReloadTask = Task { @MainActor [weak self] in
-            await Task.yield()
             guard let self else {
                 return
             }
@@ -776,12 +784,17 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     }
 
     private func openAncestors(of node: DOMNode) {
-        var current = node.parentID.flatMap { dom.node(for: $0) }
-        while let ancestor = current {
-            if ancestor.nodeType != .document || ancestor.parentID != nil {
+        guard let rootTargetID = dom.currentPageTargetID else {
+            return
+        }
+        let projection = dom.treeProjection(rootTargetID: rootTargetID)
+        for ancestorID in projection.ancestorNodeIDs(of: node.id) {
+            guard let ancestor = dom.node(for: ancestorID) else {
+                continue
+            }
+            if ancestor.nodeType != .document || projection.parent(of: ancestor.id) != nil {
                 openState[ancestor.id] = true
             }
-            current = ancestor.parentID.flatMap { dom.node(for: $0) }
         }
     }
 
@@ -983,12 +996,6 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
             }
             return dom.hasUnloadedRegularChildren(node)
         }
-        childRequestRetryCounts = childRequestRetryCounts.filter { nodeID, _ in
-            guard let node = dom.node(for: nodeID) else {
-                return false
-            }
-            return dom.hasUnloadedRegularChildren(node)
-        }
     }
 
     private func requestChildrenForOpenRowsIfNeeded() {
@@ -1016,30 +1023,14 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         else {
             return
         }
-        let attempt = childRequestRetryCounts[node.id, default: 0] + 1
-        childRequestRetryCounts[node.id] = attempt
         Task { @MainActor [weak self, requestChildrenAction, nodeID = node.id] in
             guard let self else {
                 return
             }
-            let succeeded = await requestChildrenAction?(nodeID) ?? false
-            self.requestedChildNodeIDs.remove(nodeID)
-            guard let node = self.dom.node(for: nodeID) else {
-                self.childRequestRetryCounts.removeValue(forKey: nodeID)
-                return
+            defer {
+                self.requestedChildNodeIDs.remove(nodeID)
             }
-            if succeeded || !self.dom.hasUnloadedRegularChildren(node) {
-                self.childRequestRetryCounts.removeValue(forKey: nodeID)
-                return
-            }
-            guard attempt < 3 else {
-                return
-            }
-            try? await Task.sleep(nanoseconds: 250_000_000)
-            guard !Task.isCancelled else {
-                return
-            }
-            self.requestChildrenIfNeeded(for: node)
+            _ = await requestChildrenAction?(nodeID) ?? false
         }
     }
 
@@ -2478,7 +2469,7 @@ extension DOMTreeTextView {
             toggleMultiSelection(row: row)
         } else {
             clearMultiSelection(keepingLast: row.node.id)
-            multiSelectionLastNodeID = row.node.id
+            select(row.node)
         }
     }
 
@@ -3282,6 +3273,13 @@ private enum DOMTreeMarkupBuilder {
 }
 
 private extension DOMTreeInvalidation {
+    var requiresImmediateReload: Bool {
+        if case .documentReset = self {
+            return true
+        }
+        return false
+    }
+
     var requiresTextFragmentReset: Bool {
         if case .documentReset = self {
             return true

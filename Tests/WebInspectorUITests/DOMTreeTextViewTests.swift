@@ -36,6 +36,18 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func primaryClickingRowUpdatesCoreSelection() throws {
+        let session = makeDOMSession()
+        let view = makeTreeView(session: session)
+
+        view.primaryClickRowForTesting(containing: "<input disabled>")
+        view.layoutIfNeeded()
+
+        #expect(session.selectedNode?.localName == "input")
+        #expect(view.selectedRowRectsForTesting().count == 1)
+    }
+
+    @Test
     func expandedElementRendersChildrenAndClosingTag() throws {
         let view = makeTreeView()
 
@@ -66,6 +78,39 @@ struct DOMTreeTextViewTests {
         await waitForObservationDelivery()
 
         #expect(requestedNodeID.flatMap { session.node(for: $0) }?.localName == "article")
+    }
+
+    @Test
+    func selectingProjectedFrameNodeOpensComposedAncestors() async throws {
+        let pageTargetID = ProtocolTargetIdentifier("page-main")
+        let frameTargetID = ProtocolTargetIdentifier("frame-ad-target")
+        let frameID = DOMFrameIdentifier("frame-ad")
+        let session = DOMSession()
+
+        session.applyTargetCreated(
+            ProtocolTargetRecord(id: pageTargetID, kind: .page, frameID: DOMFrameIdentifier("main-frame")),
+            makeCurrentMainPage: true
+        )
+        session.applyTargetCreated(
+            ProtocolTargetRecord(id: frameTargetID, kind: .frame, frameID: frameID)
+        )
+        _ = session.replaceDocumentRoot(projectedPageDocument(frameID: frameID), targetID: pageTargetID)
+        let frameRootID = session.replaceDocumentRoot(projectedFrameDocument(), targetID: frameTargetID)
+        let selectedNodeID = try #require(
+            session.snapshot().currentNodeIDByKey[DOMNodeCurrentKey(targetID: frameTargetID, nodeID: .init(8))]
+        )
+        let view = makeTreeView(session: session)
+
+        session.selectNode(selectedNodeID)
+        await waitForObservationDelivery()
+        view.layoutIfNeeded()
+
+        let projection = session.treeProjection(rootTargetID: pageTargetID)
+        #expect(session.snapshot().nodesByID[frameRootID]?.parentID == nil)
+        #expect(projection.ancestorNodeIDs(of: selectedNodeID).contains(frameRootID))
+        #expect(view.renderedTextForTesting.contains("#document"))
+        #expect(view.renderedTextForTesting.contains("<img id=\"ad-node\">"))
+        #expect(view.selectedRowRectsForTesting().count == 1)
     }
 
     private func makeTreeView(root: DOMNodePayload = documentNode()) -> DOMTreeTextView {
@@ -161,6 +206,74 @@ private func documentWithDeferredArticle() -> DOMNodePayload {
                             localName: "article",
                             regularChildren: .unrequested(count: 1)
                         )
+                    ),
+                ])
+            ),
+        ])
+    )
+}
+
+private func projectedPageDocument(frameID: DOMFrame.ID) -> DOMNodePayload {
+    DOMNodePayload(
+        nodeID: .init(1),
+        nodeType: .document,
+        nodeName: "#document",
+        regularChildren: .loaded([
+            DOMNodePayload(
+                nodeID: .init(2),
+                nodeType: .element,
+                nodeName: "HTML",
+                localName: "html",
+                regularChildren: .loaded([
+                    DOMNodePayload(
+                        nodeID: .init(3),
+                        nodeType: .element,
+                        nodeName: "BODY",
+                        localName: "body",
+                        regularChildren: .loaded([
+                            DOMNodePayload(
+                                nodeID: .init(20),
+                                nodeType: .element,
+                                nodeName: "IFRAME",
+                                localName: "iframe",
+                                ownerFrameID: frameID,
+                                attributes: [DOMAttribute(name: "src", value: "https://frame.example/ad")]
+                            ),
+                        ])
+                    ),
+                ])
+            ),
+        ])
+    )
+}
+
+private func projectedFrameDocument() -> DOMNodePayload {
+    DOMNodePayload(
+        nodeID: .init(101),
+        nodeType: .document,
+        nodeName: "#document",
+        documentURL: "https://frame.example/ad",
+        regularChildren: .loaded([
+            DOMNodePayload(
+                nodeID: .init(2),
+                nodeType: .element,
+                nodeName: "HTML",
+                localName: "html",
+                regularChildren: .loaded([
+                    DOMNodePayload(
+                        nodeID: .init(3),
+                        nodeType: .element,
+                        nodeName: "BODY",
+                        localName: "body",
+                        regularChildren: .loaded([
+                            DOMNodePayload(
+                                nodeID: .init(8),
+                                nodeType: .element,
+                                nodeName: "IMG",
+                                localName: "img",
+                                attributes: [DOMAttribute(name: "id", value: "ad-node")]
+                            ),
+                        ])
                     ),
                 ])
             ),

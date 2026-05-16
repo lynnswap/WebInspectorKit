@@ -23,7 +23,7 @@ func connectBootstrapsMainPageDocumentInOrder() async throws {
         "Network.enable",
     ])
     #expect(await session.isAttached)
-    #expect(await session.dom.snapshot().currentPage?.mainTargetID == ProtocolTargetIdentifier.pageMain)
+    #expect(await session.dom.snapshot().currentPageTargetID == ProtocolTargetIdentifier.pageMain)
     #expect(await session.dom.snapshot().documentsByID.count == 1)
 }
 
@@ -130,17 +130,14 @@ func frameDocumentRefreshUpdatesOnlyFrameDocument() async throws {
     try await connect(session, transport: transport, backend: backend)
     let pageDocumentID = try #require(await session.dom.snapshot().currentPageDocumentID)
 
+    let sentCount = await backend.sentTargetMessages().count
     await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["DOM"],"isProvisional":false}}}"#
     )
     _ = try await waitUntil {
         await session.dom.snapshot().targetsByID[.frameAd]
     }
 
-    let sentCount = await backend.sentTargetMessages().count
-    let performTask = Task {
-        try await session.perform(.getDocument(targetID: .frameAd))
-    }
     let sent = try await waitForTargetMessage(backend, method: "DOM.getDocument", after: sentCount)
     await receiveTargetReply(
         transport,
@@ -148,12 +145,630 @@ func frameDocumentRefreshUpdatesOnlyFrameDocument() async throws {
         messageID: try messageID(sent.message),
         result: ##"{"root":{"nodeId":1,"nodeType":9,"nodeName":"#document","children":[{"nodeId":2,"nodeType":1,"nodeName":"HTML","localName":"html"}]}}"##
     )
-    _ = try await performTask.value
+    _ = try await waitUntil {
+        await session.dom.snapshot().targetsByID[.frameAd]?.currentDocumentID
+    }
 
     let snapshot = await session.dom.snapshot()
     #expect(snapshot.currentPageDocumentID == pageDocumentID)
     #expect(snapshot.targetsByID[.frameAd]?.currentDocumentID != nil)
     #expect(snapshot.targetsByID[.frameAd]?.currentDocumentID != pageDocumentID)
+}
+
+@Test
+func frameTargetWithoutDOMCapabilityDoesNotHydrateOnCreationOrDocumentUpdated() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    let sentCount = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":[],"isProvisional":false}}}"#
+    )
+    _ = try await waitUntil {
+        await session.dom.snapshot().targetsByID[.frameAd]
+    }
+    await receiveTargetDispatch(
+        transport,
+        targetID: .frameAd,
+        message: #"{"method":"DOM.documentUpdated","params":{}}"#
+    )
+
+    #expect(await backend.sentTargetMessages().count == sentCount)
+    #expect(await session.dom.snapshot().targetsByID[.frameAd]?.currentDocumentID == nil)
+}
+
+@Test
+func frameTargetWithoutAdvertisedDomainsUsesWebKitFrameDefaultAndDoesNotHydrateOnCreation() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    let sentCount = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
+    )
+    _ = try await waitUntil {
+        await session.dom.snapshot().targetsByID[.frameAd]
+    }
+
+    #expect(await backend.sentTargetMessages().count == sentCount)
+    #expect(await session.dom.snapshot().targetsByID[.frameAd]?.currentDocumentID == nil)
+}
+
+@Test
+func frameTargetWithAdvertisedDOMCapabilityHydratesOnCreation() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    let sentCount = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["DOM","Runtime"],"isProvisional":false}}}"#
+    )
+    let sent = try await waitForTargetMessage(backend, method: "DOM.getDocument", after: sentCount)
+    #expect(sent.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    await receiveTargetReply(
+        transport,
+        targetID: sent.targetIdentifier,
+        messageID: try messageID(sent.message),
+        result: firstLazyFrameDocumentResult
+    )
+
+    #expect(await session.dom.snapshot().targetsByID[.frameAd]?.currentDocumentID != nil)
+}
+
+@Test
+func domCapableFrameTargetDiscoveredBeforeAttachHydratesAfterConnect() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["DOM","Runtime"],"isProvisional":false}}}"#
+    )
+
+    let connectTask = Task {
+        try await session.connect(transport: transport)
+    }
+    let bootstrapMessages = try await completeBootstrap(transport: transport, backend: backend)
+    try await connectTask.value
+
+    let frameRequest = try await waitForTargetMessage(
+        backend,
+        method: "DOM.getDocument",
+        after: bootstrapMessages.count
+    )
+    #expect(frameRequest.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    await receiveTargetReply(
+        transport,
+        targetID: frameRequest.targetIdentifier,
+        messageID: try messageID(frameRequest.message),
+        result: firstLazyFrameDocumentResult
+    )
+
+    #expect(await session.dom.snapshot().targetsByID[.frameAd]?.currentDocumentID != nil)
+}
+
+@Test
+func provisionalFrameDocumentResolvedBeforeCommitRehydratesCommittedFrame() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    let provisionalTargetID = ProtocolTargetIdentifier("frame-provisional")
+    let sentCountBeforeFrameTarget = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-provisional","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["DOM","Runtime"],"isProvisional":true}}}"#
+    )
+    let firstRequest = try await waitForTargetMessage(
+        backend,
+        method: "DOM.getDocument",
+        after: sentCountBeforeFrameTarget
+    )
+    #expect(firstRequest.targetIdentifier == provisionalTargetID)
+    await receiveTargetReply(
+        transport,
+        targetID: firstRequest.targetIdentifier,
+        messageID: try messageID(firstRequest.message),
+        result: firstLazyFrameDocumentResult
+    )
+    let _: DOMDocumentIdentifier = try await waitUntil {
+        await session.dom.snapshot().targetsByID[provisionalTargetID]?.currentDocumentID
+    }
+
+    let sentCountBeforeCommit = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"frame-provisional","newTargetId":"frame-ad"}}"#
+    )
+    let committedRequest = try await waitForTargetMessage(
+        backend,
+        method: "DOM.getDocument",
+        after: sentCountBeforeCommit
+    )
+    #expect(committedRequest.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    await receiveTargetReply(
+        transport,
+        targetID: committedRequest.targetIdentifier,
+        messageID: try messageID(committedRequest.message),
+        result: secondLazyFrameDocumentResult
+    )
+
+    let snapshot: DOMSessionSnapshot = try await waitUntil {
+        let snapshot = await session.dom.snapshot()
+        guard snapshot.targetsByID[ProtocolTargetIdentifier.frameAd]?.currentDocumentID != nil else {
+            return nil
+        }
+        return snapshot
+    }
+    #expect(snapshot.targetsByID[provisionalTargetID] == nil)
+}
+
+@Test
+func provisionalFrameCommitCancelsInFlightDocumentRequestBeforeRehydrating() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    let provisionalTargetID = ProtocolTargetIdentifier("frame-provisional")
+    let sentCountBeforeFrameTarget = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-provisional","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["DOM","Runtime"],"isProvisional":true}}}"#
+    )
+    let firstRequest = try await waitForTargetMessage(
+        backend,
+        method: "DOM.getDocument",
+        after: sentCountBeforeFrameTarget
+    )
+    #expect(firstRequest.targetIdentifier == provisionalTargetID)
+    let firstRequestMessageID = try messageID(firstRequest.message)
+
+    let sentCountBeforeCommit = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"frame-provisional","newTargetId":"frame-ad"}}"#
+    )
+    let committedRequest = try await waitForTargetMessage(
+        backend,
+        method: "DOM.getDocument",
+        after: sentCountBeforeCommit
+    )
+    #expect(committedRequest.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    await receiveTargetReply(
+        transport,
+        targetID: committedRequest.targetIdentifier,
+        messageID: try messageID(committedRequest.message),
+        result: secondLazyFrameDocumentResult
+    )
+    _ = try await waitUntil {
+        await session.dom.snapshot().currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(201))]
+    }
+
+    await receiveTargetReply(
+        transport,
+        targetID: .frameAd,
+        messageID: firstRequestMessageID,
+        result: firstLazyFrameDocumentResult
+    )
+    try await Task.sleep(for: .milliseconds(25))
+
+    let snapshot = await session.dom.snapshot()
+    #expect(snapshot.currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(201))] != nil)
+    #expect(snapshot.currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(101))] == nil)
+}
+
+@Test
+func oldlessProvisionalFrameCommitCancelsInFlightDocumentRequestBeforeRehydrating() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    let provisionalTargetID = ProtocolTargetIdentifier("frame-provisional")
+    let sentCountBeforeFrameTarget = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-provisional","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["DOM","Runtime"],"isProvisional":true}}}"#
+    )
+    let firstRequest = try await waitForTargetMessage(
+        backend,
+        method: "DOM.getDocument",
+        after: sentCountBeforeFrameTarget
+    )
+    #expect(firstRequest.targetIdentifier == provisionalTargetID)
+    let firstRequestMessageID = try messageID(firstRequest.message)
+
+    let sentCountBeforeCommit = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"newTargetId":"frame-ad"}}"#
+    )
+    let committedRequest = try await waitForTargetMessage(
+        backend,
+        method: "DOM.getDocument",
+        after: sentCountBeforeCommit
+    )
+    #expect(committedRequest.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    await receiveTargetReply(
+        transport,
+        targetID: committedRequest.targetIdentifier,
+        messageID: try messageID(committedRequest.message),
+        result: secondLazyFrameDocumentResult
+    )
+    _ = try await waitUntil {
+        await session.dom.snapshot().currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(201))]
+    }
+
+    await receiveTargetReply(
+        transport,
+        targetID: .frameAd,
+        messageID: firstRequestMessageID,
+        result: firstLazyFrameDocumentResult
+    )
+    try await Task.sleep(for: .milliseconds(25))
+
+    let snapshot = await session.dom.snapshot()
+    #expect(snapshot.currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(201))] != nil)
+    #expect(snapshot.currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(101))] == nil)
+}
+
+@Test("Regression: frame getDocument request does not block page DOM events")
+func frameDocumentRequestDoesNotBlockPageDOMEvents() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    let sentCountBeforeFrameTarget = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["DOM","Runtime"],"isProvisional":false}}}"#
+    )
+    let frameDocumentRequest = try await waitForTargetMessage(
+        backend,
+        method: "DOM.getDocument",
+        after: sentCountBeforeFrameTarget
+    )
+    #expect(frameDocumentRequest.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: pageHTMLChildrenSetChildNodesMessage
+    )
+    let bodyID = try await waitForCurrentNode(
+        in: session,
+        targetID: .pageMain,
+        protocolNodeID: .init(4)
+    )
+    let snapshotWhileFrameRequestIsPending = await session.dom.snapshot()
+    #expect(snapshotWhileFrameRequestIsPending.nodesByID[bodyID]?.nodeName == "BODY")
+    #expect(snapshotWhileFrameRequestIsPending.targetsByID[.frameAd]?.currentDocumentID == nil)
+
+    await receiveTargetReply(
+        transport,
+        targetID: frameDocumentRequest.targetIdentifier,
+        messageID: try messageID(frameDocumentRequest.message),
+        result: firstLazyFrameDocumentResult
+    )
+    let finalSnapshot: DOMSessionSnapshot = try await waitUntil {
+        let snapshot = await session.dom.snapshot()
+        guard snapshot.targetsByID[.frameAd]?.currentDocumentID != nil else {
+            return nil
+        }
+        return snapshot
+    }
+    #expect(finalSnapshot.currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(4))] == bodyID)
+}
+
+@Test
+func pageDocumentUpdatedInvalidatesCurrentPageDocumentWithoutReloading() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    let pageDocumentID = try #require(await session.dom.snapshot().currentPageDocumentID)
+    let sentCount = await backend.sentTargetMessages().count
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"DOM.documentUpdated","params":{}}"#
+    )
+    let snapshot: DOMSessionSnapshot = try await waitUntil {
+        let snapshot = await session.dom.snapshot()
+        guard snapshot.currentPageDocumentID == nil else {
+            return nil
+        }
+        return snapshot
+    }
+
+    #expect(snapshot.currentPageDocumentID == nil)
+    #expect(snapshot.documentsByID[pageDocumentID]?.lifecycle == .invalidated)
+    #expect(snapshot.currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(1))] == nil)
+    #expect(await backend.sentTargetMessages().count == sentCount)
+}
+
+@Test
+func ensureDOMDocumentLoadedReloadsInvalidatedPageDocument() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"DOM.documentUpdated","params":{}}"#
+    )
+    let invalidatedSnapshot: DOMSessionSnapshot = try await waitUntil {
+        let snapshot = await session.dom.snapshot()
+        guard snapshot.currentPageDocumentID == nil else {
+            return nil
+        }
+        return snapshot
+    }
+    #expect(invalidatedSnapshot.currentPageDocumentID == nil)
+
+    let sentCount = await backend.sentTargetMessages().count
+    let ensureTask = Task {
+        await session.ensureDOMDocumentLoaded()
+    }
+    let reload = try await waitForTargetMessage(
+        backend,
+        method: "DOM.getDocument",
+        after: sentCount
+    )
+    #expect(reload.targetIdentifier == ProtocolTargetIdentifier.pageMain)
+    await receiveTargetReply(
+        transport,
+        targetID: reload.targetIdentifier,
+        messageID: try messageID(reload.message),
+        result: manualReloadDocumentResult
+    )
+
+    #expect(await ensureTask.value)
+    let finalSnapshot = await session.dom.snapshot()
+    #expect(finalSnapshot.currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(40))] != nil)
+}
+
+@Test("Regression: documentUpdated reopens document request gate while previous getDocument is pending")
+func documentUpdatedAllowsNewDocumentRequestWhilePreviousRequestIsPending() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"DOM.documentUpdated","params":{}}"#
+    )
+    let _: DOMSessionSnapshot = try await waitUntil {
+        let snapshot = await session.dom.snapshot()
+        guard snapshot.currentPageDocumentID == nil else {
+            return nil
+        }
+        return snapshot
+    }
+
+    let sentCount = await backend.sentTargetMessages().count
+    let ensureTask = Task {
+        await session.ensureDOMDocumentLoaded()
+    }
+    let firstRequest = try await waitForTargetMessage(
+        backend,
+        method: "DOM.getDocument",
+        after: sentCount
+    )
+    let afterFirstRequest = await backend.sentTargetMessages().count
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"DOM.documentUpdated","params":{}}"#
+    )
+    let secondRequest = try await waitForTargetMessage(
+        backend,
+        method: "DOM.getDocument",
+        after: afterFirstRequest
+    )
+
+    #expect(secondRequest.targetIdentifier == ProtocolTargetIdentifier.pageMain)
+    #expect(try messageID(secondRequest.message) != messageID(firstRequest.message))
+
+    await receiveTargetReply(
+        transport,
+        targetID: secondRequest.targetIdentifier,
+        messageID: try messageID(secondRequest.message),
+        result: manualReloadDocumentResult
+    )
+    #expect(await ensureTask.value)
+
+    await receiveTargetReply(
+        transport,
+        targetID: firstRequest.targetIdentifier,
+        messageID: try messageID(firstRequest.message),
+        result: staleReloadDocumentResult
+    )
+    try await Task.sleep(for: .milliseconds(25))
+
+    let finalSnapshot = await session.dom.snapshot()
+    #expect(finalSnapshot.currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(40))] != nil)
+    #expect(finalSnapshot.currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(50))] == nil)
+}
+
+@Test("Regression: stale setChildNodes from previous page does not move head children into new body")
+func staleSetChildNodesAfterPageNavigationDoesNotMoveHeadChildrenIntoNewBody() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    let countBeforeOldDocumentReload = await backend.sentTargetMessages().count
+    let oldDocumentReloadTask = Task {
+        try await session.reloadDOMDocument()
+    }
+    let oldDocumentReload = try await waitForTargetMessage(
+        backend,
+        method: "DOM.getDocument",
+        after: countBeforeOldDocumentReload
+    )
+    await receiveTargetReply(
+        transport,
+        targetID: oldDocumentReload.targetIdentifier,
+        messageID: try messageID(oldDocumentReload.message),
+        result: oldDocumentWithHeadNodeFourResult
+    )
+    try await oldDocumentReloadTask.value
+
+    let oldHeadID = try await waitForCurrentNode(
+        in: session,
+        targetID: .pageMain,
+        protocolNodeID: .init(4)
+    )
+    let requestIntent = try #require(await session.dom.requestChildNodesIntent(for: oldHeadID))
+    let countBeforeRequest = await backend.sentTargetMessages().count
+    let requestTask = Task {
+        try await session.perform(requestIntent)
+    }
+    let oldHeadRequest = try await waitForTargetMessage(
+        backend,
+        method: "DOM.requestChildNodes",
+        after: countBeforeRequest
+    )
+    await receiveTargetReply(
+        transport,
+        targetID: oldHeadRequest.targetIdentifier,
+        messageID: try messageID(oldHeadRequest.message),
+        result: "{}"
+    )
+    _ = try await requestTask.value
+
+    let countBeforeNavigation = await backend.sentTargetMessages().count
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"DOM.documentUpdated","params":{}}"#
+    )
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"DOM.setChildNodes","params":{"parentId":4,"nodes":[{"nodeId":8,"nodeType":1,"nodeName":"STYLE","localName":"style"}]}}"#
+    )
+    let _: DOMSessionSnapshot = try await waitUntil {
+        let snapshot = await session.dom.snapshot()
+        guard snapshot.currentPageDocumentID == nil else {
+            return nil
+        }
+        return snapshot
+    }
+    #expect(await backend.sentTargetMessages().count == countBeforeNavigation)
+
+    let countBeforeManualReload = await backend.sentTargetMessages().count
+    let manualReloadTask = Task {
+        try await session.reloadDOMDocument()
+    }
+    let newDocumentReload = try await waitForTargetMessage(
+        backend,
+        method: "DOM.getDocument",
+        after: countBeforeManualReload
+    )
+    await receiveTargetReply(
+        transport,
+        targetID: newDocumentReload.targetIdentifier,
+        messageID: try messageID(newDocumentReload.message),
+        result: newDocumentWithBodyNodeFourResult
+    )
+    try await manualReloadTask.value
+
+    let newBodyID = try await waitForCurrentNode(
+        in: session,
+        targetID: .pageMain,
+        protocolNodeID: .init(4)
+    )
+
+    let snapshot = await session.dom.snapshot()
+    #expect(snapshot.currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(8))] == nil)
+    #expect(snapshot.nodesByID[newBodyID]?.regularChildIDs.isEmpty == true)
+}
+
+@Test("Regression: root-scoped documentUpdated invalidates the current page document")
+func rootScopedDocumentUpdatedInvalidatesCurrentPageDocument() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
+    let mainNodeID = try await waitForCurrentNode(
+        in: session,
+        targetID: .pageMain,
+        protocolNodeID: .init(5)
+    )
+
+    let sentCountBeforeFrameTarget = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["DOM","Runtime"],"isProvisional":false}}}"#
+    )
+    let frameDocumentRequest = try await waitForTargetMessage(
+        backend,
+        method: "DOM.getDocument",
+        after: sentCountBeforeFrameTarget
+    )
+    #expect(frameDocumentRequest.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    await receiveTargetReply(
+        transport,
+        targetID: frameDocumentRequest.targetIdentifier,
+        messageID: try messageID(frameDocumentRequest.message),
+        result: firstLazyFrameDocumentResult
+    )
+    _ = try await waitUntil {
+        await session.dom.snapshot().targetsByID[.frameAd]
+    }
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"DOM.childNodeInserted","params":{"parentNodeId":4,"previousNodeId":5,"node":{"nodeId":6,"nodeType":1,"nodeName":"IFRAME","localName":"iframe","frameId":"main-frame","attributes":["src","https://frame.example/ad"]}}}"#
+    )
+    let iframeNodeID = try await waitForCurrentNode(
+        in: session,
+        targetID: .pageMain,
+        protocolNodeID: .init(6)
+    )
+
+    let beforeUpdate = await session.dom.snapshot()
+    _ = try #require(beforeUpdate.currentPageDocumentID)
+    let frameDocumentID = try #require(beforeUpdate.targetsByID[.frameAd]?.currentDocumentID)
+    let frameRootID = try #require(beforeUpdate.documentsByID[frameDocumentID]?.rootNodeID)
+    await session.dom.selectNode(mainNodeID)
+    assertProjectionContainsFrameDocument(
+        in: await session.dom.treeProjection(rootTargetID: .pageMain),
+        iframeNodeID: iframeNodeID,
+        frameRootNodeID: frameRootID
+    )
+
+    let sentCountBeforeTargetlessUpdate = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(#"{"method":"DOM.documentUpdated","params":{}}"#)
+
+    let afterUpdate: DOMSessionSnapshot = try await waitUntil {
+        let snapshot = await session.dom.snapshot()
+        guard snapshot.currentPageDocumentID == nil else {
+            return nil
+        }
+        return snapshot
+    }
+    #expect(afterUpdate.currentPageDocumentID == nil)
+    #expect(afterUpdate.targetsByID[ProtocolTargetIdentifier.frameAd]?.currentDocumentID == frameDocumentID)
+    #expect(afterUpdate.selection.selectedNodeID == nil)
+    #expect(await backend.sentTargetMessages().count == sentCountBeforeTargetlessUpdate)
+    #expect((await session.dom.treeProjection(rootTargetID: .pageMain)).rows.map(\.nodeID).contains(frameRootID) == false)
 }
 
 @Test("Lazy iframe insertion and frame document update keep the parent page tree intact")
@@ -163,43 +778,21 @@ func lazyIframeInsertionAndFrameDocumentUpdateKeepParentPageTree() async throws 
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
 
-    await receiveTargetDispatch(
-        transport,
-        targetID: .pageMain,
-        message: #"{"method":"DOM.setChildNodes","params":{"parentId":2,"nodes":[{"nodeId":3,"nodeType":1,"nodeName":"HEAD","localName":"head"},{"nodeId":4,"nodeType":1,"nodeName":"BODY","localName":"body","children":[{"nodeId":5,"nodeType":1,"nodeName":"MAIN","localName":"main","attributes":["id","content"]}]}]}}"#
-    )
+    try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
     let mainNodeID = try await waitForCurrentNode(
         in: session,
         targetID: .pageMain,
         protocolNodeID: .init(5)
     )
 
+    let sentCountBeforeFrameTarget = await backend.sentTargetMessages().count
     await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["DOM","Runtime"],"isProvisional":false}}}"#
     )
-    _ = try await waitUntil {
-        await session.dom.snapshot().targetsByID[.frameAd]
-    }
-
-    await receiveTargetDispatch(
-        transport,
-        targetID: .pageMain,
-        message: #"{"method":"DOM.childNodeInserted","params":{"parentNodeId":4,"previousNodeId":5,"node":{"nodeId":6,"nodeType":1,"nodeName":"IFRAME","localName":"iframe","frameId":"ad-frame","attributes":["src","https://frame.example/ad"]}}}"#
-    )
-    let iframeNodeID = try await waitForCurrentNode(
-        in: session,
-        targetID: .pageMain,
-        protocolNodeID: .init(6)
-    )
-
-    let sentCountBeforeFirstFrameDocument = await backend.sentTargetMessages().count
-    let firstFrameDocumentTask = Task {
-        try await session.perform(.getDocument(targetID: .frameAd))
-    }
     let firstFrameDocumentRequest = try await waitForTargetMessage(
         backend,
         method: "DOM.getDocument",
-        after: sentCountBeforeFirstFrameDocument
+        after: sentCountBeforeFrameTarget
     )
     #expect(firstFrameDocumentRequest.targetIdentifier == ProtocolTargetIdentifier.frameAd)
     await receiveTargetReply(
@@ -208,7 +801,20 @@ func lazyIframeInsertionAndFrameDocumentUpdateKeepParentPageTree() async throws 
         messageID: try messageID(firstFrameDocumentRequest.message),
         result: firstLazyFrameDocumentResult
     )
-    _ = try await firstFrameDocumentTask.value
+    _ = try await waitUntil {
+        await session.dom.snapshot().targetsByID[.frameAd]
+    }
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"DOM.childNodeInserted","params":{"parentNodeId":4,"previousNodeId":5,"node":{"nodeId":6,"nodeType":1,"nodeName":"IFRAME","localName":"iframe","frameId":"main-frame","attributes":["src","https://frame.example/ad"]}}}"#
+    )
+    let iframeNodeID = try await waitForCurrentNode(
+        in: session,
+        targetID: .pageMain,
+        protocolNodeID: .init(6)
+    )
 
     let beforeUpdate = await session.dom.snapshot()
     let pageDocumentID = try #require(beforeUpdate.currentPageDocumentID)
@@ -217,6 +823,36 @@ func lazyIframeInsertionAndFrameDocumentUpdateKeepParentPageTree() async throws 
     assertProjectionContainsFrameDocument(
         in: await session.dom.treeProjection(rootTargetID: .pageMain),
         iframeNodeID: iframeNodeID,
+        frameRootNodeID: firstFrameRootID
+    )
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"DOM.setChildNodes","params":{"parentId":6,"nodes":[{"nodeId":7,"nodeType":1,"nodeName":"SPAN","localName":"span"}]}}"#
+    )
+    let afterIframeOwnerUpdate = await session.dom.snapshot()
+    #expect(afterIframeOwnerUpdate.currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(7))] == nil)
+    assertProjectionContainsFrameDocument(
+        in: await session.dom.treeProjection(rootTargetID: .pageMain),
+        iframeNodeID: iframeNodeID,
+        frameRootNodeID: firstFrameRootID
+    )
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"DOM.setChildNodes","params":{"parentId":4,"nodes":[{"nodeId":5,"nodeType":1,"nodeName":"MAIN","localName":"main","attributes":["id","content"]},{"nodeId":6,"nodeType":1,"nodeName":"IFRAME","localName":"iframe","frameId":"main-frame","attributes":["src","https://frame.example/ad"]}]}}"#
+    )
+    let refreshedIframeNodeID = try await waitForCurrentNode(
+        in: session,
+        targetID: .pageMain,
+        protocolNodeID: .init(6)
+    )
+    #expect(refreshedIframeNodeID == iframeNodeID)
+    assertProjectionContainsFrameDocument(
+        in: await session.dom.treeProjection(rootTargetID: .pageMain),
+        iframeNodeID: refreshedIframeNodeID,
         frameRootNodeID: firstFrameRootID
     )
 
@@ -241,7 +877,8 @@ func lazyIframeInsertionAndFrameDocumentUpdateKeepParentPageTree() async throws 
 
     let afterUpdate: DOMSessionSnapshot = try await waitUntil {
         let snapshot = await session.dom.snapshot()
-        guard snapshot.targetsByID[.frameAd]?.currentDocumentID != firstFrameDocumentID else {
+        guard let currentDocumentID = snapshot.targetsByID[.frameAd]?.currentDocumentID,
+              currentDocumentID != firstFrameDocumentID else {
             return nil
         }
         return snapshot
@@ -260,13 +897,167 @@ func lazyIframeInsertionAndFrameDocumentUpdateKeepParentPageTree() async throws 
     )
 }
 
-// Expected-failing regression guard for the pending frame-owner modeling fix.
+@Test("Regression: repeated frame documentUpdated reissues an in-flight frame reload")
+func repeatedFrameDocumentUpdatedReissuesInFlightFrameReload() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    let sentCountBeforeFrameTarget = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["DOM","Runtime"],"isProvisional":false}}}"#
+    )
+    let initialFrameDocumentRequest = try await waitForTargetMessage(
+        backend,
+        method: "DOM.getDocument",
+        after: sentCountBeforeFrameTarget
+    )
+    #expect(initialFrameDocumentRequest.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    await receiveTargetReply(
+        transport,
+        targetID: initialFrameDocumentRequest.targetIdentifier,
+        messageID: try messageID(initialFrameDocumentRequest.message),
+        result: firstLazyFrameDocumentResult
+    )
+    _ = try await waitUntil {
+        await session.dom.snapshot().targetsByID[.frameAd]?.currentDocumentID
+    }
+
+    let sentCountBeforeFirstUpdate = await backend.sentTargetMessages().count
+    await receiveTargetDispatch(
+        transport,
+        targetID: .frameAd,
+        message: #"{"method":"DOM.documentUpdated","params":{}}"#
+    )
+    let firstReload = try await waitForTargetMessage(
+        backend,
+        method: "DOM.getDocument",
+        after: sentCountBeforeFirstUpdate
+    )
+    #expect(firstReload.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+
+    let sentCountBeforeSecondUpdate = await backend.sentTargetMessages().count
+    await receiveTargetDispatch(
+        transport,
+        targetID: .frameAd,
+        message: #"{"method":"DOM.documentUpdated","params":{}}"#
+    )
+    let secondReload = try await waitForTargetMessage(
+        backend,
+        method: "DOM.getDocument",
+        after: sentCountBeforeSecondUpdate
+    )
+    #expect(secondReload.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    #expect(try messageID(secondReload.message) != messageID(firstReload.message))
+
+    await receiveTargetReply(
+        transport,
+        targetID: firstReload.targetIdentifier,
+        messageID: try messageID(firstReload.message),
+        result: firstLazyFrameDocumentResult
+    )
+    try await Task.sleep(for: .milliseconds(25))
+    #expect(await session.dom.snapshot().currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(101))] == nil)
+
+    await receiveTargetReply(
+        transport,
+        targetID: secondReload.targetIdentifier,
+        messageID: try messageID(secondReload.message),
+        result: secondLazyFrameDocumentResult
+    )
+
+    let snapshot: DOMSessionSnapshot = try await waitUntil {
+        let snapshot = await session.dom.snapshot()
+        guard snapshot.currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(201))] != nil else {
+            return nil
+        }
+        return snapshot
+    }
+    #expect(snapshot.currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(101))] == nil)
+}
+
+@Test("Pending frame document hydrates page owner path before projection")
+func pendingFrameDocumentHydratesPageOwnerPathBeforeProjection() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    let sentCountBeforeFrameTarget = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["DOM","Runtime"],"isProvisional":false}}}"#
+    )
+    let frameDocumentRequest = try await waitForTargetMessage(
+        backend,
+        method: "DOM.getDocument",
+        after: sentCountBeforeFrameTarget
+    )
+    #expect(frameDocumentRequest.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    await receiveTargetReply(
+        transport,
+        targetID: frameDocumentRequest.targetIdentifier,
+        messageID: try messageID(frameDocumentRequest.message),
+        result: firstLazyFrameDocumentResult
+    )
+
+    let htmlHydrationRequest = try await waitForTargetMessage(
+        backend,
+        method: "DOM.requestChildNodes",
+        after: sentCountBeforeFrameTarget
+    )
+    #expect(htmlHydrationRequest.targetIdentifier == ProtocolTargetIdentifier.pageMain)
+    #expect(try integerParameter("nodeId", in: htmlHydrationRequest.message) == 2)
+    let sentCountAfterHTMLHydrationRequest = await backend.sentTargetMessages().count
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"DOM.setChildNodes","params":{"parentId":2,"nodes":[{"nodeId":3,"nodeType":1,"nodeName":"HEAD","localName":"head"},{"nodeId":4,"nodeType":1,"nodeName":"BODY","localName":"body","childNodeCount":2}]}}"#
+    )
+    await receiveTargetReply(
+        transport,
+        targetID: htmlHydrationRequest.targetIdentifier,
+        messageID: try messageID(htmlHydrationRequest.message),
+        result: "{}"
+    )
+
+    let bodyHydrationRequest = try await waitForTargetMessage(
+        backend,
+        method: "DOM.requestChildNodes",
+        after: sentCountAfterHTMLHydrationRequest
+    )
+    #expect(bodyHydrationRequest.targetIdentifier == ProtocolTargetIdentifier.pageMain)
+    #expect(try integerParameter("nodeId", in: bodyHydrationRequest.message) == 4)
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"DOM.setChildNodes","params":{"parentId":4,"nodes":[{"nodeId":5,"nodeType":1,"nodeName":"MAIN","localName":"main","attributes":["id","content"]},{"nodeId":6,"nodeType":1,"nodeName":"IFRAME","localName":"iframe","frameId":"main-frame","attributes":["src","https://frame.example/ad"]}]}}"#
+    )
+    await receiveTargetReply(
+        transport,
+        targetID: bodyHydrationRequest.targetIdentifier,
+        messageID: try messageID(bodyHydrationRequest.message),
+        result: "{}"
+    )
+
+    let iframeNodeID = try await waitForCurrentNode(
+        in: session,
+        targetID: .pageMain,
+        protocolNodeID: .init(6)
+    )
+    let snapshot = await session.dom.snapshot()
+    let frameDocumentID = try #require(snapshot.targetsByID[.frameAd]?.currentDocumentID)
+    let frameRootID = try #require(snapshot.documentsByID[frameDocumentID]?.rootNodeID)
+    assertProjectionContainsFrameDocument(
+        in: await session.dom.treeProjection(rootTargetID: .pageMain),
+        iframeNodeID: iframeNodeID,
+        frameRootNodeID: frameRootID
+    )
+}
+
 // WebKit reports DOM.Node.frameId as the frame that owns the node's document.
 // For an iframe element in the page DOM that is the page frame, not the
 // cross-origin child frame whose document arrives through a separate target.
-// The current model still treats this value as child frame identity in one path;
-// keep this test failing until owner-frame identity and child-frame projection
-// are separated in the DOM model.
 @Test("Regression: DOM.Node.frameId on an iframe owner is the owner frame, not the child frame identity")
 func lazyIframeOwnerFrameIdIsNotTreatedAsChildFrameIdentity() async throws {
     let backend = FakeTransportBackend()
@@ -274,11 +1065,7 @@ func lazyIframeOwnerFrameIdIsNotTreatedAsChildFrameIdentity() async throws {
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
 
-    await receiveTargetDispatch(
-        transport,
-        targetID: .pageMain,
-        message: #"{"method":"DOM.setChildNodes","params":{"parentId":2,"nodes":[{"nodeId":3,"nodeType":1,"nodeName":"HEAD","localName":"head"},{"nodeId":4,"nodeType":1,"nodeName":"BODY","localName":"body","children":[{"nodeId":5,"nodeType":1,"nodeName":"MAIN","localName":"main","attributes":["id","content"]}]}]}}"#
-    )
+    try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
     _ = try await waitForCurrentNode(
         in: session,
         targetID: .pageMain,
@@ -320,45 +1107,63 @@ func lazyIframeOwnerFrameIdIsNotTreatedAsChildFrameIdentity() async throws {
     )
     _ = try await frameDocumentTask.value
     let firstFrameDocumentID = try #require(await session.dom.snapshot().targetsByID[.frameAd]?.currentDocumentID)
+    let firstFrameRootID = try #require(await session.dom.snapshot().documentsByID[firstFrameDocumentID]?.rootNodeID)
 
-    let sentCountBeforeFrameUpdate = await backend.sentTargetMessages().count
+    assertProjectionContainsFrameDocument(
+        in: await session.dom.treeProjection(rootTargetID: .pageMain),
+        iframeNodeID: iframeNodeID,
+        frameRootNodeID: firstFrameRootID
+    )
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"DOM.setChildNodes","params":{"parentId":6,"nodes":[{"nodeId":7,"nodeType":1,"nodeName":"SPAN","localName":"span"}]}}"#
+    )
+    #expect(await session.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(7))] == nil)
+    assertProjectionContainsFrameDocument(
+        in: await session.dom.treeProjection(rootTargetID: .pageMain),
+        iframeNodeID: iframeNodeID,
+        frameRootNodeID: firstFrameRootID
+    )
+
+    try await beginPicker(session: session, transport: transport, backend: backend)
+    let sentCountBeforeInspect = await backend.sentTargetMessages().count
     await receiveTargetDispatch(
         transport,
         targetID: .frameAd,
-        message: #"{"method":"DOM.documentUpdated","params":{}}"#
+        message: #"{"method":"DOM.inspect","params":{"nodeId":104}}"#
     )
-    let frameDocumentReload = try await waitForTargetMessage(
+    let disable = try await waitForTargetMessage(
         backend,
-        method: "DOM.getDocument",
-        after: sentCountBeforeFrameUpdate
+        method: "DOM.setInspectModeEnabled",
+        after: sentCountBeforeInspect
     )
-    #expect(frameDocumentReload.targetIdentifier == ProtocolTargetIdentifier.frameAd)
     await receiveTargetReply(
         transport,
-        targetID: frameDocumentReload.targetIdentifier,
-        messageID: try messageID(frameDocumentReload.message),
-        result: secondLazyFrameDocumentResult
+        targetID: disable.targetIdentifier,
+        messageID: try messageID(disable.message),
+        result: "{}"
     )
-
-    let snapshot: DOMSessionSnapshot = try await waitUntil {
-        let snapshot = await session.dom.snapshot()
-        guard snapshot.targetsByID[.frameAd]?.currentDocumentID != firstFrameDocumentID else {
-            return nil
-        }
-        return snapshot
+    let selectedNode = try await waitUntil {
+        await session.dom.selectedNode
     }
-    let frameDocumentID = try #require(snapshot.targetsByID[.frameAd]?.currentDocumentID)
-    let frameRootID = try #require(snapshot.documentsByID[frameDocumentID]?.rootNodeID)
-    let projectionRows = await session.dom.treeProjection(rootTargetID: .pageMain).rows.map(\.nodeID)
+    #expect(await selectedNode.nodeName == "CANVAS")
+    let snapshot = await session.dom.snapshot()
+    let projection = await session.dom.treeProjection(rootTargetID: .pageMain)
 
-    #expect(snapshot.framesByID[DOMFrameIdentifier("main-frame")]?.ownerNodeID == nil)
-    #expect(snapshot.framesByID[DOMFrameIdentifier("ad-frame")]?.ownerNodeID == nil)
+    #expect(snapshot.framesByID[DOMFrameIdentifier("main-frame")]?.currentDocumentID == snapshot.currentPageDocumentID)
+    #expect(snapshot.framesByID[DOMFrameIdentifier("ad-frame")]?.currentDocumentID == firstFrameDocumentID)
     #expect(snapshot.nodesByID[iframeNodeID] != nil)
-    #expect(projectionRows.contains(frameRootID) == false)
+    assertProjectionContainsFrameDocument(
+        in: projection,
+        iframeNodeID: iframeNodeID,
+        frameRootNodeID: firstFrameRootID
+    )
 }
 
 @Test
-func targetCommitBootstrapsCommittedMainPageDocument() async throws {
+func targetCommitBootstrapsCommittedMainPageTarget() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
     let session = await InspectorSession(configuration: .test)
@@ -375,14 +1180,63 @@ func targetCommitBootstrapsCommittedMainPageDocument() async throws {
     let bootstrapMessages = try await completeBootstrap(
         transport: transport,
         backend: backend,
-        after: sentCountBeforeCommit
+        after: sentCountBeforeCommit,
+        documentResult: manualReloadDocumentResult
     )
 
     let snapshot = await session.dom.snapshot()
-    #expect(snapshot.currentPage?.mainTargetID == ProtocolTargetIdentifier.pageNext)
+    #expect(snapshot.currentPageTargetID == ProtocolTargetIdentifier.pageNext)
     #expect(snapshot.targetsByID[.pageNext]?.currentDocumentID != nil)
     #expect(snapshot.targetsByID[.pageMain] == nil)
-    #expect(bootstrapMessages.map { $0.targetIdentifier } == Array(repeating: ProtocolTargetIdentifier.pageNext, count: 5))
+    #expect(bootstrapMessages.map(\.targetIdentifier).allSatisfy { $0 == .pageNext })
+    #expect(bootstrapMessages.compactMap { try? messageMethod($0.message) } == [
+        "Inspector.enable",
+        "Inspector.initialized",
+        "Runtime.enable",
+        "DOM.getDocument",
+        "Network.enable",
+    ])
+}
+
+@Test("Regression: provisional DOM events from link navigation are ignored before committed document reload")
+func linkNavigationBuffersProvisionalDOMEventsUntilCommit() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    let sentCountBeforeNavigation = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-next","type":"page","isProvisional":true}}}"#
+    )
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageNext,
+        message: #"{"method":"DOM.childNodeCountUpdated","params":{"nodeId":3,"childNodeCount":0}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-main","newTargetId":"page-next"}}"#
+    )
+
+    let bootstrapMessages = try await completeBootstrap(
+        transport: transport,
+        backend: backend,
+        after: sentCountBeforeNavigation,
+        documentResult: newDocumentWithHeadChildCountResult
+    )
+
+    let snapshot: DOMSessionSnapshot = try await waitUntil {
+        let snapshot = await session.dom.snapshot()
+        guard snapshot.currentPageTargetID == .pageNext,
+              snapshot.currentNodeIDByKey[.init(targetID: .pageNext, nodeID: .init(3))] != nil else {
+            return nil
+        }
+        return snapshot
+    }
+    let headID = try #require(snapshot.currentNodeIDByKey[.init(targetID: .pageNext, nodeID: .init(3))])
+    #expect(bootstrapMessages.map(\.targetIdentifier).allSatisfy { $0 == .pageNext })
+    #expect(snapshot.nodesByID[headID]?.nodeName == "HEAD")
+    #expect(snapshot.nodesByID[headID]?.regularChildren.knownCount == 2)
 }
 
 @Test
@@ -434,12 +1288,159 @@ func requestNodeWaitsForPathPushBeforeSelectingNode() async throws {
     #expect(attributes == [DOMAttribute(name: "id", value: "selected")])
 }
 
+@Test("Regression: backend setChildNodes without explicit hydration keeps requestNode selectable")
+func backendSetChildNodesWithoutExplicitHydrationKeepsRequestNodeSelectable() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"DOM.setChildNodes","params":{"parentId":2,"nodes":[{"nodeId":3,"nodeType":1,"nodeName":"HEAD","localName":"head"},{"nodeId":4,"nodeType":1,"nodeName":"BODY","localName":"body","children":[{"nodeId":164,"nodeType":1,"nodeName":"DIV","localName":"div","attributes":["id","picked"]}]}]}}"#
+    )
+
+    let expectedNodeID = try await waitForCurrentNode(
+        in: session,
+        targetID: .pageMain,
+        protocolNodeID: .init(164)
+    )
+    let intent = await session.dom.beginInspectSelectionRequest(
+        targetID: .pageMain,
+        objectID: "selected-object"
+    )
+    guard case let .success(commandIntent) = intent else {
+        Issue.record("Expected DOM.requestNode intent")
+        return
+    }
+
+    let sentCount = await backend.sentTargetMessages().count
+    let performTask = Task {
+        try await session.perform(commandIntent)
+    }
+    let sent = try await waitForTargetMessage(backend, method: "DOM.requestNode", after: sentCount)
+    await receiveTargetReply(
+        transport,
+        targetID: sent.targetIdentifier,
+        messageID: try messageID(sent.message),
+        result: #"{"nodeId":164}"#
+    )
+    _ = try await performTask.value
+
+    #expect(await session.dom.selectedNodeID == expectedNodeID)
+    let selectedNode = try #require(await session.dom.selectedNode)
+    #expect(await selectedNode.attributes == [DOMAttribute(name: "id", value: "picked")])
+}
+
+@Test("Regression: detached setChildNodes root keeps requestNode selectable")
+func detachedSetChildNodesRootKeepsRequestNodeSelectable() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    let intent = await session.dom.beginInspectSelectionRequest(
+        targetID: .pageMain,
+        objectID: "detached-selected-object"
+    )
+    guard case let .success(commandIntent) = intent else {
+        Issue.record("Expected DOM.requestNode intent")
+        return
+    }
+
+    let sentCount = await backend.sentTargetMessages().count
+    let performTask = Task {
+        try await session.perform(commandIntent)
+    }
+    let sent = try await waitForTargetMessage(backend, method: "DOM.requestNode", after: sentCount)
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"DOM.setChildNodes","params":{"parentId":0,"nodes":[{"nodeId":200,"nodeType":1,"nodeName":"DIV","localName":"div","children":[{"nodeId":201,"nodeType":1,"nodeName":"IMG","localName":"img"}]}]}}"#
+    )
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"DOM.attributeModified","params":{"nodeId":201,"name":"src","value":"https://ads.example/detached.webp"}}"#
+    )
+    await receiveTargetReply(
+        transport,
+        targetID: sent.targetIdentifier,
+        messageID: try messageID(sent.message),
+        result: #"{"nodeId":201}"#
+    )
+    _ = try await performTask.value
+
+    let selectedNode = try #require(await session.dom.selectedNode)
+    #expect(await selectedNode.nodeName == "IMG")
+    #expect(await selectedNode.attributes == [DOMAttribute(name: "src", value: "https://ads.example/detached.webp")])
+}
+
+@Test("Regression: detached frame setChildNodes root keeps requestNode selectable")
+func detachedFrameSetChildNodesRootKeepsRequestNodeSelectable() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    let sentCountBeforeFrameTarget = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["DOM","Runtime"],"isProvisional":false}}}"#
+    )
+    let frameDocumentRequest = try await waitForTargetMessage(
+        backend,
+        method: "DOM.getDocument",
+        after: sentCountBeforeFrameTarget
+    )
+    await receiveTargetReply(
+        transport,
+        targetID: frameDocumentRequest.targetIdentifier,
+        messageID: try messageID(frameDocumentRequest.message),
+        result: firstLazyFrameDocumentResult
+    )
+    _ = try await waitUntil {
+        await session.dom.snapshot().targetsByID[ProtocolTargetIdentifier.frameAd]?.currentDocumentID
+    }
+
+    let intent = await session.dom.beginInspectSelectionRequest(
+        targetID: .frameAd,
+        objectID: "detached-frame-object"
+    )
+    guard case let .success(commandIntent) = intent else {
+        Issue.record("Expected DOM.requestNode intent")
+        return
+    }
+
+    let sentCount = await backend.sentTargetMessages().count
+    let performTask = Task {
+        try await session.perform(commandIntent)
+    }
+    let sent = try await waitForTargetMessage(backend, method: "DOM.requestNode", after: sentCount)
+    await receiveTargetDispatch(
+        transport,
+        targetID: .frameAd,
+        message: #"{"method":"DOM.setChildNodes","params":{"parentId":0,"nodes":[{"nodeId":300,"nodeType":1,"nodeName":"DIV","localName":"div","children":[{"nodeId":301,"nodeType":1,"nodeName":"IMG","localName":"img"}]}]}}"#
+    )
+    await receiveTargetReply(
+        transport,
+        targetID: sent.targetIdentifier,
+        messageID: try messageID(sent.message),
+        result: #"{"nodeId":301}"#
+    )
+    _ = try await performTask.value
+
+    let selectedNode = try #require(await session.dom.selectedNode)
+    #expect(await selectedNode.nodeName == "IMG")
+    #expect(await session.dom.selectedNodeID?.documentID.targetID == ProtocolTargetIdentifier.frameAd)
+}
+
 @Test
-func requestNodeFailureDoesNotMutateDOMTree() async throws {
+func requestNodeReplyBeforePathPushKeepsSelectionPendingUntilParentArrives() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
     let session = await InspectorSession(
-        configuration: .init(responseTimeout: .seconds(1), bootstrapTimeout: .seconds(1), eventApplicationTimeout: .milliseconds(1))
+        configuration: .init(responseTimeout: .seconds(1), bootstrapTimeout: .seconds(1))
     )
     try await connect(session, transport: transport, backend: backend)
     let snapshotBeforeSelection = await session.dom.snapshot()
@@ -478,7 +1479,31 @@ func requestNodeFailureDoesNotMutateDOMTree() async throws {
     #expect(snapshot.documentsByID.keys == snapshotBeforeSelection.documentsByID.keys)
     #expect(snapshot.nodesByID.keys == snapshotBeforeSelection.nodesByID.keys)
     #expect(snapshot.selection.selectedNodeID == nil)
-    #expect(snapshot.selection.failure == .unresolvedNode(.init(targetID: .pageMain, nodeID: .init(999))))
+    #expect(snapshot.selection.failure == nil)
+    let pendingRequest = try #require(snapshot.selection.pendingRequest)
+    #expect(pendingRequest.targetID == .pageMain)
+    #expect(snapshot.transactions.contains { transaction in
+        transaction.targetID == .pageMain
+            && transaction.documentID == pendingRequest.documentID
+            && transaction.kind == .requestNode(selectionRequestID: pendingRequest.id, objectID: "missing-object")
+            && transaction.requestedProtocolNodeID == .init(999)
+    })
+    #expect(await session.lastError == nil)
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"DOM.setChildNodes","params":{"parentId":2,"nodes":[{"nodeId":999,"nodeType":1,"nodeName":"DIV","localName":"div","attributes":["id","late-path"]}]}}"#
+    )
+
+    let selectedNode = try await waitUntil {
+        await session.dom.selectedNode
+    }
+    #expect(await selectedNode.nodeName == "DIV")
+    #expect(await selectedNode.attributes == [DOMAttribute(name: "id", value: "late-path")])
+    let resolvedSnapshot = await session.dom.snapshot()
+    #expect(resolvedSnapshot.selection.pendingRequest == nil)
+    #expect(resolvedSnapshot.selection.failure == nil)
 }
 
 @Test
@@ -522,6 +1547,379 @@ func elementPickerBeginAndCancelToggleInspectMode() async throws {
     await cancelTask.value
 
     #expect(await session.isSelectingElement == false)
+}
+
+@Test
+func targetDestroyedClearsActiveElementPicker() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    try await beginPicker(session: session, transport: transport, backend: backend)
+    #expect(await session.isSelectingElement)
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetDestroyed","params":{"targetId":"page-main"}}"#
+    )
+    _ = try await waitUntil {
+        await session.isSelectingElement == false ? true : nil
+    }
+}
+
+@Test
+func targetCommitClearsElementPickerForOldTarget() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    try await beginPicker(session: session, transport: transport, backend: backend)
+    #expect(await session.isSelectingElement)
+
+    let sentCountBeforeNavigation = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-next","type":"page","isProvisional":true}}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-main","newTargetId":"page-next"}}"#
+    )
+
+    _ = try await waitUntil {
+        await session.isSelectingElement == false ? true : nil
+    }
+
+    let bootstrapMessages = try await completeBootstrap(
+        transport: transport,
+        backend: backend,
+        after: sentCountBeforeNavigation,
+        documentResult: manualReloadDocumentResult
+    )
+    #expect(bootstrapMessages.map(\.targetIdentifier).allSatisfy { $0 == .pageNext })
+}
+
+@Test
+func elementPickerUsesBootstrappedTargetAfterTargetCommit() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    let sentCountBeforeNavigation = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-next","type":"page","isProvisional":true}}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-main","newTargetId":"page-next"}}"#
+    )
+    try await completeBootstrap(
+        transport: transport,
+        backend: backend,
+        after: sentCountBeforeNavigation,
+        documentResult: manualReloadDocumentResult
+    )
+
+    let sentCountBeforePicker = await backend.sentTargetMessages().count
+    let beginTask = Task {
+        try await session.beginElementPicker()
+    }
+
+    let enableMessage = try await waitForTargetMessage(
+        backend,
+        method: "DOM.setInspectModeEnabled",
+        after: sentCountBeforePicker
+    )
+    #expect(enableMessage.targetIdentifier == ProtocolTargetIdentifier.pageNext)
+    await receiveTargetReply(
+        transport,
+        targetID: enableMessage.targetIdentifier,
+        messageID: try messageID(enableMessage.message),
+        result: "{}"
+    )
+    try await beginTask.value
+    #expect(await session.isSelectingElement)
+}
+
+@Test("Regression: element picker ignores inspect events before inspect-mode enable completes")
+func elementPickerIgnoresInspectEventBeforeInspectModeReply() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"main-frame"}}}"#
+    )
+    _ = try await waitUntil {
+        await session.dom.snapshot().executionContextsByID[ExecutionContextID(7)]
+    }
+
+    let sentCount = await backend.sentTargetMessages().count
+    let beginTask = Task {
+        try await session.beginElementPicker()
+    }
+    let enableMessage = try await waitForTargetMessage(
+        backend,
+        method: "DOM.setInspectModeEnabled",
+        after: sentCount
+    )
+    #expect(try boolParameter("enabled", in: enableMessage.message) == true)
+    #expect(await session.isSelectingElement)
+
+    let sentCountBeforeInspect = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(#"{"method":"Inspector.inspect","params":{"object":{"objectId":"{\"injectedScriptId\":7,\"id\":99}"},"hints":{}}}"#)
+    try await Task.sleep(for: .milliseconds(25))
+    let messagesBeforeEnableReply = await backend.sentTargetMessages().dropFirst(sentCountBeforeInspect)
+    #expect(messagesBeforeEnableReply.allSatisfy { (try? messageMethod($0.message)) != "DOM.requestNode" })
+    #expect(await session.isSelectingElement)
+
+    await receiveTargetReply(
+        transport,
+        targetID: enableMessage.targetIdentifier,
+        messageID: try messageID(enableMessage.message),
+        result: "{}"
+    )
+    try await beginTask.value
+
+    let sentCountBeforeAcceptedInspect = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(#"{"method":"Inspector.inspect","params":{"object":{"objectId":"{\"injectedScriptId\":7,\"id\":99}"},"hints":{}}}"#)
+    let requestNode = try await waitForTargetMessage(
+        backend,
+        method: "DOM.requestNode",
+        after: sentCountBeforeAcceptedInspect
+    )
+    #expect(requestNode.targetIdentifier == ProtocolTargetIdentifier.pageMain)
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"DOM.setChildNodes","params":{"parentId":2,"nodes":[{"nodeId":3,"nodeType":1,"nodeName":"DIV","localName":"div","attributes":["id","selected"]}]}}"#
+    )
+    let sentCountBeforeRequestReply = await backend.sentTargetMessages().count
+    await receiveTargetReply(
+        transport,
+        targetID: requestNode.targetIdentifier,
+        messageID: try messageID(requestNode.message),
+        result: #"{"nodeId":3}"#
+    )
+    let disableMessage = try await waitForTargetMessage(
+        backend,
+        method: "DOM.setInspectModeEnabled",
+        after: sentCountBeforeRequestReply
+    )
+    #expect(try boolParameter("enabled", in: disableMessage.message) == false)
+    await receiveTargetReply(
+        transport,
+        targetID: disableMessage.targetIdentifier,
+        messageID: try messageID(disableMessage.message),
+        result: "{}"
+    )
+
+    let selectedNode = try await waitUntil {
+        await session.dom.selectedNode
+    }
+    #expect(await selectedNode.nodeName == "DIV")
+    #expect(await session.isSelectingElement == false)
+}
+
+@Test("Regression: restarted picker ignores stale inspect event while enable is pending")
+func restartedElementPickerIgnoresStaleInspectEventBeforeInspectModeReply() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"main-frame"}}}"#
+    )
+    _ = try await waitUntil {
+        await session.dom.snapshot().executionContextsByID[ExecutionContextID(7)]
+    }
+
+    let sentCountBeforeFirstBegin = await backend.sentTargetMessages().count
+    let firstBeginTask = Task {
+        try await session.beginElementPicker()
+    }
+    let firstEnable = try await waitForTargetMessage(
+        backend,
+        method: "DOM.setInspectModeEnabled",
+        after: sentCountBeforeFirstBegin
+    )
+    #expect(try boolParameter("enabled", in: firstEnable.message) == true)
+
+    let sentCountBeforeCancel = await backend.sentTargetMessages().count
+    let cancelTask = Task {
+        await session.cancelElementPicker()
+    }
+    let cancelDisable = try await waitForTargetMessage(
+        backend,
+        method: "DOM.setInspectModeEnabled",
+        after: sentCountBeforeCancel
+    )
+    #expect(try boolParameter("enabled", in: cancelDisable.message) == false)
+    await receiveTargetReply(
+        transport,
+        targetID: cancelDisable.targetIdentifier,
+        messageID: try messageID(cancelDisable.message),
+        result: "{}"
+    )
+    await cancelTask.value
+
+    let sentCountBeforeRestart = await backend.sentTargetMessages().count
+    let restartTask = Task {
+        try await session.beginElementPicker()
+    }
+    let restartEnable = try await waitForTargetMessage(
+        backend,
+        method: "DOM.setInspectModeEnabled",
+        after: sentCountBeforeRestart
+    )
+    #expect(try boolParameter("enabled", in: restartEnable.message) == true)
+    #expect(await session.isSelectingElement)
+
+    let sentCountBeforeStaleInspect = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(#"{"method":"Inspector.inspect","params":{"object":{"objectId":"{\"injectedScriptId\":7,\"id\":99}"},"hints":{}}}"#)
+    try await Task.sleep(for: .milliseconds(25))
+    let messagesAfterStaleInspect = await backend.sentTargetMessages().dropFirst(sentCountBeforeStaleInspect)
+    #expect(messagesAfterStaleInspect.allSatisfy { (try? messageMethod($0.message)) != "DOM.requestNode" })
+    #expect(messagesAfterStaleInspect.allSatisfy { (try? messageMethod($0.message)) != "DOM.setInspectModeEnabled" })
+    #expect(await session.isSelectingElement)
+
+    await receiveTargetReply(
+        transport,
+        targetID: firstEnable.targetIdentifier,
+        messageID: try messageID(firstEnable.message),
+        result: "{}"
+    )
+    try await firstBeginTask.value
+    #expect(await session.isSelectingElement)
+
+    await receiveTargetReply(
+        transport,
+        targetID: restartEnable.targetIdentifier,
+        messageID: try messageID(restartEnable.message),
+        result: "{}"
+    )
+    try await restartTask.value
+
+    let sentCountBeforeAcceptedInspect = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(#"{"method":"Inspector.inspect","params":{"object":{"objectId":"{\"injectedScriptId\":7,\"id\":99}"},"hints":{}}}"#)
+    let requestNode = try await waitForTargetMessage(
+        backend,
+        method: "DOM.requestNode",
+        after: sentCountBeforeAcceptedInspect
+    )
+    #expect(requestNode.targetIdentifier == ProtocolTargetIdentifier.pageMain)
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"DOM.setChildNodes","params":{"parentId":2,"nodes":[{"nodeId":3,"nodeType":1,"nodeName":"DIV","localName":"div","attributes":["id","selected"]}]}}"#
+    )
+    let sentCountBeforeRequestReply = await backend.sentTargetMessages().count
+    await receiveTargetReply(
+        transport,
+        targetID: requestNode.targetIdentifier,
+        messageID: try messageID(requestNode.message),
+        result: #"{"nodeId":3}"#
+    )
+    let disable = try await waitForTargetMessage(
+        backend,
+        method: "DOM.setInspectModeEnabled",
+        after: sentCountBeforeRequestReply
+    )
+    #expect(try boolParameter("enabled", in: disable.message) == false)
+    await receiveTargetReply(
+        transport,
+        targetID: disable.targetIdentifier,
+        messageID: try messageID(disable.message),
+        result: "{}"
+    )
+
+    let selectedNode = try await waitUntil {
+        await session.dom.selectedNode
+    }
+    #expect(await selectedNode.nodeName == "DIV")
+    #expect(await session.isSelectingElement == false)
+}
+
+@Test
+func staleInspectEventCompletionDoesNotCancelRestartedPicker() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"main-frame"}}}"#
+    )
+    _ = try await waitUntil {
+        await session.dom.snapshot().executionContextsByID[ExecutionContextID(7)]
+    }
+    try await beginPicker(session: session, transport: transport, backend: backend)
+
+    let sentCountBeforeInspect = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(#"{"method":"Inspector.inspect","params":{"object":{"objectId":"{\"injectedScriptId\":7,\"id\":99}"},"hints":{}}}"#)
+    let requestNode = try await waitForTargetMessage(
+        backend,
+        method: "DOM.requestNode",
+        after: sentCountBeforeInspect
+    )
+
+    let sentCountBeforeCancel = await backend.sentTargetMessages().count
+    let cancelTask = Task {
+        await session.cancelElementPicker()
+    }
+    let cancelDisable = try await waitForTargetMessage(
+        backend,
+        method: "DOM.setInspectModeEnabled",
+        after: sentCountBeforeCancel
+    )
+    #expect(try boolParameter("enabled", in: cancelDisable.message) == false)
+    await receiveTargetReply(
+        transport,
+        targetID: cancelDisable.targetIdentifier,
+        messageID: try messageID(cancelDisable.message),
+        result: "{}"
+    )
+    await cancelTask.value
+
+    let sentCountBeforeRestart = await backend.sentTargetMessages().count
+    let restartTask = Task {
+        try await session.beginElementPicker()
+    }
+    let restartEnable = try await waitForTargetMessage(
+        backend,
+        method: "DOM.setInspectModeEnabled",
+        after: sentCountBeforeRestart
+    )
+    #expect(try boolParameter("enabled", in: restartEnable.message) == true)
+    await receiveTargetReply(
+        transport,
+        targetID: restartEnable.targetIdentifier,
+        messageID: try messageID(restartEnable.message),
+        result: "{}"
+    )
+    try await restartTask.value
+    #expect(await session.isSelectingElement)
+
+    let sentCountBeforeStaleReply = await backend.sentTargetMessages().count
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"DOM.setChildNodes","params":{"parentId":2,"nodes":[{"nodeId":3,"nodeType":1,"nodeName":"DIV","localName":"div","attributes":["id","old-picker"]}]}}"#
+    )
+    await receiveTargetReply(
+        transport,
+        targetID: requestNode.targetIdentifier,
+        messageID: try messageID(requestNode.message),
+        result: #"{"nodeId":3}"#
+    )
+    try await Task.sleep(for: .milliseconds(25))
+
+    let messagesAfterStaleReply = await backend.sentTargetMessages().dropFirst(sentCountBeforeStaleReply)
+    #expect(await session.isSelectingElement)
+    #expect(messagesAfterStaleReply.allSatisfy { (try? messageMethod($0.message)) != "DOM.setInspectModeEnabled" })
 }
 
 @Test
@@ -576,6 +1974,66 @@ func inspectorInspectSelectsRequestedNodeAndDisablesPicker() async throws {
         await session.dom.selectedNode
     }
     #expect(await selectedNode.nodeName == "DIV")
+    #expect(await session.isSelectingElement == false)
+}
+
+@Test
+func inspectorInspectWaitsForPathPushEventsBeforeSelectingNode() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(
+        configuration: .init(
+            responseTimeout: .seconds(1),
+            bootstrapTimeout: .seconds(1)
+        )
+    )
+    try await connect(session, transport: transport, backend: backend)
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"main-frame"}}}"#
+    )
+    _ = try await waitUntil {
+        await session.dom.snapshot().executionContextsByID[ExecutionContextID(7)]
+    }
+    try await beginPicker(session: session, transport: transport, backend: backend)
+    let sentCountBeforeInspect = await backend.sentTargetMessages().count
+
+    await transport.receiveRootMessage(#"{"method":"Inspector.inspect","params":{"object":{"objectId":"{\"injectedScriptId\":7,\"id\":99}"},"hints":{}}}"#)
+    let requestNode = try await waitForTargetMessage(
+        backend,
+        method: "DOM.requestNode",
+        after: sentCountBeforeInspect
+    )
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"DOM.setChildNodes","params":{"parentId":2,"nodes":[{"nodeId":3,"nodeType":1,"nodeName":"DIV","localName":"div","attributes":["id","selected-after-path-push"]}]}}"#
+    )
+    let sentCountBeforeRequestReply = await backend.sentTargetMessages().count
+    await receiveTargetReply(
+        transport,
+        targetID: requestNode.targetIdentifier,
+        messageID: try messageID(requestNode.message),
+        result: #"{"nodeId":3}"#
+    )
+    let disable = try await waitForTargetMessage(
+        backend,
+        method: "DOM.setInspectModeEnabled",
+        after: sentCountBeforeRequestReply
+    )
+    await receiveTargetReply(
+        transport,
+        targetID: disable.targetIdentifier,
+        messageID: try messageID(disable.message),
+        result: "{}"
+    )
+
+    let selectedNode = try await waitUntil {
+        await session.dom.selectedNode
+    }
+    #expect(await selectedNode.attributes == [DOMAttribute(name: "id", value: "selected-after-path-push")])
     #expect(await session.isSelectingElement == false)
 }
 
@@ -1175,6 +2633,107 @@ func reloadDOMDocumentDiscardsDeleteUndoHistory() async throws {
 
 @MainActor
 @Test
+func reloadDOMDocumentCancelsQueuedDeleteUndoOperationsBeforeTheySend() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    let htmlID = try #require(session.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(2))])
+    session.dom.selectNode(htmlID)
+
+    let undoManager = UndoManager()
+    let countBeforeDelete = await backend.sentTargetMessages().count
+    let deleteTask = Task {
+        try await session.deleteSelectedDOMNode(undoManager: undoManager)
+    }
+    let removeNode = try await waitForTargetMessage(backend, method: "DOM.removeNode", after: countBeforeDelete)
+    await receiveTargetReply(
+        transport,
+        targetID: removeNode.targetIdentifier,
+        messageID: try messageID(removeNode.message),
+        result: "{}"
+    )
+    try await deleteTask.value
+    #expect(undoManager.canUndo)
+
+    let countBeforeQueuedOperations = await backend.sentTargetMessages().count
+    let reloadReplyTask = Task {
+        let getDocument = await backend.waitForTargetMessage(method: "DOM.getDocument", after: countBeforeQueuedOperations)
+        await receiveTargetReply(
+            transport,
+            targetID: getDocument.targetIdentifier,
+            messageID: try messageID(getDocument.message),
+            result: mainDocumentResult
+        )
+    }
+
+    undoManager.undo()
+    #expect(undoManager.canRedo)
+    undoManager.redo()
+
+    try await session.reloadDOMDocument()
+    try await reloadReplyTask.value
+    try await Task.sleep(for: .milliseconds(50))
+
+    let methodsAfterReload = await targetMessageMethods(backend).dropFirst(countBeforeQueuedOperations)
+    #expect(methodsAfterReload.contains("DOM.getDocument"))
+    #expect(methodsAfterReload.contains("DOM.undo") == false)
+    #expect(methodsAfterReload.contains("DOM.redo") == false)
+}
+
+@MainActor
+@Test
+func deleteUndoReloadCancellationClearsUndoHistory() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    let htmlID = try #require(session.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(2))])
+    session.dom.selectNode(htmlID)
+
+    let undoManager = UndoManager()
+    let countBeforeDelete = await backend.sentTargetMessages().count
+    let deleteTask = Task {
+        try await session.deleteSelectedDOMNode(undoManager: undoManager)
+    }
+    let removeNode = try await waitForTargetMessage(backend, method: "DOM.removeNode", after: countBeforeDelete)
+    await receiveTargetReply(
+        transport,
+        targetID: removeNode.targetIdentifier,
+        messageID: try messageID(removeNode.message),
+        result: "{}"
+    )
+    try await deleteTask.value
+    #expect(undoManager.canUndo)
+
+    let countBeforeUndo = await backend.sentTargetMessages().count
+    undoManager.undo()
+    let undo = try await waitForTargetMessage(backend, method: "DOM.undo", after: countBeforeUndo)
+    await receiveTargetReply(
+        transport,
+        targetID: undo.targetIdentifier,
+        messageID: try messageID(undo.message),
+        result: "{}"
+    )
+    _ = try await waitForTargetMessage(backend, method: "DOM.getDocument", after: countBeforeUndo)
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"DOM.documentUpdated","params":{}}"#
+    )
+
+    _ = try await waitUntil {
+        await MainActor.run {
+            undoManager.canRedo == false ? session.lastError : nil
+        }
+    }
+    #expect(undoManager.canUndo == false)
+    #expect(undoManager.canRedo == false)
+    #expect(session.lastError == InspectorSessionError(String(describing: CancellationError())))
+}
+
+@MainActor
+@Test
 func reloadDOMDocumentCancelsActiveElementPickerBeforeReplacingDocument() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
@@ -1367,7 +2926,7 @@ func detachCancelsPumpsAndClearsModelState() async throws {
 
     #expect(await backend.isDetached())
     #expect(await session.isAttached == false)
-    #expect(await session.dom.snapshot().currentPage == nil)
+    #expect(await session.dom.snapshot().currentPageTargetID == nil)
     #expect(await session.network.snapshot().orderedRequestIDs.isEmpty)
 }
 
@@ -1402,8 +2961,7 @@ func bootstrapFailureClearsSeededModelState() async throws {
     let session = await InspectorSession(
         configuration: .init(
             responseTimeout: .milliseconds(20),
-            bootstrapTimeout: .seconds(1),
-            eventApplicationTimeout: .milliseconds(25)
+            bootstrapTimeout: .seconds(1)
         )
     )
     await transport.receiveRootMessage(
@@ -1414,7 +2972,7 @@ func bootstrapFailureClearsSeededModelState() async throws {
         try await session.connect(transport: transport)
     }
 
-    #expect(await session.dom.snapshot().currentPage == nil)
+    #expect(await session.dom.snapshot().currentPageTargetID == nil)
     #expect(await session.network.snapshot().orderedRequestIDs.isEmpty)
     #expect(await session.isAttached == false)
     #expect(await session.lastError != nil)
@@ -1446,9 +3004,6 @@ func performIsRejectedUntilBootstrapAttaches() async throws {
 @MainActor
 @Test
 func attachInspectabilityPreparationRestoresOriginalValue() throws {
-    guard #available(iOS 16.4, macOS 13.3, *) else {
-        return
-    }
     let webView = WKWebView(frame: .zero)
     let initialValue = webView.isInspectable
     webView.isInspectable = false
@@ -1462,16 +3017,6 @@ func attachInspectabilityPreparationRestoresOriginalValue() throws {
 
     #expect(webView.isInspectable == false)
     webView.isInspectable = initialValue
-}
-
-@MainActor
-@Test
-func eventPumpTimeoutRemovesWaiter() async {
-    let pump = DomainEventPump()
-
-    await pump.waitUntilApplied(10, timeout: .milliseconds(1))
-
-    #expect(pump.pendingWaiterCount == 0)
 }
 
 private func connect(
@@ -1506,7 +3051,8 @@ private func testTransport(_ backend: FakeTransportBackend) -> TransportSession 
 private func completeBootstrap(
     transport: TransportSession,
     backend: FakeTransportBackend,
-    after initialSentCount: Int = 0
+    after initialSentCount: Int = 0,
+    documentResult: String = mainDocumentResult
 ) async throws -> [SentTargetMessage] {
     var sentCount = initialSentCount
     var sentMessages: [SentTargetMessage] = []
@@ -1530,7 +3076,7 @@ private func completeBootstrap(
         transport,
         targetID: documentMessage.targetIdentifier,
         messageID: try messageID(documentMessage.message),
-        result: mainDocumentResult
+        result: documentResult
     )
 
     let networkMessage = try await waitForTargetMessage(backend, method: "Network.enable", after: sentCount)
@@ -1563,10 +3109,45 @@ private func beginPicker(
     try await beginTask.value
 }
 
-private let mainDocumentResult = ##"{"root":{"nodeId":1,"nodeType":9,"nodeName":"#document","children":[{"nodeId":2,"nodeType":1,"nodeName":"HTML","localName":"html","children":[]}]}}"##
+private func hydratePageHTMLChildren(
+    session: InspectorSession,
+    transport: TransportSession,
+    backend: FakeTransportBackend
+) async throws {
+    let htmlID = try await waitForCurrentNode(
+        in: session,
+        targetID: .pageMain,
+        protocolNodeID: .init(2)
+    )
+    let sentCount = await backend.sentTargetMessages().count
+    let requestTask = Task {
+        await session.requestChildNodes(for: htmlID)
+    }
+    let request = try await waitForTargetMessage(backend, method: "DOM.requestChildNodes", after: sentCount)
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: pageHTMLChildrenSetChildNodesMessage
+    )
+    await receiveTargetReply(
+        transport,
+        targetID: request.targetIdentifier,
+        messageID: try messageID(request.message),
+        result: "{}"
+    )
+    #expect(await requestTask.value)
+}
+
+private let mainDocumentResult = ##"{"root":{"nodeId":1,"nodeType":9,"nodeName":"#document","children":[{"nodeId":2,"nodeType":1,"nodeName":"HTML","localName":"html","childNodeCount":2}]}}"##
+private let pageHTMLChildrenSetChildNodesMessage = #"{"method":"DOM.setChildNodes","params":{"parentId":2,"nodes":[{"nodeId":3,"nodeType":1,"nodeName":"HEAD","localName":"head"},{"nodeId":4,"nodeType":1,"nodeName":"BODY","localName":"body","children":[{"nodeId":5,"nodeType":1,"nodeName":"MAIN","localName":"main","attributes":["id","content"]}]}]}}"#
 private let nestedDocumentResult = ##"{"root":{"nodeId":1,"nodeType":9,"nodeName":"#document","children":[{"nodeId":2,"nodeType":1,"nodeName":"HTML","localName":"html","children":[{"nodeId":3,"nodeType":1,"nodeName":"BODY","localName":"body","children":[{"nodeId":4,"nodeType":1,"nodeName":"DIV","localName":"div"}]}]}]}}"##
-private let firstLazyFrameDocumentResult = ##"{"root":{"nodeId":101,"nodeType":9,"nodeName":"#document","children":[{"nodeId":102,"nodeType":1,"nodeName":"HTML","localName":"html","children":[{"nodeId":103,"nodeType":1,"nodeName":"BODY","localName":"body","children":[{"nodeId":104,"nodeType":1,"nodeName":"CANVAS","localName":"canvas"}]}]}]}}"##
-private let secondLazyFrameDocumentResult = ##"{"root":{"nodeId":201,"nodeType":9,"nodeName":"#document","children":[{"nodeId":202,"nodeType":1,"nodeName":"HTML","localName":"html","children":[{"nodeId":203,"nodeType":1,"nodeName":"BODY","localName":"body","children":[{"nodeId":204,"nodeType":1,"nodeName":"VIDEO","localName":"video"}]}]}]}}"##
+private let manualReloadDocumentResult = ##"{"root":{"nodeId":1,"nodeType":9,"nodeName":"#document","children":[{"nodeId":2,"nodeType":1,"nodeName":"HTML","localName":"html","children":[{"nodeId":3,"nodeType":1,"nodeName":"BODY","localName":"body","children":[{"nodeId":40,"nodeType":1,"nodeName":"MAIN","localName":"main"}]}]}]}}"##
+private let staleReloadDocumentResult = ##"{"root":{"nodeId":1,"nodeType":9,"nodeName":"#document","children":[{"nodeId":2,"nodeType":1,"nodeName":"HTML","localName":"html","children":[{"nodeId":3,"nodeType":1,"nodeName":"BODY","localName":"body","children":[{"nodeId":50,"nodeType":1,"nodeName":"SECTION","localName":"section"}]}]}]}}"##
+private let oldDocumentWithHeadNodeFourResult = ##"{"root":{"nodeId":1,"nodeType":9,"nodeName":"#document","children":[{"nodeId":2,"nodeType":1,"nodeName":"HTML","localName":"html","children":[{"nodeId":4,"nodeType":1,"nodeName":"HEAD","localName":"head","childNodeCount":1},{"nodeId":5,"nodeType":1,"nodeName":"BODY","localName":"body"}]}]}}"##
+private let newDocumentWithBodyNodeFourResult = ##"{"root":{"nodeId":1,"nodeType":9,"nodeName":"#document","children":[{"nodeId":2,"nodeType":1,"nodeName":"HTML","localName":"html","children":[{"nodeId":3,"nodeType":1,"nodeName":"HEAD","localName":"head"},{"nodeId":4,"nodeType":1,"nodeName":"BODY","localName":"body"}]}]}}"##
+private let newDocumentWithHeadChildCountResult = ##"{"root":{"nodeId":1,"nodeType":9,"nodeName":"#document","children":[{"nodeId":2,"nodeType":1,"nodeName":"HTML","localName":"html","children":[{"nodeId":3,"nodeType":1,"nodeName":"HEAD","localName":"head","childNodeCount":2},{"nodeId":4,"nodeType":1,"nodeName":"BODY","localName":"body"}]}]}}"##
+private let firstLazyFrameDocumentResult = ##"{"root":{"nodeId":101,"nodeType":9,"nodeName":"#document","documentURL":"https://frame.example/ad","baseURL":"https://frame.example/ad","children":[{"nodeId":102,"nodeType":1,"nodeName":"HTML","localName":"html","children":[{"nodeId":103,"nodeType":1,"nodeName":"BODY","localName":"body","children":[{"nodeId":104,"nodeType":1,"nodeName":"CANVAS","localName":"canvas"}]}]}]}}"##
+private let secondLazyFrameDocumentResult = ##"{"root":{"nodeId":201,"nodeType":9,"nodeName":"#document","documentURL":"https://frame.example/ad","baseURL":"https://frame.example/ad","children":[{"nodeId":202,"nodeType":1,"nodeName":"HTML","localName":"html","children":[{"nodeId":203,"nodeType":1,"nodeName":"BODY","localName":"body","children":[{"nodeId":204,"nodeType":1,"nodeName":"VIDEO","localName":"video"}]}]}]}}"##
 
 private func targetMessageMethods(_ backend: FakeTransportBackend) async -> [String?] {
     await backend.sentTargetMessages().map { try? messageMethod($0.message) }
@@ -1577,18 +3158,27 @@ private func waitForTargetMessage(
     method: String,
     after count: Int = 0
 ) async throws -> SentTargetMessage {
-    await backend.waitForTargetMessage(method: method, after: count)
+    try await waitUntil(timeoutError: TransportError.replyTimeout(method: method, targetID: nil)) {
+        let messages = await backend.sentTargetMessages()
+        return messages.dropFirst(count).first { sent in
+            (try? messageMethod(sent.message)) == method
+        }
+    }
 }
 
-private func waitUntil<Value: Sendable>(_ body: @escaping @Sendable () async -> Value?) async throws -> Value {
-    let deadline = ContinuousClock.now + .seconds(1)
+private func waitUntil<Value: Sendable>(
+    timeout: Duration = .seconds(1),
+    timeoutError: any Error = TransportError.replyTimeout(method: "test wait", targetID: nil),
+    _ body: @escaping @Sendable () async -> Value?
+) async throws -> Value {
+    let deadline = ContinuousClock.now + timeout
     while ContinuousClock.now < deadline {
         if let value = await body() {
             return value
         }
         try await Task.sleep(for: .milliseconds(5))
     }
-    throw TransportError.replyTimeout(method: "test wait", targetID: nil)
+    throw timeoutError
 }
 
 private func waitForCurrentNode(
@@ -1716,16 +3306,15 @@ private extension ProtocolTargetIdentifier {
 private extension InspectorSessionConfiguration {
     static let test = InspectorSessionConfiguration(
         responseTimeout: .seconds(1),
-        bootstrapTimeout: .seconds(1),
-        eventApplicationTimeout: .milliseconds(25)
+        bootstrapTimeout: .seconds(1)
     )
 }
 
 private extension DOMSessionSnapshot {
     var currentPageDocumentID: DOMDocumentIdentifier? {
-        guard let currentPage else {
+        guard let currentPageTargetID else {
             return nil
         }
-        return targetsByID[currentPage.mainTargetID]?.currentDocumentID
+        return targetsByID[currentPageTargetID]?.currentDocumentID
     }
 }

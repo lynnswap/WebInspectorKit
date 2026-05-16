@@ -22,9 +22,40 @@ package struct DOMTreeRow: Equatable, Sendable {
 
 package struct DOMTreeProjection: Equatable, Sendable {
     package var rows: [DOMTreeRow]
+    package var rootNodeIDs: [DOMNodeIdentifier]
+    package var childrenByNodeID: [DOMNodeIdentifier: [DOMNodeIdentifier]]
+    package var parentByNodeID: [DOMNodeIdentifier: DOMNodeIdentifier]
 
-    package init(rows: [DOMTreeRow]) {
+    package init(
+        rows: [DOMTreeRow] = [],
+        rootNodeIDs: [DOMNodeIdentifier] = [],
+        childrenByNodeID: [DOMNodeIdentifier: [DOMNodeIdentifier]] = [:],
+        parentByNodeID: [DOMNodeIdentifier: DOMNodeIdentifier] = [:]
+    ) {
         self.rows = rows
+        self.rootNodeIDs = rootNodeIDs
+        self.childrenByNodeID = childrenByNodeID
+        self.parentByNodeID = parentByNodeID
+    }
+
+    package func children(of nodeID: DOMNodeIdentifier) -> [DOMNodeIdentifier] {
+        childrenByNodeID[nodeID] ?? []
+    }
+
+    package func parent(of nodeID: DOMNodeIdentifier) -> DOMNodeIdentifier? {
+        parentByNodeID[nodeID]
+    }
+
+    package func ancestorNodeIDs(of nodeID: DOMNodeIdentifier) -> [DOMNodeIdentifier] {
+        var ancestors: [DOMNodeIdentifier] = []
+        var visited = Set<DOMNodeIdentifier>()
+        var current = parentByNodeID[nodeID]
+        while let ancestorID = current,
+              visited.insert(ancestorID).inserted {
+            ancestors.append(ancestorID)
+            current = parentByNodeID[ancestorID]
+        }
+        return ancestors
     }
 }
 
@@ -33,32 +64,45 @@ package struct ProtocolTargetSnapshot: Equatable, Sendable {
     package var kind: ProtocolTargetKind
     package var frameID: DOMFrameIdentifier?
     package var parentFrameID: DOMFrameIdentifier?
+    package var capabilities: ProtocolTargetCapabilities
     package var isProvisional: Bool
     package var isPaused: Bool
     package var currentDocumentID: DOMDocumentIdentifier?
-}
-
-package struct DOMPageSnapshot: Equatable, Sendable {
-    package var id: ProtocolTargetIdentifier
-    package var mainTargetID: ProtocolTargetIdentifier
-    package var mainFrameID: DOMFrameIdentifier
-    package var navigationGeneration: UInt64
 }
 
 package struct DOMFrameSnapshot: Equatable, Sendable {
     package var id: DOMFrameIdentifier
     package var parentFrameID: DOMFrameIdentifier?
     package var childFrameIDs: Set<DOMFrameIdentifier>
-    package var ownerNodeID: DOMNodeIdentifier?
     package var targetID: ProtocolTargetIdentifier?
     package var currentDocumentID: DOMDocumentIdentifier?
+}
+
+package enum DOMDocumentLifecycle: Equatable, Sendable {
+    case loading
+    case loaded
+    case invalidated
 }
 
 package struct DOMDocumentSnapshot: Equatable, Sendable {
     package var id: DOMDocumentIdentifier
     package var targetID: ProtocolTargetIdentifier
-    package var generation: DOMDocumentGeneration
+    package var localDocumentLifetimeID: DOMDocumentLifetimeIdentifier
+    package var lifecycle: DOMDocumentLifecycle
     package var rootNodeID: DOMNodeIdentifier
+}
+
+package enum FrameDocumentProjectionState: Equatable, Sendable {
+    case pending
+    case attached
+    case ambiguous
+}
+
+package struct FrameDocumentProjectionSnapshot: Equatable, Sendable {
+    package var ownerNodeID: DOMNodeIdentifier?
+    package var frameTargetID: ProtocolTargetIdentifier
+    package var frameDocumentID: DOMDocumentIdentifier
+    package var state: FrameDocumentProjectionState
 }
 
 package enum DOMRegularChildrenSnapshot: Equatable, Sendable {
@@ -91,7 +135,9 @@ package struct DOMNodeSnapshot: Equatable, Sendable {
     package var nodeName: String
     package var localName: String
     package var nodeValue: String
-    package var frameID: DOMFrameIdentifier?
+    package var ownerFrameID: DOMFrameIdentifier?
+    package var documentURL: String?
+    package var baseURL: String?
     package var attributes: [DOMAttribute]
     package var parentID: DOMNodeIdentifier?
     package var previousSiblingID: DOMNodeIdentifier?
@@ -117,6 +163,21 @@ package struct SelectionRequestSnapshot: Equatable, Sendable {
     package var documentID: DOMDocumentIdentifier
 }
 
+package struct DOMTargetStateSnapshot: Equatable, Sendable {
+    package var targetID: ProtocolTargetIdentifier
+    package var currentDocumentID: DOMDocumentIdentifier?
+    package var transactionIDs: [DOMTransactionIdentifier]
+}
+
+package struct DOMTransactionSnapshot: Equatable, Sendable {
+    package var id: DOMTransactionIdentifier
+    package var targetID: ProtocolTargetIdentifier
+    package var documentID: DOMDocumentIdentifier
+    package var kind: DOMTransactionKind
+    package var issuedSequence: UInt64
+    package var requestedProtocolNodeID: DOMProtocolNodeID?
+}
+
 package struct DOMSelectionSnapshot: Equatable, Sendable {
     package var selectedNodeID: DOMNodeIdentifier?
     package var pendingRequest: SelectionRequestSnapshot?
@@ -124,12 +185,28 @@ package struct DOMSelectionSnapshot: Equatable, Sendable {
 }
 
 package struct DOMSessionSnapshot: Equatable, Sendable {
-    package var currentPage: DOMPageSnapshot?
+    package var currentPageTargetID: ProtocolTargetIdentifier?
+    package var mainFrameID: DOMFrameIdentifier?
+    package var treeRevision: UInt64
+    package var selectionRevision: UInt64
     package var targetsByID: [ProtocolTargetIdentifier: ProtocolTargetSnapshot]
+    package var targetStatesByID: [ProtocolTargetIdentifier: DOMTargetStateSnapshot]
     package var framesByID: [DOMFrameIdentifier: DOMFrameSnapshot]
     package var documentsByID: [DOMDocumentIdentifier: DOMDocumentSnapshot]
     package var nodesByID: [DOMNodeIdentifier: DOMNodeSnapshot]
+    package var frameDocumentProjections: [ProtocolTargetIdentifier: FrameDocumentProjectionSnapshot]
+    package var transactions: [DOMTransactionSnapshot]
     package var currentNodeIDByKey: [DOMNodeCurrentKey: DOMNodeIdentifier]
     package var executionContextsByID: [ExecutionContextID: ExecutionContextRecord]
     package var selection: DOMSelectionSnapshot
+}
+
+package extension DOMSessionSnapshot {
+    var currentPageDocumentID: DOMDocumentIdentifier? {
+        guard let currentPageTargetID else {
+            return nil
+        }
+        return targetStatesByID[currentPageTargetID]?.currentDocumentID
+            ?? targetsByID[currentPageTargetID]?.currentDocumentID
+    }
 }

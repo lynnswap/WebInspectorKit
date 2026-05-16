@@ -21,10 +21,12 @@ package actor TransportSession {
     private var targetReplyKeysByRootWrapperID: [UInt64: TargetReplyKey]
     private var mainPageTargetWaiters: [UInt64: ReplyPromise<TransportMainPageTarget>]
     private var targetsByID: [ProtocolTargetIdentifier: ProtocolTargetRecord]
+    private var provisionalTargetMessagesByTargetID: [ProtocolTargetIdentifier: [ParsedProtocolMessage]]
     private var frameTargetIDsByFrameID: [DOMFrameIdentifier: ProtocolTargetIdentifier]
     private var executionContextsByID: [ExecutionContextID: ExecutionContextRecord]
     private var currentMainPageTargetID: ProtocolTargetIdentifier?
     private var subscribers: [ProtocolDomain: [UInt64: AsyncStream<ProtocolEventEnvelope>.Continuation]]
+    private var orderedSubscribers: [UInt64: AsyncStream<ProtocolEventEnvelope>.Continuation]
     private var inboundMessages: [String]
     private var isDrainingInboundMessages: Bool
     private var closed: Bool
@@ -42,9 +44,12 @@ package actor TransportSession {
         targetReplyKeysByRootWrapperID = [:]
         mainPageTargetWaiters = [:]
         targetsByID = [:]
+        provisionalTargetMessagesByTargetID = [:]
         frameTargetIDsByFrameID = [:]
         executionContextsByID = [:]
+        currentMainPageTargetID = nil
         subscribers = [:]
+        orderedSubscribers = [:]
         inboundMessages = []
         isDrainingInboundMessages = false
         closed = false
@@ -58,6 +63,19 @@ package actor TransportSession {
         pair.continuation.onTermination = { [weak self] _ in
             Task {
                 await self?.removeSubscriber(subscriberID, domain: domain)
+            }
+        }
+        return pair.stream
+    }
+
+    package func orderedEvents() -> AsyncStream<ProtocolEventEnvelope> {
+        let pair = AsyncStream<ProtocolEventEnvelope>.makeStream(bufferingPolicy: .unbounded)
+        nextSubscriberID &+= 1
+        let subscriberID = nextSubscriberID
+        orderedSubscribers[subscriberID] = pair.continuation
+        pair.continuation.onTermination = { [weak self] _ in
+            Task {
+                await self?.removeOrderedSubscriber(subscriberID)
             }
         }
         return pair.stream
@@ -114,12 +132,17 @@ package actor TransportSession {
         targetReplies.removeAll()
         targetReplyKeysByRootWrapperID.removeAll()
         mainPageTargetWaiters.removeAll()
+        provisionalTargetMessagesByTargetID.removeAll()
         for continuations in subscribers.values {
             for continuation in continuations.values {
                 continuation.finish()
             }
         }
+        for continuation in orderedSubscribers.values {
+            continuation.finish()
+        }
         subscribers.removeAll()
+        orderedSubscribers.removeAll()
         await backend.detach()
     }
 
@@ -364,6 +387,7 @@ package actor TransportSession {
 
         await updateRegistryFromRootEvent(method: method, paramsData: parsed.paramsData)
         await emit(domain: ProtocolDomain(method: method), method: method, targetID: targetIDForRootEvent(method: method, paramsData: parsed.paramsData), paramsData: parsed.paramsData)
+        await dispatchCommittedProvisionalTargetMessagesIfNeeded(method: method, paramsData: parsed.paramsData)
     }
 
     private func handleTargetMessage(_ parsed: ParsedProtocolMessage, targetID: ProtocolTargetIdentifier) async {
@@ -375,7 +399,21 @@ package actor TransportSession {
             }
         }
 
+        if targetsByID[targetID]?.isProvisional == true {
+            provisionalTargetMessagesByTargetID[targetID, default: []].append(parsed)
+            return
+        }
+
         guard let method = parsed.method else {
+            return
+        }
+
+        if method == "Target.dispatchMessageFromTarget" {
+            guard let dispatch = try? TransportMessageParser.decode(TargetDispatchParams.self, from: parsed.paramsData),
+                  let targetMessage = try? await TransportMessageParser.parse(dispatch.message) else {
+                return
+            }
+            await handleTargetMessage(targetMessage, targetID: dispatch.targetId)
             return
         }
 
@@ -469,14 +507,23 @@ package actor TransportSession {
     }
 
     private func record(for targetInfo: TargetInfoPayload) -> ProtocolTargetRecord {
-        ProtocolTargetRecord(
+        let kind = targetKind(for: targetInfo)
+        return ProtocolTargetRecord(
             id: targetInfo.targetId,
-            kind: targetKind(for: targetInfo),
+            kind: kind,
             frameID: targetInfo.frameId,
             parentFrameID: targetInfo.parentFrameId,
+            capabilities: capabilities(for: targetInfo, kind: kind),
             isProvisional: targetInfo.isProvisional ?? false,
             isPaused: targetInfo.isPaused ?? false
         )
+    }
+
+    private func capabilities(for targetInfo: TargetInfoPayload, kind: ProtocolTargetKind) -> ProtocolTargetCapabilities {
+        if let domains = targetInfo.domains {
+            return ProtocolTargetCapabilities(domainNames: domains)
+        }
+        return ProtocolTargetCapabilities.protocolDefault(for: kind)
     }
 
     private func targetKind(for targetInfo: TargetInfoPayload) -> ProtocolTargetKind {
@@ -518,6 +565,7 @@ package actor TransportSession {
 
     private func applyTargetDestroyed(_ targetID: ProtocolTargetIdentifier) async {
         targetsByID.removeValue(forKey: targetID)
+        provisionalTargetMessagesByTargetID.removeValue(forKey: targetID)
         frameTargetIDsByFrameID = frameTargetIDsByFrameID.filter { $0.value != targetID }
         executionContextsByID = executionContextsByID.filter { $0.value.targetID != targetID }
         let pendingReplies = targetReplies.keys
@@ -533,6 +581,9 @@ package actor TransportSession {
 
     private func applyTargetCommitted(oldTargetID: ProtocolTargetIdentifier?, newTargetID: ProtocolTargetIdentifier) {
         let committedOldTargetID = oldTargetID ?? inferredOldTargetIDForOldlessCommit(newTargetID: newTargetID)
+        if let committedOldTargetID {
+            moveBufferedProvisionalTargetMessages(from: committedOldTargetID, to: newTargetID)
+        }
         if let oldTargetID = committedOldTargetID,
            oldTargetID == currentMainPageTargetID,
            let existingNewRecord = targetsByID[newTargetID],
@@ -586,9 +637,41 @@ package actor TransportSession {
         }
     }
 
+    private func moveBufferedProvisionalTargetMessages(
+        from oldTargetID: ProtocolTargetIdentifier,
+        to newTargetID: ProtocolTargetIdentifier
+    ) {
+        guard oldTargetID != newTargetID,
+              let messages = provisionalTargetMessagesByTargetID.removeValue(forKey: oldTargetID),
+              messages.isEmpty == false else {
+            return
+        }
+        provisionalTargetMessagesByTargetID[newTargetID, default: []].append(contentsOf: messages)
+    }
+
+    private func dispatchCommittedProvisionalTargetMessagesIfNeeded(method: String, paramsData: Data) async {
+        guard method == "Target.didCommitProvisionalTarget",
+              let params = try? TransportMessageParser.decode(TargetCommittedParams.self, from: paramsData),
+              let messages = provisionalTargetMessagesByTargetID.removeValue(forKey: params.newTargetId) else {
+            return
+        }
+
+        for message in messages {
+            await handleTargetMessage(message, targetID: params.newTargetId)
+        }
+    }
+
     private func inferredOldTargetIDForOldlessCommit(
         newTargetID: ProtocolTargetIdentifier
     ) -> ProtocolTargetIdentifier? {
+        if let newRecord = targetsByID[newTargetID],
+           newRecord.isProvisional,
+           newRecord.isTopLevelPage,
+           let currentMainPageTargetID,
+           currentMainPageTargetID != newTargetID {
+            return currentMainPageTargetID
+        }
+
         guard targetsByID[newTargetID] == nil else {
             return nil
         }
@@ -612,6 +695,8 @@ package actor TransportSession {
                 return frameTargetIDsByFrameID[frameID] ?? currentMainPageTargetID
             }
             return currentMainPageTargetID
+        case "DOM.documentUpdated":
+            return nil
         default:
             switch ProtocolDomain(method: method) {
             case .dom, .runtime, .network, .page, .storage:
@@ -642,10 +727,14 @@ package actor TransportSession {
             domain: domain,
             method: method,
             targetID: targetID,
+            receivedDomainSequences: lastSequenceByDomain,
             paramsData: paramsData
         )
         let continuations = subscribers[domain].map { Array($0.values) } ?? []
         for continuation in continuations {
+            continuation.yield(envelope)
+        }
+        for continuation in orderedSubscribers.values {
             continuation.yield(envelope)
         }
         await notifyMainPageTargetWaitersIfNeeded(receivedSequence: nextSequence)
@@ -677,6 +766,10 @@ package actor TransportSession {
         if subscribers[domain]?.isEmpty == true {
             subscribers.removeValue(forKey: domain)
         }
+    }
+
+    private func removeOrderedSubscriber(_ subscriberID: UInt64) {
+        orderedSubscribers.removeValue(forKey: subscriberID)
     }
 
     private func removePendingReply(_ key: PendingKey) {
@@ -748,6 +841,7 @@ private struct TargetInfoPayload: Decodable {
     var type: String
     var frameId: DOMFrameIdentifier?
     var parentFrameId: DOMFrameIdentifier?
+    var domains: [String]?
     var isProvisional: Bool?
     var isPaused: Bool?
 

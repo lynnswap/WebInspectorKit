@@ -187,6 +187,7 @@ package enum NetworkTransportAdapter {
         }
         return try JSONSerialization.data(withJSONObject: object, options: [])
     }
+
 }
 
 private struct ResponseBodyResult: Decodable {

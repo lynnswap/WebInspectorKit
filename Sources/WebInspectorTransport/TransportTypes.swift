@@ -127,6 +127,7 @@ package struct ProtocolEventEnvelope: Equatable, Sendable {
     package var domain: ProtocolDomain
     package var method: String
     package var targetID: ProtocolTargetIdentifier?
+    package var receivedDomainSequences: [ProtocolDomain: UInt64]
     package var paramsData: Data
 
     package init(
@@ -134,13 +135,19 @@ package struct ProtocolEventEnvelope: Equatable, Sendable {
         domain: ProtocolDomain,
         method: String,
         targetID: ProtocolTargetIdentifier?,
+        receivedDomainSequences: [ProtocolDomain: UInt64] = [:],
         paramsData: Data
     ) {
         self.sequence = sequence
         self.domain = domain
         self.method = method
         self.targetID = targetID
+        self.receivedDomainSequences = receivedDomainSequences
         self.paramsData = paramsData
+    }
+
+    package func receivedSequence(for domain: ProtocolDomain) -> UInt64 {
+        receivedDomainSequences[domain] ?? 0
     }
 }
 

@@ -10,7 +10,7 @@ package struct DOMProtocolNodeID: RawRepresentable, Hashable, Codable, Sendable 
     }
 }
 
-package struct DOMDocumentGeneration: RawRepresentable, Hashable, Comparable, Codable, Sendable {
+package struct DOMDocumentLifetimeIdentifier: RawRepresentable, Hashable, Comparable, Codable, Sendable {
     package let rawValue: UInt64
 
     package init(_ rawValue: UInt64) {
@@ -28,11 +28,17 @@ package struct DOMDocumentGeneration: RawRepresentable, Hashable, Comparable, Co
 
 package struct DOMDocumentIdentifier: Hashable, Sendable {
     package var targetID: ProtocolTargetIdentifier
-    package var generation: DOMDocumentGeneration
+    package var localDocumentLifetimeID: DOMDocumentLifetimeIdentifier
 
-    package init(targetID: ProtocolTargetIdentifier, generation: DOMDocumentGeneration) {
+    /// Local handle used for snapshots and node identity. This is not a
+    /// protocol identity and must not be used for target/frame discovery.
+    package init(targetID: ProtocolTargetIdentifier, localDocumentLifetimeID: DOMDocumentLifetimeIdentifier) {
         self.targetID = targetID
-        self.generation = generation
+        self.localDocumentLifetimeID = localDocumentLifetimeID
+    }
+
+    package var generation: DOMDocumentLifetimeIdentifier {
+        localDocumentLifetimeID
     }
 }
 
@@ -53,6 +59,41 @@ package struct DOMNodeCurrentKey: Hashable, Sendable {
     package init(targetID: ProtocolTargetIdentifier, nodeID: DOMProtocolNodeID) {
         self.targetID = targetID
         self.nodeID = nodeID
+    }
+}
+
+package struct DOMTransactionIdentifier: RawRepresentable, Hashable, Codable, Sendable {
+    package let rawValue: UInt64
+
+    package init(_ rawValue: UInt64) {
+        self.rawValue = rawValue
+    }
+
+    package init(rawValue: UInt64) {
+        self.rawValue = rawValue
+    }
+}
+
+package enum DOMTransactionKind: Equatable, Sendable {
+    case requestChildNodes(parentRawNodeID: DOMProtocolNodeID)
+    case requestNode(selectionRequestID: SelectionRequestIdentifier, objectID: String)
+    case ownerHydration(frameTargetID: ProtocolTargetIdentifier)
+}
+
+package enum DOMRequestNodeResolution: Equatable, Sendable {
+    case resolved(DOMNodeIdentifier)
+    case pending(DOMNodeCurrentKey)
+    case failed(SelectionResolutionFailure)
+
+    package func get() throws -> DOMNodeIdentifier {
+        switch self {
+        case let .resolved(nodeID):
+            return nodeID
+        case let .pending(key):
+            throw SelectionResolutionFailure.unresolvedNode(key)
+        case let .failed(failure):
+            throw failure
+        }
     }
 }
 
@@ -92,7 +133,9 @@ package struct DOMNodePayload: Equatable, Sendable {
     package var nodeName: String
     package var localName: String
     package var nodeValue: String
-    package var frameID: DOMFrameIdentifier?
+    package var ownerFrameID: DOMFrameIdentifier?
+    package var documentURL: String?
+    package var baseURL: String?
     package var attributes: [DOMAttribute]
     package var regularChildren: DOMRegularChildrenPayload
     package var contentDocument: [DOMNodePayload]
@@ -110,7 +153,9 @@ package struct DOMNodePayload: Equatable, Sendable {
         nodeName: String,
         localName: String = "",
         nodeValue: String = "",
-        frameID: DOMFrameIdentifier? = nil,
+        ownerFrameID: DOMFrameIdentifier? = nil,
+        documentURL: String? = nil,
+        baseURL: String? = nil,
         attributes: [DOMAttribute] = [],
         regularChildren: DOMRegularChildrenPayload = .unrequested(count: 0),
         contentDocument: DOMNodePayload? = nil,
@@ -127,7 +172,9 @@ package struct DOMNodePayload: Equatable, Sendable {
         self.nodeName = nodeName
         self.localName = localName
         self.nodeValue = nodeValue
-        self.frameID = frameID
+        self.ownerFrameID = ownerFrameID
+        self.documentURL = documentURL
+        self.baseURL = baseURL
         self.attributes = attributes
         self.regularChildren = regularChildren
         self.contentDocument = contentDocument.map { [$0] } ?? []
