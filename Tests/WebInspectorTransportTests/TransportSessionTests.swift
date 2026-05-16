@@ -53,7 +53,7 @@ func targetCommandUsesNestedReplyKey() async throws {
 }
 
 @Test
-func targetScopedCompatibilityCommandsResolveWithoutBackendSend() async throws {
+func domEnableIsTransportLocalWhileCSSEnableRoutesToTargetBackend() async throws {
     let backend = FakeTransportBackend()
     let session = TransportSession(backend: backend, responseTimeout: .seconds(1))
     await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#)
@@ -61,15 +61,29 @@ func targetScopedCompatibilityCommandsResolveWithoutBackendSend() async throws {
     let domResult = try await session.send(
         ProtocolCommand(domain: .dom, method: "DOM.enable", routing: .target(.init("page-main")))
     )
-    let cssResult = try await session.send(
-        ProtocolCommand(domain: .css, method: "CSS.enable", routing: .octopus(pageTarget: .init("page-main")))
+    #expect(await backend.sentTargetMessages().isEmpty)
+
+    let cssTask = Task {
+        try await session.send(
+            ProtocolCommand(domain: .css, method: "CSS.enable", routing: .octopus(pageTarget: .init("page-main")))
+        )
+    }
+    let cssSent = try await waitUntil {
+        let messages = await backend.sentTargetMessages()
+        return messages.last
+    }
+    await receiveTargetDispatch(
+        session,
+        targetID: .init("page-main"),
+        message: #"{"id":\#(try messageID(cssSent.message)),"result":{}}"#
     )
+    let cssResult = try await cssTask.value
 
     #expect(domResult.targetID == ProtocolTargetIdentifier("page-main"))
     #expect(cssResult.targetID == ProtocolTargetIdentifier("page-main"))
     #expect(String(data: domResult.resultData, encoding: .utf8) == "{}")
     #expect(String(data: cssResult.resultData, encoding: .utf8) == "{}")
-    #expect(await backend.sentMessages().isEmpty)
+    #expect(cssSent.targetIdentifier == ProtocolTargetIdentifier("page-main"))
 }
 
 @Test
@@ -360,7 +374,7 @@ func targetCommitRetargetsPendingRepliesToCommittedTarget() async throws {
 }
 
 @Test
-func provisionalTargetReplyResolvesBeforeBufferedEvents() async throws {
+func provisionalTargetReplyIsBufferedUntilCommit() async throws {
     let backend = FakeTransportBackend()
     let session = TransportSession(backend: backend, responseTimeout: .seconds(1))
     await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-provisional","type":"frame","frameId":"ad-frame","isProvisional":true}}}"#)
@@ -378,9 +392,46 @@ func provisionalTargetReplyResolvesBeforeBufferedEvents() async throws {
         targetID: .init("frame-provisional"),
         message: ##"{"id":\##(innerID),"result":{"root":{"nodeId":1,"nodeType":9,"nodeName":"#document"}}}"##
     )
+    #expect(await session.snapshot().pendingTargetReplyKeys == [
+        TargetReplyKey(targetID: .init("frame-provisional"), commandID: innerID),
+    ])
+
+    await session.receiveRootMessage(#"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"frame-provisional","newTargetId":"frame-committed"}}"#)
     let result = try await sendTask.value
 
-    #expect(result.targetID == ProtocolTargetIdentifier("frame-provisional"))
+    #expect(result.targetID == ProtocolTargetIdentifier("frame-committed"))
+    #expect(await session.snapshot().pendingTargetReplyKeys.isEmpty)
+}
+
+@Test
+func bufferedProvisionalTargetReplySurvivesResponseTimeoutBeforeCommit() async throws {
+    let backend = FakeTransportBackend()
+    let session = TransportSession(backend: backend, responseTimeout: .milliseconds(20))
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-provisional","type":"frame","frameId":"ad-frame","isProvisional":true}}}"#)
+
+    let sendTask = Task {
+        try await session.send(
+            ProtocolCommand(domain: .dom, method: "DOM.getDocument", routing: .target(.init("frame-provisional")))
+        )
+    }
+    let sent = try await waitForTargetMessage(backend)
+    let innerID = try messageID(sent.message)
+
+    await receiveTargetDispatch(
+        session,
+        targetID: .init("frame-provisional"),
+        message: ##"{"id":\##(innerID),"result":{"root":{"nodeId":1,"nodeType":9,"nodeName":"#document"}}}"##
+    )
+    try await Task.sleep(for: .milliseconds(50))
+
+    #expect(await session.snapshot().pendingTargetReplyKeys == [
+        TargetReplyKey(targetID: .init("frame-provisional"), commandID: innerID),
+    ])
+
+    await session.receiveRootMessage(#"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"frame-provisional","newTargetId":"frame-committed"}}"#)
+    let result = try await sendTask.value
+
+    #expect(result.targetID == ProtocolTargetIdentifier("frame-committed"))
     #expect(await session.snapshot().pendingTargetReplyKeys.isEmpty)
 }
 
@@ -1209,7 +1260,7 @@ func domAdapterSubframeCommitDoesNotConsumeCurrentMainPage() async throws {
 }
 
 @Test
-func networkCommandIntentRoutesThroughCurrentPageOctopusTarget() throws {
+func networkCommandIntentRoutesThroughRequestTarget() throws {
     let requestKey = NetworkRequestIdentifierKey(
         targetID: .init("frame-ad"),
         requestID: .init("request-1")
@@ -1222,9 +1273,9 @@ func networkCommandIntentRoutesThroughCurrentPageOctopusTarget() throws {
     )
 
     #expect(bodyCommand.method == "Network.getResponseBody")
-    #expect(bodyCommand.routing == .octopus(pageTarget: nil))
+    #expect(bodyCommand.routing == .target(.init("frame-ad")))
     #expect(certificateCommand.method == "Network.getSerializedCertificate")
-    #expect(certificateCommand.routing == .octopus(pageTarget: nil))
+    #expect(certificateCommand.routing == .target(.init("frame-ad")))
     #expect(String(data: bodyCommand.parametersData, encoding: .utf8)?.contains(#""requestId":"request-1""#) == true)
 }
 

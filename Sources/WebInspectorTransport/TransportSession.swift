@@ -7,6 +7,7 @@ package actor TransportSession {
         var method: String
         var targetID: ProtocolTargetIdentifier?
         var promise: ReplyPromise<ProtocolCommandResult>
+        var hasBufferedProvisionalResponse: Bool
     }
 
     private let backend: any TransportBackend
@@ -93,7 +94,7 @@ package actor TransportSession {
             guard targetsByID[targetID] != nil else {
                 throw TransportError.missingTarget(targetID)
             }
-            if let result = compatibilityResult(for: command, targetID: targetID) {
+            if let result = transportLocalResult(for: command, targetID: targetID) {
                 return result
             }
             return try await sendTarget(command, targetID: targetID)
@@ -102,7 +103,7 @@ package actor TransportSession {
             guard targetsByID[resolvedTarget] != nil else {
                 throw TransportError.missingTarget(resolvedTarget)
             }
-            if let result = compatibilityResult(for: command, targetID: resolvedTarget) {
+            if let result = transportLocalResult(for: command, targetID: resolvedTarget) {
                 return result
             }
             return try await sendTarget(command, targetID: resolvedTarget)
@@ -215,7 +216,8 @@ package actor TransportSession {
             domain: command.domain,
             method: command.method,
             targetID: nil,
-            promise: promise
+            promise: promise,
+            hasBufferedProvisionalResponse: false
         )
         do {
             let message = try TransportMessageParser.makeCommandString(
@@ -249,7 +251,8 @@ package actor TransportSession {
             domain: command.domain,
             method: command.method,
             targetID: targetID,
-            promise: promise
+            promise: promise,
+            hasBufferedProvisionalResponse: false
         )
         targetReplyKeysByRootWrapperID[outerCommandID] = key
         do {
@@ -282,23 +285,21 @@ package actor TransportSession {
         case target(TargetReplyKey)
     }
 
-    private func compatibilityResult(
+    private func transportLocalResult(
         for command: ProtocolCommand,
         targetID: ProtocolTargetIdentifier
     ) -> ProtocolCommandResult? {
-        switch command.method {
-        case "DOM.enable", "CSS.enable":
-            ProtocolCommandResult(
-                domain: command.domain,
-                method: command.method,
-                targetID: targetID,
-                receivedSequence: nextSequence,
-                receivedDomainSequences: lastSequenceByDomain,
-                resultData: Data("{}".utf8)
-            )
-        default:
-            nil
+        guard command.method == "DOM.enable" else {
+            return nil
         }
+        return ProtocolCommandResult(
+            domain: command.domain,
+            method: command.method,
+            targetID: targetID,
+            receivedSequence: nextSequence,
+            receivedDomainSequences: lastSequenceByDomain,
+            resultData: Data("{}".utf8)
+        )
     }
 
     private func drainInboundMessages() async {
@@ -333,7 +334,7 @@ package actor TransportSession {
                 } catch {
                     return
                 }
-                await self.failPendingReply(
+                await self.failPendingReplyFromTimeout(
                     key,
                     error: TransportError.replyTimeout(method: method, targetID: targetID)
                 )
@@ -393,17 +394,18 @@ package actor TransportSession {
     }
 
     private func handleTargetMessage(_ parsed: ParsedProtocolMessage, targetID: ProtocolTargetIdentifier) async {
+        if targetsByID[targetID]?.isProvisional == true {
+            markTargetReplyAsBufferedIfNeeded(parsed, targetID: targetID)
+            provisionalTargetMessagesByTargetID[targetID, default: []].append(parsed)
+            return
+        }
+
         if let id = parsed.id {
             let key = TargetReplyKey(targetID: targetID, commandID: id)
             if let pending = removeTargetReply(for: key) {
                 await resolve(pending, parsed: parsed)
                 return
             }
-        }
-
-        if targetsByID[targetID]?.isProvisional == true {
-            provisionalTargetMessagesByTargetID[targetID, default: []].append(parsed)
-            return
         }
 
         guard let method = parsed.method else {
@@ -795,12 +797,55 @@ package actor TransportSession {
         await pending?.promise.fulfill(.failure(error))
     }
 
+    private func failPendingReplyFromTimeout(_ key: PendingKey, error: any Error) async {
+        let pending: PendingReply?
+        switch key {
+        case let .root(commandID):
+            pending = rootReplies.removeValue(forKey: commandID)
+        case let .target(targetReplyKey):
+            pending = removeTargetReplyForTimeout(targetReplyKey)
+        }
+        await pending?.promise.fulfill(.failure(error))
+    }
+
     private func removeTargetReply(for key: TargetReplyKey) -> PendingReply? {
         let pending = targetReplies.removeValue(forKey: key)
         if let wrapperID = targetReplyKeysByRootWrapperID.first(where: { $0.value == key })?.key {
             targetReplyKeysByRootWrapperID.removeValue(forKey: wrapperID)
         }
         return pending
+    }
+
+    private func removeTargetReplyForTimeout(_ key: TargetReplyKey) -> PendingReply? {
+        if let pending = targetReplies[key] {
+            guard !pending.hasBufferedProvisionalResponse else {
+                return nil
+            }
+            return removeTargetReply(for: key)
+        }
+
+        guard let retargetedKey = targetReplies.keys.first(where: { $0.commandID == key.commandID }) else {
+            return nil
+        }
+        guard targetReplies[retargetedKey]?.hasBufferedProvisionalResponse != true else {
+            return nil
+        }
+        return removeTargetReply(for: retargetedKey)
+    }
+
+    private func markTargetReplyAsBufferedIfNeeded(
+        _ parsed: ParsedProtocolMessage,
+        targetID: ProtocolTargetIdentifier
+    ) {
+        guard let commandID = parsed.id else {
+            return
+        }
+        let key = TargetReplyKey(targetID: targetID, commandID: commandID)
+        guard var pending = targetReplies[key] else {
+            return
+        }
+        pending.hasBufferedProvisionalResponse = true
+        targetReplies[key] = pending
     }
 
     private func removeRetargetedReply(commandID: UInt64) -> PendingReply? {
