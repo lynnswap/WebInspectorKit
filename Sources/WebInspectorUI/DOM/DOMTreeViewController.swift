@@ -23,6 +23,15 @@ package final class DOMTreeViewController: UIViewController {
             },
             hideHighlightAction: { [weak session] in
                 await session?.hideNodeHighlight()
+            },
+            copyNodeTextAction: { [weak session] nodeID, kind in
+                guard let session else {
+                    return nil
+                }
+                return try? await session.copyDOMNodeText(kind, for: nodeID)
+            },
+            deleteNodesAction: { [weak session] nodeIDs, undoManager in
+                try? await session?.deleteDOMNodes(nodeIDs, undoManager: undoManager)
             }
         )
         super.init(nibName: nil, bundle: nil)

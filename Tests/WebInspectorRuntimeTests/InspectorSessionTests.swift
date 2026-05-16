@@ -2438,6 +2438,107 @@ func domNavigationCopyDeleteAndReloadUseRuntimeAPIs() async throws {
 }
 
 @Test
+func deletingDOMNodeClearsExistingSelectionEvenWhenDeletingAnotherNode() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
+
+    let htmlID = try #require(await session.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(2))])
+    let bodyID = try #require(await session.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(4))])
+    await session.dom.selectNode(htmlID)
+
+    let countBeforeDelete = await backend.sentTargetMessages().count
+    let deleteTask = Task {
+        try await session.deleteDOMNode(bodyID, undoManager: nil)
+    }
+    let removeNode = try await waitForTargetMessage(backend, method: "DOM.removeNode", after: countBeforeDelete)
+    await receiveTargetReply(
+        transport,
+        targetID: removeNode.targetIdentifier,
+        messageID: try messageID(removeNode.message),
+        result: "{}"
+    )
+    try await deleteTask.value
+
+    #expect(await session.dom.selectedNodeID == nil)
+}
+
+@MainActor
+@Test
+func multiNodeDeleteRegistersSingleUndoGroup() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
+
+    let headID = try #require(session.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(3))])
+    let bodyID = try #require(session.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(4))])
+    let undoManager = UndoManager()
+
+    let countBeforeDelete = await backend.sentTargetMessages().count
+    let deleteTask = Task {
+        try await session.deleteDOMNodes([headID, bodyID], undoManager: undoManager)
+    }
+    let firstRemoveNode = try await waitForTargetMessage(backend, method: "DOM.removeNode", after: countBeforeDelete)
+    await receiveTargetReply(
+        transport,
+        targetID: firstRemoveNode.targetIdentifier,
+        messageID: try messageID(firstRemoveNode.message),
+        result: "{}"
+    )
+    let countAfterFirstRemove = await backend.sentTargetMessages().count
+    let secondRemoveNode = try await waitForTargetMessage(backend, method: "DOM.removeNode", after: countAfterFirstRemove)
+    await receiveTargetReply(
+        transport,
+        targetID: secondRemoveNode.targetIdentifier,
+        messageID: try messageID(secondRemoveNode.message),
+        result: "{}"
+    )
+    try await deleteTask.value
+
+    #expect(undoManager.canUndo)
+    #expect(undoManager.undoActionName == "Delete Nodes")
+
+    let countBeforeUndo = await backend.sentTargetMessages().count
+    undoManager.undo()
+    #expect(undoManager.canUndo == false)
+    #expect(undoManager.canRedo)
+
+    let firstUndo = try await waitForTargetMessage(backend, method: "DOM.undo", after: countBeforeUndo)
+    await receiveTargetReply(
+        transport,
+        targetID: firstUndo.targetIdentifier,
+        messageID: try messageID(firstUndo.message),
+        result: "{}"
+    )
+    let firstDocumentReload = try await waitForTargetMessage(backend, method: "DOM.getDocument", after: countBeforeUndo)
+    await receiveTargetReply(
+        transport,
+        targetID: firstDocumentReload.targetIdentifier,
+        messageID: try messageID(firstDocumentReload.message),
+        result: mainDocumentResult
+    )
+
+    let secondUndo = try await waitForTargetMessage(backend, method: "DOM.undo", ordinal: 1, after: countBeforeUndo)
+    await receiveTargetReply(
+        transport,
+        targetID: secondUndo.targetIdentifier,
+        messageID: try messageID(secondUndo.message),
+        result: "{}"
+    )
+    let secondDocumentReload = try await waitForTargetMessage(backend, method: "DOM.getDocument", ordinal: 1, after: countBeforeUndo)
+    await receiveTargetReply(
+        transport,
+        targetID: secondDocumentReload.targetIdentifier,
+        messageID: try messageID(secondDocumentReload.message),
+        result: mainDocumentResult
+    )
+}
+
+@Test
 func frameDOMNodeCopyDeleteRouteThroughPageTargetWithScopedNodeID() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
@@ -3163,6 +3264,25 @@ private func waitForTargetMessage(
         return messages.dropFirst(count).first { sent in
             (try? messageMethod(sent.message)) == method
         }
+    }
+}
+
+private func waitForTargetMessage(
+    _ backend: FakeTransportBackend,
+    method: String,
+    ordinal: Int,
+    after count: Int = 0
+) async throws -> SentTargetMessage {
+    try await waitUntil(timeoutError: TransportError.replyTimeout(method: method, targetID: nil)) {
+        let matches = await backend.sentTargetMessages()
+            .dropFirst(count)
+            .filter { sent in
+                (try? messageMethod(sent.message)) == method
+            }
+        guard matches.indices.contains(ordinal) else {
+            return nil
+        }
+        return matches[ordinal]
     }
 }
 
