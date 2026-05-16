@@ -116,6 +116,7 @@ private final class InspectorConnection {
     let originalInspectability: Bool?
     var eventPump: DomainEventPump?
     var bootstrappedTargetIDs: Set<ProtocolTargetIdentifier>
+    var cssEnabledTargetIDs: Set<ProtocolTargetIdentifier>
 
     init(
         transport: TransportSession,
@@ -127,6 +128,7 @@ private final class InspectorConnection {
         self.originalInspectability = originalInspectability
         eventPump = nil
         bootstrappedTargetIDs = []
+        cssEnabledTargetIDs = []
     }
 }
 
@@ -155,6 +157,7 @@ private struct TargetDestroyedEventParams: Decodable {
 @Observable
 package final class InspectorSession {
     package let dom: DOMSession
+    package let css: CSSSession
     package let network: NetworkSession
     package private(set) var isAttached: Bool
     package private(set) var lastError: InspectorSessionError?
@@ -175,10 +178,12 @@ package final class InspectorSession {
     package init(
         configuration: InspectorSessionConfiguration = .init(),
         dom: DOMSession = DOMSession(),
+        css: CSSSession = CSSSession(),
         network: NetworkSession = NetworkSession()
     ) {
         self.configuration = configuration
         self.dom = dom
+        self.css = css
         self.network = network
         isAttached = false
         lastError = nil
@@ -280,6 +285,7 @@ package final class InspectorSession {
             await transport.detach()
             restoreInspectabilityIfNeeded(for: nextConnection)
             dom.reset()
+            css.reset()
             network.reset()
             let sessionError = InspectorSessionError(String(describing: error))
             lastError = sessionError
@@ -309,6 +315,7 @@ package final class InspectorSession {
             restoreInspectabilityIfNeeded(for: previousPendingConnection)
         }
         dom.reset()
+        css.reset()
         network.reset()
         cancelDOMDocumentRequests()
         highlightedDOMTargetID = nil
@@ -564,6 +571,7 @@ package final class InspectorSession {
         await cancelElementPicker()
         clearDeleteUndoHistory()
         dom.reset()
+        css.reset()
         network.reset()
         cancelDOMDocumentRequests()
         if let connection {
@@ -676,6 +684,82 @@ package final class InspectorSession {
         return result
     }
 
+    @discardableResult
+    package func perform(_ intent: CSSCommandIntent) async throws -> ProtocolCommandResult {
+        let connection = try activeConnection()
+        let transport = connection.transport
+        let result = try await transport.send(CSSTransportAdapter.command(for: intent))
+        try ensureCurrentConnection(connection)
+        return result
+    }
+
+    package func refreshStylesForSelectedNode() async {
+        do {
+            try await refreshSelectedNodeStyles()
+            lastError = nil
+        } catch {
+            lastError = InspectorSessionError(String(describing: error))
+        }
+    }
+
+    package func setCSSProperty(_ propertyID: CSSPropertyIdentifier, enabled: Bool) async throws {
+        guard let intent = css.setStyleTextIntent(for: propertyID, enabled: enabled) else {
+            throw InspectorSessionError("CSS property is not editable.")
+        }
+        let result = try await perform(intent)
+        guard case let .setStyleText(targetID, styleID, _) = intent else {
+            throw InspectorSessionError("Unexpected CSS command intent.")
+        }
+        let style = try CSSTransportAdapter.setStyleTextResult(from: result)
+        css.applySetStyleTextResult(style, styleID: styleID, targetID: targetID)
+        try await refreshSelectedNodeStyles()
+        lastError = nil
+    }
+
+    private func refreshSelectedNodeStyles() async throws {
+        switch dom.selectedCSSNodeStyleIdentity() {
+        case let .success(identity):
+            try await refreshStyles(for: identity)
+        case let .failure(reason):
+            css.markSelectedNodeUnavailable(reason)
+        }
+    }
+
+    private func refreshStyles(for identity: CSSNodeStyleIdentity) async throws {
+        let connection = try activeConnection()
+        try await ensureCSSEnabled(targetID: identity.targetID, connection: connection)
+        guard let token = css.beginRefresh(identity: identity) else {
+            return
+        }
+        let transport = connection.transport
+        let matchedCommand = try CSSTransportAdapter.command(for: .getMatchedStyles(identity: identity))
+        let inlineCommand = try CSSTransportAdapter.command(for: .getInlineStyles(identity: identity))
+        let computedCommand = try CSSTransportAdapter.command(for: .getComputedStyle(identity: identity))
+
+        do {
+            async let matchedResult = transport.send(matchedCommand)
+            async let inlineResult = transport.send(inlineCommand)
+            async let computedResult = transport.send(computedCommand)
+
+            let results = try await (matchedResult, inlineResult, computedResult)
+            try ensureCurrentConnection(connection)
+            guard case let .success(currentIdentity) = dom.selectedCSSNodeStyleIdentity(),
+                  currentIdentity == identity else {
+                return
+            }
+
+            css.applyRefresh(
+                token: token,
+                matched: try CSSTransportAdapter.matchedStyles(from: results.0),
+                inline: try CSSTransportAdapter.inlineStyles(from: results.1),
+                computed: try CSSTransportAdapter.computedStyles(from: results.2)
+            )
+        } catch {
+            css.markRefreshFailed(token, message: String(describing: error))
+            throw error
+        }
+    }
+
     package func fetchResponseBody(for id: NetworkRequest.ID) async {
         guard let request = network.request(for: id) else {
             return
@@ -705,6 +789,7 @@ package final class InspectorSession {
         try ensureCurrentConnection(connection)
         _ = try await sendTargetCommand(domain: .dom, method: "DOM.enable", targetID: mainTargetID, connection: connection)
         try ensureCurrentConnection(connection)
+        try await ensureCSSEnabled(targetID: mainTargetID, connection: connection)
         _ = try await sendTargetCommand(domain: .runtime, method: "Runtime.enable", targetID: mainTargetID, connection: connection)
         try ensureCurrentConnection(connection)
 
@@ -738,6 +823,46 @@ package final class InspectorSession {
         )
     }
 
+    private func ensureCSSEnabled(
+        targetID: ProtocolTargetIdentifier,
+        connection: InspectorConnection
+    ) async throws {
+        guard dom.targetCapabilities(for: targetID).contains(.css),
+              !connection.cssEnabledTargetIDs.contains(targetID) else {
+            return
+        }
+        _ = try await connection.transport.send(try CSSTransportAdapter.command(for: .enable(targetID: targetID)))
+        try ensureCurrentConnection(connection)
+        connection.cssEnabledTargetIDs.insert(targetID)
+    }
+
+    private func startCSSEnableIfNeeded(targetID: ProtocolTargetIdentifier) {
+        guard isAttached,
+              let connection,
+              dom.targetCapabilities(for: targetID).contains(.css),
+              !connection.cssEnabledTargetIDs.contains(targetID) else {
+            return
+        }
+        let targetKind = dom.targetKind(for: targetID)
+        Task { @MainActor [weak self, connection, targetKind] in
+            guard let self else {
+                return
+            }
+            do {
+                try await ensureCSSEnabled(targetID: targetID, connection: connection)
+            } catch {
+                guard isCurrentConnection(connection) else {
+                    return
+                }
+                if targetKind == .frame,
+                   shouldIgnoreFrameTargetLifecycleError(error) {
+                    return
+                }
+                lastError = InspectorSessionError(String(describing: error))
+            }
+        }
+    }
+
     private func startPumps(connection: InspectorConnection) async {
         stopPumps(connection)
         let transport = connection.transport
@@ -760,6 +885,10 @@ package final class InspectorSession {
             await handleInspectorEvent(event)
         case .dom:
             await handleDOMEvent(event)
+        case .css:
+            applyEvent(event) {
+                try CSSTransportAdapter.applyCSSEvent(event, to: $0.css)
+            }
         case .network:
             applyEvent(event) {
                 try NetworkTransportAdapter.applyNetworkEvent(event, to: $0.network)
@@ -787,6 +916,7 @@ package final class InspectorSession {
             let createdTarget = try DOMTransportAdapter.applyTargetEvent(event, to: dom)
             if let destroyedTargetID {
                 cancelDOMDocumentRequest(targetID: destroyedTargetID, reason: "targetDestroyed")
+                css.removeStyles(targetID: destroyedTargetID)
             }
             applyElementPickerTargetLifecycle(event, targetCommit: targetCommit)
             if isAttached,
@@ -794,6 +924,9 @@ package final class InspectorSession {
                createdTarget.kind == .frame {
                 if createdTarget.capabilities.contains(.dom) {
                     startDOMDocumentRequest(targetID: createdTarget.id, reason: "frameTargetCreated")
+                }
+                if createdTarget.capabilities.contains(.css) {
+                    startCSSEnableIfNeeded(targetID: createdTarget.id)
                 }
             }
             if event.method == "Target.didCommitProvisionalTarget",
@@ -806,8 +939,12 @@ package final class InspectorSession {
                let targetCommit {
                 if let oldTargetID = targetCommit.oldTargetID {
                     cancelDOMDocumentRequest(targetID: oldTargetID, reason: "frameTargetCommit")
+                    css.removeStyles(targetID: oldTargetID)
                 }
                 startFrameTargetDocumentRequestAfterCommit(targetID: targetCommit.newTargetID)
+                if dom.targetKind(for: targetCommit.newTargetID) == .frame {
+                    startCSSEnableIfNeeded(targetID: targetCommit.newTargetID)
+                }
             }
         } catch {
             lastError = InspectorSessionError("\(event.method): \(error)")
@@ -820,6 +957,11 @@ package final class InspectorSession {
             && target.capabilities.contains(.dom)
             && target.currentDocumentID == nil {
             startDOMDocumentRequest(targetID: target.id, reason: "attachedFrameTarget")
+        }
+        for target in dom.snapshot().targetsByID.values
+        where target.kind == .frame
+            && target.capabilities.contains(.css) {
+            startCSSEnableIfNeeded(targetID: target.id)
         }
     }
 
@@ -841,10 +983,24 @@ package final class InspectorSession {
                 return
             }
             if event.method == "DOM.documentUpdated" {
+                if let targetID = event.targetID ?? dom.currentPageTargetID {
+                    css.removeStyles(targetID: targetID)
+                }
                 refreshDOMDocumentAfterBackendUpdate(event)
                 return
             }
+            let selectedStyleNodeID = css.selectedNodeStyles?.identity.nodeID
             try DOMTransportAdapter.applyDOMEvent(event, to: dom)
+            if cssInvalidatingDOMEventMethods.contains(event.method),
+               let targetID = event.targetID {
+                if let selectedStyleNodeID,
+                   selectedStyleNodeID.documentID.targetID == targetID,
+                   dom.selectedNodeID != selectedStyleNodeID {
+                    css.removeStyles(targetID: targetID)
+                } else {
+                    css.markNeedsRefresh(targetID: targetID)
+                }
+            }
             if event.method == "DOM.setChildNodes" {
                 startPendingFrameOwnerHydration()
             }
@@ -869,6 +1025,17 @@ package final class InspectorSession {
                 lastError = InspectorSessionError(String(describing: error))
             }
         }
+    }
+
+    private var cssInvalidatingDOMEventMethods: Set<String> {
+        [
+            "DOM.setChildNodes",
+            "DOM.childNodeInserted",
+            "DOM.childNodeRemoved",
+            "DOM.childNodeCountUpdated",
+            "DOM.attributeModified",
+            "DOM.attributeRemoved",
+        ]
     }
 
     private func handleInspectEvent(_ event: DOMInspectEvent) async {
@@ -1097,7 +1264,7 @@ package final class InspectorSession {
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
-                if handle.targetKind == .frame, shouldIgnoreFrameDocumentRequestError(error) {
+                if handle.targetKind == .frame, shouldIgnoreFrameTargetLifecycleError(error) {
                     return
                 }
                 InspectorRuntimeLog.error("getDocument.failed target=\(targetID.rawValue) reason=\(reason) error=\(error)")
@@ -1185,7 +1352,7 @@ package final class InspectorSession {
         dom.clearOwnerHydrationTransactions(targetID: targetID)
     }
 
-    private func shouldIgnoreFrameDocumentRequestError(_ error: any Error) -> Bool {
+    private func shouldIgnoreFrameTargetLifecycleError(_ error: any Error) -> Bool {
         switch error {
         case is CancellationError:
             return true
@@ -1209,6 +1376,7 @@ package final class InspectorSession {
             return
         }
         try DOMTransportAdapter.applyGetDocumentResult(result, to: dom)
+        css.removeStyles(targetID: targetID)
         startPendingFrameOwnerHydration()
         lastError = nil
     }
@@ -1450,9 +1618,13 @@ package final class InspectorSession {
     }
 
     private func ensureCurrentConnection(_ candidate: InspectorConnection) throws {
-        guard connection === candidate || pendingConnection === candidate else {
+        guard isCurrentConnection(candidate) else {
             throw TransportError.transportClosed
         }
+    }
+
+    private func isCurrentConnection(_ candidate: InspectorConnection) -> Bool {
+        connection === candidate || pendingConnection === candidate
     }
 
     package static func prepareInspectability(for webView: WKWebView) -> Bool {

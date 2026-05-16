@@ -17,6 +17,7 @@ func connectBootstrapsMainPageDocumentInOrder() async throws {
     #expect(methods == [
         "Inspector.enable",
         "Inspector.initialized",
+        "CSS.enable",
         "Runtime.enable",
         "DOM.getDocument",
         "Network.enable",
@@ -126,6 +127,306 @@ func networkResponseBodyFetchAppliesResultToCoreRequest() async throws {
 }
 
 @Test
+func selectedElementStyleRefreshLoadsCSSSession() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
+    let bodyID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(4))
+    await session.dom.selectNode(bodyID)
+
+    let sentCount = await backend.sentTargetMessages().count
+    let refreshTask = Task {
+        await session.refreshStylesForSelectedNode()
+    }
+    let messages = try await waitForCSSRefreshMessages(backend, after: sentCount)
+    try await replyCSSRefresh(
+        transport: transport,
+        messages: messages,
+        selector: "body",
+        styleSheetID: "sheet-body"
+    )
+    await refreshTask.value
+
+    let styles = try #require(await session.css.selectedNodeStyles)
+    #expect(await session.css.selectedState == .loaded)
+    #expect(await styles.identity.nodeID == bodyID)
+    #expect(await styles.sections.map(\.title) == ["element.style", "body"])
+    #expect(await styles.sections[1].style.cssProperties.first?.name == "margin")
+    #expect(await styles.computedProperties == [CSSComputedStyleProperty(name: "display", value: "block")])
+}
+
+@Test
+func selectedElementStyleRefreshDropsResultsWhenSelectionChanges() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
+    let htmlID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(2))
+    let bodyID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(4))
+    await session.dom.selectNode(bodyID)
+
+    let firstSentCount = await backend.sentTargetMessages().count
+    let firstRefresh = Task {
+        await session.refreshStylesForSelectedNode()
+    }
+    let firstMessages = try await waitForCSSRefreshMessages(backend, after: firstSentCount)
+
+    await session.dom.selectNode(htmlID)
+    let secondSentCount = await backend.sentTargetMessages().count
+    let secondRefresh = Task {
+        await session.refreshStylesForSelectedNode()
+    }
+    let secondMessages = try await waitForCSSRefreshMessages(backend, after: secondSentCount)
+
+    try await replyCSSRefresh(
+        transport: transport,
+        messages: firstMessages,
+        selector: "body",
+        styleSheetID: "sheet-body"
+    )
+    try await replyCSSRefresh(
+        transport: transport,
+        messages: secondMessages,
+        selector: "html",
+        styleSheetID: "sheet-html"
+    )
+    await firstRefresh.value
+    await secondRefresh.value
+
+    let styles = try #require(await session.css.selectedNodeStyles)
+    #expect(await styles.identity.nodeID == htmlID)
+    #expect(await styles.sections.map(\.title) == ["element.style", "html"])
+}
+
+@Test
+func cssPropertyToggleSendsSetStyleTextAndRefreshesStyles() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
+    let bodyID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(4))
+    await session.dom.selectNode(bodyID)
+
+    let refreshCount = await backend.sentTargetMessages().count
+    let refreshTask = Task {
+        await session.refreshStylesForSelectedNode()
+    }
+    let initialRefreshMessages = try await waitForCSSRefreshMessages(backend, after: refreshCount)
+    try await replyCSSRefresh(
+        transport: transport,
+        messages: initialRefreshMessages,
+        selector: "body",
+        styleSheetID: "sheet-body"
+    )
+    await refreshTask.value
+
+    let propertyID = CSSPropertyIdentifier(
+        styleID: CSSStyleIdentifier(styleSheetID: .init("sheet-body"), ordinal: 1),
+        propertyIndex: 0
+    )
+    let toggleSentCount = await backend.sentTargetMessages().count
+    let toggleTask = Task {
+        try await session.setCSSProperty(propertyID, enabled: false)
+    }
+    let setStyleText = try await waitForTargetMessage(backend, method: "CSS.setStyleText", after: toggleSentCount)
+    #expect(setStyleText.targetIdentifier == ProtocolTargetIdentifier.pageMain)
+    #expect(try messageParameters(setStyleText.message)["text"] as? String == "/* margin: 0; */")
+    let refreshAfterToggleCount = await backend.sentTargetMessages().count
+    await receiveTargetReply(
+        transport,
+        targetID: setStyleText.targetIdentifier,
+        messageID: try messageID(setStyleText.message),
+        result: #"{"style":{"styleId":{"styleSheetId":"sheet-body","ordinal":1},"cssProperties":[{"name":"margin","value":"0","text":"/* margin: 0; */","status":"disabled"}]}}"#
+    )
+
+    let refreshMessages = try await waitForCSSRefreshMessages(
+        backend,
+        after: refreshAfterToggleCount
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"CSS.styleSheetChanged","params":{"styleSheetId":"sheet-body"}}"#
+    )
+    try await replyCSSRefresh(
+        transport: transport,
+        messages: refreshMessages,
+        selector: "body",
+        styleSheetID: "sheet-body",
+        marginStatus: "disabled",
+        marginText: "/* margin: 0; */"
+    )
+    try await toggleTask.value
+
+    let styles = try #require(await session.css.selectedNodeStyles)
+    #expect(await session.css.selectedState == .loaded)
+    #expect(await styles.sections[1].style.cssProperties[0].isEnabled == false)
+}
+
+@Test
+func cssAndDOMStyleInvalidationsMarkSelectedNodeStylesNeedsRefresh() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
+    let bodyID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(4))
+    await session.dom.selectNode(bodyID)
+
+    let sentCount = await backend.sentTargetMessages().count
+    let refreshTask = Task {
+        await session.refreshStylesForSelectedNode()
+    }
+    let messages = try await waitForCSSRefreshMessages(backend, after: sentCount)
+    try await replyCSSRefresh(transport: transport, messages: messages, selector: "body", styleSheetID: "sheet-body")
+    await refreshTask.value
+    #expect(await session.css.selectedState == .loaded)
+
+    await transport.receiveRootMessage(
+        #"{"method":"CSS.styleSheetChanged","params":{"styleSheetId":"sheet-body"}}"#
+    )
+    _ = try await waitUntil {
+        await session.css.selectedState == .needsRefresh ? true : nil
+    }
+
+    let refreshAgainCount = await backend.sentTargetMessages().count
+    let refreshAgain = Task {
+        await session.refreshStylesForSelectedNode()
+    }
+    let messagesAgain = try await waitForCSSRefreshMessages(backend, after: refreshAgainCount)
+    try await replyCSSRefresh(transport: transport, messages: messagesAgain, selector: "body", styleSheetID: "sheet-body")
+    await refreshAgain.value
+    #expect(await session.css.selectedState == .loaded)
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"DOM.attributeModified","params":{"nodeId":4,"name":"class","value":"featured"}}"#
+    )
+    _ = try await waitUntil {
+        await session.css.selectedState == .needsRefresh ? true : nil
+    }
+
+    let refreshAfterAttributeCount = await backend.sentTargetMessages().count
+    let refreshAfterAttribute = Task {
+        await session.refreshStylesForSelectedNode()
+    }
+    let messagesAfterAttribute = try await waitForCSSRefreshMessages(backend, after: refreshAfterAttributeCount)
+    try await replyCSSRefresh(transport: transport, messages: messagesAfterAttribute, selector: "body", styleSheetID: "sheet-body")
+    await refreshAfterAttribute.value
+    #expect(await session.css.selectedState == .loaded)
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"DOM.childNodeInserted","params":{"parentNodeId":4,"previousNodeId":5,"node":{"nodeId":6,"nodeType":1,"nodeName":"ASIDE","localName":"aside"}}}"#
+    )
+    _ = try await waitUntil {
+        await session.css.selectedState == .needsRefresh ? true : nil
+    }
+}
+
+@Test
+func documentUpdatedClearsSelectedCSSNodeStylesForInvalidatedDocument() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
+    let bodyID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(4))
+    await session.dom.selectNode(bodyID)
+
+    let sentCount = await backend.sentTargetMessages().count
+    let refreshTask = Task {
+        await session.refreshStylesForSelectedNode()
+    }
+    let messages = try await waitForCSSRefreshMessages(backend, after: sentCount)
+    try await replyCSSRefresh(transport: transport, messages: messages, selector: "body", styleSheetID: "sheet-body")
+    await refreshTask.value
+    #expect(await session.css.selectedNodeStyles != nil)
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"DOM.documentUpdated","params":{}}"#
+    )
+    _ = try await waitUntil {
+        await session.css.selectedNodeStyles == nil ? true : nil
+    }
+    #expect(await session.css.selectedState == .unavailable(.staleNode(bodyID)))
+}
+
+@Test
+func explicitDOMReloadClearsSelectedCSSNodeStylesForReplacedDocument() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
+    let bodyID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(4))
+    await session.dom.selectNode(bodyID)
+
+    let sentCount = await backend.sentTargetMessages().count
+    let refreshTask = Task {
+        await session.refreshStylesForSelectedNode()
+    }
+    let messages = try await waitForCSSRefreshMessages(backend, after: sentCount)
+    try await replyCSSRefresh(transport: transport, messages: messages, selector: "body", styleSheetID: "sheet-body")
+    await refreshTask.value
+    #expect(await session.css.selectedNodeStyles != nil)
+
+    let reloadSentCount = await backend.sentTargetMessages().count
+    let reloadTask = Task {
+        try await session.reloadDOMDocument()
+    }
+    let reload = try await waitForTargetMessage(backend, method: "DOM.getDocument", after: reloadSentCount)
+    await receiveTargetReply(
+        transport,
+        targetID: reload.targetIdentifier,
+        messageID: try messageID(reload.message),
+        result: manualReloadDocumentResult
+    )
+    try await reloadTask.value
+
+    #expect(await session.css.selectedNodeStyles == nil)
+    #expect(await session.css.selectedState == .unavailable(.staleNode(bodyID)))
+}
+
+@Test
+func domMutationRemovingSelectedNodeClearsSelectedCSSNodeStyles() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
+    let bodyID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(4))
+    await session.dom.selectNode(bodyID)
+
+    let sentCount = await backend.sentTargetMessages().count
+    let refreshTask = Task {
+        await session.refreshStylesForSelectedNode()
+    }
+    let messages = try await waitForCSSRefreshMessages(backend, after: sentCount)
+    try await replyCSSRefresh(transport: transport, messages: messages, selector: "body", styleSheetID: "sheet-body")
+    await refreshTask.value
+    #expect(await session.css.selectedState == .loaded)
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"DOM.childNodeRemoved","params":{"nodeId":4}}"#
+    )
+    _ = try await waitUntil {
+        await session.dom.selectedNodeID == nil ? true : nil
+    }
+
+    #expect(await session.css.selectedNodeStyles == nil)
+    #expect(await session.css.selectedState == .unavailable(.staleNode(bodyID)))
+}
+
+@Test
 func frameDocumentRefreshUpdatesOnlyFrameDocument() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
@@ -222,6 +523,94 @@ func frameTargetWithAdvertisedDOMCapabilityHydratesOnCreation() async throws {
     )
 
     #expect(await session.dom.snapshot().targetsByID[.frameAd]?.currentDocumentID != nil)
+}
+
+@Test
+func frameTargetWithAdvertisedCSSCapabilityIsEnabledOnCreation() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    let frameTargetID = ProtocolTargetIdentifier("frame-css")
+    let sentCount = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-css","type":"frame","frameId":"css-frame","parentFrameId":"main-frame","domains":["DOM","CSS"],"isProvisional":false}}}"#
+    )
+
+    let cssEnable = try await waitForTargetMessage(backend, method: "CSS.enable", after: sentCount)
+    #expect(cssEnable.targetIdentifier == frameTargetID)
+    await receiveTargetReply(
+        transport,
+        targetID: cssEnable.targetIdentifier,
+        messageID: try messageID(cssEnable.message),
+        result: "{}"
+    )
+
+    let documentRequest = try await waitForTargetMessage(backend, method: "DOM.getDocument", after: sentCount)
+    #expect(documentRequest.targetIdentifier == frameTargetID)
+    await receiveTargetReply(
+        transport,
+        targetID: documentRequest.targetIdentifier,
+        messageID: try messageID(documentRequest.message),
+        result: firstLazyFrameDocumentResult
+    )
+}
+
+@Test
+func frameTargetCSSCapabilityEnableIgnoresDestroyedTargetRace() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    let frameTargetID = ProtocolTargetIdentifier("frame-css-race")
+    let sentCount = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-css-race","type":"frame","frameId":"css-frame-race","parentFrameId":"main-frame","domains":["CSS"],"isProvisional":false}}}"#
+    )
+
+    let cssEnable = try await waitForTargetMessage(backend, method: "CSS.enable", after: sentCount)
+    #expect(cssEnable.targetIdentifier == frameTargetID)
+    let pendingKey = TargetReplyKey(
+        targetID: frameTargetID,
+        commandID: try messageID(cssEnable.message)
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetDestroyed","params":{"targetId":"frame-css-race"}}"#
+    )
+    _ = try await waitUntil {
+        await pendingTargetReplyKeys(transport).contains(pendingKey) == false ? true : nil
+    }
+
+    #expect(await session.lastError == nil)
+}
+
+@Test
+func frameTargetCSSCapabilityEnableIgnoresStaleConnectionAfterDetach() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    let frameTargetID = ProtocolTargetIdentifier("frame-css-stale")
+    let sentCount = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-css-stale","type":"frame","frameId":"css-frame-stale","parentFrameId":"main-frame","domains":["CSS"],"isProvisional":false}}}"#
+    )
+
+    let cssEnable = try await waitForTargetMessage(backend, method: "CSS.enable", after: sentCount)
+    let pendingKey = TargetReplyKey(
+        targetID: frameTargetID,
+        commandID: try messageID(cssEnable.message)
+    )
+    await session.detach()
+    _ = try await waitUntil {
+        await pendingTargetReplyKeys(transport).contains(pendingKey) == false ? true : nil
+    }
+    try await Task.sleep(for: .milliseconds(5))
+
+    #expect(await session.lastError == nil)
 }
 
 @Test
@@ -1209,6 +1598,7 @@ func targetCommitBootstrapsCommittedMainPageTarget() async throws {
     #expect(bootstrapMessages.compactMap { try? messageMethod($0.message) } == [
         "Inspector.enable",
         "Inspector.initialized",
+        "CSS.enable",
         "Runtime.enable",
         "DOM.getDocument",
         "Network.enable",
@@ -3174,7 +3564,7 @@ private func completeBootstrap(
 ) async throws -> [SentTargetMessage] {
     var sentCount = initialSentCount
     var sentMessages: [SentTargetMessage] = []
-    for method in ["Inspector.enable", "Inspector.initialized", "Runtime.enable"] {
+    for method in ["Inspector.enable", "Inspector.initialized", "CSS.enable", "Runtime.enable"] {
         let sent = try await waitForTargetMessage(backend, method: method, after: sentCount)
         sentMessages.append(sent)
         sentCount = await backend.sentTargetMessages().count
@@ -3302,6 +3692,66 @@ private func waitForTargetMessage(
     }
 }
 
+private struct CSSRefreshMessages {
+    var matched: SentTargetMessage
+    var inline: SentTargetMessage
+    var computed: SentTargetMessage
+}
+
+private func waitForCSSRefreshMessages(
+    _ backend: FakeTransportBackend,
+    after count: Int
+) async throws -> CSSRefreshMessages {
+    async let matched = waitForTargetMessage(backend, method: "CSS.getMatchedStylesForNode", after: count)
+    async let inline = waitForTargetMessage(backend, method: "CSS.getInlineStylesForNode", after: count)
+    async let computed = waitForTargetMessage(backend, method: "CSS.getComputedStyleForNode", after: count)
+    return try await CSSRefreshMessages(matched: matched, inline: inline, computed: computed)
+}
+
+private func replyCSSRefresh(
+    transport: TransportSession,
+    messages: CSSRefreshMessages,
+    selector: String,
+    styleSheetID: String,
+    marginStatus: String = "active",
+    marginText: String = "margin: 0;"
+) async throws {
+    await receiveTargetReply(
+        transport,
+        targetID: messages.matched.targetIdentifier,
+        messageID: try messageID(messages.matched.message),
+        result: cssMatchedStylesResult(
+            selector: selector,
+            styleSheetID: styleSheetID,
+            marginStatus: marginStatus,
+            marginText: marginText
+        )
+    )
+    await receiveTargetReply(
+        transport,
+        targetID: messages.inline.targetIdentifier,
+        messageID: try messageID(messages.inline.message),
+        result: #"{"inlineStyle":{"styleId":{"styleSheetId":"inline","ordinal":0},"cssProperties":[{"name":"box-sizing","value":"border-box","text":"box-sizing: border-box;","status":"active"}]}}"#
+    )
+    await receiveTargetReply(
+        transport,
+        targetID: messages.computed.targetIdentifier,
+        messageID: try messageID(messages.computed.message),
+        result: #"{"computedStyle":[{"name":"display","value":"block"}]}"#
+    )
+}
+
+private func cssMatchedStylesResult(
+    selector: String,
+    styleSheetID: String,
+    marginStatus: String,
+    marginText: String
+) -> String {
+    """
+    {"matchedCSSRules":[{"rule":{"ruleId":{"styleSheetId":"\(styleSheetID)","ordinal":1},"selectorList":{"selectors":[{"text":"\(selector)"}],"text":"\(selector)"},"origin":"author","style":{"styleId":{"styleSheetId":"\(styleSheetID)","ordinal":1},"cssProperties":[{"name":"margin","value":"0","text":"\(jsonEscapedString(marginText))","status":"\(marginStatus)"}]}},"matchingSelectors":[0]}]}
+    """
+}
+
 private func waitUntil<Value: Sendable>(
     timeout: Duration = .seconds(1),
     timeoutError: any Error = TransportError.replyTimeout(method: "test wait", targetID: nil),
@@ -3419,6 +3869,12 @@ private func messageMethod(_ message: String) throws -> String? {
     let data = try #require(message.data(using: .utf8))
     let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
     return object["method"] as? String
+}
+
+private func messageParameters(_ message: String) throws -> [String: Any] {
+    let data = try #require(message.data(using: .utf8))
+    let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+    return try #require(object["params"] as? [String: Any])
 }
 
 private func boolParameter(_ name: String, in message: String) throws -> Bool? {

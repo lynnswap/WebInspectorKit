@@ -65,7 +65,7 @@ package enum ProtocolTargetKind: Equatable, Sendable {
     }
 }
 
-package struct ProtocolTargetCapabilities: OptionSet, Equatable, Sendable {
+package struct ProtocolTargetCapabilities: OptionSet, Equatable, Hashable, Sendable {
     package let rawValue: UInt8
 
     package init(rawValue: UInt8) {
@@ -77,8 +77,9 @@ package struct ProtocolTargetCapabilities: OptionSet, Equatable, Sendable {
     package static let target = Self(rawValue: 1 << 2)
     package static let inspector = Self(rawValue: 1 << 3)
     package static let network = Self(rawValue: 1 << 4)
+    package static let css = Self(rawValue: 1 << 5)
 
-    package static let pageDefault: Self = [.dom, .runtime, .target, .inspector, .network]
+    package static let pageDefault: Self = [.dom, .runtime, .target, .inspector, .network, .css]
     package static let frameDefault: Self = []
     package static let workerDefault: Self = [.runtime]
     package static let serviceWorkerDefault: Self = [.runtime, .network]
@@ -112,6 +113,8 @@ package struct ProtocolTargetCapabilities: OptionSet, Equatable, Sendable {
                 capabilities.insert(.inspector)
             case "network":
                 capabilities.insert(.network)
+            case "css":
+                capabilities.insert(.css)
             default:
                 break
             }
