@@ -2,11 +2,14 @@ import Testing
 @testable import WebInspectorCore
 
 @Test
-func protocolTargetCapabilitiesRequireExplicitCSSDomainParsing() {
-    #expect(ProtocolTargetCapabilities.pageDefault.contains(.css) == false)
-    #expect(ProtocolTargetCapabilities.protocolDefault(for: .page).contains(.css) == false)
+func protocolTargetCapabilitiesTreatPageTargetsAsCSSCapable() {
+    #expect(ProtocolTargetKind(protocolType: "web-page") == .page)
+    #expect(ProtocolTargetCapabilities.pageDefault.contains(.css))
+    #expect(ProtocolTargetCapabilities.protocolDefault(for: .page).contains(.css))
     #expect(ProtocolTargetCapabilities.protocolDefault(for: .frame).contains(.css) == false)
     #expect(ProtocolTargetCapabilities(domainNames: ["DOM", "CSS"]).contains(.css))
+    #expect(ProtocolTargetCapabilities.resolved(for: .page, domainNames: ["DOM"]).contains(.css))
+    #expect(ProtocolTargetCapabilities.resolved(for: .frame, domainNames: ["DOM"]).contains(.css) == false)
 }
 
 @Test
@@ -14,7 +17,7 @@ func selectedCSSNodeStyleIdentityRequiresElementCurrentNodeAndCSSTarget() async 
     let pageTargetID = ProtocolTargetIdentifier("page")
     let session = await DOMSession()
     await session.applyTargetCreated(
-        .init(id: pageTargetID, kind: .page, capabilities: [.dom, .css]),
+        .init(id: pageTargetID, kind: .page),
         makeCurrentMainPage: true
     )
     let rootID = await session.replaceDocumentRoot(

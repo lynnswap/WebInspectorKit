@@ -51,7 +51,7 @@ package enum ProtocolTargetKind: Equatable, Sendable {
 
     package init(protocolType: String) {
         switch protocolType {
-        case "page":
+        case "page", "web-page":
             self = .page
         case "frame":
             self = .frame
@@ -79,7 +79,7 @@ package struct ProtocolTargetCapabilities: OptionSet, Equatable, Hashable, Senda
     package static let network = Self(rawValue: 1 << 4)
     package static let css = Self(rawValue: 1 << 5)
 
-    package static let pageDefault: Self = [.dom, .runtime, .target, .inspector, .network]
+    package static let pageDefault: Self = [.dom, .runtime, .target, .inspector, .network, .css]
     package static let frameDefault: Self = []
     package static let workerDefault: Self = [.runtime]
     package static let serviceWorkerDefault: Self = [.runtime, .network]
@@ -97,6 +97,18 @@ package struct ProtocolTargetCapabilities: OptionSet, Equatable, Hashable, Senda
         case .other:
             return []
         }
+    }
+
+    package static func resolved(for kind: ProtocolTargetKind, domainNames: [String]?) -> Self {
+        guard let domainNames else {
+            return protocolDefault(for: kind)
+        }
+
+        let advertised = Self(domainNames: domainNames)
+        guard kind == .page else {
+            return advertised
+        }
+        return protocolDefault(for: kind).union(advertised)
     }
 
     package init(domainNames: [String]) {
@@ -137,7 +149,7 @@ package struct ProtocolTargetRecord: Equatable, Sendable {
         kind: ProtocolTargetKind,
         frameID: DOMFrameIdentifier? = nil,
         parentFrameID: DOMFrameIdentifier? = nil,
-        capabilities: ProtocolTargetCapabilities = [],
+        capabilities: ProtocolTargetCapabilities? = nil,
         isProvisional: Bool = false,
         isPaused: Bool = false
     ) {
@@ -145,7 +157,7 @@ package struct ProtocolTargetRecord: Equatable, Sendable {
         self.kind = kind
         self.frameID = frameID
         self.parentFrameID = parentFrameID
-        self.capabilities = capabilities
+        self.capabilities = capabilities ?? ProtocolTargetCapabilities.protocolDefault(for: kind)
         self.isProvisional = isProvisional
         self.isPaused = isPaused
     }

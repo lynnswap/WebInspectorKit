@@ -116,7 +116,7 @@ private final class InspectorConnection {
     let originalInspectability: Bool?
     var eventPump: DomainEventPump?
     var bootstrappedTargetIDs: Set<ProtocolTargetIdentifier>
-    var cssEnabledTargetIDs: Set<ProtocolTargetIdentifier>
+    var compatibilityCSSEnabledTargetIDs: Set<ProtocolTargetIdentifier>
 
     init(
         transport: TransportSession,
@@ -128,7 +128,7 @@ private final class InspectorConnection {
         self.originalInspectability = originalInspectability
         eventPump = nil
         bootstrappedTargetIDs = []
-        cssEnabledTargetIDs = []
+        compatibilityCSSEnabledTargetIDs = []
     }
 }
 
@@ -728,21 +728,22 @@ package final class InspectorSession {
 
     private func refreshStyles(for identity: CSSNodeStyleIdentity) async throws {
         let connection = try activeConnection()
-        try await ensureCSSEnabled(targetID: identity.targetID, connection: connection)
         guard let token = css.beginRefresh(identity: identity) else {
             return
         }
         let transport = connection.transport
-        let matchedCommand = try CSSTransportAdapter.command(for: .getMatchedStyles(identity: identity))
-        let inlineCommand = try CSSTransportAdapter.command(for: .getInlineStyles(identity: identity))
-        let computedCommand = try CSSTransportAdapter.command(for: .getComputedStyle(identity: identity))
 
         do {
-            async let matchedResult = transport.send(matchedCommand)
-            async let inlineResult = transport.send(inlineCommand)
-            async let computedResult = transport.send(computedCommand)
-
-            let results = try await (matchedResult, inlineResult, computedResult)
+            let results: CSSRefreshResults
+            do {
+                results = try await fetchStyleResults(for: identity, transport: transport)
+            } catch {
+                guard shouldRetryAfterEnablingCSSAgent(error) else {
+                    throw error
+                }
+                try await enableCSSAgentForCompatibility(targetID: identity.targetID, connection: connection)
+                results = try await fetchStyleResults(for: identity, transport: transport)
+            }
             try ensureCurrentConnection(connection)
             guard case let .success(currentIdentity) = dom.selectedCSSNodeStyleIdentity(),
                   currentIdentity == identity else {
@@ -751,14 +752,64 @@ package final class InspectorSession {
 
             css.applyRefresh(
                 token: token,
-                matched: try CSSTransportAdapter.matchedStyles(from: results.0),
-                inline: try CSSTransportAdapter.inlineStyles(from: results.1),
-                computed: try CSSTransportAdapter.computedStyles(from: results.2)
+                matched: try CSSTransportAdapter.matchedStyles(from: results.matched),
+                inline: try CSSTransportAdapter.inlineStyles(from: results.inline),
+                computed: try CSSTransportAdapter.computedStyles(from: results.computed)
             )
         } catch {
             css.markRefreshFailed(token, message: String(describing: error))
             throw error
         }
+    }
+
+    private struct CSSRefreshResults {
+        var matched: ProtocolCommandResult
+        var inline: ProtocolCommandResult
+        var computed: ProtocolCommandResult
+    }
+
+    private func fetchStyleResults(
+        for identity: CSSNodeStyleIdentity,
+        transport: TransportSession
+    ) async throws -> CSSRefreshResults {
+        let matchedCommand = try CSSTransportAdapter.command(for: .getMatchedStyles(identity: identity))
+        let inlineCommand = try CSSTransportAdapter.command(for: .getInlineStyles(identity: identity))
+        let computedCommand = try CSSTransportAdapter.command(for: .getComputedStyle(identity: identity))
+
+        async let matchedResult = transport.send(matchedCommand)
+        async let inlineResult = transport.send(inlineCommand)
+        async let computedResult = transport.send(computedCommand)
+
+        let results = try await (matchedResult, inlineResult, computedResult)
+        return CSSRefreshResults(matched: results.0, inline: results.1, computed: results.2)
+    }
+
+    private func shouldRetryAfterEnablingCSSAgent(_ error: any Error) -> Bool {
+        guard case let TransportError.remoteError(method, _, message) = error,
+              method.hasPrefix("CSS.") else {
+            return false
+        }
+
+        let normalizedMessage = message.lowercased()
+        return normalizedMessage.contains("enable")
+            || normalizedMessage.contains("enabled")
+    }
+
+    private func enableCSSAgentForCompatibility(
+        targetID: ProtocolTargetIdentifier,
+        connection: InspectorConnection
+    ) async throws {
+        guard dom.targetCapabilities(for: targetID).contains(.css),
+              !connection.compatibilityCSSEnabledTargetIDs.contains(targetID) else {
+            return
+        }
+
+        // Do not enable the WebKit CSS agent proactively. On current simulator
+        // WebContent, CSS.enable can crash while synchronizing stylesheet
+        // headers during page load, while the read commands work without it.
+        _ = try await connection.transport.send(try CSSTransportAdapter.command(for: .enable(targetID: targetID)))
+        try ensureCurrentConnection(connection)
+        connection.compatibilityCSSEnabledTargetIDs.insert(targetID)
     }
 
     package func fetchResponseBody(for id: NetworkRequest.ID) async {
@@ -790,7 +841,6 @@ package final class InspectorSession {
         try ensureCurrentConnection(connection)
         _ = try await sendTargetCommand(domain: .dom, method: "DOM.enable", targetID: mainTargetID, connection: connection)
         try ensureCurrentConnection(connection)
-        try await ensureCSSEnabled(targetID: mainTargetID, connection: connection)
         _ = try await sendTargetCommand(domain: .runtime, method: "Runtime.enable", targetID: mainTargetID, connection: connection)
         try ensureCurrentConnection(connection)
 
@@ -822,46 +872,6 @@ package final class InspectorSession {
                 routing: .target(targetID)
             )
         )
-    }
-
-    private func ensureCSSEnabled(
-        targetID: ProtocolTargetIdentifier,
-        connection: InspectorConnection
-    ) async throws {
-        guard dom.targetCapabilities(for: targetID).contains(.css),
-              !connection.cssEnabledTargetIDs.contains(targetID) else {
-            return
-        }
-        _ = try await connection.transport.send(try CSSTransportAdapter.command(for: .enable(targetID: targetID)))
-        try ensureCurrentConnection(connection)
-        connection.cssEnabledTargetIDs.insert(targetID)
-    }
-
-    private func startCSSEnableIfNeeded(targetID: ProtocolTargetIdentifier) {
-        guard isAttached,
-              let connection,
-              dom.targetCapabilities(for: targetID).contains(.css),
-              !connection.cssEnabledTargetIDs.contains(targetID) else {
-            return
-        }
-        let targetKind = dom.targetKind(for: targetID)
-        Task { @MainActor [weak self, connection, targetKind] in
-            guard let self else {
-                return
-            }
-            do {
-                try await ensureCSSEnabled(targetID: targetID, connection: connection)
-            } catch {
-                guard isCurrentConnection(connection) else {
-                    return
-                }
-                if targetKind == .frame,
-                   shouldIgnoreFrameTargetLifecycleError(error) {
-                    return
-                }
-                lastError = InspectorSessionError(String(describing: error))
-            }
-        }
     }
 
     private func startPumps(connection: InspectorConnection) async {
@@ -926,9 +936,6 @@ package final class InspectorSession {
                 if createdTarget.capabilities.contains(.dom) {
                     startDOMDocumentRequest(targetID: createdTarget.id, reason: "frameTargetCreated")
                 }
-                if createdTarget.capabilities.contains(.css) {
-                    startCSSEnableIfNeeded(targetID: createdTarget.id)
-                }
             }
             if event.method == "Target.didCommitProvisionalTarget",
                dom.currentPageRootNode == nil,
@@ -943,9 +950,6 @@ package final class InspectorSession {
                     css.removeStyles(targetID: oldTargetID)
                 }
                 startFrameTargetDocumentRequestAfterCommit(targetID: targetCommit.newTargetID)
-                if dom.targetKind(for: targetCommit.newTargetID) == .frame {
-                    startCSSEnableIfNeeded(targetID: targetCommit.newTargetID)
-                }
             }
         } catch {
             lastError = InspectorSessionError("\(event.method): \(error)")
@@ -958,11 +962,6 @@ package final class InspectorSession {
             && target.capabilities.contains(.dom)
             && target.currentDocumentID == nil {
             startDOMDocumentRequest(targetID: target.id, reason: "attachedFrameTarget")
-        }
-        for target in dom.snapshot().targetsByID.values
-        where target.kind == .frame
-            && target.capabilities.contains(.css) {
-            startCSSEnableIfNeeded(targetID: target.id)
         }
     }
 

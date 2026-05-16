@@ -18,7 +18,7 @@ package final class DOMSplitViewController: UISplitViewController {
     package convenience init(session: InspectorSession) {
         self.init(
             treeViewController: DOMTreeViewController(session: session),
-            elementViewController: DOMElementViewController(dom: session.dom),
+            elementViewController: DOMElementViewController(session: session),
             session: session
         )
     }

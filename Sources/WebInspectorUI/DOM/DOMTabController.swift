@@ -89,7 +89,7 @@ package struct DOMTabController: BuiltInTabController {
 
     private func cachedElementViewController(session: WebInspectorSession) -> DOMElementViewController {
         session.interface.viewController(for: contentKey(ContentID.element)) {
-            DOMElementViewController(dom: session.inspector.dom)
+            DOMElementViewController(session: session.inspector)
         }
     }
 

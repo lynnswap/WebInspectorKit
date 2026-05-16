@@ -388,10 +388,7 @@ private struct TargetInfoPayload: Decodable {
     }
 
     private func capabilities(for kind: ProtocolTargetKind) -> ProtocolTargetCapabilities {
-        if let domains {
-            return ProtocolTargetCapabilities(domainNames: domains)
-        }
-        return ProtocolTargetCapabilities.protocolDefault(for: kind)
+        ProtocolTargetCapabilities.resolved(for: kind, domainNames: domains)
     }
 
     private func targetKind(currentMainFrameID: DOMFrameIdentifier?) -> ProtocolTargetKind {

@@ -542,10 +542,7 @@ package actor TransportSession {
     }
 
     private func capabilities(for targetInfo: TargetInfoPayload, kind: ProtocolTargetKind) -> ProtocolTargetCapabilities {
-        if let domains = targetInfo.domains {
-            return ProtocolTargetCapabilities(domainNames: domains)
-        }
-        return ProtocolTargetCapabilities.protocolDefault(for: kind)
+        ProtocolTargetCapabilities.resolved(for: kind, domainNames: targetInfo.domains)
     }
 
     private func targetKind(for targetInfo: TargetInfoPayload) -> ProtocolTargetKind {

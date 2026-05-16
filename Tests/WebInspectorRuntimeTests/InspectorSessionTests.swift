@@ -17,7 +17,6 @@ func connectBootstrapsMainPageDocumentInOrder() async throws {
     #expect(methods == [
         "Inspector.enable",
         "Inspector.initialized",
-        "CSS.enable",
         "Runtime.enable",
         "DOM.getDocument",
         "Network.enable",
@@ -25,6 +24,36 @@ func connectBootstrapsMainPageDocumentInOrder() async throws {
     #expect(await session.isAttached)
     #expect(await session.dom.snapshot().currentPageTargetID == ProtocolTargetIdentifier.pageMain)
     #expect(await session.dom.snapshot().documentsByID.count == 1)
+}
+
+@Test
+func connectBootstrapsWebPageTargetWithoutDomainMetadataAsCSSCapable() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"web-page","frameId":"main-frame","isProvisional":false}}}"#
+    )
+
+    let connectTask = Task {
+        try await session.connect(transport: transport)
+    }
+    let bootstrapMessages = try await completeBootstrap(transport: transport, backend: backend)
+    try await connectTask.value
+
+    let htmlID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(2))
+    await session.dom.selectNode(htmlID)
+    let identity: CSSNodeStyleIdentity
+    switch await session.dom.selectedCSSNodeStyleIdentity() {
+    case let .success(resolvedIdentity):
+        identity = resolvedIdentity
+    case let .failure(reason):
+        Issue.record("Expected CSS identity for web-page target, got \(reason)")
+        return
+    }
+
+    #expect(bootstrapMessages.compactMap { try? messageMethod($0.message) }.contains("CSS.enable") == false)
+    #expect(identity.targetID == ProtocolTargetIdentifier.pageMain)
 }
 
 @Test
@@ -155,6 +184,62 @@ func selectedElementStyleRefreshLoadsCSSSession() async throws {
     #expect(await styles.sections.map(\.title) == ["element.style", "body"])
     #expect(await styles.sections[1].style.cssProperties.first?.name == "margin")
     #expect(await styles.computedProperties == [CSSComputedStyleProperty(name: "display", value: "block")])
+}
+
+@Test
+func selectedElementStyleRefreshEnablesCSSAgentOnlyAfterBackendRequiresIt() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
+    let bodyID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(4))
+    await session.dom.selectNode(bodyID)
+
+    let sentCount = await backend.sentTargetMessages().count
+    let refreshTask = Task {
+        await session.refreshStylesForSelectedNode()
+    }
+    let firstMessages = try await waitForCSSRefreshMessages(backend, after: sentCount)
+    await receiveTargetErrorReply(
+        transport,
+        targetID: firstMessages.matched.targetIdentifier,
+        messageID: try messageID(firstMessages.matched.message),
+        message: "CSS agent is not enabled"
+    )
+    await receiveTargetErrorReply(
+        transport,
+        targetID: firstMessages.inline.targetIdentifier,
+        messageID: try messageID(firstMessages.inline.message),
+        message: "CSS agent is not enabled"
+    )
+    await receiveTargetErrorReply(
+        transport,
+        targetID: firstMessages.computed.targetIdentifier,
+        messageID: try messageID(firstMessages.computed.message),
+        message: "CSS agent is not enabled"
+    )
+
+    let cssEnable = try await waitForTargetMessage(backend, method: "CSS.enable", after: sentCount)
+    let retrySentCount = await backend.sentTargetMessages().count
+    await receiveTargetReply(
+        transport,
+        targetID: cssEnable.targetIdentifier,
+        messageID: try messageID(cssEnable.message),
+        result: "{}"
+    )
+    let retryMessages = try await waitForCSSRefreshMessages(backend, after: retrySentCount)
+    try await replyCSSRefresh(
+        transport: transport,
+        messages: retryMessages,
+        selector: "body",
+        styleSheetID: "sheet-body"
+    )
+    await refreshTask.value
+
+    let styles = try #require(await session.css.selectedNodeStyles)
+    #expect(await session.css.selectedState == .loaded)
+    #expect(await styles.identity.nodeID == bodyID)
 }
 
 @Test
@@ -566,7 +651,7 @@ func frameTargetWithAdvertisedDOMCapabilityHydratesOnCreation() async throws {
 }
 
 @Test
-func frameTargetWithAdvertisedCSSCapabilityIsEnabledOnCreation() async throws {
+func frameTargetWithAdvertisedCSSCapabilityHydratesDOMWithoutCSSEnableOnCreation() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
     let session = await InspectorSession(configuration: .test)
@@ -578,15 +663,6 @@ func frameTargetWithAdvertisedCSSCapabilityIsEnabledOnCreation() async throws {
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-css","type":"frame","frameId":"css-frame","parentFrameId":"main-frame","domains":["DOM","CSS"],"isProvisional":false}}}"#
     )
 
-    let cssEnable = try await waitForTargetMessage(backend, method: "CSS.enable", after: sentCount)
-    #expect(cssEnable.targetIdentifier == frameTargetID)
-    await receiveTargetReply(
-        transport,
-        targetID: cssEnable.targetIdentifier,
-        messageID: try messageID(cssEnable.message),
-        result: "{}"
-    )
-
     let documentRequest = try await waitForTargetMessage(backend, method: "DOM.getDocument", after: sentCount)
     #expect(documentRequest.targetIdentifier == frameTargetID)
     await receiveTargetReply(
@@ -595,61 +671,24 @@ func frameTargetWithAdvertisedCSSCapabilityIsEnabledOnCreation() async throws {
         messageID: try messageID(documentRequest.message),
         result: firstLazyFrameDocumentResult
     )
+    let messages = await backend.sentTargetMessages().dropFirst(sentCount)
+    #expect(messages.compactMap { try? messageMethod($0.message) }.contains("CSS.enable") == false)
 }
 
 @Test
-func frameTargetCSSCapabilityEnableIgnoresDestroyedTargetRace() async throws {
+func cssOnlyFrameTargetDoesNotSendCSSEnableOnCreation() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
 
-    let frameTargetID = ProtocolTargetIdentifier("frame-css-race")
     let sentCount = await backend.sentTargetMessages().count
     await transport.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-css-race","type":"frame","frameId":"css-frame-race","parentFrameId":"main-frame","domains":["CSS"],"isProvisional":false}}}"#
     )
-
-    let cssEnable = try await waitForTargetMessage(backend, method: "CSS.enable", after: sentCount)
-    #expect(cssEnable.targetIdentifier == frameTargetID)
-    let pendingKey = TargetReplyKey(
-        targetID: frameTargetID,
-        commandID: try messageID(cssEnable.message)
-    )
-    await transport.receiveRootMessage(
-        #"{"method":"Target.targetDestroyed","params":{"targetId":"frame-css-race"}}"#
-    )
-    _ = try await waitUntil {
-        await pendingTargetReplyKeys(transport).contains(pendingKey) == false ? true : nil
-    }
-
-    #expect(await session.lastError == nil)
-}
-
-@Test
-func frameTargetCSSCapabilityEnableIgnoresStaleConnectionAfterDetach() async throws {
-    let backend = FakeTransportBackend()
-    let transport = testTransport(backend)
-    let session = await InspectorSession(configuration: .test)
-    try await connect(session, transport: transport, backend: backend)
-
-    let frameTargetID = ProtocolTargetIdentifier("frame-css-stale")
-    let sentCount = await backend.sentTargetMessages().count
-    await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-css-stale","type":"frame","frameId":"css-frame-stale","parentFrameId":"main-frame","domains":["CSS"],"isProvisional":false}}}"#
-    )
-
-    let cssEnable = try await waitForTargetMessage(backend, method: "CSS.enable", after: sentCount)
-    let pendingKey = TargetReplyKey(
-        targetID: frameTargetID,
-        commandID: try messageID(cssEnable.message)
-    )
-    await session.detach()
-    _ = try await waitUntil {
-        await pendingTargetReplyKeys(transport).contains(pendingKey) == false ? true : nil
-    }
     try await Task.sleep(for: .milliseconds(5))
 
+    #expect(await backend.sentTargetMessages().count == sentCount)
     #expect(await session.lastError == nil)
 }
 
@@ -1638,7 +1677,6 @@ func targetCommitBootstrapsCommittedMainPageTarget() async throws {
     #expect(bootstrapMessages.compactMap { try? messageMethod($0.message) } == [
         "Inspector.enable",
         "Inspector.initialized",
-        "CSS.enable",
         "Runtime.enable",
         "DOM.getDocument",
         "Network.enable",
@@ -3613,7 +3651,7 @@ private func completeBootstrap(
 ) async throws -> [SentTargetMessage] {
     var sentCount = initialSentCount
     var sentMessages: [SentTargetMessage] = []
-    for method in ["Inspector.enable", "Inspector.initialized", "CSS.enable", "Runtime.enable"] {
+    for method in ["Inspector.enable", "Inspector.initialized", "Runtime.enable"] {
         let sent = try await waitForTargetMessage(backend, method: method, after: sentCount)
         sentMessages.append(sent)
         sentCount = await backend.sentTargetMessages().count
@@ -3869,6 +3907,19 @@ private func receiveTargetReply(
         transport,
         targetID: targetID,
         message: #"{"id":\#(messageID),"result":\#(result)}"#
+    )
+}
+
+private func receiveTargetErrorReply(
+    _ transport: TransportSession,
+    targetID: ProtocolTargetIdentifier,
+    messageID: UInt64,
+    message: String
+) async {
+    await receiveTargetDispatch(
+        transport,
+        targetID: targetID,
+        message: #"{"id":\#(messageID),"error":{"message":"\#(message)"}}"#
     )
 }
 

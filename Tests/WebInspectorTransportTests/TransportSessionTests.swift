@@ -87,6 +87,28 @@ func domEnableIsTransportLocalWhileCSSEnableRoutesToTargetBackend() async throws
 }
 
 @Test
+func pageTargetDefaultsExposeCSSCapabilityEvenWithoutDomainMetadata() async throws {
+    let backend = FakeTransportBackend()
+    let session = TransportSession(backend: backend, responseTimeout: .seconds(1))
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"web-page","frameId":"main-frame","isProvisional":false}}}"#)
+
+    let target = try #require(await session.snapshot().targetsByID[ProtocolTargetIdentifier("page-main")])
+    #expect(target.kind == .page)
+    #expect(target.capabilities.contains(.css))
+}
+
+@Test
+func pageTargetDomainMetadataKeepsPageDefaultCSSCapability() async throws {
+    let backend = FakeTransportBackend()
+    let session = TransportSession(backend: backend, responseTimeout: .seconds(1))
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","domains":["DOM"],"isProvisional":false}}}"#)
+
+    let target = try #require(await session.snapshot().targetsByID[ProtocolTargetIdentifier("page-main")])
+    #expect(target.capabilities.contains(.dom))
+    #expect(target.capabilities.contains(.css))
+}
+
+@Test
 func targetReplyCarriesPerDomainSequenceWatermarks() async throws {
     let backend = FakeTransportBackend()
     let session = TransportSession(backend: backend, responseTimeout: .seconds(1))
