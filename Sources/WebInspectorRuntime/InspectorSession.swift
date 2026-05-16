@@ -64,6 +64,49 @@ private final class DOMDeleteUndoState {
 }
 
 @MainActor
+private final class DOMDeleteUndoOperationQueue {
+    private var generation: UInt64 = 0
+    private var tail: Task<Void, Never>?
+    private var tasksByID: [UInt64: Task<Void, Never>] = [:]
+    private var nextTaskID: UInt64 = 0
+
+    func enqueue(_ operation: @escaping @MainActor (UInt64) async -> Void) {
+        let previousOperation = tail
+        let operationGeneration = generation
+        nextTaskID &+= 1
+        let taskID = nextTaskID
+        let task = Task { @MainActor [weak self] in
+            await previousOperation?.value
+            guard let self else {
+                return
+            }
+            defer {
+                tasksByID[taskID] = nil
+            }
+            guard isCurrent(operationGeneration) else {
+                return
+            }
+            await operation(operationGeneration)
+        }
+        tail = task
+        tasksByID[taskID] = task
+    }
+
+    func invalidate() {
+        generation &+= 1
+        for task in tasksByID.values {
+            task.cancel()
+        }
+        tasksByID.removeAll()
+        tail = nil
+    }
+
+    func isCurrent(_ operationGeneration: UInt64) -> Bool {
+        Task.isCancelled == false && generation == operationGeneration
+    }
+}
+
+@MainActor
 private final class InspectorConnection {
     let transport: TransportSession
     weak var webView: WKWebView?
@@ -126,6 +169,7 @@ package final class InspectorSession {
     @ObservationIgnored private var elementPickerTargetID: ProtocolTargetIdentifier?
     @ObservationIgnored private weak var deleteUndoManager: UndoManager?
     @ObservationIgnored private var deleteUndoStates: [DOMDeleteUndoState]
+    @ObservationIgnored private let deleteUndoOperationQueue: DOMDeleteUndoOperationQueue
     @ObservationIgnored private var domDocumentRequestHandlesByTargetID: [ProtocolTargetIdentifier: DOMDocumentRequestHandle]
 
     package init(
@@ -145,6 +189,7 @@ package final class InspectorSession {
         elementPickerTargetID = nil
         deleteUndoManager = nil
         deleteUndoStates = []
+        deleteUndoOperationQueue = DOMDeleteUndoOperationQueue()
         domDocumentRequestHandlesByTargetID = [:]
     }
 
@@ -1082,8 +1127,8 @@ package final class InspectorSession {
         trackDeleteUndoState(state)
         undoManager.registerUndo(withTarget: self) { target in
             target.registerRedoDelete(state, undoManager: undoManager)
-            Task { @MainActor in
-                await target.performUndoDelete(state, undoManager: undoManager)
+            target.enqueueDeleteUndoOperation { [weak target] generation in
+                await target?.performUndoDelete(state, undoManager: undoManager, generation: generation)
             }
         }
         undoManager.setActionName("Delete Node")
@@ -1094,39 +1139,85 @@ package final class InspectorSession {
         trackDeleteUndoState(state)
         undoManager.registerUndo(withTarget: self) { target in
             target.registerUndoDelete(state, undoManager: undoManager)
-            Task { @MainActor in
-                await target.performRedoDelete(state, undoManager: undoManager)
+            target.enqueueDeleteUndoOperation { [weak target] generation in
+                await target?.performRedoDelete(state, undoManager: undoManager, generation: generation)
             }
         }
         undoManager.setActionName("Delete Node")
     }
 
-    private func performUndoDelete(_ state: DOMDeleteUndoState, undoManager: UndoManager) async {
+    private func enqueueDeleteUndoOperation(_ operation: @escaping @MainActor (UInt64) async -> Void) {
+        deleteUndoOperationQueue.enqueue(operation)
+    }
+
+    private func performUndoDelete(_ state: DOMDeleteUndoState, undoManager: UndoManager, generation: UInt64) async {
+        guard deleteUndoOperationIsCurrent(generation) else {
+            return
+        }
         guard deleteUndoStateIsCurrent(state, undoManager: undoManager, operation: "undo") else {
             return
         }
         do {
+            try Task.checkCancellation()
             try await perform(.undo(targetID: state.commandTargetID))
+            try Task.checkCancellation()
+            guard deleteUndoOperationIsCurrent(generation) else {
+                return
+            }
             try await reloadDOMDocument(targetID: state.documentTargetID)
+            try Task.checkCancellation()
+            guard deleteUndoOperationIsCurrent(generation) else {
+                return
+            }
             updateDeleteUndoDocumentID(state, undoManager: undoManager)
+        } catch is CancellationError {
+            handleDeleteUndoOperationError(CancellationError(), undoManager: undoManager, generation: generation)
         } catch {
-            clearDeleteUndoHistory(using: undoManager)
-            lastError = InspectorSessionError(String(describing: error))
+            handleDeleteUndoOperationError(error, undoManager: undoManager, generation: generation)
         }
     }
 
-    private func performRedoDelete(_ state: DOMDeleteUndoState, undoManager: UndoManager) async {
+    private func performRedoDelete(_ state: DOMDeleteUndoState, undoManager: UndoManager, generation: UInt64) async {
+        guard deleteUndoOperationIsCurrent(generation) else {
+            return
+        }
         guard deleteUndoStateIsCurrent(state, undoManager: undoManager, operation: "redo") else {
             return
         }
         do {
+            try Task.checkCancellation()
             try await perform(.redo(targetID: state.commandTargetID))
+            try Task.checkCancellation()
+            guard deleteUndoOperationIsCurrent(generation) else {
+                return
+            }
             try await reloadDOMDocument(targetID: state.documentTargetID)
+            try Task.checkCancellation()
+            guard deleteUndoOperationIsCurrent(generation) else {
+                return
+            }
             updateDeleteUndoDocumentID(state, undoManager: undoManager)
+        } catch is CancellationError {
+            handleDeleteUndoOperationError(CancellationError(), undoManager: undoManager, generation: generation)
         } catch {
-            clearDeleteUndoHistory(using: undoManager)
-            lastError = InspectorSessionError(String(describing: error))
+            handleDeleteUndoOperationError(error, undoManager: undoManager, generation: generation)
         }
+    }
+
+    private func deleteUndoOperationIsCurrent(_ generation: UInt64) -> Bool {
+        deleteUndoOperationQueue.isCurrent(generation)
+    }
+
+    private func handleDeleteUndoOperationError(
+        _ error: any Error,
+        undoManager: UndoManager,
+        generation: UInt64
+    ) {
+        guard deleteUndoOperationIsCurrent(generation) else {
+            return
+        }
+        clearDeleteUndoHistory(using: undoManager)
+        lastError = InspectorSessionError(String(describing: error))
     }
 
     private func deleteUndoStateIsCurrent(
@@ -1176,6 +1267,7 @@ package final class InspectorSession {
             deleteUndoManager = nil
         }
         deleteUndoStates.removeAll()
+        deleteUndoOperationQueue.invalidate()
     }
 
     private func seedDOMSession(from snapshot: TransportSnapshot) {

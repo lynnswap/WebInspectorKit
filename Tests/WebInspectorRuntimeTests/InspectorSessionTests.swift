@@ -2091,6 +2091,107 @@ func reloadDOMDocumentDiscardsDeleteUndoHistory() async throws {
 
 @MainActor
 @Test
+func reloadDOMDocumentCancelsQueuedDeleteUndoOperationsBeforeTheySend() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    let htmlID = try #require(session.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(2))])
+    session.dom.selectNode(htmlID)
+
+    let undoManager = UndoManager()
+    let countBeforeDelete = await backend.sentTargetMessages().count
+    let deleteTask = Task {
+        try await session.deleteSelectedDOMNode(undoManager: undoManager)
+    }
+    let removeNode = try await waitForTargetMessage(backend, method: "DOM.removeNode", after: countBeforeDelete)
+    await receiveTargetReply(
+        transport,
+        targetID: removeNode.targetIdentifier,
+        messageID: try messageID(removeNode.message),
+        result: "{}"
+    )
+    try await deleteTask.value
+    #expect(undoManager.canUndo)
+
+    let countBeforeQueuedOperations = await backend.sentTargetMessages().count
+    let reloadReplyTask = Task {
+        let getDocument = await backend.waitForTargetMessage(method: "DOM.getDocument", after: countBeforeQueuedOperations)
+        await receiveTargetReply(
+            transport,
+            targetID: getDocument.targetIdentifier,
+            messageID: try messageID(getDocument.message),
+            result: mainDocumentResult
+        )
+    }
+
+    undoManager.undo()
+    #expect(undoManager.canRedo)
+    undoManager.redo()
+
+    try await session.reloadDOMDocument()
+    try await reloadReplyTask.value
+    try await Task.sleep(for: .milliseconds(50))
+
+    let methodsAfterReload = await targetMessageMethods(backend).dropFirst(countBeforeQueuedOperations)
+    #expect(methodsAfterReload.contains("DOM.getDocument"))
+    #expect(methodsAfterReload.contains("DOM.undo") == false)
+    #expect(methodsAfterReload.contains("DOM.redo") == false)
+}
+
+@MainActor
+@Test
+func deleteUndoReloadCancellationClearsUndoHistory() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    let htmlID = try #require(session.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(2))])
+    session.dom.selectNode(htmlID)
+
+    let undoManager = UndoManager()
+    let countBeforeDelete = await backend.sentTargetMessages().count
+    let deleteTask = Task {
+        try await session.deleteSelectedDOMNode(undoManager: undoManager)
+    }
+    let removeNode = try await waitForTargetMessage(backend, method: "DOM.removeNode", after: countBeforeDelete)
+    await receiveTargetReply(
+        transport,
+        targetID: removeNode.targetIdentifier,
+        messageID: try messageID(removeNode.message),
+        result: "{}"
+    )
+    try await deleteTask.value
+    #expect(undoManager.canUndo)
+
+    let countBeforeUndo = await backend.sentTargetMessages().count
+    undoManager.undo()
+    let undo = try await waitForTargetMessage(backend, method: "DOM.undo", after: countBeforeUndo)
+    await receiveTargetReply(
+        transport,
+        targetID: undo.targetIdentifier,
+        messageID: try messageID(undo.message),
+        result: "{}"
+    )
+    _ = try await waitForTargetMessage(backend, method: "DOM.getDocument", after: countBeforeUndo)
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"DOM.documentUpdated","params":{}}"#
+    )
+
+    _ = try await waitUntil {
+        await MainActor.run {
+            undoManager.canRedo == false ? session.lastError : nil
+        }
+    }
+    #expect(undoManager.canUndo == false)
+    #expect(undoManager.canRedo == false)
+    #expect(session.lastError == InspectorSessionError(String(describing: CancellationError())))
+}
+
+@MainActor
+@Test
 func reloadDOMDocumentCancelsActiveElementPickerBeforeReplacingDocument() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
