@@ -163,6 +163,7 @@ package final class InspectorSession {
     @ObservationIgnored private var highlightedDOMTargetID: ProtocolTargetIdentifier?
     @ObservationIgnored private var elementPickerTargetID: ProtocolTargetIdentifier?
     @ObservationIgnored private var elementPickerGeneration: UInt64
+    @ObservationIgnored private var elementPickerAcceptsInspectEvents: Bool
     @ObservationIgnored private weak var deleteUndoManager: UndoManager?
     @ObservationIgnored private var deleteUndoStates: [DOMDeleteUndoState]
     @ObservationIgnored private let deleteUndoOperationQueue: DOMDeleteUndoOperationQueue
@@ -184,6 +185,7 @@ package final class InspectorSession {
         highlightedDOMTargetID = nil
         elementPickerTargetID = nil
         elementPickerGeneration = 0
+        elementPickerAcceptsInspectEvents = false
         deleteUndoManager = nil
         deleteUndoStates = []
         deleteUndoOperationQueue = DOMDeleteUndoOperationQueue()
@@ -371,7 +373,9 @@ package final class InspectorSession {
         }
 
         elementPickerGeneration &+= 1
+        let pickerGeneration = elementPickerGeneration
         elementPickerTargetID = targetID
+        elementPickerAcceptsInspectEvents = false
         isSelectingElement = true
 
         do {
@@ -380,6 +384,10 @@ package final class InspectorSession {
                 throw InspectorSessionError("DOM inspect mode is not available.")
             }
             try await perform(intent)
+            guard isElementPickerSession(generation: pickerGeneration, targetID: targetID) else {
+                return
+            }
+            elementPickerAcceptsInspectEvents = true
             lastError = nil
         } catch {
             recordElementPickerFailure(
@@ -803,6 +811,7 @@ package final class InspectorSession {
 
     private func handleInspectEvent(_ event: DOMInspectEvent) async {
         guard isSelectingElement,
+              elementPickerAcceptsInspectEvents,
               let activeTargetID = elementPickerTargetID else {
             recordElementPickerFailure(
                 reason: "inspectEventWithoutActivePicker",
@@ -928,6 +937,7 @@ package final class InspectorSession {
     private func clearElementPickerState(invalidatePendingSelection: Bool = false) {
         elementPickerGeneration &+= 1
         elementPickerTargetID = nil
+        elementPickerAcceptsInspectEvents = false
         isSelectingElement = false
         if invalidatePendingSelection {
             dom.selectNode(dom.selectedNodeID)
@@ -951,8 +961,12 @@ package final class InspectorSession {
         InspectorRuntimeLog.warning(message)
     }
 
-    private func isCurrentElementPicker(generation: UInt64, targetID: ProtocolTargetIdentifier) -> Bool {
+    private func isElementPickerSession(generation: UInt64, targetID: ProtocolTargetIdentifier) -> Bool {
         isSelectingElement && elementPickerGeneration == generation && elementPickerTargetID == targetID
+    }
+
+    private func isCurrentElementPicker(generation: UInt64, targetID: ProtocolTargetIdentifier) -> Bool {
+        isElementPickerSession(generation: generation, targetID: targetID) && elementPickerAcceptsInspectEvents
     }
 
     private func completeElementPicker(generation: UInt64, targetID: ProtocolTargetIdentifier) async {
@@ -1056,16 +1070,25 @@ package final class InspectorSession {
     }
 
     private func refreshDOMDocumentAfterBackendUpdate(_ event: ProtocolEventEnvelope) {
-        guard let targetID = event.targetID ?? dom.currentPageTargetID,
-              dom.currentDocumentID(for: targetID) != nil || dom.currentPageTargetID == targetID else {
+        guard let targetID = event.targetID ?? dom.currentPageTargetID else {
             return
         }
-        let targetKind = dom.targetKind(for: targetID)
-        cancelDOMDocumentRequest(targetID: targetID, reason: "documentUpdated")
+        let activeRequest = domDocumentRequestHandlesByTargetID[targetID]
+        let targetKind = dom.targetKind(for: targetID) ?? activeRequest?.targetKind
+        let isCurrentPageTarget = dom.currentPageTargetID == targetID
+        let hasCurrentDocument = dom.currentDocumentID(for: targetID) != nil
+        let hasActiveFrameDocumentRequest = targetKind == .frame && activeRequest != nil
+        guard hasCurrentDocument || isCurrentPageTarget || hasActiveFrameDocumentRequest else {
+            return
+        }
+
         dom.invalidateDocument(targetID: targetID)
         if targetKind == .frame {
             startDOMDocumentRequest(targetID: targetID, force: true, reason: "frameDocumentUpdated")
+            return
         }
+
+        cancelDOMDocumentRequest(targetID: targetID, reason: "documentUpdated")
     }
 
     private func cancelDOMDocumentRequest(targetID: ProtocolTargetIdentifier, reason: String) {
