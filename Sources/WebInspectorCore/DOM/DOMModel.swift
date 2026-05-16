@@ -1048,7 +1048,8 @@ package final class DOMSession {
         targetID: ProtocolTarget.ID,
         nodeID: DOMProtocolNodeID
     ) -> Result<DOMNode.ID, SelectionResolutionFailure> {
-        guard let document = targetStatesByID[targetID]?.currentDocument else {
+        guard let document = targetStatesByID[targetID]?.currentDocument,
+              document.lifecycle == .loaded else {
             return failSelection(.missingCurrentDocument(targetID), clearSelected: false)
         }
         let key = DOMNodeCurrentKey(targetID: targetID, nodeID: nodeID)
@@ -1095,6 +1096,10 @@ package final class DOMSession {
             node: node,
             issuedSequence: issuedSequence
         )
+    }
+
+    package func clearOwnerHydrationTransactions(targetID: ProtocolTarget.ID) {
+        targetStatesByID[targetID]?.currentDocument?.removeOwnerHydrationTransactions()
     }
 
     package func actionIdentity(

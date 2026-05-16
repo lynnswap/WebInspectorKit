@@ -288,6 +288,9 @@ func pendingFrameOwnerHydrationWalksLoadedDescendants() async throws {
         await session.snapshot().currentNodeIDByKey[.init(targetID: pageTargetID, nodeID: .init(30))]
     )
     #expect(await session.pendingFrameOwnerHydrationIntent() == .requestChildNodes(targetID: pageTargetID, nodeID: .init(30), depth: 1))
+    #expect(await session.pendingFrameOwnerHydrationIntent() == nil)
+    await session.clearOwnerHydrationTransactions(targetID: pageTargetID)
+    #expect(await session.pendingFrameOwnerHydrationIntent() == .requestChildNodes(targetID: pageTargetID, nodeID: .init(30), depth: 1))
 
     await session.applySetChildNodes(
         parent: wrapperID,
@@ -1133,6 +1136,26 @@ func requestNodeReplyAfterDocumentInvalidationIsRejected() async throws {
     #expect(targetID == pageTargetID)
     #expect(snapshot.selection.selectedNodeID == nil)
     #expect(snapshot.selection.pendingRequest == nil)
+}
+
+@Test
+func protocolNodeSelectionAfterDocumentInvalidationIsRejected() async throws {
+    let pageTargetID = ProtocolTarget.ID("page-main")
+    let session = await DOMSession()
+
+    await session.applyTargetCreated(.init(id: pageTargetID, kind: .page), makeCurrentMainPage: true)
+    _ = await session.replaceDocumentRoot(pageDocumentWithoutIframe(), targetID: pageTargetID)
+    await session.invalidateDocument(targetID: pageTargetID)
+
+    let result = await session.selectProtocolNode(targetID: pageTargetID, nodeID: .init(2))
+    let snapshot = await session.snapshot()
+
+    guard case let .failure(.missingCurrentDocument(targetID)) = result else {
+        Issue.record("Expected missing current document failure")
+        return
+    }
+    #expect(targetID == pageTargetID)
+    #expect(snapshot.selection.selectedNodeID == nil)
 }
 
 @Test

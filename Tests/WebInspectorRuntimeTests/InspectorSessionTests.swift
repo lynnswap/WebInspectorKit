@@ -311,6 +311,59 @@ func provisionalFrameDocumentResolvedBeforeCommitRehydratesCommittedFrame() asyn
     #expect(snapshot.targetsByID[provisionalTargetID] == nil)
 }
 
+@Test
+func provisionalFrameCommitCancelsInFlightDocumentRequestBeforeRehydrating() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    let provisionalTargetID = ProtocolTargetIdentifier("frame-provisional")
+    let sentCountBeforeFrameTarget = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-provisional","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["DOM","Runtime"],"isProvisional":true}}}"#
+    )
+    let firstRequest = try await waitForTargetMessage(
+        backend,
+        method: "DOM.getDocument",
+        after: sentCountBeforeFrameTarget
+    )
+    #expect(firstRequest.targetIdentifier == provisionalTargetID)
+    let firstRequestMessageID = try messageID(firstRequest.message)
+
+    let sentCountBeforeCommit = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"frame-provisional","newTargetId":"frame-ad"}}"#
+    )
+    let committedRequest = try await waitForTargetMessage(
+        backend,
+        method: "DOM.getDocument",
+        after: sentCountBeforeCommit
+    )
+    #expect(committedRequest.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    await receiveTargetReply(
+        transport,
+        targetID: committedRequest.targetIdentifier,
+        messageID: try messageID(committedRequest.message),
+        result: secondLazyFrameDocumentResult
+    )
+    _ = try await waitUntil {
+        await session.dom.snapshot().currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(201))]
+    }
+
+    await receiveTargetReply(
+        transport,
+        targetID: .frameAd,
+        messageID: firstRequestMessageID,
+        result: firstLazyFrameDocumentResult
+    )
+    try await Task.sleep(for: .milliseconds(25))
+
+    let snapshot = await session.dom.snapshot()
+    #expect(snapshot.currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(201))] != nil)
+    #expect(snapshot.currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(101))] == nil)
+}
+
 @Test("Regression: frame getDocument request does not block page DOM events")
 func frameDocumentRequestDoesNotBlockPageDOMEvents() async throws {
     let backend = FakeTransportBackend()
@@ -1525,6 +1578,86 @@ func elementPickerAcceptsInspectEventBeforeInspectModeReply() async throws {
     }
     #expect(await selectedNode.nodeName == "DIV")
     #expect(await session.isSelectingElement == false)
+}
+
+@Test
+func staleInspectEventCompletionDoesNotCancelRestartedPicker() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"main-frame"}}}"#
+    )
+    _ = try await waitUntil {
+        await session.dom.snapshot().executionContextsByID[ExecutionContextID(7)]
+    }
+    try await beginPicker(session: session, transport: transport, backend: backend)
+
+    let sentCountBeforeInspect = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(#"{"method":"Inspector.inspect","params":{"object":{"objectId":"{\"injectedScriptId\":7,\"id\":99}"},"hints":{}}}"#)
+    let requestNode = try await waitForTargetMessage(
+        backend,
+        method: "DOM.requestNode",
+        after: sentCountBeforeInspect
+    )
+
+    let sentCountBeforeCancel = await backend.sentTargetMessages().count
+    let cancelTask = Task {
+        await session.cancelElementPicker()
+    }
+    let cancelDisable = try await waitForTargetMessage(
+        backend,
+        method: "DOM.setInspectModeEnabled",
+        after: sentCountBeforeCancel
+    )
+    #expect(try boolParameter("enabled", in: cancelDisable.message) == false)
+    await receiveTargetReply(
+        transport,
+        targetID: cancelDisable.targetIdentifier,
+        messageID: try messageID(cancelDisable.message),
+        result: "{}"
+    )
+    await cancelTask.value
+
+    let sentCountBeforeRestart = await backend.sentTargetMessages().count
+    let restartTask = Task {
+        try await session.beginElementPicker()
+    }
+    let restartEnable = try await waitForTargetMessage(
+        backend,
+        method: "DOM.setInspectModeEnabled",
+        after: sentCountBeforeRestart
+    )
+    #expect(try boolParameter("enabled", in: restartEnable.message) == true)
+    await receiveTargetReply(
+        transport,
+        targetID: restartEnable.targetIdentifier,
+        messageID: try messageID(restartEnable.message),
+        result: "{}"
+    )
+    try await restartTask.value
+    #expect(await session.isSelectingElement)
+
+    let sentCountBeforeStaleReply = await backend.sentTargetMessages().count
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"DOM.setChildNodes","params":{"parentId":2,"nodes":[{"nodeId":3,"nodeType":1,"nodeName":"DIV","localName":"div","attributes":["id","old-picker"]}]}}"#
+    )
+    await receiveTargetReply(
+        transport,
+        targetID: requestNode.targetIdentifier,
+        messageID: try messageID(requestNode.message),
+        result: #"{"nodeId":3}"#
+    )
+    try await Task.sleep(for: .milliseconds(25))
+
+    let messagesAfterStaleReply = await backend.sentTargetMessages().dropFirst(sentCountBeforeStaleReply)
+    #expect(await session.isSelectingElement)
+    #expect(messagesAfterStaleReply.allSatisfy { (try? messageMethod($0.message)) != "DOM.setInspectModeEnabled" })
 }
 
 @Test

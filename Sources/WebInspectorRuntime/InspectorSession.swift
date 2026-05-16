@@ -167,6 +167,7 @@ package final class InspectorSession {
     @ObservationIgnored private var pendingConnection: InspectorConnection?
     @ObservationIgnored private var highlightedDOMTargetID: ProtocolTargetIdentifier?
     @ObservationIgnored private var elementPickerTargetID: ProtocolTargetIdentifier?
+    @ObservationIgnored private var elementPickerGeneration: UInt64
     @ObservationIgnored private weak var deleteUndoManager: UndoManager?
     @ObservationIgnored private var deleteUndoStates: [DOMDeleteUndoState]
     @ObservationIgnored private let deleteUndoOperationQueue: DOMDeleteUndoOperationQueue
@@ -187,6 +188,7 @@ package final class InspectorSession {
         pendingConnection = nil
         highlightedDOMTargetID = nil
         elementPickerTargetID = nil
+        elementPickerGeneration = 0
         deleteUndoManager = nil
         deleteUndoStates = []
         deleteUndoOperationQueue = DOMDeleteUndoOperationQueue()
@@ -373,6 +375,7 @@ package final class InspectorSession {
             await cancelElementPicker()
         }
 
+        elementPickerGeneration &+= 1
         elementPickerTargetID = targetID
         isSelectingElement = true
 
@@ -734,8 +737,11 @@ package final class InspectorSession {
                 startPageTargetDocumentRequestAfterCommit(targetID: targetID, connection: connection)
             }
             if event.method == "Target.didCommitProvisionalTarget",
-               let committedTargetID = targetCommittedID(from: event) {
-                startFrameTargetDocumentRequestAfterCommit(targetID: committedTargetID)
+               let committedTarget = targetCommittedParams(from: event) {
+                if let oldTargetID = committedTarget.oldTargetId {
+                    cancelDOMDocumentRequest(targetID: oldTargetID, reason: "frameTargetCommit")
+                }
+                startFrameTargetDocumentRequestAfterCommit(targetID: committedTarget.newTargetId)
             }
         } catch {
             lastError = InspectorSessionError("\(event.method): \(error)")
@@ -793,6 +799,7 @@ package final class InspectorSession {
                 try await perform(intent)
             } catch {
                 InspectorRuntimeLog.warning("frameOwnerHydration.failed intent=\(intent) error=\(error)")
+                clearOwnerHydrationTransaction(for: intent)
                 lastError = InspectorSessionError(String(describing: error))
             }
         }
@@ -807,9 +814,13 @@ package final class InspectorSession {
             )
             return
         }
+        let pickerGeneration = elementPickerGeneration
         do {
             try await resolvePickerSelection(event, activeTargetID: activeTargetID)
         } catch {
+            guard isCurrentElementPicker(generation: pickerGeneration, targetID: activeTargetID) else {
+                return
+            }
             recordElementPickerFailure(
                 reason: "selectionResolveFailed",
                 targetID: activeTargetID,
@@ -818,7 +829,7 @@ package final class InspectorSession {
             lastError = InspectorSessionError(String(describing: error))
         }
 
-        await completeElementPicker()
+        await completeElementPicker(generation: pickerGeneration, targetID: activeTargetID)
     }
 
     private func resolvePickerSelection(
@@ -919,6 +930,7 @@ package final class InspectorSession {
     }
 
     private func clearElementPickerState(invalidatePendingSelection: Bool = false) {
+        elementPickerGeneration &+= 1
         elementPickerTargetID = nil
         isSelectingElement = false
         if invalidatePendingSelection {
@@ -943,11 +955,16 @@ package final class InspectorSession {
         InspectorRuntimeLog.warning(message)
     }
 
-    private func completeElementPicker() async {
-        let targetID = elementPickerTargetID ?? dom.currentPageTargetID
+    private func isCurrentElementPicker(generation: UInt64, targetID: ProtocolTargetIdentifier) -> Bool {
+        isSelectingElement && elementPickerGeneration == generation && elementPickerTargetID == targetID
+    }
+
+    private func completeElementPicker(generation: UInt64, targetID: ProtocolTargetIdentifier) async {
+        guard isCurrentElementPicker(generation: generation, targetID: targetID) else {
+            return
+        }
         clearElementPickerState()
-        guard let targetID,
-              let intent = dom.setInspectModeEnabledIntent(targetID: targetID, enabled: false) else {
+        guard let intent = dom.setInspectModeEnabledIntent(targetID: targetID, enabled: false) else {
             return
         }
         do {
@@ -1080,7 +1097,7 @@ package final class InspectorSession {
         return params.targetId
     }
 
-    private func targetCommittedID(from event: ProtocolEventEnvelope) -> ProtocolTargetIdentifier? {
+    private func targetCommittedParams(from event: ProtocolEventEnvelope) -> TargetCommittedEventParams? {
         guard event.method == "Target.didCommitProvisionalTarget",
               let params = try? TransportMessageParser.decode(
                   TargetCommittedEventParams.self,
@@ -1088,7 +1105,14 @@ package final class InspectorSession {
               ) else {
             return nil
         }
-        return params.newTargetId
+        return params
+    }
+
+    private func clearOwnerHydrationTransaction(for intent: DOMCommandIntent) {
+        guard case let .requestChildNodes(targetID, _, _) = intent else {
+            return
+        }
+        dom.clearOwnerHydrationTransactions(targetID: targetID)
     }
 
     private func shouldIgnoreFrameDocumentRequestError(_ error: any Error) -> Bool {
