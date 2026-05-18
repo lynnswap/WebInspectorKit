@@ -39,9 +39,6 @@ package final class DOMCompactNavigationController: UINavigationController {
     }
 }
 
-#if DEBUG && canImport(SwiftUI)
-import SwiftUI
-
 #Preview("DOM Compact Tree") {
     DOMCompactNavigationController(
         rootViewController: DOMTreeViewController(dom: DOMPreviewFixtures.makeDOMSession())
@@ -53,5 +50,4 @@ import SwiftUI
         rootViewController: DOMElementViewController(dom: DOMPreviewFixtures.makeDOMSession())
     )
 }
-#endif
 #endif

@@ -64,23 +64,24 @@ func selectedCSSNodeStyleIdentityRequiresElementCurrentNodeAndCSSTarget() async 
 }
 
 @Test
-func cssSessionBuildsOrderedSectionsAndPropertyRowState() async throws {
-    let css = await CSSSession()
+@MainActor
+func cssSessionBuildsOrderedSectionsAndPropertyRowState() throws {
+    let css = CSSSession()
     let identity = cssIdentity()
-    let token = try #require(await css.beginRefresh(identity: identity))
+    let token = try #require(css.beginRefresh(identity: identity))
 
-    await css.applyRefresh(
+    css.applyRefresh(
         token: token,
         matched: CSSMatchedStylesPayload(
             matchedRules: [
-                CSSRuleMatch(
+                CSSRuleMatchPayload(
                     rule: rule(
                         selector: "body",
                         properties: [
-                            CSSProperty(name: "margin", value: "0", text: "margin: 0;", status: .active),
-                            CSSProperty(name: "color", value: "red", text: "color: red;", status: .inactive),
-                            CSSProperty(name: "display", value: "block", text: "/* display: block; */", status: .disabled),
-                            CSSProperty(name: "box-sizing", value: "border-box", text: "box-sizing: border-box;"),
+                            CSSPropertyPayload(name: "margin", value: "0", text: "margin: 0;", status: .active),
+                            CSSPropertyPayload(name: "color", value: "red", text: "color: red;", status: .inactive),
+                            CSSPropertyPayload(name: "display", value: "block", text: "/* display: block; */", status: .disabled),
+                            CSSPropertyPayload(name: "box-sizing", value: "border-box", text: "box-sizing: border-box;"),
                         ]
                     ),
                     matchingSelectors: [0]
@@ -91,27 +92,27 @@ func cssSessionBuildsOrderedSectionsAndPropertyRowState() async throws {
             inlineStyle: style(
                 id: CSSStyleIdentifier(styleSheetID: .init("inline"), ordinal: 0),
                 properties: [
-                    CSSProperty(name: "padding", value: "4px", text: "padding: 4px;"),
+                    CSSPropertyPayload(name: "padding", value: "4px", text: "padding: 4px;"),
                 ]
             ),
             attributesStyle: style(properties: [
-                CSSProperty(name: "width", value: "100", text: "width: 100;"),
+                CSSPropertyPayload(name: "width", value: "100", text: "width: 100;"),
             ])
         ),
         computed: [
-            CSSComputedStyleProperty(name: "display", value: "block"),
+            CSSComputedStylePropertyPayload(name: "display", value: "block"),
         ]
     )
 
-    let selected = try #require(await css.selectedNodeStyles)
-    #expect(await css.selectedState == .loaded)
-    #expect(await selected.sections.map(\.kind) == [.inlineStyle, .rule, .attributesStyle])
-    #expect(await selected.sections[0].title == "element.style")
-    #expect(await selected.sections[1].title == "body")
-    #expect(await selected.sections[2].isEditable == false)
-    #expect(await selected.computedProperties == [CSSComputedStyleProperty(name: "display", value: "block")])
+    let selected = try #require(css.selectedNodeStyles)
+    #expect(css.selectedState == .loaded)
+    #expect(selected.sections.map(\.kind) == [.inlineStyle, .rule, .attributesStyle])
+    #expect(selected.sections[0].title == "element.style")
+    #expect(selected.sections[1].title == "body")
+    #expect(selected.sections[2].isEditable == false)
+    #expect(selected.computedProperties == [CSSComputedStyleProperty(name: "display", value: "block")])
 
-    let properties = await selected.sections[1].style.cssProperties
+    let properties = selected.sections[1].style.cssProperties
     #expect(properties[0].isEnabled)
     #expect(properties[0].isOverridden == false)
     #expect(properties[1].isOverridden)
@@ -122,38 +123,39 @@ func cssSessionBuildsOrderedSectionsAndPropertyRowState() async throws {
 }
 
 @Test
-func cssSessionRendersMatchedRulesInCascadeOrder() async throws {
-    let css = await CSSSession()
+@MainActor
+func cssSessionRendersMatchedRulesInCascadeOrder() throws {
+    let css = CSSSession()
     let identity = cssIdentity()
-    let token = try #require(await css.beginRefresh(identity: identity))
-    await css.applyRefresh(
+    let token = try #require(css.beginRefresh(identity: identity))
+    css.applyRefresh(
         token: token,
         matched: CSSMatchedStylesPayload(
             matchedRules: [
-                CSSRuleMatch(
+                CSSRuleMatchPayload(
                     rule: rule(selector: ".base", styleID: .init(styleSheetID: .init("base"), ordinal: 0), properties: [
-                        CSSProperty(name: "color", value: "black", text: "color: black;"),
+                        CSSPropertyPayload(name: "color", value: "black", text: "color: black;"),
                     ]),
                     matchingSelectors: [0]
                 ),
-                CSSRuleMatch(
+                CSSRuleMatchPayload(
                     rule: rule(selector: ".specific", styleID: .init(styleSheetID: .init("specific"), ordinal: 1), properties: [
-                        CSSProperty(name: "color", value: "red", text: "color: red;"),
+                        CSSPropertyPayload(name: "color", value: "red", text: "color: red;"),
                     ]),
                     matchingSelectors: [0]
                 ),
             ],
             inherited: [
                 CSSInheritedStyleEntry(matchedRules: [
-                    CSSRuleMatch(
+                    CSSRuleMatchPayload(
                         rule: rule(selector: ".ancestor-base", styleID: .init(styleSheetID: .init("ancestor-base"), ordinal: 0), properties: [
-                            CSSProperty(name: "font", value: "inherit", text: "font: inherit;"),
+                            CSSPropertyPayload(name: "font", value: "inherit", text: "font: inherit;"),
                         ]),
                         matchingSelectors: [0]
                     ),
-                    CSSRuleMatch(
+                    CSSRuleMatchPayload(
                         rule: rule(selector: ".ancestor-specific", styleID: .init(styleSheetID: .init("ancestor-specific"), ordinal: 1), properties: [
-                            CSSProperty(name: "font", value: "system", text: "font: system;"),
+                            CSSPropertyPayload(name: "font", value: "system", text: "font: system;"),
                         ]),
                         matchingSelectors: [0]
                     ),
@@ -164,8 +166,8 @@ func cssSessionRendersMatchedRulesInCascadeOrder() async throws {
         computed: []
     )
 
-    let styles = try #require(await css.selectedNodeStyles)
-    #expect(await styles.sections.map(\.title) == [
+    let styles = try #require(css.selectedNodeStyles)
+    #expect(styles.sections.map(\.title) == [
         ".specific",
         ".base",
         ".ancestor-specific",
@@ -186,8 +188,8 @@ func cssSessionBuildsSetStyleTextIntentByCommentingAndUncommentingPropertyText()
             inlineStyle: style(
                 id: styleID,
                 properties: [
-                    CSSProperty(name: "margin", value: "0", text: "margin: 0;", status: .active),
-                    CSSProperty(name: "box-sizing", value: "border-box", text: "box-sizing: border-box;"),
+                    CSSPropertyPayload(name: "margin", value: "0", text: "margin: 0;", status: .active),
+                    CSSPropertyPayload(name: "box-sizing", value: "border-box", text: "box-sizing: border-box;"),
                 ]
             )
         ),
@@ -209,12 +211,12 @@ func cssSessionBuildsSetStyleTextIntentByCommentingAndUncommentingPropertyText()
     await css.applyRefresh(
         token: disabledToken,
         matched: CSSMatchedStylesPayload(matchedRules: [
-            CSSRuleMatch(
+            CSSRuleMatchPayload(
                 rule: rule(
                     selector: "body",
                     styleID: disabledStyleID,
                     properties: [
-                        CSSProperty(name: "margin", value: "0", text: "/* margin: 0; */", status: .disabled),
+                        CSSPropertyPayload(name: "margin", value: "0", text: "/* margin: 0; */", status: .disabled),
                     ]
                 ),
                 matchingSelectors: [0]
@@ -240,20 +242,20 @@ func cssSessionRejectsNonEditableToggleTargets() async throws {
     await css.applyRefresh(
         token: token,
         matched: CSSMatchedStylesPayload(matchedRules: [
-            CSSRuleMatch(
+            CSSRuleMatchPayload(
                 rule: rule(
                     selector: "body",
                     styleID: styleID,
                     origin: .userAgent,
                     properties: [
-                        CSSProperty(name: "display", value: "block", text: "display: block;"),
+                        CSSPropertyPayload(name: "display", value: "block", text: "display: block;"),
                     ]
                 ),
                 matchingSelectors: [0]
             ),
         ]),
         inline: CSSInlineStylesPayload(attributesStyle: style(properties: [
-            CSSProperty(name: "width", value: "100", text: "width: 100;"),
+            CSSPropertyPayload(name: "width", value: "100", text: "width: 100;"),
         ])),
         computed: []
     )
@@ -265,21 +267,22 @@ func cssSessionRejectsNonEditableToggleTargets() async throws {
 }
 
 @Test
-func cssSessionDoesNotSynthesizeStyleTextWhenOtherPropertiesHaveNoAuthoredText() async throws {
-    let css = await CSSSession()
+@MainActor
+func cssSessionDoesNotSynthesizeStyleTextWhenOtherPropertiesHaveNoAuthoredText() throws {
+    let css = CSSSession()
     let identity = cssIdentity()
     let styleID = CSSStyleIdentifier(styleSheetID: .init("sheet"), ordinal: 0)
-    let token = try #require(await css.beginRefresh(identity: identity))
-    await css.applyRefresh(
+    let token = try #require(css.beginRefresh(identity: identity))
+    css.applyRefresh(
         token: token,
         matched: CSSMatchedStylesPayload(matchedRules: [
-            CSSRuleMatch(
+            CSSRuleMatchPayload(
                 rule: rule(
                     selector: "body",
                     styleID: styleID,
                     properties: [
-                        CSSProperty(name: "margin", value: "0", text: "margin: 0;"),
-                        CSSProperty(name: "margin-top", value: "0", implicit: true),
+                        CSSPropertyPayload(name: "margin", value: "0", text: "margin: 0;"),
+                        CSSPropertyPayload(name: "margin-top", value: "0", implicit: true),
                     ]
                 ),
                 matchingSelectors: [0]
@@ -289,29 +292,30 @@ func cssSessionDoesNotSynthesizeStyleTextWhenOtherPropertiesHaveNoAuthoredText()
         computed: []
     )
 
-    let styles = try #require(await css.selectedNodeStyles)
-    #expect(await styles.sections[0].style.cssProperties[0].isEditable == false)
-    #expect(await css.setStyleTextIntent(
+    let styles = try #require(css.selectedNodeStyles)
+    #expect(styles.sections[0].style.cssProperties[0].isEditable == false)
+    #expect(css.setStyleTextIntent(
         for: CSSPropertyIdentifier(styleID: styleID, propertyIndex: 0),
         enabled: false
     ) == nil)
 }
 
 @Test
-func cssSessionInFlightRefreshWinsOverInvalidation() async throws {
-    let css = await CSSSession()
+@MainActor
+func cssSessionInFlightRefreshWinsOverInvalidation() throws {
+    let css = CSSSession()
     let identity = cssIdentity()
-    let token = try #require(await css.beginRefresh(identity: identity))
+    let token = try #require(css.beginRefresh(identity: identity))
 
-    await css.markNeedsRefresh(targetID: identity.targetID)
-    await css.applyRefresh(
+    css.markNeedsRefresh(targetID: identity.targetID)
+    css.applyRefresh(
         token: token,
         matched: CSSMatchedStylesPayload(matchedRules: [
-            CSSRuleMatch(
+            CSSRuleMatchPayload(
                 rule: rule(
                     selector: "body",
                     properties: [
-                        CSSProperty(name: "margin", value: "0", text: "margin: 0;"),
+                        CSSPropertyPayload(name: "margin", value: "0", text: "margin: 0;"),
                     ]
                 ),
                 matchingSelectors: [0]
@@ -321,8 +325,38 @@ func cssSessionInFlightRefreshWinsOverInvalidation() async throws {
         computed: []
     )
 
+    #expect(css.selectedState == .loaded)
+    #expect(css.selectedNodeStyles?.sections.map(\.title) == ["body"])
+}
+
+@Test
+func cssSessionInvalidatesOnlyNodeStylesThatReferenceChangedStyleSheet() async throws {
+    let css = await CSSSession()
+    let identity = cssIdentity()
+    let token = try #require(await css.beginRefresh(identity: identity))
+    await css.applyRefresh(
+        token: token,
+        matched: CSSMatchedStylesPayload(matchedRules: [
+            CSSRuleMatchPayload(
+                rule: rule(
+                    selector: "body",
+                    styleID: .init(styleSheetID: .init("tracked"), ordinal: 0),
+                    properties: [
+                        CSSPropertyPayload(name: "margin", value: "0", text: "margin: 0;"),
+                    ]
+                ),
+                matchingSelectors: [0]
+            ),
+        ]),
+        inline: .init(),
+        computed: []
+    )
+
+    await css.markNeedsRefresh(targetID: identity.targetID, styleSheetID: .init("untracked"))
     #expect(await css.selectedState == .loaded)
-    #expect(await css.selectedNodeStyles?.sections.map(\.title) == ["body"])
+
+    await css.markNeedsRefresh(targetID: identity.targetID, styleSheetID: .init("tracked"))
+    #expect(await css.selectedState == .needsRefresh)
 }
 
 @Test
@@ -334,12 +368,12 @@ func cssSessionRejectsEditIntentWhenSelectedStylesNeedRefresh() async throws {
     await css.applyRefresh(
         token: token,
         matched: CSSMatchedStylesPayload(matchedRules: [
-            CSSRuleMatch(
+            CSSRuleMatchPayload(
                 rule: rule(
                     selector: "body",
                     styleID: styleID,
                     properties: [
-                        CSSProperty(name: "margin", value: "0", text: "margin: 0;"),
+                        CSSPropertyPayload(name: "margin", value: "0", text: "margin: 0;"),
                     ]
                 ),
                 matchingSelectors: [0]
@@ -362,22 +396,23 @@ func cssSessionRejectsEditIntentWhenSelectedStylesNeedRefresh() async throws {
 }
 
 @Test
-func cssSessionAppliesSetStyleTextResultOnlyToEditedTarget() async throws {
-    let css = await CSSSession()
+@MainActor
+func cssSessionAppliesSetStyleTextResultOnlyToEditedTarget() throws {
+    let css = CSSSession()
     let sharedStyleID = CSSStyleIdentifier(styleSheetID: .init("sheet"), ordinal: 0)
     let pageIdentity = cssIdentity(targetID: .init("page"), nodeRawID: 2)
     let frameIdentity = cssIdentity(targetID: .init("frame"), nodeRawID: 2)
 
-    let pageToken = try #require(await css.beginRefresh(identity: pageIdentity))
-    await css.applyRefresh(
+    let pageToken = try #require(css.beginRefresh(identity: pageIdentity))
+    css.applyRefresh(
         token: pageToken,
         matched: CSSMatchedStylesPayload(matchedRules: [
-            CSSRuleMatch(
+            CSSRuleMatchPayload(
                 rule: rule(
                     selector: "body",
                     styleID: sharedStyleID,
                     properties: [
-                        CSSProperty(name: "margin", value: "0", text: "margin: 0;"),
+                        CSSPropertyPayload(name: "margin", value: "0", text: "margin: 0;"),
                     ]
                 ),
                 matchingSelectors: [0]
@@ -387,16 +422,16 @@ func cssSessionAppliesSetStyleTextResultOnlyToEditedTarget() async throws {
         computed: []
     )
 
-    let frameToken = try #require(await css.beginRefresh(identity: frameIdentity))
-    await css.applyRefresh(
+    let frameToken = try #require(css.beginRefresh(identity: frameIdentity))
+    css.applyRefresh(
         token: frameToken,
         matched: CSSMatchedStylesPayload(matchedRules: [
-            CSSRuleMatch(
+            CSSRuleMatchPayload(
                 rule: rule(
                     selector: "body",
                     styleID: sharedStyleID,
                     properties: [
-                        CSSProperty(name: "margin", value: "10px", text: "margin: 10px;"),
+                        CSSPropertyPayload(name: "margin", value: "10px", text: "margin: 10px;"),
                     ]
                 ),
                 matchingSelectors: [0]
@@ -406,18 +441,18 @@ func cssSessionAppliesSetStyleTextResultOnlyToEditedTarget() async throws {
         computed: []
     )
 
-    await css.applySetStyleTextResult(
-        CSSStyle(id: sharedStyleID, cssProperties: [
-            CSSProperty(name: "margin", value: "0", text: "/* margin: 0; */", status: .disabled),
+    css.applySetStyleTextResult(
+        CSSStylePayload(id: sharedStyleID, cssProperties: [
+            CSSPropertyPayload(name: "margin", value: "0", text: "/* margin: 0; */", status: .disabled),
         ]),
         styleID: sharedStyleID,
         targetID: pageIdentity.targetID
     )
 
-    let selectedFrameStyles = try #require(await css.selectedNodeStyles)
-    #expect(await css.selectedState == .loaded)
-    #expect(await selectedFrameStyles.identity.targetID == frameIdentity.targetID)
-    #expect(await selectedFrameStyles.sections[0].style.cssProperties[0].value == "10px")
+    let selectedFrameStyles = try #require(css.selectedNodeStyles)
+    #expect(css.selectedState == .loaded)
+    #expect(selectedFrameStyles.identity.targetID == frameIdentity.targetID)
+    #expect(selectedFrameStyles.sections[0].style.cssProperties[0].value == "10px")
 }
 
 private func cssIdentity(
@@ -438,9 +473,9 @@ private func rule(
     selector: String,
     styleID: CSSStyleIdentifier = CSSStyleIdentifier(styleSheetID: .init("sheet"), ordinal: 0),
     origin: CSSStyleOrigin = .author,
-    properties: [CSSProperty]
-) -> CSSRule {
-    CSSRule(
+    properties: [CSSPropertyPayload]
+) -> CSSRulePayload {
+    CSSRulePayload(
         id: CSSRuleIdentifier(styleSheetID: styleID.styleSheetID, ordinal: styleID.ordinal),
         selectorList: CSSSelectorList(selectors: [CSSSelector(text: selector)], text: selector),
         sourceLine: 1,
@@ -451,9 +486,9 @@ private func rule(
 
 private func style(
     id: CSSStyleIdentifier? = nil,
-    properties: [CSSProperty]
-) -> CSSStyle {
-    CSSStyle(id: id, cssProperties: properties)
+    properties: [CSSPropertyPayload]
+) -> CSSStylePayload {
+    CSSStylePayload(id: id, cssProperties: properties)
 }
 
 private extension Result {

@@ -56,12 +56,12 @@ package enum CSSTransportAdapter {
         try TransportMessageParser.decode(CSSInlineStylesPayload.self, from: result.resultData)
     }
 
-    package static func computedStyles(from result: ProtocolCommandResult) throws -> [CSSComputedStyleProperty] {
+    package static func computedStyles(from result: ProtocolCommandResult) throws -> [CSSComputedStylePropertyPayload] {
         let payload = try TransportMessageParser.decode(ComputedStyleResult.self, from: result.resultData)
         return payload.computedStyle
     }
 
-    package static func setStyleTextResult(from result: ProtocolCommandResult) throws -> CSSStyle {
+    package static func setStyleTextResult(from result: ProtocolCommandResult) throws -> CSSStylePayload {
         let payload = try TransportMessageParser.decode(SetStyleTextResult.self, from: result.resultData)
         return payload.style
     }
@@ -74,9 +74,12 @@ package enum CSSTransportAdapter {
         }
 
         switch event.method {
-        case "CSS.styleSheetChanged",
-             "CSS.styleSheetAdded",
-             "CSS.styleSheetRemoved",
+        case "CSS.styleSheetChanged":
+            session.markNeedsRefresh(targetID: targetID)
+        case "CSS.styleSheetRemoved":
+            let params = try TransportMessageParser.decode(StyleSheetIdentifierParams.self, from: event.paramsData)
+            session.markNeedsRefresh(targetID: targetID, styleSheetID: params.styleSheetId)
+        case "CSS.styleSheetAdded",
              "CSS.mediaQueryResultChanged":
             session.markNeedsRefresh(targetID: targetID)
         case "CSS.nodeLayoutFlagsChanged":
@@ -99,12 +102,16 @@ package enum CSSTransportAdapter {
     }
 }
 
+private struct StyleSheetIdentifierParams: Decodable {
+    var styleSheetId: CSSStyleSheetIdentifier
+}
+
 private struct ComputedStyleResult: Decodable {
-    var computedStyle: [CSSComputedStyleProperty]
+    var computedStyle: [CSSComputedStylePropertyPayload]
 }
 
 private struct SetStyleTextResult: Decodable {
-    var style: CSSStyle
+    var style: CSSStylePayload
 }
 
 private struct NodeLayoutFlagsChangedParams: Decodable {

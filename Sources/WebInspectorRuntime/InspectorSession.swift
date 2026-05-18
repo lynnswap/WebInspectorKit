@@ -989,16 +989,15 @@ package final class InspectorSession {
                 refreshDOMDocumentAfterBackendUpdate(event)
                 return
             }
-            let selectedStyleNodeID = css.selectedNodeStyles?.identity.nodeID
+            let selectedStyleIdentity = css.selectedNodeStyles?.identity
             try DOMTransportAdapter.applyDOMEvent(event, to: dom)
-            if cssInvalidatingDOMEventMethods.contains(event.method),
-               let targetID = event.targetID {
-                if let selectedStyleNodeID,
-                   selectedStyleNodeID.documentID.targetID == targetID,
-                   dom.selectedNodeID != selectedStyleNodeID {
+            if let selectedStyleIdentity,
+               let targetID = event.targetID,
+               selectedStyleIdentity.targetID == targetID {
+                if dom.selectedNodeID != selectedStyleIdentity.nodeID {
                     css.removeStyles(targetID: targetID)
-                } else {
-                    css.markNeedsRefresh(targetID: targetID)
+                } else if selectedStylesShouldRefresh(after: event) {
+                    css.markNeedsRefresh(targetID: targetID, nodeID: selectedStyleIdentity.protocolNodeID)
                 }
             }
             if event.method == "DOM.setChildNodes" {
@@ -1027,15 +1026,17 @@ package final class InspectorSession {
         }
     }
 
-    private var cssInvalidatingDOMEventMethods: Set<String> {
-        [
-            "DOM.setChildNodes",
-            "DOM.childNodeInserted",
-            "DOM.childNodeRemoved",
-            "DOM.childNodeCountUpdated",
-            "DOM.attributeModified",
-            "DOM.attributeRemoved",
-        ]
+    private func selectedStylesShouldRefresh(after event: ProtocolEventEnvelope) -> Bool {
+        switch event.method {
+        case "DOM.attributeModified",
+             "DOM.attributeRemoved",
+             "DOM.childNodeInserted",
+             "DOM.childNodeRemoved",
+             "DOM.childNodeCountUpdated":
+            return true
+        default:
+            return false
+        }
     }
 
     private func handleInspectEvent(_ event: DOMInspectEvent) async {

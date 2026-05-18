@@ -91,7 +91,7 @@ func cssTransportAdapterDecodesReadAndSetStyleTextResults() throws {
         targetID: .init("page"),
         resultData: Data(#"{"computedStyle":[{"name":"display","value":"block"}]}"#.utf8)
     ))
-    #expect(computed == [CSSComputedStyleProperty(name: "display", value: "block")])
+    #expect(computed == [CSSComputedStylePropertyPayload(name: "display", value: "block")])
 
     let setStyle = try CSSTransportAdapter.setStyleTextResult(from: ProtocolCommandResult(
         domain: .css,
@@ -117,18 +117,40 @@ func cssTransportAdapterAppliesTargetScopedInvalidationEvents() async throws {
     await css.applyRefresh(
         token: token,
         matched: .init(),
-        inline: CSSInlineStylesPayload(inlineStyle: CSSStyle(
-            id: CSSStyleIdentifier(styleSheetID: .init("inline"), ordinal: 0),
-            cssProperties: [
-                CSSProperty(name: "margin", value: "0", text: "margin: 0;"),
-            ]
-        )),
+        inline: .init(),
         computed: []
     )
 
     try await CSSTransportAdapter.applyCSSEvent(
         ProtocolEventEnvelope(
             sequence: 1,
+            domain: .css,
+            method: "CSS.styleSheetChanged",
+            targetID: identity.targetID,
+            paramsData: Data(#"{"styleSheetId":"untracked"}"#.utf8)
+        ),
+        to: css
+    )
+    #expect(await css.selectedState == .needsRefresh)
+
+    let refreshToken = try #require(await css.beginRefresh(identity: identity))
+    await css.applyRefresh(
+        token: refreshToken,
+        matched: CSSMatchedStylesPayload(matchedRules: [
+            CSSRuleMatchPayload(
+                rule: cssRule(selector: "body", styleID: .init(styleSheetID: .init("sheet"), ordinal: 0), properties: [
+                    CSSPropertyPayload(name: "margin", value: "0", text: "margin: 0;"),
+                ]),
+                matchingSelectors: [0]
+            ),
+        ]),
+        inline: .init(),
+        computed: []
+    )
+
+    try await CSSTransportAdapter.applyCSSEvent(
+        ProtocolEventEnvelope(
+            sequence: 2,
             domain: .css,
             method: "CSS.styleSheetChanged",
             targetID: identity.targetID,
@@ -148,6 +170,20 @@ private func cssIdentity() -> CSSNodeStyleIdentity {
         documentID: documentID,
         protocolNodeID: .init(2),
         targetCapabilities: [.css, .dom]
+    )
+}
+
+private func cssRule(
+    selector: String,
+    styleID: CSSStyleIdentifier,
+    properties: [CSSPropertyPayload]
+) -> CSSRulePayload {
+    CSSRulePayload(
+        id: CSSRuleIdentifier(styleSheetID: styleID.styleSheetID, ordinal: styleID.ordinal),
+        selectorList: CSSSelectorList(selectors: [CSSSelector(text: selector)], text: selector),
+        sourceLine: 1,
+        origin: .author,
+        style: CSSStylePayload(id: styleID, cssProperties: properties)
     )
 }
 

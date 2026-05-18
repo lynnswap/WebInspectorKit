@@ -86,9 +86,6 @@ private final class NetworkListColumnNavigationController: UINavigationControlle
     }
 }
 
-#if DEBUG && canImport(SwiftUI)
-import SwiftUI
-
 #Preview("Network Split") {
     let model = NetworkPreviewFixtures.makePanelModel(mode: .detail)
     NetworkSplitViewController(
@@ -101,5 +98,4 @@ import SwiftUI
         )
     )
 }
-#endif
 #endif

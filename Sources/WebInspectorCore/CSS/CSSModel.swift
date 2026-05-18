@@ -1,6 +1,233 @@
 import Foundation
 import Observation
 
+@Observable
+package final class CSSProperty: Equatable {
+    /// Stable row identity within an editable CSS declaration.
+    ///
+    /// Core derives this from the owning `CSSStyleIdentifier` and the property's
+    /// index in that declaration. Source-less properties have no stable
+    /// protocol identity and compare by object identity instead.
+    package var id: CSSPropertyIdentifier?
+    package var name: String
+    package var value: String
+    package var priority: String
+    package var text: String?
+    /// WebKit protocol parse result for the authored declaration text.
+    ///
+    /// `false` means the backend kept the property text, but couldn't parse it
+    /// as a valid CSS declaration.
+    package var parsedOk: Bool
+    /// WebKit protocol cascade/editing state for this property.
+    ///
+    /// `.disabled` is a commented-out declaration. `.inactive` is enabled but
+    /// overridden inside the owning declaration.
+    package var status: CSSPropertyStatus
+    /// True when WebKit synthesized this row from a shorthand declaration.
+    package var implicit: Bool
+    package var range: CSSSourceRange?
+    /// True when Core can safely rewrite the owning style text for this row.
+    package var isEditable: Bool
+
+    package init(
+        id: CSSPropertyIdentifier? = nil,
+        name: String,
+        value: String,
+        priority: String = "",
+        text: String? = nil,
+        parsedOk: Bool = true,
+        status: CSSPropertyStatus = .style,
+        implicit: Bool = false,
+        range: CSSSourceRange? = nil,
+        isEditable: Bool = false
+    ) {
+        self.id = id
+        self.name = name
+        self.value = value
+        self.priority = priority
+        self.text = text
+        self.parsedOk = parsedOk
+        self.status = status
+        self.implicit = implicit
+        self.range = range
+        self.isEditable = isEditable
+    }
+
+    package convenience init(payload: CSSPropertyPayload, id: CSSPropertyIdentifier?, isEditable: Bool) {
+        self.init(
+            id: id,
+            name: payload.name,
+            value: payload.value,
+            priority: payload.priority,
+            text: payload.text,
+            parsedOk: payload.parsedOk,
+            status: payload.status,
+            implicit: payload.implicit,
+            range: payload.range,
+            isEditable: isEditable
+        )
+    }
+
+    package var isEnabled: Bool {
+        status != .disabled
+    }
+
+    package var isOverridden: Bool {
+        status == .inactive
+    }
+
+    package var isParsed: Bool {
+        parsedOk
+    }
+
+    package var isImplicit: Bool {
+        implicit
+    }
+
+    package static func == (lhs: CSSProperty, rhs: CSSProperty) -> Bool {
+        if let lhsID = lhs.id, let rhsID = rhs.id {
+            return lhsID == rhsID
+        }
+        return lhs === rhs
+    }
+}
+
+@Observable
+package final class CSSStyle: Equatable {
+    package var id: CSSStyleIdentifier?
+    package var cssProperties: [CSSProperty]
+    package var shorthandEntries: [CSSShorthandEntry]
+    package var cssText: String?
+    package var range: CSSSourceRange?
+    package var width: String?
+    package var height: String?
+    package var isEditable: Bool
+
+    package init(
+        id: CSSStyleIdentifier? = nil,
+        cssProperties: [CSSProperty],
+        shorthandEntries: [CSSShorthandEntry] = [],
+        cssText: String? = nil,
+        range: CSSSourceRange? = nil,
+        width: String? = nil,
+        height: String? = nil,
+        isEditable: Bool = false
+    ) {
+        self.id = id
+        self.cssProperties = cssProperties
+        self.shorthandEntries = shorthandEntries
+        self.cssText = cssText
+        self.range = range
+        self.width = width
+        self.height = height
+        self.isEditable = isEditable
+    }
+
+    package static func == (lhs: CSSStyle, rhs: CSSStyle) -> Bool {
+        if let lhsID = lhs.id, let rhsID = rhs.id {
+            return lhsID == rhsID
+        }
+        return lhs === rhs
+    }
+}
+
+@Observable
+package final class CSSRule: Equatable {
+    package var id: CSSRuleIdentifier?
+    package var selectorList: CSSSelectorList
+    package var sourceURL: String?
+    package var sourceLine: Int
+    package var origin: CSSStyleOrigin
+    package var style: CSSStyle
+    package var groupings: [CSSGrouping]
+    package var isImplicitlyNested: Bool
+
+    package init(
+        id: CSSRuleIdentifier? = nil,
+        selectorList: CSSSelectorList,
+        sourceURL: String? = nil,
+        sourceLine: Int,
+        origin: CSSStyleOrigin,
+        style: CSSStyle,
+        groupings: [CSSGrouping] = [],
+        isImplicitlyNested: Bool = false
+    ) {
+        self.id = id
+        self.selectorList = selectorList
+        self.sourceURL = sourceURL
+        self.sourceLine = sourceLine
+        self.origin = origin
+        self.style = style
+        self.groupings = groupings
+        self.isImplicitlyNested = isImplicitlyNested
+    }
+
+    package static func == (lhs: CSSRule, rhs: CSSRule) -> Bool {
+        if let lhsID = lhs.id, let rhsID = rhs.id {
+            return lhsID == rhsID
+        }
+        return lhs === rhs
+    }
+}
+
+@Observable
+package final class CSSComputedStyleProperty: Equatable {
+    /// Computed-style rows are keyed by CSS property name in the computed list.
+    package var id: String {
+        name
+    }
+
+    package var name: String
+    package var value: String
+
+    package init(name: String, value: String) {
+        self.name = name
+        self.value = value
+    }
+
+    package init(payload: CSSComputedStylePropertyPayload) {
+        name = payload.name
+        value = payload.value
+    }
+
+    package static func == (lhs: CSSComputedStyleProperty, rhs: CSSComputedStyleProperty) -> Bool {
+        lhs.id == rhs.id
+    }
+}
+
+@Observable
+package final class CSSStyleSection: Equatable {
+    package var id: CSSStyleSectionIdentifier
+    package var kind: CSSStyleSectionKind
+    package var title: String
+    package var subtitle: String?
+    package var rule: CSSRule?
+    package var style: CSSStyle
+    package var isEditable: Bool
+
+    package init(
+        id: CSSStyleSectionIdentifier,
+        kind: CSSStyleSectionKind,
+        title: String,
+        subtitle: String? = nil,
+        rule: CSSRule? = nil,
+        style: CSSStyle,
+        isEditable: Bool
+    ) {
+        self.id = id
+        self.kind = kind
+        self.title = title
+        self.subtitle = subtitle
+        self.rule = rule
+        self.style = style
+        self.isEditable = isEditable
+    }
+
+    package static func == (lhs: CSSStyleSection, rhs: CSSStyleSection) -> Bool {
+        lhs.id == rhs.id
+    }
+}
+
 @MainActor
 @Observable
 package final class CSSNodeStyles {
@@ -8,20 +235,17 @@ package final class CSSNodeStyles {
     package var state: CSSNodeStylesState
     package var sections: [CSSStyleSection]
     package var computedProperties: [CSSComputedStyleProperty]
-    package var revision: UInt64
 
     package init(
         identity: CSSNodeStyleIdentity,
         state: CSSNodeStylesState = .loading,
         sections: [CSSStyleSection] = [],
-        computedProperties: [CSSComputedStyleProperty] = [],
-        revision: UInt64 = 0
+        computedProperties: [CSSComputedStyleProperty] = []
     ) {
         self.identity = identity
         self.state = state
         self.sections = sections
         self.computedProperties = computedProperties
-        self.revision = revision
     }
 }
 
@@ -30,34 +254,30 @@ package final class CSSNodeStyles {
 package final class CSSSession {
     package private(set) var selectedNodeStyles: CSSNodeStyles?
     package private(set) var selectedState: CSSNodeStylesState
-    package private(set) var revision: UInt64
 
     @ObservationIgnored private var stylesByNodeID: [DOMNodeIdentifier: CSSNodeStyles]
-    @ObservationIgnored private var activeRefreshRevisionByNodeID: [DOMNodeIdentifier: UInt64]
-    @ObservationIgnored private var nextRevision: UInt64
+    @ObservationIgnored private var activeRefreshSequenceByNodeID: [DOMNodeIdentifier: UInt64]
+    @ObservationIgnored private var nextRefreshSequence: UInt64
 
     package init() {
         selectedNodeStyles = nil
         selectedState = .unavailable(.noSelection)
-        revision = 0
         stylesByNodeID = [:]
-        activeRefreshRevisionByNodeID = [:]
-        nextRevision = 0
+        activeRefreshSequenceByNodeID = [:]
+        nextRefreshSequence = 0
     }
 
     package func reset() {
         selectedNodeStyles = nil
         selectedState = .unavailable(.noSelection)
-        revision = 0
         stylesByNodeID.removeAll()
-        activeRefreshRevisionByNodeID.removeAll()
-        nextRevision = 0
+        activeRefreshSequenceByNodeID.removeAll()
+        nextRefreshSequence = 0
     }
 
     package func markSelectedNodeUnavailable(_ reason: CSSNodeStylesUnavailableReason) {
         selectedNodeStyles = nil
         selectedState = .unavailable(reason)
-        revision &+= 1
     }
 
     package func beginRefresh(identity: CSSNodeStyleIdentity) -> CSSStyleRefreshToken? {
@@ -66,25 +286,23 @@ package final class CSSSession {
             return nil
         }
 
-        nextRevision &+= 1
+        nextRefreshSequence &+= 1
         let nodeStyles = stylesByNodeID[identity.nodeID] ?? CSSNodeStyles(identity: identity)
         stylesByNodeID[identity.nodeID] = nodeStyles
         nodeStyles.state = .loading
-        nodeStyles.revision = nextRevision
         selectedNodeStyles = nodeStyles
         selectedState = .loading
-        revision &+= 1
-        activeRefreshRevisionByNodeID[identity.nodeID] = nextRevision
-        return CSSStyleRefreshToken(identity: identity, revision: nextRevision)
+        activeRefreshSequenceByNodeID[identity.nodeID] = nextRefreshSequence
+        return CSSStyleRefreshToken(identity: identity, sequence: nextRefreshSequence)
     }
 
     package func applyRefresh(
         token: CSSStyleRefreshToken,
         matched: CSSMatchedStylesPayload,
         inline: CSSInlineStylesPayload,
-        computed: [CSSComputedStyleProperty]
+        computed: [CSSComputedStylePropertyPayload]
     ) {
-        guard activeRefreshRevisionByNodeID[token.identity.nodeID] == token.revision,
+        guard activeRefreshSequenceByNodeID[token.identity.nodeID] == token.sequence,
               selectedNodeStyles?.identity == token.identity,
               let nodeStyles = stylesByNodeID[token.identity.nodeID] else {
             return
@@ -95,42 +313,60 @@ package final class CSSSession {
             matched: matched,
             inline: inline
         )
-        nodeStyles.computedProperties = computed
+        nodeStyles.computedProperties = computed.map(CSSComputedStyleProperty.init(payload:))
         nodeStyles.state = .loaded
-        nodeStyles.revision = token.revision
         selectedState = .loaded
-        activeRefreshRevisionByNodeID.removeValue(forKey: token.identity.nodeID)
-        revision &+= 1
+        activeRefreshSequenceByNodeID.removeValue(forKey: token.identity.nodeID)
     }
 
     package func markRefreshFailed(_ token: CSSStyleRefreshToken, message: String) {
-        guard activeRefreshRevisionByNodeID[token.identity.nodeID] == token.revision,
+        guard activeRefreshSequenceByNodeID[token.identity.nodeID] == token.sequence,
               selectedNodeStyles?.identity == token.identity,
               let nodeStyles = stylesByNodeID[token.identity.nodeID] else {
             return
         }
         nodeStyles.state = .failed(message)
         selectedState = .failed(message)
-        activeRefreshRevisionByNodeID.removeValue(forKey: token.identity.nodeID)
-        revision &+= 1
+        activeRefreshSequenceByNodeID.removeValue(forKey: token.identity.nodeID)
     }
 
     package func markNeedsRefresh(targetID: ProtocolTargetIdentifier) {
-        var changed = false
-        for nodeStyles in stylesByNodeID.values where nodeStyles.identity.targetID == targetID {
-            guard !(nodeStyles.state == .loading && activeRefreshRevisionByNodeID[nodeStyles.identity.nodeID] != nil) else {
+        markNeedsRefresh(targetID: targetID, including: { _ in true })
+    }
+
+    package func markNeedsRefresh(targetID: ProtocolTargetIdentifier, styleSheetID: CSSStyleSheetIdentifier) {
+        markNeedsRefresh(targetID: targetID, including: { nodeStyles in
+            Self.nodeStyles(nodeStyles, references: styleSheetID)
+        })
+    }
+
+    private func markNeedsRefresh(
+        targetID: ProtocolTargetIdentifier,
+        including shouldMark: (CSSNodeStyles) -> Bool
+    ) {
+        for nodeStyles in stylesByNodeID.values
+        where nodeStyles.identity.targetID == targetID && shouldMark(nodeStyles) {
+            guard !(nodeStyles.state == .loading && activeRefreshSequenceByNodeID[nodeStyles.identity.nodeID] != nil) else {
                 continue
             }
             nodeStyles.state = .needsRefresh
-            nodeStyles.revision &+= 1
-            activeRefreshRevisionByNodeID.removeValue(forKey: nodeStyles.identity.nodeID)
-            changed = true
+            activeRefreshSequenceByNodeID.removeValue(forKey: nodeStyles.identity.nodeID)
             if selectedNodeStyles === nodeStyles {
                 selectedState = .needsRefresh
             }
         }
-        if changed {
-            revision &+= 1
+    }
+
+    private static func nodeStyles(_ nodeStyles: CSSNodeStyles, references styleSheetID: CSSStyleSheetIdentifier) -> Bool {
+        nodeStyles.sections.contains { section in
+            switch section.kind {
+            case .inlineStyle, .attributesStyle:
+                false
+            default:
+                section.rule?.id?.styleSheetID == styleSheetID
+                    || section.rule?.style.id?.styleSheetID == styleSheetID
+                    || section.style.id?.styleSheetID == styleSheetID
+            }
         }
     }
 
@@ -140,16 +376,14 @@ package final class CSSSession {
         }) else {
             return
         }
-        guard !(current.state == .loading && activeRefreshRevisionByNodeID[current.identity.nodeID] != nil) else {
+        guard !(current.state == .loading && activeRefreshSequenceByNodeID[current.identity.nodeID] != nil) else {
             return
         }
         current.state = .needsRefresh
-        current.revision &+= 1
-        activeRefreshRevisionByNodeID.removeValue(forKey: current.identity.nodeID)
+        activeRefreshSequenceByNodeID.removeValue(forKey: current.identity.nodeID)
         if selectedNodeStyles === current {
             selectedState = .needsRefresh
         }
-        revision &+= 1
     }
 
     package func removeStyles(targetID: ProtocolTargetIdentifier) {
@@ -161,14 +395,13 @@ package final class CSSSession {
         }
         for nodeID in removedIDs {
             stylesByNodeID.removeValue(forKey: nodeID)
-            activeRefreshRevisionByNodeID.removeValue(forKey: nodeID)
+            activeRefreshSequenceByNodeID.removeValue(forKey: nodeID)
         }
         if let removedSelectedNodeID = selectedNodeStyles?.identity.nodeID,
            selectedNodeStyles?.identity.targetID == targetID {
             selectedNodeStyles = nil
             selectedState = .unavailable(.staleNode(removedSelectedNodeID))
         }
-        revision &+= 1
     }
 
     package func setStyleTextIntent(for propertyID: CSSPropertyIdentifier, enabled: Bool) -> CSSCommandIntent? {
@@ -196,34 +429,27 @@ package final class CSSSession {
     }
 
     package func applySetStyleTextResult(
-        _ style: CSSStyle,
+        _ style: CSSStylePayload,
         styleID: CSSStyleIdentifier,
         targetID: ProtocolTargetIdentifier
     ) {
-        var changed = false
         for nodeStyles in stylesByNodeID.values where nodeStyles.identity.targetID == targetID {
             for sectionIndex in nodeStyles.sections.indices where nodeStyles.sections[sectionIndex].style.id == styleID {
-                var section = nodeStyles.sections[sectionIndex]
+                let section = nodeStyles.sections[sectionIndex]
                 let normalizedStyle = Self.normalizedStyle(
                     style,
                     isEditable: section.isEditable,
                     ruleOrigin: section.rule?.origin
                 )
                 section.style = normalizedStyle
-                if var rule = section.rule {
+                if let rule = section.rule {
                     rule.style = normalizedStyle
-                    section.rule = rule
                 }
-                nodeStyles.sections[sectionIndex] = section
                 nodeStyles.state = .needsRefresh
-                changed = true
                 if selectedNodeStyles === nodeStyles {
                     selectedState = .needsRefresh
                 }
             }
-        }
-        if changed {
-            revision &+= 1
         }
     }
 
@@ -320,12 +546,21 @@ package final class CSSSession {
         _ sections: inout [CSSStyleSection],
         identity: CSSNodeStyleIdentity,
         ordinal: inout Int,
-        match: CSSRuleMatch,
+        match: CSSRuleMatchPayload,
         kind: CSSStyleSectionKind
     ) {
         let isEditable = match.rule.origin != .userAgent && match.rule.style.id != nil
-        var rule = match.rule
-        rule.style = normalizedStyle(rule.style, isEditable: isEditable, ruleOrigin: rule.origin)
+        let ruleStyle = normalizedStyle(match.rule.style, isEditable: isEditable, ruleOrigin: match.rule.origin)
+        let rule = CSSRule(
+            id: match.rule.id,
+            selectorList: match.rule.selectorList,
+            sourceURL: match.rule.sourceURL,
+            sourceLine: match.rule.sourceLine,
+            origin: match.rule.origin,
+            style: ruleStyle,
+            groupings: match.rule.groupings,
+            isImplicitlyNested: match.rule.isImplicitlyNested
+        )
         sections.append(
             CSSStyleSection(
                 id: .init(nodeID: identity.nodeID, kind: kind, ordinal: ordinal),
@@ -346,7 +581,7 @@ package final class CSSSession {
         ordinal: inout Int,
         kind: CSSStyleSectionKind,
         title: String,
-        style: CSSStyle,
+        style: CSSStylePayload,
         isEditable: Bool
     ) {
         sections.append(
@@ -362,28 +597,30 @@ package final class CSSSession {
     }
 
     private static func normalizedStyle(
-        _ style: CSSStyle,
+        _ style: CSSStylePayload,
         isEditable: Bool,
         ruleOrigin: CSSStyleOrigin?
     ) -> CSSStyle {
         let styleID = style.id
         let effectiveEditable = isEditable && styleID != nil && ruleOrigin != .userAgent
         let canSafelyRewriteStyleText = effectiveEditable && style.cssProperties.allSatisfy { $0.text != nil }
-        var normalized = style
-        normalized.isEditable = effectiveEditable
-        normalized.cssProperties = style.cssProperties.enumerated().map { index, property in
-            var normalizedProperty = property
-            if let styleID {
-                normalizedProperty.id = CSSPropertyIdentifier(styleID: styleID, propertyIndex: index)
-            } else {
-                normalizedProperty.id = nil
-            }
-            normalizedProperty.isEditable = canSafelyRewriteStyleText
-                && normalizedProperty.text != nil
-                && canTogglePropertyText(normalizedProperty)
-            return normalizedProperty
+        let normalizedProperties = style.cssProperties.enumerated().map { index, property in
+            let propertyID = styleID.map { CSSPropertyIdentifier(styleID: $0, propertyIndex: index) }
+            let isEditable = canSafelyRewriteStyleText
+                && property.text != nil
+                && canTogglePropertyText(property)
+            return CSSProperty(payload: property, id: propertyID, isEditable: isEditable)
         }
-        return normalized
+        return CSSStyle(
+            id: style.id,
+            cssProperties: normalizedProperties,
+            shorthandEntries: style.shorthandEntries,
+            cssText: style.cssText,
+            range: style.range,
+            width: style.width,
+            height: style.height,
+            isEditable: effectiveEditable
+        )
     }
 
     private static func rewrittenStyleText(style: CSSStyle, propertyIndex: Int, enabled: Bool) -> String? {
@@ -415,10 +652,37 @@ package final class CSSSession {
         toggledPropertyText(property, enabled: !property.isEnabled) != nil
     }
 
+    private static func canTogglePropertyText(_ property: CSSPropertyPayload) -> Bool {
+        toggledPropertyText(property, enabled: property.status == .disabled) != nil
+    }
+
     private static func toggledPropertyText(_ property: CSSProperty, enabled: Bool) -> String? {
         guard let text = property.text?.trimmingCharacters(in: .whitespacesAndNewlines),
               !text.isEmpty,
               property.isEnabled != enabled else {
+            return nil
+        }
+
+        if enabled {
+            guard text.hasPrefix("/*"),
+                  text.hasSuffix("*/") else {
+                return nil
+            }
+            let inner = String(text.dropFirst(2).dropLast(2)).trimmingCharacters(in: .whitespacesAndNewlines)
+            return inner.isEmpty ? nil : inner
+        }
+
+        guard !text.contains("/*"),
+              !text.contains("*/") else {
+            return nil
+        }
+        return "/* \(text) */"
+    }
+
+    private static func toggledPropertyText(_ property: CSSPropertyPayload, enabled: Bool) -> String? {
+        guard let text = property.text?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty,
+              (property.status != .disabled) != enabled else {
             return nil
         }
 

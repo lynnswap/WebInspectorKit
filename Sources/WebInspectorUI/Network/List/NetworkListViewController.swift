@@ -358,9 +358,6 @@ extension NetworkListViewController {
 }
 #endif
 
-#if DEBUG && canImport(SwiftUI)
-import SwiftUI
-
 #Preview("Network List") {
     UINavigationController(
         rootViewController: NetworkListViewController(
@@ -376,5 +373,4 @@ import SwiftUI
         )
     )
 }
-#endif
 #endif

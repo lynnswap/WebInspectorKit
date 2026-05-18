@@ -81,15 +81,18 @@ package final class DOMSplitViewController: UISplitViewController {
     }
 }
 
-#if DEBUG && canImport(SwiftUI)
-import SwiftUI
-
 #Preview("DOM Split") {
-    let dom = DOMPreviewFixtures.makeDOMSession()
-    return DOMSplitViewController(
-        treeViewController: DOMTreeViewController(dom: dom),
-        elementViewController: DOMElementViewController(dom: dom)
-    )
+    DOMSplitViewControllerPreview.makeViewController()
 }
-#endif
+
+@MainActor
+private enum DOMSplitViewControllerPreview {
+    static func makeViewController() -> DOMSplitViewController {
+        let dom = DOMPreviewFixtures.makeDOMSession()
+        return DOMSplitViewController(
+            treeViewController: DOMTreeViewController(dom: dom),
+            elementViewController: DOMElementViewController(dom: dom)
+        )
+    }
+}
 #endif

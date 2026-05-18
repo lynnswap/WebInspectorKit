@@ -42,17 +42,20 @@ package final class DOMElementViewController: UIViewController {
     }
 }
 
-#if DEBUG && canImport(SwiftUI)
-import SwiftUI
-
 #Preview("DOM Element") {
-    let dom = DOMPreviewFixtures.makeDOMSession()
-    if let root = dom.currentPageRootNode,
-       let body = dom.visibleDOMTreeChildren(of: root).last,
-       let selectedNode = dom.visibleDOMTreeChildren(of: body).first {
-        dom.selectNode(selectedNode.id)
-    }
-    return UINavigationController(rootViewController: DOMElementViewController(dom: dom))
+    DOMElementViewControllerPreview.makeViewController()
 }
-#endif
+
+@MainActor
+private enum DOMElementViewControllerPreview {
+    static func makeViewController() -> UINavigationController {
+        let dom = DOMPreviewFixtures.makeDOMSession()
+        if let root = dom.currentPageRootNode,
+           let body = dom.visibleDOMTreeChildren(of: root).last,
+           let selectedNode = dom.visibleDOMTreeChildren(of: body).first {
+            dom.selectNode(selectedNode.id)
+        }
+        return UINavigationController(rootViewController: DOMElementViewController(dom: dom))
+    }
+}
 #endif

@@ -829,6 +829,21 @@ package final class DOMSession {
         return node(for: selectedNodeID)
     }
 
+    package func node(_ nodeID: DOMNode.ID, isSameOrDescendantOf ancestorID: DOMNode.ID) -> Bool {
+        guard nodeID.documentID == ancestorID.documentID else {
+            return false
+        }
+
+        var currentID: DOMNode.ID? = nodeID
+        while let candidateID = currentID {
+            if candidateID == ancestorID {
+                return true
+            }
+            currentID = node(for: candidateID)?.parentID
+        }
+        return false
+    }
+
     package func selectedCSSNodeStyleIdentity() -> Result<CSSNodeStyleIdentity, CSSNodeStylesUnavailableReason> {
         guard let selectedNodeID = selection.selectedNodeID else {
             return .failure(.noSelection)

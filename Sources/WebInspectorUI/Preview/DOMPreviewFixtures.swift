@@ -1,4 +1,3 @@
-#if DEBUG
 import WebInspectorCore
 
 @MainActor
@@ -102,4 +101,3 @@ enum DOMPreviewFixtures {
         )
     }
 }
-#endif

@@ -563,9 +563,6 @@ extension NetworkDetailViewController {
 }
 #endif
 
-#if DEBUG && canImport(SwiftUI)
-import SwiftUI
-
 #Preview("Network Detail") {
     UINavigationController(
         rootViewController: NetworkDetailViewController(
@@ -573,5 +570,4 @@ import SwiftUI
         )
     )
 }
-#endif
 #endif

@@ -1,4 +1,3 @@
-#if DEBUG
 import WebInspectorCore
 
 @MainActor
@@ -134,4 +133,3 @@ enum NetworkPreviewFixtures {
         return key
     }
 }
-#endif

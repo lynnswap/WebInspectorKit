@@ -107,10 +107,17 @@ extension DOMTreeViewController {
         treeView
     }
 }
+#endif
 
 #Preview("DOM Tree") {
-    let viewController = DOMTreeViewController(dom: DOMPreviewFixtures.makeDOMSession())
-    return UINavigationController(rootViewController: viewController)
+    DOMTreeViewControllerPreview.makeViewController()
 }
-#endif
+
+@MainActor
+private enum DOMTreeViewControllerPreview {
+    static func makeViewController() -> UINavigationController {
+        let viewController = DOMTreeViewController(dom: DOMPreviewFixtures.makeDOMSession())
+        return UINavigationController(rootViewController: viewController)
+    }
+}
 #endif

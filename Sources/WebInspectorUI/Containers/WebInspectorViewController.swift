@@ -1,5 +1,7 @@
 #if canImport(UIKit)
 import UIKit
+import WebInspectorCore
+import WebInspectorRuntime
 import WebKit
 
 @MainActor
@@ -103,11 +105,6 @@ public final class WebInspectorViewController: UIViewController {
     }
 }
 
-#if DEBUG && canImport(SwiftUI)
-import SwiftUI
-import WebInspectorCore
-import WebInspectorRuntime
-
 @MainActor
 enum WebInspectorViewControllerPreviewFixtures {
     static func makeSession() -> WebInspectorSession {
@@ -123,5 +120,4 @@ enum WebInspectorViewControllerPreviewFixtures {
 #Preview("WebInspectorViewController") {
     WebInspectorViewController(session: WebInspectorViewControllerPreviewFixtures.makeSession())
 }
-#endif
 #endif
