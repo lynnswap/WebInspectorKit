@@ -174,6 +174,9 @@ package final class InspectorSession {
     @ObservationIgnored private var deleteUndoStates: [DOMDeleteUndoState]
     @ObservationIgnored private let deleteUndoOperationQueue: DOMDeleteUndoOperationQueue
     @ObservationIgnored private var domDocumentRequestHandlesByTargetID: [ProtocolTargetIdentifier: DOMDocumentRequestHandle]
+    @ObservationIgnored private var cssSelectedNodeRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private var cssSelectedNodeRefreshIdentity: CSSNodeStyleIdentity?
+    @ObservationIgnored private var cssPropertyUpdateTasks: [CSSPropertyIdentifier: Task<Void, Never>]
 
     package init(
         configuration: InspectorSessionConfiguration = .init(),
@@ -198,6 +201,9 @@ package final class InspectorSession {
         deleteUndoStates = []
         deleteUndoOperationQueue = DOMDeleteUndoOperationQueue()
         domDocumentRequestHandlesByTargetID = [:]
+        cssSelectedNodeRefreshTask = nil
+        cssSelectedNodeRefreshIdentity = nil
+        cssPropertyUpdateTasks = [:]
     }
 
     package func attach(to webView: WKWebView) async throws {
@@ -284,6 +290,7 @@ package final class InspectorSession {
             }
             await transport.detach()
             restoreInspectabilityIfNeeded(for: nextConnection)
+            cancelCSSActionRequests()
             dom.reset()
             css.reset()
             network.reset()
@@ -314,10 +321,11 @@ package final class InspectorSession {
             await previousPendingConnection.transport.detach()
             restoreInspectabilityIfNeeded(for: previousPendingConnection)
         }
+        cancelDOMDocumentRequests()
+        cancelCSSActionRequests()
         dom.reset()
         css.reset()
         network.reset()
-        cancelDOMDocumentRequests()
         highlightedDOMTargetID = nil
         clearElementPickerState(invalidatePendingSelection: true)
         clearDeleteUndoHistory()
@@ -571,10 +579,11 @@ package final class InspectorSession {
         let webView = try requireInspectableWebView()
         await cancelElementPicker()
         clearDeleteUndoHistory()
+        cancelDOMDocumentRequests()
+        cancelCSSActionRequests()
         dom.reset()
         css.reset()
         network.reset()
-        cancelDOMDocumentRequests()
         if let connection {
             seedDOMSession(from: await connection.transport.snapshot())
         }
@@ -703,6 +712,49 @@ package final class InspectorSession {
         }
     }
 
+    package func requestRefreshStylesForSelectedNode() {
+        guard isAttached else {
+            return
+        }
+
+        switch dom.selectedCSSNodeStyleIdentity() {
+        case let .success(identity):
+            requestStyleRefresh(for: identity)
+        case let .failure(reason):
+            css.markSelectedNodeUnavailable(reason)
+        }
+    }
+
+    @discardableResult
+    package func requestSetCSSProperty(_ propertyID: CSSPropertyIdentifier, enabled: Bool) -> Bool {
+        guard isAttached,
+              cssPropertyUpdateTasks[propertyID] == nil,
+              css.setStyleTextIntent(for: propertyID, enabled: enabled) != nil else {
+            return false
+        }
+
+        let task = Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+            defer {
+                cssPropertyUpdateTasks[propertyID] = nil
+            }
+            guard Task.isCancelled == false else {
+                return
+            }
+
+            do {
+                try await setCSSProperty(propertyID, enabled: enabled)
+            } catch {
+                lastError = InspectorSessionError(String(describing: error))
+                try? await refreshSelectedNodeStyles()
+            }
+        }
+        cssPropertyUpdateTasks[propertyID] = task
+        return true
+    }
+
     package func setCSSProperty(_ propertyID: CSSPropertyIdentifier, enabled: Bool) async throws {
         guard let intent = css.setStyleTextIntent(for: propertyID, enabled: enabled) else {
             throw InspectorSessionError("CSS property is not editable.")
@@ -715,6 +767,27 @@ package final class InspectorSession {
         css.applySetStyleTextResult(style, styleID: styleID, targetID: targetID)
         try await refreshSelectedNodeStyles()
         lastError = nil
+    }
+
+    private func requestStyleRefresh(for identity: CSSNodeStyleIdentity) {
+        guard cssSelectedNodeRefreshIdentity != identity else {
+            return
+        }
+
+        cssSelectedNodeRefreshTask?.cancel()
+        cssSelectedNodeRefreshIdentity = identity
+        let task = Task { @MainActor [weak self] in
+            guard Task.isCancelled == false else {
+                return
+            }
+            await self?.refreshStylesForSelectedNode()
+            guard let self, cssSelectedNodeRefreshIdentity == identity else {
+                return
+            }
+            cssSelectedNodeRefreshIdentity = nil
+            cssSelectedNodeRefreshTask = nil
+        }
+        cssSelectedNodeRefreshTask = task
     }
 
     private func refreshSelectedNodeStyles() async throws {
@@ -1333,6 +1406,17 @@ package final class InspectorSession {
             handle.task?.cancel()
         }
         domDocumentRequestHandlesByTargetID.removeAll()
+    }
+
+    private func cancelCSSActionRequests() {
+        cssSelectedNodeRefreshTask?.cancel()
+        cssSelectedNodeRefreshTask = nil
+        cssSelectedNodeRefreshIdentity = nil
+
+        for task in cssPropertyUpdateTasks.values {
+            task.cancel()
+        }
+        cssPropertyUpdateTasks.removeAll()
     }
 
     private func targetDestroyedID(from event: ProtocolEventEnvelope) -> ProtocolTargetIdentifier? {

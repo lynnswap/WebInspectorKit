@@ -5,13 +5,12 @@ import WebInspectorCore
 
 @MainActor
 package final class DOMElementStylePropertyView: UIView {
-    package typealias ToggleAction = @MainActor (CSSPropertyIdentifier, Bool) -> Void
+    package typealias ToggleAction = @MainActor (CSSPropertyIdentifier, Bool) -> Bool
 
     private let observationScope = ObservationScope()
     private let declarationTextView = UITextView()
     private let toggleSwitch = UISwitch()
     private var property: CSSProperty?
-    private var isPending = false
     private var toggleAction: ToggleAction?
 
     override package init(frame: CGRect) {
@@ -30,11 +29,9 @@ package final class DOMElementStylePropertyView: UIView {
 
     package func bind(
         property: CSSProperty,
-        isPending: Bool = false,
         onToggle: ToggleAction? = nil
     ) {
         self.property = property
-        self.isPending = isPending
         toggleAction = onToggle
 
         renderAll(from: property)
@@ -53,7 +50,6 @@ package final class DOMElementStylePropertyView: UIView {
     package func clear() {
         observationScope.cancelAll()
         property = nil
-        isPending = false
         toggleAction = nil
         declarationTextView.attributedText = nil
         toggleSwitch.setOn(false, animated: false)
@@ -111,8 +107,8 @@ package final class DOMElementStylePropertyView: UIView {
         declarationTextView.attributedText = declarationText(for: property)
     }
 
-    private func renderToggleState(from property: CSSProperty) {
-        toggleSwitch.setOn(property.isEnabled, animated: false)
+    private func renderToggleState(from property: CSSProperty, animated: Bool = false) {
+        toggleSwitch.setOn(property.isEnabled, animated: animated)
         toggleSwitch.isEnabled = canToggle(property)
     }
 
@@ -128,7 +124,7 @@ package final class DOMElementStylePropertyView: UIView {
 
     @objc private func toggleSwitchChanged() {
         guard let property else {
-            toggleSwitch.setOn(false, animated: true)
+            toggleSwitch.setOn(false, animated: false)
             return
         }
 
@@ -136,16 +132,17 @@ package final class DOMElementStylePropertyView: UIView {
         guard canToggle(property),
               requestedEnabledState != property.isEnabled,
               let propertyID = property.id else {
-            toggleSwitch.setOn(property.isEnabled, animated: true)
+            toggleSwitch.setOn(property.isEnabled, animated: false)
             return
         }
 
-        toggleAction?(propertyID, requestedEnabledState)
-        toggleSwitch.setOn(property.isEnabled, animated: true)
+        if toggleAction?(propertyID, requestedEnabledState) != true {
+            toggleSwitch.setOn(property.isEnabled, animated: false)
+        }
     }
 
     private func canToggle(_ property: CSSProperty) -> Bool {
-        property.isEditable && property.id != nil && toggleAction != nil && !isPending
+        property.isEditable && property.id != nil && toggleAction != nil
     }
 
     private func declarationText(for property: CSSProperty) -> NSAttributedString {
@@ -190,9 +187,6 @@ package final class DOMElementStylePropertyView: UIView {
         if property.isOverridden {
             states.append(webInspectorLocalized("dom.element.styles.overridden", default: "Overridden"))
         }
-        if isPending {
-            states.append(webInspectorLocalized("dom.element.styles.updating", default: "Updating"))
-        }
         return states.joined(separator: ", ")
     }
 
@@ -220,6 +214,7 @@ package final class DOMElementStylePropertyView: UIView {
             property.text = enabled
                 ? DOMElementStylePropertyViewPreviewData.sourceText(for: property)
                 : "/* \(DOMElementStylePropertyViewPreviewData.sourceText(for: property)) */"
+            return true
         }
         stackView.addArrangedSubview(row)
     }
@@ -273,4 +268,12 @@ private enum DOMElementStylePropertyViewPreviewData {
         ]
     }
 }
+
+#if DEBUG
+extension DOMElementStylePropertyView {
+    package var declarationTextForTesting: String {
+        declarationTextView.text
+    }
+}
+#endif
 #endif

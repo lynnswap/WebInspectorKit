@@ -317,9 +317,7 @@ func cssPropertyToggleSendsSetStyleTextAndRefreshesStyles() async throws {
         propertyIndex: 0
     )
     let toggleSentCount = await backend.sentTargetMessages().count
-    let toggleTask = Task {
-        try await session.setCSSProperty(propertyID, enabled: false)
-    }
+    session.requestSetCSSProperty(propertyID, enabled: false)
     let setStyleText = try await waitForTargetMessage(backend, method: "CSS.setStyleText", after: toggleSentCount)
     #expect(setStyleText.targetIdentifier == ProtocolTargetIdentifier.pageMain)
     #expect(try messageParameters(setStyleText.message)["text"] as? String == "/* margin: 0; */")
@@ -346,7 +344,9 @@ func cssPropertyToggleSendsSetStyleTextAndRefreshesStyles() async throws {
         marginStatus: "disabled",
         marginText: "/* margin: 0; */"
     )
-    try await toggleTask.value
+    _ = try await waitUntil { @MainActor in
+        session.css.selectedNodeStyles?.sections[1].style.cssProperties[0].isEnabled == false ? true : nil
+    }
 
     let styles = try #require(session.css.selectedNodeStyles)
     #expect(session.css.selectedState == .loaded)

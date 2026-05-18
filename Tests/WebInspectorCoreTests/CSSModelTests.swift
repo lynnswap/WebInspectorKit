@@ -124,6 +124,74 @@ func cssSessionBuildsOrderedSectionsAndPropertyRowState() throws {
 
 @Test
 @MainActor
+func cssSessionPreservesObservableStyleObjectsWhenRefreshingSameRows() throws {
+    let css = CSSSession()
+    let identity = cssIdentity()
+    let styleID = CSSStyleIdentifier(styleSheetID: .init("sheet"), ordinal: 0)
+    let token = try #require(css.beginRefresh(identity: identity))
+
+    css.applyRefresh(
+        token: token,
+        matched: CSSMatchedStylesPayload(matchedRules: [
+            CSSRuleMatchPayload(
+                rule: rule(
+                    selector: "body",
+                    styleID: styleID,
+                    properties: [
+                        CSSPropertyPayload(name: "margin", value: "0", text: "margin: 0;", status: .active),
+                        CSSPropertyPayload(name: "box-sizing", value: "border-box", text: "box-sizing: border-box;"),
+                    ]
+                ),
+                matchingSelectors: [0]
+            ),
+        ]),
+        inline: .init(),
+        computed: [
+            CSSComputedStylePropertyPayload(name: "display", value: "block"),
+        ]
+    )
+
+    let styles = try #require(css.selectedNodeStyles)
+    let section = styles.sections[0]
+    let style = section.style
+    let margin = style.cssProperties[0]
+    let boxSizing = style.cssProperties[1]
+    let computedDisplay = styles.computedProperties[0]
+
+    let refreshToken = try #require(css.beginRefresh(identity: identity))
+    css.applyRefresh(
+        token: refreshToken,
+        matched: CSSMatchedStylesPayload(matchedRules: [
+            CSSRuleMatchPayload(
+                rule: rule(
+                    selector: "body",
+                    styleID: styleID,
+                    properties: [
+                        CSSPropertyPayload(name: "margin", value: "4px", text: "margin: 4px;", status: .active),
+                        CSSPropertyPayload(name: "box-sizing", value: "border-box", text: "/* box-sizing: border-box; */", status: .disabled),
+                    ]
+                ),
+                matchingSelectors: [0]
+            ),
+        ]),
+        inline: .init(),
+        computed: [
+            CSSComputedStylePropertyPayload(name: "display", value: "inline"),
+        ]
+    )
+
+    #expect(styles.sections[0] === section)
+    #expect(styles.sections[0].style === style)
+    #expect(styles.sections[0].style.cssProperties[0] === margin)
+    #expect(styles.sections[0].style.cssProperties[1] === boxSizing)
+    #expect(styles.computedProperties[0] === computedDisplay)
+    #expect(margin.value == "4px")
+    #expect(boxSizing.status == .disabled)
+    #expect(computedDisplay.value == "inline")
+}
+
+@Test
+@MainActor
 func cssSessionRendersMatchedRulesInCascadeOrder() throws {
     let css = CSSSession()
     let identity = cssIdentity()
