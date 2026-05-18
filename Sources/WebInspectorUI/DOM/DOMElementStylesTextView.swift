@@ -276,7 +276,7 @@ package final class DOMElementStylesTextView: UIScrollView, @preconcurrency NSTe
         accessibilityIdentifier = "WebInspector.DOM.Element.StylesTextView"
         alwaysBounceVertical = true
         alwaysBounceHorizontal = true
-        showsHorizontalScrollIndicator = true
+        showsHorizontalScrollIndicator = false
         keyboardDismissMode = .onDrag
 
         textContainer.lineFragmentPadding = 0
@@ -1249,7 +1249,11 @@ extension DOMElementStylesTextView {
     }
 
     package var isHorizontallyScrollableForTesting: Bool {
-        alwaysBounceHorizontal && showsHorizontalScrollIndicator
+        alwaysBounceHorizontal
+    }
+
+    package var showsHorizontalScrollIndicatorForTesting: Bool {
+        showsHorizontalScrollIndicator
     }
 
     package var rebuildTextStorageCallCountForTesting: Int {

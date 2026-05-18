@@ -49,6 +49,7 @@ struct DOMContainerTests {
         #expect(viewController.stylesTextViewForTesting.isTextSelectableForTesting)
         #expect(viewController.stylesTextViewForTesting.isTextEditableForTesting == false)
         #expect(viewController.stylesTextViewForTesting.isHorizontallyScrollableForTesting)
+        #expect(viewController.stylesTextViewForTesting.showsHorizontalScrollIndicatorForTesting == false)
         #expect(viewController.stylesTextViewForTesting.isCheckboxBackedByControlForTesting(propertyID: styleIDs.margin))
         let checkboxSize = try #require(viewController.stylesTextViewForTesting.checkboxControlSizeForTesting(propertyID: styleIDs.margin))
         #expect(checkboxSize.height <= viewController.stylesTextViewForTesting.rowHeightForTesting)
