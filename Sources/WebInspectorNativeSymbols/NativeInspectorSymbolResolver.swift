@@ -8,6 +8,9 @@ package enum NativeInspectorSymbolResolver {
 
     static func resolveForTesting(
         imagePathSuffixes: [String] = NativeInspectorSymbolResolverCore.webKitImagePathSuffixes,
+        javaScriptCorePathSuffixes: [String] = NativeInspectorSymbolResolverCore.javaScriptCoreImagePathSuffixes,
+        webCorePathSuffixes: [String] = NativeInspectorSymbolResolverCore.webCoreImagePathSuffixes,
+        allowSharedCacheFallback: Bool = true,
         connectSymbol: ObfuscatedSymbolName = NativeInspectorSymbolResolverCore.connectFrontendSymbol,
         disconnectSymbol: ObfuscatedSymbolName = NativeInspectorSymbolResolverCore.disconnectFrontendSymbol,
         alternateConnectSymbols: [ObfuscatedSymbolName] = [],
@@ -20,6 +23,9 @@ package enum NativeInspectorSymbolResolver {
         makeAttachResolution(
             from: NativeInspectorSymbolResolverCore.resolveForTesting(
                 imagePathSuffixes: imagePathSuffixes,
+                javaScriptCorePathSuffixes: javaScriptCorePathSuffixes,
+                webCorePathSuffixes: webCorePathSuffixes,
+                allowSharedCacheFallback: allowSharedCacheFallback,
                 connectSymbol: connectSymbol,
                 disconnectSymbol: disconnectSymbol,
                 alternateConnectSymbols: alternateConnectSymbols,
@@ -131,6 +137,9 @@ package enum NativeInspectorSymbolResolver {
 
     static func resolveForTesting(
         imagePathSuffixes: [String] = [],
+        javaScriptCorePathSuffixes: [String] = [],
+        webCorePathSuffixes: [String] = [],
+        allowSharedCacheFallback: Bool = true,
         connectSymbol: String = "",
         disconnectSymbol: String = "",
         alternateConnectSymbols: [String] = [],

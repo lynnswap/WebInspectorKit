@@ -17,12 +17,24 @@ import MachOKit
     }
 
     static func loadedImage(matching pathSuffixes: [String]) -> MachOImage? {
-        MachOImage.images.first { image in
-            guard let path = image.path else {
-                return false
+        let imageCount = _dyld_image_count()
+        for index in 0..<imageCount {
+            guard let header = unsafe _dyld_get_image_header(index) else {
+                continue
             }
-            return pathSuffixes.contains { path.hasSuffix($0) }
+            let image = unsafe MachOImage(ptr: header)
+            let dyldImagePath: String?
+            if let dyldImageName = unsafe _dyld_get_image_name(index) {
+                dyldImagePath = unsafe String(cString: dyldImageName)
+            } else {
+                dyldImagePath = nil
+            }
+            let paths = [image.path, dyldImagePath].compactMap { $0 }
+            if paths.contains(where: { path in pathSuffixes.contains { path.hasSuffix($0) } }) {
+                return image
+            }
         }
+        return nil
     }
 
     static func image(containingAddress address: UInt64) -> MachOImage? {

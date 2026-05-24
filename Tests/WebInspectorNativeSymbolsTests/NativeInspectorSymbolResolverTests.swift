@@ -1,31 +1,22 @@
 #if os(iOS) || os(macOS)
+import Darwin
 import Foundation
 import Testing
 import WebKit
+import WebInspectorNativeSymbolFixtures
 @testable import WebInspectorNativeSymbols
 
 struct NativeInspectorSymbolResolverTests {
     @Test
-    @MainActor
-    func machOKitLookupProvidesSharedCacheAndLoadedImages() throws {
-        #if os(iOS) && !targetEnvironment(simulator)
-        throw Skip("The runtime smoke test is covered separately on device-backed flows.")
-        #else
-        let (currentSharedCache, webKitImage, javaScriptCoreImage) = withWebKitLoaded {
-            (
-                unsafe MachOKitSymbolLookup.currentSharedCache,
-                unsafe MachOKitSymbolLookup.loadedImage(
-                    matching: NativeInspectorSymbolResolver.imagePathSuffixesForTesting().webKit
-                ),
-                unsafe MachOKitSymbolLookup.loadedImage(
-                    matching: NativeInspectorSymbolResolver.imagePathSuffixesForTesting().javaScriptCore
-                )
-            )
-        }
-        #expect(currentSharedCache != nil)
-        #expect(webKitImage != nil)
-        #expect(javaScriptCoreImage != nil)
-        #endif
+    func fixtureImageResolvesCompleteAddressSet() throws {
+        let fixture = try nativeSymbolFixture()
+        let resolution = try NativeInspectorSymbolResolver.resolveUsingFixture(fixture)
+
+        #expect(resolution.failureReason == nil)
+        #expect(resolution.addresses.isComplete)
+        #expect(resolution.isSupported)
+        #expect(resolution.source == "loaded-image")
+        #expect(!resolution.usedConnectDisconnectFallback)
     }
 
     @Test
@@ -45,13 +36,12 @@ struct NativeInspectorSymbolResolverTests {
     }
 
     @Test
-    @MainActor
-    func resolveForTestingReportsOnlyMissingSymbolState() {
-        let resolution = withWebKitLoaded {
-            NativeInspectorSymbolResolver.resolveForTesting(
-                stringFromUTF8Symbol: obfuscated(["Ev", "27definitelyMissingFromUTF8Foo", "6String", "3WTF", "__ZN"])
-            )
-        }
+    func resolveForTestingReportsOnlyMissingSymbolState() throws {
+        let fixture = try nativeSymbolFixture()
+        let resolution = try NativeInspectorSymbolResolver.resolveUsingFixture(
+            fixture,
+            stringFromUTF8Symbol: obfuscated(["Ev", "27definitelyMissingFromUTF8Foo", "6String", "3WTF", "__ZN"])
+        )
         let failureReason = resolution.failureReason
 
         #expect(failureReason != nil)
@@ -78,27 +68,22 @@ struct NativeInspectorSymbolResolverTests {
     }
 
     @Test
-    @MainActor
     func resolveForTestingUsesAlternateConnectDisconnectCandidates() throws {
+        let fixture = try nativeSymbolFixture()
         let primaryConnect = try #require(NativeInspectorSymbolResolver.connectSymbolsForTesting().first)
         let primaryDisconnect = try #require(NativeInspectorSymbolResolver.disconnectSymbolsForTesting().first)
 
-        let resolution = withWebKitLoaded {
-            NativeInspectorSymbolResolver.resolveForTesting(
-                connectSymbol: obfuscated(["Ev", "26DefinitelyWrongConnectName", "7Missing", "__ZN"]),
-                disconnectSymbol: obfuscated(["Ev", "29DefinitelyWrongDisconnectName", "7Missing", "__ZN"]),
-                alternateConnectSymbols: [primaryConnect],
-                alternateDisconnectSymbols: [primaryDisconnect]
-            )
-        }
+        let resolution = try NativeInspectorSymbolResolver.resolveUsingFixture(
+            fixture,
+            connectSymbol: obfuscated(["Ev", "26DefinitelyWrongConnectName", "7Missing", "__ZN"]),
+            disconnectSymbol: obfuscated(["Ev", "29DefinitelyWrongDisconnectName", "7Missing", "__ZN"]),
+            alternateConnectSymbols: [primaryConnect],
+            alternateDisconnectSymbols: [primaryDisconnect]
+        )
 
-        #if os(iOS) && !targetEnvironment(simulator)
-        throw Skip("The runtime smoke test is covered separately on device-backed flows.")
-        #else
         #expect(resolution.isSupported)
         #expect(resolution.connectFrontendAddress != 0)
         #expect(resolution.disconnectFrontendAddress != 0)
-        #endif
     }
 
     @Test
@@ -232,13 +217,12 @@ struct NativeInspectorSymbolResolverTests {
     }
 
     @Test
-    @MainActor
-    func diagnosticsDoNotExposeDecodedMangledSymbols() {
-        let resolution = withWebKitLoaded {
-            NativeInspectorSymbolResolver.resolveForTesting(
-                stringFromUTF8Symbol: obfuscated(["Ev", "27definitelyMissingFromUTF8Foo", "6String", "3WTF", "__ZN"])
-            )
-        }
+    func diagnosticsDoNotExposeDecodedMangledSymbols() throws {
+        let fixture = try nativeSymbolFixture()
+        let resolution = try NativeInspectorSymbolResolver.resolveUsingFixture(
+            fixture,
+            stringFromUTF8Symbol: obfuscated(["Ev", "27definitelyMissingFromUTF8Foo", "6String", "3WTF", "__ZN"])
+        )
         let diagnostics = [
             resolution.failureReason,
             resolution.failureKind,
@@ -254,6 +238,69 @@ struct NativeInspectorSymbolResolverTests {
         #expect(!diagnostics.contains("definitelyMissingFromUTF8Foo"))
     }
 
+}
+
+private struct NativeSymbolFixture {
+    let pathSuffixes: [String]
+}
+
+private enum NativeSymbolFixtureError: Error {
+    case missingImagePath
+}
+
+private func nativeSymbolFixture() throws -> NativeSymbolFixture {
+    var info = unsafe Dl_info()
+    let anchor = unsafe unsafeBitCast(
+        WebInspectorNativeSymbolFixtureAnchor as @convention(c) () -> Void,
+        to: UnsafeRawPointer.self
+    )
+    let didResolveImagePath = unsafe dladdr(anchor, &info) != 0
+    try #require(didResolveImagePath)
+    guard let imagePath = unsafe info.dli_fname else {
+        throw NativeSymbolFixtureError.missingImagePath
+    }
+    let path = unsafe String(cString: imagePath)
+    let imageURL = URL(fileURLWithPath: path)
+    return NativeSymbolFixture(
+        pathSuffixes: [
+            path,
+            "\(imageURL.deletingLastPathComponent().lastPathComponent)/\(imageURL.lastPathComponent)",
+            imageURL.lastPathComponent,
+        ]
+    )
+}
+
+private extension NativeInspectorSymbolResolver {
+    static func resolveUsingFixture(
+        _ fixture: NativeSymbolFixture,
+        allowSharedCacheFallback: Bool = false,
+        connectSymbol: ObfuscatedSymbolName? = nil,
+        disconnectSymbol: ObfuscatedSymbolName? = nil,
+        alternateConnectSymbols: [ObfuscatedSymbolName] = [],
+        alternateDisconnectSymbols: [ObfuscatedSymbolName] = [],
+        stringFromUTF8Symbol: ObfuscatedSymbolName? = nil,
+        stringImplToNSStringSymbol: ObfuscatedSymbolName? = nil,
+        destroyStringImplSymbol: ObfuscatedSymbolName? = nil,
+        backendDispatcherDispatchSymbol: ObfuscatedSymbolName? = nil
+    ) throws -> NativeInspectorSymbolResolution {
+        let primaryConnect = try #require(connectSymbol ?? connectSymbolsForTesting().first)
+        let primaryDisconnect = try #require(disconnectSymbol ?? disconnectSymbolsForTesting().first)
+
+        return resolveForTesting(
+            imagePathSuffixes: fixture.pathSuffixes,
+            javaScriptCorePathSuffixes: fixture.pathSuffixes,
+            webCorePathSuffixes: fixture.pathSuffixes,
+            allowSharedCacheFallback: allowSharedCacheFallback,
+            connectSymbol: primaryConnect,
+            disconnectSymbol: primaryDisconnect,
+            alternateConnectSymbols: alternateConnectSymbols,
+            alternateDisconnectSymbols: alternateDisconnectSymbols,
+            stringFromUTF8Symbol: stringFromUTF8Symbol,
+            stringImplToNSStringSymbol: stringImplToNSStringSymbol,
+            destroyStringImplSymbol: destroyStringImplSymbol,
+            backendDispatcherDispatchSymbol: backendDispatcherDispatchSymbol
+        )
+    }
 }
 
 @MainActor

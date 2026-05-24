@@ -78,6 +78,9 @@ enum NativeInspectorSymbolResolverCore {
     
     static func resolveForTesting(
         imagePathSuffixes: [String] = webKitImagePathSuffixes,
+        javaScriptCorePathSuffixes: [String] = javaScriptCoreImagePathSuffixes,
+        webCorePathSuffixes: [String] = webCoreImagePathSuffixes,
+        allowSharedCacheFallback: Bool = true,
         connectSymbol: ObfuscatedSymbolName = connectFrontendSymbol,
         disconnectSymbol: ObfuscatedSymbolName = disconnectFrontendSymbol,
         alternateConnectSymbols: [ObfuscatedSymbolName] = [],
@@ -89,7 +92,9 @@ enum NativeInspectorSymbolResolverCore {
     ) -> NativeInspectorSymbolLookupResult {
         resolve(
             imagePathSuffixes: imagePathSuffixes,
-            javaScriptCorePathSuffixes: javaScriptCoreImagePathSuffixes,
+            javaScriptCorePathSuffixes: javaScriptCorePathSuffixes,
+            webCorePathSuffixes: webCorePathSuffixes,
+            allowSharedCacheFallback: allowSharedCacheFallback,
             symbols: NativeInspectorSymbols(
                 connectFrontend: NativeInspectorRequiredSymbol(
                     role: .connectFrontend,
