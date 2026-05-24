@@ -28,7 +28,7 @@ struct DOMContainerTests {
         dom.selectNode(body.id)
 
         let css = CSSSession()
-        _ = try applyBodyStyles(to: css, in: dom)
+        try applyBodyStyles(to: css, in: dom)
 
         let viewController = DOMElementViewController(dom: dom, css: css)
         let window = showInWindow(viewController)
@@ -47,13 +47,18 @@ struct DOMContainerTests {
         let headers = viewController.collectionViewForTesting
             .visibleSupplementaryViews(ofKind: UICollectionView.elementKindSectionHeader)
             .compactMap(\.accessibilityLabel)
-        let declarations = stylePropertyViews(in: viewController)
-            .map(\.declarationTextForTesting)
+        let propertyViews = stylePropertyViews(in: viewController)
+        let declarations = propertyViews.map(\.declarationTextForTesting)
 
         #expect(headers.contains { $0.contains("body") })
-        #expect(declarations.contains("margin: 0"))
+        #expect(headers.contains { $0.contains("styles.css") })
+        #expect(declarations.contains("margin: 0;"))
         #expect(declarations.contains("/* box-sizing: border-box; */"))
-        #expect(declarations.contains("font-size: 12px"))
+        #expect(declarations.contains("font-size: 12px;"))
+        #expect(propertyView(named: "margin", in: propertyViews)?.isToggleOnForTesting == true)
+        #expect(propertyView(named: "box-sizing", in: propertyViews)?.isToggleOnForTesting == false)
+        #expect(propertyView(named: "font-size", in: propertyViews)?.isToggleEnabledForTesting == false)
+        #expect(propertyView(named: "margin", in: propertyViews)?.declarationFontForTesting?.pointSize == UIFont.preferredFont(forTextStyle: .body).pointSize)
     }
 
     @Test
@@ -95,12 +100,410 @@ struct DOMContainerTests {
         let didUpdateVisibleRow = await waitUntil {
             stylePropertyViews(in: viewController)
                 .map(\.declarationTextForTesting)
-                .contains("margin: 4px")
+                .contains("margin: 4px;")
         }
 
         #expect(didUpdateVisibleRow)
         #expect(viewController.collectionViewForTesting.isHidden == false)
         #expect(visibleCellIDs(in: viewController) == cellIDsBeforeUpdate)
+    }
+
+    @Test
+    func elementViewControllerCollapsesUnusedInheritedCSSVariablesAndAnimatesReveal() async throws {
+        let dom = makeDOMSession(capabilities: .pageDefault)
+        let body = try #require(firstElement(named: "body", in: dom))
+        dom.selectNode(body.id)
+
+        let css = CSSSession()
+        try applyInheritedVariableStyles(to: css, in: dom)
+
+        let viewController = DOMElementViewController(dom: dom, css: css)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didCollapseUnusedVariables = await waitUntil {
+            viewController.collectionViewForTesting.numberOfSections == 2
+                && viewController.collectionViewForTesting.numberOfItems(inSection: 1) == 3
+                && hiddenVariableCells(in: viewController).count == 1
+        }
+        window.layoutIfNeeded()
+
+        #expect(didCollapseUnusedVariables)
+        let collapsedDeclarations = stylePropertyViews(in: viewController).map(\.declarationTextForTesting)
+        let revealCell = try #require(hiddenVariableCells(in: viewController).first)
+
+        #expect(collapsedDeclarations.contains("color: var(--foreground);"))
+        #expect(collapsedDeclarations.contains("--foreground: var(--palette-primary);"))
+        #expect(collapsedDeclarations.contains("--palette-primary: #111;"))
+        #expect(collapsedDeclarations.contains("--unused-a: red;") == false)
+        #expect(collapsedDeclarations.contains("--unused-b: blue;") == false)
+        #expect(revealCell.revealTitleForTesting == "Show 2 unused CSS variables")
+
+        revealCell.tapRevealForTesting()
+
+        let didRevealUnusedVariables = await waitUntil {
+            let declarations = stylePropertyViews(in: viewController).map(\.declarationTextForTesting)
+            return viewController.collectionViewForTesting.numberOfItems(inSection: 1) == 4
+                && hiddenVariableCells(in: viewController).isEmpty
+                && declarations.contains("--unused-a: red;")
+                && declarations.contains("--unused-b: blue;")
+        }
+
+        #expect(didRevealUnusedVariables)
+        #expect(viewController.lastSnapshotAnimatedForTesting)
+    }
+
+    @Test
+    func elementViewControllerIgnoresVariableReferencesInsideCSSStringsAndComments() async throws {
+        let dom = makeDOMSession(capabilities: .pageDefault)
+        let body = try #require(firstElement(named: "body", in: dom))
+        dom.selectNode(body.id)
+
+        let css = CSSSession()
+        try applyInheritedVariableStyles(
+            to: css,
+            in: dom,
+            additionalBodyProperties: [
+                CSSPropertyPayload(
+                    name: "content",
+                    value: #""var(--unused-a)""#,
+                    text: #"content: "var(--unused-a)";"#,
+                    status: .active
+                ),
+                CSSPropertyPayload(
+                    name: "background",
+                    value: "/* var(--unused-b) */ transparent",
+                    text: "background: /* var(--unused-b) */ transparent;",
+                    status: .active
+                ),
+            ]
+        )
+
+        let viewController = DOMElementViewController(dom: dom, css: css)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didCollapseUnusedVariables = await waitUntil {
+            hiddenVariableCells(in: viewController).first?.revealTitleForTesting == "Show 2 unused CSS variables"
+        }
+        window.layoutIfNeeded()
+
+        #expect(didCollapseUnusedVariables)
+        let collapsedDeclarations = stylePropertyViews(in: viewController).map(\.declarationTextForTesting)
+        #expect(collapsedDeclarations.contains("--unused-a: red;") == false)
+        #expect(collapsedDeclarations.contains("--unused-b: blue;") == false)
+    }
+
+    @Test
+    func elementViewControllerIgnoresVariableReferencesFromInactiveDeclarations() async throws {
+        let dom = makeDOMSession(capabilities: .pageDefault)
+        let body = try #require(firstElement(named: "body", in: dom))
+        dom.selectNode(body.id)
+
+        let css = CSSSession()
+        try applyInheritedVariableStyles(
+            to: css,
+            in: dom,
+            additionalBodyProperties: [
+                CSSPropertyPayload(
+                    name: "border-color",
+                    value: "var(--unused-a)",
+                    text: "border-color: var(--unused-a);",
+                    status: .inactive
+                ),
+            ]
+        )
+
+        let viewController = DOMElementViewController(dom: dom, css: css)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didCollapseUnusedVariables = await waitUntil {
+            hiddenVariableCells(in: viewController).first?.revealTitleForTesting == "Show 2 unused CSS variables"
+        }
+        window.layoutIfNeeded()
+
+        #expect(didCollapseUnusedVariables)
+        let collapsedDeclarations = stylePropertyViews(in: viewController).map(\.declarationTextForTesting)
+        #expect(collapsedDeclarations.contains("--unused-a: red;") == false)
+    }
+
+    @Test
+    func elementViewControllerTreatsCSSVariableFunctionNamesCaseInsensitively() async throws {
+        let dom = makeDOMSession(capabilities: .pageDefault)
+        let body = try #require(firstElement(named: "body", in: dom))
+        dom.selectNode(body.id)
+
+        let css = CSSSession()
+        try applyInheritedVariableStyles(
+            to: css,
+            in: dom,
+            bodyColorValue: "VAR(--foreground)",
+            foregroundValue: "vAr(--palette-primary)"
+        )
+
+        let viewController = DOMElementViewController(dom: dom, css: css)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didCollapseOnlyUnusedVariables = await waitUntil {
+            hiddenVariableCells(in: viewController).first?.revealTitleForTesting == "Show 2 unused CSS variables"
+        }
+        window.layoutIfNeeded()
+
+        #expect(didCollapseOnlyUnusedVariables)
+        let collapsedDeclarations = stylePropertyViews(in: viewController).map(\.declarationTextForTesting)
+        #expect(collapsedDeclarations.contains("color: VAR(--foreground);"))
+        #expect(collapsedDeclarations.contains("--foreground: vAr(--palette-primary);"))
+        #expect(collapsedDeclarations.contains("--palette-primary: #111;"))
+        #expect(collapsedDeclarations.contains("--unused-a: red;") == false)
+        #expect(collapsedDeclarations.contains("--unused-b: blue;") == false)
+    }
+
+    @Test
+    func elementViewControllerIgnoresVarTextInsideOtherFunctionNames() async throws {
+        let dom = makeDOMSession(capabilities: .pageDefault)
+        let body = try #require(firstElement(named: "body", in: dom))
+        dom.selectNode(body.id)
+
+        let css = CSSSession()
+        try applyInheritedVariableStyles(
+            to: css,
+            in: dom,
+            additionalBodyProperties: [
+                CSSPropertyPayload(
+                    name: "background",
+                    value: "myvar(--unused-a)",
+                    text: "background: myvar(--unused-a);",
+                    status: .active
+                ),
+            ]
+        )
+
+        let viewController = DOMElementViewController(dom: dom, css: css)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didCollapseUnusedVariables = await waitUntil {
+            hiddenVariableCells(in: viewController).first?.revealTitleForTesting == "Show 2 unused CSS variables"
+        }
+        window.layoutIfNeeded()
+
+        #expect(didCollapseUnusedVariables)
+        let collapsedDeclarations = stylePropertyViews(in: viewController).map(\.declarationTextForTesting)
+        #expect(collapsedDeclarations.contains("--unused-a: red;") == false)
+    }
+
+    @Test
+    func elementViewControllerIgnoresReferencesFromUnusedLocalCustomProperties() async throws {
+        let dom = makeDOMSession(capabilities: .pageDefault)
+        let body = try #require(firstElement(named: "body", in: dom))
+        dom.selectNode(body.id)
+
+        let css = CSSSession()
+        try applyInheritedVariableStyles(
+            to: css,
+            in: dom,
+            additionalBodyProperties: [
+                CSSPropertyPayload(
+                    name: "--local-unused",
+                    value: "var(--unused-a)",
+                    text: "--local-unused: var(--unused-a);",
+                    status: .active
+                ),
+            ]
+        )
+
+        let viewController = DOMElementViewController(dom: dom, css: css)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didCollapseUnusedVariables = await waitUntil {
+            hiddenVariableCells(in: viewController).first?.revealTitleForTesting == "Show 2 unused CSS variables"
+        }
+        window.layoutIfNeeded()
+
+        #expect(didCollapseUnusedVariables)
+        let collapsedDeclarations = stylePropertyViews(in: viewController).map(\.declarationTextForTesting)
+        #expect(collapsedDeclarations.contains("--unused-a: red;") == false)
+    }
+
+    @Test
+    func elementViewControllerFollowsReferencesFromUsedLocalCustomProperties() async throws {
+        let dom = makeDOMSession(capabilities: .pageDefault)
+        let body = try #require(firstElement(named: "body", in: dom))
+        dom.selectNode(body.id)
+
+        let css = CSSSession()
+        try applyInheritedVariableStyles(
+            to: css,
+            in: dom,
+            additionalBodyProperties: [
+                CSSPropertyPayload(
+                    name: "--local-used",
+                    value: "var(--unused-a)",
+                    text: "--local-used: var(--unused-a);",
+                    status: .active
+                ),
+                CSSPropertyPayload(
+                    name: "border-color",
+                    value: "var(--local-used)",
+                    text: "border-color: var(--local-used);",
+                    status: .active
+                ),
+            ]
+        )
+
+        let viewController = DOMElementViewController(dom: dom, css: css)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didCollapseOnlyUnusedVariable = await waitUntil {
+            hiddenVariableCells(in: viewController).first?.revealTitleForTesting == "Show 1 unused CSS variable"
+        }
+        window.layoutIfNeeded()
+
+        #expect(didCollapseOnlyUnusedVariable)
+        let collapsedDeclarations = stylePropertyViews(in: viewController).map(\.declarationTextForTesting)
+        #expect(collapsedDeclarations.contains("--unused-a: red;"))
+        #expect(collapsedDeclarations.contains("--unused-b: blue;") == false)
+    }
+
+    @Test
+    func elementViewControllerUpdatesCollapsedUnusedVariableCountAfterStyleRefresh() async throws {
+        let dom = makeDOMSession(capabilities: .pageDefault)
+        let body = try #require(firstElement(named: "body", in: dom))
+        dom.selectNode(body.id)
+
+        let css = CSSSession()
+        try applyInheritedVariableStyles(to: css, in: dom)
+
+        let viewController = DOMElementViewController(dom: dom, css: css)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didCollapseUnusedVariables = await waitUntil {
+            hiddenVariableCells(in: viewController).first?.revealTitleForTesting == "Show 2 unused CSS variables"
+        }
+        #expect(didCollapseUnusedVariables)
+
+        try applyInheritedVariableStyles(
+            to: css,
+            in: dom,
+            additionalRootProperties: [
+                CSSPropertyPayload(
+                    name: "--unused-c",
+                    value: "green",
+                    text: "--unused-c: green;",
+                    status: .active
+                ),
+            ]
+        )
+
+        let didUpdateHiddenVariableCount = await waitUntil {
+            hiddenVariableCells(in: viewController).first?.revealTitleForTesting == "Show 3 unused CSS variables"
+        }
+        #expect(didUpdateHiddenVariableCount)
+    }
+
+    @Test
+    func elementStylePropertyViewSendsToggleActionWithImmediateControlFeedback() {
+        let propertyID = CSSPropertyIdentifier(
+            styleID: CSSStyleIdentifier(styleSheetID: CSSStyleSheetIdentifier("test-sheet"), ordinal: 0),
+            propertyIndex: 0
+        )
+        let property = CSSProperty(
+            id: propertyID,
+            name: "margin",
+            value: "0",
+            text: "margin: 0;",
+            status: .active,
+            isEditable: true
+        )
+        let propertyView = DOMElementStylePropertyView()
+        var requestedPropertyID: CSSPropertyIdentifier?
+        var requestedEnabled: Bool?
+        propertyView.bind(property: property) { propertyID, enabled in
+            requestedPropertyID = propertyID
+            requestedEnabled = enabled
+            return true
+        }
+        let window = showViewInWindow(propertyView)
+        defer { window.isHidden = true }
+
+        propertyView.tapToggleForTesting()
+
+        #expect(requestedPropertyID == propertyID)
+        #expect(requestedEnabled == false)
+        #expect(propertyView.isToggleOnForTesting == false)
+
+        propertyView.bind(property: property) { _, _ in
+            false
+        }
+        propertyView.tapToggleForTesting()
+        #expect(propertyView.isToggleOnForTesting == true)
+    }
+
+    @Test
+    func elementStylePropertyViewIgnoresNonEditableAndAnonymousProperties() {
+        let styleID = CSSStyleIdentifier(styleSheetID: CSSStyleSheetIdentifier("test-sheet"), ordinal: 0)
+        let nonEditableID = CSSPropertyIdentifier(styleID: styleID, propertyIndex: 0)
+        let nonEditable = CSSProperty(
+            id: nonEditableID,
+            name: "margin",
+            value: "0",
+            text: "margin: 0;",
+            status: .active,
+            isEditable: false
+        )
+        let anonymous = CSSProperty(
+            name: "padding",
+            value: "0",
+            text: "padding: 0;",
+            status: .active,
+            isEditable: true
+        )
+        let nonEditableView = DOMElementStylePropertyView()
+        let anonymousView = DOMElementStylePropertyView()
+        var requestCount = 0
+        nonEditableView.bind(property: nonEditable) { _, _ in
+            requestCount += 1
+            return true
+        }
+        anonymousView.bind(property: anonymous) { _, _ in
+            requestCount += 1
+            return true
+        }
+        let stackView = UIStackView(arrangedSubviews: [nonEditableView, anonymousView])
+        stackView.axis = .vertical
+        let window = showViewInWindow(stackView)
+        defer { window.isHidden = true }
+
+        #expect(nonEditableView.isToggleEnabledForTesting == false)
+        #expect(anonymousView.isToggleEnabledForTesting == false)
+        nonEditableView.tapToggleForTesting()
+        anonymousView.tapToggleForTesting()
+        #expect(requestCount == 0)
+    }
+
+    @Test
+    func elementStylePropertyViewNormalizesMultilinePropertyText() {
+        let property = CSSProperty(
+            name: "background",
+            value: "red",
+            text: "background:\n    red;",
+            status: .active,
+            isEditable: true
+        )
+        let propertyView = DOMElementStylePropertyView()
+        propertyView.bind(property: property) { _, _ in
+            true
+        }
+        let window = showViewInWindow(propertyView)
+        defer { window.isHidden = true }
+
+        #expect(propertyView.declarationTextForTesting == "background: red;")
+        #expect(propertyView.declarationTextForTesting.contains("\n") == false)
     }
 
     @Test
@@ -216,6 +619,12 @@ struct DOMContainerTests {
         #expect(action(titled: "Redo", in: undoableMenu)?.attributes.contains(.disabled) == true)
     }
 
+    private struct BodyStyleIDs {
+        var margin: CSSPropertyIdentifier
+        var boxSizing: CSSPropertyIdentifier
+        var fontSize: CSSPropertyIdentifier
+    }
+
     private func makeDOMSession(capabilities: ProtocolTargetCapabilities = []) -> DOMSession {
         let targetID = ProtocolTargetIdentifier("page-main")
         let session = DOMSession()
@@ -239,7 +648,7 @@ struct DOMContainerTests {
         token: CSSStyleRefreshToken? = nil,
         marginValue: String = "0",
         marginText: String = "margin: 0;"
-    ) throws -> CSSPropertyIdentifier {
+    ) throws -> BodyStyleIDs {
         let identity = try dom.selectedCSSNodeStyleIdentity().get()
         let token = try #require(token ?? css.beginRefresh(identity: identity))
         let styleSheetID = CSSStyleSheetIdentifier("test-sheet")
@@ -290,7 +699,112 @@ struct DOMContainerTests {
             inline: CSSInlineStylesPayload(),
             computed: []
         )
-        return CSSPropertyIdentifier(styleID: styleID, propertyIndex: 0)
+        return BodyStyleIDs(
+            margin: CSSPropertyIdentifier(styleID: styleID, propertyIndex: 0),
+            boxSizing: CSSPropertyIdentifier(styleID: styleID, propertyIndex: 1),
+            fontSize: CSSPropertyIdentifier(styleID: styleID, propertyIndex: 2)
+        )
+    }
+
+    private func applyInheritedVariableStyles(
+        to css: CSSSession,
+        in dom: DOMSession,
+        bodyColorValue: String = "var(--foreground)",
+        foregroundValue: String = "var(--palette-primary)",
+        additionalBodyProperties: [CSSPropertyPayload] = [],
+        additionalRootProperties: [CSSPropertyPayload] = []
+    ) throws {
+        let identity = try dom.selectedCSSNodeStyleIdentity().get()
+        let token = try #require(css.beginRefresh(identity: identity))
+        let styleSheetID = CSSStyleSheetIdentifier("variables")
+        let bodyStyleID = CSSStyleIdentifier(styleSheetID: styleSheetID, ordinal: 0)
+        let rootStyleID = CSSStyleIdentifier(styleSheetID: styleSheetID, ordinal: 1)
+        let bodyProperties = [
+            CSSPropertyPayload(
+                name: "color",
+                value: bodyColorValue,
+                text: "color: \(bodyColorValue);",
+                status: .active
+            ),
+        ] + additionalBodyProperties
+        let rootProperties = [
+            CSSPropertyPayload(
+                name: "--foreground",
+                value: foregroundValue,
+                text: "--foreground: \(foregroundValue);",
+                status: .active
+            ),
+            CSSPropertyPayload(
+                name: "--palette-primary",
+                value: "#111",
+                text: "--palette-primary: #111;",
+                status: .active
+            ),
+            CSSPropertyPayload(
+                name: "--unused-a",
+                value: "red",
+                text: "--unused-a: red;",
+                status: .active
+            ),
+            CSSPropertyPayload(
+                name: "--unused-b",
+                value: "blue",
+                text: "--unused-b: blue;",
+                status: .active
+            ),
+        ] + additionalRootProperties
+
+        css.applyRefresh(
+            token: token,
+            matched: CSSMatchedStylesPayload(
+                matchedRules: [
+                    CSSRuleMatchPayload(
+                        rule: CSSRulePayload(
+                            id: CSSRuleIdentifier(styleSheetID: styleSheetID, ordinal: 0),
+                            selectorList: CSSSelectorList(
+                                selectors: [CSSSelector(text: "body")],
+                                text: "body"
+                            ),
+                            sourceURL: "variables.css",
+                            sourceLine: 12,
+                            origin: .author,
+                            style: CSSStylePayload(
+                                id: bodyStyleID,
+                                cssProperties: bodyProperties,
+                                cssText: bodyProperties.compactMap(\.text).joined(separator: "\n")
+                            )
+                        ),
+                        matchingSelectors: [0]
+                    ),
+                ],
+                inherited: [
+                    CSSInheritedStyleEntry(
+                        matchedRules: [
+                            CSSRuleMatchPayload(
+                                rule: CSSRulePayload(
+                                    id: CSSRuleIdentifier(styleSheetID: styleSheetID, ordinal: 1),
+                                    selectorList: CSSSelectorList(
+                                        selectors: [CSSSelector(text: ":root")],
+                                        text: ":root"
+                                    ),
+                                    sourceURL: "variables.css",
+                                    sourceLine: 1,
+                                    origin: .author,
+                                    style: CSSStylePayload(
+                                        id: rootStyleID,
+                                        cssProperties: rootProperties,
+                                        cssText: rootProperties.compactMap(\.text).joined(separator: "\n")
+                                    )
+                                ),
+                                matchingSelectors: [0]
+                            ),
+                        ]
+                    ),
+                ]
+            ),
+            inline: CSSInlineStylesPayload(),
+            computed: []
+        )
     }
 
     private func firstElement(named localName: String, in dom: DOMSession) -> DOMNode? {
@@ -348,13 +862,40 @@ struct DOMContainerTests {
         return window
     }
 
+    private func showViewInWindow(_ view: UIView) -> UIWindow {
+        let viewController = UIViewController()
+        view.translatesAutoresizingMaskIntoConstraints = false
+        viewController.view.addSubview(view)
+        NSLayoutConstraint.activate([
+            view.topAnchor.constraint(equalTo: viewController.view.topAnchor),
+            view.leadingAnchor.constraint(equalTo: viewController.view.leadingAnchor),
+            view.trailingAnchor.constraint(equalTo: viewController.view.trailingAnchor),
+            view.bottomAnchor.constraint(equalTo: viewController.view.bottomAnchor),
+        ])
+        return showInWindow(viewController)
+    }
+
     private func stylePropertyViews(in viewController: DOMElementViewController) -> [DOMElementStylePropertyView] {
         viewController.collectionViewForTesting.visibleCells
             .compactMap { ($0 as? DOMElementStylePropertyCollectionCell)?.propertyViewForTesting }
     }
 
+    private func hiddenVariableCells(in viewController: DOMElementViewController) -> [DOMElementStyleHiddenVariablesCollectionCell] {
+        viewController.collectionViewForTesting.visibleCells
+            .compactMap { $0 as? DOMElementStyleHiddenVariablesCollectionCell }
+    }
+
     private func visibleCellIDs(in viewController: DOMElementViewController) -> [ObjectIdentifier] {
         viewController.collectionViewForTesting.visibleCells.map(ObjectIdentifier.init)
+    }
+
+    private func propertyView(
+        named name: String,
+        in propertyViews: [DOMElementStylePropertyView]
+    ) -> DOMElementStylePropertyView? {
+        propertyViews.first {
+            $0.accessibilityIdentifier == "WebInspector.DOM.Element.StyleProperty.\(name)"
+        }
     }
 
     private func waitUntil(

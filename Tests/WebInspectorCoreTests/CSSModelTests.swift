@@ -82,7 +82,13 @@ func cssSessionBuildsOrderedSectionsAndPropertyRowState() throws {
                             CSSPropertyPayload(name: "color", value: "red", text: "color: red;", status: .inactive),
                             CSSPropertyPayload(name: "display", value: "block", text: "/* display: block; */", status: .disabled),
                             CSSPropertyPayload(name: "box-sizing", value: "border-box", text: "box-sizing: border-box;"),
-                        ]
+                        ],
+                        cssText: """
+                        margin: 0;
+                        color: red;
+                        /* display: block; */
+                        box-sizing: border-box;
+                        """
                     ),
                     matchingSelectors: [0]
                 ),
@@ -119,6 +125,7 @@ func cssSessionBuildsOrderedSectionsAndPropertyRowState() throws {
     #expect(properties[2].isEnabled == false)
     #expect(properties[3].isEnabled)
     #expect(properties[0].isEditable)
+    #expect(properties[1].isEditable == false)
     #expect(properties[2].isEditable)
 }
 
@@ -302,6 +309,186 @@ func cssSessionBuildsSetStyleTextIntentByCommentingAndUncommentingPropertyText()
 }
 
 @Test
+func cssSessionRewritesAuthoredStyleTextWithoutSerializingInactiveRows() async throws {
+    let css = await CSSSession()
+    let identity = cssIdentity()
+    let styleID = CSSStyleIdentifier(styleSheetID: .init("sheet"), ordinal: 0)
+    let token = try #require(await css.beginRefresh(identity: identity))
+    await css.applyRefresh(
+        token: token,
+        matched: CSSMatchedStylesPayload(matchedRules: [
+            CSSRuleMatchPayload(
+                rule: rule(
+                    selector: "body",
+                    styleID: styleID,
+                    properties: [
+                        CSSPropertyPayload(
+                            name: "font-family",
+                            value: "sans-serif",
+                            text: "font-family: sans-serif;",
+                            status: .active
+                        ),
+                        CSSPropertyPayload(
+                            name: "font-size",
+                            value: "10pt",
+                            text: "font-size: 10pt;",
+                            status: .active
+                        ),
+                        CSSPropertyPayload(
+                            name: "font-size",
+                            value: "12px",
+                            text: "font-size: 12px;",
+                            status: .inactive
+                        ),
+                    ],
+                    cssText: "font-family: sans-serif;\nfont-size: 10pt;"
+                ),
+                matchingSelectors: [0]
+            ),
+        ]),
+        inline: .init(),
+        computed: []
+    )
+
+    let intent = try #require(await css.setStyleTextIntent(
+        for: CSSPropertyIdentifier(styleID: styleID, propertyIndex: 1),
+        enabled: false
+    ))
+    #expect(intent == .setStyleText(
+        targetID: identity.targetID,
+        styleID: styleID,
+        text: "font-family: sans-serif;\n/* font-size: 10pt; */"
+    ))
+}
+
+@Test
+func cssSessionRewritesOnlyDeclarationMatchesOutsideStrings() async throws {
+    let css = await CSSSession()
+    let identity = cssIdentity()
+    let styleID = CSSStyleIdentifier(styleSheetID: .init("sheet"), ordinal: 0)
+    let token = try #require(await css.beginRefresh(identity: identity))
+    await css.applyRefresh(
+        token: token,
+        matched: CSSMatchedStylesPayload(matchedRules: [
+            CSSRuleMatchPayload(
+                rule: rule(
+                    selector: "body::before",
+                    styleID: styleID,
+                    properties: [
+                        CSSPropertyPayload(
+                            name: "content",
+                            value: #""color: red;""#,
+                            text: #"content: "color: red;";"#,
+                            status: .active
+                        ),
+                        CSSPropertyPayload(
+                            name: "color",
+                            value: "red",
+                            text: "color: red;",
+                            status: .active
+                        ),
+                    ],
+                    cssText: """
+                    content: "color: red;";
+                    color: red;
+                    """
+                ),
+                matchingSelectors: [0]
+            ),
+        ]),
+        inline: .init(),
+        computed: []
+    )
+
+    let intent = try #require(await css.setStyleTextIntent(
+        for: CSSPropertyIdentifier(styleID: styleID, propertyIndex: 1),
+        enabled: false
+    ))
+    #expect(intent == .setStyleText(
+        targetID: identity.targetID,
+        styleID: styleID,
+        text: """
+        content: "color: red;";
+        /* color: red; */
+        """
+    ))
+}
+
+@Test
+func cssSessionTreatsCommentsAsDeclarationBoundaries() async throws {
+    let css = await CSSSession()
+    let identity = cssIdentity()
+    let beforeCommentStyleID = CSSStyleIdentifier(styleSheetID: .init("sheet"), ordinal: 0)
+    let afterCommentStyleID = CSSStyleIdentifier(styleSheetID: .init("sheet"), ordinal: 1)
+    let token = try #require(await css.beginRefresh(identity: identity))
+    await css.applyRefresh(
+        token: token,
+        matched: CSSMatchedStylesPayload(matchedRules: [
+            CSSRuleMatchPayload(
+                rule: rule(
+                    selector: ".before-comment",
+                    styleID: beforeCommentStyleID,
+                    properties: [
+                        CSSPropertyPayload(
+                            name: "color",
+                            value: "red",
+                            text: "color: red;",
+                            status: .active
+                        ),
+                    ],
+                    cssText: """
+                    /* note /* marker */
+                    color: red;
+                    """
+                ),
+                matchingSelectors: [0]
+            ),
+            CSSRuleMatchPayload(
+                rule: rule(
+                    selector: ".after-comment",
+                    styleID: afterCommentStyleID,
+                    properties: [
+                        CSSPropertyPayload(
+                            name: "color",
+                            value: "red",
+                            text: "color: red",
+                            status: .active
+                        ),
+                    ],
+                    cssText: "color: red /* note */;"
+                ),
+                matchingSelectors: [0]
+            ),
+        ]),
+        inline: .init(),
+        computed: []
+    )
+
+    let beforeCommentIntent = try #require(await css.setStyleTextIntent(
+        for: CSSPropertyIdentifier(styleID: beforeCommentStyleID, propertyIndex: 0),
+        enabled: false
+    ))
+    #expect(beforeCommentIntent == .setStyleText(
+        targetID: identity.targetID,
+        styleID: beforeCommentStyleID,
+        text: """
+        /* note /* marker */
+        /* color: red; */
+        """
+    ))
+
+    let afterCommentIntent = try #require(await css.setStyleTextIntent(
+        for: CSSPropertyIdentifier(styleID: afterCommentStyleID, propertyIndex: 0),
+        enabled: false
+    ))
+    #expect(afterCommentIntent == .setStyleText(
+        targetID: identity.targetID,
+        styleID: afterCommentStyleID,
+        text: "/* color: red */ /* note */;"
+    ))
+}
+
+@Test
 func cssSessionRejectsNonEditableToggleTargets() async throws {
     let css = await CSSSession()
     let identity = cssIdentity()
@@ -465,6 +652,80 @@ func cssSessionRejectsEditIntentWhenSelectedStylesNeedRefresh() async throws {
 
 @Test
 @MainActor
+func cssSessionMarksSetStyleTextPropertyAsModifiedByInspector() throws {
+    let css = CSSSession()
+    let identity = cssIdentity()
+    let styleID = CSSStyleIdentifier(styleSheetID: .init("sheet"), ordinal: 0)
+    let propertyID = CSSPropertyIdentifier(styleID: styleID, propertyIndex: 0)
+    let token = try #require(css.beginRefresh(identity: identity))
+    css.applyRefresh(
+        token: token,
+        matched: CSSMatchedStylesPayload(matchedRules: [
+            CSSRuleMatchPayload(
+                rule: rule(
+                    selector: "body",
+                    styleID: styleID,
+                    properties: [
+                        CSSPropertyPayload(name: "margin", value: "0", text: "margin: 0;", status: .active),
+                    ]
+                ),
+                matchingSelectors: [0]
+            ),
+        ]),
+        inline: .init(),
+        computed: []
+    )
+
+    let property = try #require(css.selectedNodeStyles?.sections[0].style.cssProperties[0])
+    #expect(property.isModifiedByInspector == false)
+
+    css.applySetStyleTextResult(
+        CSSStylePayload(id: styleID, cssProperties: [
+            CSSPropertyPayload(name: "margin", value: "0", text: "/* margin: 0; */", status: .disabled),
+        ]),
+        propertyID: propertyID,
+        targetID: identity.targetID
+    )
+
+    #expect(property.status == .disabled)
+    #expect(property.isModifiedByInspector)
+
+    let refreshToken = try #require(css.beginRefresh(identity: identity))
+    css.applyRefresh(
+        token: refreshToken,
+        matched: CSSMatchedStylesPayload(matchedRules: [
+            CSSRuleMatchPayload(
+                rule: rule(
+                    selector: "body",
+                    styleID: styleID,
+                    properties: [
+                        CSSPropertyPayload(name: "margin", value: "0", text: "/* margin: 0; */", status: .disabled),
+                    ]
+                ),
+                matchingSelectors: [0]
+            ),
+        ]),
+        inline: .init(),
+        computed: []
+    )
+
+    #expect(css.selectedState == .loaded)
+    #expect(property.isModifiedByInspector)
+
+    css.applySetStyleTextResult(
+        CSSStylePayload(id: styleID, cssProperties: [
+            CSSPropertyPayload(name: "margin", value: "0", text: "margin: 0;", status: .active),
+        ]),
+        propertyID: propertyID,
+        targetID: identity.targetID
+    )
+
+    #expect(property.status == .active)
+    #expect(property.isModifiedByInspector == false)
+}
+
+@Test
+@MainActor
 func cssSessionAppliesSetStyleTextResultOnlyToEditedTarget() throws {
     let css = CSSSession()
     let sharedStyleID = CSSStyleIdentifier(styleSheetID: .init("sheet"), ordinal: 0)
@@ -513,7 +774,7 @@ func cssSessionAppliesSetStyleTextResultOnlyToEditedTarget() throws {
         CSSStylePayload(id: sharedStyleID, cssProperties: [
             CSSPropertyPayload(name: "margin", value: "0", text: "/* margin: 0; */", status: .disabled),
         ]),
-        styleID: sharedStyleID,
+        propertyID: CSSPropertyIdentifier(styleID: sharedStyleID, propertyIndex: 0),
         targetID: pageIdentity.targetID
     )
 
@@ -541,22 +802,24 @@ private func rule(
     selector: String,
     styleID: CSSStyleIdentifier = CSSStyleIdentifier(styleSheetID: .init("sheet"), ordinal: 0),
     origin: CSSStyleOrigin = .author,
-    properties: [CSSPropertyPayload]
+    properties: [CSSPropertyPayload],
+    cssText: String? = nil
 ) -> CSSRulePayload {
     CSSRulePayload(
         id: CSSRuleIdentifier(styleSheetID: styleID.styleSheetID, ordinal: styleID.ordinal),
         selectorList: CSSSelectorList(selectors: [CSSSelector(text: selector)], text: selector),
         sourceLine: 1,
         origin: origin,
-        style: style(id: styleID, properties: properties)
+        style: style(id: styleID, properties: properties, cssText: cssText)
     )
 }
 
 private func style(
     id: CSSStyleIdentifier? = nil,
-    properties: [CSSPropertyPayload]
+    properties: [CSSPropertyPayload],
+    cssText: String? = nil
 ) -> CSSStylePayload {
-    CSSStylePayload(id: id, cssProperties: properties)
+    CSSStylePayload(id: id, cssProperties: properties, cssText: cssText)
 }
 
 private extension Result {

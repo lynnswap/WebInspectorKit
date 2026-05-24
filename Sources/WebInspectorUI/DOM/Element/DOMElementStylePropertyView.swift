@@ -65,10 +65,10 @@ package final class DOMElementStylePropertyView: UIView {
 
         declarationTextView.translatesAutoresizingMaskIntoConstraints = false
         declarationTextView.backgroundColor = .clear
+        declarationTextView.font = .preferredFont(forTextStyle: .body)
         declarationTextView.isEditable = false
-        declarationTextView.isSelectable = false
+        declarationTextView.isSelectable = true
         declarationTextView.isScrollEnabled = false
-        declarationTextView.isUserInteractionEnabled = false
         declarationTextView.adjustsFontForContentSizeCategory = true
         declarationTextView.textContainerInset = .zero
         declarationTextView.textContainer.lineFragmentPadding = 0
@@ -147,8 +147,8 @@ package final class DOMElementStylePropertyView: UIView {
 
     private func declarationText(for property: CSSProperty) -> NSAttributedString {
         var attributes: [NSAttributedString.Key: Any] = [
-            .font: Self.declarationFont,
-            .foregroundColor: UIColor.label,
+            .font: declarationTextView.font ?? .preferredFont(forTextStyle: .body),
+            .foregroundColor: property.status == .disabled ? UIColor.secondaryLabel : UIColor.label,
         ]
         if property.isOverridden {
             attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
@@ -157,10 +157,13 @@ package final class DOMElementStylePropertyView: UIView {
     }
 
     private func declarationDisplayText(for property: CSSProperty) -> String {
+        let declaration: String
         if property.status == .disabled {
-            return property.text ?? "/* \(declarationSourceText(for: property)) */"
+            declaration = property.text ?? "/* \(declarationSourceText(for: property)) */"
+        } else {
+            declaration = property.text ?? declarationSourceText(for: property)
         }
-        return declarationSourceText(for: property)
+        return normalizedSingleLineDeclaration(declaration)
     }
 
     private func declarationSourceText(for property: CSSProperty) -> String {
@@ -168,7 +171,15 @@ package final class DOMElementStylePropertyView: UIView {
         if !property.priority.isEmpty {
             declaration += " !\(property.priority)"
         }
-        return declaration
+        return declaration + ";"
+    }
+
+    private func normalizedSingleLineDeclaration(_ declaration: String) -> String {
+        declaration
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
     }
 
     private func accessibilityLabel(for property: CSSProperty) -> String {
@@ -190,14 +201,6 @@ package final class DOMElementStylePropertyView: UIView {
         return states.joined(separator: ", ")
     }
 
-    private static var declarationFont: UIFont {
-        UIFontMetrics(forTextStyle: .subheadline).scaledFont(
-            for: .monospacedSystemFont(
-                ofSize: UIFont.preferredFont(forTextStyle: .subheadline).pointSize,
-                weight: .regular
-            )
-        )
-    }
 }
 
 #Preview("CSS Property Rows") {
@@ -273,6 +276,26 @@ private enum DOMElementStylePropertyViewPreviewData {
 extension DOMElementStylePropertyView {
     package var declarationTextForTesting: String {
         declarationTextView.text
+    }
+
+    package var declarationFontForTesting: UIFont? {
+        declarationTextView.font
+    }
+
+    package var isToggleOnForTesting: Bool {
+        toggleSwitch.isOn
+    }
+
+    package var isToggleEnabledForTesting: Bool {
+        toggleSwitch.isEnabled
+    }
+
+    package func tapToggleForTesting() {
+        guard toggleSwitch.isEnabled else {
+            return
+        }
+        toggleSwitch.setOn(!toggleSwitch.isOn, animated: false)
+        toggleSwitchChanged()
     }
 }
 #endif
