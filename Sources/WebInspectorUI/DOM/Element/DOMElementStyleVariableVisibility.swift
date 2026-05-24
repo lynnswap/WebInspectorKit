@@ -23,7 +23,7 @@ package enum DOMElementStyleVariableVisibility {
     package static func usedCSSVariableNames(in nodeStyles: CSSNodeStyles) -> Set<String> {
         var usedVariables = Set<String>()
         for section in nodeStyles.sections {
-            for property in section.style.cssProperties where property.isEnabled {
+            for property in section.style.cssProperties where contributesCSSVariableUsage(property) {
                 if isInheritedStyleSection(section) && isCSSVariable(property.name) {
                     continue
                 }
@@ -36,7 +36,9 @@ package enum DOMElementStyleVariableVisibility {
             addedReferences = false
             for section in nodeStyles.sections where isInheritedStyleSection(section) {
                 for property in section.style.cssProperties
-                where property.isEnabled && isCSSVariable(property.name) && usedVariables.contains(property.name) {
+                where contributesCSSVariableUsage(property)
+                    && isCSSVariable(property.name)
+                    && usedVariables.contains(property.name) {
                     for variable in cssVariableReferences(in: property.value) where usedVariables.insert(variable).inserted {
                         addedReferences = true
                     }
@@ -58,6 +60,10 @@ package enum DOMElementStyleVariableVisibility {
 
     private static func isCSSVariable(_ name: String) -> Bool {
         name.hasPrefix("--")
+    }
+
+    private static func contributesCSSVariableUsage(_ property: CSSProperty) -> Bool {
+        property.isEnabled && !property.isOverridden
     }
 
     private static func cssVariableReferences(in value: String) -> Set<String> {
