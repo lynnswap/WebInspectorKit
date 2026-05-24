@@ -2,62 +2,70 @@
 import UIKit
 
 @MainActor
-struct NetworkTabController: BuiltInTabController {
-    let tabID = WITab.network.id
-    let descriptor = TabDisplayDescriptor(
-        title: WITab.network.title,
-        image: WITab.network.image
+package struct NetworkTabController: BuiltInTabController {
+    package let tabID = WebInspectorTab.network.id
+    package let descriptor = TabDisplayDescriptor(
+        title: WebInspectorTab.network.title,
+        image: WebInspectorTab.network.image
     )
 
     private enum ContentID {
-        static let root = "root"
+        static let list = "list"
         static let detail = "detail"
     }
 
-    func contentKeys(
-        for layout: WITabHostLayout,
+    package func contentKeys(
+        for layout: WebInspectorTabHostLayout,
         displayItem: TabDisplayItem
     ) -> [TabContentKey] {
         [
-            contentKey(ContentID.root),
+            contentKey(ContentID.list),
             contentKey(ContentID.detail),
         ]
     }
 
-    func makeViewController(
+    package func makeViewController(
         for displayItem: TabDisplayItem,
-        session: WISession,
-        layout: WITabHostLayout
+        session: WebInspectorSession,
+        layout: WebInspectorTabHostLayout
     ) -> UIViewController {
-        let listViewController = cachedNetworkListViewController(session: session)
-        let detailViewController = cachedNetworkDetailViewController(session: session)
+        let model = session.interface.networkPanelModel(for: session.inspector)
+        let listViewController = cachedListViewController(session: session, model: model)
+        let detailViewController = cachedDetailViewController(session: session, model: model)
 
         switch layout {
         case .compact:
             return NetworkCompactNavigationController(
-                inspector: session.runtime.network.model,
+                model: model,
                 listViewController: listViewController,
                 detailViewController: detailViewController
             )
         case .regular:
-            let splitViewController = NetworkSplitViewController(
-                inspector: session.runtime.network.model,
-                listViewController: listViewController,
-                detailViewController: detailViewController
+            return RegularSplitRootViewController(
+                contentViewController: NetworkSplitViewController(
+                    model: model,
+                    listViewController: listViewController,
+                    detailViewController: detailViewController
+                )
             )
-            return WIRegularSplitRootViewController(contentViewController: splitViewController)
         }
     }
 
-    private func cachedNetworkListViewController(session: WISession) -> NetworkListViewController {
-        session.interface.viewController(for: contentKey(ContentID.root)) {
-            NetworkListViewController(inspector: session.runtime.network.model)
+    private func cachedListViewController(
+        session: WebInspectorSession,
+        model: NetworkPanelModel
+    ) -> NetworkListViewController {
+        session.interface.viewController(for: contentKey(ContentID.list)) {
+            NetworkListViewController(model: model)
         }
     }
 
-    private func cachedNetworkDetailViewController(session: WISession) -> NetworkEntryDetailViewController {
+    private func cachedDetailViewController(
+        session: WebInspectorSession,
+        model: NetworkPanelModel
+    ) -> NetworkDetailViewController {
         session.interface.viewController(for: contentKey(ContentID.detail)) {
-            NetworkEntryDetailViewController(inspector: session.runtime.network.model)
+            NetworkDetailViewController(model: model)
         }
     }
 

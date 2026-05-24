@@ -1,41 +1,41 @@
 #if canImport(UIKit)
 import UIKit
-@_spi(Monocly) import WebInspectorKit
+import WebInspectorKit
 
 @MainActor
 final class BrowserRootViewController: UINavigationController {
-    private enum InspectorRuntimeAttachment {
+    private enum InspectorSessionAttachment {
         case attached
-        case suspended
         case detached
     }
 
     let store: BrowserStore
-    let inspectorRuntime: WIRuntimeSession
+    let inspectorSession: WebInspectorSession
     let launchConfiguration: BrowserLaunchConfiguration
-    private var pendingInspectorRuntimeAttachment: InspectorRuntimeAttachment?
+    private var resolvedInspectorSessionAttachment: InspectorSessionAttachment = .detached
+    private var pendingInspectorSessionAttachment: InspectorSessionAttachment?
     private var inspectorLifecycleTask: Task<Void, Never>?
     private var isFinalizingInspectorSession = false
     private var isPreservingInspectorSessionForSceneDisconnection = false
 
     init(
         store: BrowserStore? = nil,
-        inspectorRuntime: WIRuntimeSession? = nil,
+        inspectorSession: WebInspectorSession? = nil,
         launchConfiguration: BrowserLaunchConfiguration
     ) {
         let resolvedStore = store ?? BrowserStore(
             url: launchConfiguration.initialURL,
             automaticallyLoadsInitialRequest: false
         )
-        let resolvedInspectorRuntime = inspectorRuntime ?? WIRuntimeSession()
+        let resolvedInspectorSession = inspectorSession ?? WebInspectorSession()
 
         self.store = resolvedStore
-        self.inspectorRuntime = resolvedInspectorRuntime
+        self.inspectorSession = resolvedInspectorSession
         self.launchConfiguration = launchConfiguration
 
         let pageViewController = BrowserPageViewController(
             store: resolvedStore,
-            inspectorRuntime: resolvedInspectorRuntime,
+            inspectorSession: resolvedInspectorSession,
             launchConfiguration: launchConfiguration
         )
 
@@ -59,24 +59,21 @@ final class BrowserRootViewController: UINavigationController {
         setNavigationBarHidden(false, animated: false)
     }
 
-    override func viewDidAppear(_ animated: Bool) {
-        super.viewDidAppear(animated)
+    override func viewIsAppearing(_ animated: Bool) {
+        super.viewIsAppearing(animated)
         isPreservingInspectorSessionForSceneDisconnection = false
-        requestInspectorRuntimeAttachment(.attached)
+        requestInspectorSessionAttachment(.attached)
     }
 
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
-        if launchConfiguration.uiTestScenario == .domRemoteURL {
-            return
-        }
-        if pageViewController?.isPresentingInspectorForRuntimeAttachment == true {
+        if pageViewController?.isPresentingInspectorForSessionAttachment == true {
             return
         }
         if isPreservingInspectorSessionForSceneDisconnection {
             return
         }
-        requestInspectorRuntimeAttachment(.detached)
+        requestInspectorSessionAttachment(.detached)
     }
 
     isolated deinit {
@@ -89,12 +86,11 @@ final class BrowserRootViewController: UINavigationController {
         }
         isFinalizingInspectorSession = true
         isPreservingInspectorSessionForSceneDisconnection = false
-        requestInspectorRuntimeAttachment(.detached)
+        requestInspectorSessionAttachment(.detached)
     }
 
     func prepareForSceneDisconnectionPreservingInspectorSession() {
         isPreservingInspectorSessionForSceneDisconnection = true
-        requestInspectorRuntimeAttachment(.suspended)
     }
 
     func waitForInspectorSessionTransitions() async {
@@ -110,24 +106,26 @@ final class BrowserRootViewController: UINavigationController {
         viewControllers.first as? BrowserPageViewController
     }
 
-    var pageViewControllerForTesting: BrowserPageViewController? {
-        pageViewController
-    }
 }
 
 private extension BrowserRootViewController {
-    private func requestInspectorRuntimeAttachment(_ attachment: InspectorRuntimeAttachment) {
+    private func requestInspectorSessionAttachment(_ attachment: InspectorSessionAttachment) {
         if isFinalizingInspectorSession, attachment != .detached {
             return
         }
-        pendingInspectorRuntimeAttachment = attachment
+        guard resolvedInspectorSessionAttachment != attachment
+            || pendingInspectorSessionAttachment != nil
+            || inspectorLifecycleTask != nil else {
+            return
+        }
+        pendingInspectorSessionAttachment = attachment
         guard inspectorLifecycleTask == nil else {
             return
         }
 
-        let inspectorRuntime = inspectorRuntime
+        let inspectorSession = inspectorSession
         let store = store
-        inspectorLifecycleTask = Task { [weak self, inspectorRuntime, store] in
+        inspectorLifecycleTask = Task { [weak self, inspectorSession, store] in
             guard let self else {
                 return
             }
@@ -135,16 +133,26 @@ private extension BrowserRootViewController {
                 self.inspectorLifecycleTask = nil
             }
 
-            while let desiredAttachment = self.pendingInspectorRuntimeAttachment {
-                self.pendingInspectorRuntimeAttachment = nil
+            while let desiredAttachment = self.pendingInspectorSessionAttachment {
+                self.pendingInspectorSessionAttachment = nil
 
                 switch desiredAttachment {
                 case .attached:
-                    await inspectorRuntime.attach(to: store.webView)
-                case .suspended:
-                    await inspectorRuntime.suspendPageAttachment()
+                    guard self.resolvedInspectorSessionAttachment != .attached else {
+                        continue
+                    }
+                    do {
+                        try await inspectorSession.attach(to: store.webView)
+                        self.resolvedInspectorSessionAttachment = .attached
+                    } catch {
+                        continue
+                    }
                 case .detached:
-                    await inspectorRuntime.detach()
+                    guard self.resolvedInspectorSessionAttachment != .detached else {
+                        continue
+                    }
+                    await inspectorSession.detach()
+                    self.resolvedInspectorSessionAttachment = .detached
                 }
             }
         }

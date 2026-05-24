@@ -19,19 +19,11 @@
 			remoteGlobalIDString = ABA353C72EDFF1EC00489A00;
 			remoteInfo = Monocly;
 		};
-		F0B200062F10000100000001 /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = ABA353C02EDFF1EC00489A00 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = ABA353C72EDFF1EC00489A00;
-			remoteInfo = Monocly;
-		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		ABA353C82EDFF1EC00489A00 /* Monocly.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Monocly.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		ABA353D52EDFF1ED00489A00 /* MonoclyTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MonoclyTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		F0B200012F10000100000001 /* MonoclyUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MonoclyUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -58,11 +50,6 @@
 			path = Monocly;
 			sourceTree = "<group>";
 		};
-		F0B200022F10000100000001 /* MonoclyUITests */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = MonoclyUITests;
-			sourceTree = "<group>";
-		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -82,13 +69,6 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		F0B200032F10000100000001 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -97,7 +77,6 @@
 			children = (
 				ABA353CA2EDFF1EC00489A00 /* Monocly */,
 				77B94B4D0F2A4D0A8B64C01A /* MonoclyTests */,
-				F0B200022F10000100000001 /* MonoclyUITests */,
 				ABA353C92EDFF1EC00489A00 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -107,7 +86,6 @@
 			children = (
 				ABA353C82EDFF1EC00489A00 /* Monocly.app */,
 				ABA353D52EDFF1ED00489A00 /* MonoclyTests.xctest */,
-				F0B200012F10000100000001 /* MonoclyUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -162,29 +140,6 @@
 			productReference = ABA353D52EDFF1ED00489A00 /* MonoclyTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
-		F0B200082F10000100000001 /* MonoclyUITests */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = F0B2000B2F10000100000001 /* Build configuration list for PBXNativeTarget "MonoclyUITests" */;
-			buildPhases = (
-				F0B200042F10000100000001 /* Sources */,
-				F0B200032F10000100000001 /* Frameworks */,
-				F0B200052F10000100000001 /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-				F0B200072F10000100000001 /* PBXTargetDependency */,
-			);
-			fileSystemSynchronizedGroups = (
-				F0B200022F10000100000001 /* MonoclyUITests */,
-			);
-			name = MonoclyUITests;
-			packageProductDependencies = (
-			);
-			productName = MonoclyUITests;
-			productReference = F0B200012F10000100000001 /* MonoclyUITests.xctest */;
-			productType = "com.apple.product-type.bundle.ui-testing";
-		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -199,10 +154,6 @@
 						CreatedOnToolsVersion = 26.1.1;
 					};
 					ABA353D42EDFF1ED00489A00 = {
-						CreatedOnToolsVersion = 26.1.1;
-						TestTargetID = ABA353C72EDFF1EC00489A00;
-					};
-					F0B200082F10000100000001 = {
 						CreatedOnToolsVersion = 26.1.1;
 						TestTargetID = ABA353C72EDFF1EC00489A00;
 					};
@@ -228,7 +179,6 @@
 			targets = (
 				ABA353C72EDFF1EC00489A00 /* Monocly */,
 				ABA353D42EDFF1ED00489A00 /* MonoclyTests */,
-				F0B200082F10000100000001 /* MonoclyUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -242,13 +192,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		ABA353D32EDFF1ED00489A00 /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		F0B200052F10000100000001 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -272,13 +215,6 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		F0B200042F10000100000001 /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -286,11 +222,6 @@
 			isa = PBXTargetDependency;
 			target = ABA353C72EDFF1EC00489A00 /* Monocly */;
 			targetProxy = ABA353D62EDFF1ED00489A00 /* PBXContainerItemProxy */;
-		};
-		F0B200072F10000100000001 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = ABA353C72EDFF1EC00489A00 /* Monocly */;
-			targetProxy = F0B200062F10000100000001 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -603,62 +534,6 @@
 			};
 			name = Release;
 		};
-		F0B200092F10000100000001 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = 58KPFKMJJW;
-				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
-				MACOSX_DEPLOYMENT_TARGET = 26.1;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = lynnpd.MonoclyUITests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = auto;
-				STRING_CATALOG_GENERATE_SYMBOLS = NO;
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
-				SUPPORTS_MACCATALYST = NO;
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_STRICT_CONCURRENCY = complete;
-				SWIFT_STRICT_MEMORY_SAFETY = YES;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 6.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_TARGET_NAME = Monocly;
-				XROS_DEPLOYMENT_TARGET = 26.1;
-			};
-			name = Debug;
-		};
-		F0B2000A2F10000100000001 /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = 58KPFKMJJW;
-				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
-				MACOSX_DEPLOYMENT_TARGET = 26.1;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = lynnpd.MonoclyUITests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = auto;
-				STRING_CATALOG_GENERATE_SYMBOLS = NO;
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
-				SUPPORTS_MACCATALYST = NO;
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_STRICT_CONCURRENCY = complete;
-				SWIFT_STRICT_MEMORY_SAFETY = YES;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 6.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_TARGET_NAME = Monocly;
-				XROS_DEPLOYMENT_TARGET = 26.1;
-			};
-			name = Release;
-		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -685,15 +560,6 @@
 			buildConfigurations = (
 				ABA353ED2EDFF1ED00489A00 /* Debug */,
 				ABA353EE2EDFF1ED00489A00 /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		F0B2000B2F10000100000001 /* Build configuration list for PBXNativeTarget "MonoclyUITests" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				F0B200092F10000100000001 /* Debug */,
-				F0B2000A2F10000100000001 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

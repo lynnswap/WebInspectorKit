@@ -50,16 +50,6 @@
                ReferencedContainer = "container:Monocly.xcodeproj">
             </BuildableReference>
          </TestableReference>
-         <TestableReference
-            skipped = "NO">
-            <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "F0B200082F10000100000001"
-               BuildableName = "MonoclyUITests.xctest"
-               BlueprintName = "MonoclyUITests"
-               ReferencedContainer = "container:Monocly.xcodeproj">
-            </BuildableReference>
-         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction

@@ -2,8 +2,7 @@
 import ObservationBridge
 import SyntaxEditorUI
 import UIKit
-import WebInspectorEngine
-import WebInspectorRuntime
+import WebInspectorCore
 
 @MainActor
 final class NetworkBodyViewController: UIViewController {
@@ -12,7 +11,7 @@ final class NetworkBodyViewController: UIViewController {
         language: .json,
         isEditable: false,
         lineWrappingEnabled: true,
-        colorTheme: .webInspectorPlainText
+        colorTheme: .v2WebInspectorPlainText
     )
     private lazy var syntaxView = SyntaxEditorView(model: syntaxModel)
     private let observationScope = ObservationScope()
@@ -75,30 +74,46 @@ final class NetworkBodyViewController: UIViewController {
     }
 
     private func renderBody() {
-        let unavailableText = wiLocalized("network.body.unavailable", default: "Body unavailable")
-        let fetchingText = wiLocalized("network.body.fetching", default: "Fetching body...")
         let displayText: String
         let syntaxKind: NetworkBodySyntaxKind
         guard let body else {
-            applyBodyDisplay(text: unavailableText, syntaxKind: .plainText)
+            applyBodyDisplay(
+                text: webInspectorLocalized("network.body.unavailable", default: "Body unavailable"),
+                syntaxKind: .plainText
+            )
             return
         }
 
         switch body.fetchState {
-        case .fetching:
-            displayText = fetchingText
+        case .available:
+            displayText = webInspectorLocalized("network.body.available", default: "Body available")
             syntaxKind = .plainText
-        case .failed(let error):
-            displayText = (body.textRepresentation ?? unavailableText)
-                + "\n\n"
-                + error.localizedDescriptionText
+        case .fetching:
+            displayText = webInspectorLocalized("network.body.fetching", default: "Fetching body...")
+            syntaxKind = .plainText
+        case .loaded:
+            displayText = body.textRepresentation
+                ?? webInspectorLocalized("network.body.unavailable", default: "Body unavailable")
             syntaxKind = body.textRepresentationSyntaxKind
-        default:
-            displayText = body.textRepresentation ?? unavailableText
+        case .failed(let error):
+            let text = body.textRepresentation
+                ?? webInspectorLocalized("network.body.unavailable", default: "Body unavailable")
+            displayText = text + "\n\n" + localizedDescription(for: error)
             syntaxKind = body.textRepresentationSyntaxKind
         }
 
         applyBodyDisplay(text: displayText, syntaxKind: syntaxKind)
+    }
+
+    private func localizedDescription(for error: NetworkBodyFetchError) -> String {
+        switch error {
+        case .unavailable:
+            webInspectorLocalized("network.body.fetch.error.unavailable", default: "Body unavailable")
+        case .decodeFailed:
+            webInspectorLocalized("network.body.fetch.error.decode_failed", default: "Body decode failed")
+        case .unknown(let message):
+            message ?? webInspectorLocalized("network.body.fetch.error.unknown", default: "Body fetch failed")
+        }
     }
 
     private func applyBodyDisplay(
@@ -106,11 +121,10 @@ final class NetworkBodyViewController: UIViewController {
         syntaxKind: NetworkBodySyntaxKind
     ) {
         let syntax = syntaxKind.syntax
-        let language = syntax.language
-        if syntaxModel.language != language {
-            syntaxModel.language = language
+        if syntaxModel.language != syntax.language {
+            syntaxModel.language = syntax.language
         }
-        let colorTheme: SyntaxEditorColorTheme = syntax.usesPlainTextTheme ? .webInspectorPlainText : .xcode
+        let colorTheme: SyntaxEditorColorTheme = syntax.usesPlainTextTheme ? .v2WebInspectorPlainText : .xcode
         if syntaxModel.colorTheme != colorTheme {
             syntaxModel.colorTheme = colorTheme
         }
@@ -122,7 +136,7 @@ final class NetworkBodyViewController: UIViewController {
 
 @MainActor
 extension SyntaxEditorColorTheme {
-    static let webInspectorPlainText = SyntaxEditorColorTheme(
+    static let v2WebInspectorPlainText = SyntaxEditorColorTheme(
         baseForeground: .label,
         bracketBackground: .clear,
         comment: .label,
