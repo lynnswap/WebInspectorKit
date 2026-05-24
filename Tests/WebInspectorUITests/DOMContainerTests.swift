@@ -261,6 +261,40 @@ struct DOMContainerTests {
     }
 
     @Test
+    func elementViewControllerIgnoresVarTextInsideOtherFunctionNames() async throws {
+        let dom = makeDOMSession(capabilities: .pageDefault)
+        let body = try #require(firstElement(named: "body", in: dom))
+        dom.selectNode(body.id)
+
+        let css = CSSSession()
+        try applyInheritedVariableStyles(
+            to: css,
+            in: dom,
+            additionalBodyProperties: [
+                CSSPropertyPayload(
+                    name: "background",
+                    value: "myvar(--unused-a)",
+                    text: "background: myvar(--unused-a);",
+                    status: .active
+                ),
+            ]
+        )
+
+        let viewController = DOMElementViewController(dom: dom, css: css)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didCollapseUnusedVariables = await waitUntil {
+            hiddenVariableCells(in: viewController).first?.revealTitleForTesting == "Show 2 unused CSS variables"
+        }
+        window.layoutIfNeeded()
+
+        #expect(didCollapseUnusedVariables)
+        let collapsedDeclarations = stylePropertyViews(in: viewController).map(\.declarationTextForTesting)
+        #expect(collapsedDeclarations.contains("--unused-a: red;") == false)
+    }
+
+    @Test
     func elementViewControllerUpdatesCollapsedUnusedVariableCountAfterStyleRefresh() async throws {
         let dom = makeDOMSession(capabilities: .pageDefault)
         let body = try #require(firstElement(named: "body", in: dom))

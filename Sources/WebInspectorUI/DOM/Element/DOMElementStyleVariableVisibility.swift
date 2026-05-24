@@ -111,7 +111,8 @@ package enum DOMElementStyleVariableVisibility {
                 continue
             }
 
-            guard startsCSSVariableFunction(in: value, at: index) else {
+            guard hasCSSFunctionBoundary(before: index, in: value),
+                  startsCSSVariableFunction(in: value, at: index) else {
                 index = nextIndex
                 continue
             }
@@ -136,6 +137,13 @@ package enum DOMElementStyleVariableVisibility {
         }
 
         return references
+    }
+
+    private static func hasCSSFunctionBoundary(before index: String.Index, in value: String) -> Bool {
+        guard index > value.startIndex else {
+            return true
+        }
+        return !isCSSIdentifierCharacter(value[value.index(before: index)])
     }
 
     private static func startsCSSVariableFunction(in value: String, at index: String.Index) -> Bool {
@@ -181,6 +189,10 @@ package enum DOMElementStyleVariableVisibility {
     }
 
     private static func isCSSVariableNameCharacter(_ character: Character) -> Bool {
+        isCSSIdentifierCharacter(character)
+    }
+
+    private static func isCSSIdentifierCharacter(_ character: Character) -> Bool {
         character.isLetter || character.isNumber || character == "-" || character == "_"
     }
 }
