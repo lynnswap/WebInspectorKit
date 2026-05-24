@@ -362,6 +362,133 @@ func cssSessionRewritesAuthoredStyleTextWithoutSerializingInactiveRows() async t
 }
 
 @Test
+func cssSessionRewritesOnlyDeclarationMatchesOutsideStrings() async throws {
+    let css = await CSSSession()
+    let identity = cssIdentity()
+    let styleID = CSSStyleIdentifier(styleSheetID: .init("sheet"), ordinal: 0)
+    let token = try #require(await css.beginRefresh(identity: identity))
+    await css.applyRefresh(
+        token: token,
+        matched: CSSMatchedStylesPayload(matchedRules: [
+            CSSRuleMatchPayload(
+                rule: rule(
+                    selector: "body::before",
+                    styleID: styleID,
+                    properties: [
+                        CSSPropertyPayload(
+                            name: "content",
+                            value: #""color: red;""#,
+                            text: #"content: "color: red;";"#,
+                            status: .active
+                        ),
+                        CSSPropertyPayload(
+                            name: "color",
+                            value: "red",
+                            text: "color: red;",
+                            status: .active
+                        ),
+                    ],
+                    cssText: """
+                    content: "color: red;";
+                    color: red;
+                    """
+                ),
+                matchingSelectors: [0]
+            ),
+        ]),
+        inline: .init(),
+        computed: []
+    )
+
+    let intent = try #require(await css.setStyleTextIntent(
+        for: CSSPropertyIdentifier(styleID: styleID, propertyIndex: 1),
+        enabled: false
+    ))
+    #expect(intent == .setStyleText(
+        targetID: identity.targetID,
+        styleID: styleID,
+        text: """
+        content: "color: red;";
+        /* color: red; */
+        """
+    ))
+}
+
+@Test
+func cssSessionTreatsCommentsAsDeclarationBoundaries() async throws {
+    let css = await CSSSession()
+    let identity = cssIdentity()
+    let beforeCommentStyleID = CSSStyleIdentifier(styleSheetID: .init("sheet"), ordinal: 0)
+    let afterCommentStyleID = CSSStyleIdentifier(styleSheetID: .init("sheet"), ordinal: 1)
+    let token = try #require(await css.beginRefresh(identity: identity))
+    await css.applyRefresh(
+        token: token,
+        matched: CSSMatchedStylesPayload(matchedRules: [
+            CSSRuleMatchPayload(
+                rule: rule(
+                    selector: ".before-comment",
+                    styleID: beforeCommentStyleID,
+                    properties: [
+                        CSSPropertyPayload(
+                            name: "color",
+                            value: "red",
+                            text: "color: red;",
+                            status: .active
+                        ),
+                    ],
+                    cssText: """
+                    /* note /* marker */
+                    color: red;
+                    """
+                ),
+                matchingSelectors: [0]
+            ),
+            CSSRuleMatchPayload(
+                rule: rule(
+                    selector: ".after-comment",
+                    styleID: afterCommentStyleID,
+                    properties: [
+                        CSSPropertyPayload(
+                            name: "color",
+                            value: "red",
+                            text: "color: red",
+                            status: .active
+                        ),
+                    ],
+                    cssText: "color: red /* note */;"
+                ),
+                matchingSelectors: [0]
+            ),
+        ]),
+        inline: .init(),
+        computed: []
+    )
+
+    let beforeCommentIntent = try #require(await css.setStyleTextIntent(
+        for: CSSPropertyIdentifier(styleID: beforeCommentStyleID, propertyIndex: 0),
+        enabled: false
+    ))
+    #expect(beforeCommentIntent == .setStyleText(
+        targetID: identity.targetID,
+        styleID: beforeCommentStyleID,
+        text: """
+        /* note /* marker */
+        /* color: red; */
+        """
+    ))
+
+    let afterCommentIntent = try #require(await css.setStyleTextIntent(
+        for: CSSPropertyIdentifier(styleID: afterCommentStyleID, propertyIndex: 0),
+        enabled: false
+    ))
+    #expect(afterCommentIntent == .setStyleText(
+        targetID: identity.targetID,
+        styleID: afterCommentStyleID,
+        text: "/* color: red */ /* note */;"
+    ))
+}
+
+@Test
 func cssSessionRejectsNonEditableToggleTargets() async throws {
     let css = await CSSSession()
     let identity = cssIdentity()

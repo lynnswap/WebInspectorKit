@@ -9,7 +9,7 @@ package final class DOMElementViewController: UIViewController {
     private struct ItemIdentifier: Hashable {
         enum Kind: Hashable {
             case property(propertyID: CSSPropertyIdentifier?, propertyIndex: Int)
-            case hiddenUnusedVariables
+            case hiddenUnusedVariables(count: Int)
         }
 
         var sectionID: CSSStyleSectionIdentifier
@@ -139,17 +139,12 @@ package final class DOMElementViewController: UIViewController {
         }
         let hiddenVariablesRegistration = UICollectionView.CellRegistration<DOMElementStyleHiddenVariablesCollectionCell, ItemIdentifier> { [weak self] cell, _, item in
             guard let self,
-                  let section = section(for: item.sectionID),
-                  let nodeStyles = css.selectedNodeStyles else {
+                  section(for: item.sectionID) != nil else {
                 cell.clear()
                 return
             }
-            let hiddenVariableCount = DOMElementStyleVariableVisibility.hiddenUnusedVariableIndices(
-                in: section,
-                usedCSSVariables: DOMElementStyleVariableVisibility.usedCSSVariableNames(in: nodeStyles)
-            )
-            .count
-            guard hiddenVariableCount > 0 else {
+            guard case let .hiddenUnusedVariables(hiddenVariableCount) = item.kind,
+                  hiddenVariableCount > 0 else {
                 cell.clear()
                 return
             }
@@ -410,7 +405,7 @@ package final class DOMElementViewController: UIViewController {
             snapshot.appendItems(propertyItems, toSection: section.id)
             if !hiddenVariableIndices.isEmpty && !showsHiddenVariables {
                 snapshot.appendItems(
-                    [ItemIdentifier(sectionID: section.id, kind: .hiddenUnusedVariables)],
+                    [ItemIdentifier(sectionID: section.id, kind: .hiddenUnusedVariables(count: hiddenVariableIndices.count))],
                     toSection: section.id
                 )
             }

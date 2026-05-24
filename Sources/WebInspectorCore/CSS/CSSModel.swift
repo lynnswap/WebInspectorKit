@@ -808,10 +808,10 @@ package final class CSSSession {
     ) -> CSSStyle {
         let styleID = style.id
         let effectiveEditable = isEditable && styleID != nil && ruleOrigin != .userAgent
-        let canSafelyRewriteStyleText = effectiveEditable && canSafelyRewriteStyleText(for: style)
         let normalizedProperties = style.cssProperties.enumerated().map { index, property in
             let propertyID = styleID.map { CSSPropertyIdentifier(styleID: $0, propertyIndex: index) }
-            let isEditable = canSafelyRewriteStyleText
+            let isEditable = effectiveEditable
+                && canSafelyRewriteStyleText(for: style, propertyIndex: index)
                 && property.text != nil
                 && canTogglePropertyText(property)
             return CSSProperty(payload: property, id: propertyID, isEditable: isEditable)
@@ -828,10 +828,23 @@ package final class CSSSession {
         )
     }
 
-    private static func canSafelyRewriteStyleText(for style: CSSStylePayload) -> Bool {
+    private static func canSafelyRewriteStyleText(for style: CSSStylePayload, propertyIndex: Int) -> Bool {
+        guard style.cssProperties.indices.contains(propertyIndex) else {
+            return false
+        }
         if let cssText = style.cssText,
            !cssText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return true
+            let property = style.cssProperties[propertyIndex]
+            guard let propertyText = property.text?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !propertyText.isEmpty else {
+                return false
+            }
+            return authoredDeclarationRange(
+                for: propertyText,
+                sourceRange: property.range,
+                in: cssText,
+                previousPropertyTexts: style.cssProperties[..<propertyIndex].map(\.text)
+            ) != nil
         }
         return style.cssProperties.allSatisfy { property in
             property.text != nil
@@ -889,24 +902,42 @@ package final class CSSSession {
             return nil
         }
         let nsText = cssText as NSString
-        if let range = property.range.flatMap({ nsRange(in: cssText, sourceRange: $0) }),
-           NSMaxRange(range) <= nsText.length,
-           nsText.substring(with: range).trimmingCharacters(in: .whitespacesAndNewlines) == propertyText {
+        if let range = authoredDeclarationRange(
+            for: propertyText,
+            sourceRange: property.range,
+            in: cssText,
+            previousPropertyTexts: style.cssProperties[..<propertyIndex].map(\.text)
+        ) {
             return nsText.replacingCharacters(in: range, with: toggledText)
         }
 
-        let ranges = nsRanges(of: propertyText, in: cssText)
-        if ranges.count == 1 {
-            return nsText.replacingCharacters(in: ranges[0], with: toggledText)
+        return nil
+    }
+
+    private static func authoredDeclarationRange(
+        for propertyText: String,
+        sourceRange: CSSSourceRange?,
+        in cssText: String,
+        previousPropertyTexts: [String?]
+    ) -> NSRange? {
+        let nsText = cssText as NSString
+        if let range = sourceRange.flatMap({ nsRange(in: cssText, sourceRange: $0) }),
+           NSMaxRange(range) <= nsText.length,
+           nsText.substring(with: range).trimmingCharacters(in: .whitespacesAndNewlines) == propertyText {
+            return range
         }
 
-        let occurrence = style.cssProperties[..<propertyIndex].filter { previousProperty in
-            previousProperty.text?.trimmingCharacters(in: .whitespacesAndNewlines) == propertyText
+        let ranges = declarationRanges(of: propertyText, in: cssText)
+        if ranges.count == 1 {
+            return ranges[0]
+        }
+        let occurrence = previousPropertyTexts.filter { previousText in
+            previousText?.trimmingCharacters(in: .whitespacesAndNewlines) == propertyText
         }.count
         guard ranges.indices.contains(occurrence) else {
             return nil
         }
-        return nsText.replacingCharacters(in: ranges[occurrence], with: toggledText)
+        return ranges[occurrence]
     }
 
     private static func nsRange(in text: String, sourceRange: CSSSourceRange) -> NSRange? {
@@ -943,7 +974,7 @@ package final class CSSSession {
         return offsets
     }
 
-    private static func nsRanges(of needle: String, in haystack: String) -> [NSRange] {
+    private static func declarationRanges(of needle: String, in haystack: String) -> [NSRange] {
         let nsHaystack = haystack as NSString
         var searchRange = NSRange(location: 0, length: nsHaystack.length)
         var ranges: [NSRange] = []
@@ -952,12 +983,198 @@ package final class CSSSession {
             guard range.location != NSNotFound else {
                 break
             }
-            ranges.append(range)
+            if isDeclarationRange(range, propertyText: needle, in: nsHaystack) {
+                ranges.append(range)
+            }
             let nextLocation = range.location + max(range.length, 1)
             searchRange = NSRange(location: nextLocation, length: nsHaystack.length - nextLocation)
         }
         return ranges
     }
+
+    private static func isDeclarationRange(_ range: NSRange, propertyText: String, in text: NSString) -> Bool {
+        isNormalCSSPosition(range.location, in: text)
+            && hasDeclarationBoundary(before: range.location, in: text)
+            && hasDeclarationEndBoundary(after: NSMaxRange(range), propertyText: propertyText, in: text)
+    }
+
+    private static func isNormalCSSPosition(_ location: Int, in text: NSString) -> Bool {
+        var index = 0
+        var quotedString: unichar?
+        var isEscaped = false
+        var isComment = false
+        while index < location {
+            let character = text.character(at: index)
+            let nextCharacter = index + 1 < text.length ? text.character(at: index + 1) : 0
+
+            if isComment {
+                if character == asterisk && nextCharacter == slash {
+                    isComment = false
+                    index += 2
+                    continue
+                }
+                index += 1
+                continue
+            }
+
+            if let quote = quotedString {
+                if isEscaped {
+                    isEscaped = false
+                } else if character == backslash {
+                    isEscaped = true
+                } else if character == quote {
+                    quotedString = nil
+                }
+                index += 1
+                continue
+            }
+
+            if character == slash && nextCharacter == asterisk {
+                isComment = true
+                index += 2
+                continue
+            }
+            if character == doubleQuote || character == singleQuote {
+                quotedString = character
+            }
+            index += 1
+        }
+        return !isComment && quotedString == nil
+    }
+
+    private static func hasDeclarationBoundary(before location: Int, in text: NSString) -> Bool {
+        var index = location - 1
+        while index >= 0 {
+            let character = text.character(at: index)
+            if character == slash,
+               index > 0,
+               text.character(at: index - 1) == asterisk {
+                guard let commentStart = cssCommentStart(endingAt: index, in: text) else {
+                    return false
+                }
+                index = commentStart - 1
+                continue
+            }
+            if !isCSSWhitespace(character) {
+                return character == semicolon || character == leftBrace
+            }
+            index -= 1
+        }
+        return true
+    }
+
+    private static func hasDeclarationBoundary(after location: Int, in text: NSString) -> Bool {
+        var index = location
+        while index < text.length {
+            let character = text.character(at: index)
+            let nextCharacter = index + 1 < text.length ? text.character(at: index + 1) : 0
+            if character == slash,
+               nextCharacter == asterisk {
+                guard let commentEnd = cssCommentEnd(startingAt: index, in: text) else {
+                    return false
+                }
+                index = commentEnd + 1
+                continue
+            }
+            if !isCSSWhitespace(character) {
+                return character == semicolon || character == rightBrace
+            }
+            index += 1
+        }
+        return true
+    }
+
+    private static func hasDeclarationEndBoundary(after location: Int, propertyText: String, in text: NSString) -> Bool {
+        let trimmedPropertyText = propertyText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedPropertyText.hasSuffix(";")
+            || trimmedPropertyText.hasSuffix("*/") {
+            return true
+        }
+        return hasDeclarationBoundary(after: location, in: text)
+    }
+
+    private static func cssCommentStart(endingAt commentEndSlashIndex: Int, in text: NSString) -> Int? {
+        var index = 0
+        var quotedString: unichar?
+        var isEscaped = false
+        var commentStart: Int?
+        while index <= commentEndSlashIndex {
+            let character = text.character(at: index)
+            let nextCharacter = index + 1 < text.length ? text.character(at: index + 1) : 0
+
+            if let start = commentStart {
+                if character == asterisk,
+                   nextCharacter == slash {
+                    if index + 1 == commentEndSlashIndex {
+                        return start
+                    }
+                    commentStart = nil
+                    index += 2
+                    continue
+                }
+                index += 1
+                continue
+            }
+
+            if let quote = quotedString {
+                if isEscaped {
+                    isEscaped = false
+                } else if character == backslash {
+                    isEscaped = true
+                } else if character == quote {
+                    quotedString = nil
+                }
+                index += 1
+                continue
+            }
+
+            if character == slash,
+               nextCharacter == asterisk {
+                commentStart = index
+                index += 2
+                continue
+            }
+            if character == doubleQuote || character == singleQuote {
+                quotedString = character
+            }
+            index += 1
+        }
+        return nil
+    }
+
+    private static func cssCommentEnd(startingAt commentStartSlashIndex: Int, in text: NSString) -> Int? {
+        var index = commentStartSlashIndex + 2
+        while index < text.length {
+            if text.character(at: index - 1) == asterisk,
+               text.character(at: index) == slash {
+                return index
+            }
+            index += 1
+        }
+        return nil
+    }
+
+    private static func isCSSWhitespace(_ character: unichar) -> Bool {
+        character == space
+            || character == tab
+            || character == newline
+            || character == carriageReturn
+            || character == formFeed
+    }
+
+    private static let tab = unichar(9)
+    private static let newline = unichar(10)
+    private static let formFeed = unichar(12)
+    private static let carriageReturn = unichar(13)
+    private static let space = unichar(32)
+    private static let doubleQuote = unichar(34)
+    private static let singleQuote = unichar(39)
+    private static let asterisk = unichar(42)
+    private static let semicolon = unichar(59)
+    private static let leftBrace = unichar(123)
+    private static let backslash = unichar(92)
+    private static let rightBrace = unichar(125)
+    private static let slash = unichar(47)
 
     private static func canTogglePropertyText(_ property: CSSProperty) -> Bool {
         guard property.status != .inactive else {

@@ -154,6 +154,43 @@ struct DOMContainerTests {
     }
 
     @Test
+    func elementViewControllerUpdatesCollapsedUnusedVariableCountAfterStyleRefresh() async throws {
+        let dom = makeDOMSession(capabilities: .pageDefault)
+        let body = try #require(firstElement(named: "body", in: dom))
+        dom.selectNode(body.id)
+
+        let css = CSSSession()
+        try applyInheritedVariableStyles(to: css, in: dom)
+
+        let viewController = DOMElementViewController(dom: dom, css: css)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didCollapseUnusedVariables = await waitUntil {
+            hiddenVariableCells(in: viewController).first?.revealTitleForTesting == "Show 2 unused CSS variables"
+        }
+        #expect(didCollapseUnusedVariables)
+
+        try applyInheritedVariableStyles(
+            to: css,
+            in: dom,
+            additionalRootProperties: [
+                CSSPropertyPayload(
+                    name: "--unused-c",
+                    value: "green",
+                    text: "--unused-c: green;",
+                    status: .active
+                ),
+            ]
+        )
+
+        let didUpdateHiddenVariableCount = await waitUntil {
+            hiddenVariableCells(in: viewController).first?.revealTitleForTesting == "Show 3 unused CSS variables"
+        }
+        #expect(didUpdateHiddenVariableCount)
+    }
+
+    @Test
     func elementStylePropertyViewSendsToggleActionWithImmediateControlFeedback() {
         let propertyID = CSSPropertyIdentifier(
             styleID: CSSStyleIdentifier(styleSheetID: CSSStyleSheetIdentifier("test-sheet"), ordinal: 0),
@@ -455,13 +492,40 @@ struct DOMContainerTests {
 
     private func applyInheritedVariableStyles(
         to css: CSSSession,
-        in dom: DOMSession
+        in dom: DOMSession,
+        additionalRootProperties: [CSSPropertyPayload] = []
     ) throws {
         let identity = try dom.selectedCSSNodeStyleIdentity().get()
         let token = try #require(css.beginRefresh(identity: identity))
         let styleSheetID = CSSStyleSheetIdentifier("variables")
         let bodyStyleID = CSSStyleIdentifier(styleSheetID: styleSheetID, ordinal: 0)
         let rootStyleID = CSSStyleIdentifier(styleSheetID: styleSheetID, ordinal: 1)
+        let rootProperties = [
+            CSSPropertyPayload(
+                name: "--foreground",
+                value: "var(--palette-primary)",
+                text: "--foreground: var(--palette-primary);",
+                status: .active
+            ),
+            CSSPropertyPayload(
+                name: "--palette-primary",
+                value: "#111",
+                text: "--palette-primary: #111;",
+                status: .active
+            ),
+            CSSPropertyPayload(
+                name: "--unused-a",
+                value: "red",
+                text: "--unused-a: red;",
+                status: .active
+            ),
+            CSSPropertyPayload(
+                name: "--unused-b",
+                value: "blue",
+                text: "--unused-b: blue;",
+                status: .active
+            ),
+        ] + additionalRootProperties
 
         css.applyRefresh(
             token: token,
@@ -508,38 +572,8 @@ struct DOMContainerTests {
                                     origin: .author,
                                     style: CSSStylePayload(
                                         id: rootStyleID,
-                                        cssProperties: [
-                                            CSSPropertyPayload(
-                                                name: "--foreground",
-                                                value: "var(--palette-primary)",
-                                                text: "--foreground: var(--palette-primary);",
-                                                status: .active
-                                            ),
-                                            CSSPropertyPayload(
-                                                name: "--palette-primary",
-                                                value: "#111",
-                                                text: "--palette-primary: #111;",
-                                                status: .active
-                                            ),
-                                            CSSPropertyPayload(
-                                                name: "--unused-a",
-                                                value: "red",
-                                                text: "--unused-a: red;",
-                                                status: .active
-                                            ),
-                                            CSSPropertyPayload(
-                                                name: "--unused-b",
-                                                value: "blue",
-                                                text: "--unused-b: blue;",
-                                                status: .active
-                                            ),
-                                        ],
-                                        cssText: """
-                                        --foreground: var(--palette-primary);
-                                        --palette-primary: #111;
-                                        --unused-a: red;
-                                        --unused-b: blue;
-                                        """
+                                        cssProperties: rootProperties,
+                                        cssText: rootProperties.compactMap(\.text).joined(separator: "\n")
                                     )
                                 ),
                                 matchingSelectors: [0]
