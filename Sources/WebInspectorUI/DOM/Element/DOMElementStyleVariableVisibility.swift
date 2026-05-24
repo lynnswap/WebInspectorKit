@@ -24,7 +24,7 @@ package enum DOMElementStyleVariableVisibility {
         var usedVariables = Set<String>()
         for section in nodeStyles.sections {
             for property in section.style.cssProperties where contributesCSSVariableUsage(property) {
-                if isInheritedStyleSection(section) && isCSSVariable(property.name) {
+                if isCSSVariable(property.name) {
                     continue
                 }
                 usedVariables.formUnion(cssVariableReferences(in: property.value))
@@ -34,7 +34,7 @@ package enum DOMElementStyleVariableVisibility {
         var addedReferences = true
         while addedReferences {
             addedReferences = false
-            for section in nodeStyles.sections where isInheritedStyleSection(section) {
+            for section in nodeStyles.sections {
                 for property in section.style.cssProperties
                 where contributesCSSVariableUsage(property)
                     && isCSSVariable(property.name)
