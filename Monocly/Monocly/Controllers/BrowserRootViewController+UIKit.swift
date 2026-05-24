@@ -12,6 +12,7 @@ final class BrowserRootViewController: UINavigationController {
     let store: BrowserStore
     let inspectorSession: WebInspectorSession
     let launchConfiguration: BrowserLaunchConfiguration
+    private var resolvedInspectorSessionAttachment: InspectorSessionAttachment = .detached
     private var pendingInspectorSessionAttachment: InspectorSessionAttachment?
     private var inspectorLifecycleTask: Task<Void, Never>?
     private var isFinalizingInspectorSession = false
@@ -58,8 +59,8 @@ final class BrowserRootViewController: UINavigationController {
         setNavigationBarHidden(false, animated: false)
     }
 
-    override func viewDidAppear(_ animated: Bool) {
-        super.viewDidAppear(animated)
+    override func viewIsAppearing(_ animated: Bool) {
+        super.viewIsAppearing(animated)
         isPreservingInspectorSessionForSceneDisconnection = false
         requestInspectorSessionAttachment(.attached)
     }
@@ -112,6 +113,11 @@ private extension BrowserRootViewController {
         if isFinalizingInspectorSession, attachment != .detached {
             return
         }
+        guard resolvedInspectorSessionAttachment != attachment
+            || pendingInspectorSessionAttachment != nil
+            || inspectorLifecycleTask != nil else {
+            return
+        }
         pendingInspectorSessionAttachment = attachment
         guard inspectorLifecycleTask == nil else {
             return
@@ -132,13 +138,21 @@ private extension BrowserRootViewController {
 
                 switch desiredAttachment {
                 case .attached:
+                    guard self.resolvedInspectorSessionAttachment != .attached else {
+                        continue
+                    }
                     do {
                         try await inspectorSession.attach(to: store.webView)
+                        self.resolvedInspectorSessionAttachment = .attached
                     } catch {
                         continue
                     }
                 case .detached:
+                    guard self.resolvedInspectorSessionAttachment != .detached else {
+                        continue
+                    }
                     await inspectorSession.detach()
+                    self.resolvedInspectorSessionAttachment = .detached
                 }
             }
         }
