@@ -65,7 +65,7 @@ final class BrowserViewportCoordinator {
         webView.scrollView.horizontalScrollIndicatorInsets = .zero
     }
 
-    func handleWebViewHierarchyDidChange() {
+    func webViewHierarchyDidChange() {
         if let currentWindowIdentity = webView?.window.map(ObjectIdentifier.init) {
             if let lastKnownWindowIdentity, lastKnownWindowIdentity != currentWindowIdentity {
                 keyboardFrameInScreen = .null
@@ -75,11 +75,11 @@ final class BrowserViewportCoordinator {
         updateViewport()
     }
 
-    func handleViewDidAppear() {
+    func hostViewDidAppear() {
         updateViewport()
     }
 
-    func handleWebViewSafeAreaInsetsDidChange() {
+    func webViewSafeAreaInsetsDidChange() {
         updateViewport()
     }
 
@@ -248,17 +248,17 @@ final class BrowserViewportWebView: WKWebView {
 
     override func didMoveToSuperview() {
         super.didMoveToSuperview()
-        viewportCoordinator?.handleWebViewHierarchyDidChange()
+        viewportCoordinator?.webViewHierarchyDidChange()
     }
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        viewportCoordinator?.handleWebViewHierarchyDidChange()
+        viewportCoordinator?.webViewHierarchyDidChange()
     }
 
     override func safeAreaInsetsDidChange() {
         super.safeAreaInsetsDidChange()
-        viewportCoordinator?.handleWebViewSafeAreaInsetsDidChange()
+        viewportCoordinator?.webViewSafeAreaInsetsDidChange()
     }
 }
 #elseif canImport(AppKit)
@@ -378,6 +378,9 @@ private enum BrowserStoreSPI {
 
 #if canImport(UIKit)
         webView = BrowserViewportWebView(frame: .zero, configuration: configuration)
+#if os(iOS)
+        webView.scrollView.contentInsetAdjustmentBehavior = .always
+#endif
 #else
         webView = WKWebView(frame: .zero, configuration: configuration)
 #endif
