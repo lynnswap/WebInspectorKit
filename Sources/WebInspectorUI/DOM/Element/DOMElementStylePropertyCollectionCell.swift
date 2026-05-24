@@ -5,7 +5,7 @@ import WebInspectorCore
 
 @MainActor
 package final class DOMElementStylePropertyCollectionCell: UICollectionViewListCell {
-    private static let modifiedBackgroundColor = UIColor.systemGreen.withAlphaComponent(0.18)
+    private static let modifiedBackgroundColor = UIColor.systemGreen.withProminence(.quaternary).withAlphaComponent(0.99)
 
     private let observationScope = ObservationScope()
     private let propertyView = DOMElementStylePropertyView()
