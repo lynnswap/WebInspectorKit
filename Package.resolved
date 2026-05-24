@@ -1,5 +1,5 @@
 {
-  "originHash" : "904549e4966658820801bbe0d5fc19577f635aa10a535e69f3c8f3236310c8a1",
+  "originHash" : "d0b0bdfefbed11d16b78868c9851d36e5df3f3ba92e91f3dd09c41103e26c585",
   "pins" : [
     {
       "identity" : "machokit",
@@ -195,8 +195,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/UIHostingMenu.git",
       "state" : {
-        "revision" : "eb453ff2ce1eb238f0fc17515db84690e5c3db63",
-        "version" : "0.1.4"
+        "revision" : "434a962f1592d15ef77ae27e247ff92a45044a6c",
+        "version" : "0.1.6"
       }
     }
   ],
