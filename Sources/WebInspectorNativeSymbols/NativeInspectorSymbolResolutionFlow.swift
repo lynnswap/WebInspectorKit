@@ -7,6 +7,8 @@ extension NativeInspectorSymbolResolverCore {
     static func resolve(
         imagePathSuffixes: [String],
         javaScriptCorePathSuffixes: [String],
+        webCorePathSuffixes: [String] = webCoreImagePathSuffixes,
+        allowSharedCacheFallback: Bool = true,
         symbols: NativeInspectorSymbols
     ) -> NativeInspectorSymbolLookupResult {
         guard let loadedImage = loadedWebKitImage(pathSuffixes: imagePathSuffixes) else {
@@ -15,7 +17,7 @@ extension NativeInspectorSymbolResolverCore {
         guard let loadedJavaScriptCoreImage = loadedWebKitImage(pathSuffixes: javaScriptCorePathSuffixes) else {
             return failure(.supportImageMissing)
         }
-        let loadedWebCoreImage = loadedWebKitImage(pathSuffixes: webCoreImagePathSuffixes)
+        let loadedWebCoreImage = loadedWebKitImage(pathSuffixes: webCorePathSuffixes)
 
         let image = unsafe MachOImage(ptr: loadedImage.header)
         guard image.is64Bit, let text = textSegment(in: image) else {
@@ -72,6 +74,10 @@ extension NativeInspectorSymbolResolverCore {
             return loadedImageResolution
         }
 
+        guard allowSharedCacheFallback else {
+            return loadedImageResolution
+        }
+
         #if DEBUG
         logResolutionAttemptIncomplete(
             loadedImageResolution,
@@ -84,6 +90,7 @@ extension NativeInspectorSymbolResolverCore {
             imagePathSuffixes: imagePathSuffixes,
             loadedJavaScriptCoreImage: loadedJavaScriptCoreImage,
             javaScriptCorePathSuffixes: javaScriptCorePathSuffixes,
+            webCorePathSuffixes: webCorePathSuffixes,
             loadedImageSymbols: loadedImageResultsWithFallback.symbols,
             symbols: symbols
         )

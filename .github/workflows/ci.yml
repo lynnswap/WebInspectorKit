@@ -174,22 +174,18 @@ jobs:
       - name: Run package tests
         if: env.SKIP_TESTS != '1'
         run: |
-          test_arguments=()
+          test_scheme="WebInspectorKit"
           if [[ "${TEST_SCOPE}" == "native" ]]; then
-            test_arguments+=(
-              "-only-testing:WebInspectorNativeBridgeTests"
-              "-only-testing:WebInspectorNativeSymbolsTests"
-            )
+            test_scheme="WebInspectorNativeTests"
           fi
 
           xcodebuild test \
             -workspace WebInspectorKit.xcworkspace \
-            -scheme WebInspectorKit \
+            -scheme "${test_scheme}" \
             -destination "${DESTINATION}" \
             -enableCodeCoverage NO \
             -parallel-testing-enabled NO \
-            -maximum-concurrent-test-simulator-destinations 1 \
-            "${test_arguments[@]}"
+            -maximum-concurrent-test-simulator-destinations 1
 
       - name: Report optional skip
         if: env.SKIP_TESTS == '1'

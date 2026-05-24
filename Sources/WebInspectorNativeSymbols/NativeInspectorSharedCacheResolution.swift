@@ -9,6 +9,7 @@ extension NativeInspectorSymbolResolverCore {
         imagePathSuffixes: [String],
         loadedJavaScriptCoreImage: LoadedNativeInspectorImage,
         javaScriptCorePathSuffixes: [String],
+        webCorePathSuffixes: [String] = webCoreImagePathSuffixes,
         loadedImageSymbols: NativeInspectorResolvedSymbolSet,
         symbols: NativeInspectorSymbols
     ) -> NativeInspectorSymbolLookupResult {
@@ -22,7 +23,7 @@ extension NativeInspectorSymbolResolverCore {
         guard let javaScriptCoreImage = cache.machOImages().first(where: { imagePathMatches($0.path, suffixes: javaScriptCorePathSuffixes) }) else {
             return failure(.supportImageMissing)
         }
-        let webCoreImage = cache.machOImages().first(where: { imagePathMatches($0.path, suffixes: webCoreImagePathSuffixes) })
+        let webCoreImage = cache.machOImages().first(where: { imagePathMatches($0.path, suffixes: webCorePathSuffixes) })
         guard webKitImage.is64Bit, let text = textSegment(in: webKitImage) else {
             return failure(.inspectorImageMissing)
         }

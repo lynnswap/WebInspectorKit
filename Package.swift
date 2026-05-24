@@ -142,10 +142,16 @@ let package = Package(
             path: "Tests/WebInspectorTransportTests",
             swiftSettings: strictSwiftSettings
         ),
+        .target(
+            name: "WebInspectorNativeSymbolFixtures",
+            path: "Tests/WebInspectorNativeSymbolFixtures",
+            publicHeadersPath: "include"
+        ),
         .testTarget(
             name: "WebInspectorNativeSymbolsTests",
             dependencies: [
-                "WebInspectorNativeSymbols"
+                "WebInspectorNativeSymbols",
+                "WebInspectorNativeSymbolFixtures"
             ],
             path: "Tests/WebInspectorNativeSymbolsTests",
             swiftSettings: strictSwiftSettings
