@@ -12,6 +12,16 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         case main
     }
 
+    private enum SnapshotApplyMode {
+        case apply
+        case reloadData
+    }
+
+    private struct PendingSnapshotUpdate {
+        var displayRequests: [NetworkRequest]
+        var mode: SnapshotApplyMode
+    }
+
     private static let snapshotObservationOptions = ObservationOptions.rateLimit(
         .throttle(
             ObservationThrottle(
@@ -26,6 +36,8 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     private let observationScope = ObservationScope()
 
     private var needsSnapshotReloadOnNextAppearance = false
+    private var pendingSnapshotUpdate: PendingSnapshotUpdate?
+    private var isApplyingSnapshotUpdate = false
     private var isApplyingSearchPresentation = false
     private var activeSearchController: UISearchController?
     private lazy var filterHostingMenu = UIHostingMenu(
@@ -287,10 +299,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
             return
         }
         needsSnapshotReloadOnNextAppearance = false
-        Task {
-            let snapshot = self.makeSnapshot(displayRequests: displayRequests)
-            await self.dataSource.apply(snapshot, animatingDifferences: false)
-        }
+        enqueueSnapshotUpdate(displayRequests: displayRequests, mode: .apply)
     }
 
     private func flushPendingSnapshotUpdateIfNeeded() {
@@ -298,9 +307,34 @@ package final class NetworkListViewController: UICollectionViewController, UISea
             return
         }
         needsSnapshotReloadOnNextAppearance = false
-        Task {
-            let snapshot = self.makeSnapshot(displayRequests: self.model.displayRequests)
-            await self.dataSource.applySnapshotUsingReloadData(snapshot)
+        enqueueSnapshotUpdate(displayRequests: model.displayRequests, mode: .reloadData)
+    }
+
+    private func enqueueSnapshotUpdate(displayRequests: [NetworkRequest], mode: SnapshotApplyMode) {
+        pendingSnapshotUpdate = PendingSnapshotUpdate(displayRequests: displayRequests, mode: mode)
+        applyPendingSnapshotUpdateIfNeeded()
+    }
+
+    private func applyPendingSnapshotUpdateIfNeeded() {
+        guard !isApplyingSnapshotUpdate, let update = pendingSnapshotUpdate else {
+            return
+        }
+        pendingSnapshotUpdate = nil
+        isApplyingSnapshotUpdate = true
+
+        let snapshot = makeSnapshot(displayRequests: update.displayRequests)
+        Task { [weak self, snapshot, mode = update.mode] in
+            guard let self else {
+                return
+            }
+            switch mode {
+            case .apply:
+                await dataSource.apply(snapshot, animatingDifferences: false)
+            case .reloadData:
+                await dataSource.applySnapshotUsingReloadData(snapshot)
+            }
+            isApplyingSnapshotUpdate = false
+            applyPendingSnapshotUpdateIfNeeded()
         }
     }
 

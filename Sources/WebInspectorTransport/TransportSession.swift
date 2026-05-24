@@ -31,6 +31,7 @@ package actor TransportSession {
     private var subscribers: [ProtocolDomain: [UInt64: AsyncStream<ProtocolEventEnvelope>.Continuation]]
     private var orderedSubscribers: [UInt64: AsyncStream<ProtocolEventEnvelope>.Continuation]
     private var inboundMessages: [String]
+    private var inboundMessageStartIndex: Int
     private var isDrainingInboundMessages: Bool
     private var closed: Bool
 
@@ -56,6 +57,7 @@ package actor TransportSession {
         subscribers = [:]
         orderedSubscribers = [:]
         inboundMessages = []
+        inboundMessageStartIndex = 0
         isDrainingInboundMessages = false
         closed = false
     }
@@ -316,12 +318,34 @@ package actor TransportSession {
             isDrainingInboundMessages = false
         }
 
-        while !inboundMessages.isEmpty {
-            let rawMessage = inboundMessages.removeFirst()
+        while let rawMessage = nextInboundMessage() {
             guard let parsed = try? await TransportMessageParser.parse(rawMessage) else {
                 continue
             }
             await handleRootMessage(parsed)
+        }
+    }
+
+    private func nextInboundMessage() -> String? {
+        guard inboundMessageStartIndex < inboundMessages.count else {
+            inboundMessages.removeAll(keepingCapacity: true)
+            inboundMessageStartIndex = 0
+            return nil
+        }
+
+        let message = inboundMessages[inboundMessageStartIndex]
+        inboundMessageStartIndex += 1
+        compactInboundMessagesIfNeeded()
+        return message
+    }
+
+    private func compactInboundMessagesIfNeeded() {
+        if inboundMessageStartIndex == inboundMessages.count {
+            inboundMessages.removeAll(keepingCapacity: true)
+            inboundMessageStartIndex = 0
+        } else if inboundMessageStartIndex >= 64 && inboundMessageStartIndex * 2 >= inboundMessages.count {
+            inboundMessages.removeFirst(inboundMessageStartIndex)
+            inboundMessageStartIndex = 0
         }
     }
 

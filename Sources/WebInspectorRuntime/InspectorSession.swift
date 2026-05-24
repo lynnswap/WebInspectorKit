@@ -1737,6 +1737,7 @@ private final class TransportReceiver: @unchecked Sendable {
     private struct State: Sendable {
         var transport: TransportSession?
         var messages: [String] = []
+        var messageStartIndex = 0
         var isDraining = false
     }
 
@@ -1774,11 +1775,27 @@ private final class TransportReceiver: @unchecked Sendable {
 
     private func nextMessage() -> (transport: TransportSession?, message: String)? {
         state.withLock {
-            guard !$0.messages.isEmpty else {
+            guard $0.messageStartIndex < $0.messages.count else {
+                $0.messages.removeAll(keepingCapacity: true)
+                $0.messageStartIndex = 0
                 $0.isDraining = false
                 return nil
             }
-            return ($0.transport, $0.messages.removeFirst())
+
+            let message = $0.messages[$0.messageStartIndex]
+            $0.messageStartIndex += 1
+            compactMessagesIfNeeded(in: &$0)
+            return ($0.transport, message)
+        }
+    }
+
+    private func compactMessagesIfNeeded(in state: inout State) {
+        if state.messageStartIndex == state.messages.count {
+            state.messages.removeAll(keepingCapacity: true)
+            state.messageStartIndex = 0
+        } else if state.messageStartIndex >= 64 && state.messageStartIndex * 2 >= state.messages.count {
+            state.messages.removeFirst(state.messageStartIndex)
+            state.messageStartIndex = 0
         }
     }
 }
