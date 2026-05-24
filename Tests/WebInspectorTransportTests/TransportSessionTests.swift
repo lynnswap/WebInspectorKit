@@ -188,25 +188,42 @@ func targetDestroyFailsPendingTargetReplies() async throws {
 
 @Test
 func remoteErrorAndTimeoutFailPendingReplies() async throws {
-    let backend = FakeTransportBackend()
-    let session = TransportSession(backend: backend, responseTimeout: .milliseconds(20))
+    let errorBackend = FakeTransportBackend()
+    let errorSession = TransportSession(backend: errorBackend, responseTimeout: nil)
 
     let errorTask = Task {
-        try await session.send(
+        try await errorSession.send(
             ProtocolCommand(domain: .target, method: "Target.resume", routing: .root)
         )
     }
-    let sent = try await waitForRootMessage(backend)
+    let sent = try await waitForRootMessage(errorBackend)
     let id = try messageID(sent)
-    await session.receiveRootMessage(#"{"id":\#(id),"error":{"message":"nope"}}"#)
+    await errorSession.receiveRootMessage(#"{"id":\#(id),"error":{"message":"nope"}}"#)
     await #expect(throws: TransportError.remoteError(method: "Target.resume", targetID: nil, message: "nope")) {
         try await errorTask.value
     }
 
-    await #expect(throws: TransportError.replyTimeout(method: "Target.setPauseOnStart", targetID: nil)) {
-        _ = try await session.send(
+    let timeoutBackend = FakeTransportBackend()
+    let responseTimeout = ManualResponseTimeout()
+    let timeoutSession = TransportSession(
+        backend: timeoutBackend,
+        responseTimeout: .milliseconds(20),
+        responseTimeoutSleep: { duration in
+            try await responseTimeout.sleep(for: duration)
+        }
+    )
+    let timeoutTask = Task {
+        try await timeoutSession.send(
             ProtocolCommand(domain: .target, method: "Target.setPauseOnStart", routing: .root)
         )
+    }
+    _ = try await waitForRootMessage(timeoutBackend)
+    _ = try await waitUntil {
+        await responseTimeout.hasPendingSleep ? true : nil
+    }
+    await responseTimeout.fireNext()
+    await #expect(throws: TransportError.replyTimeout(method: "Target.setPauseOnStart", targetID: nil)) {
+        _ = try await timeoutTask.value
     }
 }
 
@@ -1551,6 +1568,44 @@ private func waitUntil<Value: Sendable>(_ body: @escaping @Sendable () async -> 
         try await Task.sleep(for: .milliseconds(5))
     }
     throw TransportError.replyTimeout(method: "test wait", targetID: nil)
+}
+
+private actor ManualResponseTimeout {
+    private var nextSleepID: UInt64 = 0
+    private var continuations: [UInt64: CheckedContinuation<Void, Error>] = [:]
+
+    var hasPendingSleep: Bool {
+        !continuations.isEmpty
+    }
+
+    func sleep(for _: Duration) async throws {
+        nextSleepID &+= 1
+        let sleepID = nextSleepID
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                continuations[sleepID] = continuation
+            }
+        } onCancel: {
+            Task {
+                await self.cancel(sleepID)
+            }
+        }
+    }
+
+    func fireNext() {
+        guard let sleepID = continuations.keys.sorted().first,
+              let continuation = continuations.removeValue(forKey: sleepID) else {
+            return
+        }
+        continuation.resume()
+    }
+
+    private func cancel(_ sleepID: UInt64) {
+        guard let continuation = continuations.removeValue(forKey: sleepID) else {
+            return
+        }
+        continuation.resume(throwing: CancellationError())
+    }
 }
 
 private func receiveTargetDispatch(

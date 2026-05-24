@@ -10,8 +10,11 @@ package actor TransportSession {
         var hasBufferedProvisionalResponse: Bool
     }
 
+    package typealias ResponseTimeoutSleep = @Sendable (Duration) async throws -> Void
+
     private let backend: any TransportBackend
     private let responseTimeout: Duration?
+    private let responseTimeoutSleep: ResponseTimeoutSleep
     private var nextCommandID: UInt64
     private var nextSequence: UInt64
     private var lastSequenceByDomain: [ProtocolDomain: UInt64]
@@ -35,9 +38,14 @@ package actor TransportSession {
     private var isDrainingInboundMessages: Bool
     private var closed: Bool
 
-    package init(backend: any TransportBackend, responseTimeout: Duration? = .seconds(5)) {
+    package init(
+        backend: any TransportBackend,
+        responseTimeout: Duration? = .seconds(5),
+        responseTimeoutSleep: ResponseTimeoutSleep? = nil
+    ) {
         self.backend = backend
         self.responseTimeout = responseTimeout
+        self.responseTimeoutSleep = responseTimeoutSleep ?? { try await Task.sleep(for: $0) }
         nextCommandID = 0
         nextSequence = 0
         lastSequenceByDomain = [:]
@@ -356,9 +364,10 @@ package actor TransportSession {
         targetID: ProtocolTargetIdentifier?
     ) async throws -> ProtocolCommandResult {
         let timeoutTask: Task<Void, Never>? = responseTimeout.map { responseTimeout in
-            Task {
+            let responseTimeoutSleep = self.responseTimeoutSleep
+            return Task {
                 do {
-                    try await Task.sleep(for: responseTimeout)
+                    try await responseTimeoutSleep(responseTimeout)
                 } catch {
                     return
                 }
