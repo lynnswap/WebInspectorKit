@@ -62,25 +62,71 @@ package enum DOMElementStyleVariableVisibility {
 
     private static func cssVariableReferences(in value: String) -> Set<String> {
         var references = Set<String>()
-        var searchRange = value.startIndex..<value.endIndex
+        var index = value.startIndex
+        var quotedString: Character?
+        var isEscaped = false
+        var isComment = false
 
-        while let varFunctionRange = value.range(of: "var(", range: searchRange) {
-            var index = varFunctionRange.upperBound
-            while index < value.endIndex, value[index].isWhitespace {
-                value.formIndex(after: &index)
+        while index < value.endIndex {
+            let character = value[index]
+            let nextIndex = value.index(after: index)
+            let nextCharacter = nextIndex < value.endIndex ? value[nextIndex] : nil
+
+            if isComment {
+                if character == "*", nextCharacter == "/" {
+                    isComment = false
+                    index = value.index(after: nextIndex)
+                } else {
+                    index = nextIndex
+                }
+                continue
             }
 
-            if value[index...].hasPrefix("--") {
-                var end = index
+            if let quote = quotedString {
+                if isEscaped {
+                    isEscaped = false
+                } else if character == "\\" {
+                    isEscaped = true
+                } else if character == quote {
+                    quotedString = nil
+                }
+                index = nextIndex
+                continue
+            }
+
+            if character == "/", nextCharacter == "*" {
+                isComment = true
+                index = value.index(after: nextIndex)
+                continue
+            }
+            if character == "\"" || character == "'" {
+                quotedString = character
+                index = nextIndex
+                continue
+            }
+
+            guard value[index...].hasPrefix("var(") else {
+                index = nextIndex
+                continue
+            }
+
+            let argumentStart = value.index(index, offsetBy: 4)
+            var referenceStart = argumentStart
+            while referenceStart < value.endIndex, value[referenceStart].isWhitespace {
+                value.formIndex(after: &referenceStart)
+            }
+
+            if value[referenceStart...].hasPrefix("--") {
+                var end = referenceStart
                 while end < value.endIndex, isCSSVariableNameCharacter(value[end]) {
                     value.formIndex(after: &end)
                 }
-                if end > index {
-                    references.insert(String(value[index..<end]))
+                if end > referenceStart {
+                    references.insert(String(value[referenceStart..<end]))
                 }
             }
 
-            searchRange = varFunctionRange.upperBound..<value.endIndex
+            index = argumentStart
         }
 
         return references

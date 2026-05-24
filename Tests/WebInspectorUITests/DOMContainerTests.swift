@@ -154,6 +154,47 @@ struct DOMContainerTests {
     }
 
     @Test
+    func elementViewControllerIgnoresVariableReferencesInsideCSSStringsAndComments() async throws {
+        let dom = makeDOMSession(capabilities: .pageDefault)
+        let body = try #require(firstElement(named: "body", in: dom))
+        dom.selectNode(body.id)
+
+        let css = CSSSession()
+        try applyInheritedVariableStyles(
+            to: css,
+            in: dom,
+            additionalBodyProperties: [
+                CSSPropertyPayload(
+                    name: "content",
+                    value: #""var(--unused-a)""#,
+                    text: #"content: "var(--unused-a)";"#,
+                    status: .active
+                ),
+                CSSPropertyPayload(
+                    name: "background",
+                    value: "/* var(--unused-b) */ transparent",
+                    text: "background: /* var(--unused-b) */ transparent;",
+                    status: .active
+                ),
+            ]
+        )
+
+        let viewController = DOMElementViewController(dom: dom, css: css)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didCollapseUnusedVariables = await waitUntil {
+            hiddenVariableCells(in: viewController).first?.revealTitleForTesting == "Show 2 unused CSS variables"
+        }
+        window.layoutIfNeeded()
+
+        #expect(didCollapseUnusedVariables)
+        let collapsedDeclarations = stylePropertyViews(in: viewController).map(\.declarationTextForTesting)
+        #expect(collapsedDeclarations.contains("--unused-a: red;") == false)
+        #expect(collapsedDeclarations.contains("--unused-b: blue;") == false)
+    }
+
+    @Test
     func elementViewControllerUpdatesCollapsedUnusedVariableCountAfterStyleRefresh() async throws {
         let dom = makeDOMSession(capabilities: .pageDefault)
         let body = try #require(firstElement(named: "body", in: dom))
@@ -493,6 +534,7 @@ struct DOMContainerTests {
     private func applyInheritedVariableStyles(
         to css: CSSSession,
         in dom: DOMSession,
+        additionalBodyProperties: [CSSPropertyPayload] = [],
         additionalRootProperties: [CSSPropertyPayload] = []
     ) throws {
         let identity = try dom.selectedCSSNodeStyleIdentity().get()
@@ -500,6 +542,14 @@ struct DOMContainerTests {
         let styleSheetID = CSSStyleSheetIdentifier("variables")
         let bodyStyleID = CSSStyleIdentifier(styleSheetID: styleSheetID, ordinal: 0)
         let rootStyleID = CSSStyleIdentifier(styleSheetID: styleSheetID, ordinal: 1)
+        let bodyProperties = [
+            CSSPropertyPayload(
+                name: "color",
+                value: "var(--foreground)",
+                text: "color: var(--foreground);",
+                status: .active
+            ),
+        ] + additionalBodyProperties
         let rootProperties = [
             CSSPropertyPayload(
                 name: "--foreground",
@@ -543,15 +593,8 @@ struct DOMContainerTests {
                             origin: .author,
                             style: CSSStylePayload(
                                 id: bodyStyleID,
-                                cssProperties: [
-                                    CSSPropertyPayload(
-                                        name: "color",
-                                        value: "var(--foreground)",
-                                        text: "color: var(--foreground);",
-                                        status: .active
-                                    ),
-                                ],
-                                cssText: "color: var(--foreground);"
+                                cssProperties: bodyProperties,
+                                cssText: bodyProperties.compactMap(\.text).joined(separator: "\n")
                             )
                         ),
                         matchingSelectors: [0]
