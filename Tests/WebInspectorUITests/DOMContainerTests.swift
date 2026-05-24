@@ -229,6 +229,38 @@ struct DOMContainerTests {
     }
 
     @Test
+    func elementViewControllerTreatsCSSVariableFunctionNamesCaseInsensitively() async throws {
+        let dom = makeDOMSession(capabilities: .pageDefault)
+        let body = try #require(firstElement(named: "body", in: dom))
+        dom.selectNode(body.id)
+
+        let css = CSSSession()
+        try applyInheritedVariableStyles(
+            to: css,
+            in: dom,
+            bodyColorValue: "VAR(--foreground)",
+            foregroundValue: "vAr(--palette-primary)"
+        )
+
+        let viewController = DOMElementViewController(dom: dom, css: css)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didCollapseOnlyUnusedVariables = await waitUntil {
+            hiddenVariableCells(in: viewController).first?.revealTitleForTesting == "Show 2 unused CSS variables"
+        }
+        window.layoutIfNeeded()
+
+        #expect(didCollapseOnlyUnusedVariables)
+        let collapsedDeclarations = stylePropertyViews(in: viewController).map(\.declarationTextForTesting)
+        #expect(collapsedDeclarations.contains("color: VAR(--foreground);"))
+        #expect(collapsedDeclarations.contains("--foreground: vAr(--palette-primary);"))
+        #expect(collapsedDeclarations.contains("--palette-primary: #111;"))
+        #expect(collapsedDeclarations.contains("--unused-a: red;") == false)
+        #expect(collapsedDeclarations.contains("--unused-b: blue;") == false)
+    }
+
+    @Test
     func elementViewControllerUpdatesCollapsedUnusedVariableCountAfterStyleRefresh() async throws {
         let dom = makeDOMSession(capabilities: .pageDefault)
         let body = try #require(firstElement(named: "body", in: dom))
@@ -568,6 +600,8 @@ struct DOMContainerTests {
     private func applyInheritedVariableStyles(
         to css: CSSSession,
         in dom: DOMSession,
+        bodyColorValue: String = "var(--foreground)",
+        foregroundValue: String = "var(--palette-primary)",
         additionalBodyProperties: [CSSPropertyPayload] = [],
         additionalRootProperties: [CSSPropertyPayload] = []
     ) throws {
@@ -579,16 +613,16 @@ struct DOMContainerTests {
         let bodyProperties = [
             CSSPropertyPayload(
                 name: "color",
-                value: "var(--foreground)",
-                text: "color: var(--foreground);",
+                value: bodyColorValue,
+                text: "color: \(bodyColorValue);",
                 status: .active
             ),
         ] + additionalBodyProperties
         let rootProperties = [
             CSSPropertyPayload(
                 name: "--foreground",
-                value: "var(--palette-primary)",
-                text: "--foreground: var(--palette-primary);",
+                value: foregroundValue,
+                text: "--foreground: \(foregroundValue);",
                 status: .active
             ),
             CSSPropertyPayload(

@@ -111,7 +111,7 @@ package enum DOMElementStyleVariableVisibility {
                 continue
             }
 
-            guard value[index...].hasPrefix("var(") else {
+            guard startsCSSVariableFunction(in: value, at: index) else {
                 index = nextIndex
                 continue
             }
@@ -136,6 +136,48 @@ package enum DOMElementStyleVariableVisibility {
         }
 
         return references
+    }
+
+    private static func startsCSSVariableFunction(in value: String, at index: String.Index) -> Bool {
+        var cursor = index
+        guard cursor < value.endIndex,
+              isASCIILetter(value[cursor], lowercaseValue: 118) else {
+            return false
+        }
+        value.formIndex(after: &cursor)
+
+        guard cursor < value.endIndex,
+              isASCIILetter(value[cursor], lowercaseValue: 97) else {
+            return false
+        }
+        value.formIndex(after: &cursor)
+
+        guard cursor < value.endIndex,
+              isASCIILetter(value[cursor], lowercaseValue: 114) else {
+            return false
+        }
+        value.formIndex(after: &cursor)
+
+        guard cursor < value.endIndex else {
+            return false
+        }
+        return singleUnicodeScalarValue(value[cursor]) == 40
+    }
+
+    private static func isASCIILetter(_ character: Character, lowercaseValue: UInt32) -> Bool {
+        guard let value = singleUnicodeScalarValue(character) else {
+            return false
+        }
+        return value == lowercaseValue || value == lowercaseValue - 32
+    }
+
+    private static func singleUnicodeScalarValue(_ character: Character) -> UInt32? {
+        var scalars = character.unicodeScalars.makeIterator()
+        guard let scalar = scalars.next(),
+              scalars.next() == nil else {
+            return nil
+        }
+        return scalar.value
     }
 
     private static func isCSSVariableNameCharacter(_ character: Character) -> Bool {
