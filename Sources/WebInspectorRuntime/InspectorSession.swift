@@ -760,11 +760,11 @@ package final class InspectorSession {
             throw InspectorSessionError("CSS property is not editable.")
         }
         let result = try await perform(intent)
-        guard case let .setStyleText(targetID, styleID, _) = intent else {
+        guard case let .setStyleText(targetID, _, _) = intent else {
             throw InspectorSessionError("Unexpected CSS command intent.")
         }
         let style = try CSSTransportAdapter.setStyleTextResult(from: result)
-        css.applySetStyleTextResult(style, styleID: styleID, targetID: targetID)
+        css.applySetStyleTextResult(style, propertyID: propertyID, targetID: targetID)
         try await refreshSelectedNodeStyles()
         lastError = nil
     }

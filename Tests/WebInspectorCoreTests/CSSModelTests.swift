@@ -525,6 +525,80 @@ func cssSessionRejectsEditIntentWhenSelectedStylesNeedRefresh() async throws {
 
 @Test
 @MainActor
+func cssSessionMarksSetStyleTextPropertyAsModifiedByInspector() throws {
+    let css = CSSSession()
+    let identity = cssIdentity()
+    let styleID = CSSStyleIdentifier(styleSheetID: .init("sheet"), ordinal: 0)
+    let propertyID = CSSPropertyIdentifier(styleID: styleID, propertyIndex: 0)
+    let token = try #require(css.beginRefresh(identity: identity))
+    css.applyRefresh(
+        token: token,
+        matched: CSSMatchedStylesPayload(matchedRules: [
+            CSSRuleMatchPayload(
+                rule: rule(
+                    selector: "body",
+                    styleID: styleID,
+                    properties: [
+                        CSSPropertyPayload(name: "margin", value: "0", text: "margin: 0;", status: .active),
+                    ]
+                ),
+                matchingSelectors: [0]
+            ),
+        ]),
+        inline: .init(),
+        computed: []
+    )
+
+    let property = try #require(css.selectedNodeStyles?.sections[0].style.cssProperties[0])
+    #expect(property.isModifiedByInspector == false)
+
+    css.applySetStyleTextResult(
+        CSSStylePayload(id: styleID, cssProperties: [
+            CSSPropertyPayload(name: "margin", value: "0", text: "/* margin: 0; */", status: .disabled),
+        ]),
+        propertyID: propertyID,
+        targetID: identity.targetID
+    )
+
+    #expect(property.status == .disabled)
+    #expect(property.isModifiedByInspector)
+
+    let refreshToken = try #require(css.beginRefresh(identity: identity))
+    css.applyRefresh(
+        token: refreshToken,
+        matched: CSSMatchedStylesPayload(matchedRules: [
+            CSSRuleMatchPayload(
+                rule: rule(
+                    selector: "body",
+                    styleID: styleID,
+                    properties: [
+                        CSSPropertyPayload(name: "margin", value: "0", text: "/* margin: 0; */", status: .disabled),
+                    ]
+                ),
+                matchingSelectors: [0]
+            ),
+        ]),
+        inline: .init(),
+        computed: []
+    )
+
+    #expect(css.selectedState == .loaded)
+    #expect(property.isModifiedByInspector)
+
+    css.applySetStyleTextResult(
+        CSSStylePayload(id: styleID, cssProperties: [
+            CSSPropertyPayload(name: "margin", value: "0", text: "margin: 0;", status: .active),
+        ]),
+        propertyID: propertyID,
+        targetID: identity.targetID
+    )
+
+    #expect(property.status == .active)
+    #expect(property.isModifiedByInspector == false)
+}
+
+@Test
+@MainActor
 func cssSessionAppliesSetStyleTextResultOnlyToEditedTarget() throws {
     let css = CSSSession()
     let sharedStyleID = CSSStyleIdentifier(styleSheetID: .init("sheet"), ordinal: 0)
@@ -573,7 +647,7 @@ func cssSessionAppliesSetStyleTextResultOnlyToEditedTarget() throws {
         CSSStylePayload(id: sharedStyleID, cssProperties: [
             CSSPropertyPayload(name: "margin", value: "0", text: "/* margin: 0; */", status: .disabled),
         ]),
-        styleID: sharedStyleID,
+        propertyID: CSSPropertyIdentifier(styleID: sharedStyleID, propertyIndex: 0),
         targetID: pageIdentity.targetID
     )
 

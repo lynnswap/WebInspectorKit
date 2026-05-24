@@ -1,6 +1,22 @@
 import Foundation
 import Observation
 
+private struct CSSPropertyInspectorBaseline: Equatable {
+    var name: String
+    var value: String
+    var priority: String
+    var text: String?
+    var status: CSSPropertyStatus
+
+    init(_ property: CSSProperty) {
+        name = property.name
+        value = property.value
+        priority = property.priority
+        text = property.text
+        status = property.status
+    }
+}
+
 @Observable
 package final class CSSProperty: Equatable {
     /// Stable row identity within an editable CSS declaration.
@@ -28,6 +44,9 @@ package final class CSSProperty: Equatable {
     package var range: CSSSourceRange?
     /// True when Core can safely rewrite the owning style text for this row.
     package var isEditable: Bool
+    /// True after this inspector successfully rewrites the authored style text for this row.
+    package var isModifiedByInspector: Bool
+    @ObservationIgnored private var inspectorBaseline: CSSPropertyInspectorBaseline?
 
     package init(
         id: CSSPropertyIdentifier? = nil,
@@ -39,7 +58,8 @@ package final class CSSProperty: Equatable {
         status: CSSPropertyStatus = .style,
         implicit: Bool = false,
         range: CSSSourceRange? = nil,
-        isEditable: Bool = false
+        isEditable: Bool = false,
+        isModifiedByInspector: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -51,6 +71,7 @@ package final class CSSProperty: Equatable {
         self.implicit = implicit
         self.range = range
         self.isEditable = isEditable
+        self.isModifiedByInspector = isModifiedByInspector
     }
 
     package convenience init(payload: CSSPropertyPayload, id: CSSPropertyIdentifier?, isEditable: Bool) {
@@ -89,6 +110,24 @@ package final class CSSProperty: Equatable {
             return lhsID == rhsID
         }
         return lhs === rhs
+    }
+
+    fileprivate func rememberInspectorBaselineIfNeeded() {
+        if inspectorBaseline == nil {
+            inspectorBaseline = CSSPropertyInspectorBaseline(self)
+        }
+    }
+
+    fileprivate func updateInspectorModificationState() {
+        guard let inspectorBaseline else {
+            isModifiedByInspector = false
+            return
+        }
+        let isModified = CSSPropertyInspectorBaseline(self) != inspectorBaseline
+        isModifiedByInspector = isModified
+        if isModified == false {
+            self.inspectorBaseline = nil
+        }
     }
 }
 
@@ -446,18 +485,26 @@ package final class CSSSession {
 
     package func applySetStyleTextResult(
         _ style: CSSStylePayload,
-        styleID: CSSStyleIdentifier,
+        propertyID: CSSPropertyIdentifier,
         targetID: ProtocolTargetIdentifier
     ) {
         for nodeStyles in stylesByNodeID.values where nodeStyles.identity.targetID == targetID {
-            for sectionIndex in nodeStyles.sections.indices where nodeStyles.sections[sectionIndex].style.id == styleID {
+            for sectionIndex in nodeStyles.sections.indices where nodeStyles.sections[sectionIndex].style.id == propertyID.styleID {
                 let section = nodeStyles.sections[sectionIndex]
+                if section.style.cssProperties.indices.contains(propertyID.propertyIndex),
+                   section.style.cssProperties[propertyID.propertyIndex].id == propertyID {
+                    section.style.cssProperties[propertyID.propertyIndex].rememberInspectorBaselineIfNeeded()
+                }
                 let normalizedStyle = Self.normalizedStyle(
                     style,
                     isEditable: section.isEditable,
                     ruleOrigin: section.rule?.origin
                 )
                 Self.updateStyle(section.style, from: normalizedStyle)
+                if section.style.cssProperties.indices.contains(propertyID.propertyIndex),
+                   section.style.cssProperties[propertyID.propertyIndex].id == propertyID {
+                    section.style.cssProperties[propertyID.propertyIndex].updateInspectorModificationState()
+                }
                 if let rule = section.rule {
                     rule.style = section.style
                 }
@@ -660,6 +707,7 @@ package final class CSSSession {
         property.implicit = refreshedProperty.implicit
         property.range = refreshedProperty.range
         property.isEditable = refreshedProperty.isEditable
+        property.updateInspectorModificationState()
     }
 
     private static func updateComputedProperties(
