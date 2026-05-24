@@ -11,7 +11,7 @@ The target models WebKit protocol concepts before they reach UIKit presentation 
 - Treat iframe documents as frame-document projections, not regular DOM children.
 - Treat Network redirects as request history, not separate request identities.
 - Make iframe refresh and cross-origin selection behavior testable without UIKit/TextKit2.
-- Avoid compatibility paths from the old WebView-rendered DOM tree.
+- Avoid compatibility paths from removed `v0.1.x` DOM APIs.
 
 ## Domain Notes
 

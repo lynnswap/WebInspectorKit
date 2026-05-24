@@ -59,12 +59,11 @@ policies. Those boundaries are internal to the WebInspector runtime.
 
 ## 4. Remove `WebInspectorScripts` imports
 
-The DOM tree frontend is now native UIKit/TextKit2. The `WebInspectorScripts` product and
-`@_exported import WebInspectorScripts` are gone.
+The `WebInspectorScripts` product and `@_exported import WebInspectorScripts`
+are gone.
 
 Remove direct `WebInspectorScripts` imports and any custom DOM frontend client
-injection. Apps no longer need to run or ship the DOM tree JavaScript bundling
-workflow.
+injection. The current DOM tree is provided by the built-in native DOM tab.
 
 ## 5. Update tab definitions
 

@@ -75,11 +75,6 @@ flow. Core-specific model notes are rooted at the
 the detailed DOM, CSS, Network, and transport research docs kept next to the
 Core target.
 
-## Contributor Workflow
-
-- Consumers of the Swift package do not need `node`, `pnpm`, or `esbuild`.
-- The DOM tree inspector UI is native UIKit/TextKit2. There is no bundled JavaScript DOM tree frontend or generated script regeneration step.
-
 ## License
 
 See [LICENSE](LICENSE).
