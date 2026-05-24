@@ -18,7 +18,7 @@ struct DOMContainerTests {
         #expect(viewController.view.backgroundColor == .clear)
         let contentUnavailableConfiguration = viewController.contentUnavailableConfiguration as? UIContentUnavailableConfiguration
         #expect(contentUnavailableConfiguration?.text == "Select an element")
-        #expect(viewController.stylesTextViewForTesting.isHidden)
+        #expect(viewController.collectionViewForTesting.isHidden)
     }
 
     @Test
@@ -28,47 +28,37 @@ struct DOMContainerTests {
         dom.selectNode(body.id)
 
         let css = CSSSession()
-        let styleIDs = try applyBodyStyles(to: css, in: dom)
+        try applyBodyStyles(to: css, in: dom)
 
         let viewController = DOMElementViewController(dom: dom, css: css)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
         let didRenderRows = await waitUntil {
-            viewController.stylesTextViewForTesting.renderedTextForTesting.contains("body {")
-                && viewController.stylesTextViewForTesting.renderedTextForTesting.contains("styles.css")
-                && viewController.stylesTextViewForTesting.renderedTextForTesting.contains("margin: 0;")
-                && viewController.stylesTextViewForTesting.renderedTextForTesting.contains("/* box-sizing: border-box; */")
-                && viewController.stylesTextViewForTesting.renderedTextForTesting.contains("font-size: 12px;")
+            viewController.collectionViewForTesting.numberOfSections == 1
+                && viewController.collectionViewForTesting.numberOfItems(inSection: 0) == 3
         }
         window.layoutIfNeeded()
 
         #expect(didRenderRows)
         #expect(viewController.contentUnavailableConfiguration == nil)
-        #expect(viewController.stylesTextViewForTesting.isHidden == false)
-        #expect(viewController.stylesTextViewForTesting.isTextSelectableForTesting)
-        #expect(viewController.stylesTextViewForTesting.isTextEditableForTesting == false)
-        #expect(viewController.stylesTextViewForTesting.isHorizontallyScrollableForTesting)
-        #expect(viewController.stylesTextViewForTesting.showsHorizontalScrollIndicatorForTesting == false)
-        #expect(viewController.stylesTextViewForTesting.isCheckboxBackedByControlForTesting(propertyID: styleIDs.margin))
-        let checkboxSize = try #require(viewController.stylesTextViewForTesting.checkboxControlSizeForTesting(propertyID: styleIDs.margin))
-        #expect(checkboxSize.height <= viewController.stylesTextViewForTesting.rowHeightForTesting)
-        #expect(checkboxSize.width <= viewController.stylesTextViewForTesting.rowHeightForTesting)
-        let checkboxFrame = try #require(viewController.stylesTextViewForTesting.checkboxControlFrameForTesting(propertyID: styleIDs.margin))
-        let rowFrame = try #require(viewController.stylesTextViewForTesting.contentRowFrameForTesting(propertyID: styleIDs.margin))
-        #expect(checkboxFrame.minY == rowFrame.minY)
-        #expect(checkboxFrame.height == rowFrame.height)
-        #expect(viewController.stylesTextViewForTesting.isCheckboxCheckedForTesting(propertyID: styleIDs.margin) == true)
-        #expect(viewController.stylesTextViewForTesting.isCheckboxCheckedForTesting(propertyID: styleIDs.boxSizing) == false)
+        #expect(viewController.collectionViewForTesting.isHidden == false)
 
-        let attributedText = viewController.stylesTextViewForTesting.attributedTextForTesting
-        let fontSizeRange = try #require(viewController.stylesTextViewForTesting.declarationRangeForTesting(propertyID: styleIDs.fontSize))
-        let strikethroughStyle = attributedText.attribute(
-            .strikethroughStyle,
-            at: fontSizeRange.location,
-            effectiveRange: nil
-        ) as? Int
-        #expect(strikethroughStyle == NSUnderlineStyle.single.rawValue)
+        let headers = viewController.collectionViewForTesting
+            .visibleSupplementaryViews(ofKind: UICollectionView.elementKindSectionHeader)
+            .compactMap(\.accessibilityLabel)
+        let propertyViews = stylePropertyViews(in: viewController)
+        let declarations = propertyViews.map(\.declarationTextForTesting)
+
+        #expect(headers.contains { $0.contains("body") })
+        #expect(headers.contains { $0.contains("styles.css") })
+        #expect(declarations.contains("margin: 0;"))
+        #expect(declarations.contains("/* box-sizing: border-box; */"))
+        #expect(declarations.contains("font-size: 12px;"))
+        #expect(propertyView(named: "margin", in: propertyViews)?.isToggleOnForTesting == true)
+        #expect(propertyView(named: "box-sizing", in: propertyViews)?.isToggleOnForTesting == false)
+        #expect(propertyView(named: "font-size", in: propertyViews)?.isToggleEnabledForTesting == false)
+        #expect(propertyView(named: "margin", in: propertyViews)?.declarationFontForTesting?.pointSize == UIFont.preferredFont(forTextStyle: .body).pointSize)
     }
 
     @Test
@@ -85,18 +75,19 @@ struct DOMContainerTests {
         defer { window.isHidden = true }
 
         let didRenderRows = await waitUntil {
-            viewController.stylesTextViewForTesting.renderedTextForTesting.contains("font-size: 12px;")
+            viewController.collectionViewForTesting.numberOfSections == 1
+                && viewController.collectionViewForTesting.numberOfItems(inSection: 0) == 3
         }
         window.layoutIfNeeded()
 
         #expect(didRenderRows)
-        viewController.stylesTextViewForTesting.resetRenderCountersForTesting()
+        let cellIDsBeforeUpdate = visibleCellIDs(in: viewController)
 
         let identity = try dom.selectedCSSNodeStyleIdentity().get()
         let refreshToken = try #require(css.beginRefresh(identity: identity))
         window.layoutIfNeeded()
-        #expect(viewController.stylesTextViewForTesting.isHidden == false)
-        #expect(viewController.stylesTextViewForTesting.rebuildTextStorageCallCountForTesting == 0)
+        #expect(viewController.collectionViewForTesting.isHidden == false)
+        #expect(visibleCellIDs(in: viewController) == cellIDsBeforeUpdate)
 
         try applyBodyStyles(
             to: css,
@@ -107,17 +98,18 @@ struct DOMContainerTests {
         )
 
         let didUpdateVisibleRow = await waitUntil {
-            viewController.stylesTextViewForTesting.renderedTextForTesting.contains("margin: 4px;")
+            stylePropertyViews(in: viewController)
+                .map(\.declarationTextForTesting)
+                .contains("margin: 4px;")
         }
 
         #expect(didUpdateVisibleRow)
-        #expect(viewController.stylesTextViewForTesting.isHidden == false)
-        #expect(viewController.stylesTextViewForTesting.rebuildTextStorageCallCountForTesting == 0)
-        #expect(viewController.stylesTextViewForTesting.incrementalPropertyUpdateCallCountForTesting > 0)
+        #expect(viewController.collectionViewForTesting.isHidden == false)
+        #expect(visibleCellIDs(in: viewController) == cellIDsBeforeUpdate)
     }
 
     @Test
-    func elementStylesTextViewCheckboxSendsToggleActionWithoutMirroringState() async throws {
+    func elementStylePropertyViewSendsToggleActionWithImmediateControlFeedback() {
         let propertyID = CSSPropertyIdentifier(
             styleID: CSSStyleIdentifier(styleSheetID: CSSStyleSheetIdentifier("test-sheet"), ordinal: 0),
             propertyIndex: 0
@@ -130,38 +122,32 @@ struct DOMContainerTests {
             status: .active,
             isEditable: true
         )
-        let textView = DOMElementStylesTextView()
-        let nodeStyles = makeNodeStyles(properties: [property])
+        let propertyView = DOMElementStylePropertyView()
         var requestedPropertyID: CSSPropertyIdentifier?
         var requestedEnabled: Bool?
-        textView.bind(nodeStyles: nodeStyles) { propertyID, enabled in
+        propertyView.bind(property: property) { propertyID, enabled in
             requestedPropertyID = propertyID
             requestedEnabled = enabled
             return true
         }
-        let window = showViewInWindow(textView)
+        let window = showViewInWindow(propertyView)
         defer { window.isHidden = true }
 
-        let didRenderCheckbox = await waitUntil {
-            textView.isCheckboxBackedByControlForTesting(propertyID: propertyID)
-        }
-        #expect(didRenderCheckbox)
-
-        textView.tapCheckboxForTesting(propertyID: propertyID)
+        propertyView.tapToggleForTesting()
 
         #expect(requestedPropertyID == propertyID)
         #expect(requestedEnabled == false)
-        #expect(textView.isCheckboxCheckedForTesting(propertyID: propertyID) == true)
+        #expect(propertyView.isToggleOnForTesting == false)
 
-        textView.bind(nodeStyles: nodeStyles) { _, _ in
+        propertyView.bind(property: property) { _, _ in
             false
         }
-        textView.tapCheckboxForTesting(propertyID: propertyID)
-        #expect(textView.isCheckboxCheckedForTesting(propertyID: propertyID) == true)
+        propertyView.tapToggleForTesting()
+        #expect(propertyView.isToggleOnForTesting == true)
     }
 
     @Test
-    func elementStylesTextViewCheckboxIgnoresNonEditableAndAnonymousProperties() async throws {
+    func elementStylePropertyViewIgnoresNonEditableAndAnonymousProperties() {
         let styleID = CSSStyleIdentifier(styleSheetID: CSSStyleSheetIdentifier("test-sheet"), ordinal: 0)
         let nonEditableID = CSSPropertyIdentifier(styleID: styleID, propertyIndex: 0)
         let nonEditable = CSSProperty(
@@ -179,79 +165,31 @@ struct DOMContainerTests {
             status: .active,
             isEditable: true
         )
-        let textView = DOMElementStylesTextView()
+        let nonEditableView = DOMElementStylePropertyView()
+        let anonymousView = DOMElementStylePropertyView()
         var requestCount = 0
-        textView.bind(nodeStyles: makeNodeStyles(properties: [nonEditable, anonymous])) { _, _ in
+        nonEditableView.bind(property: nonEditable) { _, _ in
             requestCount += 1
             return true
         }
-        let window = showViewInWindow(textView)
+        anonymousView.bind(property: anonymous) { _, _ in
+            requestCount += 1
+            return true
+        }
+        let stackView = UIStackView(arrangedSubviews: [nonEditableView, anonymousView])
+        stackView.axis = .vertical
+        let window = showViewInWindow(stackView)
         defer { window.isHidden = true }
 
-        let didRenderCheckboxes = await waitUntil {
-            textView.renderedTextForTesting.contains("margin: 0;")
-                && textView.renderedTextForTesting.contains("padding: 0;")
-        }
-
-        #expect(didRenderCheckboxes)
-        #expect(textView.isCheckboxBackedByControlForTesting(propertyID: nonEditableID))
-        #expect(textView.isCheckboxEnabledForTesting(propertyID: nonEditableID) == false)
-        textView.tapCheckboxForTesting(propertyID: nonEditableID)
-        textView.tapCheckboxForTesting(lineContaining: "padding: 0;")
+        #expect(nonEditableView.isToggleEnabledForTesting == false)
+        #expect(anonymousView.isToggleEnabledForTesting == false)
+        nonEditableView.tapToggleForTesting()
+        anonymousView.tapToggleForTesting()
         #expect(requestCount == 0)
     }
 
     @Test
-    func elementStylesTextViewKeepsDuplicatePropertyIDsScopedBySection() async throws {
-        let styleID = CSSStyleIdentifier(styleSheetID: CSSStyleSheetIdentifier("test-sheet"), ordinal: 0)
-        let propertyID = CSSPropertyIdentifier(styleID: styleID, propertyIndex: 0)
-        let first = CSSProperty(
-            id: propertyID,
-            name: "margin",
-            value: "0",
-            text: "margin: 0;",
-            status: .active,
-            isEditable: true
-        )
-        let second = CSSProperty(
-            id: propertyID,
-            name: "margin",
-            value: "1px",
-            text: "margin: 1px;",
-            status: .active,
-            isEditable: true
-        )
-        let textView = DOMElementStylesTextView()
-        textView.bind(nodeStyles: makeNodeStyles(sectionProperties: [[first], [second]])) { _, _ in
-            true
-        }
-        let window = showViewInWindow(textView)
-        defer { window.isHidden = true }
-
-        let didRenderRows = await waitUntil {
-            textView.renderedTextForTesting.contains("margin: 0;")
-                && textView.renderedTextForTesting.contains("margin: 1px;")
-        }
-        #expect(didRenderRows)
-        textView.resetRenderCountersForTesting()
-
-        first.value = "2px"
-        first.text = "margin: 2px;"
-
-        let didUpdateFirstRow = await waitUntil {
-            let renderedText = textView.renderedTextForTesting
-            return renderedText.contains("margin: 2px;")
-                && renderedText.contains("margin: 1px;")
-                && !renderedText.contains("margin: 0;")
-        }
-
-        #expect(didUpdateFirstRow)
-        #expect(textView.rebuildTextStorageCallCountForTesting == 0)
-        #expect(textView.incrementalPropertyUpdateCallCountForTesting > 0)
-    }
-
-    @Test
-    func elementStylesTextViewNormalizesMultilinePropertyText() async throws {
+    func elementStylePropertyViewNormalizesMultilinePropertyText() {
         let property = CSSProperty(
             name: "background",
             value: "red",
@@ -259,19 +197,15 @@ struct DOMContainerTests {
             status: .active,
             isEditable: true
         )
-        let textView = DOMElementStylesTextView()
-        textView.bind(nodeStyles: makeNodeStyles(properties: [property])) { _, _ in
+        let propertyView = DOMElementStylePropertyView()
+        propertyView.bind(property: property) { _, _ in
             true
         }
-        let window = showViewInWindow(textView)
+        let window = showViewInWindow(propertyView)
         defer { window.isHidden = true }
 
-        let didRenderRow = await waitUntil {
-            textView.renderedTextForTesting.contains("background: red;")
-        }
-
-        #expect(didRenderRow)
-        #expect(textView.renderedTextForTesting.contains("background:\n") == false)
+        #expect(propertyView.declarationTextForTesting == "background: red;")
+        #expect(propertyView.declarationTextForTesting.contains("\n") == false)
     }
 
     @Test
@@ -474,39 +408,6 @@ struct DOMContainerTests {
         )
     }
 
-    private func makeNodeStyles(properties: [CSSProperty]) -> CSSNodeStyles {
-        makeNodeStyles(sectionProperties: [properties])
-    }
-
-    private func makeNodeStyles(sectionProperties: [[CSSProperty]]) -> CSSNodeStyles {
-        let targetID = ProtocolTargetIdentifier("test-target")
-        let documentID = DOMDocumentIdentifier(
-            targetID: targetID,
-            localDocumentLifetimeID: DOMDocumentLifetimeIdentifier(1)
-        )
-        let nodeID = DOMNodeIdentifier(documentID: documentID, nodeID: DOMProtocolNodeID(1))
-        let identity = CSSNodeStyleIdentity(
-            nodeID: nodeID,
-            targetID: targetID,
-            documentID: documentID,
-            protocolNodeID: DOMProtocolNodeID(1),
-            targetCapabilities: .css
-        )
-        return CSSNodeStyles(
-            identity: identity,
-            state: .loaded,
-            sections: sectionProperties.enumerated().map { ordinal, properties in
-                CSSStyleSection(
-                    id: CSSStyleSectionIdentifier(nodeID: identity.nodeID, kind: .rule, ordinal: ordinal),
-                    kind: .rule,
-                    title: ordinal == 0 ? "body" : "ancestor-\(ordinal)",
-                    style: CSSStyle(cssProperties: properties),
-                    isEditable: true
-                )
-            }
-        )
-    }
-
     private func firstElement(named localName: String, in dom: DOMSession) -> DOMNode? {
         guard let rootNode = dom.currentPageRootNode else {
             return nil
@@ -573,6 +474,24 @@ struct DOMContainerTests {
             view.bottomAnchor.constraint(equalTo: viewController.view.bottomAnchor),
         ])
         return showInWindow(viewController)
+    }
+
+    private func stylePropertyViews(in viewController: DOMElementViewController) -> [DOMElementStylePropertyView] {
+        viewController.collectionViewForTesting.visibleCells
+            .compactMap { ($0 as? DOMElementStylePropertyCollectionCell)?.propertyViewForTesting }
+    }
+
+    private func visibleCellIDs(in viewController: DOMElementViewController) -> [ObjectIdentifier] {
+        viewController.collectionViewForTesting.visibleCells.map(ObjectIdentifier.init)
+    }
+
+    private func propertyView(
+        named name: String,
+        in propertyViews: [DOMElementStylePropertyView]
+    ) -> DOMElementStylePropertyView? {
+        propertyViews.first {
+            $0.accessibilityIdentifier == "WebInspector.DOM.Element.StyleProperty.\(name)"
+        }
     }
 
     private func waitUntil(

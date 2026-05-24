@@ -6,13 +6,24 @@ import WebInspectorRuntime
 
 @MainActor
 package final class DOMElementViewController: UIViewController {
+    private struct ItemIdentifier: Hashable {
+        var sectionID: CSSStyleSectionIdentifier
+        var propertyID: CSSPropertyIdentifier?
+        var propertyIndex: Int
+    }
+
     package let dom: DOMSession
     package let css: CSSSession
 
     private weak var session: InspectorSession?
     private let observationScope = ObservationScope()
     private let selectedStylesObservationScope = ObservationScope()
-    private let stylesTextView = DOMElementStylesTextView()
+
+    private lazy var collectionView = UICollectionView(
+        frame: .zero,
+        collectionViewLayout: Self.makeLayout()
+    )
+    private lazy var dataSource = makeDataSource()
 
     package convenience init(session: InspectorSession) {
         self.init(
@@ -65,7 +76,7 @@ package final class DOMElementViewController: UIViewController {
     override package func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .clear
-        configureStylesTextView()
+        configureCollectionView()
         render()
     }
 
@@ -74,17 +85,87 @@ package final class DOMElementViewController: UIViewController {
         render()
     }
 
-    private func configureStylesTextView() {
-        stylesTextView.translatesAutoresizingMaskIntoConstraints = false
-        stylesTextView.isHidden = true
+    private static func makeLayout() -> UICollectionViewLayout {
+        UICollectionViewCompositionalLayout { _, environment in
+            var configuration = UICollectionLayoutListConfiguration(appearance: .insetGrouped)
+            configuration.headerMode = .supplementary
+            configuration.showsSeparators = true
 
-        view.addSubview(stylesTextView)
+            let section = NSCollectionLayoutSection.list(
+                using: configuration,
+                layoutEnvironment: environment
+            )
+            var contentInsets = section.contentInsets
+            contentInsets.top = 0
+            section.contentInsets = contentInsets
+            return section
+        }
+    }
+
+    private func configureCollectionView() {
+        collectionView.translatesAutoresizingMaskIntoConstraints = false
+        collectionView.backgroundColor = .clear
+        collectionView.alwaysBounceVertical = true
+        collectionView.keyboardDismissMode = .onDrag
+        collectionView.accessibilityIdentifier = "WebInspector.DOM.Element.StylesList"
+
+        view.addSubview(collectionView)
         NSLayoutConstraint.activate([
-            stylesTextView.topAnchor.constraint(equalTo: view.topAnchor),
-            stylesTextView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            stylesTextView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            stylesTextView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            collectionView.topAnchor.constraint(equalTo: view.topAnchor),
+            collectionView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            collectionView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            collectionView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
+    }
+
+    private func makeDataSource() -> UICollectionViewDiffableDataSource<CSSStyleSectionIdentifier, ItemIdentifier> {
+        let propertyRegistration = UICollectionView.CellRegistration<DOMElementStylePropertyCollectionCell, ItemIdentifier> { [weak self] cell, _, item in
+            guard let self,
+                  let section = section(for: item.sectionID),
+                  let property = property(for: item, in: section) else {
+                cell.clear()
+                return
+            }
+            cell.bind(property: property, onToggle: toggleAction())
+        }
+
+        let dataSource = UICollectionViewDiffableDataSource<CSSStyleSectionIdentifier, ItemIdentifier>(
+            collectionView: collectionView
+        ) { collectionView, indexPath, item in
+            collectionView.dequeueConfiguredReusableCell(
+                using: propertyRegistration,
+                for: indexPath,
+                item: item
+            )
+        }
+
+        let headerRegistration = UICollectionView.SupplementaryRegistration<DOMElementStyleSectionHeaderView>(
+            elementKind: UICollectionView.elementKindSectionHeader
+        ) { [weak self, weak dataSource] header, _, indexPath in
+            guard let self,
+                  let dataSource,
+                  dataSource.snapshot().sectionIdentifiers.indices.contains(indexPath.section) else {
+                header.clear()
+                return
+            }
+            let sectionID = dataSource.snapshot().sectionIdentifiers[indexPath.section]
+            guard let section = section(for: sectionID) else {
+                header.clear()
+                return
+            }
+            header.bind(section)
+        }
+
+        dataSource.supplementaryViewProvider = { collectionView, elementKind, indexPath in
+            guard elementKind == UICollectionView.elementKindSectionHeader else {
+                return nil
+            }
+            return collectionView.dequeueConfiguredReusableSupplementary(
+                using: headerRegistration,
+                for: indexPath
+            )
+        }
+        return dataSource
     }
 
     private func startObservingState() {
@@ -192,17 +273,14 @@ package final class DOMElementViewController: UIViewController {
 
     private func showStyleList(_ nodeStyles: CSSNodeStyles) {
         contentUnavailableConfiguration = nil
-        stylesTextView.isHidden = false
-        stylesTextView.bind(
-            nodeStyles: nodeStyles,
-            onToggle: toggleAction()
-        )
+        collectionView.isHidden = false
+        applySnapshot(for: nodeStyles)
     }
 
     private func showEmptyStyleList() {
         contentUnavailableConfiguration = nil
-        stylesTextView.isHidden = false
-        stylesTextView.clear()
+        collectionView.isHidden = false
+        applyEmptySnapshot()
     }
 
     private func showUnavailable(_ reason: CSSNodeStylesUnavailableReason) {
@@ -247,8 +325,8 @@ package final class DOMElementViewController: UIViewController {
     }
 
     private func showPlaceholder(text: String, secondaryText: String?, image: UIImage?) {
-        stylesTextView.clear()
-        stylesTextView.isHidden = true
+        applyEmptySnapshot()
+        collectionView.isHidden = true
         var configuration = UIContentUnavailableConfiguration.empty()
         configuration.text = text
         configuration.secondaryText = secondaryText
@@ -256,11 +334,56 @@ package final class DOMElementViewController: UIViewController {
         contentUnavailableConfiguration = configuration
     }
 
+    private func applyEmptySnapshot() {
+        guard dataSource.snapshot().numberOfItems != 0 || dataSource.snapshot().numberOfSections != 0 else {
+            return
+        }
+        let snapshot = NSDiffableDataSourceSnapshot<CSSStyleSectionIdentifier, ItemIdentifier>()
+        dataSource.apply(snapshot, animatingDifferences: false)
+    }
+
+    private func applySnapshot(for nodeStyles: CSSNodeStyles) {
+        var snapshot = NSDiffableDataSourceSnapshot<CSSStyleSectionIdentifier, ItemIdentifier>()
+        for section in nodeStyles.sections where !section.style.cssProperties.isEmpty {
+            snapshot.appendSections([section.id])
+            snapshot.appendItems(
+                section.style.cssProperties.enumerated().map { index, property in
+                    ItemIdentifier(
+                        sectionID: section.id,
+                        propertyID: property.id,
+                        propertyIndex: index
+                    )
+                },
+                toSection: section.id
+            )
+        }
+        let currentSnapshot = dataSource.snapshot()
+        guard currentSnapshot.sectionIdentifiers != snapshot.sectionIdentifiers
+            || currentSnapshot.itemIdentifiers != snapshot.itemIdentifiers else {
+            return
+        }
+        dataSource.apply(snapshot, animatingDifferences: false)
+    }
+
+    private func section(for sectionID: CSSStyleSectionIdentifier) -> CSSStyleSection? {
+        css.selectedNodeStyles?.sections.first { $0.id == sectionID }
+    }
+
+    private func property(for item: ItemIdentifier, in section: CSSStyleSection) -> CSSProperty? {
+        if let propertyID = item.propertyID {
+            return section.style.cssProperties.first { $0.id == propertyID }
+        }
+        guard section.style.cssProperties.indices.contains(item.propertyIndex) else {
+            return nil
+        }
+        return section.style.cssProperties[item.propertyIndex]
+    }
+
     private func requestStylesRefresh() {
         session?.requestRefreshStylesForSelectedNode()
     }
 
-    private func toggleAction() -> DOMElementStylesTextView.ToggleAction? {
+    private func toggleAction() -> DOMElementStylePropertyView.ToggleAction? {
         guard let session else {
             return nil
         }
@@ -270,10 +393,131 @@ package final class DOMElementViewController: UIViewController {
     }
 }
 
+@MainActor
+package final class DOMElementStylePropertyCollectionCell: UICollectionViewListCell {
+    private let propertyView = DOMElementStylePropertyView()
+
+    override package init(frame: CGRect) {
+        super.init(frame: frame)
+        configureStaticViews()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override package func prepareForReuse() {
+        super.prepareForReuse()
+        propertyView.clear()
+    }
+
+    package func bind(
+        property: CSSProperty,
+        onToggle: DOMElementStylePropertyView.ToggleAction?
+    ) {
+        propertyView.bind(
+            property: property,
+            onToggle: onToggle
+        )
+    }
+
+    package func clear() {
+        propertyView.clear()
+    }
+
+    private func configureStaticViews() {
+        contentView.preservesSuperviewLayoutMargins = true
+        propertyView.translatesAutoresizingMaskIntoConstraints = false
+        propertyView.directionalLayoutMargins = .init(top: 8, leading: 16, bottom: 8, trailing: 16)
+
+        contentView.addSubview(propertyView)
+        NSLayoutConstraint.activate([
+            propertyView.topAnchor.constraint(equalTo: contentView.topAnchor),
+            propertyView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            propertyView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            propertyView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+        ])
+    }
+}
+
+@MainActor
+private final class DOMElementStyleSectionHeaderView: UICollectionReusableView {
+    private let observationScope = ObservationScope()
+    private let contentView = UIListContentView(
+        configuration: UIListContentConfiguration.header()
+    )
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        configureStaticViews()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    isolated deinit {
+        observationScope.cancelAll()
+    }
+
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        clear()
+    }
+
+    func bind(_ section: CSSStyleSection) {
+        render(section)
+
+        observationScope.update {
+            section.observe([\.title, \.subtitle]) { [weak self, weak section] in
+                guard let self, let section else {
+                    return
+                }
+                self.render(section)
+            }
+            .store(in: observationScope)
+        }
+    }
+
+    func clear() {
+        observationScope.cancelAll()
+        contentView.configuration = UIListContentConfiguration.header()
+    }
+
+    private func configureStaticViews() {
+        contentView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(contentView)
+        NSLayoutConstraint.activate([
+            contentView.topAnchor.constraint(equalTo: topAnchor),
+            contentView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            contentView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            contentView.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+
+    private func render(_ section: CSSStyleSection) {
+        var configuration = UIListContentConfiguration.header()
+        configuration.text = section.title
+        configuration.secondaryText = section.subtitle
+        contentView.configuration = configuration
+        accessibilityLabel = [section.title, section.subtitle]
+            .compactMap { $0 }
+            .joined(separator: ", ")
+    }
+}
+
 #if DEBUG
 extension DOMElementViewController {
-    package var stylesTextViewForTesting: DOMElementStylesTextView {
-        stylesTextView
+    package var collectionViewForTesting: UICollectionView {
+        collectionView
+    }
+}
+
+extension DOMElementStylePropertyCollectionCell {
+    package var propertyViewForTesting: DOMElementStylePropertyView {
+        propertyView
     }
 }
 #endif

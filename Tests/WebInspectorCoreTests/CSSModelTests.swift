@@ -82,7 +82,13 @@ func cssSessionBuildsOrderedSectionsAndPropertyRowState() throws {
                             CSSPropertyPayload(name: "color", value: "red", text: "color: red;", status: .inactive),
                             CSSPropertyPayload(name: "display", value: "block", text: "/* display: block; */", status: .disabled),
                             CSSPropertyPayload(name: "box-sizing", value: "border-box", text: "box-sizing: border-box;"),
-                        ]
+                        ],
+                        cssText: """
+                        margin: 0;
+                        color: red;
+                        /* display: block; */
+                        box-sizing: border-box;
+                        """
                     ),
                     matchingSelectors: [0]
                 ),
@@ -119,6 +125,7 @@ func cssSessionBuildsOrderedSectionsAndPropertyRowState() throws {
     #expect(properties[2].isEnabled == false)
     #expect(properties[3].isEnabled)
     #expect(properties[0].isEditable)
+    #expect(properties[1].isEditable == false)
     #expect(properties[2].isEditable)
 }
 
@@ -299,6 +306,59 @@ func cssSessionBuildsSetStyleTextIntentByCommentingAndUncommentingPropertyText()
         enabled: true
     ))
     #expect(enabledIntent == .setStyleText(targetID: identity.targetID, styleID: disabledStyleID, text: "margin: 0;"))
+}
+
+@Test
+func cssSessionRewritesAuthoredStyleTextWithoutSerializingInactiveRows() async throws {
+    let css = await CSSSession()
+    let identity = cssIdentity()
+    let styleID = CSSStyleIdentifier(styleSheetID: .init("sheet"), ordinal: 0)
+    let token = try #require(await css.beginRefresh(identity: identity))
+    await css.applyRefresh(
+        token: token,
+        matched: CSSMatchedStylesPayload(matchedRules: [
+            CSSRuleMatchPayload(
+                rule: rule(
+                    selector: "body",
+                    styleID: styleID,
+                    properties: [
+                        CSSPropertyPayload(
+                            name: "font-family",
+                            value: "sans-serif",
+                            text: "font-family: sans-serif;",
+                            status: .active
+                        ),
+                        CSSPropertyPayload(
+                            name: "font-size",
+                            value: "10pt",
+                            text: "font-size: 10pt;",
+                            status: .active
+                        ),
+                        CSSPropertyPayload(
+                            name: "font-size",
+                            value: "12px",
+                            text: "font-size: 12px;",
+                            status: .inactive
+                        ),
+                    ],
+                    cssText: "font-family: sans-serif;\nfont-size: 10pt;"
+                ),
+                matchingSelectors: [0]
+            ),
+        ]),
+        inline: .init(),
+        computed: []
+    )
+
+    let intent = try #require(await css.setStyleTextIntent(
+        for: CSSPropertyIdentifier(styleID: styleID, propertyIndex: 1),
+        enabled: false
+    ))
+    #expect(intent == .setStyleText(
+        targetID: identity.targetID,
+        styleID: styleID,
+        text: "font-family: sans-serif;\n/* font-size: 10pt; */"
+    ))
 }
 
 @Test
@@ -541,22 +601,24 @@ private func rule(
     selector: String,
     styleID: CSSStyleIdentifier = CSSStyleIdentifier(styleSheetID: .init("sheet"), ordinal: 0),
     origin: CSSStyleOrigin = .author,
-    properties: [CSSPropertyPayload]
+    properties: [CSSPropertyPayload],
+    cssText: String? = nil
 ) -> CSSRulePayload {
     CSSRulePayload(
         id: CSSRuleIdentifier(styleSheetID: styleID.styleSheetID, ordinal: styleID.ordinal),
         selectorList: CSSSelectorList(selectors: [CSSSelector(text: selector)], text: selector),
         sourceLine: 1,
         origin: origin,
-        style: style(id: styleID, properties: properties)
+        style: style(id: styleID, properties: properties, cssText: cssText)
     )
 }
 
 private func style(
     id: CSSStyleIdentifier? = nil,
-    properties: [CSSPropertyPayload]
+    properties: [CSSPropertyPayload],
+    cssText: String? = nil
 ) -> CSSStylePayload {
-    CSSStylePayload(id: id, cssProperties: properties)
+    CSSStylePayload(id: id, cssProperties: properties, cssText: cssText)
 }
 
 private extension Result {

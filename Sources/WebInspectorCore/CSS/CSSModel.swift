@@ -760,7 +760,7 @@ package final class CSSSession {
     ) -> CSSStyle {
         let styleID = style.id
         let effectiveEditable = isEditable && styleID != nil && ruleOrigin != .userAgent
-        let canSafelyRewriteStyleText = effectiveEditable && style.cssProperties.allSatisfy { $0.text != nil }
+        let canSafelyRewriteStyleText = effectiveEditable && canSafelyRewriteStyleText(for: style)
         let normalizedProperties = style.cssProperties.enumerated().map { index, property in
             let propertyID = styleID.map { CSSPropertyIdentifier(styleID: $0, propertyIndex: index) }
             let isEditable = canSafelyRewriteStyleText
@@ -780,15 +780,36 @@ package final class CSSSession {
         )
     }
 
+    private static func canSafelyRewriteStyleText(for style: CSSStylePayload) -> Bool {
+        if let cssText = style.cssText,
+           !cssText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return true
+        }
+        return style.cssProperties.allSatisfy { property in
+            property.text != nil
+                && !property.implicit
+                && property.status != .inactive
+        }
+    }
+
     private static func rewrittenStyleText(style: CSSStyle, propertyIndex: Int, enabled: Bool) -> String? {
         guard style.cssProperties.indices.contains(propertyIndex) else {
             return nil
         }
         let property = style.cssProperties[propertyIndex]
         guard property.isEditable,
-              style.cssProperties.allSatisfy({ $0.text != nil }),
               let toggledText = toggledPropertyText(property, enabled: enabled) else {
             return nil
+        }
+        if let cssText = style.cssText,
+           !cssText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return rewriteAuthoredStyleText(
+                cssText,
+                replacing: property,
+                in: style,
+                propertyIndex: propertyIndex,
+                with: toggledText
+            )
         }
 
         var texts: [String] = []
@@ -797,7 +818,10 @@ package final class CSSSession {
                 texts.append(toggledText)
                 continue
             }
-            guard let text = style.cssProperties[index].text else {
+            let property = style.cssProperties[index]
+            guard let text = property.text,
+                  !property.implicit,
+                  property.status != .inactive else {
                 return nil
             }
             texts.append(text)
@@ -805,12 +829,100 @@ package final class CSSSession {
         return texts.joined(separator: "\n")
     }
 
+    private static func rewriteAuthoredStyleText(
+        _ cssText: String,
+        replacing property: CSSProperty,
+        in style: CSSStyle,
+        propertyIndex: Int,
+        with toggledText: String
+    ) -> String? {
+        guard let propertyText = property.text?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !propertyText.isEmpty else {
+            return nil
+        }
+        let nsText = cssText as NSString
+        if let range = property.range.flatMap({ nsRange(in: cssText, sourceRange: $0) }),
+           NSMaxRange(range) <= nsText.length,
+           nsText.substring(with: range).trimmingCharacters(in: .whitespacesAndNewlines) == propertyText {
+            return nsText.replacingCharacters(in: range, with: toggledText)
+        }
+
+        let ranges = nsRanges(of: propertyText, in: cssText)
+        if ranges.count == 1 {
+            return nsText.replacingCharacters(in: ranges[0], with: toggledText)
+        }
+
+        let occurrence = style.cssProperties[..<propertyIndex].filter { previousProperty in
+            previousProperty.text?.trimmingCharacters(in: .whitespacesAndNewlines) == propertyText
+        }.count
+        guard ranges.indices.contains(occurrence) else {
+            return nil
+        }
+        return nsText.replacingCharacters(in: ranges[occurrence], with: toggledText)
+    }
+
+    private static func nsRange(in text: String, sourceRange: CSSSourceRange) -> NSRange? {
+        guard sourceRange.startLine >= 0,
+              sourceRange.endLine >= sourceRange.startLine,
+              sourceRange.startColumn >= 0,
+              sourceRange.endColumn >= 0 else {
+            return nil
+        }
+
+        let lineStartOffsets = lineStartUTF16Offsets(in: text)
+        guard sourceRange.startLine < lineStartOffsets.count,
+              sourceRange.endLine < lineStartOffsets.count else {
+            return nil
+        }
+        let startOffset = lineStartOffsets[sourceRange.startLine] + sourceRange.startColumn
+        let endOffset = lineStartOffsets[sourceRange.endLine] + sourceRange.endColumn
+        guard endOffset >= startOffset,
+              endOffset <= (text as NSString).length else {
+            return nil
+        }
+        return NSRange(location: startOffset, length: endOffset - startOffset)
+    }
+
+    private static func lineStartUTF16Offsets(in text: String) -> [Int] {
+        var offsets = [0]
+        var offset = 0
+        for scalar in text.unicodeScalars {
+            offset += scalar.utf16.count
+            if scalar == "\n" {
+                offsets.append(offset)
+            }
+        }
+        return offsets
+    }
+
+    private static func nsRanges(of needle: String, in haystack: String) -> [NSRange] {
+        let nsHaystack = haystack as NSString
+        var searchRange = NSRange(location: 0, length: nsHaystack.length)
+        var ranges: [NSRange] = []
+        while searchRange.length > 0 {
+            let range = nsHaystack.range(of: needle, options: [], range: searchRange)
+            guard range.location != NSNotFound else {
+                break
+            }
+            ranges.append(range)
+            let nextLocation = range.location + max(range.length, 1)
+            searchRange = NSRange(location: nextLocation, length: nsHaystack.length - nextLocation)
+        }
+        return ranges
+    }
+
     private static func canTogglePropertyText(_ property: CSSProperty) -> Bool {
-        toggledPropertyText(property, enabled: !property.isEnabled) != nil
+        guard property.status != .inactive else {
+            return false
+        }
+        return toggledPropertyText(property, enabled: !property.isEnabled) != nil
     }
 
     private static func canTogglePropertyText(_ property: CSSPropertyPayload) -> Bool {
-        toggledPropertyText(property, enabled: property.status == .disabled) != nil
+        guard property.status != .inactive else {
+            return false
+        }
+        return toggledPropertyText(property, enabled: property.status == .disabled) != nil
     }
 
     private static func toggledPropertyText(_ property: CSSProperty, enabled: Bool) -> String? {
