@@ -17,12 +17,32 @@ let package = Package(
     ],
     products: [
         .library(
-            name: "WebInspectorKit",
-            targets: ["WebInspectorKit"]
+            name: "WebInspectorCore",
+            targets: ["WebInspectorCore"]
+        ),
+        .library(
+            name: "WebInspectorNativeBridge",
+            targets: ["WebInspectorNativeBridge"]
+        ),
+        .library(
+            name: "WebInspectorNativeSymbols",
+            targets: ["WebInspectorNativeSymbols"]
+        ),
+        .library(
+            name: "WebInspectorTransport",
+            targets: ["WebInspectorTransport"]
+        ),
+        .library(
+            name: "WebInspectorRuntime",
+            targets: ["WebInspectorRuntime"]
         ),
         .library(
             name: "WebInspectorUI",
             targets: ["WebInspectorUI"]
+        ),
+        .library(
+            name: "WebInspectorKit",
+            targets: ["WebInspectorKit"]
         )
     ],
     dependencies: [
