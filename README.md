@@ -4,6 +4,9 @@
 
 UIKit Web Inspector for `WKWebView`.
 
+> [!WARNING]
+> This package relies on undocumented APIs and runtime behavior, so extra care is needed before using it in App Store-bound projects.
+
 ## Features
 
 - DOM tree browsing with native UIKit/TextKit2 presentation
@@ -17,6 +20,11 @@ UIKit Web Inspector for `WKWebView`.
 - Swift 6.2+
 - iOS 18+
 - WKWebView with JavaScript enabled
+
+## Platform Notes
+
+- The current implementation targets UIKit on iOS.
+- AppKit support is planned to be rebuilt separately.
 
 ## Quick Start
 
@@ -55,15 +63,22 @@ let inspector = WebInspectorViewController(
 
 The current public tab surface exposes the built-in DOM and Network tabs.
 
-## Migration
+## Documentation
 
-See [`MIGRATION.md`](Docs/MIGRATION.md) for details on breaking changes.
+Start with [`MIGRATION.md`](Docs/MIGRATION.md) when updating from an older
+release.
+
+For implementation work, [`ArchitectureOverview.md`](Docs/ArchitectureOverview.md)
+is the top-level map for module boundaries, runtime ownership, and transport
+flow. Core-specific model notes are rooted at the
+[`WebInspectorCore README`](Sources/WebInspectorCore/README.md), which links to
+the detailed DOM, CSS, Network, and transport research docs kept next to the
+Core target.
 
 ## Contributor Workflow
 
 - Consumers of the Swift package do not need `node`, `pnpm`, or `esbuild`.
 - The DOM tree inspector UI is native UIKit/TextKit2. There is no bundled JavaScript DOM tree frontend or generated script regeneration step.
-- For internal WebInspector architecture notes, see [`ArchitectureOverview.md`](Docs/ArchitectureOverview.md).
 
 ## License
 
