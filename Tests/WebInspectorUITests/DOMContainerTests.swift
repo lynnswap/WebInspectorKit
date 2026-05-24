@@ -109,6 +109,51 @@ struct DOMContainerTests {
     }
 
     @Test
+    func elementViewControllerCollapsesUnusedInheritedCSSVariablesAndAnimatesReveal() async throws {
+        let dom = makeDOMSession(capabilities: .pageDefault)
+        let body = try #require(firstElement(named: "body", in: dom))
+        dom.selectNode(body.id)
+
+        let css = CSSSession()
+        try applyInheritedVariableStyles(to: css, in: dom)
+
+        let viewController = DOMElementViewController(dom: dom, css: css)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didCollapseUnusedVariables = await waitUntil {
+            viewController.collectionViewForTesting.numberOfSections == 2
+                && viewController.collectionViewForTesting.numberOfItems(inSection: 1) == 3
+                && hiddenVariableCells(in: viewController).count == 1
+        }
+        window.layoutIfNeeded()
+
+        #expect(didCollapseUnusedVariables)
+        let collapsedDeclarations = stylePropertyViews(in: viewController).map(\.declarationTextForTesting)
+        let revealCell = try #require(hiddenVariableCells(in: viewController).first)
+
+        #expect(collapsedDeclarations.contains("color: var(--foreground);"))
+        #expect(collapsedDeclarations.contains("--foreground: var(--palette-primary);"))
+        #expect(collapsedDeclarations.contains("--palette-primary: #111;"))
+        #expect(collapsedDeclarations.contains("--unused-a: red;") == false)
+        #expect(collapsedDeclarations.contains("--unused-b: blue;") == false)
+        #expect(revealCell.revealTitleForTesting == "Show 2 unused CSS variables")
+
+        revealCell.tapRevealForTesting()
+
+        let didRevealUnusedVariables = await waitUntil {
+            let declarations = stylePropertyViews(in: viewController).map(\.declarationTextForTesting)
+            return viewController.collectionViewForTesting.numberOfItems(inSection: 1) == 4
+                && hiddenVariableCells(in: viewController).isEmpty
+                && declarations.contains("--unused-a: red;")
+                && declarations.contains("--unused-b: blue;")
+        }
+
+        #expect(didRevealUnusedVariables)
+        #expect(viewController.lastSnapshotAnimatedForTesting)
+    }
+
+    @Test
     func elementStylePropertyViewSendsToggleActionWithImmediateControlFeedback() {
         let propertyID = CSSPropertyIdentifier(
             styleID: CSSStyleIdentifier(styleSheetID: CSSStyleSheetIdentifier("test-sheet"), ordinal: 0),
@@ -408,6 +453,106 @@ struct DOMContainerTests {
         )
     }
 
+    private func applyInheritedVariableStyles(
+        to css: CSSSession,
+        in dom: DOMSession
+    ) throws {
+        let identity = try dom.selectedCSSNodeStyleIdentity().get()
+        let token = try #require(css.beginRefresh(identity: identity))
+        let styleSheetID = CSSStyleSheetIdentifier("variables")
+        let bodyStyleID = CSSStyleIdentifier(styleSheetID: styleSheetID, ordinal: 0)
+        let rootStyleID = CSSStyleIdentifier(styleSheetID: styleSheetID, ordinal: 1)
+
+        css.applyRefresh(
+            token: token,
+            matched: CSSMatchedStylesPayload(
+                matchedRules: [
+                    CSSRuleMatchPayload(
+                        rule: CSSRulePayload(
+                            id: CSSRuleIdentifier(styleSheetID: styleSheetID, ordinal: 0),
+                            selectorList: CSSSelectorList(
+                                selectors: [CSSSelector(text: "body")],
+                                text: "body"
+                            ),
+                            sourceURL: "variables.css",
+                            sourceLine: 12,
+                            origin: .author,
+                            style: CSSStylePayload(
+                                id: bodyStyleID,
+                                cssProperties: [
+                                    CSSPropertyPayload(
+                                        name: "color",
+                                        value: "var(--foreground)",
+                                        text: "color: var(--foreground);",
+                                        status: .active
+                                    ),
+                                ],
+                                cssText: "color: var(--foreground);"
+                            )
+                        ),
+                        matchingSelectors: [0]
+                    ),
+                ],
+                inherited: [
+                    CSSInheritedStyleEntry(
+                        matchedRules: [
+                            CSSRuleMatchPayload(
+                                rule: CSSRulePayload(
+                                    id: CSSRuleIdentifier(styleSheetID: styleSheetID, ordinal: 1),
+                                    selectorList: CSSSelectorList(
+                                        selectors: [CSSSelector(text: ":root")],
+                                        text: ":root"
+                                    ),
+                                    sourceURL: "variables.css",
+                                    sourceLine: 1,
+                                    origin: .author,
+                                    style: CSSStylePayload(
+                                        id: rootStyleID,
+                                        cssProperties: [
+                                            CSSPropertyPayload(
+                                                name: "--foreground",
+                                                value: "var(--palette-primary)",
+                                                text: "--foreground: var(--palette-primary);",
+                                                status: .active
+                                            ),
+                                            CSSPropertyPayload(
+                                                name: "--palette-primary",
+                                                value: "#111",
+                                                text: "--palette-primary: #111;",
+                                                status: .active
+                                            ),
+                                            CSSPropertyPayload(
+                                                name: "--unused-a",
+                                                value: "red",
+                                                text: "--unused-a: red;",
+                                                status: .active
+                                            ),
+                                            CSSPropertyPayload(
+                                                name: "--unused-b",
+                                                value: "blue",
+                                                text: "--unused-b: blue;",
+                                                status: .active
+                                            ),
+                                        ],
+                                        cssText: """
+                                        --foreground: var(--palette-primary);
+                                        --palette-primary: #111;
+                                        --unused-a: red;
+                                        --unused-b: blue;
+                                        """
+                                    )
+                                ),
+                                matchingSelectors: [0]
+                            ),
+                        ]
+                    ),
+                ]
+            ),
+            inline: CSSInlineStylesPayload(),
+            computed: []
+        )
+    }
+
     private func firstElement(named localName: String, in dom: DOMSession) -> DOMNode? {
         guard let rootNode = dom.currentPageRootNode else {
             return nil
@@ -479,6 +624,11 @@ struct DOMContainerTests {
     private func stylePropertyViews(in viewController: DOMElementViewController) -> [DOMElementStylePropertyView] {
         viewController.collectionViewForTesting.visibleCells
             .compactMap { ($0 as? DOMElementStylePropertyCollectionCell)?.propertyViewForTesting }
+    }
+
+    private func hiddenVariableCells(in viewController: DOMElementViewController) -> [DOMElementStyleHiddenVariablesCollectionCell] {
+        viewController.collectionViewForTesting.visibleCells
+            .compactMap { $0 as? DOMElementStyleHiddenVariablesCollectionCell }
     }
 
     private func visibleCellIDs(in viewController: DOMElementViewController) -> [ObjectIdentifier] {

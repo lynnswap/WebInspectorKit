@@ -7,9 +7,13 @@ import WebInspectorRuntime
 @MainActor
 package final class DOMElementViewController: UIViewController {
     private struct ItemIdentifier: Hashable {
+        enum Kind: Hashable {
+            case property(propertyID: CSSPropertyIdentifier?, propertyIndex: Int)
+            case hiddenUnusedVariables
+        }
+
         var sectionID: CSSStyleSectionIdentifier
-        var propertyID: CSSPropertyIdentifier?
-        var propertyIndex: Int
+        var kind: Kind
     }
 
     package let dom: DOMSession
@@ -18,6 +22,11 @@ package final class DOMElementViewController: UIViewController {
     private weak var session: InspectorSession?
     private let observationScope = ObservationScope()
     private let selectedStylesObservationScope = ObservationScope()
+    private var expandedUnusedVariableSectionIDs = Set<CSSStyleSectionIdentifier>()
+
+#if DEBUG
+    package private(set) var lastSnapshotAnimatedForTesting = false
+#endif
 
     private lazy var collectionView = UICollectionView(
         frame: .zero,
@@ -128,15 +137,44 @@ package final class DOMElementViewController: UIViewController {
             }
             cell.bind(property: property, onToggle: toggleAction())
         }
+        let hiddenVariablesRegistration = UICollectionView.CellRegistration<DOMElementStyleHiddenVariablesCollectionCell, ItemIdentifier> { [weak self] cell, _, item in
+            guard let self,
+                  let section = section(for: item.sectionID),
+                  let nodeStyles = css.selectedNodeStyles else {
+                cell.clear()
+                return
+            }
+            let hiddenVariableCount = DOMElementStyleVariableVisibility.hiddenUnusedVariableIndices(
+                in: section,
+                usedCSSVariables: DOMElementStyleVariableVisibility.usedCSSVariableNames(in: nodeStyles)
+            )
+            .count
+            guard hiddenVariableCount > 0 else {
+                cell.clear()
+                return
+            }
+            cell.bind(hiddenVariableCount: hiddenVariableCount) { [weak self] in
+                self?.showHiddenUnusedVariables(in: item.sectionID)
+            }
+        }
 
         let dataSource = UICollectionViewDiffableDataSource<CSSStyleSectionIdentifier, ItemIdentifier>(
             collectionView: collectionView
         ) { collectionView, indexPath, item in
-            collectionView.dequeueConfiguredReusableCell(
-                using: propertyRegistration,
-                for: indexPath,
-                item: item
-            )
+            switch item.kind {
+            case .property:
+                collectionView.dequeueConfiguredReusableCell(
+                    using: propertyRegistration,
+                    for: indexPath,
+                    item: item
+                )
+            case .hiddenUnusedVariables:
+                collectionView.dequeueConfiguredReusableCell(
+                    using: hiddenVariablesRegistration,
+                    for: indexPath,
+                    item: item
+                )
+            }
         }
 
         let headerRegistration = UICollectionView.SupplementaryRegistration<DOMElementStyleSectionHeaderView>(
@@ -338,31 +376,54 @@ package final class DOMElementViewController: UIViewController {
         guard dataSource.snapshot().numberOfItems != 0 || dataSource.snapshot().numberOfSections != 0 else {
             return
         }
+        expandedUnusedVariableSectionIDs.removeAll()
         let snapshot = NSDiffableDataSourceSnapshot<CSSStyleSectionIdentifier, ItemIdentifier>()
         dataSource.apply(snapshot, animatingDifferences: false)
     }
 
-    private func applySnapshot(for nodeStyles: CSSNodeStyles) {
+    private func applySnapshot(for nodeStyles: CSSNodeStyles, animatingDifferences: Bool = false) {
         var snapshot = NSDiffableDataSourceSnapshot<CSSStyleSectionIdentifier, ItemIdentifier>()
+        let usedCSSVariables = DOMElementStyleVariableVisibility.usedCSSVariableNames(in: nodeStyles)
+        let currentSectionIDs = Set(nodeStyles.sections.map(\.id))
+        expandedUnusedVariableSectionIDs.formIntersection(currentSectionIDs)
+
         for section in nodeStyles.sections where !section.style.cssProperties.isEmpty {
-            snapshot.appendSections([section.id])
-            snapshot.appendItems(
-                section.style.cssProperties.enumerated().map { index, property in
-                    ItemIdentifier(
-                        sectionID: section.id,
-                        propertyID: property.id,
-                        propertyIndex: index
-                    )
-                },
-                toSection: section.id
+            let hiddenVariableIndices = DOMElementStyleVariableVisibility.hiddenUnusedVariableIndices(
+                in: section,
+                usedCSSVariables: usedCSSVariables
             )
+            let showsHiddenVariables = expandedUnusedVariableSectionIDs.contains(section.id)
+            let propertyItems = section.style.cssProperties.enumerated().compactMap { index, property -> ItemIdentifier? in
+                guard showsHiddenVariables || !hiddenVariableIndices.contains(index) else {
+                    return nil
+                }
+                return ItemIdentifier(
+                    sectionID: section.id,
+                    kind: .property(propertyID: property.id, propertyIndex: index)
+                )
+            }
+            guard !propertyItems.isEmpty || !hiddenVariableIndices.isEmpty else {
+                continue
+            }
+
+            snapshot.appendSections([section.id])
+            snapshot.appendItems(propertyItems, toSection: section.id)
+            if !hiddenVariableIndices.isEmpty && !showsHiddenVariables {
+                snapshot.appendItems(
+                    [ItemIdentifier(sectionID: section.id, kind: .hiddenUnusedVariables)],
+                    toSection: section.id
+                )
+            }
         }
         let currentSnapshot = dataSource.snapshot()
         guard currentSnapshot.sectionIdentifiers != snapshot.sectionIdentifiers
             || currentSnapshot.itemIdentifiers != snapshot.itemIdentifiers else {
             return
         }
-        dataSource.apply(snapshot, animatingDifferences: false)
+#if DEBUG
+        lastSnapshotAnimatedForTesting = animatingDifferences
+#endif
+        dataSource.apply(snapshot, animatingDifferences: animatingDifferences)
     }
 
     private func section(for sectionID: CSSStyleSectionIdentifier) -> CSSStyleSection? {
@@ -370,13 +431,24 @@ package final class DOMElementViewController: UIViewController {
     }
 
     private func property(for item: ItemIdentifier, in section: CSSStyleSection) -> CSSProperty? {
-        if let propertyID = item.propertyID {
-            return section.style.cssProperties.first { $0.id == propertyID }
-        }
-        guard section.style.cssProperties.indices.contains(item.propertyIndex) else {
+        guard case let .property(propertyID, propertyIndex) = item.kind else {
             return nil
         }
-        return section.style.cssProperties[item.propertyIndex]
+        if let propertyID {
+            return section.style.cssProperties.first { $0.id == propertyID }
+        }
+        guard section.style.cssProperties.indices.contains(propertyIndex) else {
+            return nil
+        }
+        return section.style.cssProperties[propertyIndex]
+    }
+
+    private func showHiddenUnusedVariables(in sectionID: CSSStyleSectionIdentifier) {
+        guard let nodeStyles = css.selectedNodeStyles else {
+            return
+        }
+        expandedUnusedVariableSectionIDs.insert(sectionID)
+        applySnapshot(for: nodeStyles, animatingDifferences: true)
     }
 
     private func requestStylesRefresh() {
@@ -393,131 +465,10 @@ package final class DOMElementViewController: UIViewController {
     }
 }
 
-@MainActor
-package final class DOMElementStylePropertyCollectionCell: UICollectionViewListCell {
-    private let propertyView = DOMElementStylePropertyView()
-
-    override package init(frame: CGRect) {
-        super.init(frame: frame)
-        configureStaticViews()
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        nil
-    }
-
-    override package func prepareForReuse() {
-        super.prepareForReuse()
-        propertyView.clear()
-    }
-
-    package func bind(
-        property: CSSProperty,
-        onToggle: DOMElementStylePropertyView.ToggleAction?
-    ) {
-        propertyView.bind(
-            property: property,
-            onToggle: onToggle
-        )
-    }
-
-    package func clear() {
-        propertyView.clear()
-    }
-
-    private func configureStaticViews() {
-        contentView.preservesSuperviewLayoutMargins = true
-        propertyView.translatesAutoresizingMaskIntoConstraints = false
-        propertyView.directionalLayoutMargins = .init(top: 8, leading: 16, bottom: 8, trailing: 16)
-
-        contentView.addSubview(propertyView)
-        NSLayoutConstraint.activate([
-            propertyView.topAnchor.constraint(equalTo: contentView.topAnchor),
-            propertyView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
-            propertyView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
-            propertyView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
-        ])
-    }
-}
-
-@MainActor
-private final class DOMElementStyleSectionHeaderView: UICollectionReusableView {
-    private let observationScope = ObservationScope()
-    private let contentView = UIListContentView(
-        configuration: UIListContentConfiguration.header()
-    )
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        configureStaticViews()
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        nil
-    }
-
-    isolated deinit {
-        observationScope.cancelAll()
-    }
-
-    override func prepareForReuse() {
-        super.prepareForReuse()
-        clear()
-    }
-
-    func bind(_ section: CSSStyleSection) {
-        render(section)
-
-        observationScope.update {
-            section.observe([\.title, \.subtitle]) { [weak self, weak section] in
-                guard let self, let section else {
-                    return
-                }
-                self.render(section)
-            }
-            .store(in: observationScope)
-        }
-    }
-
-    func clear() {
-        observationScope.cancelAll()
-        contentView.configuration = UIListContentConfiguration.header()
-    }
-
-    private func configureStaticViews() {
-        contentView.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(contentView)
-        NSLayoutConstraint.activate([
-            contentView.topAnchor.constraint(equalTo: topAnchor),
-            contentView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            contentView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            contentView.bottomAnchor.constraint(equalTo: bottomAnchor),
-        ])
-    }
-
-    private func render(_ section: CSSStyleSection) {
-        var configuration = UIListContentConfiguration.header()
-        configuration.text = section.title
-        configuration.secondaryText = section.subtitle
-        contentView.configuration = configuration
-        accessibilityLabel = [section.title, section.subtitle]
-            .compactMap { $0 }
-            .joined(separator: ", ")
-    }
-}
-
 #if DEBUG
 extension DOMElementViewController {
     package var collectionViewForTesting: UICollectionView {
         collectionView
-    }
-}
-
-extension DOMElementStylePropertyCollectionCell {
-    package var propertyViewForTesting: DOMElementStylePropertyView {
-        propertyView
     }
 }
 #endif
