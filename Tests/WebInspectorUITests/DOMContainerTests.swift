@@ -22,6 +22,36 @@ struct DOMContainerTests {
     }
 
     @Test
+    func elementViewControllerLeavesLoadingWhenDocumentRootArrivesAfterViewLoad() async throws {
+        let targetID = ProtocolTargetIdentifier("page-main")
+        let dom = DOMSession()
+        dom.applyTargetCreated(
+            ProtocolTargetRecord(
+                id: targetID,
+                kind: .page,
+                frameID: DOMFrameIdentifier("main-frame"),
+                capabilities: .pageDefault
+            ),
+            makeCurrentMainPage: true
+        )
+        let viewController = DOMElementViewController(dom: dom)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let loadingConfiguration = viewController.contentUnavailableConfiguration as? UIContentUnavailableConfiguration
+        #expect(loadingConfiguration?.text == "Loading DOM...")
+
+        _ = dom.replaceDocumentRoot(documentNode(), targetID: targetID)
+
+        let didRenderCurrentRoot = await waitUntil {
+            let configuration = viewController.contentUnavailableConfiguration as? UIContentUnavailableConfiguration
+            return configuration?.text == "Select an element"
+                && viewController.collectionViewForTesting.isHidden
+        }
+        #expect(didRenderCurrentRoot)
+    }
+
+    @Test
     func elementViewControllerRendersLoadedStyleSections() async throws {
         let dom = makeDOMSession(capabilities: .pageDefault)
         let body = try #require(firstElement(named: "body", in: dom))

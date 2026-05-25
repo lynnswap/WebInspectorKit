@@ -33,7 +33,7 @@ package final class RegularTabContentViewController: UINavigationController {
         navigationBar.prefersLargeTitles = false
         webInspectorApplyClearNavigationBarStyle(to: self)
 
-        renderTabsAndSelection(animated: false)
+        renderTabsAndSelection()
         bindInterface()
     }
 
@@ -63,30 +63,34 @@ package final class RegularTabContentViewController: UINavigationController {
     }
 
     private func bindInterface() {
-        session.interface.observe(\.tabs) { [weak self] _ in
-            self?.renderTabsAndSelection(animated: true)
+        observationScope.observe(session.interface) { [weak self] _, interface in
+            self?.renderInterface(interface)
         }
-        .store(in: observationScope)
-
-        session.interface.observe(\.selectedItemID) { [weak self] _ in
-            self?.renderSelection(animated: false)
-        }
-        .store(in: observationScope)
     }
 
-    private func renderTabsAndSelection(animated: Bool) {
-        let displayItems = session.interface.displayItems(for: .regular)
+    private func renderTabsAndSelection() {
+        renderInterface(session.interface)
+    }
+
+    private func renderInterface(_ interface: InterfaceModel) {
+        let displayItems = interface.displayItems(for: .regular)
+        let selectedDisplayItem = interface.resolvedSelection(for: .regular)
         let activeItemIDs = Set(displayItems.map(\.id))
         if let displayedDisplayItemID,
            activeItemIDs.contains(displayedDisplayItemID) == false {
             self.displayedDisplayItemID = nil
         }
         setSegments(for: displayItems)
-        renderSelection(animated: false)
+        renderSelection(selectedDisplayItem)
     }
 
     private func setSegments(for displayItems: [TabDisplayItem]) {
-        segmentDisplayItemIDs = displayItems.map(\.id)
+        let nextItemIDs = displayItems.map(\.id)
+        guard segmentDisplayItemIDs != nextItemIDs else {
+            return
+        }
+
+        segmentDisplayItemIDs = nextItemIDs
         segmentedControl.removeAllSegments()
         for (index, displayItem) in displayItems.enumerated() {
             segmentedControl.insertSegment(
@@ -97,8 +101,7 @@ package final class RegularTabContentViewController: UINavigationController {
         }
     }
 
-    private func renderSelection(animated: Bool) {
-        let selectedDisplayItem = session.interface.resolvedSelection(for: .regular)
+    private func renderSelection(_ selectedDisplayItem: TabDisplayItem?) {
         segmentedControl.selectedSegmentIndex = selectedDisplayItem.flatMap {
             segmentDisplayItemIDs.firstIndex(of: $0.id)
         } ?? UISegmentedControl.noSegment
@@ -116,7 +119,7 @@ package final class RegularTabContentViewController: UINavigationController {
             displayedDisplayItemID = selectedDisplayItem.id
             return
         }
-        setViewControllers([viewController], animated: animated)
+        setViewControllers([viewController], animated: false)
         displayedDisplayItemID = selectedDisplayItem.id
     }
 

@@ -22,7 +22,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         var mode: SnapshotApplyMode
     }
 
-    private static let snapshotObservationOptions = ObservationOptions.rateLimit(
+    private static let snapshotStreamOptions = ObservationStreamOptions.rateLimit(
         .throttle(
             ObservationThrottle(
                 interval: .milliseconds(80),
@@ -34,6 +34,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     private let model: NetworkPanelModel
     private var requestSelectionAction: RequestSelectionAction
     private let observationScope = ObservationScope()
+    private var displayRequestsObservationTask: Task<Void, Never>?
 
     private var needsSnapshotReloadOnNextAppearance = false
     private var pendingSnapshotUpdate: PendingSnapshotUpdate?
@@ -72,6 +73,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     isolated deinit {
+        displayRequestsObservationTask?.cancel()
         observationScope.cancelAll()
         detachSearchPresentation()
     }
@@ -128,20 +130,26 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private func startObservingModel() {
-        model.observe(\.displayRequests, options: Self.snapshotObservationOptions) { [weak self] displayRequests in
-            self?.reloadDataFromModel(displayRequests: displayRequests)
+        displayRequestsObservationTask?.cancel()
+        let model = model
+        displayRequestsObservationTask = Task { @MainActor [weak self, model] in
+            let stream = makeObservationBridgeStream(options: Self.snapshotStreamOptions) {
+                model.displayRequests
+            }
+            for await displayRequests in stream {
+                guard let self else {
+                    return
+                }
+                self.reloadDataFromModel(displayRequests: displayRequests)
+            }
         }
-        .store(in: observationScope)
 
-        model.observe(\.searchText) { [weak self] searchText in
-            self?.renderSearchText(searchText)
+        observationScope.observe(model) { [weak self] _, model in
+            self?.renderModelControls(
+                searchText: model.searchText,
+                effectiveResourceFilters: model.effectiveResourceFilters
+            )
         }
-        .store(in: observationScope)
-
-        model.observe(\.effectiveResourceFilters) { [weak self] _ in
-            self?.resourceFilterSelectionDidChange()
-        }
-        .store(in: observationScope)
     }
 
     private func configureNavigationItem() {
@@ -159,8 +167,10 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         ]
         navigationItem.additionalOverflowItems = makeOverflowMenuElement()
 
-        renderSearchText(model.searchText)
-        renderFilterItem()
+        renderModelControls(
+            searchText: model.searchText,
+            effectiveResourceFilters: model.effectiveResourceFilters
+        )
     }
 
     package func updateSearchResults(for searchController: UISearchController) {
@@ -228,18 +238,26 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         activeSearchController.searchBar.text = text
     }
 
-    private func renderFilterItem() {
+    private func renderFilterItem(effectiveResourceFilters: Set<NetworkResourceFilter>) {
         guard isViewLoaded else {
             return
         }
-        filterItem.isSelected = model.effectiveResourceFilters.isEmpty == false
+        filterItem.isSelected = effectiveResourceFilters.isEmpty == false
     }
 
-    private func resourceFilterSelectionDidChange() {
+    private func renderModelControls(
+        searchText: String,
+        effectiveResourceFilters: Set<NetworkResourceFilter>
+    ) {
+        renderSearchText(searchText)
+        resourceFilterSelectionDidChange(effectiveResourceFilters: effectiveResourceFilters)
+    }
+
+    private func resourceFilterSelectionDidChange(effectiveResourceFilters: Set<NetworkResourceFilter>) {
         if isViewLoaded {
             filterHostingMenu.setNeedsUpdate()
         }
-        renderFilterItem()
+        renderFilterItem(effectiveResourceFilters: effectiveResourceFilters)
     }
 
     private func makeFilterMenu() -> UIMenu {

@@ -48,14 +48,9 @@ package final class DOMNavigationItems: NSObject {
     }
 
     private func startObservingSession() {
-        session.observe([\.isAttached, \.isSelectingElement]) { [weak self] in
-            self?.updatePickItemAppearance()
+        observationScope.observe(session) { [weak self] _, session in
+            self?.renderPickItem(session: session)
         }
-        .store(in: observationScope)
-        session.dom.observe([\.treeRevision, \.selectionRevision]) { [weak self] in
-            self?.updatePickItemAppearance()
-        }
-        .store(in: observationScope)
     }
 
     private func makeDeferredOverflowItems() -> UIDeferredMenuElement {
@@ -154,6 +149,10 @@ package final class DOMNavigationItems: NSObject {
     }
 
     private func updatePickItemAppearance() {
+        renderPickItem(session: session)
+    }
+
+    private func renderPickItem(session: InspectorSession) {
         pickItem.isEnabled = session.canSelectElement
         pickItem.tintColor = session.isSelectingElement ? .tintColor : .label
     }

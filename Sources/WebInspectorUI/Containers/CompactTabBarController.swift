@@ -54,34 +54,38 @@ package final class CompactTabBarController: UITabBarController, UITabBarControl
     }
 
     private func bindInterface() {
-        session.interface.observe(\.tabs) { [weak self] _ in
-            self?.renderTabsAndSelection(animated: true)
+        observationScope.observe(session.interface) { [weak self] event, interface in
+            self?.renderInterface(interface, animated: event.kind != .initial)
         }
-        .store(in: observationScope)
-
-        session.interface.observe(\.selectedItemID) { [weak self] _ in
-            self?.renderSelection()
-        }
-        .store(in: observationScope)
     }
 
     private func renderTabsAndSelection(animated: Bool) {
-        let displayItems = session.interface.displayItems(for: .compact)
+        renderInterface(session.interface, animated: animated)
+    }
+
+    private func renderInterface(_ interface: InterfaceModel, animated: Bool) {
+        let displayItems = interface.displayItems(for: .compact)
+        let selectedDisplayItem = interface.resolvedSelection(for: .compact)
         renderSelectionFromInterface {
-            setTabs(nativeTabs(for: displayItems), animated: animated)
-            renderSelection()
+            setTabsIfNeeded(for: displayItems, animated: animated)
+            renderSelection(selectedDisplayItem)
         }
     }
 
-    private func renderSelection() {
-        let selectedDisplayItem = session.interface.resolvedSelection(for: .compact)
+    private func setTabsIfNeeded(for displayItems: [TabDisplayItem], animated: Bool) {
+        let nextItemIDs = displayItems.map(\.id)
+        guard tabs.map(\.identifier) != nextItemIDs else {
+            return
+        }
+        setTabs(nativeTabs(for: displayItems), animated: animated)
+    }
+
+    private func renderSelection(_ selectedDisplayItem: TabDisplayItem?) {
         let nextSelectedTab = tabs.first { $0.identifier == selectedDisplayItem?.id }
         guard selectedTab?.identifier != nextSelectedTab?.identifier else {
             return
         }
-        renderSelectionFromInterface {
-            selectedTab = nextSelectedTab
-        }
+        selectedTab = nextSelectedTab
     }
 
     private func renderSelectionFromInterface(_ render: () -> Void) {

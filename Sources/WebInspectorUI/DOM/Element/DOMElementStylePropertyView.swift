@@ -36,14 +36,9 @@ package final class DOMElementStylePropertyView: UIView {
 
         renderAll(from: property)
 
-        observationScope.update {
-            property.observe([\.name, \.value, \.priority, \.text, \.status, \.isEditable]) { [weak self, weak property] in
-                guard let self, let property else {
-                    return
-                }
-                self.renderAll(from: property)
-            }
-            .store(in: observationScope)
+        observationScope.cancelAll()
+        observationScope.observe(property) { [weak self] _, property in
+            self?.renderAll(from: property)
         }
     }
 
