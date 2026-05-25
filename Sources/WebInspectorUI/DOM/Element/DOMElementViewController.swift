@@ -69,7 +69,6 @@ package final class DOMElementViewController: UIViewController {
         self.css = css
         self.session = session
         super.init(nibName: nil, bundle: nil)
-        startObservingState()
     }
 
     @available(*, unavailable)
@@ -86,6 +85,7 @@ package final class DOMElementViewController: UIViewController {
         super.viewDidLoad()
         view.backgroundColor = .clear
         configureCollectionView()
+        startObservingState()
         render()
     }
 
@@ -202,40 +202,53 @@ package final class DOMElementViewController: UIViewController {
     }
 
     private func startObservingState() {
-        dom.observe([\.treeRevision, \.selectionRevision]) { [weak self] in
+        observationScope.observe(dom) { [weak self] _, _ in
             self?.render()
         }
-        .store(in: observationScope)
 
-        css.observe([\.selectedNodeStyles, \.selectedState]) { [weak self] in
+        observationScope.observe(css) { [weak self] _, _ in
             self?.observeSelectedNodeStyles()
             self?.render()
         }
-        .store(in: observationScope)
 
-        session?.observe(\.isAttached) { [weak self] _ in
-            self?.render()
+        if let session {
+            observationScope.observe(session) { [weak self] _, session in
+                self?.render(session: session)
+            }
         }
-        .store(in: observationScope)
 
         observeSelectedNodeStyles()
     }
 
     private func observeSelectedNodeStyles() {
-        selectedStylesObservationScope.update {
-            guard let selectedNodeStyles = css.selectedNodeStyles else {
-                return
-            }
+        selectedStylesObservationScope.cancelAll()
+        guard let selectedNodeStyles = css.selectedNodeStyles else {
+            return
+        }
 
-            selectedNodeStyles.observe([\.state, \.sections]) { [weak self] in
-                self?.render()
-            }
-            .store(in: selectedStylesObservationScope)
+        selectedStylesObservationScope.observe(selectedNodeStyles) { [weak self] _, _ in
+            self?.render()
         }
     }
 
     private func render() {
+        render(session: session)
+    }
+
+    private func render(session: InspectorSession?) {
         guard isViewLoaded else {
+            return
+        }
+
+        _ = dom.treeRevision
+        _ = dom.selectionRevision
+
+        guard session?.isAttached != false else {
+            showPlaceholder(
+                text: webInspectorLocalized("dom.element.loading.title", default: "Loading DOM..."),
+                secondaryText: nil,
+                image: UIImage(systemName: "arrow.clockwise")
+            )
             return
         }
 

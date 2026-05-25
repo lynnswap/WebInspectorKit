@@ -32,12 +32,10 @@ package final class DOMElementStylePropertyCollectionCell: UICollectionViewListC
 
     override package func updateConfiguration(using state: UICellConfigurationState) {
         super.updateConfiguration(using: state)
-
-        var background = defaultBackgroundConfiguration().updated(for: state)
-        if property?.isModifiedByInspector == true {
-            background.backgroundColor = Self.modifiedBackgroundColor
-        }
-        backgroundConfiguration = background
+        renderBackground(
+            isModifiedByInspector: property?.isModifiedByInspector == true,
+            state: state
+        )
     }
 
     package func bind(
@@ -51,11 +49,15 @@ package final class DOMElementStylePropertyCollectionCell: UICollectionViewListC
         )
         setNeedsUpdateConfiguration()
 
-        observationScope.update {
-            property.observe(\.isModifiedByInspector) { [weak self] in
-                self?.setNeedsUpdateConfiguration()
+        observationScope.cancelAll()
+        observationScope.observe(property) { [weak self] _, property in
+            guard let self else {
+                return
             }
-            .store(in: observationScope)
+            self.renderBackground(
+                isModifiedByInspector: property.isModifiedByInspector,
+                state: self.configurationState
+            )
         }
     }
 
@@ -78,6 +80,17 @@ package final class DOMElementStylePropertyCollectionCell: UICollectionViewListC
             propertyView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
             propertyView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
         ])
+    }
+
+    private func renderBackground(
+        isModifiedByInspector: Bool,
+        state: UICellConfigurationState
+    ) {
+        var background = defaultBackgroundConfiguration().updated(for: state)
+        if isModifiedByInspector {
+            background.backgroundColor = Self.modifiedBackgroundColor
+        }
+        backgroundConfiguration = background
     }
 }
 

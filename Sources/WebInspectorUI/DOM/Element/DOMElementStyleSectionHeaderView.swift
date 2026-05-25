@@ -32,14 +32,9 @@ final class DOMElementStyleSectionHeaderView: UICollectionReusableView {
     func bind(_ section: CSSStyleSection) {
         render(section)
 
-        observationScope.update {
-            section.observe([\.title, \.subtitle]) { [weak self, weak section] in
-                guard let self, let section else {
-                    return
-                }
-                self.render(section)
-            }
-            .store(in: observationScope)
+        observationScope.cancelAll()
+        observationScope.observe(section) { [weak self] _, section in
+            self?.render(section)
         }
     }
 

@@ -73,10 +73,9 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
         self.model = model
         super.init(nibName: nil, bundle: nil)
 
-        model.observe(\.selectedRequest) { [weak self] selectedRequest in
-            self?.display(selectedRequest, reloadData: true)
+        observationScope.observe(model) { [weak self] _, model in
+            self?.display(model.selectedRequest, reloadData: true)
         }
-        .store(in: observationScope)
     }
 
     @available(*, unavailable)
@@ -219,7 +218,7 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
             return
         }
         guard let request else {
-            selectedRequestObservationScope.update {}
+            selectedRequestObservationScope.cancelAll()
             collectionView.isHidden = true
             bodyViewController.view.isHidden = true
             bodyViewController.display(body: nil)
@@ -241,16 +240,14 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
     }
 
     private func startObserving(_ request: NetworkRequest) {
-        selectedRequestObservationScope.update {
-            request.observe([\.request, \.response, \.requestBody, \.responseBody]) { [weak self, weak request] in
-                guard let self, let request, self.selectedRequest?.id == request.id else {
-                    return
-                }
-                self.title = request.displayName
-                self.renderCurrentMode(reloadData: false)
-                self.modeMenu.render()
+        selectedRequestObservationScope.cancelAll()
+        selectedRequestObservationScope.observe(request) { [weak self] _, request in
+            guard let self, self.selectedRequest?.id == request.id else {
+                return
             }
-            .store(in: selectedRequestObservationScope)
+            self.title = request.displayName
+            self.renderCurrentMode(reloadData: false)
+            self.modeMenu.render()
         }
     }
 
@@ -351,8 +348,8 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
         guard isViewLoaded else {
             return
         }
+        let snapshot = makeSnapshot()
         Task {
-            let snapshot = self.makeSnapshot()
             await self.dataSource.apply(snapshot, animatingDifferences: false)
         }
     }
@@ -361,8 +358,8 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
         guard isViewLoaded else {
             return
         }
+        let snapshot = makeSnapshot()
         Task {
-            let snapshot = self.makeSnapshot()
             await self.dataSource.applySnapshotUsingReloadData(snapshot)
         }
     }
@@ -381,6 +378,12 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
 
 @MainActor
 private final class NetworkDetailModeMenu {
+    private struct ModeAvailability {
+        var hasSelectedRequest: Bool
+        var hasRequestBody: Bool
+        var hasResponseBody: Bool
+    }
+
     private weak var detailViewController: NetworkDetailViewController?
     private let model: NetworkPanelModel
     private let observationScope = ObservationScope()
@@ -392,11 +395,10 @@ private final class NetworkDetailModeMenu {
         self.detailViewController = detailViewController
         self.model = model
 
-        model.observe(\.selectedRequest) { [weak self] request in
-            self?.observeBodyAvailability(in: request)
+        observationScope.observe(model) { [weak self] _, model in
+            self?.observeBodyAvailability(in: model.selectedRequest)
             self?.render()
         }
-        .store(in: observationScope)
     }
 
     isolated deinit {
@@ -405,30 +407,28 @@ private final class NetworkDetailModeMenu {
     }
 
     private func observeBodyAvailability(in request: NetworkRequest?) {
-        selectedRequestObservationScope.update {
-            guard let request else {
+        selectedRequestObservationScope.cancelAll()
+        guard let request else {
+            return
+        }
+        selectedRequestObservationScope.observe(request) { [weak self] _, request in
+            guard let self, self.model.selectedRequest?.id == request.id else {
                 return
             }
-            request.observe([\.requestBody, \.responseBody]) { [weak self, weak request] in
-                guard let self, let request, self.model.selectedRequest?.id == request.id else {
-                    return
-                }
-                self.render()
-            }
-            .store(in: selectedRequestObservationScope)
+            self.render(selectedRequest: request)
         }
     }
 
-    fileprivate func render() {
+    fileprivate func render(selectedRequest: NetworkRequest? = nil) {
         let mode = detailViewController?.mode ?? .overview
-        let selectedRequest = model.selectedRequest
-        let isEnabled = selectedRequest != nil
+        let availability = modeAvailability(for: selectedRequest ?? model.selectedRequest)
+        let isEnabled = availability.hasSelectedRequest
 
         if let compactItem {
             compactItem.image = UIImage(systemName: mode.systemImageName)
             compactItem.title = nil
             compactItem.isEnabled = isEnabled
-            compactItem.menu = makeMenu(includesImages: true)
+            compactItem.menu = makeMenu(includesImages: true, availability: availability)
             compactItem.accessibilityLabel = mode.title
             compactItem.preferredMenuElementOrder = .fixed
         }
@@ -442,7 +442,7 @@ private final class NetworkDetailModeMenu {
                 var configuration = button.configuration ?? .bordered()
                 configuration.title = mode.title
                 button.configuration = configuration
-                button.menu = makeMenu(includesImages: false)
+                button.menu = makeMenu(includesImages: false, availability: availability)
                 button.isEnabled = isEnabled
                 button.accessibilityLabel = mode.title
                 button.preferredMenuElementOrder = .fixed
@@ -473,13 +473,17 @@ private final class NetworkDetailModeMenu {
     }
 
     func makeMenuForTesting() -> UIMenu {
-        makeMenu(includesImages: true)
+        makeMenu(
+            includesImages: true,
+            availability: modeAvailability(for: model.selectedRequest)
+        )
     }
 
     private func makeCompactBarButtonItem() -> UIBarButtonItem {
+        let availability = modeAvailability(for: model.selectedRequest)
         let item = UIBarButtonItem(
             image: UIImage(systemName: (detailViewController?.mode ?? .overview).systemImageName),
-            menu: makeMenu(includesImages: true)
+            menu: makeMenu(includesImages: true, availability: availability)
         )
         item.accessibilityIdentifier = "WebInspector.Network.DetailModeButton"
         item.preferredMenuElementOrder = .fixed
@@ -501,13 +505,19 @@ private final class NetworkDetailModeMenu {
         button.showsMenuAsPrimaryAction = true
         button.changesSelectionAsPrimaryAction = true
         button.preferredMenuElementOrder = .fixed
-        button.menu = makeMenu(includesImages: false)
+        button.menu = makeMenu(
+            includesImages: false,
+            availability: modeAvailability(for: model.selectedRequest)
+        )
         button.accessibilityIdentifier = "WebInspector.Network.DetailModeButton.Regular.Button"
         button.setContentCompressionResistancePriority(.required, for: .horizontal)
         return button
     }
 
-    private func makeMenu(includesImages: Bool) -> UIMenu {
+    private func makeMenu(
+        includesImages: Bool,
+        availability: ModeAvailability
+    ) -> UIMenu {
         UIMenu(
             title: "",
             options: .singleSelection,
@@ -515,7 +525,7 @@ private final class NetworkDetailModeMenu {
                 UIAction(
                     title: mode.title,
                     image: includesImages ? UIImage(systemName: mode.systemImageName) : nil,
-                    attributes: isModeEnabled(mode) ? [] : [.disabled],
+                    attributes: isModeEnabled(mode, availability: availability) ? [] : [.disabled],
                     state: detailViewController?.mode == mode ? .on : .off
                 ) { [weak detailViewController] _ in
                     detailViewController?.mode = mode
@@ -524,17 +534,28 @@ private final class NetworkDetailModeMenu {
         )
     }
 
-    private func isModeEnabled(_ mode: NetworkDetailMode) -> Bool {
-        guard let selectedRequest = model.selectedRequest else {
+    private func modeAvailability(for selectedRequest: NetworkRequest?) -> ModeAvailability {
+        ModeAvailability(
+            hasSelectedRequest: selectedRequest != nil,
+            hasRequestBody: selectedRequest?.requestBody != nil,
+            hasResponseBody: selectedRequest?.responseBody != nil
+        )
+    }
+
+    private func isModeEnabled(
+        _ mode: NetworkDetailMode,
+        availability: ModeAvailability
+    ) -> Bool {
+        guard availability.hasSelectedRequest else {
             return mode == .overview
         }
         switch mode {
         case .overview:
             return true
         case .requestBody:
-            return selectedRequest.requestBody != nil
+            return availability.hasRequestBody
         case .responseBody:
-            return selectedRequest.responseBody != nil
+            return availability.hasResponseBody
         }
     }
 }

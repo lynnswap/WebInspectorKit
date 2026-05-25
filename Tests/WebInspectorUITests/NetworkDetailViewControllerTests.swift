@@ -54,6 +54,62 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func detailUpdatesResponseHeadersAfterSelection() async throws {
+        let network = NetworkSession()
+        let targetID = ProtocolTargetIdentifier("page")
+        let requestID = NetworkRequestIdentifier("1")
+        let key = network.applyRequestWillBeSent(
+            targetID: targetID,
+            requestID: requestID,
+            frameID: DOMFrameIdentifier("main"),
+            loaderID: "loader",
+            documentURL: "https://example.com",
+            request: NetworkRequestPayload(
+                url: "https://example.com/api/data.json",
+                method: "GET"
+            ),
+            resourceType: .script,
+            timestamp: 1
+        )
+        let request = try #require(network.request(for: key))
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didRenderEmptyResponseHeaders = await waitUntil {
+            let collectionView = viewController.collectionViewForTesting
+            return collectionView.numberOfSections == 3
+                && collectionView.numberOfItems(inSection: 2) == 1
+                && listCellText(in: collectionView, at: IndexPath(item: 0, section: 2)) == "No headers"
+        }
+        #expect(didRenderEmptyResponseHeaders)
+
+        network.applyResponseReceived(
+            targetID: targetID,
+            requestID: requestID,
+            resourceType: .script,
+            response: NetworkResponsePayload(
+                url: "https://example.com/api/data.json",
+                status: 200,
+                statusText: "OK",
+                headers: ["content-type": "application/json"],
+                mimeType: "application/json"
+            ),
+            timestamp: 2
+        )
+
+        let didRenderResponseHeaders = await waitUntil {
+            let collectionView = viewController.collectionViewForTesting
+            return collectionView.numberOfItems(inSection: 2) == 1
+                && listCellText(in: collectionView, at: IndexPath(item: 0, section: 2)) == "content-type"
+                && listCellSecondaryText(in: collectionView, at: IndexPath(item: 0, section: 2)) == "application/json"
+        }
+        #expect(didRenderResponseHeaders)
+    }
+
+    @Test
     func detailModeMenuUsesCoreBodyAvailabilityAndRendersRequestBody() async throws {
         let network = NetworkSession()
         let request = try #require(
@@ -146,6 +202,23 @@ struct NetworkDetailViewControllerTests {
             navigationController.viewControllers == [listViewController]
         }
         #expect(didPop)
+    }
+
+    @Test
+    func listControllerDeallocatesWhileDisplayRequestObservationIsActive() async throws {
+        let model = NetworkPanelModel(network: NetworkSession())
+        weak var weakViewController: NetworkListViewController?
+
+        do {
+            let viewController = NetworkListViewController(model: model)
+            viewController.loadViewIfNeeded()
+            weakViewController = viewController
+        }
+
+        let didDeallocate = await waitUntil {
+            weakViewController == nil
+        }
+        #expect(didDeallocate)
     }
 
     private func applyRequest(

@@ -47,7 +47,6 @@ package final class DOMTreeViewController: UIViewController {
             }
         )
         super.init(nibName: nil, bundle: nil)
-        startObservingDOMRoot(session: session)
     }
 
     package init(dom: DOMSession) {
@@ -71,23 +70,34 @@ package final class DOMTreeViewController: UIViewController {
         view = treeView
     }
 
-    override package func viewDidAppear(_ animated: Bool) {
-        super.viewDidAppear(animated)
+    override package func viewDidLoad() {
+        super.viewDidLoad()
+        if let session {
+            startObservingDOMRoot(session: session)
+        }
+    }
+
+    override package func viewIsAppearing(_ animated: Bool) {
+        super.viewIsAppearing(animated)
         ensureDOMDocumentLoadedIfNeeded()
     }
 
     private func startObservingDOMRoot(session: InspectorSession) {
-        session.dom.observe(\.treeRevision) { [weak self] _ in
+        observationScope.cancelAll()
+        observationScope.observe(session.dom) { [weak self] _, _ in
             self?.ensureDOMDocumentLoadedIfNeeded()
         }
-        .store(in: observationScope)
     }
 
     private func ensureDOMDocumentLoadedIfNeeded() {
-        guard let session,
-              viewIfLoaded?.window != nil,
+        guard let session else {
+            return
+        }
+        _ = session.dom.treeRevision
+        let currentPageRootNode = session.dom.currentPageRootNode
+        guard viewIfLoaded?.window != nil,
               !isEnsuringDOMDocumentLoaded,
-              session.dom.currentPageRootNode == nil else {
+              currentPageRootNode == nil else {
             return
         }
 

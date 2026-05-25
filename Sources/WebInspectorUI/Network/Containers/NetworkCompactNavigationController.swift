@@ -66,11 +66,12 @@ package final class NetworkCompactNavigationController: UINavigationController, 
     }
 
     private func startObservingSelection() {
-        observationScope.update {
-            model.observe(\.selectedRequest) { [weak self] selectedRequest in
-                self?.syncStack(with: selectedRequest, animated: true)
-            }
-            .store(in: observationScope)
+        observationScope.cancelAll()
+        observationScope.observe(model) { [weak self] event, model in
+            self?.syncStack(
+                with: model.selectedRequest,
+                animated: event.kind != .initial
+            )
         }
     }
 

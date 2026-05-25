@@ -36,6 +36,23 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         paragraphStyle.paragraphSpacingBefore = 0
         return paragraphStyle
     }()
+    private struct DOMObservationCursor {
+        var treeRevision: UInt64?
+        var selectionRevision: UInt64?
+
+        mutating func changes(
+            treeRevision nextTreeRevision: UInt64,
+            selectionRevision nextSelectionRevision: UInt64,
+            isInitial: Bool
+        ) -> (treeChanged: Bool, selectionChanged: Bool) {
+            let treeChanged = isInitial || treeRevision != nextTreeRevision
+            let selectionChanged = selectionRevision != nextSelectionRevision
+            treeRevision = nextTreeRevision
+            selectionRevision = nextSelectionRevision
+            return (treeChanged, selectionChanged)
+        }
+    }
+
     private let dom: DOMSession
     private let menuModel: DOMTreeMenuModel
     private let observationScope = ObservationScope()
@@ -73,6 +90,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     private var lastBoundsSize: CGSize = .zero
     private var rowIndexByNodeID: [DOMNode.ID: Int] = [:]
     private var lastRenderedDocumentRootID: DOMNode.ID?
+    private var domObservationCursor = DOMObservationCursor()
     private var lastObservedSelectedNodeID: DOMNode.ID?
     private var pendingRevealSelectedNodeID: DOMNode.ID?
     private var pendingTreeInvalidation: DOMTreeInvalidation?
@@ -138,7 +156,6 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         configureTextSystem()
         configureInteractions()
         startObservingDocument()
-        reloadTree(resetFragments: true)
     }
 
     @available(*, unavailable)
@@ -551,15 +568,23 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     }
 
     private func startObservingDocument() {
-        dom.observe(\.treeRevision) { [weak self] _ in
-            self?.scheduleTreeReload(for: .documentReset)
+        observationScope.observe(dom) { [weak self] event, dom in
+            self?.routeDOMInvalidation(from: dom, isInitial: event.kind == .initial)
         }
-        .store(in: observationScope)
+    }
 
-        dom.observe(\.selectionRevision) { [weak self] _ in
-            self?.handleSelectedNodeChange()
+    private func routeDOMInvalidation(from dom: DOMSession, isInitial: Bool) {
+        let changes = domObservationCursor.changes(
+            treeRevision: dom.treeRevision,
+            selectionRevision: dom.selectionRevision,
+            isInitial: isInitial
+        )
+
+        if changes.treeChanged {
+            scheduleTreeReload(for: .documentReset)
+        } else if changes.selectionChanged {
+            handleSelectedNodeChange()
         }
-        .store(in: observationScope)
     }
 
     private func handleSelectedNodeChange() {

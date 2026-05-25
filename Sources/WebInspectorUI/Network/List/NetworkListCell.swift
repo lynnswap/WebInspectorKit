@@ -32,15 +32,10 @@ package final class NetworkListCell: UICollectionViewListCell {
         render(displayName: request.displayName)
         renderAccessories(request: request)
 
-        observationScope.update {
-            request.observe([\.request, \.response, \.resourceType, \.state]) { [weak self, weak request] in
-                guard let request else {
-                    return
-                }
-                self?.render(displayName: request.displayName)
-                self?.renderAccessories(request: request)
-            }
-            .store(in: observationScope)
+        observationScope.cancelAll()
+        observationScope.observe(request) { [weak self] _, request in
+            self?.render(displayName: request.displayName)
+            self?.renderAccessories(request: request)
         }
     }
 

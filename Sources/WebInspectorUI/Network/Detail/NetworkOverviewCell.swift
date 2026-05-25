@@ -27,31 +27,13 @@ final class NetworkOverviewCell: UICollectionViewListCell {
         content.attributedText = makeMetricsAttributedText(for: request)
         contentConfiguration = content
 
-        observationScope.update {
-            request.observe(\.request) { [weak self, weak request] _ in
-                guard let request else {
-                    return
-                }
-                self?.renderURL(request.request.url)
+        observationScope.cancelAll()
+        observationScope.observe(request) { [weak self] _, request in
+            guard let self else {
+                return
             }
-            .store(in: observationScope)
-
-            request.observe(
-                [
-                    \.response,
-                    \.state,
-                    \.responseReceivedTimestamp,
-                    \.lastDataReceivedTimestamp,
-                    \.finishedOrFailedTimestamp,
-                    \.encodedDataLength,
-                ]
-            ) { [weak self, weak request] in
-                guard let self, let request else {
-                    return
-                }
-                self.renderMetrics(self.makeMetricsAttributedText(for: request))
-            }
-            .store(in: observationScope)
+            self.renderURL(request.request.url)
+            self.renderMetrics(self.makeMetricsAttributedText(for: request))
         }
     }
 

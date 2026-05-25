@@ -6,14 +6,17 @@ import WebInspectorCore
 
 @MainActor
 final class NetworkBodyViewController: UIViewController {
-    private let syntaxModel = SyntaxEditorModel(
-        text: "",
+    private let syntaxDocument = SyntaxEditorDocument(text: "")
+    private let syntaxConfiguration = SyntaxEditorConfiguration(
         language: .json,
         isEditable: false,
         lineWrappingEnabled: true,
         colorTheme: .v2WebInspectorPlainText
     )
-    private lazy var syntaxView = SyntaxEditorView(model: syntaxModel)
+    private lazy var syntaxView = SyntaxEditorView(
+        document: syntaxDocument,
+        configuration: syntaxConfiguration
+    )
     private let observationScope = ObservationScope()
     private weak var body: NetworkBody?
 
@@ -30,7 +33,7 @@ final class NetworkBodyViewController: UIViewController {
     func display(body: NetworkBody?) {
         self.body = body
         startObserving(body: body)
-        renderBody()
+        renderBody(body)
     }
 
     private func configureSyntaxView() {
@@ -54,26 +57,19 @@ final class NetworkBodyViewController: UIViewController {
     }
 
     private func startObserving(body: NetworkBody?) {
-        observationScope.update {
-            if let body {
-                body.observe(
-                    [
-                        \.textRepresentation,
-                        \.textRepresentationSyntaxKind,
-                        \.fetchState,
-                    ]
-                ) { [weak self, weak body] in
-                    guard let self, body === self.body else {
-                        return
-                    }
-                    self.renderBody()
-                }
-                .store(in: observationScope)
+        observationScope.cancelAll()
+        guard let body else {
+            return
+        }
+        observationScope.observe(body) { [weak self] _, body in
+            guard let self, body === self.body else {
+                return
             }
+            self.renderBody(body)
         }
     }
 
-    private func renderBody() {
+    private func renderBody(_ body: NetworkBody?) {
         let displayText: String
         let syntaxKind: NetworkBodySyntaxKind
         guard let body else {
@@ -121,15 +117,15 @@ final class NetworkBodyViewController: UIViewController {
         syntaxKind: NetworkBodySyntaxKind
     ) {
         let syntax = syntaxKind.syntax
-        if syntaxModel.language != syntax.language {
-            syntaxModel.language = syntax.language
+        if syntaxConfiguration.language != syntax.language {
+            syntaxConfiguration.language = syntax.language
         }
-        let colorTheme: SyntaxEditorColorTheme = syntax.usesPlainTextTheme ? .v2WebInspectorPlainText : .xcode
-        if syntaxModel.colorTheme != colorTheme {
-            syntaxModel.colorTheme = colorTheme
+        let colorTheme: SyntaxEditorColorTheme = syntax.usesPlainTextTheme ? .v2WebInspectorPlainText : .default
+        if syntaxConfiguration.colorTheme != colorTheme {
+            syntaxConfiguration.colorTheme = colorTheme
         }
-        if syntaxModel.text != text {
-            syntaxModel.text = text
+        if syntaxDocument.textSnapshot() != text {
+            syntaxDocument.replaceText(text)
         }
     }
 }

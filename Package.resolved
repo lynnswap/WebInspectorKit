@@ -1,5 +1,5 @@
 {
-  "originHash" : "fe19de627c0f3a74665a9ab9edc28569d3393a4933a094518e6473bc295c1dd7",
+  "originHash" : "12825184504d6bd25624262a8f1e30ab567f2b96c5d34a8f18bc98b06a2b1918",
   "pins" : [
     {
       "identity" : "machokit",
@@ -24,8 +24,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/ObservationBridge.git",
       "state" : {
-        "revision" : "ba3b94adc34467dfa53836292c88f6d43095802e",
-        "version" : "0.8.0"
+        "revision" : "a5962525799eaf4b4202cabedac0947f89417b36",
+        "version" : "0.9.1"
       }
     },
     {
@@ -105,8 +105,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/SyntaxEditorUI.git",
       "state" : {
-        "revision" : "ea84443700d63141d15cc69d7a0cf26a392cdd01",
-        "version" : "0.5.1"
+        "revision" : "1c7c673844ed45d84e1d31929dac0493b145c2ba",
+        "version" : "0.8.1"
       }
     },
     {
@@ -166,10 +166,10 @@
     {
       "identity" : "tree-sitter-swift",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/alex-pinkus/tree-sitter-swift",
+      "location" : "https://github.com/lynnswap/tree-sitter-swift",
       "state" : {
-        "revision" : "277b583bbb024f20ba88b95c48bf5a6a0b4f2287",
-        "version" : "0.7.1-with-generated-files"
+        "revision" : "60941d667d0bd58f7d5b83dcd59fe22a9865f200",
+        "version" : "0.1.0"
       }
     },
     {
