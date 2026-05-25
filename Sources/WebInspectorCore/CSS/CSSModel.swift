@@ -203,10 +203,13 @@ package struct CSSRuleSourceLocation: Equatable, Sendable {
         }
 
         if let styleSheetSourceLocation {
+            let offsetColumn = column.map { column in
+                line == 0 ? styleSheetSourceLocation.startColumn + column : column
+            }
             self.init(
                 sourceURL: resolvedSourceURL,
                 line: styleSheetSourceLocation.startLine + line,
-                column: column.map { styleSheetSourceLocation.startColumn + $0 }
+                column: offsetColumn
             )
         } else {
             self.init(sourceURL: resolvedSourceURL, line: line, column: column)
@@ -363,9 +366,9 @@ package final class CSSNodeStyles {
 @MainActor
 @Observable
 package final class CSSSession {
-    private struct StyleSheetRecord: Equatable {
+    private struct StyleSheetKey: Equatable, Hashable {
         var targetID: ProtocolTargetIdentifier
-        var header: CSSStyleSheetHeaderPayload
+        var styleSheetID: CSSStyleSheetIdentifier
     }
 
     private struct SectionMembership: Equatable {
@@ -382,7 +385,7 @@ package final class CSSSession {
     package private(set) var selectedState: CSSNodeStylesState
 
     @ObservationIgnored private var stylesByNodeID: [DOMNodeIdentifier: CSSNodeStyles]
-    @ObservationIgnored private var styleSheetRecordsByID: [CSSStyleSheetIdentifier: StyleSheetRecord]
+    @ObservationIgnored private var styleSheetHeadersByKey: [StyleSheetKey: CSSStyleSheetHeaderPayload]
     @ObservationIgnored private var activeRefreshSequenceByNodeID: [DOMNodeIdentifier: UInt64]
     @ObservationIgnored private var nextRefreshSequence: UInt64
 
@@ -390,7 +393,7 @@ package final class CSSSession {
         selectedNodeStyles = nil
         selectedState = .unavailable(.noSelection)
         stylesByNodeID = [:]
-        styleSheetRecordsByID = [:]
+        styleSheetHeadersByKey = [:]
         activeRefreshSequenceByNodeID = [:]
         nextRefreshSequence = 0
     }
@@ -399,7 +402,7 @@ package final class CSSSession {
         selectedNodeStyles = nil
         selectedState = .unavailable(.noSelection)
         stylesByNodeID.removeAll()
-        styleSheetRecordsByID.removeAll()
+        styleSheetHeadersByKey.removeAll()
         activeRefreshSequenceByNodeID.removeAll()
         nextRefreshSequence = 0
     }
@@ -443,7 +446,7 @@ package final class CSSSession {
                 identity: token.identity,
                 matched: matched,
                 inline: inline,
-                styleSheetRecordsByID: styleSheetRecordsByID
+                styleSheetHeadersByKey: styleSheetHeadersByKey
             )
         )
         Self.updateComputedProperties(
@@ -456,14 +459,17 @@ package final class CSSSession {
     }
 
     package func registerStyleSheetHeader(_ header: CSSStyleSheetHeaderPayload, targetID: ProtocolTargetIdentifier) {
-        styleSheetRecordsByID[header.styleSheetID] = StyleSheetRecord(
+        styleSheetHeadersByKey[StyleSheetKey(
             targetID: targetID,
-            header: header
-        )
+            styleSheetID: header.styleSheetID
+        )] = header
     }
 
-    package func removeStyleSheetHeader(styleSheetID: CSSStyleSheetIdentifier) {
-        styleSheetRecordsByID.removeValue(forKey: styleSheetID)
+    package func removeStyleSheetHeader(styleSheetID: CSSStyleSheetIdentifier, targetID: ProtocolTargetIdentifier) {
+        styleSheetHeadersByKey.removeValue(forKey: StyleSheetKey(
+            targetID: targetID,
+            styleSheetID: styleSheetID
+        ))
     }
 
     package func markRefreshFailed(_ token: CSSStyleRefreshToken, message: String) {
@@ -544,7 +550,7 @@ package final class CSSSession {
             stylesByNodeID.removeValue(forKey: nodeID)
             activeRefreshSequenceByNodeID.removeValue(forKey: nodeID)
         }
-        styleSheetRecordsByID = styleSheetRecordsByID.filter { $0.value.targetID != targetID }
+        styleSheetHeadersByKey = styleSheetHeadersByKey.filter { $0.key.targetID != targetID }
         if let removedSelectedNodeID = selectedNodeStyles?.identity.nodeID,
            selectedNodeStyles?.identity.targetID == targetID {
             selectedNodeStyles = nil
@@ -628,7 +634,7 @@ package final class CSSSession {
         identity: CSSNodeStyleIdentity,
         matched: CSSMatchedStylesPayload,
         inline: CSSInlineStylesPayload,
-        styleSheetRecordsByID: [CSSStyleSheetIdentifier: StyleSheetRecord]
+        styleSheetHeadersByKey: [StyleSheetKey: CSSStyleSheetHeaderPayload]
     ) -> [CSSStyleSection] {
         var sections: [CSSStyleSection] = []
         var ordinal = 0
@@ -652,7 +658,7 @@ package final class CSSSession {
                 ordinal: &ordinal,
                 match: match,
                 kind: .rule,
-                styleSheetRecordsByID: styleSheetRecordsByID
+                styleSheetHeadersByKey: styleSheetHeadersByKey
             )
         }
 
@@ -676,7 +682,7 @@ package final class CSSSession {
                     ordinal: &ordinal,
                     match: match,
                     kind: .pseudoElement(pseudo.pseudoID),
-                    styleSheetRecordsByID: styleSheetRecordsByID
+                    styleSheetHeadersByKey: styleSheetHeadersByKey
                 )
             }
         }
@@ -700,7 +706,7 @@ package final class CSSSession {
                     ordinal: &ordinal,
                     match: match,
                     kind: .inheritedRule(ancestorIndex: ancestorIndex),
-                    styleSheetRecordsByID: styleSheetRecordsByID
+                    styleSheetHeadersByKey: styleSheetHeadersByKey
                 )
             }
         }
@@ -856,7 +862,7 @@ package final class CSSSession {
         ordinal: inout Int,
         match: CSSRuleMatchPayload,
         kind: CSSStyleSectionKind,
-        styleSheetRecordsByID: [CSSStyleSheetIdentifier: StyleSheetRecord]
+        styleSheetHeadersByKey: [StyleSheetKey: CSSStyleSheetHeaderPayload]
     ) {
         let isEditable = match.rule.origin != .userAgent && match.rule.style.id != nil
         let ruleStyle = normalizedStyle(match.rule.style, isEditable: isEditable, ruleOrigin: match.rule.origin)
@@ -868,7 +874,7 @@ package final class CSSSession {
             styleSheetSourceLocation: styleSheetSourceLocation(
                 for: match.rule,
                 targetID: identity.targetID,
-                recordsByID: styleSheetRecordsByID
+                headersByKey: styleSheetHeadersByKey
             ),
             origin: match.rule.origin,
             style: ruleStyle,
@@ -891,17 +897,16 @@ package final class CSSSession {
     private static func styleSheetSourceLocation(
         for rule: CSSRulePayload,
         targetID: ProtocolTargetIdentifier,
-        recordsByID: [CSSStyleSheetIdentifier: StyleSheetRecord]
+        headersByKey: [StyleSheetKey: CSSStyleSheetHeaderPayload]
     ) -> CSSStyleSheetSourceLocation? {
         guard let styleSheetID = rule.id?.styleSheetID ?? rule.style.id?.styleSheetID,
-              let record = recordsByID[styleSheetID],
-              record.targetID == targetID else {
+              let header = headersByKey[StyleSheetKey(targetID: targetID, styleSheetID: styleSheetID)] else {
             return nil
         }
         return CSSStyleSheetSourceLocation(
-            sourceURL: record.header.sourceURL,
-            startLine: record.header.startLine,
-            startColumn: record.header.startColumn
+            sourceURL: header.sourceURL,
+            startLine: header.startLine,
+            startColumn: header.startColumn
         )
     }
 

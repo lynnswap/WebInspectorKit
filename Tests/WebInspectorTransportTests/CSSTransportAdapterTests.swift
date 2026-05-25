@@ -197,7 +197,7 @@ func cssTransportAdapterRegistersStyleSheetHeaderOffsets() async throws {
                 rule: cssRule(
                     selector: ".card",
                     styleID: .init(styleSheetID: .init("sheet"), ordinal: 0),
-                    selectorRange: CSSSourceRange(startLine: 2, startColumn: 3, endLine: 2, endColumn: 8),
+                    selectorRange: CSSSourceRange(startLine: 0, startColumn: 3, endLine: 0, endColumn: 8),
                     properties: [
                         CSSPropertyPayload(name: "display", value: "grid", text: "display: grid;"),
                     ]
@@ -212,7 +212,7 @@ func cssTransportAdapterRegistersStyleSheetHeaderOffsets() async throws {
     let sourceLocation = try #require(css.selectedNodeStyles?.sections.first?.rule?.sourceLocation)
     #expect(sourceLocation == CSSRuleSourceLocation(
         sourceURL: "https://example.com/document.html",
-        line: 14,
+        line: 12,
         column: 10
     ))
 }

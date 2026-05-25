@@ -222,7 +222,7 @@ func cssRuleSourceLocationAppliesStyleSheetHeaderOffset() throws {
                 rule: rule(
                     selector: ".inline-rule",
                     sourceLine: 2,
-                    selectorRange: CSSSourceRange(startLine: 3, startColumn: 4, endLine: 3, endColumn: 16),
+                    selectorRange: CSSSourceRange(startLine: 0, startColumn: 4, endLine: 0, endColumn: 16),
                     properties: [
                         CSSPropertyPayload(name: "color", value: "red", text: "color: red;"),
                     ]
@@ -237,8 +237,109 @@ func cssRuleSourceLocationAppliesStyleSheetHeaderOffset() throws {
     let rule = try #require(css.selectedNodeStyles?.sections.first?.rule)
     #expect(rule.sourceLocation == CSSRuleSourceLocation(
         sourceURL: "https://example.com/document.html",
-        line: 21,
+        line: 18,
         column: 10
+    ))
+}
+
+@Test
+@MainActor
+func cssRuleSourceLocationKeepsSubsequentLineColumnsRelativeToLineStart() throws {
+    let css = CSSSession()
+    let identity = cssIdentity()
+    css.registerStyleSheetHeader(
+        CSSStyleSheetHeaderPayload(
+            styleSheetID: .init("sheet"),
+            sourceURL: "https://example.com/document.html",
+            origin: .author,
+            isInline: true,
+            startLine: 18,
+            startColumn: 6
+        ),
+        targetID: identity.targetID
+    )
+    let token = try #require(css.beginRefresh(identity: identity))
+
+    css.applyRefresh(
+        token: token,
+        matched: CSSMatchedStylesPayload(matchedRules: [
+            CSSRuleMatchPayload(
+                rule: rule(
+                    selector: ".later-rule",
+                    selectorRange: CSSSourceRange(startLine: 3, startColumn: 4, endLine: 3, endColumn: 15),
+                    properties: [
+                        CSSPropertyPayload(name: "color", value: "blue", text: "color: blue;"),
+                    ]
+                ),
+                matchingSelectors: [0]
+            ),
+        ]),
+        inline: .init(),
+        computed: []
+    )
+
+    let rule = try #require(css.selectedNodeStyles?.sections.first?.rule)
+    #expect(rule.sourceLocation == CSSRuleSourceLocation(
+        sourceURL: "https://example.com/document.html",
+        line: 21,
+        column: 4
+    ))
+}
+
+@Test
+@MainActor
+func cssRuleSourceLocationScopesStyleSheetHeadersByTarget() throws {
+    let css = CSSSession()
+    let pageIdentity = cssIdentity(targetID: .init("page"), nodeRawID: 2)
+    let frameIdentity = cssIdentity(targetID: .init("frame"), nodeRawID: 3)
+    css.registerStyleSheetHeader(
+        CSSStyleSheetHeaderPayload(
+            styleSheetID: .init("sheet"),
+            sourceURL: "https://example.com/page.html",
+            origin: .author,
+            isInline: true,
+            startLine: 10,
+            startColumn: 1
+        ),
+        targetID: pageIdentity.targetID
+    )
+    css.registerStyleSheetHeader(
+        CSSStyleSheetHeaderPayload(
+            styleSheetID: .init("sheet"),
+            sourceURL: "https://example.com/frame.html",
+            origin: .author,
+            isInline: true,
+            startLine: 30,
+            startColumn: 2
+        ),
+        targetID: frameIdentity.targetID
+    )
+    css.removeStyleSheetHeader(styleSheetID: .init("sheet"), targetID: frameIdentity.targetID)
+
+    let token = try #require(css.beginRefresh(identity: pageIdentity))
+    css.applyRefresh(
+        token: token,
+        matched: CSSMatchedStylesPayload(matchedRules: [
+            CSSRuleMatchPayload(
+                rule: rule(
+                    selector: ".target-rule",
+                    selectorRange: CSSSourceRange(startLine: 0, startColumn: 4, endLine: 0, endColumn: 16),
+                    properties: [
+                        CSSPropertyPayload(name: "display", value: "block", text: "display: block;"),
+                    ]
+                ),
+                matchingSelectors: [0]
+            ),
+        ]),
+        inline: .init(),
+        computed: []
+    )
+
+    let rule = try #require(css.selectedNodeStyles?.sections.first?.rule)
+    #expect(rule.sourceLocation == CSSRuleSourceLocation(
+        sourceURL: "https://example.com/page.html",
+        line: 10,
+        column: 5
     ))
 }
 
