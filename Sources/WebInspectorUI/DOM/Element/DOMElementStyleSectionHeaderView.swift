@@ -142,6 +142,7 @@ private struct DOMElementStyleSectionHeaderContent: View {
         } label: {
             Text(configuration.title)
         }
+        .textScale(.secondary)
         .lineLimit(1)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(configuration.accessibilityLabel)
