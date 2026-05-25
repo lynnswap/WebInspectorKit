@@ -345,6 +345,47 @@ func cssRuleSourceLocationScopesStyleSheetHeadersByTarget() throws {
 
 @Test
 @MainActor
+func cssSessionRemovesStyleSheetHeadersEvenWhenTargetHasNoCachedStyles() throws {
+    let css = CSSSession()
+    let identity = cssIdentity()
+    css.registerStyleSheetHeader(
+        CSSStyleSheetHeaderPayload(
+            styleSheetID: .init("sheet"),
+            sourceURL: "https://example.com/stale.html",
+            origin: .author,
+            isInline: true,
+            startLine: 10,
+            startColumn: 1
+        ),
+        targetID: identity.targetID
+    )
+    css.removeStyles(targetID: identity.targetID)
+
+    let token = try #require(css.beginRefresh(identity: identity))
+    css.applyRefresh(
+        token: token,
+        matched: CSSMatchedStylesPayload(matchedRules: [
+            CSSRuleMatchPayload(
+                rule: rule(
+                    selector: ".fresh-rule",
+                    selectorRange: CSSSourceRange(startLine: 0, startColumn: 4, endLine: 0, endColumn: 15),
+                    properties: [
+                        CSSPropertyPayload(name: "display", value: "block", text: "display: block;"),
+                    ]
+                ),
+                matchingSelectors: [0]
+            ),
+        ]),
+        inline: .init(),
+        computed: []
+    )
+
+    let rule = try #require(css.selectedNodeStyles?.sections.first?.rule)
+    #expect(rule.sourceLocation == nil)
+}
+
+@Test
+@MainActor
 func cssSessionPreservesObservableStyleObjectsWhenRefreshingSameRows() throws {
     let css = CSSSession()
     let identity = cssIdentity()

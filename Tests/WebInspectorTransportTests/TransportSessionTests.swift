@@ -732,7 +732,7 @@ func rootCSSStyleSheetAddedBeforeFrameTargetDoesNotPinSheetToPage() async throws
     let backend = FakeTransportBackend()
     let session = TransportSession(backend: backend)
     let cssStream = await session.events(for: .css)
-    let eventsTask = firstEvents(2, from: cssStream)
+    let eventsTask = firstEvents(3, from: cssStream)
 
     await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#)
     await session.receiveRootMessage(#"{"method":"CSS.styleSheetAdded","params":{"header":{"styleSheetId":"sheet-late-frame","frameId":"late-frame"}}}"#)
@@ -740,9 +740,10 @@ func rootCSSStyleSheetAddedBeforeFrameTargetDoesNotPinSheetToPage() async throws
     await session.receiveRootMessage(#"{"method":"CSS.styleSheetChanged","params":{"styleSheetId":"sheet-late-frame"}}"#)
 
     let events = await eventsTask.value
-    #expect(events.map(\.method) == ["CSS.styleSheetAdded", "CSS.styleSheetChanged"])
+    #expect(events.map(\.method) == ["CSS.styleSheetAdded", "CSS.styleSheetAdded", "CSS.styleSheetChanged"])
     #expect(events.map(\.targetID) == [
         nil,
+        ProtocolTargetIdentifier("frame-late"),
         ProtocolTargetIdentifier("frame-late"),
     ])
 }

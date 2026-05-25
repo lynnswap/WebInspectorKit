@@ -543,6 +543,7 @@ package final class CSSSession {
         let removedIDs = stylesByNodeID
             .filter { $0.value.identity.targetID == targetID }
             .map(\.key)
+        styleSheetHeadersByKey = styleSheetHeadersByKey.filter { $0.key.targetID != targetID }
         guard !removedIDs.isEmpty else {
             return
         }
@@ -550,7 +551,6 @@ package final class CSSSession {
             stylesByNodeID.removeValue(forKey: nodeID)
             activeRefreshSequenceByNodeID.removeValue(forKey: nodeID)
         }
-        styleSheetHeadersByKey = styleSheetHeadersByKey.filter { $0.key.targetID != targetID }
         if let removedSelectedNodeID = selectedNodeStyles?.identity.nodeID,
            selectedNodeStyles?.identity.targetID == targetID {
             selectedNodeStyles = nil
