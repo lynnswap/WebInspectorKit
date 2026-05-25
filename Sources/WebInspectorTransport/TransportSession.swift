@@ -561,7 +561,9 @@ package actor TransportSession {
         targetsByID[record.id] = record
         if let frameID = record.frameID {
             frameTargetIDsByFrameID[frameID] = record.id
-            resolvePendingStyleSheets(frameID: frameID, targetID: record.id)
+            if !record.isProvisional {
+                resolvePendingStyleSheets(frameID: frameID, targetID: record.id)
+            }
         }
         if currentMainPageTargetID == nil,
            record.kind == .page,
@@ -783,12 +785,12 @@ package actor TransportSession {
         guard let params = try? TransportMessageParser.decode(CSSStyleSheetAddedParams.self, from: paramsData) else {
             return nil
         }
-        if let frameID = params.header.frameID,
-           frameTargetIDsByFrameID[frameID] == nil {
-            return nil
-        }
         if let frameID = params.header.frameID {
-            return frameTargetIDsByFrameID[frameID]
+            guard let targetID = frameTargetIDsByFrameID[frameID],
+                  targetsByID[targetID]?.isProvisional != true else {
+                return nil
+            }
+            return targetID
         }
         return styleSheetTargetIDsByStyleSheetID[params.header.styleSheetID] ?? currentMainPageTargetID
     }
@@ -814,9 +816,11 @@ package actor TransportSession {
                 return
             }
             if let frameID = params.header.frameID {
-                if let resolvedTargetID = frameTargetIDsByFrameID[frameID] {
+                if let resolvedTargetID = frameTargetIDsByFrameID[frameID],
+                   targetsByID[resolvedTargetID]?.isProvisional != true {
                     styleSheetTargetIDsByStyleSheetID[params.header.styleSheetID] = resolvedTargetID
                     unresolvedStyleSheetFrameIDsByStyleSheetID.removeValue(forKey: params.header.styleSheetID)
+                    unresolvedStyleSheetAddedParamsDataByStyleSheetID.removeValue(forKey: params.header.styleSheetID)
                 } else {
                     styleSheetTargetIDsByStyleSheetID.removeValue(forKey: params.header.styleSheetID)
                     unresolvedStyleSheetFrameIDsByStyleSheetID[params.header.styleSheetID] = frameID

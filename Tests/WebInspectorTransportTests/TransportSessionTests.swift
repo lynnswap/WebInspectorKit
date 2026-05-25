@@ -749,6 +749,26 @@ func rootCSSStyleSheetAddedBeforeFrameTargetDoesNotPinSheetToPage() async throws
 }
 
 @Test
+func rootCSSStyleSheetAddedBeforeProvisionalFrameTargetReplaysAfterCommit() async throws {
+    let backend = FakeTransportBackend()
+    let session = TransportSession(backend: backend)
+    let cssStream = await session.events(for: .css)
+    let eventsTask = firstEvents(2, from: cssStream)
+
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#)
+    await session.receiveRootMessage(#"{"method":"CSS.styleSheetAdded","params":{"header":{"styleSheetId":"sheet-provisional-frame","frameId":"ad-frame"}}}"#)
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-provisional","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","isProvisional":true}}}"#)
+    await session.receiveRootMessage(#"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"frame-provisional","newTargetId":"frame-committed"}}"#)
+
+    let events = await eventsTask.value
+    #expect(events.map(\.method) == ["CSS.styleSheetAdded", "CSS.styleSheetAdded"])
+    #expect(events.map(\.targetID) == [
+        nil,
+        ProtocolTargetIdentifier("frame-committed"),
+    ])
+}
+
+@Test
 func orderedStreamReceivesTargetEventsAcrossDomainsInTransportOrder() async throws {
     let backend = FakeTransportBackend()
     let session = TransportSession(backend: backend)
