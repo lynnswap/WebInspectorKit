@@ -1043,16 +1043,6 @@ private struct CSSStyleSheetAddedParams: Decodable {
     var header: CSSStyleSheetHeaderPayload
 }
 
-private struct CSSStyleSheetHeaderPayload: Decodable {
-    var styleSheetID: CSSStyleSheetIdentifier
-    var frameID: DOMFrameIdentifier?
-
-    private enum CodingKeys: String, CodingKey {
-        case styleSheetID = "styleSheetId"
-        case frameID = "frameId"
-    }
-}
-
 private struct CSSStyleSheetIDParams: Decodable {
     var styleSheetID: CSSStyleSheetIdentifier
 

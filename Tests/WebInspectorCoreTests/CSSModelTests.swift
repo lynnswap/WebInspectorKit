@@ -199,6 +199,51 @@ func cssRuleSourceLocationFallsBackToSourceLineWhenSelectorRangeIsMissing() thro
 
 @Test
 @MainActor
+func cssRuleSourceLocationAppliesStyleSheetHeaderOffset() throws {
+    let css = CSSSession()
+    let identity = cssIdentity()
+    css.registerStyleSheetHeader(
+        CSSStyleSheetHeaderPayload(
+            styleSheetID: .init("sheet"),
+            sourceURL: "https://example.com/document.html",
+            origin: .author,
+            isInline: true,
+            startLine: 18,
+            startColumn: 6
+        ),
+        targetID: identity.targetID
+    )
+    let token = try #require(css.beginRefresh(identity: identity))
+
+    css.applyRefresh(
+        token: token,
+        matched: CSSMatchedStylesPayload(matchedRules: [
+            CSSRuleMatchPayload(
+                rule: rule(
+                    selector: ".inline-rule",
+                    sourceLine: 2,
+                    selectorRange: CSSSourceRange(startLine: 3, startColumn: 4, endLine: 3, endColumn: 16),
+                    properties: [
+                        CSSPropertyPayload(name: "color", value: "red", text: "color: red;"),
+                    ]
+                ),
+                matchingSelectors: [0]
+            ),
+        ]),
+        inline: .init(),
+        computed: []
+    )
+
+    let rule = try #require(css.selectedNodeStyles?.sections.first?.rule)
+    #expect(rule.sourceLocation == CSSRuleSourceLocation(
+        sourceURL: "https://example.com/document.html",
+        line: 21,
+        column: 10
+    ))
+}
+
+@Test
+@MainActor
 func cssSessionPreservesObservableStyleObjectsWhenRefreshingSameRows() throws {
     let css = CSSSession()
     let identity = cssIdentity()

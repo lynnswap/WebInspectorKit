@@ -46,6 +46,78 @@ package struct CSSRuleIdentifier: Hashable, Codable, Sendable {
     }
 }
 
+package struct CSSStyleSheetHeaderPayload: Equatable, Codable, Sendable {
+    package var styleSheetID: CSSStyleSheetIdentifier
+    package var frameID: DOMFrameIdentifier?
+    package var sourceURL: String?
+    package var origin: CSSStyleOrigin?
+    package var title: String?
+    package var disabled: Bool
+    package var isInline: Bool
+    package var startLine: Int
+    package var startColumn: Int
+
+    package init(
+        styleSheetID: CSSStyleSheetIdentifier,
+        frameID: DOMFrameIdentifier? = nil,
+        sourceURL: String? = nil,
+        origin: CSSStyleOrigin? = nil,
+        title: String? = nil,
+        disabled: Bool = false,
+        isInline: Bool = false,
+        startLine: Int = 0,
+        startColumn: Int = 0
+    ) {
+        self.styleSheetID = styleSheetID
+        self.frameID = frameID
+        self.sourceURL = sourceURL
+        self.origin = origin
+        self.title = title
+        self.disabled = disabled
+        self.isInline = isInline
+        self.startLine = startLine
+        self.startColumn = startColumn
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case styleSheetID = "styleSheetId"
+        case frameID = "frameId"
+        case sourceURL
+        case origin
+        case title
+        case disabled
+        case isInline
+        case startLine
+        case startColumn
+    }
+
+    package init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        styleSheetID = try container.decode(CSSStyleSheetIdentifier.self, forKey: .styleSheetID)
+        frameID = try container.decodeIfPresent(DOMFrameIdentifier.self, forKey: .frameID)
+        sourceURL = try container.decodeIfPresent(String.self, forKey: .sourceURL)
+        origin = try container.decodeIfPresent(CSSStyleOrigin.self, forKey: .origin)
+        title = try container.decodeIfPresent(String.self, forKey: .title)
+        disabled = try container.decodeIfPresent(Bool.self, forKey: .disabled) ?? false
+        isInline = try container.decodeIfPresent(Bool.self, forKey: .isInline) ?? false
+        startLine = try container.decodeIfPresent(Int.self, forKey: .startLine) ?? 0
+        startColumn = try container.decodeIfPresent(Int.self, forKey: .startColumn) ?? 0
+    }
+
+    package func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(styleSheetID, forKey: .styleSheetID)
+        try container.encodeIfPresent(frameID, forKey: .frameID)
+        try container.encodeIfPresent(sourceURL, forKey: .sourceURL)
+        try container.encodeIfPresent(origin, forKey: .origin)
+        try container.encodeIfPresent(title, forKey: .title)
+        try container.encode(disabled, forKey: .disabled)
+        try container.encode(isInline, forKey: .isInline)
+        try container.encode(startLine, forKey: .startLine)
+        try container.encode(startColumn, forKey: .startColumn)
+    }
+}
+
 package struct CSSSourceRange: Equatable, Codable, Sendable {
     package var startLine: Int
     package var startColumn: Int
