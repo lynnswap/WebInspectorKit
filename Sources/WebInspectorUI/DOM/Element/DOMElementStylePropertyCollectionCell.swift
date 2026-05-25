@@ -27,7 +27,7 @@ package final class DOMElementStylePropertyCollectionCell: UICollectionViewListC
 
     override package func prepareForReuse() {
         super.prepareForReuse()
-        clear()
+        unbind()
     }
 
     override package func updateConfiguration(using state: UICellConfigurationState) {
@@ -47,7 +47,6 @@ package final class DOMElementStylePropertyCollectionCell: UICollectionViewListC
             property: property,
             onToggle: onToggle
         )
-        setNeedsUpdateConfiguration()
 
         observationScope.cancelAll()
         observationScope.observe(property) { [weak self] _, property in
@@ -65,7 +64,19 @@ package final class DOMElementStylePropertyCollectionCell: UICollectionViewListC
         observationScope.cancelAll()
         property = nil
         propertyView.clear()
-        setNeedsUpdateConfiguration()
+        renderBackground(
+            isModifiedByInspector: false,
+            state: configurationState
+        )
+    }
+
+    private func unbind() {
+        observationScope.cancelAll()
+        property = nil
+        renderBackground(
+            isModifiedByInspector: false,
+            state: configurationState
+        )
     }
 
     private func configureStaticViews() {
