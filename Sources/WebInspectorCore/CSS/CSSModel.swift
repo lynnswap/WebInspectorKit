@@ -170,6 +170,39 @@ package final class CSSStyle: Equatable {
     }
 }
 
+package struct CSSRuleSourceLocation: Equatable, Sendable {
+    package var sourceURL: String
+    /// Zero-based source line, matching WebKit protocol/source location values.
+    package var line: Int
+    /// Zero-based source column when the selector range provides one.
+    package var column: Int?
+
+    package init(sourceURL: String, line: Int, column: Int? = nil) {
+        self.sourceURL = sourceURL
+        self.line = line
+        self.column = column
+    }
+
+    package init?(
+        sourceURL: String?,
+        selectorRange: CSSSourceRange?,
+        fallbackLine: Int
+    ) {
+        guard let sourceURL else {
+            return nil
+        }
+        if let selectorRange {
+            self.init(
+                sourceURL: sourceURL,
+                line: selectorRange.startLine,
+                column: selectorRange.startColumn
+            )
+        } else {
+            self.init(sourceURL: sourceURL, line: fallbackLine)
+        }
+    }
+}
+
 @Observable
 package final class CSSRule: Equatable {
     package var id: CSSRuleIdentifier?
@@ -199,6 +232,14 @@ package final class CSSRule: Equatable {
         self.style = style
         self.groupings = groupings
         self.isImplicitlyNested = isImplicitlyNested
+    }
+
+    package var sourceLocation: CSSRuleSourceLocation? {
+        CSSRuleSourceLocation(
+            sourceURL: sourceURL,
+            selectorRange: selectorList.range,
+            fallbackLine: sourceLine
+        )
     }
 
     package static func == (lhs: CSSRule, rhs: CSSRule) -> Bool {
@@ -239,7 +280,6 @@ package final class CSSStyleSection: Equatable {
     package var id: CSSStyleSectionIdentifier
     package var kind: CSSStyleSectionKind
     package var title: String
-    package var subtitle: String?
     package var rule: CSSRule?
     package var style: CSSStyle
     package var isEditable: Bool
@@ -248,7 +288,6 @@ package final class CSSStyleSection: Equatable {
         id: CSSStyleSectionIdentifier,
         kind: CSSStyleSectionKind,
         title: String,
-        subtitle: String? = nil,
         rule: CSSRule? = nil,
         style: CSSStyle,
         isEditable: Bool
@@ -256,7 +295,6 @@ package final class CSSStyleSection: Equatable {
         self.id = id
         self.kind = kind
         self.title = title
-        self.subtitle = subtitle
         self.rule = rule
         self.style = style
         self.isEditable = isEditable
@@ -627,7 +665,6 @@ package final class CSSSession {
     private static func updateSection(_ section: CSSStyleSection, from refreshedSection: CSSStyleSection) {
         section.kind = refreshedSection.kind
         section.title = refreshedSection.title
-        section.subtitle = refreshedSection.subtitle
         section.isEditable = refreshedSection.isEditable
 
         if let refreshedRule = refreshedSection.rule {
@@ -771,7 +808,6 @@ package final class CSSSession {
                 id: .init(nodeID: identity.nodeID, kind: kind, ordinal: ordinal),
                 kind: kind,
                 title: rule.selectorList.text,
-                subtitle: rule.sourceURL,
                 rule: rule,
                 style: rule.style,
                 isEditable: isEditable

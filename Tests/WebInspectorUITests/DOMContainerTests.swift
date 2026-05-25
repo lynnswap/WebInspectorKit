@@ -74,14 +74,16 @@ struct DOMContainerTests {
         #expect(viewController.contentUnavailableConfiguration == nil)
         #expect(viewController.collectionViewForTesting.isHidden == false)
 
-        let headers = viewController.collectionViewForTesting
-            .visibleSupplementaryViews(ofKind: UICollectionView.elementKindSectionHeader)
-            .compactMap(\.accessibilityLabel)
+        let headers = styleSectionHeaders(in: viewController)
         let propertyViews = stylePropertyViews(in: viewController)
         let declarations = propertyViews.map(\.declarationTextForTesting)
 
-        #expect(headers.contains { $0.contains("body") })
-        #expect(headers.contains { $0.contains("styles.css") })
+        #expect(headers.contains { $0.titleTextForTesting == "body" })
+        #expect(headers.contains { $0.originTextForTesting == "styles.css:2" })
+        #expect(headers.allSatisfy { $0.titleNumberOfLinesForTesting == 1 })
+        #expect(headers.allSatisfy { $0.originNumberOfLinesForTesting == 1 })
+        #expect(headers.allSatisfy { $0.titleLineBreakModeForTesting == .byTruncatingTail })
+        #expect(headers.allSatisfy { $0.originLineBreakModeForTesting == .byTruncatingTail })
         #expect(declarations.contains("margin: 0;"))
         #expect(declarations.contains("/* box-sizing: border-box; */"))
         #expect(declarations.contains("font-size: 12px;"))
@@ -89,6 +91,28 @@ struct DOMContainerTests {
         #expect(propertyView(named: "box-sizing", in: propertyViews)?.isToggleOnForTesting == false)
         #expect(propertyView(named: "font-size", in: propertyViews)?.isToggleEnabledForTesting == false)
         #expect(propertyView(named: "margin", in: propertyViews)?.declarationFontForTesting?.pointSize == UIFont.preferredFont(forTextStyle: .body).pointSize)
+    }
+
+    @Test
+    func elementStyleHeaderPresentationFormatsRuleOriginText() {
+        let googleLocation = CSSRuleSourceLocation(
+            sourceURL: "https://www.google.com/search?q=%E5%9C%B0%E9%9C%87",
+            line: 27,
+            column: 22164
+        )
+        #expect(DOMElementStyleSectionHeaderPresentation.displayText(for: googleLocation) == "search:28:22165")
+        #expect(DOMElementStyleSectionHeaderPresentation.fullDisplayText(for: googleLocation) == "https://www.google.com/search?q=%E5%9C%B0%E9%9C%87:28:22165")
+
+        #expect(DOMElementStyleSectionHeaderPresentation.displayText(
+            for: CSSRuleSourceLocation(sourceURL: "styles.css", line: 1)
+        ) == "styles.css:2")
+        #expect(DOMElementStyleSectionHeaderPresentation.displayText(
+            for: CSSRuleSourceLocation(sourceURL: "styles.css", line: 0, column: 80)
+        ) == "styles.css:1")
+        #expect(DOMElementStyleSectionHeaderPresentation.displayText(
+            for: CSSRuleSourceLocation(sourceURL: "styles.css", line: 0, column: 81)
+        ) == "styles.css:1:82")
+        #expect(DOMElementStyleSectionHeaderPresentation.displayText(for: .userAgent) == "User Agent Style Sheet")
     }
 
     @Test
@@ -908,6 +932,12 @@ struct DOMContainerTests {
     private func stylePropertyViews(in viewController: DOMElementViewController) -> [DOMElementStylePropertyView] {
         viewController.collectionViewForTesting.visibleCells
             .compactMap { ($0 as? DOMElementStylePropertyCollectionCell)?.propertyViewForTesting }
+    }
+
+    private func styleSectionHeaders(in viewController: DOMElementViewController) -> [DOMElementStyleSectionHeaderView] {
+        viewController.collectionViewForTesting
+            .visibleSupplementaryViews(ofKind: UICollectionView.elementKindSectionHeader)
+            .compactMap { $0 as? DOMElementStyleSectionHeaderView }
     }
 
     private func hiddenVariableCells(in viewController: DOMElementViewController) -> [DOMElementStyleHiddenVariablesCollectionCell] {
