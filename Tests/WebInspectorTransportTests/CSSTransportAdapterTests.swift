@@ -161,6 +161,62 @@ func cssTransportAdapterAppliesTargetScopedInvalidationEvents() async throws {
     #expect(await css.selectedState == .needsRefresh)
 }
 
+@Test
+@MainActor
+func cssTransportAdapterRegistersStyleSheetHeaderOffsets() async throws {
+    let css = CSSSession()
+    let identity = cssIdentity()
+
+    try CSSTransportAdapter.applyCSSEvent(
+        ProtocolEventEnvelope(
+            sequence: 1,
+            domain: .css,
+            method: "CSS.styleSheetAdded",
+            targetID: identity.targetID,
+            paramsData: Data("""
+            {
+              "header": {
+                "styleSheetId": "sheet",
+                "sourceURL": "https://example.com/document.html",
+                "origin": "author",
+                "isInline": true,
+                "startLine": 12,
+                "startColumn": 7
+              }
+            }
+            """.utf8)
+        ),
+        to: css
+    )
+
+    let token = try #require(css.beginRefresh(identity: identity))
+    css.applyRefresh(
+        token: token,
+        matched: CSSMatchedStylesPayload(matchedRules: [
+            CSSRuleMatchPayload(
+                rule: cssRule(
+                    selector: ".card",
+                    styleID: .init(styleSheetID: .init("sheet"), ordinal: 0),
+                    selectorRange: CSSSourceRange(startLine: 0, startColumn: 3, endLine: 0, endColumn: 8),
+                    properties: [
+                        CSSPropertyPayload(name: "display", value: "grid", text: "display: grid;"),
+                    ]
+                ),
+                matchingSelectors: [0]
+            ),
+        ]),
+        inline: .init(),
+        computed: []
+    )
+
+    let sourceLocation = try #require(css.selectedNodeStyles?.sections.first?.rule?.sourceLocation)
+    #expect(sourceLocation == CSSRuleSourceLocation(
+        sourceURL: "https://example.com/document.html",
+        line: 12,
+        column: 10
+    ))
+}
+
 private func cssIdentity() -> CSSNodeStyleIdentity {
     let targetID = ProtocolTargetIdentifier("page")
     let documentID = DOMDocumentIdentifier(targetID: targetID, localDocumentLifetimeID: .init(1))
@@ -176,12 +232,16 @@ private func cssIdentity() -> CSSNodeStyleIdentity {
 private func cssRule(
     selector: String,
     styleID: CSSStyleIdentifier,
+    sourceURL: String? = nil,
+    sourceLine: Int = 1,
+    selectorRange: CSSSourceRange? = nil,
     properties: [CSSPropertyPayload]
 ) -> CSSRulePayload {
     CSSRulePayload(
         id: CSSRuleIdentifier(styleSheetID: styleID.styleSheetID, ordinal: styleID.ordinal),
-        selectorList: CSSSelectorList(selectors: [CSSSelector(text: selector)], text: selector),
-        sourceLine: 1,
+        selectorList: CSSSelectorList(selectors: [CSSSelector(text: selector)], text: selector, range: selectorRange),
+        sourceURL: sourceURL,
+        sourceLine: sourceLine,
         origin: .author,
         style: CSSStylePayload(id: styleID, cssProperties: properties)
     )

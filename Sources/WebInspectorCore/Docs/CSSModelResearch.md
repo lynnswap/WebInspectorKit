@@ -56,6 +56,8 @@ DOM selection -> selected DOMNode.ID
 | `Source/WebInspectorUI/UserInterface/Views/GeneralStyleDetailsSidebarPanel.js` | Shared style-sidebar shell. It only supports element DOM nodes, installs the style panel, filter bar, new-rule control, class toggles, and forced pseudo-class checkboxes. |
 | `Source/WebInspectorUI/UserInterface/Views/StyleDetailsPanel.js` | Base panel that owns the current `WI.DOMNodeStyles`, refreshes it when the selected DOM node changes, and preserves scroll position across refreshes. |
 | `Source/WebInspectorUI/UserInterface/Views/SpreadsheetRulesStyleDetailsPanel.js` | Builds the rules list from `nodeStyles.uniqueOrderedStyles`, inserting pseudo-element and inherited headers, then creating one `SpreadsheetCSSStyleDeclarationSection` per style declaration. |
+| `Source/WebInspectorUI/UserInterface/Views/SpreadsheetCSSStyleDeclarationSection.js` | Renders each rule header from the selector plus `StyleOriginView`; the protocol `sourceURL` is not displayed directly as a raw subtitle. |
+| `Source/WebInspectorUI/UserInterface/Views/StyleOriginView.js` | Renders rule origin/source information from `CSSRule.sourceCodeLocation`, falling back to origin labels such as "User Agent Style Sheet" when no source location is available. |
 | `Source/WebInspectorUI/UserInterface/Views/ComputedStyleDetailsPanel.js` | Builds the computed surface from `nodeStyles.computedStyle`, plus box model, variable grouping, and property trace links into the rules panel. |
 | `Source/WebInspectorUI/UserInterface/Models/DOMNodeStyles.js` | Node-scoped CSS source of truth for matched rules, pseudo rules, inherited rules, inline style, attribute style, computed style, ordered cascade styles, effective properties, and CSS variables. |
 | `Source/WebInspectorUI/UserInterface/Models/CSSStyleDeclaration.js` | Style declaration model with style id, owner rule/sheet, editable state, enabled/visible properties, variables, source ranges, and text editing. |
@@ -114,6 +116,25 @@ valid for user-agent, attribute, inline, source-less, or non-editable styles.
 | `CSS.CSSComputedStyleProperty` | `name`, `value` | none | Drives the Computed tab/list and can later be traced back to effective authored properties. |
 | `CSS.InheritedStyleEntry` | `matchedCSSRules` | `inlineStyle` | Separates inherited sections by ancestor node and avoids showing non-inherited properties as normal active declarations. |
 | `CSS.PseudoIdMatches` | `pseudoId`, `matches` | none | Allows `::before`, `::after`, and other pseudo-element sections before inherited rules. |
+
+## WebKit Source Links and Header Display
+
+- `DOMNodeStyles._parseRulePayload` builds a `CSSRule.sourceCodeLocation` from
+  `selectorList.range.startLine/startColumn` when available. If the range is
+  absent, it falls back to `CSSRule.sourceLine`. Stylesheet metadata can then
+  offset the resulting location for inline or nested stylesheet sources.
+- `StyleOriginView` displays that source location through
+  `createSourceCodeLocationLink`, whose default display is the short source
+  name plus a 1-based line number. Columns are shown only for large columns
+  (`SourceCodeLocation.LargeColumnNumber` is 80).
+- `displayNameForURL` uses a decoded last path component when present, then a
+  host fallback, then the original URL. This is why a Google search URL appears
+  as a compact `search:<line>` style label rather than the full request URL.
+- Long source/origin text is constrained in WebKit UI rather than allowed to
+  grow section headers: `.spreadsheet-css-declaration .origin` uses one-line
+  overflow ellipsis, and generic details-section headers also use `nowrap` plus
+  ellipsis. Inherited/pseudo group headers are a separate list grouping surface;
+  inherited node links are pre-truncated with `maxLength: 100`.
 
 ## WebKit Cascade and Refresh Behavior
 
@@ -216,6 +237,9 @@ Toggle availability follows style editability, not just row display:
 - `Source/WebInspectorUI/UserInterface/Views/SpreadsheetRulesStyleDetailsPanel.js`
 - `Source/WebInspectorUI/UserInterface/Views/ComputedStyleDetailsPanel.js`
 - `Source/WebInspectorUI/UserInterface/Views/SpreadsheetCSSStyleDeclarationSection.js`
+- `Source/WebInspectorUI/UserInterface/Views/SpreadsheetCSSStyleDeclarationSection.css`
+- `Source/WebInspectorUI/UserInterface/Views/StyleOriginView.js`
+- `Source/WebInspectorUI/UserInterface/Views/DetailsSection.css`
 - `Source/WebInspectorUI/UserInterface/Views/SpreadsheetCSSStyleDeclarationEditor.js`
 - `Source/WebInspectorUI/UserInterface/Views/SpreadsheetStyleProperty.js`
 - `Source/WebInspectorUI/UserInterface/Models/DOMNodeStyles.js`
@@ -223,6 +247,8 @@ Toggle availability follows style editability, not just row display:
 - `Source/WebInspectorUI/UserInterface/Models/CSSRule.js`
 - `Source/WebInspectorUI/UserInterface/Models/CSSProperty.js`
 - `Source/WebInspectorUI/UserInterface/Models/CSSStyleSheet.js`
+- `Source/WebInspectorUI/UserInterface/Models/SourceCodeLocation.js`
+- `Source/WebInspectorUI/UserInterface/Base/URLUtilities.js`
 - `Source/WebInspectorUI/UserInterface/Controllers/CSSManager.js`
 - `Source/WebInspectorUI/UserInterface/Protocol/CSSObserver.js`
 - `Source/JavaScriptCore/inspector/protocol/CSS.json`

@@ -78,9 +78,13 @@ package enum CSSTransportAdapter {
             session.markNeedsRefresh(targetID: targetID)
         case "CSS.styleSheetRemoved":
             let params = try TransportMessageParser.decode(StyleSheetIdentifierParams.self, from: event.paramsData)
+            session.removeStyleSheetHeader(styleSheetID: params.styleSheetId, targetID: targetID)
             session.markNeedsRefresh(targetID: targetID, styleSheetID: params.styleSheetId)
-        case "CSS.styleSheetAdded",
-             "CSS.mediaQueryResultChanged":
+        case "CSS.styleSheetAdded":
+            let params = try TransportMessageParser.decode(StyleSheetAddedParams.self, from: event.paramsData)
+            session.registerStyleSheetHeader(params.header, targetID: targetID)
+            session.markNeedsRefresh(targetID: targetID)
+        case "CSS.mediaQueryResultChanged":
             session.markNeedsRefresh(targetID: targetID)
         case "CSS.nodeLayoutFlagsChanged":
             let params = try TransportMessageParser.decode(NodeLayoutFlagsChangedParams.self, from: event.paramsData)
@@ -104,6 +108,10 @@ package enum CSSTransportAdapter {
 
 private struct StyleSheetIdentifierParams: Decodable {
     var styleSheetId: CSSStyleSheetIdentifier
+}
+
+private struct StyleSheetAddedParams: Decodable {
+    var header: CSSStyleSheetHeaderPayload
 }
 
 private struct ComputedStyleResult: Decodable {

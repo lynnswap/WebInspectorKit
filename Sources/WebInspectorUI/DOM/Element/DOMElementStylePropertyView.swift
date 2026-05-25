@@ -34,8 +34,6 @@ package final class DOMElementStylePropertyView: UIView {
         self.property = property
         toggleAction = onToggle
 
-        renderAll(from: property)
-
         observationScope.cancelAll()
         observationScope.observe(property) { [weak self] _, property in
             self?.renderAll(from: property)

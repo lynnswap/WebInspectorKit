@@ -10,6 +10,11 @@ package actor TransportSession {
         var hasBufferedProvisionalResponse: Bool
     }
 
+    private struct ResolvedStyleSheetAddedEvent: Sendable {
+        var targetID: ProtocolTargetIdentifier
+        var paramsData: Data
+    }
+
     package typealias ResponseTimeoutSleep = @Sendable (Duration) async throws -> Void
 
     private let backend: any TransportBackend
@@ -29,6 +34,8 @@ package actor TransportSession {
     private var frameTargetIDsByFrameID: [DOMFrameIdentifier: ProtocolTargetIdentifier]
     private var styleSheetTargetIDsByStyleSheetID: [CSSStyleSheetIdentifier: ProtocolTargetIdentifier]
     private var unresolvedStyleSheetFrameIDsByStyleSheetID: [CSSStyleSheetIdentifier: DOMFrameIdentifier]
+    private var unresolvedStyleSheetAddedParamsDataByStyleSheetID: [CSSStyleSheetIdentifier: Data]
+    private var pendingResolvedStyleSheetAddedEvents: [ResolvedStyleSheetAddedEvent]
     private var executionContextsByID: [ExecutionContextID: ExecutionContextRecord]
     private var currentMainPageTargetID: ProtocolTargetIdentifier?
     private var subscribers: [ProtocolDomain: [UInt64: AsyncStream<ProtocolEventEnvelope>.Continuation]]
@@ -60,6 +67,8 @@ package actor TransportSession {
         frameTargetIDsByFrameID = [:]
         styleSheetTargetIDsByStyleSheetID = [:]
         unresolvedStyleSheetFrameIDsByStyleSheetID = [:]
+        unresolvedStyleSheetAddedParamsDataByStyleSheetID = [:]
+        pendingResolvedStyleSheetAddedEvents = []
         executionContextsByID = [:]
         currentMainPageTargetID = nil
         subscribers = [:]
@@ -428,6 +437,7 @@ package actor TransportSession {
         let targetID = targetIDForRootEvent(method: method, paramsData: parsed.paramsData)
         await updateRegistryFromRootEvent(method: method, targetID: targetID, paramsData: parsed.paramsData)
         await emit(domain: ProtocolDomain(method: method), method: method, targetID: targetID, paramsData: parsed.paramsData)
+        await emitPendingResolvedStyleSheetAddedEvents()
         await dispatchCommittedProvisionalTargetMessagesIfNeeded(method: method, paramsData: parsed.paramsData)
     }
 
@@ -551,7 +561,9 @@ package actor TransportSession {
         targetsByID[record.id] = record
         if let frameID = record.frameID {
             frameTargetIDsByFrameID[frameID] = record.id
-            resolvePendingStyleSheets(frameID: frameID, targetID: record.id)
+            if !record.isProvisional {
+                resolvePendingStyleSheets(frameID: frameID, targetID: record.id)
+            }
         }
         if currentMainPageTargetID == nil,
            record.kind == .page,
@@ -773,12 +785,12 @@ package actor TransportSession {
         guard let params = try? TransportMessageParser.decode(CSSStyleSheetAddedParams.self, from: paramsData) else {
             return nil
         }
-        if let frameID = params.header.frameID,
-           frameTargetIDsByFrameID[frameID] == nil {
-            return nil
-        }
         if let frameID = params.header.frameID {
-            return frameTargetIDsByFrameID[frameID]
+            guard let targetID = frameTargetIDsByFrameID[frameID],
+                  targetsByID[targetID]?.isProvisional != true else {
+                return nil
+            }
+            return targetID
         }
         return styleSheetTargetIDsByStyleSheetID[params.header.styleSheetID] ?? currentMainPageTargetID
     }
@@ -804,18 +816,22 @@ package actor TransportSession {
                 return
             }
             if let frameID = params.header.frameID {
-                if let resolvedTargetID = frameTargetIDsByFrameID[frameID] {
+                if let resolvedTargetID = frameTargetIDsByFrameID[frameID],
+                   targetsByID[resolvedTargetID]?.isProvisional != true {
                     styleSheetTargetIDsByStyleSheetID[params.header.styleSheetID] = resolvedTargetID
                     unresolvedStyleSheetFrameIDsByStyleSheetID.removeValue(forKey: params.header.styleSheetID)
+                    unresolvedStyleSheetAddedParamsDataByStyleSheetID.removeValue(forKey: params.header.styleSheetID)
                 } else {
                     styleSheetTargetIDsByStyleSheetID.removeValue(forKey: params.header.styleSheetID)
                     unresolvedStyleSheetFrameIDsByStyleSheetID[params.header.styleSheetID] = frameID
+                    unresolvedStyleSheetAddedParamsDataByStyleSheetID[params.header.styleSheetID] = paramsData
                 }
                 return
             }
             if let resolvedTargetID = targetID {
                 styleSheetTargetIDsByStyleSheetID[params.header.styleSheetID] = resolvedTargetID
                 unresolvedStyleSheetFrameIDsByStyleSheetID.removeValue(forKey: params.header.styleSheetID)
+                unresolvedStyleSheetAddedParamsDataByStyleSheetID.removeValue(forKey: params.header.styleSheetID)
             }
         case "CSS.styleSheetRemoved":
             guard let params = try? TransportMessageParser.decode(CSSStyleSheetIDParams.self, from: paramsData) else {
@@ -823,6 +839,7 @@ package actor TransportSession {
             }
             styleSheetTargetIDsByStyleSheetID.removeValue(forKey: params.styleSheetID)
             unresolvedStyleSheetFrameIDsByStyleSheetID.removeValue(forKey: params.styleSheetID)
+            unresolvedStyleSheetAddedParamsDataByStyleSheetID.removeValue(forKey: params.styleSheetID)
         default:
             return
         }
@@ -835,6 +852,28 @@ package actor TransportSession {
         for styleSheetID in styleSheetIDs {
             styleSheetTargetIDsByStyleSheetID[styleSheetID] = targetID
             unresolvedStyleSheetFrameIDsByStyleSheetID.removeValue(forKey: styleSheetID)
+            if let paramsData = unresolvedStyleSheetAddedParamsDataByStyleSheetID.removeValue(forKey: styleSheetID) {
+                pendingResolvedStyleSheetAddedEvents.append(ResolvedStyleSheetAddedEvent(
+                    targetID: targetID,
+                    paramsData: paramsData
+                ))
+            }
+        }
+    }
+
+    private func emitPendingResolvedStyleSheetAddedEvents() async {
+        guard !pendingResolvedStyleSheetAddedEvents.isEmpty else {
+            return
+        }
+        let events = pendingResolvedStyleSheetAddedEvents
+        pendingResolvedStyleSheetAddedEvents.removeAll(keepingCapacity: true)
+        for event in events {
+            await emit(
+                domain: .css,
+                method: "CSS.styleSheetAdded",
+                targetID: event.targetID,
+                paramsData: event.paramsData
+            )
         }
     }
 
@@ -1041,16 +1080,6 @@ private struct RuntimeExecutionContextCreatedParams: Decodable {
 
 private struct CSSStyleSheetAddedParams: Decodable {
     var header: CSSStyleSheetHeaderPayload
-}
-
-private struct CSSStyleSheetHeaderPayload: Decodable {
-    var styleSheetID: CSSStyleSheetIdentifier
-    var frameID: DOMFrameIdentifier?
-
-    private enum CodingKeys: String, CodingKey {
-        case styleSheetID = "styleSheetId"
-        case frameID = "frameId"
-    }
 }
 
 private struct CSSStyleSheetIDParams: Decodable {

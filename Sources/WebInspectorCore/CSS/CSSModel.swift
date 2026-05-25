@@ -170,12 +170,79 @@ package final class CSSStyle: Equatable {
     }
 }
 
+package struct CSSRuleSourceLocation: Equatable, Sendable {
+    package var sourceURL: String
+    /// Zero-based source line, matching WebKit source location values.
+    package var line: Int
+    /// Zero-based source column when the selector range provides one.
+    package var column: Int?
+
+    package init(sourceURL: String, line: Int, column: Int? = nil) {
+        self.sourceURL = sourceURL
+        self.line = line
+        self.column = column
+    }
+
+    package init?(
+        sourceURL: String?,
+        selectorRange: CSSSourceRange?,
+        fallbackLine: Int,
+        styleSheetSourceLocation: CSSStyleSheetSourceLocation? = nil
+    ) {
+        guard let resolvedSourceURL = Self.nonEmpty(sourceURL) ?? Self.nonEmpty(styleSheetSourceLocation?.sourceURL) else {
+            return nil
+        }
+        let line: Int
+        let column: Int?
+        if let selectorRange {
+            line = selectorRange.startLine
+            column = selectorRange.startColumn
+        } else {
+            line = fallbackLine
+            column = nil
+        }
+
+        if let styleSheetSourceLocation {
+            let offsetColumn = column.map { column in
+                line == 0 ? styleSheetSourceLocation.startColumn + column : column
+            }
+            self.init(
+                sourceURL: resolvedSourceURL,
+                line: styleSheetSourceLocation.startLine + line,
+                column: offsetColumn
+            )
+        } else {
+            self.init(sourceURL: resolvedSourceURL, line: line, column: column)
+        }
+    }
+
+    private static func nonEmpty(_ value: String?) -> String? {
+        guard let value, !value.isEmpty else {
+            return nil
+        }
+        return value
+    }
+}
+
+package struct CSSStyleSheetSourceLocation: Equatable, Sendable {
+    package var sourceURL: String?
+    package var startLine: Int
+    package var startColumn: Int
+
+    package init(sourceURL: String?, startLine: Int, startColumn: Int) {
+        self.sourceURL = sourceURL
+        self.startLine = startLine
+        self.startColumn = startColumn
+    }
+}
+
 @Observable
 package final class CSSRule: Equatable {
     package var id: CSSRuleIdentifier?
     package var selectorList: CSSSelectorList
     package var sourceURL: String?
     package var sourceLine: Int
+    package var styleSheetSourceLocation: CSSStyleSheetSourceLocation?
     package var origin: CSSStyleOrigin
     package var style: CSSStyle
     package var groupings: [CSSGrouping]
@@ -186,6 +253,7 @@ package final class CSSRule: Equatable {
         selectorList: CSSSelectorList,
         sourceURL: String? = nil,
         sourceLine: Int,
+        styleSheetSourceLocation: CSSStyleSheetSourceLocation? = nil,
         origin: CSSStyleOrigin,
         style: CSSStyle,
         groupings: [CSSGrouping] = [],
@@ -195,10 +263,20 @@ package final class CSSRule: Equatable {
         self.selectorList = selectorList
         self.sourceURL = sourceURL
         self.sourceLine = sourceLine
+        self.styleSheetSourceLocation = styleSheetSourceLocation
         self.origin = origin
         self.style = style
         self.groupings = groupings
         self.isImplicitlyNested = isImplicitlyNested
+    }
+
+    package var sourceLocation: CSSRuleSourceLocation? {
+        CSSRuleSourceLocation(
+            sourceURL: sourceURL,
+            selectorRange: selectorList.range,
+            fallbackLine: sourceLine,
+            styleSheetSourceLocation: styleSheetSourceLocation
+        )
     }
 
     package static func == (lhs: CSSRule, rhs: CSSRule) -> Bool {
@@ -239,7 +317,6 @@ package final class CSSStyleSection: Equatable {
     package var id: CSSStyleSectionIdentifier
     package var kind: CSSStyleSectionKind
     package var title: String
-    package var subtitle: String?
     package var rule: CSSRule?
     package var style: CSSStyle
     package var isEditable: Bool
@@ -248,7 +325,6 @@ package final class CSSStyleSection: Equatable {
         id: CSSStyleSectionIdentifier,
         kind: CSSStyleSectionKind,
         title: String,
-        subtitle: String? = nil,
         rule: CSSRule? = nil,
         style: CSSStyle,
         isEditable: Bool
@@ -256,7 +332,6 @@ package final class CSSStyleSection: Equatable {
         self.id = id
         self.kind = kind
         self.title = title
-        self.subtitle = subtitle
         self.rule = rule
         self.style = style
         self.isEditable = isEditable
@@ -291,6 +366,11 @@ package final class CSSNodeStyles {
 @MainActor
 @Observable
 package final class CSSSession {
+    private struct StyleSheetKey: Equatable, Hashable {
+        var targetID: ProtocolTargetIdentifier
+        var styleSheetID: CSSStyleSheetIdentifier
+    }
+
     private struct SectionMembership: Equatable {
         var id: CSSStyleSectionIdentifier
         var propertyIDs: [PropertyMembership]
@@ -305,6 +385,7 @@ package final class CSSSession {
     package private(set) var selectedState: CSSNodeStylesState
 
     @ObservationIgnored private var stylesByNodeID: [DOMNodeIdentifier: CSSNodeStyles]
+    @ObservationIgnored private var styleSheetHeadersByKey: [StyleSheetKey: CSSStyleSheetHeaderPayload]
     @ObservationIgnored private var activeRefreshSequenceByNodeID: [DOMNodeIdentifier: UInt64]
     @ObservationIgnored private var nextRefreshSequence: UInt64
 
@@ -312,6 +393,7 @@ package final class CSSSession {
         selectedNodeStyles = nil
         selectedState = .unavailable(.noSelection)
         stylesByNodeID = [:]
+        styleSheetHeadersByKey = [:]
         activeRefreshSequenceByNodeID = [:]
         nextRefreshSequence = 0
     }
@@ -320,6 +402,7 @@ package final class CSSSession {
         selectedNodeStyles = nil
         selectedState = .unavailable(.noSelection)
         stylesByNodeID.removeAll()
+        styleSheetHeadersByKey.removeAll()
         activeRefreshSequenceByNodeID.removeAll()
         nextRefreshSequence = 0
     }
@@ -362,7 +445,8 @@ package final class CSSSession {
             with: Self.makeSections(
                 identity: token.identity,
                 matched: matched,
-                inline: inline
+                inline: inline,
+                styleSheetHeadersByKey: styleSheetHeadersByKey
             )
         )
         Self.updateComputedProperties(
@@ -372,6 +456,20 @@ package final class CSSSession {
         nodeStyles.state = .loaded
         selectedState = .loaded
         activeRefreshSequenceByNodeID.removeValue(forKey: token.identity.nodeID)
+    }
+
+    package func registerStyleSheetHeader(_ header: CSSStyleSheetHeaderPayload, targetID: ProtocolTargetIdentifier) {
+        styleSheetHeadersByKey[StyleSheetKey(
+            targetID: targetID,
+            styleSheetID: header.styleSheetID
+        )] = header
+    }
+
+    package func removeStyleSheetHeader(styleSheetID: CSSStyleSheetIdentifier, targetID: ProtocolTargetIdentifier) {
+        styleSheetHeadersByKey.removeValue(forKey: StyleSheetKey(
+            targetID: targetID,
+            styleSheetID: styleSheetID
+        ))
     }
 
     package func markRefreshFailed(_ token: CSSStyleRefreshToken, message: String) {
@@ -445,6 +543,7 @@ package final class CSSSession {
         let removedIDs = stylesByNodeID
             .filter { $0.value.identity.targetID == targetID }
             .map(\.key)
+        styleSheetHeadersByKey = styleSheetHeadersByKey.filter { $0.key.targetID != targetID }
         guard !removedIDs.isEmpty else {
             return
         }
@@ -534,7 +633,8 @@ package final class CSSSession {
     private static func makeSections(
         identity: CSSNodeStyleIdentity,
         matched: CSSMatchedStylesPayload,
-        inline: CSSInlineStylesPayload
+        inline: CSSInlineStylesPayload,
+        styleSheetHeadersByKey: [StyleSheetKey: CSSStyleSheetHeaderPayload]
     ) -> [CSSStyleSection] {
         var sections: [CSSStyleSection] = []
         var ordinal = 0
@@ -552,7 +652,14 @@ package final class CSSSession {
         }
 
         for match in matched.matchedRules.reversed() {
-            appendRuleSection(&sections, identity: identity, ordinal: &ordinal, match: match, kind: .rule)
+            appendRuleSection(
+                &sections,
+                identity: identity,
+                ordinal: &ordinal,
+                match: match,
+                kind: .rule,
+                styleSheetHeadersByKey: styleSheetHeadersByKey
+            )
         }
 
         if let attributesStyle = inline.attributesStyle {
@@ -574,7 +681,8 @@ package final class CSSSession {
                     identity: identity,
                     ordinal: &ordinal,
                     match: match,
-                    kind: .pseudoElement(pseudo.pseudoID)
+                    kind: .pseudoElement(pseudo.pseudoID),
+                    styleSheetHeadersByKey: styleSheetHeadersByKey
                 )
             }
         }
@@ -597,7 +705,8 @@ package final class CSSSession {
                     identity: identity,
                     ordinal: &ordinal,
                     match: match,
-                    kind: .inheritedRule(ancestorIndex: ancestorIndex)
+                    kind: .inheritedRule(ancestorIndex: ancestorIndex),
+                    styleSheetHeadersByKey: styleSheetHeadersByKey
                 )
             }
         }
@@ -627,7 +736,6 @@ package final class CSSSession {
     private static func updateSection(_ section: CSSStyleSection, from refreshedSection: CSSStyleSection) {
         section.kind = refreshedSection.kind
         section.title = refreshedSection.title
-        section.subtitle = refreshedSection.subtitle
         section.isEditable = refreshedSection.isEditable
 
         if let refreshedRule = refreshedSection.rule {
@@ -649,6 +757,7 @@ package final class CSSSession {
         rule.selectorList = refreshedRule.selectorList
         rule.sourceURL = refreshedRule.sourceURL
         rule.sourceLine = refreshedRule.sourceLine
+        rule.styleSheetSourceLocation = refreshedRule.styleSheetSourceLocation
         rule.origin = refreshedRule.origin
         rule.groupings = refreshedRule.groupings
         rule.isImplicitlyNested = refreshedRule.isImplicitlyNested
@@ -752,7 +861,8 @@ package final class CSSSession {
         identity: CSSNodeStyleIdentity,
         ordinal: inout Int,
         match: CSSRuleMatchPayload,
-        kind: CSSStyleSectionKind
+        kind: CSSStyleSectionKind,
+        styleSheetHeadersByKey: [StyleSheetKey: CSSStyleSheetHeaderPayload]
     ) {
         let isEditable = match.rule.origin != .userAgent && match.rule.style.id != nil
         let ruleStyle = normalizedStyle(match.rule.style, isEditable: isEditable, ruleOrigin: match.rule.origin)
@@ -761,6 +871,11 @@ package final class CSSSession {
             selectorList: match.rule.selectorList,
             sourceURL: match.rule.sourceURL,
             sourceLine: match.rule.sourceLine,
+            styleSheetSourceLocation: styleSheetSourceLocation(
+                for: match.rule,
+                targetID: identity.targetID,
+                headersByKey: styleSheetHeadersByKey
+            ),
             origin: match.rule.origin,
             style: ruleStyle,
             groupings: match.rule.groupings,
@@ -771,13 +886,28 @@ package final class CSSSession {
                 id: .init(nodeID: identity.nodeID, kind: kind, ordinal: ordinal),
                 kind: kind,
                 title: rule.selectorList.text,
-                subtitle: rule.sourceURL,
                 rule: rule,
                 style: rule.style,
                 isEditable: isEditable
             )
         )
         ordinal += 1
+    }
+
+    private static func styleSheetSourceLocation(
+        for rule: CSSRulePayload,
+        targetID: ProtocolTargetIdentifier,
+        headersByKey: [StyleSheetKey: CSSStyleSheetHeaderPayload]
+    ) -> CSSStyleSheetSourceLocation? {
+        guard let styleSheetID = rule.id?.styleSheetID ?? rule.style.id?.styleSheetID,
+              let header = headersByKey[StyleSheetKey(targetID: targetID, styleSheetID: styleSheetID)] else {
+            return nil
+        }
+        return CSSStyleSheetSourceLocation(
+            sourceURL: header.sourceURL,
+            startLine: header.startLine,
+            startColumn: header.startColumn
+        )
     }
 
     private static func appendSection(
