@@ -178,12 +178,12 @@ package final class DOMElementViewController: UIViewController {
             guard let self,
                   let dataSource,
                   dataSource.snapshot().sectionIdentifiers.indices.contains(indexPath.section) else {
-                header.clear()
+                header.bind(nil)
                 return
             }
             let sectionID = dataSource.snapshot().sectionIdentifiers[indexPath.section]
             guard let section = section(for: sectionID) else {
-                header.clear()
+                header.bind(nil)
                 return
             }
             header.bind(section)

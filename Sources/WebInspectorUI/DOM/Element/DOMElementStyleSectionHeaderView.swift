@@ -1,19 +1,30 @@
 #if canImport(UIKit)
-import ObservationBridge
+import Observation
+import SwiftUI
 import UIKit
 import WebInspectorCore
 
-package struct DOMElementStyleSectionHeaderPresentation: Equatable {
+@MainActor
+@Observable
+package final class DOMElementStyleSectionHeaderConfiguration {
     private static let largeColumnNumber = 80
 
-    package var title: String
-    package var originText: String?
-    package var accessibilityOriginText: String?
+    package var section: CSSStyleSection?
 
-    package init(section: CSSStyleSection) {
-        title = section.title
-        originText = section.rule.flatMap(Self.displayOriginText(for:))
-        accessibilityOriginText = section.rule.flatMap(Self.accessibilityOriginText(for:))
+    package init(section: CSSStyleSection? = nil) {
+        self.section = section
+    }
+
+    package var title: String {
+        section?.title ?? ""
+    }
+
+    package var originText: String? {
+        section?.rule.flatMap(Self.displayOriginText(for:))
+    }
+
+    package var accessibilityOriginText: String? {
+        section?.rule.flatMap(Self.accessibilityOriginText(for:))
     }
 
     package var accessibilityLabel: String {
@@ -98,14 +109,14 @@ package struct DOMElementStyleSectionHeaderPresentation: Equatable {
 }
 
 @MainActor
-final class DOMElementStyleSectionHeaderView: UICollectionReusableView {
-    private let observationScope = ObservationScope()
-    private let titleLabel = UILabel()
-    private let originLabel = UILabel()
+final class DOMElementStyleSectionHeaderView: UICollectionViewListCell {
+    private let headerConfiguration = DOMElementStyleSectionHeaderConfiguration()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        configureStaticViews()
+        contentConfiguration = UIHostingConfiguration {
+            DOMElementStyleSectionHeaderContent(configuration: headerConfiguration)
+        }
     }
 
     @available(*, unavailable)
@@ -113,106 +124,27 @@ final class DOMElementStyleSectionHeaderView: UICollectionReusableView {
         nil
     }
 
-    isolated deinit {
-        observationScope.cancelAll()
+    func bind(_ section: CSSStyleSection?) {
+        headerConfiguration.section = section
     }
+}
 
-    override func prepareForReuse() {
-        super.prepareForReuse()
-        clear()
-    }
+private struct DOMElementStyleSectionHeaderContent: View {
+    var configuration: DOMElementStyleSectionHeaderConfiguration
 
-    func bind(_ section: CSSStyleSection) {
-        render(section)
-
-        observationScope.cancelAll()
-        observationScope.observe(section) { [weak self] _, section in
-            self?.render(section)
+    var body: some View {
+        LabeledContent {
+            if let originText = configuration.originText {
+                Text(originText)
+                    .truncationMode(.tail)
+                    .multilineTextAlignment(.trailing)
+            }
+        } label: {
+            Text(configuration.title)
         }
-    }
-
-    func clear() {
-        observationScope.cancelAll()
-        titleLabel.text = nil
-        originLabel.text = nil
-        originLabel.isHidden = true
-        accessibilityLabel = nil
-    }
-
-    private func configureStaticViews() {
-        preservesSuperviewLayoutMargins = true
-        directionalLayoutMargins = NSDirectionalEdgeInsets(top: 6, leading: 16, bottom: 4, trailing: 16)
-
-        titleLabel.translatesAutoresizingMaskIntoConstraints = false
-        titleLabel.font = .preferredFont(forTextStyle: .footnote)
-        titleLabel.textColor = .secondaryLabel
-        titleLabel.adjustsFontForContentSizeCategory = true
-        titleLabel.numberOfLines = 1
-        titleLabel.lineBreakMode = .byTruncatingTail
-        titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        titleLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
-
-        originLabel.translatesAutoresizingMaskIntoConstraints = false
-        originLabel.font = .preferredFont(forTextStyle: .caption1)
-        originLabel.textColor = .tertiaryLabel
-        originLabel.textAlignment = .right
-        originLabel.adjustsFontForContentSizeCategory = true
-        originLabel.numberOfLines = 1
-        originLabel.lineBreakMode = .byTruncatingTail
-        originLabel.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
-        originLabel.setContentHuggingPriority(.defaultHigh, for: .horizontal)
-        originLabel.isHidden = true
-
-        addSubview(titleLabel)
-        addSubview(originLabel)
-
-        let layoutGuide = layoutMarginsGuide
-        NSLayoutConstraint.activate([
-            titleLabel.topAnchor.constraint(equalTo: layoutGuide.topAnchor),
-            titleLabel.leadingAnchor.constraint(equalTo: layoutGuide.leadingAnchor),
-            titleLabel.bottomAnchor.constraint(equalTo: layoutGuide.bottomAnchor),
-            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: originLabel.leadingAnchor, constant: -8),
-
-            originLabel.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
-            originLabel.trailingAnchor.constraint(equalTo: layoutGuide.trailingAnchor),
-            originLabel.widthAnchor.constraint(lessThanOrEqualTo: layoutGuide.widthAnchor, multiplier: 0.55),
-        ])
-    }
-
-    private func render(_ section: CSSStyleSection) {
-        let presentation = DOMElementStyleSectionHeaderPresentation(section: section)
-        titleLabel.text = presentation.title
-        originLabel.text = presentation.originText
-        originLabel.isHidden = presentation.originText?.isEmpty != false
-        accessibilityLabel = presentation.accessibilityLabel
+        .lineLimit(1)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(configuration.accessibilityLabel)
     }
 }
-
-#if DEBUG
-extension DOMElementStyleSectionHeaderView {
-    package var titleTextForTesting: String? {
-        titleLabel.text
-    }
-
-    package var originTextForTesting: String? {
-        originLabel.text
-    }
-
-    package var titleNumberOfLinesForTesting: Int {
-        titleLabel.numberOfLines
-    }
-
-    package var originNumberOfLinesForTesting: Int {
-        originLabel.numberOfLines
-    }
-
-    package var titleLineBreakModeForTesting: NSLineBreakMode {
-        titleLabel.lineBreakMode
-    }
-
-    package var originLineBreakModeForTesting: NSLineBreakMode {
-        originLabel.lineBreakMode
-    }
-}
-#endif
 #endif
