@@ -201,6 +201,34 @@ WebInspectorUI.
   `Runtime.executionContextsCleared` must clear by Runtime agent source, not by
   the retargeted owner.
 
+## Target-Owned Frontend State
+
+The latest checked WebKit UI keeps target lifecycle and agent availability on
+typed target objects rather than on a collection of session-level flags:
+
+- `WI.TargetManager` owns the target registry and applies create, destroy, and
+  provisional commit events.
+- `WI.Target` owns the per-target agent table and exposes `hasDomain`,
+  `hasCommand`, and `hasEvent`.
+- `WI.PageTarget`, `WI.FrameTarget`, and `WI.WorkerTarget` specialize target
+  behavior where the domain semantics differ. In particular, `WI.FrameTarget`
+  owns frame-target execution contexts and replaces normal contexts on
+  navigation.
+- Target initialization is manager-driven, but `ConsoleAgent.enable()` is
+  intentionally sent last from the target initialization path so replayed
+  console messages do not overtake earlier setup.
+
+For `WebInspectorKit`, transport/runtime integration should follow the same
+shape: keep target capability, provisional status, agent enablement, and
+in-flight target initialization work behind a target-owned model. Domain models
+such as Runtime and Console can still own their semantic data, but target
+lifecycle code should not grow pass-through accessors over parallel
+dictionaries. UI-facing domain state should stay as observable live models
+with stable identity (`RuntimeTargetState`, `RuntimeAgentState`,
+`RuntimeExecutionContext`, `RuntimeRemoteObject`, `ConsoleTargetState`, and
+`ConsoleMessage`). Sendable records should be reserved for transport handoff
+and snapshots, such as `RuntimeExecutionContextRecord`.
+
 ## Contradicted Interpretations
 
 ```text

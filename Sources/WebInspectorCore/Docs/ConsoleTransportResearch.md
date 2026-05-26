@@ -55,6 +55,46 @@ This note records the WebKit Console and Runtime transport behavior that
 
 ## WebKit Protocol Surface
 
+## 2026-05-26 WebKit UI Ownership Recheck
+
+The latest checked WebKit UI does not keep Console/Runtime enablement as loose
+per-target dictionaries on the session object. The relevant ownership is
+target-centric:
+
+- `Source/WebInspectorUI/UserInterface/Controllers/TargetManager.js` owns the
+  target map and target lifecycle. `targetCreated` constructs a target-specific
+  connection plus a typed target object, then initializes and registers it.
+- `Source/WebInspectorUI/UserInterface/Protocol/Target.js` owns target
+  metadata, provisional/paused state, and the per-target agent table. `hasDomain`
+  / `hasCommand` / `hasEvent` are target methods, so domain availability is a
+  target fact, not inferred from target kind alone.
+- `Target.initialize()` calls each manager's `initializeTarget(target)` and then
+  enables `ConsoleAgent` at the end when the target has the Console domain. This
+  keeps Console replay events behind the rest of target initialization.
+- `Source/WebInspectorUI/UserInterface/Controllers/RuntimeManager.js` enables
+  `RuntimeAgent` per target from `initializeTarget(target)` and uses the active
+  execution context's target for evaluation.
+- `Source/WebInspectorUI/UserInterface/Controllers/ConsoleManager.js` does not
+  send `Console.enable` itself from `initializeTarget`; it only configures
+  Console behavior such as clear-API support. The actual enable is deferred to
+  `Target.initialize()`.
+- `Source/WebInspectorUI/UserInterface/Protocol/RuntimeObserver.js` routes
+  `Runtime.executionContextCreated` to `WI.FrameTarget` directly when the event
+  is delivered by a frame target. Otherwise it delegates to `NetworkManager`,
+  which resolves page-delivered contexts through frame ownership.
+- `Source/WebInspectorUI/UserInterface/Protocol/FrameTarget.js` owns a
+  frame-target execution-context list. A new normal context replaces prior frame
+  contexts, matching navigation semantics.
+- `Source/WebInspectorUI/UserInterface/Protocol/Connection.js` buffers messages
+  delivered to provisional targets and dispatches them after commit.
+
+Model implication for `WebInspectorKit`: connection-level bootstrap state should
+be owned by target objects or target-scoped state objects. Avoid parallel
+session dictionaries such as `runtimeEnabledByTargetID`,
+`consoleEnabledByTargetID`, and `enableTaskByTargetID` with pass-through
+accessors. Optional command fallback remains domain/model state because it is a
+capability probe result for the target's agent surface.
+
 ### Console Domain
 
 `Source/JavaScriptCore/inspector/protocol/Console.json` defines the useful
@@ -352,7 +392,9 @@ when probing is acceptable, and conservative defaults otherwise.
   from the page agent. Execution context IDs are only unique inside one Runtime
   agent, so Core, DOM compatibility storage, and Transport registries use
   `RuntimeExecutionContextKey(runtimeAgentTargetID, contextID)` for context
-  identity.
+  identity. Core exposes `RuntimeExecutionContext` as the observable live model
+  for UI/event integration, while `RuntimeExecutionContextRecord` is the
+  Sendable value used by snapshots, DOM compatibility storage, and Transport.
 - Site Isolation frame Console means `ConsoleSession` must merge page, frame,
   worker, and service-worker message streams without dropping the target
   identity. A flat display can still be built later, but the Core model should
@@ -371,6 +413,16 @@ Add first-class Runtime and Console domains beside DOM/CSS/Network:
   - command intents
 - `Sources/WebInspectorCore/Runtime/RuntimeModel.swift`
   - `@MainActor @Observable RuntimeSession`
+  - `@MainActor @Observable RuntimeTargetState` for target-owned default
+    execution context selection
+  - `@MainActor @Observable RuntimeAgentState` for agent-scoped execution
+    contexts, remote objects, and unsupported optional commands
+  - `@MainActor @Observable RuntimeExecutionContext` for context selector and
+    event-routing identity without replacing UI row identity
+  - `@MainActor @Observable RuntimeRemoteObject` for future Console object
+    previews/properties without replacing UI row identity
+  - `RuntimeExecutionContextRecord` for snapshots and actor/transport
+    handoff
   - execution contexts keyed by `RuntimeExecutionContextKey`
   - `RuntimeExecutionContext.targetID` for semantic ownership
   - `RuntimeExecutionContext.runtimeAgentTargetID` for agent-scoped clears
@@ -383,6 +435,10 @@ Add first-class Runtime and Console domains beside DOM/CSS/Network:
   - command intents
 - `Sources/WebInspectorCore/Console/ConsoleModel.swift`
   - `@MainActor @Observable ConsoleSession`
+  - `@MainActor @Observable ConsoleTargetState` for target-owned message list,
+    repeat state, clear reason, warning count, error count, and unsupported
+    optional commands
+  - `@MainActor @Observable ConsoleMessage`
   - append message
   - update previous repeat count
   - clear with reason

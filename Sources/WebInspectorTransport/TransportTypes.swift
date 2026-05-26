@@ -158,7 +158,7 @@ package struct TransportSnapshot: Equatable, Sendable {
     package var currentMainPageTargetID: ProtocolTargetIdentifier?
     package var targetsByID: [ProtocolTargetIdentifier: ProtocolTargetRecord]
     package var frameTargetIDsByFrameID: [DOMFrameIdentifier: ProtocolTargetIdentifier]
-    package var executionContextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContext]
+    package var executionContextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContextRecord]
     package var pendingRootReplyIDs: [UInt64]
     package var pendingTargetReplyKeys: [TargetReplyKey]
 
@@ -166,7 +166,7 @@ package struct TransportSnapshot: Equatable, Sendable {
         currentMainPageTargetID: ProtocolTargetIdentifier?,
         targetsByID: [ProtocolTargetIdentifier: ProtocolTargetRecord],
         frameTargetIDsByFrameID: [DOMFrameIdentifier: ProtocolTargetIdentifier],
-        executionContextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContext],
+        executionContextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContextRecord],
         pendingRootReplyIDs: [UInt64],
         pendingTargetReplyKeys: [TargetReplyKey]
     ) {

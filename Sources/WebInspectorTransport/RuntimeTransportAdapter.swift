@@ -131,7 +131,7 @@ package enum RuntimeTransportAdapter {
             }
             let params = try TransportMessageParser.decode(ExecutionContextCreatedParams.self, from: event.paramsData)
             session.applyExecutionContextCreated(
-                RuntimeExecutionContext(
+                RuntimeExecutionContextRecord(
                     id: params.context.id,
                     targetID: targetID,
                     runtimeAgentTargetID: event.sourceTargetID ?? targetID,

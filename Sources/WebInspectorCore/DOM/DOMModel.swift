@@ -532,7 +532,7 @@ package final class DOMSession {
         treeRevision &+= 1
     }
 
-    package func applyExecutionContextCreated(_ context: RuntimeExecutionContext) {
+    package func applyExecutionContextCreated(_ context: RuntimeExecutionContextRecord) {
         guard targetGraph.containsTarget(context.targetID) else {
             return
         }
@@ -552,7 +552,7 @@ package final class DOMSession {
         targetID: ProtocolTarget.ID,
         frameID: DOMFrame.ID? = nil
     ) {
-        applyExecutionContextCreated(RuntimeExecutionContext(id: id, targetID: targetID, frameID: frameID))
+        applyExecutionContextCreated(RuntimeExecutionContextRecord(id: id, targetID: targetID, frameID: frameID))
     }
 
     @discardableResult

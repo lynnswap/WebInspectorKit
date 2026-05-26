@@ -5,7 +5,7 @@ package enum DOMTransportAdapter {
     package struct TargetCommitResolution: Equatable, Sendable {
         package var oldTargetID: ProtocolTargetIdentifier?
         package var newTargetID: ProtocolTargetIdentifier
-        package var consumesOldTarget: Bool
+        package var consumedOldTargetID: ProtocolTargetIdentifier?
     }
 
     package static func command(for intent: DOMCommandIntent) throws -> ProtocolCommand {
@@ -113,7 +113,7 @@ package enum DOMTransportAdapter {
             guard let commit = try targetCommitResolution(from: event, snapshot: snapshotBeforeCommit) else {
                 return nil
             }
-            if let oldTargetID = commit.oldTargetID {
+            if let oldTargetID = commit.consumedOldTargetID {
                 session.applyTargetCommitted(oldTargetID: oldTargetID, newTargetID: commit.newTargetID)
             } else {
                 session.applyTargetCommitted(targetID: commit.newTargetID)
@@ -143,9 +143,9 @@ package enum DOMTransportAdapter {
         return TargetCommitResolution(
             oldTargetID: oldTargetID,
             newTargetID: params.newTargetId,
-            consumesOldTarget: oldTargetID.map {
-                targetCommitConsumesOldTarget(oldTargetID: $0, newTargetID: params.newTargetId, snapshot: snapshot)
-            } ?? false
+            consumedOldTargetID: oldTargetID.flatMap {
+                targetCommitConsumesOldTarget(oldTargetID: $0, newTargetID: params.newTargetId, snapshot: snapshot) ? $0 : nil
+            }
         )
     }
 

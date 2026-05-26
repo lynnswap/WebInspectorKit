@@ -15,6 +15,112 @@ package actor TransportSession {
         var paramsData: Data
     }
 
+    private struct RuntimeContextAgentState: Sendable {
+        var targetID: ProtocolTargetIdentifier
+        var contextsByID: [ExecutionContextID: RuntimeExecutionContextRecord] = [:]
+
+        var isEmpty: Bool {
+            contextsByID.isEmpty
+        }
+    }
+
+    private struct RuntimeContextRegistry: Sendable {
+        private var agentStatesByID: [ProtocolTargetIdentifier: RuntimeContextAgentState] = [:]
+
+        var contextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContextRecord] {
+            Dictionary(
+                uniqueKeysWithValues: agentStatesByID.values.flatMap { state in
+                    state.contextsByID.values.map { ($0.key, $0) }
+                }
+            )
+        }
+
+        func targetID(for key: RuntimeExecutionContextKey) -> ProtocolTargetIdentifier? {
+            agentStatesByID[key.runtimeAgentTargetID]?.contextsByID[key.contextID]?.targetID
+        }
+
+        mutating func record(_ context: RuntimeExecutionContextRecord) {
+            var state = agentState(for: context.runtimeAgentTargetID)
+            state.contextsByID[context.id] = context
+            store(state)
+        }
+
+        mutating func remove(_ key: RuntimeExecutionContextKey) {
+            guard var state = agentStatesByID[key.runtimeAgentTargetID] else {
+                return
+            }
+            state.contextsByID.removeValue(forKey: key.contextID)
+            store(state)
+        }
+
+        mutating func clear(runtimeAgentTargetID: ProtocolTargetIdentifier) {
+            guard var state = agentStatesByID[runtimeAgentTargetID] else {
+                return
+            }
+            state.contextsByID.removeAll()
+            store(state)
+        }
+
+        mutating func removeTarget(_ targetID: ProtocolTargetIdentifier) {
+            agentStatesByID.removeValue(forKey: targetID)
+            for agentID in Array(agentStatesByID.keys) {
+                guard var state = agentStatesByID[agentID] else {
+                    continue
+                }
+                state.contextsByID = state.contextsByID.filter { $0.value.targetID != targetID }
+                store(state)
+            }
+        }
+
+        mutating func retarget(oldTargetID: ProtocolTargetIdentifier, newTargetID: ProtocolTargetIdentifier) {
+            let currentContexts = contextsByKey
+            var nextContexts = currentContexts
+            for (contextKey, context) in currentContexts {
+                var movedContext = context
+                if movedContext.targetID == oldTargetID {
+                    movedContext.targetID = newTargetID
+                }
+                if movedContext.runtimeAgentTargetID == oldTargetID {
+                    movedContext.runtimeAgentTargetID = newTargetID
+                }
+                guard movedContext != context else {
+                    continue
+                }
+                nextContexts.removeValue(forKey: contextKey)
+                if nextContexts[movedContext.key] == nil {
+                    nextContexts[movedContext.key] = movedContext
+                }
+            }
+            replace(with: nextContexts)
+        }
+
+        private func agentState(for targetID: ProtocolTargetIdentifier) -> RuntimeContextAgentState {
+            agentStatesByID[targetID] ?? RuntimeContextAgentState(targetID: targetID)
+        }
+
+        private mutating func store(_ state: RuntimeContextAgentState) {
+            if state.isEmpty {
+                agentStatesByID.removeValue(forKey: state.targetID)
+            } else {
+                agentStatesByID[state.targetID] = state
+            }
+        }
+
+        private mutating func replace(with contextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContextRecord]) {
+            for agentID in agentStatesByID.keys {
+                agentStatesByID[agentID]?.contextsByID.removeAll()
+            }
+            for context in contextsByKey.values {
+                record(context)
+            }
+            for agentID in Array(agentStatesByID.keys) {
+                if let state = agentStatesByID[agentID] {
+                    store(state)
+                }
+            }
+        }
+    }
+
     package typealias ResponseTimeoutSleep = @Sendable (Duration) async throws -> Void
 
     private let backend: any TransportBackend
@@ -36,7 +142,7 @@ package actor TransportSession {
     private var unresolvedStyleSheetFrameIDsByStyleSheetID: [CSSStyleSheetIdentifier: DOMFrameIdentifier]
     private var unresolvedStyleSheetAddedParamsDataByStyleSheetID: [CSSStyleSheetIdentifier: Data]
     private var pendingResolvedStyleSheetAddedEvents: [ResolvedStyleSheetAddedEvent]
-    private var executionContextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContext]
+    private var runtimeContextRegistry: RuntimeContextRegistry
     private var currentMainPageTargetID: ProtocolTargetIdentifier?
     private var subscribers: [ProtocolDomain: [UInt64: AsyncStream<ProtocolEventEnvelope>.Continuation]]
     private var orderedSubscribers: [UInt64: AsyncStream<ProtocolEventEnvelope>.Continuation]
@@ -69,7 +175,7 @@ package actor TransportSession {
         unresolvedStyleSheetFrameIDsByStyleSheetID = [:]
         unresolvedStyleSheetAddedParamsDataByStyleSheetID = [:]
         pendingResolvedStyleSheetAddedEvents = []
-        executionContextsByKey = [:]
+        runtimeContextRegistry = RuntimeContextRegistry()
         currentMainPageTargetID = nil
         subscribers = [:]
         orderedSubscribers = [:]
@@ -218,14 +324,14 @@ package actor TransportSession {
             currentMainPageTargetID: currentMainPageTargetID,
             targetsByID: targetsByID,
             frameTargetIDsByFrameID: frameTargetIDsByFrameID,
-            executionContextsByKey: executionContextsByKey,
+            executionContextsByKey: runtimeContextRegistry.contextsByKey,
             pendingRootReplyIDs: rootReplies.keys.sorted(),
             pendingTargetReplyKeys: targetReplies.keys.sorted()
         )
     }
 
     package func targetIdentifier(forExecutionContext key: RuntimeExecutionContextKey) -> ProtocolTargetIdentifier? {
-        executionContextsByKey[key]?.targetID
+        runtimeContextRegistry.targetID(for: key)
     }
 
     package func targetIdentifier(forFrameID frameID: DOMFrameIdentifier) -> ProtocolTargetIdentifier? {
@@ -587,7 +693,7 @@ package actor TransportSession {
                 deliveredTargetID: targetID,
                 frameID: frameID
             )
-            let context = RuntimeExecutionContext(
+            let context = RuntimeExecutionContextRecord(
                 id: params.context.id,
                 targetID: resolvedTargetID,
                 runtimeAgentTargetID: sourceTargetID ?? targetID,
@@ -595,7 +701,7 @@ package actor TransportSession {
                 name: params.context.name ?? "",
                 frameID: frameID
             )
-            executionContextsByKey[context.key] = context
+            runtimeContextRegistry.record(context)
             if let frameID {
                 frameTargetIDsByFrameID[frameID] = resolvedTargetID
             }
@@ -604,15 +710,15 @@ package actor TransportSession {
                 return
             }
             let runtimeAgentTargetID = sourceTargetID ?? targetID
-            executionContextsByKey.removeValue(
-                forKey: RuntimeExecutionContextKey(
+            runtimeContextRegistry.remove(
+                RuntimeExecutionContextKey(
                     runtimeAgentTargetID: runtimeAgentTargetID,
                     contextID: params.executionContextId
                 )
             )
         case "Runtime.executionContextsCleared":
             let runtimeAgentTargetID = sourceTargetID ?? targetID
-            executionContextsByKey = executionContextsByKey.filter { $0.key.runtimeAgentTargetID != runtimeAgentTargetID }
+            runtimeContextRegistry.clear(runtimeAgentTargetID: runtimeAgentTargetID)
         default:
             return
         }
@@ -693,9 +799,7 @@ package actor TransportSession {
         provisionalTargetMessagesByTargetID.removeValue(forKey: targetID)
         frameTargetIDsByFrameID = frameTargetIDsByFrameID.filter { $0.value != targetID }
         styleSheetTargetIDsByStyleSheetID = styleSheetTargetIDsByStyleSheetID.filter { $0.value != targetID }
-        executionContextsByKey = executionContextsByKey.filter {
-            $0.value.targetID != targetID && $0.value.runtimeAgentTargetID != targetID
-        }
+        runtimeContextRegistry.removeTarget(targetID)
         let pendingReplies = targetReplies.keys
             .filter { $0.targetID == targetID }
             .compactMap { removeTargetReply(for: $0) }
@@ -751,20 +855,7 @@ package actor TransportSession {
             resolvePendingStyleSheets(frameID: frameID, targetID: newTargetID)
         }
         if let oldTargetID = committedOldTargetID {
-            for (contextKey, record) in Array(executionContextsByKey) {
-                var movedRecord = record
-                if movedRecord.targetID == oldTargetID {
-                    movedRecord.targetID = newTargetID
-                }
-                if movedRecord.runtimeAgentTargetID == oldTargetID {
-                    movedRecord.runtimeAgentTargetID = newTargetID
-                }
-                guard movedRecord != record else {
-                    continue
-                }
-                executionContextsByKey.removeValue(forKey: contextKey)
-                executionContextsByKey[movedRecord.key] = movedRecord
-            }
+            runtimeContextRegistry.retarget(oldTargetID: oldTargetID, newTargetID: newTargetID)
             if currentMainPageTargetID == oldTargetID,
                newRecord.isTopLevelPage {
                 currentMainPageTargetID = newTargetID

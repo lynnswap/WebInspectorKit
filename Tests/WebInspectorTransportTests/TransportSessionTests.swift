@@ -740,6 +740,31 @@ func runtimeExecutionContextRegistryScopesDuplicateIDsByRuntimeAgentTarget() asy
 }
 
 @Test
+func runtimeExecutionContextRegistryPreservesCommittedContextWhenIDsCollide() async throws {
+    let backend = FakeTransportBackend()
+    let session = TransportSession(backend: backend)
+
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-old","type":"page","frameId":"old-frame","isProvisional":false}}}"#)
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-new","type":"page","isProvisional":false}}}"#)
+    await receiveTargetDispatch(
+        session,
+        targetID: .init("page-old"),
+        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"type":"normal","name":"old","frameId":"old-frame"}}}"#
+    )
+    await receiveTargetDispatch(
+        session,
+        targetID: .init("page-new"),
+        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"type":"normal","name":"new"}}}"#
+    )
+
+    await session.receiveRootMessage(#"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-old","newTargetId":"page-new"}}"#)
+    let snapshot = await session.snapshot()
+
+    #expect(snapshot.executionContextsByKey[contextKey("page-old", 7)] == nil)
+    #expect(snapshot.executionContextsByKey[contextKey("page-new", 7)]?.name == "new")
+}
+
+@Test
 func runtimeExecutionContextRegistryPreservesContextMetadata() async throws {
     let backend = FakeTransportBackend()
     let session = TransportSession(backend: backend)

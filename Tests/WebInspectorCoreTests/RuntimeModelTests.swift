@@ -64,7 +64,7 @@ func runtimeSessionKeepsSameFrameNormalContextsFromDifferentRuntimeAgents() {
     let objectID = RuntimeRemoteObjectIdentifier("page-agent-object")
 
     session.applyExecutionContextCreated(
-        RuntimeExecutionContext(
+        RuntimeExecutionContextRecord(
             id: ExecutionContextID(1),
             targetID: frameTargetID,
             runtimeAgentTargetID: pageTargetID,
@@ -80,7 +80,7 @@ func runtimeSessionKeepsSameFrameNormalContextsFromDifferentRuntimeAgents() {
         executionContextID: ExecutionContextID(1)
     )
     session.applyExecutionContextCreated(
-        RuntimeExecutionContext(
+        RuntimeExecutionContextRecord(
             id: ExecutionContextID(1),
             targetID: frameTargetID,
             runtimeAgentTargetID: frameTargetID,
@@ -122,7 +122,7 @@ func runtimeEvaluateIntentRoutesSelectedContextToRuntimeAgentTarget() throws {
     let pageTargetID = ProtocolTargetIdentifier("page")
     let frameTargetID = ProtocolTargetIdentifier("frame")
     session.applyExecutionContextCreated(
-        RuntimeExecutionContext(
+        RuntimeExecutionContextRecord(
             id: ExecutionContextID(2),
             targetID: frameTargetID,
             runtimeAgentTargetID: pageTargetID,
@@ -145,7 +145,7 @@ func runtimeEvaluateIntentKeepsPageDefaultContextWhenFrameContextsShareTarget() 
     let session = RuntimeSession()
     let pageTargetID = ProtocolTargetIdentifier("page")
     session.applyExecutionContextCreated(
-        RuntimeExecutionContext(
+        RuntimeExecutionContextRecord(
             id: ExecutionContextID(1),
             targetID: pageTargetID,
             type: .normal,
@@ -154,7 +154,7 @@ func runtimeEvaluateIntentKeepsPageDefaultContextWhenFrameContextsShareTarget() 
         )
     )
     session.applyExecutionContextCreated(
-        RuntimeExecutionContext(
+        RuntimeExecutionContextRecord(
             id: ExecutionContextID(2),
             targetID: pageTargetID,
             type: .normal,
@@ -178,7 +178,7 @@ func runtimeEvaluateIntentHonorsSelectedContextBeforeTargetNormalContext() throw
     let session = RuntimeSession()
     let targetID = ProtocolTargetIdentifier("page")
     session.applyExecutionContextCreated(
-        RuntimeExecutionContext(
+        RuntimeExecutionContextRecord(
             id: ExecutionContextID(1),
             targetID: targetID,
             type: .normal,
@@ -186,7 +186,7 @@ func runtimeEvaluateIntentHonorsSelectedContextBeforeTargetNormalContext() throw
         )
     )
     session.applyExecutionContextCreated(
-        RuntimeExecutionContext(
+        RuntimeExecutionContextRecord(
             id: ExecutionContextID(2),
             targetID: targetID,
             type: .user,
@@ -212,7 +212,7 @@ func runtimeSessionPreservesTransportSeededContextMetadata() {
     let targetID = ProtocolTargetIdentifier("page")
 
     session.applyExecutionContextCreated(
-        RuntimeExecutionContext(
+        RuntimeExecutionContextRecord(
             id: ExecutionContextID(1),
             targetID: targetID,
             type: .internal,
@@ -237,7 +237,7 @@ func runtimeSessionClearsExecutionContextsByRuntimeAgentTarget() {
     let otherFrameTargetID = ProtocolTargetIdentifier("other-frame")
 
     session.applyExecutionContextCreated(
-        RuntimeExecutionContext(
+        RuntimeExecutionContextRecord(
             id: ExecutionContextID(1),
             targetID: frameTargetID,
             runtimeAgentTargetID: pageTargetID,
@@ -245,7 +245,7 @@ func runtimeSessionClearsExecutionContextsByRuntimeAgentTarget() {
         )
     )
     session.applyExecutionContextCreated(
-        RuntimeExecutionContext(
+        RuntimeExecutionContextRecord(
             id: ExecutionContextID(2),
             targetID: otherFrameTargetID,
             runtimeAgentTargetID: otherFrameTargetID,
@@ -290,7 +290,7 @@ func runtimeSessionTargetDestroyedClearsExecutionContextsByRuntimeAgentTarget() 
     let pageTargetID = ProtocolTargetIdentifier("page")
     let frameTargetID = ProtocolTargetIdentifier("frame")
     session.applyExecutionContextCreated(
-        RuntimeExecutionContext(
+        RuntimeExecutionContextRecord(
             id: ExecutionContextID(1),
             targetID: frameTargetID,
             runtimeAgentTargetID: pageTargetID,
@@ -323,7 +323,7 @@ func runtimeSessionTargetCommitDropsOldRuntimeAgentObjects() {
     let objectID = RuntimeRemoteObjectIdentifier("old-object")
 
     session.applyExecutionContextCreated(
-        RuntimeExecutionContext(id: ExecutionContextID(1), targetID: oldTargetID)
+        RuntimeExecutionContextRecord(id: ExecutionContextID(1), targetID: oldTargetID)
     )
     session.registerRemoteObject(
         RuntimeRemoteObjectPayload(type: .object, objectID: objectID),
@@ -344,6 +344,44 @@ func runtimeSessionTargetCommitDropsOldRuntimeAgentObjects() {
 
 @Test
 @MainActor
+func runtimeSessionTargetCommitPreservesCommittedContextWhenIDsCollide() {
+    let session = RuntimeSession()
+    let oldTargetID = ProtocolTargetIdentifier("page-old")
+    let newTargetID = ProtocolTargetIdentifier("page-new")
+    let oldContextKey = contextKey(oldTargetID, 1)
+    let newContextKey = contextKey(newTargetID, 1)
+
+    session.applyExecutionContextCreated(
+        RuntimeExecutionContextRecord(
+            id: ExecutionContextID(1),
+            targetID: oldTargetID,
+            name: "old"
+        )
+    )
+    session.selectExecutionContext(oldContextKey)
+    session.applyExecutionContextCreated(
+        RuntimeExecutionContextRecord(
+            id: ExecutionContextID(1),
+            targetID: newTargetID,
+            name: "new"
+        )
+    )
+    let oldContext = session.executionContext(for: oldContextKey)
+    let newContext = session.executionContext(for: newContextKey)
+
+    session.applyTargetCommitted(oldTargetID: oldTargetID, newTargetID: newTargetID)
+    let snapshot = session.snapshot()
+
+    #expect(snapshot.executionContextsByKey[oldContextKey] == nil)
+    #expect(snapshot.executionContextsByKey[newContextKey]?.name == "new")
+    #expect(snapshot.normalContextKeyByTargetID[newTargetID] == newContextKey)
+    #expect(snapshot.selectedContextKey == newContextKey)
+    #expect(session.executionContext(for: newContextKey) === newContext)
+    #expect(session.executionContext(for: newContextKey) !== oldContext)
+}
+
+@Test
+@MainActor
 func runtimeSessionSnapshotInvalidatesObserversWhenRemoteObjectIsRegistered() {
     let session = RuntimeSession()
     let didChange = Mutex(false)
@@ -360,6 +398,128 @@ func runtimeSessionSnapshotInvalidatesObserversWhenRemoteObjectIsRegistered() {
         objectGroup: RuntimeObjectGroup("console")
     )
 
+    #expect(didChange.withLock { $0 })
+}
+
+@Test
+@MainActor
+func runtimeTargetAndAgentStatesKeepStableObservableIdentity() throws {
+    let session = RuntimeSession()
+    let targetID = ProtocolTargetIdentifier("page")
+
+    session.applyExecutionContextCreated(
+        RuntimeExecutionContextRecord(id: ExecutionContextID(1), targetID: targetID, name: "page")
+    )
+
+    let targetState = try #require(session.targetState(for: targetID))
+    let agentState = try #require(session.runtimeAgentState(for: targetID))
+    let targetDidChange = Mutex(false)
+    let agentDidChange = Mutex(false)
+
+    withObservationTracking {
+        _ = targetState.normalContextKey
+    } onChange: {
+        targetDidChange.withLock { $0 = true }
+    }
+    withObservationTracking {
+        _ = agentState.executionContexts.count
+    } onChange: {
+        agentDidChange.withLock { $0 = true }
+    }
+
+    session.applyExecutionContextCreated(
+        RuntimeExecutionContextRecord(id: ExecutionContextID(2), targetID: targetID, name: "page")
+    )
+
+    #expect(session.targetState(for: targetID) === targetState)
+    #expect(session.runtimeAgentState(for: targetID) === agentState)
+    #expect(targetState.normalContextKey == contextKey(targetID, 2))
+    #expect(agentState.executionContexts.map(\.id) == [ExecutionContextID(2)])
+    #expect(targetDidChange.withLock { $0 })
+    #expect(agentDidChange.withLock { $0 })
+}
+
+@Test
+@MainActor
+func runtimeExecutionContextKeepsStableObservableIdentityWhenUpdated() throws {
+    let session = RuntimeSession()
+    let targetID = ProtocolTargetIdentifier("page")
+
+    session.applyExecutionContextCreated(
+        RuntimeExecutionContextRecord(id: ExecutionContextID(1), targetID: targetID, name: "before")
+    )
+
+    let agentState = try #require(session.runtimeAgentState(for: targetID))
+    let context = try #require(agentState.executionContexts.first)
+    let didChange = Mutex(false)
+
+    withObservationTracking {
+        _ = context.name
+    } onChange: {
+        didChange.withLock { $0 = true }
+    }
+
+    session.applyExecutionContextCreated(
+        RuntimeExecutionContextRecord(id: ExecutionContextID(1), targetID: targetID, name: "after")
+    )
+
+    #expect(agentState.executionContexts.first === context)
+    #expect(context.name == "after")
+    #expect(didChange.withLock { $0 })
+}
+
+@Test
+@MainActor
+func runtimeExecutionContextKeepsStableObservableIdentityWhenRetargeted() throws {
+    let session = RuntimeSession()
+    let oldTargetID = ProtocolTargetIdentifier("page-old")
+    let newTargetID = ProtocolTargetIdentifier("page-new")
+    let oldContextKey = contextKey(oldTargetID, 1)
+    let newContextKey = contextKey(newTargetID, 1)
+
+    session.applyExecutionContextCreated(
+        RuntimeExecutionContextRecord(id: ExecutionContextID(1), targetID: oldTargetID, name: "page")
+    )
+
+    let context = try #require(session.executionContext(for: oldContextKey))
+    session.applyTargetCommitted(oldTargetID: oldTargetID, newTargetID: newTargetID)
+
+    #expect(session.executionContext(for: newContextKey) === context)
+    #expect(context.targetID == newTargetID)
+    #expect(context.runtimeAgentTargetID == newTargetID)
+}
+
+@Test
+@MainActor
+func runtimeRemoteObjectKeepsStableObservableIdentity() throws {
+    let session = RuntimeSession()
+    let targetID = ProtocolTargetIdentifier("page")
+    let objectID = RuntimeRemoteObjectIdentifier("object-1")
+
+    session.registerRemoteObject(
+        RuntimeRemoteObjectPayload(type: .object, description: "before", objectID: objectID),
+        runtimeAgentTargetID: targetID,
+        objectGroup: RuntimeObjectGroup("console")
+    )
+
+    let agentState = try #require(session.runtimeAgentState(for: targetID))
+    let remoteObject = try #require(agentState.remoteObjects.first)
+    let didChange = Mutex(false)
+
+    withObservationTracking {
+        _ = remoteObject.payload.description
+    } onChange: {
+        didChange.withLock { $0 = true }
+    }
+
+    session.registerRemoteObject(
+        RuntimeRemoteObjectPayload(type: .object, description: "after", objectID: objectID),
+        runtimeAgentTargetID: targetID
+    )
+
+    #expect(agentState.remoteObjects.first === remoteObject)
+    #expect(remoteObject.payload.description == "after")
+    #expect(remoteObject.objectGroup == nil)
     #expect(didChange.withLock { $0 })
 }
 

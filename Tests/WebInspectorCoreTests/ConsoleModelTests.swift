@@ -63,3 +63,34 @@ func consoleSessionMessagesInvalidatesObserversWhenNormalMessageIsAdded() {
 
     #expect(didChange.withLock { $0 })
 }
+
+@Test
+@MainActor
+func consoleTargetStateKeepsStableObservableIdentity() throws {
+    let session = ConsoleSession()
+    let targetID = ProtocolTargetIdentifier("page")
+
+    session.applyMessageAdded(
+        ConsoleMessagePayload(source: .consoleAPI, level: .log, text: "first", type: .log),
+        targetID: targetID
+    )
+
+    let targetState = try #require(session.targetState(for: targetID))
+    let didChange = Mutex(false)
+
+    withObservationTracking {
+        _ = targetState.messages.count
+    } onChange: {
+        didChange.withLock { $0 = true }
+    }
+
+    session.applyMessageAdded(
+        ConsoleMessagePayload(source: .consoleAPI, level: .warning, text: "second", type: .log),
+        targetID: targetID
+    )
+
+    #expect(session.targetState(for: targetID) === targetState)
+    #expect(targetState.messages.map(\.text) == ["first", "second"])
+    #expect(targetState.warningCount == 1)
+    #expect(didChange.withLock { $0 })
+}
