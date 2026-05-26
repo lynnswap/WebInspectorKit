@@ -55,41 +55,6 @@ package enum NetworkCommandIntent: Equatable, Sendable {
     )
 }
 
-package struct ConsoleCallFramePayload: Equatable, Sendable {
-    package var functionName: String
-    package var url: String
-    package var scriptID: String
-    package var lineNumber: Int
-    package var columnNumber: Int
-
-    package init(functionName: String, url: String, scriptID: String, lineNumber: Int, columnNumber: Int) {
-        self.functionName = functionName
-        self.url = url
-        self.scriptID = scriptID
-        self.lineNumber = lineNumber
-        self.columnNumber = columnNumber
-    }
-}
-
-package struct ConsoleStackTracePayload: Equatable, Sendable {
-    package var callFrames: [ConsoleCallFramePayload]
-    package var topCallFrameIsBoundary: Bool?
-    package var truncated: Bool?
-    package var parentStackTraces: [ConsoleStackTracePayload]
-
-    package init(
-        callFrames: [ConsoleCallFramePayload],
-        topCallFrameIsBoundary: Bool? = nil,
-        truncated: Bool? = nil,
-        parentStackTraces: [ConsoleStackTracePayload] = []
-    ) {
-        self.callFrames = callFrames
-        self.topCallFrameIsBoundary = topCallFrameIsBoundary
-        self.truncated = truncated
-        self.parentStackTraces = parentStackTraces
-    }
-}
-
 package struct NetworkReferrerPolicy: RawRepresentable, Hashable, Sendable {
     package let rawValue: String
 

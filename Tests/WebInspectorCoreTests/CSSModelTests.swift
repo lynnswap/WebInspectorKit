@@ -5,11 +5,17 @@ import Testing
 func protocolTargetCapabilitiesTreatPageTargetsAsCSSCapable() {
     #expect(ProtocolTargetKind(protocolType: "web-page") == .page)
     #expect(ProtocolTargetCapabilities.pageDefault.contains(.css))
+    #expect(ProtocolTargetCapabilities.pageDefault.contains(.console))
     #expect(ProtocolTargetCapabilities.protocolDefault(for: .page).contains(.css))
+    #expect(ProtocolTargetCapabilities.protocolDefault(for: .serviceWorker).contains(.console))
     #expect(ProtocolTargetCapabilities.protocolDefault(for: .frame).contains(.css) == false)
-    #expect(ProtocolTargetCapabilities(domainNames: ["DOM", "CSS"]).contains(.css))
+    #expect(ProtocolTargetCapabilities.protocolDefault(for: .frame).contains(.console) == false)
+    #expect(ProtocolTargetCapabilities(domainNames: ["DOM", "CSS", "Console"]).contains(.css))
+    #expect(ProtocolTargetCapabilities(domainNames: ["DOM", "CSS", "Console"]).contains(.console))
     #expect(ProtocolTargetCapabilities.resolved(for: .page, domainNames: ["DOM"]).contains(.css))
+    #expect(ProtocolTargetCapabilities.resolved(for: .page, domainNames: ["DOM"]).contains(.console))
     #expect(ProtocolTargetCapabilities.resolved(for: .frame, domainNames: ["DOM"]).contains(.css) == false)
+    #expect(ProtocolTargetCapabilities.resolved(for: .frame, domainNames: ["DOM"]).contains(.console) == false)
 }
 
 @Test

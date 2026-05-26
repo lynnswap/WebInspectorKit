@@ -117,6 +117,9 @@ private final class InspectorConnection {
     var eventPump: DomainEventPump?
     var bootstrappedTargetIDs: Set<ProtocolTargetIdentifier>
     var compatibilityCSSEnabledTargetIDs: Set<ProtocolTargetIdentifier>
+    var runtimeEnabledTargetIDs: Set<ProtocolTargetIdentifier>
+    var consoleEnabledTargetIDs: Set<ProtocolTargetIdentifier>
+    var runtimeConsoleEnableTasksByTargetID: [ProtocolTargetIdentifier: Task<Void, Never>]
 
     init(
         transport: TransportSession,
@@ -129,6 +132,9 @@ private final class InspectorConnection {
         eventPump = nil
         bootstrappedTargetIDs = []
         compatibilityCSSEnabledTargetIDs = []
+        runtimeEnabledTargetIDs = []
+        consoleEnabledTargetIDs = []
+        runtimeConsoleEnableTasksByTargetID = [:]
     }
 }
 
@@ -159,6 +165,8 @@ package final class InspectorSession {
     package let dom: DOMSession
     package let css: CSSSession
     package let network: NetworkSession
+    package let runtime: RuntimeSession
+    package let console: ConsoleSession
     package private(set) var isAttached: Bool
     package private(set) var lastError: InspectorSessionError?
     package private(set) var isSelectingElement: Bool
@@ -182,12 +190,16 @@ package final class InspectorSession {
         configuration: InspectorSessionConfiguration = .init(),
         dom: DOMSession = DOMSession(),
         css: CSSSession = CSSSession(),
-        network: NetworkSession = NetworkSession()
+        network: NetworkSession = NetworkSession(),
+        runtime: RuntimeSession = RuntimeSession(),
+        console: ConsoleSession = ConsoleSession()
     ) {
         self.configuration = configuration
         self.dom = dom
         self.css = css
         self.network = network
+        self.runtime = runtime
+        self.console = console
         isAttached = false
         lastError = nil
         isSelectingElement = false
@@ -263,18 +275,21 @@ package final class InspectorSession {
         lastError = nil
         await startPumps(connection: nextConnection)
         seedDOMSession(from: await transport.snapshot())
+        seedRuntimeSession(from: await transport.snapshot())
 
         do {
             let mainTarget = try await transport.waitForCurrentMainPageTarget(
                 timeout: configuration.bootstrapTimeout
             )
             seedDOMSession(from: await transport.snapshot())
+            seedRuntimeSession(from: await transport.snapshot())
             try await bootstrap(mainTargetID: mainTarget.targetID, connection: nextConnection)
             try ensureCurrentConnection(nextConnection)
             pendingConnection = nil
             connection = nextConnection
             isAttached = true
             startDOMDocumentRequestsForAttachedFrameTargets()
+            startRuntimeConsoleEnableForAttachedTargets()
             lastError = nil
         } catch {
             guard connection === nextConnection || pendingConnection === nextConnection else {
@@ -294,6 +309,8 @@ package final class InspectorSession {
             dom.reset()
             css.reset()
             network.reset()
+            runtime.reset()
+            console.reset()
             let sessionError = InspectorSessionError(String(describing: error))
             lastError = sessionError
             throw error
@@ -312,11 +329,13 @@ package final class InspectorSession {
         isAttached = false
 
         if let previousConnection {
+            cancelRuntimeConsoleEnableTasks(previousConnection)
             stopPumps(previousConnection)
             await previousConnection.transport.detach()
             restoreInspectabilityIfNeeded(for: previousConnection)
         }
         if let previousPendingConnection {
+            cancelRuntimeConsoleEnableTasks(previousPendingConnection)
             stopPumps(previousPendingConnection)
             await previousPendingConnection.transport.detach()
             restoreInspectabilityIfNeeded(for: previousPendingConnection)
@@ -326,6 +345,8 @@ package final class InspectorSession {
         dom.reset()
         css.reset()
         network.reset()
+        runtime.reset()
+        console.reset()
         highlightedDOMTargetID = nil
         clearElementPickerState(invalidatePendingSelection: true)
         clearDeleteUndoHistory()
@@ -584,8 +605,11 @@ package final class InspectorSession {
         dom.reset()
         css.reset()
         network.reset()
+        runtime.reset()
+        console.reset()
         if let connection {
             seedDOMSession(from: await connection.transport.snapshot())
+            seedRuntimeSession(from: await connection.transport.snapshot())
         }
         webView.reload()
     }
@@ -701,6 +725,49 @@ package final class InspectorSession {
         let result = try await transport.send(CSSTransportAdapter.command(for: intent))
         try ensureCurrentConnection(connection)
         return result
+    }
+
+    @discardableResult
+    package func perform(_ intent: RuntimeCommandIntent) async throws -> ProtocolCommandResult {
+        let connection = try activeConnection()
+        let transport = connection.transport
+        let command = try RuntimeTransportAdapter.command(for: intent)
+        let result: ProtocolCommandResult
+        do {
+            result = try await transport.send(command)
+        } catch {
+            markRuntimeCommandUnsupportedIfNeeded(command.method, targetID: intent.targetID, error: error)
+            throw error
+        }
+        try ensureCurrentConnection(connection)
+
+        switch intent {
+        case let .evaluate(request):
+            let payload = try RuntimeTransportAdapter.evaluationResult(from: result)
+            runtime.applyEvaluationResult(payload, request: request)
+        case let .releaseObject(key):
+            runtime.releaseObject(key)
+        case let .releaseObjectGroup(targetID, objectGroup):
+            runtime.releaseObjectGroup(objectGroup, targetID: targetID)
+        default:
+            break
+        }
+        return result
+    }
+
+    @discardableResult
+    package func perform(_ intent: ConsoleCommandIntent) async throws -> ProtocolCommandResult {
+        let connection = try activeConnection()
+        let transport = connection.transport
+        let command = try ConsoleTransportAdapter.command(for: intent)
+        do {
+            let result = try await transport.send(command)
+            try ensureCurrentConnection(connection)
+            return result
+        } catch {
+            markConsoleCommandUnsupportedIfNeeded(command.method, targetID: intent.targetID, error: error)
+            throw error
+        }
     }
 
     package func refreshStylesForSelectedNode() async {
@@ -868,6 +935,40 @@ package final class InspectorSession {
             || normalizedMessage.contains("enabled")
     }
 
+    private func markRuntimeCommandUnsupportedIfNeeded(
+        _ method: String,
+        targetID: ProtocolTargetIdentifier,
+        error: any Error
+    ) {
+        guard isUnsupportedProtocolCommandError(error) else {
+            return
+        }
+        runtime.markCommandUnsupported(method, targetID: targetID)
+    }
+
+    private func markConsoleCommandUnsupportedIfNeeded(
+        _ method: String,
+        targetID: ProtocolTargetIdentifier,
+        error: any Error
+    ) {
+        guard isUnsupportedProtocolCommandError(error) else {
+            return
+        }
+        console.markCommandUnsupported(method, targetID: targetID)
+    }
+
+    private func isUnsupportedProtocolCommandError(_ error: any Error) -> Bool {
+        guard case let TransportError.remoteError(_, _, message) = error else {
+            return false
+        }
+        let normalizedMessage = message.lowercased()
+        return normalizedMessage.contains("unrecognized")
+            || normalizedMessage.contains("unsupported")
+            || normalizedMessage.contains("unknown")
+            || normalizedMessage.contains("not found")
+            || normalizedMessage.contains("not implemented")
+    }
+
     private func enableCSSAgentForCompatibility(
         targetID: ProtocolTargetIdentifier,
         connection: InspectorConnection
@@ -914,8 +1015,11 @@ package final class InspectorSession {
         try ensureCurrentConnection(connection)
         _ = try await sendTargetCommand(domain: .dom, method: "DOM.enable", targetID: mainTargetID, connection: connection)
         try ensureCurrentConnection(connection)
-        _ = try await sendTargetCommand(domain: .runtime, method: "Runtime.enable", targetID: mainTargetID, connection: connection)
+        _ = try await connection.transport.send(
+            try RuntimeTransportAdapter.command(for: .enable(targetID: mainTargetID))
+        )
         try ensureCurrentConnection(connection)
+        connection.runtimeEnabledTargetIDs.insert(mainTargetID)
 
         let documentResult = try await sendTargetCommand(domain: .dom, method: "DOM.getDocument", targetID: mainTargetID, connection: connection)
         try ensureCurrentConnection(connection)
@@ -929,6 +1033,13 @@ package final class InspectorSession {
             )
         )
         try ensureCurrentConnection(connection)
+        if dom.targetCapabilities(for: mainTargetID).contains(.console) {
+            _ = try await connection.transport.send(
+                try ConsoleTransportAdapter.command(for: .enable(targetID: mainTargetID))
+            )
+            try ensureCurrentConnection(connection)
+            connection.consoleEnabledTargetIDs.insert(mainTargetID)
+        }
         connection.bootstrappedTargetIDs.insert(mainTargetID)
     }
 
@@ -963,7 +1074,12 @@ package final class InspectorSession {
             await handleTargetEvent(event)
         case .runtime:
             applyEvent(event) {
+                try RuntimeTransportAdapter.applyRuntimeEvent(event, to: $0.runtime)
                 try DOMTransportAdapter.applyRuntimeEvent(event, to: $0.dom)
+            }
+        case .console:
+            applyEvent(event) {
+                try ConsoleTransportAdapter.applyConsoleEvent(event, to: $0.console)
             }
         case .inspector:
             await handleInspectorEvent(event)
@@ -1000,7 +1116,10 @@ package final class InspectorSession {
             let createdTarget = try DOMTransportAdapter.applyTargetEvent(event, to: dom)
             if let destroyedTargetID {
                 cancelDOMDocumentRequest(targetID: destroyedTargetID, reason: "targetDestroyed")
+                cancelRuntimeConsoleEnableTask(targetID: destroyedTargetID)
                 css.removeStyles(targetID: destroyedTargetID)
+                runtime.applyTargetDestroyed(destroyedTargetID)
+                console.applyTargetDestroyed(destroyedTargetID)
             }
             applyElementPickerTargetLifecycle(event, targetCommit: targetCommit)
             if isAttached,
@@ -1009,6 +1128,7 @@ package final class InspectorSession {
                 if createdTarget.capabilities.contains(.dom) {
                     startDOMDocumentRequest(targetID: createdTarget.id, reason: "frameTargetCreated")
                 }
+                startRuntimeConsoleEnableIfNeeded(targetID: createdTarget.id, reason: "frameTargetCreated")
             }
             if event.method == "Target.didCommitProvisionalTarget",
                dom.currentPageRootNode == nil,
@@ -1020,9 +1140,17 @@ package final class InspectorSession {
                let targetCommit {
                 if let oldTargetID = targetCommit.oldTargetID {
                     cancelDOMDocumentRequest(targetID: oldTargetID, reason: "frameTargetCommit")
+                    cancelRuntimeConsoleEnableTask(targetID: oldTargetID)
                     css.removeStyles(targetID: oldTargetID)
                 }
+                runtime.applyTargetCommitted(oldTargetID: targetCommit.oldTargetID, newTargetID: targetCommit.newTargetID)
+                console.applyTargetCommitted(oldTargetID: targetCommit.oldTargetID, newTargetID: targetCommit.newTargetID)
+                retargetRuntimeConsoleAgentState(
+                    oldTargetID: targetCommit.oldTargetID,
+                    newTargetID: targetCommit.newTargetID
+                )
                 startFrameTargetDocumentRequestAfterCommit(targetID: targetCommit.newTargetID)
+                startRuntimeConsoleEnableIfNeeded(targetID: targetCommit.newTargetID, reason: "frameTargetCommit")
             }
         } catch {
             lastError = InspectorSessionError("\(event.method): \(error)")
@@ -1035,6 +1163,120 @@ package final class InspectorSession {
             && target.capabilities.contains(.dom)
             && target.currentDocumentID == nil {
             startDOMDocumentRequest(targetID: target.id, reason: "attachedFrameTarget")
+        }
+    }
+
+    private func startRuntimeConsoleEnableForAttachedTargets() {
+        for target in dom.snapshot().targetsByID.values
+        where target.kind == .frame && target.isProvisional == false {
+            startRuntimeConsoleEnableIfNeeded(targetID: target.id, reason: "attachedTarget")
+        }
+    }
+
+    private func startRuntimeConsoleEnableIfNeeded(targetID: ProtocolTargetIdentifier, reason: String) {
+        guard isAttached,
+              let connection,
+              connection.runtimeConsoleEnableTasksByTargetID[targetID] == nil,
+              shouldEnableConsoleAgents(targetID: targetID, connection: connection) else {
+            return
+        }
+
+        let task = Task { @MainActor [weak self, connection] in
+            guard let self else {
+                return
+            }
+            defer {
+                connection.runtimeConsoleEnableTasksByTargetID.removeValue(forKey: targetID)
+            }
+            do {
+                try await enableRuntimeConsoleIfNeeded(targetID: targetID, connection: connection)
+            } catch is CancellationError {
+            } catch {
+                InspectorRuntimeLog.warning("runtimeConsoleEnable.failed target=\(targetID.rawValue) reason=\(reason) error=\(error)")
+                lastError = InspectorSessionError(String(describing: error))
+            }
+        }
+        connection.runtimeConsoleEnableTasksByTargetID[targetID] = task
+    }
+
+    private func shouldEnableConsoleAgents(
+        targetID: ProtocolTargetIdentifier,
+        connection: InspectorConnection
+    ) -> Bool {
+        guard let target = dom.snapshot().targetsByID[targetID],
+              target.isProvisional == false,
+              target.capabilities.contains(.console),
+              connection.consoleEnabledTargetIDs.contains(targetID) == false,
+              console.supportsCommand("Console.enable", targetID: targetID) else {
+            return false
+        }
+        return true
+    }
+
+    private func enableRuntimeConsoleIfNeeded(
+        targetID: ProtocolTargetIdentifier,
+        connection: InspectorConnection
+    ) async throws {
+        guard let target = dom.snapshot().targetsByID[targetID],
+              target.isProvisional == false,
+              target.capabilities.contains(.console) else {
+            return
+        }
+
+        if target.capabilities.contains(.runtime),
+           connection.runtimeEnabledTargetIDs.contains(targetID) == false,
+           runtime.supportsCommand("Runtime.enable", targetID: targetID) {
+            do {
+                _ = try await connection.transport.send(try RuntimeTransportAdapter.command(for: .enable(targetID: targetID)))
+                try ensureCurrentConnection(connection)
+                connection.runtimeEnabledTargetIDs.insert(targetID)
+            } catch {
+                markRuntimeCommandUnsupportedIfNeeded("Runtime.enable", targetID: targetID, error: error)
+                throw error
+            }
+        }
+
+        guard connection.consoleEnabledTargetIDs.contains(targetID) == false,
+              console.supportsCommand("Console.enable", targetID: targetID) else {
+            return
+        }
+        do {
+            _ = try await connection.transport.send(try ConsoleTransportAdapter.command(for: .enable(targetID: targetID)))
+            try ensureCurrentConnection(connection)
+            connection.consoleEnabledTargetIDs.insert(targetID)
+        } catch {
+            markConsoleCommandUnsupportedIfNeeded("Console.enable", targetID: targetID, error: error)
+            throw error
+        }
+    }
+
+    private func cancelRuntimeConsoleEnableTask(targetID: ProtocolTargetIdentifier) {
+        guard let connection else {
+            return
+        }
+        connection.runtimeConsoleEnableTasksByTargetID.removeValue(forKey: targetID)?.cancel()
+    }
+
+    private func cancelRuntimeConsoleEnableTasks(_ connection: InspectorConnection) {
+        for task in connection.runtimeConsoleEnableTasksByTargetID.values {
+            task.cancel()
+        }
+        connection.runtimeConsoleEnableTasksByTargetID.removeAll()
+    }
+
+    private func retargetRuntimeConsoleAgentState(
+        oldTargetID: ProtocolTargetIdentifier?,
+        newTargetID: ProtocolTargetIdentifier
+    ) {
+        guard let oldTargetID,
+              let connection else {
+            return
+        }
+        if connection.runtimeEnabledTargetIDs.remove(oldTargetID) != nil {
+            connection.runtimeEnabledTargetIDs.insert(newTargetID)
+        }
+        if connection.consoleEnabledTargetIDs.remove(oldTargetID) != nil {
+            connection.consoleEnabledTargetIDs.insert(newTargetID)
         }
     }
 
@@ -1691,6 +1933,12 @@ package final class InspectorSession {
         }
         for record in snapshot.executionContextsByID.values.sorted(by: { $0.id.rawValue < $1.id.rawValue }) {
             dom.applyExecutionContextCreated(record)
+        }
+    }
+
+    private func seedRuntimeSession(from snapshot: TransportSnapshot) {
+        for record in snapshot.executionContextsByID.values.sorted(by: { $0.id.rawValue < $1.id.rawValue }) {
+            runtime.applyExecutionContextCreated(record)
         }
     }
 

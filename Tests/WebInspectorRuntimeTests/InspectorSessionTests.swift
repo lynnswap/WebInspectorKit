@@ -20,6 +20,7 @@ func connectBootstrapsMainPageDocumentInOrder() async throws {
         "Runtime.enable",
         "DOM.getDocument",
         "Network.enable",
+        "Console.enable",
     ])
     #expect(await session.isAttached)
     #expect(await session.dom.snapshot().currentPageTargetID == ProtocolTargetIdentifier.pageMain)
@@ -74,6 +75,31 @@ func domainPumpsApplyNetworkEventsToNetworkSession() async throws {
 
     #expect(request.id.targetID == ProtocolTargetIdentifier.pageMain)
     #expect(request.request.url == "https://example.com/app.js")
+}
+
+@Test
+func domainPumpsApplyConsoleEventsToConsoleSession() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"Console.messageAdded","params":{"message":{"source":"console-api","level":"warning","text":"hello","type":"log","networkRequestId":"request-1"}}}"#
+    )
+
+    let snapshot: ConsoleSessionSnapshot = try await waitUntil {
+        let snapshot = await session.console.snapshot()
+        guard snapshot.orderedMessageIDs.isEmpty == false else {
+            return nil
+        }
+        return snapshot
+    }
+    let messageID = try #require(snapshot.orderedMessageIDs.first)
+    #expect(snapshot.messagesByID[messageID]?.networkRequestKey == NetworkRequestIdentifierKey(targetID: .pageMain, requestID: .init("request-1")))
+    #expect(snapshot.warningCount == 1)
 }
 
 @Test
@@ -745,6 +771,37 @@ func cssOnlyFrameTargetDoesNotSendCSSEnableOnCreation() async throws {
 }
 
 @Test
+func frameTargetWithAdvertisedRuntimeAndConsoleEnablesRuntimeBeforeConsole() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    let sentCount = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["Runtime","Console"],"isProvisional":false}}}"#
+    )
+
+    let runtimeEnable = try await waitForTargetMessage(backend, method: "Runtime.enable", after: sentCount)
+    #expect(runtimeEnable.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    await receiveTargetReply(
+        transport,
+        targetID: runtimeEnable.targetIdentifier,
+        messageID: try messageID(runtimeEnable.message),
+        result: "{}"
+    )
+
+    let consoleEnable = try await waitForTargetMessage(backend, method: "Console.enable", after: sentCount)
+    #expect(consoleEnable.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    await receiveTargetReply(
+        transport,
+        targetID: consoleEnable.targetIdentifier,
+        messageID: try messageID(consoleEnable.message),
+        result: "{}"
+    )
+}
+
+@Test
 func domCapableFrameTargetDiscoveredBeforeAttachHydratesAfterConnect() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
@@ -830,6 +887,51 @@ func provisionalFrameDocumentReplyBeforeCommitRehydratesCommittedFrame() async t
         return snapshot
     }
     #expect(snapshot.targetsByID[provisionalTargetID] == nil)
+}
+
+@Test
+func committedProvisionalFrameWithRuntimeAndConsoleEnablesCommittedTarget() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    let sentCountBeforeFrameTarget = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-provisional","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["Runtime","Console"],"isProvisional":true}}}"#
+    )
+    try await Task.sleep(for: .milliseconds(5))
+    #expect(await backend.sentTargetMessages().count == sentCountBeforeFrameTarget)
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"frame-provisional","newTargetId":"frame-ad"}}"#
+    )
+
+    let runtimeEnable = try await waitForTargetMessage(
+        backend,
+        method: "Runtime.enable",
+        after: sentCountBeforeFrameTarget
+    )
+    #expect(runtimeEnable.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    await receiveTargetReply(
+        transport,
+        targetID: runtimeEnable.targetIdentifier,
+        messageID: try messageID(runtimeEnable.message),
+        result: "{}"
+    )
+
+    let consoleEnable = try await waitForTargetMessage(
+        backend,
+        method: "Console.enable",
+        after: sentCountBeforeFrameTarget
+    )
+    #expect(consoleEnable.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    await receiveTargetReply(
+        transport,
+        targetID: consoleEnable.targetIdentifier,
+        messageID: try messageID(consoleEnable.message),
+        result: "{}"
+    )
 }
 
 @Test
@@ -1732,6 +1834,7 @@ func targetCommitBootstrapsCommittedMainPageTarget() async throws {
         "Runtime.enable",
         "DOM.getDocument",
         "Network.enable",
+        "Console.enable",
     ])
 }
 
@@ -1791,6 +1894,10 @@ func requestNodeWaitsForPathPushBeforeSelectingNode() async throws {
     _ = try await waitUntil {
         await session.dom.snapshot().executionContextsByID[ExecutionContextID(7)]
     }
+    _ = try await waitUntil {
+        await session.runtime.snapshot().executionContextsByID[ExecutionContextID(7)]
+    }
+    #expect(await session.runtime.snapshot().executionContextsByID[ExecutionContextID(7)]?.targetID == .pageMain)
     let intent = await session.dom.beginInspectSelectionRequest(
         targetID: .pageMain,
         objectID: "selected-object"
@@ -3727,10 +3834,20 @@ private func completeBootstrap(
 
     let networkMessage = try await waitForTargetMessage(backend, method: "Network.enable", after: sentCount)
     sentMessages.append(networkMessage)
+    sentCount = await backend.sentTargetMessages().count
     await receiveTargetReply(
         transport,
         targetID: networkMessage.targetIdentifier,
         messageID: try messageID(networkMessage.message),
+        result: "{}"
+    )
+
+    let consoleMessage = try await waitForTargetMessage(backend, method: "Console.enable", after: sentCount)
+    sentMessages.append(consoleMessage)
+    await receiveTargetReply(
+        transport,
+        targetID: consoleMessage.targetIdentifier,
+        messageID: try messageID(consoleMessage.message),
         result: "{}"
     )
     return sentMessages
