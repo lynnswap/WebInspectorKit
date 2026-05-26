@@ -327,6 +327,12 @@ when probing is acceptable, and conservative defaults otherwise.
 - `Runtime.evaluate` should target the active execution context target when UI
   later exposes context selection. Without UI context selection, the current
   page target/main-world context is the simplest first behavior.
+- Runtime execution contexts need two target identities. `targetID` is the
+  semantic owner used by DOM selection and future UI grouping.
+  `runtimeAgentTargetID` is the protocol agent that delivered the context and
+  is the scope for `Runtime.executionContextsCleared`. They differ when the
+  page Runtime agent reports a subframe context that should be owned by a frame
+  target.
 - Site Isolation frame Console means `ConsoleSession` must merge page, frame,
   worker, and service-worker message streams without dropping the target
   identity. A flat display can still be built later, but the Core model should
@@ -336,16 +342,23 @@ when probing is acceptable, and conservative defaults otherwise.
 
 ### Core
 
-Add a first-class Console domain beside DOM/CSS/Network:
+Add first-class Runtime and Console domains beside DOM/CSS/Network:
 
+- `Sources/WebInspectorCore/Runtime/RuntimeProtocol.swift`
+  - JSON values
+  - execution context payloads
+  - remote object, preview, property, collection, and evaluation payloads
+  - command intents
+- `Sources/WebInspectorCore/Runtime/RuntimeModel.swift`
+  - `@MainActor @Observable RuntimeSession`
+  - execution contexts keyed by id
+  - `RuntimeExecutionContext.targetID` for semantic ownership
+  - `RuntimeExecutionContext.runtimeAgentTargetID` for agent-scoped clears
+  - target-scoped remote object groups and unsupported command state
 - `Sources/WebInspectorCore/Console/ConsoleProtocol.swift`
   - identifiers
   - message/source/level/type/clear reason enums or raw wrappers
   - `ConsoleMessagePayload`
-  - `RuntimeRemoteObjectPayload`
-  - `RuntimeObjectPreviewPayload`
-  - `RuntimePropertyPreviewPayload`
-  - `RuntimeEvaluationResultPayload`
   - command intents
 - `Sources/WebInspectorCore/Console/ConsoleModel.swift`
   - `@MainActor @Observable ConsoleSession`
@@ -364,31 +377,43 @@ latest (`appcache` removed, `accessibility` added).
 Add `ConsoleTransportAdapter`:
 
 - build `Console.enable`, `Console.disable`, `Console.clearMessages`,
-  `Console.setConsoleClearAPIEnabled`, `Runtime.evaluate`,
-  `Runtime.getPreview`, `Runtime.getProperties`, `Runtime.releaseObject`, and
-  `Runtime.releaseObjectGroup` commands.
+  `Console.setConsoleClearAPIEnabled`, `Console.getLoggingChannels`, and
+  `Console.setLoggingChannelLevel` commands.
 - decode `Console.messageAdded`
 - decode `Console.messageRepeatCountUpdated`
 - decode `Console.messagesCleared`
-- decode `Runtime.evaluate` result
 - preserve target id from `ProtocolEventEnvelope.targetID`
 
-`Runtime.evaluate` belongs in this adapter because it is required by the
-Console feature, but its command domain must remain `.runtime`.
+Add `RuntimeTransportAdapter`:
+
+- build `Runtime.enable`, `Runtime.evaluate`, `Runtime.getPreview`,
+  `Runtime.getProperties`, `Runtime.getDisplayableProperties`,
+  `Runtime.getCollectionEntries`, `Runtime.saveResult`,
+  `Runtime.setSavedResultAlias`, `Runtime.releaseObject`, and
+  `Runtime.releaseObjectGroup` commands.
+- decode Runtime command results.
+- decode `Runtime.executionContextCreated`,
+  `Runtime.executionContextDestroyed`, and `Runtime.executionContextsCleared`.
+- preserve `ProtocolEventEnvelope.sourceTargetID` as the Runtime agent source
+  when recording contexts and applying clear events.
 
 ### Runtime Session
 
 Add `console` to `InspectorSession` construction and event handling:
 
+- `package let runtime: RuntimeSession`
 - `package let console: ConsoleSession`
 - bootstrap `Console.enable` for the main page target after existing DOM,
   Runtime, and Network setup when the target has Console capability.
-- when target lifecycle events create/commit a target with Console capability,
-  enable Console for that target after it is no longer provisional.
+- when target lifecycle events create/commit a target with Runtime and/or
+  Console capability, enable each supported agent independently after the target
+  is no longer provisional.
 - handle `.console` in `handleProtocolEvent` by applying decoded events to
   `ConsoleSession`.
-- keep `.runtime` execution context handling for DOM/transport registry as it
-  exists today; add Console-specific evaluation methods separately.
+- handle `.runtime` by applying decoded events to `RuntimeSession` and the DOM
+  compatibility execution-context store. Runtime agent source target controls
+  `executionContextsCleared`, while semantic target ownership remains available
+  for DOM selection and future Console UI grouping.
 
 Do not create a UI-only view model for Console transport state. The native UI
 can observe `ConsoleSession` directly later, matching the existing

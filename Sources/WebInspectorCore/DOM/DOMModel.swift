@@ -542,8 +542,8 @@ package final class DOMSession {
         targetGraph.removeExecutionContext(contextID)
     }
 
-    package func applyExecutionContextsCleared(targetID: ProtocolTarget.ID) {
-        targetGraph.removeExecutionContexts(targetID: targetID)
+    package func applyExecutionContextsCleared(runtimeAgentTargetID: ProtocolTarget.ID) {
+        targetGraph.removeExecutionContexts(runtimeAgentTargetID: runtimeAgentTargetID)
     }
 
     package func applyExecutionContextCreated(

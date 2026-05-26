@@ -683,6 +683,32 @@ func runtimeContextOnPagePreservesExistingFrameTargetRoute() async throws {
 }
 
 @Test
+func rootScopedRuntimeClearRemovesRetargetedContextsFromPageRuntimeAgent() async throws {
+    let backend = FakeTransportBackend()
+    let session = TransportSession(backend: backend)
+
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#)
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-A","type":"frame","frameId":"frame-A","parentFrameId":"main-frame","isProvisional":false}}}"#)
+    await session.receiveRootMessage(#"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"frame-A"}}}"#)
+    await receiveTargetDispatch(
+        session,
+        targetID: .init("frame-A"),
+        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":8,"frameId":"frame-A"}}}"#
+    )
+
+    let beforeClear = await session.snapshot()
+    #expect(beforeClear.executionContextsByID[ExecutionContextID(7)]?.targetID == ProtocolTargetIdentifier("frame-A"))
+    #expect(beforeClear.executionContextsByID[ExecutionContextID(7)]?.runtimeAgentTargetID == ProtocolTargetIdentifier("page-main"))
+    #expect(beforeClear.executionContextsByID[ExecutionContextID(8)]?.runtimeAgentTargetID == ProtocolTargetIdentifier("frame-A"))
+
+    await session.receiveRootMessage(#"{"method":"Runtime.executionContextsCleared","params":{}}"#)
+    let afterClear = await session.snapshot()
+
+    #expect(afterClear.executionContextsByID[ExecutionContextID(7)] == nil)
+    #expect(afterClear.executionContextsByID[ExecutionContextID(8)]?.targetID == ProtocolTargetIdentifier("frame-A"))
+}
+
+@Test
 func runtimeExecutionContextRegistryPreservesContextMetadata() async throws {
     let backend = FakeTransportBackend()
     let session = TransportSession(backend: backend)

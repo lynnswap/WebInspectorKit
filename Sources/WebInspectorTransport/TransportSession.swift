@@ -435,8 +435,20 @@ package actor TransportSession {
         }
 
         let targetID = targetIDForRootEvent(method: method, paramsData: parsed.paramsData)
-        await updateRegistryFromRootEvent(method: method, targetID: targetID, paramsData: parsed.paramsData)
-        await emit(domain: ProtocolDomain(method: method), method: method, targetID: targetID, paramsData: parsed.paramsData)
+        let sourceTargetID = sourceTargetIDForRootEvent(method: method, targetID: targetID)
+        await updateRegistryFromRootEvent(
+            method: method,
+            targetID: targetID,
+            sourceTargetID: sourceTargetID,
+            paramsData: parsed.paramsData
+        )
+        await emit(
+            domain: ProtocolDomain(method: method),
+            method: method,
+            targetID: targetID,
+            sourceTargetID: sourceTargetID,
+            paramsData: parsed.paramsData
+        )
         await emitPendingResolvedStyleSheetAddedEvents()
         await dispatchCommittedProvisionalTargetMessagesIfNeeded(method: method, paramsData: parsed.paramsData)
     }
@@ -469,13 +481,24 @@ package actor TransportSession {
             return
         }
 
-        updateRegistryFromTargetEvent(method: method, targetID: targetID, paramsData: parsed.paramsData)
         let emittedTargetID = targetIDForTargetEvent(
             method: method,
             deliveredTargetID: targetID,
             paramsData: parsed.paramsData
         )
-        await emit(domain: ProtocolDomain(method: method), method: method, targetID: emittedTargetID, paramsData: parsed.paramsData)
+        updateRegistryFromTargetEvent(
+            method: method,
+            targetID: emittedTargetID,
+            sourceTargetID: targetID,
+            paramsData: parsed.paramsData
+        )
+        await emit(
+            domain: ProtocolDomain(method: method),
+            method: method,
+            targetID: emittedTargetID,
+            sourceTargetID: targetID,
+            paramsData: parsed.paramsData
+        )
     }
 
     private func resolve(_ pending: PendingReply, parsed: ParsedProtocolMessage) async {
@@ -508,6 +531,7 @@ package actor TransportSession {
     private func updateRegistryFromRootEvent(
         method: String,
         targetID: ProtocolTargetIdentifier?,
+        sourceTargetID: ProtocolTargetIdentifier?,
         paramsData: Data
     ) async {
         switch method {
@@ -527,7 +551,12 @@ package actor TransportSession {
             }
             applyTargetCommitted(oldTargetID: params.oldTargetId, newTargetID: params.newTargetId)
         case "Runtime.executionContextCreated", "Runtime.executionContextDestroyed", "Runtime.executionContextsCleared":
-            updateRegistryFromTargetEvent(method: method, targetID: targetID, paramsData: paramsData)
+            updateRegistryFromTargetEvent(
+                method: method,
+                targetID: targetID,
+                sourceTargetID: sourceTargetID,
+                paramsData: paramsData
+            )
         case "CSS.styleSheetAdded", "CSS.styleSheetRemoved":
             updateCSSStyleSheetRegistry(method: method, targetID: targetID, paramsData: paramsData)
         default:
@@ -535,7 +564,12 @@ package actor TransportSession {
         }
     }
 
-    private func updateRegistryFromTargetEvent(method: String, targetID: ProtocolTargetIdentifier?, paramsData: Data) {
+    private func updateRegistryFromTargetEvent(
+        method: String,
+        targetID: ProtocolTargetIdentifier?,
+        sourceTargetID: ProtocolTargetIdentifier? = nil,
+        paramsData: Data
+    ) {
         guard let targetID else {
             return
         }
@@ -556,6 +590,7 @@ package actor TransportSession {
             executionContextsByID[params.context.id] = RuntimeExecutionContext(
                 id: params.context.id,
                 targetID: resolvedTargetID,
+                runtimeAgentTargetID: sourceTargetID ?? resolvedTargetID,
                 type: params.context.type ?? .normal,
                 name: params.context.name ?? "",
                 frameID: frameID
@@ -569,7 +604,8 @@ package actor TransportSession {
             }
             executionContextsByID.removeValue(forKey: params.executionContextId)
         case "Runtime.executionContextsCleared":
-            executionContextsByID = executionContextsByID.filter { $0.value.targetID != targetID }
+            let runtimeAgentTargetID = sourceTargetID ?? targetID
+            executionContextsByID = executionContextsByID.filter { $0.value.runtimeAgentTargetID != runtimeAgentTargetID }
         default:
             return
         }
@@ -650,7 +686,9 @@ package actor TransportSession {
         provisionalTargetMessagesByTargetID.removeValue(forKey: targetID)
         frameTargetIDsByFrameID = frameTargetIDsByFrameID.filter { $0.value != targetID }
         styleSheetTargetIDsByStyleSheetID = styleSheetTargetIDsByStyleSheetID.filter { $0.value != targetID }
-        executionContextsByID = executionContextsByID.filter { $0.value.targetID != targetID }
+        executionContextsByID = executionContextsByID.filter {
+            $0.value.targetID != targetID && $0.value.runtimeAgentTargetID != targetID
+        }
         let pendingReplies = targetReplies.keys
             .filter { $0.targetID == targetID }
             .compactMap { removeTargetReply(for: $0) }
@@ -710,6 +748,9 @@ package actor TransportSession {
                 var movedRecord = record
                 movedRecord.targetID = newTargetID
                 executionContextsByID[contextID] = movedRecord
+            }
+            for (contextID, record) in executionContextsByID where record.runtimeAgentTargetID == oldTargetID {
+                executionContextsByID[contextID]?.runtimeAgentTargetID = newTargetID
             }
             if currentMainPageTargetID == oldTargetID,
                newRecord.isTopLevelPage {
@@ -794,6 +835,18 @@ package actor TransportSession {
             default:
                 return nil
             }
+        }
+    }
+
+    private func sourceTargetIDForRootEvent(
+        method: String,
+        targetID: ProtocolTargetIdentifier?
+    ) -> ProtocolTargetIdentifier? {
+        switch ProtocolDomain(method: method) {
+        case .runtime:
+            return currentMainPageTargetID ?? targetID
+        default:
+            return targetID
         }
     }
 
@@ -917,7 +970,13 @@ package actor TransportSession {
         return nextCommandID
     }
 
-    private func emit(domain: ProtocolDomain, method: String, targetID: ProtocolTargetIdentifier?, paramsData: Data) async {
+    private func emit(
+        domain: ProtocolDomain,
+        method: String,
+        targetID: ProtocolTargetIdentifier?,
+        sourceTargetID: ProtocolTargetIdentifier? = nil,
+        paramsData: Data
+    ) async {
         nextSequence &+= 1
         lastSequenceByDomain[domain] = nextSequence
         let envelope = ProtocolEventEnvelope(
@@ -925,6 +984,7 @@ package actor TransportSession {
             domain: domain,
             method: method,
             targetID: targetID,
+            sourceTargetID: sourceTargetID,
             receivedDomainSequences: lastSequenceByDomain,
             paramsData: paramsData
         )

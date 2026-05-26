@@ -255,6 +255,10 @@ package final class DOMTargetGraph {
         executionContextsByID = executionContextsByID.filter { $0.value.targetID != targetID }
     }
 
+    package func removeExecutionContexts(runtimeAgentTargetID: ProtocolTarget.ID) {
+        executionContextsByID = executionContextsByID.filter { $0.value.runtimeAgentTargetID != runtimeAgentTargetID }
+    }
+
     package func removeExecutionContext(_ contextID: ExecutionContextID) {
         executionContextsByID.removeValue(forKey: contextID)
     }
@@ -264,6 +268,9 @@ package final class DOMTargetGraph {
             var movedRecord = record
             movedRecord.targetID = newTargetID
             executionContextsByID[contextID] = movedRecord
+        }
+        for (contextID, record) in executionContextsByID where record.runtimeAgentTargetID == oldTargetID {
+            executionContextsByID[contextID]?.runtimeAgentTargetID = newTargetID
         }
     }
 

@@ -1171,7 +1171,8 @@ package final class InspectorSession {
         guard isAttached,
               let connection,
               connection.runtimeConsoleEnableTasksByTargetID[targetID] == nil,
-              shouldEnableConsoleAgents(targetID: targetID, connection: connection) else {
+              shouldEnableRuntimeAgent(targetID: targetID, connection: connection)
+                  || shouldEnableConsoleAgent(targetID: targetID, connection: connection) else {
             return
         }
 
@@ -1193,7 +1194,21 @@ package final class InspectorSession {
         connection.runtimeConsoleEnableTasksByTargetID[targetID] = task
     }
 
-    private func shouldEnableConsoleAgents(
+    private func shouldEnableRuntimeAgent(
+        targetID: ProtocolTargetIdentifier,
+        connection: InspectorConnection
+    ) -> Bool {
+        guard let target = dom.snapshot().targetsByID[targetID],
+              target.isProvisional == false,
+              target.capabilities.contains(.runtime),
+              connection.runtimeEnabledTargetIDs.contains(targetID) == false,
+              runtime.supportsCommand("Runtime.enable", targetID: targetID) else {
+            return false
+        }
+        return true
+    }
+
+    private func shouldEnableConsoleAgent(
         targetID: ProtocolTargetIdentifier,
         connection: InspectorConnection
     ) -> Bool {
@@ -1212,8 +1227,7 @@ package final class InspectorSession {
         connection: InspectorConnection
     ) async throws {
         guard let target = dom.snapshot().targetsByID[targetID],
-              target.isProvisional == false,
-              target.capabilities.contains(.console) else {
+              target.isProvisional == false else {
             return
         }
 
@@ -1230,7 +1244,8 @@ package final class InspectorSession {
             }
         }
 
-        guard connection.consoleEnabledTargetIDs.contains(targetID) == false,
+        guard target.capabilities.contains(.console),
+              connection.consoleEnabledTargetIDs.contains(targetID) == false,
               console.supportsCommand("Console.enable", targetID: targetID) else {
             return
         }

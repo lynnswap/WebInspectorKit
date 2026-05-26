@@ -130,7 +130,16 @@ package enum RuntimeTransportAdapter {
                 return
             }
             let params = try TransportMessageParser.decode(ExecutionContextCreatedParams.self, from: event.paramsData)
-            session.applyExecutionContextCreated(params.context, targetID: targetID)
+            session.applyExecutionContextCreated(
+                RuntimeExecutionContext(
+                    id: params.context.id,
+                    targetID: targetID,
+                    runtimeAgentTargetID: event.sourceTargetID ?? targetID,
+                    type: params.context.type ?? .normal,
+                    name: params.context.name ?? "",
+                    frameID: params.context.frameID
+                )
+            )
         case "Runtime.executionContextDestroyed":
             let params = try TransportMessageParser.decode(ExecutionContextDestroyedParams.self, from: event.paramsData)
             session.applyExecutionContextDestroyed(params.executionContextId)
@@ -138,7 +147,7 @@ package enum RuntimeTransportAdapter {
             guard let targetID = event.targetID else {
                 return
             }
-            session.applyExecutionContextsCleared(targetID: targetID)
+            session.applyExecutionContextsCleared(runtimeAgentTargetID: event.sourceTargetID ?? targetID)
         default:
             return
         }

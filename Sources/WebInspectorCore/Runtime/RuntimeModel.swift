@@ -3,6 +3,7 @@ import Observation
 package struct RuntimeExecutionContext: Equatable, Sendable {
     package var id: ExecutionContextID
     package var targetID: ProtocolTargetIdentifier
+    package var runtimeAgentTargetID: ProtocolTargetIdentifier
     package var type: RuntimeExecutionContextType
     package var name: String
     package var frameID: DOMFrameIdentifier?
@@ -10,12 +11,14 @@ package struct RuntimeExecutionContext: Equatable, Sendable {
     package init(
         id: ExecutionContextID,
         targetID: ProtocolTargetIdentifier,
+        runtimeAgentTargetID: ProtocolTargetIdentifier? = nil,
         type: RuntimeExecutionContextType = .normal,
         name: String = "",
         frameID: DOMFrameIdentifier? = nil
     ) {
         self.id = id
         self.targetID = targetID
+        self.runtimeAgentTargetID = runtimeAgentTargetID ?? targetID
         self.type = type
         self.name = name
         self.frameID = frameID
@@ -140,17 +143,23 @@ package final class RuntimeSession {
         }
     }
 
-    package func applyExecutionContextsCleared(targetID: ProtocolTargetIdentifier) {
+    package func applyExecutionContextsCleared(runtimeAgentTargetID: ProtocolTargetIdentifier) {
         let removedContextIDs = Set(
             executionContextsByID.values
-                .filter { $0.targetID == targetID }
+                .filter { $0.runtimeAgentTargetID == runtimeAgentTargetID }
                 .map(\.id)
         )
         guard removedContextIDs.isEmpty == false else {
             return
         }
-        executionContextsByID = executionContextsByID.filter { $0.value.targetID != targetID }
-        normalContextIDByTargetID.removeValue(forKey: targetID)
+        let removedTargetIDs = Set(removedContextIDs.compactMap { executionContextsByID[$0]?.targetID })
+        executionContextsByID = executionContextsByID.filter { $0.value.runtimeAgentTargetID != runtimeAgentTargetID }
+        for targetID in removedTargetIDs {
+            if let normalContextID = normalContextIDByTargetID[targetID],
+               removedContextIDs.contains(normalContextID) {
+                normalContextIDByTargetID.removeValue(forKey: targetID)
+            }
+        }
         if let activeContextID,
            removedContextIDs.contains(activeContextID) {
             self.activeContextID = nil
@@ -190,6 +199,9 @@ package final class RuntimeSession {
         if let oldTargetID {
             for (contextID, context) in executionContextsByID where context.targetID == oldTargetID {
                 executionContextsByID[contextID]?.targetID = newTargetID
+            }
+            for (contextID, context) in executionContextsByID where context.runtimeAgentTargetID == oldTargetID {
+                executionContextsByID[contextID]?.runtimeAgentTargetID = newTargetID
             }
             if let normalContextID = normalContextIDByTargetID.removeValue(forKey: oldTargetID) {
                 normalContextIDByTargetID[newTargetID] = normalContextID

@@ -194,8 +194,12 @@ WebInspectorUI.
 - Network owns request/resource identity. Transport preserves the event target
   and optional payload `targetId` separately so Network can distinguish routing
   from origin/placement metadata.
-- Runtime owns execution contexts. Transport preserves the target connection
-  that delivered each context and the frame id carried by the context payload.
+- Runtime owns execution contexts. Transport preserves both the semantic owner
+  target (`targetID`) and the Runtime agent that delivered the context
+  (`runtimeAgentTargetID`). These can differ when a page Runtime agent reports a
+  subframe context that is displayed under a frame target. Root-scoped
+  `Runtime.executionContextsCleared` must clear by Runtime agent source, not by
+  the retargeted owner.
 
 ## Contradicted Interpretations
 

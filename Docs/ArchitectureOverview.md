@@ -53,11 +53,12 @@ Responsibilities stay intentionally narrow:
 
 - `WebInspectorNativeBridge`: attach, send raw JSON, receive raw JSON, detach.
 - `WebInspectorTransport`: parse protocol envelopes, unwrap target messages,
-  route commands, manage replies, track protocol targets and execution contexts.
+  route commands, manage replies, track protocol targets, and preserve
+  execution-context owner/source target identity.
 - `InspectorSession`: bootstrap domains, own event pumps, apply decoded domain
   events to semantic sessions, perform command intents.
 - `WebInspectorCore`: hold `@MainActor @Observable` semantic model state for
-  DOM and Network.
+  DOM, Runtime, Console, and Network.
 - `WebInspectorUI`: render and interact with native UIKit/TextKit2 views.
 
 ## Event And Command Flow

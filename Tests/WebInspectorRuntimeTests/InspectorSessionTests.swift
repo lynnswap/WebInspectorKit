@@ -265,6 +265,43 @@ func runtimeContextDispatchedOnPageResolvesToFrameTargetByFrameID() async throws
 }
 
 @Test
+func rootRuntimeClearRemovesFrameContextOwnedByPageRuntimeAgent() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["Runtime"],"isProvisional":false}}}"#
+    )
+    _ = try await waitUntil {
+        await session.dom.snapshot().targetsByID[.frameAd]
+    }
+    await transport.receiveRootMessage(
+        #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":78,"frameId":"ad-frame"}}}"#
+    )
+
+    let _: Bool = try await waitUntil {
+        let runtimeContext = await session.runtime.snapshot().executionContextsByID[ExecutionContextID(78)]
+        let domContext = await session.dom.snapshot().executionContextsByID[ExecutionContextID(78)]
+        guard runtimeContext?.targetID == .frameAd,
+              runtimeContext?.runtimeAgentTargetID == .pageMain,
+              domContext?.targetID == .frameAd,
+              domContext?.runtimeAgentTargetID == .pageMain else {
+            return nil
+        }
+        return true
+    }
+
+    await transport.receiveRootMessage(#"{"method":"Runtime.executionContextsCleared","params":{}}"#)
+    let _: Bool = try await waitUntil {
+        let runtimeContext = await session.runtime.snapshot().executionContextsByID[ExecutionContextID(78)]
+        let domContext = await session.dom.snapshot().executionContextsByID[ExecutionContextID(78)]
+        return runtimeContext == nil && domContext == nil ? true : nil
+    }
+}
+
+@Test
 func networkLazyFetchReturnsCommandResultFromRequestTarget() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
@@ -961,6 +998,32 @@ func frameTargetWithAdvertisedRuntimeAndConsoleEnablesRuntimeBeforeConsole() asy
         messageID: try messageID(consoleEnable.message),
         result: "{}"
     )
+}
+
+@Test
+func frameTargetWithAdvertisedRuntimeOnlyEnablesRuntimeWithoutConsole() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    let sentCount = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["Runtime"],"isProvisional":false}}}"#
+    )
+
+    let runtimeEnable = try await waitForTargetMessage(backend, method: "Runtime.enable", after: sentCount)
+    #expect(runtimeEnable.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    await receiveTargetReply(
+        transport,
+        targetID: runtimeEnable.targetIdentifier,
+        messageID: try messageID(runtimeEnable.message),
+        result: "{}"
+    )
+
+    try await Task.sleep(for: .milliseconds(5))
+    let messages = await backend.sentTargetMessages().dropFirst(sentCount)
+    #expect(messages.compactMap { try? messageMethod($0.message) }.contains("Console.enable") == false)
 }
 
 @Test

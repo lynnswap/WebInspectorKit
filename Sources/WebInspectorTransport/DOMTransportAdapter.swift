@@ -159,6 +159,7 @@ package enum DOMTransportAdapter {
                 .init(
                     id: params.context.id,
                     targetID: targetID,
+                    runtimeAgentTargetID: event.sourceTargetID ?? targetID,
                     type: params.context.type ?? .normal,
                     name: params.context.name ?? "",
                     frameID: params.context.frameId
@@ -171,7 +172,7 @@ package enum DOMTransportAdapter {
             guard let targetID = event.targetID else {
                 return
             }
-            session.applyExecutionContextsCleared(targetID: targetID)
+            session.applyExecutionContextsCleared(runtimeAgentTargetID: event.sourceTargetID ?? targetID)
         default:
             return
         }
