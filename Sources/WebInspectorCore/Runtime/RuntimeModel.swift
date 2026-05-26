@@ -325,6 +325,7 @@ package final class RuntimeSession {
                 .filter {
                     $0.type == .normal
                         && $0.targetID == context.targetID
+                        && $0.runtimeAgentTargetID == context.runtimeAgentTargetID
                         && $0.frameID == context.frameID
                         && $0.name == context.name
                         && $0.id != context.id

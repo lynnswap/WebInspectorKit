@@ -57,6 +57,47 @@ func runtimeSessionTracksTargetOwnedExecutionContextsAndReplacesFrameNormalConte
 
 @Test
 @MainActor
+func runtimeSessionKeepsSameFrameNormalContextsFromDifferentRuntimeAgents() {
+    let session = RuntimeSession()
+    let pageTargetID = ProtocolTargetIdentifier("page-target")
+    let frameTargetID = ProtocolTargetIdentifier("frame-target")
+    let objectID = RuntimeRemoteObjectIdentifier("page-agent-object")
+
+    session.applyExecutionContextCreated(
+        RuntimeExecutionContext(
+            id: ExecutionContextID(1),
+            targetID: frameTargetID,
+            runtimeAgentTargetID: pageTargetID,
+            type: .normal,
+            name: "Frame",
+            frameID: DOMFrameIdentifier("frame-a")
+        )
+    )
+    session.registerRemoteObject(
+        RuntimeRemoteObjectPayload(type: .object, objectID: objectID),
+        runtimeAgentTargetID: pageTargetID,
+        objectGroup: .console,
+        executionContextID: ExecutionContextID(1)
+    )
+    session.applyExecutionContextCreated(
+        RuntimeExecutionContext(
+            id: ExecutionContextID(2),
+            targetID: frameTargetID,
+            runtimeAgentTargetID: frameTargetID,
+            type: .normal,
+            name: "Frame",
+            frameID: DOMFrameIdentifier("frame-a")
+        )
+    )
+
+    let snapshot = session.snapshot()
+    #expect(snapshot.executionContextsByID[ExecutionContextID(1)]?.runtimeAgentTargetID == pageTargetID)
+    #expect(snapshot.executionContextsByID[ExecutionContextID(2)]?.runtimeAgentTargetID == frameTargetID)
+    #expect(snapshot.remoteObjectsByID[.init(runtimeAgentTargetID: pageTargetID, objectID: objectID)] != nil)
+}
+
+@Test
+@MainActor
 func runtimeEvaluateIntentDoesNotUseActiveContextFromAnotherTarget() throws {
     let session = RuntimeSession()
     let pageTargetID = ProtocolTargetIdentifier("page")

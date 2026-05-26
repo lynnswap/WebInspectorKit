@@ -347,7 +347,9 @@ when probing is acceptable, and conservative defaults otherwise.
   `runtimeAgentTargetID` is the protocol agent that delivered the context and
   is the scope for `Runtime.executionContextsCleared`. They differ when the
   page Runtime agent reports a subframe context that should be owned by a frame
-  target.
+  target. Normal-context replacement is scoped by both semantic target and
+  Runtime agent so a later frame agent does not discard still-valid contexts
+  from the page agent.
 - Site Isolation frame Console means `ConsoleSession` must merge page, frame,
   worker, and service-worker message streams without dropping the target
   identity. A flat display can still be built later, but the Core model should
