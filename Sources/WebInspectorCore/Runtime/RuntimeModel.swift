@@ -27,7 +27,7 @@ package struct RuntimeExecutionContext: Equatable, Sendable {
 
 package struct RuntimeSessionSnapshot: Equatable, Sendable {
     package var executionContextsByID: [ExecutionContextID: RuntimeExecutionContext]
-    package var activeContextID: ExecutionContextID?
+    package var selectedContextID: ExecutionContextID?
     package var normalContextIDByTargetID: [ProtocolTargetIdentifier: ExecutionContextID]
     package var remoteObjectsByID: [RuntimeRemoteObjectIdentifierKey: RuntimeRemoteObjectPayload]
     package var objectGroupByRemoteObjectID: [RuntimeRemoteObjectIdentifierKey: RuntimeObjectGroup]
@@ -38,7 +38,7 @@ package struct RuntimeSessionSnapshot: Equatable, Sendable {
 @MainActor
 @Observable
 package final class RuntimeSession {
-    package private(set) var activeContextID: ExecutionContextID?
+    package private(set) var selectedContextID: ExecutionContextID?
 
     private var executionContextsByID: [ExecutionContextID: RuntimeExecutionContext]
     private var normalContextIDByTargetID: [ProtocolTargetIdentifier: ExecutionContextID]
@@ -48,7 +48,7 @@ package final class RuntimeSession {
     private var unsupportedCommandsByTargetID: [ProtocolTargetIdentifier: Set<String>]
 
     package init() {
-        activeContextID = nil
+        selectedContextID = nil
         executionContextsByID = [:]
         normalContextIDByTargetID = [:]
         remoteObjectsByID = [:]
@@ -58,7 +58,7 @@ package final class RuntimeSession {
     }
 
     package func reset() {
-        activeContextID = nil
+        selectedContextID = nil
         executionContextsByID.removeAll()
         normalContextIDByTargetID.removeAll()
         remoteObjectsByID.removeAll()
@@ -70,7 +70,7 @@ package final class RuntimeSession {
     package func snapshot() -> RuntimeSessionSnapshot {
         RuntimeSessionSnapshot(
             executionContextsByID: executionContextsByID,
-            activeContextID: activeContextID,
+            selectedContextID: selectedContextID,
             normalContextIDByTargetID: normalContextIDByTargetID,
             remoteObjectsByID: remoteObjectsByID,
             objectGroupByRemoteObjectID: objectGroupByRemoteObjectID,
@@ -83,22 +83,22 @@ package final class RuntimeSession {
         executionContextsByID[contextID]
     }
 
-    package func activeContext(targetID: ProtocolTargetIdentifier? = nil) -> RuntimeExecutionContext? {
-        if let targetID {
-            if let contextID = normalContextIDByTargetID[targetID] {
-                return executionContextsByID[contextID]
-            }
-            guard let activeContextID,
-                  let context = executionContextsByID[activeContextID],
-                  context.targetID == targetID else {
-                return nil
-            }
-            return context
-        }
-        guard let activeContextID else {
+    package func selectedContext(targetID: ProtocolTargetIdentifier? = nil) -> RuntimeExecutionContext? {
+        guard let selectedContextID,
+              let context = executionContextsByID[selectedContextID] else {
             return nil
         }
-        return executionContextsByID[activeContextID]
+        if let targetID {
+            return context.targetID == targetID ? context : nil
+        }
+        return context
+    }
+
+    package func defaultContext(targetID: ProtocolTargetIdentifier) -> RuntimeExecutionContext? {
+        guard let contextID = normalContextIDByTargetID[targetID] else {
+            return nil
+        }
+        return executionContextsByID[contextID]
     }
 
     package func applyExecutionContextCreated(_ payload: RuntimeExecutionContextPayload, targetID: ProtocolTargetIdentifier) {
@@ -118,16 +118,17 @@ package final class RuntimeSession {
            let oldContextID = normalContextIDToReplace(with: context),
            oldContextID != context.id {
             executionContextsByID.removeValue(forKey: oldContextID)
-            if activeContextID == oldContextID {
-                activeContextID = nil
+            if selectedContextID == oldContextID {
+                selectedContextID = nil
             }
         }
         executionContextsByID[context.id] = context
         if context.type == .normal {
             normalContextIDByTargetID[context.targetID] = context.id
         }
-        if context.type == .normal {
-            activeContextID = context.id
+        if context.type == .normal,
+           selectedContextID == nil {
+            selectedContextID = context.id
         }
     }
 
@@ -138,8 +139,8 @@ package final class RuntimeSession {
         if normalContextIDByTargetID[context.targetID] == contextID {
             normalContextIDByTargetID.removeValue(forKey: context.targetID)
         }
-        if activeContextID == contextID {
-            activeContextID = nil
+        if selectedContextID == contextID {
+            selectedContextID = nil
         }
     }
 
@@ -160,21 +161,21 @@ package final class RuntimeSession {
                 normalContextIDByTargetID.removeValue(forKey: targetID)
             }
         }
-        if let activeContextID,
-           removedContextIDs.contains(activeContextID) {
-            self.activeContextID = nil
+        if let selectedContextID,
+           removedContextIDs.contains(selectedContextID) {
+            self.selectedContextID = nil
         }
     }
 
     package func selectExecutionContext(_ contextID: ExecutionContextID?) {
         guard let contextID else {
-            activeContextID = nil
+            selectedContextID = nil
             return
         }
         guard executionContextsByID[contextID] != nil else {
             return
         }
-        activeContextID = contextID
+        selectedContextID = contextID
     }
 
     package func applyTargetDestroyed(_ targetID: ProtocolTargetIdentifier) {
@@ -202,9 +203,9 @@ package final class RuntimeSession {
             }
         }
         unsupportedCommandsByTargetID.removeValue(forKey: targetID)
-        if let activeContextID,
-           removedContextIDs.contains(activeContextID) {
-            self.activeContextID = normalContextIDByTargetID.values.sorted(by: { $0.rawValue < $1.rawValue }).first
+        if let selectedContextID,
+           removedContextIDs.contains(selectedContextID) {
+            self.selectedContextID = nil
         }
     }
 
@@ -332,7 +333,7 @@ package final class RuntimeSession {
         contextID: ExecutionContextID? = nil,
         objectGroup: RuntimeObjectGroup? = .console
     ) -> RuntimeCommandIntent {
-        let context = contextID.flatMap { executionContextsByID[$0] } ?? activeContext(targetID: targetID)
+        let context = evaluationContext(targetID: targetID, contextID: contextID)
         return .evaluate(
             RuntimeEvaluationRequest(
                 targetID: context?.runtimeAgentTargetID ?? targetID,
@@ -347,5 +348,15 @@ package final class RuntimeSession {
                 emulateUserGesture: true
             )
         )
+    }
+
+    private func evaluationContext(
+        targetID: ProtocolTargetIdentifier,
+        contextID: ExecutionContextID?
+    ) -> RuntimeExecutionContext? {
+        if let contextID {
+            return executionContextsByID[contextID]
+        }
+        return selectedContext(targetID: targetID) ?? defaultContext(targetID: targetID)
     }
 }

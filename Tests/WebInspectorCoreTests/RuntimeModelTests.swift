@@ -44,7 +44,7 @@ func runtimeSessionTracksTargetOwnedExecutionContextsAndReplacesFrameNormalConte
     #expect(snapshot.executionContextsByID[ExecutionContextID(3)]?.targetID == frameTargetID)
     #expect(snapshot.executionContextsByID[ExecutionContextID(3)]?.frameID == DOMFrameIdentifier("frame-a"))
     #expect(snapshot.normalContextIDByTargetID[frameTargetID] == ExecutionContextID(3))
-    #expect(snapshot.activeContextID == ExecutionContextID(3))
+    #expect(snapshot.selectedContextID == ExecutionContextID(3))
 }
 
 @Test
@@ -92,6 +92,39 @@ func runtimeEvaluateIntentRoutesSelectedContextToRuntimeAgentTarget() throws {
 
 @Test
 @MainActor
+func runtimeEvaluateIntentHonorsSelectedContextBeforeTargetNormalContext() throws {
+    let session = RuntimeSession()
+    let targetID = ProtocolTargetIdentifier("page")
+    session.applyExecutionContextCreated(
+        RuntimeExecutionContext(
+            id: ExecutionContextID(1),
+            targetID: targetID,
+            type: .normal,
+            name: "Page"
+        )
+    )
+    session.applyExecutionContextCreated(
+        RuntimeExecutionContext(
+            id: ExecutionContextID(2),
+            targetID: targetID,
+            type: .user,
+            name: "Selected Isolated World"
+        )
+    )
+
+    session.selectExecutionContext(ExecutionContextID(2))
+
+    let intent = session.evaluateIntent(expression: "window.location.href", targetID: targetID)
+    guard case let .evaluate(request) = intent else {
+        Issue.record("Expected evaluate intent")
+        return
+    }
+    #expect(request.contextID == ExecutionContextID(2))
+    #expect(session.snapshot().selectedContextID == ExecutionContextID(2))
+}
+
+@Test
+@MainActor
 func runtimeSessionPreservesTransportSeededContextMetadata() {
     let session = RuntimeSession()
     let targetID = ProtocolTargetIdentifier("page")
@@ -110,7 +143,7 @@ func runtimeSessionPreservesTransportSeededContextMetadata() {
     #expect(snapshot.executionContextsByID[ExecutionContextID(1)]?.type == .internal)
     #expect(snapshot.executionContextsByID[ExecutionContextID(1)]?.name == "Isolated World")
     #expect(snapshot.normalContextIDByTargetID[targetID] == nil)
-    #expect(snapshot.activeContextID == nil)
+    #expect(snapshot.selectedContextID == nil)
 }
 
 @Test
@@ -167,7 +200,7 @@ func runtimeSessionTargetDestroyedClearsExecutionContextsByRuntimeAgentTarget() 
 
     #expect(snapshot.executionContextsByID[ExecutionContextID(1)] == nil)
     #expect(snapshot.normalContextIDByTargetID[frameTargetID] == nil)
-    #expect(snapshot.activeContextID == nil)
+    #expect(snapshot.selectedContextID == nil)
 }
 
 @Test
