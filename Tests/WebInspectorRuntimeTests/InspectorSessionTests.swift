@@ -28,6 +28,58 @@ func connectBootstrapsMainPageDocumentInOrder() async throws {
 }
 
 @Test
+func connectToleratesUnsupportedConsoleEnableForDefaultPageTarget() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    await transport.receiveRootMessage(
+        cssCapablePageTargetCreatedMessage(targetID: "page-main", frameID: "main-frame", isProvisional: false)
+    )
+
+    let connectTask = Task {
+        try await session.connect(transport: transport)
+    }
+    var sentCount = 0
+    for method in ["Inspector.enable", "Inspector.initialized", "Runtime.enable"] {
+        let sent = try await waitForTargetMessage(backend, method: method, after: sentCount)
+        sentCount = await backend.sentTargetMessages().count
+        await receiveTargetReply(
+            transport,
+            targetID: sent.targetIdentifier,
+            messageID: try messageID(sent.message),
+            result: "{}"
+        )
+    }
+    let documentMessage = try await waitForTargetMessage(backend, method: "DOM.getDocument", after: sentCount)
+    sentCount = await backend.sentTargetMessages().count
+    await receiveTargetReply(
+        transport,
+        targetID: documentMessage.targetIdentifier,
+        messageID: try messageID(documentMessage.message),
+        result: mainDocumentResult
+    )
+    let networkMessage = try await waitForTargetMessage(backend, method: "Network.enable", after: sentCount)
+    sentCount = await backend.sentTargetMessages().count
+    await receiveTargetReply(
+        transport,
+        targetID: networkMessage.targetIdentifier,
+        messageID: try messageID(networkMessage.message),
+        result: "{}"
+    )
+    let consoleMessage = try await waitForTargetMessage(backend, method: "Console.enable", after: sentCount)
+    await receiveTargetErrorReply(
+        transport,
+        targetID: consoleMessage.targetIdentifier,
+        messageID: try messageID(consoleMessage.message),
+        message: "Unknown command: Console.enable"
+    )
+
+    try await connectTask.value
+    #expect(await session.isAttached)
+    #expect(await session.console.snapshot().unsupportedCommandsByTargetID[.pageMain]?.contains("Console.enable") == true)
+}
+
+@Test
 func connectBootstrapsWebPageTargetWithoutDomainMetadataAsCSSCapable() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
@@ -100,6 +152,43 @@ func domainPumpsApplyConsoleEventsToConsoleSession() async throws {
     let messageID = try #require(snapshot.orderedMessageIDs.first)
     #expect(snapshot.messagesByID[messageID]?.networkRequestKey == NetworkRequestIdentifierKey(targetID: .pageMain, requestID: .init("request-1")))
     #expect(snapshot.warningCount == 1)
+}
+
+@Test
+func runtimeContextDispatchedOnPageResolvesToFrameTargetByFrameID() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["Runtime"],"isProvisional":false}}}"#
+    )
+    _ = try await waitUntil {
+        await session.dom.snapshot().targetsByID[.frameAd]
+    }
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":77,"frameId":"ad-frame"}}}"#
+    )
+
+    let runtimeSnapshot: RuntimeSessionSnapshot = try await waitUntil {
+        let snapshot = await session.runtime.snapshot()
+        guard snapshot.executionContextsByID[ExecutionContextID(77)]?.targetID == .frameAd else {
+            return nil
+        }
+        return snapshot
+    }
+    let domSnapshot: DOMSessionSnapshot = try await waitUntil {
+        let snapshot = await session.dom.snapshot()
+        guard snapshot.executionContextsByID[ExecutionContextID(77)]?.targetID == .frameAd else {
+            return nil
+        }
+        return snapshot
+    }
+    #expect(runtimeSnapshot.normalContextIDByTargetID[.frameAd] == ExecutionContextID(77))
+    #expect(domSnapshot.executionContextsByID[ExecutionContextID(77)]?.targetID == .frameAd)
 }
 
 @Test

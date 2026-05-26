@@ -1033,13 +1033,7 @@ package final class InspectorSession {
             )
         )
         try ensureCurrentConnection(connection)
-        if dom.targetCapabilities(for: mainTargetID).contains(.console) {
-            _ = try await connection.transport.send(
-                try ConsoleTransportAdapter.command(for: .enable(targetID: mainTargetID))
-            )
-            try ensureCurrentConnection(connection)
-            connection.consoleEnabledTargetIDs.insert(mainTargetID)
-        }
+        try await enableConsoleAgentIfSupported(targetID: mainTargetID, connection: connection, force: true)
         connection.bootstrappedTargetIDs.insert(mainTargetID)
     }
 
@@ -1240,12 +1234,30 @@ package final class InspectorSession {
               console.supportsCommand("Console.enable", targetID: targetID) else {
             return
         }
+        try await enableConsoleAgentIfSupported(targetID: targetID, connection: connection)
+    }
+
+    private func enableConsoleAgentIfSupported(
+        targetID: ProtocolTargetIdentifier,
+        connection: InspectorConnection,
+        force: Bool = false
+    ) async throws {
+        guard dom.targetCapabilities(for: targetID).contains(.console),
+              console.supportsCommand("Console.enable", targetID: targetID) else {
+            return
+        }
+        guard force || connection.consoleEnabledTargetIDs.contains(targetID) == false else {
+            return
+        }
         do {
             _ = try await connection.transport.send(try ConsoleTransportAdapter.command(for: .enable(targetID: targetID)))
             try ensureCurrentConnection(connection)
             connection.consoleEnabledTargetIDs.insert(targetID)
         } catch {
             markConsoleCommandUnsupportedIfNeeded("Console.enable", targetID: targetID, error: error)
+            if isUnsupportedProtocolCommandError(error) {
+                return
+            }
             throw error
         }
     }

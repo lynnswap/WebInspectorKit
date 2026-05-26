@@ -470,7 +470,12 @@ package actor TransportSession {
         }
 
         updateRegistryFromTargetEvent(method: method, targetID: targetID, paramsData: parsed.paramsData)
-        await emit(domain: ProtocolDomain(method: method), method: method, targetID: targetID, paramsData: parsed.paramsData)
+        let emittedTargetID = targetIDForTargetEvent(
+            method: method,
+            deliveredTargetID: targetID,
+            paramsData: parsed.paramsData
+        )
+        await emit(domain: ProtocolDomain(method: method), method: method, targetID: emittedTargetID, paramsData: parsed.paramsData)
     }
 
     private func resolve(_ pending: PendingReply, parsed: ParsedProtocolMessage) async {
@@ -779,6 +784,18 @@ package actor TransportSession {
                 return nil
             }
         }
+    }
+
+    private func targetIDForTargetEvent(
+        method: String,
+        deliveredTargetID: ProtocolTargetIdentifier,
+        paramsData: Data
+    ) -> ProtocolTargetIdentifier {
+        guard method == "Runtime.executionContextCreated",
+              let frameID = (try? TransportMessageParser.decode(RuntimeExecutionContextCreatedParams.self, from: paramsData))?.context.frameId else {
+            return deliveredTargetID
+        }
+        return resolvedTargetIDForRuntimeContext(deliveredTargetID: deliveredTargetID, frameID: frameID)
     }
 
     private func targetIDForCSSStyleSheetAdded(paramsData: Data) -> ProtocolTargetIdentifier? {
