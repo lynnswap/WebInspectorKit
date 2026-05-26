@@ -5,11 +5,18 @@ import Testing
 func protocolTargetCapabilitiesTreatPageTargetsAsCSSCapable() {
     #expect(ProtocolTargetKind(protocolType: "web-page") == .page)
     #expect(ProtocolTargetCapabilities.pageDefault.contains(.css))
+    #expect(ProtocolTargetCapabilities.pageDefault.contains(.console))
     #expect(ProtocolTargetCapabilities.protocolDefault(for: .page).contains(.css))
+    #expect(ProtocolTargetCapabilities.protocolDefault(for: .worker).contains(.console))
+    #expect(ProtocolTargetCapabilities.protocolDefault(for: .serviceWorker).contains(.console))
     #expect(ProtocolTargetCapabilities.protocolDefault(for: .frame).contains(.css) == false)
-    #expect(ProtocolTargetCapabilities(domainNames: ["DOM", "CSS"]).contains(.css))
+    #expect(ProtocolTargetCapabilities.protocolDefault(for: .frame).contains(.console) == false)
+    #expect(ProtocolTargetCapabilities(domainNames: ["DOM", "CSS", "Console"]).contains(.css))
+    #expect(ProtocolTargetCapabilities(domainNames: ["DOM", "CSS", "Console"]).contains(.console))
     #expect(ProtocolTargetCapabilities.resolved(for: .page, domainNames: ["DOM"]).contains(.css))
+    #expect(ProtocolTargetCapabilities.resolved(for: .page, domainNames: ["DOM"]).contains(.console))
     #expect(ProtocolTargetCapabilities.resolved(for: .frame, domainNames: ["DOM"]).contains(.css) == false)
+    #expect(ProtocolTargetCapabilities.resolved(for: .frame, domainNames: ["DOM"]).contains(.console) == false)
 }
 
 @Test
@@ -1037,6 +1044,100 @@ func cssSessionAppliesSetStyleTextResultOnlyToEditedTarget() throws {
     #expect(css.selectedState == .loaded)
     #expect(selectedFrameStyles.identity.targetID == frameIdentity.targetID)
     #expect(selectedFrameStyles.sections[0].style.cssProperties[0].value == "10px")
+}
+
+@Test
+@MainActor
+func cssSessionPreservesSelectedStylesObjectWhenTargetBecomesStale() throws {
+    let css = CSSSession()
+    let identity = cssIdentity()
+    let token = try #require(css.beginRefresh(identity: identity))
+    css.applyRefresh(
+        token: token,
+        matched: CSSMatchedStylesPayload(matchedRules: [
+            CSSRuleMatchPayload(
+                rule: rule(
+                    selector: "body",
+                    properties: [
+                        CSSPropertyPayload(name: "margin", value: "0", text: "margin: 0;"),
+                    ]
+                ),
+                matchingSelectors: [0]
+            ),
+        ]),
+        inline: .init(),
+        computed: []
+    )
+    let selectedStyles = try #require(css.selectedNodeStyles)
+
+    css.removeStyles(targetID: identity.targetID)
+
+    #expect(css.selectedNodeStyles === selectedStyles)
+    #expect(css.selectedState == .unavailable(.staleNode(identity.nodeID)))
+    #expect(selectedStyles.state == .unavailable(.staleNode(identity.nodeID)))
+    #expect(css.refreshState(forSelected: identity) == .unavailable(.staleNode(identity.nodeID)))
+}
+
+@Test
+@MainActor
+func cssSessionMarksSelectedStylesUnavailableWithoutReplacingObject() throws {
+    let css = CSSSession()
+    let identity = cssIdentity()
+    let token = try #require(css.beginRefresh(identity: identity))
+    css.applyRefresh(
+        token: token,
+        matched: CSSMatchedStylesPayload(matchedRules: [
+            CSSRuleMatchPayload(
+                rule: rule(
+                    selector: "body",
+                    properties: [
+                        CSSPropertyPayload(name: "margin", value: "0", text: "margin: 0;"),
+                    ]
+                ),
+                matchingSelectors: [0]
+            ),
+        ]),
+        inline: .init(),
+        computed: []
+    )
+    let selectedStyles = try #require(css.selectedNodeStyles)
+
+    css.markSelectedNodeStylesUnavailable(identity: identity, reason: .staleNode(identity.nodeID))
+
+    #expect(css.selectedNodeStyles === selectedStyles)
+    #expect(css.selectedState == .unavailable(.staleNode(identity.nodeID)))
+    #expect(selectedStyles.state == .unavailable(.staleNode(identity.nodeID)))
+    #expect(css.refreshState(forSelected: identity) == .unavailable(.staleNode(identity.nodeID)))
+}
+
+@Test
+@MainActor
+func cssSessionDoesNotDowngradeStaleSelectionToNoSelection() throws {
+    let css = CSSSession()
+    let identity = cssIdentity()
+    css.markSelectedNodeStylesUnavailable(identity: identity, reason: .staleNode(identity.nodeID))
+    let selectedStyles = try #require(css.selectedNodeStyles)
+
+    css.markSelectedNodeUnavailable(.noSelection)
+
+    #expect(css.selectedNodeStyles === selectedStyles)
+    #expect(css.selectedState == .unavailable(.staleNode(identity.nodeID)))
+    #expect(selectedStyles.state == .unavailable(.staleNode(identity.nodeID)))
+}
+
+@Test
+@MainActor
+func cssSessionCancelsActiveRefreshBackToNeedsRefresh() throws {
+    let css = CSSSession()
+    let identity = cssIdentity()
+
+    _ = try #require(css.beginRefresh(identity: identity))
+    #expect(css.selectedState == .loading)
+
+    css.cancelRefresh(identity: identity)
+
+    #expect(css.selectedState == .needsRefresh)
+    #expect(css.refreshState(forSelected: identity) == .needsRefresh)
 }
 
 private func cssIdentity(

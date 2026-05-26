@@ -512,6 +512,7 @@ package final class DOMSession {
             return
         }
         targetGraph.removeExecutionContexts(targetID: targetID)
+        targetGraph.removeExecutionContexts(runtimeAgentTargetID: targetID)
         if let documentID = documentStore.currentDocument(forTargetID: targetID)?.id {
             removeDocument(documentID)
         }
@@ -531,11 +532,19 @@ package final class DOMSession {
         treeRevision &+= 1
     }
 
-    package func applyExecutionContextCreated(_ record: ExecutionContextRecord) {
-        guard targetGraph.containsTarget(record.targetID) else {
+    package func applyExecutionContextCreated(_ context: RuntimeExecutionContextRecord) {
+        guard targetGraph.containsTarget(context.targetID) else {
             return
         }
-        targetGraph.recordExecutionContext(record)
+        targetGraph.recordExecutionContext(context)
+    }
+
+    package func applyExecutionContextDestroyed(_ contextKey: RuntimeExecutionContextKey) {
+        targetGraph.removeExecutionContext(contextKey)
+    }
+
+    package func applyExecutionContextsCleared(runtimeAgentTargetID: ProtocolTarget.ID) {
+        targetGraph.removeExecutionContexts(runtimeAgentTargetID: runtimeAgentTargetID)
     }
 
     package func applyExecutionContextCreated(
@@ -543,7 +552,7 @@ package final class DOMSession {
         targetID: ProtocolTarget.ID,
         frameID: DOMFrame.ID? = nil
     ) {
-        applyExecutionContextCreated(.init(id: id, targetID: targetID, frameID: frameID))
+        applyExecutionContextCreated(RuntimeExecutionContextRecord(id: id, targetID: targetID, frameID: frameID))
     }
 
     @discardableResult
@@ -1292,7 +1301,7 @@ package final class DOMSession {
                 )
             },
             currentNodeIDByKey: currentNodeIDByKey,
-            executionContextsByID: targetGraph.executionContextSnapshots(),
+            executionContextsByKey: targetGraph.executionContextSnapshots(),
             selection: DOMSelectionSnapshot(
                 selectedNodeID: selection.selectedNodeID,
                 pendingRequest: selection.pendingRequest.map {

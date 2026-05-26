@@ -20,10 +20,63 @@ func connectBootstrapsMainPageDocumentInOrder() async throws {
         "Runtime.enable",
         "DOM.getDocument",
         "Network.enable",
+        "Console.enable",
     ])
     #expect(await session.isAttached)
     #expect(await session.dom.snapshot().currentPageTargetID == ProtocolTargetIdentifier.pageMain)
     #expect(await session.dom.snapshot().documentsByID.count == 1)
+}
+
+@Test
+func connectToleratesUnsupportedConsoleEnableForDefaultPageTarget() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    await transport.receiveRootMessage(
+        cssCapablePageTargetCreatedMessage(targetID: "page-main", frameID: "main-frame", isProvisional: false)
+    )
+
+    let connectTask = Task {
+        try await session.connect(transport: transport)
+    }
+    var sentCount = 0
+    for method in ["Inspector.enable", "Inspector.initialized", "Runtime.enable"] {
+        let sent = try await waitForTargetMessage(backend, method: method, after: sentCount)
+        sentCount = await backend.sentTargetMessages().count
+        await receiveTargetReply(
+            transport,
+            targetID: sent.targetIdentifier,
+            messageID: try messageID(sent.message),
+            result: "{}"
+        )
+    }
+    let documentMessage = try await waitForTargetMessage(backend, method: "DOM.getDocument", after: sentCount)
+    sentCount = await backend.sentTargetMessages().count
+    await receiveTargetReply(
+        transport,
+        targetID: documentMessage.targetIdentifier,
+        messageID: try messageID(documentMessage.message),
+        result: mainDocumentResult
+    )
+    let networkMessage = try await waitForTargetMessage(backend, method: "Network.enable", after: sentCount)
+    sentCount = await backend.sentTargetMessages().count
+    await receiveTargetReply(
+        transport,
+        targetID: networkMessage.targetIdentifier,
+        messageID: try messageID(networkMessage.message),
+        result: "{}"
+    )
+    let consoleMessage = try await waitForTargetMessage(backend, method: "Console.enable", after: sentCount)
+    await receiveTargetErrorReply(
+        transport,
+        targetID: consoleMessage.targetIdentifier,
+        messageID: try messageID(consoleMessage.message),
+        message: "Unknown command: Console.enable"
+    )
+
+    try await connectTask.value
+    #expect(await session.isAttached)
+    #expect(await session.console.snapshot().unsupportedCommandsByTargetID[.pageMain]?.contains("Console.enable") == true)
 }
 
 @Test
@@ -74,6 +127,231 @@ func domainPumpsApplyNetworkEventsToNetworkSession() async throws {
 
     #expect(request.id.targetID == ProtocolTargetIdentifier.pageMain)
     #expect(request.request.url == "https://example.com/app.js")
+}
+
+@Test
+func domainPumpsApplyConsoleEventsToConsoleSession() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"Console.messageAdded","params":{"message":{"source":"console-api","level":"warning","text":"hello","type":"log","networkRequestId":"request-1"}}}"#
+    )
+
+    let snapshot: ConsoleSessionSnapshot = try await waitUntil {
+        let snapshot = await session.console.snapshot()
+        guard snapshot.orderedMessageIDs.isEmpty == false else {
+            return nil
+        }
+        return snapshot
+    }
+    let messageID = try #require(snapshot.orderedMessageIDs.first)
+    #expect(snapshot.messagesByID[messageID]?.networkRequestKey == NetworkRequestIdentifierKey(targetID: .pageMain, requestID: .init("request-1")))
+    #expect(snapshot.warningCount == 1)
+}
+
+@Test
+func domainPumpsReleaseConsoleRuntimeObjectsOnConsoleClear() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"Console.messageAdded","params":{"message":{"source":"console-api","level":"log","text":"hello","type":"log","parameters":[{"type":"object","objectId":"console-object","description":"Object"}]}}}"#
+    )
+
+    let objectKey = RuntimeRemoteObjectIdentifierKey(
+        runtimeAgentTargetID: .pageMain,
+        objectID: RuntimeRemoteObjectIdentifier("console-object")
+    )
+    let _: Bool = try await waitUntil {
+        let runtimeSnapshot = await session.runtime.snapshot()
+        let consoleSnapshot = await session.console.snapshot()
+        let linkedParameter = await MainActor.run {
+            guard let runtimeObject = session.runtime.runtimeAgentState(for: .pageMain)?.remoteObjects.first,
+                  let parameter = session.console.messages.first?.parameters.first else {
+                return false
+            }
+            return parameter === runtimeObject
+        }
+        guard runtimeSnapshot.remoteObjectsByID[objectKey]?.objectGroup == .console,
+              consoleSnapshot.orderedMessageIDs.isEmpty == false,
+              linkedParameter else {
+            return nil
+        }
+        return true
+    }
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"Console.messagesCleared","params":{"reason":"console-api"}}"#
+    )
+
+    let _: Bool = try await waitUntil {
+        let runtimeSnapshot = await session.runtime.snapshot()
+        let consoleSnapshot = await session.console.snapshot()
+        guard runtimeSnapshot.remoteObjectsByID[objectKey] == nil,
+              runtimeSnapshot.objectGroupRuntimeAgentTargetsByGroup[.console] == nil,
+              consoleSnapshot.lastClearReasonByTargetID[.pageMain] == .consoleAPI else {
+            return nil
+        }
+        return true
+    }
+}
+
+@Test
+func domainPumpsApplyRootScopedConsoleEventsToMainPageConsoleSession() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    await transport.receiveRootMessage(
+        #"{"method":"Console.messageAdded","params":{"message":{"source":"console-api","level":"error","text":"root hello","type":"log","networkRequestId":"request-root"}}}"#
+    )
+
+    let snapshot: ConsoleSessionSnapshot = try await waitUntil {
+        let snapshot = await session.console.snapshot()
+        guard snapshot.orderedMessageIDs.isEmpty == false else {
+            return nil
+        }
+        return snapshot
+    }
+    let messageID = try #require(snapshot.orderedMessageIDs.first)
+    #expect(snapshot.messagesByID[messageID]?.networkRequestKey == NetworkRequestIdentifierKey(targetID: .pageMain, requestID: .init("request-root")))
+    #expect(snapshot.errorCount == 1)
+}
+
+@Test
+func domainPumpsApplyRuntimeContextTeardownToRuntimeAndDOMSessions() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":81,"type":"normal","frameId":"main-frame"}}}"#
+    )
+    _ = try await waitUntil {
+        await session.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 81)]
+    }
+    _ = try await waitUntil {
+        await session.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 81)]
+    }
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"Runtime.executionContextDestroyed","params":{"executionContextId":81}}"#
+    )
+    _ = try await waitUntil {
+        let runtimeContext = await session.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 81)]
+        let domContext = await session.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 81)]
+        return runtimeContext == nil && domContext == nil ? true : nil
+    }
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":82,"type":"normal","frameId":"main-frame"}}}"#
+    )
+    _ = try await waitUntil {
+        await session.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 82)]
+    }
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"Runtime.executionContextsCleared","params":{}}"#
+    )
+    _ = try await waitUntil {
+        let runtimeContext = await session.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 82)]
+        let domContext = await session.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 82)]
+        return runtimeContext == nil && domContext == nil ? true : nil
+    }
+}
+
+@Test
+func runtimeContextDispatchedOnPageResolvesToFrameTargetByFrameID() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["Runtime"],"isProvisional":false}}}"#
+    )
+    _ = try await waitUntil {
+        await session.dom.snapshot().targetsByID[.frameAd]
+    }
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":77,"frameId":"ad-frame"}}}"#
+    )
+
+    let runtimeSnapshot: RuntimeSessionSnapshot = try await waitUntil {
+        let snapshot = await session.runtime.snapshot()
+        guard snapshot.executionContextsByKey[contextKey(.pageMain, 77)]?.targetID == .frameAd else {
+            return nil
+        }
+        return snapshot
+    }
+    let domSnapshot: DOMSessionSnapshot = try await waitUntil {
+        let snapshot = await session.dom.snapshot()
+        guard snapshot.executionContextsByKey[contextKey(.pageMain, 77)]?.targetID == .frameAd else {
+            return nil
+        }
+        return snapshot
+    }
+    #expect(runtimeSnapshot.normalContextKeyByTargetID[.frameAd] == contextKey(.pageMain, 77))
+    #expect(domSnapshot.executionContextsByKey[contextKey(.pageMain, 77)]?.targetID == .frameAd)
+}
+
+@Test
+func rootRuntimeClearRemovesFrameContextOwnedByPageRuntimeAgent() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["Runtime"],"isProvisional":false}}}"#
+    )
+    _ = try await waitUntil {
+        await session.dom.snapshot().targetsByID[.frameAd]
+    }
+    await transport.receiveRootMessage(
+        #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":78,"frameId":"ad-frame"}}}"#
+    )
+
+    let _: Bool = try await waitUntil {
+        let runtimeContext = await session.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 78)]
+        let domContext = await session.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 78)]
+        guard runtimeContext?.targetID == .frameAd,
+              runtimeContext?.runtimeAgentTargetID == .pageMain,
+              domContext?.targetID == .frameAd,
+              domContext?.runtimeAgentTargetID == .pageMain else {
+            return nil
+        }
+        return true
+    }
+
+    await transport.receiveRootMessage(#"{"method":"Runtime.executionContextsCleared","params":{}}"#)
+    let _: Bool = try await waitUntil {
+        let runtimeContext = await session.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 78)]
+        let domContext = await session.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 78)]
+        return runtimeContext == nil && domContext == nil ? true : nil
+    }
 }
 
 @Test
@@ -185,6 +463,147 @@ func selectedElementStyleRefreshLoadsCSSSession() async throws {
     #expect(styles.sections.map(\.title) == ["element.style", "body"])
     #expect(styles.sections[1].style.cssProperties.first?.name == "margin")
     #expect(styles.computedProperties == [CSSComputedStyleProperty(name: "display", value: "block")])
+}
+
+@Test
+@MainActor
+func selectedElementStyleHydrationLoadsCSSSessionWhenActive() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
+    let bodyID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(4))
+    session.dom.selectNode(bodyID)
+
+    let sentCount = await backend.sentTargetMessages().count
+    session.setSelectedNodeStyleHydrationActive(true)
+    let messages = try await waitForCSSRefreshMessages(backend, after: sentCount)
+    try await replyCSSRefresh(
+        transport: transport,
+        messages: messages,
+        selector: "body",
+        styleSheetID: "sheet-body"
+    )
+
+    let didLoadStyles = try await waitUntil {
+        await session.css.selectedState == .loaded ? true : nil
+    }
+    #expect(didLoadStyles)
+    let styles = try #require(session.css.selectedNodeStyles)
+    #expect(styles.identity.nodeID == bodyID)
+    #expect(styles.sections.map(\.title) == ["element.style", "body"])
+}
+
+@Test
+@MainActor
+func selectedElementStyleHydrationCancellationDoesNotPublishFailure() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
+    let htmlID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(2))
+    let bodyID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(4))
+    session.setSelectedNodeStyleHydrationActive(true)
+    session.dom.selectNode(bodyID)
+
+    let firstSentCount = await backend.sentTargetMessages().count
+    _ = try await waitForCSSRefreshMessages(backend, after: firstSentCount)
+
+    let secondSentCount = await backend.sentTargetMessages().count
+    session.dom.selectNode(htmlID)
+    let secondMessages = try await waitForCSSRefreshMessages(backend, after: secondSentCount)
+    try await replyCSSRefresh(
+        transport: transport,
+        messages: secondMessages,
+        selector: "html",
+        styleSheetID: "sheet-html"
+    )
+
+    let didLoadReplacementStyles = try await waitUntil {
+        let selectedNodeID = await session.css.selectedNodeStyles?.identity.nodeID
+        let selectedState = await session.css.selectedState
+        return selectedNodeID == htmlID && selectedState == .loaded ? true : nil
+    }
+    #expect(didLoadReplacementStyles)
+    #expect(session.lastError == nil)
+}
+
+@Test
+@MainActor
+func selectedElementStyleHydrationCancellationResetsLoadingForFutureRefresh() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
+    let bodyID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(4))
+    session.dom.selectNode(bodyID)
+
+    let firstSentCount = await backend.sentTargetMessages().count
+    session.setSelectedNodeStyleHydrationActive(true)
+    _ = try await waitForCSSRefreshMessages(backend, after: firstSentCount)
+    _ = try await waitUntil {
+        await session.css.selectedState == .loading ? true : nil
+    }
+
+    session.setSelectedNodeStyleHydrationActive(false)
+    #expect(session.css.selectedState == .needsRefresh)
+
+    let secondSentCount = await backend.sentTargetMessages().count
+    session.setSelectedNodeStyleHydrationActive(true)
+    let secondMessages = try await waitForCSSRefreshMessages(backend, after: secondSentCount)
+    try await replyCSSRefresh(
+        transport: transport,
+        messages: secondMessages,
+        selector: "body",
+        styleSheetID: "sheet-body"
+    )
+
+    let didLoadStyles = try await waitUntil {
+        await session.css.selectedState == .loaded ? true : nil
+    }
+    #expect(didLoadStyles)
+    #expect(session.lastError == nil)
+}
+
+@Test
+@MainActor
+func selectedElementStyleHydrationPreservesStaleStateAfterSelectionDisappears() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
+    let bodyID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(4))
+    session.dom.selectNode(bodyID)
+
+    let sentCount = await backend.sentTargetMessages().count
+    session.setSelectedNodeStyleHydrationActive(true)
+    let messages = try await waitForCSSRefreshMessages(backend, after: sentCount)
+    try await replyCSSRefresh(
+        transport: transport,
+        messages: messages,
+        selector: "body",
+        styleSheetID: "sheet-body"
+    )
+    _ = try await waitUntil {
+        await session.css.selectedState == .loaded ? true : nil
+    }
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"DOM.childNodeRemoved","params":{"nodeId":4}}"#
+    )
+    _ = try await waitUntil {
+        await session.dom.selectedNodeID == nil ? true : nil
+    }
+    try await Task.sleep(for: .milliseconds(10))
+
+    #expect(session.css.selectedNodeStyles != nil)
+    #expect(session.css.selectedState == .unavailable(.staleNode(bodyID)))
 }
 
 @Test
@@ -469,7 +888,7 @@ func cssAndDOMStyleInvalidationsMarkSelectedNodeStylesNeedsRefresh() async throw
 }
 
 @Test
-func documentUpdatedClearsSelectedCSSNodeStylesForInvalidatedDocument() async throws {
+func documentUpdatedMarksSelectedCSSNodeStylesUnavailableForInvalidatedDocument() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
     let session = await InspectorSession(configuration: .test)
@@ -493,13 +912,14 @@ func documentUpdatedClearsSelectedCSSNodeStylesForInvalidatedDocument() async th
         message: #"{"method":"DOM.documentUpdated","params":{}}"#
     )
     _ = try await waitUntil {
-        await session.css.selectedNodeStyles == nil ? true : nil
+        await session.css.selectedState == .unavailable(.staleNode(bodyID)) ? true : nil
     }
+    #expect(await session.css.selectedNodeStyles != nil)
     #expect(await session.css.selectedState == .unavailable(.staleNode(bodyID)))
 }
 
 @Test
-func explicitDOMReloadClearsSelectedCSSNodeStylesForReplacedDocument() async throws {
+func explicitDOMReloadMarksSelectedCSSNodeStylesUnavailableForReplacedDocument() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
     let session = await InspectorSession(configuration: .test)
@@ -530,12 +950,12 @@ func explicitDOMReloadClearsSelectedCSSNodeStylesForReplacedDocument() async thr
     )
     try await reloadTask.value
 
-    #expect(await session.css.selectedNodeStyles == nil)
+    #expect(await session.css.selectedNodeStyles != nil)
     #expect(await session.css.selectedState == .unavailable(.staleNode(bodyID)))
 }
 
 @Test
-func domMutationRemovingSelectedNodeClearsSelectedCSSNodeStyles() async throws {
+func domMutationRemovingSelectedNodeMarksSelectedCSSNodeStylesUnavailable() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
     let session = await InspectorSession(configuration: .test)
@@ -562,12 +982,12 @@ func domMutationRemovingSelectedNodeClearsSelectedCSSNodeStyles() async throws {
         await session.dom.selectedNodeID == nil ? true : nil
     }
 
-    #expect(await session.css.selectedNodeStyles == nil)
+    #expect(await session.css.selectedNodeStyles != nil)
     #expect(await session.css.selectedState == .unavailable(.staleNode(bodyID)))
 }
 
 @Test
-func localDOMDeleteClearsSelectedCSSNodeStylesWithoutBackendMutationEvent() async throws {
+func localDOMDeleteMarksSelectedCSSNodeStylesUnavailableWithoutBackendMutationEvent() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
     let session = await InspectorSession(configuration: .test)
@@ -599,7 +1019,7 @@ func localDOMDeleteClearsSelectedCSSNodeStylesWithoutBackendMutationEvent() asyn
     try await deleteTask.value
 
     #expect(await session.dom.selectedNodeID == nil)
-    #expect(await session.css.selectedNodeStyles == nil)
+    #expect(await session.css.selectedNodeStyles != nil)
     #expect(await session.css.selectedState == .unavailable(.staleNode(bodyID)))
 }
 
@@ -745,6 +1165,237 @@ func cssOnlyFrameTargetDoesNotSendCSSEnableOnCreation() async throws {
 }
 
 @Test
+func frameTargetWithAdvertisedRuntimeAndConsoleEnablesRuntimeBeforeConsole() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    let sentCount = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["Runtime","Console"],"isProvisional":false}}}"#
+    )
+
+    let runtimeEnable = try await waitForTargetMessage(backend, method: "Runtime.enable", after: sentCount)
+    #expect(runtimeEnable.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    await receiveTargetReply(
+        transport,
+        targetID: runtimeEnable.targetIdentifier,
+        messageID: try messageID(runtimeEnable.message),
+        result: "{}"
+    )
+
+    let consoleEnable = try await waitForTargetMessage(backend, method: "Console.enable", after: sentCount)
+    #expect(consoleEnable.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    await receiveTargetReply(
+        transport,
+        targetID: consoleEnable.targetIdentifier,
+        messageID: try messageID(consoleEnable.message),
+        result: "{}"
+    )
+}
+
+@Test
+func frameTargetWithUnsupportedRuntimeStillEnablesConsole() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    let sentCount = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["Runtime","Console"],"isProvisional":false}}}"#
+    )
+
+    let runtimeEnable = try await waitForTargetMessage(backend, method: "Runtime.enable", after: sentCount)
+    #expect(runtimeEnable.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    await receiveTargetErrorReply(
+        transport,
+        targetID: runtimeEnable.targetIdentifier,
+        messageID: try messageID(runtimeEnable.message),
+        message: "Unknown command: Runtime.enable"
+    )
+
+    let consoleEnable = try await waitForTargetMessage(backend, method: "Console.enable", after: sentCount)
+    #expect(consoleEnable.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    await receiveTargetReply(
+        transport,
+        targetID: consoleEnable.targetIdentifier,
+        messageID: try messageID(consoleEnable.message),
+        result: "{}"
+    )
+
+    #expect(await session.runtime.snapshot().unsupportedCommandsByTargetID[.frameAd]?.contains("Runtime.enable") == true)
+    #expect(await session.lastError == nil)
+}
+
+@Test
+func consoleEnableTargetNotFoundDoesNotMarkCommandUnsupported() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    let sentCount = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["Runtime","Console"],"isProvisional":false}}}"#
+    )
+
+    let runtimeEnable = try await waitForTargetMessage(backend, method: "Runtime.enable", after: sentCount)
+    #expect(runtimeEnable.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    await receiveTargetReply(
+        transport,
+        targetID: runtimeEnable.targetIdentifier,
+        messageID: try messageID(runtimeEnable.message),
+        result: "{}"
+    )
+
+    let consoleEnable = try await waitForTargetMessage(backend, method: "Console.enable", after: sentCount)
+    #expect(consoleEnable.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    await receiveTargetErrorReply(
+        transport,
+        targetID: consoleEnable.targetIdentifier,
+        messageID: try messageID(consoleEnable.message),
+        message: "Target not found"
+    )
+
+    let didPublishFailure = try await waitUntil {
+        await session.lastError != nil ? true : nil
+    }
+    #expect(didPublishFailure)
+    #expect(await session.console.snapshot().unsupportedCommandsByTargetID[.frameAd]?.contains("Console.enable") != true)
+}
+
+@Test
+func frameTargetWithAdvertisedRuntimeOnlyEnablesRuntimeWithoutConsole() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    let sentCount = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["Runtime"],"isProvisional":false}}}"#
+    )
+
+    let runtimeEnable = try await waitForTargetMessage(backend, method: "Runtime.enable", after: sentCount)
+    #expect(runtimeEnable.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    await receiveTargetReply(
+        transport,
+        targetID: runtimeEnable.targetIdentifier,
+        messageID: try messageID(runtimeEnable.message),
+        result: "{}"
+    )
+
+    try await Task.sleep(for: .milliseconds(5))
+    let messages = await backend.sentTargetMessages().dropFirst(sentCount)
+    #expect(messages.compactMap { try? messageMethod($0.message) }.contains("Console.enable") == false)
+}
+
+@Test
+func serviceWorkerTargetCreatedAfterAttachEnablesRuntimeBeforeConsole() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    let serviceWorkerTargetID = ProtocolTargetIdentifier("service-worker-1")
+    let sentCount = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"service-worker-1","type":"service-worker","isProvisional":false}}}"#
+    )
+
+    let runtimeEnable = try await waitForTargetMessage(backend, method: "Runtime.enable", after: sentCount)
+    #expect(runtimeEnable.targetIdentifier == serviceWorkerTargetID)
+    await receiveTargetReply(
+        transport,
+        targetID: runtimeEnable.targetIdentifier,
+        messageID: try messageID(runtimeEnable.message),
+        result: "{}"
+    )
+
+    let consoleEnable = try await waitForTargetMessage(backend, method: "Console.enable", after: sentCount)
+    #expect(consoleEnable.targetIdentifier == serviceWorkerTargetID)
+    await receiveTargetReply(
+        transport,
+        targetID: consoleEnable.targetIdentifier,
+        messageID: try messageID(consoleEnable.message),
+        result: "{}"
+    )
+}
+
+@Test
+func workerTargetCreatedAfterAttachEnablesRuntimeBeforeConsoleWithoutDomainMetadata() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    let workerTargetID = ProtocolTargetIdentifier("worker-1")
+    let sentCount = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"worker-1","type":"worker","isProvisional":false}}}"#
+    )
+
+    let runtimeEnable = try await waitForTargetMessage(backend, method: "Runtime.enable", after: sentCount)
+    #expect(runtimeEnable.targetIdentifier == workerTargetID)
+    await receiveTargetReply(
+        transport,
+        targetID: runtimeEnable.targetIdentifier,
+        messageID: try messageID(runtimeEnable.message),
+        result: "{}"
+    )
+
+    let consoleEnable = try await waitForTargetMessage(backend, method: "Console.enable", after: sentCount)
+    #expect(consoleEnable.targetIdentifier == workerTargetID)
+    await receiveTargetReply(
+        transport,
+        targetID: consoleEnable.targetIdentifier,
+        messageID: try messageID(consoleEnable.message),
+        result: "{}"
+    )
+}
+
+@Test
+func serviceWorkerTargetDiscoveredBeforeAttachEnablesRuntimeBeforeConsoleAfterConnect() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    let serviceWorkerTargetID = ProtocolTargetIdentifier("service-worker-1")
+
+    await transport.receiveRootMessage(
+        cssCapablePageTargetCreatedMessage(targetID: "page-main", frameID: "main-frame", isProvisional: false)
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"service-worker-1","type":"service-worker","isProvisional":false}}}"#
+    )
+
+    let connectTask = Task {
+        try await session.connect(transport: transport)
+    }
+    let bootstrapMessages = try await completeBootstrap(transport: transport, backend: backend)
+    try await connectTask.value
+
+    let runtimeEnable = try await waitForTargetMessage(backend, method: "Runtime.enable", after: bootstrapMessages.count)
+    #expect(runtimeEnable.targetIdentifier == serviceWorkerTargetID)
+    await receiveTargetReply(
+        transport,
+        targetID: runtimeEnable.targetIdentifier,
+        messageID: try messageID(runtimeEnable.message),
+        result: "{}"
+    )
+
+    let consoleEnable = try await waitForTargetMessage(backend, method: "Console.enable", after: bootstrapMessages.count)
+    #expect(consoleEnable.targetIdentifier == serviceWorkerTargetID)
+    await receiveTargetReply(
+        transport,
+        targetID: consoleEnable.targetIdentifier,
+        messageID: try messageID(consoleEnable.message),
+        result: "{}"
+    )
+}
+
+@Test
 func domCapableFrameTargetDiscoveredBeforeAttachHydratesAfterConnect() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
@@ -830,6 +1481,168 @@ func provisionalFrameDocumentReplyBeforeCommitRehydratesCommittedFrame() async t
         return snapshot
     }
     #expect(snapshot.targetsByID[provisionalTargetID] == nil)
+}
+
+@Test
+func committedProvisionalFrameWithRuntimeAndConsoleEnablesCommittedTarget() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    let sentCountBeforeFrameTarget = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-provisional","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["Runtime","Console"],"isProvisional":true}}}"#
+    )
+    try await Task.sleep(for: .milliseconds(5))
+    #expect(await backend.sentTargetMessages().count == sentCountBeforeFrameTarget)
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"frame-provisional","newTargetId":"frame-ad"}}"#
+    )
+
+    let runtimeEnable = try await waitForTargetMessage(
+        backend,
+        method: "Runtime.enable",
+        after: sentCountBeforeFrameTarget
+    )
+    #expect(runtimeEnable.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    await receiveTargetReply(
+        transport,
+        targetID: runtimeEnable.targetIdentifier,
+        messageID: try messageID(runtimeEnable.message),
+        result: "{}"
+    )
+
+    let consoleEnable = try await waitForTargetMessage(
+        backend,
+        method: "Console.enable",
+        after: sentCountBeforeFrameTarget
+    )
+    #expect(consoleEnable.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    await receiveTargetReply(
+        transport,
+        targetID: consoleEnable.targetIdentifier,
+        messageID: try messageID(consoleEnable.message),
+        result: "{}"
+    )
+}
+
+@Test
+func committedNavigatedFrameReEnablesRuntimeAndConsoleOnNewTarget() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    let sentCountBeforeFrameTarget = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["Runtime","Console"],"isProvisional":false}}}"#
+    )
+    let firstRuntimeEnable = try await waitForTargetMessage(
+        backend,
+        method: "Runtime.enable",
+        after: sentCountBeforeFrameTarget
+    )
+    #expect(firstRuntimeEnable.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    await receiveTargetReply(
+        transport,
+        targetID: firstRuntimeEnable.targetIdentifier,
+        messageID: try messageID(firstRuntimeEnable.message),
+        result: "{}"
+    )
+    let firstConsoleEnable = try await waitForTargetMessage(
+        backend,
+        method: "Console.enable",
+        after: sentCountBeforeFrameTarget
+    )
+    #expect(firstConsoleEnable.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    await receiveTargetReply(
+        transport,
+        targetID: firstConsoleEnable.targetIdentifier,
+        messageID: try messageID(firstConsoleEnable.message),
+        result: "{}"
+    )
+
+    let sentCountBeforeNavigation = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-next","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["Runtime","Console"],"isProvisional":true}}}"#
+    )
+    try await Task.sleep(for: .milliseconds(5))
+    #expect(await backend.sentTargetMessages().count == sentCountBeforeNavigation)
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"frame-ad","newTargetId":"frame-next"}}"#
+    )
+
+    let secondRuntimeEnable = try await waitForTargetMessage(
+        backend,
+        method: "Runtime.enable",
+        after: sentCountBeforeNavigation
+    )
+    #expect(secondRuntimeEnable.targetIdentifier == ProtocolTargetIdentifier("frame-next"))
+    await receiveTargetReply(
+        transport,
+        targetID: secondRuntimeEnable.targetIdentifier,
+        messageID: try messageID(secondRuntimeEnable.message),
+        result: "{}"
+    )
+
+    let secondConsoleEnable = try await waitForTargetMessage(
+        backend,
+        method: "Console.enable",
+        after: sentCountBeforeNavigation
+    )
+    #expect(secondConsoleEnable.targetIdentifier == ProtocolTargetIdentifier("frame-next"))
+    await receiveTargetReply(
+        transport,
+        targetID: secondConsoleEnable.targetIdentifier,
+        messageID: try messageID(secondConsoleEnable.message),
+        result: "{}"
+    )
+}
+
+@Test
+func subframeCommitDoesNotRetargetPageRuntimeOrConsoleState() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"type":"normal","frameId":"main-frame"}}}"#
+    )
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"Console.messageAdded","params":{"message":{"source":"console-api","level":"log","text":"page message","type":"log"}}}"#
+    )
+    let _: Bool = try await waitUntil {
+        let runtimeSnapshot = await session.runtime.snapshot()
+        let consoleSnapshot = await session.console.snapshot()
+        guard runtimeSnapshot.executionContextsByKey[contextKey(.pageMain, 7)]?.targetID == .pageMain,
+              consoleSnapshot.orderedMessageIDs.first?.targetID == .pageMain else {
+            return nil
+        }
+        return true
+    }
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-committed","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["Runtime","Console"],"isProvisional":true}}}"#
+    )
+    let commitSequence = await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-main","newTargetId":"frame-committed"}}"#
+    )
+    await expectProtocolEventApplied(commitSequence, in: session)
+    let runtimeSnapshot = await session.runtime.snapshot()
+    let consoleSnapshot = await session.console.snapshot()
+
+    #expect(runtimeSnapshot.executionContextsByKey[contextKey(.pageMain, 7)]?.targetID == .pageMain)
+    #expect(runtimeSnapshot.executionContextsByKey[contextKey(ProtocolTargetIdentifier("frame-committed"), 7)] == nil)
+    #expect(consoleSnapshot.orderedMessageIDs.first?.targetID == .pageMain)
+    #expect(consoleSnapshot.orderedMessageIDs.contains { $0.targetID == ProtocolTargetIdentifier("frame-committed") } == false)
 }
 
 @Test
@@ -1732,7 +2545,57 @@ func targetCommitBootstrapsCommittedMainPageTarget() async throws {
         "Runtime.enable",
         "DOM.getDocument",
         "Network.enable",
+        "Console.enable",
     ])
+}
+
+@Test
+func runtimeEvaluationResultUsesCommittedReplyTargetAfterNavigationCommit() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    let sentCountBeforeEvaluate = await backend.sentTargetMessages().count
+    let intent = await session.runtime.evaluateIntent(expression: "window", targetID: .pageMain)
+    let evaluateTask = Task {
+        try await session.perform(intent)
+    }
+    let evaluateMessage = try await waitForTargetMessage(
+        backend,
+        method: "Runtime.evaluate",
+        after: sentCountBeforeEvaluate
+    )
+    let sentCountBeforeCommit = await backend.sentTargetMessages().count
+
+    await transport.receiveRootMessage(
+        cssCapablePageTargetCreatedMessage(targetID: "page-next", isProvisional: true)
+    )
+    let commitSequence = await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-main","newTargetId":"page-next"}}"#
+    )
+    await expectProtocolEventApplied(commitSequence, in: session)
+
+    await receiveTargetReply(
+        transport,
+        targetID: .pageNext,
+        messageID: try messageID(evaluateMessage.message),
+        result: #"{"result":{"type":"object","objectId":"eval-object","description":"Window"}}"#
+    )
+    let result = try await evaluateTask.value
+
+    let objectID = RuntimeRemoteObjectIdentifier("eval-object")
+    let snapshot = await session.runtime.snapshot()
+    #expect(result.targetID == ProtocolTargetIdentifier.pageNext)
+    #expect(snapshot.remoteObjectsByID[.init(runtimeAgentTargetID: .pageMain, objectID: objectID)] == nil)
+    #expect(snapshot.remoteObjectsByID[.init(runtimeAgentTargetID: .pageNext, objectID: objectID)]?.payload.description == "Window")
+
+    try await completeBootstrap(
+        transport: transport,
+        backend: backend,
+        after: sentCountBeforeCommit,
+        documentResult: manualReloadDocumentResult
+    )
 }
 
 @Test("Regression: provisional DOM events from link navigation are ignored before committed document reload")
@@ -1789,8 +2652,12 @@ func requestNodeWaitsForPathPushBeforeSelectingNode() async throws {
         message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"main-frame"}}}"#
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().executionContextsByID[ExecutionContextID(7)]
+        await session.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
     }
+    _ = try await waitUntil {
+        await session.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
+    }
+    #expect(await session.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]?.targetID == .pageMain)
     let intent = await session.dom.beginInspectSelectionRequest(
         targetID: .pageMain,
         objectID: "selected-object"
@@ -1989,7 +2856,7 @@ func requestNodeReplyBeforePathPushKeepsSelectionPendingUntilParentArrives() asy
         message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"main-frame"}}}"#
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().executionContextsByID[ExecutionContextID(7)]
+        await session.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
     }
     let intent = await session.dom.beginInspectSelectionRequest(
         targetID: .pageMain,
@@ -2135,6 +3002,26 @@ func targetCommitClearsElementPickerForOldTarget() async throws {
 }
 
 @Test
+func subframeCommitDoesNotClearPageElementPicker() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    try await beginPicker(session: session, transport: transport, backend: backend)
+    #expect(await session.isSelectingElement)
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-committed","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["DOM","Runtime","Console"],"isProvisional":true}}}"#
+    )
+    let commitSequence = await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-main","newTargetId":"frame-committed"}}"#
+    )
+    await expectProtocolEventApplied(commitSequence, in: session)
+
+    #expect(await session.isSelectingElement)
+}
+
+@Test
 func elementPickerUsesBootstrappedTargetAfterTargetCommit() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
@@ -2188,7 +3075,7 @@ func elementPickerIgnoresInspectEventBeforeInspectModeReply() async throws {
         message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"main-frame"}}}"#
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().executionContextsByID[ExecutionContextID(7)]
+        await session.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
     }
 
     let sentCount = await backend.sentTargetMessages().count
@@ -2271,7 +3158,7 @@ func restartedElementPickerIgnoresStaleInspectEventBeforeInspectModeReply() asyn
         message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"main-frame"}}}"#
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().executionContextsByID[ExecutionContextID(7)]
+        await session.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
     }
 
     let sentCountBeforeFirstBegin = await backend.sentTargetMessages().count
@@ -2392,7 +3279,7 @@ func staleInspectEventCompletionDoesNotCancelRestartedPicker() async throws {
         message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"main-frame"}}}"#
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().executionContextsByID[ExecutionContextID(7)]
+        await session.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
     }
     try await beginPicker(session: session, transport: transport, backend: backend)
 
@@ -2472,7 +3359,7 @@ func inspectorInspectSelectsRequestedNodeAndDisablesPicker() async throws {
         message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"main-frame"}}}"#
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().executionContextsByID[ExecutionContextID(7)]
+        await session.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
     }
     try await beginPicker(session: session, transport: transport, backend: backend)
     let sentCountBeforeInspect = await backend.sentTargetMessages().count
@@ -2532,7 +3419,7 @@ func inspectorInspectWaitsForPathPushEventsBeforeSelectingNode() async throws {
         message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"main-frame"}}}"#
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().executionContextsByID[ExecutionContextID(7)]
+        await session.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
     }
     try await beginPicker(session: session, transport: transport, backend: backend)
     let sentCountBeforeInspect = await backend.sentTargetMessages().count
@@ -2604,7 +3491,7 @@ func inspectorInspectRecordedExecutionContextOverridesEventTargetHint() async th
         message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":77,"frameId":"ad-frame"}}}"#
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().executionContextsByID[ExecutionContextID(77)]
+        await session.dom.snapshot().executionContextsByKey[contextKey(.frameAd, 77)]
     }
     try await beginPicker(session: session, transport: transport, backend: backend)
     let sentCountBeforeInspect = await backend.sentTargetMessages().count
@@ -3727,10 +4614,20 @@ private func completeBootstrap(
 
     let networkMessage = try await waitForTargetMessage(backend, method: "Network.enable", after: sentCount)
     sentMessages.append(networkMessage)
+    sentCount = await backend.sentTargetMessages().count
     await receiveTargetReply(
         transport,
         targetID: networkMessage.targetIdentifier,
         messageID: try messageID(networkMessage.message),
+        result: "{}"
+    )
+
+    let consoleMessage = try await waitForTargetMessage(backend, method: "Console.enable", after: sentCount)
+    sentMessages.append(consoleMessage)
+    await receiveTargetReply(
+        transport,
+        targetID: consoleMessage.targetIdentifier,
+        messageID: try messageID(consoleMessage.message),
         result: "{}"
     )
     return sentMessages
@@ -3985,6 +4882,13 @@ private func expectProtocolEventApplied(
 
 private func pendingTargetReplyKeys(_ transport: TransportSession) async -> [TargetReplyKey] {
     await transport.snapshot().pendingTargetReplyKeys
+}
+
+private func contextKey(
+    _ runtimeAgentTargetID: ProtocolTargetIdentifier,
+    _ contextID: Int
+) -> RuntimeExecutionContextKey {
+    RuntimeExecutionContextKey(runtimeAgentTargetID: runtimeAgentTargetID, contextID: ExecutionContextID(contextID))
 }
 
 private func targetDispatchMessage(

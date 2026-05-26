@@ -41,12 +41,18 @@ final class NetworkOverviewCell: UICollectionViewListCell {
         guard var content = contentConfiguration as? UIListContentConfiguration else {
             return
         }
+        guard content.secondaryText != url else {
+            return
+        }
         content.secondaryText = url
         contentConfiguration = content
     }
 
     private func renderMetrics(_ metricsText: NSAttributedString) {
         guard var content = contentConfiguration as? UIListContentConfiguration else {
+            return
+        }
+        guard content.attributedText?.isEqual(to: metricsText) != true else {
             return
         }
         content.attributedText = metricsText

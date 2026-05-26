@@ -100,7 +100,8 @@ let package = Package(
             name: "WebInspectorRuntime",
             dependencies: [
                 "WebInspectorCore",
-                "WebInspectorTransport"
+                "WebInspectorTransport",
+                .product(name: "ObservationBridge", package: "ObservationBridge")
             ],
             swiftSettings: strictSwiftSettings
         ),

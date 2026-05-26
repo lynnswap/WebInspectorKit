@@ -599,22 +599,26 @@ func ambiguousTargetCommitPreservesExistingMetadataAndDoesNotInventTarget() asyn
 }
 
 @Test
-func rootScopedRuntimeAndDOMMutationEventsResolveToCurrentPageTarget() async throws {
+func rootScopedRuntimeDOMAndConsoleEventsResolveToCurrentPageTarget() async throws {
     let backend = FakeTransportBackend()
     let session = TransportSession(backend: backend)
     let runtimeStream = await session.events(for: .runtime)
     let domStream = await session.events(for: .dom)
+    let consoleStream = await session.events(for: .console)
     let runtimeTask = firstEvent(from: runtimeStream)
     let domTask = firstEvent(from: domStream)
+    let consoleTask = firstEvent(from: consoleStream)
 
     await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#)
     await session.receiveRootMessage(#"{"method":"Runtime.executionContextCreated","params":{"context":{"id":11,"frameId":"main-frame"}}}"#)
     await session.receiveRootMessage(#"{"method":"DOM.childNodeCountUpdated","params":{"nodeId":1,"childNodeCount":2}}"#)
+    await session.receiveRootMessage(#"{"method":"Console.messageAdded","params":{"message":{"text":"hello"}}}"#)
     let snapshot = await session.snapshot()
 
-    #expect(snapshot.executionContextsByID[ExecutionContextID(11)]?.targetID == ProtocolTargetIdentifier("page-main"))
+    #expect(snapshot.executionContextsByKey[contextKey("page-main", 11)]?.targetID == ProtocolTargetIdentifier("page-main"))
     #expect(await runtimeTask.value?.targetID == ProtocolTargetIdentifier("page-main"))
     #expect(await domTask.value?.targetID == ProtocolTargetIdentifier("page-main"))
+    #expect(await consoleTask.value?.targetID == ProtocolTargetIdentifier("page-main"))
 }
 
 @Test
@@ -656,7 +660,7 @@ func runtimeExecutionContextMapsToDeliveringTarget() async throws {
     )
     let snapshot = await session.snapshot()
 
-    #expect(snapshot.executionContextsByID[ExecutionContextID(7)]?.targetID == ProtocolTargetIdentifier("frame-A"))
+    #expect(snapshot.executionContextsByKey[contextKey("frame-A", 7)]?.targetID == ProtocolTargetIdentifier("frame-A"))
     #expect(await session.targetIdentifier(forFrameID: .init("frame-A")) == ProtocolTargetIdentifier("frame-A"))
 }
 
@@ -674,8 +678,121 @@ func runtimeContextOnPagePreservesExistingFrameTargetRoute() async throws {
     )
     let snapshot = await session.snapshot()
 
-    #expect(snapshot.executionContextsByID[ExecutionContextID(7)]?.targetID == ProtocolTargetIdentifier("frame-A"))
+    #expect(snapshot.executionContextsByKey[contextKey("page-main", 7)]?.targetID == ProtocolTargetIdentifier("frame-A"))
     #expect(await session.targetIdentifier(forFrameID: .init("frame-A")) == ProtocolTargetIdentifier("frame-A"))
+}
+
+@Test
+func rootScopedRuntimeClearRemovesRetargetedContextsFromPageRuntimeAgent() async throws {
+    let backend = FakeTransportBackend()
+    let session = TransportSession(backend: backend)
+
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#)
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-A","type":"frame","frameId":"frame-A","parentFrameId":"main-frame","isProvisional":false}}}"#)
+    await session.receiveRootMessage(#"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"frame-A"}}}"#)
+    await receiveTargetDispatch(
+        session,
+        targetID: .init("frame-A"),
+        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":8,"frameId":"frame-A"}}}"#
+    )
+
+    let beforeClear = await session.snapshot()
+    #expect(beforeClear.executionContextsByKey[contextKey("page-main", 7)]?.targetID == ProtocolTargetIdentifier("frame-A"))
+    #expect(beforeClear.executionContextsByKey[contextKey("page-main", 7)]?.runtimeAgentTargetID == ProtocolTargetIdentifier("page-main"))
+    #expect(beforeClear.executionContextsByKey[contextKey("frame-A", 8)]?.runtimeAgentTargetID == ProtocolTargetIdentifier("frame-A"))
+
+    await session.receiveRootMessage(#"{"method":"Runtime.executionContextsCleared","params":{}}"#)
+    let afterClear = await session.snapshot()
+
+    #expect(afterClear.executionContextsByKey[contextKey("page-main", 7)] == nil)
+    #expect(afterClear.executionContextsByKey[contextKey("frame-A", 8)]?.targetID == ProtocolTargetIdentifier("frame-A"))
+}
+
+@Test
+func runtimeExecutionContextRegistryScopesDuplicateIDsByRuntimeAgentTarget() async throws {
+    let backend = FakeTransportBackend()
+    let session = TransportSession(backend: backend)
+
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#)
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-A","type":"frame","frameId":"frame-A","parentFrameId":"main-frame","isProvisional":false}}}"#)
+    await session.receiveRootMessage(#"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"frame-A"}}}"#)
+    await receiveTargetDispatch(
+        session,
+        targetID: .init("frame-A"),
+        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"frame-A"}}}"#
+    )
+
+    let snapshot = await session.snapshot()
+    #expect(snapshot.executionContextsByKey[contextKey("page-main", 7)]?.targetID == ProtocolTargetIdentifier("frame-A"))
+    #expect(snapshot.executionContextsByKey[contextKey("frame-A", 7)]?.targetID == ProtocolTargetIdentifier("frame-A"))
+
+    await receiveTargetDispatch(
+        session,
+        targetID: .init("frame-A"),
+        message: #"{"method":"Runtime.executionContextDestroyed","params":{"executionContextId":7}}"#
+    )
+    let afterFrameDestroy = await session.snapshot()
+    #expect(afterFrameDestroy.executionContextsByKey[contextKey("page-main", 7)]?.targetID == ProtocolTargetIdentifier("frame-A"))
+    #expect(afterFrameDestroy.executionContextsByKey[contextKey("frame-A", 7)] == nil)
+
+    await session.receiveRootMessage(#"{"method":"Runtime.executionContextsCleared","params":{}}"#)
+    #expect(await session.snapshot().executionContextsByKey[contextKey("page-main", 7)] == nil)
+}
+
+@Test
+func runtimeExecutionContextRegistryPreservesCommittedContextWhenIDsCollide() async throws {
+    let backend = FakeTransportBackend()
+    let session = TransportSession(backend: backend)
+
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-old","type":"page","frameId":"old-frame","isProvisional":false}}}"#)
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-new","type":"page","isProvisional":false}}}"#)
+    await receiveTargetDispatch(
+        session,
+        targetID: .init("page-old"),
+        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"type":"normal","name":"old","frameId":"old-frame"}}}"#
+    )
+    await receiveTargetDispatch(
+        session,
+        targetID: .init("page-new"),
+        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"type":"normal","name":"new"}}}"#
+    )
+
+    await session.receiveRootMessage(#"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-old","newTargetId":"page-new"}}"#)
+    let snapshot = await session.snapshot()
+
+    #expect(snapshot.executionContextsByKey[contextKey("page-old", 7)] == nil)
+    #expect(snapshot.executionContextsByKey[contextKey("page-new", 7)]?.name == "new")
+}
+
+@Test
+func runtimeExecutionContextRegistryPreservesContextMetadata() async throws {
+    let backend = FakeTransportBackend()
+    let session = TransportSession(backend: backend)
+
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#)
+    await session.receiveRootMessage(#"{"method":"Runtime.executionContextCreated","params":{"context":{"id":9,"type":"internal","name":"Isolated World","frameId":"main-frame"}}}"#)
+    let snapshot = await session.snapshot()
+    let record = try #require(snapshot.executionContextsByKey[contextKey("page-main", 9)])
+
+    #expect(record.targetID == ProtocolTargetIdentifier("page-main"))
+    #expect(record.type == .internal)
+    #expect(record.name == "Isolated World")
+    #expect(record.frameID == DOMFrameIdentifier("main-frame"))
+}
+
+@Test
+func runtimeExecutionContextRegistryAppliesTeardownEvents() async throws {
+    let backend = FakeTransportBackend()
+    let session = TransportSession(backend: backend)
+
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#)
+    await session.receiveRootMessage(#"{"method":"Runtime.executionContextCreated","params":{"context":{"id":9,"type":"normal","frameId":"main-frame"}}}"#)
+    await session.receiveRootMessage(#"{"method":"Runtime.executionContextDestroyed","params":{"executionContextId":9}}"#)
+    #expect(await session.snapshot().executionContextsByKey[contextKey("page-main", 9)] == nil)
+
+    await session.receiveRootMessage(#"{"method":"Runtime.executionContextCreated","params":{"context":{"id":10,"type":"normal","frameId":"main-frame"}}}"#)
+    await session.receiveRootMessage(#"{"method":"Runtime.executionContextsCleared","params":{}}"#)
+    #expect(await session.snapshot().executionContextsByKey[contextKey("page-main", 10)] == nil)
 }
 
 @Test
@@ -1673,6 +1790,13 @@ private func messageMethod(_ message: String) throws -> String? {
 
 private func jsonObject(from data: Data) throws -> [String: Any] {
     try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+}
+
+private func contextKey(_ runtimeAgentTargetID: String, _ contextID: Int) -> RuntimeExecutionContextKey {
+    RuntimeExecutionContextKey(
+        runtimeAgentTargetID: ProtocolTargetIdentifier(runtimeAgentTargetID),
+        contextID: ExecutionContextID(contextID)
+    )
 }
 
 private func integerValue(_ value: Any?) -> Int? {

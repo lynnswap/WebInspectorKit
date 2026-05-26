@@ -147,6 +147,37 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func detailModeMenuDisablesWhenSelectedRequestDisappears() async throws {
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://example.com/form",
+                postData: "name=Jane+Doe"
+            )
+        )
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didEnableMenu = await waitUntil {
+            viewController.navigationItem.trailingItemGroups.first?.barButtonItems.first?.isEnabled == true
+        }
+        #expect(didEnableMenu)
+
+        network.reset()
+
+        let didDisableMenu = await waitUntil {
+            viewController.navigationItem.trailingItemGroups.first?.barButtonItems.first?.isEnabled == false
+                && viewController.contentUnavailableConfiguration != nil
+        }
+        #expect(didDisableMenu)
+    }
+
+    @Test
     func responseBodyModeRequestsRuntimeFetchWhenBodyIsAvailable() async throws {
         let network = NetworkSession()
         let request = try #require(
@@ -198,6 +229,37 @@ struct NetworkDetailViewControllerTests {
         #expect(didPush)
 
         model.selectRequest(nil)
+        let didPop = await waitUntilAllowingAnimations {
+            navigationController.viewControllers == [listViewController]
+        }
+        #expect(didPop)
+    }
+
+    @Test
+    func compactContainerPopsDetailWhenSelectedRequestDisappears() async throws {
+        let network = NetworkSession()
+        let request = try #require(applyRequest(to: network, requestID: "1", url: "https://example.com/app.js"))
+        let model = NetworkPanelModel(network: network)
+        let listViewController = NetworkListViewController(model: model)
+        let detailViewController = NetworkDetailViewController(model: model)
+        let navigationController = NetworkCompactNavigationController(
+            model: model,
+            listViewController: listViewController,
+            detailViewController: detailViewController
+        )
+        let window = showInWindow(navigationController)
+        defer { window.isHidden = true }
+
+        model.selectRequest(request)
+        let didPush = await waitUntil {
+            navigationController.viewControllers.last === detailViewController
+        }
+        #expect(didPush)
+
+        network.reset()
+        #expect(model.selectedRequestID == request.id)
+        #expect(model.selectedRequest == nil)
+
         let didPop = await waitUntilAllowingAnimations {
             navigationController.viewControllers == [listViewController]
         }

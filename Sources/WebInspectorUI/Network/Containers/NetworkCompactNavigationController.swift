@@ -43,7 +43,7 @@ package final class NetworkCompactNavigationController: UINavigationController, 
 
     override package func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        syncStack(with: model.selectedRequest, animated: false)
+        syncStack(hasSelection: model.selectedRequest != nil, animated: false)
         startObservingSelection()
     }
 
@@ -69,7 +69,7 @@ package final class NetworkCompactNavigationController: UINavigationController, 
         observationScope.cancelAll()
         observationScope.observe(model) { [weak self] event, model in
             self?.syncStack(
-                with: model.selectedRequest,
+                hasSelection: model.selectedRequest != nil,
                 animated: event.kind != .initial
             )
         }
@@ -79,12 +79,12 @@ package final class NetworkCompactNavigationController: UINavigationController, 
         observationScope.cancelAll()
     }
 
-    private func syncStack(with request: NetworkRequest?, animated: Bool) {
+    private func syncStack(hasSelection: Bool, animated: Bool) {
         guard scheduleStackSyncAfterCurrentTransitionIfNeeded(animated: animated) == false else {
             return
         }
 
-        guard request != nil else {
+        guard hasSelection else {
             popRequestDetailIfNeeded(animated: animated)
             return
         }
@@ -149,7 +149,7 @@ package final class NetworkCompactNavigationController: UINavigationController, 
         isStackSyncScheduledAfterTransition = false
         let shouldAnimate = pendingStackSyncAnimates
         pendingStackSyncAnimates = false
-        syncStack(with: model.selectedRequest, animated: shouldAnimate)
+        syncStack(hasSelection: model.selectedRequest != nil, animated: shouldAnimate)
     }
 }
 #endif

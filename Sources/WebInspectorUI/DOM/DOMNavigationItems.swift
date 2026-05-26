@@ -153,8 +153,14 @@ package final class DOMNavigationItems: NSObject {
     }
 
     private func renderPickItem(session: InspectorSession) {
-        pickItem.isEnabled = session.canSelectElement
-        pickItem.tintColor = session.isSelectingElement ? .tintColor : .label
+        let isEnabled = session.canSelectElement
+        if pickItem.isEnabled != isEnabled {
+            pickItem.isEnabled = isEnabled
+        }
+        let tintColor: UIColor = session.isSelectingElement ? .tintColor : .label
+        if pickItem.tintColor != tintColor {
+            pickItem.tintColor = tintColor
+        }
     }
 }
 

@@ -127,6 +127,7 @@ package struct ProtocolEventEnvelope: Equatable, Sendable {
     package var domain: ProtocolDomain
     package var method: String
     package var targetID: ProtocolTargetIdentifier?
+    package var sourceTargetID: ProtocolTargetIdentifier?
     package var receivedDomainSequences: [ProtocolDomain: UInt64]
     package var paramsData: Data
 
@@ -135,6 +136,7 @@ package struct ProtocolEventEnvelope: Equatable, Sendable {
         domain: ProtocolDomain,
         method: String,
         targetID: ProtocolTargetIdentifier?,
+        sourceTargetID: ProtocolTargetIdentifier? = nil,
         receivedDomainSequences: [ProtocolDomain: UInt64] = [:],
         paramsData: Data
     ) {
@@ -142,6 +144,7 @@ package struct ProtocolEventEnvelope: Equatable, Sendable {
         self.domain = domain
         self.method = method
         self.targetID = targetID
+        self.sourceTargetID = sourceTargetID
         self.receivedDomainSequences = receivedDomainSequences
         self.paramsData = paramsData
     }
@@ -155,7 +158,7 @@ package struct TransportSnapshot: Equatable, Sendable {
     package var currentMainPageTargetID: ProtocolTargetIdentifier?
     package var targetsByID: [ProtocolTargetIdentifier: ProtocolTargetRecord]
     package var frameTargetIDsByFrameID: [DOMFrameIdentifier: ProtocolTargetIdentifier]
-    package var executionContextsByID: [ExecutionContextID: ExecutionContextRecord]
+    package var executionContextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContextRecord]
     package var pendingRootReplyIDs: [UInt64]
     package var pendingTargetReplyKeys: [TargetReplyKey]
 
@@ -163,14 +166,14 @@ package struct TransportSnapshot: Equatable, Sendable {
         currentMainPageTargetID: ProtocolTargetIdentifier?,
         targetsByID: [ProtocolTargetIdentifier: ProtocolTargetRecord],
         frameTargetIDsByFrameID: [DOMFrameIdentifier: ProtocolTargetIdentifier],
-        executionContextsByID: [ExecutionContextID: ExecutionContextRecord],
+        executionContextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContextRecord],
         pendingRootReplyIDs: [UInt64],
         pendingTargetReplyKeys: [TargetReplyKey]
     ) {
         self.currentMainPageTargetID = currentMainPageTargetID
         self.targetsByID = targetsByID
         self.frameTargetIDsByFrameID = frameTargetIDsByFrameID
-        self.executionContextsByID = executionContextsByID
+        self.executionContextsByKey = executionContextsByKey
         self.pendingRootReplyIDs = pendingRootReplyIDs
         self.pendingTargetReplyKeys = pendingTargetReplyKeys
     }

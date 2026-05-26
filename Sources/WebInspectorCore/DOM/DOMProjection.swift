@@ -70,6 +70,20 @@ package struct ProtocolTargetSnapshot: Equatable, Sendable {
     package var currentDocumentID: DOMDocumentIdentifier?
 }
 
+package extension ProtocolTargetSnapshot {
+    var record: ProtocolTargetRecord {
+        ProtocolTargetRecord(
+            id: id,
+            kind: kind,
+            frameID: frameID,
+            parentFrameID: parentFrameID,
+            capabilities: capabilities,
+            isProvisional: isProvisional,
+            isPaused: isPaused
+        )
+    }
+}
+
 package struct DOMFrameSnapshot: Equatable, Sendable {
     package var id: DOMFrameIdentifier
     package var parentFrameID: DOMFrameIdentifier?
@@ -197,7 +211,7 @@ package struct DOMSessionSnapshot: Equatable, Sendable {
     package var frameDocumentProjections: [ProtocolTargetIdentifier: FrameDocumentProjectionSnapshot]
     package var transactions: [DOMTransactionSnapshot]
     package var currentNodeIDByKey: [DOMNodeCurrentKey: DOMNodeIdentifier]
-    package var executionContextsByID: [ExecutionContextID: ExecutionContextRecord]
+    package var executionContextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContextRecord]
     package var selection: DOMSelectionSnapshot
 }
 
@@ -208,5 +222,19 @@ package extension DOMSessionSnapshot {
         }
         return targetStatesByID[currentPageTargetID]?.currentDocumentID
             ?? targetsByID[currentPageTargetID]?.currentDocumentID
+    }
+
+    func executionContext(
+        runtimeAgentTargetID: ProtocolTargetIdentifier,
+        contextID: ExecutionContextID
+    ) -> RuntimeExecutionContextRecord? {
+        executionContextsByKey[
+            RuntimeExecutionContextKey(runtimeAgentTargetID: runtimeAgentTargetID, contextID: contextID)
+        ]
+    }
+
+    func uniqueExecutionContext(contextID: ExecutionContextID) -> RuntimeExecutionContextRecord? {
+        let matches = executionContextsByKey.values.filter { $0.id == contextID }
+        return matches.count == 1 ? matches[0] : nil
     }
 }

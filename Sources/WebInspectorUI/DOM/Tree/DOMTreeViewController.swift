@@ -93,7 +93,6 @@ package final class DOMTreeViewController: UIViewController {
         guard let session else {
             return
         }
-        _ = session.dom.treeRevision
         let currentPageRootNode = session.dom.currentPageRootNode
         guard viewIfLoaded?.window != nil,
               !isEnsuringDOMDocumentLoaded,

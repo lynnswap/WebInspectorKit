@@ -5,6 +5,7 @@ package enum DOMTransportAdapter {
     package struct TargetCommitResolution: Equatable, Sendable {
         package var oldTargetID: ProtocolTargetIdentifier?
         package var newTargetID: ProtocolTargetIdentifier
+        package var consumedOldTargetID: ProtocolTargetIdentifier?
     }
 
     package static func command(for intent: DOMCommandIntent) throws -> ProtocolCommand {
@@ -112,7 +113,7 @@ package enum DOMTransportAdapter {
             guard let commit = try targetCommitResolution(from: event, snapshot: snapshotBeforeCommit) else {
                 return nil
             }
-            if let oldTargetID = commit.oldTargetID {
+            if let oldTargetID = commit.consumedOldTargetID {
                 session.applyTargetCommitted(oldTargetID: oldTargetID, newTargetID: commit.newTargetID)
             } else {
                 session.applyTargetCommitted(targetID: commit.newTargetID)
@@ -138,22 +139,56 @@ package enum DOMTransportAdapter {
             return nil
         }
         let params = try TransportMessageParser.decode(TargetCommittedParams.self, from: event.paramsData)
+        let oldTargetID = params.oldTargetId ?? inferredOldTargetIDForOldlessCommit(params, snapshot: snapshot)
         return TargetCommitResolution(
-            oldTargetID: params.oldTargetId ?? inferredOldTargetIDForOldlessCommit(params, snapshot: snapshot),
-            newTargetID: params.newTargetId
+            oldTargetID: oldTargetID,
+            newTargetID: params.newTargetId,
+            consumedOldTargetID: oldTargetID.flatMap {
+                targetCommitConsumesOldTarget(oldTargetID: $0, newTargetID: params.newTargetId, snapshot: snapshot) ? $0 : nil
+            }
         )
     }
 
     @MainActor
     package static func applyRuntimeEvent(_ event: ProtocolEventEnvelope, to session: DOMSession) throws {
-        guard event.method == "Runtime.executionContextCreated",
-              let targetID = event.targetID else {
+        guard event.domain == .runtime else {
             return
         }
-        let params = try TransportMessageParser.decode(RuntimeExecutionContextCreatedParams.self, from: event.paramsData)
-        session.applyExecutionContextCreated(
-            .init(id: params.context.id, targetID: targetID, frameID: params.context.frameId)
-        )
+        switch event.method {
+        case "Runtime.executionContextCreated":
+            guard let targetID = event.targetID else {
+                return
+            }
+            let params = try TransportMessageParser.decode(RuntimeExecutionContextCreatedParams.self, from: event.paramsData)
+            session.applyExecutionContextCreated(
+                .init(
+                    id: params.context.id,
+                    targetID: targetID,
+                    runtimeAgentTargetID: event.sourceTargetID ?? targetID,
+                    type: params.context.type ?? .normal,
+                    name: params.context.name ?? "",
+                    frameID: params.context.frameId
+                )
+            )
+        case "Runtime.executionContextDestroyed":
+            guard let targetID = event.targetID else {
+                return
+            }
+            let params = try TransportMessageParser.decode(RuntimeExecutionContextDestroyedParams.self, from: event.paramsData)
+            session.applyExecutionContextDestroyed(
+                RuntimeExecutionContextKey(
+                    runtimeAgentTargetID: event.sourceTargetID ?? targetID,
+                    contextID: params.executionContextId
+                )
+            )
+        case "Runtime.executionContextsCleared":
+            guard let targetID = event.targetID else {
+                return
+            }
+            session.applyExecutionContextsCleared(runtimeAgentTargetID: event.sourceTargetID ?? targetID)
+        default:
+            return
+        }
     }
 
     @MainActor
@@ -341,6 +376,22 @@ package enum DOMTransportAdapter {
         return provisionalTargetIDs.count == 1 ? provisionalTargetIDs[0] : nil
     }
 
+    private static func targetCommitConsumesOldTarget(
+        oldTargetID: ProtocolTargetIdentifier,
+        newTargetID: ProtocolTargetIdentifier,
+        snapshot: DOMSessionSnapshot
+    ) -> Bool {
+        guard oldTargetID != newTargetID else {
+            return false
+        }
+        if snapshot.currentPageTargetID == oldTargetID,
+           let newTarget = snapshot.targetsByID[newTargetID],
+           (newTarget.kind != .page || newTarget.parentFrameID != nil) {
+            return false
+        }
+        return true
+    }
+
     private static func injectedScriptID(from objectID: String) -> ExecutionContextID? {
         guard let data = objectID.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -424,10 +475,16 @@ private struct TargetCommittedParams: Decodable {
 private struct RuntimeExecutionContextCreatedParams: Decodable {
     struct Context: Decodable {
         var id: ExecutionContextID
+        var type: RuntimeExecutionContextType?
+        var name: String?
         var frameId: DOMFrameIdentifier?
     }
 
     var context: Context
+}
+
+private struct RuntimeExecutionContextDestroyedParams: Decodable {
+    var executionContextId: ExecutionContextID
 }
 
 private struct GetDocumentResult: Decodable {
