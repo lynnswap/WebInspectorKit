@@ -558,10 +558,14 @@ package final class RuntimeSession {
         storeRuntimeAgentState(agentState)
     }
 
-    package func applyEvaluationResult(_ result: RuntimeEvaluationResultPayload, request: RuntimeEvaluationRequest) {
+    package func applyEvaluationResult(
+        _ result: RuntimeEvaluationResultPayload,
+        request: RuntimeEvaluationRequest,
+        runtimeAgentTargetID: ProtocolTargetIdentifier? = nil
+    ) {
         registerRemoteObject(
             result.result,
-            runtimeAgentTargetID: request.runtimeAgentTargetID,
+            runtimeAgentTargetID: runtimeAgentTargetID ?? request.runtimeAgentTargetID,
             objectGroup: request.objectGroup,
             executionContextID: request.contextID
         )

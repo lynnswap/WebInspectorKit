@@ -2362,6 +2362,55 @@ func targetCommitBootstrapsCommittedMainPageTarget() async throws {
     ])
 }
 
+@Test
+func runtimeEvaluationResultUsesCommittedReplyTargetAfterNavigationCommit() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    let sentCountBeforeEvaluate = await backend.sentTargetMessages().count
+    let intent = await session.runtime.evaluateIntent(expression: "window", targetID: .pageMain)
+    let evaluateTask = Task {
+        try await session.perform(intent)
+    }
+    let evaluateMessage = try await waitForTargetMessage(
+        backend,
+        method: "Runtime.evaluate",
+        after: sentCountBeforeEvaluate
+    )
+    let sentCountBeforeCommit = await backend.sentTargetMessages().count
+
+    await transport.receiveRootMessage(
+        cssCapablePageTargetCreatedMessage(targetID: "page-next", isProvisional: true)
+    )
+    let commitSequence = await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-main","newTargetId":"page-next"}}"#
+    )
+    await expectProtocolEventApplied(commitSequence, in: session)
+
+    await receiveTargetReply(
+        transport,
+        targetID: .pageNext,
+        messageID: try messageID(evaluateMessage.message),
+        result: #"{"result":{"type":"object","objectId":"eval-object","description":"Window"}}"#
+    )
+    let result = try await evaluateTask.value
+
+    let objectID = RuntimeRemoteObjectIdentifier("eval-object")
+    let snapshot = await session.runtime.snapshot()
+    #expect(result.targetID == ProtocolTargetIdentifier.pageNext)
+    #expect(snapshot.remoteObjectsByID[.init(runtimeAgentTargetID: .pageMain, objectID: objectID)] == nil)
+    #expect(snapshot.remoteObjectsByID[.init(runtimeAgentTargetID: .pageNext, objectID: objectID)]?.payload.description == "Window")
+
+    try await completeBootstrap(
+        transport: transport,
+        backend: backend,
+        after: sentCountBeforeCommit,
+        documentResult: manualReloadDocumentResult
+    )
+}
+
 @Test("Regression: provisional DOM events from link navigation are ignored before committed document reload")
 func linkNavigationBuffersProvisionalDOMEventsUntilCommit() async throws {
     let backend = FakeTransportBackend()

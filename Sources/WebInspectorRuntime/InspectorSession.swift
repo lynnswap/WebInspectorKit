@@ -867,7 +867,11 @@ package final class InspectorSession {
         switch intent {
         case let .evaluate(request):
             let payload = try RuntimeTransportAdapter.evaluationResult(from: result)
-            runtime.applyEvaluationResult(payload, request: request)
+            runtime.applyEvaluationResult(
+                payload,
+                request: request,
+                runtimeAgentTargetID: result.targetID
+            )
         case let .releaseObject(key):
             runtime.releaseObject(key)
         case let .releaseObjectGroup(runtimeAgentTargetID, objectGroup):
