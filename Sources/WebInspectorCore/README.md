@@ -19,6 +19,7 @@ The target models WebKit protocol concepts before they reach UIKit presentation 
 - [DOM model research](Docs/DOMModelResearch.md)
 - [CSS model research](Docs/CSSModelResearch.md)
 - [Network model research](Docs/NetworkModelResearch.md)
+- [Console transport research](Docs/ConsoleTransportResearch.md)
 - [WebInspector architecture overview](../../Docs/ArchitectureOverview.md)
 
 ## Model Boundary
