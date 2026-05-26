@@ -131,6 +131,7 @@ private final class InspectorTarget {
     var isBootstrapped: Bool
     private var enabledDomains: ProtocolTargetCapabilities
     private var runtimeConsoleEnableTask: Task<Void, Never>?
+    private var runtimeConsoleEnableTaskWaiters: [CheckedContinuation<Void, Never>]
 
     init(snapshot: ProtocolTargetSnapshot) {
         id = snapshot.id
@@ -143,6 +144,7 @@ private final class InspectorTarget {
         isBootstrapped = false
         enabledDomains = []
         runtimeConsoleEnableTask = nil
+        runtimeConsoleEnableTaskWaiters = []
     }
 
     func update(from snapshot: ProtocolTargetSnapshot) {
@@ -191,11 +193,34 @@ private final class InspectorTarget {
 
     func finishRuntimeConsoleEnableTask() {
         runtimeConsoleEnableTask = nil
+        resumeRuntimeConsoleEnableTaskWaiters()
     }
 
     func cancelRuntimeConsoleEnableTask() {
         runtimeConsoleEnableTask?.cancel()
         runtimeConsoleEnableTask = nil
+        resumeRuntimeConsoleEnableTaskWaiters()
+    }
+
+    func waitUntilRuntimeConsoleEnableTaskFinished() async {
+        guard runtimeConsoleEnableTask != nil else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            if runtimeConsoleEnableTask == nil {
+                continuation.resume()
+            } else {
+                runtimeConsoleEnableTaskWaiters.append(continuation)
+            }
+        }
+    }
+
+    private func resumeRuntimeConsoleEnableTaskWaiters() {
+        let waiters = runtimeConsoleEnableTaskWaiters
+        runtimeConsoleEnableTaskWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
     }
 }
 
@@ -244,6 +269,14 @@ private final class InspectorTargetRegistry {
         for target in targetsByID.values {
             target.cancelRuntimeConsoleEnableTask()
         }
+    }
+
+    func waitUntilRuntimeConsoleEnableTaskFinished(targetID: ProtocolTargetIdentifier) async -> Bool {
+        guard let target = targetsByID[targetID] else {
+            return false
+        }
+        await target.waitUntilRuntimeConsoleEnableTaskFinished()
+        return true
     }
 }
 
@@ -761,6 +794,13 @@ package final class InspectorSession {
             return false
         }
         return await eventPump.waitUntilApplied(sequence)
+    }
+
+    package func waitUntilRuntimeConsoleEnableFinished(targetID: ProtocolTargetIdentifier) async -> Bool {
+        guard let connection else {
+            return false
+        }
+        return await connection.targets.waitUntilRuntimeConsoleEnableTaskFinished(targetID: targetID)
     }
 
     @discardableResult
