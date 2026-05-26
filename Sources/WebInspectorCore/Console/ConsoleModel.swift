@@ -199,7 +199,8 @@ package final class ConsoleTargetState {
                     stackTrace: message.stackTrace,
                     networkRequestID: message.networkRequestKey?.requestID,
                     timestamp: message.timestamp
-                )
+                ),
+                parameters: message.parameters.map(Self.displayOnlyParameter)
             )
         }
         if let lastRepeatableMessageID {
@@ -210,6 +211,14 @@ package final class ConsoleTargetState {
         }
         nextState.recalculateSeverityCounts()
         return nextState
+    }
+
+    private static func displayOnlyParameter(_ parameter: RuntimeRemoteObject) -> RuntimeRemoteObject {
+        RuntimeRemoteObject(
+            payload: parameter.payload,
+            objectGroup: parameter.objectGroup,
+            executionContextKey: parameter.executionContextKey
+        )
     }
 
     func mergeCommittedState(_ committedState: ConsoleTargetState) {

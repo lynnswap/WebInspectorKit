@@ -162,3 +162,37 @@ func consoleTargetCommitKeepsRepeatUpdatesPointedAtNewestMessage() throws {
     #expect(snapshot.messagesByID[newMessageID]?.timestamp == 12)
     #expect(snapshot.warningCountByTargetID[newTargetID] == 5)
 }
+
+@Test
+@MainActor
+func consoleTargetCommitPreservesDisplayParametersWithoutRekeyingStaleObjectHandles() throws {
+    let session = ConsoleSession()
+    let oldTargetID = ProtocolTargetIdentifier("page-old")
+    let newTargetID = ProtocolTargetIdentifier("page-new")
+    let objectID = RuntimeRemoteObjectIdentifier("old-agent-object")
+
+    let oldMessageID = session.applyMessageAdded(
+        ConsoleMessagePayload(
+            source: .consoleAPI,
+            level: .log,
+            text: "old object",
+            type: .log,
+            parameters: [
+                RuntimeRemoteObjectPayload(type: .object, description: "stale", objectID: objectID),
+            ]
+        ),
+        targetID: oldTargetID
+    )
+
+    session.applyTargetCommitted(oldTargetID: oldTargetID, newTargetID: newTargetID)
+
+    let retargetedMessageID = ConsoleMessageIdentifier(
+        targetID: newTargetID,
+        ordinal: oldMessageID.ordinal
+    )
+    let message = try #require(session.message(for: retargetedMessageID))
+    let parameter = try #require(message.parameters.first)
+    #expect(parameter.payload.objectID == objectID)
+    #expect(parameter.payload.description == "stale")
+    #expect(parameter.remoteObjectKey == nil)
+}
