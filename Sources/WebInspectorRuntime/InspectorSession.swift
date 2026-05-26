@@ -736,7 +736,7 @@ package final class InspectorSession {
         do {
             result = try await transport.send(command)
         } catch {
-            markRuntimeCommandUnsupportedIfNeeded(command.method, targetID: intent.targetID, error: error)
+            markRuntimeCommandUnsupportedIfNeeded(command.method, targetID: intent.routingTargetID, error: error)
             throw error
         }
         try ensureCurrentConnection(connection)
@@ -747,8 +747,8 @@ package final class InspectorSession {
             runtime.applyEvaluationResult(payload, request: request)
         case let .releaseObject(key):
             runtime.releaseObject(key)
-        case let .releaseObjectGroup(targetID, objectGroup):
-            runtime.releaseObjectGroup(objectGroup, targetID: targetID)
+        case let .releaseObjectGroup(runtimeAgentTargetID, objectGroup):
+            runtime.releaseObjectGroup(objectGroup, runtimeAgentTargetID: runtimeAgentTargetID)
         default:
             break
         }
@@ -1073,10 +1073,20 @@ package final class InspectorSession {
             }
         case .console:
             applyEvent(event) {
+                if let targetID = event.targetID,
+                   let message = try ConsoleTransportAdapter.messagePayload(from: event) {
+                    for parameter in message.parameters {
+                        $0.runtime.registerRemoteObject(
+                            parameter,
+                            runtimeAgentTargetID: targetID,
+                            objectGroup: .console
+                        )
+                    }
+                }
                 try ConsoleTransportAdapter.applyConsoleEvent(event, to: $0.console)
                 if event.method == "Console.messagesCleared",
                    let targetID = event.targetID {
-                    $0.runtime.releaseObjectGroup(.console, targetID: targetID)
+                    $0.runtime.releaseObjectGroup(.console, runtimeAgentTargetID: targetID)
                 }
             }
         case .inspector:

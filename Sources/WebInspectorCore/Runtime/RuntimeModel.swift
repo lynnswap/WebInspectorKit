@@ -25,13 +25,28 @@ package struct RuntimeExecutionContext: Equatable, Sendable {
     }
 }
 
+package struct RuntimeRemoteObjectRecord: Equatable, Sendable {
+    package var payload: RuntimeRemoteObjectPayload
+    package var objectGroup: RuntimeObjectGroup?
+    package var executionContextID: ExecutionContextID?
+
+    package init(
+        payload: RuntimeRemoteObjectPayload,
+        objectGroup: RuntimeObjectGroup? = nil,
+        executionContextID: ExecutionContextID? = nil
+    ) {
+        self.payload = payload
+        self.objectGroup = objectGroup
+        self.executionContextID = executionContextID
+    }
+}
+
 package struct RuntimeSessionSnapshot: Equatable, Sendable {
     package var executionContextsByID: [ExecutionContextID: RuntimeExecutionContext]
     package var selectedContextID: ExecutionContextID?
     package var normalContextIDByTargetID: [ProtocolTargetIdentifier: ExecutionContextID]
-    package var remoteObjectsByID: [RuntimeRemoteObjectIdentifierKey: RuntimeRemoteObjectPayload]
-    package var objectGroupByRemoteObjectID: [RuntimeRemoteObjectIdentifierKey: RuntimeObjectGroup]
-    package var objectGroupTargetsByGroup: [RuntimeObjectGroup: Set<ProtocolTargetIdentifier>]
+    package var remoteObjectsByID: [RuntimeRemoteObjectIdentifierKey: RuntimeRemoteObjectRecord]
+    package var objectGroupRuntimeAgentTargetsByGroup: [RuntimeObjectGroup: Set<ProtocolTargetIdentifier>]
     package var unsupportedCommandsByTargetID: [ProtocolTargetIdentifier: Set<String>]
 }
 
@@ -42,9 +57,8 @@ package final class RuntimeSession {
 
     private var executionContextsByID: [ExecutionContextID: RuntimeExecutionContext]
     private var normalContextIDByTargetID: [ProtocolTargetIdentifier: ExecutionContextID]
-    private var remoteObjectsByID: [RuntimeRemoteObjectIdentifierKey: RuntimeRemoteObjectPayload]
-    private var objectGroupByRemoteObjectID: [RuntimeRemoteObjectIdentifierKey: RuntimeObjectGroup]
-    private var objectGroupTargetsByGroup: [RuntimeObjectGroup: Set<ProtocolTargetIdentifier>]
+    private var remoteObjectsByID: [RuntimeRemoteObjectIdentifierKey: RuntimeRemoteObjectRecord]
+    private var objectGroupRuntimeAgentTargetsByGroup: [RuntimeObjectGroup: Set<ProtocolTargetIdentifier>]
     private var unsupportedCommandsByTargetID: [ProtocolTargetIdentifier: Set<String>]
 
     package init() {
@@ -52,8 +66,7 @@ package final class RuntimeSession {
         executionContextsByID = [:]
         normalContextIDByTargetID = [:]
         remoteObjectsByID = [:]
-        objectGroupByRemoteObjectID = [:]
-        objectGroupTargetsByGroup = [:]
+        objectGroupRuntimeAgentTargetsByGroup = [:]
         unsupportedCommandsByTargetID = [:]
     }
 
@@ -62,8 +75,7 @@ package final class RuntimeSession {
         executionContextsByID.removeAll()
         normalContextIDByTargetID.removeAll()
         remoteObjectsByID.removeAll()
-        objectGroupByRemoteObjectID.removeAll()
-        objectGroupTargetsByGroup.removeAll()
+        objectGroupRuntimeAgentTargetsByGroup.removeAll()
         unsupportedCommandsByTargetID.removeAll()
     }
 
@@ -73,8 +85,7 @@ package final class RuntimeSession {
             selectedContextID: selectedContextID,
             normalContextIDByTargetID: normalContextIDByTargetID,
             remoteObjectsByID: remoteObjectsByID,
-            objectGroupByRemoteObjectID: objectGroupByRemoteObjectID,
-            objectGroupTargetsByGroup: objectGroupTargetsByGroup,
+            objectGroupRuntimeAgentTargetsByGroup: objectGroupRuntimeAgentTargetsByGroup,
             unsupportedCommandsByTargetID: unsupportedCommandsByTargetID
         )
     }
@@ -142,6 +153,7 @@ package final class RuntimeSession {
         if selectedContextID == contextID {
             selectedContextID = nil
         }
+        releaseRemoteObjects(executionContextID: context.id)
     }
 
     package func applyExecutionContextsCleared(runtimeAgentTargetID: ProtocolTargetIdentifier) {
@@ -150,9 +162,6 @@ package final class RuntimeSession {
                 .filter { $0.runtimeAgentTargetID == runtimeAgentTargetID }
                 .map(\.id)
         )
-        guard removedContextIDs.isEmpty == false else {
-            return
-        }
         let removedTargetIDs = Set(removedContextIDs.compactMap { executionContextsByID[$0]?.targetID })
         executionContextsByID = executionContextsByID.filter { $0.value.runtimeAgentTargetID != runtimeAgentTargetID }
         for targetID in removedTargetIDs {
@@ -165,6 +174,7 @@ package final class RuntimeSession {
            removedContextIDs.contains(selectedContextID) {
             self.selectedContextID = nil
         }
+        releaseRemoteObjects(runtimeAgentTargetID: runtimeAgentTargetID)
     }
 
     package func selectExecutionContext(_ contextID: ExecutionContextID?) {
@@ -194,13 +204,9 @@ package final class RuntimeSession {
                 normalContextIDByTargetID.removeValue(forKey: removedTargetID)
             }
         }
-        remoteObjectsByID = remoteObjectsByID.filter { $0.key.targetID != targetID }
-        objectGroupByRemoteObjectID = objectGroupByRemoteObjectID.filter { $0.key.targetID != targetID }
-        for group in Array(objectGroupTargetsByGroup.keys) {
-            objectGroupTargetsByGroup[group]?.remove(targetID)
-            if objectGroupTargetsByGroup[group]?.isEmpty == true {
-                objectGroupTargetsByGroup.removeValue(forKey: group)
-            }
+        releaseRemoteObjects(runtimeAgentTargetID: targetID)
+        for contextID in removedContextIDs {
+            releaseRemoteObjects(executionContextID: contextID)
         }
         unsupportedCommandsByTargetID.removeValue(forKey: targetID)
         if let selectedContextID,
@@ -220,21 +226,19 @@ package final class RuntimeSession {
             if let normalContextID = normalContextIDByTargetID.removeValue(forKey: oldTargetID) {
                 normalContextIDByTargetID[newTargetID] = normalContextID
             }
-            var movedObjects: [RuntimeRemoteObjectIdentifierKey: RuntimeRemoteObjectPayload] = [:]
-            var movedObjectGroups: [RuntimeRemoteObjectIdentifierKey: RuntimeObjectGroup] = [:]
-            for (key, object) in remoteObjectsByID where key.targetID == oldTargetID {
-                let newKey = RuntimeRemoteObjectIdentifierKey(targetID: newTargetID, objectID: key.objectID)
-                movedObjects[newKey] = object
+            var movedObjects: [RuntimeRemoteObjectIdentifierKey: RuntimeRemoteObjectRecord] = [:]
+            for (key, record) in remoteObjectsByID where key.runtimeAgentTargetID == oldTargetID {
+                let newKey = RuntimeRemoteObjectIdentifierKey(
+                    runtimeAgentTargetID: newTargetID,
+                    objectID: key.objectID
+                )
+                movedObjects[newKey] = record
                 remoteObjectsByID.removeValue(forKey: key)
-                if let group = objectGroupByRemoteObjectID.removeValue(forKey: key) {
-                    movedObjectGroups[newKey] = group
-                }
             }
             remoteObjectsByID.merge(movedObjects) { _, new in new }
-            objectGroupByRemoteObjectID.merge(movedObjectGroups) { _, new in new }
-            for group in objectGroupTargetsByGroup.keys {
-                if objectGroupTargetsByGroup[group]?.remove(oldTargetID) != nil {
-                    objectGroupTargetsByGroup[group]?.insert(newTargetID)
+            for group in objectGroupRuntimeAgentTargetsByGroup.keys {
+                if objectGroupRuntimeAgentTargetsByGroup[group]?.remove(oldTargetID) != nil {
+                    objectGroupRuntimeAgentTargetsByGroup[group]?.insert(newTargetID)
                 }
             }
             if let unsupported = unsupportedCommandsByTargetID.removeValue(forKey: oldTargetID) {
@@ -245,47 +249,45 @@ package final class RuntimeSession {
 
     package func registerRemoteObject(
         _ object: RuntimeRemoteObjectPayload,
-        targetID: ProtocolTargetIdentifier,
-        objectGroup: RuntimeObjectGroup? = nil
+        runtimeAgentTargetID: ProtocolTargetIdentifier,
+        objectGroup: RuntimeObjectGroup? = nil,
+        executionContextID: ExecutionContextID? = nil
     ) {
-        if let key = object.identifierKey(targetID: targetID) {
-            let previousGroup = objectGroupByRemoteObjectID[key]
-            remoteObjectsByID[key] = object
+        if let key = object.identifierKey(runtimeAgentTargetID: runtimeAgentTargetID) {
+            let previousGroup = remoteObjectsByID[key]?.objectGroup
+            remoteObjectsByID[key] = RuntimeRemoteObjectRecord(
+                payload: object,
+                objectGroup: objectGroup,
+                executionContextID: executionContextID
+            )
             if let objectGroup {
-                objectGroupByRemoteObjectID[key] = objectGroup
-                objectGroupTargetsByGroup[objectGroup, default: []].insert(targetID)
-            } else {
-                objectGroupByRemoteObjectID.removeValue(forKey: key)
+                objectGroupRuntimeAgentTargetsByGroup[objectGroup, default: []].insert(runtimeAgentTargetID)
             }
             if let previousGroup,
                previousGroup != objectGroup {
-                removeObjectGroupTargetIfEmpty(previousGroup, targetID: targetID)
+                removeObjectGroupTargetIfEmpty(previousGroup, runtimeAgentTargetID: runtimeAgentTargetID)
             }
         }
     }
 
     package func applyEvaluationResult(_ result: RuntimeEvaluationResultPayload, request: RuntimeEvaluationRequest) {
-        registerRemoteObject(result.result, targetID: request.targetID, objectGroup: request.objectGroup)
+        registerRemoteObject(
+            result.result,
+            runtimeAgentTargetID: request.runtimeAgentTargetID,
+            objectGroup: request.objectGroup,
+            executionContextID: request.contextID
+        )
     }
 
     package func releaseObject(_ key: RuntimeRemoteObjectIdentifierKey) {
-        remoteObjectsByID.removeValue(forKey: key)
-        if let objectGroup = objectGroupByRemoteObjectID.removeValue(forKey: key) {
-            removeObjectGroupTargetIfEmpty(objectGroup, targetID: key.targetID)
+        releaseRemoteObjects { candidateKey, _ in
+            candidateKey == key
         }
     }
 
-    package func releaseObjectGroup(_ objectGroup: RuntimeObjectGroup, targetID: ProtocolTargetIdentifier) {
-        let releasedKeys = objectGroupByRemoteObjectID.compactMap { key, group in
-            key.targetID == targetID && group == objectGroup ? key : nil
-        }
-        for key in releasedKeys {
-            remoteObjectsByID.removeValue(forKey: key)
-            objectGroupByRemoteObjectID.removeValue(forKey: key)
-        }
-        objectGroupTargetsByGroup[objectGroup]?.remove(targetID)
-        if objectGroupTargetsByGroup[objectGroup]?.isEmpty == true {
-            objectGroupTargetsByGroup.removeValue(forKey: objectGroup)
+    package func releaseObjectGroup(_ objectGroup: RuntimeObjectGroup, runtimeAgentTargetID: ProtocolTargetIdentifier) {
+        releaseRemoteObjects { key, record in
+            key.runtimeAgentTargetID == runtimeAgentTargetID && record.objectGroup == objectGroup
         }
     }
 
@@ -297,16 +299,52 @@ package final class RuntimeSession {
         unsupportedCommandsByTargetID[targetID]?.contains(method) != true
     }
 
-    private func removeObjectGroupTargetIfEmpty(_ objectGroup: RuntimeObjectGroup, targetID: ProtocolTargetIdentifier) {
-        let hasRemainingObject = objectGroupByRemoteObjectID.contains { key, group in
-            key.targetID == targetID && group == objectGroup
+    private func releaseRemoteObjects(runtimeAgentTargetID: ProtocolTargetIdentifier) {
+        releaseRemoteObjects { key, _ in
+            key.runtimeAgentTargetID == runtimeAgentTargetID
+        }
+    }
+
+    private func releaseRemoteObjects(executionContextID: ExecutionContextID) {
+        releaseRemoteObjects { _, record in
+            record.executionContextID == executionContextID
+        }
+    }
+
+    private func releaseRemoteObjects(
+        matching shouldRelease: (RuntimeRemoteObjectIdentifierKey, RuntimeRemoteObjectRecord) -> Bool
+    ) {
+        var releasedKeys: [RuntimeRemoteObjectIdentifierKey] = []
+        var affectedTargetsByGroup: [RuntimeObjectGroup: Set<ProtocolTargetIdentifier>] = [:]
+        for (key, record) in remoteObjectsByID where shouldRelease(key, record) {
+            releasedKeys.append(key)
+            if let objectGroup = record.objectGroup {
+                affectedTargetsByGroup[objectGroup, default: []].insert(key.runtimeAgentTargetID)
+            }
+        }
+        for key in releasedKeys {
+            remoteObjectsByID.removeValue(forKey: key)
+        }
+        for (objectGroup, runtimeAgentTargetIDs) in affectedTargetsByGroup {
+            for runtimeAgentTargetID in runtimeAgentTargetIDs {
+                removeObjectGroupTargetIfEmpty(objectGroup, runtimeAgentTargetID: runtimeAgentTargetID)
+            }
+        }
+    }
+
+    private func removeObjectGroupTargetIfEmpty(
+        _ objectGroup: RuntimeObjectGroup,
+        runtimeAgentTargetID: ProtocolTargetIdentifier
+    ) {
+        let hasRemainingObject = remoteObjectsByID.contains { key, record in
+            key.runtimeAgentTargetID == runtimeAgentTargetID && record.objectGroup == objectGroup
         }
         guard hasRemainingObject == false else {
             return
         }
-        objectGroupTargetsByGroup[objectGroup]?.remove(targetID)
-        if objectGroupTargetsByGroup[objectGroup]?.isEmpty == true {
-            objectGroupTargetsByGroup.removeValue(forKey: objectGroup)
+        objectGroupRuntimeAgentTargetsByGroup[objectGroup]?.remove(runtimeAgentTargetID)
+        if objectGroupRuntimeAgentTargetsByGroup[objectGroup]?.isEmpty == true {
+            objectGroupRuntimeAgentTargetsByGroup.removeValue(forKey: objectGroup)
         }
     }
 
@@ -336,7 +374,7 @@ package final class RuntimeSession {
         let context = evaluationContext(targetID: targetID, contextID: contextID)
         return .evaluate(
             RuntimeEvaluationRequest(
-                targetID: context?.runtimeAgentTargetID ?? targetID,
+                runtimeAgentTargetID: context?.runtimeAgentTargetID ?? targetID,
                 expression: expression,
                 objectGroup: objectGroup,
                 includeCommandLineAPI: true,

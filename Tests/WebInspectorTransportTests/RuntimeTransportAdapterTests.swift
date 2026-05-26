@@ -8,7 +8,7 @@ func runtimeTransportAdapterBuildsEvaluateCommandAndDecodesResult() throws {
     let targetID = ProtocolTargetIdentifier("page")
     let intent = RuntimeCommandIntent.evaluate(
         RuntimeEvaluationRequest(
-            targetID: targetID,
+            runtimeAgentTargetID: targetID,
             expression: "document.title",
             objectGroup: RuntimeObjectGroup("console"),
             includeCommandLineAPI: true,
@@ -47,7 +47,7 @@ func runtimeTransportAdapterBuildsEvaluateCommandAndDecodesResult() throws {
 @Test
 func runtimeTransportAdapterBuildsObjectCommandsAndDecodesPropertiesAndCollections() throws {
     let key = RuntimeRemoteObjectIdentifierKey(
-        targetID: ProtocolTargetIdentifier("frame"),
+        runtimeAgentTargetID: ProtocolTargetIdentifier("frame"),
         objectID: RuntimeRemoteObjectIdentifier("object-1")
     )
 
@@ -63,7 +63,7 @@ func runtimeTransportAdapterBuildsObjectCommandsAndDecodesPropertiesAndCollectio
     let propertiesResult = ProtocolCommandResult(
         domain: .runtime,
         method: "Runtime.getProperties",
-        targetID: key.targetID,
+        targetID: key.runtimeAgentTargetID,
         resultData: Data(#"{"properties":[{"name":"length","value":{"type":"number","value":3}}],"internalProperties":[{"name":"[[Prototype]]","value":{"type":"object","objectId":"proto"}}]}"#.utf8)
     )
     let properties = try RuntimeTransportAdapter.propertiesResult(from: propertiesResult)
@@ -74,7 +74,7 @@ func runtimeTransportAdapterBuildsObjectCommandsAndDecodesPropertiesAndCollectio
     let entriesResult = ProtocolCommandResult(
         domain: .runtime,
         method: "Runtime.getCollectionEntries",
-        targetID: key.targetID,
+        targetID: key.runtimeAgentTargetID,
         resultData: Data(#"{"entries":[{"key":{"type":"string","value":"k"},"value":{"type":"number","value":1}}]}"#.utf8)
     )
     let entries = try RuntimeTransportAdapter.collectionEntriesResult(from: entriesResult)

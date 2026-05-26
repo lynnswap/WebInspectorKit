@@ -311,9 +311,10 @@ when probing is acceptable, and conservative defaults otherwise.
 - Console message identity is local to `ConsoleSession`; WebKit does not send a
   stable message id.
 - Console messages must retain the protocol event target that delivered them.
-- Remote objects must retain their owning target. `Runtime.releaseObject`,
-  `getPreview`, `getProperties`, and `releaseObjectGroup` must be sent back to
-  that same target.
+- Remote objects must retain their owning Runtime agent target.
+  `Runtime.releaseObject`, `getPreview`, `getProperties`, and
+  `releaseObjectGroup` must be sent back to that same agent target. This can
+  differ from the semantic frame target used to group DOM/Console UI state.
 - `networkRequestId` is not globally unique. Resolve it with the console event
   target.
 - `messageRepeatCountUpdated` updates the previous repeatable message for the
@@ -328,6 +329,10 @@ when probing is acceptable, and conservative defaults otherwise.
   command to that context's `runtimeAgentTargetID`. Without UI context
   selection, the current page target/main-world context is the simplest first
   behavior.
+- Remote object lifetime belongs to `RuntimeSession`. `Console.messageAdded`
+  registers parameter objects in Runtime under object group `"console"`, and
+  `Console.messagesCleared` / `Runtime.executionContextsCleared` release the
+  matching Runtime agent's cached handles.
 - Runtime execution contexts need two target identities. `targetID` is the
   semantic owner used by DOM selection and future UI grouping.
   `runtimeAgentTargetID` is the protocol agent that delivered the context and
@@ -355,7 +360,8 @@ Add first-class Runtime and Console domains beside DOM/CSS/Network:
   - execution contexts keyed by id
   - `RuntimeExecutionContext.targetID` for semantic ownership
   - `RuntimeExecutionContext.runtimeAgentTargetID` for agent-scoped clears
-  - target-scoped remote object groups and unsupported command state
+  - Runtime-agent-scoped remote object records, object group index, and
+    unsupported command state
 - `Sources/WebInspectorCore/Console/ConsoleProtocol.swift`
   - identifiers
   - message/source/level/type/clear reason enums or raw wrappers
@@ -411,6 +417,8 @@ Add `console` to `InspectorSession` construction and event handling:
   is no longer provisional.
 - handle `.console` in `handleProtocolEvent` by applying decoded events to
   `ConsoleSession`.
+- when handling `Console.messageAdded`, register parameter `RemoteObject`
+  handles with `RuntimeSession` using object group `"console"`.
 - when handling `Console.messagesCleared`, also release Runtime object group
   `"console"` for the console event target to match backend lifetime.
 - handle `.runtime` by applying decoded events to `RuntimeSession` and the DOM
@@ -447,7 +455,8 @@ Useful tests before UI work:
 - `ConsoleTransportAdapter` builds `Runtime.evaluate` with WebInspectorUI-like
   console defaults.
 - `Console.messageAdded` appends a target-scoped message with parameters,
-  stack trace, source location, timestamp, and network request key.
+  stack trace, source location, timestamp, and network request key, and
+  registers parameter remote objects in `RuntimeSession`.
 - `Console.messageRepeatCountUpdated` updates the previous message instead of
   appending.
 - `Console.messagesCleared` clears or starts a new model session with the raw
@@ -460,7 +469,8 @@ Useful tests before UI work:
   commit is associated with the committed target only through the transport's
   target-commit rewrite/buffering path, not through URL or frame id guesses.
 - `Runtime.evaluate` result decodes `RemoteObject`, `wasThrown`, and
-  `savedResultIndex`, preserving the command target on the returned object.
+  `savedResultIndex`, preserving the Runtime agent target on the returned
+  object record.
 
 ## Source References
 

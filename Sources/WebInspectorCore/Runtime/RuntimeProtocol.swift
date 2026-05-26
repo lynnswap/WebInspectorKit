@@ -82,11 +82,11 @@ package struct RuntimeRemoteObjectIdentifier: RawRepresentable, Hashable, Codabl
 }
 
 package struct RuntimeRemoteObjectIdentifierKey: Hashable, Sendable {
-    package var targetID: ProtocolTargetIdentifier
+    package var runtimeAgentTargetID: ProtocolTargetIdentifier
     package var objectID: RuntimeRemoteObjectIdentifier
 
-    package init(targetID: ProtocolTargetIdentifier, objectID: RuntimeRemoteObjectIdentifier) {
-        self.targetID = targetID
+    package init(runtimeAgentTargetID: ProtocolTargetIdentifier, objectID: RuntimeRemoteObjectIdentifier) {
+        self.runtimeAgentTargetID = runtimeAgentTargetID
         self.objectID = objectID
     }
 }
@@ -268,8 +268,8 @@ package struct RuntimeRemoteObjectPayload: Equatable, Sendable, Codable {
         self.preview = preview
     }
 
-    package func identifierKey(targetID: ProtocolTargetIdentifier) -> RuntimeRemoteObjectIdentifierKey? {
-        objectID.map { RuntimeRemoteObjectIdentifierKey(targetID: targetID, objectID: $0) }
+    package func identifierKey(runtimeAgentTargetID: ProtocolTargetIdentifier) -> RuntimeRemoteObjectIdentifierKey? {
+        objectID.map { RuntimeRemoteObjectIdentifierKey(runtimeAgentTargetID: runtimeAgentTargetID, objectID: $0) }
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -548,7 +548,7 @@ package struct RuntimeCallArgumentPayload: Equatable, Sendable {
 }
 
 package struct RuntimeEvaluationRequest: Equatable, Sendable {
-    package var targetID: ProtocolTargetIdentifier
+    package var runtimeAgentTargetID: ProtocolTargetIdentifier
     package var expression: String
     package var objectGroup: RuntimeObjectGroup?
     package var includeCommandLineAPI: Bool?
@@ -560,7 +560,7 @@ package struct RuntimeEvaluationRequest: Equatable, Sendable {
     package var emulateUserGesture: Bool?
 
     package init(
-        targetID: ProtocolTargetIdentifier,
+        runtimeAgentTargetID: ProtocolTargetIdentifier,
         expression: String,
         objectGroup: RuntimeObjectGroup? = nil,
         includeCommandLineAPI: Bool? = nil,
@@ -571,7 +571,7 @@ package struct RuntimeEvaluationRequest: Equatable, Sendable {
         saveResult: Bool? = nil,
         emulateUserGesture: Bool? = nil
     ) {
-        self.targetID = targetID
+        self.runtimeAgentTargetID = runtimeAgentTargetID
         self.expression = expression
         self.objectGroup = objectGroup
         self.includeCommandLineAPI = includeCommandLineAPI
@@ -610,30 +610,30 @@ package enum RuntimeCommandIntent: Equatable, Sendable {
     case saveResult(targetID: ProtocolTargetIdentifier, argument: RuntimeCallArgumentPayload, contextID: ExecutionContextID?)
     case setSavedResultAlias(targetID: ProtocolTargetIdentifier, alias: String?)
     case releaseObject(RuntimeRemoteObjectIdentifierKey)
-    case releaseObjectGroup(targetID: ProtocolTargetIdentifier, objectGroup: RuntimeObjectGroup)
+    case releaseObjectGroup(runtimeAgentTargetID: ProtocolTargetIdentifier, objectGroup: RuntimeObjectGroup)
 
-    package var targetID: ProtocolTargetIdentifier {
+    package var routingTargetID: ProtocolTargetIdentifier {
         switch self {
         case let .enable(targetID):
             targetID
         case let .evaluate(request):
-            request.targetID
+            request.runtimeAgentTargetID
         case let .getPreview(object):
-            object.targetID
+            object.runtimeAgentTargetID
         case let .getProperties(object, _, _, _, _):
-            object.targetID
+            object.runtimeAgentTargetID
         case let .getDisplayableProperties(object, _, _, _):
-            object.targetID
+            object.runtimeAgentTargetID
         case let .getCollectionEntries(object, _, _, _):
-            object.targetID
+            object.runtimeAgentTargetID
         case let .saveResult(targetID, _, _):
             targetID
         case let .setSavedResultAlias(targetID, _):
             targetID
         case let .releaseObject(object):
-            object.targetID
-        case let .releaseObjectGroup(targetID, _):
-            targetID
+            object.runtimeAgentTargetID
+        case let .releaseObjectGroup(runtimeAgentTargetID, _):
+            runtimeAgentTargetID
         }
     }
 }

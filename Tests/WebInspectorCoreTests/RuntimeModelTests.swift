@@ -86,7 +86,7 @@ func runtimeEvaluateIntentRoutesSelectedContextToRuntimeAgentTarget() throws {
         Issue.record("Expected evaluate intent")
         return
     }
-    #expect(request.targetID == pageTargetID)
+    #expect(request.runtimeAgentTargetID == pageTargetID)
     #expect(request.contextID == ExecutionContextID(2))
 }
 
@@ -170,6 +170,23 @@ func runtimeSessionClearsExecutionContextsByRuntimeAgentTarget() {
             frameID: DOMFrameIdentifier("other-frame")
         )
     )
+    session.registerRemoteObject(
+        RuntimeRemoteObjectPayload(type: .object, objectID: RuntimeRemoteObjectIdentifier("page-object")),
+        runtimeAgentTargetID: pageTargetID,
+        objectGroup: .console,
+        executionContextID: ExecutionContextID(1)
+    )
+    session.registerRemoteObject(
+        RuntimeRemoteObjectPayload(type: .object, objectID: RuntimeRemoteObjectIdentifier("page-console-object")),
+        runtimeAgentTargetID: pageTargetID,
+        objectGroup: .console
+    )
+    session.registerRemoteObject(
+        RuntimeRemoteObjectPayload(type: .object, objectID: RuntimeRemoteObjectIdentifier("other-object")),
+        runtimeAgentTargetID: otherFrameTargetID,
+        objectGroup: .console,
+        executionContextID: ExecutionContextID(2)
+    )
 
     session.applyExecutionContextsCleared(runtimeAgentTargetID: pageTargetID)
     let snapshot = session.snapshot()
@@ -178,6 +195,10 @@ func runtimeSessionClearsExecutionContextsByRuntimeAgentTarget() {
     #expect(snapshot.executionContextsByID[ExecutionContextID(2)]?.targetID == otherFrameTargetID)
     #expect(snapshot.normalContextIDByTargetID[frameTargetID] == nil)
     #expect(snapshot.normalContextIDByTargetID[otherFrameTargetID] == ExecutionContextID(2))
+    #expect(snapshot.remoteObjectsByID[.init(runtimeAgentTargetID: pageTargetID, objectID: RuntimeRemoteObjectIdentifier("page-object"))] == nil)
+    #expect(snapshot.remoteObjectsByID[.init(runtimeAgentTargetID: pageTargetID, objectID: RuntimeRemoteObjectIdentifier("page-console-object"))] == nil)
+    #expect(snapshot.remoteObjectsByID[.init(runtimeAgentTargetID: otherFrameTargetID, objectID: RuntimeRemoteObjectIdentifier("other-object"))] != nil)
+    #expect(snapshot.objectGroupRuntimeAgentTargetsByGroup[.console] == [otherFrameTargetID])
 }
 
 @Test
@@ -194,6 +215,12 @@ func runtimeSessionTargetDestroyedClearsExecutionContextsByRuntimeAgentTarget() 
             frameID: DOMFrameIdentifier("frame")
         )
     )
+    session.registerRemoteObject(
+        RuntimeRemoteObjectPayload(type: .object, objectID: RuntimeRemoteObjectIdentifier("page-object")),
+        runtimeAgentTargetID: pageTargetID,
+        objectGroup: .console,
+        executionContextID: ExecutionContextID(1)
+    )
 
     session.applyTargetDestroyed(pageTargetID)
     let snapshot = session.snapshot()
@@ -201,6 +228,8 @@ func runtimeSessionTargetDestroyedClearsExecutionContextsByRuntimeAgentTarget() 
     #expect(snapshot.executionContextsByID[ExecutionContextID(1)] == nil)
     #expect(snapshot.normalContextIDByTargetID[frameTargetID] == nil)
     #expect(snapshot.selectedContextID == nil)
+    #expect(snapshot.remoteObjectsByID[.init(runtimeAgentTargetID: pageTargetID, objectID: RuntimeRemoteObjectIdentifier("page-object"))] == nil)
+    #expect(snapshot.objectGroupRuntimeAgentTargetsByGroup[.console] == nil)
 }
 
 @Test
@@ -217,7 +246,7 @@ func runtimeSessionSnapshotInvalidatesObserversWhenRemoteObjectIsRegistered() {
 
     session.registerRemoteObject(
         RuntimeRemoteObjectPayload(type: .object, objectID: RuntimeRemoteObjectIdentifier("object-1")),
-        targetID: ProtocolTargetIdentifier("page"),
+        runtimeAgentTargetID: ProtocolTargetIdentifier("page"),
         objectGroup: RuntimeObjectGroup("console")
     )
 
@@ -226,7 +255,7 @@ func runtimeSessionSnapshotInvalidatesObserversWhenRemoteObjectIsRegistered() {
 
 @Test
 @MainActor
-func runtimeRemoteObjectIdentityIncludesTargetAndObjectID() {
+func runtimeRemoteObjectIdentityIncludesRuntimeAgentTargetAndObjectID() {
     let session = RuntimeSession()
     let pageTargetID = ProtocolTargetIdentifier("page")
     let frameTargetID = ProtocolTargetIdentifier("frame")
@@ -242,14 +271,14 @@ func runtimeRemoteObjectIdentityIncludesTargetAndObjectID() {
         objectID: objectID
     )
 
-    session.registerRemoteObject(pageObject, targetID: pageTargetID, objectGroup: RuntimeObjectGroup("console"))
-    session.registerRemoteObject(frameObject, targetID: frameTargetID, objectGroup: RuntimeObjectGroup("console"))
+    session.registerRemoteObject(pageObject, runtimeAgentTargetID: pageTargetID, objectGroup: RuntimeObjectGroup("console"))
+    session.registerRemoteObject(frameObject, runtimeAgentTargetID: frameTargetID, objectGroup: RuntimeObjectGroup("console"))
 
     let snapshot = session.snapshot()
-    #expect(snapshot.remoteObjectsByID[.init(targetID: pageTargetID, objectID: objectID)]?.description == "page object")
-    #expect(snapshot.remoteObjectsByID[.init(targetID: frameTargetID, objectID: objectID)]?.description == "frame object")
-    #expect(snapshot.objectGroupByRemoteObjectID[.init(targetID: pageTargetID, objectID: objectID)] == RuntimeObjectGroup("console"))
-    #expect(snapshot.objectGroupTargetsByGroup[RuntimeObjectGroup("console")] == [pageTargetID, frameTargetID])
+    #expect(snapshot.remoteObjectsByID[.init(runtimeAgentTargetID: pageTargetID, objectID: objectID)]?.payload.description == "page object")
+    #expect(snapshot.remoteObjectsByID[.init(runtimeAgentTargetID: frameTargetID, objectID: objectID)]?.payload.description == "frame object")
+    #expect(snapshot.remoteObjectsByID[.init(runtimeAgentTargetID: pageTargetID, objectID: objectID)]?.objectGroup == RuntimeObjectGroup("console"))
+    #expect(snapshot.objectGroupRuntimeAgentTargetsByGroup[RuntimeObjectGroup("console")] == [pageTargetID, frameTargetID])
 }
 
 @Test
@@ -262,13 +291,12 @@ func runtimeReleaseObjectDropsEmptyObjectGroupTargets() {
 
     session.registerRemoteObject(
         RuntimeRemoteObjectPayload(type: .object, objectID: objectID),
-        targetID: targetID,
+        runtimeAgentTargetID: targetID,
         objectGroup: objectGroup
     )
-    session.releaseObject(.init(targetID: targetID, objectID: objectID))
+    session.releaseObject(.init(runtimeAgentTargetID: targetID, objectID: objectID))
 
     let snapshot = session.snapshot()
-    #expect(snapshot.remoteObjectsByID[.init(targetID: targetID, objectID: objectID)] == nil)
-    #expect(snapshot.objectGroupByRemoteObjectID[.init(targetID: targetID, objectID: objectID)] == nil)
-    #expect(snapshot.objectGroupTargetsByGroup[objectGroup] == nil)
+    #expect(snapshot.remoteObjectsByID[.init(runtimeAgentTargetID: targetID, objectID: objectID)] == nil)
+    #expect(snapshot.objectGroupRuntimeAgentTargetsByGroup[objectGroup] == nil)
 }

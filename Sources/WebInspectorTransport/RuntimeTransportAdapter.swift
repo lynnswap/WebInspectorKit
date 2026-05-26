@@ -10,21 +10,21 @@ package enum RuntimeTransportAdapter {
             return ProtocolCommand(
                 domain: .runtime,
                 method: "Runtime.evaluate",
-                routing: .target(request.targetID),
+                routing: .target(request.runtimeAgentTargetID),
                 parametersData: try data(evaluationParameters(request))
             )
         case let .getPreview(object):
             return ProtocolCommand(
                 domain: .runtime,
                 method: "Runtime.getPreview",
-                routing: .target(object.targetID),
+                routing: .target(object.runtimeAgentTargetID),
                 parametersData: try data(["objectId": object.objectID.rawValue])
             )
         case let .getProperties(object, ownProperties, fetchStart, fetchCount, generatePreview):
             return ProtocolCommand(
                 domain: .runtime,
                 method: "Runtime.getProperties",
-                routing: .target(object.targetID),
+                routing: .target(object.runtimeAgentTargetID),
                 parametersData: try data(
                     objectParameters(
                         object,
@@ -39,7 +39,7 @@ package enum RuntimeTransportAdapter {
             return ProtocolCommand(
                 domain: .runtime,
                 method: "Runtime.getDisplayableProperties",
-                routing: .target(object.targetID),
+                routing: .target(object.runtimeAgentTargetID),
                 parametersData: try data(
                     objectParameters(
                         object,
@@ -57,7 +57,7 @@ package enum RuntimeTransportAdapter {
             return ProtocolCommand(
                 domain: .runtime,
                 method: "Runtime.getCollectionEntries",
-                routing: .target(object.targetID),
+                routing: .target(object.runtimeAgentTargetID),
                 parametersData: try data(parameters)
             )
         case let .saveResult(targetID, argument, contextID):
@@ -86,14 +86,14 @@ package enum RuntimeTransportAdapter {
             return ProtocolCommand(
                 domain: .runtime,
                 method: "Runtime.releaseObject",
-                routing: .target(object.targetID),
+                routing: .target(object.runtimeAgentTargetID),
                 parametersData: try data(["objectId": object.objectID.rawValue])
             )
-        case let .releaseObjectGroup(targetID, objectGroup):
+        case let .releaseObjectGroup(runtimeAgentTargetID, objectGroup):
             return ProtocolCommand(
                 domain: .runtime,
                 method: "Runtime.releaseObjectGroup",
-                routing: .target(targetID),
+                routing: .target(runtimeAgentTargetID),
                 parametersData: try data(["objectGroup": objectGroup.rawValue])
             )
         }

@@ -161,14 +161,25 @@ func domainPumpsReleaseConsoleRuntimeObjectsOnConsoleClear() async throws {
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
 
-    await session.runtime.registerRemoteObject(
-        RuntimeRemoteObjectPayload(type: .object, objectID: RuntimeRemoteObjectIdentifier("console-object")),
+    await receiveTargetDispatch(
+        transport,
         targetID: .pageMain,
-        objectGroup: .console
+        message: #"{"method":"Console.messageAdded","params":{"message":{"source":"console-api","level":"log","text":"hello","type":"log","parameters":[{"type":"object","objectId":"console-object","description":"Object"}]}}}"#
     )
-    #expect(await session.runtime.snapshot().remoteObjectsByID[
-        .init(targetID: .pageMain, objectID: RuntimeRemoteObjectIdentifier("console-object"))
-    ] != nil)
+
+    let objectKey = RuntimeRemoteObjectIdentifierKey(
+        runtimeAgentTargetID: .pageMain,
+        objectID: RuntimeRemoteObjectIdentifier("console-object")
+    )
+    let _: Bool = try await waitUntil {
+        let runtimeSnapshot = await session.runtime.snapshot()
+        let consoleSnapshot = await session.console.snapshot()
+        guard runtimeSnapshot.remoteObjectsByID[objectKey]?.objectGroup == .console,
+              consoleSnapshot.orderedMessageIDs.isEmpty == false else {
+            return nil
+        }
+        return true
+    }
 
     await receiveTargetDispatch(
         transport,
@@ -179,13 +190,8 @@ func domainPumpsReleaseConsoleRuntimeObjectsOnConsoleClear() async throws {
     let _: Bool = try await waitUntil {
         let runtimeSnapshot = await session.runtime.snapshot()
         let consoleSnapshot = await session.console.snapshot()
-        let objectKey = RuntimeRemoteObjectIdentifierKey(
-            targetID: .pageMain,
-            objectID: RuntimeRemoteObjectIdentifier("console-object")
-        )
         guard runtimeSnapshot.remoteObjectsByID[objectKey] == nil,
-              runtimeSnapshot.objectGroupByRemoteObjectID[objectKey] == nil,
-              runtimeSnapshot.objectGroupTargetsByGroup[.console] == nil,
+              runtimeSnapshot.objectGroupRuntimeAgentTargetsByGroup[.console] == nil,
               consoleSnapshot.lastClearReasonByTargetID[.pageMain] == .consoleAPI else {
             return nil
         }
