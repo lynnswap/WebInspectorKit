@@ -329,10 +329,17 @@ when probing is acceptable, and conservative defaults otherwise.
   command to that context's `runtimeAgentTargetID`. Without UI context
   selection, the current page target/main-world context is the simplest first
   behavior.
-- Remote object lifetime belongs to `RuntimeSession`. `Console.messageAdded`
-  registers parameter objects in Runtime under object group `"console"`, and
-  `Console.messagesCleared` / `Runtime.executionContextsCleared` release the
-  matching Runtime agent's cached handles.
+- Remote object lifetime belongs to `RuntimeSession`. It keeps the remote object
+  payload plus object group/context metadata as the single release owner; any
+  snapshot-level object group target index is derived from those records.
+  `Console.messageAdded` registers parameter objects in Runtime under object
+  group `"console"`, and `Console.messagesCleared` /
+  `Runtime.executionContextsCleared` release the matching Runtime agent's cached
+  handles.
+- `Target.didCommitProvisionalTarget` may move semantic context ownership to
+  the committed target, but it must not re-key existing remote object handles to
+  the new Runtime agent target. Handles created by the old agent are stale and
+  should be dropped.
 - Runtime execution contexts need two target identities. `targetID` is the
   semantic owner used by DOM selection and future UI grouping.
   `runtimeAgentTargetID` is the protocol agent that delivered the context and

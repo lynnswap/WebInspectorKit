@@ -27,6 +27,12 @@ func runtimeSessionTracksTargetOwnedExecutionContextsAndReplacesFrameNormalConte
         ),
         targetID: frameTargetID
     )
+    session.registerRemoteObject(
+        RuntimeRemoteObjectPayload(type: .object, objectID: RuntimeRemoteObjectIdentifier("frame-a-object")),
+        runtimeAgentTargetID: frameTargetID,
+        objectGroup: .console,
+        executionContextID: ExecutionContextID(1)
+    )
     session.applyExecutionContextCreated(
         RuntimeExecutionContextPayload(
             id: ExecutionContextID(3),
@@ -45,6 +51,8 @@ func runtimeSessionTracksTargetOwnedExecutionContextsAndReplacesFrameNormalConte
     #expect(snapshot.executionContextsByID[ExecutionContextID(3)]?.frameID == DOMFrameIdentifier("frame-a"))
     #expect(snapshot.normalContextIDByTargetID[frameTargetID] == ExecutionContextID(3))
     #expect(snapshot.selectedContextID == ExecutionContextID(3))
+    #expect(snapshot.remoteObjectsByID[.init(runtimeAgentTargetID: frameTargetID, objectID: RuntimeRemoteObjectIdentifier("frame-a-object"))] == nil)
+    #expect(snapshot.objectGroupRuntimeAgentTargetsByGroup[.console] == nil)
 }
 
 @Test
@@ -234,6 +242,34 @@ func runtimeSessionTargetDestroyedClearsExecutionContextsByRuntimeAgentTarget() 
 
 @Test
 @MainActor
+func runtimeSessionTargetCommitDropsOldRuntimeAgentObjects() {
+    let session = RuntimeSession()
+    let oldTargetID = ProtocolTargetIdentifier("page-old")
+    let newTargetID = ProtocolTargetIdentifier("page-new")
+    let objectID = RuntimeRemoteObjectIdentifier("old-object")
+
+    session.applyExecutionContextCreated(
+        RuntimeExecutionContext(id: ExecutionContextID(1), targetID: oldTargetID)
+    )
+    session.registerRemoteObject(
+        RuntimeRemoteObjectPayload(type: .object, objectID: objectID),
+        runtimeAgentTargetID: oldTargetID,
+        objectGroup: .console,
+        executionContextID: ExecutionContextID(1)
+    )
+
+    session.applyTargetCommitted(oldTargetID: oldTargetID, newTargetID: newTargetID)
+    let snapshot = session.snapshot()
+
+    #expect(snapshot.executionContextsByID[ExecutionContextID(1)]?.targetID == newTargetID)
+    #expect(snapshot.executionContextsByID[ExecutionContextID(1)]?.runtimeAgentTargetID == newTargetID)
+    #expect(snapshot.remoteObjectsByID[.init(runtimeAgentTargetID: oldTargetID, objectID: objectID)] == nil)
+    #expect(snapshot.remoteObjectsByID[.init(runtimeAgentTargetID: newTargetID, objectID: objectID)] == nil)
+    #expect(snapshot.objectGroupRuntimeAgentTargetsByGroup[.console] == nil)
+}
+
+@Test
+@MainActor
 func runtimeSessionSnapshotInvalidatesObserversWhenRemoteObjectIsRegistered() {
     let session = RuntimeSession()
     let didChange = Mutex(false)
@@ -298,5 +334,28 @@ func runtimeReleaseObjectDropsEmptyObjectGroupTargets() {
 
     let snapshot = session.snapshot()
     #expect(snapshot.remoteObjectsByID[.init(runtimeAgentTargetID: targetID, objectID: objectID)] == nil)
+    #expect(snapshot.objectGroupRuntimeAgentTargetsByGroup[objectGroup] == nil)
+}
+
+@Test
+@MainActor
+func runtimeObjectGroupTargetsAreDerivedFromCurrentRemoteObjects() {
+    let session = RuntimeSession()
+    let targetID = ProtocolTargetIdentifier("page")
+    let objectGroup = RuntimeObjectGroup("console")
+    let objectID = RuntimeRemoteObjectIdentifier("object-1")
+
+    session.registerRemoteObject(
+        RuntimeRemoteObjectPayload(type: .object, objectID: objectID),
+        runtimeAgentTargetID: targetID,
+        objectGroup: objectGroup
+    )
+    session.registerRemoteObject(
+        RuntimeRemoteObjectPayload(type: .object, objectID: objectID),
+        runtimeAgentTargetID: targetID
+    )
+
+    let snapshot = session.snapshot()
+    #expect(snapshot.remoteObjectsByID[.init(runtimeAgentTargetID: targetID, objectID: objectID)]?.objectGroup == nil)
     #expect(snapshot.objectGroupRuntimeAgentTargetsByGroup[objectGroup] == nil)
 }
