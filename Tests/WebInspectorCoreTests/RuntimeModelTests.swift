@@ -11,8 +11,8 @@ func runtimeSessionTracksTargetOwnedExecutionContextsAndReplacesFrameNormalConte
         RuntimeExecutionContextPayload(
             id: ExecutionContextID(1),
             type: .normal,
-            name: "Frame",
-            frameID: DOMFrameIdentifier("frame")
+            name: "Frame A",
+            frameID: DOMFrameIdentifier("frame-a")
         ),
         targetID: frameTargetID
     )
@@ -20,8 +20,17 @@ func runtimeSessionTracksTargetOwnedExecutionContextsAndReplacesFrameNormalConte
         RuntimeExecutionContextPayload(
             id: ExecutionContextID(2),
             type: .normal,
-            name: "Frame replacement",
-            frameID: DOMFrameIdentifier("frame")
+            name: "Frame B",
+            frameID: DOMFrameIdentifier("frame-b")
+        ),
+        targetID: frameTargetID
+    )
+    session.applyExecutionContextCreated(
+        RuntimeExecutionContextPayload(
+            id: ExecutionContextID(3),
+            type: .normal,
+            name: "Frame A",
+            frameID: DOMFrameIdentifier("frame-a")
         ),
         targetID: frameTargetID
     )
@@ -29,9 +38,30 @@ func runtimeSessionTracksTargetOwnedExecutionContextsAndReplacesFrameNormalConte
     let snapshot = session.snapshot()
     #expect(snapshot.executionContextsByID[ExecutionContextID(1)] == nil)
     #expect(snapshot.executionContextsByID[ExecutionContextID(2)]?.targetID == frameTargetID)
-    #expect(snapshot.executionContextsByID[ExecutionContextID(2)]?.frameID == DOMFrameIdentifier("frame"))
-    #expect(snapshot.normalContextIDByTargetID[frameTargetID] == ExecutionContextID(2))
-    #expect(snapshot.activeContextID == ExecutionContextID(2))
+    #expect(snapshot.executionContextsByID[ExecutionContextID(2)]?.frameID == DOMFrameIdentifier("frame-b"))
+    #expect(snapshot.executionContextsByID[ExecutionContextID(3)]?.targetID == frameTargetID)
+    #expect(snapshot.executionContextsByID[ExecutionContextID(3)]?.frameID == DOMFrameIdentifier("frame-a"))
+    #expect(snapshot.normalContextIDByTargetID[frameTargetID] == ExecutionContextID(3))
+    #expect(snapshot.activeContextID == ExecutionContextID(3))
+}
+
+@Test
+@MainActor
+func runtimeEvaluateIntentDoesNotUseActiveContextFromAnotherTarget() throws {
+    let session = RuntimeSession()
+    let pageTargetID = ProtocolTargetIdentifier("page")
+    let frameTargetID = ProtocolTargetIdentifier("frame")
+    session.applyExecutionContextCreated(
+        RuntimeExecutionContextPayload(id: ExecutionContextID(1), type: .normal, frameID: DOMFrameIdentifier("main-frame")),
+        targetID: pageTargetID
+    )
+
+    let intent = session.evaluateIntent(expression: "1 + 1", targetID: frameTargetID)
+    guard case let .evaluate(request) = intent else {
+        Issue.record("Expected evaluate intent")
+        return
+    }
+    #expect(request.contextID == nil)
 }
 
 @Test

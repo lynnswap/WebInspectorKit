@@ -81,9 +81,16 @@ package final class RuntimeSession {
     }
 
     package func activeContext(targetID: ProtocolTargetIdentifier? = nil) -> RuntimeExecutionContext? {
-        if let targetID,
-           let contextID = normalContextIDByTargetID[targetID] {
-            return executionContextsByID[contextID]
+        if let targetID {
+            if let contextID = normalContextIDByTargetID[targetID] {
+                return executionContextsByID[contextID]
+            }
+            guard let activeContextID,
+                  let context = executionContextsByID[activeContextID],
+                  context.targetID == targetID else {
+                return nil
+            }
+            return context
         }
         guard let activeContextID else {
             return nil
@@ -116,7 +123,7 @@ package final class RuntimeSession {
 
     package func applyExecutionContextCreated(_ context: RuntimeExecutionContext) {
         if context.type == .normal,
-           let oldContextID = normalContextIDByTargetID[context.targetID],
+           let oldContextID = normalContextIDToReplace(with: context),
            oldContextID != context.id {
             executionContextsByID.removeValue(forKey: oldContextID)
             if activeContextID == oldContextID {
@@ -241,6 +248,19 @@ package final class RuntimeSession {
         unsupportedCommandsByTargetID[targetID]?.contains(method) != true
     }
 
+    private func normalContextIDToReplace(with context: RuntimeExecutionContext) -> ExecutionContextID? {
+        executionContextsByID.values
+            .filter {
+                $0.type == .normal
+                    && $0.targetID == context.targetID
+                    && $0.frameID == context.frameID
+                    && $0.name == context.name
+                    && $0.id != context.id
+            }
+            .map(\.id)
+            .min { $0.rawValue < $1.rawValue }
+    }
+
     package func enableIntent(targetID: ProtocolTargetIdentifier) -> RuntimeCommandIntent {
         .enable(targetID: targetID)
     }
@@ -258,7 +278,7 @@ package final class RuntimeSession {
                 objectGroup: objectGroup,
                 includeCommandLineAPI: true,
                 doNotPauseOnExceptionsAndMuteConsole: false,
-                contextID: contextID ?? normalContextIDByTargetID[targetID] ?? activeContextID,
+                contextID: contextID ?? activeContext(targetID: targetID)?.id,
                 returnByValue: false,
                 generatePreview: true,
                 saveResult: true,
