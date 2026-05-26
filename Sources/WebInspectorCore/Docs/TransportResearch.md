@@ -226,8 +226,10 @@ lifecycle code should not grow pass-through accessors over parallel
 dictionaries. UI-facing domain state should stay as observable live models
 with stable identity (`RuntimeTargetState`, `RuntimeAgentState`,
 `RuntimeExecutionContext`, `RuntimeRemoteObject`, `ConsoleTargetState`, and
-`ConsoleMessage`). Sendable records should be reserved for transport handoff
-and snapshots, such as `RuntimeExecutionContextRecord`.
+`ConsoleMessage`). Console message parameters should also reference
+`RuntimeRemoteObject` live objects; payload records should be reserved for
+protocol decode, transport handoff, and snapshots, such as
+`RuntimeExecutionContextRecord`.
 
 ## Contradicted Interpretations
 

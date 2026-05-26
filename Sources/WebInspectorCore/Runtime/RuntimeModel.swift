@@ -109,18 +109,18 @@ package struct RuntimeRemoteObjectRecord: Equatable, Sendable {
 @MainActor
 @Observable
 package final class RuntimeRemoteObject {
-    package let id: RuntimeRemoteObjectIdentifierKey
+    package let remoteObjectKey: RuntimeRemoteObjectIdentifierKey?
     package var payload: RuntimeRemoteObjectPayload
     package var objectGroup: RuntimeObjectGroup?
     package var executionContextKey: RuntimeExecutionContextKey?
 
     package init(
-        id: RuntimeRemoteObjectIdentifierKey,
+        remoteObjectKey: RuntimeRemoteObjectIdentifierKey? = nil,
         payload: RuntimeRemoteObjectPayload,
         objectGroup: RuntimeObjectGroup? = nil,
         executionContextKey: RuntimeExecutionContextKey? = nil
     ) {
-        self.id = id
+        self.remoteObjectKey = remoteObjectKey
         self.payload = payload
         self.objectGroup = objectGroup
         self.executionContextKey = executionContextKey
@@ -196,7 +196,7 @@ package final class RuntimeAgentState {
 
     package var remoteObjects: [RuntimeRemoteObject] {
         remoteObjectsByID.values.sorted {
-            $0.id.objectID.rawValue < $1.id.objectID.rawValue
+            ($0.remoteObjectKey?.objectID.rawValue ?? "") < ($1.remoteObjectKey?.objectID.rawValue ?? "")
         }
     }
 
@@ -214,8 +214,11 @@ package final class RuntimeAgentState {
 
     var remoteObjectsByKey: [RuntimeRemoteObjectIdentifierKey: RuntimeRemoteObjectRecord] {
         Dictionary(
-            uniqueKeysWithValues: remoteObjectsByID.map { _, remoteObject in
-                (remoteObject.id, remoteObject.snapshotRecord)
+            uniqueKeysWithValues: remoteObjectsByID.map { objectID, remoteObject in
+                (
+                    RuntimeRemoteObjectIdentifierKey(runtimeAgentTargetID: targetID, objectID: objectID),
+                    remoteObject.snapshotRecord
+                )
             }
         )
     }
@@ -240,29 +243,37 @@ package final class RuntimeAgentState {
         executionContextsByID.removeValue(forKey: contextID)
     }
 
+    @discardableResult
     func registerRemoteObject(
         _ object: RuntimeRemoteObjectPayload,
         objectGroup: RuntimeObjectGroup?,
         executionContextID: ExecutionContextID?
-    ) {
-        guard let objectID = object.objectID else {
-            return
-        }
-        let objectKey = RuntimeRemoteObjectIdentifierKey(runtimeAgentTargetID: targetID, objectID: objectID)
+    ) -> RuntimeRemoteObject {
         let executionContextKey = executionContextID.map {
             RuntimeExecutionContextKey(runtimeAgentTargetID: targetID, contextID: $0)
         }
-        if let remoteObject = remoteObjectsByID[objectID] {
-            remoteObject.payload = object
-            remoteObject.objectGroup = objectGroup
-            remoteObject.executionContextKey = executionContextKey
-        } else {
-            remoteObjectsByID[objectID] = RuntimeRemoteObject(
-                id: objectKey,
+        guard let objectID = object.objectID else {
+            return RuntimeRemoteObject(
                 payload: object,
                 objectGroup: objectGroup,
                 executionContextKey: executionContextKey
             )
+        }
+        let objectKey = RuntimeRemoteObjectIdentifierKey(runtimeAgentTargetID: targetID, objectID: objectID)
+        if let remoteObject = remoteObjectsByID[objectID] {
+            remoteObject.payload = object
+            remoteObject.objectGroup = objectGroup
+            remoteObject.executionContextKey = executionContextKey
+            return remoteObject
+        } else {
+            let remoteObject = RuntimeRemoteObject(
+                remoteObjectKey: objectKey,
+                payload: object,
+                objectGroup: objectGroup,
+                executionContextKey: executionContextKey
+            )
+            remoteObjectsByID[objectID] = remoteObject
+            return remoteObject
         }
     }
 
@@ -543,19 +554,21 @@ package final class RuntimeSession {
         }
     }
 
+    @discardableResult
     package func registerRemoteObject(
         _ object: RuntimeRemoteObjectPayload,
         runtimeAgentTargetID: ProtocolTargetIdentifier,
         objectGroup: RuntimeObjectGroup? = nil,
         executionContextID: ExecutionContextID? = nil
-    ) {
+    ) -> RuntimeRemoteObject {
         let agentState = ensureRuntimeAgentState(for: runtimeAgentTargetID)
-        agentState.registerRemoteObject(
+        let remoteObject = agentState.registerRemoteObject(
             object,
             objectGroup: objectGroup,
             executionContextID: executionContextID
         )
         storeRuntimeAgentState(agentState)
+        return remoteObject
     }
 
     package func applyEvaluationResult(

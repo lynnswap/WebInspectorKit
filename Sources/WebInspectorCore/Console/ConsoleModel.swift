@@ -31,12 +31,17 @@ package final class ConsoleMessage {
     package var line: Int?
     package var column: Int?
     package var repeatCount: Int
-    package var parameters: [RuntimeRemoteObjectPayload]
+    package var parameters: [RuntimeRemoteObject]
     package var stackTrace: ConsoleStackTracePayload?
     package var networkRequestKey: NetworkRequestIdentifierKey?
     package var timestamp: Double?
 
-    package init(id: ID, targetID: ProtocolTargetIdentifier, payload: ConsoleMessagePayload) {
+    package init(
+        id: ID,
+        targetID: ProtocolTargetIdentifier,
+        payload: ConsoleMessagePayload,
+        parameters: [RuntimeRemoteObject]? = nil
+    ) {
         self.id = id
         self.source = payload.source
         self.level = payload.level
@@ -46,7 +51,7 @@ package final class ConsoleMessage {
         self.line = payload.line
         self.column = payload.column
         self.repeatCount = max(1, payload.repeatCount ?? 1)
-        self.parameters = payload.parameters
+        self.parameters = parameters ?? Self.parameterObjects(from: payload.parameters, targetID: targetID)
         self.stackTrace = payload.stackTrace
         self.networkRequestKey = payload.networkRequestID.map {
             NetworkRequestIdentifierKey(targetID: targetID, requestID: $0)
@@ -56,6 +61,19 @@ package final class ConsoleMessage {
 
     package var targetID: ProtocolTargetIdentifier {
         id.targetID
+    }
+
+    private static func parameterObjects(
+        from payloads: [RuntimeRemoteObjectPayload],
+        targetID: ProtocolTargetIdentifier
+    ) -> [RuntimeRemoteObject] {
+        payloads.map { payload in
+            RuntimeRemoteObject(
+                remoteObjectKey: payload.identifierKey(runtimeAgentTargetID: targetID),
+                payload: payload,
+                objectGroup: .console
+            )
+        }
     }
 }
 
@@ -117,9 +135,13 @@ package final class ConsoleTargetState {
         messagesByID[id]
     }
 
-    func append(_ payload: ConsoleMessagePayload, ordinal: UInt64) -> ConsoleMessageIdentifier {
+    func append(
+        _ payload: ConsoleMessagePayload,
+        ordinal: UInt64,
+        parameters: [RuntimeRemoteObject]? = nil
+    ) -> ConsoleMessageIdentifier {
         let id = ConsoleMessageIdentifier(targetID: targetID, ordinal: ordinal)
-        let message = ConsoleMessage(id: id, targetID: targetID, payload: payload)
+        let message = ConsoleMessage(id: id, targetID: targetID, payload: payload, parameters: parameters)
         orderedMessageIDs.append(id)
         messagesByID[id] = message
         if payload.type != .clear {
@@ -173,7 +195,7 @@ package final class ConsoleTargetState {
                     line: message.line,
                     column: message.column,
                     repeatCount: message.repeatCount,
-                    parameters: message.parameters,
+                    parameters: message.parameters.map(\.payload),
                     stackTrace: message.stackTrace,
                     networkRequestID: message.networkRequestKey?.requestID,
                     timestamp: message.timestamp
@@ -196,8 +218,12 @@ package final class ConsoleTargetState {
         for (id, message) in committedState.messagesByID {
             messagesByID[id] = message
         }
-        if let lastRepeatableMessageID = committedState.lastRepeatableMessageID {
-            self.lastRepeatableMessageID = lastRepeatableMessageID
+        if let committedLastRepeatableMessageID = committedState.lastRepeatableMessageID {
+            if let currentLastRepeatableMessageID = lastRepeatableMessageID {
+                lastRepeatableMessageID = max(currentLastRepeatableMessageID, committedLastRepeatableMessageID)
+            } else {
+                lastRepeatableMessageID = committedLastRepeatableMessageID
+            }
         }
         if let lastClearReason = committedState.lastClearReason {
             self.lastClearReason = lastClearReason
@@ -228,7 +254,7 @@ package final class ConsoleTargetState {
                     line: message.line,
                     column: message.column,
                     repeatCount: message.repeatCount,
-                    parameters: message.parameters,
+                    parameters: message.parameters.map(\.payload),
                     stackTrace: message.stackTrace,
                     networkRequestKey: message.networkRequestKey,
                     timestamp: message.timestamp
@@ -335,10 +361,14 @@ package final class ConsoleSession {
     }
 
     @discardableResult
-    package func applyMessageAdded(_ payload: ConsoleMessagePayload, targetID: ProtocolTargetIdentifier) -> ConsoleMessageIdentifier {
+    package func applyMessageAdded(
+        _ payload: ConsoleMessagePayload,
+        targetID: ProtocolTargetIdentifier,
+        parameters: [RuntimeRemoteObject]? = nil
+    ) -> ConsoleMessageIdentifier {
         nextMessageOrdinal &+= 1
         let state = ensureTargetState(for: targetID)
-        let id = state.append(payload, ordinal: nextMessageOrdinal)
+        let id = state.append(payload, ordinal: nextMessageOrdinal, parameters: parameters)
         updateAggregateSeverityCounts()
         return id
     }

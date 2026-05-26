@@ -378,6 +378,12 @@ when probing is acceptable, and conservative defaults otherwise.
   group `"console"`, and `Console.messagesCleared` /
   `Runtime.executionContextsCleared` release the matching Runtime agent's cached
   handles.
+- `ConsoleMessage.parameters` should hold `RuntimeRemoteObject` live model
+  instances, matching WebKit's `RemoteObject.fromPayload` conversion in
+  `ConsoleManager`, not a Console-local remote object type or raw payload list.
+  Object-ID-backed parameters should be the same observable objects registered
+  in `RuntimeSession`; by-value parameters can be message-owned
+  `RuntimeRemoteObject` instances with no protocol object handle.
 - `Target.didCommitProvisionalTarget` may move semantic context ownership to
   the committed target, but it must not re-key existing remote object handles to
   the new Runtime agent target. Handles created by the old agent are stale and

@@ -94,3 +94,71 @@ func consoleTargetStateKeepsStableObservableIdentity() throws {
     #expect(targetState.warningCount == 1)
     #expect(didChange.withLock { $0 })
 }
+
+@Test
+@MainActor
+func consoleMessageParametersUseObservableRuntimeObjects() throws {
+    let session = ConsoleSession()
+    let targetID = ProtocolTargetIdentifier("page")
+    let objectID = RuntimeRemoteObjectIdentifier("console-object")
+
+    let messageID = session.applyMessageAdded(
+        ConsoleMessagePayload(
+            source: .consoleAPI,
+            level: .log,
+            text: "object",
+            type: .log,
+            parameters: [
+                RuntimeRemoteObjectPayload(type: .object, description: "before", objectID: objectID),
+            ]
+        ),
+        targetID: targetID
+    )
+
+    let message = try #require(session.message(for: messageID))
+    let parameter = try #require(message.parameters.first)
+    let didChange = Mutex(false)
+
+    withObservationTracking {
+        _ = parameter.payload.description
+    } onChange: {
+        didChange.withLock { $0 = true }
+    }
+
+    parameter.payload = RuntimeRemoteObjectPayload(type: .object, description: "after", objectID: objectID)
+
+    #expect(parameter.remoteObjectKey == RuntimeRemoteObjectIdentifierKey(runtimeAgentTargetID: targetID, objectID: objectID))
+    #expect(message.parameters.first === parameter)
+    #expect(session.snapshot().messagesByID[messageID]?.parameters.first?.description == "after")
+    #expect(didChange.withLock { $0 })
+}
+
+@Test
+@MainActor
+func consoleTargetCommitKeepsRepeatUpdatesPointedAtNewestMessage() throws {
+    let session = ConsoleSession()
+    let oldTargetID = ProtocolTargetIdentifier("page-old")
+    let newTargetID = ProtocolTargetIdentifier("page-new")
+
+    let oldMessageID = session.applyMessageAdded(
+        ConsoleMessagePayload(source: .consoleAPI, level: .warning, text: "old", type: .log),
+        targetID: oldTargetID
+    )
+    let newMessageID = session.applyMessageAdded(
+        ConsoleMessagePayload(source: .consoleAPI, level: .warning, text: "new", type: .log),
+        targetID: newTargetID
+    )
+
+    session.applyTargetCommitted(oldTargetID: oldTargetID, newTargetID: newTargetID)
+    session.applyRepeatCountUpdated(count: 4, timestamp: 12, targetID: newTargetID)
+
+    let snapshot = session.snapshot()
+    let retargetedOldMessageID = ConsoleMessageIdentifier(
+        targetID: newTargetID,
+        ordinal: oldMessageID.ordinal
+    )
+    #expect(snapshot.messagesByID[retargetedOldMessageID]?.repeatCount == 1)
+    #expect(snapshot.messagesByID[newMessageID]?.repeatCount == 4)
+    #expect(snapshot.messagesByID[newMessageID]?.timestamp == 12)
+    #expect(snapshot.warningCountByTargetID[newTargetID] == 5)
+}

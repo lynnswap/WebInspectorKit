@@ -174,8 +174,16 @@ func domainPumpsReleaseConsoleRuntimeObjectsOnConsoleClear() async throws {
     let _: Bool = try await waitUntil {
         let runtimeSnapshot = await session.runtime.snapshot()
         let consoleSnapshot = await session.console.snapshot()
+        let linkedParameter = await MainActor.run {
+            guard let runtimeObject = session.runtime.runtimeAgentState(for: .pageMain)?.remoteObjects.first,
+                  let parameter = session.console.messages.first?.parameters.first else {
+                return false
+            }
+            return parameter === runtimeObject
+        }
         guard runtimeSnapshot.remoteObjectsByID[objectKey]?.objectGroup == .console,
-              consoleSnapshot.orderedMessageIDs.isEmpty == false else {
+              consoleSnapshot.orderedMessageIDs.isEmpty == false,
+              linkedParameter else {
             return nil
         }
         return true

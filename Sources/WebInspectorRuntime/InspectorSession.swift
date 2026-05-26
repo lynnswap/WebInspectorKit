@@ -1201,21 +1201,23 @@ package final class InspectorSession {
                 try DOMTransportAdapter.applyRuntimeEvent(event, to: $0.dom)
             }
         case .console:
-            applyEvent(event) {
+            applyEvent(event) { session in
                 if let targetID = event.targetID,
                    let message = try ConsoleTransportAdapter.messagePayload(from: event) {
-                    for parameter in message.parameters {
-                        $0.runtime.registerRemoteObject(
+                    let parameters = message.parameters.map { parameter in
+                        session.runtime.registerRemoteObject(
                             parameter,
                             runtimeAgentTargetID: targetID,
                             objectGroup: .console
                         )
                     }
+                    session.console.applyMessageAdded(message, targetID: targetID, parameters: parameters)
+                    return
                 }
-                try ConsoleTransportAdapter.applyConsoleEvent(event, to: $0.console)
+                try ConsoleTransportAdapter.applyConsoleEvent(event, to: session.console)
                 if event.method == "Console.messagesCleared",
                    let targetID = event.targetID {
-                    $0.runtime.releaseObjectGroup(.console, runtimeAgentTargetID: targetID)
+                    session.runtime.releaseObjectGroup(.console, runtimeAgentTargetID: targetID)
                 }
             }
         case .inspector:
