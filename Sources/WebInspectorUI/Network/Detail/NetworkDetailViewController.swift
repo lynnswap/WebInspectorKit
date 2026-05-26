@@ -219,6 +219,7 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
         }
         guard let request else {
             showEmptySelection()
+            modeMenu.render(selectedRequest: nil)
             return
         }
 
