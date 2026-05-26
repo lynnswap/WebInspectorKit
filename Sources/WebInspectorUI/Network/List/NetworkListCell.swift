@@ -80,8 +80,14 @@ package final class NetworkListCell: UICollectionViewListCell {
     }
 
     private func renderAccessories(request: NetworkRequest) {
-        statusIndicatorView.backgroundColor = request.statusSeverity.color
-        fileTypeLabel.text = request.fileTypeLabel
+        let color = request.statusSeverity.color
+        if statusIndicatorView.backgroundColor?.isEqual(color) != true {
+            statusIndicatorView.backgroundColor = color
+        }
+        let fileTypeLabelText = request.fileTypeLabel
+        if fileTypeLabel.text != fileTypeLabelText {
+            fileTypeLabel.text = fileTypeLabelText
+        }
     }
 
     private static func makeContentConfiguration() -> UIListContentConfiguration {

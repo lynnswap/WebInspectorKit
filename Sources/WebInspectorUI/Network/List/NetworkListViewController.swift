@@ -18,7 +18,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private struct PendingSnapshotUpdate {
-        var displayRequests: [NetworkRequest]
+        var requestIDs: [NetworkRequest.ID]
         var mode: SnapshotApplyMode
     }
 
@@ -38,6 +38,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
 
     private var needsSnapshotReloadOnNextAppearance = false
     private var pendingSnapshotUpdate: PendingSnapshotUpdate?
+    private var applyingSnapshotRequestIDs: [NetworkRequest.ID]?
     private var isApplyingSnapshotUpdate = false
     private var isApplyingSearchPresentation = false
     private var activeSearchController: UISearchController?
@@ -145,10 +146,15 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         }
 
         observationScope.observe(model) { [weak self] _, model in
-            self?.renderModelControls(
-                searchText: model.searchText,
-                effectiveResourceFilters: model.effectiveResourceFilters
-            )
+            self?.renderSearchText(model.searchText)
+        }
+
+        observationScope.observe(model) { [weak self] _, model in
+            self?.resourceFilterSelectionDidChange(effectiveResourceFilters: model.effectiveResourceFilters)
+        }
+
+        observationScope.observe(model) { [weak self] _, model in
+            self?.renderOverflowMenu(isNetworkEmpty: model.isEmpty)
         }
     }
 
@@ -167,10 +173,8 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         ]
         navigationItem.additionalOverflowItems = makeOverflowMenuElement()
 
-        renderModelControls(
-            searchText: model.searchText,
-            effectiveResourceFilters: model.effectiveResourceFilters
-        )
+        renderSearchText(model.searchText)
+        resourceFilterSelectionDidChange(effectiveResourceFilters: model.effectiveResourceFilters)
     }
 
     package func updateSearchResults(for searchController: UISearchController) {
@@ -245,14 +249,6 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         filterItem.isSelected = effectiveResourceFilters.isEmpty == false
     }
 
-    private func renderModelControls(
-        searchText: String,
-        effectiveResourceFilters: Set<NetworkResourceFilter>
-    ) {
-        renderSearchText(searchText)
-        resourceFilterSelectionDidChange(effectiveResourceFilters: effectiveResourceFilters)
-    }
-
     private func resourceFilterSelectionDidChange(effectiveResourceFilters: Set<NetworkResourceFilter>) {
         if isViewLoaded {
             filterHostingMenu.setNeedsUpdate()
@@ -293,9 +289,8 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private func makeSnapshot(
-        displayRequests: [NetworkRequest]
+        requestIDs: [NetworkRequest.ID]
     ) -> NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkRequest.ID> {
-        let requestIDs = displayRequests.map(\.id)
         precondition(
             requestIDs.count == Set(requestIDs).count,
             "Duplicate row IDs detected in NetworkListViewController"
@@ -312,12 +307,29 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private func requestSnapshotUpdate(displayRequests: [NetworkRequest]) {
+        requestSnapshotUpdate(requestIDs: displayRequests.map(\.id))
+    }
+
+    private func requestSnapshotUpdate(requestIDs: [NetworkRequest.ID]) {
+        precondition(
+            requestIDs.count == Set(requestIDs).count,
+            "Duplicate row IDs detected in NetworkListViewController"
+        )
+        if let applyingSnapshotRequestIDs {
+            if applyingSnapshotRequestIDs == requestIDs {
+                pendingSnapshotUpdate = nil
+                return
+            }
+        } else if dataSource.snapshot().itemIdentifiers == requestIDs {
+            pendingSnapshotUpdate = nil
+            return
+        }
         guard isCollectionViewVisible else {
             needsSnapshotReloadOnNextAppearance = true
             return
         }
         needsSnapshotReloadOnNextAppearance = false
-        enqueueSnapshotUpdate(displayRequests: displayRequests, mode: .apply)
+        enqueueSnapshotUpdate(requestIDs: requestIDs, mode: .apply)
     }
 
     private func flushPendingSnapshotUpdateIfNeeded() {
@@ -325,11 +337,21 @@ package final class NetworkListViewController: UICollectionViewController, UISea
             return
         }
         needsSnapshotReloadOnNextAppearance = false
-        enqueueSnapshotUpdate(displayRequests: model.displayRequests, mode: .reloadData)
+        enqueueSnapshotUpdate(requestIDs: model.displayRequests.map(\.id), mode: .reloadData)
     }
 
-    private func enqueueSnapshotUpdate(displayRequests: [NetworkRequest], mode: SnapshotApplyMode) {
-        pendingSnapshotUpdate = PendingSnapshotUpdate(displayRequests: displayRequests, mode: mode)
+    private func enqueueSnapshotUpdate(requestIDs: [NetworkRequest.ID], mode: SnapshotApplyMode) {
+        if let pendingSnapshotUpdate, pendingSnapshotUpdate.requestIDs == requestIDs {
+            self.pendingSnapshotUpdate = PendingSnapshotUpdate(
+                requestIDs: requestIDs,
+                mode: pendingSnapshotUpdate.mode == .reloadData || mode == .reloadData ? .reloadData : .apply
+            )
+            return
+        }
+        guard applyingSnapshotRequestIDs != nil || dataSource.snapshot().itemIdentifiers != requestIDs || mode == .reloadData else {
+            return
+        }
+        pendingSnapshotUpdate = PendingSnapshotUpdate(requestIDs: requestIDs, mode: mode)
         applyPendingSnapshotUpdateIfNeeded()
     }
 
@@ -339,9 +361,10 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         }
         pendingSnapshotUpdate = nil
         isApplyingSnapshotUpdate = true
+        applyingSnapshotRequestIDs = update.requestIDs
 
-        let snapshot = makeSnapshot(displayRequests: update.displayRequests)
-        Task { [weak self, snapshot, mode = update.mode] in
+        let snapshot = makeSnapshot(requestIDs: update.requestIDs)
+        Task { [weak self, snapshot, requestIDs = update.requestIDs, mode = update.mode] in
             guard let self else {
                 return
             }
@@ -351,6 +374,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
             case .reloadData:
                 await dataSource.applySnapshotUsingReloadData(snapshot)
             }
+            applyingSnapshotRequestIDs = nil
             isApplyingSnapshotUpdate = false
             applyPendingSnapshotUpdateIfNeeded()
         }
@@ -359,11 +383,22 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     private func reloadDataFromModel(displayRequests: [NetworkRequest]? = nil) {
         let resolvedDisplayRequests = displayRequests ?? model.displayRequests
         requestSnapshotUpdate(displayRequests: resolvedDisplayRequests)
-        overflowHostingMenu.requestUpdate()
+        renderEmptyState(isEmpty: resolvedDisplayRequests.isEmpty)
+    }
 
-        let shouldShowEmptyState = resolvedDisplayRequests.isEmpty
-        collectionView.isHidden = shouldShowEmptyState
-        if shouldShowEmptyState {
+    private func renderOverflowMenu(isNetworkEmpty: Bool) {
+        overflowHostingMenu.requestUpdate()
+    }
+
+    private func renderEmptyState(isEmpty: Bool) {
+        if collectionView.isHidden != isEmpty {
+            collectionView.isHidden = isEmpty
+        }
+        if isEmpty {
+            if let configuration = contentUnavailableConfiguration as? UIContentUnavailableConfiguration,
+               configuration.text == webInspectorLocalized("network.empty.title", default: "No requests yet") {
+                return
+            }
             var configuration = UIContentUnavailableConfiguration.empty()
             configuration.text = webInspectorLocalized("network.empty.title", default: "No requests yet")
             configuration.secondaryText = webInspectorLocalized(
@@ -372,7 +407,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
             )
             configuration.image = UIImage(systemName: "waveform.path.ecg.rectangle")
             contentUnavailableConfiguration = configuration
-        } else {
+        } else if contentUnavailableConfiguration != nil {
             contentUnavailableConfiguration = nil
         }
     }

@@ -102,10 +102,16 @@ package final class RegularTabContentViewController: UINavigationController {
     }
 
     private func renderSelection(_ selectedDisplayItem: TabDisplayItem?) {
-        segmentedControl.selectedSegmentIndex = selectedDisplayItem.flatMap {
+        let selectedSegmentIndex = selectedDisplayItem.flatMap {
             segmentDisplayItemIDs.firstIndex(of: $0.id)
         } ?? UISegmentedControl.noSegment
+        if segmentedControl.selectedSegmentIndex != selectedSegmentIndex {
+            segmentedControl.selectedSegmentIndex = selectedSegmentIndex
+        }
         guard let selectedDisplayItem else {
+            guard displayedDisplayItemID != nil || viewControllers.isEmpty == false else {
+                return
+            }
             displayedDisplayItemID = nil
             setViewControllers([], animated: false)
             return

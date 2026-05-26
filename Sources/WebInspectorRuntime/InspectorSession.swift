@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import ObservationBridge
 import OSLog
 import Synchronization
 import WebKit
@@ -19,6 +20,15 @@ private enum InspectorRuntimeLog {
     static func warning(_ message: String) {
         logger.warning("\(message, privacy: .public)")
     }
+}
+
+private enum SelectedNodeStyleHydrationState {
+    case detached
+    case waitingForDocument
+    case unavailable(CSSNodeStylesUnavailableReason)
+    case needsRefresh(CSSNodeStyleIdentity)
+    case refreshing(CSSNodeStyleIdentity)
+    case current(CSSNodeStyleIdentity)
 }
 
 package struct InspectorSessionError: Error, Equatable, Sendable, CustomStringConvertible {
@@ -302,8 +312,10 @@ package final class InspectorSession {
     @ObservationIgnored private var deleteUndoStates: [DOMDeleteUndoState]
     @ObservationIgnored private let deleteUndoOperationQueue: DOMDeleteUndoOperationQueue
     @ObservationIgnored private var domDocumentRequestHandlesByTargetID: [ProtocolTargetIdentifier: DOMDocumentRequestHandle]
-    @ObservationIgnored private var cssSelectedNodeRefreshTask: Task<Void, Never>?
-    @ObservationIgnored private var cssSelectedNodeRefreshIdentity: CSSNodeStyleIdentity?
+    @ObservationIgnored private var selectedNodeStyleHydrationObservationTask: Task<Void, Never>?
+    @ObservationIgnored private var selectedNodeStyleHydrationTask: Task<Void, Never>?
+    @ObservationIgnored private var selectedNodeStyleHydrationIdentity: CSSNodeStyleIdentity?
+    @ObservationIgnored private var isSelectedNodeStyleHydrationActive: Bool
     @ObservationIgnored private var cssPropertyUpdateTasks: [CSSPropertyIdentifier: Task<Void, Never>]
 
     package init(
@@ -333,8 +345,10 @@ package final class InspectorSession {
         deleteUndoStates = []
         deleteUndoOperationQueue = DOMDeleteUndoOperationQueue()
         domDocumentRequestHandlesByTargetID = [:]
-        cssSelectedNodeRefreshTask = nil
-        cssSelectedNodeRefreshIdentity = nil
+        selectedNodeStyleHydrationObservationTask = nil
+        selectedNodeStyleHydrationTask = nil
+        selectedNodeStyleHydrationIdentity = nil
+        isSelectedNodeStyleHydrationActive = false
         cssPropertyUpdateTasks = [:]
     }
 
@@ -410,6 +424,9 @@ package final class InspectorSession {
             pendingConnection = nil
             connection = nextConnection
             isAttached = true
+            if isSelectedNodeStyleHydrationActive {
+                startSelectedNodeStyleHydration()
+            }
             startDOMDocumentRequestsForAttachedFrameTargets()
             startRuntimeConsoleEnableForAttachedTargets()
             lastError = nil
@@ -428,6 +445,7 @@ package final class InspectorSession {
             await transport.detach()
             restoreInspectabilityIfNeeded(for: nextConnection)
             cancelCSSActionRequests()
+            stopSelectedNodeStyleHydration()
             dom.reset()
             css.reset()
             network.reset()
@@ -449,6 +467,7 @@ package final class InspectorSession {
         connection = nil
         pendingConnection = nil
         isAttached = false
+        stopSelectedNodeStyleHydration()
 
         if let previousConnection {
             cancelRuntimeConsoleEnableTasks(previousConnection)
@@ -906,16 +925,15 @@ package final class InspectorSession {
         }
     }
 
-    package func requestRefreshStylesForSelectedNode() {
-        guard isAttached else {
+    package func setSelectedNodeStyleHydrationActive(_ isActive: Bool) {
+        guard isSelectedNodeStyleHydrationActive != isActive else {
             return
         }
-
-        switch dom.selectedCSSNodeStyleIdentity() {
-        case let .success(identity):
-            requestStyleRefresh(for: identity)
-        case let .failure(reason):
-            css.markSelectedNodeUnavailable(reason)
+        isSelectedNodeStyleHydrationActive = isActive
+        if isActive, isAttached {
+            startSelectedNodeStyleHydration()
+        } else {
+            stopSelectedNodeStyleHydration()
         }
     }
 
@@ -963,25 +981,94 @@ package final class InspectorSession {
         lastError = nil
     }
 
-    private func requestStyleRefresh(for identity: CSSNodeStyleIdentity) {
-        guard cssSelectedNodeRefreshIdentity != identity else {
+    private func startSelectedNodeStyleHydration() {
+        selectedNodeStyleHydrationObservationTask?.cancel()
+        selectedNodeStyleHydrationObservationTask = Task { @MainActor [weak self] in
+            let stream = makeObservationBridgeStream {
+                self?.selectedNodeStyleHydrationState() ?? .detached
+            }
+            for await state in stream {
+                guard let self else {
+                    return
+                }
+                self.applySelectedNodeStyleHydrationState(state)
+            }
+        }
+    }
+
+    private func stopSelectedNodeStyleHydration() {
+        selectedNodeStyleHydrationObservationTask?.cancel()
+        selectedNodeStyleHydrationObservationTask = nil
+        selectedNodeStyleHydrationTask?.cancel()
+        selectedNodeStyleHydrationTask = nil
+        selectedNodeStyleHydrationIdentity = nil
+    }
+
+    private func selectedNodeStyleHydrationState() -> SelectedNodeStyleHydrationState {
+        guard isAttached else {
+            return .detached
+        }
+        guard dom.currentPageRootNode != nil else {
+            return .waitingForDocument
+        }
+
+        switch dom.selectedCSSNodeStyleIdentity() {
+        case let .success(identity):
+            switch css.refreshState(forSelected: identity) {
+            case nil, .needsRefresh:
+                return .needsRefresh(identity)
+            case .loading:
+                return .refreshing(identity)
+            case .loaded, .failed(_), .unavailable(_):
+                return .current(identity)
+            }
+        case let .failure(reason):
+            return .unavailable(reason)
+        }
+    }
+
+    private func applySelectedNodeStyleHydrationState(_ state: SelectedNodeStyleHydrationState) {
+        switch state {
+        case .detached, .waitingForDocument, .refreshing, .current:
+            return
+        case .unavailable(let reason):
+            selectedNodeStyleHydrationTask?.cancel()
+            selectedNodeStyleHydrationTask = nil
+            selectedNodeStyleHydrationIdentity = nil
+            css.markSelectedNodeUnavailable(reason)
+        case .needsRefresh(let identity):
+            hydrateSelectedNodeStyles(identity)
+        }
+    }
+
+    private func hydrateSelectedNodeStyles(_ identity: CSSNodeStyleIdentity) {
+        guard selectedNodeStyleHydrationIdentity != identity else {
             return
         }
 
-        cssSelectedNodeRefreshTask?.cancel()
-        cssSelectedNodeRefreshIdentity = identity
-        let task = Task { @MainActor [weak self] in
+        selectedNodeStyleHydrationTask?.cancel()
+        selectedNodeStyleHydrationIdentity = identity
+        selectedNodeStyleHydrationTask = Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+            defer {
+                if self.selectedNodeStyleHydrationIdentity == identity {
+                    self.selectedNodeStyleHydrationIdentity = nil
+                    self.selectedNodeStyleHydrationTask = nil
+                }
+            }
             guard Task.isCancelled == false else {
                 return
             }
-            await self?.refreshStylesForSelectedNode()
-            guard let self, cssSelectedNodeRefreshIdentity == identity else {
-                return
+
+            do {
+                try await self.refreshStyles(for: identity)
+                self.lastError = nil
+            } catch {
+                self.lastError = InspectorSessionError(String(describing: error))
             }
-            cssSelectedNodeRefreshIdentity = nil
-            cssSelectedNodeRefreshTask = nil
         }
-        cssSelectedNodeRefreshTask = task
     }
 
     private func refreshSelectedNodeStyles() async throws {
@@ -995,6 +1082,11 @@ package final class InspectorSession {
 
     private func refreshStyles(for identity: CSSNodeStyleIdentity) async throws {
         let connection = try activeConnection()
+        let targetExists = await connection.transport.snapshot().targetsByID[identity.targetID] != nil
+        guard targetExists else {
+            css.markSelectedNodeStylesUnavailable(identity: identity, reason: .staleNode(identity.nodeID))
+            return
+        }
         guard let token = css.beginRefresh(identity: identity) else {
             return
         }
@@ -1794,9 +1886,9 @@ package final class InspectorSession {
     }
 
     private func cancelCSSActionRequests() {
-        cssSelectedNodeRefreshTask?.cancel()
-        cssSelectedNodeRefreshTask = nil
-        cssSelectedNodeRefreshIdentity = nil
+        selectedNodeStyleHydrationTask?.cancel()
+        selectedNodeStyleHydrationTask = nil
+        selectedNodeStyleHydrationIdentity = nil
 
         for task in cssPropertyUpdateTasks.values {
             task.cancel()

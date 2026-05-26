@@ -1046,6 +1046,70 @@ func cssSessionAppliesSetStyleTextResultOnlyToEditedTarget() throws {
     #expect(selectedFrameStyles.sections[0].style.cssProperties[0].value == "10px")
 }
 
+@Test
+@MainActor
+func cssSessionPreservesSelectedStylesObjectWhenTargetBecomesStale() throws {
+    let css = CSSSession()
+    let identity = cssIdentity()
+    let token = try #require(css.beginRefresh(identity: identity))
+    css.applyRefresh(
+        token: token,
+        matched: CSSMatchedStylesPayload(matchedRules: [
+            CSSRuleMatchPayload(
+                rule: rule(
+                    selector: "body",
+                    properties: [
+                        CSSPropertyPayload(name: "margin", value: "0", text: "margin: 0;"),
+                    ]
+                ),
+                matchingSelectors: [0]
+            ),
+        ]),
+        inline: .init(),
+        computed: []
+    )
+    let selectedStyles = try #require(css.selectedNodeStyles)
+
+    css.removeStyles(targetID: identity.targetID)
+
+    #expect(css.selectedNodeStyles === selectedStyles)
+    #expect(css.selectedState == .unavailable(.staleNode(identity.nodeID)))
+    #expect(selectedStyles.state == .unavailable(.staleNode(identity.nodeID)))
+    #expect(css.refreshState(forSelected: identity) == .unavailable(.staleNode(identity.nodeID)))
+}
+
+@Test
+@MainActor
+func cssSessionMarksSelectedStylesUnavailableWithoutReplacingObject() throws {
+    let css = CSSSession()
+    let identity = cssIdentity()
+    let token = try #require(css.beginRefresh(identity: identity))
+    css.applyRefresh(
+        token: token,
+        matched: CSSMatchedStylesPayload(matchedRules: [
+            CSSRuleMatchPayload(
+                rule: rule(
+                    selector: "body",
+                    properties: [
+                        CSSPropertyPayload(name: "margin", value: "0", text: "margin: 0;"),
+                    ]
+                ),
+                matchingSelectors: [0]
+            ),
+        ]),
+        inline: .init(),
+        computed: []
+    )
+    let selectedStyles = try #require(css.selectedNodeStyles)
+
+    css.markSelectedNodeStylesUnavailable(identity: identity, reason: .staleNode(identity.nodeID))
+
+    #expect(css.selectedNodeStyles === selectedStyles)
+    #expect(css.selectedState == .unavailable(.staleNode(identity.nodeID)))
+    #expect(selectedStyles.state == .unavailable(.staleNode(identity.nodeID)))
+    #expect(css.refreshState(forSelected: identity) == .unavailable(.staleNode(identity.nodeID)))
+}
+
 private func cssIdentity(
     targetID: ProtocolTargetIdentifier = ProtocolTargetIdentifier("page"),
     nodeRawID: Int = 2

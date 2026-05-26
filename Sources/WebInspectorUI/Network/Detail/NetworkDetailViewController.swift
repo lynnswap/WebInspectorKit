@@ -29,7 +29,7 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
     }
 
     private enum ItemIdentifier: Hashable {
-        case overview
+        case overview(NetworkRequest.ID)
         case requestHeader(HeaderField)
         case requestHeadersEmpty
         case responseHeader(HeaderField)
@@ -38,7 +38,6 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
 
     private let model: NetworkPanelModel
     private let observationScope = ObservationScope()
-    private let selectedRequestObservationScope = ObservationScope()
     private let bodyViewController = NetworkBodyViewController()
     private lazy var modeMenu = NetworkDetailModeMenu(
         detailViewController: self,
@@ -72,10 +71,6 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
     package init(model: NetworkPanelModel) {
         self.model = model
         super.init(nibName: nil, bundle: nil)
-
-        observationScope.observe(model) { [weak self] _, model in
-            self?.display(model.selectedRequest, reloadData: true)
-        }
     }
 
     @available(*, unavailable)
@@ -85,7 +80,6 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
 
     isolated deinit {
         observationScope.cancelAll()
-        selectedRequestObservationScope.cancelAll()
     }
 
     override package func viewDidLoad() {
@@ -94,11 +88,17 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
         configureNavigationItem()
         installCollectionView()
         installBodyViewController()
-        display(model.selectedRequest, reloadData: true)
+        startObservingModel()
     }
 
     package func collectionView(_ collectionView: UICollectionView, shouldSelectItemAt indexPath: IndexPath) -> Bool {
         false
+    }
+
+    private func startObservingModel() {
+        observationScope.observe(model) { [weak self] event, model in
+            self?.render(selectedRequest: model.selectedRequest, reloadData: event.kind == .initial)
+        }
     }
 
     private func configureNavigationItem() {
@@ -211,44 +211,22 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
         return dataSource
     }
 
-    private func display(_ request: NetworkRequest?, reloadData: Bool) {
+    private func render(selectedRequest request: NetworkRequest?, reloadData: Bool) {
         title = request?.displayName
 
         guard isViewLoaded else {
             return
         }
         guard let request else {
-            selectedRequestObservationScope.cancelAll()
-            collectionView.isHidden = true
-            bodyViewController.view.isHidden = true
-            bodyViewController.display(body: nil)
-            var configuration = UIContentUnavailableConfiguration.empty()
-            configuration.text = webInspectorLocalized("network.empty.selection.title", default: "No request selected")
-            configuration.secondaryText = webInspectorLocalized(
-                "network.empty.selection.description",
-                default: "Select a request from the list to inspect details."
-            )
-            configuration.image = UIImage(systemName: "list.bullet.rectangle")
-            contentUnavailableConfiguration = configuration
-            applySnapshotUsingReloadData()
+            showEmptySelection()
             return
         }
 
-        contentUnavailableConfiguration = nil
-        startObserving(request)
-        renderCurrentMode(reloadData: reloadData)
-    }
-
-    private func startObserving(_ request: NetworkRequest) {
-        selectedRequestObservationScope.cancelAll()
-        selectedRequestObservationScope.observe(request) { [weak self] _, request in
-            guard let self, self.selectedRequest?.id == request.id else {
-                return
-            }
-            self.title = request.displayName
-            self.renderCurrentMode(reloadData: false)
-            self.modeMenu.render()
+        if contentUnavailableConfiguration != nil {
+            contentUnavailableConfiguration = nil
         }
+        renderCurrentMode(reloadData: reloadData)
+        modeMenu.render(selectedRequest: request)
     }
 
     private func renderCurrentMode(reloadData: Bool) {
@@ -264,24 +242,64 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
 
         switch mode {
         case .overview:
-            bodyViewController.display(body: nil)
-            bodyViewController.view.isHidden = true
-            collectionView.isHidden = false
+            showOverview()
             if reloadData {
                 applySnapshotUsingReloadData()
             } else {
                 applySnapshot()
             }
         case .requestBody, .responseBody:
-            collectionView.isHidden = true
-            bodyViewController.view.isHidden = false
             guard let role = mode.bodyRole else {
                 return
             }
+            showBody()
             if role == .response {
                 model.fetchResponseBodyIfNeeded(for: selectedRequest)
             }
             bodyViewController.display(body: body(in: selectedRequest, for: role))
+        }
+    }
+
+    private func showEmptySelection() {
+        if collectionView.isHidden == false {
+            collectionView.isHidden = true
+        }
+        if bodyViewController.view.isHidden == false {
+            bodyViewController.view.isHidden = true
+        }
+        bodyViewController.display(body: nil)
+        if let configuration = contentUnavailableConfiguration as? UIContentUnavailableConfiguration,
+           configuration.text == webInspectorLocalized("network.empty.selection.title", default: "No request selected") {
+            applyEmptySnapshotUsingReloadData()
+            return
+        }
+        var configuration = UIContentUnavailableConfiguration.empty()
+        configuration.text = webInspectorLocalized("network.empty.selection.title", default: "No request selected")
+        configuration.secondaryText = webInspectorLocalized(
+            "network.empty.selection.description",
+            default: "Select a request from the list to inspect details."
+        )
+        configuration.image = UIImage(systemName: "list.bullet.rectangle")
+        contentUnavailableConfiguration = configuration
+        applyEmptySnapshotUsingReloadData()
+    }
+
+    private func showOverview() {
+        if bodyViewController.view.isHidden == false {
+            bodyViewController.view.isHidden = true
+        }
+        if collectionView.isHidden {
+            collectionView.isHidden = false
+        }
+        bodyViewController.display(body: nil)
+    }
+
+    private func showBody() {
+        if collectionView.isHidden == false {
+            collectionView.isHidden = true
+        }
+        if bodyViewController.view.isHidden {
+            bodyViewController.view.isHidden = false
         }
     }
 
@@ -325,10 +343,9 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
 
         var snapshot = NSDiffableDataSourceSnapshot<SectionIdentifier, ItemIdentifier>()
         snapshot.appendSections(SectionIdentifier.allCases)
-        snapshot.appendItems([.overview], toSection: .overview)
+        snapshot.appendItems([.overview(selectedRequest.id)], toSection: .overview)
         snapshot.appendItems(requestItems, toSection: .request)
         snapshot.appendItems(responseItems, toSection: .response)
-        snapshot.reconfigureItems(snapshot.itemIdentifiers)
         return snapshot
     }
 
@@ -349,6 +366,11 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
             return
         }
         let snapshot = makeSnapshot()
+        let currentSnapshot = dataSource.snapshot()
+        guard currentSnapshot.sectionIdentifiers != snapshot.sectionIdentifiers
+            || currentSnapshot.itemIdentifiers != snapshot.itemIdentifiers else {
+            return
+        }
         Task {
             await self.dataSource.apply(snapshot, animatingDifferences: false)
         }
@@ -359,6 +381,20 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
             return
         }
         let snapshot = makeSnapshot()
+        Task {
+            await self.dataSource.applySnapshotUsingReloadData(snapshot)
+        }
+    }
+
+    private func applyEmptySnapshotUsingReloadData() {
+        guard isViewLoaded else {
+            return
+        }
+        let snapshot = NSDiffableDataSourceSnapshot<SectionIdentifier, ItemIdentifier>()
+        let currentSnapshot = dataSource.snapshot()
+        guard currentSnapshot.numberOfItems != 0 || currentSnapshot.numberOfSections != 0 else {
+            return
+        }
         Task {
             await self.dataSource.applySnapshotUsingReloadData(snapshot)
         }
@@ -386,37 +422,12 @@ private final class NetworkDetailModeMenu {
 
     private weak var detailViewController: NetworkDetailViewController?
     private let model: NetworkPanelModel
-    private let observationScope = ObservationScope()
-    private let selectedRequestObservationScope = ObservationScope()
     private var compactItem: UIBarButtonItem?
     private var regularItem: UIBarButtonItem?
 
     init(detailViewController: NetworkDetailViewController, model: NetworkPanelModel) {
         self.detailViewController = detailViewController
         self.model = model
-
-        observationScope.observe(model) { [weak self] _, model in
-            self?.observeBodyAvailability(in: model.selectedRequest)
-            self?.render()
-        }
-    }
-
-    isolated deinit {
-        observationScope.cancelAll()
-        selectedRequestObservationScope.cancelAll()
-    }
-
-    private func observeBodyAvailability(in request: NetworkRequest?) {
-        selectedRequestObservationScope.cancelAll()
-        guard let request else {
-            return
-        }
-        selectedRequestObservationScope.observe(request) { [weak self] _, request in
-            guard let self, self.model.selectedRequest?.id == request.id else {
-                return
-            }
-            self.render(selectedRequest: request)
-        }
     }
 
     fileprivate func render(selectedRequest: NetworkRequest? = nil) {

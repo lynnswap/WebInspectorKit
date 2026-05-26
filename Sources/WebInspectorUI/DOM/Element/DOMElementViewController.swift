@@ -21,7 +21,6 @@ package final class DOMElementViewController: UIViewController {
 
     private weak var session: InspectorSession?
     private let observationScope = ObservationScope()
-    private let selectedStylesObservationScope = ObservationScope()
     private var expandedUnusedVariableSectionIDs = Set<CSSStyleSectionIdentifier>()
 
 #if DEBUG
@@ -77,8 +76,8 @@ package final class DOMElementViewController: UIViewController {
     }
 
     isolated deinit {
+        session?.setSelectedNodeStyleHydrationActive(false)
         observationScope.cancelAll()
-        selectedStylesObservationScope.cancelAll()
     }
 
     override package func viewDidLoad() {
@@ -91,7 +90,13 @@ package final class DOMElementViewController: UIViewController {
 
     override package func viewIsAppearing(_ animated: Bool) {
         super.viewIsAppearing(animated)
+        session?.setSelectedNodeStyleHydrationActive(true)
         render()
+    }
+
+    override package func viewDidDisappear(_ animated: Bool) {
+        session?.setSelectedNodeStyleHydrationActive(false)
+        super.viewDidDisappear(animated)
     }
 
     private static func makeLayout() -> UICollectionViewLayout {
@@ -207,7 +212,6 @@ package final class DOMElementViewController: UIViewController {
         }
 
         observationScope.observe(css) { [weak self] _, _ in
-            self?.observeSelectedNodeStyles()
             self?.render()
         }
 
@@ -215,19 +219,6 @@ package final class DOMElementViewController: UIViewController {
             observationScope.observe(session) { [weak self] _, session in
                 self?.render(session: session)
             }
-        }
-
-        observeSelectedNodeStyles()
-    }
-
-    private func observeSelectedNodeStyles() {
-        selectedStylesObservationScope.cancelAll()
-        guard let selectedNodeStyles = css.selectedNodeStyles else {
-            return
-        }
-
-        selectedStylesObservationScope.observe(selectedNodeStyles) { [weak self] _, _ in
-            self?.render()
         }
     }
 
@@ -240,14 +231,11 @@ package final class DOMElementViewController: UIViewController {
             return
         }
 
-        _ = dom.treeRevision
-        _ = dom.selectionRevision
-
         guard session?.isAttached != false else {
             showPlaceholder(
                 text: webInspectorLocalized("dom.element.loading.title", default: "Loading DOM..."),
                 secondaryText: nil,
-                image: UIImage(systemName: "arrow.clockwise")
+                imageName: "arrow.clockwise"
             )
             return
         }
@@ -256,7 +244,7 @@ package final class DOMElementViewController: UIViewController {
             showPlaceholder(
                 text: webInspectorLocalized("dom.element.loading.title", default: "Loading DOM..."),
                 secondaryText: nil,
-                image: UIImage(systemName: "arrow.clockwise")
+                imageName: "arrow.clockwise"
             )
             return
         }
@@ -272,7 +260,6 @@ package final class DOMElementViewController: UIViewController {
     private func renderStyles(for identity: CSSNodeStyleIdentity) {
         guard let nodeStyles = css.selectedNodeStyles,
               nodeStyles.identity == identity else {
-            requestStylesRefresh()
             showEmptyStyleList()
             return
         }
@@ -283,7 +270,6 @@ package final class DOMElementViewController: UIViewController {
         case .loaded:
             showLoadedStyles(nodeStyles)
         case .needsRefresh:
-            requestStylesRefresh()
             if nodeStyles.sections.isEmpty {
                 showEmptyStyleList()
             } else {
@@ -295,7 +281,7 @@ package final class DOMElementViewController: UIViewController {
             showPlaceholder(
                 text: webInspectorLocalized("dom.element.styles.failed.title", default: "Couldn’t load styles"),
                 secondaryText: message,
-                image: UIImage(systemName: "exclamationmark.triangle")
+                imageName: "exclamationmark.triangle"
             )
         }
     }
@@ -309,7 +295,7 @@ package final class DOMElementViewController: UIViewController {
                     "dom.element.styles.empty.description",
                     default: "This element has no editable or matched CSS declarations."
                 ),
-                image: UIImage(systemName: "curlybraces")
+                imageName: "curlybraces"
             )
             return
         }
@@ -318,15 +304,22 @@ package final class DOMElementViewController: UIViewController {
     }
 
     private func showStyleList(_ nodeStyles: CSSNodeStyles) {
-        contentUnavailableConfiguration = nil
-        collectionView.isHidden = false
+        showCollectionView()
         applySnapshot(for: nodeStyles)
     }
 
     private func showEmptyStyleList() {
-        contentUnavailableConfiguration = nil
-        collectionView.isHidden = false
+        showCollectionView()
         applyEmptySnapshot()
+    }
+
+    private func showCollectionView() {
+        if contentUnavailableConfiguration != nil {
+            contentUnavailableConfiguration = nil
+        }
+        if collectionView.isHidden {
+            collectionView.isHidden = false
+        }
     }
 
     private func showUnavailable(_ reason: CSSNodeStylesUnavailableReason) {
@@ -338,7 +331,7 @@ package final class DOMElementViewController: UIViewController {
                     "dom.element.no_selection.description",
                     default: "Choose an element in the DOM tree to inspect its styles."
                 ),
-                image: UIImage(systemName: "scope")
+                imageName: "scope"
             )
         case .nonElementNode:
             showPlaceholder(
@@ -347,7 +340,7 @@ package final class DOMElementViewController: UIViewController {
                     "dom.element.styles.non_element.description",
                     default: "CSS styles are only available for element nodes."
                 ),
-                image: UIImage(systemName: "curlybraces")
+                imageName: "curlybraces"
             )
         case .staleNode:
             showPlaceholder(
@@ -356,7 +349,7 @@ package final class DOMElementViewController: UIViewController {
                     "dom.element.styles.stale.description",
                     default: "The selected node is no longer available."
                 ),
-                image: UIImage(systemName: "curlybraces")
+                imageName: "curlybraces"
             )
         case .cssUnavailableForTarget:
             showPlaceholder(
@@ -365,18 +358,26 @@ package final class DOMElementViewController: UIViewController {
                     "dom.element.styles.target_unavailable.description",
                     default: "This target does not expose CSS styles."
                 ),
-                image: UIImage(systemName: "curlybraces")
+                imageName: "curlybraces"
             )
         }
     }
 
-    private func showPlaceholder(text: String, secondaryText: String?, image: UIImage?) {
+    private func showPlaceholder(text: String, secondaryText: String?, imageName: String?) {
+        if collectionView.isHidden,
+           let configuration = contentUnavailableConfiguration as? UIContentUnavailableConfiguration,
+           configuration.text == text,
+           configuration.secondaryText == secondaryText {
+            return
+        }
         applyEmptySnapshot()
-        collectionView.isHidden = true
+        if collectionView.isHidden == false {
+            collectionView.isHidden = true
+        }
         var configuration = UIContentUnavailableConfiguration.empty()
         configuration.text = text
         configuration.secondaryText = secondaryText
-        configuration.image = image
+        configuration.image = imageName.flatMap(UIImage.init(systemName:))
         contentUnavailableConfiguration = configuration
     }
 
@@ -457,10 +458,6 @@ package final class DOMElementViewController: UIViewController {
         }
         expandedUnusedVariableSectionIDs.insert(sectionID)
         applySnapshot(for: nodeStyles, animatingDifferences: true)
-    }
-
-    private func requestStylesRefresh() {
-        session?.requestRefreshStylesForSelectedNode()
     }
 
     private func toggleAction() -> DOMElementStylePropertyView.ToggleAction? {

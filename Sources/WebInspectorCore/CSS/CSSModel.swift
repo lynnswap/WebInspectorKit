@@ -382,8 +382,11 @@ package final class CSSSession {
     }
 
     package private(set) var selectedNodeStyles: CSSNodeStyles?
-    package private(set) var selectedState: CSSNodeStylesState
+    package var selectedState: CSSNodeStylesState {
+        selectedNodeStyles?.state ?? .unavailable(selectedUnavailableReason)
+    }
 
+    private var selectedUnavailableReason: CSSNodeStylesUnavailableReason
     @ObservationIgnored private var stylesByNodeID: [DOMNodeIdentifier: CSSNodeStyles]
     @ObservationIgnored private var styleSheetHeadersByKey: [StyleSheetKey: CSSStyleSheetHeaderPayload]
     @ObservationIgnored private var activeRefreshSequenceByNodeID: [DOMNodeIdentifier: UInt64]
@@ -391,7 +394,7 @@ package final class CSSSession {
 
     package init() {
         selectedNodeStyles = nil
-        selectedState = .unavailable(.noSelection)
+        selectedUnavailableReason = .noSelection
         stylesByNodeID = [:]
         styleSheetHeadersByKey = [:]
         activeRefreshSequenceByNodeID = [:]
@@ -400,7 +403,7 @@ package final class CSSSession {
 
     package func reset() {
         selectedNodeStyles = nil
-        selectedState = .unavailable(.noSelection)
+        selectedUnavailableReason = .noSelection
         stylesByNodeID.removeAll()
         styleSheetHeadersByKey.removeAll()
         activeRefreshSequenceByNodeID.removeAll()
@@ -408,8 +411,32 @@ package final class CSSSession {
     }
 
     package func markSelectedNodeUnavailable(_ reason: CSSNodeStylesUnavailableReason) {
+        guard selectedNodeStyles != nil || selectedState != .unavailable(reason) else {
+            return
+        }
         selectedNodeStyles = nil
-        selectedState = .unavailable(reason)
+        selectedUnavailableReason = reason
+    }
+
+    package func markSelectedNodeStylesUnavailable(
+        identity: CSSNodeStyleIdentity,
+        reason: CSSNodeStylesUnavailableReason
+    ) {
+        let nodeStyles = stylesByNodeID[identity.nodeID] ?? CSSNodeStyles(identity: identity)
+        stylesByNodeID[identity.nodeID] = nodeStyles
+        guard selectedNodeStyles !== nodeStyles || nodeStyles.state != .unavailable(reason) else {
+            return
+        }
+        nodeStyles.state = .unavailable(reason)
+        selectedNodeStyles = nodeStyles
+        activeRefreshSequenceByNodeID.removeValue(forKey: identity.nodeID)
+    }
+
+    package func refreshState(forSelected identity: CSSNodeStyleIdentity) -> CSSNodeStylesState? {
+        guard selectedNodeStyles?.identity == identity else {
+            return nil
+        }
+        return selectedNodeStyles?.state
     }
 
     package func beginRefresh(identity: CSSNodeStyleIdentity) -> CSSStyleRefreshToken? {
@@ -423,7 +450,6 @@ package final class CSSSession {
         stylesByNodeID[identity.nodeID] = nodeStyles
         nodeStyles.state = .loading
         selectedNodeStyles = nodeStyles
-        selectedState = .loading
         activeRefreshSequenceByNodeID[identity.nodeID] = nextRefreshSequence
         return CSSStyleRefreshToken(identity: identity, sequence: nextRefreshSequence)
     }
@@ -454,7 +480,6 @@ package final class CSSSession {
             with: computed.map(CSSComputedStyleProperty.init(payload:))
         )
         nodeStyles.state = .loaded
-        selectedState = .loaded
         activeRefreshSequenceByNodeID.removeValue(forKey: token.identity.nodeID)
     }
 
@@ -479,7 +504,6 @@ package final class CSSSession {
             return
         }
         nodeStyles.state = .failed(message)
-        selectedState = .failed(message)
         activeRefreshSequenceByNodeID.removeValue(forKey: token.identity.nodeID)
     }
 
@@ -504,9 +528,6 @@ package final class CSSSession {
             }
             nodeStyles.state = .needsRefresh
             activeRefreshSequenceByNodeID.removeValue(forKey: nodeStyles.identity.nodeID)
-            if selectedNodeStyles === nodeStyles {
-                selectedState = .needsRefresh
-            }
         }
     }
 
@@ -534,9 +555,6 @@ package final class CSSSession {
         }
         current.state = .needsRefresh
         activeRefreshSequenceByNodeID.removeValue(forKey: current.identity.nodeID)
-        if selectedNodeStyles === current {
-            selectedState = .needsRefresh
-        }
     }
 
     package func removeStyles(targetID: ProtocolTargetIdentifier) {
@@ -551,10 +569,9 @@ package final class CSSSession {
             stylesByNodeID.removeValue(forKey: nodeID)
             activeRefreshSequenceByNodeID.removeValue(forKey: nodeID)
         }
-        if let removedSelectedNodeID = selectedNodeStyles?.identity.nodeID,
-           selectedNodeStyles?.identity.targetID == targetID {
-            selectedNodeStyles = nil
-            selectedState = .unavailable(.staleNode(removedSelectedNodeID))
+        if let selectedNodeStyles,
+           selectedNodeStyles.identity.targetID == targetID {
+            selectedNodeStyles.state = .unavailable(.staleNode(selectedNodeStyles.identity.nodeID))
         }
     }
 
@@ -608,9 +625,6 @@ package final class CSSSession {
                     rule.style = section.style
                 }
                 nodeStyles.state = .needsRefresh
-                if selectedNodeStyles === nodeStyles {
-                    selectedState = .needsRefresh
-                }
             }
         }
     }

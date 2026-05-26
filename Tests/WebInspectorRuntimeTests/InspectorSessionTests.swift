@@ -466,6 +466,36 @@ func selectedElementStyleRefreshLoadsCSSSession() async throws {
 }
 
 @Test
+@MainActor
+func selectedElementStyleHydrationLoadsCSSSessionWhenActive() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
+    let bodyID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(4))
+    session.dom.selectNode(bodyID)
+
+    let sentCount = await backend.sentTargetMessages().count
+    session.setSelectedNodeStyleHydrationActive(true)
+    let messages = try await waitForCSSRefreshMessages(backend, after: sentCount)
+    try await replyCSSRefresh(
+        transport: transport,
+        messages: messages,
+        selector: "body",
+        styleSheetID: "sheet-body"
+    )
+
+    let didLoadStyles = try await waitUntil {
+        await session.css.selectedState == .loaded ? true : nil
+    }
+    #expect(didLoadStyles)
+    let styles = try #require(session.css.selectedNodeStyles)
+    #expect(styles.identity.nodeID == bodyID)
+    #expect(styles.sections.map(\.title) == ["element.style", "body"])
+}
+
+@Test
 func selectedElementStyleRefreshEnablesCSSAgentOnlyAfterBackendRequiresIt() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
@@ -747,7 +777,7 @@ func cssAndDOMStyleInvalidationsMarkSelectedNodeStylesNeedsRefresh() async throw
 }
 
 @Test
-func documentUpdatedClearsSelectedCSSNodeStylesForInvalidatedDocument() async throws {
+func documentUpdatedMarksSelectedCSSNodeStylesUnavailableForInvalidatedDocument() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
     let session = await InspectorSession(configuration: .test)
@@ -771,13 +801,14 @@ func documentUpdatedClearsSelectedCSSNodeStylesForInvalidatedDocument() async th
         message: #"{"method":"DOM.documentUpdated","params":{}}"#
     )
     _ = try await waitUntil {
-        await session.css.selectedNodeStyles == nil ? true : nil
+        await session.css.selectedState == .unavailable(.staleNode(bodyID)) ? true : nil
     }
+    #expect(await session.css.selectedNodeStyles != nil)
     #expect(await session.css.selectedState == .unavailable(.staleNode(bodyID)))
 }
 
 @Test
-func explicitDOMReloadClearsSelectedCSSNodeStylesForReplacedDocument() async throws {
+func explicitDOMReloadMarksSelectedCSSNodeStylesUnavailableForReplacedDocument() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
     let session = await InspectorSession(configuration: .test)
@@ -808,12 +839,12 @@ func explicitDOMReloadClearsSelectedCSSNodeStylesForReplacedDocument() async thr
     )
     try await reloadTask.value
 
-    #expect(await session.css.selectedNodeStyles == nil)
+    #expect(await session.css.selectedNodeStyles != nil)
     #expect(await session.css.selectedState == .unavailable(.staleNode(bodyID)))
 }
 
 @Test
-func domMutationRemovingSelectedNodeClearsSelectedCSSNodeStyles() async throws {
+func domMutationRemovingSelectedNodeMarksSelectedCSSNodeStylesUnavailable() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
     let session = await InspectorSession(configuration: .test)
@@ -840,12 +871,12 @@ func domMutationRemovingSelectedNodeClearsSelectedCSSNodeStyles() async throws {
         await session.dom.selectedNodeID == nil ? true : nil
     }
 
-    #expect(await session.css.selectedNodeStyles == nil)
+    #expect(await session.css.selectedNodeStyles != nil)
     #expect(await session.css.selectedState == .unavailable(.staleNode(bodyID)))
 }
 
 @Test
-func localDOMDeleteClearsSelectedCSSNodeStylesWithoutBackendMutationEvent() async throws {
+func localDOMDeleteMarksSelectedCSSNodeStylesUnavailableWithoutBackendMutationEvent() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
     let session = await InspectorSession(configuration: .test)
@@ -877,7 +908,7 @@ func localDOMDeleteClearsSelectedCSSNodeStylesWithoutBackendMutationEvent() asyn
     try await deleteTask.value
 
     #expect(await session.dom.selectedNodeID == nil)
-    #expect(await session.css.selectedNodeStyles == nil)
+    #expect(await session.css.selectedNodeStyles != nil)
     #expect(await session.css.selectedState == .unavailable(.staleNode(bodyID)))
 }
 

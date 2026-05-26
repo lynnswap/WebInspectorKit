@@ -31,6 +31,10 @@ final class NetworkBodyViewController: UIViewController {
     }
 
     func display(body: NetworkBody?) {
+        guard self.body !== body else {
+            renderBody(body)
+            return
+        }
         self.body = body
         startObserving(body: body)
         renderBody(body)
