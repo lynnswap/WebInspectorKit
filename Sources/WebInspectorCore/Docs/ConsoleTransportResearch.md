@@ -328,7 +328,9 @@ when probing is acceptable, and conservative defaults otherwise.
 - `Runtime.evaluate` should resolve the selected execution context and send the
   command to that context's `runtimeAgentTargetID`. Without UI context
   selection, the current page target/main-world context is the simplest first
-  behavior.
+  behavior. Later same-agent subframe contexts must not overwrite the target's
+  default context; they are addressable through explicit/selected contexts or
+  frame-target ownership when Site Isolation metadata is available.
 - Remote object lifetime belongs to `RuntimeSession`. It keeps the remote object
   payload plus object group/context metadata as the single release owner; any
   snapshot-level object group target index is derived from those records.

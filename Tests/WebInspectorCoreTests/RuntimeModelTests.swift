@@ -100,6 +100,39 @@ func runtimeEvaluateIntentRoutesSelectedContextToRuntimeAgentTarget() throws {
 
 @Test
 @MainActor
+func runtimeEvaluateIntentKeepsPageDefaultContextWhenFrameContextsShareTarget() throws {
+    let session = RuntimeSession()
+    let pageTargetID = ProtocolTargetIdentifier("page")
+    session.applyExecutionContextCreated(
+        RuntimeExecutionContext(
+            id: ExecutionContextID(1),
+            targetID: pageTargetID,
+            type: .normal,
+            name: "Main",
+            frameID: DOMFrameIdentifier("main-frame")
+        )
+    )
+    session.applyExecutionContextCreated(
+        RuntimeExecutionContext(
+            id: ExecutionContextID(2),
+            targetID: pageTargetID,
+            type: .normal,
+            name: "Subframe",
+            frameID: DOMFrameIdentifier("ad-frame")
+        )
+    )
+
+    let intent = session.evaluateIntent(expression: "document.URL", targetID: pageTargetID)
+    guard case let .evaluate(request) = intent else {
+        Issue.record("Expected evaluate intent")
+        return
+    }
+    #expect(request.contextID == ExecutionContextID(1))
+    #expect(session.snapshot().normalContextIDByTargetID[pageTargetID] == ExecutionContextID(1))
+}
+
+@Test
+@MainActor
 func runtimeEvaluateIntentHonorsSelectedContextBeforeTargetNormalContext() throws {
     let session = RuntimeSession()
     let targetID = ProtocolTargetIdentifier("page")

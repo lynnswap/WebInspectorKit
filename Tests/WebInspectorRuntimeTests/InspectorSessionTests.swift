@@ -1046,6 +1046,40 @@ func frameTargetWithAdvertisedRuntimeAndConsoleEnablesRuntimeBeforeConsole() asy
 }
 
 @Test
+func frameTargetWithUnsupportedRuntimeStillEnablesConsole() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    let sentCount = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["Runtime","Console"],"isProvisional":false}}}"#
+    )
+
+    let runtimeEnable = try await waitForTargetMessage(backend, method: "Runtime.enable", after: sentCount)
+    #expect(runtimeEnable.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    await receiveTargetErrorReply(
+        transport,
+        targetID: runtimeEnable.targetIdentifier,
+        messageID: try messageID(runtimeEnable.message),
+        message: "Unknown command: Runtime.enable"
+    )
+
+    let consoleEnable = try await waitForTargetMessage(backend, method: "Console.enable", after: sentCount)
+    #expect(consoleEnable.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    await receiveTargetReply(
+        transport,
+        targetID: consoleEnable.targetIdentifier,
+        messageID: try messageID(consoleEnable.message),
+        result: "{}"
+    )
+
+    #expect(await session.runtime.snapshot().unsupportedCommandsByTargetID[.frameAd]?.contains("Runtime.enable") == true)
+    #expect(await session.lastError == nil)
+}
+
+@Test
 func frameTargetWithAdvertisedRuntimeOnlyEnablesRuntimeWithoutConsole() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)

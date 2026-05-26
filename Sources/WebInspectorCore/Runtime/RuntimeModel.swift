@@ -135,7 +135,13 @@ package final class RuntimeSession {
         }
         executionContextsByID[context.id] = context
         if context.type == .normal {
-            normalContextIDByTargetID[context.targetID] = context.id
+            if let defaultContextID = normalContextIDByTargetID[context.targetID] {
+                if oldContextIDs.contains(defaultContextID) {
+                    normalContextIDByTargetID[context.targetID] = context.id
+                }
+            } else {
+                normalContextIDByTargetID[context.targetID] = context.id
+            }
         }
         if context.type == .normal,
            selectedContextID == nil {

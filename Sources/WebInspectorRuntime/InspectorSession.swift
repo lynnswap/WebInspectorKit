@@ -1254,7 +1254,9 @@ package final class InspectorSession {
                 connection.runtimeEnabledTargetIDs.insert(targetID)
             } catch {
                 markRuntimeCommandUnsupportedIfNeeded("Runtime.enable", targetID: targetID, error: error)
-                throw error
+                if isUnsupportedProtocolCommandError(error) == false {
+                    throw error
+                }
             }
         }
 
