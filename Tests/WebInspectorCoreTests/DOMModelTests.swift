@@ -153,7 +153,7 @@ func targetDestroyedRemovesExecutionContextsOwnedByRuntimeAgentTarget() async th
     await session.applyTargetDestroyed(pageTargetID)
 
     let snapshot = await session.snapshot()
-    #expect(snapshot.executionContextsByID[ExecutionContextID(7)] == nil)
+    #expect(snapshot.executionContextsByKey[contextKey(pageTargetID, 7)] == nil)
 }
 
 @Test
@@ -1556,6 +1556,10 @@ private func frameDocument(
             ),
         ]
     )
+}
+
+private func contextKey(_ runtimeAgentTargetID: ProtocolTargetIdentifier, _ contextID: Int) -> RuntimeExecutionContextKey {
+    RuntimeExecutionContextKey(runtimeAgentTargetID: runtimeAgentTargetID, contextID: ExecutionContextID(contextID))
 }
 
 private extension DOMNodePayload {

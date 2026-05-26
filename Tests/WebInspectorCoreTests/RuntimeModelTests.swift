@@ -44,13 +44,13 @@ func runtimeSessionTracksTargetOwnedExecutionContextsAndReplacesFrameNormalConte
     )
 
     let snapshot = session.snapshot()
-    #expect(snapshot.executionContextsByID[ExecutionContextID(1)] == nil)
-    #expect(snapshot.executionContextsByID[ExecutionContextID(2)]?.targetID == frameTargetID)
-    #expect(snapshot.executionContextsByID[ExecutionContextID(2)]?.frameID == DOMFrameIdentifier("frame-b"))
-    #expect(snapshot.executionContextsByID[ExecutionContextID(3)]?.targetID == frameTargetID)
-    #expect(snapshot.executionContextsByID[ExecutionContextID(3)]?.frameID == DOMFrameIdentifier("frame-a"))
-    #expect(snapshot.normalContextIDByTargetID[frameTargetID] == ExecutionContextID(3))
-    #expect(snapshot.selectedContextID == ExecutionContextID(3))
+    #expect(snapshot.executionContextsByKey[contextKey(frameTargetID, 1)] == nil)
+    #expect(snapshot.executionContextsByKey[contextKey(frameTargetID, 2)]?.targetID == frameTargetID)
+    #expect(snapshot.executionContextsByKey[contextKey(frameTargetID, 2)]?.frameID == DOMFrameIdentifier("frame-b"))
+    #expect(snapshot.executionContextsByKey[contextKey(frameTargetID, 3)]?.targetID == frameTargetID)
+    #expect(snapshot.executionContextsByKey[contextKey(frameTargetID, 3)]?.frameID == DOMFrameIdentifier("frame-a"))
+    #expect(snapshot.normalContextKeyByTargetID[frameTargetID] == contextKey(frameTargetID, 3))
+    #expect(snapshot.selectedContextKey == contextKey(frameTargetID, 3))
     #expect(snapshot.remoteObjectsByID[.init(runtimeAgentTargetID: frameTargetID, objectID: RuntimeRemoteObjectIdentifier("frame-a-object"))] == nil)
     #expect(snapshot.objectGroupRuntimeAgentTargetsByGroup[.console] == nil)
 }
@@ -81,7 +81,7 @@ func runtimeSessionKeepsSameFrameNormalContextsFromDifferentRuntimeAgents() {
     )
     session.applyExecutionContextCreated(
         RuntimeExecutionContext(
-            id: ExecutionContextID(2),
+            id: ExecutionContextID(1),
             targetID: frameTargetID,
             runtimeAgentTargetID: frameTargetID,
             type: .normal,
@@ -91,8 +91,8 @@ func runtimeSessionKeepsSameFrameNormalContextsFromDifferentRuntimeAgents() {
     )
 
     let snapshot = session.snapshot()
-    #expect(snapshot.executionContextsByID[ExecutionContextID(1)]?.runtimeAgentTargetID == pageTargetID)
-    #expect(snapshot.executionContextsByID[ExecutionContextID(2)]?.runtimeAgentTargetID == frameTargetID)
+    #expect(snapshot.executionContextsByKey[contextKey(pageTargetID, 1)]?.runtimeAgentTargetID == pageTargetID)
+    #expect(snapshot.executionContextsByKey[contextKey(frameTargetID, 1)]?.runtimeAgentTargetID == frameTargetID)
     #expect(snapshot.remoteObjectsByID[.init(runtimeAgentTargetID: pageTargetID, objectID: objectID)] != nil)
 }
 
@@ -169,7 +169,7 @@ func runtimeEvaluateIntentKeepsPageDefaultContextWhenFrameContextsShareTarget() 
         return
     }
     #expect(request.contextID == ExecutionContextID(1))
-    #expect(session.snapshot().normalContextIDByTargetID[pageTargetID] == ExecutionContextID(1))
+    #expect(session.snapshot().normalContextKeyByTargetID[pageTargetID] == contextKey(pageTargetID, 1))
 }
 
 @Test
@@ -194,7 +194,7 @@ func runtimeEvaluateIntentHonorsSelectedContextBeforeTargetNormalContext() throw
         )
     )
 
-    session.selectExecutionContext(ExecutionContextID(2))
+    session.selectExecutionContext(contextKey(targetID, 2))
 
     let intent = session.evaluateIntent(expression: "window.location.href", targetID: targetID)
     guard case let .evaluate(request) = intent else {
@@ -202,7 +202,7 @@ func runtimeEvaluateIntentHonorsSelectedContextBeforeTargetNormalContext() throw
         return
     }
     #expect(request.contextID == ExecutionContextID(2))
-    #expect(session.snapshot().selectedContextID == ExecutionContextID(2))
+    #expect(session.snapshot().selectedContextKey == contextKey(targetID, 2))
 }
 
 @Test
@@ -222,10 +222,10 @@ func runtimeSessionPreservesTransportSeededContextMetadata() {
     )
 
     let snapshot = session.snapshot()
-    #expect(snapshot.executionContextsByID[ExecutionContextID(1)]?.type == .internal)
-    #expect(snapshot.executionContextsByID[ExecutionContextID(1)]?.name == "Isolated World")
-    #expect(snapshot.normalContextIDByTargetID[targetID] == nil)
-    #expect(snapshot.selectedContextID == nil)
+    #expect(snapshot.executionContextsByKey[contextKey(targetID, 1)]?.type == .internal)
+    #expect(snapshot.executionContextsByKey[contextKey(targetID, 1)]?.name == "Isolated World")
+    #expect(snapshot.normalContextKeyByTargetID[targetID] == nil)
+    #expect(snapshot.selectedContextKey == nil)
 }
 
 @Test
@@ -273,10 +273,10 @@ func runtimeSessionClearsExecutionContextsByRuntimeAgentTarget() {
     session.applyExecutionContextsCleared(runtimeAgentTargetID: pageTargetID)
     let snapshot = session.snapshot()
 
-    #expect(snapshot.executionContextsByID[ExecutionContextID(1)] == nil)
-    #expect(snapshot.executionContextsByID[ExecutionContextID(2)]?.targetID == otherFrameTargetID)
-    #expect(snapshot.normalContextIDByTargetID[frameTargetID] == nil)
-    #expect(snapshot.normalContextIDByTargetID[otherFrameTargetID] == ExecutionContextID(2))
+    #expect(snapshot.executionContextsByKey[contextKey(pageTargetID, 1)] == nil)
+    #expect(snapshot.executionContextsByKey[contextKey(otherFrameTargetID, 2)]?.targetID == otherFrameTargetID)
+    #expect(snapshot.normalContextKeyByTargetID[frameTargetID] == nil)
+    #expect(snapshot.normalContextKeyByTargetID[otherFrameTargetID] == contextKey(otherFrameTargetID, 2))
     #expect(snapshot.remoteObjectsByID[.init(runtimeAgentTargetID: pageTargetID, objectID: RuntimeRemoteObjectIdentifier("page-object"))] == nil)
     #expect(snapshot.remoteObjectsByID[.init(runtimeAgentTargetID: pageTargetID, objectID: RuntimeRemoteObjectIdentifier("page-console-object"))] == nil)
     #expect(snapshot.remoteObjectsByID[.init(runtimeAgentTargetID: otherFrameTargetID, objectID: RuntimeRemoteObjectIdentifier("other-object"))] != nil)
@@ -307,9 +307,9 @@ func runtimeSessionTargetDestroyedClearsExecutionContextsByRuntimeAgentTarget() 
     session.applyTargetDestroyed(pageTargetID)
     let snapshot = session.snapshot()
 
-    #expect(snapshot.executionContextsByID[ExecutionContextID(1)] == nil)
-    #expect(snapshot.normalContextIDByTargetID[frameTargetID] == nil)
-    #expect(snapshot.selectedContextID == nil)
+    #expect(snapshot.executionContextsByKey[contextKey(pageTargetID, 1)] == nil)
+    #expect(snapshot.normalContextKeyByTargetID[frameTargetID] == nil)
+    #expect(snapshot.selectedContextKey == nil)
     #expect(snapshot.remoteObjectsByID[.init(runtimeAgentTargetID: pageTargetID, objectID: RuntimeRemoteObjectIdentifier("page-object"))] == nil)
     #expect(snapshot.objectGroupRuntimeAgentTargetsByGroup[.console] == nil)
 }
@@ -335,8 +335,8 @@ func runtimeSessionTargetCommitDropsOldRuntimeAgentObjects() {
     session.applyTargetCommitted(oldTargetID: oldTargetID, newTargetID: newTargetID)
     let snapshot = session.snapshot()
 
-    #expect(snapshot.executionContextsByID[ExecutionContextID(1)]?.targetID == newTargetID)
-    #expect(snapshot.executionContextsByID[ExecutionContextID(1)]?.runtimeAgentTargetID == newTargetID)
+    #expect(snapshot.executionContextsByKey[contextKey(newTargetID, 1)]?.targetID == newTargetID)
+    #expect(snapshot.executionContextsByKey[contextKey(newTargetID, 1)]?.runtimeAgentTargetID == newTargetID)
     #expect(snapshot.remoteObjectsByID[.init(runtimeAgentTargetID: oldTargetID, objectID: objectID)] == nil)
     #expect(snapshot.remoteObjectsByID[.init(runtimeAgentTargetID: newTargetID, objectID: objectID)] == nil)
     #expect(snapshot.objectGroupRuntimeAgentTargetsByGroup[.console] == nil)
@@ -432,4 +432,8 @@ func runtimeObjectGroupTargetsAreDerivedFromCurrentRemoteObjects() {
     let snapshot = session.snapshot()
     #expect(snapshot.remoteObjectsByID[.init(runtimeAgentTargetID: targetID, objectID: objectID)]?.objectGroup == nil)
     #expect(snapshot.objectGroupRuntimeAgentTargetsByGroup[objectGroup] == nil)
+}
+
+private func contextKey(_ runtimeAgentTargetID: ProtocolTargetIdentifier, _ contextID: Int) -> RuntimeExecutionContextKey {
+    RuntimeExecutionContextKey(runtimeAgentTargetID: runtimeAgentTargetID, contextID: ExecutionContextID(contextID))
 }

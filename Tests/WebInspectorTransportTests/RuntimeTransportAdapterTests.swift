@@ -98,9 +98,9 @@ func runtimeTransportAdapterAppliesExecutionContextEventToRuntimeSession() throw
     try RuntimeTransportAdapter.applyRuntimeEvent(event, to: session)
 
     let snapshot = session.snapshot()
-    #expect(snapshot.executionContextsByID[ExecutionContextID(42)]?.targetID == targetID)
-    #expect(snapshot.executionContextsByID[ExecutionContextID(42)]?.frameID == DOMFrameIdentifier("frame-1"))
-    #expect(snapshot.normalContextIDByTargetID[targetID] == ExecutionContextID(42))
+    #expect(snapshot.executionContextsByKey[contextKey(targetID, 42)]?.targetID == targetID)
+    #expect(snapshot.executionContextsByKey[contextKey(targetID, 42)]?.frameID == DOMFrameIdentifier("frame-1"))
+    #expect(snapshot.normalContextKeyByTargetID[targetID] == contextKey(targetID, 42))
 }
 
 @Test
@@ -129,8 +129,8 @@ func runtimeTransportAdapterAppliesExecutionContextTeardownEvents() throws {
         ),
         to: session
     )
-    #expect(session.snapshot().executionContextsByID[ExecutionContextID(42)] == nil)
-    #expect(session.snapshot().normalContextIDByTargetID[targetID] == nil)
+    #expect(session.snapshot().executionContextsByKey[contextKey(targetID, 42)] == nil)
+    #expect(session.snapshot().normalContextKeyByTargetID[targetID] == nil)
 
     try RuntimeTransportAdapter.applyRuntimeEvent(
         ProtocolEventEnvelope(
@@ -152,8 +152,8 @@ func runtimeTransportAdapterAppliesExecutionContextTeardownEvents() throws {
         ),
         to: session
     )
-    #expect(session.snapshot().executionContextsByID[ExecutionContextID(43)] == nil)
-    #expect(session.snapshot().normalContextIDByTargetID[targetID] == nil)
+    #expect(session.snapshot().executionContextsByKey[contextKey(targetID, 43)] == nil)
+    #expect(session.snapshot().normalContextKeyByTargetID[targetID] == nil)
 }
 
 @Test
@@ -171,4 +171,8 @@ func runtimeSessionTracksUnsupportedOptionalCommandsPerTarget() {
 
 private func parametersObject(_ data: Data) throws -> [String: Any] {
     try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+}
+
+private func contextKey(_ runtimeAgentTargetID: ProtocolTargetIdentifier, _ contextID: Int) -> RuntimeExecutionContextKey {
+    RuntimeExecutionContextKey(runtimeAgentTargetID: runtimeAgentTargetID, contextID: ExecutionContextID(contextID))
 }

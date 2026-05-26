@@ -36,7 +36,7 @@ package actor TransportSession {
     private var unresolvedStyleSheetFrameIDsByStyleSheetID: [CSSStyleSheetIdentifier: DOMFrameIdentifier]
     private var unresolvedStyleSheetAddedParamsDataByStyleSheetID: [CSSStyleSheetIdentifier: Data]
     private var pendingResolvedStyleSheetAddedEvents: [ResolvedStyleSheetAddedEvent]
-    private var executionContextsByID: [ExecutionContextID: RuntimeExecutionContext]
+    private var executionContextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContext]
     private var currentMainPageTargetID: ProtocolTargetIdentifier?
     private var subscribers: [ProtocolDomain: [UInt64: AsyncStream<ProtocolEventEnvelope>.Continuation]]
     private var orderedSubscribers: [UInt64: AsyncStream<ProtocolEventEnvelope>.Continuation]
@@ -69,7 +69,7 @@ package actor TransportSession {
         unresolvedStyleSheetFrameIDsByStyleSheetID = [:]
         unresolvedStyleSheetAddedParamsDataByStyleSheetID = [:]
         pendingResolvedStyleSheetAddedEvents = []
-        executionContextsByID = [:]
+        executionContextsByKey = [:]
         currentMainPageTargetID = nil
         subscribers = [:]
         orderedSubscribers = [:]
@@ -218,14 +218,14 @@ package actor TransportSession {
             currentMainPageTargetID: currentMainPageTargetID,
             targetsByID: targetsByID,
             frameTargetIDsByFrameID: frameTargetIDsByFrameID,
-            executionContextsByID: executionContextsByID,
+            executionContextsByKey: executionContextsByKey,
             pendingRootReplyIDs: rootReplies.keys.sorted(),
             pendingTargetReplyKeys: targetReplies.keys.sorted()
         )
     }
 
-    package func targetIdentifier(forExecutionContext contextID: ExecutionContextID) -> ProtocolTargetIdentifier? {
-        executionContextsByID[contextID]?.targetID
+    package func targetIdentifier(forExecutionContext key: RuntimeExecutionContextKey) -> ProtocolTargetIdentifier? {
+        executionContextsByKey[key]?.targetID
     }
 
     package func targetIdentifier(forFrameID frameID: DOMFrameIdentifier) -> ProtocolTargetIdentifier? {
@@ -587,14 +587,15 @@ package actor TransportSession {
                 deliveredTargetID: targetID,
                 frameID: frameID
             )
-            executionContextsByID[params.context.id] = RuntimeExecutionContext(
+            let context = RuntimeExecutionContext(
                 id: params.context.id,
                 targetID: resolvedTargetID,
-                runtimeAgentTargetID: sourceTargetID ?? resolvedTargetID,
+                runtimeAgentTargetID: sourceTargetID ?? targetID,
                 type: params.context.type ?? .normal,
                 name: params.context.name ?? "",
                 frameID: frameID
             )
+            executionContextsByKey[context.key] = context
             if let frameID {
                 frameTargetIDsByFrameID[frameID] = resolvedTargetID
             }
@@ -602,10 +603,16 @@ package actor TransportSession {
             guard let params = try? TransportMessageParser.decode(RuntimeExecutionContextDestroyedParams.self, from: paramsData) else {
                 return
             }
-            executionContextsByID.removeValue(forKey: params.executionContextId)
+            let runtimeAgentTargetID = sourceTargetID ?? targetID
+            executionContextsByKey.removeValue(
+                forKey: RuntimeExecutionContextKey(
+                    runtimeAgentTargetID: runtimeAgentTargetID,
+                    contextID: params.executionContextId
+                )
+            )
         case "Runtime.executionContextsCleared":
             let runtimeAgentTargetID = sourceTargetID ?? targetID
-            executionContextsByID = executionContextsByID.filter { $0.value.runtimeAgentTargetID != runtimeAgentTargetID }
+            executionContextsByKey = executionContextsByKey.filter { $0.key.runtimeAgentTargetID != runtimeAgentTargetID }
         default:
             return
         }
@@ -686,7 +693,7 @@ package actor TransportSession {
         provisionalTargetMessagesByTargetID.removeValue(forKey: targetID)
         frameTargetIDsByFrameID = frameTargetIDsByFrameID.filter { $0.value != targetID }
         styleSheetTargetIDsByStyleSheetID = styleSheetTargetIDsByStyleSheetID.filter { $0.value != targetID }
-        executionContextsByID = executionContextsByID.filter {
+        executionContextsByKey = executionContextsByKey.filter {
             $0.value.targetID != targetID && $0.value.runtimeAgentTargetID != targetID
         }
         let pendingReplies = targetReplies.keys
@@ -744,13 +751,19 @@ package actor TransportSession {
             resolvePendingStyleSheets(frameID: frameID, targetID: newTargetID)
         }
         if let oldTargetID = committedOldTargetID {
-            for (contextID, record) in executionContextsByID where record.targetID == oldTargetID {
+            for (contextKey, record) in Array(executionContextsByKey) {
                 var movedRecord = record
-                movedRecord.targetID = newTargetID
-                executionContextsByID[contextID] = movedRecord
-            }
-            for (contextID, record) in executionContextsByID where record.runtimeAgentTargetID == oldTargetID {
-                executionContextsByID[contextID]?.runtimeAgentTargetID = newTargetID
+                if movedRecord.targetID == oldTargetID {
+                    movedRecord.targetID = newTargetID
+                }
+                if movedRecord.runtimeAgentTargetID == oldTargetID {
+                    movedRecord.runtimeAgentTargetID = newTargetID
+                }
+                guard movedRecord != record else {
+                    continue
+                }
+                executionContextsByKey.removeValue(forKey: contextKey)
+                executionContextsByKey[movedRecord.key] = movedRecord
             }
             if currentMainPageTargetID == oldTargetID,
                newRecord.isTopLevelPage {

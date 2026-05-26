@@ -91,6 +91,16 @@ package struct RuntimeRemoteObjectIdentifierKey: Hashable, Sendable {
     }
 }
 
+package struct RuntimeExecutionContextKey: Hashable, Sendable {
+    package var runtimeAgentTargetID: ProtocolTargetIdentifier
+    package var contextID: ExecutionContextID
+
+    package init(runtimeAgentTargetID: ProtocolTargetIdentifier, contextID: ExecutionContextID) {
+        self.runtimeAgentTargetID = runtimeAgentTargetID
+        self.contextID = contextID
+    }
+}
+
 package struct RuntimeObjectGroup: RawRepresentable, Hashable, Codable, Sendable {
     package static let console = Self("console")
 

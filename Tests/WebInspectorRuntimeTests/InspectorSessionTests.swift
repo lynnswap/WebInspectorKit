@@ -235,10 +235,10 @@ func domainPumpsApplyRuntimeContextTeardownToRuntimeAndDOMSessions() async throw
         message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":81,"type":"normal","frameId":"main-frame"}}}"#
     )
     _ = try await waitUntil {
-        await session.runtime.snapshot().executionContextsByID[ExecutionContextID(81)]
+        await session.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 81)]
     }
     _ = try await waitUntil {
-        await session.dom.snapshot().executionContextsByID[ExecutionContextID(81)]
+        await session.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 81)]
     }
 
     await receiveTargetDispatch(
@@ -247,8 +247,8 @@ func domainPumpsApplyRuntimeContextTeardownToRuntimeAndDOMSessions() async throw
         message: #"{"method":"Runtime.executionContextDestroyed","params":{"executionContextId":81}}"#
     )
     _ = try await waitUntil {
-        let runtimeContext = await session.runtime.snapshot().executionContextsByID[ExecutionContextID(81)]
-        let domContext = await session.dom.snapshot().executionContextsByID[ExecutionContextID(81)]
+        let runtimeContext = await session.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 81)]
+        let domContext = await session.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 81)]
         return runtimeContext == nil && domContext == nil ? true : nil
     }
 
@@ -258,7 +258,7 @@ func domainPumpsApplyRuntimeContextTeardownToRuntimeAndDOMSessions() async throw
         message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":82,"type":"normal","frameId":"main-frame"}}}"#
     )
     _ = try await waitUntil {
-        await session.runtime.snapshot().executionContextsByID[ExecutionContextID(82)]
+        await session.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 82)]
     }
     await receiveTargetDispatch(
         transport,
@@ -266,8 +266,8 @@ func domainPumpsApplyRuntimeContextTeardownToRuntimeAndDOMSessions() async throw
         message: #"{"method":"Runtime.executionContextsCleared","params":{}}"#
     )
     _ = try await waitUntil {
-        let runtimeContext = await session.runtime.snapshot().executionContextsByID[ExecutionContextID(82)]
-        let domContext = await session.dom.snapshot().executionContextsByID[ExecutionContextID(82)]
+        let runtimeContext = await session.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 82)]
+        let domContext = await session.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 82)]
         return runtimeContext == nil && domContext == nil ? true : nil
     }
 }
@@ -293,20 +293,20 @@ func runtimeContextDispatchedOnPageResolvesToFrameTargetByFrameID() async throws
 
     let runtimeSnapshot: RuntimeSessionSnapshot = try await waitUntil {
         let snapshot = await session.runtime.snapshot()
-        guard snapshot.executionContextsByID[ExecutionContextID(77)]?.targetID == .frameAd else {
+        guard snapshot.executionContextsByKey[contextKey(.pageMain, 77)]?.targetID == .frameAd else {
             return nil
         }
         return snapshot
     }
     let domSnapshot: DOMSessionSnapshot = try await waitUntil {
         let snapshot = await session.dom.snapshot()
-        guard snapshot.executionContextsByID[ExecutionContextID(77)]?.targetID == .frameAd else {
+        guard snapshot.executionContextsByKey[contextKey(.pageMain, 77)]?.targetID == .frameAd else {
             return nil
         }
         return snapshot
     }
-    #expect(runtimeSnapshot.normalContextIDByTargetID[.frameAd] == ExecutionContextID(77))
-    #expect(domSnapshot.executionContextsByID[ExecutionContextID(77)]?.targetID == .frameAd)
+    #expect(runtimeSnapshot.normalContextKeyByTargetID[.frameAd] == contextKey(.pageMain, 77))
+    #expect(domSnapshot.executionContextsByKey[contextKey(.pageMain, 77)]?.targetID == .frameAd)
 }
 
 @Test
@@ -327,8 +327,8 @@ func rootRuntimeClearRemovesFrameContextOwnedByPageRuntimeAgent() async throws {
     )
 
     let _: Bool = try await waitUntil {
-        let runtimeContext = await session.runtime.snapshot().executionContextsByID[ExecutionContextID(78)]
-        let domContext = await session.dom.snapshot().executionContextsByID[ExecutionContextID(78)]
+        let runtimeContext = await session.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 78)]
+        let domContext = await session.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 78)]
         guard runtimeContext?.targetID == .frameAd,
               runtimeContext?.runtimeAgentTargetID == .pageMain,
               domContext?.targetID == .frameAd,
@@ -340,8 +340,8 @@ func rootRuntimeClearRemovesFrameContextOwnedByPageRuntimeAgent() async throws {
 
     await transport.receiveRootMessage(#"{"method":"Runtime.executionContextsCleared","params":{}}"#)
     let _: Bool = try await waitUntil {
-        let runtimeContext = await session.runtime.snapshot().executionContextsByID[ExecutionContextID(78)]
-        let domContext = await session.dom.snapshot().executionContextsByID[ExecutionContextID(78)]
+        let runtimeContext = await session.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 78)]
+        let domContext = await session.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 78)]
         return runtimeContext == nil && domContext == nil ? true : nil
     }
 }
@@ -2373,12 +2373,12 @@ func requestNodeWaitsForPathPushBeforeSelectingNode() async throws {
         message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"main-frame"}}}"#
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().executionContextsByID[ExecutionContextID(7)]
+        await session.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
     }
     _ = try await waitUntil {
-        await session.runtime.snapshot().executionContextsByID[ExecutionContextID(7)]
+        await session.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
     }
-    #expect(await session.runtime.snapshot().executionContextsByID[ExecutionContextID(7)]?.targetID == .pageMain)
+    #expect(await session.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]?.targetID == .pageMain)
     let intent = await session.dom.beginInspectSelectionRequest(
         targetID: .pageMain,
         objectID: "selected-object"
@@ -2577,7 +2577,7 @@ func requestNodeReplyBeforePathPushKeepsSelectionPendingUntilParentArrives() asy
         message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"main-frame"}}}"#
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().executionContextsByID[ExecutionContextID(7)]
+        await session.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
     }
     let intent = await session.dom.beginInspectSelectionRequest(
         targetID: .pageMain,
@@ -2776,7 +2776,7 @@ func elementPickerIgnoresInspectEventBeforeInspectModeReply() async throws {
         message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"main-frame"}}}"#
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().executionContextsByID[ExecutionContextID(7)]
+        await session.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
     }
 
     let sentCount = await backend.sentTargetMessages().count
@@ -2859,7 +2859,7 @@ func restartedElementPickerIgnoresStaleInspectEventBeforeInspectModeReply() asyn
         message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"main-frame"}}}"#
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().executionContextsByID[ExecutionContextID(7)]
+        await session.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
     }
 
     let sentCountBeforeFirstBegin = await backend.sentTargetMessages().count
@@ -2980,7 +2980,7 @@ func staleInspectEventCompletionDoesNotCancelRestartedPicker() async throws {
         message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"main-frame"}}}"#
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().executionContextsByID[ExecutionContextID(7)]
+        await session.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
     }
     try await beginPicker(session: session, transport: transport, backend: backend)
 
@@ -3060,7 +3060,7 @@ func inspectorInspectSelectsRequestedNodeAndDisablesPicker() async throws {
         message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"main-frame"}}}"#
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().executionContextsByID[ExecutionContextID(7)]
+        await session.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
     }
     try await beginPicker(session: session, transport: transport, backend: backend)
     let sentCountBeforeInspect = await backend.sentTargetMessages().count
@@ -3120,7 +3120,7 @@ func inspectorInspectWaitsForPathPushEventsBeforeSelectingNode() async throws {
         message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"main-frame"}}}"#
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().executionContextsByID[ExecutionContextID(7)]
+        await session.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
     }
     try await beginPicker(session: session, transport: transport, backend: backend)
     let sentCountBeforeInspect = await backend.sentTargetMessages().count
@@ -3192,7 +3192,7 @@ func inspectorInspectRecordedExecutionContextOverridesEventTargetHint() async th
         message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":77,"frameId":"ad-frame"}}}"#
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().executionContextsByID[ExecutionContextID(77)]
+        await session.dom.snapshot().executionContextsByKey[contextKey(.frameAd, 77)]
     }
     try await beginPicker(session: session, transport: transport, backend: backend)
     let sentCountBeforeInspect = await backend.sentTargetMessages().count
@@ -4583,6 +4583,13 @@ private func expectProtocolEventApplied(
 
 private func pendingTargetReplyKeys(_ transport: TransportSession) async -> [TargetReplyKey] {
     await transport.snapshot().pendingTargetReplyKeys
+}
+
+private func contextKey(
+    _ runtimeAgentTargetID: ProtocolTargetIdentifier,
+    _ contextID: Int
+) -> RuntimeExecutionContextKey {
+    RuntimeExecutionContextKey(runtimeAgentTargetID: runtimeAgentTargetID, contextID: ExecutionContextID(contextID))
 }
 
 private func targetDispatchMessage(

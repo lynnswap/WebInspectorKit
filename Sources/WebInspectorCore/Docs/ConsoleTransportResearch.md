@@ -349,7 +349,10 @@ when probing is acceptable, and conservative defaults otherwise.
   page Runtime agent reports a subframe context that should be owned by a frame
   target. Normal-context replacement is scoped by both semantic target and
   Runtime agent so a later frame agent does not discard still-valid contexts
-  from the page agent.
+  from the page agent. Execution context IDs are only unique inside one Runtime
+  agent, so Core, DOM compatibility storage, and Transport registries use
+  `RuntimeExecutionContextKey(runtimeAgentTargetID, contextID)` for context
+  identity.
 - Site Isolation frame Console means `ConsoleSession` must merge page, frame,
   worker, and service-worker message streams without dropping the target
   identity. A flat display can still be built later, but the Core model should
@@ -368,7 +371,7 @@ Add first-class Runtime and Console domains beside DOM/CSS/Network:
   - command intents
 - `Sources/WebInspectorCore/Runtime/RuntimeModel.swift`
   - `@MainActor @Observable RuntimeSession`
-  - execution contexts keyed by id
+  - execution contexts keyed by `RuntimeExecutionContextKey`
   - `RuntimeExecutionContext.targetID` for semantic ownership
   - `RuntimeExecutionContext.runtimeAgentTargetID` for agent-scoped clears
   - Runtime-agent-scoped remote object records, object group index, and

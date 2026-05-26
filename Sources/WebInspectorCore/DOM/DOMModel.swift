@@ -539,8 +539,8 @@ package final class DOMSession {
         targetGraph.recordExecutionContext(context)
     }
 
-    package func applyExecutionContextDestroyed(_ contextID: ExecutionContextID) {
-        targetGraph.removeExecutionContext(contextID)
+    package func applyExecutionContextDestroyed(_ contextKey: RuntimeExecutionContextKey) {
+        targetGraph.removeExecutionContext(contextKey)
     }
 
     package func applyExecutionContextsCleared(runtimeAgentTargetID: ProtocolTarget.ID) {
@@ -1301,7 +1301,7 @@ package final class DOMSession {
                 )
             },
             currentNodeIDByKey: currentNodeIDByKey,
-            executionContextsByID: targetGraph.executionContextSnapshots(),
+            executionContextsByKey: targetGraph.executionContextSnapshots(),
             selection: DOMSelectionSnapshot(
                 selectedNodeID: selection.selectedNodeID,
                 pendingRequest: selection.pendingRequest.map {

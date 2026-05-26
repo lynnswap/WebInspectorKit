@@ -166,8 +166,16 @@ package enum DOMTransportAdapter {
                 )
             )
         case "Runtime.executionContextDestroyed":
+            guard let targetID = event.targetID else {
+                return
+            }
             let params = try TransportMessageParser.decode(RuntimeExecutionContextDestroyedParams.self, from: event.paramsData)
-            session.applyExecutionContextDestroyed(params.executionContextId)
+            session.applyExecutionContextDestroyed(
+                RuntimeExecutionContextKey(
+                    runtimeAgentTargetID: event.sourceTargetID ?? targetID,
+                    contextID: params.executionContextId
+                )
+            )
         case "Runtime.executionContextsCleared":
             guard let targetID = event.targetID else {
                 return

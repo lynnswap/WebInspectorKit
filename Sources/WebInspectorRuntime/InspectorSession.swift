@@ -1481,9 +1481,17 @@ package final class InspectorSession {
         eventTargetID: ProtocolTargetIdentifier?,
         activeTargetID: ProtocolTargetIdentifier
     ) -> ProtocolTargetIdentifier {
-        if let executionContextID = remoteObject.injectedScriptID,
-           let targetID = dom.snapshot().executionContextsByID[executionContextID]?.targetID {
-            return targetID
+        if let executionContextID = remoteObject.injectedScriptID {
+            let snapshot = dom.snapshot()
+            if let targetID = snapshot.executionContext(
+                runtimeAgentTargetID: eventTargetID ?? activeTargetID,
+                contextID: executionContextID
+            )?.targetID {
+                return targetID
+            }
+            if let targetID = snapshot.uniqueExecutionContext(contextID: executionContextID)?.targetID {
+                return targetID
+            }
         }
         return eventTargetID ?? activeTargetID
     }
@@ -1971,13 +1979,13 @@ package final class InspectorSession {
                     && record.parentFrameID == nil
             )
         }
-        for record in snapshot.executionContextsByID.values.sorted(by: { $0.id.rawValue < $1.id.rawValue }) {
+        for record in snapshot.executionContextsByKey.values.sorted(by: { $0.id.rawValue < $1.id.rawValue }) {
             dom.applyExecutionContextCreated(record)
         }
     }
 
     private func seedRuntimeSession(from snapshot: TransportSnapshot) {
-        for record in snapshot.executionContextsByID.values.sorted(by: { $0.id.rawValue < $1.id.rawValue }) {
+        for record in snapshot.executionContextsByKey.values.sorted(by: { $0.id.rawValue < $1.id.rawValue }) {
             runtime.applyExecutionContextCreated(record)
         }
     }

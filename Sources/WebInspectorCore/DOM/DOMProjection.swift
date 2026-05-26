@@ -197,7 +197,7 @@ package struct DOMSessionSnapshot: Equatable, Sendable {
     package var frameDocumentProjections: [ProtocolTargetIdentifier: FrameDocumentProjectionSnapshot]
     package var transactions: [DOMTransactionSnapshot]
     package var currentNodeIDByKey: [DOMNodeCurrentKey: DOMNodeIdentifier]
-    package var executionContextsByID: [ExecutionContextID: RuntimeExecutionContext]
+    package var executionContextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContext]
     package var selection: DOMSelectionSnapshot
 }
 
@@ -208,5 +208,19 @@ package extension DOMSessionSnapshot {
         }
         return targetStatesByID[currentPageTargetID]?.currentDocumentID
             ?? targetsByID[currentPageTargetID]?.currentDocumentID
+    }
+
+    func executionContext(
+        runtimeAgentTargetID: ProtocolTargetIdentifier,
+        contextID: ExecutionContextID
+    ) -> RuntimeExecutionContext? {
+        executionContextsByKey[
+            RuntimeExecutionContextKey(runtimeAgentTargetID: runtimeAgentTargetID, contextID: contextID)
+        ]
+    }
+
+    func uniqueExecutionContext(contextID: ExecutionContextID) -> RuntimeExecutionContext? {
+        let matches = executionContextsByKey.values.filter { $0.id == contextID }
+        return matches.count == 1 ? matches[0] : nil
     }
 }

@@ -23,77 +23,95 @@ package struct RuntimeExecutionContext: Equatable, Sendable {
         self.name = name
         self.frameID = frameID
     }
+
+    package var key: RuntimeExecutionContextKey {
+        RuntimeExecutionContextKey(runtimeAgentTargetID: runtimeAgentTargetID, contextID: id)
+    }
 }
 
 package struct RuntimeRemoteObjectRecord: Equatable, Sendable {
     package var payload: RuntimeRemoteObjectPayload
     package var objectGroup: RuntimeObjectGroup?
-    package var executionContextID: ExecutionContextID?
+    package var executionContextKey: RuntimeExecutionContextKey?
 
     package init(
         payload: RuntimeRemoteObjectPayload,
         objectGroup: RuntimeObjectGroup? = nil,
-        executionContextID: ExecutionContextID? = nil
+        executionContextKey: RuntimeExecutionContextKey? = nil
     ) {
         self.payload = payload
         self.objectGroup = objectGroup
-        self.executionContextID = executionContextID
+        self.executionContextKey = executionContextKey
     }
 }
 
 package struct RuntimeSessionSnapshot: Equatable, Sendable {
-    package var executionContextsByID: [ExecutionContextID: RuntimeExecutionContext]
-    package var selectedContextID: ExecutionContextID?
-    package var normalContextIDByTargetID: [ProtocolTargetIdentifier: ExecutionContextID]
+    package var executionContextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContext]
+    package var selectedContextKey: RuntimeExecutionContextKey?
+    package var normalContextKeyByTargetID: [ProtocolTargetIdentifier: RuntimeExecutionContextKey]
     package var remoteObjectsByID: [RuntimeRemoteObjectIdentifierKey: RuntimeRemoteObjectRecord]
     package var objectGroupRuntimeAgentTargetsByGroup: [RuntimeObjectGroup: Set<ProtocolTargetIdentifier>]
     package var unsupportedCommandsByTargetID: [ProtocolTargetIdentifier: Set<String>]
+
+    package func executionContext(
+        runtimeAgentTargetID: ProtocolTargetIdentifier,
+        contextID: ExecutionContextID
+    ) -> RuntimeExecutionContext? {
+        executionContextsByKey[
+            RuntimeExecutionContextKey(runtimeAgentTargetID: runtimeAgentTargetID, contextID: contextID)
+        ]
+    }
+
+    package func uniqueExecutionContext(contextID: ExecutionContextID) -> RuntimeExecutionContext? {
+        let matches = executionContextsByKey.values.filter { $0.id == contextID }
+        return matches.count == 1 ? matches[0] : nil
+    }
 }
 
 @MainActor
 @Observable
 package final class RuntimeSession {
-    package private(set) var selectedContextID: ExecutionContextID?
+    package private(set) var selectedContextKey: RuntimeExecutionContextKey?
 
-    private var executionContextsByID: [ExecutionContextID: RuntimeExecutionContext]
-    private var normalContextIDByTargetID: [ProtocolTargetIdentifier: ExecutionContextID]
+    private var executionContextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContext]
+    private var normalContextKeyByTargetID: [ProtocolTargetIdentifier: RuntimeExecutionContextKey]
     private var remoteObjectsByID: [RuntimeRemoteObjectIdentifierKey: RuntimeRemoteObjectRecord]
     private var unsupportedCommandsByTargetID: [ProtocolTargetIdentifier: Set<String>]
 
     package init() {
-        selectedContextID = nil
-        executionContextsByID = [:]
-        normalContextIDByTargetID = [:]
+        selectedContextKey = nil
+        executionContextsByKey = [:]
+        normalContextKeyByTargetID = [:]
         remoteObjectsByID = [:]
         unsupportedCommandsByTargetID = [:]
     }
 
     package func reset() {
-        selectedContextID = nil
-        executionContextsByID.removeAll()
-        normalContextIDByTargetID.removeAll()
+        selectedContextKey = nil
+        executionContextsByKey.removeAll()
+        normalContextKeyByTargetID.removeAll()
         remoteObjectsByID.removeAll()
         unsupportedCommandsByTargetID.removeAll()
     }
 
     package func snapshot() -> RuntimeSessionSnapshot {
         RuntimeSessionSnapshot(
-            executionContextsByID: executionContextsByID,
-            selectedContextID: selectedContextID,
-            normalContextIDByTargetID: normalContextIDByTargetID,
+            executionContextsByKey: executionContextsByKey,
+            selectedContextKey: selectedContextKey,
+            normalContextKeyByTargetID: normalContextKeyByTargetID,
             remoteObjectsByID: remoteObjectsByID,
             objectGroupRuntimeAgentTargetsByGroup: Self.objectGroupRuntimeAgentTargets(from: remoteObjectsByID),
             unsupportedCommandsByTargetID: unsupportedCommandsByTargetID
         )
     }
 
-    package func executionContext(for contextID: ExecutionContextID) -> RuntimeExecutionContext? {
-        executionContextsByID[contextID]
+    package func executionContext(for key: RuntimeExecutionContextKey) -> RuntimeExecutionContext? {
+        executionContextsByKey[key]
     }
 
     package func selectedContext(targetID: ProtocolTargetIdentifier? = nil) -> RuntimeExecutionContext? {
-        guard let selectedContextID,
-              let context = executionContextsByID[selectedContextID] else {
+        guard let selectedContextKey,
+              let context = executionContextsByKey[selectedContextKey] else {
             return nil
         }
         if let targetID {
@@ -103,10 +121,10 @@ package final class RuntimeSession {
     }
 
     package func defaultContext(targetID: ProtocolTargetIdentifier) -> RuntimeExecutionContext? {
-        guard let contextID = normalContextIDByTargetID[targetID] else {
+        guard let contextKey = normalContextKeyByTargetID[targetID] else {
             return nil
         }
-        return executionContextsByID[contextID]
+        return executionContextsByKey[contextKey]
     }
 
     package func applyExecutionContextCreated(_ payload: RuntimeExecutionContextPayload, targetID: ProtocolTargetIdentifier) {
@@ -122,115 +140,134 @@ package final class RuntimeSession {
     }
 
     package func applyExecutionContextCreated(_ context: RuntimeExecutionContext) {
-        let oldContextIDs = context.type == .normal ? normalContextIDsToReplace(with: context) : []
-        if oldContextIDs.isEmpty == false {
-            for oldContextID in oldContextIDs {
-                releaseRemoteObjects(executionContextID: oldContextID)
-                executionContextsByID.removeValue(forKey: oldContextID)
+        let oldContextKeys = context.type == .normal ? normalContextKeysToReplace(with: context) : []
+        if oldContextKeys.isEmpty == false {
+            for oldContextKey in oldContextKeys {
+                releaseRemoteObjects(executionContextKey: oldContextKey)
+                executionContextsByKey.removeValue(forKey: oldContextKey)
             }
-            if let selectedContextID,
-               oldContextIDs.contains(selectedContextID) {
-                self.selectedContextID = nil
+            if let selectedContextKey,
+               oldContextKeys.contains(selectedContextKey) {
+                self.selectedContextKey = nil
             }
         }
-        executionContextsByID[context.id] = context
+        executionContextsByKey[context.key] = context
         if context.type == .normal {
-            if let defaultContextID = normalContextIDByTargetID[context.targetID] {
-                if oldContextIDs.contains(defaultContextID) {
-                    normalContextIDByTargetID[context.targetID] = context.id
+            if let defaultContextKey = normalContextKeyByTargetID[context.targetID] {
+                if oldContextKeys.contains(defaultContextKey) {
+                    normalContextKeyByTargetID[context.targetID] = context.key
                 }
             } else {
-                normalContextIDByTargetID[context.targetID] = context.id
+                normalContextKeyByTargetID[context.targetID] = context.key
             }
         }
         if context.type == .normal,
-           selectedContextID == nil {
-            selectedContextID = context.id
+           selectedContextKey == nil {
+            selectedContextKey = context.key
         }
     }
 
-    package func applyExecutionContextDestroyed(_ contextID: ExecutionContextID) {
-        guard let context = executionContextsByID.removeValue(forKey: contextID) else {
+    package func applyExecutionContextDestroyed(_ contextKey: RuntimeExecutionContextKey) {
+        guard let context = executionContextsByKey.removeValue(forKey: contextKey) else {
             return
         }
-        if normalContextIDByTargetID[context.targetID] == contextID {
-            normalContextIDByTargetID.removeValue(forKey: context.targetID)
+        if normalContextKeyByTargetID[context.targetID] == contextKey {
+            normalContextKeyByTargetID.removeValue(forKey: context.targetID)
         }
-        if selectedContextID == contextID {
-            selectedContextID = nil
+        if selectedContextKey == contextKey {
+            selectedContextKey = nil
         }
-        releaseRemoteObjects(executionContextID: context.id)
+        releaseRemoteObjects(executionContextKey: contextKey)
     }
 
     package func applyExecutionContextsCleared(runtimeAgentTargetID: ProtocolTargetIdentifier) {
-        let removedContextIDs = Set(
-            executionContextsByID.values
-                .filter { $0.runtimeAgentTargetID == runtimeAgentTargetID }
-                .map(\.id)
+        let removedContextKeys = Set(
+            executionContextsByKey
+                .filter { $0.key.runtimeAgentTargetID == runtimeAgentTargetID }
+                .map(\.key)
         )
-        let removedTargetIDs = Set(removedContextIDs.compactMap { executionContextsByID[$0]?.targetID })
-        executionContextsByID = executionContextsByID.filter { $0.value.runtimeAgentTargetID != runtimeAgentTargetID }
+        let removedTargetIDs = Set(removedContextKeys.compactMap { executionContextsByKey[$0]?.targetID })
+        executionContextsByKey = executionContextsByKey.filter { $0.key.runtimeAgentTargetID != runtimeAgentTargetID }
         for targetID in removedTargetIDs {
-            if let normalContextID = normalContextIDByTargetID[targetID],
-               removedContextIDs.contains(normalContextID) {
-                normalContextIDByTargetID.removeValue(forKey: targetID)
+            if let normalContextKey = normalContextKeyByTargetID[targetID],
+               removedContextKeys.contains(normalContextKey) {
+                normalContextKeyByTargetID.removeValue(forKey: targetID)
             }
         }
-        if let selectedContextID,
-           removedContextIDs.contains(selectedContextID) {
-            self.selectedContextID = nil
+        if let selectedContextKey,
+           removedContextKeys.contains(selectedContextKey) {
+            self.selectedContextKey = nil
         }
         releaseRemoteObjects(runtimeAgentTargetID: runtimeAgentTargetID)
     }
 
-    package func selectExecutionContext(_ contextID: ExecutionContextID?) {
-        guard let contextID else {
-            selectedContextID = nil
+    package func selectExecutionContext(_ contextKey: RuntimeExecutionContextKey?) {
+        guard let contextKey else {
+            selectedContextKey = nil
             return
         }
-        guard executionContextsByID[contextID] != nil else {
+        guard executionContextsByKey[contextKey] != nil else {
             return
         }
-        selectedContextID = contextID
+        selectedContextKey = contextKey
     }
 
     package func applyTargetDestroyed(_ targetID: ProtocolTargetIdentifier) {
-        let removedContextIDs = Set(
-            executionContextsByID.values
-                .filter { $0.targetID == targetID || $0.runtimeAgentTargetID == targetID }
-                .map(\.id)
+        let removedContextKeys = Set(
+            executionContextsByKey
+                .filter { $0.value.targetID == targetID || $0.value.runtimeAgentTargetID == targetID }
+                .map(\.key)
         )
-        let removedTargetIDs = Set(removedContextIDs.compactMap { executionContextsByID[$0]?.targetID })
-        executionContextsByID = executionContextsByID.filter {
+        let removedTargetIDs = Set(removedContextKeys.compactMap { executionContextsByKey[$0]?.targetID })
+        executionContextsByKey = executionContextsByKey.filter {
             $0.value.targetID != targetID && $0.value.runtimeAgentTargetID != targetID
         }
         for removedTargetID in removedTargetIDs {
-            if let normalContextID = normalContextIDByTargetID[removedTargetID],
-               removedContextIDs.contains(normalContextID) {
-                normalContextIDByTargetID.removeValue(forKey: removedTargetID)
+            if let normalContextKey = normalContextKeyByTargetID[removedTargetID],
+               removedContextKeys.contains(normalContextKey) {
+                normalContextKeyByTargetID.removeValue(forKey: removedTargetID)
             }
         }
         releaseRemoteObjects(runtimeAgentTargetID: targetID)
-        for contextID in removedContextIDs {
-            releaseRemoteObjects(executionContextID: contextID)
+        for contextKey in removedContextKeys {
+            releaseRemoteObjects(executionContextKey: contextKey)
         }
         unsupportedCommandsByTargetID.removeValue(forKey: targetID)
-        if let selectedContextID,
-           removedContextIDs.contains(selectedContextID) {
-            self.selectedContextID = nil
+        if let selectedContextKey,
+           removedContextKeys.contains(selectedContextKey) {
+            self.selectedContextKey = nil
         }
     }
 
     package func applyTargetCommitted(oldTargetID: ProtocolTargetIdentifier?, newTargetID: ProtocolTargetIdentifier) {
         if let oldTargetID {
-            for (contextID, context) in executionContextsByID where context.targetID == oldTargetID {
-                executionContextsByID[contextID]?.targetID = newTargetID
+            var movedKeys: [RuntimeExecutionContextKey: RuntimeExecutionContextKey] = [:]
+            for (contextKey, context) in Array(executionContextsByKey) {
+                var movedContext = context
+                if movedContext.targetID == oldTargetID {
+                    movedContext.targetID = newTargetID
+                }
+                if movedContext.runtimeAgentTargetID == oldTargetID {
+                    movedContext.runtimeAgentTargetID = newTargetID
+                }
+                guard movedContext != context else {
+                    continue
+                }
+                executionContextsByKey.removeValue(forKey: contextKey)
+                executionContextsByKey[movedContext.key] = movedContext
+                movedKeys[contextKey] = movedContext.key
             }
-            for (contextID, context) in executionContextsByID where context.runtimeAgentTargetID == oldTargetID {
-                executionContextsByID[contextID]?.runtimeAgentTargetID = newTargetID
+            for (targetID, contextKey) in Array(normalContextKeyByTargetID) {
+                if let movedKey = movedKeys[contextKey] {
+                    normalContextKeyByTargetID[targetID] = movedKey
+                }
             }
-            if let normalContextID = normalContextIDByTargetID.removeValue(forKey: oldTargetID) {
-                normalContextIDByTargetID[newTargetID] = normalContextID
+            if let normalContextKey = normalContextKeyByTargetID.removeValue(forKey: oldTargetID) {
+                normalContextKeyByTargetID[newTargetID] = movedKeys[normalContextKey] ?? normalContextKey
+            }
+            if let selectedContextKey,
+               let movedKey = movedKeys[selectedContextKey] {
+                self.selectedContextKey = movedKey
             }
             releaseRemoteObjects(runtimeAgentTargetID: oldTargetID)
             if let unsupported = unsupportedCommandsByTargetID.removeValue(forKey: oldTargetID) {
@@ -249,7 +286,9 @@ package final class RuntimeSession {
             remoteObjectsByID[key] = RuntimeRemoteObjectRecord(
                 payload: object,
                 objectGroup: objectGroup,
-                executionContextID: executionContextID
+                executionContextKey: executionContextID.map {
+                    RuntimeExecutionContextKey(runtimeAgentTargetID: runtimeAgentTargetID, contextID: $0)
+                }
             )
         }
     }
@@ -289,9 +328,9 @@ package final class RuntimeSession {
         }
     }
 
-    private func releaseRemoteObjects(executionContextID: ExecutionContextID) {
+    private func releaseRemoteObjects(executionContextKey: RuntimeExecutionContextKey) {
         releaseRemoteObjects { _, record in
-            record.executionContextID == executionContextID
+            record.executionContextKey == executionContextKey
         }
     }
 
@@ -319,18 +358,18 @@ package final class RuntimeSession {
         return targetsByGroup
     }
 
-    private func normalContextIDsToReplace(with context: RuntimeExecutionContext) -> Set<ExecutionContextID> {
+    private func normalContextKeysToReplace(with context: RuntimeExecutionContext) -> Set<RuntimeExecutionContextKey> {
         Set(
-            executionContextsByID.values
+            executionContextsByKey.values
                 .filter {
                     $0.type == .normal
                         && $0.targetID == context.targetID
                         && $0.runtimeAgentTargetID == context.runtimeAgentTargetID
                         && $0.frameID == context.frameID
                         && $0.name == context.name
-                        && $0.id != context.id
+                        && $0.key != context.key
                 }
-                .map(\.id)
+                .map(\.key)
         )
     }
 
@@ -341,10 +380,10 @@ package final class RuntimeSession {
     package func evaluateIntent(
         expression: String,
         targetID: ProtocolTargetIdentifier,
-        contextID: ExecutionContextID? = nil,
+        contextKey: RuntimeExecutionContextKey? = nil,
         objectGroup: RuntimeObjectGroup? = .console
     ) -> RuntimeCommandIntent {
-        let context = evaluationContext(targetID: targetID, contextID: contextID)
+        let context = evaluationContext(targetID: targetID, contextKey: contextKey)
         return .evaluate(
             RuntimeEvaluationRequest(
                 runtimeAgentTargetID: context?.runtimeAgentTargetID ?? targetID,
@@ -352,7 +391,7 @@ package final class RuntimeSession {
                 objectGroup: objectGroup,
                 includeCommandLineAPI: true,
                 doNotPauseOnExceptionsAndMuteConsole: false,
-                contextID: contextID ?? context?.id,
+                contextID: context?.id,
                 returnByValue: false,
                 generatePreview: true,
                 saveResult: true,
@@ -363,10 +402,10 @@ package final class RuntimeSession {
 
     private func evaluationContext(
         targetID: ProtocolTargetIdentifier,
-        contextID: ExecutionContextID?
+        contextKey: RuntimeExecutionContextKey?
     ) -> RuntimeExecutionContext? {
-        if let contextID {
-            return executionContextsByID[contextID]
+        if let contextKey {
+            return executionContextsByKey[contextKey]
         }
         return selectedContext(targetID: targetID) ?? defaultContext(targetID: targetID)
     }
