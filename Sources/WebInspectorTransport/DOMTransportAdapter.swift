@@ -5,6 +5,7 @@ package enum DOMTransportAdapter {
     package struct TargetCommitResolution: Equatable, Sendable {
         package var oldTargetID: ProtocolTargetIdentifier?
         package var newTargetID: ProtocolTargetIdentifier
+        package var consumesOldTarget: Bool
     }
 
     package static func command(for intent: DOMCommandIntent) throws -> ProtocolCommand {
@@ -138,9 +139,13 @@ package enum DOMTransportAdapter {
             return nil
         }
         let params = try TransportMessageParser.decode(TargetCommittedParams.self, from: event.paramsData)
+        let oldTargetID = params.oldTargetId ?? inferredOldTargetIDForOldlessCommit(params, snapshot: snapshot)
         return TargetCommitResolution(
-            oldTargetID: params.oldTargetId ?? inferredOldTargetIDForOldlessCommit(params, snapshot: snapshot),
-            newTargetID: params.newTargetId
+            oldTargetID: oldTargetID,
+            newTargetID: params.newTargetId,
+            consumesOldTarget: oldTargetID.map {
+                targetCommitConsumesOldTarget(oldTargetID: $0, newTargetID: params.newTargetId, snapshot: snapshot)
+            } ?? false
         )
     }
 
@@ -369,6 +374,22 @@ package enum DOMTransportAdapter {
             .filter { $0.value.isProvisional }
             .map(\.key)
         return provisionalTargetIDs.count == 1 ? provisionalTargetIDs[0] : nil
+    }
+
+    private static func targetCommitConsumesOldTarget(
+        oldTargetID: ProtocolTargetIdentifier,
+        newTargetID: ProtocolTargetIdentifier,
+        snapshot: DOMSessionSnapshot
+    ) -> Bool {
+        guard oldTargetID != newTargetID else {
+            return false
+        }
+        if snapshot.currentPageTargetID == oldTargetID,
+           let newTarget = snapshot.targetsByID[newTargetID],
+           (newTarget.kind != .page || newTarget.parentFrameID != nil) {
+            return false
+        }
+        return true
     }
 
     private static func injectedScriptID(from objectID: String) -> ExecutionContextID? {

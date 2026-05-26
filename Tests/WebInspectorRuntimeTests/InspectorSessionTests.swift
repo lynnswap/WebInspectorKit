@@ -1416,6 +1416,49 @@ func committedNavigatedFrameReEnablesRuntimeAndConsoleOnNewTarget() async throws
 }
 
 @Test
+func subframeCommitDoesNotRetargetPageRuntimeOrConsoleState() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"type":"normal","frameId":"main-frame"}}}"#
+    )
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"Console.messageAdded","params":{"message":{"source":"console-api","level":"log","text":"page message","type":"log"}}}"#
+    )
+    let _: Bool = try await waitUntil {
+        let runtimeSnapshot = await session.runtime.snapshot()
+        let consoleSnapshot = await session.console.snapshot()
+        guard runtimeSnapshot.executionContextsByKey[contextKey(.pageMain, 7)]?.targetID == .pageMain,
+              consoleSnapshot.orderedMessageIDs.first?.targetID == .pageMain else {
+            return nil
+        }
+        return true
+    }
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-committed","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["Runtime","Console"],"isProvisional":true}}}"#
+    )
+    let commitSequence = await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-main","newTargetId":"frame-committed"}}"#
+    )
+    await expectProtocolEventApplied(commitSequence, in: session)
+    let runtimeSnapshot = await session.runtime.snapshot()
+    let consoleSnapshot = await session.console.snapshot()
+
+    #expect(runtimeSnapshot.executionContextsByKey[contextKey(.pageMain, 7)]?.targetID == .pageMain)
+    #expect(runtimeSnapshot.executionContextsByKey[contextKey(ProtocolTargetIdentifier("frame-committed"), 7)] == nil)
+    #expect(consoleSnapshot.orderedMessageIDs.first?.targetID == .pageMain)
+    #expect(consoleSnapshot.orderedMessageIDs.contains { $0.targetID == ProtocolTargetIdentifier("frame-committed") } == false)
+}
+
+@Test
 func provisionalFrameCommitCancelsInFlightDocumentRequestBeforeRehydrating() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
@@ -2720,6 +2763,26 @@ func targetCommitClearsElementPickerForOldTarget() async throws {
         documentResult: manualReloadDocumentResult
     )
     #expect(bootstrapMessages.map(\.targetIdentifier).allSatisfy { $0 == .pageNext })
+}
+
+@Test
+func subframeCommitDoesNotClearPageElementPicker() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    try await beginPicker(session: session, transport: transport, backend: backend)
+    #expect(await session.isSelectingElement)
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-committed","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["DOM","Runtime","Console"],"isProvisional":true}}}"#
+    )
+    let commitSequence = await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-main","newTargetId":"frame-committed"}}"#
+    )
+    await expectProtocolEventApplied(commitSequence, in: session)
+
+    #expect(await session.isSelectingElement)
 }
 
 @Test

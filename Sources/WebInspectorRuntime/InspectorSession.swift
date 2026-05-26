@@ -1146,17 +1146,18 @@ package final class InspectorSession {
             }
             if event.method == "Target.didCommitProvisionalTarget",
                let targetCommit {
-                if let oldTargetID = targetCommit.oldTargetID {
+                if targetCommit.consumesOldTarget,
+                   let oldTargetID = targetCommit.oldTargetID {
                     cancelDOMDocumentRequest(targetID: oldTargetID, reason: "frameTargetCommit")
                     cancelRuntimeConsoleEnableTask(targetID: oldTargetID)
                     css.removeStyles(targetID: oldTargetID)
+                    runtime.applyTargetCommitted(oldTargetID: oldTargetID, newTargetID: targetCommit.newTargetID)
+                    console.applyTargetCommitted(oldTargetID: oldTargetID, newTargetID: targetCommit.newTargetID)
+                    retargetRuntimeConsoleAgentState(
+                        oldTargetID: oldTargetID,
+                        newTargetID: targetCommit.newTargetID
+                    )
                 }
-                runtime.applyTargetCommitted(oldTargetID: targetCommit.oldTargetID, newTargetID: targetCommit.newTargetID)
-                console.applyTargetCommitted(oldTargetID: targetCommit.oldTargetID, newTargetID: targetCommit.newTargetID)
-                retargetRuntimeConsoleAgentState(
-                    oldTargetID: targetCommit.oldTargetID,
-                    newTargetID: targetCommit.newTargetID
-                )
                 startFrameTargetDocumentRequestAfterCommit(targetID: targetCommit.newTargetID)
                 startRuntimeConsoleEnableIfNeeded(targetID: targetCommit.newTargetID, reason: "frameTargetCommit")
             }
@@ -1781,6 +1782,7 @@ package final class InspectorSession {
             clearElementPickerState(invalidatePendingSelection: true)
         case "Target.didCommitProvisionalTarget":
             guard let targetCommit,
+                  targetCommit.consumesOldTarget,
                   targetCommit.oldTargetID == activeTargetID else {
                 return
             }
