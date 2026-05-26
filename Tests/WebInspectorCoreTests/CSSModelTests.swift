@@ -7,6 +7,7 @@ func protocolTargetCapabilitiesTreatPageTargetsAsCSSCapable() {
     #expect(ProtocolTargetCapabilities.pageDefault.contains(.css))
     #expect(ProtocolTargetCapabilities.pageDefault.contains(.console))
     #expect(ProtocolTargetCapabilities.protocolDefault(for: .page).contains(.css))
+    #expect(ProtocolTargetCapabilities.protocolDefault(for: .worker).contains(.console))
     #expect(ProtocolTargetCapabilities.protocolDefault(for: .serviceWorker).contains(.console))
     #expect(ProtocolTargetCapabilities.protocolDefault(for: .frame).contains(.css) == false)
     #expect(ProtocolTargetCapabilities.protocolDefault(for: .frame).contains(.console) == false)

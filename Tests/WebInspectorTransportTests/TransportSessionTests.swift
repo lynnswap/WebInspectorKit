@@ -683,6 +683,22 @@ func runtimeContextOnPagePreservesExistingFrameTargetRoute() async throws {
 }
 
 @Test
+func runtimeExecutionContextRegistryPreservesContextMetadata() async throws {
+    let backend = FakeTransportBackend()
+    let session = TransportSession(backend: backend)
+
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#)
+    await session.receiveRootMessage(#"{"method":"Runtime.executionContextCreated","params":{"context":{"id":9,"type":"internal","name":"Isolated World","frameId":"main-frame"}}}"#)
+    let snapshot = await session.snapshot()
+    let record = try #require(snapshot.executionContextsByID[ExecutionContextID(9)])
+
+    #expect(record.targetID == ProtocolTargetIdentifier("page-main"))
+    #expect(record.type == .internal)
+    #expect(record.name == "Isolated World")
+    #expect(record.frameID == DOMFrameIdentifier("main-frame"))
+}
+
+@Test
 func domainStreamsReceiveIndependentTargetEventsInOrder() async throws {
     let backend = FakeTransportBackend()
     let session = TransportSession(backend: backend)

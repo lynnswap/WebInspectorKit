@@ -115,7 +115,8 @@ package final class RuntimeSession {
             RuntimeExecutionContext(
                 id: record.id,
                 targetID: record.targetID,
-                type: .normal,
+                type: record.type,
+                name: record.name,
                 frameID: record.frameID
             )
         )
@@ -134,7 +135,7 @@ package final class RuntimeSession {
         if context.type == .normal {
             normalContextIDByTargetID[context.targetID] = context.id
         }
-        if activeContextID == nil || context.type == .normal {
+        if context.type == .normal {
             activeContextID = context.id
         }
     }

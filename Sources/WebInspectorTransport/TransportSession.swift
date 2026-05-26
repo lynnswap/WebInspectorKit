@@ -555,6 +555,8 @@ package actor TransportSession {
         executionContextsByID[params.context.id] = ExecutionContextRecord(
             id: params.context.id,
             targetID: resolvedTargetID,
+            type: params.context.type ?? .normal,
+            name: params.context.name ?? "",
             frameID: frameID
         )
         if let frameID {
@@ -694,11 +696,9 @@ package actor TransportSession {
         }
         if let oldTargetID = committedOldTargetID {
             for (contextID, record) in executionContextsByID where record.targetID == oldTargetID {
-                executionContextsByID[contextID] = ExecutionContextRecord(
-                    id: record.id,
-                    targetID: newTargetID,
-                    frameID: record.frameID
-                )
+                var movedRecord = record
+                movedRecord.targetID = newTargetID
+                executionContextsByID[contextID] = movedRecord
             }
             if currentMainPageTargetID == oldTargetID,
                newRecord.isTopLevelPage {
@@ -1089,6 +1089,8 @@ private struct TargetCommittedParams: Decodable {
 private struct RuntimeExecutionContextCreatedParams: Decodable {
     struct Context: Decodable {
         var id: ExecutionContextID
+        var type: RuntimeExecutionContextType?
+        var name: String?
         var frameId: DOMFrameIdentifier?
     }
 

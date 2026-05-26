@@ -82,7 +82,7 @@ package struct ProtocolTargetCapabilities: OptionSet, Equatable, Hashable, Senda
 
     package static let pageDefault: Self = [.dom, .runtime, .target, .inspector, .network, .css, .console]
     package static let frameDefault: Self = []
-    package static let workerDefault: Self = [.runtime]
+    package static let workerDefault: Self = [.runtime, .console]
     package static let serviceWorkerDefault: Self = [.runtime, .network, .console]
 
     package static func protocolDefault(for kind: ProtocolTargetKind) -> Self {
@@ -169,15 +169,21 @@ package struct ProtocolTargetRecord: Equatable, Sendable {
 package struct ExecutionContextRecord: Equatable, Sendable {
     package var id: ExecutionContextID
     package var targetID: ProtocolTargetIdentifier
+    package var type: RuntimeExecutionContextType
+    package var name: String
     package var frameID: DOMFrameIdentifier?
 
     package init(
         id: ExecutionContextID,
         targetID: ProtocolTargetIdentifier,
+        type: RuntimeExecutionContextType = .normal,
+        name: String = "",
         frameID: DOMFrameIdentifier? = nil
     ) {
         self.id = id
         self.targetID = targetID
+        self.type = type
+        self.name = name
         self.frameID = frameID
     }
 }

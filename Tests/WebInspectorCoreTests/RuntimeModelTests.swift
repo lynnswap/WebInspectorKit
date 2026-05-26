@@ -66,6 +66,29 @@ func runtimeEvaluateIntentDoesNotUseActiveContextFromAnotherTarget() throws {
 
 @Test
 @MainActor
+func runtimeSessionPreservesTransportSeededContextMetadata() {
+    let session = RuntimeSession()
+    let targetID = ProtocolTargetIdentifier("page")
+
+    session.applyExecutionContextCreated(
+        ExecutionContextRecord(
+            id: ExecutionContextID(1),
+            targetID: targetID,
+            type: .internal,
+            name: "Isolated World",
+            frameID: DOMFrameIdentifier("main-frame")
+        )
+    )
+
+    let snapshot = session.snapshot()
+    #expect(snapshot.executionContextsByID[ExecutionContextID(1)]?.type == .internal)
+    #expect(snapshot.executionContextsByID[ExecutionContextID(1)]?.name == "Isolated World")
+    #expect(snapshot.normalContextIDByTargetID[targetID] == nil)
+    #expect(snapshot.activeContextID == nil)
+}
+
+@Test
+@MainActor
 func runtimeRemoteObjectIdentityIncludesTargetAndObjectID() {
     let session = RuntimeSession()
     let pageTargetID = ProtocolTargetIdentifier("page")

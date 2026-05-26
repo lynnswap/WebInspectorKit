@@ -257,11 +257,9 @@ package final class DOMTargetGraph {
 
     package func retargetExecutionContexts(from oldTargetID: ProtocolTarget.ID, to newTargetID: ProtocolTarget.ID) {
         for (contextID, record) in executionContextsByID where record.targetID == oldTargetID {
-            executionContextsByID[contextID] = ExecutionContextRecord(
-                id: record.id,
-                targetID: newTargetID,
-                frameID: record.frameID
-            )
+            var movedRecord = record
+            movedRecord.targetID = newTargetID
+            executionContextsByID[contextID] = movedRecord
         }
     }
 

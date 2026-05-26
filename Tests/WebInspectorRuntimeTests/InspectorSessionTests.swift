@@ -946,6 +946,38 @@ func serviceWorkerTargetCreatedAfterAttachEnablesRuntimeBeforeConsole() async th
 }
 
 @Test
+func workerTargetCreatedAfterAttachEnablesRuntimeBeforeConsoleWithoutDomainMetadata() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    let workerTargetID = ProtocolTargetIdentifier("worker-1")
+    let sentCount = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"worker-1","type":"worker","isProvisional":false}}}"#
+    )
+
+    let runtimeEnable = try await waitForTargetMessage(backend, method: "Runtime.enable", after: sentCount)
+    #expect(runtimeEnable.targetIdentifier == workerTargetID)
+    await receiveTargetReply(
+        transport,
+        targetID: runtimeEnable.targetIdentifier,
+        messageID: try messageID(runtimeEnable.message),
+        result: "{}"
+    )
+
+    let consoleEnable = try await waitForTargetMessage(backend, method: "Console.enable", after: sentCount)
+    #expect(consoleEnable.targetIdentifier == workerTargetID)
+    await receiveTargetReply(
+        transport,
+        targetID: consoleEnable.targetIdentifier,
+        messageID: try messageID(consoleEnable.message),
+        result: "{}"
+    )
+}
+
+@Test
 func serviceWorkerTargetDiscoveredBeforeAttachEnablesRuntimeBeforeConsoleAfterConnect() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
