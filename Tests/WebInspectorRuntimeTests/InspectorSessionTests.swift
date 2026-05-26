@@ -600,7 +600,9 @@ func selectedElementStyleHydrationPreservesStaleStateAfterSelectionDisappears() 
     _ = try await waitUntil {
         await session.dom.selectedNodeID == nil ? true : nil
     }
-    try await Task.sleep(for: .milliseconds(10))
+    _ = try await waitUntil {
+        await session.css.selectedState == .unavailable(.staleNode(bodyID)) ? true : nil
+    }
 
     #expect(session.css.selectedNodeStyles != nil)
     #expect(session.css.selectedState == .unavailable(.staleNode(bodyID)))
@@ -1155,10 +1157,10 @@ func cssOnlyFrameTargetDoesNotSendCSSEnableOnCreation() async throws {
     try await connect(session, transport: transport, backend: backend)
 
     let sentCount = await backend.sentTargetMessages().count
-    await transport.receiveRootMessage(
+    let targetCreatedSequence = await transport.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-css-race","type":"frame","frameId":"css-frame-race","parentFrameId":"main-frame","domains":["CSS"],"isProvisional":false}}}"#
     )
-    try await Task.sleep(for: .milliseconds(5))
+    await expectProtocolEventApplied(targetCreatedSequence, in: session)
 
     #expect(await backend.sentTargetMessages().count == sentCount)
     #expect(await session.lastError == nil)
@@ -1287,7 +1289,7 @@ func frameTargetWithAdvertisedRuntimeOnlyEnablesRuntimeWithoutConsole() async th
         result: "{}"
     )
 
-    try await Task.sleep(for: .milliseconds(5))
+    #expect(await session.waitUntilRuntimeConsoleEnableFinished(targetID: .frameAd))
     let messages = await backend.sentTargetMessages().dropFirst(sentCount)
     #expect(messages.compactMap { try? messageMethod($0.message) }.contains("Console.enable") == false)
 }
@@ -1491,10 +1493,10 @@ func committedProvisionalFrameWithRuntimeAndConsoleEnablesCommittedTarget() asyn
     try await connect(session, transport: transport, backend: backend)
 
     let sentCountBeforeFrameTarget = await backend.sentTargetMessages().count
-    await transport.receiveRootMessage(
+    let targetCreatedSequence = await transport.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-provisional","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["Runtime","Console"],"isProvisional":true}}}"#
     )
-    try await Task.sleep(for: .milliseconds(5))
+    await expectProtocolEventApplied(targetCreatedSequence, in: session)
     #expect(await backend.sentTargetMessages().count == sentCountBeforeFrameTarget)
 
     await transport.receiveRootMessage(
@@ -1565,10 +1567,10 @@ func committedNavigatedFrameReEnablesRuntimeAndConsoleOnNewTarget() async throws
     )
 
     let sentCountBeforeNavigation = await backend.sentTargetMessages().count
-    await transport.receiveRootMessage(
+    let targetCreatedSequence = await transport.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-next","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["Runtime","Console"],"isProvisional":true}}}"#
     )
-    try await Task.sleep(for: .milliseconds(5))
+    await expectProtocolEventApplied(targetCreatedSequence, in: session)
     #expect(await backend.sentTargetMessages().count == sentCountBeforeNavigation)
 
     await transport.receiveRootMessage(
