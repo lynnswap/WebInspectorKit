@@ -599,22 +599,26 @@ func ambiguousTargetCommitPreservesExistingMetadataAndDoesNotInventTarget() asyn
 }
 
 @Test
-func rootScopedRuntimeAndDOMMutationEventsResolveToCurrentPageTarget() async throws {
+func rootScopedRuntimeDOMAndConsoleEventsResolveToCurrentPageTarget() async throws {
     let backend = FakeTransportBackend()
     let session = TransportSession(backend: backend)
     let runtimeStream = await session.events(for: .runtime)
     let domStream = await session.events(for: .dom)
+    let consoleStream = await session.events(for: .console)
     let runtimeTask = firstEvent(from: runtimeStream)
     let domTask = firstEvent(from: domStream)
+    let consoleTask = firstEvent(from: consoleStream)
 
     await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#)
     await session.receiveRootMessage(#"{"method":"Runtime.executionContextCreated","params":{"context":{"id":11,"frameId":"main-frame"}}}"#)
     await session.receiveRootMessage(#"{"method":"DOM.childNodeCountUpdated","params":{"nodeId":1,"childNodeCount":2}}"#)
+    await session.receiveRootMessage(#"{"method":"Console.messageAdded","params":{"message":{"text":"hello"}}}"#)
     let snapshot = await session.snapshot()
 
     #expect(snapshot.executionContextsByID[ExecutionContextID(11)]?.targetID == ProtocolTargetIdentifier("page-main"))
     #expect(await runtimeTask.value?.targetID == ProtocolTargetIdentifier("page-main"))
     #expect(await domTask.value?.targetID == ProtocolTargetIdentifier("page-main"))
+    #expect(await consoleTask.value?.targetID == ProtocolTargetIdentifier("page-main"))
 }
 
 @Test

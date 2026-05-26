@@ -778,7 +778,7 @@ package actor TransportSession {
             return nil
         default:
             switch ProtocolDomain(method: method) {
-            case .dom, .runtime, .css, .network, .page, .storage:
+            case .dom, .runtime, .css, .console, .network, .page, .storage:
                 return currentMainPageTargetID
             default:
                 return nil

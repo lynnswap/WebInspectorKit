@@ -155,6 +155,29 @@ func domainPumpsApplyConsoleEventsToConsoleSession() async throws {
 }
 
 @Test
+func domainPumpsApplyRootScopedConsoleEventsToMainPageConsoleSession() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    await transport.receiveRootMessage(
+        #"{"method":"Console.messageAdded","params":{"message":{"source":"console-api","level":"error","text":"root hello","type":"log","networkRequestId":"request-root"}}}"#
+    )
+
+    let snapshot: ConsoleSessionSnapshot = try await waitUntil {
+        let snapshot = await session.console.snapshot()
+        guard snapshot.orderedMessageIDs.isEmpty == false else {
+            return nil
+        }
+        return snapshot
+    }
+    let messageID = try #require(snapshot.orderedMessageIDs.first)
+    #expect(snapshot.messagesByID[messageID]?.networkRequestKey == NetworkRequestIdentifierKey(targetID: .pageMain, requestID: .init("request-root")))
+    #expect(snapshot.errorCount == 1)
+}
+
+@Test
 func runtimeContextDispatchedOnPageResolvesToFrameTargetByFrameID() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
