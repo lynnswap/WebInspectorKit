@@ -802,6 +802,77 @@ func frameTargetWithAdvertisedRuntimeAndConsoleEnablesRuntimeBeforeConsole() asy
 }
 
 @Test
+func serviceWorkerTargetCreatedAfterAttachEnablesRuntimeBeforeConsole() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    let serviceWorkerTargetID = ProtocolTargetIdentifier("service-worker-1")
+    let sentCount = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"service-worker-1","type":"service-worker","isProvisional":false}}}"#
+    )
+
+    let runtimeEnable = try await waitForTargetMessage(backend, method: "Runtime.enable", after: sentCount)
+    #expect(runtimeEnable.targetIdentifier == serviceWorkerTargetID)
+    await receiveTargetReply(
+        transport,
+        targetID: runtimeEnable.targetIdentifier,
+        messageID: try messageID(runtimeEnable.message),
+        result: "{}"
+    )
+
+    let consoleEnable = try await waitForTargetMessage(backend, method: "Console.enable", after: sentCount)
+    #expect(consoleEnable.targetIdentifier == serviceWorkerTargetID)
+    await receiveTargetReply(
+        transport,
+        targetID: consoleEnable.targetIdentifier,
+        messageID: try messageID(consoleEnable.message),
+        result: "{}"
+    )
+}
+
+@Test
+func serviceWorkerTargetDiscoveredBeforeAttachEnablesRuntimeBeforeConsoleAfterConnect() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    let serviceWorkerTargetID = ProtocolTargetIdentifier("service-worker-1")
+
+    await transport.receiveRootMessage(
+        cssCapablePageTargetCreatedMessage(targetID: "page-main", frameID: "main-frame", isProvisional: false)
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"service-worker-1","type":"service-worker","isProvisional":false}}}"#
+    )
+
+    let connectTask = Task {
+        try await session.connect(transport: transport)
+    }
+    let bootstrapMessages = try await completeBootstrap(transport: transport, backend: backend)
+    try await connectTask.value
+
+    let runtimeEnable = try await waitForTargetMessage(backend, method: "Runtime.enable", after: bootstrapMessages.count)
+    #expect(runtimeEnable.targetIdentifier == serviceWorkerTargetID)
+    await receiveTargetReply(
+        transport,
+        targetID: runtimeEnable.targetIdentifier,
+        messageID: try messageID(runtimeEnable.message),
+        result: "{}"
+    )
+
+    let consoleEnable = try await waitForTargetMessage(backend, method: "Console.enable", after: bootstrapMessages.count)
+    #expect(consoleEnable.targetIdentifier == serviceWorkerTargetID)
+    await receiveTargetReply(
+        transport,
+        targetID: consoleEnable.targetIdentifier,
+        messageID: try messageID(consoleEnable.message),
+        result: "{}"
+    )
+}
+
+@Test
 func domCapableFrameTargetDiscoveredBeforeAttachHydratesAfterConnect() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)

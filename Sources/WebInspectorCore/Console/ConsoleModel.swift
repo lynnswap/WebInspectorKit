@@ -93,8 +93,8 @@ package final class ConsoleSession {
     package private(set) var errorCount: Int
 
     @ObservationIgnored private var nextMessageOrdinal: UInt64
-    @ObservationIgnored private var orderedMessageIDs: [ConsoleMessageIdentifier]
-    @ObservationIgnored private var messagesByID: [ConsoleMessageIdentifier: ConsoleMessage]
+    private var orderedMessageIDs: [ConsoleMessageIdentifier]
+    private var messagesByID: [ConsoleMessageIdentifier: ConsoleMessage]
     @ObservationIgnored private var lastRepeatableMessageIDByTargetID: [ProtocolTargetIdentifier: ConsoleMessageIdentifier]
     @ObservationIgnored private var warningCountByTargetID: [ProtocolTargetIdentifier: Int]
     @ObservationIgnored private var errorCountByTargetID: [ProtocolTargetIdentifier: Int]

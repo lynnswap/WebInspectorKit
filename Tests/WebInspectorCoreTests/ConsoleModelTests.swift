@@ -1,3 +1,5 @@
+import Observation
+import Synchronization
 import Testing
 @testable import WebInspectorCore
 
@@ -40,4 +42,24 @@ func consoleSessionAppendsMessagesUpdatesTargetScopedRepeatsAndClearsByTarget() 
     #expect(snapshot.lastClearReasonByTargetID[pageTargetID] == .frontend)
     #expect(snapshot.warningCount == 0)
     #expect(snapshot.errorCount == 1)
+}
+
+@Test
+@MainActor
+func consoleSessionMessagesInvalidatesObserversWhenNormalMessageIsAdded() {
+    let session = ConsoleSession()
+    let didChange = Mutex(false)
+
+    withObservationTracking {
+        _ = session.messages.count
+    } onChange: {
+        didChange.withLock { $0 = true }
+    }
+
+    session.applyMessageAdded(
+        ConsoleMessagePayload(source: .consoleAPI, level: .log, text: "hello", type: .log),
+        targetID: ProtocolTargetIdentifier("page")
+    )
+
+    #expect(didChange.withLock { $0 })
 }

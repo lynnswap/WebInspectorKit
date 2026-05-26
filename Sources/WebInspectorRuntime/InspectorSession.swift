@@ -1123,12 +1123,12 @@ package final class InspectorSession {
             }
             applyElementPickerTargetLifecycle(event, targetCommit: targetCommit)
             if isAttached,
-               let createdTarget,
-               createdTarget.kind == .frame {
-                if createdTarget.capabilities.contains(.dom) {
+               let createdTarget {
+                if createdTarget.kind == .frame,
+                   createdTarget.capabilities.contains(.dom) {
                     startDOMDocumentRequest(targetID: createdTarget.id, reason: "frameTargetCreated")
                 }
-                startRuntimeConsoleEnableIfNeeded(targetID: createdTarget.id, reason: "frameTargetCreated")
+                startRuntimeConsoleEnableIfNeeded(targetID: createdTarget.id, reason: "targetCreated")
             }
             if event.method == "Target.didCommitProvisionalTarget",
                dom.currentPageRootNode == nil,
@@ -1168,7 +1168,7 @@ package final class InspectorSession {
 
     private func startRuntimeConsoleEnableForAttachedTargets() {
         for target in dom.snapshot().targetsByID.values
-        where target.kind == .frame && target.isProvisional == false {
+        where target.isProvisional == false {
             startRuntimeConsoleEnableIfNeeded(targetID: target.id, reason: "attachedTarget")
         }
     }
