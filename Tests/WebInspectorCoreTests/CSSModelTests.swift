@@ -1110,6 +1110,21 @@ func cssSessionMarksSelectedStylesUnavailableWithoutReplacingObject() throws {
     #expect(css.refreshState(forSelected: identity) == .unavailable(.staleNode(identity.nodeID)))
 }
 
+@Test
+@MainActor
+func cssSessionDoesNotDowngradeStaleSelectionToNoSelection() throws {
+    let css = CSSSession()
+    let identity = cssIdentity()
+    css.markSelectedNodeStylesUnavailable(identity: identity, reason: .staleNode(identity.nodeID))
+    let selectedStyles = try #require(css.selectedNodeStyles)
+
+    css.markSelectedNodeUnavailable(.noSelection)
+
+    #expect(css.selectedNodeStyles === selectedStyles)
+    #expect(css.selectedState == .unavailable(.staleNode(identity.nodeID)))
+    #expect(selectedStyles.state == .unavailable(.staleNode(identity.nodeID)))
+}
+
 private func cssIdentity(
     targetID: ProtocolTargetIdentifier = ProtocolTargetIdentifier("page"),
     nodeRawID: Int = 2

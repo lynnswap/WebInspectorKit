@@ -1065,6 +1065,7 @@ package final class InspectorSession {
             do {
                 try await self.refreshStyles(for: identity)
                 self.lastError = nil
+            } catch is CancellationError {
             } catch {
                 self.lastError = InspectorSessionError(String(describing: error))
             }
@@ -1115,6 +1116,8 @@ package final class InspectorSession {
                 inline: try CSSTransportAdapter.inlineStyles(from: results.inline),
                 computed: try CSSTransportAdapter.computedStyles(from: results.computed)
             )
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             css.markRefreshFailed(token, message: String(describing: error))
             throw error
@@ -1159,7 +1162,7 @@ package final class InspectorSession {
         targetID: ProtocolTargetIdentifier,
         error: any Error
     ) {
-        guard isUnsupportedProtocolCommandError(error) else {
+        guard isUnsupportedProtocolCommandError(method, error: error) else {
             return
         }
         runtime.markCommandUnsupported(method, targetID: targetID)
@@ -1170,22 +1173,38 @@ package final class InspectorSession {
         targetID: ProtocolTargetIdentifier,
         error: any Error
     ) {
-        guard isUnsupportedProtocolCommandError(error) else {
+        guard isUnsupportedProtocolCommandError(method, error: error) else {
             return
         }
         console.markCommandUnsupported(method, targetID: targetID)
     }
 
-    private func isUnsupportedProtocolCommandError(_ error: any Error) -> Bool {
-        guard case let TransportError.remoteError(_, _, message) = error else {
+    private func isUnsupportedProtocolCommandError(
+        _ method: String,
+        error: any Error
+    ) -> Bool {
+        guard case let TransportError.remoteError(errorMethod, _, message) = error,
+              errorMethod == method else {
             return false
         }
         let normalizedMessage = message.lowercased()
-        return normalizedMessage.contains("unrecognized")
-            || normalizedMessage.contains("unsupported")
-            || normalizedMessage.contains("unknown")
-            || normalizedMessage.contains("not found")
-            || normalizedMessage.contains("not implemented")
+        if normalizedMessage.contains("unknown command")
+            || normalizedMessage.contains("unknown method")
+            || normalizedMessage.contains("unrecognized command")
+            || normalizedMessage.contains("unrecognized method")
+            || normalizedMessage.contains("unsupported command")
+            || normalizedMessage.contains("unsupported method")
+            || normalizedMessage.contains("command not found")
+            || normalizedMessage.contains("method not found") {
+            return true
+        }
+
+        guard normalizedMessage.contains("not implemented") else {
+            return false
+        }
+        return normalizedMessage.contains(method.lowercased())
+            || normalizedMessage.contains("command")
+            || normalizedMessage.contains("method")
     }
 
     private func enableCSSAgentForCompatibility(
@@ -1452,7 +1471,7 @@ package final class InspectorSession {
                 target.markEnabled(.runtime)
             } catch {
                 markRuntimeCommandUnsupportedIfNeeded("Runtime.enable", targetID: targetID, error: error)
-                if isUnsupportedProtocolCommandError(error) == false {
+                if isUnsupportedProtocolCommandError("Runtime.enable", error: error) == false {
                     throw error
                 }
             }
@@ -1481,7 +1500,7 @@ package final class InspectorSession {
             target.markEnabled(.console)
         } catch {
             markConsoleCommandUnsupportedIfNeeded("Console.enable", targetID: targetID, error: error)
-            if isUnsupportedProtocolCommandError(error) {
+            if isUnsupportedProtocolCommandError("Console.enable", error: error) {
                 return
             }
             throw error

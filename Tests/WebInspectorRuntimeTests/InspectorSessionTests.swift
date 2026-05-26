@@ -496,6 +496,79 @@ func selectedElementStyleHydrationLoadsCSSSessionWhenActive() async throws {
 }
 
 @Test
+@MainActor
+func selectedElementStyleHydrationCancellationDoesNotPublishFailure() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
+    let htmlID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(2))
+    let bodyID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(4))
+    session.setSelectedNodeStyleHydrationActive(true)
+    session.dom.selectNode(bodyID)
+
+    let firstSentCount = await backend.sentTargetMessages().count
+    _ = try await waitForCSSRefreshMessages(backend, after: firstSentCount)
+
+    let secondSentCount = await backend.sentTargetMessages().count
+    session.dom.selectNode(htmlID)
+    let secondMessages = try await waitForCSSRefreshMessages(backend, after: secondSentCount)
+    try await replyCSSRefresh(
+        transport: transport,
+        messages: secondMessages,
+        selector: "html",
+        styleSheetID: "sheet-html"
+    )
+
+    let didLoadReplacementStyles = try await waitUntil {
+        let selectedNodeID = await session.css.selectedNodeStyles?.identity.nodeID
+        let selectedState = await session.css.selectedState
+        return selectedNodeID == htmlID && selectedState == .loaded ? true : nil
+    }
+    #expect(didLoadReplacementStyles)
+    #expect(session.lastError == nil)
+}
+
+@Test
+@MainActor
+func selectedElementStyleHydrationPreservesStaleStateAfterSelectionDisappears() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
+    let bodyID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(4))
+    session.dom.selectNode(bodyID)
+
+    let sentCount = await backend.sentTargetMessages().count
+    session.setSelectedNodeStyleHydrationActive(true)
+    let messages = try await waitForCSSRefreshMessages(backend, after: sentCount)
+    try await replyCSSRefresh(
+        transport: transport,
+        messages: messages,
+        selector: "body",
+        styleSheetID: "sheet-body"
+    )
+    _ = try await waitUntil {
+        await session.css.selectedState == .loaded ? true : nil
+    }
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"DOM.childNodeRemoved","params":{"nodeId":4}}"#
+    )
+    _ = try await waitUntil {
+        await session.dom.selectedNodeID == nil ? true : nil
+    }
+    try await Task.sleep(for: .milliseconds(10))
+
+    #expect(session.css.selectedNodeStyles != nil)
+    #expect(session.css.selectedState == .unavailable(.staleNode(bodyID)))
+}
+
+@Test
 func selectedElementStyleRefreshEnablesCSSAgentOnlyAfterBackendRequiresIt() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
@@ -1116,6 +1189,43 @@ func frameTargetWithUnsupportedRuntimeStillEnablesConsole() async throws {
 
     #expect(await session.runtime.snapshot().unsupportedCommandsByTargetID[.frameAd]?.contains("Runtime.enable") == true)
     #expect(await session.lastError == nil)
+}
+
+@Test
+func consoleEnableTargetNotFoundDoesNotMarkCommandUnsupported() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    let sentCount = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["Runtime","Console"],"isProvisional":false}}}"#
+    )
+
+    let runtimeEnable = try await waitForTargetMessage(backend, method: "Runtime.enable", after: sentCount)
+    #expect(runtimeEnable.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    await receiveTargetReply(
+        transport,
+        targetID: runtimeEnable.targetIdentifier,
+        messageID: try messageID(runtimeEnable.message),
+        result: "{}"
+    )
+
+    let consoleEnable = try await waitForTargetMessage(backend, method: "Console.enable", after: sentCount)
+    #expect(consoleEnable.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    await receiveTargetErrorReply(
+        transport,
+        targetID: consoleEnable.targetIdentifier,
+        messageID: try messageID(consoleEnable.message),
+        message: "Target not found"
+    )
+
+    let didPublishFailure = try await waitUntil {
+        await session.lastError != nil ? true : nil
+    }
+    #expect(didPublishFailure)
+    #expect(await session.console.snapshot().unsupportedCommandsByTargetID[.frameAd]?.contains("Console.enable") != true)
 }
 
 @Test

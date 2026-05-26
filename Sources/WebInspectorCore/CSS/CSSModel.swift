@@ -411,6 +411,10 @@ package final class CSSSession {
     }
 
     package func markSelectedNodeUnavailable(_ reason: CSSNodeStylesUnavailableReason) {
+        if reason == .noSelection,
+           case .unavailable(.staleNode) = selectedNodeStyles?.state {
+            return
+        }
         guard selectedNodeStyles != nil || selectedState != .unavailable(reason) else {
             return
         }
