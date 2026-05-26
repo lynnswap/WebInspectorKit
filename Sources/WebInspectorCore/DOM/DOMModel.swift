@@ -512,6 +512,7 @@ package final class DOMSession {
             return
         }
         targetGraph.removeExecutionContexts(targetID: targetID)
+        targetGraph.removeExecutionContexts(runtimeAgentTargetID: targetID)
         if let documentID = documentStore.currentDocument(forTargetID: targetID)?.id {
             removeDocument(documentID)
         }

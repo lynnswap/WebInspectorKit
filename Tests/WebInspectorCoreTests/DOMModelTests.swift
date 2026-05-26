@@ -132,6 +132,31 @@ func frameTargetCreationLinksProtocolTargetToFrame() async throws {
 }
 
 @Test
+func targetDestroyedRemovesExecutionContextsOwnedByRuntimeAgentTarget() async throws {
+    let pageTargetID = ProtocolTarget.ID("page-main")
+    let mainFrameID = DOMFrame.ID("main-frame")
+    let frameTargetID = ProtocolTarget.ID("frame-ad-target")
+    let frameID = DOMFrame.ID("frame-ad")
+    let session = await DOMSession()
+
+    await session.applyTargetCreated(.init(id: pageTargetID, kind: .page, frameID: mainFrameID), makeCurrentMainPage: true)
+    await session.applyTargetCreated(.init(id: frameTargetID, kind: .frame, frameID: frameID, parentFrameID: mainFrameID))
+    await session.applyExecutionContextCreated(
+        RuntimeExecutionContext(
+            id: ExecutionContextID(7),
+            targetID: frameTargetID,
+            runtimeAgentTargetID: pageTargetID,
+            frameID: frameID
+        )
+    )
+
+    await session.applyTargetDestroyed(pageTargetID)
+
+    let snapshot = await session.snapshot()
+    #expect(snapshot.executionContextsByID[ExecutionContextID(7)] == nil)
+}
+
+@Test
 func beginInspectSelectionRequestUsesExplicitProtocolTarget() async throws {
     let frameTargetID = ProtocolTarget.ID("frame-ad-target")
     let frameID = DOMFrame.ID("frame-ad")
