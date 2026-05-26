@@ -70,6 +70,20 @@ package struct ProtocolTargetSnapshot: Equatable, Sendable {
     package var currentDocumentID: DOMDocumentIdentifier?
 }
 
+package extension ProtocolTargetSnapshot {
+    var record: ProtocolTargetRecord {
+        ProtocolTargetRecord(
+            id: id,
+            kind: kind,
+            frameID: frameID,
+            parentFrameID: parentFrameID,
+            capabilities: capabilities,
+            isProvisional: isProvisional,
+            isPaused: isPaused
+        )
+    }
+}
+
 package struct DOMFrameSnapshot: Equatable, Sendable {
     package var id: DOMFrameIdentifier
     package var parentFrameID: DOMFrameIdentifier?

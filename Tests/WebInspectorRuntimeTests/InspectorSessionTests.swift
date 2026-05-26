@@ -532,6 +532,44 @@ func selectedElementStyleHydrationCancellationDoesNotPublishFailure() async thro
 
 @Test
 @MainActor
+func selectedElementStyleHydrationCancellationResetsLoadingForFutureRefresh() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
+    let bodyID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(4))
+    session.dom.selectNode(bodyID)
+
+    let firstSentCount = await backend.sentTargetMessages().count
+    session.setSelectedNodeStyleHydrationActive(true)
+    _ = try await waitForCSSRefreshMessages(backend, after: firstSentCount)
+    _ = try await waitUntil {
+        await session.css.selectedState == .loading ? true : nil
+    }
+
+    session.setSelectedNodeStyleHydrationActive(false)
+    #expect(session.css.selectedState == .needsRefresh)
+
+    let secondSentCount = await backend.sentTargetMessages().count
+    session.setSelectedNodeStyleHydrationActive(true)
+    let secondMessages = try await waitForCSSRefreshMessages(backend, after: secondSentCount)
+    try await replyCSSRefresh(
+        transport: transport,
+        messages: secondMessages,
+        selector: "body",
+        styleSheetID: "sheet-body"
+    )
+
+    let didLoadStyles = try await waitUntil {
+        await session.css.selectedState == .loaded ? true : nil
+    }
+    #expect(didLoadStyles)
+    #expect(session.lastError == nil)
+}
+
+@Test
+@MainActor
 func selectedElementStyleHydrationPreservesStaleStateAfterSelectionDisappears() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)

@@ -27,6 +27,25 @@ package struct RuntimeExecutionContextRecord: Equatable, Sendable {
     package var key: RuntimeExecutionContextKey {
         RuntimeExecutionContextKey(runtimeAgentTargetID: runtimeAgentTargetID, contextID: id)
     }
+
+    package static func stableOrder(_ lhs: Self, _ rhs: Self) -> Bool {
+        if lhs.runtimeAgentTargetID != rhs.runtimeAgentTargetID {
+            return lhs.runtimeAgentTargetID.rawValue < rhs.runtimeAgentTargetID.rawValue
+        }
+        if lhs.id != rhs.id {
+            return lhs.id.rawValue < rhs.id.rawValue
+        }
+        if lhs.targetID != rhs.targetID {
+            return lhs.targetID.rawValue < rhs.targetID.rawValue
+        }
+        if lhs.frameID != rhs.frameID {
+            return (lhs.frameID?.rawValue ?? "") < (rhs.frameID?.rawValue ?? "")
+        }
+        if lhs.type != rhs.type {
+            return lhs.type.rawValue < rhs.type.rawValue
+        }
+        return lhs.name < rhs.name
+    }
 }
 
 @MainActor
@@ -162,10 +181,16 @@ package struct RuntimeSessionSnapshot: Equatable, Sendable {
 @Observable
 package final class RuntimeTargetState {
     package let targetID: ProtocolTargetIdentifier
+    package var frameID: DOMFrameIdentifier?
     package var normalContextKey: RuntimeExecutionContextKey?
 
-    package init(targetID: ProtocolTargetIdentifier, normalContextKey: RuntimeExecutionContextKey? = nil) {
+    package init(
+        targetID: ProtocolTargetIdentifier,
+        frameID: DOMFrameIdentifier? = nil,
+        normalContextKey: RuntimeExecutionContextKey? = nil
+    ) {
         self.targetID = targetID
+        self.frameID = frameID
         self.normalContextKey = normalContextKey
     }
 }
@@ -336,17 +361,20 @@ package final class RuntimeSession {
 
     private var targetStatesByID: [ProtocolTargetIdentifier: RuntimeTargetState]
     private var runtimeAgentStatesByID: [ProtocolTargetIdentifier: RuntimeAgentState]
+    @ObservationIgnored private var selectedContextIsExplicit: Bool
 
     package init() {
         selectedContextKey = nil
         targetStatesByID = [:]
         runtimeAgentStatesByID = [:]
+        selectedContextIsExplicit = false
     }
 
     package func reset() {
         selectedContextKey = nil
         targetStatesByID.removeAll()
         runtimeAgentStatesByID.removeAll()
+        selectedContextIsExplicit = false
     }
 
     package func snapshot() -> RuntimeSessionSnapshot {
@@ -420,6 +448,7 @@ package final class RuntimeSession {
             if let selectedContextKey,
                oldContextKeys.contains(selectedContextKey) {
                 self.selectedContextKey = nil
+                selectedContextIsExplicit = false
             }
         }
         let agentState = ensureRuntimeAgentState(for: record.runtimeAgentTargetID)
@@ -427,17 +456,21 @@ package final class RuntimeSession {
         storeRuntimeAgentState(agentState)
         if record.type == .normal {
             let targetState = ensureTargetState(for: record.targetID)
-            if let defaultContextKey = targetState.normalContextKey {
-                if oldContextKeys.contains(defaultContextKey) {
-                    targetState.normalContextKey = record.key
-                }
-            } else {
+            let previousDefaultContextKey = targetState.normalContextKey
+            if shouldUseAsDefaultNormalContext(record, replacing: previousDefaultContextKey)
+                || previousDefaultContextKey.map(oldContextKeys.contains) == true {
                 targetState.normalContextKey = record.key
+                if selectedContextKey == nil
+                    || (selectedContextIsExplicit == false && selectedContextKey == previousDefaultContextKey) {
+                    selectedContextKey = record.key
+                    selectedContextIsExplicit = false
+                }
             }
         }
         if record.type == .normal,
            selectedContextKey == nil {
             selectedContextKey = record.key
+            selectedContextIsExplicit = false
         }
     }
 
@@ -450,6 +483,7 @@ package final class RuntimeSession {
         }
         if selectedContextKey == contextKey {
             selectedContextKey = nil
+            selectedContextIsExplicit = false
         }
     }
 
@@ -472,18 +506,21 @@ package final class RuntimeSession {
         if let selectedContextKey,
            removedContextKeys.contains(selectedContextKey) {
             self.selectedContextKey = nil
+            selectedContextIsExplicit = false
         }
     }
 
     package func selectExecutionContext(_ contextKey: RuntimeExecutionContextKey?) {
         guard let contextKey else {
             selectedContextKey = nil
+            selectedContextIsExplicit = false
             return
         }
         guard executionContext(for: contextKey) != nil else {
             return
         }
         selectedContextKey = contextKey
+        selectedContextIsExplicit = true
     }
 
     package func applyTargetDestroyed(_ targetID: ProtocolTargetIdentifier) {
@@ -521,7 +558,14 @@ package final class RuntimeSession {
         if let selectedContextKey,
            removedContextKeys.contains(selectedContextKey) {
             self.selectedContextKey = nil
+            selectedContextIsExplicit = false
         }
+    }
+
+    package func applyTargetCreated(_ record: ProtocolTargetRecord) {
+        let targetState = ensureTargetState(for: record.id)
+        targetState.frameID = record.frameID
+        promotePreferredNormalContextIfNeeded(for: targetState)
     }
 
     package func applyTargetCommitted(oldTargetID: ProtocolTargetIdentifier?, newTargetID: ProtocolTargetIdentifier) {
@@ -536,6 +580,9 @@ package final class RuntimeSession {
             }
             if let oldTargetState = targetStatesByID.removeValue(forKey: oldTargetID) {
                 let newTargetState = ensureTargetState(for: newTargetID)
+                if newTargetState.frameID == nil {
+                    newTargetState.frameID = oldTargetState.frameID
+                }
                 if newTargetState.normalContextKey == nil,
                    let normalContextKey = oldTargetState.normalContextKey {
                     newTargetState.normalContextKey = movedContextKeys[normalContextKey] ?? normalContextKey
@@ -666,6 +713,56 @@ package final class RuntimeSession {
         let state = RuntimeAgentState(targetID: targetID)
         runtimeAgentStatesByID[targetID] = state
         return state
+    }
+
+    private func shouldUseAsDefaultNormalContext(
+        _ record: RuntimeExecutionContextRecord,
+        replacing currentKey: RuntimeExecutionContextKey?
+    ) -> Bool {
+        guard let currentKey else {
+            return true
+        }
+        guard let currentContext = executionContext(for: currentKey) else {
+            return true
+        }
+        guard let targetFrameID = targetStatesByID[record.targetID]?.frameID else {
+            return false
+        }
+        guard currentContext.frameID != targetFrameID else {
+            return false
+        }
+        return record.frameID == targetFrameID
+    }
+
+    private func promotePreferredNormalContextIfNeeded(for targetState: RuntimeTargetState) {
+        guard let targetFrameID = targetState.frameID else {
+            return
+        }
+        let currentDefaultContextKey = targetState.normalContextKey
+        if let currentDefaultContextKey,
+           executionContext(for: currentDefaultContextKey)?.frameID == targetFrameID {
+            return
+        }
+
+        guard let preferredContext = executionContextsByKey.values
+            .filter({
+                $0.type == .normal
+                    && $0.targetID == targetState.targetID
+                    && $0.frameID == targetFrameID
+            })
+            .sorted(by: {
+                RuntimeExecutionContextRecord.stableOrder($0.snapshotRecord, $1.snapshotRecord)
+            })
+            .first else {
+            return
+        }
+
+        targetState.normalContextKey = preferredContext.key
+        if selectedContextKey == nil
+            || (selectedContextIsExplicit == false && selectedContextKey == currentDefaultContextKey) {
+            selectedContextKey = preferredContext.key
+            selectedContextIsExplicit = false
+        }
     }
 
     private func storeRuntimeAgentState(_ state: RuntimeAgentState) {

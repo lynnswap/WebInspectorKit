@@ -511,6 +511,15 @@ package final class CSSSession {
         activeRefreshSequenceByNodeID.removeValue(forKey: token.identity.nodeID)
     }
 
+    package func cancelRefresh(identity: CSSNodeStyleIdentity) {
+        guard activeRefreshSequenceByNodeID.removeValue(forKey: identity.nodeID) != nil,
+              let nodeStyles = stylesByNodeID[identity.nodeID],
+              nodeStyles.state == .loading else {
+            return
+        }
+        nodeStyles.state = .needsRefresh
+    }
+
     package func markNeedsRefresh(targetID: ProtocolTargetIdentifier) {
         markNeedsRefresh(targetID: targetID, including: { _ in true })
     }

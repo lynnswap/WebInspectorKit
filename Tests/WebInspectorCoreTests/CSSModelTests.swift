@@ -1125,6 +1125,21 @@ func cssSessionDoesNotDowngradeStaleSelectionToNoSelection() throws {
     #expect(selectedStyles.state == .unavailable(.staleNode(identity.nodeID)))
 }
 
+@Test
+@MainActor
+func cssSessionCancelsActiveRefreshBackToNeedsRefresh() throws {
+    let css = CSSSession()
+    let identity = cssIdentity()
+
+    _ = try #require(css.beginRefresh(identity: identity))
+    #expect(css.selectedState == .loading)
+
+    css.cancelRefresh(identity: identity)
+
+    #expect(css.selectedState == .needsRefresh)
+    #expect(css.refreshState(forSelected: identity) == .needsRefresh)
+}
+
 private func cssIdentity(
     targetID: ProtocolTargetIdentifier = ProtocolTargetIdentifier("page"),
     nodeRawID: Int = 2

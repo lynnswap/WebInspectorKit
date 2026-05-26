@@ -999,9 +999,7 @@ package final class InspectorSession {
     private func stopSelectedNodeStyleHydration() {
         selectedNodeStyleHydrationObservationTask?.cancel()
         selectedNodeStyleHydrationObservationTask = nil
-        selectedNodeStyleHydrationTask?.cancel()
-        selectedNodeStyleHydrationTask = nil
-        selectedNodeStyleHydrationIdentity = nil
+        cancelSelectedNodeStyleHydrationRefresh()
     }
 
     private func selectedNodeStyleHydrationState() -> SelectedNodeStyleHydrationState {
@@ -1032,9 +1030,7 @@ package final class InspectorSession {
         case .detached, .waitingForDocument, .refreshing, .current:
             return
         case .unavailable(let reason):
-            selectedNodeStyleHydrationTask?.cancel()
-            selectedNodeStyleHydrationTask = nil
-            selectedNodeStyleHydrationIdentity = nil
+            cancelSelectedNodeStyleHydrationRefresh()
             css.markSelectedNodeUnavailable(reason)
         case .needsRefresh(let identity):
             hydrateSelectedNodeStyles(identity)
@@ -1046,7 +1042,7 @@ package final class InspectorSession {
             return
         }
 
-        selectedNodeStyleHydrationTask?.cancel()
+        cancelSelectedNodeStyleHydrationRefresh()
         selectedNodeStyleHydrationIdentity = identity
         selectedNodeStyleHydrationTask = Task { @MainActor [weak self] in
             guard let self else {
@@ -1066,10 +1062,20 @@ package final class InspectorSession {
                 try await self.refreshStyles(for: identity)
                 self.lastError = nil
             } catch is CancellationError {
+                self.css.cancelRefresh(identity: identity)
             } catch {
                 self.lastError = InspectorSessionError(String(describing: error))
             }
         }
+    }
+
+    private func cancelSelectedNodeStyleHydrationRefresh() {
+        selectedNodeStyleHydrationTask?.cancel()
+        selectedNodeStyleHydrationTask = nil
+        if let selectedNodeStyleHydrationIdentity {
+            css.cancelRefresh(identity: selectedNodeStyleHydrationIdentity)
+        }
+        selectedNodeStyleHydrationIdentity = nil
     }
 
     private func refreshSelectedNodeStyles() async throws {
@@ -1364,6 +1370,9 @@ package final class InspectorSession {
             let destroyedTargetID = targetDestroyedID(from: event)
             let targetCommit = try DOMTransportAdapter.targetCommitResolution(from: event, snapshot: dom.snapshot())
             let createdTarget = try DOMTransportAdapter.applyTargetEvent(event, to: dom)
+            if let createdTarget {
+                runtime.applyTargetCreated(createdTarget)
+            }
             if let connection {
                 syncTargets(for: connection)
             }
@@ -1392,6 +1401,9 @@ package final class InspectorSession {
             }
             if event.method == "Target.didCommitProvisionalTarget",
                let targetCommit {
+                if let committedTarget = dom.snapshot().targetsByID[targetCommit.newTargetID] {
+                    runtime.applyTargetCreated(committedTarget.record)
+                }
                 if let oldTargetID = targetCommit.consumedOldTargetID {
                     cancelDOMDocumentRequest(targetID: oldTargetID, reason: "frameTargetCommit")
                     cancelRuntimeConsoleEnableTask(targetID: oldTargetID)
@@ -1905,9 +1917,7 @@ package final class InspectorSession {
     }
 
     private func cancelCSSActionRequests() {
-        selectedNodeStyleHydrationTask?.cancel()
-        selectedNodeStyleHydrationTask = nil
-        selectedNodeStyleHydrationIdentity = nil
+        cancelSelectedNodeStyleHydrationRefresh()
 
         for task in cssPropertyUpdateTasks.values {
             task.cancel()
@@ -2185,13 +2195,16 @@ package final class InspectorSession {
                     && record.parentFrameID == nil
             )
         }
-        for record in snapshot.executionContextsByKey.values.sorted(by: { $0.id.rawValue < $1.id.rawValue }) {
+        for record in snapshot.executionContextsByKey.values.sorted(by: RuntimeExecutionContextRecord.stableOrder) {
             dom.applyExecutionContextCreated(record)
         }
     }
 
     private func seedRuntimeSession(from snapshot: TransportSnapshot) {
-        for record in snapshot.executionContextsByKey.values.sorted(by: { $0.id.rawValue < $1.id.rawValue }) {
+        for record in snapshot.targetsByID.values.sorted(by: { $0.id.rawValue < $1.id.rawValue }) {
+            runtime.applyTargetCreated(record)
+        }
+        for record in snapshot.executionContextsByKey.values.sorted(by: RuntimeExecutionContextRecord.stableOrder) {
             runtime.applyExecutionContextCreated(record)
         }
     }

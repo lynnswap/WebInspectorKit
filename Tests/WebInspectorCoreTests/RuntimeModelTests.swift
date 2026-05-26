@@ -98,6 +98,36 @@ func runtimeSessionKeepsSameFrameNormalContextsFromDifferentRuntimeAgents() {
 
 @Test
 @MainActor
+func runtimeExecutionContextStableOrderIncludesRuntimeAgentTarget() {
+    let pageTargetID = ProtocolTargetIdentifier("page-target")
+    let frameTargetID = ProtocolTargetIdentifier("frame-target")
+    let records = [
+        RuntimeExecutionContextRecord(
+            id: ExecutionContextID(1),
+            targetID: frameTargetID,
+            runtimeAgentTargetID: frameTargetID,
+            name: "Frame",
+            frameID: DOMFrameIdentifier("frame")
+        ),
+        RuntimeExecutionContextRecord(
+            id: ExecutionContextID(1),
+            targetID: pageTargetID,
+            runtimeAgentTargetID: pageTargetID,
+            name: "Page",
+            frameID: DOMFrameIdentifier("page")
+        ),
+    ]
+
+    let orderedKeys = records.sorted(by: RuntimeExecutionContextRecord.stableOrder).map(\.key)
+
+    #expect(orderedKeys == [
+        contextKey(frameTargetID, 1),
+        contextKey(pageTargetID, 1),
+    ])
+}
+
+@Test
+@MainActor
 func runtimeEvaluateIntentDoesNotUseActiveContextFromAnotherTarget() throws {
     let session = RuntimeSession()
     let pageTargetID = ProtocolTargetIdentifier("page")
@@ -144,6 +174,13 @@ func runtimeEvaluateIntentRoutesSelectedContextToRuntimeAgentTarget() throws {
 func runtimeEvaluateIntentKeepsPageDefaultContextWhenFrameContextsShareTarget() throws {
     let session = RuntimeSession()
     let pageTargetID = ProtocolTargetIdentifier("page")
+    session.applyTargetCreated(
+        ProtocolTargetRecord(
+            id: pageTargetID,
+            kind: .page,
+            frameID: DOMFrameIdentifier("main-frame")
+        )
+    )
     session.applyExecutionContextCreated(
         RuntimeExecutionContextRecord(
             id: ExecutionContextID(1),
@@ -170,6 +207,131 @@ func runtimeEvaluateIntentKeepsPageDefaultContextWhenFrameContextsShareTarget() 
     }
     #expect(request.contextID == ExecutionContextID(1))
     #expect(session.snapshot().normalContextKeyByTargetID[pageTargetID] == contextKey(pageTargetID, 1))
+}
+
+@Test
+@MainActor
+func runtimeEvaluateIntentPromotesTargetFrameContextWhenItArrivesAfterSubframeContext() throws {
+    let session = RuntimeSession()
+    let pageTargetID = ProtocolTargetIdentifier("page")
+    session.applyTargetCreated(
+        ProtocolTargetRecord(
+            id: pageTargetID,
+            kind: .page,
+            frameID: DOMFrameIdentifier("main-frame")
+        )
+    )
+    session.applyExecutionContextCreated(
+        RuntimeExecutionContextRecord(
+            id: ExecutionContextID(1),
+            targetID: pageTargetID,
+            type: .normal,
+            name: "Subframe",
+            frameID: DOMFrameIdentifier("ad-frame")
+        )
+    )
+    session.applyExecutionContextCreated(
+        RuntimeExecutionContextRecord(
+            id: ExecutionContextID(2),
+            targetID: pageTargetID,
+            type: .normal,
+            name: "Main",
+            frameID: DOMFrameIdentifier("main-frame")
+        )
+    )
+
+    let intent = session.evaluateIntent(expression: "document.URL", targetID: pageTargetID)
+    guard case let .evaluate(request) = intent else {
+        Issue.record("Expected evaluate intent")
+        return
+    }
+    #expect(request.contextID == ExecutionContextID(2))
+    #expect(session.snapshot().normalContextKeyByTargetID[pageTargetID] == contextKey(pageTargetID, 2))
+    #expect(session.snapshot().selectedContextKey == contextKey(pageTargetID, 2))
+}
+
+@Test
+@MainActor
+func runtimeEvaluateIntentDoesNotOverrideExplicitSelectedContextWhenTargetFrameContextArrives() throws {
+    let session = RuntimeSession()
+    let pageTargetID = ProtocolTargetIdentifier("page")
+    session.applyTargetCreated(
+        ProtocolTargetRecord(
+            id: pageTargetID,
+            kind: .page,
+            frameID: DOMFrameIdentifier("main-frame")
+        )
+    )
+    session.applyExecutionContextCreated(
+        RuntimeExecutionContextRecord(
+            id: ExecutionContextID(1),
+            targetID: pageTargetID,
+            type: .normal,
+            name: "Subframe",
+            frameID: DOMFrameIdentifier("ad-frame")
+        )
+    )
+    session.selectExecutionContext(contextKey(pageTargetID, 1))
+    session.applyExecutionContextCreated(
+        RuntimeExecutionContextRecord(
+            id: ExecutionContextID(2),
+            targetID: pageTargetID,
+            type: .normal,
+            name: "Main",
+            frameID: DOMFrameIdentifier("main-frame")
+        )
+    )
+
+    let intent = session.evaluateIntent(expression: "document.URL", targetID: pageTargetID)
+    guard case let .evaluate(request) = intent else {
+        Issue.record("Expected evaluate intent")
+        return
+    }
+    #expect(request.contextID == ExecutionContextID(1))
+    #expect(session.snapshot().normalContextKeyByTargetID[pageTargetID] == contextKey(pageTargetID, 2))
+    #expect(session.snapshot().selectedContextKey == contextKey(pageTargetID, 1))
+}
+
+@Test
+@MainActor
+func runtimeTargetFrameMetadataPromotesExistingMatchingContext() throws {
+    let session = RuntimeSession()
+    let pageTargetID = ProtocolTargetIdentifier("page")
+    session.applyExecutionContextCreated(
+        RuntimeExecutionContextRecord(
+            id: ExecutionContextID(1),
+            targetID: pageTargetID,
+            type: .normal,
+            name: "Subframe",
+            frameID: DOMFrameIdentifier("ad-frame")
+        )
+    )
+    session.applyExecutionContextCreated(
+        RuntimeExecutionContextRecord(
+            id: ExecutionContextID(2),
+            targetID: pageTargetID,
+            type: .normal,
+            name: "Main",
+            frameID: DOMFrameIdentifier("main-frame")
+        )
+    )
+
+    session.applyTargetCreated(
+        ProtocolTargetRecord(
+            id: pageTargetID,
+            kind: .page,
+            frameID: DOMFrameIdentifier("main-frame")
+        )
+    )
+
+    let intent = session.evaluateIntent(expression: "document.URL", targetID: pageTargetID)
+    guard case let .evaluate(request) = intent else {
+        Issue.record("Expected evaluate intent")
+        return
+    }
+    #expect(request.contextID == ExecutionContextID(2))
+    #expect(session.snapshot().normalContextKeyByTargetID[pageTargetID] == contextKey(pageTargetID, 2))
+    #expect(session.snapshot().selectedContextKey == contextKey(pageTargetID, 2))
 }
 
 @Test
