@@ -1074,6 +1074,10 @@ package final class InspectorSession {
         case .console:
             applyEvent(event) {
                 try ConsoleTransportAdapter.applyConsoleEvent(event, to: $0.console)
+                if event.method == "Console.messagesCleared",
+                   let targetID = event.targetID {
+                    $0.runtime.releaseObjectGroup(.console, targetID: targetID)
+                }
             }
         case .inspector:
             await handleInspectorEvent(event)

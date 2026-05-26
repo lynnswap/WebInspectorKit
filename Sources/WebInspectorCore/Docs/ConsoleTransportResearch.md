@@ -411,6 +411,8 @@ Add `console` to `InspectorSession` construction and event handling:
   is no longer provisional.
 - handle `.console` in `handleProtocolEvent` by applying decoded events to
   `ConsoleSession`.
+- when handling `Console.messagesCleared`, also release Runtime object group
+  `"console"` for the console event target to match backend lifetime.
 - handle `.runtime` by applying decoded events to `RuntimeSession` and the DOM
   compatibility execution-context store. Runtime agent source target controls
   `executionContextsCleared`, while semantic target ownership remains available

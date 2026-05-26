@@ -92,6 +92,8 @@ package struct RuntimeRemoteObjectIdentifierKey: Hashable, Sendable {
 }
 
 package struct RuntimeObjectGroup: RawRepresentable, Hashable, Codable, Sendable {
+    package static let console = Self("console")
+
     package let rawValue: String
 
     package init(_ rawValue: String) {

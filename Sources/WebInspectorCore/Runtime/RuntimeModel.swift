@@ -330,7 +330,7 @@ package final class RuntimeSession {
         expression: String,
         targetID: ProtocolTargetIdentifier,
         contextID: ExecutionContextID? = nil,
-        objectGroup: RuntimeObjectGroup? = RuntimeObjectGroup("console")
+        objectGroup: RuntimeObjectGroup? = .console
     ) -> RuntimeCommandIntent {
         let context = contextID.flatMap { executionContextsByID[$0] } ?? activeContext(targetID: targetID)
         return .evaluate(

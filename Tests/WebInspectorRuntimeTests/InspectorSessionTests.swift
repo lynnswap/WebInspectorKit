@@ -155,6 +155,45 @@ func domainPumpsApplyConsoleEventsToConsoleSession() async throws {
 }
 
 @Test
+func domainPumpsReleaseConsoleRuntimeObjectsOnConsoleClear() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    await session.runtime.registerRemoteObject(
+        RuntimeRemoteObjectPayload(type: .object, objectID: RuntimeRemoteObjectIdentifier("console-object")),
+        targetID: .pageMain,
+        objectGroup: .console
+    )
+    #expect(await session.runtime.snapshot().remoteObjectsByID[
+        .init(targetID: .pageMain, objectID: RuntimeRemoteObjectIdentifier("console-object"))
+    ] != nil)
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"Console.messagesCleared","params":{"reason":"console-api"}}"#
+    )
+
+    let _: Bool = try await waitUntil {
+        let runtimeSnapshot = await session.runtime.snapshot()
+        let consoleSnapshot = await session.console.snapshot()
+        let objectKey = RuntimeRemoteObjectIdentifierKey(
+            targetID: .pageMain,
+            objectID: RuntimeRemoteObjectIdentifier("console-object")
+        )
+        guard runtimeSnapshot.remoteObjectsByID[objectKey] == nil,
+              runtimeSnapshot.objectGroupByRemoteObjectID[objectKey] == nil,
+              runtimeSnapshot.objectGroupTargetsByGroup[.console] == nil,
+              consoleSnapshot.lastClearReasonByTargetID[.pageMain] == .consoleAPI else {
+            return nil
+        }
+        return true
+    }
+}
+
+@Test
 func domainPumpsApplyRootScopedConsoleEventsToMainPageConsoleSession() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
