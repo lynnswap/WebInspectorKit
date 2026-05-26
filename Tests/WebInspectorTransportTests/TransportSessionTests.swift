@@ -449,6 +449,9 @@ func bufferedProvisionalTargetReplySurvivesResponseTimeoutBeforeCommit() async t
         responseTimeout: .milliseconds(20),
         responseTimeoutSleep: { duration in
             try await responseTimeout.sleep(for: duration)
+        },
+        responseTimeoutDidFire: {
+            await responseTimeout.recordHandledTimeout()
         }
     )
     await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-provisional","type":"frame","frameId":"ad-frame","isProvisional":true}}}"#)
@@ -468,6 +471,7 @@ func bufferedProvisionalTargetReplySurvivesResponseTimeoutBeforeCommit() async t
     )
     await responseTimeout.waitUntilSuspended()
     await responseTimeout.fireNext()
+    await responseTimeout.waitUntilHandledTimeout()
 
     #expect(await session.snapshot().pendingTargetReplyKeys == [
         TargetReplyKey(targetID: .init("frame-provisional"), commandID: innerID),
@@ -1719,6 +1723,8 @@ private actor ManualResponseTimeout {
     private var continuations: [UInt64: CheckedContinuation<Void, Error>] = [:]
     private var nextSuspensionID: UInt64 = 0
     private var suspensionContinuations: [UInt64: SuspensionContinuation] = [:]
+    private var handledTimeoutCount: Int = 0
+    private var handledTimeoutContinuation: CheckedContinuation<Void, Never>?
 
     private struct SuspensionContinuation {
         var minimumSleeps: Int
@@ -1773,6 +1779,25 @@ private actor ManualResponseTimeout {
         } onCancel: {
             Task {
                 await self.cancelSuspension(suspensionID)
+            }
+        }
+    }
+
+    func recordHandledTimeout() {
+        handledTimeoutCount += 1
+        handledTimeoutContinuation?.resume()
+        handledTimeoutContinuation = nil
+    }
+
+    func waitUntilHandledTimeout() async {
+        guard handledTimeoutCount == 0 else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            if handledTimeoutCount > 0 {
+                continuation.resume()
+            } else {
+                handledTimeoutContinuation = continuation
             }
         }
     }

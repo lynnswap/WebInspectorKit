@@ -122,10 +122,12 @@ package actor TransportSession {
     }
 
     package typealias ResponseTimeoutSleep = @Sendable (Duration) async throws -> Void
+    package typealias ResponseTimeoutDidFire = @Sendable () async -> Void
 
     private let backend: any TransportBackend
     private let responseTimeout: Duration?
     private let responseTimeoutSleep: ResponseTimeoutSleep
+    private let responseTimeoutDidFire: ResponseTimeoutDidFire
     private var nextCommandID: UInt64
     private var nextSequence: UInt64
     private var lastSequenceByDomain: [ProtocolDomain: UInt64]
@@ -154,11 +156,13 @@ package actor TransportSession {
     package init(
         backend: any TransportBackend,
         responseTimeout: Duration? = .seconds(5),
-        responseTimeoutSleep: ResponseTimeoutSleep? = nil
+        responseTimeoutSleep: ResponseTimeoutSleep? = nil,
+        responseTimeoutDidFire: ResponseTimeoutDidFire? = nil
     ) {
         self.backend = backend
         self.responseTimeout = responseTimeout
         self.responseTimeoutSleep = responseTimeoutSleep ?? { try await Task.sleep(for: $0) }
+        self.responseTimeoutDidFire = responseTimeoutDidFire ?? {}
         nextCommandID = 0
         nextSequence = 0
         lastSequenceByDomain = [:]
@@ -480,6 +484,7 @@ package actor TransportSession {
     ) async throws -> ProtocolCommandResult {
         let timeoutTask: Task<Void, Never>? = responseTimeout.map { responseTimeout in
             let responseTimeoutSleep = self.responseTimeoutSleep
+            let responseTimeoutDidFire = self.responseTimeoutDidFire
             return Task {
                 do {
                     try await responseTimeoutSleep(responseTimeout)
@@ -490,6 +495,7 @@ package actor TransportSession {
                     key,
                     error: TransportError.replyTimeout(method: method, targetID: targetID)
                 )
+                await responseTimeoutDidFire()
             }
         }
         defer {
