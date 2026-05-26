@@ -324,9 +324,10 @@ when probing is acceptable, and conservative defaults otherwise.
 - `Console.enable` can synchronously cause a backlog of `messageAdded` events
   after its command response path begins. Bootstrap should enable Console after
   other required initial domain setup.
-- `Runtime.evaluate` should target the active execution context target when UI
-  later exposes context selection. Without UI context selection, the current
-  page target/main-world context is the simplest first behavior.
+- `Runtime.evaluate` should resolve the selected execution context and send the
+  command to that context's `runtimeAgentTargetID`. Without UI context
+  selection, the current page target/main-world context is the simplest first
+  behavior.
 - Runtime execution contexts need two target identities. `targetID` is the
   semantic owner used by DOM selection and future UI grouping.
   `runtimeAgentTargetID` is the protocol agent that delivered the context and

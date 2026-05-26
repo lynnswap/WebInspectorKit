@@ -68,6 +68,30 @@ func runtimeEvaluateIntentDoesNotUseActiveContextFromAnotherTarget() throws {
 
 @Test
 @MainActor
+func runtimeEvaluateIntentRoutesSelectedContextToRuntimeAgentTarget() throws {
+    let session = RuntimeSession()
+    let pageTargetID = ProtocolTargetIdentifier("page")
+    let frameTargetID = ProtocolTargetIdentifier("frame")
+    session.applyExecutionContextCreated(
+        RuntimeExecutionContext(
+            id: ExecutionContextID(2),
+            targetID: frameTargetID,
+            runtimeAgentTargetID: pageTargetID,
+            frameID: DOMFrameIdentifier("frame")
+        )
+    )
+
+    let intent = session.evaluateIntent(expression: "window.location.href", targetID: frameTargetID)
+    guard case let .evaluate(request) = intent else {
+        Issue.record("Expected evaluate intent")
+        return
+    }
+    #expect(request.targetID == pageTargetID)
+    #expect(request.contextID == ExecutionContextID(2))
+}
+
+@Test
+@MainActor
 func runtimeSessionPreservesTransportSeededContextMetadata() {
     let session = RuntimeSession()
     let targetID = ProtocolTargetIdentifier("page")
@@ -121,6 +145,29 @@ func runtimeSessionClearsExecutionContextsByRuntimeAgentTarget() {
     #expect(snapshot.executionContextsByID[ExecutionContextID(2)]?.targetID == otherFrameTargetID)
     #expect(snapshot.normalContextIDByTargetID[frameTargetID] == nil)
     #expect(snapshot.normalContextIDByTargetID[otherFrameTargetID] == ExecutionContextID(2))
+}
+
+@Test
+@MainActor
+func runtimeSessionTargetDestroyedClearsExecutionContextsByRuntimeAgentTarget() {
+    let session = RuntimeSession()
+    let pageTargetID = ProtocolTargetIdentifier("page")
+    let frameTargetID = ProtocolTargetIdentifier("frame")
+    session.applyExecutionContextCreated(
+        RuntimeExecutionContext(
+            id: ExecutionContextID(1),
+            targetID: frameTargetID,
+            runtimeAgentTargetID: pageTargetID,
+            frameID: DOMFrameIdentifier("frame")
+        )
+    )
+
+    session.applyTargetDestroyed(pageTargetID)
+    let snapshot = session.snapshot()
+
+    #expect(snapshot.executionContextsByID[ExecutionContextID(1)] == nil)
+    #expect(snapshot.normalContextIDByTargetID[frameTargetID] == nil)
+    #expect(snapshot.activeContextID == nil)
 }
 
 @Test

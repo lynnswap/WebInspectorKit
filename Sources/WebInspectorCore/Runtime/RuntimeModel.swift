@@ -178,8 +178,21 @@ package final class RuntimeSession {
     }
 
     package func applyTargetDestroyed(_ targetID: ProtocolTargetIdentifier) {
-        executionContextsByID = executionContextsByID.filter { $0.value.targetID != targetID }
-        normalContextIDByTargetID.removeValue(forKey: targetID)
+        let removedContextIDs = Set(
+            executionContextsByID.values
+                .filter { $0.targetID == targetID || $0.runtimeAgentTargetID == targetID }
+                .map(\.id)
+        )
+        let removedTargetIDs = Set(removedContextIDs.compactMap { executionContextsByID[$0]?.targetID })
+        executionContextsByID = executionContextsByID.filter {
+            $0.value.targetID != targetID && $0.value.runtimeAgentTargetID != targetID
+        }
+        for removedTargetID in removedTargetIDs {
+            if let normalContextID = normalContextIDByTargetID[removedTargetID],
+               removedContextIDs.contains(normalContextID) {
+                normalContextIDByTargetID.removeValue(forKey: removedTargetID)
+            }
+        }
         remoteObjectsByID = remoteObjectsByID.filter { $0.key.targetID != targetID }
         objectGroupByRemoteObjectID = objectGroupByRemoteObjectID.filter { $0.key.targetID != targetID }
         for group in Array(objectGroupTargetsByGroup.keys) {
@@ -190,7 +203,7 @@ package final class RuntimeSession {
         }
         unsupportedCommandsByTargetID.removeValue(forKey: targetID)
         if let activeContextID,
-           executionContextsByID[activeContextID] == nil {
+           removedContextIDs.contains(activeContextID) {
             self.activeContextID = normalContextIDByTargetID.values.sorted(by: { $0.rawValue < $1.rawValue }).first
         }
     }
@@ -319,14 +332,15 @@ package final class RuntimeSession {
         contextID: ExecutionContextID? = nil,
         objectGroup: RuntimeObjectGroup? = RuntimeObjectGroup("console")
     ) -> RuntimeCommandIntent {
-        .evaluate(
+        let context = contextID.flatMap { executionContextsByID[$0] } ?? activeContext(targetID: targetID)
+        return .evaluate(
             RuntimeEvaluationRequest(
-                targetID: targetID,
+                targetID: context?.runtimeAgentTargetID ?? targetID,
                 expression: expression,
                 objectGroup: objectGroup,
                 includeCommandLineAPI: true,
                 doNotPauseOnExceptionsAndMuteConsole: false,
-                contextID: contextID ?? activeContext(targetID: targetID)?.id,
+                contextID: contextID ?? context?.id,
                 returnByValue: false,
                 generatePreview: true,
                 saveResult: true,
