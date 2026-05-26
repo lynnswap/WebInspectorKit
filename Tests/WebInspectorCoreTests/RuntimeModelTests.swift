@@ -1,3 +1,5 @@
+import Observation
+import Synchronization
 import Testing
 @testable import WebInspectorCore
 
@@ -89,6 +91,27 @@ func runtimeSessionPreservesTransportSeededContextMetadata() {
 
 @Test
 @MainActor
+func runtimeSessionSnapshotInvalidatesObserversWhenRemoteObjectIsRegistered() {
+    let session = RuntimeSession()
+    let didChange = Mutex(false)
+
+    withObservationTracking {
+        _ = session.snapshot().remoteObjectsByID.count
+    } onChange: {
+        didChange.withLock { $0 = true }
+    }
+
+    session.registerRemoteObject(
+        RuntimeRemoteObjectPayload(type: .object, objectID: RuntimeRemoteObjectIdentifier("object-1")),
+        targetID: ProtocolTargetIdentifier("page"),
+        objectGroup: RuntimeObjectGroup("console")
+    )
+
+    #expect(didChange.withLock { $0 })
+}
+
+@Test
+@MainActor
 func runtimeRemoteObjectIdentityIncludesTargetAndObjectID() {
     let session = RuntimeSession()
     let pageTargetID = ProtocolTargetIdentifier("page")
@@ -113,4 +136,25 @@ func runtimeRemoteObjectIdentityIncludesTargetAndObjectID() {
     #expect(snapshot.remoteObjectsByID[.init(targetID: frameTargetID, objectID: objectID)]?.description == "frame object")
     #expect(snapshot.objectGroupByRemoteObjectID[.init(targetID: pageTargetID, objectID: objectID)] == RuntimeObjectGroup("console"))
     #expect(snapshot.objectGroupTargetsByGroup[RuntimeObjectGroup("console")] == [pageTargetID, frameTargetID])
+}
+
+@Test
+@MainActor
+func runtimeReleaseObjectDropsEmptyObjectGroupTargets() {
+    let session = RuntimeSession()
+    let targetID = ProtocolTargetIdentifier("page")
+    let objectGroup = RuntimeObjectGroup("console")
+    let objectID = RuntimeRemoteObjectIdentifier("object-1")
+
+    session.registerRemoteObject(
+        RuntimeRemoteObjectPayload(type: .object, objectID: objectID),
+        targetID: targetID,
+        objectGroup: objectGroup
+    )
+    session.releaseObject(.init(targetID: targetID, objectID: objectID))
+
+    let snapshot = session.snapshot()
+    #expect(snapshot.remoteObjectsByID[.init(targetID: targetID, objectID: objectID)] == nil)
+    #expect(snapshot.objectGroupByRemoteObjectID[.init(targetID: targetID, objectID: objectID)] == nil)
+    #expect(snapshot.objectGroupTargetsByGroup[objectGroup] == nil)
 }
