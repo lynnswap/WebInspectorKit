@@ -121,13 +121,27 @@ package enum RuntimeTransportAdapter {
 
     @MainActor
     package static func applyRuntimeEvent(_ event: ProtocolEventEnvelope, to session: RuntimeSession) throws {
-        guard event.domain == .runtime,
-              event.method == "Runtime.executionContextCreated",
-              let targetID = event.targetID else {
+        guard event.domain == .runtime else {
             return
         }
-        let params = try TransportMessageParser.decode(ExecutionContextCreatedParams.self, from: event.paramsData)
-        session.applyExecutionContextCreated(params.context, targetID: targetID)
+        switch event.method {
+        case "Runtime.executionContextCreated":
+            guard let targetID = event.targetID else {
+                return
+            }
+            let params = try TransportMessageParser.decode(ExecutionContextCreatedParams.self, from: event.paramsData)
+            session.applyExecutionContextCreated(params.context, targetID: targetID)
+        case "Runtime.executionContextDestroyed":
+            let params = try TransportMessageParser.decode(ExecutionContextDestroyedParams.self, from: event.paramsData)
+            session.applyExecutionContextDestroyed(params.executionContextId)
+        case "Runtime.executionContextsCleared":
+            guard let targetID = event.targetID else {
+                return
+            }
+            session.applyExecutionContextsCleared(targetID: targetID)
+        default:
+            return
+        }
     }
 
     private static func evaluationParameters(_ request: RuntimeEvaluationRequest) -> [String: Any] {
@@ -193,4 +207,8 @@ package enum RuntimeTransportAdapter {
 
 private struct ExecutionContextCreatedParams: Decodable {
     var context: RuntimeExecutionContextPayload
+}
+
+private struct ExecutionContextDestroyedParams: Decodable {
+    var executionContextId: ExecutionContextID
 }

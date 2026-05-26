@@ -531,11 +531,19 @@ package final class DOMSession {
         treeRevision &+= 1
     }
 
-    package func applyExecutionContextCreated(_ record: ExecutionContextRecord) {
-        guard targetGraph.containsTarget(record.targetID) else {
+    package func applyExecutionContextCreated(_ context: RuntimeExecutionContext) {
+        guard targetGraph.containsTarget(context.targetID) else {
             return
         }
-        targetGraph.recordExecutionContext(record)
+        targetGraph.recordExecutionContext(context)
+    }
+
+    package func applyExecutionContextDestroyed(_ contextID: ExecutionContextID) {
+        targetGraph.removeExecutionContext(contextID)
+    }
+
+    package func applyExecutionContextsCleared(targetID: ProtocolTarget.ID) {
+        targetGraph.removeExecutionContexts(targetID: targetID)
     }
 
     package func applyExecutionContextCreated(
@@ -543,7 +551,7 @@ package final class DOMSession {
         targetID: ProtocolTarget.ID,
         frameID: DOMFrame.ID? = nil
     ) {
-        applyExecutionContextCreated(.init(id: id, targetID: targetID, frameID: frameID))
+        applyExecutionContextCreated(RuntimeExecutionContext(id: id, targetID: targetID, frameID: frameID))
     }
 
     @discardableResult

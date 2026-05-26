@@ -699,6 +699,21 @@ func runtimeExecutionContextRegistryPreservesContextMetadata() async throws {
 }
 
 @Test
+func runtimeExecutionContextRegistryAppliesTeardownEvents() async throws {
+    let backend = FakeTransportBackend()
+    let session = TransportSession(backend: backend)
+
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#)
+    await session.receiveRootMessage(#"{"method":"Runtime.executionContextCreated","params":{"context":{"id":9,"type":"normal","frameId":"main-frame"}}}"#)
+    await session.receiveRootMessage(#"{"method":"Runtime.executionContextDestroyed","params":{"executionContextId":9}}"#)
+    #expect(await session.snapshot().executionContextsByID[ExecutionContextID(9)] == nil)
+
+    await session.receiveRootMessage(#"{"method":"Runtime.executionContextCreated","params":{"context":{"id":10,"type":"normal","frameId":"main-frame"}}}"#)
+    await session.receiveRootMessage(#"{"method":"Runtime.executionContextsCleared","params":{}}"#)
+    #expect(await session.snapshot().executionContextsByID[ExecutionContextID(10)] == nil)
+}
+
+@Test
 func domainStreamsReceiveIndependentTargetEventsInOrder() async throws {
     let backend = FakeTransportBackend()
     let session = TransportSession(backend: backend)

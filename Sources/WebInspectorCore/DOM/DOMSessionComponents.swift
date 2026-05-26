@@ -12,7 +12,7 @@ package struct DOMTargetRemoval: Equatable, Sendable {
 package final class DOMTargetGraph {
     private var targetsByID: [ProtocolTarget.ID: ProtocolTarget]
     private var framesByID: [DOMFrame.ID: DOMFrame]
-    private var executionContextsByID: [ExecutionContextID: ExecutionContextRecord]
+    private var executionContextsByID: [ExecutionContextID: RuntimeExecutionContext]
 
     package init() {
         targetsByID = [:]
@@ -255,6 +255,10 @@ package final class DOMTargetGraph {
         executionContextsByID = executionContextsByID.filter { $0.value.targetID != targetID }
     }
 
+    package func removeExecutionContext(_ contextID: ExecutionContextID) {
+        executionContextsByID.removeValue(forKey: contextID)
+    }
+
     package func retargetExecutionContexts(from oldTargetID: ProtocolTarget.ID, to newTargetID: ProtocolTarget.ID) {
         for (contextID, record) in executionContextsByID where record.targetID == oldTargetID {
             var movedRecord = record
@@ -263,8 +267,8 @@ package final class DOMTargetGraph {
         }
     }
 
-    package func recordExecutionContext(_ record: ExecutionContextRecord) {
-        executionContextsByID[record.id] = record
+    package func recordExecutionContext(_ context: RuntimeExecutionContext) {
+        executionContextsByID[context.id] = context
     }
 
     package func targetSnapshots(
@@ -296,7 +300,7 @@ package final class DOMTargetGraph {
         }
     }
 
-    package func executionContextSnapshots() -> [ExecutionContextID: ExecutionContextRecord] {
+    package func executionContextSnapshots() -> [ExecutionContextID: RuntimeExecutionContext] {
         executionContextsByID
     }
 }

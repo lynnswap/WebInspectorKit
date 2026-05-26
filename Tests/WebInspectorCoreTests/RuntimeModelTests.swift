@@ -71,7 +71,7 @@ func runtimeSessionPreservesTransportSeededContextMetadata() {
     let targetID = ProtocolTargetIdentifier("page")
 
     session.applyExecutionContextCreated(
-        ExecutionContextRecord(
+        RuntimeExecutionContext(
             id: ExecutionContextID(1),
             targetID: targetID,
             type: .internal,

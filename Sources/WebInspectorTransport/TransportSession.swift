@@ -36,7 +36,7 @@ package actor TransportSession {
     private var unresolvedStyleSheetFrameIDsByStyleSheetID: [CSSStyleSheetIdentifier: DOMFrameIdentifier]
     private var unresolvedStyleSheetAddedParamsDataByStyleSheetID: [CSSStyleSheetIdentifier: Data]
     private var pendingResolvedStyleSheetAddedEvents: [ResolvedStyleSheetAddedEvent]
-    private var executionContextsByID: [ExecutionContextID: ExecutionContextRecord]
+    private var executionContextsByID: [ExecutionContextID: RuntimeExecutionContext]
     private var currentMainPageTargetID: ProtocolTargetIdentifier?
     private var subscribers: [ProtocolDomain: [UInt64: AsyncStream<ProtocolEventEnvelope>.Continuation]]
     private var orderedSubscribers: [UInt64: AsyncStream<ProtocolEventEnvelope>.Continuation]
@@ -526,7 +526,7 @@ package actor TransportSession {
                 return
             }
             applyTargetCommitted(oldTargetID: params.oldTargetId, newTargetID: params.newTargetId)
-        case "Runtime.executionContextCreated":
+        case "Runtime.executionContextCreated", "Runtime.executionContextDestroyed", "Runtime.executionContextsCleared":
             updateRegistryFromTargetEvent(method: method, targetID: targetID, paramsData: paramsData)
         case "CSS.styleSheetAdded", "CSS.styleSheetRemoved":
             updateCSSStyleSheetRegistry(method: method, targetID: targetID, paramsData: paramsData)
@@ -543,24 +543,35 @@ package actor TransportSession {
             updateCSSStyleSheetRegistry(method: method, targetID: targetID, paramsData: paramsData)
             return
         }
-        guard method == "Runtime.executionContextCreated",
-              let params = try? TransportMessageParser.decode(RuntimeExecutionContextCreatedParams.self, from: paramsData) else {
+        switch method {
+        case "Runtime.executionContextCreated":
+            guard let params = try? TransportMessageParser.decode(RuntimeExecutionContextCreatedParams.self, from: paramsData) else {
+                return
+            }
+            let frameID = params.context.frameId
+            let resolvedTargetID = resolvedTargetIDForRuntimeContext(
+                deliveredTargetID: targetID,
+                frameID: frameID
+            )
+            executionContextsByID[params.context.id] = RuntimeExecutionContext(
+                id: params.context.id,
+                targetID: resolvedTargetID,
+                type: params.context.type ?? .normal,
+                name: params.context.name ?? "",
+                frameID: frameID
+            )
+            if let frameID {
+                frameTargetIDsByFrameID[frameID] = resolvedTargetID
+            }
+        case "Runtime.executionContextDestroyed":
+            guard let params = try? TransportMessageParser.decode(RuntimeExecutionContextDestroyedParams.self, from: paramsData) else {
+                return
+            }
+            executionContextsByID.removeValue(forKey: params.executionContextId)
+        case "Runtime.executionContextsCleared":
+            executionContextsByID = executionContextsByID.filter { $0.value.targetID != targetID }
+        default:
             return
-        }
-        let frameID = params.context.frameId
-        let resolvedTargetID = resolvedTargetIDForRuntimeContext(
-            deliveredTargetID: targetID,
-            frameID: frameID
-        )
-        executionContextsByID[params.context.id] = ExecutionContextRecord(
-            id: params.context.id,
-            targetID: resolvedTargetID,
-            type: params.context.type ?? .normal,
-            name: params.context.name ?? "",
-            frameID: frameID
-        )
-        if let frameID {
-            frameTargetIDsByFrameID[frameID] = resolvedTargetID
         }
     }
 
@@ -1095,6 +1106,10 @@ private struct RuntimeExecutionContextCreatedParams: Decodable {
     }
 
     var context: Context
+}
+
+private struct RuntimeExecutionContextDestroyedParams: Decodable {
+    var executionContextId: ExecutionContextID
 }
 
 private struct CSSStyleSheetAddedParams: Decodable {

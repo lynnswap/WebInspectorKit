@@ -105,6 +105,59 @@ func runtimeTransportAdapterAppliesExecutionContextEventToRuntimeSession() throw
 
 @Test
 @MainActor
+func runtimeTransportAdapterAppliesExecutionContextTeardownEvents() throws {
+    let session = RuntimeSession()
+    let targetID = ProtocolTargetIdentifier("frame")
+
+    try RuntimeTransportAdapter.applyRuntimeEvent(
+        ProtocolEventEnvelope(
+            sequence: 1,
+            domain: .runtime,
+            method: "Runtime.executionContextCreated",
+            targetID: targetID,
+            paramsData: Data(#"{"context":{"id":42,"type":"normal","frameId":"frame-1"}}"#.utf8)
+        ),
+        to: session
+    )
+    try RuntimeTransportAdapter.applyRuntimeEvent(
+        ProtocolEventEnvelope(
+            sequence: 2,
+            domain: .runtime,
+            method: "Runtime.executionContextDestroyed",
+            targetID: targetID,
+            paramsData: Data(#"{"executionContextId":42}"#.utf8)
+        ),
+        to: session
+    )
+    #expect(session.snapshot().executionContextsByID[ExecutionContextID(42)] == nil)
+    #expect(session.snapshot().normalContextIDByTargetID[targetID] == nil)
+
+    try RuntimeTransportAdapter.applyRuntimeEvent(
+        ProtocolEventEnvelope(
+            sequence: 3,
+            domain: .runtime,
+            method: "Runtime.executionContextCreated",
+            targetID: targetID,
+            paramsData: Data(#"{"context":{"id":43,"type":"normal","frameId":"frame-1"}}"#.utf8)
+        ),
+        to: session
+    )
+    try RuntimeTransportAdapter.applyRuntimeEvent(
+        ProtocolEventEnvelope(
+            sequence: 4,
+            domain: .runtime,
+            method: "Runtime.executionContextsCleared",
+            targetID: targetID,
+            paramsData: Data("{}".utf8)
+        ),
+        to: session
+    )
+    #expect(session.snapshot().executionContextsByID[ExecutionContextID(43)] == nil)
+    #expect(session.snapshot().normalContextIDByTargetID[targetID] == nil)
+}
+
+@Test
+@MainActor
 func runtimeSessionTracksUnsupportedOptionalCommandsPerTarget() {
     let session = RuntimeSession()
     let pageTargetID = ProtocolTargetIdentifier("page")

@@ -146,14 +146,35 @@ package enum DOMTransportAdapter {
 
     @MainActor
     package static func applyRuntimeEvent(_ event: ProtocolEventEnvelope, to session: DOMSession) throws {
-        guard event.method == "Runtime.executionContextCreated",
-              let targetID = event.targetID else {
+        guard event.domain == .runtime else {
             return
         }
-        let params = try TransportMessageParser.decode(RuntimeExecutionContextCreatedParams.self, from: event.paramsData)
-        session.applyExecutionContextCreated(
-            .init(id: params.context.id, targetID: targetID, frameID: params.context.frameId)
-        )
+        switch event.method {
+        case "Runtime.executionContextCreated":
+            guard let targetID = event.targetID else {
+                return
+            }
+            let params = try TransportMessageParser.decode(RuntimeExecutionContextCreatedParams.self, from: event.paramsData)
+            session.applyExecutionContextCreated(
+                .init(
+                    id: params.context.id,
+                    targetID: targetID,
+                    type: params.context.type ?? .normal,
+                    name: params.context.name ?? "",
+                    frameID: params.context.frameId
+                )
+            )
+        case "Runtime.executionContextDestroyed":
+            let params = try TransportMessageParser.decode(RuntimeExecutionContextDestroyedParams.self, from: event.paramsData)
+            session.applyExecutionContextDestroyed(params.executionContextId)
+        case "Runtime.executionContextsCleared":
+            guard let targetID = event.targetID else {
+                return
+            }
+            session.applyExecutionContextsCleared(targetID: targetID)
+        default:
+            return
+        }
     }
 
     @MainActor
@@ -424,10 +445,16 @@ private struct TargetCommittedParams: Decodable {
 private struct RuntimeExecutionContextCreatedParams: Decodable {
     struct Context: Decodable {
         var id: ExecutionContextID
+        var type: RuntimeExecutionContextType?
+        var name: String?
         var frameId: DOMFrameIdentifier?
     }
 
     var context: Context
+}
+
+private struct RuntimeExecutionContextDestroyedParams: Decodable {
+    var executionContextId: ExecutionContextID
 }
 
 private struct GetDocumentResult: Decodable {

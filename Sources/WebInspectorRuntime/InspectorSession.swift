@@ -1281,15 +1281,12 @@ package final class InspectorSession {
         newTargetID: ProtocolTargetIdentifier
     ) {
         guard let oldTargetID,
+              oldTargetID != newTargetID,
               let connection else {
             return
         }
-        if connection.runtimeEnabledTargetIDs.remove(oldTargetID) != nil {
-            connection.runtimeEnabledTargetIDs.insert(newTargetID)
-        }
-        if connection.consoleEnabledTargetIDs.remove(oldTargetID) != nil {
-            connection.consoleEnabledTargetIDs.insert(newTargetID)
-        }
+        connection.runtimeEnabledTargetIDs.remove(oldTargetID)
+        connection.consoleEnabledTargetIDs.remove(oldTargetID)
     }
 
     private func startFrameTargetDocumentRequestAfterCommit(targetID: ProtocolTargetIdentifier) {

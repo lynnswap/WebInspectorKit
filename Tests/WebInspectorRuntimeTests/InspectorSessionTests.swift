@@ -178,6 +178,56 @@ func domainPumpsApplyRootScopedConsoleEventsToMainPageConsoleSession() async thr
 }
 
 @Test
+func domainPumpsApplyRuntimeContextTeardownToRuntimeAndDOMSessions() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":81,"type":"normal","frameId":"main-frame"}}}"#
+    )
+    _ = try await waitUntil {
+        await session.runtime.snapshot().executionContextsByID[ExecutionContextID(81)]
+    }
+    _ = try await waitUntil {
+        await session.dom.snapshot().executionContextsByID[ExecutionContextID(81)]
+    }
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"Runtime.executionContextDestroyed","params":{"executionContextId":81}}"#
+    )
+    _ = try await waitUntil {
+        let runtimeContext = await session.runtime.snapshot().executionContextsByID[ExecutionContextID(81)]
+        let domContext = await session.dom.snapshot().executionContextsByID[ExecutionContextID(81)]
+        return runtimeContext == nil && domContext == nil ? true : nil
+    }
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":82,"type":"normal","frameId":"main-frame"}}}"#
+    )
+    _ = try await waitUntil {
+        await session.runtime.snapshot().executionContextsByID[ExecutionContextID(82)]
+    }
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"Runtime.executionContextsCleared","params":{}}"#
+    )
+    _ = try await waitUntil {
+        let runtimeContext = await session.runtime.snapshot().executionContextsByID[ExecutionContextID(82)]
+        let domContext = await session.dom.snapshot().executionContextsByID[ExecutionContextID(82)]
+        return runtimeContext == nil && domContext == nil ? true : nil
+    }
+}
+
+@Test
 func runtimeContextDispatchedOnPageResolvesToFrameTargetByFrameID() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
@@ -1145,6 +1195,80 @@ func committedProvisionalFrameWithRuntimeAndConsoleEnablesCommittedTarget() asyn
         transport,
         targetID: consoleEnable.targetIdentifier,
         messageID: try messageID(consoleEnable.message),
+        result: "{}"
+    )
+}
+
+@Test
+func committedNavigatedFrameReEnablesRuntimeAndConsoleOnNewTarget() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    let sentCountBeforeFrameTarget = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["Runtime","Console"],"isProvisional":false}}}"#
+    )
+    let firstRuntimeEnable = try await waitForTargetMessage(
+        backend,
+        method: "Runtime.enable",
+        after: sentCountBeforeFrameTarget
+    )
+    #expect(firstRuntimeEnable.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    await receiveTargetReply(
+        transport,
+        targetID: firstRuntimeEnable.targetIdentifier,
+        messageID: try messageID(firstRuntimeEnable.message),
+        result: "{}"
+    )
+    let firstConsoleEnable = try await waitForTargetMessage(
+        backend,
+        method: "Console.enable",
+        after: sentCountBeforeFrameTarget
+    )
+    #expect(firstConsoleEnable.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    await receiveTargetReply(
+        transport,
+        targetID: firstConsoleEnable.targetIdentifier,
+        messageID: try messageID(firstConsoleEnable.message),
+        result: "{}"
+    )
+
+    let sentCountBeforeNavigation = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-next","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["Runtime","Console"],"isProvisional":true}}}"#
+    )
+    try await Task.sleep(for: .milliseconds(5))
+    #expect(await backend.sentTargetMessages().count == sentCountBeforeNavigation)
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"frame-ad","newTargetId":"frame-next"}}"#
+    )
+
+    let secondRuntimeEnable = try await waitForTargetMessage(
+        backend,
+        method: "Runtime.enable",
+        after: sentCountBeforeNavigation
+    )
+    #expect(secondRuntimeEnable.targetIdentifier == ProtocolTargetIdentifier("frame-next"))
+    await receiveTargetReply(
+        transport,
+        targetID: secondRuntimeEnable.targetIdentifier,
+        messageID: try messageID(secondRuntimeEnable.message),
+        result: "{}"
+    )
+
+    let secondConsoleEnable = try await waitForTargetMessage(
+        backend,
+        method: "Console.enable",
+        after: sentCountBeforeNavigation
+    )
+    #expect(secondConsoleEnable.targetIdentifier == ProtocolTargetIdentifier("frame-next"))
+    await receiveTargetReply(
+        transport,
+        targetID: secondConsoleEnable.targetIdentifier,
+        messageID: try messageID(secondConsoleEnable.message),
         result: "{}"
     )
 }

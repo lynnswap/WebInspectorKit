@@ -165,25 +165,3 @@ package struct ProtocolTargetRecord: Equatable, Sendable {
         self.isPaused = isPaused
     }
 }
-
-package struct ExecutionContextRecord: Equatable, Sendable {
-    package var id: ExecutionContextID
-    package var targetID: ProtocolTargetIdentifier
-    package var type: RuntimeExecutionContextType
-    package var name: String
-    package var frameID: DOMFrameIdentifier?
-
-    package init(
-        id: ExecutionContextID,
-        targetID: ProtocolTargetIdentifier,
-        type: RuntimeExecutionContextType = .normal,
-        name: String = "",
-        frameID: DOMFrameIdentifier? = nil
-    ) {
-        self.id = id
-        self.targetID = targetID
-        self.type = type
-        self.name = name
-        self.frameID = frameID
-    }
-}

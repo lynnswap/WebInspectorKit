@@ -197,7 +197,7 @@ package struct DOMSessionSnapshot: Equatable, Sendable {
     package var frameDocumentProjections: [ProtocolTargetIdentifier: FrameDocumentProjectionSnapshot]
     package var transactions: [DOMTransactionSnapshot]
     package var currentNodeIDByKey: [DOMNodeCurrentKey: DOMNodeIdentifier]
-    package var executionContextsByID: [ExecutionContextID: ExecutionContextRecord]
+    package var executionContextsByID: [ExecutionContextID: RuntimeExecutionContext]
     package var selection: DOMSelectionSnapshot
 }
 

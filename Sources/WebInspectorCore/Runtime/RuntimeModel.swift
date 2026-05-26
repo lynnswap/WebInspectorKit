@@ -110,18 +110,6 @@ package final class RuntimeSession {
         applyExecutionContextCreated(context)
     }
 
-    package func applyExecutionContextCreated(_ record: ExecutionContextRecord) {
-        applyExecutionContextCreated(
-            RuntimeExecutionContext(
-                id: record.id,
-                targetID: record.targetID,
-                type: record.type,
-                name: record.name,
-                frameID: record.frameID
-            )
-        )
-    }
-
     package func applyExecutionContextCreated(_ context: RuntimeExecutionContext) {
         if context.type == .normal,
            let oldContextID = normalContextIDToReplace(with: context),
@@ -137,6 +125,35 @@ package final class RuntimeSession {
         }
         if context.type == .normal {
             activeContextID = context.id
+        }
+    }
+
+    package func applyExecutionContextDestroyed(_ contextID: ExecutionContextID) {
+        guard let context = executionContextsByID.removeValue(forKey: contextID) else {
+            return
+        }
+        if normalContextIDByTargetID[context.targetID] == contextID {
+            normalContextIDByTargetID.removeValue(forKey: context.targetID)
+        }
+        if activeContextID == contextID {
+            activeContextID = nil
+        }
+    }
+
+    package func applyExecutionContextsCleared(targetID: ProtocolTargetIdentifier) {
+        let removedContextIDs = Set(
+            executionContextsByID.values
+                .filter { $0.targetID == targetID }
+                .map(\.id)
+        )
+        guard removedContextIDs.isEmpty == false else {
+            return
+        }
+        executionContextsByID = executionContextsByID.filter { $0.value.targetID != targetID }
+        normalContextIDByTargetID.removeValue(forKey: targetID)
+        if let activeContextID,
+           removedContextIDs.contains(activeContextID) {
+            self.activeContextID = nil
         }
     }
 
