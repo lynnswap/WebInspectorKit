@@ -142,6 +142,7 @@ struct NetworkDetailViewControllerTests {
         let didSwitch = await waitUntil {
             viewController.currentModeForTesting == .requestBody
                 && viewController.bodyTextViewForTesting.text == "name=Jane Doe\ncity=Tokyo East"
+                && viewController.bodyTextViewForTesting.configuration.drawsBackground == false
         }
         #expect(didSwitch)
     }
@@ -192,6 +193,7 @@ struct NetworkDetailViewControllerTests {
         var fetchedIDs: [NetworkRequest.ID] = []
         let model = NetworkPanelModel(network: network) { id in
             fetchedIDs.append(id)
+            request.markResponseBodyFetching()
         }
         model.selectRequest(request)
         let viewController = NetworkDetailViewController(model: model)
@@ -205,6 +207,62 @@ struct NetworkDetailViewControllerTests {
             fetchedIDs == [request.id]
         }
         #expect(didFetch)
+    }
+
+    @Test
+    func responseBodyModePrewarmsSyntaxAndShowsNavigationActivityWhileFetching() async throws {
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://example.com/api/data.json",
+                responseHeaders: ["content-type": "application/json"],
+                responseMimeType: "application/json"
+            )
+        )
+        var fetchedIDs: [NetworkRequest.ID] = []
+        let model = NetworkPanelModel(network: network) { id in
+            fetchedIDs.append(id)
+            request.markResponseBodyFetching()
+        }
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let indicatorItem = try #require(bodyFetchIndicatorItem(in: viewController))
+        viewController.setModeForTesting(.responseBody)
+
+        let didStartFetching = await waitUntil {
+            guard let activityIndicator = indicatorItem.customView as? UIActivityIndicatorView else {
+                return false
+            }
+            return fetchedIDs == [request.id]
+                && viewController.currentModeForTesting == .responseBody
+                && viewController.bodyTextViewForTesting.text.isEmpty
+                && viewController.bodyTextViewForTesting.configuration.language == .json
+                && indicatorItem.isHidden == false
+                && activityIndicator.isAnimating
+        }
+        #expect(didStartFetching)
+
+        request.applyResponseBody(
+            NetworkBodyPayload(
+                body: #"{"ok":true}"#,
+                base64Encoded: false
+            )
+        )
+
+        let didRenderBody = await waitUntil {
+            guard let activityIndicator = indicatorItem.customView as? UIActivityIndicatorView else {
+                return false
+            }
+            return viewController.bodyTextViewForTesting.text.contains(#""ok""#)
+                && indicatorItem.isHidden
+                && activityIndicator.isAnimating == false
+        }
+        #expect(didRenderBody)
     }
 
     @Test
@@ -223,6 +281,7 @@ struct NetworkDetailViewControllerTests {
         var fetchedIDs: [NetworkRequest.ID] = []
         let model = NetworkPanelModel(network: network) { id in
             fetchedIDs.append(id)
+            request.markResponseBodyFetching()
         }
         model.selectRequest(request)
         let viewController = NetworkDetailViewController(model: model)
@@ -428,6 +487,14 @@ struct NetworkDetailViewControllerTests {
             }
         }
         return nil
+    }
+
+    private func bodyFetchIndicatorItem(in viewController: NetworkDetailViewController) -> UIBarButtonItem? {
+        viewController.navigationItem.trailingItemGroups
+            .flatMap(\.barButtonItems)
+            .first {
+                $0.accessibilityIdentifier == "WebInspector.Network.BodyFetchIndicatorItem"
+            }
     }
 
     private func listCellText(

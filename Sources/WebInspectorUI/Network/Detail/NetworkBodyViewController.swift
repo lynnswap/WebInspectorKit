@@ -11,7 +11,8 @@ final class NetworkBodyViewController: UIViewController {
         language: .json,
         isEditable: false,
         lineWrappingEnabled: true,
-        colorTheme: .v2WebInspectorPlainText
+        colorTheme: .v2WebInspectorPlainText,
+        drawsBackground: false
     )
     private lazy var syntaxView = SyntaxEditorView(
         document: syntaxDocument,
@@ -46,7 +47,6 @@ final class NetworkBodyViewController: UIViewController {
         syntaxView.isSelectable = true
         syntaxView.isScrollEnabled = true
         syntaxView.alwaysBounceVertical = true
-        syntaxView.backgroundColor = .clear
         syntaxView.contentInsetAdjustmentBehavior = .automatic
         syntaxView.keyboardDismissMode = .onDrag
         syntaxView.accessibilityIdentifier = "WebInspector.Network.BodyView"
@@ -85,12 +85,9 @@ final class NetworkBodyViewController: UIViewController {
         }
 
         switch body.fetchState {
-        case .available:
-            displayText = webInspectorLocalized("network.body.available", default: "Body available")
-            syntaxKind = .plainText
-        case .fetching:
-            displayText = webInspectorLocalized("network.body.fetching", default: "Fetching body...")
-            syntaxKind = .plainText
+        case .available, .fetching:
+            displayText = ""
+            syntaxKind = body.textRepresentationSyntaxKind
         case .loaded:
             displayText = body.textRepresentation
                 ?? webInspectorLocalized("network.body.unavailable", default: "Body unavailable")

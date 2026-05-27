@@ -19,6 +19,7 @@ package final class NetworkPanelModel {
     }
     package private(set) var effectiveResourceFilters: Set<NetworkResourceFilter> = []
     @ObservationIgnored private let responseBodyFetchAction: ResponseBodyFetchAction?
+    @ObservationIgnored private var responseBodyFetchesInFlight: Set<NetworkRequest.ID> = []
 
     package init(
         network: NetworkSession,
@@ -95,10 +96,15 @@ package final class NetworkPanelModel {
 
     package func fetchResponseBodyIfNeeded(for request: NetworkRequest) {
         guard request.canFetchResponseBody,
+              responseBodyFetchesInFlight.contains(request.id) == false,
               let responseBodyFetchAction else {
             return
         }
+        responseBodyFetchesInFlight.insert(request.id)
         Task { @MainActor in
+            defer {
+                responseBodyFetchesInFlight.remove(request.id)
+            }
             await responseBodyFetchAction(request.id)
         }
     }
