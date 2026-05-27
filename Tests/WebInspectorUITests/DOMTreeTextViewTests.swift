@@ -61,6 +61,35 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func expandedDescendantMutationRerendersAfterExpansionDependencyRefresh() async throws {
+        let session = makeDOMSession()
+        let view = makeTreeView(session: session)
+        let renderedText = await view.documentObservationDeliveryForTesting.values {
+            view.renderedTextForTesting
+        }
+
+        view.toggleRowForTesting(containing: "<article")
+        let didRenderExpandedChild = await renderedText.waitUntil { text in
+            text.contains("<span id=\"nested-child\"></span>")
+        } != nil
+        #expect(didRenderExpandedChild)
+
+        let nestedChildID = try #require(
+            session.snapshot().nodesByID.first { entry in
+                entry.value.attributes.contains { attribute in
+                    attribute.name == "id" && attribute.value == "nested-child"
+                }
+            }?.key
+        )
+
+        session.applyAttributeModified(nestedChildID, name: "data-state", value: "ready")
+        let didRenderMutation = await renderedText.waitUntil { text in
+            text.contains("<span id=\"nested-child\" data-state=\"ready\"></span>")
+        } != nil
+        #expect(didRenderMutation)
+    }
+
+    @Test
     func documentResetClearsLocalExpansionStateEvenWhenNodeIDsRepeat() async throws {
         let session = makeDOMSession()
         let view = makeTreeView(session: session)
