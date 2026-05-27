@@ -15,10 +15,26 @@ struct DOMContainerTests {
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
-        #expect(viewController.view.backgroundColor == .clear)
+        #expect(viewController.view.backgroundColor == .systemBackground)
         let contentUnavailableConfiguration = viewController.contentUnavailableConfiguration as? UIContentUnavailableConfiguration
         #expect(contentUnavailableConfiguration?.text == "Select an element")
         #expect(viewController.collectionViewForTesting.isHidden)
+    }
+
+    @Test
+    func elementViewControllerCanDisableBackgroundDrawing() {
+        guard #available(iOS 26.0, *) else {
+            return
+        }
+
+        let dom = makeDOMSession()
+        let viewController = DOMElementViewController(dom: dom)
+        viewController.traitOverrides.webInspectorDrawsBackground = false
+
+        viewController.loadViewIfNeeded()
+
+        #expect(viewController.view.backgroundColor == .clear)
+        #expect(viewController.collectionViewForTesting.backgroundColor == .clear)
     }
 
     @Test

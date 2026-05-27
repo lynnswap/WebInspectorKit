@@ -87,6 +87,12 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         super.viewDidLoad()
         title = nil
         view.accessibilityIdentifier = "WebInspector.Network.ListPane"
+        applyBackgroundFromTraits()
+        if #available(iOS 26.0, *) {
+            webInspectorRegisterForBackgroundTraitChanges { viewController in
+                viewController.applyBackgroundFromTraits()
+            }
+        }
 
         collectionView.alwaysBounceVertical = true
         collectionView.keyboardDismissMode = .onDrag
@@ -171,6 +177,10 @@ package final class NetworkListViewController: UICollectionViewController, UISea
 
         renderSearchText(model.searchText)
         resourceFilterSelectionDidChange(effectiveResourceFilters: model.effectiveResourceFilters)
+    }
+
+    private func applyBackgroundFromTraits() {
+        collectionView.backgroundColor = webInspectorBackgroundPolicy.backgroundColor
     }
 
     package func updateSearchResults(for searchController: UISearchController) {

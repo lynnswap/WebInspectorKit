@@ -1,7 +1,65 @@
 #if canImport(UIKit)
 import UIKit
 
+@available(iOS 26.0, *)
+package struct WebInspectorDrawsBackgroundTrait: UITraitDefinition {
+    package static let defaultValue = true
+}
+
+extension UITraitCollection {
+    @available(iOS 26.0, *)
+    package var webInspectorDrawsBackground: Bool {
+        self[WebInspectorDrawsBackgroundTrait.self]
+    }
+}
+
+extension UIMutableTraits {
+    @available(iOS 26.0, *)
+    package var webInspectorDrawsBackground: Bool {
+        get { self[WebInspectorDrawsBackgroundTrait.self] }
+        set { self[WebInspectorDrawsBackgroundTrait.self] = newValue }
+    }
+}
+
+@MainActor
+package struct WebInspectorBackgroundPolicy: Equatable {
+    package var drawsBackground: Bool
+
+    package init(drawsBackground: Bool) {
+        self.drawsBackground = drawsBackground
+    }
+
+    package var backgroundColor: UIColor {
+        drawsBackground ? .systemBackground : .clear
+    }
+}
+
 extension UIViewController {
+    @MainActor
+    package var webInspectorBackgroundPolicy: WebInspectorBackgroundPolicy {
+        if #available(iOS 26.0, *) {
+            return WebInspectorBackgroundPolicy(
+                drawsBackground: traitCollection.webInspectorDrawsBackground
+            )
+        }
+        return WebInspectorBackgroundPolicy(drawsBackground: true)
+    }
+
+    @MainActor
+    package func webInspectorSetDrawsBackgroundTraitOverride(_ drawsBackground: Bool) {
+        if #available(iOS 26.0, *) {
+            traitOverrides.webInspectorDrawsBackground = drawsBackground
+        }
+    }
+
+    @available(iOS 26.0, *)
+    @MainActor
+    package func webInspectorRegisterForBackgroundTraitChanges(_ action: @escaping (Self) -> Void) {
+        registerForTraitChanges([WebInspectorDrawsBackgroundTrait.self]) { (viewController: Self, _) in
+            action(viewController)
+        }
+    }
+
     func webInspectorDetachFromContainerForReuse() {
         if let navigationController = parent as? UINavigationController,
            navigationController.viewControllers.contains(where: { $0 === self }) {
@@ -22,20 +80,11 @@ extension UIViewController {
 }
 
 @MainActor
-func webInspectorApplyClearNavigationBarStyle(to navigationController: UINavigationController) {
-    navigationController.view.backgroundColor = .clear
-    navigationController.navigationBar.isTranslucent = true
-
-    let appearance = UINavigationBarAppearance()
-    appearance.configureWithTransparentBackground()
-    appearance.backgroundColor = .clear
-    appearance.backgroundEffect = nil
-    appearance.shadowColor = nil
-
-    navigationController.navigationBar.standardAppearance = appearance
-    navigationController.navigationBar.scrollEdgeAppearance = appearance
-    navigationController.navigationBar.compactAppearance = appearance
-    navigationController.navigationBar.compactScrollEdgeAppearance = appearance
+func webInspectorApplyNavigationControllerBackground(to navigationController: UINavigationController) {
+    let backgroundPolicy = navigationController.webInspectorBackgroundPolicy
+    navigationController.view.backgroundColor = backgroundPolicy.backgroundColor
+    // This policy owns WebInspector view backgrounds, not UIKit chrome. Leave
+    // UINavigationBarAppearance to UIKit so each presentation keeps its system material.
 }
 
 @MainActor
@@ -43,7 +92,7 @@ final class RegularSplitColumnNavigationController: UINavigationController {
     override init(rootViewController: UIViewController) {
         rootViewController.webInspectorDetachFromContainerForReuse()
         super.init(rootViewController: rootViewController)
-        webInspectorApplyClearNavigationBarStyle(to: self)
+        webInspectorApplyNavigationControllerBackground(to: self)
         setNavigationBarHidden(true, animated: false)
     }
 
@@ -55,6 +104,16 @@ final class RegularSplitColumnNavigationController: UINavigationController {
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         setNavigationBarHidden(true, animated: false)
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        webInspectorApplyNavigationControllerBackground(to: self)
+        if #available(iOS 26.0, *) {
+            webInspectorRegisterForBackgroundTraitChanges { navigationController in
+                webInspectorApplyNavigationControllerBackground(to: navigationController)
+            }
+        }
     }
 }
 
@@ -75,8 +134,17 @@ package final class RegularSplitRootViewController: UIViewController {
 
     override package func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .clear
+        applyBackgroundFromTraits()
+        if #available(iOS 26.0, *) {
+            webInspectorRegisterForBackgroundTraitChanges { viewController in
+                viewController.applyBackgroundFromTraits()
+            }
+        }
         installContentViewController()
+    }
+
+    private func applyBackgroundFromTraits() {
+        view.backgroundColor = webInspectorBackgroundPolicy.backgroundColor
     }
 
     private func installContentViewController() {

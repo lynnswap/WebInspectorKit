@@ -23,9 +23,8 @@ package final class NetworkCompactNavigationController: UINavigationController, 
         self.detailViewController = detailViewController
         listViewController.webInspectorDetachFromContainerForReuse()
         super.init(rootViewController: listViewController)
-        view.backgroundColor = .clear
         navigationBar.prefersLargeTitles = false
-        webInspectorApplyClearNavigationBarStyle(to: self)
+        webInspectorApplyNavigationControllerBackground(to: self)
         delegate = self
         listViewController.setRequestSelectionAction { [weak model] request in
             model?.selectRequest(request)
@@ -45,6 +44,16 @@ package final class NetworkCompactNavigationController: UINavigationController, 
         super.viewWillAppear(animated)
         syncStack(hasSelection: model.selectedRequest != nil, animated: false)
         startObservingSelection()
+    }
+
+    override package func viewDidLoad() {
+        super.viewDidLoad()
+        applyBackgroundFromTraits()
+        if #available(iOS 26.0, *) {
+            webInspectorRegisterForBackgroundTraitChanges { navigationController in
+                navigationController.applyBackgroundFromTraits()
+            }
+        }
     }
 
     override package func viewDidDisappear(_ animated: Bool) {
@@ -150,6 +159,10 @@ package final class NetworkCompactNavigationController: UINavigationController, 
         let shouldAnimate = pendingStackSyncAnimates
         pendingStackSyncAnimates = false
         syncStack(hasSelection: model.selectedRequest != nil, animated: shouldAnimate)
+    }
+
+    private func applyBackgroundFromTraits() {
+        webInspectorApplyNavigationControllerBackground(to: self)
     }
 }
 #endif

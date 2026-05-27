@@ -41,9 +41,18 @@ package final class DOMSplitViewController: UISplitViewController {
 
     override package func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .clear
+        applyBackgroundFromTraits()
+        if #available(iOS 26.0, *) {
+            webInspectorRegisterForBackgroundTraitChanges { splitViewController in
+                splitViewController.applyBackgroundFromTraits()
+            }
+        }
         configureSplitViewLayout()
         configureNavigationItem()
+    }
+
+    private func applyBackgroundFromTraits() {
+        view.backgroundColor = webInspectorBackgroundPolicy.backgroundColor
     }
 
     private func configureSplitViewLayout() {

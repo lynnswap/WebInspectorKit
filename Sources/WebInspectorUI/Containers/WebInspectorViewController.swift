@@ -12,6 +12,13 @@ public final class WebInspectorViewController: UIViewController {
     }
 
     public let session: WebInspectorSession
+    private var drawsBackgroundStorage = true
+
+    @available(iOS 26.0, *)
+    public var drawsBackground: Bool {
+        get { drawsBackgroundStorage }
+        set { setDrawsBackground(newValue) }
+    }
 
     private var activeHost: UIViewController?
     private var activeHostKind: HostKind?
@@ -24,6 +31,7 @@ public final class WebInspectorViewController: UIViewController {
     public init(session: WebInspectorSession = WebInspectorSession()) {
         self.session = session
         super.init(nibName: nil, bundle: nil)
+        webInspectorSetDrawsBackgroundTraitOverride(drawsBackgroundStorage)
     }
 
     public convenience init(tabs: [WebInspectorTab]) {
@@ -37,10 +45,15 @@ public final class WebInspectorViewController: UIViewController {
 
     public override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .clear
+        applyBackgroundFromTraits()
         rebuildLayout(forceHostReplacement: true)
         registerForTraitChanges([UITraitHorizontalSizeClass.self]) { (self: Self, _) in
             self.handleHorizontalSizeClassChange()
+        }
+        if #available(iOS 26.0, *) {
+            webInspectorRegisterForBackgroundTraitChanges { viewController in
+                viewController.applyBackgroundFromTraits()
+            }
         }
     }
 
@@ -58,6 +71,22 @@ public final class WebInspectorViewController: UIViewController {
 
     private func handleHorizontalSizeClassChange() {
         rebuildLayout()
+    }
+
+    private func applyBackgroundFromTraits() {
+        view.backgroundColor = webInspectorBackgroundPolicy.backgroundColor
+    }
+
+    private func setDrawsBackground(_ drawsBackground: Bool) {
+        guard drawsBackgroundStorage != drawsBackground else {
+            return
+        }
+        drawsBackgroundStorage = drawsBackground
+        webInspectorSetDrawsBackgroundTraitOverride(drawsBackground)
+        activeHost?.webInspectorSetDrawsBackgroundTraitOverride(drawsBackground)
+        if isViewLoaded {
+            applyBackgroundFromTraits()
+        }
     }
 
     private func rebuildLayout(forceHostReplacement: Bool = false) {
@@ -84,6 +113,7 @@ public final class WebInspectorViewController: UIViewController {
         case .regular:
             host = RegularTabContentViewController(session: session)
         }
+        host.webInspectorSetDrawsBackgroundTraitOverride(drawsBackgroundStorage)
 
         addChild(host)
         host.view.translatesAutoresizingMaskIntoConstraints = false

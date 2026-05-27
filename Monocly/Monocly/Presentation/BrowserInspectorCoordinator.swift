@@ -266,6 +266,9 @@ final class BrowserInspectorCoordinator {
 
         let anchor = resolvePresentationAnchor(from: presenter)
         let sheetController = WebInspectorViewController(session: inspectorSession)
+        if #available(iOS 26.0, *) {
+            sheetController.drawsBackground = false
+        }
         sheetController.modalPresentationStyle = .pageSheet
         applyDefaultDetents(to: sheetController)
         presentedSheetController = sheetController
@@ -355,6 +358,10 @@ final class BrowserInspectorCoordinator {
 
     var hasInspectorWindowForTesting: Bool {
         Self.inspectorWindowRegistry.presentationState
+    }
+
+    var presentedSheetControllerForTesting: UIViewController? {
+        presentedSheetController
     }
 
     static var inspectorWindowSceneActivityType: String {

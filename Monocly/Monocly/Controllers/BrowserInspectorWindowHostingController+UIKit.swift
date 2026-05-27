@@ -86,4 +86,12 @@ final class BrowserInspectorWindowHostingController: UIViewController {
         ])
     }
 }
+
+#if DEBUG
+extension BrowserInspectorWindowHostingController {
+    var inspectorContainerForTesting: WebInspectorViewController? {
+        inspectorContainer
+    }
+}
+#endif
 #endif

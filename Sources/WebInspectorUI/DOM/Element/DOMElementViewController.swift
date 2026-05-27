@@ -82,7 +82,12 @@ package final class DOMElementViewController: UIViewController {
 
     override package func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .clear
+        applyBackgroundFromTraits()
+        if #available(iOS 26.0, *) {
+            webInspectorRegisterForBackgroundTraitChanges { viewController in
+                viewController.applyBackgroundFromTraits()
+            }
+        }
         configureCollectionView()
         startObservingState()
         render()
@@ -118,7 +123,7 @@ package final class DOMElementViewController: UIViewController {
 
     private func configureCollectionView() {
         collectionView.translatesAutoresizingMaskIntoConstraints = false
-        collectionView.backgroundColor = .clear
+        collectionView.backgroundColor = webInspectorBackgroundPolicy.backgroundColor
         collectionView.alwaysBounceVertical = true
         collectionView.keyboardDismissMode = .onDrag
         collectionView.accessibilityIdentifier = "WebInspector.DOM.Element.StylesList"
@@ -130,6 +135,12 @@ package final class DOMElementViewController: UIViewController {
             collectionView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             collectionView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
+    }
+
+    private func applyBackgroundFromTraits() {
+        let backgroundColor = webInspectorBackgroundPolicy.backgroundColor
+        view.backgroundColor = backgroundColor
+        collectionView.backgroundColor = backgroundColor
     }
 
     private func makeDataSource() -> UICollectionViewDiffableDataSource<CSSStyleSectionIdentifier, ItemIdentifier> {
