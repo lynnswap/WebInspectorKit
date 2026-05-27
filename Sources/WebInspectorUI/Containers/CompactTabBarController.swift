@@ -31,8 +31,10 @@ package final class CompactTabBarController: UITabBarController, UITabBarControl
     override package func viewDidLoad() {
         super.viewDidLoad()
         applyBackgroundFromTraits()
-        registerForTraitChanges([WebInspectorDrawsBackgroundTrait.self]) { (self: Self, _) in
-            self.applyBackgroundFromTraits()
+        if #available(iOS 26.0, *) {
+            webInspectorRegisterForBackgroundTraitChanges { tabBarController in
+                tabBarController.applyBackgroundFromTraits()
+            }
         }
         tabBar.scrollEdgeAppearance = tabBar.standardAppearance
     }

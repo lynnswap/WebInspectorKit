@@ -20,6 +20,10 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func detailCanDisableBackgroundDrawing() {
+        guard #available(iOS 26.0, *) else {
+            return
+        }
+
         let model = NetworkPanelModel(network: NetworkSession())
         let viewController = NetworkDetailViewController(model: model)
         viewController.traitOverrides.webInspectorDrawsBackground = false
@@ -32,6 +36,10 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func listCanDisableBackgroundDrawing() {
+        guard #available(iOS 26.0, *) else {
+            return
+        }
+
         let model = NetworkPanelModel(network: NetworkSession())
         let viewController = NetworkListViewController(model: model)
         viewController.traitOverrides.webInspectorDrawsBackground = false

@@ -23,6 +23,10 @@ struct DOMContainerTests {
 
     @Test
     func elementViewControllerCanDisableBackgroundDrawing() {
+        guard #available(iOS 26.0, *) else {
+            return
+        }
+
         let dom = makeDOMSession()
         let viewController = DOMElementViewController(dom: dom)
         viewController.traitOverrides.webInspectorDrawsBackground = false

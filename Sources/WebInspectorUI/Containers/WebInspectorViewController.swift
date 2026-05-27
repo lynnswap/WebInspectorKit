@@ -31,7 +31,7 @@ public final class WebInspectorViewController: UIViewController {
     public init(session: WebInspectorSession = WebInspectorSession()) {
         self.session = session
         super.init(nibName: nil, bundle: nil)
-        traitOverrides.webInspectorDrawsBackground = drawsBackgroundStorage
+        webInspectorSetDrawsBackgroundTraitOverride(drawsBackgroundStorage)
     }
 
     public convenience init(tabs: [WebInspectorTab]) {
@@ -50,8 +50,10 @@ public final class WebInspectorViewController: UIViewController {
         registerForTraitChanges([UITraitHorizontalSizeClass.self]) { (self: Self, _) in
             self.handleHorizontalSizeClassChange()
         }
-        registerForTraitChanges([WebInspectorDrawsBackgroundTrait.self]) { (self: Self, _) in
-            self.applyBackgroundFromTraits()
+        if #available(iOS 26.0, *) {
+            webInspectorRegisterForBackgroundTraitChanges { viewController in
+                viewController.applyBackgroundFromTraits()
+            }
         }
     }
 
@@ -80,8 +82,8 @@ public final class WebInspectorViewController: UIViewController {
             return
         }
         drawsBackgroundStorage = drawsBackground
-        traitOverrides.webInspectorDrawsBackground = drawsBackground
-        activeHost?.traitOverrides.webInspectorDrawsBackground = drawsBackground
+        webInspectorSetDrawsBackgroundTraitOverride(drawsBackground)
+        activeHost?.webInspectorSetDrawsBackgroundTraitOverride(drawsBackground)
         if isViewLoaded {
             applyBackgroundFromTraits()
         }
@@ -111,7 +113,7 @@ public final class WebInspectorViewController: UIViewController {
         case .regular:
             host = RegularTabContentViewController(session: session)
         }
-        host.traitOverrides.webInspectorDrawsBackground = drawsBackgroundStorage
+        host.webInspectorSetDrawsBackgroundTraitOverride(drawsBackgroundStorage)
 
         addChild(host)
         host.view.translatesAutoresizingMaskIntoConstraints = false

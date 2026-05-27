@@ -1,17 +1,20 @@
 #if canImport(UIKit)
 import UIKit
 
+@available(iOS 26.0, *)
 package struct WebInspectorDrawsBackgroundTrait: UITraitDefinition {
     package static let defaultValue = true
 }
 
 extension UITraitCollection {
+    @available(iOS 26.0, *)
     package var webInspectorDrawsBackground: Bool {
         self[WebInspectorDrawsBackgroundTrait.self]
     }
 }
 
 extension UIMutableTraits {
+    @available(iOS 26.0, *)
     package var webInspectorDrawsBackground: Bool {
         get { self[WebInspectorDrawsBackgroundTrait.self] }
         set { self[WebInspectorDrawsBackgroundTrait.self] = newValue }
@@ -34,9 +37,27 @@ package struct WebInspectorBackgroundPolicy: Equatable {
 extension UIViewController {
     @MainActor
     package var webInspectorBackgroundPolicy: WebInspectorBackgroundPolicy {
-        WebInspectorBackgroundPolicy(
-            drawsBackground: traitCollection.webInspectorDrawsBackground
-        )
+        if #available(iOS 26.0, *) {
+            return WebInspectorBackgroundPolicy(
+                drawsBackground: traitCollection.webInspectorDrawsBackground
+            )
+        }
+        return WebInspectorBackgroundPolicy(drawsBackground: true)
+    }
+
+    @MainActor
+    package func webInspectorSetDrawsBackgroundTraitOverride(_ drawsBackground: Bool) {
+        if #available(iOS 26.0, *) {
+            traitOverrides.webInspectorDrawsBackground = drawsBackground
+        }
+    }
+
+    @available(iOS 26.0, *)
+    @MainActor
+    package func webInspectorRegisterForBackgroundTraitChanges(_ action: @escaping (Self) -> Void) {
+        registerForTraitChanges([WebInspectorDrawsBackgroundTrait.self]) { (viewController: Self, _) in
+            action(viewController)
+        }
     }
 
     func webInspectorDetachFromContainerForReuse() {
@@ -88,8 +109,10 @@ final class RegularSplitColumnNavigationController: UINavigationController {
     override func viewDidLoad() {
         super.viewDidLoad()
         webInspectorApplyNavigationControllerBackground(to: self)
-        registerForTraitChanges([WebInspectorDrawsBackgroundTrait.self]) { (self: Self, _) in
-            webInspectorApplyNavigationControllerBackground(to: self)
+        if #available(iOS 26.0, *) {
+            webInspectorRegisterForBackgroundTraitChanges { navigationController in
+                webInspectorApplyNavigationControllerBackground(to: navigationController)
+            }
         }
     }
 }
@@ -112,8 +135,10 @@ package final class RegularSplitRootViewController: UIViewController {
     override package func viewDidLoad() {
         super.viewDidLoad()
         applyBackgroundFromTraits()
-        registerForTraitChanges([WebInspectorDrawsBackgroundTrait.self]) { (self: Self, _) in
-            self.applyBackgroundFromTraits()
+        if #available(iOS 26.0, *) {
+            webInspectorRegisterForBackgroundTraitChanges { viewController in
+                viewController.applyBackgroundFromTraits()
+            }
         }
         installContentViewController()
     }

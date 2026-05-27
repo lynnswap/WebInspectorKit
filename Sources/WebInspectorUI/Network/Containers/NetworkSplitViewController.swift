@@ -36,8 +36,10 @@ package final class NetworkSplitViewController: UISplitViewController {
     override package func viewDidLoad() {
         super.viewDidLoad()
         applyBackgroundFromTraits()
-        registerForTraitChanges([WebInspectorDrawsBackgroundTrait.self]) { (self: Self, _) in
-            self.applyBackgroundFromTraits()
+        if #available(iOS 26.0, *) {
+            webInspectorRegisterForBackgroundTraitChanges { splitViewController in
+                splitViewController.applyBackgroundFromTraits()
+            }
         }
         configureNavigationItem()
     }
@@ -100,8 +102,10 @@ private final class NetworkListColumnNavigationController: UINavigationControlle
     override func viewDidLoad() {
         super.viewDidLoad()
         applyBackgroundFromTraits()
-        registerForTraitChanges([WebInspectorDrawsBackgroundTrait.self]) { (self: Self, _) in
-            self.applyBackgroundFromTraits()
+        if #available(iOS 26.0, *) {
+            webInspectorRegisterForBackgroundTraitChanges { navigationController in
+                navigationController.applyBackgroundFromTraits()
+            }
         }
     }
 

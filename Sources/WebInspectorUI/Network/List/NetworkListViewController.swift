@@ -88,8 +88,10 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         title = nil
         view.accessibilityIdentifier = "WebInspector.Network.ListPane"
         applyBackgroundFromTraits()
-        registerForTraitChanges([WebInspectorDrawsBackgroundTrait.self]) { (self: Self, _) in
-            self.applyBackgroundFromTraits()
+        if #available(iOS 26.0, *) {
+            webInspectorRegisterForBackgroundTraitChanges { viewController in
+                viewController.applyBackgroundFromTraits()
+            }
         }
 
         collectionView.alwaysBounceVertical = true

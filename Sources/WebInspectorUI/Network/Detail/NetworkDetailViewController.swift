@@ -102,8 +102,10 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
     override package func viewDidLoad() {
         super.viewDidLoad()
         applyBackgroundFromTraits()
-        registerForTraitChanges([WebInspectorDrawsBackgroundTrait.self]) { (self: Self, _) in
-            self.applyBackgroundFromTraits()
+        if #available(iOS 26.0, *) {
+            webInspectorRegisterForBackgroundTraitChanges { viewController in
+                viewController.applyBackgroundFromTraits()
+            }
         }
         configureNavigationItem()
         installCollectionView()
