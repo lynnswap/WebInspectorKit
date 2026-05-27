@@ -142,6 +142,7 @@ struct NetworkDetailViewControllerTests {
         let didSwitch = await waitUntil {
             viewController.currentModeForTesting == .requestBody
                 && viewController.bodyTextViewForTesting.text == "name=Jane Doe\ncity=Tokyo East"
+                && viewController.bodyTextViewForTesting.configuration.drawsBackground == false
         }
         #expect(didSwitch)
     }

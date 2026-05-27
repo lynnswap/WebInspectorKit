@@ -11,7 +11,8 @@ final class NetworkBodyViewController: UIViewController {
         language: .json,
         isEditable: false,
         lineWrappingEnabled: true,
-        colorTheme: .v2WebInspectorPlainText
+        colorTheme: .v2WebInspectorPlainText,
+        drawsBackground: false
     )
     private lazy var syntaxView = SyntaxEditorView(
         document: syntaxDocument,
@@ -46,7 +47,6 @@ final class NetworkBodyViewController: UIViewController {
         syntaxView.isSelectable = true
         syntaxView.isScrollEnabled = true
         syntaxView.alwaysBounceVertical = true
-        syntaxView.backgroundColor = .clear
         syntaxView.contentInsetAdjustmentBehavior = .automatic
         syntaxView.keyboardDismissMode = .onDrag
         syntaxView.accessibilityIdentifier = "WebInspector.Network.BodyView"
