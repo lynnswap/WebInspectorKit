@@ -4248,7 +4248,7 @@ func reloadDOMDocumentCancelsQueuedDeleteUndoOperationsBeforeTheySend() async th
 
     let countBeforeQueuedOperations = await backend.sentTargetMessages().count
     let reloadReplyTask = Task {
-        let getDocument = await backend.waitForTargetMessage(method: "DOM.getDocument", after: countBeforeQueuedOperations)
+        let getDocument = try await waitForTargetMessage(backend, method: "DOM.getDocument", after: countBeforeQueuedOperations)
         await receiveTargetReply(
             transport,
             targetID: getDocument.targetIdentifier,
@@ -4763,32 +4763,56 @@ private func targetMessageMethods(_ backend: FakeTransportBackend) async -> [Str
 private func waitForTargetMessage(
     _ backend: FakeTransportBackend,
     method: String,
-    after count: Int = 0
+    after count: Int = 0,
+    timeout: Duration = .seconds(5)
 ) async throws -> SentTargetMessage {
-    try await waitUntil(timeoutError: TransportError.replyTimeout(method: method, targetID: nil)) {
-        let messages = await backend.sentTargetMessages()
-        return messages.dropFirst(count).first { sent in
-            (try? messageMethod(sent.message)) == method
-        }
-    }
+    try await waitForBackendTargetMessage(
+        backend,
+        method: method,
+        ordinal: 0,
+        after: count,
+        timeout: timeout
+    )
 }
 
 private func waitForTargetMessage(
     _ backend: FakeTransportBackend,
     method: String,
     ordinal: Int,
-    after count: Int = 0
+    after count: Int = 0,
+    timeout: Duration = .seconds(5)
 ) async throws -> SentTargetMessage {
-    try await waitUntil(timeoutError: TransportError.replyTimeout(method: method, targetID: nil)) {
-        let matches = await backend.sentTargetMessages()
-            .dropFirst(count)
-            .filter { sent in
-                (try? messageMethod(sent.message)) == method
-            }
-        guard matches.indices.contains(ordinal) else {
-            return nil
+    try await waitForBackendTargetMessage(
+        backend,
+        method: method,
+        ordinal: ordinal,
+        after: count,
+        timeout: timeout
+    )
+}
+
+private func waitForBackendTargetMessage(
+    _ backend: FakeTransportBackend,
+    method: String,
+    ordinal: Int,
+    after count: Int,
+    timeout: Duration
+) async throws -> SentTargetMessage {
+    try await withThrowingTaskGroup(of: SentTargetMessage.self) { group in
+        defer { group.cancelAll() }
+
+        group.addTask {
+            try await backend.waitForTargetMessage(method: method, ordinal: ordinal, after: count)
         }
-        return matches[ordinal]
+        group.addTask {
+            try await Task.sleep(for: timeout)
+            throw TransportError.replyTimeout(method: method, targetID: nil)
+        }
+
+        guard let message = try await group.next() else {
+            throw TransportError.replyTimeout(method: method, targetID: nil)
+        }
+        return message
     }
 }
 
