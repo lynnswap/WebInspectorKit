@@ -12,6 +12,18 @@ public final class WebInspectorViewController: UIViewController {
     }
 
     public let session: WebInspectorSession
+    public var drawsBackground: Bool {
+        didSet {
+            guard drawsBackground != oldValue else {
+                return
+            }
+            traitOverrides.webInspectorDrawsBackground = drawsBackground
+            activeHost?.traitOverrides.webInspectorDrawsBackground = drawsBackground
+            if isViewLoaded {
+                applyBackgroundFromTraits()
+            }
+        }
+    }
 
     private var activeHost: UIViewController?
     private var activeHostKind: HostKind?
@@ -21,13 +33,24 @@ public final class WebInspectorViewController: UIViewController {
         }
     }
 
-    public init(session: WebInspectorSession = WebInspectorSession()) {
+    public init(
+        session: WebInspectorSession = WebInspectorSession(),
+        drawsBackground: Bool = true
+    ) {
         self.session = session
+        self.drawsBackground = drawsBackground
         super.init(nibName: nil, bundle: nil)
+        traitOverrides.webInspectorDrawsBackground = drawsBackground
     }
 
-    public convenience init(tabs: [WebInspectorTab]) {
-        self.init(session: WebInspectorSession(tabs: tabs))
+    public convenience init(
+        tabs: [WebInspectorTab],
+        drawsBackground: Bool = true
+    ) {
+        self.init(
+            session: WebInspectorSession(tabs: tabs),
+            drawsBackground: drawsBackground
+        )
     }
 
     @available(*, unavailable)
@@ -37,10 +60,13 @@ public final class WebInspectorViewController: UIViewController {
 
     public override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .clear
+        applyBackgroundFromTraits()
         rebuildLayout(forceHostReplacement: true)
         registerForTraitChanges([UITraitHorizontalSizeClass.self]) { (self: Self, _) in
             self.handleHorizontalSizeClassChange()
+        }
+        registerForTraitChanges([WebInspectorDrawsBackgroundTrait.self]) { (self: Self, _) in
+            self.applyBackgroundFromTraits()
         }
     }
 
@@ -58,6 +84,10 @@ public final class WebInspectorViewController: UIViewController {
 
     private func handleHorizontalSizeClassChange() {
         rebuildLayout()
+    }
+
+    private func applyBackgroundFromTraits() {
+        view.backgroundColor = webInspectorBackgroundPolicy.backgroundColor
     }
 
     private func rebuildLayout(forceHostReplacement: Bool = false) {
@@ -84,6 +114,7 @@ public final class WebInspectorViewController: UIViewController {
         case .regular:
             host = RegularTabContentViewController(session: session)
         }
+        host.traitOverrides.webInspectorDrawsBackground = drawsBackground
 
         addChild(host)
         host.view.translatesAutoresizingMaskIntoConstraints = false

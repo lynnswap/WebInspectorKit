@@ -19,6 +19,29 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func detailCanDisableBackgroundDrawing() {
+        let model = NetworkPanelModel(network: NetworkSession())
+        let viewController = NetworkDetailViewController(model: model)
+        viewController.traitOverrides.webInspectorDrawsBackground = false
+
+        viewController.loadViewIfNeeded()
+
+        #expect(viewController.view.backgroundColor == .clear)
+        #expect(viewController.collectionViewForTesting.backgroundColor == .clear)
+    }
+
+    @Test
+    func listCanDisableBackgroundDrawing() {
+        let model = NetworkPanelModel(network: NetworkSession())
+        let viewController = NetworkListViewController(model: model)
+        viewController.traitOverrides.webInspectorDrawsBackground = false
+
+        viewController.loadViewIfNeeded()
+
+        #expect(viewController.collectionViewForTesting.backgroundColor == .clear)
+    }
+
+    @Test
     func detailRendersOverviewRequestAndResponseHeaders() async throws {
         let network = NetworkSession()
         let request = try #require(

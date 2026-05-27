@@ -23,7 +23,10 @@ final class NetworkBodyViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .clear
+        applyBackgroundFromTraits()
+        registerForTraitChanges([WebInspectorDrawsBackgroundTrait.self]) { (self: Self, _) in
+            self.applyBackgroundFromTraits()
+        }
         configureSyntaxView()
     }
 
@@ -58,6 +61,10 @@ final class NetworkBodyViewController: UIViewController {
             syntaxView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             syntaxView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
+    }
+
+    private func applyBackgroundFromTraits() {
+        view.backgroundColor = webInspectorBackgroundPolicy.backgroundColor
     }
 
     private func startObserving(body: NetworkBody?) {

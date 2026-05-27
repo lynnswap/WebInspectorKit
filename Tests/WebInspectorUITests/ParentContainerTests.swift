@@ -15,6 +15,44 @@ struct ParentContainerTests {
 
         #expect(session.interface.tabs.map(\.id) == [WebInspectorTab.dom.id, WebInspectorTab.network.id])
         #expect(viewController.session.interface.tabs.map(\.id) == [WebInspectorTab.dom.id, WebInspectorTab.network.id])
+        #expect(viewController.drawsBackground)
+    }
+
+    @Test
+    func viewControllerBackgroundDrawingDefaultsToSystemBackground() {
+        let viewController = WebInspectorViewController()
+
+        viewController.loadViewIfNeeded()
+
+        #expect(viewController.drawsBackground)
+        #expect(viewController.view.backgroundColor == .systemBackground)
+    }
+
+    @Test
+    func viewControllerCanDisableBackgroundDrawingFromSessionInitializer() {
+        let viewController = WebInspectorViewController(
+            session: WebInspectorSession(),
+            drawsBackground: false
+        )
+
+        viewController.loadViewIfNeeded()
+
+        #expect(viewController.drawsBackground == false)
+        #expect(viewController.view.backgroundColor == .clear)
+    }
+
+    @Test
+    func viewControllerCanDisableBackgroundDrawingFromTabsInitializer() {
+        let viewController = WebInspectorViewController(
+            tabs: [.network],
+            drawsBackground: false
+        )
+
+        viewController.loadViewIfNeeded()
+
+        #expect(viewController.drawsBackground == false)
+        #expect(viewController.session.interface.tabs.map(\.id) == [WebInspectorTab.network.id])
+        #expect(viewController.view.backgroundColor == .clear)
     }
 
     @Test
@@ -51,6 +89,23 @@ struct ParentContainerTests {
 
         viewController.horizontalSizeClassOverrideForTesting = .regular
         #expect(viewController.activeHostViewControllerForTesting is RegularTabContentViewController)
+    }
+
+    @Test
+    func topLevelContainerPropagatesBackgroundDrawingTraitToHosts() throws {
+        let viewController = WebInspectorViewController(drawsBackground: false)
+        viewController.loadViewIfNeeded()
+
+        viewController.horizontalSizeClassOverrideForTesting = .compact
+        let compactHost = try #require(viewController.activeHostViewControllerForTesting as? CompactTabBarController)
+        compactHost.loadViewIfNeeded()
+        #expect(compactHost.view.backgroundColor == .clear)
+
+        viewController.drawsBackground = true
+        viewController.horizontalSizeClassOverrideForTesting = .regular
+        let regularHost = try #require(viewController.activeHostViewControllerForTesting as? RegularTabContentViewController)
+        regularHost.loadViewIfNeeded()
+        #expect(regularHost.view.backgroundColor == .systemBackground)
     }
 
     @Test

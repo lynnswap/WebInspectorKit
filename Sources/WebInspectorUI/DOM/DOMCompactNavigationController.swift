@@ -9,9 +9,8 @@ package final class DOMCompactNavigationController: UINavigationController {
     package override init(rootViewController: UIViewController) {
         rootViewController.webInspectorDetachFromContainerForReuse()
         super.init(rootViewController: rootViewController)
-        view.backgroundColor = .clear
         navigationBar.prefersLargeTitles = false
-        webInspectorApplyClearNavigationBarStyle(to: self)
+        webInspectorApplyNavigationControllerBackground(to: self)
         rootViewController.navigationItem.style = .browser
     }
 
@@ -21,9 +20,8 @@ package final class DOMCompactNavigationController: UINavigationController {
     ) {
         rootViewController.webInspectorDetachFromContainerForReuse()
         super.init(rootViewController: rootViewController)
-        view.backgroundColor = .clear
         navigationBar.prefersLargeTitles = false
-        webInspectorApplyClearNavigationBarStyle(to: self)
+        webInspectorApplyNavigationControllerBackground(to: self)
         rootViewController.navigationItem.style = .browser
         let treeViewController = rootViewController as? DOMTreeViewController
         let navigationItems = DOMNavigationItems(session: session)
@@ -36,6 +34,18 @@ package final class DOMCompactNavigationController: UINavigationController {
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         nil
+    }
+
+    override package func viewDidLoad() {
+        super.viewDidLoad()
+        applyBackgroundFromTraits()
+        registerForTraitChanges([WebInspectorDrawsBackgroundTrait.self]) { (self: Self, _) in
+            self.applyBackgroundFromTraits()
+        }
+    }
+
+    private func applyBackgroundFromTraits() {
+        webInspectorApplyNavigationControllerBackground(to: self)
     }
 }
 

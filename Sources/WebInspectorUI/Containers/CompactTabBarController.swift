@@ -30,8 +30,15 @@ package final class CompactTabBarController: UITabBarController, UITabBarControl
 
     override package func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .clear
+        applyBackgroundFromTraits()
+        registerForTraitChanges([WebInspectorDrawsBackgroundTrait.self]) { (self: Self, _) in
+            self.applyBackgroundFromTraits()
+        }
         tabBar.scrollEdgeAppearance = tabBar.standardAppearance
+    }
+
+    private func applyBackgroundFromTraits() {
+        view.backgroundColor = webInspectorBackgroundPolicy.backgroundColor
     }
 
     package func tabBarController(

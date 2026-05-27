@@ -31,7 +31,7 @@ package final class RegularTabContentViewController: UINavigationController {
         super.init(nibName: nil, bundle: nil)
 
         navigationBar.prefersLargeTitles = false
-        webInspectorApplyClearNavigationBarStyle(to: self)
+        webInspectorApplyNavigationControllerBackground(to: self)
 
         renderTabsAndSelection()
         bindInterface()
@@ -48,7 +48,15 @@ package final class RegularTabContentViewController: UINavigationController {
 
     override package func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .clear
+        applyBackgroundFromTraits()
+        registerForTraitChanges([WebInspectorDrawsBackgroundTrait.self]) { (self: Self, _) in
+            self.applyBackgroundFromTraits()
+        }
+    }
+
+    private func applyBackgroundFromTraits() {
+        view.backgroundColor = webInspectorBackgroundPolicy.backgroundColor
+        webInspectorApplyNavigationControllerBackground(to: self)
     }
 
     @objc

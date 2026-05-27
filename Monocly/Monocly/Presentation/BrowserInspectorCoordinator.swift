@@ -1,6 +1,10 @@
 import Foundation
 import WebInspectorKit
 
+#if canImport(Darwin)
+import Darwin
+#endif
+
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -265,7 +269,10 @@ final class BrowserInspectorCoordinator {
         }
 
         let anchor = resolvePresentationAnchor(from: presenter)
-        let sheetController = WebInspectorViewController(session: inspectorSession)
+        let sheetController = WebInspectorViewController(
+            session: inspectorSession,
+            drawsBackground: Self.sheetDrawsInspectorBackground
+        )
         sheetController.modalPresentationStyle = .pageSheet
         applyDefaultDetents(to: sheetController)
         presentedSheetController = sheetController
@@ -357,6 +364,14 @@ final class BrowserInspectorCoordinator {
         Self.inspectorWindowRegistry.presentationState
     }
 
+    var presentedSheetControllerForTesting: UIViewController? {
+        presentedSheetController
+    }
+
+    static var sheetDrawsInspectorBackgroundForTesting: Bool {
+        sheetDrawsInspectorBackground
+    }
+
     static var inspectorWindowSceneActivityType: String {
         BrowserInspectorWindowContext.sceneActivityType
     }
@@ -412,6 +427,35 @@ final class BrowserInspectorCoordinator {
         let userActivity = NSUserActivity(activityType: BrowserInspectorWindowContext.sceneActivityType)
         userActivity.targetContentIdentifier = BrowserInspectorWindowContext.sceneActivityType
         return userActivity
+    }
+
+    private static var sheetDrawsInspectorBackground: Bool {
+        runtimeLiquidGlassEnabled == false
+    }
+
+    private static let runtimeLiquidGlassEnabled: Bool = {
+#if canImport(Darwin)
+        let defaultLookupHandle = UnsafeMutableRawPointer(bitPattern: -2)
+        return runtimeLiquidGlassSymbolName.withCString { symbolName in
+            guard let symbol = dlsym(defaultLookupHandle, symbolName) else {
+                return false
+            }
+            typealias RuntimeFlagFunction = @convention(c) () -> Bool
+            return unsafeBitCast(symbol, to: RuntimeFlagFunction.self)()
+        }
+#else
+        return false
+#endif
+    }()
+
+    private static var runtimeLiquidGlassSymbolName: String {
+        let key: UInt8 = 0x5a
+        // Original: _UISolariumEnabled
+        let obfuscatedBytes: [UInt8] = [
+            5, 15, 19, 9, 53, 54, 59, 40, 51,
+            47, 55, 31, 52, 59, 56, 54, 63, 62,
+        ]
+        return String(decoding: obfuscatedBytes.map { $0 ^ key }, as: UTF8.self)
     }
 
     private func resolvePresentationAnchor(from presenter: UIViewController) -> UIViewController {

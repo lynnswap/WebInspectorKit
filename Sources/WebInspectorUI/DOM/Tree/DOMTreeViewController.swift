@@ -65,16 +65,24 @@ package final class DOMTreeViewController: UIViewController {
     }
 
     override package func loadView() {
-        treeView.backgroundColor = .clear
+        treeView.backgroundColor = webInspectorBackgroundPolicy.backgroundColor
         treeView.accessibilityIdentifier = "WebInspector.DOM.Tree.NativeTextView"
         view = treeView
     }
 
     override package func viewDidLoad() {
         super.viewDidLoad()
+        applyBackgroundFromTraits()
+        registerForTraitChanges([WebInspectorDrawsBackgroundTrait.self]) { (self: Self, _) in
+            self.applyBackgroundFromTraits()
+        }
         if let session {
             startObservingDOMRoot(session: session)
         }
+    }
+
+    private func applyBackgroundFromTraits() {
+        treeView.backgroundColor = webInspectorBackgroundPolicy.backgroundColor
     }
 
     override package func viewIsAppearing(_ animated: Bool) {

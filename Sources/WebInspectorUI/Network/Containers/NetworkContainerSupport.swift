@@ -1,7 +1,44 @@
 #if canImport(UIKit)
 import UIKit
 
+package struct WebInspectorDrawsBackgroundTrait: UITraitDefinition {
+    package static let defaultValue = true
+}
+
+extension UITraitCollection {
+    package var webInspectorDrawsBackground: Bool {
+        self[WebInspectorDrawsBackgroundTrait.self]
+    }
+}
+
+extension UIMutableTraits {
+    package var webInspectorDrawsBackground: Bool {
+        get { self[WebInspectorDrawsBackgroundTrait.self] }
+        set { self[WebInspectorDrawsBackgroundTrait.self] = newValue }
+    }
+}
+
+@MainActor
+package struct WebInspectorBackgroundPolicy: Equatable {
+    package var drawsBackground: Bool
+
+    package init(drawsBackground: Bool) {
+        self.drawsBackground = drawsBackground
+    }
+
+    package var backgroundColor: UIColor {
+        drawsBackground ? .systemBackground : .clear
+    }
+}
+
 extension UIViewController {
+    @MainActor
+    package var webInspectorBackgroundPolicy: WebInspectorBackgroundPolicy {
+        WebInspectorBackgroundPolicy(
+            drawsBackground: traitCollection.webInspectorDrawsBackground
+        )
+    }
+
     func webInspectorDetachFromContainerForReuse() {
         if let navigationController = parent as? UINavigationController,
            navigationController.viewControllers.contains(where: { $0 === self }) {
@@ -22,20 +59,9 @@ extension UIViewController {
 }
 
 @MainActor
-func webInspectorApplyClearNavigationBarStyle(to navigationController: UINavigationController) {
-    navigationController.view.backgroundColor = .clear
-    navigationController.navigationBar.isTranslucent = true
-
-    let appearance = UINavigationBarAppearance()
-    appearance.configureWithTransparentBackground()
-    appearance.backgroundColor = .clear
-    appearance.backgroundEffect = nil
-    appearance.shadowColor = nil
-
-    navigationController.navigationBar.standardAppearance = appearance
-    navigationController.navigationBar.scrollEdgeAppearance = appearance
-    navigationController.navigationBar.compactAppearance = appearance
-    navigationController.navigationBar.compactScrollEdgeAppearance = appearance
+func webInspectorApplyNavigationControllerBackground(to navigationController: UINavigationController) {
+    let backgroundPolicy = navigationController.webInspectorBackgroundPolicy
+    navigationController.view.backgroundColor = backgroundPolicy.backgroundColor
 }
 
 @MainActor
@@ -43,7 +69,7 @@ final class RegularSplitColumnNavigationController: UINavigationController {
     override init(rootViewController: UIViewController) {
         rootViewController.webInspectorDetachFromContainerForReuse()
         super.init(rootViewController: rootViewController)
-        webInspectorApplyClearNavigationBarStyle(to: self)
+        webInspectorApplyNavigationControllerBackground(to: self)
         setNavigationBarHidden(true, animated: false)
     }
 
@@ -55,6 +81,14 @@ final class RegularSplitColumnNavigationController: UINavigationController {
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         setNavigationBarHidden(true, animated: false)
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        webInspectorApplyNavigationControllerBackground(to: self)
+        registerForTraitChanges([WebInspectorDrawsBackgroundTrait.self]) { (self: Self, _) in
+            webInspectorApplyNavigationControllerBackground(to: self)
+        }
     }
 }
 
@@ -75,8 +109,15 @@ package final class RegularSplitRootViewController: UIViewController {
 
     override package func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .clear
+        applyBackgroundFromTraits()
+        registerForTraitChanges([WebInspectorDrawsBackgroundTrait.self]) { (self: Self, _) in
+            self.applyBackgroundFromTraits()
+        }
         installContentViewController()
+    }
+
+    private func applyBackgroundFromTraits() {
+        view.backgroundColor = webInspectorBackgroundPolicy.backgroundColor
     }
 
     private func installContentViewController() {

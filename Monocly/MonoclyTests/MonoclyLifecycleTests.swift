@@ -3,6 +3,7 @@ import Testing
 
 #if os(iOS)
 import UIKit
+import WebInspectorKit
 
 @Suite(.serialized)
 @MainActor
@@ -192,6 +193,29 @@ struct MonoclyLifecycleTests {
             #expect(didPresent == false)
             #expect(activationCount == 0)
             #expect(coordinator.hasInspectorWindowForTesting == false)
+        }
+    }
+
+    @Test
+    func presentSheetUsesLiquidGlassBackgroundPolicy() throws {
+        try withCleanState { context in
+            let fixture = try makeHostedRootViewController(context: context)
+            let coordinator = BrowserInspectorCoordinator()
+            defer {
+                coordinator.invalidate()
+                fixture.rootViewController.dismiss(animated: false)
+            }
+
+            let didPresent = coordinator.presentSheet(
+                from: fixture.rootViewController,
+                inspectorSession: fixture.rootViewController.inspectorSession
+            )
+
+            let sheetController = try #require(
+                coordinator.presentedSheetControllerForTesting as? WebInspectorViewController
+            )
+            #expect(didPresent)
+            #expect(sheetController.drawsBackground == BrowserInspectorCoordinator.sheetDrawsInspectorBackgroundForTesting)
         }
     }
 
@@ -393,6 +417,7 @@ struct MonoclyLifecycleTests {
             let inspectorWindow = try #require(sceneDelegate.window)
             context.retain(inspectorWindow)
             #expect(inspectorWindow.rootViewController === sceneDelegate.inspectorViewController)
+            #expect(sceneDelegate.inspectorViewController?.inspectorContainerForTesting?.drawsBackground == true)
             #expect(coordinator.hasInspectorWindowForTesting)
 
             sceneDelegate.scene(

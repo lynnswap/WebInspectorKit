@@ -62,7 +62,7 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
     private lazy var collectionView: UICollectionView = {
         let collectionView = UICollectionView(frame: .zero, collectionViewLayout: Self.makeListLayout())
         collectionView.translatesAutoresizingMaskIntoConstraints = false
-        collectionView.backgroundColor = .clear
+        collectionView.backgroundColor = webInspectorBackgroundPolicy.backgroundColor
         collectionView.alwaysBounceVertical = true
         collectionView.accessibilityIdentifier = "WebInspector.Network.Detail"
         collectionView.delegate = self
@@ -101,7 +101,10 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
 
     override package func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .clear
+        applyBackgroundFromTraits()
+        registerForTraitChanges([WebInspectorDrawsBackgroundTrait.self]) { (self: Self, _) in
+            self.applyBackgroundFromTraits()
+        }
         configureNavigationItem()
         installCollectionView()
         installBodyViewController()
@@ -116,6 +119,12 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
         observationScope.observe(model) { [weak self] event, model in
             self?.render(selectedRequest: model.selectedRequest, reloadData: event.kind == .initial)
         }
+    }
+
+    private func applyBackgroundFromTraits() {
+        let backgroundColor = webInspectorBackgroundPolicy.backgroundColor
+        view.backgroundColor = backgroundColor
+        collectionView.backgroundColor = backgroundColor
     }
 
     private func configureNavigationItem() {

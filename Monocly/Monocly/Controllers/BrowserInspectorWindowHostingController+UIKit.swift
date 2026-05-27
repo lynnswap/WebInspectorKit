@@ -50,7 +50,10 @@ final class BrowserInspectorWindowHostingController: UIViewController {
         removeInspectorContainerIfNeeded()
 
         placeholderLabel.removeFromSuperview()
-        let container = WebInspectorViewController(session: inspectorContext.inspectorSession)
+        let container = WebInspectorViewController(
+            session: inspectorContext.inspectorSession,
+            drawsBackground: true
+        )
         addChild(container)
         container.view.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(container.view)
@@ -86,4 +89,12 @@ final class BrowserInspectorWindowHostingController: UIViewController {
         ])
     }
 }
+
+#if DEBUG
+extension BrowserInspectorWindowHostingController {
+    var inspectorContainerForTesting: WebInspectorViewController? {
+        inspectorContainer
+    }
+}
+#endif
 #endif

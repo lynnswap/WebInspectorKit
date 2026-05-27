@@ -35,8 +35,15 @@ package final class NetworkSplitViewController: UISplitViewController {
 
     override package func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .clear
+        applyBackgroundFromTraits()
+        registerForTraitChanges([WebInspectorDrawsBackgroundTrait.self]) { (self: Self, _) in
+            self.applyBackgroundFromTraits()
+        }
         configureNavigationItem()
+    }
+
+    private func applyBackgroundFromTraits() {
+        view.backgroundColor = webInspectorBackgroundPolicy.backgroundColor
     }
 
     private func configureSplitViewLayout() {
@@ -75,7 +82,7 @@ private final class NetworkListColumnNavigationController: UINavigationControlle
     override init(rootViewController: UIViewController) {
         rootViewController.webInspectorDetachFromContainerForReuse()
         super.init(rootViewController: rootViewController)
-        webInspectorApplyClearNavigationBarStyle(to: self)
+        webInspectorApplyNavigationControllerBackground(to: self)
         navigationBar.prefersLargeTitles = false
         setNavigationBarHidden(false, animated: false)
     }
@@ -88,6 +95,18 @@ private final class NetworkListColumnNavigationController: UINavigationControlle
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         setNavigationBarHidden(false, animated: false)
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        applyBackgroundFromTraits()
+        registerForTraitChanges([WebInspectorDrawsBackgroundTrait.self]) { (self: Self, _) in
+            self.applyBackgroundFromTraits()
+        }
+    }
+
+    private func applyBackgroundFromTraits() {
+        webInspectorApplyNavigationControllerBackground(to: self)
     }
 }
 
