@@ -250,6 +250,60 @@ func cancellationFailsPendingReplyImmediately() async throws {
 }
 
 @Test
+func fakeBackendTargetMessageWaiterUsesAfterAndOrdinal() async throws {
+    let backend = FakeTransportBackend()
+
+    try await backend.sendJSONString(targetCommandWrapperMessage(outerID: 1, innerID: 1, method: "DOM.getDocument"))
+    try await backend.sendJSONString(targetCommandWrapperMessage(outerID: 2, innerID: 2, method: "CSS.getMatchedStylesForNode"))
+    try await backend.sendJSONString(targetCommandWrapperMessage(outerID: 3, innerID: 3, method: "DOM.getDocument"))
+
+    let secondDocumentByOrdinal = try await backend.waitForTargetMessage(method: "DOM.getDocument", ordinal: 1)
+    let secondDocumentByOffset = try await backend.waitForTargetMessage(method: "DOM.getDocument", after: 1)
+
+    #expect(try messageID(secondDocumentByOrdinal.message) == 3)
+    #expect(try messageID(secondDocumentByOffset.message) == 3)
+}
+
+@Test
+func fakeBackendTargetMessageWaiterResumesFutureOrdinalMatch() async throws {
+    let backend = FakeTransportBackend()
+    let waitTask = Task {
+        try await backend.waitForTargetMessage(method: "DOM.getDocument", ordinal: 1)
+    }
+    await Task.yield()
+
+    try await backend.sendJSONString(targetCommandWrapperMessage(outerID: 1, innerID: 1, method: "DOM.getDocument"))
+    try await backend.sendJSONString(targetCommandWrapperMessage(outerID: 2, innerID: 2, method: "CSS.getMatchedStylesForNode"))
+    try await backend.sendJSONString(targetCommandWrapperMessage(outerID: 3, innerID: 3, method: "DOM.getDocument"))
+
+    let message = try await waitTask.value
+    #expect(try messageID(message.message) == 3)
+}
+
+@Test
+func fakeBackendTargetMessageWaiterCancellationDoesNotResumeWithLaterMessage() async throws {
+    let backend = FakeTransportBackend()
+    let waitTask = Task {
+        try await backend.waitForTargetMessage(method: "DOM.getDocument")
+    }
+    await Task.yield()
+
+    waitTask.cancel()
+    try await backend.sendJSONString(targetCommandWrapperMessage(outerID: 1, innerID: 1, method: "DOM.getDocument"))
+
+    do {
+        _ = try await waitTask.value
+        Issue.record("Expected cancellation")
+    } catch is CancellationError {
+    } catch {
+        Issue.record("Expected CancellationError, got \(error)")
+    }
+
+    let message = try await backend.waitForTargetMessage(method: "DOM.getDocument")
+    #expect(try messageID(message.message) == 1)
+}
+
+@Test
 func detachFailsPendingRepliesAndClosesStreams() async throws {
     let backend = FakeTransportBackend()
     let session = TransportSession(backend: backend, responseTimeout: .seconds(1))
@@ -1841,6 +1895,17 @@ private func targetDispatchMessage(
     let escapedTargetID = jsonEscapedString(targetID.rawValue)
     let escapedMessage = jsonEscapedString(message)
     return #"{"method":"Target.dispatchMessageFromTarget","params":{"targetId":"\#(escapedTargetID)","message":"\#(escapedMessage)"}}"#
+}
+
+private func targetCommandWrapperMessage(
+    outerID: UInt64,
+    targetID: ProtocolTargetIdentifier = .init("page-main"),
+    innerID: UInt64,
+    method: String
+) -> String {
+    let escapedTargetID = jsonEscapedString(targetID.rawValue)
+    let escapedMessage = jsonEscapedString(#"{"id":\#(innerID),"method":"\#(method)"}"#)
+    return #"{"id":\#(outerID),"method":"Target.sendMessageToTarget","params":{"targetId":"\#(escapedTargetID)","message":"\#(escapedMessage)"}}"#
 }
 
 private func jsonEscapedString(_ string: String) -> String {

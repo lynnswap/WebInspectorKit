@@ -1275,7 +1275,7 @@ package final class InspectorSession {
         guard let request = network.request(for: id) else {
             return
         }
-        guard request.responseBody?.needsFetch == true else {
+        guard request.canFetchResponseBody else {
             return
         }
         guard let intent = network.responseBodyCommandIntent(for: id) else {

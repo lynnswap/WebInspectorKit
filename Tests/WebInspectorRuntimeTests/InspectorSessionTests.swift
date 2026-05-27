@@ -415,6 +415,16 @@ func networkResponseBodyFetchAppliesResultToCoreRequest() async throws {
     let body = try #require(responseBody)
     #expect(await body.fetchState == .available)
 
+    let sentCountBeforeFinish = await backend.sentTargetMessages().count
+    await session.fetchResponseBody(for: request.id)
+    #expect(await backend.sentTargetMessages().count == sentCountBeforeFinish)
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"Network.loadingFinished","params":{"requestId":"request-2","timestamp":3}}"#
+    )
+
     let sentCount = await backend.sentTargetMessages().count
     let fetchTask = Task {
         await session.fetchResponseBody(for: request.id)
@@ -431,6 +441,58 @@ func networkResponseBodyFetchAppliesResultToCoreRequest() async throws {
     #expect(await body.fetchState == .loaded)
     #expect(await body.textRepresentation?.contains("\n") == true)
     #expect(await body.textRepresentation?.contains(#""ok""#) == true)
+}
+
+@Test
+func networkResponseBodyFetchErrorDoesNotRetry() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-error","frameId":"main-frame","request":{"url":"https://example.com/api.json"},"timestamp":1}}"#
+    )
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"Network.responseReceived","params":{"requestId":"request-error","timestamp":2,"type":"XHR","response":{"url":"https://example.com/api.json","status":200,"mimeType":"application/json","headers":{"content-type":"application/json"}}}}"#
+    )
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"Network.loadingFinished","params":{"requestId":"request-error","timestamp":3}}"#
+    )
+    let request = try await waitUntil {
+        await session.network.request(for: .init(targetID: .pageMain, requestID: .init("request-error")))
+    }
+    let responseBody = await request.responseBody
+    let body = try #require(responseBody)
+    #expect(await body.fetchState == .available)
+
+    let sentCount = await backend.sentTargetMessages().count
+    let fetchTask = Task {
+        await session.fetchResponseBody(for: request.id)
+    }
+    let sent = try await waitForTargetMessage(backend, method: "Network.getResponseBody", after: sentCount)
+    await receiveTargetErrorReply(
+        transport,
+        targetID: sent.targetIdentifier,
+        messageID: try messageID(sent.message),
+        message: "Not yet implemented"
+    )
+    await fetchTask.value
+
+    guard case .failed = await body.fetchState else {
+        Issue.record("Expected response body fetch to fail")
+        return
+    }
+
+    let sentCountAfterFailure = await backend.sentTargetMessages().count
+    await session.fetchResponseBody(for: request.id)
+    #expect(await backend.sentTargetMessages().count == sentCountAfterFailure)
 }
 
 @Test
@@ -4186,7 +4248,7 @@ func reloadDOMDocumentCancelsQueuedDeleteUndoOperationsBeforeTheySend() async th
 
     let countBeforeQueuedOperations = await backend.sentTargetMessages().count
     let reloadReplyTask = Task {
-        let getDocument = await backend.waitForTargetMessage(method: "DOM.getDocument", after: countBeforeQueuedOperations)
+        let getDocument = try await waitForTargetMessage(backend, method: "DOM.getDocument", after: countBeforeQueuedOperations)
         await receiveTargetReply(
             transport,
             targetID: getDocument.targetIdentifier,
@@ -4701,32 +4763,56 @@ private func targetMessageMethods(_ backend: FakeTransportBackend) async -> [Str
 private func waitForTargetMessage(
     _ backend: FakeTransportBackend,
     method: String,
-    after count: Int = 0
+    after count: Int = 0,
+    timeout: Duration = .seconds(5)
 ) async throws -> SentTargetMessage {
-    try await waitUntil(timeoutError: TransportError.replyTimeout(method: method, targetID: nil)) {
-        let messages = await backend.sentTargetMessages()
-        return messages.dropFirst(count).first { sent in
-            (try? messageMethod(sent.message)) == method
-        }
-    }
+    try await waitForBackendTargetMessage(
+        backend,
+        method: method,
+        ordinal: 0,
+        after: count,
+        timeout: timeout
+    )
 }
 
 private func waitForTargetMessage(
     _ backend: FakeTransportBackend,
     method: String,
     ordinal: Int,
-    after count: Int = 0
+    after count: Int = 0,
+    timeout: Duration = .seconds(5)
 ) async throws -> SentTargetMessage {
-    try await waitUntil(timeoutError: TransportError.replyTimeout(method: method, targetID: nil)) {
-        let matches = await backend.sentTargetMessages()
-            .dropFirst(count)
-            .filter { sent in
-                (try? messageMethod(sent.message)) == method
-            }
-        guard matches.indices.contains(ordinal) else {
-            return nil
+    try await waitForBackendTargetMessage(
+        backend,
+        method: method,
+        ordinal: ordinal,
+        after: count,
+        timeout: timeout
+    )
+}
+
+private func waitForBackendTargetMessage(
+    _ backend: FakeTransportBackend,
+    method: String,
+    ordinal: Int,
+    after count: Int,
+    timeout: Duration
+) async throws -> SentTargetMessage {
+    try await withThrowingTaskGroup(of: SentTargetMessage.self) { group in
+        defer { group.cancelAll() }
+
+        group.addTask {
+            try await backend.waitForTargetMessage(method: method, ordinal: ordinal, after: count)
         }
-        return matches[ordinal]
+        group.addTask {
+            try await Task.sleep(for: timeout)
+            throw TransportError.replyTimeout(method: method, targetID: nil)
+        }
+
+        guard let message = try await group.next() else {
+            throw TransportError.replyTimeout(method: method, targetID: nil)
+        }
+        return message
     }
 }
 
