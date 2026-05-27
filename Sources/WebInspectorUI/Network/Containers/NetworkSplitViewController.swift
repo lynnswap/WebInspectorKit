@@ -52,11 +52,16 @@ package final class NetworkSplitViewController: UISplitViewController {
 
     private func configureNavigationItem() {
         let item = detailViewController.makeRegularModeItem()
+        let bodyFetchIndicatorItem = detailViewController.makeRegularBodyFetchIndicatorItem()
         if #available(iOS 26.0, *) {
             item.hidesSharedBackground = true
+            bodyFetchIndicatorItem.hidesSharedBackground = true
         }
         let group = UIBarButtonItemGroup(
-            barButtonItems: [item],
+            barButtonItems: [
+                item,
+                bodyFetchIndicatorItem,
+            ],
             representativeItem: nil
         )
         navigationItem.trailingItemGroups = [

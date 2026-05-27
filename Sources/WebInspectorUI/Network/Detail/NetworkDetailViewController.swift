@@ -38,10 +38,26 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
 
     private let model: NetworkPanelModel
     private let observationScope = ObservationScope()
+    private let bodyObservationScope = ObservationScope()
     private let bodyViewController = NetworkBodyViewController()
+    private weak var observedBody: NetworkBody?
     private lazy var modeMenu = NetworkDetailModeMenu(
         detailViewController: self,
         model: model
+    )
+    private lazy var compactBodyFetchIndicator = makeBodyFetchIndicator(
+        accessibilityIdentifier: "WebInspector.Network.BodyFetchIndicator.Compact"
+    )
+    private lazy var regularBodyFetchIndicator = makeBodyFetchIndicator(
+        accessibilityIdentifier: "WebInspector.Network.BodyFetchIndicator.Regular"
+    )
+    private lazy var compactBodyFetchIndicatorItem = makeBodyFetchIndicatorItem(
+        activityIndicator: compactBodyFetchIndicator,
+        accessibilityIdentifier: "WebInspector.Network.BodyFetchIndicatorItem"
+    )
+    private lazy var regularBodyFetchIndicatorItem = makeBodyFetchIndicatorItem(
+        activityIndicator: regularBodyFetchIndicator,
+        accessibilityIdentifier: "WebInspector.Network.BodyFetchIndicatorItem.Regular"
     )
     private lazy var collectionView: UICollectionView = {
         let collectionView = UICollectionView(frame: .zero, collectionViewLayout: Self.makeListLayout())
@@ -80,6 +96,7 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
 
     isolated deinit {
         observationScope.cancelAll()
+        bodyObservationScope.cancelAll()
     }
 
     override package func viewDidLoad() {
@@ -104,10 +121,35 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
     private func configureNavigationItem() {
         navigationItem.trailingItemGroups = [
             UIBarButtonItemGroup(
-                barButtonItems: [modeMenu.makeCompactItem()],
+                barButtonItems: [
+                    modeMenu.makeCompactItem(),
+                    compactBodyFetchIndicatorItem,
+                ],
                 representativeItem: nil
             ),
         ]
+    }
+
+    private func makeBodyFetchIndicator(accessibilityIdentifier: String) -> UIActivityIndicatorView {
+        let activityIndicator = UIActivityIndicatorView(style: .medium)
+        activityIndicator.hidesWhenStopped = true
+        activityIndicator.accessibilityIdentifier = accessibilityIdentifier
+        activityIndicator.accessibilityLabel = webInspectorLocalized(
+            "network.body.fetching.accessibility_label",
+            default: "Fetching response body"
+        )
+        activityIndicator.stopAnimating()
+        return activityIndicator
+    }
+
+    private func makeBodyFetchIndicatorItem(
+        activityIndicator: UIActivityIndicatorView,
+        accessibilityIdentifier: String
+    ) -> UIBarButtonItem {
+        let item = UIBarButtonItem(customView: activityIndicator)
+        item.accessibilityIdentifier = accessibilityIdentifier
+        item.isHidden = true
+        return item
     }
 
     private func installCollectionView() {
@@ -253,11 +295,13 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
             guard let role = mode.bodyRole else {
                 return
             }
+            let body = body(in: selectedRequest, for: role)
             showBody()
+            bodyViewController.display(body: body)
+            observeDisplayedBody(body)
             if role == .response {
                 model.fetchResponseBodyIfNeeded(for: selectedRequest)
             }
-            bodyViewController.display(body: body(in: selectedRequest, for: role))
         }
     }
 
@@ -268,6 +312,7 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
         if bodyViewController.view.isHidden == false {
             bodyViewController.view.isHidden = true
         }
+        observeDisplayedBody(nil)
         bodyViewController.display(body: nil)
         if let configuration = contentUnavailableConfiguration as? UIContentUnavailableConfiguration,
            configuration.text == webInspectorLocalized("network.empty.selection.title", default: "No request selected") {
@@ -292,6 +337,7 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
         if collectionView.isHidden {
             collectionView.isHidden = false
         }
+        observeDisplayedBody(nil)
         bodyViewController.display(body: nil)
     }
 
@@ -319,12 +365,67 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
         modeMenu.makeRegularItem()
     }
 
+    package func makeRegularBodyFetchIndicatorItem() -> UIBarButtonItem {
+        regularBodyFetchIndicatorItem
+    }
+
     private func body(in request: NetworkRequest, for role: NetworkBodyRole) -> NetworkBody? {
         switch role {
         case .request:
             request.requestBody
         case .response:
             request.responseBody
+        }
+    }
+
+    private func observeDisplayedBody(_ body: NetworkBody?) {
+        guard observedBody !== body else {
+            updateBodyFetchIndicator(for: body)
+            return
+        }
+
+        bodyObservationScope.cancelAll()
+        observedBody = body
+        updateBodyFetchIndicator(for: body)
+
+        guard let body else {
+            return
+        }
+        bodyObservationScope.observe(body) { [weak self] _, body in
+            self?.updateBodyFetchIndicator(for: body)
+        }
+    }
+
+    private func updateBodyFetchIndicator(for body: NetworkBody?) {
+        let isFetching: Bool
+        if let body, case .fetching = body.fetchState {
+            isFetching = true
+        } else {
+            isFetching = false
+        }
+
+        updateBodyFetchIndicatorItem(
+            compactBodyFetchIndicatorItem,
+            activityIndicator: compactBodyFetchIndicator,
+            isFetching: isFetching
+        )
+        updateBodyFetchIndicatorItem(
+            regularBodyFetchIndicatorItem,
+            activityIndicator: regularBodyFetchIndicator,
+            isFetching: isFetching
+        )
+    }
+
+    private func updateBodyFetchIndicatorItem(
+        _ item: UIBarButtonItem,
+        activityIndicator: UIActivityIndicatorView,
+        isFetching: Bool
+    ) {
+        item.isHidden = !isFetching
+        if isFetching {
+            activityIndicator.startAnimating()
+        } else {
+            activityIndicator.stopAnimating()
         }
     }
 

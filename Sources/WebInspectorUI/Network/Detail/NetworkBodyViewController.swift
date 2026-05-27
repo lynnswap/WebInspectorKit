@@ -85,12 +85,9 @@ final class NetworkBodyViewController: UIViewController {
         }
 
         switch body.fetchState {
-        case .available:
-            displayText = webInspectorLocalized("network.body.available", default: "Body available")
-            syntaxKind = .plainText
-        case .fetching:
-            displayText = webInspectorLocalized("network.body.fetching", default: "Fetching body...")
-            syntaxKind = .plainText
+        case .available, .fetching:
+            displayText = ""
+            syntaxKind = body.textRepresentationSyntaxKind
         case .loaded:
             displayText = body.textRepresentation
                 ?? webInspectorLocalized("network.body.unavailable", default: "Body unavailable")
