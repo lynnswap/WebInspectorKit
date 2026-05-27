@@ -62,6 +62,8 @@ extension UIViewController {
 func webInspectorApplyNavigationControllerBackground(to navigationController: UINavigationController) {
     let backgroundPolicy = navigationController.webInspectorBackgroundPolicy
     navigationController.view.backgroundColor = backgroundPolicy.backgroundColor
+    // Leave UINavigationBarAppearance to UIKit. For Liquid Glass window presentations,
+    // forcing transparent/default appearances here changes the system chrome material.
 }
 
 @MainActor

@@ -216,6 +216,11 @@ struct MonoclyLifecycleTests {
             )
             #expect(didPresent)
             #expect(sheetController.drawsBackground == BrowserInspectorCoordinator.sheetDrawsInspectorBackgroundForTesting)
+            if #available(iOS 26.0, *) {
+                #expect(sheetController.drawsBackground == false)
+            } else {
+                #expect(sheetController.drawsBackground)
+            }
         }
     }
 
