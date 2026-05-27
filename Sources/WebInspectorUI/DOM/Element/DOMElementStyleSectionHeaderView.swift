@@ -1,42 +1,10 @@
 #if canImport(UIKit)
-import Observation
 import SwiftUI
 import UIKit
 import WebInspectorCore
 
-@MainActor
-@Observable
-package final class DOMElementStyleSectionHeaderConfiguration {
+package enum DOMElementStyleSectionHeaderConfiguration {
     private static let largeColumnNumber = 80
-
-    package var section: CSSStyleSection?
-
-    package init(section: CSSStyleSection? = nil) {
-        self.section = section
-    }
-
-    package var title: String {
-        section?.title ?? ""
-    }
-
-    package var originText: String? {
-        section?.rule.flatMap(Self.displayOriginText(for:))
-    }
-
-    package var accessibilityOriginText: String? {
-        section?.rule.flatMap(Self.accessibilityOriginText(for:))
-    }
-
-    package var accessibilityLabel: String {
-        [title, accessibilityOriginText]
-            .compactMap { text in
-                guard let text, !text.isEmpty else {
-                    return nil
-                }
-                return text
-            }
-            .joined(separator: ", ")
-    }
 
     package static func displayOriginText(for rule: CSSRule) -> String? {
         if let sourceLocation = rule.sourceLocation {
@@ -110,13 +78,9 @@ package final class DOMElementStyleSectionHeaderConfiguration {
 
 @MainActor
 final class DOMElementStyleSectionHeaderView: UICollectionViewListCell {
-    private let headerConfiguration = DOMElementStyleSectionHeaderConfiguration()
-
     override init(frame: CGRect) {
         super.init(frame: frame)
-        contentConfiguration = UIHostingConfiguration {
-            DOMElementStyleSectionHeaderContent(configuration: headerConfiguration)
-        }
+        bind(nil)
     }
 
     @available(*, unavailable)
@@ -125,27 +89,52 @@ final class DOMElementStyleSectionHeaderView: UICollectionViewListCell {
     }
 
     func bind(_ section: CSSStyleSection?) {
-        headerConfiguration.section = section
+        contentConfiguration = UIHostingConfiguration {
+            DOMElementStyleSectionHeaderContent(section: section)
+        }
     }
 }
 
 private struct DOMElementStyleSectionHeaderContent: View {
-    var configuration: DOMElementStyleSectionHeaderConfiguration
+    var section: CSSStyleSection?
+
+    private var title: String {
+        section?.title ?? ""
+    }
+
+    private var originText: String? {
+        section?.rule.flatMap(DOMElementStyleSectionHeaderConfiguration.displayOriginText(for:))
+    }
+
+    private var accessibilityOriginText: String? {
+        section?.rule.flatMap(DOMElementStyleSectionHeaderConfiguration.accessibilityOriginText(for:))
+    }
+
+    private var accessibilityLabel: String {
+        [title, accessibilityOriginText]
+            .compactMap { text in
+                guard let text, !text.isEmpty else {
+                    return nil
+                }
+                return text
+            }
+            .joined(separator: ", ")
+    }
 
     var body: some View {
         LabeledContent {
-            if let originText = configuration.originText {
+            if let originText {
                 Text(originText)
                     .truncationMode(.tail)
                     .multilineTextAlignment(.trailing)
             }
         } label: {
-            Text(configuration.title)
+            Text(title)
         }
         .textScale(.secondary)
         .lineLimit(1)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(configuration.accessibilityLabel)
+        .accessibilityLabel(accessibilityLabel)
     }
 }
 #endif

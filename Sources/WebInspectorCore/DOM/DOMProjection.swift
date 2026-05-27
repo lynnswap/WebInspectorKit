@@ -2,20 +2,17 @@ package struct DOMTreeRow: Equatable, Sendable {
     package var nodeID: DOMNodeIdentifier
     package var depth: Int
     package var nodeName: String
-    package var isSelected: Bool
     package var hasVisibleChildren: Bool
 
     package init(
         nodeID: DOMNodeIdentifier,
         depth: Int,
         nodeName: String,
-        isSelected: Bool,
         hasVisibleChildren: Bool
     ) {
         self.nodeID = nodeID
         self.depth = depth
         self.nodeName = nodeName
-        self.isSelected = isSelected
         self.hasVisibleChildren = hasVisibleChildren
     }
 }
@@ -201,8 +198,6 @@ package struct DOMSelectionSnapshot: Equatable, Sendable {
 package struct DOMSessionSnapshot: Equatable, Sendable {
     package var currentPageTargetID: ProtocolTargetIdentifier?
     package var mainFrameID: DOMFrameIdentifier?
-    package var treeRevision: UInt64
-    package var selectionRevision: UInt64
     package var targetsByID: [ProtocolTargetIdentifier: ProtocolTargetSnapshot]
     package var targetStatesByID: [ProtocolTargetIdentifier: DOMTargetStateSnapshot]
     package var framesByID: [DOMFrameIdentifier: DOMFrameSnapshot]

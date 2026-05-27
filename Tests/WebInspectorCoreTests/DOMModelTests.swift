@@ -305,12 +305,9 @@ func resetDoesNotReuseDocumentLifetimeForSameTargetID() async throws {
     )
     _ = await session.replaceDocumentRoot(pageDocumentWithoutIframe(), targetID: pageTargetID)
     let firstDocumentID = try #require(await session.snapshot().targetsByID[pageTargetID]?.currentDocumentID)
-    let revisionBeforeReset = await session.treeRevision
-    let selectionRevisionBeforeReset = await session.selectionRevision
 
     await session.reset()
-    #expect(await session.treeRevision > revisionBeforeReset)
-    #expect(await session.selectionRevision > selectionRevisionBeforeReset)
+    #expect(await session.snapshot().currentPageTargetID == nil)
     await session.applyTargetCreated(
         .init(id: pageTargetID, kind: .page, frameID: mainFrameID),
         makeCurrentMainPage: true
@@ -820,7 +817,6 @@ func detachedRootCannotOverwriteConnectedPageDocumentNodes() async throws {
     let after = await session.snapshot()
     let projection = await session.treeProjection(rootTargetID: pageTargetID)
 
-    #expect(after.treeRevision == before.treeRevision)
     #expect(after.currentNodeIDByKey[htmlKey] == htmlID)
     #expect(after.currentNodeIDByKey[headKey] == headID)
     #expect(after.currentNodeIDByKey[bodyKey] == bodyID)
@@ -886,7 +882,7 @@ func directNodeSelectionUpdatesProjectionWithoutSnapshotModel() async throws {
     let projection = await session.treeProjection(rootTargetID: pageTargetID)
 
     #expect(await session.selectedNodeID == htmlID)
-    #expect(projection.rows.contains { $0.nodeID == htmlID && $0.isSelected })
+    #expect(projection.rows.contains { $0.nodeID == htmlID })
 }
 
 @Test
@@ -1227,7 +1223,8 @@ func iframeAdRefreshSelectionUsesNewFrameDocumentGenerationAndSelectedProjection
     #expect(projection.parent(of: refreshedFrameRootID) == iframeID)
     #expect(projection.ancestorNodeIDs(of: selectedNodeID).contains(iframeID))
     #expect(projection.ancestorNodeIDs(of: selectedNodeID).contains(refreshedFrameRootID))
-    #expect(projection.rows.contains { $0.nodeID == selectedNodeID && $0.isSelected })
+    #expect(projection.rows.contains { $0.nodeID == selectedNodeID })
+    #expect(await session.selectedNodeID == selectedNodeID)
     #expect(await session.selectedNodeCopyText(.selectorPath) == "#ad-node")
     #expect(await session.selectedNodeCopyText(.xPath) == "/html/body/div")
 }

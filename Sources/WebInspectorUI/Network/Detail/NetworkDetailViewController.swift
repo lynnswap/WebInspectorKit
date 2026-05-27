@@ -372,9 +372,7 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
             || currentSnapshot.itemIdentifiers != snapshot.itemIdentifiers else {
             return
         }
-        Task {
-            await self.dataSource.apply(snapshot, animatingDifferences: false)
-        }
+        dataSource.apply(snapshot, animatingDifferences: false)
     }
 
     private func applySnapshotUsingReloadData() {
@@ -382,9 +380,7 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
             return
         }
         let snapshot = makeSnapshot()
-        Task {
-            await self.dataSource.applySnapshotUsingReloadData(snapshot)
-        }
+        dataSource.applySnapshotUsingReloadData(snapshot)
     }
 
     private func applyEmptySnapshotUsingReloadData() {
@@ -396,9 +392,7 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
         guard currentSnapshot.numberOfItems != 0 || currentSnapshot.numberOfSections != 0 else {
             return
         }
-        Task {
-            await self.dataSource.applySnapshotUsingReloadData(snapshot)
-        }
+        dataSource.applySnapshotUsingReloadData(snapshot)
     }
 
     private func configure(_ cell: NetworkFieldCell, item: ItemIdentifier) {
@@ -440,7 +434,6 @@ private final class NetworkDetailModeMenu {
             compactItem.image = UIImage(systemName: mode.systemImageName)
             compactItem.title = nil
             compactItem.isEnabled = isEnabled
-            compactItem.menu = makeMenu(includesImages: true, availability: availability)
             compactItem.accessibilityLabel = mode.title
             compactItem.preferredMenuElementOrder = .fixed
         }
@@ -454,7 +447,6 @@ private final class NetworkDetailModeMenu {
                 var configuration = button.configuration ?? .bordered()
                 configuration.title = mode.title
                 button.configuration = configuration
-                button.menu = makeMenu(includesImages: false, availability: availability)
                 button.isEnabled = isEnabled
                 button.accessibilityLabel = mode.title
                 button.preferredMenuElementOrder = .fixed
@@ -495,10 +487,11 @@ private final class NetworkDetailModeMenu {
         let availability = modeAvailability(for: model.selectedRequest)
         let item = UIBarButtonItem(
             image: UIImage(systemName: (detailViewController?.mode ?? .overview).systemImageName),
-            menu: makeMenu(includesImages: true, availability: availability)
+            menu: makeDeferredMenu(includesImages: true)
         )
         item.accessibilityIdentifier = "WebInspector.Network.DetailModeButton"
         item.preferredMenuElementOrder = .fixed
+        item.isEnabled = availability.hasSelectedRequest
         return item
     }
 
@@ -515,15 +508,33 @@ private final class NetworkDetailModeMenu {
         configuration.title = (detailViewController?.mode ?? .overview).title
         button.configuration = configuration
         button.showsMenuAsPrimaryAction = true
-        button.changesSelectionAsPrimaryAction = true
+        button.changesSelectionAsPrimaryAction = false
         button.preferredMenuElementOrder = .fixed
-        button.menu = makeMenu(
-            includesImages: false,
-            availability: modeAvailability(for: model.selectedRequest)
-        )
+        button.menu = makeDeferredMenu(includesImages: false)
         button.accessibilityIdentifier = "WebInspector.Network.DetailModeButton.Regular.Button"
         button.setContentCompressionResistancePriority(.required, for: .horizontal)
         return button
+    }
+
+    private func makeDeferredMenu(includesImages: Bool) -> UIMenu {
+        UIMenu(
+            title: "",
+            options: .singleSelection,
+            children: [
+                UIDeferredMenuElement.uncached { [weak self] completion in
+                    guard let self else {
+                        completion([])
+                        return
+                    }
+                    completion(
+                        self.makeMenu(
+                            includesImages: includesImages,
+                            availability: self.modeAvailability(for: self.model.selectedRequest)
+                        ).children
+                    )
+                },
+            ]
+        )
     }
 
     private func makeMenu(

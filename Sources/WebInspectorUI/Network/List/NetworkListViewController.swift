@@ -152,10 +152,6 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         observationScope.observe(model) { [weak self] _, model in
             self?.resourceFilterSelectionDidChange(effectiveResourceFilters: model.effectiveResourceFilters)
         }
-
-        observationScope.observe(model) { [weak self] _, model in
-            self?.renderOverflowMenu(isNetworkEmpty: model.isEmpty)
-        }
     }
 
     private func configureNavigationItem() {
@@ -250,9 +246,6 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private func resourceFilterSelectionDidChange(effectiveResourceFilters: Set<NetworkResourceFilter>) {
-        if isViewLoaded {
-            filterHostingMenu.setNeedsUpdate()
-        }
         renderFilterItem(effectiveResourceFilters: effectiveResourceFilters)
     }
 
@@ -364,30 +357,27 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         applyingSnapshotRequestIDs = update.requestIDs
 
         let snapshot = makeSnapshot(requestIDs: update.requestIDs)
-        Task { [weak self, snapshot, requestIDs = update.requestIDs, mode = update.mode] in
-            guard let self else {
-                return
-            }
-            switch mode {
-            case .apply:
-                await dataSource.apply(snapshot, animatingDifferences: false)
-            case .reloadData:
-                await dataSource.applySnapshotUsingReloadData(snapshot)
-            }
-            applyingSnapshotRequestIDs = nil
-            isApplyingSnapshotUpdate = false
-            applyPendingSnapshotUpdateIfNeeded()
+        let completion: () -> Void = { [weak self] in
+            self?.snapshotUpdateDidFinish()
         }
+        switch update.mode {
+        case .apply:
+            dataSource.apply(snapshot, animatingDifferences: false, completion: completion)
+        case .reloadData:
+            dataSource.applySnapshotUsingReloadData(snapshot, completion: completion)
+        }
+    }
+
+    private func snapshotUpdateDidFinish() {
+        applyingSnapshotRequestIDs = nil
+        isApplyingSnapshotUpdate = false
+        applyPendingSnapshotUpdateIfNeeded()
     }
 
     private func reloadDataFromModel(displayRequests: [NetworkRequest]? = nil) {
         let resolvedDisplayRequests = displayRequests ?? model.displayRequests
         requestSnapshotUpdate(displayRequests: resolvedDisplayRequests)
         renderEmptyState(isEmpty: resolvedDisplayRequests.isEmpty)
-    }
-
-    private func renderOverflowMenu(isNetworkEmpty: Bool) {
-        overflowHostingMenu.requestUpdate()
     }
 
     private func renderEmptyState(isEmpty: Bool) {

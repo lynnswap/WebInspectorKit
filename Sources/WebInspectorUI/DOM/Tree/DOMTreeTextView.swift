@@ -36,26 +36,46 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         paragraphStyle.paragraphSpacingBefore = 0
         return paragraphStyle
     }()
-    private struct DOMObservationCursor {
-        var treeRevision: UInt64?
-        var selectionRevision: UInt64?
+    private struct ObservedTreeLine: Equatable {
+        var nodeID: DOMNode.ID
+        var depth: Int
+        var text: String
+        var tokens: [DOMTreeToken]
+        var displayColumnCount: Int
+        var hasDisclosure: Bool
+        var isOpen: Bool
+        var isClosingTag: Bool
 
-        mutating func changes(
-            treeRevision nextTreeRevision: UInt64,
-            selectionRevision nextSelectionRevision: UInt64,
-            isInitial: Bool
-        ) -> (treeChanged: Bool, selectionChanged: Bool) {
-            let treeChanged = isInitial || treeRevision != nextTreeRevision
-            let selectionChanged = selectionRevision != nextSelectionRevision
-            treeRevision = nextTreeRevision
-            selectionRevision = nextSelectionRevision
-            return (treeChanged, selectionChanged)
+        @MainActor
+        init(_ line: DOMTreeLine) {
+            nodeID = line.node.id
+            depth = line.depth
+            text = line.text
+            tokens = line.tokens
+            displayColumnCount = line.displayColumnCount
+            hasDisclosure = line.hasDisclosure
+            isOpen = line.isOpen
+            isClosingTag = line.isClosingTag
+        }
+    }
+
+    private struct ObservedTreeContent: Equatable {
+        var lines: [ObservedTreeLine]
+        var text: String
+        var maxLineDisplayColumnCount: Int
+
+        @MainActor
+        init(_ buildResult: (rows: [DOMTreeLine], text: String, maxLineDisplayColumnCount: Int)) {
+            lines = buildResult.rows.map(ObservedTreeLine.init)
+            text = buildResult.text
+            maxLineDisplayColumnCount = buildResult.maxLineDisplayColumnCount
         }
     }
 
     private let dom: DOMSession
     private let menuModel: DOMTreeMenuModel
     private let observationScope = ObservationScope()
+    private var documentObservationDelivery: ObservationDelivery?
     private let textContentStorage = NSTextContentStorage()
     private let layoutManager = NSTextLayoutManager()
     private let textContainer = NSTextContainer()
@@ -90,7 +110,8 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     private var lastBoundsSize: CGSize = .zero
     private var rowIndexByNodeID: [DOMNode.ID: Int] = [:]
     private var lastRenderedDocumentRootID: DOMNode.ID?
-    private var domObservationCursor = DOMObservationCursor()
+    private var lastObservedTreeContent: ObservedTreeContent?
+    private var lastRoutedSelectedNodeID: DOMNode.ID?
     private var lastObservedSelectedNodeID: DOMNode.ID?
     private var pendingRevealSelectedNodeID: DOMNode.ID?
     private var pendingTreeInvalidation: DOMTreeInvalidation?
@@ -568,21 +589,23 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     }
 
     private func startObservingDocument() {
-        observationScope.observe(dom) { [weak self] event, dom in
+        documentObservationDelivery = observationScope.observe(dom) { [weak self] event, dom in
             self?.routeDOMInvalidation(from: dom, isInitial: event.kind == .initial)
         }
     }
 
     private func routeDOMInvalidation(from dom: DOMSession, isInitial: Bool) {
-        let changes = domObservationCursor.changes(
-            treeRevision: dom.treeRevision,
-            selectionRevision: dom.selectionRevision,
-            isInitial: isInitial
-        )
+        let buildResult = buildRenderedRows()
+        let nextTreeContent = ObservedTreeContent(buildResult)
+        let nextSelectedNodeID = dom.selectedNodeID
+        let treeChanged = isInitial || lastObservedTreeContent != nextTreeContent
+        let selectionChanged = lastRoutedSelectedNodeID != nextSelectedNodeID
+        lastObservedTreeContent = nextTreeContent
+        lastRoutedSelectedNodeID = nextSelectedNodeID
 
-        if changes.treeChanged {
+        if treeChanged {
             scheduleTreeReload(for: .documentReset)
-        } else if changes.selectionChanged {
+        } else if selectionChanged {
             handleSelectedNodeChange()
         }
     }
@@ -652,6 +675,8 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         prepareSelectionForRendering()
         let buildResult = buildRenderedRows()
         rows = buildResult.rows
+        lastObservedTreeContent = ObservedTreeContent(buildResult)
+        lastRoutedSelectedNodeID = dom.selectedNodeID
         rebuildRowIndexAndPruneMarkupCache()
         reconcileMultiSelectionAfterReload()
         renderedText = buildResult.text
@@ -1373,7 +1398,6 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
                 self?.clearMultiSelection(keepingLast: nil)
             }
         )
-        domMenuHostingMenu.setNeedsUpdate()
         return (try? domMenuHostingMenu.menu()) ?? UIMenu(children: [])
     }
 
@@ -2393,6 +2417,10 @@ extension DOMTreeTextView {
 
     var renderedTextForTesting: String {
         renderedText
+    }
+
+    var documentObservationDeliveryForTesting: ObservationDelivery {
+        documentObservationDelivery!
     }
 
     var rowCountForTesting: Int {

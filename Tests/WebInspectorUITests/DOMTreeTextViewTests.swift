@@ -64,6 +64,9 @@ struct DOMTreeTextViewTests {
     func documentResetClearsLocalExpansionStateEvenWhenNodeIDsRepeat() async throws {
         let session = makeDOMSession()
         let view = makeTreeView(session: session)
+        let renderedText = await view.documentObservationDeliveryForTesting.values {
+            view.renderedTextForTesting
+        }
 
         view.toggleRowForTesting(containing: "<article")
         #expect(view.renderedTextForTesting.contains("<span id=\"nested-child\"></span>"))
@@ -79,22 +82,22 @@ struct DOMTreeTextViewTests {
             makeCurrentMainPage: true
         )
         _ = session.replaceDocumentRoot(documentNode(), targetID: targetID)
-        await waitForObservationDelivery()
-        view.layoutIfNeeded()
 
-        let text = view.renderedTextForTesting
-        #expect(text.contains("<article>…</article>"))
-        #expect(!text.contains("<span id=\"nested-child\"></span>"))
+        let didRenderReset = await renderedText.waitUntil { text in
+            text.contains("<article>…</article>")
+                && !text.contains("<span id=\"nested-child\"></span>")
+        } != nil
+        #expect(didRenderReset)
     }
 
     @Test
     func openingUnloadedRowRequestsChildrenThroughInjectedAction() async throws {
         let session = makeDOMSession(root: documentWithDeferredArticle())
-        var requestedNodeID: DOMNode.ID?
+        let recorder = NodeRequestRecorder()
         let view = DOMTreeTextView(
             dom: session,
             requestChildrenAction: { nodeID in
-                requestedNodeID = nodeID
+                recorder.record(nodeID)
                 return true
             }
         )
@@ -102,9 +105,9 @@ struct DOMTreeTextViewTests {
         view.layoutIfNeeded()
 
         view.toggleRowForTesting(containing: "<article")
-        await waitForObservationDelivery()
+        let requestedNodeID = await recorder.next()
 
-        #expect(requestedNodeID.flatMap { session.node(for: $0) }?.localName == "article")
+        #expect(session.node(for: requestedNodeID)?.localName == "article")
     }
 
     @Test
@@ -127,35 +130,65 @@ struct DOMTreeTextViewTests {
             session.snapshot().currentNodeIDByKey[DOMNodeCurrentKey(targetID: frameTargetID, nodeID: .init(8))]
         )
         let view = makeTreeView(session: session)
+        let renderedState = await view.documentObservationDeliveryForTesting.values {
+            view.layoutIfNeeded()
+            return RenderedDOMTreeState(
+                text: view.renderedTextForTesting,
+                selectedRowCount: view.selectedRowRectsForTesting().count
+            )
+        }
 
         session.selectNode(selectedNodeID)
-        await waitForObservationDelivery()
-        view.layoutIfNeeded()
+        let didRenderSelection = await renderedState.waitUntil { state in
+            state.text.contains("#document")
+                && state.text.contains("<img id=\"ad-node\">")
+                && state.selectedRowCount == 1
+        } != nil
 
         let projection = session.treeProjection(rootTargetID: pageTargetID)
         #expect(session.snapshot().nodesByID[frameRootID]?.parentID == nil)
         #expect(projection.ancestorNodeIDs(of: selectedNodeID).contains(frameRootID))
-        #expect(view.renderedTextForTesting.contains("#document"))
-        #expect(view.renderedTextForTesting.contains("<img id=\"ad-node\">"))
-        #expect(view.selectedRowRectsForTesting().count == 1)
+        #expect(didRenderSelection)
+    }
+}
+
+private struct RenderedDOMTreeState: Equatable, Sendable {
+    var text: String
+    var selectedRowCount: Int
+}
+
+@MainActor
+private final class NodeRequestRecorder {
+    private var nodeID: DOMNode.ID?
+    private var continuation: CheckedContinuation<DOMNode.ID, Never>?
+
+    func record(_ nodeID: DOMNode.ID) {
+        self.nodeID = nodeID
+        continuation?.resume(returning: nodeID)
+        continuation = nil
     }
 
-    private func makeTreeView(root: DOMNodePayload = documentNode()) -> DOMTreeTextView {
-        makeTreeView(session: makeDOMSession(root: root))
-    }
-
-    private func makeTreeView(session: DOMSession) -> DOMTreeTextView {
-        let view = DOMTreeTextView(dom: session)
-        view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
-        view.layoutIfNeeded()
-        return view
-    }
-
-    private func waitForObservationDelivery() async {
-        for _ in 0..<5 {
-            await Task.yield()
+    func next() async -> DOMNode.ID {
+        if let nodeID {
+            return nodeID
+        }
+        return await withCheckedContinuation { continuation in
+            self.continuation = continuation
         }
     }
+}
+
+@MainActor
+private func makeTreeView(root: DOMNodePayload = documentNode()) -> DOMTreeTextView {
+    makeTreeView(session: makeDOMSession(root: root))
+}
+
+@MainActor
+private func makeTreeView(session: DOMSession) -> DOMTreeTextView {
+    let view = DOMTreeTextView(dom: session)
+    view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
+    view.layoutIfNeeded()
+    return view
 }
 
 @MainActor

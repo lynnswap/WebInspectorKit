@@ -1,5 +1,5 @@
 {
-  "originHash" : "3457f5332b246d8307179af4412a71ae0649050a0c87961746de5f237a094b4c",
+  "originHash" : "042d057b568d5d3bd3e1f07a9052d29adc7a7102825ac574144c44f544ebefec",
   "pins" : [
     {
       "identity" : "machokit",
@@ -24,8 +24,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/ObservationBridge.git",
       "state" : {
-        "revision" : "a5962525799eaf4b4202cabedac0947f89417b36",
-        "version" : "0.9.1"
+        "revision" : "03c89fba6e2866a1af1516da2ae8d64958a917f5",
+        "version" : "0.10.0"
       }
     },
     {
@@ -105,8 +105,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/SyntaxEditorUI.git",
       "state" : {
-        "revision" : "1c7c673844ed45d84e1d31929dac0493b145c2ba",
-        "version" : "0.8.1"
+        "revision" : "982b31e8e1d51e19874aef52879f41899687f747",
+        "version" : "0.8.2"
       }
     },
     {
@@ -195,8 +195,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/UIHostingMenu.git",
       "state" : {
-        "revision" : "434a962f1592d15ef77ae27e247ff92a45044a6c",
-        "version" : "0.1.6"
+        "revision" : "5277efa331ab295e4f2b5ec9a018158607b9c662",
+        "version" : "0.2.0"
       }
     },
     {
