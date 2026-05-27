@@ -108,9 +108,9 @@ package final class NetworkBody {
 
     package var needsFetch: Bool {
         switch fetchState {
-        case .available, .failed:
+        case .available:
             full == nil
-        case .fetching, .loaded:
+        case .fetching, .loaded, .failed:
             false
         }
     }

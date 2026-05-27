@@ -121,8 +121,12 @@ func backendResourceIdentifierPropagatesToLazyCommandIntents() async throws {
         response: .init(url: "https://example.com/app.js", status: 200),
         timestamp: 2
     )
-    let bodyIntent = await session.responseBodyCommandIntent(for: key)
+    let bodyIntentBeforeFinish = await session.responseBodyCommandIntent(for: key)
     let certificateIntent = await session.serializedCertificateCommandIntent(for: key)
+
+    #expect(bodyIntentBeforeFinish == nil)
+    await session.applyLoadingFinished(targetID: targetID, requestID: requestID, timestamp: 3)
+    let bodyIntent = await session.responseBodyCommandIntent(for: key)
 
     #expect(bodyIntent == .getResponseBody(requestKey: key, backendResourceIdentifier: backendResourceIdentifier))
     #expect(certificateIntent == .getSerializedCertificate(requestKey: key, backendResourceIdentifier: backendResourceIdentifier))
@@ -200,6 +204,77 @@ func responseReceivedCreatesFetchableResponseBodyAndAppliesFetchedContent() thro
     #expect(body.textRepresentation?.contains("\n") == true)
     #expect(body.textRepresentation?.contains(#""name""#) == true)
     #expect(body.textRepresentationSyntaxKind == .json)
+}
+
+@Test
+@MainActor
+func responseBodyFetchFailureIsTerminal() throws {
+    let session = NetworkSession()
+    let targetID = ProtocolTargetIdentifier("page")
+    let requestID = NetworkRequestIdentifier("0.response-body-failure")
+
+    let key = session.applyRequestWillBeSent(
+        targetID: targetID,
+        requestID: requestID,
+        frameID: .init("main-frame"),
+        loaderID: "loader",
+        documentURL: "https://example.com",
+        request: .init(url: "https://example.com/api/data.json"),
+        timestamp: 1
+    )
+    session.applyResponseReceived(
+        targetID: targetID,
+        requestID: requestID,
+        response: .init(url: "https://example.com/api/data.json", status: 200),
+        timestamp: 2
+    )
+    session.applyLoadingFinished(targetID: targetID, requestID: requestID, timestamp: 3)
+
+    let request = try #require(session.request(for: key))
+    let body = try #require(request.responseBody)
+    #expect(request.canFetchResponseBody)
+
+    request.markResponseBodyFailed(.unavailable)
+
+    #expect(body.needsFetch == false)
+    #expect(request.canFetchResponseBody == false)
+    #expect(session.responseBodyCommandIntent(for: key) == nil)
+}
+
+@Test
+@MainActor
+func failedNetworkRequestCannotFetchResponseBody() throws {
+    let session = NetworkSession()
+    let targetID = ProtocolTargetIdentifier("page")
+    let requestID = NetworkRequestIdentifier("0.failed-response-body")
+
+    let key = session.applyRequestWillBeSent(
+        targetID: targetID,
+        requestID: requestID,
+        frameID: .init("main-frame"),
+        loaderID: "loader",
+        documentURL: "https://example.com",
+        request: .init(url: "https://example.com/api/data.json"),
+        timestamp: 1
+    )
+    session.applyResponseReceived(
+        targetID: targetID,
+        requestID: requestID,
+        response: .init(url: "https://example.com/api/data.json", status: 200),
+        timestamp: 2
+    )
+    session.applyLoadingFailed(
+        targetID: targetID,
+        requestID: requestID,
+        timestamp: 3,
+        errorText: "cancelled",
+        canceled: true
+    )
+
+    let request = try #require(session.request(for: key))
+    #expect(request.responseBody != nil)
+    #expect(request.canFetchResponseBody == false)
+    #expect(session.responseBodyCommandIntent(for: key) == nil)
 }
 
 @Test

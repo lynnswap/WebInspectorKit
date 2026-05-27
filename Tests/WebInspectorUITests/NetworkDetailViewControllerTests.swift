@@ -208,6 +208,84 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func responseBodyModeWaitsForLoadingFinishedBeforeFetching() async throws {
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://example.com/api/data.json",
+                responseHeaders: ["content-type": "application/json"],
+                responseMimeType: "application/json",
+                finishes: false
+            )
+        )
+        var fetchedIDs: [NetworkRequest.ID] = []
+        let model = NetworkPanelModel(network: network) { id in
+            fetchedIDs.append(id)
+        }
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        viewController.setModeForTesting(.responseBody)
+        #expect(fetchedIDs.isEmpty)
+
+        network.applyLoadingFinished(
+            targetID: request.id.targetID,
+            requestID: request.id.requestID,
+            timestamp: 3
+        )
+
+        let didFetch = await waitUntil {
+            fetchedIDs == [request.id]
+        }
+        #expect(didFetch)
+    }
+
+    @Test
+    func failedResponseBodyDoesNotRefetchFromRendering() async throws {
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://example.com/api/data.json",
+                responseHeaders: ["content-type": "application/json"],
+                responseMimeType: "application/json"
+            )
+        )
+        request.markResponseBodyFailed(.unavailable)
+
+        var fetchedIDs: [NetworkRequest.ID] = []
+        let model = NetworkPanelModel(network: network) { id in
+            fetchedIDs.append(id)
+        }
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        viewController.setModeForTesting(.responseBody)
+
+        let didRenderFailure = await waitUntil {
+            viewController.currentModeForTesting == .responseBody
+                && viewController.bodyTextViewForTesting.text.contains("Body unavailable")
+        }
+        #expect(didRenderFailure)
+        #expect(fetchedIDs.isEmpty)
+
+        request.markResponseBodyFailed(.unknown("Still unavailable"))
+
+        let didStayIdle = await waitUntil {
+            viewController.bodyTextViewForTesting.text.contains("Still unavailable")
+                && fetchedIDs.isEmpty
+        }
+        #expect(didStayIdle)
+    }
+
+    @Test
     func compactContainerPushesAndPopsDetailFromSelection() async throws {
         let network = NetworkSession()
         let request = try #require(applyRequest(to: network, requestID: "1", url: "https://example.com/app.js"))
@@ -290,7 +368,8 @@ struct NetworkDetailViewControllerTests {
         requestHeaders: [String: String] = [:],
         postData: String? = nil,
         responseHeaders: [String: String] = ["content-type": "text/javascript"],
-        responseMimeType: String = "text/javascript"
+        responseMimeType: String = "text/javascript",
+        finishes: Bool = true
     ) -> NetworkRequest? {
         let targetID = ProtocolTargetIdentifier("page")
         let requestID = NetworkRequestIdentifier(rawRequestID)
@@ -322,11 +401,13 @@ struct NetworkDetailViewControllerTests {
             ),
             timestamp: 2
         )
-        network.applyLoadingFinished(
-            targetID: targetID,
-            requestID: requestID,
-            timestamp: 3
-        )
+        if finishes {
+            network.applyLoadingFinished(
+                targetID: targetID,
+                requestID: requestID,
+                timestamp: 3
+            )
+        }
         return network.request(for: key)
     }
 

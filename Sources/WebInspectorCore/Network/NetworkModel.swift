@@ -175,6 +175,13 @@ package final class NetworkRequest {
         responseBody?.apply(payload)
     }
 
+    package var canFetchResponseBody: Bool {
+        guard state == .finished else {
+            return false
+        }
+        return responseBody?.needsFetch == true
+    }
+
     package func markResponseBodyFetching() {
         ensureResponseBody()
         responseBody?.markFetching()
@@ -591,7 +598,7 @@ package final class NetworkSession {
 
     package func responseBodyCommandIntent(for id: NetworkRequest.ID) -> NetworkCommandIntent? {
         guard let request = requestsByID[id],
-              request.responseBody != nil else {
+              request.canFetchResponseBody else {
             return nil
         }
         return .getResponseBody(

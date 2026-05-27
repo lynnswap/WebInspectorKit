@@ -94,7 +94,7 @@ package final class NetworkPanelModel {
     }
 
     package func fetchResponseBodyIfNeeded(for request: NetworkRequest) {
-        guard request.responseBody?.needsFetch == true,
+        guard request.canFetchResponseBody,
               let responseBodyFetchAction else {
             return
         }
