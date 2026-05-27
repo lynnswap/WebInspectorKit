@@ -1,4 +1,5 @@
 #if canImport(UIKit)
+import ObservationBridge
 import UIKit
 import WebInspectorKit
 #if os(iOS)
@@ -16,6 +17,7 @@ final class BrowserPageViewController: UIViewController {
     private let inspectorSession: WebInspectorSession
     private let launchConfiguration: BrowserLaunchConfiguration
     private let inspectorCoordinator = BrowserInspectorCoordinator()
+    private let observationScope = ObservationScope()
 
     private let progressView = UIProgressView(progressViewStyle: .bar)
 
@@ -44,8 +46,6 @@ final class BrowserPageViewController: UIViewController {
         self?.store.goForward()
     }
     private var viewportCoordinator: BrowserViewportCoordinator?
-    private var storeObserverID: UUID?
-    private var historyObserverID: UUID?
     private var inspectorWindowObserverID: UUID?
     private var didAutoPresentInspector = false
     private var progressHeightConstraint: NSLayoutConstraint?
@@ -72,12 +72,7 @@ final class BrowserPageViewController: UIViewController {
 
     isolated deinit {
         viewportCoordinator?.invalidate()
-        if let storeObserverID {
-            store.removeStateObserver(storeObserverID)
-        }
-        if let historyObserverID {
-            store.removeHistoryObserver(historyObserverID)
-        }
+        observationScope.cancelAll()
         if let inspectorWindowObserverID {
             BrowserInspectorCoordinator.removeInspectorWindowObservation(inspectorWindowObserverID)
         }
@@ -93,17 +88,7 @@ final class BrowserPageViewController: UIViewController {
         (store.webView as? BrowserViewportWebView)?.viewportCoordinator = viewportCoordinator
         viewportCoordinator?.webViewHierarchyDidChange()
 
-        storeObserverID = store.addStateObserver { [weak self] in
-            self?.renderState()
-            self?.maybeAutoPresentInspectorIfNeeded()
-        }
-        historyObserverID = store.addHistoryObserver { [weak self] in
-            guard let self else {
-                return
-            }
-            let placement = self.currentChromePlacement ?? self.resolvedChromePlacement()
-            self.refreshNavigationHistoryMenus(for: placement)
-        }
+        startObservingStore()
         inspectorWindowObserverID = BrowserInspectorCoordinator.observeInspectorWindowPresentation { [weak self] _ in
             self?.refreshChromeControls()
         }
@@ -126,6 +111,13 @@ final class BrowserPageViewController: UIViewController {
         refreshChromeControls()
         store.loadInitialRequestIfNeeded()
         maybeAutoPresentInspectorIfNeeded()
+    }
+
+    private func startObservingStore() {
+        observationScope.observe(store) { [weak self] _, store in
+            self?.renderState(from: store)
+            self?.maybeAutoPresentInspectorIfNeeded()
+        }
     }
 
     override func viewSafeAreaInsetsDidChange() {
@@ -175,10 +167,12 @@ final class BrowserPageViewController: UIViewController {
 
         configureNavigationHistoryButtonItem(
             backButtonItem,
+            direction: .back,
             action: backNavigationAction
         )
         configureNavigationHistoryButtonItem(
             forwardButtonItem,
+            direction: .forward,
             action: forwardNavigationAction
         )
         configureNavigationButtonItem(inspectorButtonItem)
@@ -205,12 +199,13 @@ final class BrowserPageViewController: UIViewController {
 
     private func configureNavigationHistoryButtonItem(
         _ item: UIBarButtonItem,
+        direction: BrowserHistoryDirection,
         action: UIAction
     ) {
         item.target = nil
         item.action = nil
         item.primaryAction = action
-        item.menu = nil
+        item.menu = makeDeferredHistoryMenu(direction: direction)
         item.customView = nil
         item.preferredMenuElementOrder = .fixed
         item.accessibilityIdentifier = nil
@@ -219,9 +214,8 @@ final class BrowserPageViewController: UIViewController {
     private func refreshChromeControls() {
         let placement = currentChromePlacement ?? resolvedChromePlacement()
         applyAccessibilityIdentifiers(for: placement)
-        refreshNavigationHistoryMenus(for: placement)
         refreshInspectorButtonConfiguration(for: placement)
-        syncNavigationButtonStates()
+        syncNavigationButtonStates(store: store)
     }
 
     private func applyAccessibilityIdentifiers(for placement: ChromePlacement) {
@@ -236,16 +230,24 @@ final class BrowserPageViewController: UIViewController {
         inspectorButtonItem.accessibilityIdentifier = "Monocly.openInspectorButton.\(suffix)"
     }
 
-    private func refreshNavigationHistoryMenus(for placement: ChromePlacement) {
-        backButtonItem.menu = makeHistoryMenu(direction: .back, placement: placement)
-        forwardButtonItem.menu = makeHistoryMenu(direction: .forward, placement: placement)
+    private func makeDeferredHistoryMenu(direction: BrowserHistoryDirection) -> UIMenu {
+        UIMenu(
+            title: "",
+            children: [
+                UIDeferredMenuElement.uncached { [weak self] completion in
+                    guard let self else {
+                        completion([])
+                        return
+                    }
+                    let placement = self.currentChromePlacement ?? self.resolvedChromePlacement()
+                    completion(self.makeHistoryMenu(direction: direction, placement: placement).children)
+                },
+            ]
+        )
     }
 
-    private func makeHistoryMenu(direction: BrowserHistoryDirection, placement: ChromePlacement) -> UIMenu? {
+    private func makeHistoryMenu(direction: BrowserHistoryDirection, placement: ChromePlacement) -> UIMenu {
         let historyItems = displayedHistoryMenuItems(direction: direction, placement: placement)
-        guard historyItems.isEmpty == false else {
-            return nil
-        }
 
         let actions = historyItems.map { historyItem in
             UIAction(
@@ -290,9 +292,13 @@ final class BrowserPageViewController: UIViewController {
         if supportsMultipleScenesForInspectorMenu {
             inspectorButtonItem.target = nil
             inspectorButtonItem.action = nil
-            inspectorButtonItem.primaryAction = makeInspectorPrimaryAction()
+            if inspectorButtonItem.primaryAction == nil {
+                inspectorButtonItem.primaryAction = makeInspectorPrimaryAction()
+            }
             inspectorButtonItem.preferredMenuElementOrder = .fixed
-            inspectorButtonItem.menu = makeInspectorMenu(for: placement)
+            if inspectorButtonItem.menu == nil {
+                inspectorButtonItem.menu = makeDeferredInspectorMenu()
+            }
             return
         }
 
@@ -312,6 +318,22 @@ final class BrowserPageViewController: UIViewController {
             }
             _ = self.openInspectorAsSheet()
         }
+    }
+
+    private func makeDeferredInspectorMenu() -> UIMenu {
+        UIMenu(
+            title: "",
+            children: [
+                UIDeferredMenuElement.uncached { [weak self] completion in
+                    guard let self else {
+                        completion([])
+                        return
+                    }
+                    let placement = self.currentChromePlacement ?? self.resolvedChromePlacement()
+                    completion(self.makeInspectorMenu(for: placement).children)
+                },
+            ]
+        )
     }
 
     private func makeInspectorMenu(for placement: ChromePlacement) -> UIMenu {
@@ -382,7 +404,8 @@ final class BrowserPageViewController: UIViewController {
         traitCollection.horizontalSizeClass == .regular ? .regularNavigationBar : .compactToolbar
     }
 
-    private func syncNavigationButtonStates() {
+    private func syncNavigationButtonStates(store: BrowserStore? = nil) {
+        let store = store ?? self.store
         let canGoBack = store.canGoBack
         let canGoForward = store.canGoForward
         let canOpenInspector = inspectorCoordinator.isPresentingInspector(presenter: navigationController ?? self) == false
@@ -392,13 +415,13 @@ final class BrowserPageViewController: UIViewController {
         inspectorButtonItem.isEnabled = canOpenInspector
     }
 
-    private func renderState() {
+    private func renderState(from store: BrowserStore) {
         guard isViewLoaded else {
             return
         }
 
         navigationItem.title = store.displayTitle
-        syncNavigationButtonStates()
+        syncNavigationButtonStates(store: store)
 
         let progressIsVisible = store.isShowingProgress
         progressView.progress = Float(store.estimatedProgress)

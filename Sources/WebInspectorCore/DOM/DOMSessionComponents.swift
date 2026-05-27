@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 package struct DOMTargetCommit: Equatable, Sendable {
     package var oldFrameID: DOMFrame.ID?
@@ -9,6 +10,7 @@ package struct DOMTargetRemoval: Equatable, Sendable {
 }
 
 @MainActor
+@Observable
 package final class DOMTargetGraph {
     private var targetsByID: [ProtocolTarget.ID: ProtocolTarget]
     private var framesByID: [DOMFrame.ID: DOMFrame]
@@ -321,6 +323,7 @@ package final class DOMTargetGraph {
 }
 
 @MainActor
+@Observable
 package final class DOMDocumentStore {
     private var targetStatesByID: [ProtocolTarget.ID: DOMTargetState]
     private var lastDocumentLifetimeIDByTargetID: [ProtocolTarget.ID: UInt64]
@@ -459,7 +462,8 @@ package struct FrameDocumentProjection: Equatable, Sendable {
 }
 
 @MainActor
-package struct FrameDocumentProjectionIndex {
+@Observable
+package final class FrameDocumentProjectionIndex {
     private var projectionsByFrameTargetID: [ProtocolTarget.ID: FrameDocumentProjection]
 
     package init() {
@@ -478,17 +482,17 @@ package struct FrameDocumentProjectionIndex {
         projectionsByFrameTargetID[frameTargetID]
     }
 
-    package mutating func removeAll() {
+    package func removeAll() {
         projectionsByFrameTargetID.removeAll()
     }
 
     @discardableResult
-    package mutating func removeValue(forKey frameTargetID: ProtocolTarget.ID) -> FrameDocumentProjection? {
+    package func removeValue(forKey frameTargetID: ProtocolTarget.ID) -> FrameDocumentProjection? {
         projectionsByFrameTargetID.removeValue(forKey: frameTargetID)
     }
 
     @discardableResult
-    package mutating func moveProjection(
+    package func moveProjection(
         from oldTargetID: ProtocolTarget.ID,
         to newTargetID: ProtocolTarget.ID
     ) -> FrameDocumentProjection? {
@@ -501,7 +505,7 @@ package struct FrameDocumentProjectionIndex {
     }
 
     @discardableResult
-    package mutating func setFrameDocument(
+    package func setFrameDocument(
         frameTargetID: ProtocolTarget.ID,
         frameDocumentID: DOMDocument.ID
     ) -> FrameDocumentProjection {
@@ -519,7 +523,7 @@ package struct FrameDocumentProjectionIndex {
         return projection
     }
 
-    package mutating func attach(frameTargetID: ProtocolTarget.ID, to ownerNodeID: DOMNode.ID) {
+    package func attach(frameTargetID: ProtocolTarget.ID, to ownerNodeID: DOMNode.ID) {
         guard var projection = projectionsByFrameTargetID[frameTargetID] else {
             return
         }
@@ -528,7 +532,7 @@ package struct FrameDocumentProjectionIndex {
         projectionsByFrameTargetID[frameTargetID] = projection
     }
 
-    package mutating func detach(
+    package func detach(
         frameTargetID: ProtocolTarget.ID,
         state: FrameDocumentProjectionState = .pending
     ) {
@@ -593,18 +597,15 @@ package struct DOMTreeProjectionBuilder {
     package typealias FrameDocumentRootResolver = @MainActor (DOMNode.ID) -> DOMNode.ID?
 
     private let rootDocument: DOMDocument
-    private let selectedNodeID: DOMNode.ID?
     private let nodeProvider: NodeProvider
     private let frameDocumentRootResolver: FrameDocumentRootResolver
 
     package init(
         rootDocument: DOMDocument,
-        selectedNodeID: DOMNode.ID?,
         nodeProvider: @escaping NodeProvider,
         frameDocumentRootResolver: @escaping FrameDocumentRootResolver
     ) {
         self.rootDocument = rootDocument
-        self.selectedNodeID = selectedNodeID
         self.nodeProvider = nodeProvider
         self.frameDocumentRootResolver = frameDocumentRootResolver
     }
@@ -687,7 +688,6 @@ package struct DOMTreeProjectionBuilder {
                 nodeID: nodeID,
                 depth: depth,
                 nodeName: node.nodeName,
-                isSelected: selectedNodeID == nodeID,
                 hasVisibleChildren: !visibleChildren.isEmpty || node.regularChildren.knownCount > 0
             )
         )

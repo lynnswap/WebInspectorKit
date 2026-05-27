@@ -283,16 +283,6 @@ struct BrowserHistoryMenuItem {
     let direction: BrowserHistoryDirection
 }
 
-private struct BrowserHistorySnapshotEntry: Equatable {
-    let title: String
-    let urlString: String
-}
-
-private struct BrowserHistorySnapshot: Equatable {
-    let backItems: [BrowserHistorySnapshotEntry]
-    let forwardItems: [BrowserHistorySnapshotEntry]
-}
-
 private enum BrowserStoreSPI {
     private static func deobfuscate(_ reverseTokens: [String]) -> String {
         reverseTokens.reversed().joined()
@@ -340,13 +330,7 @@ private enum BrowserStoreSPI {
 #endif
 
     @ObservationIgnored private var cancellables: Set<AnyCancellable> = []
-    @ObservationIgnored private var stateObserverByID: [UUID: () -> Void] = [:]
-    @ObservationIgnored private var historyObserverByID: [UUID: () -> Void] = [:]
     @ObservationIgnored private var hasLoadedInitialRequest = false
-    @ObservationIgnored private var lastHistorySnapshot = BrowserHistorySnapshot(
-        backItems: [],
-        forwardItems: []
-    )
 
     var isShowingProgress: Bool {
         isLoading && estimatedProgress < 1.0
@@ -402,34 +386,9 @@ private enum BrowserStoreSPI {
         configureHistoryDelegateIfAvailable()
 
         setObservers()
-        lastHistorySnapshot = historySnapshot()
         if automaticallyLoadsInitialRequest {
             loadInitialRequestIfNeeded()
         }
-    }
-
-    @discardableResult
-    func addStateObserver(_ observer: @escaping () -> Void) -> UUID {
-        let observerID = UUID()
-        stateObserverByID[observerID] = observer
-        observer()
-        return observerID
-    }
-
-    func removeStateObserver(_ observerID: UUID) {
-        stateObserverByID.removeValue(forKey: observerID)
-    }
-
-    @discardableResult
-    func addHistoryObserver(_ observer: @escaping () -> Void) -> UUID {
-        let observerID = UUID()
-        historyObserverByID[observerID] = observer
-        observer()
-        return observerID
-    }
-
-    func removeHistoryObserver(_ observerID: UUID) {
-        historyObserverByID.removeValue(forKey: observerID)
     }
 
     func goBack() {
@@ -484,7 +443,6 @@ private enum BrowserStoreSPI {
                     return
                 }
                 self.estimatedProgress = progress
-                self.notifyStateObservers()
             }
             .store(in: &cancellables)
 
@@ -495,7 +453,6 @@ private enum BrowserStoreSPI {
                     return
                 }
                 self.syncCurrentURL(url)
-                self.notifyStateObservers()
             }
             .store(in: &cancellables)
 
@@ -506,7 +463,6 @@ private enum BrowserStoreSPI {
                     return
                 }
                 self.canGoForward = canGoForward
-                self.notifyStateObservers()
             }
             .store(in: &cancellables)
 
@@ -517,7 +473,6 @@ private enum BrowserStoreSPI {
                     return
                 }
                 self.canGoBack = canGoBack
-                self.notifyStateObservers()
             }
             .store(in: &cancellables)
 
@@ -528,21 +483,8 @@ private enum BrowserStoreSPI {
                     return
                 }
                 self.underPageBackgroundColor = underPageBackgroundColor
-                self.notifyStateObservers()
             }
             .store(in: &cancellables)
-    }
-
-    private func notifyStateObservers() {
-        for observer in stateObserverByID.values {
-            observer()
-        }
-    }
-
-    private func notifyHistoryObservers() {
-        for observer in historyObserverByID.values {
-            observer()
-        }
     }
 
     private func syncNavigationState(
@@ -556,7 +498,6 @@ private enum BrowserStoreSPI {
             lastNavigationErrorDescription = nil
         }
         invalidateHistoryIfNeeded()
-        notifyStateObservers()
     }
 
     private func syncCurrentURL(_ url: URL?) {
@@ -569,12 +510,8 @@ private enum BrowserStoreSPI {
     }
 
     private func invalidateHistoryIfNeeded() {
-        let snapshot = historySnapshot()
-        guard snapshot != lastHistorySnapshot else {
-            return
-        }
-        lastHistorySnapshot = snapshot
-        notifyHistoryObservers()
+        canGoBack = webView.canGoBack
+        canGoForward = webView.canGoForward
     }
 
     private func historyItems(direction: BrowserHistoryDirection, limit: Int) -> [BrowserHistoryMenuItem] {
@@ -596,22 +533,6 @@ private enum BrowserStoreSPI {
             return host
         }
         return item.url.absoluteString
-    }
-
-    private func historySnapshot() -> BrowserHistorySnapshot {
-        BrowserHistorySnapshot(
-            backItems: historySnapshotEntries(direction: .back),
-            forwardItems: historySnapshotEntries(direction: .forward)
-        )
-    }
-
-    private func historySnapshotEntries(direction: BrowserHistoryDirection) -> [BrowserHistorySnapshotEntry] {
-        spiHistoryItems(direction: direction, limit: BrowserStoreSPI.maximumHistoryMenuItemCount).map { item in
-            BrowserHistorySnapshotEntry(
-                title: historyTitle(for: item),
-                urlString: item.url.absoluteString
-            )
-        }
     }
 
     private func spiHistoryItems(direction: BrowserHistoryDirection, limit: Int) -> [WKBackForwardListItem] {
@@ -707,7 +628,6 @@ extension BrowserStore: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         isLoading = true
         estimatedProgress = .zero
-        notifyStateObservers()
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse) async -> WKNavigationResponsePolicy {
@@ -766,7 +686,6 @@ extension BrowserStore: WKNavigationDelegate {
         lastWebContentTerminationDate = Date()
         lastWebContentTerminationURL = webView.url
         invalidateHistoryIfNeeded()
-        notifyStateObservers()
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {

@@ -338,7 +338,9 @@ package struct DOMSelectionRequest {
     package var transactionID: DOMTransaction.ID?
 }
 
-package struct DOMSelection {
+@MainActor
+@Observable
+package final class DOMSelection {
     package var selectedNodeID: DOMNode.ID?
     package var pendingRequest: DOMSelectionRequest?
     package var failure: SelectionResolutionFailure?
@@ -355,8 +357,6 @@ package struct DOMSelection {
 package final class DOMSession {
     package private(set) var currentPageTargetID: ProtocolTarget.ID?
     package private(set) var mainFrameID: DOMFrame.ID?
-    package private(set) var treeRevision: UInt64
-    package private(set) var selectionRevision: UInt64
 
     private var targetGraph: DOMTargetGraph
     private var documentStore: DOMDocumentStore
@@ -367,8 +367,6 @@ package final class DOMSession {
     package init() {
         currentPageTargetID = nil
         mainFrameID = nil
-        treeRevision = 0
-        selectionRevision = 0
         targetGraph = DOMTargetGraph()
         documentStore = DOMDocumentStore()
         frameDocumentProjectionIndex = FrameDocumentProjectionIndex()
@@ -410,8 +408,6 @@ package final class DOMSession {
     package func reset() {
         currentPageTargetID = nil
         mainFrameID = nil
-        treeRevision &+= 1
-        selectionRevision &+= 1
         targetGraph.reset()
         documentStore.reset()
         frameDocumentProjectionIndex.removeAll()
@@ -445,14 +441,12 @@ package final class DOMSession {
         let resolvedMainFrameID = targetGraph.targetFrameID(for: targetID) ?? DOMFrame.ID("main:\(targetID.rawValue)")
         if let currentPageTargetID, currentPageTargetID != targetID {
             selection = DOMSelection()
-            selectionRevision &+= 1
         }
         currentPageTargetID = targetID
         mainFrameID = resolvedMainFrameID
         _ = state(for: targetID)
         targetGraph.assignMainFrame(resolvedMainFrameID, to: targetID)
         attachKnownFrameTargets()
-        treeRevision &+= 1
     }
 
     package func applyTargetCommitted(targetID: ProtocolTarget.ID) {
@@ -504,7 +498,6 @@ package final class DOMSession {
         }
 
         reconcileSelection()
-        treeRevision &+= 1
     }
 
     package func applyTargetDestroyed(_ targetID: ProtocolTarget.ID) {
@@ -529,7 +522,6 @@ package final class DOMSession {
         }
         documentStore.removeState(for: targetID)
         reconcileSelection()
-        treeRevision &+= 1
     }
 
     package func applyExecutionContextCreated(_ context: RuntimeExecutionContextRecord) {
@@ -596,7 +588,6 @@ package final class DOMSession {
         updateAllFrameDocumentProjectionStates()
 
         reconcileSelection()
-        treeRevision &+= 1
         return rootNodeID
     }
 
@@ -621,7 +612,6 @@ package final class DOMSession {
             detachFrameDocumentProjection(frameTargetID: targetID)
         }
         reconcileSelection()
-        treeRevision &+= 1
     }
 
     package func applySetChildNodes(parent nodeID: DOMNode.ID, children payloads: [DOMNodePayload]) {
@@ -697,7 +687,6 @@ package final class DOMSession {
         if affectsVisibleTree {
             updateAllFrameDocumentProjectionStates()
             reconcileSelection()
-            treeRevision &+= 1
         } else {
             completePendingSelectionIfPossible(in: document)
         }
@@ -733,7 +722,6 @@ package final class DOMSession {
             reattachFrameDocumentProjections(using: replacementOwnerKeys)
             updateAllFrameDocumentProjectionStates()
             reconcileSelection()
-            treeRevision &+= 1
         } else {
             completePendingSelectionIfPossible(in: document)
         }
@@ -750,7 +738,6 @@ package final class DOMSession {
         if affectsVisibleTree {
             updateAllFrameDocumentProjectionStates()
             reconcileSelection()
-            treeRevision &+= 1
         }
     }
 
@@ -762,9 +749,6 @@ package final class DOMSession {
         }
         if case .unrequested = node.regularChildren {
             node.regularChildren = .unrequested(count: max(0, count))
-            if nodeIsConnectedToDocumentTree(nodeID, in: document) {
-                treeRevision &+= 1
-            }
         }
     }
 
@@ -786,9 +770,6 @@ package final class DOMSession {
            name.caseInsensitiveCompare("src") == .orderedSame {
             updateAllFrameDocumentProjectionStates()
         }
-        if nodeIsConnectedToDocumentTree(nodeID, in: document) {
-            treeRevision &+= 1
-        }
     }
 
     package func applyAttributeRemoved(_ nodeID: DOMNode.ID, name: String) {
@@ -802,9 +783,6 @@ package final class DOMSession {
         if node.isFrameOwner,
            name.caseInsensitiveCompare("src") == .orderedSame {
             updateAllFrameDocumentProjectionStates()
-        }
-        if nodeIsConnectedToDocumentTree(nodeID, in: document) {
-            treeRevision &+= 1
         }
     }
 
@@ -946,7 +924,6 @@ package final class DOMSession {
         selection.selectedNodeID = nodeID
         selection.pendingRequest = nil
         selection.failure = nil
-        selectionRevision &+= 1
     }
 
     @discardableResult
@@ -1227,7 +1204,6 @@ package final class DOMSession {
         }
         return DOMTreeProjectionBuilder(
             rootDocument: document,
-            selectedNodeID: selection.selectedNodeID,
             nodeProvider: { [weak self] nodeID in
                 self?.node(for: nodeID)
             },
@@ -1249,8 +1225,6 @@ package final class DOMSession {
         return DOMSessionSnapshot(
             currentPageTargetID: currentPageTargetID,
             mainFrameID: mainFrameID,
-            treeRevision: treeRevision,
-            selectionRevision: selectionRevision,
             targetsByID: targetGraph.targetSnapshots(currentDocumentID: currentDocumentID(for:)),
             targetStatesByID: documentStore.targetStateSnapshots(currentDocumentID: currentDocumentID(for:)),
             framesByID: targetGraph.frameSnapshots(),
@@ -1409,7 +1383,6 @@ package final class DOMSession {
         if selection.selectedNodeID?.documentID == documentID {
             selection.selectedNodeID = nil
             selection.failure = nil
-            selectionRevision &+= 1
         }
     }
 
@@ -2300,7 +2273,6 @@ package final class DOMSession {
         }
         selection.selectedNodeID = nil
         selection.failure = nil
-        selectionRevision &+= 1
     }
 
     private func completePendingSelection(
@@ -2313,16 +2285,12 @@ package final class DOMSession {
         selection.selectedNodeID = selectedNodeID
         selection.pendingRequest = nil
         selection.failure = nil
-        selectionRevision &+= 1
     }
 
     private func failSelection(
         _ failure: SelectionResolutionFailure,
         clearSelected: Bool = true
     ) -> Result<DOMCommandIntent, SelectionResolutionFailure> {
-        let previousSelectedNodeID = selection.selectedNodeID
-        let previousHadPendingRequest = selection.pendingRequest != nil
-        let previousFailure = selection.failure
         if let pendingTransactionID = selection.pendingRequest?.transactionID {
             removeTransaction(pendingTransactionID, targetID: selection.pendingRequest?.targetID)
         }
@@ -2331,11 +2299,6 @@ package final class DOMSession {
         }
         selection.pendingRequest = nil
         selection.failure = failure
-        if (clearSelected && previousSelectedNodeID != nil)
-            || previousHadPendingRequest
-            || previousFailure != failure {
-            selectionRevision &+= 1
-        }
         return .failure(failure)
     }
 
@@ -2343,9 +2306,6 @@ package final class DOMSession {
         _ failure: SelectionResolutionFailure,
         clearSelected: Bool = true
     ) -> Result<DOMNode.ID, SelectionResolutionFailure> {
-        let previousSelectedNodeID = selection.selectedNodeID
-        let previousHadPendingRequest = selection.pendingRequest != nil
-        let previousFailure = selection.failure
         if let pendingTransactionID = selection.pendingRequest?.transactionID {
             removeTransaction(pendingTransactionID, targetID: selection.pendingRequest?.targetID)
         }
@@ -2354,11 +2314,6 @@ package final class DOMSession {
         }
         selection.pendingRequest = nil
         selection.failure = failure
-        if (clearSelected && previousSelectedNodeID != nil)
-            || previousHadPendingRequest
-            || previousFailure != failure {
-            selectionRevision &+= 1
-        }
         return .failure(failure)
     }
 
@@ -2366,9 +2321,6 @@ package final class DOMSession {
         _ failure: SelectionResolutionFailure,
         clearSelected: Bool = true
     ) -> DOMRequestNodeResolution {
-        let previousSelectedNodeID = selection.selectedNodeID
-        let previousHadPendingRequest = selection.pendingRequest != nil
-        let previousFailure = selection.failure
         if let pendingTransactionID = selection.pendingRequest?.transactionID {
             removeTransaction(pendingTransactionID, targetID: selection.pendingRequest?.targetID)
         }
@@ -2377,11 +2329,6 @@ package final class DOMSession {
         }
         selection.pendingRequest = nil
         selection.failure = failure
-        if (clearSelected && previousSelectedNodeID != nil)
-            || previousHadPendingRequest
-            || previousFailure != failure {
-            selectionRevision &+= 1
-        }
         return .failed(failure)
     }
 }
