@@ -12,17 +12,12 @@ public final class WebInspectorViewController: UIViewController {
     }
 
     public let session: WebInspectorSession
+    private var drawsBackgroundStorage = true
+
+    @available(iOS 26.0, *)
     public var drawsBackground: Bool {
-        didSet {
-            guard drawsBackground != oldValue else {
-                return
-            }
-            traitOverrides.webInspectorDrawsBackground = drawsBackground
-            activeHost?.traitOverrides.webInspectorDrawsBackground = drawsBackground
-            if isViewLoaded {
-                applyBackgroundFromTraits()
-            }
-        }
+        get { drawsBackgroundStorage }
+        set { setDrawsBackground(newValue) }
     }
 
     private var activeHost: UIViewController?
@@ -33,24 +28,14 @@ public final class WebInspectorViewController: UIViewController {
         }
     }
 
-    public init(
-        session: WebInspectorSession = WebInspectorSession(),
-        drawsBackground: Bool = true
-    ) {
+    public init(session: WebInspectorSession = WebInspectorSession()) {
         self.session = session
-        self.drawsBackground = drawsBackground
         super.init(nibName: nil, bundle: nil)
-        traitOverrides.webInspectorDrawsBackground = drawsBackground
+        traitOverrides.webInspectorDrawsBackground = drawsBackgroundStorage
     }
 
-    public convenience init(
-        tabs: [WebInspectorTab],
-        drawsBackground: Bool = true
-    ) {
-        self.init(
-            session: WebInspectorSession(tabs: tabs),
-            drawsBackground: drawsBackground
-        )
+    public convenience init(tabs: [WebInspectorTab]) {
+        self.init(session: WebInspectorSession(tabs: tabs))
     }
 
     @available(*, unavailable)
@@ -90,6 +75,18 @@ public final class WebInspectorViewController: UIViewController {
         view.backgroundColor = webInspectorBackgroundPolicy.backgroundColor
     }
 
+    private func setDrawsBackground(_ drawsBackground: Bool) {
+        guard drawsBackgroundStorage != drawsBackground else {
+            return
+        }
+        drawsBackgroundStorage = drawsBackground
+        traitOverrides.webInspectorDrawsBackground = drawsBackground
+        activeHost?.traitOverrides.webInspectorDrawsBackground = drawsBackground
+        if isViewLoaded {
+            applyBackgroundFromTraits()
+        }
+    }
+
     private func rebuildLayout(forceHostReplacement: Bool = false) {
         let targetHostKind = effectiveHostKind
         guard forceHostReplacement || activeHostKind != targetHostKind else {
@@ -114,7 +111,7 @@ public final class WebInspectorViewController: UIViewController {
         case .regular:
             host = RegularTabContentViewController(session: session)
         }
-        host.traitOverrides.webInspectorDrawsBackground = drawsBackground
+        host.traitOverrides.webInspectorDrawsBackground = drawsBackgroundStorage
 
         addChild(host)
         host.view.translatesAutoresizingMaskIntoConstraints = false

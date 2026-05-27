@@ -15,7 +15,9 @@ struct ParentContainerTests {
 
         #expect(session.interface.tabs.map(\.id) == [WebInspectorTab.dom.id, WebInspectorTab.network.id])
         #expect(viewController.session.interface.tabs.map(\.id) == [WebInspectorTab.dom.id, WebInspectorTab.network.id])
-        #expect(viewController.drawsBackground)
+        if #available(iOS 26.0, *) {
+            #expect(viewController.drawsBackground)
+        }
     }
 
     @Test
@@ -24,17 +26,20 @@ struct ParentContainerTests {
 
         viewController.loadViewIfNeeded()
 
-        #expect(viewController.drawsBackground)
+        if #available(iOS 26.0, *) {
+            #expect(viewController.drawsBackground)
+        }
         #expect(viewController.view.backgroundColor == .systemBackground)
     }
 
     @Test
-    func viewControllerCanDisableBackgroundDrawingFromSessionInitializer() {
-        let viewController = WebInspectorViewController(
-            session: WebInspectorSession(),
-            drawsBackground: false
-        )
+    func viewControllerCanDisableBackgroundDrawingAfterInitialization() {
+        guard #available(iOS 26.0, *) else {
+            return
+        }
 
+        let viewController = WebInspectorViewController(session: WebInspectorSession())
+        viewController.drawsBackground = false
         viewController.loadViewIfNeeded()
 
         #expect(viewController.drawsBackground == false)
@@ -42,17 +47,16 @@ struct ParentContainerTests {
     }
 
     @Test
-    func viewControllerCanDisableBackgroundDrawingFromTabsInitializer() {
-        let viewController = WebInspectorViewController(
-            tabs: [.network],
-            drawsBackground: false
-        )
+    func tabsInitializerKeepsBackgroundDrawingEnabledByDefault() {
+        let viewController = WebInspectorViewController(tabs: [.network])
 
         viewController.loadViewIfNeeded()
 
-        #expect(viewController.drawsBackground == false)
+        if #available(iOS 26.0, *) {
+            #expect(viewController.drawsBackground)
+        }
         #expect(viewController.session.interface.tabs.map(\.id) == [WebInspectorTab.network.id])
-        #expect(viewController.view.backgroundColor == .clear)
+        #expect(viewController.view.backgroundColor == .systemBackground)
     }
 
     @Test
@@ -93,7 +97,12 @@ struct ParentContainerTests {
 
     @Test
     func topLevelContainerPropagatesBackgroundDrawingTraitToHosts() throws {
-        let viewController = WebInspectorViewController(drawsBackground: false)
+        guard #available(iOS 26.0, *) else {
+            return
+        }
+
+        let viewController = WebInspectorViewController()
+        viewController.drawsBackground = false
         viewController.loadViewIfNeeded()
 
         viewController.horizontalSizeClassOverrideForTesting = .compact

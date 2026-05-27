@@ -265,10 +265,10 @@ final class BrowserInspectorCoordinator {
         }
 
         let anchor = resolvePresentationAnchor(from: presenter)
-        let sheetController = WebInspectorViewController(
-            session: inspectorSession,
-            drawsBackground: Self.sheetDrawsInspectorBackground
-        )
+        let sheetController = WebInspectorViewController(session: inspectorSession)
+        if #available(iOS 26.0, *) {
+            sheetController.drawsBackground = false
+        }
         sheetController.modalPresentationStyle = .pageSheet
         applyDefaultDetents(to: sheetController)
         presentedSheetController = sheetController
@@ -364,10 +364,6 @@ final class BrowserInspectorCoordinator {
         presentedSheetController
     }
 
-    static var sheetDrawsInspectorBackgroundForTesting: Bool {
-        sheetDrawsInspectorBackground
-    }
-
     static var inspectorWindowSceneActivityType: String {
         BrowserInspectorWindowContext.sceneActivityType
     }
@@ -423,14 +419,6 @@ final class BrowserInspectorCoordinator {
         let userActivity = NSUserActivity(activityType: BrowserInspectorWindowContext.sceneActivityType)
         userActivity.targetContentIdentifier = BrowserInspectorWindowContext.sceneActivityType
         return userActivity
-    }
-
-    private static var sheetDrawsInspectorBackground: Bool {
-        if #available(iOS 26.0, *) {
-            false
-        } else {
-            true
-        }
     }
 
     private func resolvePresentationAnchor(from presenter: UIViewController) -> UIViewController {

@@ -215,11 +215,8 @@ struct MonoclyLifecycleTests {
                 coordinator.presentedSheetControllerForTesting as? WebInspectorViewController
             )
             #expect(didPresent)
-            #expect(sheetController.drawsBackground == BrowserInspectorCoordinator.sheetDrawsInspectorBackgroundForTesting)
             if #available(iOS 26.0, *) {
                 #expect(sheetController.drawsBackground == false)
-            } else {
-                #expect(sheetController.drawsBackground)
             }
         }
     }
@@ -422,7 +419,9 @@ struct MonoclyLifecycleTests {
             let inspectorWindow = try #require(sceneDelegate.window)
             context.retain(inspectorWindow)
             #expect(inspectorWindow.rootViewController === sceneDelegate.inspectorViewController)
-            #expect(sceneDelegate.inspectorViewController?.inspectorContainerForTesting?.drawsBackground == true)
+            if #available(iOS 26.0, *) {
+                #expect(sceneDelegate.inspectorViewController?.inspectorContainerForTesting?.drawsBackground == true)
+            }
             #expect(coordinator.hasInspectorWindowForTesting)
 
             sceneDelegate.scene(
