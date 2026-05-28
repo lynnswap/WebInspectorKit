@@ -1,3 +1,4 @@
+import WebInspectorTransport
 package struct ConsoleMessageSource: RawRepresentable, Hashable, Codable, Sendable {
     package let rawValue: String
 

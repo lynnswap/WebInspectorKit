@@ -1,8 +1,8 @@
 #if canImport(UIKit)
+import WebInspectorCore
 import ObservationBridge
 import SyntaxEditorUI
 import UIKit
-import WebInspectorCore
 
 @MainActor
 final class NetworkBodyViewController: UIViewController {

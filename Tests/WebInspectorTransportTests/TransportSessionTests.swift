@@ -972,7 +972,7 @@ func orderedStreamReceivesTargetEventsAcrossDomainsInTransportOrder() async thro
 }
 
 @Test
-func networkAdapterKeepsEnvelopeTargetAndPayloadTargetSeparate() async throws {
+func networkProtocolDispatchingKeepsEnvelopeTargetAndPayloadTargetSeparate() async throws {
     let network = await NetworkSession()
     let event = ProtocolEventEnvelope(
         sequence: 1,
@@ -984,7 +984,7 @@ func networkAdapterKeepsEnvelopeTargetAndPayloadTargetSeparate() async throws {
         )
     )
 
-    try await NetworkTransportAdapter.applyNetworkEvent(event, to: network)
+    try await NetworkProtocolEventDispatcher(session: network).dispatch(event)
     let key = NetworkRequestIdentifierKey(targetID: .init("page-proxy"), requestID: .init("request-1"))
     let snapshot = try #require(await network.requestSnapshot(for: key))
 
@@ -993,7 +993,7 @@ func networkAdapterKeepsEnvelopeTargetAndPayloadTargetSeparate() async throws {
 }
 
 @Test
-func networkAdapterBuildsRedirectChainFromRepeatedRequestWillBeSent() async throws {
+func networkProtocolDispatchingBuildsRedirectChainFromRepeatedRequestWillBeSent() async throws {
     let network = await NetworkSession()
     let targetID = ProtocolTargetIdentifier("page-proxy")
     let first = ProtocolEventEnvelope(
@@ -1015,8 +1015,8 @@ func networkAdapterBuildsRedirectChainFromRepeatedRequestWillBeSent() async thro
         )
     )
 
-    try await NetworkTransportAdapter.applyNetworkEvent(first, to: network)
-    try await NetworkTransportAdapter.applyNetworkEvent(redirect, to: network)
+    try await NetworkProtocolEventDispatcher(session: network).dispatch(first)
+    try await NetworkProtocolEventDispatcher(session: network).dispatch(redirect)
     let key = NetworkRequestIdentifierKey(targetID: targetID, requestID: .init("request-redirect"))
     let snapshot = try #require(await network.requestSnapshot(for: key))
 
@@ -1026,12 +1026,12 @@ func networkAdapterBuildsRedirectChainFromRepeatedRequestWillBeSent() async thro
 }
 
 @Test
-func networkAdapterPreservesInitiatorAndLoadingFinishedMetrics() async throws {
+func networkProtocolDispatchingPreservesInitiatorAndLoadingFinishedMetrics() async throws {
     let network = await NetworkSession()
     let targetID = ProtocolTargetIdentifier("page-proxy")
     let requestID = NetworkRequestIdentifier("request-metrics")
 
-    try await NetworkTransportAdapter.applyNetworkEvent(
+    try await NetworkProtocolEventDispatcher(session: network).dispatch(
         ProtocolEventEnvelope(
             sequence: 1,
             domain: .network,
@@ -1040,10 +1040,9 @@ func networkAdapterPreservesInitiatorAndLoadingFinishedMetrics() async throws {
             paramsData: Data(
                 ##"{"requestId":"request-metrics","request":{"url":"https://example.com/app.js"},"timestamp":1,"initiator":{"type":"parser","url":"https://example.com","lineNumber":12,"nodeId":42,"stackTrace":{"callFrames":[{"functionName":"load","url":"https://example.com/app.js","scriptId":"7","lineNumber":3,"columnNumber":9}]}}}"##.utf8
             )
-        ),
-        to: network
+        )
     )
-    try await NetworkTransportAdapter.applyNetworkEvent(
+    try await NetworkProtocolEventDispatcher(session: network).dispatch(
         ProtocolEventEnvelope(
             sequence: 2,
             domain: .network,
@@ -1052,10 +1051,9 @@ func networkAdapterPreservesInitiatorAndLoadingFinishedMetrics() async throws {
             paramsData: Data(
                 ##"{"requestId":"request-metrics","response":{"status":200,"headers":{"Content-Type":"text/javascript"}},"timestamp":1.5}"##.utf8
             )
-        ),
-        to: network
+        )
     )
-    try await NetworkTransportAdapter.applyNetworkEvent(
+    try await NetworkProtocolEventDispatcher(session: network).dispatch(
         ProtocolEventEnvelope(
             sequence: 3,
             domain: .network,
@@ -1064,8 +1062,7 @@ func networkAdapterPreservesInitiatorAndLoadingFinishedMetrics() async throws {
             paramsData: Data(
                 ##"{"requestId":"request-metrics","timestamp":2,"sourceMapURL":"app.js.map","metrics":{"protocol":"h2","priority":"high","connectionIdentifier":"connection-1","remoteAddress":"203.0.113.10","requestHeaders":{"User-Agent":"WebInspector"},"requestHeaderBytesSent":64,"responseHeaderBytesReceived":128,"responseBodyBytesReceived":300,"responseBodyDecodedSize":512,"securityConnection":{"protocol":"TLS 1.3","cipher":"TLS_AES_128_GCM_SHA256"},"isProxyConnection":false}}"##.utf8
             )
-        ),
-        to: network
+        )
     )
     let key = NetworkRequestIdentifierKey(targetID: targetID, requestID: requestID)
     let snapshot = try #require(await network.requestSnapshot(for: key))
@@ -1084,7 +1081,7 @@ func networkAdapterPreservesInitiatorAndLoadingFinishedMetrics() async throws {
 }
 
 @Test
-func networkAdapterHandlesWebSocketLifecycleEvents() async throws {
+func networkProtocolDispatchingHandlesWebSocketLifecycleEvents() async throws {
     let network = await NetworkSession()
     let targetID = ProtocolTargetIdentifier("page-proxy")
     let requestID = NetworkRequestIdentifier("ws.1")
@@ -1098,7 +1095,7 @@ func networkAdapterHandlesWebSocketLifecycleEvents() async throws {
         ProtocolEventEnvelope(sequence: 6, domain: .network, method: "Network.webSocketFrameError", targetID: targetID, paramsData: Data(#"{"requestId":"ws.1","timestamp":4.5,"errorMessage":"bad frame"}"#.utf8)),
         ProtocolEventEnvelope(sequence: 7, domain: .network, method: "Network.webSocketClosed", targetID: targetID, paramsData: Data(#"{"requestId":"ws.1","timestamp":5}"#.utf8)),
     ] {
-        try await NetworkTransportAdapter.applyNetworkEvent(event, to: network)
+        try await NetworkProtocolEventDispatcher(session: network).dispatch(event)
     }
     let key = NetworkRequestIdentifierKey(targetID: targetID, requestID: requestID)
     let snapshot = try #require(await network.requestSnapshot(for: key))
@@ -1112,9 +1109,9 @@ func networkAdapterHandlesWebSocketLifecycleEvents() async throws {
 }
 
 @Test
-func domAdapterCompletesInspectSelectionThroughRequestNodeResult() async throws {
+func domProtocolDispatchingCompletesInspectSelectionThroughRequestNodeResult() async throws {
     let dom = await DOMSession()
-    try await DOMTransportAdapter.applyTargetEvent(
+    try await TargetProtocolEventDispatcher().dispatch(
         ProtocolEventEnvelope(
             sequence: 1,
             domain: .target,
@@ -1124,7 +1121,7 @@ func domAdapterCompletesInspectSelectionThroughRequestNodeResult() async throws 
         ),
         to: dom
     )
-    try await DOMTransportAdapter.applyGetDocumentResult(
+    try await DOMProtocolCommands().applyGetDocumentResult(
         ProtocolCommandResult(
             domain: .dom,
             method: "DOM.getDocument",
@@ -1133,15 +1130,14 @@ func domAdapterCompletesInspectSelectionThroughRequestNodeResult() async throws 
         ),
         to: dom
     )
-    try await DOMTransportAdapter.applyRuntimeEvent(
+    try await RuntimeProtocolEventDispatcher(handlers: [dom]).dispatch(
         ProtocolEventEnvelope(
             sequence: 2,
             domain: .runtime,
             method: "Runtime.executionContextCreated",
             targetID: .init("frame-A"),
             paramsData: Data(#"{"context":{"id":9,"frameId":"frame-A"}}"#.utf8)
-        ),
-        to: dom
+        )
     )
     let intent = await dom.beginInspectSelectionRequest(targetID: .init("frame-A"), objectID: "node-object")
     guard case let .success(.requestNode(selectionRequestID, targetID, _)) = intent else {
@@ -1149,7 +1145,7 @@ func domAdapterCompletesInspectSelectionThroughRequestNodeResult() async throws 
         return
     }
 
-    let result = try await DOMTransportAdapter.applyRequestNodeResult(
+    let result = try await DOMProtocolCommands().applyRequestNodeResult(
         ProtocolCommandResult(
             domain: .dom,
             method: "DOM.requestNode",
@@ -1170,9 +1166,9 @@ func domAdapterCompletesInspectSelectionThroughRequestNodeResult() async throws 
 }
 
 @Test
-func domAdapterFrameDocumentRefreshOnlyUpdatesFrameTargetDocument() async throws {
+func domProtocolDispatchingFrameDocumentRefreshOnlyUpdatesFrameTargetDocument() async throws {
     let dom = await DOMSession()
-    try await DOMTransportAdapter.applyTargetEvent(
+    try await TargetProtocolEventDispatcher().dispatch(
         ProtocolEventEnvelope(
             sequence: 1,
             domain: .target,
@@ -1182,7 +1178,7 @@ func domAdapterFrameDocumentRefreshOnlyUpdatesFrameTargetDocument() async throws
         ),
         to: dom
     )
-    try await DOMTransportAdapter.applyTargetEvent(
+    try await TargetProtocolEventDispatcher().dispatch(
         ProtocolEventEnvelope(
             sequence: 2,
             domain: .target,
@@ -1192,7 +1188,7 @@ func domAdapterFrameDocumentRefreshOnlyUpdatesFrameTargetDocument() async throws
         ),
         to: dom
     )
-    try await DOMTransportAdapter.applyGetDocumentResult(
+    try await DOMProtocolCommands().applyGetDocumentResult(
         ProtocolCommandResult(
             domain: .dom,
             method: "DOM.getDocument",
@@ -1202,14 +1198,14 @@ func domAdapterFrameDocumentRefreshOnlyUpdatesFrameTargetDocument() async throws
         to: dom
     )
     let firstFrameRoot = try #require(
-        await DOMTransportAdapter.applyGetDocumentResult(
-        ProtocolCommandResult(
-            domain: .dom,
-            method: "DOM.getDocument",
-            targetID: .init("frame-ad"),
-            resultData: Data(##"{"root":{"nodeId":10,"nodeType":9,"nodeName":"#document","children":[{"nodeId":11,"nodeType":1,"nodeName":"HTML","localName":"html"}]}}"##.utf8)
-        ),
-        to: dom
+        await DOMProtocolCommands().applyGetDocumentResult(
+            ProtocolCommandResult(
+                domain: .dom,
+                method: "DOM.getDocument",
+                targetID: .init("frame-ad"),
+                resultData: Data(##"{"root":{"nodeId":10,"nodeType":9,"nodeName":"#document","children":[{"nodeId":11,"nodeType":1,"nodeName":"HTML","localName":"html"}]}}"##.utf8)
+            ),
+            to: dom
         )
     )
     let before = await dom.snapshot()
@@ -1217,14 +1213,14 @@ func domAdapterFrameDocumentRefreshOnlyUpdatesFrameTargetDocument() async throws
     let frameDocumentID = try #require(before.targetsByID[ProtocolTargetIdentifier("frame-ad")]?.currentDocumentID)
 
     let secondFrameRoot = try #require(
-        await DOMTransportAdapter.applyGetDocumentResult(
-        ProtocolCommandResult(
-            domain: .dom,
-            method: "DOM.getDocument",
-            targetID: .init("frame-ad"),
-            resultData: Data(##"{"root":{"nodeId":20,"nodeType":9,"nodeName":"#document","children":[{"nodeId":21,"nodeType":1,"nodeName":"HTML","localName":"html"}]}}"##.utf8)
-        ),
-        to: dom
+        await DOMProtocolCommands().applyGetDocumentResult(
+            ProtocolCommandResult(
+                domain: .dom,
+                method: "DOM.getDocument",
+                targetID: .init("frame-ad"),
+                resultData: Data(##"{"root":{"nodeId":20,"nodeType":9,"nodeName":"#document","children":[{"nodeId":21,"nodeType":1,"nodeName":"HTML","localName":"html"}]}}"##.utf8)
+            ),
+            to: dom
         )
     )
     let after = await dom.snapshot()
@@ -1236,9 +1232,9 @@ func domAdapterFrameDocumentRefreshOnlyUpdatesFrameTargetDocument() async throws
 }
 
 @Test
-func domAdapterAmbiguousTargetCommitDoesNotOverwriteExistingTargetMetadata() async throws {
+func domProtocolDispatchingAmbiguousTargetCommitDoesNotOverwriteExistingTargetMetadata() async throws {
     let dom = await DOMSession()
-    try await DOMTransportAdapter.applyTargetEvent(
+    try await TargetProtocolEventDispatcher().dispatch(
         ProtocolEventEnvelope(
             sequence: 1,
             domain: .target,
@@ -1249,7 +1245,7 @@ func domAdapterAmbiguousTargetCommitDoesNotOverwriteExistingTargetMetadata() asy
         to: dom
     )
 
-    try await DOMTransportAdapter.applyTargetEvent(
+    try await TargetProtocolEventDispatcher().dispatch(
         ProtocolEventEnvelope(
             sequence: 2,
             domain: .target,
@@ -1267,9 +1263,9 @@ func domAdapterAmbiguousTargetCommitDoesNotOverwriteExistingTargetMetadata() asy
 }
 
 @Test
-func domAdapterPageTargetWithParentFrameIsClassifiedAsFrame() async throws {
+func domProtocolDispatchingPageTargetWithParentFrameIsClassifiedAsFrame() async throws {
     let dom = await DOMSession()
-    try await DOMTransportAdapter.applyTargetEvent(
+    try await TargetProtocolEventDispatcher().dispatch(
         ProtocolEventEnvelope(
             sequence: 1,
             domain: .target,
@@ -1287,9 +1283,9 @@ func domAdapterPageTargetWithParentFrameIsClassifiedAsFrame() async throws {
 }
 
 @Test
-func domAdapterPageTargetWithKnownNonMainFrameIsClassifiedAsFrame() async throws {
+func domProtocolDispatchingPageTargetWithKnownNonMainFrameIsClassifiedAsFrame() async throws {
     let dom = await DOMSession()
-    try await DOMTransportAdapter.applyTargetEvent(
+    try await TargetProtocolEventDispatcher().dispatch(
         ProtocolEventEnvelope(
             sequence: 1,
             domain: .target,
@@ -1299,7 +1295,7 @@ func domAdapterPageTargetWithKnownNonMainFrameIsClassifiedAsFrame() async throws
         ),
         to: dom
     )
-    try await DOMTransportAdapter.applyTargetEvent(
+    try await TargetProtocolEventDispatcher().dispatch(
         ProtocolEventEnvelope(
             sequence: 2,
             domain: .target,
@@ -1317,9 +1313,9 @@ func domAdapterPageTargetWithKnownNonMainFrameIsClassifiedAsFrame() async throws
 }
 
 @Test
-func domAdapterPageTargetWithoutFrameIDCanCommitAsCurrentPage() async throws {
+func domProtocolDispatchingPageTargetWithoutFrameIDCanCommitAsCurrentPage() async throws {
     let dom = await DOMSession()
-    try await DOMTransportAdapter.applyTargetEvent(
+    try await TargetProtocolEventDispatcher().dispatch(
         ProtocolEventEnvelope(
             sequence: 1,
             domain: .target,
@@ -1329,7 +1325,7 @@ func domAdapterPageTargetWithoutFrameIDCanCommitAsCurrentPage() async throws {
         ),
         to: dom
     )
-    try await DOMTransportAdapter.applyTargetEvent(
+    try await TargetProtocolEventDispatcher().dispatch(
         ProtocolEventEnvelope(
             sequence: 2,
             domain: .target,
@@ -1339,7 +1335,7 @@ func domAdapterPageTargetWithoutFrameIDCanCommitAsCurrentPage() async throws {
         ),
         to: dom
     )
-    try await DOMTransportAdapter.applyTargetEvent(
+    try await TargetProtocolEventDispatcher().dispatch(
         ProtocolEventEnvelope(
             sequence: 3,
             domain: .target,
@@ -1357,9 +1353,9 @@ func domAdapterPageTargetWithoutFrameIDCanCommitAsCurrentPage() async throws {
 }
 
 @Test
-func domAdapterCommittedTopLevelProvisionalPageBecomesCurrentPage() async throws {
+func domProtocolDispatchingCommittedTopLevelProvisionalPageBecomesCurrentPage() async throws {
     let dom = await DOMSession()
-    try await DOMTransportAdapter.applyTargetEvent(
+    try await TargetProtocolEventDispatcher().dispatch(
         ProtocolEventEnvelope(
             sequence: 1,
             domain: .target,
@@ -1370,7 +1366,7 @@ func domAdapterCommittedTopLevelProvisionalPageBecomesCurrentPage() async throws
         to: dom
     )
 
-    try await DOMTransportAdapter.applyTargetEvent(
+    try await TargetProtocolEventDispatcher().dispatch(
         ProtocolEventEnvelope(
             sequence: 2,
             domain: .target,
@@ -1382,7 +1378,7 @@ func domAdapterCommittedTopLevelProvisionalPageBecomesCurrentPage() async throws
     )
     #expect(await dom.snapshot().currentPageTargetID == ProtocolTargetIdentifier("page-old"))
 
-    try await DOMTransportAdapter.applyTargetEvent(
+    try await TargetProtocolEventDispatcher().dispatch(
         ProtocolEventEnvelope(
             sequence: 3,
             domain: .target,
@@ -1399,9 +1395,9 @@ func domAdapterCommittedTopLevelProvisionalPageBecomesCurrentPage() async throws
 }
 
 @Test
-func domAdapterOldlessCommittedProvisionalPageWithoutMainContextStaysFrameScoped() async throws {
+func domProtocolDispatchingOldlessCommittedProvisionalPageWithoutMainContextStaysFrameScoped() async throws {
     let dom = await DOMSession()
-    try await DOMTransportAdapter.applyTargetEvent(
+    try await TargetProtocolEventDispatcher().dispatch(
         ProtocolEventEnvelope(
             sequence: 1,
             domain: .target,
@@ -1413,7 +1409,7 @@ func domAdapterOldlessCommittedProvisionalPageWithoutMainContextStaysFrameScoped
     )
     #expect(await dom.snapshot().currentPageTargetID == nil)
 
-    try await DOMTransportAdapter.applyTargetEvent(
+    try await TargetProtocolEventDispatcher().dispatch(
         ProtocolEventEnvelope(
             sequence: 2,
             domain: .target,
@@ -1431,9 +1427,9 @@ func domAdapterOldlessCommittedProvisionalPageWithoutMainContextStaysFrameScoped
 }
 
 @Test
-func domAdapterOldlessCommitInfersSoleProvisionalFrameTarget() async throws {
+func domProtocolDispatchingOldlessCommitInfersSoleProvisionalFrameTarget() async throws {
     let dom = await DOMSession()
-    try await DOMTransportAdapter.applyTargetEvent(
+    try await TargetProtocolEventDispatcher().dispatch(
         ProtocolEventEnvelope(
             sequence: 1,
             domain: .target,
@@ -1444,7 +1440,7 @@ func domAdapterOldlessCommitInfersSoleProvisionalFrameTarget() async throws {
         to: dom
     )
 
-    try await DOMTransportAdapter.applyTargetEvent(
+    try await TargetProtocolEventDispatcher().dispatch(
         ProtocolEventEnvelope(
             sequence: 2,
             domain: .target,
@@ -1464,9 +1460,9 @@ func domAdapterOldlessCommitInfersSoleProvisionalFrameTarget() async throws {
 }
 
 @Test
-func domAdapterCommittedSecondaryPageDoesNotReplaceCurrentPage() async throws {
+func domProtocolDispatchingCommittedSecondaryPageDoesNotReplaceCurrentPage() async throws {
     let dom = await DOMSession()
-    try await DOMTransportAdapter.applyTargetEvent(
+    try await TargetProtocolEventDispatcher().dispatch(
         ProtocolEventEnvelope(
             sequence: 1,
             domain: .target,
@@ -1476,7 +1472,7 @@ func domAdapterCommittedSecondaryPageDoesNotReplaceCurrentPage() async throws {
         ),
         to: dom
     )
-    try await DOMTransportAdapter.applyTargetEvent(
+    try await TargetProtocolEventDispatcher().dispatch(
         ProtocolEventEnvelope(
             sequence: 2,
             domain: .target,
@@ -1487,7 +1483,7 @@ func domAdapterCommittedSecondaryPageDoesNotReplaceCurrentPage() async throws {
         to: dom
     )
 
-    try await DOMTransportAdapter.applyTargetEvent(
+    try await TargetProtocolEventDispatcher().dispatch(
         ProtocolEventEnvelope(
             sequence: 3,
             domain: .target,
@@ -1504,9 +1500,9 @@ func domAdapterCommittedSecondaryPageDoesNotReplaceCurrentPage() async throws {
 }
 
 @Test
-func domAdapterSubframeCommitDoesNotConsumeCurrentMainPage() async throws {
+func domProtocolDispatchingSubframeCommitDoesNotConsumeCurrentMainPage() async throws {
     let dom = await DOMSession()
-    try await DOMTransportAdapter.applyTargetEvent(
+    try await TargetProtocolEventDispatcher().dispatch(
         ProtocolEventEnvelope(
             sequence: 1,
             domain: .target,
@@ -1516,7 +1512,7 @@ func domAdapterSubframeCommitDoesNotConsumeCurrentMainPage() async throws {
         ),
         to: dom
     )
-    try await DOMTransportAdapter.applyTargetEvent(
+    try await TargetProtocolEventDispatcher().dispatch(
         ProtocolEventEnvelope(
             sequence: 2,
             domain: .target,
@@ -1527,7 +1523,7 @@ func domAdapterSubframeCommitDoesNotConsumeCurrentMainPage() async throws {
         to: dom
     )
 
-    try await DOMTransportAdapter.applyTargetEvent(
+    try await TargetProtocolEventDispatcher().dispatch(
         ProtocolEventEnvelope(
             sequence: 3,
             domain: .target,
@@ -1550,10 +1546,10 @@ func networkCommandIntentRoutesThroughRequestTarget() throws {
         targetID: .init("frame-ad"),
         requestID: .init("request-1")
     )
-    let bodyCommand = try NetworkTransportAdapter.command(
+    let bodyCommand = try NetworkProtocolCommands().command(
         for: .getResponseBody(requestKey: requestKey, backendResourceIdentifier: nil)
     )
-    let certificateCommand = try NetworkTransportAdapter.command(
+    let certificateCommand = try NetworkProtocolCommands().command(
         for: .getSerializedCertificate(requestKey: requestKey, backendResourceIdentifier: nil)
     )
 
@@ -1566,7 +1562,7 @@ func networkCommandIntentRoutesThroughRequestTarget() throws {
 
 @Test
 func domHighlightCommandUsesNonRevealingVisibleHighlightConfig() throws {
-    let command = try DOMTransportAdapter.command(
+    let command = try DOMProtocolCommands().command(
         for: .highlightNode(
             identity: .init(
                 documentTargetID: .init("page-A"),
@@ -1589,7 +1585,7 @@ func domHighlightCommandUsesNonRevealingVisibleHighlightConfig() throws {
 func domNavigationActionCommandsUseExpectedProtocolPayloads() throws {
     let targetID = ProtocolTargetIdentifier("page-A")
 
-    let enablePicker = try DOMTransportAdapter.command(
+    let enablePicker = try DOMProtocolCommands().command(
         for: .setInspectModeEnabled(targetID: targetID, enabled: true)
     )
     let enableParameters = try jsonObject(from: enablePicker.parametersData)
@@ -1598,7 +1594,7 @@ func domNavigationActionCommandsUseExpectedProtocolPayloads() throws {
     #expect(enableParameters["enabled"] as? Bool == true)
     #expect(hasVisibleHighlightConfig(enableParameters["highlightConfig"] as? [String: Any]) == true)
 
-    let disablePicker = try DOMTransportAdapter.command(
+    let disablePicker = try DOMProtocolCommands().command(
         for: .setInspectModeEnabled(targetID: targetID, enabled: false)
     )
     let disableParameters = try jsonObject(from: disablePicker.parametersData)
@@ -1613,16 +1609,16 @@ func domNavigationActionCommandsUseExpectedProtocolPayloads() throws {
         commandNodeID: .protocolNode(.init(42))
     )
 
-    let outerHTML = try DOMTransportAdapter.command(for: .getOuterHTML(identity: identity))
+    let outerHTML = try DOMProtocolCommands().command(for: .getOuterHTML(identity: identity))
     #expect(outerHTML.method == "DOM.getOuterHTML")
     #expect(integerValue(try jsonObject(from: outerHTML.parametersData)["nodeId"]) == 42)
 
-    let removeNode = try DOMTransportAdapter.command(for: .removeNode(identity: identity))
+    let removeNode = try DOMProtocolCommands().command(for: .removeNode(identity: identity))
     #expect(removeNode.method == "DOM.removeNode")
     #expect(integerValue(try jsonObject(from: removeNode.parametersData)["nodeId"]) == 42)
 
-    #expect(try DOMTransportAdapter.command(for: .undo(targetID: targetID)).method == "DOM.undo")
-    #expect(try DOMTransportAdapter.command(for: .redo(targetID: targetID)).method == "DOM.redo")
+    #expect(try DOMProtocolCommands().command(for: .undo(targetID: targetID)).method == "DOM.undo")
+    #expect(try DOMProtocolCommands().command(for: .redo(targetID: targetID)).method == "DOM.redo")
 }
 
 @Test
@@ -1634,20 +1630,20 @@ func domActionCommandsEncodeScopedCommandNodeIDs() throws {
         commandNodeID: .scoped(targetID: .init("frame-A"), nodeID: .init(42))
     )
 
-    let outerHTML = try DOMTransportAdapter.command(for: .getOuterHTML(identity: identity))
+    let outerHTML = try DOMProtocolCommands().command(for: .getOuterHTML(identity: identity))
     let outerHTMLParameters = try jsonObject(from: outerHTML.parametersData)
     #expect(outerHTML.routing == .target(.init("page-main")))
     #expect(outerHTMLParameters["nodeId"] as? String == "frame-A:42")
 
-    let removeNode = try DOMTransportAdapter.command(for: .removeNode(identity: identity))
+    let removeNode = try DOMProtocolCommands().command(for: .removeNode(identity: identity))
     let removeNodeParameters = try jsonObject(from: removeNode.parametersData)
     #expect(removeNode.routing == .target(.init("page-main")))
     #expect(removeNodeParameters["nodeId"] as? String == "frame-A:42")
 }
 
 @Test
-func domAdapterDecodesOuterHTMLResultAndInspectEvents() throws {
-    let html = try DOMTransportAdapter.outerHTML(
+func domProtocolDispatchingDecodesOuterHTMLResultAndInspectEvents() throws {
+    let html = try DOMProtocolCommands().outerHTML(
         from: ProtocolCommandResult(
             domain: .dom,
             method: "DOM.getOuterHTML",
@@ -1657,7 +1653,7 @@ func domAdapterDecodesOuterHTMLResultAndInspectEvents() throws {
     )
     #expect(html == "<main></main>")
 
-    let domInspect = try DOMTransportAdapter.inspectEvent(
+    let domInspect = try DOMProtocolCommands().inspectEvent(
         from: ProtocolEventEnvelope(
             sequence: 1,
             domain: .dom,
@@ -1668,7 +1664,7 @@ func domAdapterDecodesOuterHTMLResultAndInspectEvents() throws {
     )
     #expect(domInspect == .protocolNode(targetID: .init("page-A"), nodeID: .init(42)))
 
-    let inspectorInspect = try DOMTransportAdapter.inspectEvent(
+    let inspectorInspect = try DOMProtocolCommands().inspectEvent(
         from: ProtocolEventEnvelope(
             sequence: 2,
             domain: .inspector,
@@ -1682,7 +1678,7 @@ func domAdapterDecodesOuterHTMLResultAndInspectEvents() throws {
         remoteObject: .init(objectID: #"{"injectedScriptId":7,"id":99}"#, injectedScriptID: .init(7))
     ))
 
-    let targetScopedInspectorInspect = try DOMTransportAdapter.inspectEvent(
+    let targetScopedInspectorInspect = try DOMProtocolCommands().inspectEvent(
         from: ProtocolEventEnvelope(
             sequence: 3,
             domain: .inspector,

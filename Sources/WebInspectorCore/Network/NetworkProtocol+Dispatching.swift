@@ -1,8 +1,8 @@
 import Foundation
-import WebInspectorCore
+import WebInspectorTransport
 
-package enum NetworkTransportAdapter {
-    package static func command(for intent: NetworkCommandIntent) throws -> ProtocolCommand {
+package struct NetworkProtocolCommands {
+    package func command(for intent: NetworkCommandIntent) throws -> ProtocolCommand {
         switch intent {
         case let .getResponseBody(requestKey, backendResourceIdentifier):
             return ProtocolCommand(
@@ -28,7 +28,7 @@ package enum NetworkTransportAdapter {
     }
 
     @MainActor
-    package static func applyResponseBodyResult(_ result: ProtocolCommandResult, to request: NetworkRequest) throws {
+    package func applyResponseBodyResult(_ result: ProtocolCommandResult, to request: NetworkRequest) throws {
         let payload = try TransportMessageParser.decode(ResponseBodyResult.self, from: result.resultData)
         request.applyResponseBody(
             NetworkBodyPayload(
@@ -38,10 +38,37 @@ package enum NetworkTransportAdapter {
         )
     }
 
-    @MainActor
-    package static func applyNetworkEvent(_ event: ProtocolEventEnvelope, to session: NetworkSession) throws {
+    private func parameters(
+        requestKey: NetworkRequestIdentifierKey,
+        backendResourceIdentifier: NetworkBackendResourceIdentifier?
+    ) throws -> Data {
+        var object: [String: Any] = [
+            "requestId": requestKey.requestID.rawValue,
+        ]
+        if let backendResourceIdentifier {
+            object["backendResourceIdentifier"] = [
+                "sourceProcessID": backendResourceIdentifier.sourceProcessID,
+                "resourceID": backendResourceIdentifier.resourceID,
+            ]
+        }
+        return try JSONSerialization.data(withJSONObject: object, options: [])
+    }
+}
+
+@MainActor
+package final class NetworkProtocolEventDispatcher: ProtocolDomainEventDispatcher {
+    private weak var session: NetworkSession?
+
+    package init(session: NetworkSession) {
+        self.session = session
+    }
+
+    package var domain: ProtocolDomain { .network }
+
+    package func dispatch(_ event: ProtocolEventEnvelope) async throws {
         guard event.domain == .network,
-              let targetID = event.targetID else {
+              let targetID = event.targetID,
+              let session else {
             return
         }
 
@@ -171,23 +198,6 @@ package enum NetworkTransportAdapter {
             break
         }
     }
-
-    private static func parameters(
-        requestKey: NetworkRequestIdentifierKey,
-        backendResourceIdentifier: NetworkBackendResourceIdentifier?
-    ) throws -> Data {
-        var object: [String: Any] = [
-            "requestId": requestKey.requestID.rawValue,
-        ]
-        if let backendResourceIdentifier {
-            object["backendResourceIdentifier"] = [
-                "sourceProcessID": backendResourceIdentifier.sourceProcessID,
-                "resourceID": backendResourceIdentifier.resourceID,
-            ]
-        }
-        return try JSONSerialization.data(withJSONObject: object, options: [])
-    }
-
 }
 
 private struct ResponseBodyResult: Decodable {

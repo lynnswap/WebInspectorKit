@@ -1,13 +1,12 @@
 #if canImport(UIKit)
+import WebInspectorCore
 import ObservationBridge
 import UIKit
-import WebInspectorCore
-import WebInspectorRuntime
 
 @MainActor
 package final class DOMTreeViewController: UIViewController {
     private let treeView: DOMTreeTextView
-    private weak var session: InspectorSession?
+    private weak var inspection: AttachedInspection?
     private let observationScope = ObservationScope()
     private var isEnsuringDOMDocumentLoaded = false
 
@@ -15,31 +14,31 @@ package final class DOMTreeViewController: UIViewController {
         treeView.undoManager
     }
 
-    package init(session: InspectorSession) {
-        self.session = session
+    package init(inspection: AttachedInspection) {
+        self.inspection = inspection
         self.treeView = DOMTreeTextView(
-            dom: session.dom,
-            requestChildrenAction: { [weak session] nodeID in
-                await session?.requestChildNodes(for: nodeID) ?? false
+            dom: inspection.dom,
+            requestChildrenAction: { [weak inspection] nodeID in
+                await inspection?.dom.requestChildNodes(for: nodeID) ?? false
             },
-            highlightNodeAction: { [weak session] nodeID in
-                await session?.highlightNode(for: nodeID)
+            highlightNodeAction: { [weak inspection] nodeID in
+                await inspection?.dom.highlightNode(for: nodeID)
             },
-            hideHighlightAction: { [weak session] in
-                await session?.hideNodeHighlight()
+            hideHighlightAction: { [weak inspection] in
+                await inspection?.dom.hideNodeHighlight()
             },
-            copyNodeTextAction: { [weak session] nodeID, kind in
-                guard let session else {
+            copyNodeTextAction: { [weak inspection] nodeID, kind in
+                guard let inspection else {
                     return nil
                 }
-                return try? await session.copyDOMNodeText(kind, for: nodeID)
+                return try? await inspection.dom.copyNodeText(kind, for: nodeID)
             },
-            deleteNodesAction: { [weak session] nodeIDs, undoManager in
-                guard let session else {
+            deleteNodesAction: { [weak inspection] nodeIDs, undoManager in
+                guard let inspection else {
                     return false
                 }
                 do {
-                    try await session.deleteDOMNodes(nodeIDs, undoManager: undoManager)
+                    try await inspection.dom.deleteNodes(nodeIDs, undoManager: undoManager)
                     return true
                 } catch {
                     return false
@@ -50,7 +49,7 @@ package final class DOMTreeViewController: UIViewController {
     }
 
     package init(dom: DOMSession) {
-        self.session = nil
+        self.inspection = nil
         self.treeView = DOMTreeTextView(dom: dom)
         super.init(nibName: nil, bundle: nil)
     }
@@ -78,8 +77,8 @@ package final class DOMTreeViewController: UIViewController {
                 viewController.applyBackgroundFromTraits()
             }
         }
-        if let session {
-            startObservingDOMRoot(session: session)
+        if let inspection {
+            startObservingDOMRoot(inspection: inspection)
         }
     }
 
@@ -92,18 +91,18 @@ package final class DOMTreeViewController: UIViewController {
         ensureDOMDocumentLoadedIfNeeded()
     }
 
-    private func startObservingDOMRoot(session: InspectorSession) {
+    private func startObservingDOMRoot(inspection: AttachedInspection) {
         observationScope.cancelAll()
-        observationScope.observe(session.dom) { [weak self] _, _ in
+        observationScope.observe(inspection.dom) { [weak self] _, _ in
             self?.ensureDOMDocumentLoadedIfNeeded()
         }
     }
 
     private func ensureDOMDocumentLoadedIfNeeded() {
-        guard let session else {
+        guard let inspection else {
             return
         }
-        let currentPageRootNode = session.dom.currentPageRootNode
+        let currentPageRootNode = inspection.dom.currentPageRootNode
         guard viewIfLoaded?.window != nil,
               !isEnsuringDOMDocumentLoaded,
               currentPageRootNode == nil else {
@@ -111,11 +110,11 @@ package final class DOMTreeViewController: UIViewController {
         }
 
         isEnsuringDOMDocumentLoaded = true
-        Task { @MainActor [weak self, weak session] in
+        Task { @MainActor [weak self, weak inspection] in
             defer {
                 self?.isEnsuringDOMDocumentLoaded = false
             }
-            _ = await session?.ensureDOMDocumentLoaded()
+            _ = await inspection?.dom.ensureDocumentLoaded()
         }
     }
 }

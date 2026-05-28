@@ -29,7 +29,7 @@ package struct NetworkTabController: BuiltInTabController {
         session: WebInspectorSession,
         layout: WebInspectorTabHostLayout
     ) -> UIViewController {
-        let model = session.interface.networkPanelModel(for: session.inspector)
+        let model = session.interface.networkPanelModel(for: session.attachment)
         let listViewController = cachedListViewController(session: session, model: model)
         let detailViewController = cachedDetailViewController(session: session, model: model)
 

@@ -1,6 +1,7 @@
 import Observation
 import Synchronization
 import Testing
+import WebInspectorTransport
 @testable import WebInspectorCore
 
 @Test

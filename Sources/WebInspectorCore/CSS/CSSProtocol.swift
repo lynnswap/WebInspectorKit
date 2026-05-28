@@ -1,4 +1,5 @@
 import Foundation
+import WebInspectorTransport
 
 package struct CSSStyleSheetIdentifier: RawRepresentable, Hashable, Codable, Sendable, CustomStringConvertible {
     package let rawValue: String

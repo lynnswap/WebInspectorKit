@@ -2,7 +2,7 @@
 import Observation
 import UIKit
 import WebKit
-import WebInspectorRuntime
+import WebInspectorCore
 
 @MainActor
 @Observable
@@ -24,6 +24,10 @@ public final class WebInspectorSession {
 
     isolated deinit {
         interface.removeContentCache()
+    }
+
+    package var attachment: AttachedInspection {
+        inspector.attachment
     }
 
     public func attach(to webView: WKWebView) async throws {
@@ -110,14 +114,14 @@ package final class InterfaceModel {
         contentCache.viewController(for: key, make: make)
     }
 
-    package func networkPanelModel(for inspector: InspectorSession) -> NetworkPanelModel {
+    package func networkPanelModel(for inspection: AttachedInspection) -> NetworkPanelModel {
         if let networkPanelModel,
-           networkPanelModel.network === inspector.network {
+           networkPanelModel.network === inspection.network {
             return networkPanelModel
         }
 
-        let model = NetworkPanelModel(network: inspector.network) { [weak inspector] id in
-            await inspector?.fetchResponseBody(for: id)
+        let model = NetworkPanelModel(network: inspection.network) { [weak inspection] id in
+            await inspection?.network.fetchResponseBody(for: id)
         }
         networkPanelModel = model
         return model

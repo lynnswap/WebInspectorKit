@@ -1,3 +1,4 @@
+import WebInspectorTransport
 package struct NetworkRequestIdentifier: RawRepresentable, Hashable, Codable, Sendable, CustomStringConvertible {
     package let rawValue: String
 

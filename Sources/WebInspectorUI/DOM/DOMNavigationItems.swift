@@ -1,13 +1,13 @@
 #if canImport(UIKit)
 import ObservationBridge
+import WebInspectorCore
 import UIKit
-import WebInspectorRuntime
 
 @MainActor
 package final class DOMNavigationItems: NSObject {
     private typealias UndoManagerProvider = @MainActor () -> UndoManager?
 
-    private let session: InspectorSession
+    private let inspector: InspectorSession
     private let observationScope = ObservationScope()
     private var undoManagerProvider: UndoManagerProvider = { nil }
 
@@ -22,10 +22,10 @@ package final class DOMNavigationItems: NSObject {
         return item
     }()
 
-    package init(session: InspectorSession) {
-        self.session = session
+    package init(inspector: InspectorSession) {
+        self.inspector = inspector
         super.init()
-        startObservingSession()
+        startObservingInspection()
     }
 
     isolated deinit {
@@ -47,9 +47,9 @@ package final class DOMNavigationItems: NSObject {
         navigationItem.additionalOverflowItems = makeDeferredOverflowItems()
     }
 
-    private func startObservingSession() {
-        observationScope.observe(session) { [weak self] _, session in
-            self?.renderPickItem(session: session)
+    private func startObservingInspection() {
+        observationScope.observe(inspector.attachment.dom) { [weak self] _, _ in
+            self?.renderPickItem()
         }
     }
 
@@ -114,16 +114,16 @@ package final class DOMNavigationItems: NSObject {
         UIAction(
             title: webInspectorLocalized("reload", default: "Reload"),
             image: UIImage(systemName: "arrow.clockwise"),
-            attributes: (session.hasInspectablePageWebView || session.canReloadDOMDocument) ? [] : [.disabled]
-        ) { [weak session] _ in
+            attributes: (inspector.hasInspectablePageWebView || inspector.attachment.dom.canReloadDocument) ? [] : [.disabled]
+        ) { [weak inspector] _ in
             Task { @MainActor in
-                guard let session else {
+                guard let inspector else {
                     return
                 }
-                if session.hasInspectablePageWebView {
-                    try? await session.reloadPage()
+                if inspector.hasInspectablePageWebView {
+                    try? await inspector.reloadPage()
                 } else {
-                    try? await session.reloadDOMDocument()
+                    try? await inspector.attachment.dom.reloadDocument()
                 }
             }
         }
@@ -133,31 +133,32 @@ package final class DOMNavigationItems: NSObject {
         UIAction(
             title: webInspectorLocalized("inspector.delete_node", default: "Delete Node"),
             image: UIImage(systemName: "trash"),
-            attributes: session.canDeleteSelectedDOMNode ? [.destructive] : [.disabled, .destructive]
-        ) { [weak session] _ in
+            attributes: inspector.attachment.dom.canDeleteSelectedNode ? [.destructive] : [.disabled, .destructive]
+        ) { [weak inspector] _ in
             Task { @MainActor in
-                try? await session?.deleteSelectedDOMNode(undoManager: undoManagerProvider())
+                try? await inspector?.attachment.dom.deleteSelectedNode(undoManager: undoManagerProvider())
             }
         }
     }
 
     @objc
     private func toggleElementPicker() {
-        Task { @MainActor [weak session] in
-            await session?.toggleElementPicker()
+        Task { @MainActor [weak inspector] in
+            await inspector?.attachment.dom.toggleElementPicker()
         }
     }
 
     private func updatePickItemAppearance() {
-        renderPickItem(session: session)
+        renderPickItem()
     }
 
-    private func renderPickItem(session: InspectorSession) {
-        let isEnabled = session.canSelectElement
+    private func renderPickItem() {
+        let dom = inspector.attachment.dom
+        let isEnabled = dom.canSelectElement
         if pickItem.isEnabled != isEnabled {
             pickItem.isEnabled = isEnabled
         }
-        let tintColor: UIColor = session.isSelectingElement ? .tintColor : .label
+        let tintColor: UIColor = dom.isSelectingElement ? .tintColor : .label
         if pickItem.tintColor != tintColor {
             pickItem.tintColor = tintColor
         }

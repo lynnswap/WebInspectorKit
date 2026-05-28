@@ -1,5 +1,4 @@
 import Foundation
-import WebInspectorCore
 
 package protocol TransportBackend: Sendable {
     func sendJSONString(_ message: String) async throws

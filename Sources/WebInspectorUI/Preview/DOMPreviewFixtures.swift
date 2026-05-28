@@ -1,4 +1,5 @@
 import WebInspectorCore
+import WebInspectorTransport
 
 @MainActor
 enum DOMPreviewFixtures {

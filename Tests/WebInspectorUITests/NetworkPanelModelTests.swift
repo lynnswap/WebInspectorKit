@@ -1,4 +1,5 @@
 import Testing
+import WebInspectorTransport
 @testable import WebInspectorCore
 @testable import WebInspectorUI
 

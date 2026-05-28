@@ -1,5 +1,6 @@
 #if canImport(UIKit)
 import Testing
+import WebInspectorTransport
 import UIKit
 @testable import WebInspectorCore
 @testable import WebInspectorUI

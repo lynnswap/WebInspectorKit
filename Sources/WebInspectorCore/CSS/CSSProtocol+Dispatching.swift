@@ -1,8 +1,8 @@
 import Foundation
-import WebInspectorCore
+import WebInspectorTransport
 
-package enum CSSTransportAdapter {
-    package static func command(for intent: CSSCommandIntent) throws -> ProtocolCommand {
+package struct CSSProtocolCommands {
+    package func command(for intent: CSSCommandIntent) throws -> ProtocolCommand {
         switch intent {
         case let .enable(targetID):
             return ProtocolCommand(
@@ -48,61 +48,103 @@ package enum CSSTransportAdapter {
         }
     }
 
-    package static func matchedStyles(from result: ProtocolCommandResult) throws -> CSSMatchedStylesPayload {
+    package func matchedStyles(from result: ProtocolCommandResult) throws -> CSSMatchedStylesPayload {
         try TransportMessageParser.decode(CSSMatchedStylesPayload.self, from: result.resultData)
     }
 
-    package static func inlineStyles(from result: ProtocolCommandResult) throws -> CSSInlineStylesPayload {
+    package func inlineStyles(from result: ProtocolCommandResult) throws -> CSSInlineStylesPayload {
         try TransportMessageParser.decode(CSSInlineStylesPayload.self, from: result.resultData)
     }
 
-    package static func computedStyles(from result: ProtocolCommandResult) throws -> [CSSComputedStylePropertyPayload] {
+    package func computedStyles(from result: ProtocolCommandResult) throws -> [CSSComputedStylePropertyPayload] {
         let payload = try TransportMessageParser.decode(ComputedStyleResult.self, from: result.resultData)
         return payload.computedStyle
     }
 
-    package static func setStyleTextResult(from result: ProtocolCommandResult) throws -> CSSStylePayload {
+    package func setStyleTextResult(from result: ProtocolCommandResult) throws -> CSSStylePayload {
         let payload = try TransportMessageParser.decode(SetStyleTextResult.self, from: result.resultData)
         return payload.style
     }
 
-    @MainActor
-    package static func applyCSSEvent(_ event: ProtocolEventEnvelope, to session: CSSSession) throws {
+    private func data(_ object: [String: Any]) throws -> Data {
+        try JSONSerialization.data(withJSONObject: object, options: [])
+    }
+
+    private func styleIDPayload(_ styleID: CSSStyleIdentifier) -> [String: Any] {
+        [
+            "styleSheetId": styleID.styleSheetID.rawValue,
+            "ordinal": styleID.ordinal,
+        ]
+    }
+}
+
+@MainActor
+package protocol CSSProtocolEventHandler: AnyObject {
+    func cssStyleSheetChanged(targetID: ProtocolTargetIdentifier)
+    func cssStyleSheetRemoved(styleSheetID: CSSStyleSheetIdentifier, targetID: ProtocolTargetIdentifier)
+    func cssStyleSheetAdded(_ header: CSSStyleSheetHeaderPayload, targetID: ProtocolTargetIdentifier)
+    func cssMediaQueryResultChanged(targetID: ProtocolTargetIdentifier)
+    func cssNodeLayoutFlagsChanged(targetID: ProtocolTargetIdentifier, nodeID: DOMProtocolNodeID)
+}
+
+@MainActor
+package final class CSSProtocolEventDispatcher: ProtocolDomainEventDispatcher {
+    private weak var handler: (any CSSProtocolEventHandler)?
+
+    package init(handler: any CSSProtocolEventHandler) {
+        self.handler = handler
+    }
+
+    package var domain: ProtocolDomain { .css }
+
+    package func dispatch(_ event: ProtocolEventEnvelope) async throws {
         guard event.domain == .css,
-              let targetID = event.targetID else {
+              let targetID = event.targetID,
+              let handler else {
             return
         }
 
         switch event.method {
         case "CSS.styleSheetChanged":
-            session.markNeedsRefresh(targetID: targetID)
+            handler.cssStyleSheetChanged(targetID: targetID)
         case "CSS.styleSheetRemoved":
             let params = try TransportMessageParser.decode(StyleSheetIdentifierParams.self, from: event.paramsData)
-            session.removeStyleSheetHeader(styleSheetID: params.styleSheetId, targetID: targetID)
-            session.markNeedsRefresh(targetID: targetID, styleSheetID: params.styleSheetId)
+            handler.cssStyleSheetRemoved(styleSheetID: params.styleSheetId, targetID: targetID)
         case "CSS.styleSheetAdded":
             let params = try TransportMessageParser.decode(StyleSheetAddedParams.self, from: event.paramsData)
-            session.registerStyleSheetHeader(params.header, targetID: targetID)
-            session.markNeedsRefresh(targetID: targetID)
+            handler.cssStyleSheetAdded(params.header, targetID: targetID)
         case "CSS.mediaQueryResultChanged":
-            session.markNeedsRefresh(targetID: targetID)
+            handler.cssMediaQueryResultChanged(targetID: targetID)
         case "CSS.nodeLayoutFlagsChanged":
             let params = try TransportMessageParser.decode(NodeLayoutFlagsChangedParams.self, from: event.paramsData)
-            session.markNeedsRefresh(targetID: targetID, nodeID: params.nodeId)
+            handler.cssNodeLayoutFlagsChanged(targetID: targetID, nodeID: params.nodeId)
         default:
             break
         }
     }
+}
 
-    private static func data(_ object: [String: Any]) throws -> Data {
-        try JSONSerialization.data(withJSONObject: object, options: [])
+extension CSSSession: CSSProtocolEventHandler {
+    package func cssStyleSheetChanged(targetID: ProtocolTargetIdentifier) {
+        markNeedsRefresh(targetID: targetID)
     }
 
-    private static func styleIDPayload(_ styleID: CSSStyleIdentifier) -> [String: Any] {
-        [
-            "styleSheetId": styleID.styleSheetID.rawValue,
-            "ordinal": styleID.ordinal,
-        ]
+    package func cssStyleSheetRemoved(styleSheetID: CSSStyleSheetIdentifier, targetID: ProtocolTargetIdentifier) {
+        removeStyleSheetHeader(styleSheetID: styleSheetID, targetID: targetID)
+        markNeedsRefresh(targetID: targetID, styleSheetID: styleSheetID)
+    }
+
+    package func cssStyleSheetAdded(_ header: CSSStyleSheetHeaderPayload, targetID: ProtocolTargetIdentifier) {
+        registerStyleSheetHeader(header, targetID: targetID)
+        markNeedsRefresh(targetID: targetID)
+    }
+
+    package func cssMediaQueryResultChanged(targetID: ProtocolTargetIdentifier) {
+        markNeedsRefresh(targetID: targetID)
+    }
+
+    package func cssNodeLayoutFlagsChanged(targetID: ProtocolTargetIdentifier, nodeID: DOMProtocolNodeID) {
+        markNeedsRefresh(targetID: targetID, nodeID: nodeID)
     }
 }
 

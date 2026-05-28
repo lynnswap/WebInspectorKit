@@ -1,7 +1,6 @@
 #if canImport(UIKit)
-import UIKit
 import WebInspectorCore
-import WebInspectorRuntime
+import UIKit
 import WebKit
 
 @MainActor
@@ -140,8 +139,10 @@ enum WebInspectorViewControllerPreviewFixtures {
     static func makeSession() -> WebInspectorSession {
         WebInspectorSession(
             inspector: InspectorSession(
-                dom: DOMPreviewFixtures.makeDOMSession(),
-                network: NetworkPreviewFixtures.makeNetworkSession(mode: .detail)
+                attachment: AttachedInspection(
+                    dom: DOMPreviewFixtures.makeDOMSession(),
+                    network: NetworkPreviewFixtures.makeNetworkSession(mode: .detail)
+                )
             )
         )
     }

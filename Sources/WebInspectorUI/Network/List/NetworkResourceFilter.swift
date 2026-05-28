@@ -1,5 +1,5 @@
-import Foundation
 import WebInspectorCore
+import Foundation
 
 package enum NetworkResourceFilter: String, CaseIterable, Hashable, Sendable, Identifiable {
     case all

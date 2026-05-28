@@ -1,8 +1,8 @@
 #if canImport(UIKit)
+import WebInspectorCore
 import ObservationBridge
 import UIHostingMenu
 import UIKit
-import WebInspectorCore
 
 @MainActor
 package final class NetworkListViewController: UICollectionViewController, UISearchResultsUpdating {

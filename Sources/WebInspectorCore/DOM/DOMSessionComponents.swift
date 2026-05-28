@@ -1,17 +1,18 @@
 import Foundation
 import Observation
+import WebInspectorTransport
 
-package struct DOMTargetCommit: Equatable, Sendable {
+package struct TargetCommit: Equatable, Sendable {
     package var oldFrameID: DOMFrame.ID?
 }
 
-package struct DOMTargetRemoval: Equatable, Sendable {
+package struct TargetRemoval: Equatable, Sendable {
     package var frameID: DOMFrame.ID?
 }
 
 @MainActor
 @Observable
-package final class DOMTargetGraph {
+package final class TargetGraph {
     private var targetsByID: [ProtocolTarget.ID: ProtocolTarget]
     private var framesByID: [DOMFrame.ID: DOMFrame]
     private var executionContextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContextRecord]
@@ -78,11 +79,11 @@ package final class DOMTargetGraph {
         targetsByID[record.id] = target
     }
 
-    package func removeTarget(_ targetID: ProtocolTarget.ID) -> DOMTargetRemoval? {
+    package func removeTarget(_ targetID: ProtocolTarget.ID) -> TargetRemoval? {
         guard let target = targetsByID.removeValue(forKey: targetID) else {
             return nil
         }
-        return DOMTargetRemoval(frameID: target.frameID)
+        return TargetRemoval(frameID: target.frameID)
     }
 
     @discardableResult
@@ -97,7 +98,7 @@ package final class DOMTargetGraph {
         return true
     }
 
-    package func commitTarget(oldTargetID: ProtocolTarget.ID, newTargetID: ProtocolTarget.ID) -> DOMTargetCommit? {
+    package func commitTarget(oldTargetID: ProtocolTarget.ID, newTargetID: ProtocolTarget.ID) -> TargetCommit? {
         guard let oldTarget = targetsByID.removeValue(forKey: oldTargetID) else {
             return nil
         }
@@ -123,7 +124,7 @@ package final class DOMTargetGraph {
         if let frameID {
             retargetFrame(frameID, from: oldTargetID, to: newTargetID)
         }
-        return DOMTargetCommit(oldFrameID: oldTarget.frameID)
+        return TargetCommit(oldFrameID: oldTarget.frameID)
     }
 
     package func targetBelongsToCurrentPage(

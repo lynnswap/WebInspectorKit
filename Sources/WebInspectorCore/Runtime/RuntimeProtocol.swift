@@ -1,4 +1,5 @@
 import Foundation
+import WebInspectorTransport
 
 package enum JSONValue: Equatable, Sendable, Codable {
     case null
@@ -91,16 +92,6 @@ package struct RuntimeRemoteObjectIdentifierKey: Hashable, Sendable {
     }
 }
 
-package struct RuntimeExecutionContextKey: Hashable, Sendable {
-    package var runtimeAgentTargetID: ProtocolTargetIdentifier
-    package var contextID: ExecutionContextID
-
-    package init(runtimeAgentTargetID: ProtocolTargetIdentifier, contextID: ExecutionContextID) {
-        self.runtimeAgentTargetID = runtimeAgentTargetID
-        self.contextID = contextID
-    }
-}
-
 package struct RuntimeObjectGroup: RawRepresentable, Hashable, Codable, Sendable {
     package static let console = Self("console")
 
@@ -161,22 +152,6 @@ package struct RuntimeRemoteObjectSubtype: RawRepresentable, Hashable, Codable, 
     package static let `class` = Self("class")
     package static let proxy = Self("proxy")
     package static let weakRef = Self("weakref")
-}
-
-package struct RuntimeExecutionContextType: RawRepresentable, Hashable, Codable, Sendable {
-    package let rawValue: String
-
-    package init(_ rawValue: String) {
-        self.rawValue = rawValue
-    }
-
-    package init(rawValue: String) {
-        self.rawValue = rawValue
-    }
-
-    package static let normal = Self("normal")
-    package static let user = Self("user")
-    package static let `internal` = Self("internal")
 }
 
 package struct RuntimeExecutionContextPayload: Equatable, Sendable, Decodable {

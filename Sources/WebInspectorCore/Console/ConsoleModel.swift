@@ -1,4 +1,5 @@
 import Observation
+import WebInspectorTransport
 
 package struct ConsoleMessageIdentifier: Hashable, Sendable, Comparable {
     package var targetID: ProtocolTargetIdentifier
@@ -303,12 +304,18 @@ package final class ConsoleSession {
     package private(set) var errorCount: Int
 
     @ObservationIgnored private var nextMessageOrdinal: UInt64
+    @ObservationIgnored private var commandChannel: ProtocolCommandChannel?
+    @ObservationIgnored private let protocolCommands: ConsoleProtocolCommands
+    @ObservationIgnored private var recordError: ((InspectorSessionError?) -> Void)?
     private var targetStatesByID: [ProtocolTargetIdentifier: ConsoleTargetState]
 
     package init() {
         warningCount = 0
         errorCount = 0
         nextMessageOrdinal = 0
+        commandChannel = nil
+        protocolCommands = ConsoleProtocolCommands()
+        recordError = nil
         targetStatesByID = [:]
     }
 
@@ -317,6 +324,47 @@ package final class ConsoleSession {
         errorCount = 0
         nextMessageOrdinal = 0
         targetStatesByID.removeAll()
+    }
+
+    package func bindProtocolChannel(
+        _ commandChannel: ProtocolCommandChannel,
+        recordError: @escaping (InspectorSessionError?) -> Void
+    ) {
+        self.commandChannel = commandChannel
+        self.recordError = recordError
+    }
+
+    package func unbindProtocolChannel() {
+        commandChannel = nil
+        recordError = nil
+    }
+
+    @discardableResult
+    package func perform(_ intent: ConsoleCommandIntent) async throws -> ProtocolCommandResult {
+        try await perform(intent, requiresActiveConnection: true)
+    }
+
+    @discardableResult
+    private func perform(
+        _ intent: ConsoleCommandIntent,
+        requiresActiveConnection: Bool
+    ) async throws -> ProtocolCommandResult {
+        let commandChannel = try requireCommandChannel(requiresActiveConnection: requiresActiveConnection)
+        let command = try protocolCommands.command(for: intent)
+        do {
+            return try await commandChannel.send(command)
+        } catch {
+            markCommandUnsupportedIfNeeded(command.method, targetID: intent.targetID, error: error)
+            throw error
+        }
+    }
+
+    package func enable(targetID: ProtocolTargetIdentifier) async throws {
+        _ = try await perform(.enable(targetID: targetID))
+    }
+
+    package func enableDuringBootstrap(targetID: ProtocolTargetIdentifier) async throws {
+        _ = try await perform(.enable(targetID: targetID), requiresActiveConnection: false)
     }
 
     package var messages: [ConsoleMessage] {
@@ -444,5 +492,26 @@ package final class ConsoleSession {
     private func updateAggregateSeverityCounts() {
         warningCount = targetStatesByID.values.reduce(0) { $0 + $1.warningCount }
         errorCount = targetStatesByID.values.reduce(0) { $0 + $1.errorCount }
+    }
+
+    private func markCommandUnsupportedIfNeeded(
+        _ method: String,
+        targetID: ProtocolTargetIdentifier,
+        error: any Error
+    ) {
+        guard isUnsupportedProtocolCommandError(method, error: error) else {
+            return
+        }
+        markCommandUnsupported(method, targetID: targetID)
+    }
+
+    private func requireCommandChannel(requiresActiveConnection: Bool = true) throws -> ProtocolCommandChannel {
+        guard let commandChannel else {
+            throw InspectorSessionError("Inspector session is not attached.")
+        }
+        if requiresActiveConnection {
+            try commandChannel.requireAttached()
+        }
+        return commandChannel
     }
 }

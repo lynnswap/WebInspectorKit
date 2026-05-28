@@ -371,7 +371,7 @@ when probing is acceptable, and conservative defaults otherwise.
   behavior. Later same-agent subframe contexts must not overwrite the target's
   default context; they are addressable through explicit/selected contexts or
   frame-target ownership when Site Isolation metadata is available.
-- Remote object lifetime belongs to `RuntimeSession`. It keeps the remote object
+- Remote object lifetime belongs to `RuntimeState`. It keeps the remote object
   payload plus object group/context metadata as the single release owner; any
   snapshot-level object group target index is derived from those records.
   `Console.messageAdded` registers parameter objects in Runtime under object
@@ -382,7 +382,7 @@ when probing is acceptable, and conservative defaults otherwise.
   instances, matching WebKit's `RemoteObject.fromPayload` conversion in
   `ConsoleManager`, not a Console-local remote object type or raw payload list.
   Object-ID-backed parameters should be the same observable objects registered
-  in `RuntimeSession`; by-value parameters can be message-owned
+  in `RuntimeState`; by-value parameters can be message-owned
   `RuntimeRemoteObject` instances with no protocol object handle.
 - `Target.didCommitProvisionalTarget` may move semantic context ownership to
   the committed target, but it must not re-key existing remote object handles to
@@ -418,7 +418,7 @@ Add first-class Runtime and Console domains beside DOM/CSS/Network:
   - remote object, preview, property, collection, and evaluation payloads
   - command intents
 - `Sources/WebInspectorCore/Runtime/RuntimeModel.swift`
-  - `@MainActor @Observable RuntimeSession`
+  - `@MainActor @Observable RuntimeState`
   - `@MainActor @Observable RuntimeTargetState` for target-owned default
     execution context selection
   - `@MainActor @Observable RuntimeAgentState` for agent-scoped execution
@@ -455,9 +455,9 @@ Use raw-value wrappers for protocol enums whose value sets drift across WebKit
 versions. For example, `ChannelSource` changed between iOS 18.5 and WebKit
 latest (`appcache` removed, `accessibility` added).
 
-### Transport
+### Protocol Dispatching
 
-Add `ConsoleTransportAdapter`:
+Add `ConsoleProtocol+Dispatching.swift`:
 
 - build `Console.enable`, `Console.disable`, `Console.clearMessages`,
   `Console.setConsoleClearAPIEnabled`, `Console.getLoggingChannels`, and
@@ -467,7 +467,7 @@ Add `ConsoleTransportAdapter`:
 - decode `Console.messagesCleared`
 - preserve target id from `ProtocolEventEnvelope.targetID`
 
-Add `RuntimeTransportAdapter`:
+Add `RuntimeProtocol+Dispatching.swift`:
 
 - build `Runtime.enable`, `Runtime.evaluate`, `Runtime.getPreview`,
   `Runtime.getProperties`, `Runtime.getDisplayableProperties`,
@@ -480,24 +480,23 @@ Add `RuntimeTransportAdapter`:
 - preserve `ProtocolEventEnvelope.sourceTargetID` as the Runtime agent source
   when recording contexts and applying clear events.
 
-### Runtime Session
+### Runtime State
 
-Add `console` to `InspectorSession` construction and event handling:
+Add Console wiring to attached inspection construction and event handling:
 
-- `package let runtime: RuntimeSession`
+- `package let runtime: RuntimeState`
 - `package let console: ConsoleSession`
 - bootstrap `Console.enable` for the main page target after existing DOM,
   Runtime, and Network setup when the target has Console capability.
 - when target lifecycle events create/commit a target with Runtime and/or
   Console capability, enable each supported agent independently after the target
   is no longer provisional.
-- handle `.console` in `handleProtocolEvent` by applying decoded events to
-  `ConsoleSession`.
+- handle `.console` through `ConsoleProtocol+Dispatching.swift`.
 - when handling `Console.messageAdded`, register parameter `RemoteObject`
-  handles with `RuntimeSession` using object group `"console"`.
+  handles with `RuntimeState` using object group `"console"`.
 - when handling `Console.messagesCleared`, also release Runtime object group
   `"console"` for the console event target to match backend lifetime.
-- handle `.runtime` by applying decoded events to `RuntimeSession` and the DOM
+- handle `.runtime` by applying decoded events to `RuntimeState` and the DOM
   compatibility execution-context store. Runtime agent source target controls
   `executionContextsCleared`, while semantic target ownership remains available
   for DOM selection and future Console UI grouping.
@@ -527,12 +526,12 @@ Useful tests before UI work:
 - `ProtocolTargetCapabilities` decodes `domains: ["Console", "Runtime"]`.
 - Metadata-free page target has Console capability.
 - Metadata-free frame target does not assume Console capability.
-- `ConsoleTransportAdapter` builds `Console.enable` as a target command.
-- `ConsoleTransportAdapter` builds `Runtime.evaluate` with WebInspectorUI-like
+- `ConsoleProtocolCommands` builds `Console.enable` as a target command.
+- `RuntimeProtocolCommands` builds `Runtime.evaluate` with WebInspectorUI-like
   console defaults.
 - `Console.messageAdded` appends a target-scoped message with parameters,
   stack trace, source location, timestamp, and network request key, and
-  registers parameter remote objects in `RuntimeSession`.
+  registers parameter remote objects in `RuntimeState`.
 - `Console.messageRepeatCountUpdated` updates the previous message instead of
   appending.
 - `Console.messagesCleared` clears or starts a new model session with the raw

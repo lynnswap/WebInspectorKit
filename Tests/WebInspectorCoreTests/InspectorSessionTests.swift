@@ -1,9 +1,8 @@
 import Foundation
 import Testing
+import WebInspectorTransport
 import WebKit
 @testable import WebInspectorCore
-@testable import WebInspectorRuntime
-@testable import WebInspectorTransport
 
 @Test
 func connectBootstrapsMainPageDocumentInOrder() async throws {
@@ -22,9 +21,9 @@ func connectBootstrapsMainPageDocumentInOrder() async throws {
         "Network.enable",
         "Console.enable",
     ])
-    #expect(await session.isAttached)
-    #expect(await session.dom.snapshot().currentPageTargetID == ProtocolTargetIdentifier.pageMain)
-    #expect(await session.dom.snapshot().documentsByID.count == 1)
+    #expect(await session.hasActiveConnection)
+    #expect(await session.attachment.dom.snapshot().currentPageTargetID == ProtocolTargetIdentifier.pageMain)
+    #expect(await session.attachment.dom.snapshot().documentsByID.count == 1)
 }
 
 @Test
@@ -75,8 +74,8 @@ func connectToleratesUnsupportedConsoleEnableForDefaultPageTarget() async throws
     )
 
     try await connectTask.value
-    #expect(await session.isAttached)
-    #expect(await session.console.snapshot().unsupportedCommandsByTargetID[.pageMain]?.contains("Console.enable") == true)
+    #expect(await session.hasActiveConnection)
+    #expect(await session.attachment.console.snapshot().unsupportedCommandsByTargetID[.pageMain]?.contains("Console.enable") == true)
 }
 
 @Test
@@ -95,9 +94,9 @@ func connectBootstrapsWebPageTargetWithoutDomainMetadataAsCSSCapable() async thr
     try await connectTask.value
 
     let htmlID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(2))
-    await session.dom.selectNode(htmlID)
+    await session.attachment.dom.selectNode(htmlID)
     let identity: CSSNodeStyleIdentity
-    switch await session.dom.selectedCSSNodeStyleIdentity() {
+    switch await session.attachment.dom.selectedCSSNodeStyleIdentity() {
     case let .success(resolvedIdentity):
         identity = resolvedIdentity
     case let .failure(reason):
@@ -122,7 +121,7 @@ func domainPumpsApplyNetworkEventsToNetworkSession() async throws {
         message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-1","frameId":"main-frame","request":{"url":"https://example.com/app.js"},"timestamp":1}}"#
     )
     let request = try await waitUntil {
-        await session.network.requestSnapshot(for: .init(targetID: .pageMain, requestID: .init("request-1")))
+        await session.attachment.network.requestSnapshot(for: .init(targetID: .pageMain, requestID: .init("request-1")))
     }
 
     #expect(request.id.targetID == ProtocolTargetIdentifier.pageMain)
@@ -143,7 +142,7 @@ func domainPumpsApplyConsoleEventsToConsoleSession() async throws {
     )
 
     let snapshot: ConsoleSessionSnapshot = try await waitUntil {
-        let snapshot = await session.console.snapshot()
+        let snapshot = await session.attachment.console.snapshot()
         guard snapshot.orderedMessageIDs.isEmpty == false else {
             return nil
         }
@@ -172,11 +171,11 @@ func domainPumpsReleaseConsoleRuntimeObjectsOnConsoleClear() async throws {
         objectID: RuntimeRemoteObjectIdentifier("console-object")
     )
     let _: Bool = try await waitUntil {
-        let runtimeSnapshot = await session.runtime.snapshot()
-        let consoleSnapshot = await session.console.snapshot()
+        let runtimeSnapshot = await session.attachment.runtime.snapshot()
+        let consoleSnapshot = await session.attachment.console.snapshot()
         let linkedParameter = await MainActor.run {
-            guard let runtimeObject = session.runtime.runtimeAgentState(for: .pageMain)?.remoteObjects.first,
-                  let parameter = session.console.messages.first?.parameters.first else {
+            guard let runtimeObject = session.attachment.runtime.runtimeAgentState(for: .pageMain)?.remoteObjects.first,
+                  let parameter = session.attachment.console.messages.first?.parameters.first else {
                 return false
             }
             return parameter === runtimeObject
@@ -196,8 +195,8 @@ func domainPumpsReleaseConsoleRuntimeObjectsOnConsoleClear() async throws {
     )
 
     let _: Bool = try await waitUntil {
-        let runtimeSnapshot = await session.runtime.snapshot()
-        let consoleSnapshot = await session.console.snapshot()
+        let runtimeSnapshot = await session.attachment.runtime.snapshot()
+        let consoleSnapshot = await session.attachment.console.snapshot()
         guard runtimeSnapshot.remoteObjectsByID[objectKey] == nil,
               runtimeSnapshot.objectGroupRuntimeAgentTargetsByGroup[.console] == nil,
               consoleSnapshot.lastClearReasonByTargetID[.pageMain] == .consoleAPI else {
@@ -219,7 +218,7 @@ func domainPumpsApplyRootScopedConsoleEventsToMainPageConsoleSession() async thr
     )
 
     let snapshot: ConsoleSessionSnapshot = try await waitUntil {
-        let snapshot = await session.console.snapshot()
+        let snapshot = await session.attachment.console.snapshot()
         guard snapshot.orderedMessageIDs.isEmpty == false else {
             return nil
         }
@@ -243,10 +242,10 @@ func domainPumpsApplyRuntimeContextTeardownToRuntimeAndDOMSessions() async throw
         message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":81,"type":"normal","frameId":"main-frame"}}}"#
     )
     _ = try await waitUntil {
-        await session.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 81)]
+        await session.attachment.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 81)]
     }
     _ = try await waitUntil {
-        await session.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 81)]
+        await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 81)]
     }
 
     await receiveTargetDispatch(
@@ -255,8 +254,8 @@ func domainPumpsApplyRuntimeContextTeardownToRuntimeAndDOMSessions() async throw
         message: #"{"method":"Runtime.executionContextDestroyed","params":{"executionContextId":81}}"#
     )
     _ = try await waitUntil {
-        let runtimeContext = await session.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 81)]
-        let domContext = await session.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 81)]
+        let runtimeContext = await session.attachment.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 81)]
+        let domContext = await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 81)]
         return runtimeContext == nil && domContext == nil ? true : nil
     }
 
@@ -266,7 +265,7 @@ func domainPumpsApplyRuntimeContextTeardownToRuntimeAndDOMSessions() async throw
         message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":82,"type":"normal","frameId":"main-frame"}}}"#
     )
     _ = try await waitUntil {
-        await session.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 82)]
+        await session.attachment.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 82)]
     }
     await receiveTargetDispatch(
         transport,
@@ -274,8 +273,8 @@ func domainPumpsApplyRuntimeContextTeardownToRuntimeAndDOMSessions() async throw
         message: #"{"method":"Runtime.executionContextsCleared","params":{}}"#
     )
     _ = try await waitUntil {
-        let runtimeContext = await session.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 82)]
-        let domContext = await session.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 82)]
+        let runtimeContext = await session.attachment.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 82)]
+        let domContext = await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 82)]
         return runtimeContext == nil && domContext == nil ? true : nil
     }
 }
@@ -291,7 +290,7 @@ func runtimeContextDispatchedOnPageResolvesToFrameTargetByFrameID() async throws
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["Runtime"],"isProvisional":false}}}"#
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().targetsByID[.frameAd]
+        await session.attachment.dom.snapshot().targetsByID[.frameAd]
     }
     await receiveTargetDispatch(
         transport,
@@ -299,15 +298,15 @@ func runtimeContextDispatchedOnPageResolvesToFrameTargetByFrameID() async throws
         message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":77,"frameId":"ad-frame"}}}"#
     )
 
-    let runtimeSnapshot: RuntimeSessionSnapshot = try await waitUntil {
-        let snapshot = await session.runtime.snapshot()
+    let runtimeSnapshot: RuntimeStateSnapshot = try await waitUntil {
+        let snapshot = await session.attachment.runtime.snapshot()
         guard snapshot.executionContextsByKey[contextKey(.pageMain, 77)]?.targetID == .frameAd else {
             return nil
         }
         return snapshot
     }
     let domSnapshot: DOMSessionSnapshot = try await waitUntil {
-        let snapshot = await session.dom.snapshot()
+        let snapshot = await session.attachment.dom.snapshot()
         guard snapshot.executionContextsByKey[contextKey(.pageMain, 77)]?.targetID == .frameAd else {
             return nil
         }
@@ -328,15 +327,15 @@ func rootRuntimeClearRemovesFrameContextOwnedByPageRuntimeAgent() async throws {
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["Runtime"],"isProvisional":false}}}"#
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().targetsByID[.frameAd]
+        await session.attachment.dom.snapshot().targetsByID[.frameAd]
     }
     await transport.receiveRootMessage(
         #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":78,"frameId":"ad-frame"}}}"#
     )
 
     let _: Bool = try await waitUntil {
-        let runtimeContext = await session.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 78)]
-        let domContext = await session.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 78)]
+        let runtimeContext = await session.attachment.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 78)]
+        let domContext = await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 78)]
         guard runtimeContext?.targetID == .frameAd,
               runtimeContext?.runtimeAgentTargetID == .pageMain,
               domContext?.targetID == .frameAd,
@@ -348,8 +347,8 @@ func rootRuntimeClearRemovesFrameContextOwnedByPageRuntimeAgent() async throws {
 
     await transport.receiveRootMessage(#"{"method":"Runtime.executionContextsCleared","params":{}}"#)
     let _: Bool = try await waitUntil {
-        let runtimeContext = await session.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 78)]
-        let domContext = await session.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 78)]
+        let runtimeContext = await session.attachment.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 78)]
+        let domContext = await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 78)]
         return runtimeContext == nil && domContext == nil ? true : nil
     }
 }
@@ -366,7 +365,7 @@ func networkLazyFetchReturnsCommandResultFromRequestTarget() async throws {
 
     let sentCount = await backend.sentTargetMessages().count
     let performTask = Task {
-        try await session.perform(
+        try await session.attachment.network.perform(
             .getResponseBody(
                 requestKey: .init(targetID: .frameAd, requestID: .init("request-1")),
                 backendResourceIdentifier: nil
@@ -409,14 +408,14 @@ func networkResponseBodyFetchAppliesResultToCoreRequest() async throws {
         message: #"{"method":"Network.responseReceived","params":{"requestId":"request-2","timestamp":2,"type":"XHR","response":{"url":"https://example.com/api.json","status":200,"mimeType":"application/json","headers":{"content-type":"application/json"}}}}"#
     )
     let request = try await waitUntil {
-        await session.network.request(for: .init(targetID: .pageMain, requestID: .init("request-2")))
+        await session.attachment.network.request(for: .init(targetID: .pageMain, requestID: .init("request-2")))
     }
     let responseBody = await request.responseBody
     let body = try #require(responseBody)
     #expect(await body.fetchState == .available)
 
     let sentCountBeforeFinish = await backend.sentTargetMessages().count
-    await session.fetchResponseBody(for: request.id)
+    await session.attachment.network.fetchResponseBody(for: request.id)
     #expect(await backend.sentTargetMessages().count == sentCountBeforeFinish)
 
     await receiveTargetDispatch(
@@ -427,7 +426,7 @@ func networkResponseBodyFetchAppliesResultToCoreRequest() async throws {
 
     let sentCount = await backend.sentTargetMessages().count
     let fetchTask = Task {
-        await session.fetchResponseBody(for: request.id)
+        await session.attachment.network.fetchResponseBody(for: request.id)
     }
     let sent = try await waitForTargetMessage(backend, method: "Network.getResponseBody", after: sentCount)
     await receiveTargetReply(
@@ -466,7 +465,7 @@ func networkResponseBodyFetchErrorDoesNotRetry() async throws {
         message: #"{"method":"Network.loadingFinished","params":{"requestId":"request-error","timestamp":3}}"#
     )
     let request = try await waitUntil {
-        await session.network.request(for: .init(targetID: .pageMain, requestID: .init("request-error")))
+        await session.attachment.network.request(for: .init(targetID: .pageMain, requestID: .init("request-error")))
     }
     let responseBody = await request.responseBody
     let body = try #require(responseBody)
@@ -474,7 +473,7 @@ func networkResponseBodyFetchErrorDoesNotRetry() async throws {
 
     let sentCount = await backend.sentTargetMessages().count
     let fetchTask = Task {
-        await session.fetchResponseBody(for: request.id)
+        await session.attachment.network.fetchResponseBody(for: request.id)
     }
     let sent = try await waitForTargetMessage(backend, method: "Network.getResponseBody", after: sentCount)
     await receiveTargetErrorReply(
@@ -491,7 +490,7 @@ func networkResponseBodyFetchErrorDoesNotRetry() async throws {
     }
 
     let sentCountAfterFailure = await backend.sentTargetMessages().count
-    await session.fetchResponseBody(for: request.id)
+    await session.attachment.network.fetchResponseBody(for: request.id)
     #expect(await backend.sentTargetMessages().count == sentCountAfterFailure)
 }
 
@@ -504,11 +503,11 @@ func selectedElementStyleRefreshLoadsCSSSession() async throws {
     try await connect(session, transport: transport, backend: backend)
     try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
     let bodyID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(4))
-    session.dom.selectNode(bodyID)
+    session.attachment.dom.selectNode(bodyID)
 
     let sentCount = await backend.sentTargetMessages().count
     let refreshTask = Task {
-        await session.refreshStylesForSelectedNode()
+        await session.attachment.dom.refreshStylesForSelectedNode()
     }
     let messages = try await waitForCSSRefreshMessages(backend, after: sentCount)
     try await replyCSSRefresh(
@@ -519,12 +518,79 @@ func selectedElementStyleRefreshLoadsCSSSession() async throws {
     )
     await refreshTask.value
 
-    let styles = try #require(session.css.selectedNodeStyles)
-    #expect(session.css.selectedState == .loaded)
+    let styles = try #require(session.attachment.dom.elementStyles.selectedNodeStyles)
+    #expect(session.attachment.dom.elementStyles.selectedState == .loaded)
     #expect(styles.identity.nodeID == bodyID)
     #expect(styles.sections.map(\.title) == ["element.style", "body"])
     #expect(styles.sections[1].style.cssProperties.first?.name == "margin")
     #expect(styles.computedProperties == [CSSComputedStyleProperty(name: "display", value: "block")])
+}
+
+@Test
+@MainActor
+func selectedNodeStylesRetainsLoadedRowsUntilNewElementStylesArrive() async throws {
+    let targetID = ProtocolTargetIdentifier("page")
+    let css = CSSSession()
+    let dom = DOMSession(elementStyles: css)
+    dom.applyTargetCreated(
+        .init(id: targetID, kind: .page, capabilities: .pageDefault),
+        makeCurrentMainPage: true
+    )
+    _ = dom.replaceDocumentRoot(
+        DOMNodePayload(
+            nodeID: .init(1),
+            nodeType: .document,
+            nodeName: "#document",
+            regularChildren: .loaded([
+                DOMNodePayload(nodeID: .init(2), nodeType: .element, nodeName: "BODY", localName: "body"),
+                DOMNodePayload(nodeID: .init(3), nodeType: .element, nodeName: "INPUT", localName: "input"),
+            ])
+        ),
+        targetID: targetID
+    )
+    let snapshot = dom.snapshot()
+    let bodyID = try #require(snapshot.currentNodeIDByKey[.init(targetID: targetID, nodeID: .init(2))])
+    let inputID = try #require(snapshot.currentNodeIDByKey[.init(targetID: targetID, nodeID: .init(3))])
+    let session = InspectorSession(dom: dom)
+
+    dom.selectNode(bodyID)
+    let bodyIdentity = try #require(dom.selectedCSSNodeStyleIdentity().successValue)
+    let bodyStyles = try applySingleRuleStyles(
+        to: css,
+        identity: bodyIdentity,
+        selector: "body",
+        marginValue: "0",
+        marginText: "margin: 0;"
+    )
+    _ = try await waitUntil {
+        await session.attachment.dom.selectedNodeStyles === bodyStyles ? true : nil
+    }
+
+    dom.selectNode(inputID)
+    _ = try await waitUntil {
+        await session.attachment.dom.selectedNodeStyles === bodyStyles ? true : nil
+    }
+
+    let inputIdentity = try #require(dom.selectedCSSNodeStyleIdentity().successValue)
+    let inputToken = try #require(css.beginRefresh(identity: inputIdentity))
+    #expect(session.attachment.dom.selectedNodeStyles === bodyStyles)
+
+    let inputStyles = try applySingleRuleStyles(
+        to: css,
+        identity: inputIdentity,
+        token: inputToken,
+        selector: "input",
+        marginValue: "8px",
+        marginText: "margin: 8px;"
+    )
+    _ = try await waitUntil {
+        await session.attachment.dom.selectedNodeStyles === inputStyles ? true : nil
+    }
+
+    dom.selectNode(nil)
+    _ = try await waitUntil {
+        await session.attachment.dom.selectedNodeStyles == nil ? true : nil
+    }
 }
 
 @Test
@@ -536,10 +602,10 @@ func selectedElementStyleHydrationLoadsCSSSessionWhenActive() async throws {
     try await connect(session, transport: transport, backend: backend)
     try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
     let bodyID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(4))
-    session.dom.selectNode(bodyID)
+    session.attachment.dom.selectNode(bodyID)
 
     let sentCount = await backend.sentTargetMessages().count
-    session.setSelectedNodeStyleHydrationActive(true)
+    session.attachment.dom.setSelectedNodeStyleHydrationActive(true)
     let messages = try await waitForCSSRefreshMessages(backend, after: sentCount)
     try await replyCSSRefresh(
         transport: transport,
@@ -549,10 +615,10 @@ func selectedElementStyleHydrationLoadsCSSSessionWhenActive() async throws {
     )
 
     let didLoadStyles = try await waitUntil {
-        await session.css.selectedState == .loaded ? true : nil
+        await session.attachment.dom.elementStyles.selectedState == .loaded ? true : nil
     }
     #expect(didLoadStyles)
-    let styles = try #require(session.css.selectedNodeStyles)
+    let styles = try #require(session.attachment.dom.elementStyles.selectedNodeStyles)
     #expect(styles.identity.nodeID == bodyID)
     #expect(styles.sections.map(\.title) == ["element.style", "body"])
 }
@@ -567,14 +633,14 @@ func selectedElementStyleHydrationCancellationDoesNotPublishFailure() async thro
     try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
     let htmlID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(2))
     let bodyID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(4))
-    session.setSelectedNodeStyleHydrationActive(true)
-    session.dom.selectNode(bodyID)
+    session.attachment.dom.setSelectedNodeStyleHydrationActive(true)
+    session.attachment.dom.selectNode(bodyID)
 
     let firstSentCount = await backend.sentTargetMessages().count
     _ = try await waitForCSSRefreshMessages(backend, after: firstSentCount)
 
     let secondSentCount = await backend.sentTargetMessages().count
-    session.dom.selectNode(htmlID)
+    session.attachment.dom.selectNode(htmlID)
     let secondMessages = try await waitForCSSRefreshMessages(backend, after: secondSentCount)
     try await replyCSSRefresh(
         transport: transport,
@@ -584,8 +650,8 @@ func selectedElementStyleHydrationCancellationDoesNotPublishFailure() async thro
     )
 
     let didLoadReplacementStyles = try await waitUntil {
-        let selectedNodeID = await session.css.selectedNodeStyles?.identity.nodeID
-        let selectedState = await session.css.selectedState
+        let selectedNodeID = await session.attachment.dom.elementStyles.selectedNodeStyles?.identity.nodeID
+        let selectedState = await session.attachment.dom.elementStyles.selectedState
         return selectedNodeID == htmlID && selectedState == .loaded ? true : nil
     }
     #expect(didLoadReplacementStyles)
@@ -601,20 +667,20 @@ func selectedElementStyleHydrationCancellationResetsLoadingForFutureRefresh() as
     try await connect(session, transport: transport, backend: backend)
     try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
     let bodyID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(4))
-    session.dom.selectNode(bodyID)
+    session.attachment.dom.selectNode(bodyID)
 
     let firstSentCount = await backend.sentTargetMessages().count
-    session.setSelectedNodeStyleHydrationActive(true)
+    session.attachment.dom.setSelectedNodeStyleHydrationActive(true)
     _ = try await waitForCSSRefreshMessages(backend, after: firstSentCount)
     _ = try await waitUntil {
-        await session.css.selectedState == .loading ? true : nil
+        await session.attachment.dom.elementStyles.selectedState == .loading ? true : nil
     }
 
-    session.setSelectedNodeStyleHydrationActive(false)
-    #expect(session.css.selectedState == .needsRefresh)
+    session.attachment.dom.setSelectedNodeStyleHydrationActive(false)
+    #expect(session.attachment.dom.elementStyles.selectedState == .needsRefresh)
 
     let secondSentCount = await backend.sentTargetMessages().count
-    session.setSelectedNodeStyleHydrationActive(true)
+    session.attachment.dom.setSelectedNodeStyleHydrationActive(true)
     let secondMessages = try await waitForCSSRefreshMessages(backend, after: secondSentCount)
     try await replyCSSRefresh(
         transport: transport,
@@ -624,7 +690,7 @@ func selectedElementStyleHydrationCancellationResetsLoadingForFutureRefresh() as
     )
 
     let didLoadStyles = try await waitUntil {
-        await session.css.selectedState == .loaded ? true : nil
+        await session.attachment.dom.elementStyles.selectedState == .loaded ? true : nil
     }
     #expect(didLoadStyles)
     #expect(session.lastError == nil)
@@ -632,17 +698,17 @@ func selectedElementStyleHydrationCancellationResetsLoadingForFutureRefresh() as
 
 @Test
 @MainActor
-func selectedElementStyleHydrationPreservesStaleStateAfterSelectionDisappears() async throws {
+func selectedElementStyleHydrationClearsStylesAfterSelectionDisappears() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
     let session = InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
     try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
     let bodyID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(4))
-    session.dom.selectNode(bodyID)
+    session.attachment.dom.selectNode(bodyID)
 
     let sentCount = await backend.sentTargetMessages().count
-    session.setSelectedNodeStyleHydrationActive(true)
+    session.attachment.dom.setSelectedNodeStyleHydrationActive(true)
     let messages = try await waitForCSSRefreshMessages(backend, after: sentCount)
     try await replyCSSRefresh(
         transport: transport,
@@ -651,7 +717,7 @@ func selectedElementStyleHydrationPreservesStaleStateAfterSelectionDisappears() 
         styleSheetID: "sheet-body"
     )
     _ = try await waitUntil {
-        await session.css.selectedState == .loaded ? true : nil
+        await session.attachment.dom.elementStyles.selectedState == .loaded ? true : nil
     }
 
     await receiveTargetDispatch(
@@ -660,14 +726,13 @@ func selectedElementStyleHydrationPreservesStaleStateAfterSelectionDisappears() 
         message: #"{"method":"DOM.childNodeRemoved","params":{"nodeId":4}}"#
     )
     _ = try await waitUntil {
-        await session.dom.selectedNodeID == nil ? true : nil
+        await session.attachment.dom.selectedNodeID == nil ? true : nil
     }
     _ = try await waitUntil {
-        await session.css.selectedState == .unavailable(.staleNode(bodyID)) ? true : nil
+        await session.attachment.dom.elementStyles.selectedNodeStyles == nil ? true : nil
     }
 
-    #expect(session.css.selectedNodeStyles != nil)
-    #expect(session.css.selectedState == .unavailable(.staleNode(bodyID)))
+    #expect(session.attachment.dom.elementStyles.selectedNodeStyles == nil)
 }
 
 @Test
@@ -678,11 +743,11 @@ func selectedElementStyleRefreshEnablesCSSAgentOnlyAfterBackendRequiresIt() asyn
     try await connect(session, transport: transport, backend: backend)
     try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
     let bodyID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(4))
-    await session.dom.selectNode(bodyID)
+    await session.attachment.dom.selectNode(bodyID)
 
     let sentCount = await backend.sentTargetMessages().count
     let refreshTask = Task {
-        await session.refreshStylesForSelectedNode()
+        await session.attachment.dom.refreshStylesForSelectedNode()
     }
     let firstMessages = try await waitForCSSRefreshMessages(backend, after: sentCount)
     await receiveTargetErrorReply(
@@ -721,8 +786,8 @@ func selectedElementStyleRefreshEnablesCSSAgentOnlyAfterBackendRequiresIt() asyn
     )
     await refreshTask.value
 
-    let styles = try #require(await session.css.selectedNodeStyles)
-    #expect(await session.css.selectedState == .loaded)
+    let styles = try #require(await session.attachment.dom.elementStyles.selectedNodeStyles)
+    #expect(await session.attachment.dom.elementStyles.selectedState == .loaded)
     #expect(await styles.identity.nodeID == bodyID)
 }
 
@@ -736,18 +801,18 @@ func selectedElementStyleRefreshDropsResultsWhenSelectionChanges() async throws 
     try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
     let htmlID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(2))
     let bodyID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(4))
-    session.dom.selectNode(bodyID)
+    session.attachment.dom.selectNode(bodyID)
 
     let firstSentCount = await backend.sentTargetMessages().count
     let firstRefresh = Task {
-        await session.refreshStylesForSelectedNode()
+        await session.attachment.dom.refreshStylesForSelectedNode()
     }
     let firstMessages = try await waitForCSSRefreshMessages(backend, after: firstSentCount)
 
-    session.dom.selectNode(htmlID)
+    session.attachment.dom.selectNode(htmlID)
     let secondSentCount = await backend.sentTargetMessages().count
     let secondRefresh = Task {
-        await session.refreshStylesForSelectedNode()
+        await session.attachment.dom.refreshStylesForSelectedNode()
     }
     let secondMessages = try await waitForCSSRefreshMessages(backend, after: secondSentCount)
 
@@ -766,7 +831,7 @@ func selectedElementStyleRefreshDropsResultsWhenSelectionChanges() async throws 
     await firstRefresh.value
     await secondRefresh.value
 
-    let styles = try #require(session.css.selectedNodeStyles)
+    let styles = try #require(session.attachment.dom.elementStyles.selectedNodeStyles)
     #expect(styles.identity.nodeID == htmlID)
     #expect(styles.sections.map(\.title) == ["element.style", "html"])
 }
@@ -780,11 +845,11 @@ func cssPropertyToggleSendsSetStyleTextAndRefreshesStyles() async throws {
     try await connect(session, transport: transport, backend: backend)
     try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
     let bodyID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(4))
-    session.dom.selectNode(bodyID)
+    session.attachment.dom.selectNode(bodyID)
 
     let refreshCount = await backend.sentTargetMessages().count
     let refreshTask = Task {
-        await session.refreshStylesForSelectedNode()
+        await session.attachment.dom.refreshStylesForSelectedNode()
     }
     let initialRefreshMessages = try await waitForCSSRefreshMessages(backend, after: refreshCount)
     try await replyCSSRefresh(
@@ -800,7 +865,7 @@ func cssPropertyToggleSendsSetStyleTextAndRefreshesStyles() async throws {
         propertyIndex: 0
     )
     let toggleSentCount = await backend.sentTargetMessages().count
-    session.requestSetCSSProperty(propertyID, enabled: false)
+    session.attachment.dom.requestSetCSSProperty(propertyID, enabled: false)
     let setStyleText = try await waitForTargetMessage(backend, method: "CSS.setStyleText", after: toggleSentCount)
     #expect(setStyleText.targetIdentifier == ProtocolTargetIdentifier.pageMain)
     #expect(try messageParameters(setStyleText.message)["text"] as? String == "/* margin: 0; */")
@@ -828,11 +893,11 @@ func cssPropertyToggleSendsSetStyleTextAndRefreshesStyles() async throws {
         marginText: "/* margin: 0; */"
     )
     _ = try await waitUntil { @MainActor in
-        session.css.selectedNodeStyles?.sections[1].style.cssProperties[0].isEnabled == false ? true : nil
+        session.attachment.dom.elementStyles.selectedNodeStyles?.sections[1].style.cssProperties[0].isEnabled == false ? true : nil
     }
 
-    let styles = try #require(session.css.selectedNodeStyles)
-    #expect(session.css.selectedState == .loaded)
+    let styles = try #require(session.attachment.dom.elementStyles.selectedNodeStyles)
+    #expect(session.attachment.dom.elementStyles.selectedState == .loaded)
     #expect(styles.sections[1].style.cssProperties[0].isEnabled == false)
 }
 
@@ -844,35 +909,35 @@ func cssAndDOMStyleInvalidationsMarkSelectedNodeStylesNeedsRefresh() async throw
     try await connect(session, transport: transport, backend: backend)
     try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
     let bodyID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(4))
-    await session.dom.selectNode(bodyID)
+    await session.attachment.dom.selectNode(bodyID)
     await transport.receiveRootMessage(
         #"{"method":"CSS.styleSheetAdded","params":{"header":{"styleSheetId":"sheet-body"}}}"#
     )
 
     let sentCount = await backend.sentTargetMessages().count
     let refreshTask = Task {
-        await session.refreshStylesForSelectedNode()
+        await session.attachment.dom.refreshStylesForSelectedNode()
     }
     let messages = try await waitForCSSRefreshMessages(backend, after: sentCount)
     try await replyCSSRefresh(transport: transport, messages: messages, selector: "body", styleSheetID: "sheet-body")
     await refreshTask.value
-    #expect(await session.css.selectedState == .loaded)
+    #expect(await session.attachment.dom.elementStyles.selectedState == .loaded)
 
     await transport.receiveRootMessage(
         #"{"method":"CSS.styleSheetChanged","params":{"styleSheetId":"sheet-body"}}"#
     )
     _ = try await waitUntil {
-        await session.css.selectedState == .needsRefresh ? true : nil
+        await session.attachment.dom.elementStyles.selectedState == .needsRefresh ? true : nil
     }
 
     let refreshAgainCount = await backend.sentTargetMessages().count
     let refreshAgain = Task {
-        await session.refreshStylesForSelectedNode()
+        await session.attachment.dom.refreshStylesForSelectedNode()
     }
     let messagesAgain = try await waitForCSSRefreshMessages(backend, after: refreshAgainCount)
     try await replyCSSRefresh(transport: transport, messages: messagesAgain, selector: "body", styleSheetID: "sheet-body")
     await refreshAgain.value
-    #expect(await session.css.selectedState == .loaded)
+    #expect(await session.attachment.dom.elementStyles.selectedState == .loaded)
 
     await receiveTargetDispatch(
         transport,
@@ -880,17 +945,17 @@ func cssAndDOMStyleInvalidationsMarkSelectedNodeStylesNeedsRefresh() async throw
         message: #"{"method":"DOM.attributeModified","params":{"nodeId":4,"name":"class","value":"featured"}}"#
     )
     _ = try await waitUntil {
-        await session.css.selectedState == .needsRefresh ? true : nil
+        await session.attachment.dom.elementStyles.selectedState == .needsRefresh ? true : nil
     }
 
     let refreshAfterAttributeCount = await backend.sentTargetMessages().count
     let refreshAfterAttribute = Task {
-        await session.refreshStylesForSelectedNode()
+        await session.attachment.dom.refreshStylesForSelectedNode()
     }
     let messagesAfterAttribute = try await waitForCSSRefreshMessages(backend, after: refreshAfterAttributeCount)
     try await replyCSSRefresh(transport: transport, messages: messagesAfterAttribute, selector: "body", styleSheetID: "sheet-body")
     await refreshAfterAttribute.value
-    #expect(await session.css.selectedState == .loaded)
+    #expect(await session.attachment.dom.elementStyles.selectedState == .loaded)
 
     await receiveTargetDispatch(
         transport,
@@ -898,12 +963,12 @@ func cssAndDOMStyleInvalidationsMarkSelectedNodeStylesNeedsRefresh() async throw
         message: #"{"method":"DOM.attributeModified","params":{"nodeId":5,"name":"class","value":"child-only"}}"#
     )
     _ = try await waitUntil {
-        await session.css.selectedState == .needsRefresh ? true : nil
+        await session.attachment.dom.elementStyles.selectedState == .needsRefresh ? true : nil
     }
 
     let refreshAfterRelatedAttributeCount = await backend.sentTargetMessages().count
     let refreshAfterRelatedAttribute = Task {
-        await session.refreshStylesForSelectedNode()
+        await session.attachment.dom.refreshStylesForSelectedNode()
     }
     let messagesAfterRelatedAttribute = try await waitForCSSRefreshMessages(
         backend,
@@ -916,7 +981,7 @@ func cssAndDOMStyleInvalidationsMarkSelectedNodeStylesNeedsRefresh() async throw
         styleSheetID: "sheet-body"
     )
     await refreshAfterRelatedAttribute.value
-    #expect(await session.css.selectedState == .loaded)
+    #expect(await session.attachment.dom.elementStyles.selectedState == .loaded)
 
     await receiveTargetDispatch(
         transport,
@@ -924,12 +989,12 @@ func cssAndDOMStyleInvalidationsMarkSelectedNodeStylesNeedsRefresh() async throw
         message: #"{"method":"DOM.childNodeInserted","params":{"parentNodeId":4,"previousNodeId":5,"node":{"nodeId":6,"nodeType":1,"nodeName":"ASIDE","localName":"aside"}}}"#
     )
     _ = try await waitUntil {
-        await session.css.selectedState == .needsRefresh ? true : nil
+        await session.attachment.dom.elementStyles.selectedState == .needsRefresh ? true : nil
     }
 
     let refreshAfterChildInsertCount = await backend.sentTargetMessages().count
     let refreshAfterChildInsert = Task {
-        await session.refreshStylesForSelectedNode()
+        await session.attachment.dom.refreshStylesForSelectedNode()
     }
     let messagesAfterChildInsert = try await waitForCSSRefreshMessages(backend, after: refreshAfterChildInsertCount)
     try await replyCSSRefresh(
@@ -939,7 +1004,7 @@ func cssAndDOMStyleInvalidationsMarkSelectedNodeStylesNeedsRefresh() async throw
         styleSheetID: "sheet-body"
     )
     await refreshAfterChildInsert.value
-    #expect(await session.css.selectedState == .loaded)
+    #expect(await session.attachment.dom.elementStyles.selectedState == .loaded)
 
     await receiveTargetDispatch(
         transport,
@@ -947,28 +1012,28 @@ func cssAndDOMStyleInvalidationsMarkSelectedNodeStylesNeedsRefresh() async throw
         message: #"{"method":"DOM.childNodeCountUpdated","params":{"nodeId":4,"childNodeCount":3}}"#
     )
     _ = try await waitUntil {
-        await session.css.selectedState == .needsRefresh ? true : nil
+        await session.attachment.dom.elementStyles.selectedState == .needsRefresh ? true : nil
     }
 }
 
 @Test
-func documentUpdatedMarksSelectedCSSNodeStylesUnavailableForInvalidatedDocument() async throws {
+func documentUpdatedClearsSelectedCSSNodeStylesForInvalidatedDocument() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
     try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
     let bodyID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(4))
-    await session.dom.selectNode(bodyID)
+    await session.attachment.dom.selectNode(bodyID)
 
     let sentCount = await backend.sentTargetMessages().count
     let refreshTask = Task {
-        await session.refreshStylesForSelectedNode()
+        await session.attachment.dom.refreshStylesForSelectedNode()
     }
     let messages = try await waitForCSSRefreshMessages(backend, after: sentCount)
     try await replyCSSRefresh(transport: transport, messages: messages, selector: "body", styleSheetID: "sheet-body")
     await refreshTask.value
-    #expect(await session.css.selectedNodeStyles != nil)
+    #expect(await session.attachment.dom.elementStyles.selectedNodeStyles != nil)
 
     await receiveTargetDispatch(
         transport,
@@ -976,34 +1041,33 @@ func documentUpdatedMarksSelectedCSSNodeStylesUnavailableForInvalidatedDocument(
         message: #"{"method":"DOM.documentUpdated","params":{}}"#
     )
     _ = try await waitUntil {
-        await session.css.selectedState == .unavailable(.staleNode(bodyID)) ? true : nil
+        await session.attachment.dom.elementStyles.selectedNodeStyles == nil ? true : nil
     }
-    #expect(await session.css.selectedNodeStyles != nil)
-    #expect(await session.css.selectedState == .unavailable(.staleNode(bodyID)))
+    #expect(await session.attachment.dom.elementStyles.selectedNodeStyles == nil)
 }
 
 @Test
-func explicitDOMReloadMarksSelectedCSSNodeStylesUnavailableForReplacedDocument() async throws {
+func explicitDOMReloadClearsSelectedCSSNodeStylesForReplacedDocument() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
     try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
     let bodyID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(4))
-    await session.dom.selectNode(bodyID)
+    await session.attachment.dom.selectNode(bodyID)
 
     let sentCount = await backend.sentTargetMessages().count
     let refreshTask = Task {
-        await session.refreshStylesForSelectedNode()
+        await session.attachment.dom.refreshStylesForSelectedNode()
     }
     let messages = try await waitForCSSRefreshMessages(backend, after: sentCount)
     try await replyCSSRefresh(transport: transport, messages: messages, selector: "body", styleSheetID: "sheet-body")
     await refreshTask.value
-    #expect(await session.css.selectedNodeStyles != nil)
+    #expect(await session.attachment.dom.elementStyles.selectedNodeStyles != nil)
 
     let reloadSentCount = await backend.sentTargetMessages().count
     let reloadTask = Task {
-        try await session.reloadDOMDocument()
+        try await session.attachment.dom.reloadDocument()
     }
     let reload = try await waitForTargetMessage(backend, method: "DOM.getDocument", after: reloadSentCount)
     await receiveTargetReply(
@@ -1014,28 +1078,27 @@ func explicitDOMReloadMarksSelectedCSSNodeStylesUnavailableForReplacedDocument()
     )
     try await reloadTask.value
 
-    #expect(await session.css.selectedNodeStyles != nil)
-    #expect(await session.css.selectedState == .unavailable(.staleNode(bodyID)))
+    #expect(await session.attachment.dom.elementStyles.selectedNodeStyles == nil)
 }
 
 @Test
-func domMutationRemovingSelectedNodeMarksSelectedCSSNodeStylesUnavailable() async throws {
+func domMutationRemovingSelectedNodeClearsSelectedCSSNodeStyles() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
     try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
     let bodyID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(4))
-    await session.dom.selectNode(bodyID)
+    await session.attachment.dom.selectNode(bodyID)
 
     let sentCount = await backend.sentTargetMessages().count
     let refreshTask = Task {
-        await session.refreshStylesForSelectedNode()
+        await session.attachment.dom.refreshStylesForSelectedNode()
     }
     let messages = try await waitForCSSRefreshMessages(backend, after: sentCount)
     try await replyCSSRefresh(transport: transport, messages: messages, selector: "body", styleSheetID: "sheet-body")
     await refreshTask.value
-    #expect(await session.css.selectedState == .loaded)
+    #expect(await session.attachment.dom.elementStyles.selectedState == .loaded)
 
     await receiveTargetDispatch(
         transport,
@@ -1043,35 +1106,34 @@ func domMutationRemovingSelectedNodeMarksSelectedCSSNodeStylesUnavailable() asyn
         message: #"{"method":"DOM.childNodeRemoved","params":{"nodeId":4}}"#
     )
     _ = try await waitUntil {
-        await session.dom.selectedNodeID == nil ? true : nil
+        await session.attachment.dom.selectedNodeID == nil ? true : nil
     }
 
-    #expect(await session.css.selectedNodeStyles != nil)
-    #expect(await session.css.selectedState == .unavailable(.staleNode(bodyID)))
+    #expect(await session.attachment.dom.elementStyles.selectedNodeStyles == nil)
 }
 
 @Test
-func localDOMDeleteMarksSelectedCSSNodeStylesUnavailableWithoutBackendMutationEvent() async throws {
+func localDOMDeleteClearsSelectedCSSNodeStylesWithoutBackendMutationEvent() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
     try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
     let bodyID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(4))
-    await session.dom.selectNode(bodyID)
+    await session.attachment.dom.selectNode(bodyID)
 
     let sentCount = await backend.sentTargetMessages().count
     let refreshTask = Task {
-        await session.refreshStylesForSelectedNode()
+        await session.attachment.dom.refreshStylesForSelectedNode()
     }
     let messages = try await waitForCSSRefreshMessages(backend, after: sentCount)
     try await replyCSSRefresh(transport: transport, messages: messages, selector: "body", styleSheetID: "sheet-body")
     await refreshTask.value
-    #expect(await session.css.selectedState == .loaded)
+    #expect(await session.attachment.dom.elementStyles.selectedState == .loaded)
 
     let countBeforeDelete = await backend.sentTargetMessages().count
     let deleteTask = Task {
-        try await session.deleteDOMNode(bodyID, undoManager: nil)
+        try await session.attachment.dom.deleteNode(bodyID, undoManager: nil)
     }
     let removeNode = try await waitForTargetMessage(backend, method: "DOM.removeNode", after: countBeforeDelete)
     await receiveTargetReply(
@@ -1082,9 +1144,8 @@ func localDOMDeleteMarksSelectedCSSNodeStylesUnavailableWithoutBackendMutationEv
     )
     try await deleteTask.value
 
-    #expect(await session.dom.selectedNodeID == nil)
-    #expect(await session.css.selectedNodeStyles != nil)
-    #expect(await session.css.selectedState == .unavailable(.staleNode(bodyID)))
+    #expect(await session.attachment.dom.selectedNodeID == nil)
+    #expect(await session.attachment.dom.elementStyles.selectedNodeStyles == nil)
 }
 
 @Test
@@ -1093,14 +1154,14 @@ func frameDocumentRefreshUpdatesOnlyFrameDocument() async throws {
     let transport = testTransport(backend)
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
-    let pageDocumentID = try #require(await session.dom.snapshot().currentPageDocumentID)
+    let pageDocumentID = try #require(await session.attachment.dom.snapshot().currentPageDocumentID)
 
     let sentCount = await backend.sentTargetMessages().count
     await transport.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["DOM"],"isProvisional":false}}}"#
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().targetsByID[.frameAd]
+        await session.attachment.dom.snapshot().targetsByID[.frameAd]
     }
 
     let sent = try await waitForTargetMessage(backend, method: "DOM.getDocument", after: sentCount)
@@ -1111,10 +1172,10 @@ func frameDocumentRefreshUpdatesOnlyFrameDocument() async throws {
         result: ##"{"root":{"nodeId":1,"nodeType":9,"nodeName":"#document","children":[{"nodeId":2,"nodeType":1,"nodeName":"HTML","localName":"html"}]}}"##
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().targetsByID[.frameAd]?.currentDocumentID
+        await session.attachment.dom.snapshot().targetsByID[.frameAd]?.currentDocumentID
     }
 
-    let snapshot = await session.dom.snapshot()
+    let snapshot = await session.attachment.dom.snapshot()
     #expect(snapshot.currentPageDocumentID == pageDocumentID)
     #expect(snapshot.targetsByID[.frameAd]?.currentDocumentID != nil)
     #expect(snapshot.targetsByID[.frameAd]?.currentDocumentID != pageDocumentID)
@@ -1132,7 +1193,7 @@ func frameTargetWithoutDOMCapabilityDoesNotHydrateOnCreationOrDocumentUpdated() 
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":[],"isProvisional":false}}}"#
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().targetsByID[.frameAd]
+        await session.attachment.dom.snapshot().targetsByID[.frameAd]
     }
     await receiveTargetDispatch(
         transport,
@@ -1141,7 +1202,7 @@ func frameTargetWithoutDOMCapabilityDoesNotHydrateOnCreationOrDocumentUpdated() 
     )
 
     #expect(await backend.sentTargetMessages().count == sentCount)
-    #expect(await session.dom.snapshot().targetsByID[.frameAd]?.currentDocumentID == nil)
+    #expect(await session.attachment.dom.snapshot().targetsByID[.frameAd]?.currentDocumentID == nil)
 }
 
 @Test
@@ -1156,11 +1217,11 @@ func frameTargetWithoutAdvertisedDomainsUsesWebKitFrameDefaultAndDoesNotHydrateO
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().targetsByID[.frameAd]
+        await session.attachment.dom.snapshot().targetsByID[.frameAd]
     }
 
     #expect(await backend.sentTargetMessages().count == sentCount)
-    #expect(await session.dom.snapshot().targetsByID[.frameAd]?.currentDocumentID == nil)
+    #expect(await session.attachment.dom.snapshot().targetsByID[.frameAd]?.currentDocumentID == nil)
 }
 
 @Test
@@ -1183,7 +1244,7 @@ func frameTargetWithAdvertisedDOMCapabilityHydratesOnCreation() async throws {
         result: firstLazyFrameDocumentResult
     )
 
-    #expect(await session.dom.snapshot().targetsByID[.frameAd]?.currentDocumentID != nil)
+    #expect(await session.attachment.dom.snapshot().targetsByID[.frameAd]?.currentDocumentID != nil)
 }
 
 @Test
@@ -1289,7 +1350,7 @@ func frameTargetWithUnsupportedRuntimeStillEnablesConsole() async throws {
         result: "{}"
     )
 
-    #expect(await session.runtime.snapshot().unsupportedCommandsByTargetID[.frameAd]?.contains("Runtime.enable") == true)
+    #expect(await session.attachment.runtime.snapshot().unsupportedCommandsByTargetID[.frameAd]?.contains("Runtime.enable") == true)
     #expect(await session.lastError == nil)
 }
 
@@ -1327,7 +1388,7 @@ func consoleEnableTargetNotFoundDoesNotMarkCommandUnsupported() async throws {
         await session.lastError != nil ? true : nil
     }
     #expect(didPublishFailure)
-    #expect(await session.console.snapshot().unsupportedCommandsByTargetID[.frameAd]?.contains("Console.enable") != true)
+    #expect(await session.attachment.console.snapshot().unsupportedCommandsByTargetID[.frameAd]?.contains("Console.enable") != true)
 }
 
 @Test
@@ -1491,7 +1552,7 @@ func domCapableFrameTargetDiscoveredBeforeAttachHydratesAfterConnect() async thr
         result: firstLazyFrameDocumentResult
     )
 
-    #expect(await session.dom.snapshot().targetsByID[.frameAd]?.currentDocumentID != nil)
+    #expect(await session.attachment.dom.snapshot().targetsByID[.frameAd]?.currentDocumentID != nil)
 }
 
 @Test
@@ -1518,7 +1579,7 @@ func provisionalFrameDocumentReplyBeforeCommitRehydratesCommittedFrame() async t
         messageID: try messageID(firstRequest.message),
         result: firstLazyFrameDocumentResult
     )
-    #expect(await session.dom.snapshot().targetsByID[provisionalTargetID]?.currentDocumentID == nil)
+    #expect(await session.attachment.dom.snapshot().targetsByID[provisionalTargetID]?.currentDocumentID == nil)
 
     let sentCountBeforeCommit = await backend.sentTargetMessages().count
     await transport.receiveRootMessage(
@@ -1538,7 +1599,7 @@ func provisionalFrameDocumentReplyBeforeCommitRehydratesCommittedFrame() async t
     )
 
     let snapshot: DOMSessionSnapshot = try await waitUntil {
-        let snapshot = await session.dom.snapshot()
+        let snapshot = await session.attachment.dom.snapshot()
         guard snapshot.targetsByID[ProtocolTargetIdentifier.frameAd]?.currentDocumentID != nil else {
             return nil
         }
@@ -1684,8 +1745,8 @@ func subframeCommitDoesNotRetargetPageRuntimeOrConsoleState() async throws {
         message: #"{"method":"Console.messageAdded","params":{"message":{"source":"console-api","level":"log","text":"page message","type":"log"}}}"#
     )
     let _: Bool = try await waitUntil {
-        let runtimeSnapshot = await session.runtime.snapshot()
-        let consoleSnapshot = await session.console.snapshot()
+        let runtimeSnapshot = await session.attachment.runtime.snapshot()
+        let consoleSnapshot = await session.attachment.console.snapshot()
         guard runtimeSnapshot.executionContextsByKey[contextKey(.pageMain, 7)]?.targetID == .pageMain,
               consoleSnapshot.orderedMessageIDs.first?.targetID == .pageMain else {
             return nil
@@ -1700,8 +1761,8 @@ func subframeCommitDoesNotRetargetPageRuntimeOrConsoleState() async throws {
         #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-main","newTargetId":"frame-committed"}}"#
     )
     await expectProtocolEventApplied(commitSequence, in: session)
-    let runtimeSnapshot = await session.runtime.snapshot()
-    let consoleSnapshot = await session.console.snapshot()
+    let runtimeSnapshot = await session.attachment.runtime.snapshot()
+    let consoleSnapshot = await session.attachment.console.snapshot()
 
     #expect(runtimeSnapshot.executionContextsByKey[contextKey(.pageMain, 7)]?.targetID == .pageMain)
     #expect(runtimeSnapshot.executionContextsByKey[contextKey(ProtocolTargetIdentifier("frame-committed"), 7)] == nil)
@@ -1746,7 +1807,7 @@ func provisionalFrameCommitCancelsInFlightDocumentRequestBeforeRehydrating() asy
         result: secondLazyFrameDocumentResult
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(201))]
+        await session.attachment.dom.snapshot().currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(201))]
     }
 
     #expect(
@@ -1761,7 +1822,7 @@ func provisionalFrameCommitCancelsInFlightDocumentRequestBeforeRehydrating() asy
         result: firstLazyFrameDocumentResult
     )
 
-    let snapshot = await session.dom.snapshot()
+    let snapshot = await session.attachment.dom.snapshot()
     #expect(snapshot.currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(201))] != nil)
     #expect(snapshot.currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(101))] == nil)
 }
@@ -1803,7 +1864,7 @@ func oldlessProvisionalFrameCommitCancelsInFlightDocumentRequestBeforeRehydratin
         result: secondLazyFrameDocumentResult
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(201))]
+        await session.attachment.dom.snapshot().currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(201))]
     }
 
     #expect(
@@ -1818,7 +1879,7 @@ func oldlessProvisionalFrameCommitCancelsInFlightDocumentRequestBeforeRehydratin
         result: firstLazyFrameDocumentResult
     )
 
-    let snapshot = await session.dom.snapshot()
+    let snapshot = await session.attachment.dom.snapshot()
     #expect(snapshot.currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(201))] != nil)
     #expect(snapshot.currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(101))] == nil)
 }
@@ -1851,7 +1912,7 @@ func frameDocumentRequestDoesNotBlockPageDOMEvents() async throws {
         targetID: .pageMain,
         protocolNodeID: .init(4)
     )
-    let snapshotWhileFrameRequestIsPending = await session.dom.snapshot()
+    let snapshotWhileFrameRequestIsPending = await session.attachment.dom.snapshot()
     #expect(snapshotWhileFrameRequestIsPending.nodesByID[bodyID]?.nodeName == "BODY")
     #expect(snapshotWhileFrameRequestIsPending.targetsByID[.frameAd]?.currentDocumentID == nil)
 
@@ -1862,7 +1923,7 @@ func frameDocumentRequestDoesNotBlockPageDOMEvents() async throws {
         result: firstLazyFrameDocumentResult
     )
     let finalSnapshot: DOMSessionSnapshot = try await waitUntil {
-        let snapshot = await session.dom.snapshot()
+        let snapshot = await session.attachment.dom.snapshot()
         guard snapshot.targetsByID[.frameAd]?.currentDocumentID != nil else {
             return nil
         }
@@ -1877,7 +1938,7 @@ func pageDocumentUpdatedInvalidatesCurrentPageDocumentWithoutReloading() async t
     let transport = testTransport(backend)
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
-    let pageDocumentID = try #require(await session.dom.snapshot().currentPageDocumentID)
+    let pageDocumentID = try #require(await session.attachment.dom.snapshot().currentPageDocumentID)
     let sentCount = await backend.sentTargetMessages().count
 
     await receiveTargetDispatch(
@@ -1886,7 +1947,7 @@ func pageDocumentUpdatedInvalidatesCurrentPageDocumentWithoutReloading() async t
         message: #"{"method":"DOM.documentUpdated","params":{}}"#
     )
     let snapshot: DOMSessionSnapshot = try await waitUntil {
-        let snapshot = await session.dom.snapshot()
+        let snapshot = await session.attachment.dom.snapshot()
         guard snapshot.currentPageDocumentID == nil else {
             return nil
         }
@@ -1912,7 +1973,7 @@ func ensureDOMDocumentLoadedReloadsInvalidatedPageDocument() async throws {
         message: #"{"method":"DOM.documentUpdated","params":{}}"#
     )
     let invalidatedSnapshot: DOMSessionSnapshot = try await waitUntil {
-        let snapshot = await session.dom.snapshot()
+        let snapshot = await session.attachment.dom.snapshot()
         guard snapshot.currentPageDocumentID == nil else {
             return nil
         }
@@ -1922,7 +1983,7 @@ func ensureDOMDocumentLoadedReloadsInvalidatedPageDocument() async throws {
 
     let sentCount = await backend.sentTargetMessages().count
     let ensureTask = Task {
-        await session.ensureDOMDocumentLoaded()
+        await session.attachment.dom.ensureDocumentLoaded()
     }
     let reload = try await waitForTargetMessage(
         backend,
@@ -1938,7 +1999,7 @@ func ensureDOMDocumentLoadedReloadsInvalidatedPageDocument() async throws {
     )
 
     #expect(await ensureTask.value)
-    let finalSnapshot = await session.dom.snapshot()
+    let finalSnapshot = await session.attachment.dom.snapshot()
     #expect(finalSnapshot.currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(40))] != nil)
 }
 
@@ -1955,7 +2016,7 @@ func documentUpdatedAllowsNewDocumentRequestWhilePreviousRequestIsPending() asyn
         message: #"{"method":"DOM.documentUpdated","params":{}}"#
     )
     let _: DOMSessionSnapshot = try await waitUntil {
-        let snapshot = await session.dom.snapshot()
+        let snapshot = await session.attachment.dom.snapshot()
         guard snapshot.currentPageDocumentID == nil else {
             return nil
         }
@@ -1964,7 +2025,7 @@ func documentUpdatedAllowsNewDocumentRequestWhilePreviousRequestIsPending() asyn
 
     let sentCount = await backend.sentTargetMessages().count
     let ensureTask = Task {
-        await session.ensureDOMDocumentLoaded()
+        await session.attachment.dom.ensureDocumentLoaded()
     }
     let firstRequest = try await waitForTargetMessage(
         backend,
@@ -2007,7 +2068,7 @@ func documentUpdatedAllowsNewDocumentRequestWhilePreviousRequestIsPending() asyn
         result: staleReloadDocumentResult
     )
 
-    let finalSnapshot = await session.dom.snapshot()
+    let finalSnapshot = await session.attachment.dom.snapshot()
     #expect(finalSnapshot.currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(40))] != nil)
     #expect(finalSnapshot.currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(50))] == nil)
 }
@@ -2021,7 +2082,7 @@ func staleSetChildNodesAfterPageNavigationDoesNotMoveHeadChildrenIntoNewBody() a
 
     let countBeforeOldDocumentReload = await backend.sentTargetMessages().count
     let oldDocumentReloadTask = Task {
-        try await session.reloadDOMDocument()
+        try await session.attachment.dom.reloadDocument()
     }
     let oldDocumentReload = try await waitForTargetMessage(
         backend,
@@ -2041,10 +2102,10 @@ func staleSetChildNodesAfterPageNavigationDoesNotMoveHeadChildrenIntoNewBody() a
         targetID: .pageMain,
         protocolNodeID: .init(4)
     )
-    let requestIntent = try #require(await session.dom.requestChildNodesIntent(for: oldHeadID))
+    let requestIntent = try #require(await session.attachment.dom.requestChildNodesIntent(for: oldHeadID))
     let countBeforeRequest = await backend.sentTargetMessages().count
     let requestTask = Task {
-        try await session.perform(requestIntent)
+        try await session.attachment.dom.perform(requestIntent)
     }
     let oldHeadRequest = try await waitForTargetMessage(
         backend,
@@ -2072,7 +2133,7 @@ func staleSetChildNodesAfterPageNavigationDoesNotMoveHeadChildrenIntoNewBody() a
         message: #"{"method":"DOM.setChildNodes","params":{"parentId":4,"nodes":[{"nodeId":8,"nodeType":1,"nodeName":"STYLE","localName":"style"}]}}"#
     )
     let _: DOMSessionSnapshot = try await waitUntil {
-        let snapshot = await session.dom.snapshot()
+        let snapshot = await session.attachment.dom.snapshot()
         guard snapshot.currentPageDocumentID == nil else {
             return nil
         }
@@ -2082,7 +2143,7 @@ func staleSetChildNodesAfterPageNavigationDoesNotMoveHeadChildrenIntoNewBody() a
 
     let countBeforeManualReload = await backend.sentTargetMessages().count
     let manualReloadTask = Task {
-        try await session.reloadDOMDocument()
+        try await session.attachment.dom.reloadDocument()
     }
     let newDocumentReload = try await waitForTargetMessage(
         backend,
@@ -2103,7 +2164,7 @@ func staleSetChildNodesAfterPageNavigationDoesNotMoveHeadChildrenIntoNewBody() a
         protocolNodeID: .init(4)
     )
 
-    let snapshot = await session.dom.snapshot()
+    let snapshot = await session.attachment.dom.snapshot()
     #expect(snapshot.currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(8))] == nil)
     #expect(snapshot.nodesByID[newBodyID]?.regularChildIDs.isEmpty == true)
 }
@@ -2139,7 +2200,7 @@ func rootScopedDocumentUpdatedInvalidatesCurrentPageDocument() async throws {
         result: firstLazyFrameDocumentResult
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().targetsByID[.frameAd]
+        await session.attachment.dom.snapshot().targetsByID[.frameAd]
     }
 
     await receiveTargetDispatch(
@@ -2153,13 +2214,13 @@ func rootScopedDocumentUpdatedInvalidatesCurrentPageDocument() async throws {
         protocolNodeID: .init(6)
     )
 
-    let beforeUpdate = await session.dom.snapshot()
+    let beforeUpdate = await session.attachment.dom.snapshot()
     _ = try #require(beforeUpdate.currentPageDocumentID)
     let frameDocumentID = try #require(beforeUpdate.targetsByID[.frameAd]?.currentDocumentID)
     let frameRootID = try #require(beforeUpdate.documentsByID[frameDocumentID]?.rootNodeID)
-    await session.dom.selectNode(mainNodeID)
+    await session.attachment.dom.selectNode(mainNodeID)
     assertProjectionContainsFrameDocument(
-        in: await session.dom.treeProjection(rootTargetID: .pageMain),
+        in: await session.attachment.dom.treeProjection(rootTargetID: .pageMain),
         iframeNodeID: iframeNodeID,
         frameRootNodeID: frameRootID
     )
@@ -2168,7 +2229,7 @@ func rootScopedDocumentUpdatedInvalidatesCurrentPageDocument() async throws {
     await transport.receiveRootMessage(#"{"method":"DOM.documentUpdated","params":{}}"#)
 
     let afterUpdate: DOMSessionSnapshot = try await waitUntil {
-        let snapshot = await session.dom.snapshot()
+        let snapshot = await session.attachment.dom.snapshot()
         guard snapshot.currentPageDocumentID == nil else {
             return nil
         }
@@ -2178,7 +2239,7 @@ func rootScopedDocumentUpdatedInvalidatesCurrentPageDocument() async throws {
     #expect(afterUpdate.targetsByID[ProtocolTargetIdentifier.frameAd]?.currentDocumentID == frameDocumentID)
     #expect(afterUpdate.selection.selectedNodeID == nil)
     #expect(await backend.sentTargetMessages().count == sentCountBeforeTargetlessUpdate)
-    #expect((await session.dom.treeProjection(rootTargetID: .pageMain)).rows.map(\.nodeID).contains(frameRootID) == false)
+    #expect((await session.attachment.dom.treeProjection(rootTargetID: .pageMain)).rows.map(\.nodeID).contains(frameRootID) == false)
 }
 
 @Test("Lazy iframe insertion and frame document update keep the parent page tree intact")
@@ -2212,7 +2273,7 @@ func lazyIframeInsertionAndFrameDocumentUpdateKeepParentPageTree() async throws 
         result: firstLazyFrameDocumentResult
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().targetsByID[.frameAd]
+        await session.attachment.dom.snapshot().targetsByID[.frameAd]
     }
 
     await receiveTargetDispatch(
@@ -2226,12 +2287,12 @@ func lazyIframeInsertionAndFrameDocumentUpdateKeepParentPageTree() async throws 
         protocolNodeID: .init(6)
     )
 
-    let beforeUpdate = await session.dom.snapshot()
+    let beforeUpdate = await session.attachment.dom.snapshot()
     let pageDocumentID = try #require(beforeUpdate.currentPageDocumentID)
     let firstFrameDocumentID = try #require(beforeUpdate.targetsByID[.frameAd]?.currentDocumentID)
     let firstFrameRootID = try #require(beforeUpdate.documentsByID[firstFrameDocumentID]?.rootNodeID)
     assertProjectionContainsFrameDocument(
-        in: await session.dom.treeProjection(rootTargetID: .pageMain),
+        in: await session.attachment.dom.treeProjection(rootTargetID: .pageMain),
         iframeNodeID: iframeNodeID,
         frameRootNodeID: firstFrameRootID
     )
@@ -2241,10 +2302,10 @@ func lazyIframeInsertionAndFrameDocumentUpdateKeepParentPageTree() async throws 
         targetID: .pageMain,
         message: #"{"method":"DOM.setChildNodes","params":{"parentId":6,"nodes":[{"nodeId":7,"nodeType":1,"nodeName":"SPAN","localName":"span"}]}}"#
     )
-    let afterIframeOwnerUpdate = await session.dom.snapshot()
+    let afterIframeOwnerUpdate = await session.attachment.dom.snapshot()
     #expect(afterIframeOwnerUpdate.currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(7))] == nil)
     assertProjectionContainsFrameDocument(
-        in: await session.dom.treeProjection(rootTargetID: .pageMain),
+        in: await session.attachment.dom.treeProjection(rootTargetID: .pageMain),
         iframeNodeID: iframeNodeID,
         frameRootNodeID: firstFrameRootID
     )
@@ -2261,7 +2322,7 @@ func lazyIframeInsertionAndFrameDocumentUpdateKeepParentPageTree() async throws 
     )
     #expect(refreshedIframeNodeID == iframeNodeID)
     assertProjectionContainsFrameDocument(
-        in: await session.dom.treeProjection(rootTargetID: .pageMain),
+        in: await session.attachment.dom.treeProjection(rootTargetID: .pageMain),
         iframeNodeID: refreshedIframeNodeID,
         frameRootNodeID: firstFrameRootID
     )
@@ -2286,7 +2347,7 @@ func lazyIframeInsertionAndFrameDocumentUpdateKeepParentPageTree() async throws 
     )
 
     let afterUpdate: DOMSessionSnapshot = try await waitUntil {
-        let snapshot = await session.dom.snapshot()
+        let snapshot = await session.attachment.dom.snapshot()
         guard let currentDocumentID = snapshot.targetsByID[.frameAd]?.currentDocumentID,
               currentDocumentID != firstFrameDocumentID else {
             return nil
@@ -2301,7 +2362,7 @@ func lazyIframeInsertionAndFrameDocumentUpdateKeepParentPageTree() async throws 
     #expect(afterUpdate.nodesByID[iframeNodeID] != nil)
     #expect(afterUpdate.nodesByID[firstFrameRootID] == nil)
     assertProjectionContainsFrameDocument(
-        in: await session.dom.treeProjection(rootTargetID: .pageMain),
+        in: await session.attachment.dom.treeProjection(rootTargetID: .pageMain),
         iframeNodeID: iframeNodeID,
         frameRootNodeID: secondFrameRootID
     )
@@ -2331,7 +2392,7 @@ func repeatedFrameDocumentUpdatedReissuesInFlightFrameReload() async throws {
         result: firstLazyFrameDocumentResult
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().targetsByID[.frameAd]?.currentDocumentID
+        await session.attachment.dom.snapshot().targetsByID[.frameAd]?.currentDocumentID
     }
 
     let sentCountBeforeFirstUpdate = await backend.sentTargetMessages().count
@@ -2372,7 +2433,7 @@ func repeatedFrameDocumentUpdatedReissuesInFlightFrameReload() async throws {
         messageID: try messageID(firstReload.message),
         result: firstLazyFrameDocumentResult
     )
-    #expect(await session.dom.snapshot().currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(101))] == nil)
+    #expect(await session.attachment.dom.snapshot().currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(101))] == nil)
 
     await receiveTargetReply(
         transport,
@@ -2382,7 +2443,7 @@ func repeatedFrameDocumentUpdatedReissuesInFlightFrameReload() async throws {
     )
 
     let snapshot: DOMSessionSnapshot = try await waitUntil {
-        let snapshot = await session.dom.snapshot()
+        let snapshot = await session.attachment.dom.snapshot()
         guard snapshot.currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(201))] != nil else {
             return nil
         }
@@ -2459,11 +2520,11 @@ func pendingFrameDocumentHydratesPageOwnerPathBeforeProjection() async throws {
         targetID: .pageMain,
         protocolNodeID: .init(6)
     )
-    let snapshot = await session.dom.snapshot()
+    let snapshot = await session.attachment.dom.snapshot()
     let frameDocumentID = try #require(snapshot.targetsByID[.frameAd]?.currentDocumentID)
     let frameRootID = try #require(snapshot.documentsByID[frameDocumentID]?.rootNodeID)
     assertProjectionContainsFrameDocument(
-        in: await session.dom.treeProjection(rootTargetID: .pageMain),
+        in: await session.attachment.dom.treeProjection(rootTargetID: .pageMain),
         iframeNodeID: iframeNodeID,
         frameRootNodeID: frameRootID
     )
@@ -2490,7 +2551,7 @@ func lazyIframeOwnerFrameIdIsNotTreatedAsChildFrameIdentity() async throws {
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().targetsByID[.frameAd]
+        await session.attachment.dom.snapshot().targetsByID[.frameAd]
     }
 
     await receiveTargetDispatch(
@@ -2506,7 +2567,7 @@ func lazyIframeOwnerFrameIdIsNotTreatedAsChildFrameIdentity() async throws {
 
     let sentCountBeforeFrameDocument = await backend.sentTargetMessages().count
     let frameDocumentTask = Task {
-        try await session.perform(.getDocument(targetID: .frameAd))
+        try await session.attachment.dom.perform(.getDocument(targetID: .frameAd))
     }
     let frameDocumentRequest = try await waitForTargetMessage(
         backend,
@@ -2520,11 +2581,11 @@ func lazyIframeOwnerFrameIdIsNotTreatedAsChildFrameIdentity() async throws {
         result: firstLazyFrameDocumentResult
     )
     _ = try await frameDocumentTask.value
-    let firstFrameDocumentID = try #require(await session.dom.snapshot().targetsByID[.frameAd]?.currentDocumentID)
-    let firstFrameRootID = try #require(await session.dom.snapshot().documentsByID[firstFrameDocumentID]?.rootNodeID)
+    let firstFrameDocumentID = try #require(await session.attachment.dom.snapshot().targetsByID[.frameAd]?.currentDocumentID)
+    let firstFrameRootID = try #require(await session.attachment.dom.snapshot().documentsByID[firstFrameDocumentID]?.rootNodeID)
 
     assertProjectionContainsFrameDocument(
-        in: await session.dom.treeProjection(rootTargetID: .pageMain),
+        in: await session.attachment.dom.treeProjection(rootTargetID: .pageMain),
         iframeNodeID: iframeNodeID,
         frameRootNodeID: firstFrameRootID
     )
@@ -2534,9 +2595,9 @@ func lazyIframeOwnerFrameIdIsNotTreatedAsChildFrameIdentity() async throws {
         targetID: .pageMain,
         message: #"{"method":"DOM.setChildNodes","params":{"parentId":6,"nodes":[{"nodeId":7,"nodeType":1,"nodeName":"SPAN","localName":"span"}]}}"#
     )
-    #expect(await session.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(7))] == nil)
+    #expect(await session.attachment.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(7))] == nil)
     assertProjectionContainsFrameDocument(
-        in: await session.dom.treeProjection(rootTargetID: .pageMain),
+        in: await session.attachment.dom.treeProjection(rootTargetID: .pageMain),
         iframeNodeID: iframeNodeID,
         frameRootNodeID: firstFrameRootID
     )
@@ -2560,11 +2621,11 @@ func lazyIframeOwnerFrameIdIsNotTreatedAsChildFrameIdentity() async throws {
         result: "{}"
     )
     let selectedNode = try await waitUntil {
-        await session.dom.selectedNode
+        await session.attachment.dom.selectedNode
     }
     #expect(await selectedNode.nodeName == "CANVAS")
-    let snapshot = await session.dom.snapshot()
-    let projection = await session.dom.treeProjection(rootTargetID: .pageMain)
+    let snapshot = await session.attachment.dom.snapshot()
+    let projection = await session.attachment.dom.treeProjection(rootTargetID: .pageMain)
 
     #expect(snapshot.framesByID[DOMFrameIdentifier("main-frame")]?.currentDocumentID == snapshot.currentPageDocumentID)
     #expect(snapshot.framesByID[DOMFrameIdentifier("ad-frame")]?.currentDocumentID == firstFrameDocumentID)
@@ -2598,7 +2659,7 @@ func targetCommitBootstrapsCommittedMainPageTarget() async throws {
         documentResult: manualReloadDocumentResult
     )
 
-    let snapshot = await session.dom.snapshot()
+    let snapshot = await session.attachment.dom.snapshot()
     #expect(snapshot.currentPageTargetID == ProtocolTargetIdentifier.pageNext)
     #expect(snapshot.targetsByID[.pageNext]?.currentDocumentID != nil)
     #expect(snapshot.targetsByID[.pageMain] == nil)
@@ -2621,9 +2682,9 @@ func runtimeEvaluationResultUsesCommittedReplyTargetAfterNavigationCommit() asyn
     try await connect(session, transport: transport, backend: backend)
 
     let sentCountBeforeEvaluate = await backend.sentTargetMessages().count
-    let intent = await session.runtime.evaluateIntent(expression: "window", targetID: .pageMain)
+    let intent = await session.attachment.runtime.evaluateIntent(expression: "window", targetID: .pageMain)
     let evaluateTask = Task {
-        try await session.perform(intent)
+        try await session.attachment.runtime.perform(intent)
     }
     let evaluateMessage = try await waitForTargetMessage(
         backend,
@@ -2649,7 +2710,7 @@ func runtimeEvaluationResultUsesCommittedReplyTargetAfterNavigationCommit() asyn
     let result = try await evaluateTask.value
 
     let objectID = RuntimeRemoteObjectIdentifier("eval-object")
-    let snapshot = await session.runtime.snapshot()
+    let snapshot = await session.attachment.runtime.snapshot()
     #expect(result.targetID == ProtocolTargetIdentifier.pageNext)
     #expect(snapshot.remoteObjectsByID[.init(runtimeAgentTargetID: .pageMain, objectID: objectID)] == nil)
     #expect(snapshot.remoteObjectsByID[.init(runtimeAgentTargetID: .pageNext, objectID: objectID)]?.payload.description == "Window")
@@ -2690,7 +2751,7 @@ func linkNavigationBuffersProvisionalDOMEventsUntilCommit() async throws {
     )
 
     let snapshot: DOMSessionSnapshot = try await waitUntil {
-        let snapshot = await session.dom.snapshot()
+        let snapshot = await session.attachment.dom.snapshot()
         guard snapshot.currentPageTargetID == .pageNext,
               snapshot.currentNodeIDByKey[.init(targetID: .pageNext, nodeID: .init(3))] != nil else {
             return nil
@@ -2716,13 +2777,13 @@ func requestNodeWaitsForPathPushBeforeSelectingNode() async throws {
         message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"main-frame"}}}"#
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
+        await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
     }
     _ = try await waitUntil {
-        await session.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
+        await session.attachment.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
     }
-    #expect(await session.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]?.targetID == .pageMain)
-    let intent = await session.dom.beginInspectSelectionRequest(
+    #expect(await session.attachment.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]?.targetID == .pageMain)
+    let intent = await session.attachment.dom.beginInspectSelectionRequest(
         targetID: .pageMain,
         objectID: "selected-object"
     )
@@ -2733,7 +2794,7 @@ func requestNodeWaitsForPathPushBeforeSelectingNode() async throws {
 
     let sentCount = await backend.sentTargetMessages().count
     let performTask = Task {
-        try await session.perform(commandIntent)
+        try await session.attachment.dom.perform(commandIntent)
     }
     let sent = try await waitForTargetMessage(backend, method: "DOM.requestNode", after: sentCount)
     await receiveTargetDispatch(
@@ -2749,7 +2810,7 @@ func requestNodeWaitsForPathPushBeforeSelectingNode() async throws {
     )
     _ = try await performTask.value
 
-    let selectedNode = try #require(await session.dom.selectedNode)
+    let selectedNode = try #require(await session.attachment.dom.selectedNode)
     let nodeName = await selectedNode.nodeName
     let attributes = await selectedNode.attributes
     #expect(nodeName == "DIV")
@@ -2774,7 +2835,7 @@ func backendSetChildNodesWithoutExplicitHydrationKeepsRequestNodeSelectable() as
         targetID: .pageMain,
         protocolNodeID: .init(164)
     )
-    let intent = await session.dom.beginInspectSelectionRequest(
+    let intent = await session.attachment.dom.beginInspectSelectionRequest(
         targetID: .pageMain,
         objectID: "selected-object"
     )
@@ -2785,7 +2846,7 @@ func backendSetChildNodesWithoutExplicitHydrationKeepsRequestNodeSelectable() as
 
     let sentCount = await backend.sentTargetMessages().count
     let performTask = Task {
-        try await session.perform(commandIntent)
+        try await session.attachment.dom.perform(commandIntent)
     }
     let sent = try await waitForTargetMessage(backend, method: "DOM.requestNode", after: sentCount)
     await receiveTargetReply(
@@ -2796,8 +2857,8 @@ func backendSetChildNodesWithoutExplicitHydrationKeepsRequestNodeSelectable() as
     )
     _ = try await performTask.value
 
-    #expect(await session.dom.selectedNodeID == expectedNodeID)
-    let selectedNode = try #require(await session.dom.selectedNode)
+    #expect(await session.attachment.dom.selectedNodeID == expectedNodeID)
+    let selectedNode = try #require(await session.attachment.dom.selectedNode)
     #expect(await selectedNode.attributes == [DOMAttribute(name: "id", value: "picked")])
 }
 
@@ -2808,7 +2869,7 @@ func detachedSetChildNodesRootKeepsRequestNodeSelectable() async throws {
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
 
-    let intent = await session.dom.beginInspectSelectionRequest(
+    let intent = await session.attachment.dom.beginInspectSelectionRequest(
         targetID: .pageMain,
         objectID: "detached-selected-object"
     )
@@ -2819,7 +2880,7 @@ func detachedSetChildNodesRootKeepsRequestNodeSelectable() async throws {
 
     let sentCount = await backend.sentTargetMessages().count
     let performTask = Task {
-        try await session.perform(commandIntent)
+        try await session.attachment.dom.perform(commandIntent)
     }
     let sent = try await waitForTargetMessage(backend, method: "DOM.requestNode", after: sentCount)
     await receiveTargetDispatch(
@@ -2841,7 +2902,7 @@ func detachedSetChildNodesRootKeepsRequestNodeSelectable() async throws {
     )
     _ = try await performTask.value
 
-    let selectedNode = try #require(await session.dom.selectedNode)
+    let selectedNode = try #require(await session.attachment.dom.selectedNode)
     #expect(await selectedNode.nodeName == "IMG")
     #expect(await selectedNode.attributes == [DOMAttribute(name: "src", value: "https://ads.example/detached.webp")])
 }
@@ -2869,10 +2930,10 @@ func detachedFrameSetChildNodesRootKeepsRequestNodeSelectable() async throws {
         result: firstLazyFrameDocumentResult
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().targetsByID[ProtocolTargetIdentifier.frameAd]?.currentDocumentID
+        await session.attachment.dom.snapshot().targetsByID[ProtocolTargetIdentifier.frameAd]?.currentDocumentID
     }
 
-    let intent = await session.dom.beginInspectSelectionRequest(
+    let intent = await session.attachment.dom.beginInspectSelectionRequest(
         targetID: .frameAd,
         objectID: "detached-frame-object"
     )
@@ -2883,7 +2944,7 @@ func detachedFrameSetChildNodesRootKeepsRequestNodeSelectable() async throws {
 
     let sentCount = await backend.sentTargetMessages().count
     let performTask = Task {
-        try await session.perform(commandIntent)
+        try await session.attachment.dom.perform(commandIntent)
     }
     let sent = try await waitForTargetMessage(backend, method: "DOM.requestNode", after: sentCount)
     await receiveTargetDispatch(
@@ -2899,9 +2960,9 @@ func detachedFrameSetChildNodesRootKeepsRequestNodeSelectable() async throws {
     )
     _ = try await performTask.value
 
-    let selectedNode = try #require(await session.dom.selectedNode)
+    let selectedNode = try #require(await session.attachment.dom.selectedNode)
     #expect(await selectedNode.nodeName == "IMG")
-    #expect(await session.dom.selectedNodeID?.documentID.targetID == ProtocolTargetIdentifier.frameAd)
+    #expect(await session.attachment.dom.selectedNodeID?.documentID.targetID == ProtocolTargetIdentifier.frameAd)
 }
 
 @Test
@@ -2912,7 +2973,7 @@ func requestNodeReplyBeforePathPushKeepsSelectionPendingUntilParentArrives() asy
         configuration: .init(responseTimeout: .seconds(1), bootstrapTimeout: .seconds(1))
     )
     try await connect(session, transport: transport, backend: backend)
-    let snapshotBeforeSelection = await session.dom.snapshot()
+    let snapshotBeforeSelection = await session.attachment.dom.snapshot()
 
     await receiveTargetDispatch(
         transport,
@@ -2920,9 +2981,9 @@ func requestNodeReplyBeforePathPushKeepsSelectionPendingUntilParentArrives() asy
         message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"main-frame"}}}"#
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
+        await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
     }
-    let intent = await session.dom.beginInspectSelectionRequest(
+    let intent = await session.attachment.dom.beginInspectSelectionRequest(
         targetID: .pageMain,
         objectID: "missing-object"
     )
@@ -2933,7 +2994,7 @@ func requestNodeReplyBeforePathPushKeepsSelectionPendingUntilParentArrives() asy
 
     let sentCount = await backend.sentTargetMessages().count
     let performTask = Task {
-        try await session.perform(commandIntent)
+        try await session.attachment.dom.perform(commandIntent)
     }
     let sent = try await waitForTargetMessage(backend, method: "DOM.requestNode", after: sentCount)
     await receiveTargetReply(
@@ -2944,7 +3005,7 @@ func requestNodeReplyBeforePathPushKeepsSelectionPendingUntilParentArrives() asy
     )
     _ = try await performTask.value
 
-    let snapshot = await session.dom.snapshot()
+    let snapshot = await session.attachment.dom.snapshot()
     #expect(snapshot.documentsByID.keys == snapshotBeforeSelection.documentsByID.keys)
     #expect(snapshot.nodesByID.keys == snapshotBeforeSelection.nodesByID.keys)
     #expect(snapshot.selection.selectedNodeID == nil)
@@ -2966,11 +3027,11 @@ func requestNodeReplyBeforePathPushKeepsSelectionPendingUntilParentArrives() asy
     )
 
     let selectedNode = try await waitUntil {
-        await session.dom.selectedNode
+        await session.attachment.dom.selectedNode
     }
     #expect(await selectedNode.nodeName == "DIV")
     #expect(await selectedNode.attributes == [DOMAttribute(name: "id", value: "late-path")])
-    let resolvedSnapshot = await session.dom.snapshot()
+    let resolvedSnapshot = await session.attachment.dom.snapshot()
     #expect(resolvedSnapshot.selection.pendingRequest == nil)
     #expect(resolvedSnapshot.selection.failure == nil)
 }
@@ -2984,7 +3045,7 @@ func elementPickerBeginAndCancelToggleInspectMode() async throws {
 
     let sentCount = await backend.sentTargetMessages().count
     let beginTask = Task {
-        try await session.beginElementPicker()
+        try await session.attachment.dom.beginElementPicker()
     }
     let enableMessage = try await waitForTargetMessage(backend, method: "DOM.setInspectModeEnabled", after: sentCount)
     #expect(try boolParameter("enabled", in: enableMessage.message) == true)
@@ -2995,11 +3056,11 @@ func elementPickerBeginAndCancelToggleInspectMode() async throws {
         result: "{}"
     )
     try await beginTask.value
-    #expect(await session.isSelectingElement)
+    #expect(await session.attachment.dom.isSelectingElement)
 
     let sentCountBeforeCancel = await backend.sentTargetMessages().count
     let cancelTask = Task {
-        await session.cancelElementPicker()
+        await session.attachment.dom.cancelElementPicker()
     }
     let disableMessage = try await waitForTargetMessage(
         backend,
@@ -3015,7 +3076,7 @@ func elementPickerBeginAndCancelToggleInspectMode() async throws {
     )
     await cancelTask.value
 
-    #expect(await session.isSelectingElement == false)
+    #expect(await session.attachment.dom.isSelectingElement == false)
 }
 
 @Test
@@ -3025,13 +3086,13 @@ func targetDestroyedClearsActiveElementPicker() async throws {
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
     try await beginPicker(session: session, transport: transport, backend: backend)
-    #expect(await session.isSelectingElement)
+    #expect(await session.attachment.dom.isSelectingElement)
 
     await transport.receiveRootMessage(
         #"{"method":"Target.targetDestroyed","params":{"targetId":"page-main"}}"#
     )
     _ = try await waitUntil {
-        await session.isSelectingElement == false ? true : nil
+        await session.attachment.dom.isSelectingElement == false ? true : nil
     }
 }
 
@@ -3042,7 +3103,7 @@ func targetCommitClearsElementPickerForOldTarget() async throws {
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
     try await beginPicker(session: session, transport: transport, backend: backend)
-    #expect(await session.isSelectingElement)
+    #expect(await session.attachment.dom.isSelectingElement)
 
     let sentCountBeforeNavigation = await backend.sentTargetMessages().count
     await transport.receiveRootMessage(
@@ -3053,7 +3114,7 @@ func targetCommitClearsElementPickerForOldTarget() async throws {
     )
 
     _ = try await waitUntil {
-        await session.isSelectingElement == false ? true : nil
+        await session.attachment.dom.isSelectingElement == false ? true : nil
     }
 
     let bootstrapMessages = try await completeBootstrap(
@@ -3072,7 +3133,7 @@ func subframeCommitDoesNotClearPageElementPicker() async throws {
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
     try await beginPicker(session: session, transport: transport, backend: backend)
-    #expect(await session.isSelectingElement)
+    #expect(await session.attachment.dom.isSelectingElement)
 
     await transport.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-committed","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["DOM","Runtime","Console"],"isProvisional":true}}}"#
@@ -3082,7 +3143,7 @@ func subframeCommitDoesNotClearPageElementPicker() async throws {
     )
     await expectProtocolEventApplied(commitSequence, in: session)
 
-    #expect(await session.isSelectingElement)
+    #expect(await session.attachment.dom.isSelectingElement)
 }
 
 @Test
@@ -3108,7 +3169,7 @@ func elementPickerUsesBootstrappedTargetAfterTargetCommit() async throws {
 
     let sentCountBeforePicker = await backend.sentTargetMessages().count
     let beginTask = Task {
-        try await session.beginElementPicker()
+        try await session.attachment.dom.beginElementPicker()
     }
 
     let enableMessage = try await waitForTargetMessage(
@@ -3124,7 +3185,7 @@ func elementPickerUsesBootstrappedTargetAfterTargetCommit() async throws {
         result: "{}"
     )
     try await beginTask.value
-    #expect(await session.isSelectingElement)
+    #expect(await session.attachment.dom.isSelectingElement)
 }
 
 @Test("Regression: element picker ignores inspect events before inspect-mode enable completes")
@@ -3139,12 +3200,12 @@ func elementPickerIgnoresInspectEventBeforeInspectModeReply() async throws {
         message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"main-frame"}}}"#
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
+        await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
     }
 
     let sentCount = await backend.sentTargetMessages().count
     let beginTask = Task {
-        try await session.beginElementPicker()
+        try await session.attachment.dom.beginElementPicker()
     }
     let enableMessage = try await waitForTargetMessage(
         backend,
@@ -3152,14 +3213,14 @@ func elementPickerIgnoresInspectEventBeforeInspectModeReply() async throws {
         after: sentCount
     )
     #expect(try boolParameter("enabled", in: enableMessage.message) == true)
-    #expect(await session.isSelectingElement)
+    #expect(await session.attachment.dom.isSelectingElement)
 
     let sentCountBeforeInspect = await backend.sentTargetMessages().count
     let inspectBeforeEnableSequence = await transport.receiveRootMessage(#"{"method":"Inspector.inspect","params":{"object":{"objectId":"{\"injectedScriptId\":7,\"id\":99}"},"hints":{}}}"#)
     await expectProtocolEventApplied(inspectBeforeEnableSequence, in: session)
     let messagesBeforeEnableReply = await backend.sentTargetMessages().dropFirst(sentCountBeforeInspect)
     #expect(messagesBeforeEnableReply.allSatisfy { (try? messageMethod($0.message)) != "DOM.requestNode" })
-    #expect(await session.isSelectingElement)
+    #expect(await session.attachment.dom.isSelectingElement)
 
     await receiveTargetReply(
         transport,
@@ -3204,10 +3265,10 @@ func elementPickerIgnoresInspectEventBeforeInspectModeReply() async throws {
     )
 
     let selectedNode = try await waitUntil {
-        await session.dom.selectedNode
+        await session.attachment.dom.selectedNode
     }
     #expect(await selectedNode.nodeName == "DIV")
-    #expect(await session.isSelectingElement == false)
+    #expect(await session.attachment.dom.isSelectingElement == false)
 }
 
 @Test("Regression: restarted picker ignores stale inspect event while enable is pending")
@@ -3222,12 +3283,12 @@ func restartedElementPickerIgnoresStaleInspectEventBeforeInspectModeReply() asyn
         message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"main-frame"}}}"#
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
+        await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
     }
 
     let sentCountBeforeFirstBegin = await backend.sentTargetMessages().count
     let firstBeginTask = Task {
-        try await session.beginElementPicker()
+        try await session.attachment.dom.beginElementPicker()
     }
     let firstEnable = try await waitForTargetMessage(
         backend,
@@ -3238,7 +3299,7 @@ func restartedElementPickerIgnoresStaleInspectEventBeforeInspectModeReply() asyn
 
     let sentCountBeforeCancel = await backend.sentTargetMessages().count
     let cancelTask = Task {
-        await session.cancelElementPicker()
+        await session.attachment.dom.cancelElementPicker()
     }
     let cancelDisable = try await waitForTargetMessage(
         backend,
@@ -3256,7 +3317,7 @@ func restartedElementPickerIgnoresStaleInspectEventBeforeInspectModeReply() asyn
 
     let sentCountBeforeRestart = await backend.sentTargetMessages().count
     let restartTask = Task {
-        try await session.beginElementPicker()
+        try await session.attachment.dom.beginElementPicker()
     }
     let restartEnable = try await waitForTargetMessage(
         backend,
@@ -3264,7 +3325,7 @@ func restartedElementPickerIgnoresStaleInspectEventBeforeInspectModeReply() asyn
         after: sentCountBeforeRestart
     )
     #expect(try boolParameter("enabled", in: restartEnable.message) == true)
-    #expect(await session.isSelectingElement)
+    #expect(await session.attachment.dom.isSelectingElement)
 
     let sentCountBeforeStaleInspect = await backend.sentTargetMessages().count
     let staleInspectSequence = await transport.receiveRootMessage(#"{"method":"Inspector.inspect","params":{"object":{"objectId":"{\"injectedScriptId\":7,\"id\":99}"},"hints":{}}}"#)
@@ -3272,7 +3333,7 @@ func restartedElementPickerIgnoresStaleInspectEventBeforeInspectModeReply() asyn
     let messagesAfterStaleInspect = await backend.sentTargetMessages().dropFirst(sentCountBeforeStaleInspect)
     #expect(messagesAfterStaleInspect.allSatisfy { (try? messageMethod($0.message)) != "DOM.requestNode" })
     #expect(messagesAfterStaleInspect.allSatisfy { (try? messageMethod($0.message)) != "DOM.setInspectModeEnabled" })
-    #expect(await session.isSelectingElement)
+    #expect(await session.attachment.dom.isSelectingElement)
 
     await receiveTargetReply(
         transport,
@@ -3281,7 +3342,7 @@ func restartedElementPickerIgnoresStaleInspectEventBeforeInspectModeReply() asyn
         result: "{}"
     )
     try await firstBeginTask.value
-    #expect(await session.isSelectingElement)
+    #expect(await session.attachment.dom.isSelectingElement)
 
     await receiveTargetReply(
         transport,
@@ -3325,10 +3386,10 @@ func restartedElementPickerIgnoresStaleInspectEventBeforeInspectModeReply() asyn
     )
 
     let selectedNode = try await waitUntil {
-        await session.dom.selectedNode
+        await session.attachment.dom.selectedNode
     }
     #expect(await selectedNode.nodeName == "DIV")
-    #expect(await session.isSelectingElement == false)
+    #expect(await session.attachment.dom.isSelectingElement == false)
 }
 
 @Test
@@ -3343,7 +3404,7 @@ func staleInspectEventCompletionDoesNotCancelRestartedPicker() async throws {
         message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"main-frame"}}}"#
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
+        await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
     }
     try await beginPicker(session: session, transport: transport, backend: backend)
 
@@ -3357,7 +3418,7 @@ func staleInspectEventCompletionDoesNotCancelRestartedPicker() async throws {
 
     let sentCountBeforeCancel = await backend.sentTargetMessages().count
     let cancelTask = Task {
-        await session.cancelElementPicker()
+        await session.attachment.dom.cancelElementPicker()
     }
     let cancelDisable = try await waitForTargetMessage(
         backend,
@@ -3375,7 +3436,7 @@ func staleInspectEventCompletionDoesNotCancelRestartedPicker() async throws {
 
     let sentCountBeforeRestart = await backend.sentTargetMessages().count
     let restartTask = Task {
-        try await session.beginElementPicker()
+        try await session.attachment.dom.beginElementPicker()
     }
     let restartEnable = try await waitForTargetMessage(
         backend,
@@ -3390,7 +3451,7 @@ func staleInspectEventCompletionDoesNotCancelRestartedPicker() async throws {
         result: "{}"
     )
     try await restartTask.value
-    #expect(await session.isSelectingElement)
+    #expect(await session.attachment.dom.isSelectingElement)
 
     let sentCountBeforeStaleReply = await backend.sentTargetMessages().count
     await receiveTargetDispatch(
@@ -3407,7 +3468,7 @@ func staleInspectEventCompletionDoesNotCancelRestartedPicker() async throws {
     await expectProtocolEventApplied(inspectSequence, in: session)
 
     let messagesAfterStaleReply = await backend.sentTargetMessages().dropFirst(sentCountBeforeStaleReply)
-    #expect(await session.isSelectingElement)
+    #expect(await session.attachment.dom.isSelectingElement)
     #expect(messagesAfterStaleReply.allSatisfy { (try? messageMethod($0.message)) != "DOM.setInspectModeEnabled" })
 }
 
@@ -3423,7 +3484,7 @@ func inspectorInspectSelectsRequestedNodeAndDisablesPicker() async throws {
         message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"main-frame"}}}"#
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
+        await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
     }
     try await beginPicker(session: session, transport: transport, backend: backend)
     let sentCountBeforeInspect = await backend.sentTargetMessages().count
@@ -3460,10 +3521,10 @@ func inspectorInspectSelectsRequestedNodeAndDisablesPicker() async throws {
     )
 
     let selectedNode = try await waitUntil {
-        await session.dom.selectedNode
+        await session.attachment.dom.selectedNode
     }
     #expect(await selectedNode.nodeName == "DIV")
-    #expect(await session.isSelectingElement == false)
+    #expect(await session.attachment.dom.isSelectingElement == false)
 }
 
 @Test
@@ -3483,7 +3544,7 @@ func inspectorInspectWaitsForPathPushEventsBeforeSelectingNode() async throws {
         message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"main-frame"}}}"#
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
+        await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
     }
     try await beginPicker(session: session, transport: transport, backend: backend)
     let sentCountBeforeInspect = await backend.sentTargetMessages().count
@@ -3520,10 +3581,10 @@ func inspectorInspectWaitsForPathPushEventsBeforeSelectingNode() async throws {
     )
 
     let selectedNode = try await waitUntil {
-        await session.dom.selectedNode
+        await session.attachment.dom.selectedNode
     }
     #expect(await selectedNode.attributes == [DOMAttribute(name: "id", value: "selected-after-path-push")])
-    #expect(await session.isSelectingElement == false)
+    #expect(await session.attachment.dom.isSelectingElement == false)
 }
 
 @Test
@@ -3536,9 +3597,9 @@ func inspectorInspectRecordedExecutionContextOverridesEventTargetHint() async th
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().targetsByID[.frameAd]
+        await session.attachment.dom.snapshot().targetsByID[.frameAd]
     }
-    _ = await session.dom.replaceDocumentRoot(
+    _ = await session.attachment.dom.replaceDocumentRoot(
         DOMNodePayload(
             nodeID: .init(1),
             nodeType: .document,
@@ -3555,7 +3616,7 @@ func inspectorInspectRecordedExecutionContextOverridesEventTargetHint() async th
         message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":77,"frameId":"ad-frame"}}}"#
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().executionContextsByKey[contextKey(.frameAd, 77)]
+        await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.frameAd, 77)]
     }
     try await beginPicker(session: session, transport: transport, backend: backend)
     let sentCountBeforeInspect = await backend.sentTargetMessages().count
@@ -3597,10 +3658,10 @@ func inspectorInspectRecordedExecutionContextOverridesEventTargetHint() async th
     )
 
     let selectedNode = try await waitUntil {
-        await session.dom.selectedNode
+        await session.attachment.dom.selectedNode
     }
     #expect(await selectedNode.nodeName == "DIV")
-    #expect(await session.isSelectingElement == false)
+    #expect(await session.attachment.dom.isSelectingElement == false)
 }
 
 @Test
@@ -3646,10 +3707,10 @@ func inspectorInspectOpaqueObjectIDFallsBackToPickerTarget() async throws {
     )
 
     let selectedNode = try await waitUntil {
-        await session.dom.selectedNode
+        await session.attachment.dom.selectedNode
     }
     #expect(await selectedNode.nodeName == "DIV")
-    #expect(await session.isSelectingElement == false)
+    #expect(await session.attachment.dom.isSelectingElement == false)
 }
 
 @Test
@@ -3662,9 +3723,9 @@ func targetScopedInspectorInspectUsesEventTargetAsFallback() async throws {
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().targetsByID[.frameAd]
+        await session.attachment.dom.snapshot().targetsByID[.frameAd]
     }
-    _ = await session.dom.replaceDocumentRoot(
+    _ = await session.attachment.dom.replaceDocumentRoot(
         DOMNodePayload(
             nodeID: .init(1),
             nodeType: .document,
@@ -3715,10 +3776,10 @@ func targetScopedInspectorInspectUsesEventTargetAsFallback() async throws {
     )
 
     let selectedNode = try await waitUntil {
-        await session.dom.selectedNode
+        await session.attachment.dom.selectedNode
     }
     #expect(await selectedNode.nodeName == "DIV")
-    #expect(await session.isSelectingElement == false)
+    #expect(await session.attachment.dom.isSelectingElement == false)
 }
 
 @Test
@@ -3731,9 +3792,9 @@ func targetScopedInspectorInspectFallsBackToEventTargetWhenContextIsUnrecorded()
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().targetsByID[.frameAd]
+        await session.attachment.dom.snapshot().targetsByID[.frameAd]
     }
-    _ = await session.dom.replaceDocumentRoot(
+    _ = await session.attachment.dom.replaceDocumentRoot(
         DOMNodePayload(
             nodeID: .init(1),
             nodeType: .document,
@@ -3785,10 +3846,10 @@ func targetScopedInspectorInspectFallsBackToEventTargetWhenContextIsUnrecorded()
     )
 
     let selectedNode = try await waitUntil {
-        await session.dom.selectedNode
+        await session.attachment.dom.selectedNode
     }
     #expect(await selectedNode.nodeName == "DIV")
-    #expect(await session.isSelectingElement == false)
+    #expect(await session.attachment.dom.isSelectingElement == false)
 }
 
 @Test
@@ -3817,7 +3878,7 @@ func domInspectSelectsKnownProtocolNodeWithoutRequestNode() async throws {
         result: "{}"
     )
 
-    let selectedNode = try #require(await session.dom.selectedNode)
+    let selectedNode = try #require(await session.attachment.dom.selectedNode)
     #expect(await selectedNode.nodeName == "HTML")
     #expect(await backend.sentTargetMessages().dropFirst(sentCountBeforeInspect).contains {
         (try? messageMethod($0.message)) == "DOM.requestNode"
@@ -3862,10 +3923,10 @@ func domInspectReloadsDocumentBeforeFailingUnknownProtocolNode() async throws {
     )
 
     let selectedNode = try await waitUntil {
-        await session.dom.selectedNode
+        await session.attachment.dom.selectedNode
     }
     #expect(await selectedNode.nodeName == "DIV")
-    #expect(await session.isSelectingElement == false)
+    #expect(await session.attachment.dom.isSelectingElement == false)
 }
 
 @Test
@@ -3875,12 +3936,12 @@ func domNavigationCopyDeleteAndReloadUseRuntimeAPIs() async throws {
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
     #expect(await session.hasInspectablePageWebView == false)
-    let htmlID = try #require(await session.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(2))])
-    await session.dom.selectNode(htmlID)
+    let htmlID = try #require(await session.attachment.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(2))])
+    await session.attachment.dom.selectNode(htmlID)
 
     let countBeforeHTMLCopy = await backend.sentTargetMessages().count
     let copyTask = Task {
-        try await session.copySelectedDOMNodeText(.html)
+        try await session.attachment.dom.copySelectedNodeText(.html)
     }
     let outerHTML = try await waitForTargetMessage(backend, method: "DOM.getOuterHTML", after: countBeforeHTMLCopy)
     await receiveTargetReply(
@@ -3892,12 +3953,12 @@ func domNavigationCopyDeleteAndReloadUseRuntimeAPIs() async throws {
     #expect(try await copyTask.value == "<html></html>")
 
     let countBeforeSelectorCopy = await backend.sentTargetMessages().count
-    #expect(try await session.copySelectedDOMNodeText(.selectorPath) == "html")
+    #expect(try await session.attachment.dom.copySelectedNodeText(.selectorPath) == "html")
     #expect(await backend.sentTargetMessages().count == countBeforeSelectorCopy)
 
     let countBeforeDelete = await backend.sentTargetMessages().count
     let deleteTask = Task {
-        try await session.deleteSelectedDOMNode(undoManager: nil)
+        try await session.attachment.dom.deleteSelectedNode(undoManager: nil)
     }
     let removeNode = try await waitForTargetMessage(backend, method: "DOM.removeNode", after: countBeforeDelete)
     await receiveTargetReply(
@@ -3907,11 +3968,11 @@ func domNavigationCopyDeleteAndReloadUseRuntimeAPIs() async throws {
         result: "{}"
     )
     try await deleteTask.value
-    #expect(await session.dom.selectedNodeID == nil)
+    #expect(await session.attachment.dom.selectedNodeID == nil)
 
     let countBeforeReload = await backend.sentTargetMessages().count
     let reloadTask = Task {
-        try await session.reloadDOMDocument()
+        try await session.attachment.dom.reloadDocument()
     }
     let getDocument = try await waitForTargetMessage(backend, method: "DOM.getDocument", after: countBeforeReload)
     await receiveTargetReply(
@@ -3922,7 +3983,7 @@ func domNavigationCopyDeleteAndReloadUseRuntimeAPIs() async throws {
     )
     try await reloadTask.value
 
-    let reloadedBody = await session.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(4))]
+    let reloadedBody = await session.attachment.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(4))]
     #expect(reloadedBody != nil)
 }
 
@@ -3934,13 +3995,13 @@ func deletingDOMNodeClearsExistingSelectionEvenWhenDeletingAnotherNode() async t
     try await connect(session, transport: transport, backend: backend)
     try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
 
-    let htmlID = try #require(await session.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(2))])
-    let bodyID = try #require(await session.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(4))])
-    await session.dom.selectNode(htmlID)
+    let htmlID = try #require(await session.attachment.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(2))])
+    let bodyID = try #require(await session.attachment.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(4))])
+    await session.attachment.dom.selectNode(htmlID)
 
     let countBeforeDelete = await backend.sentTargetMessages().count
     let deleteTask = Task {
-        try await session.deleteDOMNode(bodyID, undoManager: nil)
+        try await session.attachment.dom.deleteNode(bodyID, undoManager: nil)
     }
     let removeNode = try await waitForTargetMessage(backend, method: "DOM.removeNode", after: countBeforeDelete)
     await receiveTargetReply(
@@ -3951,7 +4012,7 @@ func deletingDOMNodeClearsExistingSelectionEvenWhenDeletingAnotherNode() async t
     )
     try await deleteTask.value
 
-    #expect(await session.dom.selectedNodeID == nil)
+    #expect(await session.attachment.dom.selectedNodeID == nil)
 }
 
 @MainActor
@@ -3963,13 +4024,13 @@ func multiNodeDeleteRegistersSingleUndoGroup() async throws {
     try await connect(session, transport: transport, backend: backend)
     try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
 
-    let headID = try #require(session.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(3))])
-    let bodyID = try #require(session.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(4))])
+    let headID = try #require(session.attachment.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(3))])
+    let bodyID = try #require(session.attachment.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(4))])
     let undoManager = UndoManager()
 
     let countBeforeDelete = await backend.sentTargetMessages().count
     let deleteTask = Task {
-        try await session.deleteDOMNodes([headID, bodyID], undoManager: undoManager)
+        try await session.attachment.dom.deleteNodes([headID, bodyID], undoManager: undoManager)
     }
     let firstRemoveNode = try await waitForTargetMessage(backend, method: "DOM.removeNode", after: countBeforeDelete)
     await receiveTargetReply(
@@ -4037,9 +4098,9 @@ func frameDOMNodeCopyDeleteRouteThroughPageTargetWithScopedNodeID() async throws
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().targetsByID[.frameAd]
+        await session.attachment.dom.snapshot().targetsByID[.frameAd]
     }
-    _ = await session.dom.replaceDocumentRoot(
+    _ = await session.attachment.dom.replaceDocumentRoot(
         DOMNodePayload(
             nodeID: .init(101),
             nodeType: .document,
@@ -4050,12 +4111,12 @@ func frameDOMNodeCopyDeleteRouteThroughPageTargetWithScopedNodeID() async throws
         ),
         targetID: .frameAd
     )
-    let frameHTMLID = try #require(await session.dom.snapshot().currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(102))])
-    await session.dom.selectNode(frameHTMLID)
+    let frameHTMLID = try #require(await session.attachment.dom.snapshot().currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(102))])
+    await session.attachment.dom.selectNode(frameHTMLID)
 
     let countBeforeHighlight = await backend.sentTargetMessages().count
     let highlightTask = Task {
-        await session.highlightNode(for: frameHTMLID)
+        await session.attachment.dom.highlightNode(for: frameHTMLID)
     }
     let highlightNode = try await waitForTargetMessage(backend, method: "DOM.highlightNode", after: countBeforeHighlight)
     #expect(highlightNode.targetIdentifier == ProtocolTargetIdentifier.frameAd)
@@ -4070,7 +4131,7 @@ func frameDOMNodeCopyDeleteRouteThroughPageTargetWithScopedNodeID() async throws
 
     let countBeforeHideHighlight = await backend.sentTargetMessages().count
     let hideHighlightTask = Task {
-        await session.hideNodeHighlight()
+        await session.attachment.dom.hideNodeHighlight()
     }
     let hideHighlight = try await waitForTargetMessage(
         backend,
@@ -4088,7 +4149,7 @@ func frameDOMNodeCopyDeleteRouteThroughPageTargetWithScopedNodeID() async throws
 
     let countBeforeHTMLCopy = await backend.sentTargetMessages().count
     let copyTask = Task {
-        try await session.copySelectedDOMNodeText(.html)
+        try await session.attachment.dom.copySelectedNodeText(.html)
     }
     let outerHTML = try await waitForTargetMessage(backend, method: "DOM.getOuterHTML", after: countBeforeHTMLCopy)
     #expect(outerHTML.targetIdentifier == ProtocolTargetIdentifier.pageMain)
@@ -4103,7 +4164,7 @@ func frameDOMNodeCopyDeleteRouteThroughPageTargetWithScopedNodeID() async throws
 
     let countBeforeDelete = await backend.sentTargetMessages().count
     let deleteTask = Task {
-        try await session.deleteSelectedDOMNode(undoManager: nil)
+        try await session.attachment.dom.deleteSelectedNode(undoManager: nil)
     }
     let removeNode = try await waitForTargetMessage(backend, method: "DOM.removeNode", after: countBeforeDelete)
     #expect(removeNode.targetIdentifier == ProtocolTargetIdentifier.pageMain)
@@ -4115,7 +4176,7 @@ func frameDOMNodeCopyDeleteRouteThroughPageTargetWithScopedNodeID() async throws
         result: "{}"
     )
     try await deleteTask.value
-    #expect(await session.dom.selectedNodeID == nil)
+    #expect(await session.attachment.dom.selectedNodeID == nil)
 }
 
 @MainActor
@@ -4125,13 +4186,13 @@ func deleteUndoRedoKeepsUndoManagerStacksAvailableDuringAsyncProtocolWork() asyn
     let transport = testTransport(backend)
     let session = InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
-    let htmlID = try #require(session.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(2))])
-    session.dom.selectNode(htmlID)
+    let htmlID = try #require(session.attachment.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(2))])
+    session.attachment.dom.selectNode(htmlID)
 
     let undoManager = UndoManager()
     let countBeforeDelete = await backend.sentTargetMessages().count
     let deleteTask = Task {
-        try await session.deleteSelectedDOMNode(undoManager: undoManager)
+        try await session.attachment.dom.deleteSelectedNode(undoManager: undoManager)
     }
     let removeNode = try await waitForTargetMessage(backend, method: "DOM.removeNode", after: countBeforeDelete)
     await receiveTargetReply(
@@ -4188,13 +4249,13 @@ func reloadDOMDocumentDiscardsDeleteUndoHistory() async throws {
     let transport = testTransport(backend)
     let session = InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
-    let htmlID = try #require(session.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(2))])
-    session.dom.selectNode(htmlID)
+    let htmlID = try #require(session.attachment.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(2))])
+    session.attachment.dom.selectNode(htmlID)
 
     let undoManager = UndoManager()
     let countBeforeDelete = await backend.sentTargetMessages().count
     let deleteTask = Task {
-        try await session.deleteSelectedDOMNode(undoManager: undoManager)
+        try await session.attachment.dom.deleteSelectedNode(undoManager: undoManager)
     }
     let removeNode = try await waitForTargetMessage(backend, method: "DOM.removeNode", after: countBeforeDelete)
     await receiveTargetReply(
@@ -4208,7 +4269,7 @@ func reloadDOMDocumentDiscardsDeleteUndoHistory() async throws {
 
     let countBeforeReload = await backend.sentTargetMessages().count
     let reloadTask = Task {
-        try await session.reloadDOMDocument()
+        try await session.attachment.dom.reloadDocument()
     }
     let getDocument = try await waitForTargetMessage(backend, method: "DOM.getDocument", after: countBeforeReload)
     #expect(undoManager.canUndo == false)
@@ -4228,13 +4289,13 @@ func reloadDOMDocumentCancelsQueuedDeleteUndoOperationsBeforeTheySend() async th
     let transport = testTransport(backend)
     let session = InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
-    let htmlID = try #require(session.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(2))])
-    session.dom.selectNode(htmlID)
+    let htmlID = try #require(session.attachment.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(2))])
+    session.attachment.dom.selectNode(htmlID)
 
     let undoManager = UndoManager()
     let countBeforeDelete = await backend.sentTargetMessages().count
     let deleteTask = Task {
-        try await session.deleteSelectedDOMNode(undoManager: undoManager)
+        try await session.attachment.dom.deleteSelectedNode(undoManager: undoManager)
     }
     let removeNode = try await waitForTargetMessage(backend, method: "DOM.removeNode", after: countBeforeDelete)
     await receiveTargetReply(
@@ -4261,7 +4322,7 @@ func reloadDOMDocumentCancelsQueuedDeleteUndoOperationsBeforeTheySend() async th
     #expect(undoManager.canRedo)
     undoManager.redo()
 
-    try await session.reloadDOMDocument()
+    try await session.attachment.dom.reloadDocument()
     try await reloadReplyTask.value
 
     let methodsAfterReload = await targetMessageMethods(backend).dropFirst(countBeforeQueuedOperations)
@@ -4277,13 +4338,13 @@ func deleteUndoReloadCancellationClearsUndoHistory() async throws {
     let transport = testTransport(backend)
     let session = InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
-    let htmlID = try #require(session.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(2))])
-    session.dom.selectNode(htmlID)
+    let htmlID = try #require(session.attachment.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(2))])
+    session.attachment.dom.selectNode(htmlID)
 
     let undoManager = UndoManager()
     let countBeforeDelete = await backend.sentTargetMessages().count
     let deleteTask = Task {
-        try await session.deleteSelectedDOMNode(undoManager: undoManager)
+        try await session.attachment.dom.deleteSelectedNode(undoManager: undoManager)
     }
     let removeNode = try await waitForTargetMessage(backend, method: "DOM.removeNode", after: countBeforeDelete)
     await receiveTargetReply(
@@ -4329,11 +4390,11 @@ func reloadDOMDocumentCancelsActiveElementPickerBeforeReplacingDocument() async 
     let session = InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
     try await beginPicker(session: session, transport: transport, backend: backend)
-    #expect(session.isSelectingElement)
+    #expect(session.attachment.dom.isSelectingElement)
 
     let countBeforeReload = await backend.sentTargetMessages().count
     let reloadTask = Task {
-        try await session.reloadDOMDocument()
+        try await session.attachment.dom.reloadDocument()
     }
     let disablePicker = try await waitForTargetMessage(
         backend,
@@ -4355,7 +4416,7 @@ func reloadDOMDocumentCancelsActiveElementPickerBeforeReplacingDocument() async 
         result: mainDocumentResult
     )
     try await reloadTask.value
-    #expect(session.isSelectingElement == false)
+    #expect(session.attachment.dom.isSelectingElement == false)
 }
 
 @MainActor
@@ -4365,7 +4426,7 @@ func deleteUndoKeepsOlderUndoStatesCurrentAfterReload() async throws {
     let transport = testTransport(backend)
     let session = InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
-    _ = session.dom.replaceDocumentRoot(
+    _ = session.attachment.dom.replaceDocumentRoot(
         DOMNodePayload(
             nodeID: .init(1),
             nodeType: .document,
@@ -4392,14 +4453,14 @@ func deleteUndoKeepsOlderUndoStatesCurrentAfterReload() async throws {
         ),
         targetID: .pageMain
     )
-    let bodyID = try #require(session.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(3))])
-    let divID = try #require(session.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(4))])
+    let bodyID = try #require(session.attachment.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(3))])
+    let divID = try #require(session.attachment.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(4))])
     let undoManager = UndoManager()
 
-    session.dom.selectNode(divID)
+    session.attachment.dom.selectNode(divID)
     let countBeforeFirstDelete = await backend.sentTargetMessages().count
     let firstDeleteTask = Task {
-        try await session.deleteSelectedDOMNode(undoManager: undoManager)
+        try await session.attachment.dom.deleteSelectedNode(undoManager: undoManager)
     }
     let firstRemoveNode = try await waitForTargetMessage(backend, method: "DOM.removeNode", after: countBeforeFirstDelete)
     await receiveTargetReply(
@@ -4410,10 +4471,10 @@ func deleteUndoKeepsOlderUndoStatesCurrentAfterReload() async throws {
     )
     try await firstDeleteTask.value
 
-    session.dom.selectNode(bodyID)
+    session.attachment.dom.selectNode(bodyID)
     let countBeforeSecondDelete = await backend.sentTargetMessages().count
     let secondDeleteTask = Task {
-        try await session.deleteSelectedDOMNode(undoManager: undoManager)
+        try await session.attachment.dom.deleteSelectedNode(undoManager: undoManager)
     }
     let secondRemoveNode = try await waitForTargetMessage(backend, method: "DOM.removeNode", after: countBeforeSecondDelete)
     await receiveTargetReply(
@@ -4442,7 +4503,7 @@ func deleteUndoKeepsOlderUndoStatesCurrentAfterReload() async throws {
         result: nestedDocumentResult
     )
     _ = try await waitUntil {
-        await session.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(4))]
+        await session.attachment.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(4))]
     }
 
     let countBeforeSecondUndo = await backend.sentTargetMessages().count
@@ -4472,13 +4533,13 @@ func deleteUndoIsDiscardedWhenDocumentIdentityChanges() async throws {
     let transport = testTransport(backend)
     let session = InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
-    let htmlID = try #require(session.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(2))])
-    session.dom.selectNode(htmlID)
+    let htmlID = try #require(session.attachment.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(2))])
+    session.attachment.dom.selectNode(htmlID)
 
     let undoManager = UndoManager()
     let countBeforeDelete = await backend.sentTargetMessages().count
     let deleteTask = Task {
-        try await session.deleteSelectedDOMNode(undoManager: undoManager)
+        try await session.attachment.dom.deleteSelectedNode(undoManager: undoManager)
     }
     let removeNode = try await waitForTargetMessage(backend, method: "DOM.removeNode", after: countBeforeDelete)
     await receiveTargetReply(
@@ -4490,7 +4551,7 @@ func deleteUndoIsDiscardedWhenDocumentIdentityChanges() async throws {
     try await deleteTask.value
     #expect(undoManager.canUndo)
 
-    _ = session.dom.replaceDocumentRoot(
+    _ = session.attachment.dom.replaceDocumentRoot(
         DOMNodePayload(nodeID: .init(1), nodeType: .document, nodeName: "#document"),
         targetID: .pageMain
     )
@@ -4514,9 +4575,9 @@ func detachCancelsPumpsAndClearsModelState() async throws {
     await session.detach()
 
     #expect(await backend.isDetached())
-    #expect(await session.isAttached == false)
-    #expect(await session.dom.snapshot().currentPageTargetID == nil)
-    #expect(await session.network.snapshot().orderedRequestIDs.isEmpty)
+    #expect(await session.hasActiveConnection == false)
+    #expect(await session.attachment.dom.snapshot().currentPageTargetID == nil)
+    #expect(await session.attachment.network.snapshot().orderedRequestIDs.isEmpty)
 }
 
 @Test
@@ -4538,7 +4599,7 @@ func detachDuringConnectKeepsSessionDetached() async throws {
     await #expect(throws: TransportError.transportClosed) {
         try await connectTask.value
     }
-    #expect(await session.isAttached == false)
+    #expect(await session.hasActiveConnection == false)
     #expect(await session.lastError == nil)
     #expect(await backend.isDetached())
 }
@@ -4561,9 +4622,9 @@ func bootstrapFailureClearsSeededModelState() async throws {
         try await session.connect(transport: transport)
     }
 
-    #expect(await session.dom.snapshot().currentPageTargetID == nil)
-    #expect(await session.network.snapshot().orderedRequestIDs.isEmpty)
-    #expect(await session.isAttached == false)
+    #expect(await session.attachment.dom.snapshot().currentPageTargetID == nil)
+    #expect(await session.attachment.network.snapshot().orderedRequestIDs.isEmpty)
+    #expect(await session.hasActiveConnection == false)
     #expect(await session.lastError != nil)
 }
 
@@ -4582,12 +4643,12 @@ func performIsRejectedUntilBootstrapAttaches() async throws {
     _ = try await waitForTargetMessage(backend, method: "Inspector.enable")
 
     await #expect(throws: InspectorSessionError("Inspector session is not attached.")) {
-        try await session.perform(.getDocument(targetID: .pageMain))
+        try await session.attachment.dom.perform(.getDocument(targetID: .pageMain))
     }
 
     try await completeBootstrap(transport: transport, backend: backend)
     try await connectTask.value
-    #expect(await session.isAttached)
+    #expect(await session.hasActiveConnection)
 }
 
 @MainActor
@@ -4704,7 +4765,7 @@ private func beginPicker(
 ) async throws {
     let sentCount = await backend.sentTargetMessages().count
     let beginTask = Task {
-        try await session.beginElementPicker()
+        try await session.attachment.dom.beginElementPicker()
     }
     let enableMessage = try await waitForTargetMessage(backend, method: "DOM.setInspectModeEnabled", after: sentCount)
     await receiveTargetReply(
@@ -4728,7 +4789,7 @@ private func hydratePageHTMLChildren(
     )
     let sentCount = await backend.sentTargetMessages().count
     let requestTask = Task {
-        await session.requestChildNodes(for: htmlID)
+        await session.attachment.dom.requestChildNodes(for: htmlID)
     }
     let request = try await waitForTargetMessage(backend, method: "DOM.requestChildNodes", after: sentCount)
     await receiveTargetDispatch(
@@ -4876,6 +4937,49 @@ private func cssMatchedStylesResult(
     """
 }
 
+@discardableResult
+@MainActor
+private func applySingleRuleStyles(
+    to css: CSSSession,
+    identity: CSSNodeStyleIdentity,
+    token: CSSStyleRefreshToken? = nil,
+    selector: String,
+    marginValue: String,
+    marginText: String
+) throws -> CSSNodeStyles {
+    let token = try #require(token ?? css.beginRefresh(identity: identity))
+    let styleSheetID = CSSStyleSheetIdentifier("test-sheet")
+    let styleID = CSSStyleIdentifier(styleSheetID: styleSheetID, ordinal: 0)
+    css.applyRefresh(
+        token: token,
+        matched: CSSMatchedStylesPayload(matchedRules: [
+            CSSRuleMatchPayload(
+                rule: CSSRulePayload(
+                    id: CSSRuleIdentifier(styleSheetID: styleSheetID, ordinal: 0),
+                    selectorList: CSSSelectorList(selectors: [CSSSelector(text: selector)], text: selector),
+                    sourceLine: 0,
+                    origin: .author,
+                    style: CSSStylePayload(
+                        id: styleID,
+                        cssProperties: [
+                            CSSPropertyPayload(
+                                name: "margin",
+                                value: marginValue,
+                                text: marginText
+                            ),
+                        ],
+                        cssText: marginText
+                    )
+                ),
+                matchingSelectors: [0]
+            ),
+        ]),
+        inline: .init(),
+        computed: []
+    )
+    return try #require(css.nodeStyles(for: identity))
+}
+
 private func waitUntil<Value: Sendable>(
     timeout: Duration = .seconds(1),
     timeoutError: any Error = TransportError.replyTimeout(method: "test wait", targetID: nil),
@@ -4897,7 +5001,7 @@ private func waitForCurrentNode(
     protocolNodeID: DOMProtocolNodeID
 ) async throws -> DOMNodeIdentifier {
     try await waitUntil {
-        await session.dom.snapshot().currentNodeIDByKey[
+        await session.attachment.dom.snapshot().currentNodeIDByKey[
             .init(targetID: targetID, nodeID: protocolNodeID)
         ]
     }
@@ -5065,5 +5169,14 @@ private extension DOMSessionSnapshot {
             return nil
         }
         return targetsByID[currentPageTargetID]?.currentDocumentID
+    }
+}
+
+private extension Result {
+    var successValue: Success? {
+        if case let .success(value) = self {
+            return value
+        }
+        return nil
     }
 }

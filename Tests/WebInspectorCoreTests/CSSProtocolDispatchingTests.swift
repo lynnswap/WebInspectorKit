@@ -1,13 +1,13 @@
 import Foundation
 import Testing
+import WebInspectorTransport
 @testable import WebInspectorCore
-@testable import WebInspectorTransport
 
 @Test
-func cssTransportAdapterBuildsReadCommands() throws {
+func cssProtocolDispatchingBuildsReadCommands() throws {
     let identity = cssIdentity()
 
-    let matched = try CSSTransportAdapter.command(for: .getMatchedStyles(identity: identity))
+    let matched = try CSSProtocolCommands().command(for: .getMatchedStyles(identity: identity))
     #expect(matched.method == "CSS.getMatchedStylesForNode")
     #expect(matched.routing == .target(identity.targetID))
     let matchedParams = try JSONObject(matched.parametersData)
@@ -15,19 +15,19 @@ func cssTransportAdapterBuildsReadCommands() throws {
     #expect(matchedParams["includePseudo"] as? Bool == true)
     #expect(matchedParams["includeInherited"] as? Bool == true)
 
-    let inline = try CSSTransportAdapter.command(for: .getInlineStyles(identity: identity))
+    let inline = try CSSProtocolCommands().command(for: .getInlineStyles(identity: identity))
     #expect(inline.method == "CSS.getInlineStylesForNode")
     #expect(try JSONObject(inline.parametersData)["nodeId"] as? Int == 2)
 
-    let computed = try CSSTransportAdapter.command(for: .getComputedStyle(identity: identity))
+    let computed = try CSSProtocolCommands().command(for: .getComputedStyle(identity: identity))
     #expect(computed.method == "CSS.getComputedStyleForNode")
     #expect(try JSONObject(computed.parametersData)["nodeId"] as? Int == 2)
 }
 
 @Test
-func cssTransportAdapterBuildsSetStyleTextCommand() throws {
+func cssProtocolDispatchingBuildsSetStyleTextCommand() throws {
     let styleID = CSSStyleIdentifier(styleSheetID: .init("sheet-1"), ordinal: 7)
-    let command = try CSSTransportAdapter.command(for: .setStyleText(
+    let command = try CSSProtocolCommands().command(for: .setStyleText(
         targetID: .init("page"),
         styleID: styleID,
         text: "/* margin: 0; */"
@@ -43,8 +43,8 @@ func cssTransportAdapterBuildsSetStyleTextCommand() throws {
 }
 
 @Test
-func cssTransportAdapterDecodesReadAndSetStyleTextResults() throws {
-    let matched = try CSSTransportAdapter.matchedStyles(from: ProtocolCommandResult(
+func cssProtocolDispatchingDecodesReadAndSetStyleTextResults() throws {
+    let matched = try CSSProtocolCommands().matchedStyles(from: ProtocolCommandResult(
         domain: .css,
         method: "CSS.getMatchedStylesForNode",
         targetID: .init("page"),
@@ -70,7 +70,7 @@ func cssTransportAdapterDecodesReadAndSetStyleTextResults() throws {
     #expect(matched.matchedRules.first?.rule.selectorList.text == "body")
     #expect(matched.matchedRules.first?.rule.style.cssProperties.first?.status == .style)
 
-    let inline = try CSSTransportAdapter.inlineStyles(from: ProtocolCommandResult(
+    let inline = try CSSProtocolCommands().inlineStyles(from: ProtocolCommandResult(
         domain: .css,
         method: "CSS.getInlineStylesForNode",
         targetID: .init("page"),
@@ -85,7 +85,7 @@ func cssTransportAdapterDecodesReadAndSetStyleTextResults() throws {
     ))
     #expect(inline.inlineStyle?.cssProperties.first?.name == "padding")
 
-    let computed = try CSSTransportAdapter.computedStyles(from: ProtocolCommandResult(
+    let computed = try CSSProtocolCommands().computedStyles(from: ProtocolCommandResult(
         domain: .css,
         method: "CSS.getComputedStyleForNode",
         targetID: .init("page"),
@@ -93,7 +93,7 @@ func cssTransportAdapterDecodesReadAndSetStyleTextResults() throws {
     ))
     #expect(computed == [CSSComputedStylePropertyPayload(name: "display", value: "block")])
 
-    let setStyle = try CSSTransportAdapter.setStyleTextResult(from: ProtocolCommandResult(
+    let setStyle = try CSSProtocolCommands().setStyleTextResult(from: ProtocolCommandResult(
         domain: .css,
         method: "CSS.setStyleText",
         targetID: .init("page"),
@@ -110,7 +110,7 @@ func cssTransportAdapterDecodesReadAndSetStyleTextResults() throws {
 }
 
 @Test
-func cssTransportAdapterAppliesTargetScopedInvalidationEvents() async throws {
+func cssProtocolDispatchingAppliesTargetScopedInvalidationEvents() async throws {
     let css = await CSSSession()
     let identity = cssIdentity()
     let token = try #require(await css.beginRefresh(identity: identity))
@@ -121,15 +121,14 @@ func cssTransportAdapterAppliesTargetScopedInvalidationEvents() async throws {
         computed: []
     )
 
-    try await CSSTransportAdapter.applyCSSEvent(
+    try await CSSProtocolEventDispatcher(handler: css).dispatch(
         ProtocolEventEnvelope(
             sequence: 1,
             domain: .css,
             method: "CSS.styleSheetChanged",
             targetID: identity.targetID,
             paramsData: Data(#"{"styleSheetId":"untracked"}"#.utf8)
-        ),
-        to: css
+        )
     )
     #expect(await css.selectedState == .needsRefresh)
 
@@ -148,26 +147,25 @@ func cssTransportAdapterAppliesTargetScopedInvalidationEvents() async throws {
         computed: []
     )
 
-    try await CSSTransportAdapter.applyCSSEvent(
+    try await CSSProtocolEventDispatcher(handler: css).dispatch(
         ProtocolEventEnvelope(
             sequence: 2,
             domain: .css,
             method: "CSS.styleSheetChanged",
             targetID: identity.targetID,
             paramsData: Data(#"{"styleSheetId":"sheet"}"#.utf8)
-        ),
-        to: css
+        )
     )
     #expect(await css.selectedState == .needsRefresh)
 }
 
 @Test
 @MainActor
-func cssTransportAdapterRegistersStyleSheetHeaderOffsets() async throws {
+func cssProtocolDispatchingRegistersStyleSheetHeaderOffsets() async throws {
     let css = CSSSession()
     let identity = cssIdentity()
 
-    try CSSTransportAdapter.applyCSSEvent(
+    try await CSSProtocolEventDispatcher(handler: css).dispatch(
         ProtocolEventEnvelope(
             sequence: 1,
             domain: .css,
@@ -185,8 +183,7 @@ func cssTransportAdapterRegistersStyleSheetHeaderOffsets() async throws {
               }
             }
             """.utf8)
-        ),
-        to: css
+        )
     )
 
     let token = try #require(css.beginRefresh(identity: identity))

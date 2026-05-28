@@ -1,5 +1,4 @@
 import Foundation
-import WebInspectorCore
 
 package actor TransportSession {
     private struct PendingReply: Sendable {
@@ -140,9 +139,9 @@ package actor TransportSession {
     private var targetsByID: [ProtocolTargetIdentifier: ProtocolTargetRecord]
     private var provisionalTargetMessagesByTargetID: [ProtocolTargetIdentifier: [ParsedProtocolMessage]]
     private var frameTargetIDsByFrameID: [DOMFrameIdentifier: ProtocolTargetIdentifier]
-    private var styleSheetTargetIDsByStyleSheetID: [CSSStyleSheetIdentifier: ProtocolTargetIdentifier]
-    private var unresolvedStyleSheetFrameIDsByStyleSheetID: [CSSStyleSheetIdentifier: DOMFrameIdentifier]
-    private var unresolvedStyleSheetAddedParamsDataByStyleSheetID: [CSSStyleSheetIdentifier: Data]
+    private var styleSheetTargetIDsByStyleSheetID: [String: ProtocolTargetIdentifier]
+    private var unresolvedStyleSheetFrameIDsByStyleSheetID: [String: DOMFrameIdentifier]
+    private var unresolvedStyleSheetAddedParamsDataByStyleSheetID: [String: Data]
     private var pendingResolvedStyleSheetAddedEvents: [ResolvedStyleSheetAddedEvent]
     private var runtimeContextRegistry: RuntimeContextRegistry
     private var currentMainPageTargetID: ProtocolTargetIdentifier?
@@ -1283,11 +1282,21 @@ private struct RuntimeExecutionContextDestroyedParams: Decodable {
 }
 
 private struct CSSStyleSheetAddedParams: Decodable {
-    var header: CSSStyleSheetHeaderPayload
+    var header: Header
+
+    struct Header: Decodable {
+        var styleSheetID: String
+        var frameID: DOMFrameIdentifier?
+
+        private enum CodingKeys: String, CodingKey {
+            case styleSheetID = "styleSheetId"
+            case frameID = "frameId"
+        }
+    }
 }
 
 private struct CSSStyleSheetIDParams: Decodable {
-    var styleSheetID: CSSStyleSheetIdentifier
+    var styleSheetID: String
 
     private enum CodingKeys: String, CodingKey {
         case styleSheetID = "styleSheetId"

@@ -1,8 +1,8 @@
 #if canImport(UIKit)
 import Testing
+import WebInspectorTransport
 import UIKit
 @testable import WebInspectorCore
-@testable import WebInspectorRuntime
 @testable import WebInspectorUI
 
 @MainActor
@@ -11,14 +11,14 @@ struct DOMContainerTests {
     @Test
     func elementViewControllerLoadsEmptyContent() {
         let dom = makeDOMSession()
-        let viewController = DOMElementViewController(dom: dom)
+        let viewController = makeElementViewController(dom: dom)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
         #expect(viewController.view.backgroundColor == .systemBackground)
-        let contentUnavailableConfiguration = viewController.contentUnavailableConfiguration as? UIContentUnavailableConfiguration
-        #expect(contentUnavailableConfiguration?.text == "Select an element")
-        #expect(viewController.collectionViewForTesting.isHidden)
+        #expect(viewController.contentUnavailableConfiguration == nil)
+        #expect(viewController.collectionViewForTesting.isHidden == false)
+        #expect(viewController.collectionViewForTesting.numberOfSections == 0)
     }
 
     @Test
@@ -28,7 +28,7 @@ struct DOMContainerTests {
         }
 
         let dom = makeDOMSession()
-        let viewController = DOMElementViewController(dom: dom)
+        let viewController = makeElementViewController(dom: dom)
         viewController.traitOverrides.webInspectorDrawsBackground = false
 
         viewController.loadViewIfNeeded()
@@ -38,7 +38,7 @@ struct DOMContainerTests {
     }
 
     @Test
-    func elementViewControllerLeavesLoadingWhenDocumentRootArrivesAfterViewLoad() async throws {
+    func elementViewControllerShowsBlankCollectionWhenDocumentRootArrivesAfterViewLoad() async throws {
         let targetID = ProtocolTargetIdentifier("page-main")
         let dom = DOMSession()
         dom.applyTargetCreated(
@@ -50,19 +50,20 @@ struct DOMContainerTests {
             ),
             makeCurrentMainPage: true
         )
-        let viewController = DOMElementViewController(dom: dom)
+        let viewController = makeElementViewController(dom: dom)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
-        let loadingConfiguration = viewController.contentUnavailableConfiguration as? UIContentUnavailableConfiguration
-        #expect(loadingConfiguration?.text == "Loading DOM...")
+        #expect(viewController.contentUnavailableConfiguration == nil)
+        #expect(viewController.collectionViewForTesting.isHidden == false)
+        #expect(viewController.collectionViewForTesting.numberOfSections == 0)
 
         _ = dom.replaceDocumentRoot(documentNode(), targetID: targetID)
 
         let didRenderCurrentRoot = await waitUntil {
-            let configuration = viewController.contentUnavailableConfiguration as? UIContentUnavailableConfiguration
-            return configuration?.text == "Select an element"
-                && viewController.collectionViewForTesting.isHidden
+            viewController.contentUnavailableConfiguration == nil
+                && viewController.collectionViewForTesting.isHidden == false
+                && viewController.collectionViewForTesting.numberOfSections == 0
         }
         #expect(didRenderCurrentRoot)
     }
@@ -73,10 +74,10 @@ struct DOMContainerTests {
         let body = try #require(firstElement(named: "body", in: dom))
         dom.selectNode(body.id)
 
-        let css = CSSSession()
+        let css = dom.elementStyles
         try applyBodyStyles(to: css, in: dom)
 
-        let viewController = DOMElementViewController(dom: dom, css: css)
+        let viewController = makeElementViewController(dom: dom)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -130,10 +131,10 @@ struct DOMContainerTests {
         let body = try #require(firstElement(named: "body", in: dom))
         dom.selectNode(body.id)
 
-        let css = CSSSession()
+        let css = dom.elementStyles
         try applyBodyStyles(to: css, in: dom)
 
-        let viewController = DOMElementViewController(dom: dom, css: css)
+        let viewController = makeElementViewController(dom: dom)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -172,15 +173,191 @@ struct DOMContainerTests {
     }
 
     @Test
+    func elementViewControllerKeepsDisplayedRowsWhileNewSelectionStylesAreHydrating() async throws {
+        let dom = makeDOMSession(capabilities: .pageDefault)
+        let body = try #require(firstElement(named: "body", in: dom))
+        dom.selectNode(body.id)
+
+        let css = dom.elementStyles
+        try applyBodyStyles(to: css, in: dom)
+
+        let viewController = makeElementViewController(dom: dom)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didRenderBodyRows = await waitUntil {
+            stylePropertyViews(in: viewController)
+                .map(\.declarationTextForTesting)
+                .contains("margin: 0;")
+        }
+        window.layoutIfNeeded()
+        #expect(didRenderBodyRows)
+
+        let input = try #require(firstElement(named: "input", in: dom))
+        let bodyIdentity = try dom.selectedCSSNodeStyleIdentity().get()
+        dom.selectNode(input.id)
+        let inputIdentity = try dom.selectedCSSNodeStyleIdentity().get()
+        let inputRefreshToken = try #require(css.beginRefresh(identity: inputIdentity))
+        window.layoutIfNeeded()
+
+        #expect(css.selectedNodeStyles?.identity == bodyIdentity)
+        #expect(css.selectedState == .loaded)
+        #expect(css.refreshState(forSelected: inputIdentity) == .loading)
+        #expect(viewController.contentUnavailableConfiguration == nil)
+        #expect(viewController.collectionViewForTesting.isHidden == false)
+        #expect(stylePropertyViews(in: viewController).map(\.declarationTextForTesting).contains("margin: 0;"))
+
+        try applyBodyStyles(
+            to: css,
+            in: dom,
+            token: inputRefreshToken,
+            selector: "input",
+            marginValue: "8px",
+            marginText: "margin: 8px;"
+        )
+
+        let didRenderInputRows = await waitUntil {
+            stylePropertyViews(in: viewController)
+                .map(\.declarationTextForTesting)
+                .contains("margin: 8px;")
+        }
+
+        #expect(didRenderInputRows)
+        #expect(viewController.collectionViewForTesting.isHidden == false)
+    }
+
+    @Test
+    func elementViewControllerShowsBlankCollectionForInitialElementSelectionWhileStylesHydrate() async throws {
+        let dom = makeDOMSession(capabilities: .pageDefault)
+        let css = dom.elementStyles
+        let viewController = makeElementViewController(dom: dom)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let body = try #require(firstElement(named: "body", in: dom))
+        dom.selectNode(body.id)
+        let identity = try dom.selectedCSSNodeStyleIdentity().get()
+        #expect(css.beginRefresh(identity: identity) != nil)
+
+        let didRenderBlankCollection = await waitUntil {
+            viewController.contentUnavailableConfiguration == nil
+                && viewController.collectionViewForTesting.isHidden == false
+                && viewController.collectionViewForTesting.numberOfSections == 0
+        }
+
+        #expect(didRenderBlankCollection)
+    }
+
+    @Test
+    func elementViewControllerClearsRetainedRowsWhenSelectionClears() async throws {
+        let dom = makeDOMSession(capabilities: .pageDefault)
+        let body = try #require(firstElement(named: "body", in: dom))
+        dom.selectNode(body.id)
+
+        let css = dom.elementStyles
+        try applyBodyStyles(to: css, in: dom)
+
+        let viewController = makeElementViewController(dom: dom)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didRenderBodyRows = await waitUntil {
+            stylePropertyViews(in: viewController)
+                .map(\.declarationTextForTesting)
+                .contains("margin: 0;")
+        }
+        #expect(didRenderBodyRows)
+
+        let input = try #require(firstElement(named: "input", in: dom))
+        dom.selectNode(input.id)
+        let inputIdentity = try dom.selectedCSSNodeStyleIdentity().get()
+        #expect(css.beginRefresh(identity: inputIdentity) != nil)
+        #expect(stylePropertyViews(in: viewController).map(\.declarationTextForTesting).contains("margin: 0;"))
+
+        dom.selectNode(nil)
+
+        let didClearRows = await waitUntil {
+            viewController.contentUnavailableConfiguration == nil
+                && viewController.collectionViewForTesting.isHidden == false
+                && viewController.collectionViewForTesting.numberOfSections == 0
+        }
+
+        #expect(didClearRows)
+    }
+
+    @Test
+    func elementViewControllerClearsDisplayedRowsWhenSelectedNodeIsRemoved() async throws {
+        let dom = makeDOMSession(capabilities: .pageDefault)
+        let body = try #require(firstElement(named: "body", in: dom))
+        dom.selectNode(body.id)
+
+        let css = dom.elementStyles
+        try applyBodyStyles(to: css, in: dom)
+
+        let viewController = makeElementViewController(dom: dom)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didRenderBodyRows = await waitUntil {
+            stylePropertyViews(in: viewController)
+                .map(\.declarationTextForTesting)
+                .contains("margin: 0;")
+        }
+        #expect(didRenderBodyRows)
+
+        dom.applyNodeRemoved(body.id)
+
+        let didClearRows = await waitUntil {
+            viewController.contentUnavailableConfiguration == nil
+                && viewController.collectionViewForTesting.isHidden == false
+                && viewController.collectionViewForTesting.numberOfSections == 0
+        }
+
+        #expect(didClearRows)
+    }
+
+    @Test
+    func elementViewControllerClearsDisplayedRowsWhenSelectedStylesBecomeUnavailable() async throws {
+        let dom = makeDOMSession(capabilities: .pageDefault)
+        let body = try #require(firstElement(named: "body", in: dom))
+        dom.selectNode(body.id)
+
+        let css = dom.elementStyles
+        try applyBodyStyles(to: css, in: dom)
+
+        let viewController = makeElementViewController(dom: dom)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didRenderBodyRows = await waitUntil {
+            stylePropertyViews(in: viewController)
+                .map(\.declarationTextForTesting)
+                .contains("margin: 0;")
+        }
+        #expect(didRenderBodyRows)
+
+        let identity = try dom.selectedCSSNodeStyleIdentity().get()
+        css.markSelectedNodeStylesUnavailable(identity: identity, reason: .staleNode(body.id))
+
+        let didClearRows = await waitUntil {
+            viewController.contentUnavailableConfiguration == nil
+                && viewController.collectionViewForTesting.isHidden == false
+                && viewController.collectionViewForTesting.numberOfSections == 0
+        }
+
+        #expect(didClearRows)
+    }
+
+    @Test
     func elementViewControllerCollapsesUnusedInheritedCSSVariablesAndAnimatesReveal() async throws {
         let dom = makeDOMSession(capabilities: .pageDefault)
         let body = try #require(firstElement(named: "body", in: dom))
         dom.selectNode(body.id)
 
-        let css = CSSSession()
+        let css = dom.elementStyles
         try applyInheritedVariableStyles(to: css, in: dom)
 
-        let viewController = DOMElementViewController(dom: dom, css: css)
+        let viewController = makeElementViewController(dom: dom)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -222,7 +399,7 @@ struct DOMContainerTests {
         let body = try #require(firstElement(named: "body", in: dom))
         dom.selectNode(body.id)
 
-        let css = CSSSession()
+        let css = dom.elementStyles
         try applyInheritedVariableStyles(
             to: css,
             in: dom,
@@ -242,7 +419,7 @@ struct DOMContainerTests {
             ]
         )
 
-        let viewController = DOMElementViewController(dom: dom, css: css)
+        let viewController = makeElementViewController(dom: dom)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -263,7 +440,7 @@ struct DOMContainerTests {
         let body = try #require(firstElement(named: "body", in: dom))
         dom.selectNode(body.id)
 
-        let css = CSSSession()
+        let css = dom.elementStyles
         try applyInheritedVariableStyles(
             to: css,
             in: dom,
@@ -277,7 +454,7 @@ struct DOMContainerTests {
             ]
         )
 
-        let viewController = DOMElementViewController(dom: dom, css: css)
+        let viewController = makeElementViewController(dom: dom)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -297,7 +474,7 @@ struct DOMContainerTests {
         let body = try #require(firstElement(named: "body", in: dom))
         dom.selectNode(body.id)
 
-        let css = CSSSession()
+        let css = dom.elementStyles
         try applyInheritedVariableStyles(
             to: css,
             in: dom,
@@ -305,7 +482,7 @@ struct DOMContainerTests {
             foregroundValue: "vAr(--palette-primary)"
         )
 
-        let viewController = DOMElementViewController(dom: dom, css: css)
+        let viewController = makeElementViewController(dom: dom)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -329,7 +506,7 @@ struct DOMContainerTests {
         let body = try #require(firstElement(named: "body", in: dom))
         dom.selectNode(body.id)
 
-        let css = CSSSession()
+        let css = dom.elementStyles
         try applyInheritedVariableStyles(
             to: css,
             in: dom,
@@ -343,7 +520,7 @@ struct DOMContainerTests {
             ]
         )
 
-        let viewController = DOMElementViewController(dom: dom, css: css)
+        let viewController = makeElementViewController(dom: dom)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -363,7 +540,7 @@ struct DOMContainerTests {
         let body = try #require(firstElement(named: "body", in: dom))
         dom.selectNode(body.id)
 
-        let css = CSSSession()
+        let css = dom.elementStyles
         try applyInheritedVariableStyles(
             to: css,
             in: dom,
@@ -377,7 +554,7 @@ struct DOMContainerTests {
             ]
         )
 
-        let viewController = DOMElementViewController(dom: dom, css: css)
+        let viewController = makeElementViewController(dom: dom)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -397,7 +574,7 @@ struct DOMContainerTests {
         let body = try #require(firstElement(named: "body", in: dom))
         dom.selectNode(body.id)
 
-        let css = CSSSession()
+        let css = dom.elementStyles
         try applyInheritedVariableStyles(
             to: css,
             in: dom,
@@ -417,7 +594,7 @@ struct DOMContainerTests {
             ]
         )
 
-        let viewController = DOMElementViewController(dom: dom, css: css)
+        let viewController = makeElementViewController(dom: dom)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -438,10 +615,10 @@ struct DOMContainerTests {
         let body = try #require(firstElement(named: "body", in: dom))
         dom.selectNode(body.id)
 
-        let css = CSSSession()
+        let css = dom.elementStyles
         try applyInheritedVariableStyles(to: css, in: dom)
 
-        let viewController = DOMElementViewController(dom: dom, css: css)
+        let viewController = makeElementViewController(dom: dom)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -582,11 +759,12 @@ struct DOMContainerTests {
 
     @Test
     func compactContainerInstallsSessionNavigationActions() throws {
-        let session = InspectorSession(dom: makeDOMSession())
-        let treeViewController = DOMTreeViewController(session: session)
+        let session = AttachedInspection(dom: makeDOMSession())
+        let inspector = InspectorSession(attachment: session)
+        let treeViewController = DOMTreeViewController(inspection: session)
         let navigationController = DOMCompactNavigationController(
             rootViewController: treeViewController,
-            session: session
+            inspector: inspector
         )
 
         let pickItem = try #require(treeViewController.navigationItem.trailingItemGroups.first?.barButtonItems.first)
@@ -600,7 +778,7 @@ struct DOMContainerTests {
     func splitContainerInstallsTreeAndElementColumns() throws {
         let dom = makeDOMSession()
         let treeViewController = DOMTreeViewController(dom: dom)
-        let elementViewController = DOMElementViewController(dom: dom)
+        let elementViewController = makeElementViewController(dom: dom)
         let splitViewController = DOMSplitViewController(
             treeViewController: treeViewController,
             elementViewController: elementViewController
@@ -633,8 +811,8 @@ struct DOMContainerTests {
 
     @Test
     func splitContainerInstallsSessionNavigationActions() throws {
-        let session = InspectorSession(dom: makeDOMSession())
-        let splitViewController = DOMSplitViewController(session: session)
+        let session = AttachedInspection(dom: makeDOMSession())
+        let splitViewController = DOMSplitViewController(inspection: session)
 
         splitViewController.loadViewIfNeeded()
 
@@ -646,8 +824,9 @@ struct DOMContainerTests {
     @Test
     func overflowMenuUsesPageReloadAndDeleteOnlyWhenSessionIsDetached() throws {
         let dom = makeDOMSession()
-        let session = InspectorSession(dom: dom)
-        let navigationItems = DOMNavigationItems(session: session)
+        let attachment = AttachedInspection(dom: dom)
+        let session = InspectorSession(attachment: attachment)
+        let navigationItems = DOMNavigationItems(inspector: session)
 
         let emptyMenu = navigationItems.overflowMenuForTesting()
         #expect(inlineSectionCount(in: emptyMenu) == 3)
@@ -704,11 +883,16 @@ struct DOMContainerTests {
         return session
     }
 
+    private func makeElementViewController(dom: DOMSession) -> DOMElementViewController {
+        DOMElementViewController(inspection: AttachedInspection(dom: dom))
+    }
+
     @discardableResult
     private func applyBodyStyles(
         to css: CSSSession,
         in dom: DOMSession,
         token: CSSStyleRefreshToken? = nil,
+        selector: String = "body",
         marginValue: String = "0",
         marginText: String = "margin: 0;"
     ) throws -> BodyStyleIDs {
@@ -724,8 +908,8 @@ struct DOMContainerTests {
                         rule: CSSRulePayload(
                             id: CSSRuleIdentifier(styleSheetID: styleSheetID, ordinal: 0),
                             selectorList: CSSSelectorList(
-                                selectors: [CSSSelector(text: "body")],
-                                text: "body"
+                                selectors: [CSSSelector(text: selector)],
+                                text: selector
                             ),
                             sourceURL: "styles.css",
                             sourceLine: 1,

@@ -1,7 +1,7 @@
 #if canImport(UIKit)
+import WebInspectorCore
 import ObservationBridge
 import UIKit
-import WebInspectorCore
 
 @MainActor
 final class NetworkOverviewCell: UICollectionViewListCell {
