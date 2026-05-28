@@ -466,9 +466,10 @@ package final class CSSSession {
         selectedIdentity = identity
         selectedUnavailableReason = .noSelection
         guard let nodeStyles = nodeStyles(for: identity) else {
+            selectedNodeStyles = nil
             return
         }
-        selectLoadedOrRetainedNodeStyles(nodeStyles)
+        selectCurrentNodeStyles(nodeStyles)
     }
 
     package func markSelectedNodeUnavailable(_ reason: CSSNodeStylesUnavailableReason) {
@@ -510,7 +511,7 @@ package final class CSSSession {
         stylesByNodeID[identity.nodeID] = nodeStyles
         nodeStyles.state = .loading
         selectedIdentity = identity
-        selectLoadedOrRetainedNodeStyles(nodeStyles)
+        selectCurrentNodeStyles(nodeStyles)
         activeRefreshSequenceByNodeID[identity.nodeID] = nextRefreshSequence
         return CSSStyleRefreshToken(identity: identity, sequence: nextRefreshSequence)
     }
@@ -683,12 +684,8 @@ package final class CSSSession {
         return .setStyleText(targetID: nodeStyles.identity.targetID, styleID: propertyID.styleID, text: text)
     }
 
-    private func selectLoadedOrRetainedNodeStyles(_ nodeStyles: CSSNodeStyles) {
+    private func selectCurrentNodeStyles(_ nodeStyles: CSSNodeStyles) {
         switch nodeStyles.state {
-        case .loading where nodeStyles.sections.isEmpty && selectedNodeStyles !== nodeStyles:
-            if selectedNodeStyles == nil {
-                selectedNodeStyles = nodeStyles
-            }
         case .unavailable, .failed:
             selectedNodeStyles = nil
         case .loading, .loaded, .needsRefresh:

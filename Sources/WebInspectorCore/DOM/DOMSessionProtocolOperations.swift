@@ -130,19 +130,23 @@ private struct TargetDestroyedEventParams: Decodable {
 
 extension DOMSession {
     package var canReloadDocument: Bool {
-        commandChannel != nil && currentPageTargetID != nil
+        hasActiveCommandChannel && currentPageTargetID != nil
     }
 
     package var canSelectElement: Bool {
-        commandChannel != nil && currentPageRootNode != nil
+        hasActiveCommandChannel && currentPageRootNode != nil
     }
 
     package var canCopySelectedNodeText: Bool {
-        commandChannel != nil && selectedNodeID != nil
+        hasActiveCommandChannel && selectedNodeID != nil
     }
 
     package var canDeleteSelectedNode: Bool {
-        commandChannel != nil && selectedNodeID != nil
+        hasActiveCommandChannel && selectedNodeID != nil
+    }
+
+    private var hasActiveCommandChannel: Bool {
+        commandChannel?.acceptsActiveCommands == true
     }
 
     package func bindProtocolChannel(

@@ -173,7 +173,7 @@ struct DOMContainerTests {
     }
 
     @Test
-    func elementViewControllerKeepsDisplayedRowsWhileNewSelectionStylesAreHydrating() async throws {
+    func elementViewControllerShowsBlankCollectionWhileNewSelectionStylesAreHydrating() async throws {
         let dom = makeDOMSession(capabilities: .pageDefault)
         let body = try #require(firstElement(named: "body", in: dom))
         dom.selectNode(body.id)
@@ -200,12 +200,16 @@ struct DOMContainerTests {
         let inputRefreshToken = try #require(css.beginRefresh(identity: inputIdentity))
         window.layoutIfNeeded()
 
-        #expect(css.selectedNodeStyles?.identity == bodyIdentity)
-        #expect(css.selectedState == .loaded)
+        #expect(bodyIdentity != inputIdentity)
+        #expect(css.selectedNodeStyles?.identity == inputIdentity)
+        #expect(css.selectedState == .loading)
         #expect(css.refreshState(forSelected: inputIdentity) == .loading)
-        #expect(viewController.contentUnavailableConfiguration == nil)
-        #expect(viewController.collectionViewForTesting.isHidden == false)
-        #expect(stylePropertyViews(in: viewController).map(\.declarationTextForTesting).contains("margin: 0;"))
+        let didRenderBlankCollection = await waitUntil {
+            viewController.contentUnavailableConfiguration == nil
+                && viewController.collectionViewForTesting.isHidden == false
+                && viewController.collectionViewForTesting.numberOfSections == 0
+        }
+        #expect(didRenderBlankCollection)
 
         try applyBodyStyles(
             to: css,

@@ -528,7 +528,7 @@ func selectedElementStyleRefreshLoadsCSSSession() async throws {
 
 @Test
 @MainActor
-func selectedNodeStylesRetainsLoadedRowsUntilNewElementStylesArrive() async throws {
+func selectedNodeStylesTracksNewSelectionWhileElementStylesLoad() async throws {
     let targetID = ProtocolTargetIdentifier("page")
     let css = CSSSession()
     let dom = DOMSession(elementStyles: css)
@@ -568,12 +568,15 @@ func selectedNodeStylesRetainsLoadedRowsUntilNewElementStylesArrive() async thro
 
     dom.selectNode(inputID)
     _ = try await waitUntil {
-        await session.attachment.dom.selectedNodeStyles === bodyStyles ? true : nil
+        await session.attachment.dom.selectedNodeStyles == nil ? true : nil
     }
 
     let inputIdentity = try #require(dom.selectedCSSNodeStyleIdentity().successValue)
     let inputToken = try #require(css.beginRefresh(identity: inputIdentity))
-    #expect(session.attachment.dom.selectedNodeStyles === bodyStyles)
+    let loadingInputStyles = try #require(session.attachment.dom.selectedNodeStyles)
+    #expect(loadingInputStyles.identity == inputIdentity)
+    #expect(loadingInputStyles.state == .loading)
+    #expect(loadingInputStyles.sections.isEmpty)
 
     let inputStyles = try applySingleRuleStyles(
         to: css,
@@ -4650,6 +4653,70 @@ func performIsRejectedUntilBootstrapAttaches() async throws {
     try await completeBootstrap(transport: transport, backend: backend)
     try await connectTask.value
     #expect(await session.hasActiveConnection)
+}
+
+@Test
+func domActionAvailabilityWaitsForActiveAttachment() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    await transport.receiveRootMessage(
+        cssCapablePageTargetCreatedMessage(targetID: "page-main", frameID: "main-frame", isProvisional: false)
+    )
+
+    let connectTask = Task {
+        try await session.connect(transport: transport)
+    }
+
+    var sentCount = 0
+    for method in ["Inspector.enable", "Inspector.initialized", "Runtime.enable"] {
+        let sent = try await waitForTargetMessage(backend, method: method, after: sentCount)
+        sentCount = await backend.sentTargetMessages().count
+        await receiveTargetReply(
+            transport,
+            targetID: sent.targetIdentifier,
+            messageID: try messageID(sent.message),
+            result: "{}"
+        )
+    }
+
+    let documentMessage = try await waitForTargetMessage(backend, method: "DOM.getDocument", after: sentCount)
+    sentCount = await backend.sentTargetMessages().count
+    await receiveTargetReply(
+        transport,
+        targetID: documentMessage.targetIdentifier,
+        messageID: try messageID(documentMessage.message),
+        result: mainDocumentResult
+    )
+
+    _ = try await waitUntil {
+        await session.attachment.dom.snapshot().currentPageDocumentID != nil ? true : nil
+    }
+    #expect(await session.hasActiveConnection == false)
+    #expect(await session.attachment.dom.canReloadDocument == false)
+    #expect(await session.attachment.dom.canSelectElement == false)
+
+    let networkMessage = try await waitForTargetMessage(backend, method: "Network.enable", after: sentCount)
+    sentCount = await backend.sentTargetMessages().count
+    await receiveTargetReply(
+        transport,
+        targetID: networkMessage.targetIdentifier,
+        messageID: try messageID(networkMessage.message),
+        result: "{}"
+    )
+
+    let consoleMessage = try await waitForTargetMessage(backend, method: "Console.enable", after: sentCount)
+    await receiveTargetReply(
+        transport,
+        targetID: consoleMessage.targetIdentifier,
+        messageID: try messageID(consoleMessage.message),
+        result: "{}"
+    )
+
+    try await connectTask.value
+    #expect(await session.hasActiveConnection)
+    #expect(await session.attachment.dom.canReloadDocument)
+    #expect(await session.attachment.dom.canSelectElement)
 }
 
 @MainActor

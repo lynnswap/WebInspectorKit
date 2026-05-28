@@ -29,6 +29,10 @@ package final class ProtocolCommandChannel {
         appliedSequence()
     }
 
+    package var acceptsActiveCommands: Bool {
+        isAttached()
+    }
+
     package func snapshot() async -> TransportSnapshot {
         await transport.snapshot()
     }
