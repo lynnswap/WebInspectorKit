@@ -2000,6 +2000,7 @@ func ensureDOMDocumentLoadedReloadsInvalidatedPageDocument() async throws {
 
     #expect(await ensureTask.value)
     let finalSnapshot = await session.attachment.dom.snapshot()
+    #expect(finalSnapshot.currentPageDocumentID?.localDocumentLifetimeID == .init(2))
     #expect(finalSnapshot.currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(40))] != nil)
 }
 

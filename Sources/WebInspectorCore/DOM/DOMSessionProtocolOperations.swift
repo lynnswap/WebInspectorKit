@@ -198,9 +198,7 @@ extension DOMSession {
         _ intent: DOMCommandIntent,
         requiresActiveConnection: Bool
     ) async throws -> ProtocolCommandResult {
-        let commandChannel = try requireCommandChannel(requiresActiveConnection: requiresActiveConnection)
-        let command = try protocolCommands.command(for: intent)
-        let result = try await commandChannel.send(command)
+        let result = try await send(intent, requiresActiveConnection: requiresActiveConnection)
 
         switch intent {
         case .getDocument:
@@ -234,6 +232,16 @@ extension DOMSession {
             break
         }
         return result
+    }
+
+    @discardableResult
+    private func send(
+        _ intent: DOMCommandIntent,
+        requiresActiveConnection: Bool = true
+    ) async throws -> ProtocolCommandResult {
+        let commandChannel = try requireCommandChannel(requiresActiveConnection: requiresActiveConnection)
+        let command = try protocolCommands.command(for: intent)
+        return try await commandChannel.send(command)
     }
 
     @discardableResult
@@ -898,7 +906,7 @@ extension DOMSession {
                 }
             }
             do {
-                let result = try await perform(intent)
+                let result = try await send(intent)
                 try Task.checkCancellation()
                 guard documentRequests.handlesByTargetID[targetID] === handle else {
                     return
