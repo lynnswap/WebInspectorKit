@@ -457,7 +457,7 @@ latest (`appcache` removed, `accessibility` added).
 
 ### Protocol Dispatching
 
-Add `ConsoleProtocol+Dispatching.swift`:
+Add `ConsoleProtocolDispatching.swift`:
 
 - build `Console.enable`, `Console.disable`, `Console.clearMessages`,
   `Console.setConsoleClearAPIEnabled`, `Console.getLoggingChannels`, and
@@ -467,7 +467,7 @@ Add `ConsoleProtocol+Dispatching.swift`:
 - decode `Console.messagesCleared`
 - preserve target id from `ProtocolEventEnvelope.targetID`
 
-Add `RuntimeProtocol+Dispatching.swift`:
+Add `RuntimeProtocolDispatching.swift`:
 
 - build `Runtime.enable`, `Runtime.evaluate`, `Runtime.getPreview`,
   `Runtime.getProperties`, `Runtime.getDisplayableProperties`,
@@ -491,7 +491,7 @@ Add Console wiring to attached inspection construction and event handling:
 - when target lifecycle events create/commit a target with Runtime and/or
   Console capability, enable each supported agent independently after the target
   is no longer provisional.
-- handle `.console` through `ConsoleProtocol+Dispatching.swift`.
+- handle `.console` through `ConsoleProtocolDispatching.swift`.
 - when handling `Console.messageAdded`, register parameter `RemoteObject`
   handles with `RuntimeState` using object group `"console"`.
 - when handling `Console.messagesCleared`, also release Runtime object group

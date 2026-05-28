@@ -30,7 +30,7 @@ Mutable model classes are `@MainActor @Observable` so the native UI can observe 
 - target message multiplexing
 - search/tokenization/markup generation
 
-The model should apply domain protocol payloads into semantic state and produce Sendable snapshots/command intents. Protocol command/result/event implementation lives next to each domain as `*Protocol+Dispatching.swift`; do not add cross-domain adapter buckets.
+The model should apply domain protocol payloads into semantic state and produce Sendable snapshots/command intents. Protocol command/result/event implementation lives next to each domain as `*ProtocolDispatching.swift`; do not add cross-domain adapter buckets.
 
 ## Tests
 

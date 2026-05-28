@@ -128,8 +128,8 @@ model boundary:
 - response body decoding
 
 Protocol implementation is domain-local. Command/result/event decoding belongs
-in files named like `DOMProtocol+Dispatching.swift`,
-`TargetProtocol+Dispatching.swift`, or `NetworkProtocol+Dispatching.swift`.
+in files named like `DOMProtocolDispatching.swift`,
+`TargetProtocolDispatching.swift`, or `NetworkProtocolDispatching.swift`.
 `InspectorSession` owns connection lifecycle and event pumping; it does not
 hold per-domain event parsers.
 
