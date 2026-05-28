@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import WebInspectorTransport
 
 package enum NetworkBodyRole: CaseIterable, Hashable, Sendable {
     case request

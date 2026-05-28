@@ -1,4 +1,5 @@
 import Testing
+import WebInspectorTransport
 @testable import WebInspectorCore
 
 @Test
@@ -68,6 +69,67 @@ func selectedCSSNodeStyleIdentityRequiresElementCurrentNodeAndCSSTarget() async 
 
     let staleNodeID = DOMNodeIdentifier(documentID: plainDocumentID, nodeID: .init(999))
     #expect(await session.cssNodeStyleIdentity(for: staleNodeID).failureValue == .staleNode(staleNodeID))
+}
+
+@Test
+@MainActor
+func selectedNodeStylesResolvesSelectedDOMNodeThroughCSSSession() throws {
+    let pageTargetID = ProtocolTargetIdentifier("page")
+    let css = CSSSession()
+    let session = DOMSession(elementStyles: css)
+    session.applyTargetCreated(
+        .init(id: pageTargetID, kind: .page, capabilities: .pageDefault),
+        makeCurrentMainPage: true
+    )
+    let rootID = session.replaceDocumentRoot(
+        DOMNodePayload(
+            nodeID: .init(1),
+            nodeType: .document,
+            nodeName: "#document",
+            regularChildren: .loaded([
+                DOMNodePayload(nodeID: .init(2), nodeType: .element, nodeName: "BODY", localName: "body"),
+            ])
+        ),
+        targetID: pageTargetID
+    )
+    let snapshot = session.snapshot()
+    let bodyID = try #require(snapshot.currentNodeIDByKey[.init(targetID: pageTargetID, nodeID: .init(2))])
+
+    session.selectNode(bodyID)
+    let identity = try #require(session.selectedCSSNodeStyleIdentity().successValue)
+
+    #expect(session.selectedNodeStyles == nil)
+
+    let token = try #require(css.beginRefresh(identity: identity))
+    let loadingStyles = try #require(session.selectedNodeStyles)
+    #expect(loadingStyles.identity == identity)
+    #expect(loadingStyles.state == .loading)
+    #expect(loadingStyles.sections.isEmpty)
+
+    css.applyRefresh(
+        token: token,
+        matched: CSSMatchedStylesPayload(matchedRules: [
+            CSSRuleMatchPayload(
+                rule: rule(
+                    selector: "body",
+                    properties: [
+                        CSSPropertyPayload(name: "margin", value: "0", text: "margin: 0;"),
+                    ]
+                ),
+                matchingSelectors: [0]
+            ),
+        ]),
+        inline: .init(),
+        computed: []
+    )
+
+    let loadedStyles = try #require(session.selectedNodeStyles)
+    #expect(loadedStyles.identity == identity)
+    #expect(loadedStyles.state == .loaded)
+    #expect(loadedStyles.sections.map(\.title) == ["body"])
+
+    session.selectNode(rootID)
+    #expect(session.selectedNodeStyles == nil)
 }
 
 @Test
@@ -1048,7 +1110,7 @@ func cssSessionAppliesSetStyleTextResultOnlyToEditedTarget() throws {
 
 @Test
 @MainActor
-func cssSessionPreservesSelectedStylesObjectWhenTargetBecomesStale() throws {
+func cssSessionClearsSelectedStylesWhenTargetBecomesStale() throws {
     let css = CSSSession()
     let identity = cssIdentity()
     let token = try #require(css.beginRefresh(identity: identity))
@@ -1072,15 +1134,15 @@ func cssSessionPreservesSelectedStylesObjectWhenTargetBecomesStale() throws {
 
     css.removeStyles(targetID: identity.targetID)
 
-    #expect(css.selectedNodeStyles === selectedStyles)
+    #expect(css.selectedNodeStyles == nil)
     #expect(css.selectedState == .unavailable(.staleNode(identity.nodeID)))
-    #expect(selectedStyles.state == .unavailable(.staleNode(identity.nodeID)))
-    #expect(css.refreshState(forSelected: identity) == .unavailable(.staleNode(identity.nodeID)))
+    #expect(selectedStyles.state == .loaded)
+    #expect(css.refreshState(forSelected: identity) == nil)
 }
 
 @Test
 @MainActor
-func cssSessionMarksSelectedStylesUnavailableWithoutReplacingObject() throws {
+func cssSessionClearsSelectedStylesWhenCurrentStylesBecomeUnavailable() throws {
     let css = CSSSession()
     let identity = cssIdentity()
     let token = try #require(css.beginRefresh(identity: identity))
@@ -1104,7 +1166,7 @@ func cssSessionMarksSelectedStylesUnavailableWithoutReplacingObject() throws {
 
     css.markSelectedNodeStylesUnavailable(identity: identity, reason: .staleNode(identity.nodeID))
 
-    #expect(css.selectedNodeStyles === selectedStyles)
+    #expect(css.selectedNodeStyles == nil)
     #expect(css.selectedState == .unavailable(.staleNode(identity.nodeID)))
     #expect(selectedStyles.state == .unavailable(.staleNode(identity.nodeID)))
     #expect(css.refreshState(forSelected: identity) == .unavailable(.staleNode(identity.nodeID)))
@@ -1112,17 +1174,16 @@ func cssSessionMarksSelectedStylesUnavailableWithoutReplacingObject() throws {
 
 @Test
 @MainActor
-func cssSessionDoesNotDowngradeStaleSelectionToNoSelection() throws {
+func cssSessionDoesNotDisplayUnavailableStylesForUnselectedIdentity() throws {
     let css = CSSSession()
     let identity = cssIdentity()
     css.markSelectedNodeStylesUnavailable(identity: identity, reason: .staleNode(identity.nodeID))
-    let selectedStyles = try #require(css.selectedNodeStyles)
 
     css.markSelectedNodeUnavailable(.noSelection)
 
-    #expect(css.selectedNodeStyles === selectedStyles)
-    #expect(css.selectedState == .unavailable(.staleNode(identity.nodeID)))
-    #expect(selectedStyles.state == .unavailable(.staleNode(identity.nodeID)))
+    #expect(css.selectedNodeStyles == nil)
+    #expect(css.selectedState == .unavailable(.noSelection))
+    #expect(css.refreshState(forSelected: identity) == .unavailable(.staleNode(identity.nodeID)))
 }
 
 @Test

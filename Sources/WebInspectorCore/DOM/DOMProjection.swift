@@ -1,3 +1,4 @@
+import WebInspectorTransport
 package struct DOMTreeRow: Equatable, Sendable {
     package var nodeID: DOMNodeIdentifier
     package var depth: Int

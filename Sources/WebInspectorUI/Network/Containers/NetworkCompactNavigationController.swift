@@ -1,7 +1,7 @@
 #if canImport(UIKit)
+import WebInspectorCore
 import ObservationBridge
 import UIKit
-import WebInspectorCore
 
 @MainActor
 package final class NetworkCompactNavigationController: UINavigationController, UINavigationControllerDelegate {

@@ -1,8 +1,8 @@
 # WebInspectorCore
 
-`WebInspectorCore` is the package-internal semantic model target for the WebInspector inspector stack.
+`WebInspectorCore` is the inspector session and semantic model target for the WebInspector stack.
 
-The target models WebKit protocol concepts before they reach UIKit presentation code. Runtime and transport targets decode protocol traffic and apply semantic events here.
+The target models WebKit protocol concepts before they reach UIKit presentation code. `WebInspectorTransport` owns raw JSON transport and target multiplexing; Core owns attached inspection orchestration, domain protocol dispatching, and semantic event application.
 
 ## Goals
 
@@ -27,11 +27,10 @@ The target models WebKit protocol concepts before they reach UIKit presentation 
 Mutable model classes are `@MainActor @Observable` so the native UI can observe the same semantic source of truth directly. Expensive work must stay outside this boundary:
 
 - raw transport I/O
-- JSON parsing
-- protocol payload decoding
+- target message multiplexing
 - search/tokenization/markup generation
 
-The model should only apply already-decoded semantic events and produce Sendable snapshots/command intents.
+The model should apply domain protocol payloads into semantic state and produce Sendable snapshots/command intents. Protocol command/result/event implementation lives next to each domain as `*ProtocolDispatching.swift`; do not add cross-domain adapter buckets.
 
 ## Tests
 

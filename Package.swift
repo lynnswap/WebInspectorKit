@@ -33,10 +33,6 @@ let package = Package(
             targets: ["WebInspectorTransport"]
         ),
         .library(
-            name: "WebInspectorRuntime",
-            targets: ["WebInspectorRuntime"]
-        ),
-        .library(
             name: "WebInspectorUI",
             targets: ["WebInspectorUI"]
         ),
@@ -66,7 +62,10 @@ let package = Package(
     targets: [
         .target(
             name: "WebInspectorCore",
-            dependencies: [],
+            dependencies: [
+                "WebInspectorTransport",
+                .product(name: "ObservationBridge", package: "ObservationBridge")
+            ],
             exclude: ["README.md", "Docs"],
             swiftSettings: strictSwiftSettings
         ),
@@ -90,18 +89,8 @@ let package = Package(
         .target(
             name: "WebInspectorTransport",
             dependencies: [
-                "WebInspectorCore",
                 "WebInspectorNativeBridge",
                 "WebInspectorNativeSymbols"
-            ],
-            swiftSettings: strictSwiftSettings
-        ),
-        .target(
-            name: "WebInspectorRuntime",
-            dependencies: [
-                "WebInspectorCore",
-                "WebInspectorTransport",
-                .product(name: "ObservationBridge", package: "ObservationBridge")
             ],
             swiftSettings: strictSwiftSettings
         ),
@@ -109,7 +98,7 @@ let package = Package(
             name: "WebInspectorUI",
             dependencies: [
                 "WebInspectorCore",
-                "WebInspectorRuntime",
+                "WebInspectorTransport",
                 .product(name: "ObservationBridge", package: "ObservationBridge"),
                 .product(name: "UIHostingMenu", package: "UIHostingMenu", condition: .when(platforms: [.iOS])),
                 .product(name: "SyntaxEditorUI", package: "SyntaxEditorUI", condition: .when(platforms: [.iOS]))
@@ -129,7 +118,8 @@ let package = Package(
         .testTarget(
             name: "WebInspectorCoreTests",
             dependencies: [
-                "WebInspectorCore"
+                "WebInspectorCore",
+                "WebInspectorTransport"
             ],
             path: "Tests/WebInspectorCoreTests",
             swiftSettings: strictSwiftSettings
@@ -166,20 +156,10 @@ let package = Package(
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(
-            name: "WebInspectorRuntimeTests",
-            dependencies: [
-                "WebInspectorCore",
-                "WebInspectorTransport",
-                "WebInspectorRuntime"
-            ],
-            path: "Tests/WebInspectorRuntimeTests",
-            swiftSettings: strictSwiftSettings
-        ),
-        .testTarget(
             name: "WebInspectorUITests",
             dependencies: [
                 "WebInspectorCore",
-                "WebInspectorRuntime",
+                "WebInspectorTransport",
                 "WebInspectorUI"
             ],
             path: "Tests/WebInspectorUITests",

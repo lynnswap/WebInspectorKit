@@ -1,5 +1,5 @@
-import Observation
 import WebInspectorCore
+import Observation
 
 @MainActor
 @Observable

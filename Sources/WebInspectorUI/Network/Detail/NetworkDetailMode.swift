@@ -1,6 +1,6 @@
 #if canImport(UIKit)
-import UIKit
 import WebInspectorCore
+import UIKit
 
 @MainActor
 package enum NetworkDetailMode: CaseIterable, Hashable {

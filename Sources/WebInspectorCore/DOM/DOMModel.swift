@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import WebInspectorTransport
 
 @MainActor
 @Observable
@@ -357,21 +358,44 @@ package final class DOMSelection {
 package final class DOMSession {
     package private(set) var currentPageTargetID: ProtocolTarget.ID?
     package private(set) var mainFrameID: DOMFrame.ID?
+    package private(set) var elementStyles: CSSSession
+    package var isSelectingElement: Bool
 
-    private var targetGraph: DOMTargetGraph
+    private let targetGraph: TargetGraph
     private var documentStore: DOMDocumentStore
     private var frameDocumentProjectionIndex: FrameDocumentProjectionIndex
     private var selection: DOMSelection
     private var nextSelectionRequestRawID: UInt64
+    @ObservationIgnored var commandChannel: ProtocolCommandChannel?
+    @ObservationIgnored let protocolCommands: DOMProtocolCommands
+    @ObservationIgnored var recordError: ((InspectorSessionError?) -> Void)?
+    @ObservationIgnored let highlightController: DOMSessionHighlightController
+    @ObservationIgnored let elementPicker: DOMSessionElementPickerController
+    @ObservationIgnored let documentRequests: DOMSessionDocumentRequestController
+    @ObservationIgnored let styleHydration: DOMSessionElementStyleHydrationController
+    @ObservationIgnored let deleteUndoController: DOMSessionDeleteUndoController
 
-    package init() {
+    package init(
+        targetGraph: TargetGraph = TargetGraph(),
+        elementStyles: CSSSession = CSSSession()
+    ) {
         currentPageTargetID = nil
         mainFrameID = nil
-        targetGraph = DOMTargetGraph()
+        self.elementStyles = elementStyles
+        isSelectingElement = false
+        self.targetGraph = targetGraph
         documentStore = DOMDocumentStore()
         frameDocumentProjectionIndex = FrameDocumentProjectionIndex()
         selection = DOMSelection()
         nextSelectionRequestRawID = 0
+        commandChannel = nil
+        protocolCommands = DOMProtocolCommands()
+        recordError = nil
+        highlightController = DOMSessionHighlightController()
+        elementPicker = DOMSessionElementPickerController()
+        documentRequests = DOMSessionDocumentRequestController()
+        styleHydration = DOMSessionElementStyleHydrationController()
+        deleteUndoController = DOMSessionDeleteUndoController()
     }
 
     private func targetBelongsToCurrentPage(_ targetID: ProtocolTarget.ID) -> Bool {
@@ -412,7 +436,9 @@ package final class DOMSession {
         documentStore.reset()
         frameDocumentProjectionIndex.removeAll()
         selection = DOMSelection()
+        elementStyles.reset()
         nextSelectionRequestRawID = 0
+        isSelectingElement = false
     }
 
     package func applyTargetCreated(
@@ -838,6 +864,10 @@ package final class DOMSession {
         return cssNodeStyleIdentity(for: selectedNodeID)
     }
 
+    package var selectedNodeStyles: CSSNodeStyles? {
+        elementStyles.selectedNodeStyles
+    }
+
     package func cssNodeStyleIdentity(
         for nodeID: DOMNode.ID
     ) -> Result<CSSNodeStyleIdentity, CSSNodeStylesUnavailableReason> {
@@ -924,6 +954,7 @@ package final class DOMSession {
         selection.selectedNodeID = nodeID
         selection.pendingRequest = nil
         selection.failure = nil
+        syncSelectedElementStyles()
     }
 
     @discardableResult
@@ -1383,6 +1414,7 @@ package final class DOMSession {
         if selection.selectedNodeID?.documentID == documentID {
             selection.selectedNodeID = nil
             selection.failure = nil
+            syncSelectedElementStyles()
         }
     }
 
@@ -2269,10 +2301,12 @@ package final class DOMSession {
     private func reconcileSelection() {
         guard let selectedNodeID = selection.selectedNodeID,
               node(for: selectedNodeID) == nil else {
+            syncSelectedElementStyles()
             return
         }
         selection.selectedNodeID = nil
         selection.failure = nil
+        syncSelectedElementStyles()
     }
 
     private func completePendingSelection(
@@ -2285,6 +2319,7 @@ package final class DOMSession {
         selection.selectedNodeID = selectedNodeID
         selection.pendingRequest = nil
         selection.failure = nil
+        syncSelectedElementStyles()
     }
 
     private func failSelection(
@@ -2299,6 +2334,7 @@ package final class DOMSession {
         }
         selection.pendingRequest = nil
         selection.failure = failure
+        syncSelectedElementStyles()
         return .failure(failure)
     }
 
@@ -2314,6 +2350,7 @@ package final class DOMSession {
         }
         selection.pendingRequest = nil
         selection.failure = failure
+        syncSelectedElementStyles()
         return .failure(failure)
     }
 
@@ -2329,6 +2366,16 @@ package final class DOMSession {
         }
         selection.pendingRequest = nil
         selection.failure = failure
+        syncSelectedElementStyles()
         return .failed(failure)
+    }
+
+    private func syncSelectedElementStyles() {
+        switch selectedCSSNodeStyleIdentity() {
+        case let .success(identity):
+            elementStyles.selectNodeStyles(identity: identity)
+        case let .failure(reason):
+            elementStyles.markSelectedNodeUnavailable(reason)
+        }
     }
 }

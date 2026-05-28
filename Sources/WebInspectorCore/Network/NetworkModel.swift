@@ -1,4 +1,5 @@
 import Observation
+import WebInspectorTransport
 
 package struct NetworkRedirectHop: Equatable, Sendable {
     package var id: NetworkRedirectHopIdentifier
@@ -274,10 +275,16 @@ package struct NetworkSessionSnapshot: Equatable, Sendable {
 package final class NetworkSession {
     private var orderedRequestIDs: [NetworkRequest.ID]
     private var requestsByID: [NetworkRequest.ID: NetworkRequest]
+    @ObservationIgnored private var commandChannel: ProtocolCommandChannel?
+    @ObservationIgnored private let protocolCommands: NetworkProtocolCommands
+    @ObservationIgnored private var recordError: ((InspectorSessionError?) -> Void)?
 
     package init() {
         orderedRequestIDs = []
         requestsByID = [:]
+        commandChannel = nil
+        protocolCommands = NetworkProtocolCommands()
+        recordError = nil
     }
 
     package var requests: [NetworkRequest] {
@@ -291,6 +298,47 @@ package final class NetworkSession {
     package func reset() {
         orderedRequestIDs.removeAll()
         requestsByID.removeAll()
+    }
+
+    package func bindProtocolChannel(
+        _ commandChannel: ProtocolCommandChannel,
+        recordError: @escaping (InspectorSessionError?) -> Void
+    ) {
+        self.commandChannel = commandChannel
+        self.recordError = recordError
+    }
+
+    package func unbindProtocolChannel() {
+        commandChannel = nil
+        recordError = nil
+    }
+
+    @discardableResult
+    package func perform(_ intent: NetworkCommandIntent) async throws -> ProtocolCommandResult {
+        let commandChannel = try requireCommandChannel()
+        return try await commandChannel.send(protocolCommands.command(for: intent))
+    }
+
+    package func fetchResponseBody(for id: NetworkRequest.ID) async {
+        guard let request = request(for: id) else {
+            return
+        }
+        guard request.canFetchResponseBody else {
+            return
+        }
+        guard let intent = responseBodyCommandIntent(for: id) else {
+            request.markResponseBodyFailed(.unavailable)
+            return
+        }
+
+        request.markResponseBodyFetching()
+        do {
+            let result = try await perform(intent)
+            try protocolCommands.applyResponseBodyResult(result, to: request)
+        } catch {
+            request.markResponseBodyFailed(.unknown(String(describing: error)))
+            recordError?(InspectorSessionError(String(describing: error)))
+        }
     }
 
     @discardableResult
@@ -673,5 +721,13 @@ package final class NetworkSession {
         request.webSocketFrames.append(.init(payload: response, direction: direction, timestamp: timestamp))
         request.decodedDataLength += max(0, response.payloadLength)
         request.lastDataReceivedTimestamp = timestamp
+    }
+
+    private func requireCommandChannel() throws -> ProtocolCommandChannel {
+        guard let commandChannel else {
+            throw InspectorSessionError("Inspector session is not attached.")
+        }
+        try commandChannel.requireAttached()
+        return commandChannel
     }
 }

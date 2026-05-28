@@ -1,52 +1,5 @@
 import Observation
-
-package struct RuntimeExecutionContextRecord: Equatable, Sendable {
-    package var id: ExecutionContextID
-    package var targetID: ProtocolTargetIdentifier
-    package var runtimeAgentTargetID: ProtocolTargetIdentifier
-    package var type: RuntimeExecutionContextType
-    package var name: String
-    package var frameID: DOMFrameIdentifier?
-
-    package init(
-        id: ExecutionContextID,
-        targetID: ProtocolTargetIdentifier,
-        runtimeAgentTargetID: ProtocolTargetIdentifier? = nil,
-        type: RuntimeExecutionContextType = .normal,
-        name: String = "",
-        frameID: DOMFrameIdentifier? = nil
-    ) {
-        self.id = id
-        self.targetID = targetID
-        self.runtimeAgentTargetID = runtimeAgentTargetID ?? targetID
-        self.type = type
-        self.name = name
-        self.frameID = frameID
-    }
-
-    package var key: RuntimeExecutionContextKey {
-        RuntimeExecutionContextKey(runtimeAgentTargetID: runtimeAgentTargetID, contextID: id)
-    }
-
-    package static func stableOrder(_ lhs: Self, _ rhs: Self) -> Bool {
-        if lhs.runtimeAgentTargetID != rhs.runtimeAgentTargetID {
-            return lhs.runtimeAgentTargetID.rawValue < rhs.runtimeAgentTargetID.rawValue
-        }
-        if lhs.id != rhs.id {
-            return lhs.id.rawValue < rhs.id.rawValue
-        }
-        if lhs.targetID != rhs.targetID {
-            return lhs.targetID.rawValue < rhs.targetID.rawValue
-        }
-        if lhs.frameID != rhs.frameID {
-            return (lhs.frameID?.rawValue ?? "") < (rhs.frameID?.rawValue ?? "")
-        }
-        if lhs.type != rhs.type {
-            return lhs.type.rawValue < rhs.type.rawValue
-        }
-        return lhs.name < rhs.name
-    }
-}
+import WebInspectorTransport
 
 @MainActor
 @Observable
@@ -154,7 +107,7 @@ package final class RuntimeRemoteObject {
     }
 }
 
-package struct RuntimeSessionSnapshot: Equatable, Sendable {
+package struct RuntimeStateSnapshot: Equatable, Sendable {
     package var executionContextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContextRecord]
     package var selectedContextKey: RuntimeExecutionContextKey?
     package var normalContextKeyByTargetID: [ProtocolTargetIdentifier: RuntimeExecutionContextKey]
@@ -356,18 +309,24 @@ package final class RuntimeAgentState {
 
 @MainActor
 @Observable
-package final class RuntimeSession {
+package final class RuntimeState {
     package private(set) var selectedContextKey: RuntimeExecutionContextKey?
 
     private var targetStatesByID: [ProtocolTargetIdentifier: RuntimeTargetState]
     private var runtimeAgentStatesByID: [ProtocolTargetIdentifier: RuntimeAgentState]
     @ObservationIgnored private var selectedContextIsExplicit: Bool
+    @ObservationIgnored private var commandChannel: ProtocolCommandChannel?
+    @ObservationIgnored private let protocolCommands: RuntimeProtocolCommands
+    @ObservationIgnored private var recordError: ((InspectorSessionError?) -> Void)?
 
     package init() {
         selectedContextKey = nil
         targetStatesByID = [:]
         runtimeAgentStatesByID = [:]
         selectedContextIsExplicit = false
+        commandChannel = nil
+        protocolCommands = RuntimeProtocolCommands()
+        recordError = nil
     }
 
     package func reset() {
@@ -377,9 +336,68 @@ package final class RuntimeSession {
         selectedContextIsExplicit = false
     }
 
-    package func snapshot() -> RuntimeSessionSnapshot {
+    package func bindProtocolChannel(
+        _ commandChannel: ProtocolCommandChannel,
+        recordError: @escaping (InspectorSessionError?) -> Void
+    ) {
+        self.commandChannel = commandChannel
+        self.recordError = recordError
+    }
+
+    package func unbindProtocolChannel() {
+        commandChannel = nil
+        recordError = nil
+    }
+
+    @discardableResult
+    package func perform(_ intent: RuntimeCommandIntent) async throws -> ProtocolCommandResult {
+        try await perform(intent, requiresActiveConnection: true)
+    }
+
+    @discardableResult
+    private func perform(
+        _ intent: RuntimeCommandIntent,
+        requiresActiveConnection: Bool
+    ) async throws -> ProtocolCommandResult {
+        let commandChannel = try requireCommandChannel(requiresActiveConnection: requiresActiveConnection)
+        let command = try protocolCommands.command(for: intent)
+        let result: ProtocolCommandResult
+        do {
+            result = try await commandChannel.send(command)
+        } catch {
+            markCommandUnsupportedIfNeeded(command.method, targetID: intent.routingTargetID, error: error)
+            throw error
+        }
+
+        switch intent {
+        case let .evaluate(request):
+            let payload = try protocolCommands.evaluationResult(from: result)
+            applyEvaluationResult(
+                payload,
+                request: request,
+                runtimeAgentTargetID: result.targetID
+            )
+        case let .releaseObject(key):
+            releaseObject(key)
+        case let .releaseObjectGroup(runtimeAgentTargetID, objectGroup):
+            releaseObjectGroup(objectGroup, runtimeAgentTargetID: runtimeAgentTargetID)
+        default:
+            break
+        }
+        return result
+    }
+
+    package func enable(targetID: ProtocolTargetIdentifier) async throws {
+        _ = try await perform(.enable(targetID: targetID))
+    }
+
+    package func enableDuringBootstrap(targetID: ProtocolTargetIdentifier) async throws {
+        _ = try await perform(.enable(targetID: targetID), requiresActiveConnection: false)
+    }
+
+    package func snapshot() -> RuntimeStateSnapshot {
         let remoteObjectsByID = remoteObjectsByID
-        return RuntimeSessionSnapshot(
+        return RuntimeStateSnapshot(
             executionContextsByKey: executionContextRecordsByKey,
             selectedContextKey: selectedContextKey,
             normalContextKeyByTargetID: normalContextKeyByTargetID,
@@ -903,5 +921,26 @@ package final class RuntimeSession {
             return executionContextsByKey[contextKey]
         }
         return selectedContext(targetID: targetID) ?? defaultContext(targetID: targetID)
+    }
+
+    private func markCommandUnsupportedIfNeeded(
+        _ method: String,
+        targetID: ProtocolTargetIdentifier,
+        error: any Error
+    ) {
+        guard isUnsupportedProtocolCommandError(method, error: error) else {
+            return
+        }
+        markCommandUnsupported(method, targetID: targetID)
+    }
+
+    private func requireCommandChannel(requiresActiveConnection: Bool = true) throws -> ProtocolCommandChannel {
+        guard let commandChannel else {
+            throw InspectorSessionError("Inspector session is not attached.")
+        }
+        if requiresActiveConnection {
+            try commandChannel.requireAttached()
+        }
+        return commandChannel
     }
 }

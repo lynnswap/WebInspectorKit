@@ -1,8 +1,8 @@
 #if canImport(UIKit)
+import WebInspectorCore
 import Observation
 import SwiftUI
 import UIKit
-import WebInspectorCore
 
 typealias DOMTreeMenuCopyNodeTextAction = @MainActor (DOMNode.ID, DOMNodeCopyTextKind) async -> String?
 typealias DOMTreeMenuDeleteNodesAction = @MainActor ([DOMNode.ID], UndoManager?) async -> Bool

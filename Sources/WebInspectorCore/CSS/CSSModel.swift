@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import WebInspectorTransport
 
 private struct CSSPropertyInspectorBaseline: Equatable {
     var name: String
@@ -366,6 +367,12 @@ package final class CSSNodeStyles {
 @MainActor
 @Observable
 package final class CSSSession {
+    package struct RefreshResults {
+        package var matched: CSSMatchedStylesPayload
+        package var inline: CSSInlineStylesPayload
+        package var computed: [CSSComputedStylePropertyPayload]
+    }
+
     private struct StyleSheetKey: Equatable, Hashable {
         var targetID: ProtocolTargetIdentifier
         var styleSheetID: CSSStyleSheetIdentifier
@@ -386,35 +393,87 @@ package final class CSSSession {
         selectedNodeStyles?.state ?? .unavailable(selectedUnavailableReason)
     }
 
+    package func nodeStyles(for identity: CSSNodeStyleIdentity) -> CSSNodeStyles? {
+        guard let nodeStyles = stylesByNodeID[identity.nodeID],
+              nodeStyles.identity == identity else {
+            return nil
+        }
+        return nodeStyles
+    }
+
     private var selectedUnavailableReason: CSSNodeStylesUnavailableReason
+    @ObservationIgnored private var selectedIdentity: CSSNodeStyleIdentity?
     @ObservationIgnored private var stylesByNodeID: [DOMNodeIdentifier: CSSNodeStyles]
     @ObservationIgnored private var styleSheetHeadersByKey: [StyleSheetKey: CSSStyleSheetHeaderPayload]
     @ObservationIgnored private var activeRefreshSequenceByNodeID: [DOMNodeIdentifier: UInt64]
     @ObservationIgnored private var nextRefreshSequence: UInt64
+    @ObservationIgnored private var commandChannel: ProtocolCommandChannel?
+    @ObservationIgnored private let protocolCommands: CSSProtocolCommands
 
     package init() {
         selectedNodeStyles = nil
         selectedUnavailableReason = .noSelection
+        selectedIdentity = nil
         stylesByNodeID = [:]
         styleSheetHeadersByKey = [:]
         activeRefreshSequenceByNodeID = [:]
         nextRefreshSequence = 0
+        commandChannel = nil
+        protocolCommands = CSSProtocolCommands()
     }
 
     package func reset() {
         selectedNodeStyles = nil
         selectedUnavailableReason = .noSelection
+        selectedIdentity = nil
         stylesByNodeID.removeAll()
         styleSheetHeadersByKey.removeAll()
         activeRefreshSequenceByNodeID.removeAll()
         nextRefreshSequence = 0
     }
 
-    package func markSelectedNodeUnavailable(_ reason: CSSNodeStylesUnavailableReason) {
-        if reason == .noSelection,
-           case .unavailable(.staleNode) = selectedNodeStyles?.state {
+    package func bindProtocolChannel(_ commandChannel: ProtocolCommandChannel) {
+        self.commandChannel = commandChannel
+    }
+
+    package func unbindProtocolChannel() {
+        commandChannel = nil
+    }
+
+    @discardableResult
+    package func perform(_ intent: CSSCommandIntent) async throws -> ProtocolCommandResult {
+        let commandChannel = try requireCommandChannel()
+        return try await commandChannel.send(try protocolCommands.command(for: intent))
+    }
+
+    package func fetchRefreshResults(for identity: CSSNodeStyleIdentity) async throws -> RefreshResults {
+        do {
+            return try await fetchRefreshResultsWithoutCompatibilityRetry(for: identity)
+        } catch {
+            guard shouldRetryAfterEnablingCSSAgent(error) else {
+                throw error
+            }
+            try await enableAgentForCompatibility(targetID: identity.targetID)
+            return try await fetchRefreshResultsWithoutCompatibilityRetry(for: identity)
+        }
+    }
+
+    package func setStyleTextResult(from result: ProtocolCommandResult) throws -> CSSStylePayload {
+        try protocolCommands.setStyleTextResult(from: result)
+    }
+
+    package func selectNodeStyles(identity: CSSNodeStyleIdentity) {
+        selectedIdentity = identity
+        selectedUnavailableReason = .noSelection
+        guard let nodeStyles = nodeStyles(for: identity) else {
+            selectedNodeStyles = nil
             return
         }
+        selectCurrentNodeStyles(nodeStyles)
+    }
+
+    package func markSelectedNodeUnavailable(_ reason: CSSNodeStylesUnavailableReason) {
+        selectedIdentity = nil
         guard selectedNodeStyles != nil || selectedState != .unavailable(reason) else {
             return
         }
@@ -428,19 +487,17 @@ package final class CSSSession {
     ) {
         let nodeStyles = stylesByNodeID[identity.nodeID] ?? CSSNodeStyles(identity: identity)
         stylesByNodeID[identity.nodeID] = nodeStyles
-        guard selectedNodeStyles !== nodeStyles || nodeStyles.state != .unavailable(reason) else {
+        nodeStyles.state = .unavailable(reason)
+        activeRefreshSequenceByNodeID.removeValue(forKey: identity.nodeID)
+        guard selectedIdentity == identity || selectedNodeStyles === nodeStyles else {
             return
         }
-        nodeStyles.state = .unavailable(reason)
-        selectedNodeStyles = nodeStyles
-        activeRefreshSequenceByNodeID.removeValue(forKey: identity.nodeID)
+        selectedNodeStyles = nil
+        selectedUnavailableReason = reason
     }
 
     package func refreshState(forSelected identity: CSSNodeStyleIdentity) -> CSSNodeStylesState? {
-        guard selectedNodeStyles?.identity == identity else {
-            return nil
-        }
-        return selectedNodeStyles?.state
+        nodeStyles(for: identity)?.state
     }
 
     package func beginRefresh(identity: CSSNodeStyleIdentity) -> CSSStyleRefreshToken? {
@@ -453,7 +510,8 @@ package final class CSSSession {
         let nodeStyles = stylesByNodeID[identity.nodeID] ?? CSSNodeStyles(identity: identity)
         stylesByNodeID[identity.nodeID] = nodeStyles
         nodeStyles.state = .loading
-        selectedNodeStyles = nodeStyles
+        selectedIdentity = identity
+        selectCurrentNodeStyles(nodeStyles)
         activeRefreshSequenceByNodeID[identity.nodeID] = nextRefreshSequence
         return CSSStyleRefreshToken(identity: identity, sequence: nextRefreshSequence)
     }
@@ -465,7 +523,6 @@ package final class CSSSession {
         computed: [CSSComputedStylePropertyPayload]
     ) {
         guard activeRefreshSequenceByNodeID[token.identity.nodeID] == token.sequence,
-              selectedNodeStyles?.identity == token.identity,
               let nodeStyles = stylesByNodeID[token.identity.nodeID] else {
             return
         }
@@ -485,6 +542,10 @@ package final class CSSSession {
         )
         nodeStyles.state = .loaded
         activeRefreshSequenceByNodeID.removeValue(forKey: token.identity.nodeID)
+        if selectedIdentity == token.identity {
+            selectedNodeStyles = nodeStyles
+            selectedUnavailableReason = .noSelection
+        }
     }
 
     package func registerStyleSheetHeader(_ header: CSSStyleSheetHeaderPayload, targetID: ProtocolTargetIdentifier) {
@@ -503,12 +564,15 @@ package final class CSSSession {
 
     package func markRefreshFailed(_ token: CSSStyleRefreshToken, message: String) {
         guard activeRefreshSequenceByNodeID[token.identity.nodeID] == token.sequence,
-              selectedNodeStyles?.identity == token.identity,
               let nodeStyles = stylesByNodeID[token.identity.nodeID] else {
             return
         }
         nodeStyles.state = .failed(message)
         activeRefreshSequenceByNodeID.removeValue(forKey: token.identity.nodeID)
+        if selectedIdentity == token.identity {
+            selectedNodeStyles = nil
+            selectedUnavailableReason = .staleNode(token.identity.nodeID)
+        }
     }
 
     package func cancelRefresh(identity: CSSNodeStyleIdentity) {
@@ -518,6 +582,9 @@ package final class CSSSession {
             return
         }
         nodeStyles.state = .needsRefresh
+        if selectedIdentity == identity {
+            selectedNodeStyles = nodeStyles
+        }
     }
 
     package func markNeedsRefresh(targetID: ProtocolTargetIdentifier) {
@@ -584,12 +651,17 @@ package final class CSSSession {
         }
         if let selectedNodeStyles,
            selectedNodeStyles.identity.targetID == targetID {
-            selectedNodeStyles.state = .unavailable(.staleNode(selectedNodeStyles.identity.nodeID))
+            self.selectedNodeStyles = nil
+            selectedUnavailableReason = .staleNode(selectedNodeStyles.identity.nodeID)
+        }
+        if selectedIdentity?.targetID == targetID {
+            selectedIdentity = nil
         }
     }
 
     package func setStyleTextIntent(for propertyID: CSSPropertyIdentifier, enabled: Bool) -> CSSCommandIntent? {
         guard let nodeStyles = selectedNodeStyles,
+              selectedIdentity == nodeStyles.identity,
               case .loaded = selectedState,
               case .loaded = nodeStyles.state,
               let (sectionIndex, propertyIndex) = Self.locateProperty(propertyID, in: nodeStyles.sections),
@@ -610,6 +682,15 @@ package final class CSSSession {
             return nil
         }
         return .setStyleText(targetID: nodeStyles.identity.targetID, styleID: propertyID.styleID, text: text)
+    }
+
+    private func selectCurrentNodeStyles(_ nodeStyles: CSSNodeStyles) {
+        switch nodeStyles.state {
+        case .unavailable, .failed:
+            selectedNodeStyles = nil
+        case .loading, .loaded, .needsRefresh:
+            selectedNodeStyles = nodeStyles
+        }
     }
 
     package func applySetStyleTextResult(
@@ -1393,4 +1474,47 @@ package final class CSSSession {
         return "/* \(text) */"
     }
 
+    private func fetchRefreshResultsWithoutCompatibilityRetry(for identity: CSSNodeStyleIdentity) async throws -> RefreshResults {
+        async let matched = perform(.getMatchedStyles(identity: identity))
+        async let inline = perform(.getInlineStyles(identity: identity))
+        async let computed = perform(.getComputedStyle(identity: identity))
+        let results = try await (matched, inline, computed)
+        return RefreshResults(
+            matched: try protocolCommands.matchedStyles(from: results.0),
+            inline: try protocolCommands.inlineStyles(from: results.1),
+            computed: try protocolCommands.computedStyles(from: results.2)
+        )
+    }
+
+    private func enableAgentForCompatibility(targetID: ProtocolTargetIdentifier) async throws {
+        let commandChannel = try requireCommandChannel()
+        guard commandChannel.cssAgentShouldBeEnabledForCompatibility(targetID: targetID) else {
+            return
+        }
+
+        // Do not enable the WebKit CSS agent proactively. On current simulator
+        // WebContent, CSS.enable can crash while synchronizing stylesheet
+        // headers during page load, while the read commands work without it.
+        _ = try await perform(.enable(targetID: targetID))
+        commandChannel.markEnabled(.css, targetID: targetID)
+    }
+
+    private func shouldRetryAfterEnablingCSSAgent(_ error: any Error) -> Bool {
+        guard case let TransportError.remoteError(method, _, message) = error,
+              method.hasPrefix("CSS.") else {
+            return false
+        }
+
+        let normalizedMessage = message.lowercased()
+        return normalizedMessage.contains("enable")
+            || normalizedMessage.contains("enabled")
+    }
+
+    private func requireCommandChannel() throws -> ProtocolCommandChannel {
+        guard let commandChannel else {
+            throw InspectorSessionError("Inspector session is not attached.")
+        }
+        try commandChannel.requireAttached()
+        return commandChannel
+    }
 }

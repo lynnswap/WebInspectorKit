@@ -1,8 +1,8 @@
 #if canImport(UIKit)
 import Testing
+import WebInspectorTransport
 import UIKit
 @testable import WebInspectorCore
-@testable import WebInspectorRuntime
 @testable import WebInspectorUI
 
 @MainActor
@@ -63,9 +63,9 @@ struct ParentContainerTests {
     func viewControllerPreviewSessionInjectsMockDOMAndNetworkModels() throws {
         let session = WebInspectorViewControllerPreviewFixtures.makeSession()
 
-        #expect(session.inspector.dom.currentPageRootNode?.nodeName == "#document")
-        #expect(session.inspector.network.requests.count >= 2)
-        #expect(session.interface.networkPanelModel(for: session.inspector).displayRequests.isEmpty == false)
+        #expect(session.attachment.dom.currentPageRootNode?.nodeName == "#document")
+        #expect(session.attachment.network.requests.count >= 2)
+        #expect(session.interface.networkPanelModel(for: session.attachment).displayRequests.isEmpty == false)
     }
 
     @Test
@@ -244,12 +244,12 @@ struct ParentContainerTests {
         let session = WebInspectorSession()
         let request = try #require(
             applyRequest(
-                to: session.inspector.network,
+                to: session.attachment.network,
                 requestID: "1",
                 url: "https://example.com/app.js"
             )
         )
-        let model = session.interface.networkPanelModel(for: session.inspector)
+        let model = session.interface.networkPanelModel(for: session.attachment)
         let compactNavigationController = try #require(
             TabContentFactory.makeViewController(
                 for: .network,

@@ -16,9 +16,8 @@ compatibility alias layer between the public API and the active implementation.
 | `WebInspectorSession` | UI-facing session and lifecycle owner |
 | `WebInspectorViewController` | UIKit inspector container |
 | `WebInspectorTab` | Public tab descriptor |
-| `WebInspectorRuntime` | Session assembly target |
-| `WebInspectorTransport` | Protocol command/reply and target multiplexing |
-| `WebInspectorCore` | DOM/Network semantic model target |
+| `WebInspectorCore` | Inspector attachment, protocol dispatching, and semantic domain models |
+| `WebInspectorTransport` | Protocol primitives, command/reply, and target multiplexing |
 | `WebInspectorNativeBridge` | Raw native inspector JSON bridge |
 | `WebInspectorNativeSymbols` | Native symbol resolution for attach bootstrap |
 
@@ -32,8 +31,7 @@ flowchart TD
     Host["Host app / WKWebView"]
     UI["WebInspectorUI<br/>current UIKit UI"]
     PublicSession["WebInspectorSession<br/>public session owner"]
-    Runtime["InspectorSession<br/>current runtime owner"]
-    Core["WebInspectorCore<br/>DOMSession + NetworkSession"]
+    Core["WebInspectorCore<br/>InspectorSession + semantic sessions"]
     Transport["WebInspectorTransport<br/>target multiplexing + replies"]
     Bridge["WebInspectorNativeBridge<br/>raw JSON bridge"]
     Symbols["WebInspectorNativeSymbols<br/>symbol addresses for attach"]
@@ -41,9 +39,8 @@ flowchart TD
 
     Host --> UI
     UI --> PublicSession
-    PublicSession --> Runtime
-    Runtime --> Core
-    Runtime --> Transport
+    PublicSession --> Core
+    Core --> Transport
     Transport --> Bridge
     Bridge --> WebKit
     Symbols --> Bridge
@@ -55,10 +52,10 @@ Responsibilities stay intentionally narrow:
 - `WebInspectorTransport`: parse protocol envelopes, unwrap target messages,
   route commands, manage replies, track protocol targets, and preserve
   execution-context owner/source target identity.
-- `InspectorSession`: bootstrap domains, own event pumps, apply decoded domain
-  events to semantic sessions, perform command intents.
-- `WebInspectorCore`: hold `@MainActor @Observable` semantic model state for
-  DOM, Runtime, Console, and Network.
+- `WebInspectorCore`: bootstrap domains, own event pumps, dispatch protocol
+  events through domain handlers, perform command intents, and hold
+  `@MainActor @Observable` model state for DOM, element styles, Runtime,
+  Console, and Network.
 - `WebInspectorUI`: render and interact with native UIKit/TextKit2 views.
 
 ## Event And Command Flow
@@ -68,25 +65,24 @@ sequenceDiagram
     participant WK as WebKit backend
     participant Bridge as WebInspectorNativeBridge
     participant Transport as WebInspectorTransport
-    participant Runtime as InspectorSession
-    participant Core as DOMSession / NetworkSession
+    participant Core as WebInspectorCore
     participant UI as WebInspectorUI
 
     WK->>Bridge: raw JSON message
     Bridge->>Transport: raw JSON
     Transport->>Transport: parse envelope and target routing
-    Transport->>Runtime: ordered domain event
-    Runtime->>Core: apply decoded semantic event
+    Transport->>Core: ordered domain event
+    Core->>Core: apply decoded semantic event
     Core-->>UI: Observation update
 
-    UI->>Runtime: command intent
-    Runtime->>Transport: protocol command
+    UI->>Core: command intent
+    Core->>Transport: protocol command
     Transport->>Bridge: raw JSON command
     Bridge->>WK: raw JSON command
     WK-->>Bridge: raw JSON reply
     Bridge-->>Transport: raw JSON reply
-    Transport-->>Runtime: command result with sequence
-    Runtime-->>Core: apply result if still current
+    Transport-->>Core: command result with sequence
+    Core->>Core: apply result if still current
 ```
 
 The native bridge is deliberately not target-aware. Target wrapping,
@@ -101,17 +97,23 @@ controllers observe the semantic sessions through the runtime owner:
 ```mermaid
 flowchart TD
     Session["WebInspectorSession<br/>@MainActor @Observable"]
-    Attachment["attachmentState / lastError"]
-    DOM["dom: DOMSession"]
-    Network["network: NetworkSession"]
-    PerformDOM["perform(DOMCommandIntent)"]
-    PerformNetwork["perform(NetworkCommandIntent)"]
+    CoreSession["InspectorSession<br/>connection lifecycle"]
+    Attachment["AttachedInspection<br/>target graph + domain models"]
+    Target["TargetGraph"]
+    DOM["DOMSession"]
+    Styles["DOMSession.elementStyles"]
+    Runtime["RuntimeState"]
+    Console["ConsoleSession"]
+    Network["NetworkSession"]
 
-    Session --> Attachment
-    Session --> DOM
-    Session --> Network
-    Session --> PerformDOM
-    Session --> PerformNetwork
+    Session --> CoreSession
+    CoreSession --> Attachment
+    Attachment --> Target
+    Attachment --> DOM
+    DOM --> Styles
+    Attachment --> Runtime
+    Attachment --> Console
+    Attachment --> Network
 ```
 
 The UI should receive one session object and avoid direct ownership of
@@ -124,6 +126,12 @@ model boundary:
 - DOM markup/tokenization
 - search indexing
 - response body decoding
+
+Protocol implementation is domain-local. Command/result/event decoding belongs
+in files named like `DOMProtocolDispatching.swift`,
+`TargetProtocolDispatching.swift`, or `NetworkProtocolDispatching.swift`.
+`InspectorSession` owns connection lifecycle and event pumping; it does not
+hold per-domain event parsers.
 
 ## UI Integration Boundary
 

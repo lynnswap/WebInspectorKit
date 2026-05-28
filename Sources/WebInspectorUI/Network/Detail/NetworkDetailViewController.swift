@@ -1,8 +1,8 @@
 #if canImport(UIKit)
+import WebInspectorCore
 import ObservationBridge
 import SyntaxEditorUI
 import UIKit
-import WebInspectorCore
 
 @MainActor
 package final class NetworkDetailViewController: UIViewController, UICollectionViewDelegate {

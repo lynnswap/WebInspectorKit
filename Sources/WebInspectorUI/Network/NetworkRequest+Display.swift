@@ -1,5 +1,5 @@
-import Foundation
 import WebInspectorCore
+import Foundation
 
 extension NetworkRequest {
     package var displayName: String {

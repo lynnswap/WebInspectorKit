@@ -1,3 +1,4 @@
+import WebInspectorTransport
 package struct DOMProtocolNodeID: RawRepresentable, Hashable, Codable, Sendable {
     package let rawValue: Int
 

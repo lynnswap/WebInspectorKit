@@ -1,7 +1,7 @@
 #if canImport(UIKit)
+import WebInspectorCore
 import SwiftUI
 import UIKit
-import WebInspectorCore
 
 package enum DOMElementStyleSectionHeaderConfiguration {
     private static let largeColumnNumber = 80

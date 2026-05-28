@@ -1,12 +1,13 @@
 #if canImport(UIKit)
+import WebInspectorCore
 import UIKit
-import WebInspectorRuntime
 
 @MainActor
 package final class DOMSplitViewController: UISplitViewController {
     private let treeViewController: DOMTreeViewController
     private let elementViewController: DOMElementViewController
-    private let session: InspectorSession?
+    private let inspection: AttachedInspection?
+    private let inspector: InspectorSession?
     private var domNavigationItems: DOMNavigationItems?
     private lazy var treeNavigationController = RegularSplitColumnNavigationController(
         rootViewController: treeViewController
@@ -15,22 +16,26 @@ package final class DOMSplitViewController: UISplitViewController {
         rootViewController: elementViewController
     )
 
-    package convenience init(session: InspectorSession) {
+    package convenience init(inspection: AttachedInspection) {
+        let inspector = InspectorSession(attachment: inspection)
         self.init(
-            treeViewController: DOMTreeViewController(session: session),
-            elementViewController: DOMElementViewController(session: session),
-            session: session
+            treeViewController: DOMTreeViewController(inspection: inspection),
+            elementViewController: DOMElementViewController(inspection: inspection),
+            inspection: inspection,
+            inspector: inspector
         )
     }
 
     package init(
         treeViewController: DOMTreeViewController,
         elementViewController: DOMElementViewController,
-        session: InspectorSession? = nil
+        inspection: AttachedInspection? = nil,
+        inspector: InspectorSession? = nil
     ) {
         self.treeViewController = treeViewController
         self.elementViewController = elementViewController
-        self.session = session
+        self.inspection = inspection
+        self.inspector = inspector
         super.init(style: .doubleColumn)
     }
 
@@ -79,10 +84,10 @@ package final class DOMSplitViewController: UISplitViewController {
     }
 
     private func configureNavigationItem() {
-        guard let session else {
+        guard let inspector else {
             return
         }
-        let navigationItems = DOMNavigationItems(session: session)
+        let navigationItems = DOMNavigationItems(inspector: inspector)
         navigationItems.install(on: navigationItem) { [weak self] in
             self?.treeViewController.domTreeUndoManager ?? self?.undoManager
         }
@@ -98,9 +103,10 @@ package final class DOMSplitViewController: UISplitViewController {
 private enum DOMSplitViewControllerPreview {
     static func makeViewController() -> DOMSplitViewController {
         let dom = DOMPreviewFixtures.makeDOMSession()
+        let inspection = AttachedInspection(dom: dom)
         return DOMSplitViewController(
-            treeViewController: DOMTreeViewController(dom: dom),
-            elementViewController: DOMElementViewController(dom: dom)
+            treeViewController: DOMTreeViewController(inspection: inspection),
+            elementViewController: DOMElementViewController(inspection: inspection)
         )
     }
 }

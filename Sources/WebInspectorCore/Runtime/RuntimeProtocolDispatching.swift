@@ -1,8 +1,8 @@
 import Foundation
-import WebInspectorCore
+import WebInspectorTransport
 
-package enum RuntimeTransportAdapter {
-    package static func command(for intent: RuntimeCommandIntent) throws -> ProtocolCommand {
+package struct RuntimeProtocolCommands {
+    package func command(for intent: RuntimeCommandIntent) throws -> ProtocolCommand {
         switch intent {
         case let .enable(targetID):
             return ProtocolCommand(domain: .runtime, method: "Runtime.enable", routing: .target(targetID))
@@ -99,69 +99,27 @@ package enum RuntimeTransportAdapter {
         }
     }
 
-    package static func evaluationResult(from result: ProtocolCommandResult) throws -> RuntimeEvaluationResultPayload {
+    package func evaluationResult(from result: ProtocolCommandResult) throws -> RuntimeEvaluationResultPayload {
         try TransportMessageParser.decode(RuntimeEvaluationResultPayload.self, from: result.resultData)
     }
 
-    package static func previewResult(from result: ProtocolCommandResult) throws -> RuntimePreviewResultPayload {
+    package func previewResult(from result: ProtocolCommandResult) throws -> RuntimePreviewResultPayload {
         try TransportMessageParser.decode(RuntimePreviewResultPayload.self, from: result.resultData)
     }
 
-    package static func propertiesResult(from result: ProtocolCommandResult) throws -> RuntimePropertiesResultPayload {
+    package func propertiesResult(from result: ProtocolCommandResult) throws -> RuntimePropertiesResultPayload {
         try TransportMessageParser.decode(RuntimePropertiesResultPayload.self, from: result.resultData)
     }
 
-    package static func collectionEntriesResult(from result: ProtocolCommandResult) throws -> RuntimeCollectionEntriesResultPayload {
+    package func collectionEntriesResult(from result: ProtocolCommandResult) throws -> RuntimeCollectionEntriesResultPayload {
         try TransportMessageParser.decode(RuntimeCollectionEntriesResultPayload.self, from: result.resultData)
     }
 
-    package static func saveResult(from result: ProtocolCommandResult) throws -> RuntimeSaveResultPayload {
+    package func saveResult(from result: ProtocolCommandResult) throws -> RuntimeSaveResultPayload {
         try TransportMessageParser.decode(RuntimeSaveResultPayload.self, from: result.resultData)
     }
 
-    @MainActor
-    package static func applyRuntimeEvent(_ event: ProtocolEventEnvelope, to session: RuntimeSession) throws {
-        guard event.domain == .runtime else {
-            return
-        }
-        switch event.method {
-        case "Runtime.executionContextCreated":
-            guard let targetID = event.targetID else {
-                return
-            }
-            let params = try TransportMessageParser.decode(ExecutionContextCreatedParams.self, from: event.paramsData)
-            session.applyExecutionContextCreated(
-                RuntimeExecutionContextRecord(
-                    id: params.context.id,
-                    targetID: targetID,
-                    runtimeAgentTargetID: event.sourceTargetID ?? targetID,
-                    type: params.context.type ?? .normal,
-                    name: params.context.name ?? "",
-                    frameID: params.context.frameID
-                )
-            )
-        case "Runtime.executionContextDestroyed":
-            guard let targetID = event.targetID else {
-                return
-            }
-            let params = try TransportMessageParser.decode(ExecutionContextDestroyedParams.self, from: event.paramsData)
-            session.applyExecutionContextDestroyed(
-                RuntimeExecutionContextKey(
-                    runtimeAgentTargetID: event.sourceTargetID ?? targetID,
-                    contextID: params.executionContextId
-                )
-            )
-        case "Runtime.executionContextsCleared":
-            guard let targetID = event.targetID else {
-                return
-            }
-            session.applyExecutionContextsCleared(runtimeAgentTargetID: event.sourceTargetID ?? targetID)
-        default:
-            return
-        }
-    }
-
-    private static func evaluationParameters(_ request: RuntimeEvaluationRequest) -> [String: Any] {
+    private func evaluationParameters(_ request: RuntimeEvaluationRequest) -> [String: Any] {
         var parameters: [String: Any] = [
             "expression": request.expression,
         ]
@@ -192,7 +150,7 @@ package enum RuntimeTransportAdapter {
         return parameters
     }
 
-    private static func objectParameters(
+    private func objectParameters(
         _ object: RuntimeRemoteObjectIdentifierKey,
         ownProperties: Bool? = nil,
         fetchStart: Int? = nil,
@@ -217,8 +175,78 @@ package enum RuntimeTransportAdapter {
         return parameters
     }
 
-    private static func data(_ object: [String: Any]) throws -> Data {
+    private func data(_ object: [String: Any]) throws -> Data {
         try JSONSerialization.data(withJSONObject: object, options: [])
+    }
+}
+
+@MainActor
+package protocol RuntimeProtocolEventHandler: AnyObject {
+    func runtimeExecutionContextCreated(_ record: RuntimeExecutionContextRecord)
+    func runtimeExecutionContextDestroyed(_ key: RuntimeExecutionContextKey)
+    func runtimeExecutionContextsCleared(runtimeAgentTargetID: ProtocolTargetIdentifier)
+}
+
+@MainActor
+package final class RuntimeProtocolEventDispatcher: ProtocolDomainEventDispatcher {
+    private let handlers: [any RuntimeProtocolEventHandler]
+
+    package init(handlers: [any RuntimeProtocolEventHandler]) {
+        self.handlers = handlers
+    }
+
+    package var domain: ProtocolDomain { .runtime }
+
+    package func dispatch(_ event: ProtocolEventEnvelope) async throws {
+        guard event.domain == .runtime,
+              let targetID = event.targetID else {
+            return
+        }
+        switch event.method {
+        case "Runtime.executionContextCreated":
+            let params = try TransportMessageParser.decode(ExecutionContextCreatedParams.self, from: event.paramsData)
+            let record = RuntimeExecutionContextRecord(
+                id: params.context.id,
+                targetID: targetID,
+                runtimeAgentTargetID: event.sourceTargetID ?? targetID,
+                type: params.context.type ?? .normal,
+                name: params.context.name ?? "",
+                frameID: params.context.frameID
+            )
+            for handler in handlers {
+                handler.runtimeExecutionContextCreated(record)
+            }
+        case "Runtime.executionContextDestroyed":
+            let params = try TransportMessageParser.decode(ExecutionContextDestroyedParams.self, from: event.paramsData)
+            let key = RuntimeExecutionContextKey(
+                runtimeAgentTargetID: event.sourceTargetID ?? targetID,
+                contextID: params.executionContextId
+            )
+            for handler in handlers {
+                handler.runtimeExecutionContextDestroyed(key)
+            }
+        case "Runtime.executionContextsCleared":
+            let runtimeAgentTargetID = event.sourceTargetID ?? targetID
+            for handler in handlers {
+                handler.runtimeExecutionContextsCleared(runtimeAgentTargetID: runtimeAgentTargetID)
+            }
+        default:
+            return
+        }
+    }
+}
+
+extension RuntimeState: RuntimeProtocolEventHandler {
+    package func runtimeExecutionContextCreated(_ record: RuntimeExecutionContextRecord) {
+        applyExecutionContextCreated(record)
+    }
+
+    package func runtimeExecutionContextDestroyed(_ key: RuntimeExecutionContextKey) {
+        applyExecutionContextDestroyed(key)
+    }
+
+    package func runtimeExecutionContextsCleared(runtimeAgentTargetID: ProtocolTargetIdentifier) {
+        applyExecutionContextsCleared(runtimeAgentTargetID: runtimeAgentTargetID)
     }
 }
 

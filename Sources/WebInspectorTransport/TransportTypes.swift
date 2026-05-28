@@ -1,5 +1,4 @@
 import Foundation
-import WebInspectorCore
 
 package enum ProtocolDomain: Hashable, Sendable, CustomStringConvertible {
     case target

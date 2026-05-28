@@ -1,3 +1,4 @@
+import WebInspectorTransport
 package struct ConsoleCallFramePayload: Equatable, Sendable, Codable {
     package var functionName: String
     package var url: String

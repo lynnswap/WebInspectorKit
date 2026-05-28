@@ -1,9 +1,9 @@
 #if canImport(UIKit)
+import WebInspectorCore
 import Observation
 import ObservationBridge
 import UIHostingMenu
 import UIKit
-import WebInspectorCore
 
 @MainActor
 @Observable
