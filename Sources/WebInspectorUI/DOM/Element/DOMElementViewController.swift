@@ -1,6 +1,5 @@
 #if canImport(UIKit)
 import WebInspectorCore
-import WebInspectorTransport
 import ObservationBridge
 import UIKit
 
@@ -332,82 +331,9 @@ package final class DOMElementViewController: UICollectionViewController {
     }
 
     private func toggleAction() -> DOMElementStylePropertyView.ToggleAction? {
-        { [weak inspection] propertyID, enabled in
+        return { [weak inspection] propertyID, enabled in
             inspection?.dom.requestSetCSSProperty(propertyID, enabled: enabled) ?? false
         }
-    }
-}
-
-#Preview("DOM Element") {
-    DOMElementViewControllerPreview.makeViewController()
-}
-
-@MainActor
-private enum DOMElementViewControllerPreview {
-    static func makeViewController() -> UINavigationController {
-        let dom = DOMPreviewFixtures.makeDOMSession()
-        dom.applyTargetCreated(
-            ProtocolTargetRecord(
-                id: ProtocolTargetIdentifier("preview-page"),
-                kind: .page,
-                frameID: DOMFrameIdentifier("preview-frame"),
-                capabilities: .pageDefault
-            ),
-            makeCurrentMainPage: true
-        )
-        if let body = firstElement(named: "body", in: dom) {
-            dom.selectNode(body.id)
-        }
-
-        let css = dom.elementStyles
-        if case let .success(identity) = dom.selectedCSSNodeStyleIdentity(),
-           let token = css.beginRefresh(identity: identity) {
-            css.applyRefresh(
-                token: token,
-                matched: CSSMatchedStylesPayload(
-                    matchedRules: [
-                        CSSRuleMatchPayload(
-                            rule: CSSRulePayload(
-                                id: CSSRuleIdentifier(styleSheetID: CSSStyleSheetIdentifier("preview"), ordinal: 0),
-                                selectorList: CSSSelectorList(selectors: [CSSSelector(text: "body")], text: "body"),
-                                sourceURL: "preview.css",
-                                sourceLine: 1,
-                                origin: .author,
-                                style: CSSStylePayload(
-                                    id: CSSStyleIdentifier(styleSheetID: CSSStyleSheetIdentifier("preview"), ordinal: 0),
-                                    cssProperties: [
-                                        CSSPropertyPayload(name: "margin", value: "0", text: "margin: 0;", status: .active),
-                                        CSSPropertyPayload(name: "box-sizing", value: "border-box", text: "box-sizing: border-box;", status: .active),
-                                        CSSPropertyPayload(name: "font-size", value: "12px", text: "font-size: 12px;", status: .inactive),
-                                    ],
-                                    cssText: "margin: 0;\nbox-sizing: border-box;\nfont-size: 12px;"
-                                )
-                            ),
-                            matchingSelectors: [0]
-                        ),
-                    ]
-                ),
-                inline: CSSInlineStylesPayload(),
-                computed: []
-            )
-        }
-
-        let inspection = AttachedInspection(dom: dom)
-        return UINavigationController(rootViewController: DOMElementViewController(inspection: inspection))
-    }
-
-    private static func firstElement(named localName: String, in dom: DOMSession) -> DOMNode? {
-        guard let rootNode = dom.currentPageRootNode else {
-            return nil
-        }
-        var stack = [rootNode]
-        while let node = stack.popLast() {
-            if node.localName == localName {
-                return node
-            }
-            stack.append(contentsOf: dom.visibleDOMTreeChildren(of: node).reversed())
-        }
-        return nil
     }
 }
 #endif
