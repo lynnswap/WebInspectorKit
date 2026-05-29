@@ -397,9 +397,11 @@ struct NetworkDetailViewControllerTests {
         }
         #expect(didPush)
 
-        model.selectRequest(nil)
-        let didPop = await waitUntilAllowingAnimations {
-            navigationController.viewControllers == [listViewController]
+        let didPop = await withUIKitAnimationsDisabled {
+            model.selectRequest(nil)
+            return await waitUntil {
+                navigationController.viewControllers == [listViewController]
+            }
         }
         #expect(didPop)
     }
@@ -425,12 +427,13 @@ struct NetworkDetailViewControllerTests {
         }
         #expect(didPush)
 
-        network.reset()
-        #expect(model.selectedRequestID == request.id)
-        #expect(model.selectedRequest == nil)
-
-        let didPop = await waitUntilAllowingAnimations {
-            navigationController.viewControllers == [listViewController]
+        let didPop = await withUIKitAnimationsDisabled {
+            network.reset()
+            #expect(model.selectedRequestID == request.id)
+            #expect(model.selectedRequest == nil)
+            return await waitUntil {
+                navigationController.viewControllers == [listViewController]
+            }
         }
         #expect(didPop)
     }
@@ -571,18 +574,11 @@ struct NetworkDetailViewControllerTests {
         return false
     }
 
-    private func waitUntilAllowingAnimations(
-        maxTicks: Int = 256,
-        _ condition: @MainActor () -> Bool
-    ) async -> Bool {
-        for _ in 0..<maxTicks {
-            if condition() {
-                return true
-            }
-            await Task.yield()
-            try? await Task.sleep(nanoseconds: 10_000_000)
-        }
-        return false
+    private func withUIKitAnimationsDisabled<T>(_ body: () async -> T) async -> T {
+        let wereAnimationsEnabled = UIView.areAnimationsEnabled
+        UIView.setAnimationsEnabled(false)
+        defer { UIView.setAnimationsEnabled(wereAnimationsEnabled) }
+        return await body()
     }
 }
 #endif

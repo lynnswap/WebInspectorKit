@@ -1,4 +1,5 @@
 #if canImport(UIKit)
+import ObservationBridge
 import Testing
 import WebInspectorTransport
 import UIKit
@@ -60,7 +61,7 @@ struct DOMContainerTests {
 
         _ = dom.replaceDocumentRoot(documentNode(), targetID: targetID)
 
-        let didKeepUnavailableState = await waitUntil {
+        let didKeepUnavailableState = await waitUntilRendered(in: viewController) {
             viewController.contentUnavailableConfiguration != nil
                 && viewController.collectionView.isHidden == false
                 && viewController.collectionView.numberOfSections == 0
@@ -81,7 +82,7 @@ struct DOMContainerTests {
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
-        let didRenderRows = await waitUntil {
+        let didRenderRows = await waitUntilRendered(in: viewController) {
             viewController.collectionView.numberOfSections == 1
                 && viewController.collectionView.numberOfItems(inSection: 0) == 3
         }
@@ -138,7 +139,7 @@ struct DOMContainerTests {
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
-        let didRenderRows = await waitUntil {
+        let didRenderRows = await waitUntilRendered(in: viewController) {
             viewController.collectionView.numberOfSections == 1
                 && viewController.collectionView.numberOfItems(inSection: 0) == 3
         }
@@ -161,7 +162,7 @@ struct DOMContainerTests {
             marginText: "margin: 4px;"
         )
 
-        let didUpdateVisibleRow = await waitUntil {
+        let didUpdateVisibleRow = await waitUntilRendered(in: viewController) {
             stylePropertyViews(in: viewController)
                 .map(\.declarationTextForTesting)
                 .contains("margin: 4px;")
@@ -185,7 +186,7 @@ struct DOMContainerTests {
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
-        let didRenderHeader = await waitUntil {
+        let didRenderHeader = await waitUntilRendered(in: viewController) {
             styleSectionHeaderViews(in: viewController).first?.titleTextForTesting == "body"
                 && styleSectionHeaderViews(in: viewController).first?.originTextForTesting == "styles.css:2"
         }
@@ -206,7 +207,7 @@ struct DOMContainerTests {
             sourceLine: 5
         )
 
-        let didUpdateHeader = await waitUntil {
+        let didUpdateHeader = await waitUntilRendered(in: viewController) {
             guard let header = styleSectionHeaderViews(in: viewController).first else {
                 return false
             }
@@ -231,7 +232,7 @@ struct DOMContainerTests {
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
-        let didRenderBodyRows = await waitUntil {
+        let didRenderBodyRows = await waitUntilRendered(in: viewController) {
             stylePropertyViews(in: viewController)
                 .map(\.declarationTextForTesting)
                 .contains("margin: 0;")
@@ -250,7 +251,7 @@ struct DOMContainerTests {
         #expect(css.selectedNodeStyles?.identity == inputIdentity)
         #expect(css.selectedState == .loading)
         #expect(css.refreshState(forSelected: inputIdentity) == .loading)
-        let didKeepBodyRowsWhileInputLoads = await waitUntil {
+        let didKeepBodyRowsWhileInputLoads = await waitUntilRendered(in: viewController) {
             viewController.contentUnavailableConfiguration == nil
                 && viewController.collectionView.isHidden == false
                 && viewController.collectionView.numberOfSections == 1
@@ -269,7 +270,7 @@ struct DOMContainerTests {
             marginText: "margin: 8px;"
         )
 
-        let didRenderInputRows = await waitUntil {
+        let didRenderInputRows = await waitUntilRendered(in: viewController) {
             stylePropertyViews(in: viewController)
                 .map(\.declarationTextForTesting)
                 .contains("margin: 8px;")
@@ -292,7 +293,7 @@ struct DOMContainerTests {
         let identity = try dom.selectedCSSNodeStyleIdentity().get()
         #expect(css.beginRefresh(identity: identity) != nil)
 
-        let didRenderPlaceholder = await waitUntil {
+        let didRenderPlaceholder = await waitUntilRendered(in: viewController) {
             viewController.contentUnavailableConfiguration != nil
                 && viewController.collectionView.isHidden == false
                 && viewController.collectionView.numberOfSections == 0
@@ -314,7 +315,7 @@ struct DOMContainerTests {
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
-        let didRenderBodyRows = await waitUntil {
+        let didRenderBodyRows = await waitUntilRendered(in: viewController) {
             stylePropertyViews(in: viewController)
                 .map(\.declarationTextForTesting)
                 .contains("margin: 0;")
@@ -329,7 +330,7 @@ struct DOMContainerTests {
 
         dom.selectNode(nil)
 
-        let didClearRows = await waitUntil {
+        let didClearRows = await waitUntilRendered(in: viewController) {
             viewController.contentUnavailableConfiguration != nil
                 && viewController.collectionView.isHidden == false
                 && viewController.collectionView.numberOfSections == 0
@@ -351,7 +352,7 @@ struct DOMContainerTests {
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
-        let didRenderBodyRows = await waitUntil {
+        let didRenderBodyRows = await waitUntilRendered(in: viewController) {
             stylePropertyViews(in: viewController)
                 .map(\.declarationTextForTesting)
                 .contains("margin: 0;")
@@ -360,7 +361,7 @@ struct DOMContainerTests {
 
         dom.applyNodeRemoved(body.id)
 
-        let didClearRows = await waitUntil {
+        let didClearRows = await waitUntilRendered(in: viewController) {
             viewController.contentUnavailableConfiguration != nil
                 && viewController.collectionView.isHidden == false
                 && viewController.collectionView.numberOfSections == 0
@@ -382,7 +383,7 @@ struct DOMContainerTests {
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
-        let didRenderBodyRows = await waitUntil {
+        let didRenderBodyRows = await waitUntilRendered(in: viewController) {
             stylePropertyViews(in: viewController)
                 .map(\.declarationTextForTesting)
                 .contains("margin: 0;")
@@ -392,7 +393,7 @@ struct DOMContainerTests {
         let identity = try dom.selectedCSSNodeStyleIdentity().get()
         css.markSelectedNodeStylesUnavailable(identity: identity, reason: .staleNode(body.id))
 
-        let didClearRows = await waitUntil {
+        let didClearRows = await waitUntilRendered(in: viewController) {
             viewController.contentUnavailableConfiguration != nil
                 && viewController.collectionView.isHidden == false
                 && viewController.collectionView.numberOfSections == 0
@@ -414,7 +415,7 @@ struct DOMContainerTests {
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
-        let didCollapseUnusedVariables = await waitUntil {
+        let didCollapseUnusedVariables = await waitUntilRendered(in: viewController) {
             viewController.collectionView.numberOfSections == 2
                 && viewController.collectionView.numberOfItems(inSection: 1) == 3
                 && hiddenVariableCells(in: viewController).count == 1
@@ -434,7 +435,7 @@ struct DOMContainerTests {
 
         revealCell.tapRevealForTesting()
 
-        let didRevealUnusedVariables = await waitUntil {
+        let didRevealUnusedVariables = await waitUntilRendered(in: viewController) {
             let declarations = stylePropertyViews(in: viewController).map(\.declarationTextForTesting)
             return viewController.collectionView.numberOfItems(inSection: 1) == 4
                 && hiddenVariableCells(in: viewController).isEmpty
@@ -476,7 +477,7 @@ struct DOMContainerTests {
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
-        let didCollapseUnusedVariables = await waitUntil {
+        let didCollapseUnusedVariables = await waitUntilRendered(in: viewController) {
             hiddenVariableCells(in: viewController).first?.revealTitleForTesting == "Show 2 unused CSS variables"
         }
         window.layoutIfNeeded()
@@ -511,7 +512,7 @@ struct DOMContainerTests {
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
-        let didCollapseUnusedVariables = await waitUntil {
+        let didCollapseUnusedVariables = await waitUntilRendered(in: viewController) {
             hiddenVariableCells(in: viewController).first?.revealTitleForTesting == "Show 2 unused CSS variables"
         }
         window.layoutIfNeeded()
@@ -539,7 +540,7 @@ struct DOMContainerTests {
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
-        let didCollapseOnlyUnusedVariables = await waitUntil {
+        let didCollapseOnlyUnusedVariables = await waitUntilRendered(in: viewController) {
             hiddenVariableCells(in: viewController).first?.revealTitleForTesting == "Show 2 unused CSS variables"
         }
         window.layoutIfNeeded()
@@ -577,7 +578,7 @@ struct DOMContainerTests {
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
-        let didCollapseUnusedVariables = await waitUntil {
+        let didCollapseUnusedVariables = await waitUntilRendered(in: viewController) {
             hiddenVariableCells(in: viewController).first?.revealTitleForTesting == "Show 2 unused CSS variables"
         }
         window.layoutIfNeeded()
@@ -611,7 +612,7 @@ struct DOMContainerTests {
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
-        let didCollapseUnusedVariables = await waitUntil {
+        let didCollapseUnusedVariables = await waitUntilRendered(in: viewController) {
             hiddenVariableCells(in: viewController).first?.revealTitleForTesting == "Show 2 unused CSS variables"
         }
         window.layoutIfNeeded()
@@ -651,7 +652,7 @@ struct DOMContainerTests {
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
-        let didCollapseOnlyUnusedVariable = await waitUntil {
+        let didCollapseOnlyUnusedVariable = await waitUntilRendered(in: viewController) {
             hiddenVariableCells(in: viewController).first?.revealTitleForTesting == "Show 1 unused CSS variable"
         }
         window.layoutIfNeeded()
@@ -675,7 +676,7 @@ struct DOMContainerTests {
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
-        let didCollapseUnusedVariables = await waitUntil {
+        let didCollapseUnusedVariables = await waitUntilRendered(in: viewController) {
             hiddenVariableCells(in: viewController).first?.revealTitleForTesting == "Show 2 unused CSS variables"
         }
         #expect(didCollapseUnusedVariables)
@@ -693,7 +694,7 @@ struct DOMContainerTests {
             ]
         )
 
-        let didUpdateHiddenVariableCount = await waitUntil {
+        let didUpdateHiddenVariableCount = await waitUntilRendered(in: viewController) {
             hiddenVariableCells(in: viewController).first?.revealTitleForTesting == "Show 3 unused CSS variables"
         }
         #expect(didUpdateHiddenVariableCount)
@@ -1207,19 +1208,21 @@ struct DOMContainerTests {
         }
     }
 
-    private func waitUntil(
-        timeoutNanoseconds: UInt64 = 1_000_000_000,
-        condition: @escaping @MainActor () -> Bool
+    private func waitUntilRendered(
+        in viewController: DOMElementViewController,
+        condition: @escaping @MainActor @Sendable () -> Bool
     ) async -> Bool {
-        let interval: UInt64 = 10_000_000
-        let attempts = Int(timeoutNanoseconds / interval)
-        for _ in 0..<attempts {
-            if condition() {
-                return true
-            }
-            try? await Task.sleep(nanoseconds: interval)
+        guard let delivery = viewController.selectedNodeStyleObservationDeliveryForTesting
+            ?? viewController.elementStylesObservationDeliveryForTesting else {
+            viewController.collectionView.layoutIfNeeded()
+            return condition()
         }
-        return condition()
+        let renderedValues = await delivery.values {
+            viewController.collectionView.layoutIfNeeded()
+            viewController.view.layoutIfNeeded()
+            return condition()
+        }
+        return await renderedValues.waitUntil { $0 } != nil
     }
 
     private func action(titled title: String, in menu: UIMenu) -> UIAction? {
