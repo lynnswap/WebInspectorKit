@@ -2079,6 +2079,70 @@ func documentUpdatedAllowsNewDocumentRequestWhilePreviousRequestIsPending() asyn
     #expect(finalSnapshot.currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(50))] == nil)
 }
 
+@Test("Regression: element picker begins after page documentUpdated invalidates loaded document")
+func elementPickerBeginsAfterDocumentUpdatedInvalidatesLoadedDocument() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"DOM.documentUpdated","params":{}}"#
+    )
+    let _: DOMSessionSnapshot = try await awaitValueAfterActorTurns {
+        let snapshot = await session.attachment.dom.snapshot()
+        guard snapshot.currentPageDocumentID == nil else {
+            return nil
+        }
+        return snapshot
+    }
+    #expect(await session.attachment.dom.canSelectElement == false)
+    #expect(await session.attachment.dom.canBeginElementPicker)
+
+    let sentCount = await backend.sentTargetMessages().count
+    let beginTask = Task {
+        try await session.attachment.dom.beginElementPicker()
+    }
+    let documentRequest = try await waitForTargetMessage(
+        backend,
+        method: "DOM.getDocument",
+        after: sentCount
+    )
+    #expect(documentRequest.targetIdentifier == ProtocolTargetIdentifier.pageMain)
+    #expect(
+        await backend.sentTargetMessages().dropFirst(sentCount).compactMap { try? messageMethod($0.message) } == [
+            "DOM.getDocument",
+        ]
+    )
+
+    let afterDocumentRequest = await backend.sentTargetMessages().count
+    await receiveTargetReply(
+        transport,
+        targetID: documentRequest.targetIdentifier,
+        messageID: try messageID(documentRequest.message),
+        result: manualReloadDocumentResult
+    )
+
+    let enableMessage = try await waitForTargetMessage(
+        backend,
+        method: "DOM.setInspectModeEnabled",
+        after: afterDocumentRequest
+    )
+    #expect(enableMessage.targetIdentifier == ProtocolTargetIdentifier.pageMain)
+    #expect(try boolParameter("enabled", in: enableMessage.message) == true)
+    await receiveTargetReply(
+        transport,
+        targetID: enableMessage.targetIdentifier,
+        messageID: try messageID(enableMessage.message),
+        result: "{}"
+    )
+
+    try await beginTask.value
+    #expect(await session.attachment.dom.isSelectingElement)
+}
+
 @Test("Regression: stale setChildNodes from previous page does not move head children into new body")
 func staleSetChildNodesAfterPageNavigationDoesNotMoveHeadChildrenIntoNewBody() async throws {
     let backend = FakeTransportBackend()

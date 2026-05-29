@@ -154,7 +154,7 @@ package final class DOMNavigationItems: NSObject {
 
     private func renderPickItem() {
         let dom = inspector.attachment.dom
-        let isEnabled = dom.canSelectElement
+        let isEnabled = dom.canBeginElementPicker
         if pickItem.isEnabled != isEnabled {
             pickItem.isEnabled = isEnabled
         }
