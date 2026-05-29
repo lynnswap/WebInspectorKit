@@ -5,7 +5,7 @@ import ObservationBridge
 import UIKit
 
 @MainActor
-package final class DOMElementViewController: UIViewController {
+package final class DOMElementViewController: UICollectionViewController {
     private struct ItemIdentifier: Hashable {
         enum Kind: Hashable {
             case property(propertyID: CSSPropertyIdentifier?, propertyIndex: Int)
@@ -18,6 +18,8 @@ package final class DOMElementViewController: UIViewController {
 
     private let inspection: AttachedInspection
     private let observationScope = ObservationScope()
+    private let selectedNodeStyleObservationScope = ObservationScope()
+    private weak var observedNodeStyles: CSSNodeStyles?
     private var expandedUnusedVariableSectionIDs = Set<CSSStyleSectionIdentifier>()
     private var displayedNodeStyles: CSSNodeStyles?
 
@@ -25,15 +27,11 @@ package final class DOMElementViewController: UIViewController {
     package private(set) var lastSnapshotAnimatedForTesting = false
 #endif
 
-    private lazy var collectionView = UICollectionView(
-        frame: .zero,
-        collectionViewLayout: Self.makeLayout()
-    )
     private lazy var dataSource = makeDataSource()
 
     package init(inspection: AttachedInspection) {
         self.inspection = inspection
-        super.init(nibName: nil, bundle: nil)
+        super.init(collectionViewLayout: Self.makeLayout())
     }
 
     @available(*, unavailable)
@@ -44,25 +42,29 @@ package final class DOMElementViewController: UIViewController {
     isolated deinit {
         inspection.dom.setSelectedNodeStyleHydrationActive(false)
         observationScope.cancelAll()
+        selectedNodeStyleObservationScope.cancelAll()
     }
 
     override package func viewDidLoad() {
         super.viewDidLoad()
         applyBackgroundFromTraits()
+        collectionView.alwaysBounceVertical = true
+        collectionView.keyboardDismissMode = .onDrag
+        collectionView.accessibilityIdentifier = "WebInspector.DOM.Element.StylesList"
         if #available(iOS 26.0, *) {
             webInspectorRegisterForBackgroundTraitChanges { viewController in
                 viewController.applyBackgroundFromTraits()
             }
         }
-        configureCollectionView()
+        let selectedNodeStyles = inspection.dom.elementStyles.selectedNodeStyles
+        render(selectedNodeStyles)
+        observeSelectedNodeStyles(selectedNodeStyles)
         startObservingState()
-        render()
     }
 
     override package func viewIsAppearing(_ animated: Bool) {
         super.viewIsAppearing(animated)
         inspection.dom.setSelectedNodeStyleHydrationActive(true)
-        render()
     }
 
     override package func viewDidDisappear(_ animated: Bool) {
@@ -85,22 +87,6 @@ package final class DOMElementViewController: UIViewController {
             section.contentInsets = contentInsets
             return section
         }
-    }
-
-    private func configureCollectionView() {
-        collectionView.translatesAutoresizingMaskIntoConstraints = false
-        collectionView.backgroundColor = webInspectorBackgroundPolicy.backgroundColor
-        collectionView.alwaysBounceVertical = true
-        collectionView.keyboardDismissMode = .onDrag
-        collectionView.accessibilityIdentifier = "WebInspector.DOM.Element.StylesList"
-
-        view.addSubview(collectionView)
-        NSLayoutConstraint.activate([
-            collectionView.topAnchor.constraint(equalTo: view.topAnchor),
-            collectionView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            collectionView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            collectionView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-        ])
     }
 
     private func applyBackgroundFromTraits() {
@@ -184,55 +170,84 @@ package final class DOMElementViewController: UIViewController {
     }
 
     private func startObservingState() {
-        observationScope.observe(inspection.dom) { [weak self] _, _ in
-            self?.render()
-        }
-        observationScope.observe(inspection.dom.elementStyles) { [weak self] _, _ in
-            self?.render()
+        observationScope.observe(inspection.dom.elementStyles) { [weak self] _, elementStyles in
+            self?.observeSelectedNodeStyles(elementStyles.selectedNodeStyles)
         }
     }
 
-    private func render() {
-        guard isViewLoaded else {
+    private func observeSelectedNodeStyles(_ nodeStyles: CSSNodeStyles?) {
+        guard observedNodeStyles !== nodeStyles else {
+            return
+        }
+        observedNodeStyles = nodeStyles
+        selectedNodeStyleObservationScope.cancelAll()
+
+        guard let nodeStyles else {
+            render(nil)
             return
         }
 
-        render(inspection.dom.selectedNodeStyles)
+        selectedNodeStyleObservationScope.observe(nodeStyles) { [weak self] _, nodeStyles in
+            guard self?.observedNodeStyles === nodeStyles else {
+                return
+            }
+            self?.render(nodeStyles)
+        }
     }
 
     private func render(_ nodeStyles: CSSNodeStyles?) {
         guard let nodeStyles else {
-            showEmptyStyleList()
+            displayedNodeStyles = nil
+            renderUnavailableStyles()
             return
         }
-        showStyleList(nodeStyles)
+
+        switch nodeStyles.state {
+        case .loaded:
+            displayedNodeStyles = nodeStyles
+            renderStyles(nodeStyles)
+        case .loading, .needsRefresh:
+            renderPendingStyles()
+        case .unavailable, .failed:
+            displayedNodeStyles = nil
+            renderUnavailableStyles()
+        }
     }
 
-    private func showStyleList(_ nodeStyles: CSSNodeStyles) {
-        displayedNodeStyles = nodeStyles
-        showCollectionView()
-        applySnapshot(for: nodeStyles)
-    }
-
-    private func showEmptyStyleList() {
-        displayedNodeStyles = nil
-        showCollectionView()
+    private func renderUnavailableStyles() {
+        if let configuration = contentUnavailableConfiguration as? UIContentUnavailableConfiguration,
+           configuration.text == webInspectorLocalized("dom.element.styles.empty.title", default: "No styles available") {
+            applyEmptySnapshot()
+            return
+        }
+        var configuration = UIContentUnavailableConfiguration.empty()
+        configuration.text = webInspectorLocalized("dom.element.styles.empty.title", default: "No styles available")
+        configuration.secondaryText = webInspectorLocalized(
+            "dom.element.styles.empty.description",
+            default: "Select an element in the DOM tree to inspect CSS styles."
+        )
+        contentUnavailableConfiguration = configuration
         applyEmptySnapshot()
     }
 
-    private func showCollectionView() {
+    private func renderPendingStyles() {
+        guard displayedNodeStyles != nil else {
+            renderUnavailableStyles()
+            return
+        }
         if contentUnavailableConfiguration != nil {
             contentUnavailableConfiguration = nil
         }
-        if collectionView.isHidden {
-            collectionView.isHidden = false
+    }
+
+    private func renderStyles(_ nodeStyles: CSSNodeStyles) {
+        if contentUnavailableConfiguration != nil {
+            contentUnavailableConfiguration = nil
         }
+        applySnapshot(for: nodeStyles)
     }
 
     private func applyEmptySnapshot() {
-        guard dataSource.snapshot().numberOfItems != 0 || dataSource.snapshot().numberOfSections != 0 else {
-            return
-        }
         expandedUnusedVariableSectionIDs.removeAll()
         let snapshot = NSDiffableDataSourceSnapshot<CSSStyleSectionIdentifier, ItemIdentifier>()
         dataSource.apply(snapshot, animatingDifferences: false)
@@ -314,14 +329,6 @@ package final class DOMElementViewController: UIViewController {
         }
     }
 }
-
-#if DEBUG
-extension DOMElementViewController {
-    package var collectionViewForTesting: UICollectionView {
-        collectionView
-    }
-}
-#endif
 
 #Preview("DOM Element") {
     DOMElementViewControllerPreview.makeViewController()

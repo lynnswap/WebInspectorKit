@@ -567,11 +567,13 @@ func selectedNodeStylesTracksNewSelectionWhileElementStylesLoad() async throws {
     }
 
     dom.selectNode(inputID)
-    _ = try await waitUntil {
-        await session.attachment.dom.selectedNodeStyles == nil ? true : nil
-    }
-
     let inputIdentity = try #require(dom.selectedCSSNodeStyleIdentity().successValue)
+    _ = try await waitUntil {
+        await MainActor.run {
+            let styles = session.attachment.dom.selectedNodeStyles
+            return styles?.identity == inputIdentity && styles?.state == .needsRefresh ? true : nil
+        }
+    }
     let inputToken = try #require(css.beginRefresh(identity: inputIdentity))
     let loadingInputStyles = try #require(session.attachment.dom.selectedNodeStyles)
     #expect(loadingInputStyles.identity == inputIdentity)

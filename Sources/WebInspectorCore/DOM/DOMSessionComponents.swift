@@ -61,22 +61,27 @@ package final class TargetGraph {
     }
 
     package func upsertTarget(from record: ProtocolTargetRecord) {
-        let target = targetsByID[record.id] ?? ProtocolTarget(
-            id: record.id,
-            kind: record.kind,
-            frameID: record.frameID,
-            parentFrameID: record.parentFrameID,
-            capabilities: record.capabilities,
-            isProvisional: record.isProvisional,
-            isPaused: record.isPaused
-        )
+        let target: ProtocolTarget
+        if let existingTarget = targetsByID[record.id] {
+            target = existingTarget
+        } else {
+            target = ProtocolTarget(
+                id: record.id,
+                kind: record.kind,
+                frameID: record.frameID,
+                parentFrameID: record.parentFrameID,
+                capabilities: record.capabilities,
+                isProvisional: record.isProvisional,
+                isPaused: record.isPaused
+            )
+            targetsByID[record.id] = target
+        }
         target.kind = record.kind
         target.frameID = record.frameID
         target.parentFrameID = record.parentFrameID
         target.capabilities = record.capabilities
         target.isProvisional = record.isProvisional
         target.isPaused = record.isPaused
-        targetsByID[record.id] = target
     }
 
     package func removeTarget(_ targetID: ProtocolTarget.ID) -> TargetRemoval? {
@@ -105,22 +110,27 @@ package final class TargetGraph {
         let existingNewTarget = targetsByID[newTargetID]
         let frameID = existingNewTarget?.frameID ?? oldTarget.frameID
         let parentFrameID = existingNewTarget?.parentFrameID ?? oldTarget.parentFrameID
-        let committedTarget = existingNewTarget ?? ProtocolTarget(
-            id: newTargetID,
-            kind: oldTarget.kind,
-            frameID: frameID,
-            parentFrameID: parentFrameID,
-            capabilities: oldTarget.capabilities,
-            isProvisional: false,
-            isPaused: oldTarget.isPaused
-        )
+        let committedTarget: ProtocolTarget
+        if let existingNewTarget {
+            committedTarget = existingNewTarget
+        } else {
+            committedTarget = ProtocolTarget(
+                id: newTargetID,
+                kind: oldTarget.kind,
+                frameID: frameID,
+                parentFrameID: parentFrameID,
+                capabilities: oldTarget.capabilities,
+                isProvisional: false,
+                isPaused: oldTarget.isPaused
+            )
+            targetsByID[newTargetID] = committedTarget
+        }
         committedTarget.kind = existingNewTarget?.kind ?? oldTarget.kind
         committedTarget.frameID = frameID
         committedTarget.parentFrameID = parentFrameID
         committedTarget.capabilities = existingNewTarget?.capabilities ?? oldTarget.capabilities
         committedTarget.isProvisional = false
         committedTarget.isPaused = existingNewTarget?.isPaused ?? oldTarget.isPaused
-        targetsByID[newTargetID] = committedTarget
         if let frameID {
             retargetFrame(frameID, from: oldTargetID, to: newTargetID)
         }
@@ -155,9 +165,14 @@ package final class TargetGraph {
     }
 
     private func frameWithID(_ frameID: DOMFrame.ID, parentFrameID: DOMFrame.ID?) -> DOMFrame {
-        let frame = framesByID[frameID] ?? DOMFrame(id: frameID, parentFrameID: parentFrameID)
+        let frame: DOMFrame
+        if let existingFrame = framesByID[frameID] {
+            frame = existingFrame
+        } else {
+            frame = DOMFrame(id: frameID, parentFrameID: parentFrameID)
+            framesByID[frameID] = frame
+        }
         frame.parentFrameID = parentFrameID
-        framesByID[frameID] = frame
         if let parentFrameID {
             let parent = frameWithID(parentFrameID, parentFrameID: nil)
             parent.childFrameIDs.insert(frameID)
@@ -349,7 +364,10 @@ package final class DOMDocumentStore {
     }
 
     package func state(for targetID: ProtocolTarget.ID) -> DOMTargetState {
-        let state = targetStatesByID[targetID] ?? DOMTargetState(targetID: targetID)
+        if let state = targetStatesByID[targetID] {
+            return state
+        }
+        let state = DOMTargetState(targetID: targetID)
         targetStatesByID[targetID] = state
         return state
     }

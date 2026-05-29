@@ -828,6 +828,35 @@ func detachedRootCannotOverwriteConnectedPageDocumentNodes() async throws {
 }
 
 @Test
+@MainActor
+func setChildNodesUpdatesExistingNodeObjectForSameNodeID() throws {
+    let pageTargetID = ProtocolTarget.ID("page-main")
+    let session = DOMSession()
+
+    session.applyTargetCreated(.init(id: pageTargetID, kind: .page), makeCurrentMainPage: true)
+    _ = session.replaceDocumentRoot(pageDocumentWithoutIframe(), targetID: pageTargetID)
+    let before = session.snapshot()
+    let bodyID = try #require(before.currentNodeIDByKey[.init(targetID: pageTargetID, nodeID: .init(4))])
+
+    session.applySetChildNodes(
+        parent: bodyID,
+        children: [.element(nodeID: 5, name: "div", attributes: [.init(name: "class", value: "before")])]
+    )
+    let childID = try #require(session.snapshot().currentNodeIDByKey[.init(targetID: pageTargetID, nodeID: .init(5))])
+    let child = try #require(session.node(for: childID))
+
+    session.applySetChildNodes(
+        parent: bodyID,
+        children: [.element(nodeID: 5, name: "span", attributes: [.init(name: "class", value: "after")])]
+    )
+
+    let updatedChild = try #require(session.node(for: childID))
+    #expect(updatedChild === child)
+    #expect(updatedChild.nodeName == "span")
+    #expect(updatedChild.attributes == [.init(name: "class", value: "after")])
+}
+
+@Test
 func childNodeInsertedUsesWebKitPreviousSiblingSemantics() async throws {
     let pageTargetID = ProtocolTarget.ID("page-main")
     let session = await DOMSession()

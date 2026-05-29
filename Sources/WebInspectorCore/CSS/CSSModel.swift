@@ -465,10 +465,7 @@ package final class CSSSession {
     package func selectNodeStyles(identity: CSSNodeStyleIdentity) {
         selectedIdentity = identity
         selectedUnavailableReason = .noSelection
-        guard let nodeStyles = nodeStyles(for: identity) else {
-            selectedNodeStyles = nil
-            return
-        }
+        let nodeStyles = ensureNodeStyles(for: identity, initialState: .needsRefresh)
         selectCurrentNodeStyles(nodeStyles)
     }
 
@@ -485,8 +482,7 @@ package final class CSSSession {
         identity: CSSNodeStyleIdentity,
         reason: CSSNodeStylesUnavailableReason
     ) {
-        let nodeStyles = stylesByNodeID[identity.nodeID] ?? CSSNodeStyles(identity: identity)
-        stylesByNodeID[identity.nodeID] = nodeStyles
+        let nodeStyles = ensureNodeStyles(for: identity)
         nodeStyles.state = .unavailable(reason)
         activeRefreshSequenceByNodeID.removeValue(forKey: identity.nodeID)
         guard selectedIdentity == identity || selectedNodeStyles === nodeStyles else {
@@ -507,8 +503,7 @@ package final class CSSSession {
         }
 
         nextRefreshSequence &+= 1
-        let nodeStyles = stylesByNodeID[identity.nodeID] ?? CSSNodeStyles(identity: identity)
-        stylesByNodeID[identity.nodeID] = nodeStyles
+        let nodeStyles = ensureNodeStyles(for: identity)
         nodeStyles.state = .loading
         selectedIdentity = identity
         selectCurrentNodeStyles(nodeStyles)
@@ -543,8 +538,7 @@ package final class CSSSession {
         nodeStyles.state = .loaded
         activeRefreshSequenceByNodeID.removeValue(forKey: token.identity.nodeID)
         if selectedIdentity == token.identity {
-            selectedNodeStyles = nodeStyles
-            selectedUnavailableReason = .noSelection
+            selectCurrentNodeStyles(nodeStyles)
         }
     }
 
@@ -583,7 +577,7 @@ package final class CSSSession {
         }
         nodeStyles.state = .needsRefresh
         if selectedIdentity == identity {
-            selectedNodeStyles = nodeStyles
+            selectCurrentNodeStyles(nodeStyles)
         }
     }
 
@@ -687,10 +681,29 @@ package final class CSSSession {
     private func selectCurrentNodeStyles(_ nodeStyles: CSSNodeStyles) {
         switch nodeStyles.state {
         case .unavailable, .failed:
+            guard selectedNodeStyles != nil else {
+                return
+            }
             selectedNodeStyles = nil
         case .loading, .loaded, .needsRefresh:
+            selectedUnavailableReason = .noSelection
+            guard selectedNodeStyles !== nodeStyles else {
+                return
+            }
             selectedNodeStyles = nodeStyles
         }
+    }
+
+    private func ensureNodeStyles(
+        for identity: CSSNodeStyleIdentity,
+        initialState: CSSNodeStylesState = .loading
+    ) -> CSSNodeStyles {
+        if let nodeStyles = nodeStyles(for: identity) {
+            return nodeStyles
+        }
+        let nodeStyles = CSSNodeStyles(identity: identity, state: initialState)
+        stylesByNodeID[identity.nodeID] = nodeStyles
+        return nodeStyles
     }
 
     package func applySetStyleTextResult(

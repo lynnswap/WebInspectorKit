@@ -37,11 +37,11 @@ flowchart TD
     NetworkSplit["NetworkSplitViewController<br/>UISplitViewController"]
 
     CompactTree["DOMTreeViewController<br/>UIViewController"]
-    CompactElement["DOMElementViewController<br/>UIViewController"]
+    CompactElement["DOMElementViewController<br/>UICollectionViewController"]
     RegularTreeNavigation["RegularSplitColumnNavigationController<br/>UINavigationController"]
     RegularTree["DOMTreeViewController<br/>UIViewController"]
     RegularElementNavigation["RegularSplitColumnNavigationController<br/>UINavigationController"]
-    RegularElement["DOMElementViewController<br/>UIViewController"]
+    RegularElement["DOMElementViewController<br/>UICollectionViewController"]
 
     NetworkPrimaryNavigation["NetworkListColumnNavigationController<br/>UINavigationController"]
     NetworkSecondaryNavigation["RegularSplitColumnNavigationController<br/>UINavigationController"]
