@@ -338,16 +338,12 @@ struct MonoclyLifecycleTests {
 
             #expect(mainSceneDelegate.window == nil)
             #expect(mainSceneDelegate.rootViewController == nil)
-            #expect(waitForCondition {
-                BrowserInspectorCoordinator.hasInspectorWindow(for: rootViewController.inspectorSession)
-            })
+            #expect(BrowserInspectorCoordinator.hasInspectorWindow(for: rootViewController.inspectorSession))
 
             inspectorSceneDelegate.disconnect(windowScene: windowScene)
             await rootViewController.waitForInspectorSessionTransitions()
 
-            #expect(waitForCondition {
-                BrowserInspectorCoordinator.hasInspectorWindow(for: rootViewController.inspectorSession) == false
-            })
+            #expect(BrowserInspectorCoordinator.hasInspectorWindow(for: rootViewController.inspectorSession) == false)
         }
     }
 
@@ -612,7 +608,9 @@ private extension MonoclyLifecycleTests {
         window.rootViewController = rootViewController
         window.makeKeyAndVisible()
         context.retain(window)
-        drainMainQueue()
+        rootViewController.loadViewIfNeeded()
+        rootViewController.view.layoutIfNeeded()
+        window.layoutIfNeeded()
         return HostedRootFixture(windowScene: windowScene, rootViewController: rootViewController)
     }
 
@@ -622,21 +620,6 @@ private extension MonoclyLifecycleTests {
                 .compactMap { $0 as? UIWindowScene }
                 .first
         )
-    }
-
-    func drainMainQueue() {
-        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
-    }
-
-    func waitForCondition(timeout: TimeInterval = 2, condition: () -> Bool) -> Bool {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            if condition() {
-                return true
-            }
-            drainMainQueue()
-        }
-        return condition()
     }
 
     func makeSavedStateFixture(

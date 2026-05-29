@@ -24,6 +24,8 @@ package final class DOMElementViewController: UICollectionViewController {
 
 #if DEBUG
     package private(set) var lastSnapshotAnimatedForTesting = false
+    private var elementStylesObservationDelivery: ObservationDelivery?
+    private var selectedNodeStyleObservationDelivery: ObservationDelivery?
 #endif
 
     private lazy var dataSource = makeDataSource()
@@ -166,7 +168,7 @@ package final class DOMElementViewController: UICollectionViewController {
     }
 
     private func startObservingState() {
-        observationScope.observe(inspection.dom.elementStyles, tracking: { elementStyles in
+        let delivery = observationScope.observe(inspection.dom.elementStyles, tracking: { elementStyles in
             _ = elementStyles.selectedNodeStyles
         }) { [weak self] _, elementStyles in
             self?.bindSelectedNodeStyles(
@@ -174,12 +176,18 @@ package final class DOMElementViewController: UICollectionViewController {
                 unavailableState: elementStyles.selectedState
             )
         }
+#if DEBUG
+        elementStylesObservationDelivery = delivery
+#endif
     }
 
     private func bindSelectedNodeStyles(_ nodeStyles: CSSNodeStyles?, unavailableState: CSSNodeStylesState) {
         guard let nodeStyles else {
             observedNodeStyles = nil
             selectedNodeStyleObservationScope.cancelAll()
+#if DEBUG
+            selectedNodeStyleObservationDelivery = nil
+#endif
             render(unavailableState)
             return
         }
@@ -189,12 +197,15 @@ package final class DOMElementViewController: UICollectionViewController {
         }
         observedNodeStyles = nodeStyles
         selectedNodeStyleObservationScope.cancelAll()
-        selectedNodeStyleObservationScope.observe(nodeStyles) { [weak self] _, nodeStyles in
+        let delivery = selectedNodeStyleObservationScope.observe(nodeStyles) { [weak self] _, nodeStyles in
             guard self?.observedNodeStyles === nodeStyles else {
                 return
             }
             self?.render(nodeStyles)
         }
+#if DEBUG
+        selectedNodeStyleObservationDelivery = delivery
+#endif
     }
 
     private func render(_ nodeStyles: CSSNodeStyles) {
@@ -335,5 +346,15 @@ package final class DOMElementViewController: UICollectionViewController {
             inspection?.dom.requestSetCSSProperty(propertyID, enabled: enabled) ?? false
         }
     }
+
+#if DEBUG
+    package var elementStylesObservationDeliveryForTesting: ObservationDelivery? {
+        elementStylesObservationDelivery
+    }
+
+    package var selectedNodeStyleObservationDeliveryForTesting: ObservationDelivery? {
+        selectedNodeStyleObservationDelivery
+    }
+#endif
 }
 #endif

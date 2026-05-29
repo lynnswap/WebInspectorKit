@@ -18,9 +18,16 @@ package struct SentTargetMessage: Equatable, Sendable {
 }
 
 package actor FakeTransportBackend: TransportBackend {
+    private struct MessageWaiter: Sendable {
+        var id: UInt64
+        var ordinal: Int
+        var after: Int
+        var continuation: CheckedContinuation<String, Error>
+    }
+
     private struct TargetMessageWaiter: Sendable {
         var id: UInt64
-        var method: String
+        var method: String?
         var ordinal: Int
         var after: Int
         var continuation: CheckedContinuation<SentTargetMessage, Error>
@@ -29,6 +36,9 @@ package actor FakeTransportBackend: TransportBackend {
     private var messages: [String]
     private var sendError: (any Error)?
     private var detached: Bool
+    private var messageWaiters: [MessageWaiter]
+    private var nextMessageWaiterID: UInt64
+    private var cancelledMessageWaiterIDs: Set<UInt64>
     private var targetMessageWaiters: [TargetMessageWaiter]
     private var nextTargetMessageWaiterID: UInt64
     private var cancelledTargetMessageWaiterIDs: Set<UInt64>
@@ -36,6 +46,9 @@ package actor FakeTransportBackend: TransportBackend {
     package init() {
         messages = []
         detached = false
+        messageWaiters = []
+        nextMessageWaiterID = 0
+        cancelledMessageWaiterIDs = []
         targetMessageWaiters = []
         nextTargetMessageWaiterID = 0
         cancelledTargetMessageWaiterIDs = []
@@ -46,6 +59,7 @@ package actor FakeTransportBackend: TransportBackend {
             throw sendError
         }
         messages.append(message)
+        resumeMessageWaiters()
         resumeTargetMessageWaiters()
     }
 
@@ -65,7 +79,41 @@ package actor FakeTransportBackend: TransportBackend {
         messages.compactMap { Self.sentTargetMessage(from: $0) }
     }
 
+    package func waitForMessage(ordinal: Int = 0, after count: Int = 0) async throws -> String {
+        try Task.checkCancellation()
+        if let message = message(ordinal: ordinal, after: count) {
+            return message
+        }
+
+        nextMessageWaiterID &+= 1
+        let waiterID = nextMessageWaiterID
+        let message = try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                registerMessageWaiter(
+                    id: waiterID,
+                    ordinal: ordinal,
+                    after: count,
+                    continuation: continuation
+                )
+            }
+        } onCancel: {
+            Task {
+                await self.cancelMessageWaiter(waiterID)
+            }
+        }
+        try Task.checkCancellation()
+        return message
+    }
+
+    package func waitForTargetMessage(ordinal: Int = 0, after count: Int = 0) async throws -> SentTargetMessage {
+        try await waitForTargetMessage(method: nil, ordinal: ordinal, after: count)
+    }
+
     package func waitForTargetMessage(method: String, ordinal: Int = 0, after count: Int = 0) async throws -> SentTargetMessage {
+        try await waitForTargetMessage(method: method as String?, ordinal: ordinal, after: count)
+    }
+
+    private func waitForTargetMessage(method: String?, ordinal: Int, after count: Int) async throws -> SentTargetMessage {
         try Task.checkCancellation()
         if let message = targetMessage(method: method, ordinal: ordinal, after: count) {
             return message
@@ -96,6 +144,20 @@ package actor FakeTransportBackend: TransportBackend {
         detached
     }
 
+    private func resumeMessageWaiters() {
+        var remainingWaiters: [MessageWaiter] = []
+        for waiter in messageWaiters {
+            if cancelledMessageWaiterIDs.remove(waiter.id) != nil {
+                waiter.continuation.resume(throwing: CancellationError())
+            } else if let message = message(ordinal: waiter.ordinal, after: waiter.after) {
+                waiter.continuation.resume(returning: message)
+            } else {
+                remainingWaiters.append(waiter)
+            }
+        }
+        messageWaiters = remainingWaiters
+    }
+
     private func resumeTargetMessageWaiters() {
         var remainingWaiters: [TargetMessageWaiter] = []
         for waiter in targetMessageWaiters {
@@ -110,9 +172,33 @@ package actor FakeTransportBackend: TransportBackend {
         targetMessageWaiters = remainingWaiters
     }
 
+    private func registerMessageWaiter(
+        id: UInt64,
+        ordinal: Int,
+        after count: Int,
+        continuation: CheckedContinuation<String, Error>
+    ) {
+        guard cancelledMessageWaiterIDs.remove(id) == nil else {
+            continuation.resume(throwing: CancellationError())
+            return
+        }
+        if let message = message(ordinal: ordinal, after: count) {
+            continuation.resume(returning: message)
+            return
+        }
+        messageWaiters.append(
+            MessageWaiter(
+                id: id,
+                ordinal: ordinal,
+                after: count,
+                continuation: continuation
+            )
+        )
+    }
+
     private func registerTargetMessageWaiter(
         id: UInt64,
-        method: String,
+        method: String?,
         ordinal: Int,
         after count: Int,
         continuation: CheckedContinuation<SentTargetMessage, Error>
@@ -136,6 +222,15 @@ package actor FakeTransportBackend: TransportBackend {
         )
     }
 
+    private func cancelMessageWaiter(_ id: UInt64) {
+        guard let index = messageWaiters.firstIndex(where: { $0.id == id }) else {
+            cancelledMessageWaiterIDs.insert(id)
+            return
+        }
+        let waiter = messageWaiters.remove(at: index)
+        waiter.continuation.resume(throwing: CancellationError())
+    }
+
     private func cancelTargetMessageWaiter(_ id: UInt64) {
         guard let index = targetMessageWaiters.firstIndex(where: { $0.id == id }) else {
             cancelledTargetMessageWaiterIDs.insert(id)
@@ -145,9 +240,20 @@ package actor FakeTransportBackend: TransportBackend {
         waiter.continuation.resume(throwing: CancellationError())
     }
 
-    private func targetMessage(method: String, ordinal: Int, after count: Int) -> SentTargetMessage? {
+    private func message(ordinal: Int, after count: Int) -> String? {
+        let matches = Array(messages.dropFirst(count))
+        guard matches.indices.contains(ordinal) else {
+            return nil
+        }
+        return matches[ordinal]
+    }
+
+    private func targetMessage(method: String?, ordinal: Int, after count: Int) -> SentTargetMessage? {
         let matches = sentTargetMessages().dropFirst(count).filter { sentMessage in
-            Self.messageMethod(from: sentMessage.message) == method
+            guard let method else {
+                return true
+            }
+            return Self.messageMethod(from: sentMessage.message) == method
         }
         guard matches.indices.contains(ordinal) else {
             return nil

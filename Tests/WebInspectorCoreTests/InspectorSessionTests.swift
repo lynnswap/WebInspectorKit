@@ -120,7 +120,7 @@ func domainPumpsApplyNetworkEventsToNetworkSession() async throws {
         targetID: .pageMain,
         message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-1","frameId":"main-frame","request":{"url":"https://example.com/app.js"},"timestamp":1}}"#
     )
-    let request = try await waitUntil {
+    let request = try await awaitValueAfterActorTurns {
         await session.attachment.network.requestSnapshot(for: .init(targetID: .pageMain, requestID: .init("request-1")))
     }
 
@@ -141,7 +141,7 @@ func domainPumpsApplyConsoleEventsToConsoleSession() async throws {
         message: #"{"method":"Console.messageAdded","params":{"message":{"source":"console-api","level":"warning","text":"hello","type":"log","networkRequestId":"request-1"}}}"#
     )
 
-    let snapshot: ConsoleSessionSnapshot = try await waitUntil {
+    let snapshot: ConsoleSessionSnapshot = try await awaitValueAfterActorTurns {
         let snapshot = await session.attachment.console.snapshot()
         guard snapshot.orderedMessageIDs.isEmpty == false else {
             return nil
@@ -170,7 +170,7 @@ func domainPumpsReleaseConsoleRuntimeObjectsOnConsoleClear() async throws {
         runtimeAgentTargetID: .pageMain,
         objectID: RuntimeRemoteObjectIdentifier("console-object")
     )
-    let _: Bool = try await waitUntil {
+    let _: Bool = try await awaitValueAfterActorTurns {
         let runtimeSnapshot = await session.attachment.runtime.snapshot()
         let consoleSnapshot = await session.attachment.console.snapshot()
         let linkedParameter = await MainActor.run {
@@ -194,7 +194,7 @@ func domainPumpsReleaseConsoleRuntimeObjectsOnConsoleClear() async throws {
         message: #"{"method":"Console.messagesCleared","params":{"reason":"console-api"}}"#
     )
 
-    let _: Bool = try await waitUntil {
+    let _: Bool = try await awaitValueAfterActorTurns {
         let runtimeSnapshot = await session.attachment.runtime.snapshot()
         let consoleSnapshot = await session.attachment.console.snapshot()
         guard runtimeSnapshot.remoteObjectsByID[objectKey] == nil,
@@ -217,7 +217,7 @@ func domainPumpsApplyRootScopedConsoleEventsToMainPageConsoleSession() async thr
         #"{"method":"Console.messageAdded","params":{"message":{"source":"console-api","level":"error","text":"root hello","type":"log","networkRequestId":"request-root"}}}"#
     )
 
-    let snapshot: ConsoleSessionSnapshot = try await waitUntil {
+    let snapshot: ConsoleSessionSnapshot = try await awaitValueAfterActorTurns {
         let snapshot = await session.attachment.console.snapshot()
         guard snapshot.orderedMessageIDs.isEmpty == false else {
             return nil
@@ -241,10 +241,10 @@ func domainPumpsApplyRuntimeContextTeardownToRuntimeAndDOMSessions() async throw
         targetID: .pageMain,
         message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":81,"type":"normal","frameId":"main-frame"}}}"#
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 81)]
     }
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 81)]
     }
 
@@ -253,7 +253,7 @@ func domainPumpsApplyRuntimeContextTeardownToRuntimeAndDOMSessions() async throw
         targetID: .pageMain,
         message: #"{"method":"Runtime.executionContextDestroyed","params":{"executionContextId":81}}"#
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         let runtimeContext = await session.attachment.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 81)]
         let domContext = await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 81)]
         return runtimeContext == nil && domContext == nil ? true : nil
@@ -264,7 +264,7 @@ func domainPumpsApplyRuntimeContextTeardownToRuntimeAndDOMSessions() async throw
         targetID: .pageMain,
         message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":82,"type":"normal","frameId":"main-frame"}}}"#
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 82)]
     }
     await receiveTargetDispatch(
@@ -272,7 +272,7 @@ func domainPumpsApplyRuntimeContextTeardownToRuntimeAndDOMSessions() async throw
         targetID: .pageMain,
         message: #"{"method":"Runtime.executionContextsCleared","params":{}}"#
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         let runtimeContext = await session.attachment.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 82)]
         let domContext = await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 82)]
         return runtimeContext == nil && domContext == nil ? true : nil
@@ -289,7 +289,7 @@ func runtimeContextDispatchedOnPageResolvesToFrameTargetByFrameID() async throws
     await transport.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["Runtime"],"isProvisional":false}}}"#
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.snapshot().targetsByID[.frameAd]
     }
     await receiveTargetDispatch(
@@ -298,14 +298,14 @@ func runtimeContextDispatchedOnPageResolvesToFrameTargetByFrameID() async throws
         message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":77,"frameId":"ad-frame"}}}"#
     )
 
-    let runtimeSnapshot: RuntimeStateSnapshot = try await waitUntil {
+    let runtimeSnapshot: RuntimeStateSnapshot = try await awaitValueAfterActorTurns {
         let snapshot = await session.attachment.runtime.snapshot()
         guard snapshot.executionContextsByKey[contextKey(.pageMain, 77)]?.targetID == .frameAd else {
             return nil
         }
         return snapshot
     }
-    let domSnapshot: DOMSessionSnapshot = try await waitUntil {
+    let domSnapshot: DOMSessionSnapshot = try await awaitValueAfterActorTurns {
         let snapshot = await session.attachment.dom.snapshot()
         guard snapshot.executionContextsByKey[contextKey(.pageMain, 77)]?.targetID == .frameAd else {
             return nil
@@ -326,14 +326,14 @@ func rootRuntimeClearRemovesFrameContextOwnedByPageRuntimeAgent() async throws {
     await transport.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["Runtime"],"isProvisional":false}}}"#
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.snapshot().targetsByID[.frameAd]
     }
     await transport.receiveRootMessage(
         #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":78,"frameId":"ad-frame"}}}"#
     )
 
-    let _: Bool = try await waitUntil {
+    let _: Bool = try await awaitValueAfterActorTurns {
         let runtimeContext = await session.attachment.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 78)]
         let domContext = await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 78)]
         guard runtimeContext?.targetID == .frameAd,
@@ -346,7 +346,7 @@ func rootRuntimeClearRemovesFrameContextOwnedByPageRuntimeAgent() async throws {
     }
 
     await transport.receiveRootMessage(#"{"method":"Runtime.executionContextsCleared","params":{}}"#)
-    let _: Bool = try await waitUntil {
+    let _: Bool = try await awaitValueAfterActorTurns {
         let runtimeContext = await session.attachment.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 78)]
         let domContext = await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 78)]
         return runtimeContext == nil && domContext == nil ? true : nil
@@ -407,7 +407,7 @@ func networkResponseBodyFetchAppliesResultToCoreRequest() async throws {
         targetID: .pageMain,
         message: #"{"method":"Network.responseReceived","params":{"requestId":"request-2","timestamp":2,"type":"XHR","response":{"url":"https://example.com/api.json","status":200,"mimeType":"application/json","headers":{"content-type":"application/json"}}}}"#
     )
-    let request = try await waitUntil {
+    let request = try await awaitValueAfterActorTurns {
         await session.attachment.network.request(for: .init(targetID: .pageMain, requestID: .init("request-2")))
     }
     let responseBody = await request.responseBody
@@ -464,7 +464,7 @@ func networkResponseBodyFetchErrorDoesNotRetry() async throws {
         targetID: .pageMain,
         message: #"{"method":"Network.loadingFinished","params":{"requestId":"request-error","timestamp":3}}"#
     )
-    let request = try await waitUntil {
+    let request = try await awaitValueAfterActorTurns {
         await session.attachment.network.request(for: .init(targetID: .pageMain, requestID: .init("request-error")))
     }
     let responseBody = await request.responseBody
@@ -562,13 +562,13 @@ func selectedNodeStylesTracksNewSelectionWhileElementStylesLoad() async throws {
         marginValue: "0",
         marginText: "margin: 0;"
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.selectedNodeStyles === bodyStyles ? true : nil
     }
 
     dom.selectNode(inputID)
     let inputIdentity = try #require(dom.selectedCSSNodeStyleIdentity().successValue)
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await MainActor.run {
             let styles = session.attachment.dom.selectedNodeStyles
             return styles?.identity == inputIdentity && styles?.state == .needsRefresh ? true : nil
@@ -588,12 +588,12 @@ func selectedNodeStylesTracksNewSelectionWhileElementStylesLoad() async throws {
         marginValue: "8px",
         marginText: "margin: 8px;"
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.selectedNodeStyles === inputStyles ? true : nil
     }
 
     dom.selectNode(nil)
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.selectedNodeStyles == nil ? true : nil
     }
 }
@@ -619,7 +619,7 @@ func selectedElementStyleHydrationLoadsCSSSessionWhenActive() async throws {
         styleSheetID: "sheet-body"
     )
 
-    let didLoadStyles = try await waitUntil {
+    let didLoadStyles = try await awaitValueAfterActorTurns {
         await session.attachment.dom.elementStyles.selectedState == .loaded ? true : nil
     }
     #expect(didLoadStyles)
@@ -654,7 +654,7 @@ func selectedElementStyleHydrationCancellationDoesNotPublishFailure() async thro
         styleSheetID: "sheet-html"
     )
 
-    let didLoadReplacementStyles = try await waitUntil {
+    let didLoadReplacementStyles = try await awaitValueAfterActorTurns {
         let selectedNodeID = await session.attachment.dom.elementStyles.selectedNodeStyles?.identity.nodeID
         let selectedState = await session.attachment.dom.elementStyles.selectedState
         return selectedNodeID == htmlID && selectedState == .loaded ? true : nil
@@ -677,7 +677,7 @@ func selectedElementStyleHydrationCancellationResetsLoadingForFutureRefresh() as
     let firstSentCount = await backend.sentTargetMessages().count
     session.attachment.dom.setSelectedNodeStyleHydrationActive(true)
     _ = try await waitForCSSRefreshMessages(backend, after: firstSentCount)
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.elementStyles.selectedState == .loading ? true : nil
     }
 
@@ -694,7 +694,7 @@ func selectedElementStyleHydrationCancellationResetsLoadingForFutureRefresh() as
         styleSheetID: "sheet-body"
     )
 
-    let didLoadStyles = try await waitUntil {
+    let didLoadStyles = try await awaitValueAfterActorTurns {
         await session.attachment.dom.elementStyles.selectedState == .loaded ? true : nil
     }
     #expect(didLoadStyles)
@@ -721,7 +721,7 @@ func selectedElementStyleHydrationClearsStylesAfterSelectionDisappears() async t
         selector: "body",
         styleSheetID: "sheet-body"
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.elementStyles.selectedState == .loaded ? true : nil
     }
 
@@ -730,10 +730,10 @@ func selectedElementStyleHydrationClearsStylesAfterSelectionDisappears() async t
         targetID: .pageMain,
         message: #"{"method":"DOM.childNodeRemoved","params":{"nodeId":4}}"#
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.selectedNodeID == nil ? true : nil
     }
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.elementStyles.selectedNodeStyles == nil ? true : nil
     }
 
@@ -897,7 +897,7 @@ func cssPropertyToggleSendsSetStyleTextAndRefreshesStyles() async throws {
         marginStatus: "disabled",
         marginText: "/* margin: 0; */"
     )
-    _ = try await waitUntil { @MainActor in
+    _ = try await awaitValueAfterActorTurns { @MainActor in
         session.attachment.dom.elementStyles.selectedNodeStyles?.sections[1].style.cssProperties[0].isEnabled == false ? true : nil
     }
 
@@ -931,7 +931,7 @@ func cssAndDOMStyleInvalidationsMarkSelectedNodeStylesNeedsRefresh() async throw
     await transport.receiveRootMessage(
         #"{"method":"CSS.styleSheetChanged","params":{"styleSheetId":"sheet-body"}}"#
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.elementStyles.selectedState == .needsRefresh ? true : nil
     }
 
@@ -949,7 +949,7 @@ func cssAndDOMStyleInvalidationsMarkSelectedNodeStylesNeedsRefresh() async throw
         targetID: .pageMain,
         message: #"{"method":"DOM.attributeModified","params":{"nodeId":4,"name":"class","value":"featured"}}"#
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.elementStyles.selectedState == .needsRefresh ? true : nil
     }
 
@@ -967,7 +967,7 @@ func cssAndDOMStyleInvalidationsMarkSelectedNodeStylesNeedsRefresh() async throw
         targetID: .pageMain,
         message: #"{"method":"DOM.attributeModified","params":{"nodeId":5,"name":"class","value":"child-only"}}"#
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.elementStyles.selectedState == .needsRefresh ? true : nil
     }
 
@@ -993,7 +993,7 @@ func cssAndDOMStyleInvalidationsMarkSelectedNodeStylesNeedsRefresh() async throw
         targetID: .pageMain,
         message: #"{"method":"DOM.childNodeInserted","params":{"parentNodeId":4,"previousNodeId":5,"node":{"nodeId":6,"nodeType":1,"nodeName":"ASIDE","localName":"aside"}}}"#
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.elementStyles.selectedState == .needsRefresh ? true : nil
     }
 
@@ -1016,7 +1016,7 @@ func cssAndDOMStyleInvalidationsMarkSelectedNodeStylesNeedsRefresh() async throw
         targetID: .pageMain,
         message: #"{"method":"DOM.childNodeCountUpdated","params":{"nodeId":4,"childNodeCount":3}}"#
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.elementStyles.selectedState == .needsRefresh ? true : nil
     }
 }
@@ -1045,7 +1045,7 @@ func documentUpdatedClearsSelectedCSSNodeStylesForInvalidatedDocument() async th
         targetID: .pageMain,
         message: #"{"method":"DOM.documentUpdated","params":{}}"#
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.elementStyles.selectedNodeStyles == nil ? true : nil
     }
     #expect(await session.attachment.dom.elementStyles.selectedNodeStyles == nil)
@@ -1110,7 +1110,7 @@ func domMutationRemovingSelectedNodeClearsSelectedCSSNodeStyles() async throws {
         targetID: .pageMain,
         message: #"{"method":"DOM.childNodeRemoved","params":{"nodeId":4}}"#
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.selectedNodeID == nil ? true : nil
     }
 
@@ -1165,7 +1165,7 @@ func frameDocumentRefreshUpdatesOnlyFrameDocument() async throws {
     await transport.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["DOM"],"isProvisional":false}}}"#
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.snapshot().targetsByID[.frameAd]
     }
 
@@ -1176,7 +1176,7 @@ func frameDocumentRefreshUpdatesOnlyFrameDocument() async throws {
         messageID: try messageID(sent.message),
         result: ##"{"root":{"nodeId":1,"nodeType":9,"nodeName":"#document","children":[{"nodeId":2,"nodeType":1,"nodeName":"HTML","localName":"html"}]}}"##
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.snapshot().targetsByID[.frameAd]?.currentDocumentID
     }
 
@@ -1197,7 +1197,7 @@ func frameTargetWithoutDOMCapabilityDoesNotHydrateOnCreationOrDocumentUpdated() 
     await transport.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":[],"isProvisional":false}}}"#
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.snapshot().targetsByID[.frameAd]
     }
     await receiveTargetDispatch(
@@ -1221,7 +1221,7 @@ func frameTargetWithoutAdvertisedDomainsUsesWebKitFrameDefaultAndDoesNotHydrateO
     await transport.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.snapshot().targetsByID[.frameAd]
     }
 
@@ -1389,7 +1389,7 @@ func consoleEnableTargetNotFoundDoesNotMarkCommandUnsupported() async throws {
         message: "Target not found"
     )
 
-    let didPublishFailure = try await waitUntil {
+    let didPublishFailure = try await awaitValueAfterActorTurns {
         await session.lastError != nil ? true : nil
     }
     #expect(didPublishFailure)
@@ -1603,7 +1603,7 @@ func provisionalFrameDocumentReplyBeforeCommitRehydratesCommittedFrame() async t
         result: secondLazyFrameDocumentResult
     )
 
-    let snapshot: DOMSessionSnapshot = try await waitUntil {
+    let snapshot: DOMSessionSnapshot = try await awaitValueAfterActorTurns {
         let snapshot = await session.attachment.dom.snapshot()
         guard snapshot.targetsByID[ProtocolTargetIdentifier.frameAd]?.currentDocumentID != nil else {
             return nil
@@ -1749,7 +1749,7 @@ func subframeCommitDoesNotRetargetPageRuntimeOrConsoleState() async throws {
         targetID: .pageMain,
         message: #"{"method":"Console.messageAdded","params":{"message":{"source":"console-api","level":"log","text":"page message","type":"log"}}}"#
     )
-    let _: Bool = try await waitUntil {
+    let _: Bool = try await awaitValueAfterActorTurns {
         let runtimeSnapshot = await session.attachment.runtime.snapshot()
         let consoleSnapshot = await session.attachment.console.snapshot()
         guard runtimeSnapshot.executionContextsByKey[contextKey(.pageMain, 7)]?.targetID == .pageMain,
@@ -1811,7 +1811,7 @@ func provisionalFrameCommitCancelsInFlightDocumentRequestBeforeRehydrating() asy
         messageID: try messageID(committedRequest.message),
         result: secondLazyFrameDocumentResult
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.snapshot().currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(201))]
     }
 
@@ -1868,7 +1868,7 @@ func oldlessProvisionalFrameCommitCancelsInFlightDocumentRequestBeforeRehydratin
         messageID: try messageID(committedRequest.message),
         result: secondLazyFrameDocumentResult
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.snapshot().currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(201))]
     }
 
@@ -1927,7 +1927,7 @@ func frameDocumentRequestDoesNotBlockPageDOMEvents() async throws {
         messageID: try messageID(frameDocumentRequest.message),
         result: firstLazyFrameDocumentResult
     )
-    let finalSnapshot: DOMSessionSnapshot = try await waitUntil {
+    let finalSnapshot: DOMSessionSnapshot = try await awaitValueAfterActorTurns {
         let snapshot = await session.attachment.dom.snapshot()
         guard snapshot.targetsByID[.frameAd]?.currentDocumentID != nil else {
             return nil
@@ -1951,7 +1951,7 @@ func pageDocumentUpdatedInvalidatesCurrentPageDocumentWithoutReloading() async t
         targetID: .pageMain,
         message: #"{"method":"DOM.documentUpdated","params":{}}"#
     )
-    let snapshot: DOMSessionSnapshot = try await waitUntil {
+    let snapshot: DOMSessionSnapshot = try await awaitValueAfterActorTurns {
         let snapshot = await session.attachment.dom.snapshot()
         guard snapshot.currentPageDocumentID == nil else {
             return nil
@@ -1977,7 +1977,7 @@ func ensureDOMDocumentLoadedReloadsInvalidatedPageDocument() async throws {
         targetID: .pageMain,
         message: #"{"method":"DOM.documentUpdated","params":{}}"#
     )
-    let invalidatedSnapshot: DOMSessionSnapshot = try await waitUntil {
+    let invalidatedSnapshot: DOMSessionSnapshot = try await awaitValueAfterActorTurns {
         let snapshot = await session.attachment.dom.snapshot()
         guard snapshot.currentPageDocumentID == nil else {
             return nil
@@ -2021,7 +2021,7 @@ func documentUpdatedAllowsNewDocumentRequestWhilePreviousRequestIsPending() asyn
         targetID: .pageMain,
         message: #"{"method":"DOM.documentUpdated","params":{}}"#
     )
-    let _: DOMSessionSnapshot = try await waitUntil {
+    let _: DOMSessionSnapshot = try await awaitValueAfterActorTurns {
         let snapshot = await session.attachment.dom.snapshot()
         guard snapshot.currentPageDocumentID == nil else {
             return nil
@@ -2138,7 +2138,7 @@ func staleSetChildNodesAfterPageNavigationDoesNotMoveHeadChildrenIntoNewBody() a
         targetID: .pageMain,
         message: #"{"method":"DOM.setChildNodes","params":{"parentId":4,"nodes":[{"nodeId":8,"nodeType":1,"nodeName":"STYLE","localName":"style"}]}}"#
     )
-    let _: DOMSessionSnapshot = try await waitUntil {
+    let _: DOMSessionSnapshot = try await awaitValueAfterActorTurns {
         let snapshot = await session.attachment.dom.snapshot()
         guard snapshot.currentPageDocumentID == nil else {
             return nil
@@ -2205,7 +2205,7 @@ func rootScopedDocumentUpdatedInvalidatesCurrentPageDocument() async throws {
         messageID: try messageID(frameDocumentRequest.message),
         result: firstLazyFrameDocumentResult
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.snapshot().targetsByID[.frameAd]
     }
 
@@ -2234,7 +2234,7 @@ func rootScopedDocumentUpdatedInvalidatesCurrentPageDocument() async throws {
     let sentCountBeforeTargetlessUpdate = await backend.sentTargetMessages().count
     await transport.receiveRootMessage(#"{"method":"DOM.documentUpdated","params":{}}"#)
 
-    let afterUpdate: DOMSessionSnapshot = try await waitUntil {
+    let afterUpdate: DOMSessionSnapshot = try await awaitValueAfterActorTurns {
         let snapshot = await session.attachment.dom.snapshot()
         guard snapshot.currentPageDocumentID == nil else {
             return nil
@@ -2278,7 +2278,7 @@ func lazyIframeInsertionAndFrameDocumentUpdateKeepParentPageTree() async throws 
         messageID: try messageID(firstFrameDocumentRequest.message),
         result: firstLazyFrameDocumentResult
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.snapshot().targetsByID[.frameAd]
     }
 
@@ -2352,7 +2352,7 @@ func lazyIframeInsertionAndFrameDocumentUpdateKeepParentPageTree() async throws 
         result: secondLazyFrameDocumentResult
     )
 
-    let afterUpdate: DOMSessionSnapshot = try await waitUntil {
+    let afterUpdate: DOMSessionSnapshot = try await awaitValueAfterActorTurns {
         let snapshot = await session.attachment.dom.snapshot()
         guard let currentDocumentID = snapshot.targetsByID[.frameAd]?.currentDocumentID,
               currentDocumentID != firstFrameDocumentID else {
@@ -2397,7 +2397,7 @@ func repeatedFrameDocumentUpdatedReissuesInFlightFrameReload() async throws {
         messageID: try messageID(initialFrameDocumentRequest.message),
         result: firstLazyFrameDocumentResult
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.snapshot().targetsByID[.frameAd]?.currentDocumentID
     }
 
@@ -2448,7 +2448,7 @@ func repeatedFrameDocumentUpdatedReissuesInFlightFrameReload() async throws {
         result: secondLazyFrameDocumentResult
     )
 
-    let snapshot: DOMSessionSnapshot = try await waitUntil {
+    let snapshot: DOMSessionSnapshot = try await awaitValueAfterActorTurns {
         let snapshot = await session.attachment.dom.snapshot()
         guard snapshot.currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(201))] != nil else {
             return nil
@@ -2556,7 +2556,7 @@ func lazyIframeOwnerFrameIdIsNotTreatedAsChildFrameIdentity() async throws {
     await transport.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.snapshot().targetsByID[.frameAd]
     }
 
@@ -2626,7 +2626,7 @@ func lazyIframeOwnerFrameIdIsNotTreatedAsChildFrameIdentity() async throws {
         messageID: try messageID(disable.message),
         result: "{}"
     )
-    let selectedNode = try await waitUntil {
+    let selectedNode = try await awaitValueAfterActorTurns {
         await session.attachment.dom.selectedNode
     }
     #expect(await selectedNode.nodeName == "CANVAS")
@@ -2756,7 +2756,7 @@ func linkNavigationBuffersProvisionalDOMEventsUntilCommit() async throws {
         documentResult: newDocumentWithHeadChildCountResult
     )
 
-    let snapshot: DOMSessionSnapshot = try await waitUntil {
+    let snapshot: DOMSessionSnapshot = try await awaitValueAfterActorTurns {
         let snapshot = await session.attachment.dom.snapshot()
         guard snapshot.currentPageTargetID == .pageNext,
               snapshot.currentNodeIDByKey[.init(targetID: .pageNext, nodeID: .init(3))] != nil else {
@@ -2782,10 +2782,10 @@ func requestNodeWaitsForPathPushBeforeSelectingNode() async throws {
         targetID: .pageMain,
         message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"main-frame"}}}"#
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
     }
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
     }
     #expect(await session.attachment.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]?.targetID == .pageMain)
@@ -2935,7 +2935,7 @@ func detachedFrameSetChildNodesRootKeepsRequestNodeSelectable() async throws {
         messageID: try messageID(frameDocumentRequest.message),
         result: firstLazyFrameDocumentResult
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.snapshot().targetsByID[ProtocolTargetIdentifier.frameAd]?.currentDocumentID
     }
 
@@ -2986,7 +2986,7 @@ func requestNodeReplyBeforePathPushKeepsSelectionPendingUntilParentArrives() asy
         targetID: .pageMain,
         message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"main-frame"}}}"#
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
     }
     let intent = await session.attachment.dom.beginInspectSelectionRequest(
@@ -3032,7 +3032,7 @@ func requestNodeReplyBeforePathPushKeepsSelectionPendingUntilParentArrives() asy
         message: #"{"method":"DOM.setChildNodes","params":{"parentId":2,"nodes":[{"nodeId":999,"nodeType":1,"nodeName":"DIV","localName":"div","attributes":["id","late-path"]}]}}"#
     )
 
-    let selectedNode = try await waitUntil {
+    let selectedNode = try await awaitValueAfterActorTurns {
         await session.attachment.dom.selectedNode
     }
     #expect(await selectedNode.nodeName == "DIV")
@@ -3097,7 +3097,7 @@ func targetDestroyedClearsActiveElementPicker() async throws {
     await transport.receiveRootMessage(
         #"{"method":"Target.targetDestroyed","params":{"targetId":"page-main"}}"#
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.isSelectingElement == false ? true : nil
     }
 }
@@ -3119,7 +3119,7 @@ func targetCommitClearsElementPickerForOldTarget() async throws {
         #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-main","newTargetId":"page-next"}}"#
     )
 
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.isSelectingElement == false ? true : nil
     }
 
@@ -3205,7 +3205,7 @@ func elementPickerIgnoresInspectEventBeforeInspectModeReply() async throws {
         targetID: .pageMain,
         message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"main-frame"}}}"#
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
     }
 
@@ -3270,7 +3270,7 @@ func elementPickerIgnoresInspectEventBeforeInspectModeReply() async throws {
         result: "{}"
     )
 
-    let selectedNode = try await waitUntil {
+    let selectedNode = try await awaitValueAfterActorTurns {
         await session.attachment.dom.selectedNode
     }
     #expect(await selectedNode.nodeName == "DIV")
@@ -3288,7 +3288,7 @@ func restartedElementPickerIgnoresStaleInspectEventBeforeInspectModeReply() asyn
         targetID: .pageMain,
         message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"main-frame"}}}"#
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
     }
 
@@ -3391,7 +3391,7 @@ func restartedElementPickerIgnoresStaleInspectEventBeforeInspectModeReply() asyn
         result: "{}"
     )
 
-    let selectedNode = try await waitUntil {
+    let selectedNode = try await awaitValueAfterActorTurns {
         await session.attachment.dom.selectedNode
     }
     #expect(await selectedNode.nodeName == "DIV")
@@ -3409,7 +3409,7 @@ func staleInspectEventCompletionDoesNotCancelRestartedPicker() async throws {
         targetID: .pageMain,
         message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"main-frame"}}}"#
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
     }
     try await beginPicker(session: session, transport: transport, backend: backend)
@@ -3489,7 +3489,7 @@ func inspectorInspectSelectsRequestedNodeAndDisablesPicker() async throws {
         targetID: .pageMain,
         message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"main-frame"}}}"#
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
     }
     try await beginPicker(session: session, transport: transport, backend: backend)
@@ -3526,7 +3526,7 @@ func inspectorInspectSelectsRequestedNodeAndDisablesPicker() async throws {
         result: "{}"
     )
 
-    let selectedNode = try await waitUntil {
+    let selectedNode = try await awaitValueAfterActorTurns {
         await session.attachment.dom.selectedNode
     }
     #expect(await selectedNode.nodeName == "DIV")
@@ -3549,7 +3549,7 @@ func inspectorInspectWaitsForPathPushEventsBeforeSelectingNode() async throws {
         targetID: .pageMain,
         message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"main-frame"}}}"#
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
     }
     try await beginPicker(session: session, transport: transport, backend: backend)
@@ -3586,7 +3586,7 @@ func inspectorInspectWaitsForPathPushEventsBeforeSelectingNode() async throws {
         result: "{}"
     )
 
-    let selectedNode = try await waitUntil {
+    let selectedNode = try await awaitValueAfterActorTurns {
         await session.attachment.dom.selectedNode
     }
     #expect(await selectedNode.attributes == [DOMAttribute(name: "id", value: "selected-after-path-push")])
@@ -3602,7 +3602,7 @@ func inspectorInspectRecordedExecutionContextOverridesEventTargetHint() async th
     await transport.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.snapshot().targetsByID[.frameAd]
     }
     _ = await session.attachment.dom.replaceDocumentRoot(
@@ -3621,7 +3621,7 @@ func inspectorInspectRecordedExecutionContextOverridesEventTargetHint() async th
         targetID: .frameAd,
         message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":77,"frameId":"ad-frame"}}}"#
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.frameAd, 77)]
     }
     try await beginPicker(session: session, transport: transport, backend: backend)
@@ -3663,7 +3663,7 @@ func inspectorInspectRecordedExecutionContextOverridesEventTargetHint() async th
         result: "{}"
     )
 
-    let selectedNode = try await waitUntil {
+    let selectedNode = try await awaitValueAfterActorTurns {
         await session.attachment.dom.selectedNode
     }
     #expect(await selectedNode.nodeName == "DIV")
@@ -3712,7 +3712,7 @@ func inspectorInspectOpaqueObjectIDFallsBackToPickerTarget() async throws {
         result: "{}"
     )
 
-    let selectedNode = try await waitUntil {
+    let selectedNode = try await awaitValueAfterActorTurns {
         await session.attachment.dom.selectedNode
     }
     #expect(await selectedNode.nodeName == "DIV")
@@ -3728,7 +3728,7 @@ func targetScopedInspectorInspectUsesEventTargetAsFallback() async throws {
     await transport.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.snapshot().targetsByID[.frameAd]
     }
     _ = await session.attachment.dom.replaceDocumentRoot(
@@ -3781,7 +3781,7 @@ func targetScopedInspectorInspectUsesEventTargetAsFallback() async throws {
         result: "{}"
     )
 
-    let selectedNode = try await waitUntil {
+    let selectedNode = try await awaitValueAfterActorTurns {
         await session.attachment.dom.selectedNode
     }
     #expect(await selectedNode.nodeName == "DIV")
@@ -3797,7 +3797,7 @@ func targetScopedInspectorInspectFallsBackToEventTargetWhenContextIsUnrecorded()
     await transport.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.snapshot().targetsByID[.frameAd]
     }
     _ = await session.attachment.dom.replaceDocumentRoot(
@@ -3851,7 +3851,7 @@ func targetScopedInspectorInspectFallsBackToEventTargetWhenContextIsUnrecorded()
         result: "{}"
     )
 
-    let selectedNode = try await waitUntil {
+    let selectedNode = try await awaitValueAfterActorTurns {
         await session.attachment.dom.selectedNode
     }
     #expect(await selectedNode.nodeName == "DIV")
@@ -3928,7 +3928,7 @@ func domInspectReloadsDocumentBeforeFailingUnknownProtocolNode() async throws {
         result: "{}"
     )
 
-    let selectedNode = try await waitUntil {
+    let selectedNode = try await awaitValueAfterActorTurns {
         await session.attachment.dom.selectedNode
     }
     #expect(await selectedNode.nodeName == "DIV")
@@ -4103,7 +4103,7 @@ func frameDOMNodeCopyDeleteRouteThroughPageTargetWithScopedNodeID() async throws
     await transport.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.snapshot().targetsByID[.frameAd]
     }
     _ = await session.attachment.dom.replaceDocumentRoot(
@@ -4378,7 +4378,7 @@ func deleteUndoReloadCancellationClearsUndoHistory() async throws {
         message: #"{"method":"DOM.documentUpdated","params":{}}"#
     )
 
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await MainActor.run {
             undoManager.canRedo == false ? session.lastError : nil
         }
@@ -4508,7 +4508,7 @@ func deleteUndoKeepsOlderUndoStatesCurrentAfterReload() async throws {
         messageID: try messageID(documentAfterFirstUndo.message),
         result: nestedDocumentResult
     )
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(4))]
     }
 
@@ -4691,7 +4691,7 @@ func domActionAvailabilityWaitsForActiveAttachment() async throws {
         result: mainDocumentResult
     )
 
-    _ = try await waitUntil {
+    _ = try await awaitValueAfterActorTurns {
         await session.attachment.dom.snapshot().currentPageDocumentID != nil ? true : nil
     }
     #expect(await session.hasActiveConnection == false)
@@ -4894,15 +4894,13 @@ private func targetMessageMethods(_ backend: FakeTransportBackend) async -> [Str
 private func waitForTargetMessage(
     _ backend: FakeTransportBackend,
     method: String,
-    after count: Int = 0,
-    timeout: Duration = .seconds(5)
+    after count: Int = 0
 ) async throws -> SentTargetMessage {
     try await waitForBackendTargetMessage(
         backend,
         method: method,
         ordinal: 0,
-        after: count,
-        timeout: timeout
+        after: count
     )
 }
 
@@ -4910,15 +4908,13 @@ private func waitForTargetMessage(
     _ backend: FakeTransportBackend,
     method: String,
     ordinal: Int,
-    after count: Int = 0,
-    timeout: Duration = .seconds(5)
+    after count: Int = 0
 ) async throws -> SentTargetMessage {
     try await waitForBackendTargetMessage(
         backend,
         method: method,
         ordinal: ordinal,
-        after: count,
-        timeout: timeout
+        after: count
     )
 }
 
@@ -4927,10 +4923,12 @@ private func waitForBackendTargetMessage(
     method: String,
     ordinal: Int,
     after count: Int,
-    timeout: Duration
+    timeout: Duration = .seconds(5)
 ) async throws -> SentTargetMessage {
     try await withThrowingTaskGroup(of: SentTargetMessage.self) { group in
-        defer { group.cancelAll() }
+        defer {
+            group.cancelAll()
+        }
 
         group.addTask {
             try await backend.waitForTargetMessage(method: method, ordinal: ordinal, after: count)
@@ -5050,19 +5048,17 @@ private func applySingleRuleStyles(
     return try #require(css.nodeStyles(for: identity))
 }
 
-private func waitUntil<Value: Sendable>(
-    timeout: Duration = .seconds(1),
-    timeoutError: any Error = TransportError.replyTimeout(method: "test wait", targetID: nil),
+private func awaitValueAfterActorTurns<Value: Sendable>(
+    maxTicks: Int = 256,
     _ body: @escaping @Sendable () async -> Value?
 ) async throws -> Value {
-    let deadline = ContinuousClock.now + timeout
-    while ContinuousClock.now < deadline {
+    for _ in 0..<maxTicks {
         if let value = await body() {
             return value
         }
-        try await Task.sleep(for: .milliseconds(5))
+        await Task.yield()
     }
-    throw timeoutError
+    throw TransportError.replyTimeout(method: "test wait", targetID: nil)
 }
 
 private func waitForCurrentNode(
@@ -5070,7 +5066,7 @@ private func waitForCurrentNode(
     targetID: ProtocolTargetIdentifier,
     protocolNodeID: DOMProtocolNodeID
 ) async throws -> DOMNodeIdentifier {
-    try await waitUntil {
+    try await awaitValueAfterActorTurns {
         await session.attachment.dom.snapshot().currentNodeIDByKey[
             .init(targetID: targetID, nodeID: protocolNodeID)
         ]
