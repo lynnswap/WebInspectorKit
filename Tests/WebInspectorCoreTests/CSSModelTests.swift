@@ -216,7 +216,7 @@ func cssRuleSourceLocationPrefersSelectorRangeOverSourceLine() throws {
             CSSRuleMatchPayload(
                 rule: rule(
                     selector: ".result-card",
-                    sourceURL: "https://www.google.com/search?q=%E5%9C%B0%E9%9C%87",
+                    sourceURL: "https://styles.example/assets/result-card.css",
                     sourceLine: 4,
                     selectorRange: CSSSourceRange(startLine: 27, startColumn: 22164, endLine: 27, endColumn: 22176),
                     properties: [
@@ -233,9 +233,9 @@ func cssRuleSourceLocationPrefersSelectorRangeOverSourceLine() throws {
     let section = try #require(css.selectedNodeStyles?.sections.first)
     let rule = try #require(section.rule)
     #expect(section.title == ".result-card")
-    #expect(rule.sourceURL == "https://www.google.com/search?q=%E5%9C%B0%E9%9C%87")
+    #expect(rule.sourceURL == "https://styles.example/assets/result-card.css")
     #expect(rule.sourceLocation == CSSRuleSourceLocation(
-        sourceURL: "https://www.google.com/search?q=%E5%9C%B0%E9%9C%87",
+        sourceURL: "https://styles.example/assets/result-card.css",
         line: 27,
         column: 22164
     ))

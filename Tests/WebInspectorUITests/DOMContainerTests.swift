@@ -104,25 +104,25 @@ struct DOMContainerTests {
     }
 
     @Test
-    func elementStyleHeaderConfigurationFormatsRuleOriginText() {
-        let googleLocation = CSSRuleSourceLocation(
-            sourceURL: "https://www.google.com/search?q=%E5%9C%B0%E9%9C%87",
+    func elementStyleSectionHeaderTextFormatsRuleOriginText() {
+        let stylesheetLocation = CSSRuleSourceLocation(
+            sourceURL: "https://styles.example/assets/result-card.css",
             line: 27,
             column: 22164
         )
-        #expect(DOMElementStyleSectionHeaderConfiguration.displayText(for: googleLocation) == "search:28:22165")
-        #expect(DOMElementStyleSectionHeaderConfiguration.fullDisplayText(for: googleLocation) == "https://www.google.com/search?q=%E5%9C%B0%E9%9C%87:28:22165")
+        #expect(DOMElementStyleSectionHeaderText.displayText(for: stylesheetLocation) == "result-card.css:28:22165")
+        #expect(DOMElementStyleSectionHeaderText.fullDisplayText(for: stylesheetLocation) == "https://styles.example/assets/result-card.css:28:22165")
 
-        #expect(DOMElementStyleSectionHeaderConfiguration.displayText(
+        #expect(DOMElementStyleSectionHeaderText.displayText(
             for: CSSRuleSourceLocation(sourceURL: "styles.css", line: 1)
         ) == "styles.css:2")
-        #expect(DOMElementStyleSectionHeaderConfiguration.displayText(
+        #expect(DOMElementStyleSectionHeaderText.displayText(
             for: CSSRuleSourceLocation(sourceURL: "styles.css", line: 0, column: 80)
         ) == "styles.css:1")
-        #expect(DOMElementStyleSectionHeaderConfiguration.displayText(
+        #expect(DOMElementStyleSectionHeaderText.displayText(
             for: CSSRuleSourceLocation(sourceURL: "styles.css", line: 0, column: 81)
         ) == "styles.css:1:82")
-        #expect(DOMElementStyleSectionHeaderConfiguration.displayText(for: .userAgent) == "User Agent Style Sheet")
+        #expect(DOMElementStyleSectionHeaderText.displayText(for: .userAgent) == "User Agent Style Sheet")
     }
 
     @Test
@@ -170,6 +170,52 @@ struct DOMContainerTests {
         #expect(didUpdateVisibleRow)
         #expect(viewController.collectionView.isHidden == false)
         #expect(visibleCellIDs(in: viewController) == cellIDsBeforeUpdate)
+    }
+
+    @Test
+    func elementViewControllerUpdatesVisibleSectionHeaderDuringSameNodeStyleRefresh() async throws {
+        let dom = makeDOMSession(capabilities: .pageDefault)
+        let body = try #require(firstElement(named: "body", in: dom))
+        dom.selectNode(body.id)
+
+        let css = dom.elementStyles
+        try applyBodyStyles(to: css, in: dom)
+
+        let viewController = makeElementViewController(dom: dom)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didRenderHeader = await waitUntil {
+            styleSectionHeaderViews(in: viewController).first?.titleTextForTesting == "body"
+                && styleSectionHeaderViews(in: viewController).first?.originTextForTesting == "styles.css:2"
+        }
+        window.layoutIfNeeded()
+
+        #expect(didRenderHeader)
+        let headerBeforeUpdate = try #require(styleSectionHeaderViews(in: viewController).first)
+        let headerIDBeforeUpdate = ObjectIdentifier(headerBeforeUpdate)
+
+        let identity = try dom.selectedCSSNodeStyleIdentity().get()
+        let refreshToken = try #require(css.beginRefresh(identity: identity))
+        try applyBodyStyles(
+            to: css,
+            in: dom,
+            token: refreshToken,
+            selector: ".content",
+            sourceURL: "updated.css",
+            sourceLine: 5
+        )
+
+        let didUpdateHeader = await waitUntil {
+            guard let header = styleSectionHeaderViews(in: viewController).first else {
+                return false
+            }
+            return ObjectIdentifier(header) == headerIDBeforeUpdate
+                && header.titleTextForTesting == ".content"
+                && header.originTextForTesting == "updated.css:6"
+        }
+
+        #expect(didUpdateHeader)
     }
 
     @Test
@@ -900,6 +946,8 @@ struct DOMContainerTests {
         in dom: DOMSession,
         token: CSSStyleRefreshToken? = nil,
         selector: String = "body",
+        sourceURL: String = "styles.css",
+        sourceLine: Int = 1,
         marginValue: String = "0",
         marginText: String = "margin: 0;"
     ) throws -> BodyStyleIDs {
@@ -918,8 +966,8 @@ struct DOMContainerTests {
                                 selectors: [CSSSelector(text: selector)],
                                 text: selector
                             ),
-                            sourceURL: "styles.css",
-                            sourceLine: 1,
+                            sourceURL: sourceURL,
+                            sourceLine: sourceLine,
                             origin: .author,
                             style: CSSStylePayload(
                                 id: styleID,
@@ -1137,6 +1185,13 @@ struct DOMContainerTests {
     private func hiddenVariableCells(in viewController: DOMElementViewController) -> [DOMElementStyleHiddenVariablesCollectionCell] {
         viewController.collectionView.visibleCells
             .compactMap { $0 as? DOMElementStyleHiddenVariablesCollectionCell }
+    }
+
+    private func styleSectionHeaderViews(in viewController: DOMElementViewController) -> [DOMElementStyleSectionHeaderView] {
+        viewController.collectionView.visibleSupplementaryViews(
+            ofKind: UICollectionView.elementKindSectionHeader
+        )
+        .compactMap { $0 as? DOMElementStyleSectionHeaderView }
     }
 
     private func visibleCellIDs(in viewController: DOMElementViewController) -> [ObjectIdentifier] {

@@ -128,8 +128,9 @@ valid for user-agent, attribute, inline, source-less, or non-editable styles.
   name plus a 1-based line number. Columns are shown only for large columns
   (`SourceCodeLocation.LargeColumnNumber` is 80).
 - `displayNameForURL` uses a decoded last path component when present, then a
-  host fallback, then the original URL. This is why a Google search URL appears
-  as a compact `search:<line>` style label rather than the full request URL.
+  host fallback, then the original URL. This is why a URL ending in a stylesheet
+  path appears as a compact `<file>:<line>` style label rather than the full
+  request URL.
 - Long source/origin text is constrained in WebKit UI rather than allowed to
   grow section headers: `.spreadsheet-css-declaration .origin` uses one-line
   overflow ellipsis, and generic details-section headers also use `nowrap` plus

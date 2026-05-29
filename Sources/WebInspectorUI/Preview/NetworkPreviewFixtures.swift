@@ -28,7 +28,7 @@ enum NetworkPreviewFixtures {
         applyRequest(
             to: network,
             requestID: "1001",
-            url: "https://play.google.com/log?format=json&hasfast=true",
+            url: "https://telemetry.example/log",
             method: "POST",
             resourceType: .xhr,
             responseMimeType: "application/json",
@@ -40,7 +40,7 @@ enum NetworkPreviewFixtures {
         applyRequest(
             to: network,
             requestID: "1002",
-            url: "https://www.gstatic.com/images/icons/material/system/2x/trending_up_grey600_24dp.png",
+            url: "https://static.example/images/icons/trending-up.png",
             resourceType: .image,
             responseMimeType: "image/png",
             status: 200,
@@ -89,7 +89,7 @@ enum NetworkPreviewFixtures {
                 url: url,
                 method: method,
                 headers: method == "POST" ? ["content-type": "application/x-www-form-urlencoded"] : [:],
-                postData: method == "POST" ? "hl=ja&gl=JP&source=wi-preview" : nil
+                postData: method == "POST" ? "sample=true&source=wi-preview" : nil
             ),
             resourceType: resourceType,
             timestamp: timestamp,
