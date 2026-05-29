@@ -56,9 +56,6 @@ package final class DOMElementViewController: UICollectionViewController {
                 viewController.applyBackgroundFromTraits()
             }
         }
-        let selectedNodeStyles = inspection.dom.elementStyles.selectedNodeStyles
-        render(selectedNodeStyles)
-        observeSelectedNodeStyles(selectedNodeStyles)
         startObservingState()
     }
 
@@ -170,23 +167,29 @@ package final class DOMElementViewController: UICollectionViewController {
     }
 
     private func startObservingState() {
-        observationScope.observe(inspection.dom.elementStyles) { [weak self] _, elementStyles in
-            self?.observeSelectedNodeStyles(elementStyles.selectedNodeStyles)
+        observationScope.observe(inspection.dom.elementStyles, tracking: { elementStyles in
+            _ = elementStyles.selectedNodeStyles
+        }) { [weak self] _, elementStyles in
+            self?.bindSelectedNodeStyles(
+                elementStyles.selectedNodeStyles,
+                unavailableState: elementStyles.selectedState
+            )
         }
     }
 
-    private func observeSelectedNodeStyles(_ nodeStyles: CSSNodeStyles?) {
+    private func bindSelectedNodeStyles(_ nodeStyles: CSSNodeStyles?, unavailableState: CSSNodeStylesState) {
+        guard let nodeStyles else {
+            observedNodeStyles = nil
+            selectedNodeStyleObservationScope.cancelAll()
+            render(unavailableState)
+            return
+        }
+
         guard observedNodeStyles !== nodeStyles else {
             return
         }
         observedNodeStyles = nodeStyles
         selectedNodeStyleObservationScope.cancelAll()
-
-        guard let nodeStyles else {
-            render(nil)
-            return
-        }
-
         selectedNodeStyleObservationScope.observe(nodeStyles) { [weak self] _, nodeStyles in
             guard self?.observedNodeStyles === nodeStyles else {
                 return
@@ -195,17 +198,22 @@ package final class DOMElementViewController: UICollectionViewController {
         }
     }
 
-    private func render(_ nodeStyles: CSSNodeStyles?) {
-        guard let nodeStyles else {
-            displayedNodeStyles = nil
-            renderUnavailableStyles()
-            return
-        }
-
+    private func render(_ nodeStyles: CSSNodeStyles) {
         switch nodeStyles.state {
         case .loaded:
             displayedNodeStyles = nodeStyles
             renderStyles(nodeStyles)
+        case .loading, .needsRefresh:
+            renderPendingStyles()
+        case .unavailable, .failed:
+            render(nodeStyles.state)
+        }
+    }
+
+    private func render(_ state: CSSNodeStylesState) {
+        switch state {
+        case .loaded:
+            return
         case .loading, .needsRefresh:
             renderPendingStyles()
         case .unavailable, .failed:

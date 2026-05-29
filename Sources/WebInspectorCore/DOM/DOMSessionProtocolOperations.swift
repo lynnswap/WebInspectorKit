@@ -2,15 +2,6 @@ import Foundation
 import ObservationBridge
 import WebInspectorTransport
 
-private enum SelectedNodeStyleHydrationState {
-    case detached
-    case waitingForDocument
-    case unavailable(CSSNodeStylesUnavailableReason)
-    case needsRefresh(CSSNodeStyleIdentity)
-    case refreshing(CSSNodeStyleIdentity)
-    case current(CSSNodeStyleIdentity)
-}
-
 @MainActor
 final class DOMSessionHighlightController {
     var targetID: ProtocolTargetIdentifier?
@@ -30,7 +21,7 @@ final class DOMSessionDocumentRequestController {
 
 @MainActor
 final class DOMSessionElementStyleHydrationController {
-    var observationTask: Task<Void, Never>?
+    let observationScope = ObservationScope()
     var refreshTask: Task<Void, Never>?
     var refreshIdentity: CSSNodeStyleIdentity?
     var isActive = false
@@ -539,58 +530,40 @@ extension DOMSession {
     }
 
     private func startSelectedNodeStyleHydration() {
-        styleHydration.observationTask?.cancel()
-        styleHydration.observationTask = Task { @MainActor [weak self] in
-            let stream = makeObservationBridgeStream {
-                self?.selectedNodeStyleHydrationState() ?? .detached
-            }
-            for await state in stream {
-                guard let self else {
-                    return
-                }
-                self.applySelectedNodeStyleHydrationState(state)
-            }
+        styleHydration.observationScope.cancelAll()
+        styleHydration.observationScope.observe(self) { [weak self] _, _ in
+            self?.reconcileSelectedNodeStyleHydration()
         }
     }
 
     private func stopSelectedNodeStyleHydration() {
-        styleHydration.observationTask?.cancel()
-        styleHydration.observationTask = nil
+        styleHydration.observationScope.cancelAll()
         cancelSelectedNodeStyleHydrationRefresh()
     }
 
-    private func selectedNodeStyleHydrationState() -> SelectedNodeStyleHydrationState {
+    private func reconcileSelectedNodeStyleHydration() {
         guard commandChannel != nil else {
-            return .detached
+            return
         }
         guard currentPageRootNode != nil else {
-            return .waitingForDocument
+            return
         }
 
         switch selectedCSSNodeStyleIdentity() {
         case let .success(identity):
-            switch elementStyles.refreshState(forSelected: identity) {
-            case nil, .needsRefresh:
-                return .needsRefresh(identity)
-            case .loading:
-                return .refreshing(identity)
-            case .loaded, .failed(_), .unavailable(_):
-                return .current(identity)
-            }
+            reconcileSelectedNodeStyles(identity)
         case let .failure(reason):
-            return .unavailable(reason)
+            cancelSelectedNodeStyleHydrationRefresh()
+            elementStyles.markSelectedNodeUnavailable(reason)
         }
     }
 
-    private func applySelectedNodeStyleHydrationState(_ state: SelectedNodeStyleHydrationState) {
-        switch state {
-        case .detached, .waitingForDocument, .refreshing, .current:
-            return
-        case .unavailable(let reason):
-            cancelSelectedNodeStyleHydrationRefresh()
-            elementStyles.markSelectedNodeUnavailable(reason)
-        case .needsRefresh(let identity):
+    private func reconcileSelectedNodeStyles(_ identity: CSSNodeStyleIdentity) {
+        switch elementStyles.refreshState(forSelected: identity) {
+        case nil, .needsRefresh:
             hydrateSelectedNodeStyles(identity)
+        case .loading, .loaded, .failed(_), .unavailable(_):
+            return
         }
     }
 
