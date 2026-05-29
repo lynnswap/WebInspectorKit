@@ -396,12 +396,13 @@ struct NetworkDetailViewControllerTests {
             navigationController.viewControllers.last === detailViewController
         }
         #expect(didPush)
+        await waitForNavigationTransitionToFinish(in: navigationController)
 
-        let didPop = await withUIKitAnimationsDisabled {
+        withUIKitAnimationsDisabled {
             model.selectRequest(nil)
-            return await waitUntil {
-                navigationController.viewControllers == [listViewController]
-            }
+        }
+        let didPop = await waitUntil {
+            navigationController.viewControllers == [listViewController]
         }
         #expect(didPop)
     }
@@ -426,14 +427,16 @@ struct NetworkDetailViewControllerTests {
             navigationController.viewControllers.last === detailViewController
         }
         #expect(didPush)
+        await waitForNavigationTransitionToFinish(in: navigationController)
 
-        let didPop = await withUIKitAnimationsDisabled {
+        withUIKitAnimationsDisabled {
             network.reset()
-            #expect(model.selectedRequestID == request.id)
-            #expect(model.selectedRequest == nil)
-            return await waitUntil {
-                navigationController.viewControllers == [listViewController]
-            }
+        }
+        #expect(model.selectedRequestID == request.id)
+        #expect(model.selectedRequest == nil)
+
+        let didPop = await waitUntil {
+            navigationController.viewControllers == [listViewController]
         }
         #expect(didPop)
     }
@@ -574,11 +577,25 @@ struct NetworkDetailViewControllerTests {
         return false
     }
 
-    private func withUIKitAnimationsDisabled<T>(_ body: () async -> T) async -> T {
+    private func waitForNavigationTransitionToFinish(in navigationController: UINavigationController) async {
+        guard let transitionCoordinator = navigationController.transitionCoordinator else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            let didRegister = transitionCoordinator.animate(alongsideTransition: nil) { _ in
+                continuation.resume()
+            }
+            if didRegister == false {
+                continuation.resume()
+            }
+        }
+    }
+
+    private func withUIKitAnimationsDisabled<T>(_ body: () -> T) -> T {
         let wereAnimationsEnabled = UIView.areAnimationsEnabled
         UIView.setAnimationsEnabled(false)
         defer { UIView.setAnimationsEnabled(wereAnimationsEnabled) }
-        return await body()
+        return body()
     }
 }
 #endif
