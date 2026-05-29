@@ -1708,18 +1708,25 @@ private final class ProtocolEventRecorder: Sendable {
         task.cancel()
     }
 
-    func event(at index: Int = 0) async -> ProtocolEventEnvelope? {
-        await storage.event(at: index)
+    func event(at index: Int = 0, timeout: Duration = .seconds(1)) async -> ProtocolEventEnvelope? {
+        await storage.event(at: index, timeout: timeout)
     }
 
-    func events(prefix count: Int) async -> [ProtocolEventEnvelope] {
-        await storage.events(prefix: count)
+    func events(prefix count: Int, timeout: Duration = .seconds(1)) async -> [ProtocolEventEnvelope] {
+        await storage.events(prefix: count, timeout: timeout)
     }
 }
 
 private actor ProtocolEventRecorderStorage {
+    private struct CountWaiter: Sendable {
+        var count: Int
+        var continuation: CheckedContinuation<Bool, Never>
+        var timeoutTask: Task<Void, Never>?
+    }
+
     private var events: [ProtocolEventEnvelope] = []
-    private var waiters: [Int: [CheckedContinuation<Bool, Never>]] = [:]
+    private var waiters: [UInt64: CountWaiter] = [:]
+    private var nextWaiterID: UInt64 = 0
     private var isFinished = false
 
     func record(_ event: ProtocolEventEnvelope) {
@@ -1732,51 +1739,135 @@ private actor ProtocolEventRecorderStorage {
         resumeReadyWaiters()
     }
 
-    func event(at index: Int) async -> ProtocolEventEnvelope? {
-        guard await waitUntilCount(index + 1) else {
+    func event(at index: Int, timeout: Duration) async -> ProtocolEventEnvelope? {
+        guard await waitUntilCount(index + 1, timeout: timeout) else {
             return nil
         }
         return events[index]
     }
 
-    func events(prefix count: Int) async -> [ProtocolEventEnvelope] {
-        guard await waitUntilCount(count) else {
+    func events(prefix count: Int, timeout: Duration) async -> [ProtocolEventEnvelope] {
+        guard await waitUntilCount(count, timeout: timeout) else {
             return events
         }
         return Array(events.prefix(count))
     }
 
-    private func waitUntilCount(_ count: Int) async -> Bool {
+    private func waitUntilCount(_ count: Int, timeout: Duration) async -> Bool {
         if events.count >= count {
             return true
         }
         if isFinished {
             return false
         }
-        return await withCheckedContinuation { continuation in
-            waiters[count, default: []].append(continuation)
+
+        nextWaiterID &+= 1
+        let waiterID = nextWaiterID
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                registerWaiter(
+                    id: waiterID,
+                    count: count,
+                    timeout: timeout,
+                    continuation: continuation
+                )
+            }
+        } onCancel: {
+            Task {
+                await self.cancelWaiter(waiterID)
+            }
         }
+    }
+
+    private func registerWaiter(
+        id: UInt64,
+        count: Int,
+        timeout: Duration,
+        continuation: CheckedContinuation<Bool, Never>
+    ) {
+        if events.count >= count {
+            continuation.resume(returning: true)
+            return
+        }
+        if isFinished {
+            continuation.resume(returning: false)
+            return
+        }
+
+        let timeoutTask = Task {
+            try? await Task.sleep(for: timeout)
+            timeoutWaiter(id)
+        }
+        waiters[id] = CountWaiter(
+            count: count,
+            continuation: continuation,
+            timeoutTask: timeoutTask
+        )
     }
 
     private func resumeReadyWaiters() {
-        for (count, continuations) in waiters {
-            guard events.count >= count || isFinished else {
+        let readyWaiterIDs = waiters.compactMap { id, waiter in
+            events.count >= waiter.count || isFinished ? id : nil
+        }
+        for waiterID in readyWaiterIDs {
+            guard let waiter = waiters[waiterID] else {
                 continue
             }
-            waiters[count] = nil
-            for continuation in continuations {
-                continuation.resume(returning: events.count >= count)
-            }
+            resolveWaiter(waiterID, returning: events.count >= waiter.count)
         }
+    }
+
+    private func timeoutWaiter(_ id: UInt64) {
+        resolveWaiter(id, returning: false)
+    }
+
+    private func cancelWaiter(_ id: UInt64) {
+        resolveWaiter(id, returning: false)
+    }
+
+    private func resolveWaiter(_ id: UInt64, returning value: Bool) {
+        guard let waiter = waiters.removeValue(forKey: id) else {
+            return
+        }
+        waiter.timeoutTask?.cancel()
+        waiter.continuation.resume(returning: value)
     }
 }
 
-private func waitForRootMessage(_ backend: FakeTransportBackend) async throws -> String {
-    try await backend.waitForMessage()
+private func waitForRootMessage(_ backend: FakeTransportBackend, timeout: Duration = .seconds(1)) async throws -> String {
+    try await waitForBackendValue(timeout: timeout) {
+        try await backend.waitForMessage()
+    }
 }
 
-private func waitForTargetMessage(_ backend: FakeTransportBackend) async throws -> SentTargetMessage {
-    try await backend.waitForTargetMessage()
+private func waitForTargetMessage(_ backend: FakeTransportBackend, timeout: Duration = .seconds(1)) async throws -> SentTargetMessage {
+    try await waitForBackendValue(timeout: timeout) {
+        try await backend.waitForTargetMessage()
+    }
+}
+
+private func waitForBackendValue<Value: Sendable>(
+    timeout: Duration,
+    _ operation: @escaping @Sendable () async throws -> Value
+) async throws -> Value {
+    try await withThrowingTaskGroup(of: Value.self) { group in
+        defer {
+            group.cancelAll()
+        }
+
+        group.addTask {
+            try await operation()
+        }
+        group.addTask {
+            try await Task.sleep(for: timeout)
+            throw TransportError.replyTimeout(method: "test wait", targetID: nil)
+        }
+
+        guard let value = try await group.next() else {
+            throw TransportError.replyTimeout(method: "test wait", targetID: nil)
+        }
+        return value
+    }
 }
 
 private actor ManualResponseTimeout {

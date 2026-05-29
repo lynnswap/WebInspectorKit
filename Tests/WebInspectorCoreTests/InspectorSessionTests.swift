@@ -4922,9 +4922,27 @@ private func waitForBackendTargetMessage(
     _ backend: FakeTransportBackend,
     method: String,
     ordinal: Int,
-    after count: Int
+    after count: Int,
+    timeout: Duration = .seconds(5)
 ) async throws -> SentTargetMessage {
-    try await backend.waitForTargetMessage(method: method, ordinal: ordinal, after: count)
+    try await withThrowingTaskGroup(of: SentTargetMessage.self) { group in
+        defer {
+            group.cancelAll()
+        }
+
+        group.addTask {
+            try await backend.waitForTargetMessage(method: method, ordinal: ordinal, after: count)
+        }
+        group.addTask {
+            try await Task.sleep(for: timeout)
+            throw TransportError.replyTimeout(method: method, targetID: nil)
+        }
+
+        guard let message = try await group.next() else {
+            throw TransportError.replyTimeout(method: method, targetID: nil)
+        }
+        return message
+    }
 }
 
 private struct CSSRefreshMessages {

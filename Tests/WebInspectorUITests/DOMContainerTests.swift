@@ -1212,17 +1212,42 @@ struct DOMContainerTests {
         in viewController: DOMElementViewController,
         condition: @escaping @MainActor @Sendable () -> Bool
     ) async -> Bool {
-        guard let delivery = viewController.selectedNodeStyleObservationDeliveryForTesting
-            ?? viewController.elementStylesObservationDeliveryForTesting else {
-            viewController.collectionView.layoutIfNeeded()
-            return condition()
+        if sampleRenderedCondition(in: viewController, condition: condition) {
+            return true
         }
-        let renderedValues = await delivery.values {
-            viewController.collectionView.layoutIfNeeded()
-            viewController.view.layoutIfNeeded()
-            return condition()
+
+        let deliveries = [
+            viewController.selectedNodeStyleObservationDeliveryForTesting,
+            viewController.elementStylesObservationDeliveryForTesting,
+        ].compactMap { $0 }
+        guard deliveries.isEmpty == false else {
+            return sampleRenderedCondition(in: viewController, condition: condition)
         }
-        return await renderedValues.waitUntil { $0 } != nil
+
+        var renderedValues: [ObservedValues<Bool>] = []
+        for delivery in deliveries {
+            renderedValues.append(
+                await delivery.values {
+                    sampleRenderedCondition(in: viewController, condition: condition)
+                }
+            )
+        }
+        for _ in 0..<256 {
+            if renderedValues.contains(where: { $0.latestValue == true }) {
+                return true
+            }
+            await Task.yield()
+        }
+        return sampleRenderedCondition(in: viewController, condition: condition)
+    }
+
+    private func sampleRenderedCondition(
+        in viewController: DOMElementViewController,
+        condition: @MainActor @Sendable () -> Bool
+    ) -> Bool {
+        viewController.collectionView.layoutIfNeeded()
+        viewController.view.layoutIfNeeded()
+        return condition()
     }
 
     private func action(titled title: String, in menu: UIMenu) -> UIAction? {
