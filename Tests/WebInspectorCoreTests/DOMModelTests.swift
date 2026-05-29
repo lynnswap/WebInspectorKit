@@ -857,6 +857,58 @@ func setChildNodesUpdatesExistingNodeObjectForSameNodeID() throws {
 }
 
 @Test
+@MainActor
+func setChildNodesPrunesOmittedDescendantsWhenReusingChildNode() throws {
+    let pageTargetID = ProtocolTarget.ID("page-main")
+    let session = DOMSession()
+
+    session.applyTargetCreated(.init(id: pageTargetID, kind: .page), makeCurrentMainPage: true)
+    _ = session.replaceDocumentRoot(pageDocumentWithoutIframe(), targetID: pageTargetID)
+    let before = session.snapshot()
+    let bodyID = try #require(before.currentNodeIDByKey[.init(targetID: pageTargetID, nodeID: .init(4))])
+
+    session.applySetChildNodes(
+        parent: bodyID,
+        children: [
+            .element(
+                nodeID: 5,
+                name: "div",
+                children: [
+                    .element(nodeID: 6, name: "span"),
+                    .element(nodeID: 7, name: "em"),
+                ]
+            ),
+        ]
+    )
+    let loaded = session.snapshot()
+    let divID = try #require(loaded.currentNodeIDByKey[.init(targetID: pageTargetID, nodeID: .init(5))])
+    let spanID = try #require(loaded.currentNodeIDByKey[.init(targetID: pageTargetID, nodeID: .init(6))])
+    let emID = try #require(loaded.currentNodeIDByKey[.init(targetID: pageTargetID, nodeID: .init(7))])
+    let div = try #require(session.node(for: divID))
+
+    session.applySetChildNodes(
+        parent: bodyID,
+        children: [
+            DOMNodePayload(
+                nodeID: .init(5),
+                nodeType: .element,
+                nodeName: "div",
+                localName: "div",
+                regularChildren: .unrequested(count: 0)
+            ),
+        ]
+    )
+
+    let refreshed = session.snapshot()
+    #expect(session.node(for: divID) === div)
+    #expect(refreshed.nodesByID[spanID] == nil)
+    #expect(refreshed.nodesByID[emID] == nil)
+    #expect(refreshed.currentNodeIDByKey[.init(targetID: pageTargetID, nodeID: .init(6))] == nil)
+    #expect(refreshed.currentNodeIDByKey[.init(targetID: pageTargetID, nodeID: .init(7))] == nil)
+    #expect(refreshed.nodesByID[divID]?.regularChildren.loadedChildren.isEmpty == true)
+}
+
+@Test
 func childNodeInsertedUsesWebKitPreviousSiblingSemantics() async throws {
     let pageTargetID = ProtocolTarget.ID("page-main")
     let session = await DOMSession()

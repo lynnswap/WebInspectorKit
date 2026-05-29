@@ -1406,6 +1406,7 @@ package final class DOMSession {
            existingNodeID != DOMNode.ID(documentID: document.id, nodeID: payload.nodeID) {
             removeNodeSubtree(existingNodeID, detachFromParent: true)
         }
+        pruneOmittedOwnedChildren(fromExistingSubtreeMatching: payload, in: document)
         let oldNodeIDs = Set(document.nodesByID.keys)
         let oldCurrentNodeIDByProtocolNodeID = document.currentNodeIDByProtocolNodeID
         var nodesByID = document.nodesByID
@@ -1424,6 +1425,21 @@ package final class DOMSession {
             document.currentNodeIDByProtocolNodeID = currentNodeIDByProtocolNodeID
         }
         return nodeID
+    }
+
+    private func pruneOmittedOwnedChildren(fromExistingSubtreeMatching payload: DOMNodePayload, in document: DOMDocument) {
+        let nodeID = DOMNode.ID(documentID: document.id, nodeID: payload.nodeID)
+        guard let node = document.nodesByID[nodeID] else {
+            return
+        }
+        let payloadChildren = payloadOwnedChildren(payload)
+        let retainedChildIDs = Set(payloadChildren.map { DOMNode.ID(documentID: document.id, nodeID: $0.nodeID) })
+        for childID in node.protocolOwnedChildren where retainedChildIDs.contains(childID) == false {
+            removeNodeSubtree(childID, detachFromParent: false)
+        }
+        for childPayload in payloadChildren {
+            pruneOmittedOwnedChildren(fromExistingSubtreeMatching: childPayload, in: document)
+        }
     }
 
     private func removeDocuments(for targetID: ProtocolTarget.ID) {
