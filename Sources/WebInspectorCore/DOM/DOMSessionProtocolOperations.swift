@@ -124,6 +124,10 @@ extension DOMSession {
         hasActiveCommandChannel && currentPageTargetID != nil
     }
 
+    package var canBeginElementPicker: Bool {
+        hasActiveCommandChannel && currentPageTargetID != nil
+    }
+
     package var canSelectElement: Bool {
         hasActiveCommandChannel && currentPageRootNode != nil
     }
