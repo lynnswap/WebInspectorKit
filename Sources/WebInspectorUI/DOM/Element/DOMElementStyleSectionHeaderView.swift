@@ -1,9 +1,10 @@
 #if canImport(UIKit)
 import WebInspectorCore
+import Observation
 import SwiftUI
 import UIKit
 
-package enum DOMElementStyleSectionHeaderConfiguration {
+package enum DOMElementStyleSectionHeaderText {
     private static let largeColumnNumber = 80
 
     package static func displayOriginText(for rule: CSSRule) -> String? {
@@ -78,9 +79,14 @@ package enum DOMElementStyleSectionHeaderConfiguration {
 
 @MainActor
 final class DOMElementStyleSectionHeaderView: UICollectionViewListCell {
+    private let model = DOMElementStyleSectionHeaderModel()
+
     override init(frame: CGRect) {
         super.init(frame: frame)
-        bind(nil)
+        let model = model
+        contentConfiguration = UIHostingConfiguration {
+            DOMElementStyleSectionHeaderContent(model: model)
+        }
     }
 
     @available(*, unavailable)
@@ -88,26 +94,35 @@ final class DOMElementStyleSectionHeaderView: UICollectionViewListCell {
         nil
     }
 
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        bind(nil)
+    }
+
     func bind(_ section: CSSStyleSection?) {
-        contentConfiguration = UIHostingConfiguration {
-            DOMElementStyleSectionHeaderContent(section: section)
-        }
+        model.section = section
     }
 }
 
-private struct DOMElementStyleSectionHeaderContent: View {
+@MainActor
+@Observable
+private final class DOMElementStyleSectionHeaderModel {
     var section: CSSStyleSection?
+}
+
+private struct DOMElementStyleSectionHeaderContent: View {
+    var model: DOMElementStyleSectionHeaderModel
 
     private var title: String {
-        section?.title ?? ""
+        model.section?.title ?? ""
     }
 
     private var originText: String? {
-        section?.rule.flatMap(DOMElementStyleSectionHeaderConfiguration.displayOriginText(for:))
+        model.section?.rule.flatMap(DOMElementStyleSectionHeaderText.displayOriginText(for:))
     }
 
     private var accessibilityOriginText: String? {
-        section?.rule.flatMap(DOMElementStyleSectionHeaderConfiguration.accessibilityOriginText(for:))
+        model.section?.rule.flatMap(DOMElementStyleSectionHeaderText.accessibilityOriginText(for:))
     }
 
     private var accessibilityLabel: String {
@@ -137,4 +152,26 @@ private struct DOMElementStyleSectionHeaderContent: View {
         .accessibilityLabel(accessibilityLabel)
     }
 }
+
+#if DEBUG
+extension DOMElementStyleSectionHeaderView {
+    package var titleTextForTesting: String {
+        model.titleTextForTesting
+    }
+
+    package var originTextForTesting: String? {
+        model.originTextForTesting
+    }
+}
+
+private extension DOMElementStyleSectionHeaderModel {
+    var titleTextForTesting: String {
+        section?.title ?? ""
+    }
+
+    var originTextForTesting: String? {
+        section?.rule.flatMap(DOMElementStyleSectionHeaderText.displayOriginText(for:))
+    }
+}
+#endif
 #endif

@@ -300,6 +300,20 @@ package final class DOMNode {
         self.shadowRootType = payload.shadowRootType
     }
 
+    package func update(from payload: DOMNodePayload, parentID: ID?) {
+        nodeType = payload.nodeType
+        nodeName = payload.nodeName
+        localName = payload.localName
+        nodeValue = payload.nodeValue
+        ownerFrameID = payload.ownerFrameID
+        documentURL = payload.documentURL
+        baseURL = payload.baseURL
+        attributes = payload.attributes
+        self.parentID = parentID
+        pseudoType = payload.pseudoType
+        shadowRootType = payload.shadowRootType
+    }
+
     package var isFrameOwner: Bool {
         let lowercasedName = nodeName.lowercased()
         return lowercasedName == "iframe" || lowercasedName == "frame"
@@ -695,8 +709,15 @@ package final class DOMSession {
             document.removeChildNodesTransactions(parentRawNodeID: parent.protocolNodeID)
             return
         }
+        let incomingRawNodeIDs = Set(payloads.map(\.nodeID))
+        let childIDsToRemove = parent.regularChildren.loadedChildren.filter { childID in
+            guard let child = document.nodesByID[childID] else {
+                return true
+            }
+            return incomingRawNodeIDs.contains(child.protocolNodeID) == false
+        }
         var replacementOwnerKeys: [ProtocolTarget.ID: DOMNodeCurrentKey] = [:]
-        for childID in parent.regularChildren.loadedChildren {
+        for childID in childIDsToRemove {
             replacementOwnerKeys.merge(projectedFrameOwnerKeys(inSubtree: childID)) { current, _ in current }
             removeNodeSubtree(childID, detachFromParent: false)
         }
@@ -1325,8 +1346,14 @@ package final class DOMSession {
         currentNodeIDByProtocolNodeID: inout [DOMProtocolNodeID: DOMNode.ID]
     ) -> DOMNode.ID {
         let nodeID = DOMNode.ID(documentID: documentID, nodeID: payload.nodeID)
-        let node = DOMNode(id: nodeID, payload: payload, parentID: parentID)
-        nodesByID[nodeID] = node
+        let node: DOMNode
+        if let existingNode = nodesByID[nodeID] {
+            node = existingNode
+            node.update(from: payload, parentID: parentID)
+        } else {
+            node = DOMNode(id: nodeID, payload: payload, parentID: parentID)
+            nodesByID[nodeID] = node
+        }
         currentNodeIDByProtocolNodeID[payload.nodeID] = nodeID
 
         switch payload.regularChildren {
@@ -1379,6 +1406,9 @@ package final class DOMSession {
            existingNodeID != DOMNode.ID(documentID: document.id, nodeID: payload.nodeID) {
             removeNodeSubtree(existingNodeID, detachFromParent: true)
         }
+        pruneOmittedOwnedChildren(fromExistingSubtreeMatching: payload, in: document)
+        let oldNodeIDs = Set(document.nodesByID.keys)
+        let oldCurrentNodeIDByProtocolNodeID = document.currentNodeIDByProtocolNodeID
         var nodesByID = document.nodesByID
         var currentNodeIDByProtocolNodeID = document.currentNodeIDByProtocolNodeID
         let nodeID = buildSubtree(
@@ -1388,9 +1418,28 @@ package final class DOMSession {
             nodesByID: &nodesByID,
             currentNodeIDByProtocolNodeID: &currentNodeIDByProtocolNodeID
         )
-        document.nodesByID = nodesByID
-        document.currentNodeIDByProtocolNodeID = currentNodeIDByProtocolNodeID
+        if Set(nodesByID.keys) != oldNodeIDs {
+            document.nodesByID = nodesByID
+        }
+        if currentNodeIDByProtocolNodeID != oldCurrentNodeIDByProtocolNodeID {
+            document.currentNodeIDByProtocolNodeID = currentNodeIDByProtocolNodeID
+        }
         return nodeID
+    }
+
+    private func pruneOmittedOwnedChildren(fromExistingSubtreeMatching payload: DOMNodePayload, in document: DOMDocument) {
+        let nodeID = DOMNode.ID(documentID: document.id, nodeID: payload.nodeID)
+        guard let node = document.nodesByID[nodeID] else {
+            return
+        }
+        let payloadChildren = payloadOwnedChildren(payload)
+        let retainedChildIDs = Set(payloadChildren.map { DOMNode.ID(documentID: document.id, nodeID: $0.nodeID) })
+        for childID in node.protocolOwnedChildren where retainedChildIDs.contains(childID) == false {
+            removeNodeSubtree(childID, detachFromParent: false)
+        }
+        for childPayload in payloadChildren {
+            pruneOmittedOwnedChildren(fromExistingSubtreeMatching: childPayload, in: document)
+        }
     }
 
     private func removeDocuments(for targetID: ProtocolTarget.ID) {
@@ -1563,11 +1612,18 @@ package final class DOMSession {
                   let parent = document.nodesByID[parentID] else {
                 continue
             }
-            let replacementOwnerKeys = parent.regularChildren.loadedChildren
+            let incomingRawNodeIDs = Set(fragments.map(\.nodeID))
+            let childIDsToRemove = parent.regularChildren.loadedChildren.filter { childID in
+                guard let child = document.nodesByID[childID] else {
+                    return true
+                }
+                return incomingRawNodeIDs.contains(child.protocolNodeID) == false
+            }
+            let replacementOwnerKeys = childIDsToRemove
                 .reduce(into: [ProtocolTarget.ID: DOMNodeCurrentKey]()) { partialResult, childID in
                     partialResult.merge(projectedFrameOwnerKeys(inSubtree: childID)) { current, _ in current }
                 }
-            for childID in parent.regularChildren.loadedChildren {
+            for childID in childIDsToRemove {
                 removeNodeSubtree(childID, detachFromParent: false)
             }
             parent.regularChildren = .loaded(fragments.map {

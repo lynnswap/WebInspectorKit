@@ -9,16 +9,16 @@ import UIKit
 @Suite(.serialized)
 struct DOMContainerTests {
     @Test
-    func elementViewControllerLoadsEmptyContent() {
+    func elementViewControllerShowsUnavailableStateWithoutSelectedStyles() {
         let dom = makeDOMSession()
         let viewController = makeElementViewController(dom: dom)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
         #expect(viewController.view.backgroundColor == .systemBackground)
-        #expect(viewController.contentUnavailableConfiguration == nil)
-        #expect(viewController.collectionViewForTesting.isHidden == false)
-        #expect(viewController.collectionViewForTesting.numberOfSections == 0)
+        #expect(viewController.contentUnavailableConfiguration != nil)
+        #expect(viewController.collectionView.isHidden == false)
+        #expect(viewController.collectionView.numberOfSections == 0)
     }
 
     @Test
@@ -34,11 +34,11 @@ struct DOMContainerTests {
         viewController.loadViewIfNeeded()
 
         #expect(viewController.view.backgroundColor == .clear)
-        #expect(viewController.collectionViewForTesting.backgroundColor == .clear)
+        #expect(viewController.collectionView.backgroundColor == .clear)
     }
 
     @Test
-    func elementViewControllerShowsBlankCollectionWhenDocumentRootArrivesAfterViewLoad() async throws {
+    func elementViewControllerKeepsUnavailableStateWhenDocumentRootArrivesWithoutSelection() async throws {
         let targetID = ProtocolTargetIdentifier("page-main")
         let dom = DOMSession()
         dom.applyTargetCreated(
@@ -54,18 +54,18 @@ struct DOMContainerTests {
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
-        #expect(viewController.contentUnavailableConfiguration == nil)
-        #expect(viewController.collectionViewForTesting.isHidden == false)
-        #expect(viewController.collectionViewForTesting.numberOfSections == 0)
+        #expect(viewController.contentUnavailableConfiguration != nil)
+        #expect(viewController.collectionView.isHidden == false)
+        #expect(viewController.collectionView.numberOfSections == 0)
 
         _ = dom.replaceDocumentRoot(documentNode(), targetID: targetID)
 
-        let didRenderCurrentRoot = await waitUntil {
-            viewController.contentUnavailableConfiguration == nil
-                && viewController.collectionViewForTesting.isHidden == false
-                && viewController.collectionViewForTesting.numberOfSections == 0
+        let didKeepUnavailableState = await waitUntil {
+            viewController.contentUnavailableConfiguration != nil
+                && viewController.collectionView.isHidden == false
+                && viewController.collectionView.numberOfSections == 0
         }
-        #expect(didRenderCurrentRoot)
+        #expect(didKeepUnavailableState)
     }
 
     @Test
@@ -82,14 +82,14 @@ struct DOMContainerTests {
         defer { window.isHidden = true }
 
         let didRenderRows = await waitUntil {
-            viewController.collectionViewForTesting.numberOfSections == 1
-                && viewController.collectionViewForTesting.numberOfItems(inSection: 0) == 3
+            viewController.collectionView.numberOfSections == 1
+                && viewController.collectionView.numberOfItems(inSection: 0) == 3
         }
         window.layoutIfNeeded()
 
         #expect(didRenderRows)
         #expect(viewController.contentUnavailableConfiguration == nil)
-        #expect(viewController.collectionViewForTesting.isHidden == false)
+        #expect(viewController.collectionView.isHidden == false)
 
         let propertyViews = stylePropertyViews(in: viewController)
         let declarations = propertyViews.map(\.declarationTextForTesting)
@@ -104,25 +104,25 @@ struct DOMContainerTests {
     }
 
     @Test
-    func elementStyleHeaderConfigurationFormatsRuleOriginText() {
-        let googleLocation = CSSRuleSourceLocation(
-            sourceURL: "https://www.google.com/search?q=%E5%9C%B0%E9%9C%87",
+    func elementStyleSectionHeaderTextFormatsRuleOriginText() {
+        let stylesheetLocation = CSSRuleSourceLocation(
+            sourceURL: "https://styles.example/assets/result-card.css",
             line: 27,
             column: 22164
         )
-        #expect(DOMElementStyleSectionHeaderConfiguration.displayText(for: googleLocation) == "search:28:22165")
-        #expect(DOMElementStyleSectionHeaderConfiguration.fullDisplayText(for: googleLocation) == "https://www.google.com/search?q=%E5%9C%B0%E9%9C%87:28:22165")
+        #expect(DOMElementStyleSectionHeaderText.displayText(for: stylesheetLocation) == "result-card.css:28:22165")
+        #expect(DOMElementStyleSectionHeaderText.fullDisplayText(for: stylesheetLocation) == "https://styles.example/assets/result-card.css:28:22165")
 
-        #expect(DOMElementStyleSectionHeaderConfiguration.displayText(
+        #expect(DOMElementStyleSectionHeaderText.displayText(
             for: CSSRuleSourceLocation(sourceURL: "styles.css", line: 1)
         ) == "styles.css:2")
-        #expect(DOMElementStyleSectionHeaderConfiguration.displayText(
+        #expect(DOMElementStyleSectionHeaderText.displayText(
             for: CSSRuleSourceLocation(sourceURL: "styles.css", line: 0, column: 80)
         ) == "styles.css:1")
-        #expect(DOMElementStyleSectionHeaderConfiguration.displayText(
+        #expect(DOMElementStyleSectionHeaderText.displayText(
             for: CSSRuleSourceLocation(sourceURL: "styles.css", line: 0, column: 81)
         ) == "styles.css:1:82")
-        #expect(DOMElementStyleSectionHeaderConfiguration.displayText(for: .userAgent) == "User Agent Style Sheet")
+        #expect(DOMElementStyleSectionHeaderText.displayText(for: .userAgent) == "User Agent Style Sheet")
     }
 
     @Test
@@ -139,8 +139,8 @@ struct DOMContainerTests {
         defer { window.isHidden = true }
 
         let didRenderRows = await waitUntil {
-            viewController.collectionViewForTesting.numberOfSections == 1
-                && viewController.collectionViewForTesting.numberOfItems(inSection: 0) == 3
+            viewController.collectionView.numberOfSections == 1
+                && viewController.collectionView.numberOfItems(inSection: 0) == 3
         }
         window.layoutIfNeeded()
 
@@ -150,7 +150,7 @@ struct DOMContainerTests {
         let identity = try dom.selectedCSSNodeStyleIdentity().get()
         let refreshToken = try #require(css.beginRefresh(identity: identity))
         window.layoutIfNeeded()
-        #expect(viewController.collectionViewForTesting.isHidden == false)
+        #expect(viewController.collectionView.isHidden == false)
         #expect(visibleCellIDs(in: viewController) == cellIDsBeforeUpdate)
 
         try applyBodyStyles(
@@ -168,12 +168,58 @@ struct DOMContainerTests {
         }
 
         #expect(didUpdateVisibleRow)
-        #expect(viewController.collectionViewForTesting.isHidden == false)
+        #expect(viewController.collectionView.isHidden == false)
         #expect(visibleCellIDs(in: viewController) == cellIDsBeforeUpdate)
     }
 
     @Test
-    func elementViewControllerShowsBlankCollectionWhileNewSelectionStylesAreHydrating() async throws {
+    func elementViewControllerUpdatesVisibleSectionHeaderDuringSameNodeStyleRefresh() async throws {
+        let dom = makeDOMSession(capabilities: .pageDefault)
+        let body = try #require(firstElement(named: "body", in: dom))
+        dom.selectNode(body.id)
+
+        let css = dom.elementStyles
+        try applyBodyStyles(to: css, in: dom)
+
+        let viewController = makeElementViewController(dom: dom)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didRenderHeader = await waitUntil {
+            styleSectionHeaderViews(in: viewController).first?.titleTextForTesting == "body"
+                && styleSectionHeaderViews(in: viewController).first?.originTextForTesting == "styles.css:2"
+        }
+        window.layoutIfNeeded()
+
+        #expect(didRenderHeader)
+        let headerBeforeUpdate = try #require(styleSectionHeaderViews(in: viewController).first)
+        let headerIDBeforeUpdate = ObjectIdentifier(headerBeforeUpdate)
+
+        let identity = try dom.selectedCSSNodeStyleIdentity().get()
+        let refreshToken = try #require(css.beginRefresh(identity: identity))
+        try applyBodyStyles(
+            to: css,
+            in: dom,
+            token: refreshToken,
+            selector: ".content",
+            sourceURL: "updated.css",
+            sourceLine: 5
+        )
+
+        let didUpdateHeader = await waitUntil {
+            guard let header = styleSectionHeaderViews(in: viewController).first else {
+                return false
+            }
+            return ObjectIdentifier(header) == headerIDBeforeUpdate
+                && header.titleTextForTesting == ".content"
+                && header.originTextForTesting == "updated.css:6"
+        }
+
+        #expect(didUpdateHeader)
+    }
+
+    @Test
+    func elementViewControllerKeepsCurrentRowsWhileNewSelectionStylesAreHydrating() async throws {
         let dom = makeDOMSession(capabilities: .pageDefault)
         let body = try #require(firstElement(named: "body", in: dom))
         dom.selectNode(body.id)
@@ -204,12 +250,15 @@ struct DOMContainerTests {
         #expect(css.selectedNodeStyles?.identity == inputIdentity)
         #expect(css.selectedState == .loading)
         #expect(css.refreshState(forSelected: inputIdentity) == .loading)
-        let didRenderBlankCollection = await waitUntil {
+        let didKeepBodyRowsWhileInputLoads = await waitUntil {
             viewController.contentUnavailableConfiguration == nil
-                && viewController.collectionViewForTesting.isHidden == false
-                && viewController.collectionViewForTesting.numberOfSections == 0
+                && viewController.collectionView.isHidden == false
+                && viewController.collectionView.numberOfSections == 1
+                && stylePropertyViews(in: viewController)
+                    .map(\.declarationTextForTesting)
+                    .contains("margin: 0;")
         }
-        #expect(didRenderBlankCollection)
+        #expect(didKeepBodyRowsWhileInputLoads)
 
         try applyBodyStyles(
             to: css,
@@ -227,11 +276,11 @@ struct DOMContainerTests {
         }
 
         #expect(didRenderInputRows)
-        #expect(viewController.collectionViewForTesting.isHidden == false)
+        #expect(viewController.collectionView.isHidden == false)
     }
 
     @Test
-    func elementViewControllerShowsBlankCollectionForInitialElementSelectionWhileStylesHydrate() async throws {
+    func elementViewControllerShowsPlaceholderForInitialElementSelectionWhileStylesHydrate() async throws {
         let dom = makeDOMSession(capabilities: .pageDefault)
         let css = dom.elementStyles
         let viewController = makeElementViewController(dom: dom)
@@ -243,13 +292,13 @@ struct DOMContainerTests {
         let identity = try dom.selectedCSSNodeStyleIdentity().get()
         #expect(css.beginRefresh(identity: identity) != nil)
 
-        let didRenderBlankCollection = await waitUntil {
-            viewController.contentUnavailableConfiguration == nil
-                && viewController.collectionViewForTesting.isHidden == false
-                && viewController.collectionViewForTesting.numberOfSections == 0
+        let didRenderPlaceholder = await waitUntil {
+            viewController.contentUnavailableConfiguration != nil
+                && viewController.collectionView.isHidden == false
+                && viewController.collectionView.numberOfSections == 0
         }
 
-        #expect(didRenderBlankCollection)
+        #expect(didRenderPlaceholder)
     }
 
     @Test
@@ -281,9 +330,9 @@ struct DOMContainerTests {
         dom.selectNode(nil)
 
         let didClearRows = await waitUntil {
-            viewController.contentUnavailableConfiguration == nil
-                && viewController.collectionViewForTesting.isHidden == false
-                && viewController.collectionViewForTesting.numberOfSections == 0
+            viewController.contentUnavailableConfiguration != nil
+                && viewController.collectionView.isHidden == false
+                && viewController.collectionView.numberOfSections == 0
         }
 
         #expect(didClearRows)
@@ -312,9 +361,9 @@ struct DOMContainerTests {
         dom.applyNodeRemoved(body.id)
 
         let didClearRows = await waitUntil {
-            viewController.contentUnavailableConfiguration == nil
-                && viewController.collectionViewForTesting.isHidden == false
-                && viewController.collectionViewForTesting.numberOfSections == 0
+            viewController.contentUnavailableConfiguration != nil
+                && viewController.collectionView.isHidden == false
+                && viewController.collectionView.numberOfSections == 0
         }
 
         #expect(didClearRows)
@@ -344,9 +393,9 @@ struct DOMContainerTests {
         css.markSelectedNodeStylesUnavailable(identity: identity, reason: .staleNode(body.id))
 
         let didClearRows = await waitUntil {
-            viewController.contentUnavailableConfiguration == nil
-                && viewController.collectionViewForTesting.isHidden == false
-                && viewController.collectionViewForTesting.numberOfSections == 0
+            viewController.contentUnavailableConfiguration != nil
+                && viewController.collectionView.isHidden == false
+                && viewController.collectionView.numberOfSections == 0
         }
 
         #expect(didClearRows)
@@ -366,8 +415,8 @@ struct DOMContainerTests {
         defer { window.isHidden = true }
 
         let didCollapseUnusedVariables = await waitUntil {
-            viewController.collectionViewForTesting.numberOfSections == 2
-                && viewController.collectionViewForTesting.numberOfItems(inSection: 1) == 3
+            viewController.collectionView.numberOfSections == 2
+                && viewController.collectionView.numberOfItems(inSection: 1) == 3
                 && hiddenVariableCells(in: viewController).count == 1
         }
         window.layoutIfNeeded()
@@ -387,7 +436,7 @@ struct DOMContainerTests {
 
         let didRevealUnusedVariables = await waitUntil {
             let declarations = stylePropertyViews(in: viewController).map(\.declarationTextForTesting)
-            return viewController.collectionViewForTesting.numberOfItems(inSection: 1) == 4
+            return viewController.collectionView.numberOfItems(inSection: 1) == 4
                 && hiddenVariableCells(in: viewController).isEmpty
                 && declarations.contains("--unused-a: red;")
                 && declarations.contains("--unused-b: blue;")
@@ -897,6 +946,8 @@ struct DOMContainerTests {
         in dom: DOMSession,
         token: CSSStyleRefreshToken? = nil,
         selector: String = "body",
+        sourceURL: String = "styles.css",
+        sourceLine: Int = 1,
         marginValue: String = "0",
         marginText: String = "margin: 0;"
     ) throws -> BodyStyleIDs {
@@ -915,8 +966,8 @@ struct DOMContainerTests {
                                 selectors: [CSSSelector(text: selector)],
                                 text: selector
                             ),
-                            sourceURL: "styles.css",
-                            sourceLine: 1,
+                            sourceURL: sourceURL,
+                            sourceLine: sourceLine,
                             origin: .author,
                             style: CSSStylePayload(
                                 id: styleID,
@@ -1127,17 +1178,24 @@ struct DOMContainerTests {
     }
 
     private func stylePropertyViews(in viewController: DOMElementViewController) -> [DOMElementStylePropertyView] {
-        viewController.collectionViewForTesting.visibleCells
+        viewController.collectionView.visibleCells
             .compactMap { ($0 as? DOMElementStylePropertyCollectionCell)?.propertyViewForTesting }
     }
 
     private func hiddenVariableCells(in viewController: DOMElementViewController) -> [DOMElementStyleHiddenVariablesCollectionCell] {
-        viewController.collectionViewForTesting.visibleCells
+        viewController.collectionView.visibleCells
             .compactMap { $0 as? DOMElementStyleHiddenVariablesCollectionCell }
     }
 
+    private func styleSectionHeaderViews(in viewController: DOMElementViewController) -> [DOMElementStyleSectionHeaderView] {
+        viewController.collectionView.visibleSupplementaryViews(
+            ofKind: UICollectionView.elementKindSectionHeader
+        )
+        .compactMap { $0 as? DOMElementStyleSectionHeaderView }
+    }
+
     private func visibleCellIDs(in viewController: DOMElementViewController) -> [ObjectIdentifier] {
-        viewController.collectionViewForTesting.visibleCells.map(ObjectIdentifier.init)
+        viewController.collectionView.visibleCells.map(ObjectIdentifier.init)
     }
 
     private func propertyView(

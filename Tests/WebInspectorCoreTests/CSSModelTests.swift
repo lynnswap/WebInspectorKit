@@ -1,3 +1,5 @@
+import Observation
+import Synchronization
 import Testing
 import WebInspectorTransport
 @testable import WebInspectorCore
@@ -98,7 +100,10 @@ func selectedNodeStylesResolvesSelectedDOMNodeThroughCSSSession() throws {
     session.selectNode(bodyID)
     let identity = try #require(session.selectedCSSNodeStyleIdentity().successValue)
 
-    #expect(session.selectedNodeStyles == nil)
+    let pendingStyles = try #require(session.selectedNodeStyles)
+    #expect(pendingStyles.identity == identity)
+    #expect(pendingStyles.state == .needsRefresh)
+    #expect(pendingStyles.sections.isEmpty)
 
     let token = try #require(css.beginRefresh(identity: identity))
     let loadingStyles = try #require(session.selectedNodeStyles)
@@ -211,7 +216,7 @@ func cssRuleSourceLocationPrefersSelectorRangeOverSourceLine() throws {
             CSSRuleMatchPayload(
                 rule: rule(
                     selector: ".result-card",
-                    sourceURL: "https://www.google.com/search?q=%E5%9C%B0%E9%9C%87",
+                    sourceURL: "https://styles.example/assets/result-card.css",
                     sourceLine: 4,
                     selectorRange: CSSSourceRange(startLine: 27, startColumn: 22164, endLine: 27, endColumn: 22176),
                     properties: [
@@ -228,9 +233,9 @@ func cssRuleSourceLocationPrefersSelectorRangeOverSourceLine() throws {
     let section = try #require(css.selectedNodeStyles?.sections.first)
     let rule = try #require(section.rule)
     #expect(section.title == ".result-card")
-    #expect(rule.sourceURL == "https://www.google.com/search?q=%E5%9C%B0%E9%9C%87")
+    #expect(rule.sourceURL == "https://styles.example/assets/result-card.css")
     #expect(rule.sourceLocation == CSSRuleSourceLocation(
-        sourceURL: "https://www.google.com/search?q=%E5%9C%B0%E9%9C%87",
+        sourceURL: "https://styles.example/assets/result-card.css",
         line: 27,
         column: 22164
     ))
@@ -1199,6 +1204,49 @@ func cssSessionCancelsActiveRefreshBackToNeedsRefresh() throws {
 
     #expect(css.selectedState == .needsRefresh)
     #expect(css.refreshState(forSelected: identity) == .needsRefresh)
+}
+
+@Test
+@MainActor
+func cssSessionRefreshDoesNotRepublishCurrentSelectedNodeStyles() throws {
+    let css = CSSSession()
+    let identity = cssIdentity()
+    css.selectNodeStyles(identity: identity)
+    let selectedStyles = try #require(css.selectedNodeStyles)
+
+    let selectedNodeStylesInvalidations = Mutex(0)
+    withObservationTracking {
+        _ = css.selectedNodeStyles
+    } onChange: {
+        selectedNodeStylesInvalidations.withLock { $0 += 1 }
+    }
+
+    let token = try #require(css.beginRefresh(identity: identity))
+
+    #expect(css.selectedNodeStyles === selectedStyles)
+    #expect(css.selectedState == .loading)
+    #expect(selectedNodeStylesInvalidations.withLock { $0 } == 0)
+
+    css.applyRefresh(
+        token: token,
+        matched: CSSMatchedStylesPayload(matchedRules: [
+            CSSRuleMatchPayload(
+                rule: rule(
+                    selector: "body",
+                    properties: [
+                        CSSPropertyPayload(name: "margin", value: "0", text: "margin: 0;"),
+                    ]
+                ),
+                matchingSelectors: [0]
+            ),
+        ]),
+        inline: .init(),
+        computed: []
+    )
+
+    #expect(css.selectedNodeStyles === selectedStyles)
+    #expect(css.selectedState == .loaded)
+    #expect(selectedNodeStylesInvalidations.withLock { $0 } == 0)
 }
 
 private func cssIdentity(

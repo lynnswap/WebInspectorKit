@@ -471,7 +471,6 @@ package final class RuntimeState {
         }
         let agentState = ensureRuntimeAgentState(for: record.runtimeAgentTargetID)
         agentState.recordExecutionContext(record)
-        storeRuntimeAgentState(agentState)
         if record.type == .normal {
             let targetState = ensureTargetState(for: record.targetID)
             let previousDefaultContextKey = targetState.normalContextKey
@@ -514,7 +513,6 @@ package final class RuntimeState {
         let removedTargetIDs = Set(removedContexts.map(\.targetID))
         agentState.clearExecutionContexts()
         agentState.clearRemoteObjects()
-        storeRuntimeAgentState(agentState)
         for targetID in removedTargetIDs {
             if let normalContextKey = targetStatesByID[targetID]?.normalContextKey,
                removedContextKeys.contains(normalContextKey) {
@@ -562,7 +560,6 @@ package final class RuntimeState {
                     agentState.releaseRemoteObjects(executionContextKey: context.key)
                 }
             }
-            storeRuntimeAgentState(agentState)
         }
         let removedContextKeys = Set(removedContexts.map(\.key))
         let removedTargetIDs = Set(removedContexts.map(\.targetID))
@@ -614,7 +611,6 @@ package final class RuntimeState {
                oldAgentState.unsupportedCommandSnapshot.isEmpty == false {
                 let newAgentState = ensureRuntimeAgentState(for: newTargetID)
                 newAgentState.mergeUnsupportedCommands(oldAgentState.unsupportedCommandSnapshot)
-                storeRuntimeAgentState(newAgentState)
             }
         }
     }
@@ -632,7 +628,6 @@ package final class RuntimeState {
             objectGroup: objectGroup,
             executionContextID: executionContextID
         )
-        storeRuntimeAgentState(agentState)
         return remoteObject
     }
 
@@ -654,7 +649,6 @@ package final class RuntimeState {
             return
         }
         agentState.releaseRemoteObject(key.objectID)
-        storeRuntimeAgentState(agentState)
     }
 
     package func releaseObjectGroup(_ objectGroup: RuntimeObjectGroup, runtimeAgentTargetID: ProtocolTargetIdentifier) {
@@ -662,13 +656,11 @@ package final class RuntimeState {
             return
         }
         agentState.releaseRemoteObjects(objectGroup: objectGroup)
-        storeRuntimeAgentState(agentState)
     }
 
     package func markCommandUnsupported(_ method: String, targetID: ProtocolTargetIdentifier) {
         let agentState = ensureRuntimeAgentState(for: targetID)
         agentState.markCommandUnsupported(method)
-        storeRuntimeAgentState(agentState)
     }
 
     package func supportsCommand(_ method: String, targetID: ProtocolTargetIdentifier) -> Bool {
@@ -783,10 +775,6 @@ package final class RuntimeState {
         }
     }
 
-    private func storeRuntimeAgentState(_ state: RuntimeAgentState) {
-        runtimeAgentStatesByID[state.targetID] = state
-    }
-
     @discardableResult
     private func removeExecutionContext(
         _ contextKey: RuntimeExecutionContextKey,
@@ -799,7 +787,6 @@ package final class RuntimeState {
         if releaseRemoteObjects {
             agentState.releaseRemoteObjects(executionContextKey: contextKey)
         }
-        storeRuntimeAgentState(agentState)
         return context
     }
 
@@ -839,7 +826,6 @@ package final class RuntimeState {
             guard sourceAgentState.removeExecutionContext(contextID: entry.context.id) != nil else {
                 continue
             }
-            storeRuntimeAgentState(sourceAgentState)
             movedContextKeys[oldKey] = nextKey
 
             if let destinationAgentState = runtimeAgentStatesByID[nextRuntimeAgentTargetID],
@@ -851,7 +837,6 @@ package final class RuntimeState {
             entry.context.runtimeAgentTargetID = nextRuntimeAgentTargetID
             let destinationAgentState = ensureRuntimeAgentState(for: nextRuntimeAgentTargetID)
             destinationAgentState.insertExecutionContext(entry.context)
-            storeRuntimeAgentState(destinationAgentState)
         }
 
         return movedContextKeys

@@ -1,11 +1,10 @@
 #if canImport(UIKit)
 import WebInspectorCore
-import WebInspectorTransport
 import ObservationBridge
 import UIKit
 
 @MainActor
-package final class DOMElementViewController: UIViewController {
+package final class DOMElementViewController: UICollectionViewController {
     private struct ItemIdentifier: Hashable {
         enum Kind: Hashable {
             case property(propertyID: CSSPropertyIdentifier?, propertyIndex: Int)
@@ -18,6 +17,8 @@ package final class DOMElementViewController: UIViewController {
 
     private let inspection: AttachedInspection
     private let observationScope = ObservationScope()
+    private let selectedNodeStyleObservationScope = ObservationScope()
+    private weak var observedNodeStyles: CSSNodeStyles?
     private var expandedUnusedVariableSectionIDs = Set<CSSStyleSectionIdentifier>()
     private var displayedNodeStyles: CSSNodeStyles?
 
@@ -25,15 +26,11 @@ package final class DOMElementViewController: UIViewController {
     package private(set) var lastSnapshotAnimatedForTesting = false
 #endif
 
-    private lazy var collectionView = UICollectionView(
-        frame: .zero,
-        collectionViewLayout: Self.makeLayout()
-    )
     private lazy var dataSource = makeDataSource()
 
     package init(inspection: AttachedInspection) {
         self.inspection = inspection
-        super.init(nibName: nil, bundle: nil)
+        super.init(collectionViewLayout: Self.makeLayout())
     }
 
     @available(*, unavailable)
@@ -44,25 +41,26 @@ package final class DOMElementViewController: UIViewController {
     isolated deinit {
         inspection.dom.setSelectedNodeStyleHydrationActive(false)
         observationScope.cancelAll()
+        selectedNodeStyleObservationScope.cancelAll()
     }
 
     override package func viewDidLoad() {
         super.viewDidLoad()
         applyBackgroundFromTraits()
+        collectionView.alwaysBounceVertical = true
+        collectionView.keyboardDismissMode = .onDrag
+        collectionView.accessibilityIdentifier = "WebInspector.DOM.Element.StylesList"
         if #available(iOS 26.0, *) {
             webInspectorRegisterForBackgroundTraitChanges { viewController in
                 viewController.applyBackgroundFromTraits()
             }
         }
-        configureCollectionView()
         startObservingState()
-        render()
     }
 
     override package func viewIsAppearing(_ animated: Bool) {
         super.viewIsAppearing(animated)
         inspection.dom.setSelectedNodeStyleHydrationActive(true)
-        render()
     }
 
     override package func viewDidDisappear(_ animated: Bool) {
@@ -85,22 +83,6 @@ package final class DOMElementViewController: UIViewController {
             section.contentInsets = contentInsets
             return section
         }
-    }
-
-    private func configureCollectionView() {
-        collectionView.translatesAutoresizingMaskIntoConstraints = false
-        collectionView.backgroundColor = webInspectorBackgroundPolicy.backgroundColor
-        collectionView.alwaysBounceVertical = true
-        collectionView.keyboardDismissMode = .onDrag
-        collectionView.accessibilityIdentifier = "WebInspector.DOM.Element.StylesList"
-
-        view.addSubview(collectionView)
-        NSLayoutConstraint.activate([
-            collectionView.topAnchor.constraint(equalTo: view.topAnchor),
-            collectionView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            collectionView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            collectionView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-        ])
     }
 
     private func applyBackgroundFromTraits() {
@@ -184,55 +166,95 @@ package final class DOMElementViewController: UIViewController {
     }
 
     private func startObservingState() {
-        observationScope.observe(inspection.dom) { [weak self] _, _ in
-            self?.render()
-        }
-        observationScope.observe(inspection.dom.elementStyles) { [weak self] _, _ in
-            self?.render()
+        observationScope.observe(inspection.dom.elementStyles, tracking: { elementStyles in
+            _ = elementStyles.selectedNodeStyles
+        }) { [weak self] _, elementStyles in
+            self?.bindSelectedNodeStyles(
+                elementStyles.selectedNodeStyles,
+                unavailableState: elementStyles.selectedState
+            )
         }
     }
 
-    private func render() {
-        guard isViewLoaded else {
-            return
-        }
-
-        render(inspection.dom.selectedNodeStyles)
-    }
-
-    private func render(_ nodeStyles: CSSNodeStyles?) {
+    private func bindSelectedNodeStyles(_ nodeStyles: CSSNodeStyles?, unavailableState: CSSNodeStylesState) {
         guard let nodeStyles else {
-            showEmptyStyleList()
+            observedNodeStyles = nil
+            selectedNodeStyleObservationScope.cancelAll()
+            render(unavailableState)
             return
         }
-        showStyleList(nodeStyles)
+
+        guard observedNodeStyles !== nodeStyles else {
+            return
+        }
+        observedNodeStyles = nodeStyles
+        selectedNodeStyleObservationScope.cancelAll()
+        selectedNodeStyleObservationScope.observe(nodeStyles) { [weak self] _, nodeStyles in
+            guard self?.observedNodeStyles === nodeStyles else {
+                return
+            }
+            self?.render(nodeStyles)
+        }
     }
 
-    private func showStyleList(_ nodeStyles: CSSNodeStyles) {
-        displayedNodeStyles = nodeStyles
-        showCollectionView()
-        applySnapshot(for: nodeStyles)
+    private func render(_ nodeStyles: CSSNodeStyles) {
+        switch nodeStyles.state {
+        case .loaded:
+            displayedNodeStyles = nodeStyles
+            renderStyles(nodeStyles)
+        case .loading, .needsRefresh:
+            renderPendingStyles()
+        case .unavailable, .failed:
+            render(nodeStyles.state)
+        }
     }
 
-    private func showEmptyStyleList() {
-        displayedNodeStyles = nil
-        showCollectionView()
+    private func render(_ state: CSSNodeStylesState) {
+        switch state {
+        case .loaded:
+            return
+        case .loading, .needsRefresh:
+            renderPendingStyles()
+        case .unavailable, .failed:
+            displayedNodeStyles = nil
+            renderUnavailableStyles()
+        }
+    }
+
+    private func renderUnavailableStyles() {
+        if let configuration = contentUnavailableConfiguration as? UIContentUnavailableConfiguration,
+           configuration.text == webInspectorLocalized("dom.element.styles.empty.title", default: "No styles available") {
+            applyEmptySnapshot()
+            return
+        }
+        var configuration = UIContentUnavailableConfiguration.empty()
+        configuration.text = webInspectorLocalized("dom.element.styles.empty.title", default: "No styles available")
+        configuration.secondaryText = webInspectorLocalized(
+            "dom.element.styles.empty.description",
+            default: "Select an element in the DOM tree to inspect CSS styles."
+        )
+        contentUnavailableConfiguration = configuration
         applyEmptySnapshot()
     }
 
-    private func showCollectionView() {
+    private func renderPendingStyles() {
+        guard displayedNodeStyles != nil else {
+            renderUnavailableStyles()
+            return
+        }
         if contentUnavailableConfiguration != nil {
             contentUnavailableConfiguration = nil
         }
-        if collectionView.isHidden {
-            collectionView.isHidden = false
+    }
+
+    private func renderStyles(_ nodeStyles: CSSNodeStyles) {
+        if contentUnavailableConfiguration != nil {
+            contentUnavailableConfiguration = nil
         }
+        applySnapshot(for: nodeStyles)
     }
 
     private func applyEmptySnapshot() {
-        guard dataSource.snapshot().numberOfItems != 0 || dataSource.snapshot().numberOfSections != 0 else {
-            return
-        }
         expandedUnusedVariableSectionIDs.removeAll()
         let snapshot = NSDiffableDataSourceSnapshot<CSSStyleSectionIdentifier, ItemIdentifier>()
         dataSource.apply(snapshot, animatingDifferences: false)
@@ -309,90 +331,9 @@ package final class DOMElementViewController: UIViewController {
     }
 
     private func toggleAction() -> DOMElementStylePropertyView.ToggleAction? {
-        { [weak inspection] propertyID, enabled in
+        return { [weak inspection] propertyID, enabled in
             inspection?.dom.requestSetCSSProperty(propertyID, enabled: enabled) ?? false
         }
-    }
-}
-
-#if DEBUG
-extension DOMElementViewController {
-    package var collectionViewForTesting: UICollectionView {
-        collectionView
-    }
-}
-#endif
-
-#Preview("DOM Element") {
-    DOMElementViewControllerPreview.makeViewController()
-}
-
-@MainActor
-private enum DOMElementViewControllerPreview {
-    static func makeViewController() -> UINavigationController {
-        let dom = DOMPreviewFixtures.makeDOMSession()
-        dom.applyTargetCreated(
-            ProtocolTargetRecord(
-                id: ProtocolTargetIdentifier("preview-page"),
-                kind: .page,
-                frameID: DOMFrameIdentifier("preview-frame"),
-                capabilities: .pageDefault
-            ),
-            makeCurrentMainPage: true
-        )
-        if let body = firstElement(named: "body", in: dom) {
-            dom.selectNode(body.id)
-        }
-
-        let css = dom.elementStyles
-        if case let .success(identity) = dom.selectedCSSNodeStyleIdentity(),
-           let token = css.beginRefresh(identity: identity) {
-            css.applyRefresh(
-                token: token,
-                matched: CSSMatchedStylesPayload(
-                    matchedRules: [
-                        CSSRuleMatchPayload(
-                            rule: CSSRulePayload(
-                                id: CSSRuleIdentifier(styleSheetID: CSSStyleSheetIdentifier("preview"), ordinal: 0),
-                                selectorList: CSSSelectorList(selectors: [CSSSelector(text: "body")], text: "body"),
-                                sourceURL: "preview.css",
-                                sourceLine: 1,
-                                origin: .author,
-                                style: CSSStylePayload(
-                                    id: CSSStyleIdentifier(styleSheetID: CSSStyleSheetIdentifier("preview"), ordinal: 0),
-                                    cssProperties: [
-                                        CSSPropertyPayload(name: "margin", value: "0", text: "margin: 0;", status: .active),
-                                        CSSPropertyPayload(name: "box-sizing", value: "border-box", text: "box-sizing: border-box;", status: .active),
-                                        CSSPropertyPayload(name: "font-size", value: "12px", text: "font-size: 12px;", status: .inactive),
-                                    ],
-                                    cssText: "margin: 0;\nbox-sizing: border-box;\nfont-size: 12px;"
-                                )
-                            ),
-                            matchingSelectors: [0]
-                        ),
-                    ]
-                ),
-                inline: CSSInlineStylesPayload(),
-                computed: []
-            )
-        }
-
-        let inspection = AttachedInspection(dom: dom)
-        return UINavigationController(rootViewController: DOMElementViewController(inspection: inspection))
-    }
-
-    private static func firstElement(named localName: String, in dom: DOMSession) -> DOMNode? {
-        guard let rootNode = dom.currentPageRootNode else {
-            return nil
-        }
-        var stack = [rootNode]
-        while let node = stack.popLast() {
-            if node.localName == localName {
-                return node
-            }
-            stack.append(contentsOf: dom.visibleDOMTreeChildren(of: node).reversed())
-        }
-        return nil
     }
 }
 #endif
