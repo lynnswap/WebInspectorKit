@@ -98,6 +98,7 @@ final class NetworkBodyViewController: UIViewController {
             displayText = ""
             syntaxKind = body.textRepresentationSyntaxKind
         case .loaded:
+            body.prepareTextRepresentation()
             displayText = body.textRepresentation
                 ?? String(localized: "network.body.unavailable", bundle: .module)
             syntaxKind = body.textRepresentationSyntaxKind
