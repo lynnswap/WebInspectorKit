@@ -163,7 +163,7 @@ func requestPostDataCreatesObservableRequestBody() throws {
 
 @Test
 @MainActor
-func responseReceivedCreatesFetchableResponseBodyAndAppliesFetchedContent() throws {
+func responseReceivedCreatesFetchableResponseBodyAndAppliesFetchedContent() async throws {
     let session = NetworkSession()
     let targetID = ProtocolTargetIdentifier("page")
     let requestID = NetworkRequestIdentifier("0.response-body")
@@ -202,9 +202,72 @@ func responseReceivedCreatesFetchableResponseBodyAndAppliesFetchedContent() thro
     )
 
     #expect(body.fetchState == .loaded)
+    #expect(body.textRepresentation == #"{"name":"codex","value":42}"#)
+    #expect(body.textRepresentationSyntaxKind == .json)
+
+    let preparation = try #require(body.prepareTextRepresentation())
+    await preparation.wait()
+
     #expect(body.textRepresentation?.contains("\n") == true)
     #expect(body.textRepresentation?.contains(#""name""#) == true)
     #expect(body.textRepresentationSyntaxKind == .json)
+}
+
+@Test
+@MainActor
+func preparedResponseBodyTextInvalidatesWhenFetchedContentChanges() async throws {
+    let body = NetworkBody(
+        role: .response,
+        kind: .text,
+        full: #"{"first":true}"#,
+        sourceSyntaxKind: .json,
+        fetchState: .loaded
+    )
+
+    let firstPreparation = try #require(body.prepareTextRepresentation())
+    await firstPreparation.wait()
+
+    #expect(body.textRepresentation?.contains("\n") == true)
+    #expect(body.textRepresentation?.contains(#""first""#) == true)
+
+    body.apply(
+        NetworkBodyPayload(
+            body: #"{"second":true}"#,
+            base64Encoded: false
+        )
+    )
+
+    #expect(body.textRepresentation == #"{"second":true}"#)
+    #expect(body.textRepresentation?.contains(#""first""#) == false)
+
+    let secondPreparation = try #require(body.prepareTextRepresentation())
+    await secondPreparation.wait()
+
+    #expect(body.textRepresentation?.contains("\n") == true)
+    #expect(body.textRepresentation?.contains(#""second""#) == true)
+    #expect(body.textRepresentation?.contains(#""first""#) == false)
+}
+
+@Test
+@MainActor
+func invalidJSONLookingPlainTextKeepsPlainTextSyntax() async {
+    let body = NetworkBody(
+        role: .response,
+        kind: .text,
+        full: "[INFO] started",
+        sourceSyntaxKind: .plainText,
+        fetchState: .loaded
+    )
+
+    #expect(body.textRepresentation == "[INFO] started")
+    #expect(body.textRepresentationSyntaxKind == .plainText)
+
+    if let preparation = body.prepareTextRepresentation() {
+        await preparation.wait()
+    }
+
+    #expect(body.textRepresentation == "[INFO] started")
+    #expect(body.textRepresentationSyntaxKind == .plainText)
 }
 
 @Test

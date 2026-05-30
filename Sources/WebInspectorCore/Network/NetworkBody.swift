@@ -54,35 +54,52 @@ package struct NetworkBodyPayload: Equatable, Sendable {
     }
 }
 
+package struct NetworkBodyTextPreparation: Sendable {
+    private let task: Task<Void, Never>
+
+    fileprivate init(task: Task<Void, Never>) {
+        self.task = task
+    }
+
+    package func wait() async {
+        await task.value
+    }
+}
+
 @MainActor
 @Observable
 package final class NetworkBody {
     package let role: NetworkBodyRole
     package var kind: NetworkBodyKind {
         didSet {
-            refreshTextRepresentation()
+            invalidatePreparedTextRepresentation()
         }
     }
     package private(set) var full: String? {
         didSet {
-            refreshTextRepresentation()
+            invalidatePreparedTextRepresentation()
         }
     }
     package private(set) var size: Int?
     package private(set) var isBase64Encoded: Bool {
         didSet {
-            refreshTextRepresentation()
+            invalidatePreparedTextRepresentation()
         }
     }
     package private(set) var isTruncated: Bool
     package var fetchState: NetworkBodyFetchState
     package private(set) var sourceSyntaxKind: NetworkBodySyntaxKind {
         didSet {
-            refreshTextRepresentation()
+            invalidatePreparedTextRepresentation()
         }
     }
     package private(set) var textRepresentation: String?
     package private(set) var textRepresentationSyntaxKind: NetworkBodySyntaxKind
+    @ObservationIgnored private var textRepresentationGeneration = 0
+    @ObservationIgnored private var preparedTextRepresentationGeneration: Int?
+    @ObservationIgnored private var textRepresentationTask: Task<Void, Never>?
+    @ObservationIgnored private var isBatchingTextRepresentationInvalidation = false
+    @ObservationIgnored private var needsTextRepresentationInvalidation = false
 
     package init(
         role: NetworkBodyRole,
@@ -107,6 +124,10 @@ package final class NetworkBody {
         refreshTextRepresentation()
     }
 
+    isolated deinit {
+        textRepresentationTask?.cancel()
+    }
+
     package var needsFetch: Bool {
         switch fetchState {
         case .available:
@@ -117,8 +138,10 @@ package final class NetworkBody {
     }
 
     package func updateHints(kind: NetworkBodyKind, sourceSyntaxKind: NetworkBodySyntaxKind) {
-        self.kind = kind
-        self.sourceSyntaxKind = sourceSyntaxKind
+        withTextRepresentationInvalidationBatch {
+            self.kind = kind
+            self.sourceSyntaxKind = sourceSyntaxKind
+        }
     }
 
     package func markFetching() {
@@ -130,11 +153,41 @@ package final class NetworkBody {
     }
 
     package func apply(_ payload: NetworkBodyPayload) {
-        full = payload.body
-        isBase64Encoded = payload.base64Encoded
-        isTruncated = payload.isTruncated
+        withTextRepresentationInvalidationBatch {
+            full = payload.body
+            isBase64Encoded = payload.base64Encoded
+            isTruncated = payload.isTruncated
+        }
         size = payload.size ?? payload.body.utf8.count
         fetchState = .loaded
+    }
+
+    @discardableResult
+    package func prepareTextRepresentation() -> NetworkBodyTextPreparation? {
+        guard case .loaded = fetchState else {
+            return nil
+        }
+        guard preparedTextRepresentationGeneration != textRepresentationGeneration else {
+            return nil
+        }
+        if let textRepresentationTask {
+            return NetworkBodyTextPreparation(task: textRepresentationTask)
+        }
+        guard let input = preparedTextRepresentationInput() else {
+            preparedTextRepresentationGeneration = textRepresentationGeneration
+            return nil
+        }
+
+        let generation = textRepresentationGeneration
+        let task = Task.detached(priority: .utility) { [weak self] in
+            let result = NetworkBodyPreparedTextRepresentation.make(from: input)
+            guard Task.isCancelled == false else {
+                return
+            }
+            await self?.applyPreparedTextRepresentation(result, generation: generation)
+        }
+        textRepresentationTask = task
+        return NetworkBodyTextPreparation(task: task)
     }
 
     package static func makeRequestBody(for request: NetworkRequestPayload) -> NetworkBody? {
@@ -228,16 +281,36 @@ package final class NetworkBody {
         }
     }
 
+    private func withTextRepresentationInvalidationBatch(_ updates: () -> Void) {
+        isBatchingTextRepresentationInvalidation = true
+        updates()
+        isBatchingTextRepresentationInvalidation = false
+
+        if needsTextRepresentationInvalidation {
+            needsTextRepresentationInvalidation = false
+            invalidatePreparedTextRepresentation()
+        }
+    }
+
+    private func invalidatePreparedTextRepresentation() {
+        guard isBatchingTextRepresentationInvalidation == false else {
+            needsTextRepresentationInvalidation = true
+            return
+        }
+        textRepresentationGeneration += 1
+        preparedTextRepresentationGeneration = nil
+        textRepresentationTask?.cancel()
+        textRepresentationTask = nil
+        refreshTextRepresentation()
+    }
+
     private func refreshTextRepresentation() {
         let contentText = decodedContentText()
         let formText = kind == .form ? formattedURLEncodedFormText(from: contentText) : nil
-        let prettyJSON = formText == nil ? prettyPrintedJSON(from: contentText) : nil
-        let displayText = formText ?? prettyJSON ?? (kind == .binary ? nil : contentText)
+        let displayText = formText ?? (kind == .binary ? nil : contentText)
         let syntaxKind: NetworkBodySyntaxKind
         if kind == .binary || kind == .form {
             syntaxKind = .plainText
-        } else if prettyJSON != nil {
-            syntaxKind = .json
         } else {
             syntaxKind = sourceSyntaxKind
         }
@@ -248,6 +321,39 @@ package final class NetworkBody {
         if textRepresentationSyntaxKind != syntaxKind {
             textRepresentationSyntaxKind = syntaxKind
         }
+    }
+
+    private func preparedTextRepresentationInput() -> NetworkBodyPreparedTextRepresentation.Input? {
+        guard kind != .binary, kind != .form else {
+            return nil
+        }
+        guard let contentText = decodedContentText() else {
+            return nil
+        }
+        let isJSONCandidate = sourceSyntaxKind == .json || Self.looksLikeJSON(contentText)
+        guard isJSONCandidate else {
+            return nil
+        }
+        return NetworkBodyPreparedTextRepresentation.Input(text: contentText)
+    }
+
+    private func applyPreparedTextRepresentation(
+        _ result: NetworkBodyPreparedTextRepresentation.Result?,
+        generation: Int
+    ) {
+        guard generation == textRepresentationGeneration else {
+            return
+        }
+        if let result {
+            if textRepresentation != result.text {
+                textRepresentation = result.text
+            }
+            if textRepresentationSyntaxKind != result.syntaxKind {
+                textRepresentationSyntaxKind = result.syntaxKind
+            }
+        }
+        preparedTextRepresentationGeneration = generation
+        textRepresentationTask = nil
     }
 
     private func decodedContentText() -> String? {
@@ -303,8 +409,33 @@ package final class NetworkBody {
             .removingPercentEncoding
     }
 
-    private func prettyPrintedJSON(from text: String?) -> String? {
-        guard let text, let data = text.data(using: .utf8) else {
+    private static func looksLikeJSON(_ text: String?) -> Bool {
+        guard let firstNonWhitespace = text?.first(where: { $0.isWhitespace == false }) else {
+            return false
+        }
+        return firstNonWhitespace == "{" || firstNonWhitespace == "["
+    }
+}
+
+private enum NetworkBodyPreparedTextRepresentation {
+    struct Input: Sendable {
+        let text: String
+    }
+
+    struct Result: Sendable {
+        let text: String
+        let syntaxKind: NetworkBodySyntaxKind
+    }
+
+    static func make(from input: Input) -> Result? {
+        guard let prettyJSON = prettyPrintedJSON(from: input.text) else {
+            return nil
+        }
+        return Result(text: prettyJSON, syntaxKind: .json)
+    }
+
+    private static func prettyPrintedJSON(from text: String) -> String? {
+        guard let data = text.data(using: .utf8) else {
             return nil
         }
         guard let object = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) else {
