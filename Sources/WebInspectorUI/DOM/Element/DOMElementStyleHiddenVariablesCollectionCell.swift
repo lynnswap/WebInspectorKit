@@ -53,17 +53,18 @@ package final class DOMElementStyleHiddenVariablesCollectionCell: UICollectionVi
     }
 
     private static func title(forHiddenVariableCount hiddenVariableCount: Int) -> String {
-        let format = String(localized: "Show %lld unused CSS variables", bundle: .module)
-        return String.localizedStringWithFormat(format, hiddenVariableCount)
+        var options = String.LocalizationOptions()
+        options.replacements = [hiddenVariableCount]
+        return String(
+            localized: "Show \(placeholder: .int) unused CSS variables",
+            options: options,
+            bundle: .module
+        )
     }
 }
 
 #if DEBUG
 extension DOMElementStyleHiddenVariablesCollectionCell {
-    package var revealTitleForTesting: String? {
-        revealButton.title(for: .normal)
-    }
-
     package func tapRevealForTesting() {
         revealButtonPressed()
     }

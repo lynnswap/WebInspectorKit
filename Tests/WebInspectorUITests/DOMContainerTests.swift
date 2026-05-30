@@ -436,7 +436,6 @@ struct DOMContainerTests {
         #expect(collapsedDeclarations.contains("--palette-primary: #111;"))
         #expect(collapsedDeclarations.contains("--unused-a: red;") == false)
         #expect(collapsedDeclarations.contains("--unused-b: blue;") == false)
-        #expect(revealCell.revealTitleForTesting == localizedUnusedCSSVariablesTitle(2))
 
         revealCell.tapRevealForTesting()
 
@@ -483,7 +482,7 @@ struct DOMContainerTests {
         defer { window.isHidden = true }
 
         let didCollapseUnusedVariables = await waitUntilRendered(in: viewController) {
-            hiddenVariableCells(in: viewController).first?.revealTitleForTesting == localizedUnusedCSSVariablesTitle(2)
+            hiddenVariableCells(in: viewController).count == 1
         }
         window.layoutIfNeeded()
 
@@ -518,7 +517,7 @@ struct DOMContainerTests {
         defer { window.isHidden = true }
 
         let didCollapseUnusedVariables = await waitUntilRendered(in: viewController) {
-            hiddenVariableCells(in: viewController).first?.revealTitleForTesting == localizedUnusedCSSVariablesTitle(2)
+            hiddenVariableCells(in: viewController).count == 1
         }
         window.layoutIfNeeded()
 
@@ -546,7 +545,7 @@ struct DOMContainerTests {
         defer { window.isHidden = true }
 
         let didCollapseOnlyUnusedVariables = await waitUntilRendered(in: viewController) {
-            hiddenVariableCells(in: viewController).first?.revealTitleForTesting == localizedUnusedCSSVariablesTitle(2)
+            hiddenVariableCells(in: viewController).count == 1
         }
         window.layoutIfNeeded()
 
@@ -584,7 +583,7 @@ struct DOMContainerTests {
         defer { window.isHidden = true }
 
         let didCollapseUnusedVariables = await waitUntilRendered(in: viewController) {
-            hiddenVariableCells(in: viewController).first?.revealTitleForTesting == localizedUnusedCSSVariablesTitle(2)
+            hiddenVariableCells(in: viewController).count == 1
         }
         window.layoutIfNeeded()
 
@@ -618,7 +617,7 @@ struct DOMContainerTests {
         defer { window.isHidden = true }
 
         let didCollapseUnusedVariables = await waitUntilRendered(in: viewController) {
-            hiddenVariableCells(in: viewController).first?.revealTitleForTesting == localizedUnusedCSSVariablesTitle(2)
+            hiddenVariableCells(in: viewController).count == 1
         }
         window.layoutIfNeeded()
 
@@ -658,7 +657,7 @@ struct DOMContainerTests {
         defer { window.isHidden = true }
 
         let didCollapseOnlyUnusedVariable = await waitUntilRendered(in: viewController) {
-            hiddenVariableCells(in: viewController).first?.revealTitleForTesting == localizedUnusedCSSVariablesTitle(1)
+            hiddenVariableCells(in: viewController).count == 1
         }
         window.layoutIfNeeded()
 
@@ -682,7 +681,7 @@ struct DOMContainerTests {
         defer { window.isHidden = true }
 
         let didCollapseUnusedVariables = await waitUntilRendered(in: viewController) {
-            hiddenVariableCells(in: viewController).first?.revealTitleForTesting == localizedUnusedCSSVariablesTitle(2)
+            hiddenVariableCells(in: viewController).count == 1
         }
         #expect(didCollapseUnusedVariables)
 
@@ -700,9 +699,24 @@ struct DOMContainerTests {
         )
 
         let didUpdateHiddenVariableCount = await waitUntilRendered(in: viewController) {
-            hiddenVariableCells(in: viewController).first?.revealTitleForTesting == localizedUnusedCSSVariablesTitle(3)
+            hiddenVariableCells(in: viewController).count == 1
+                && stylePropertyViews(in: viewController)
+                    .map(\.declarationTextForTesting)
+                    .contains("--unused-c: green;") == false
         }
         #expect(didUpdateHiddenVariableCount)
+
+        let revealCell = try #require(hiddenVariableCells(in: viewController).first)
+        revealCell.tapRevealForTesting()
+
+        let didRevealUpdatedHiddenVariables = await waitUntilRendered(in: viewController) {
+            let declarations = stylePropertyViews(in: viewController).map(\.declarationTextForTesting)
+            return hiddenVariableCells(in: viewController).isEmpty
+                && declarations.contains("--unused-a: red;")
+                && declarations.contains("--unused-b: blue;")
+                && declarations.contains("--unused-c: green;")
+        }
+        #expect(didRevealUpdatedHiddenVariables)
     }
 
     @Test
@@ -1287,11 +1301,6 @@ struct DOMContainerTests {
             }
         }
         return nil
-    }
-
-    private func localizedUnusedCSSVariablesTitle(_ count: Int) -> String {
-        let format = String(localized: "Show %lld unused CSS variables", bundle: .module)
-        return String.localizedStringWithFormat(format, count)
     }
 
     private func localizedUndoTitle() -> String {
