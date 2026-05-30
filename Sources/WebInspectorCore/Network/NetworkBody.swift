@@ -54,6 +54,18 @@ package struct NetworkBodyPayload: Equatable, Sendable {
     }
 }
 
+package struct NetworkBodyTextPreparation: Sendable {
+    private let task: Task<Void, Never>
+
+    fileprivate init(task: Task<Void, Never>) {
+        self.task = task
+    }
+
+    package func wait() async {
+        await task.value
+    }
+}
+
 @MainActor
 @Observable
 package final class NetworkBody {
@@ -150,29 +162,32 @@ package final class NetworkBody {
         fetchState = .loaded
     }
 
-    package func prepareTextRepresentation() {
+    @discardableResult
+    package func prepareTextRepresentation() -> NetworkBodyTextPreparation? {
         guard case .loaded = fetchState else {
-            return
+            return nil
         }
         guard preparedTextRepresentationGeneration != textRepresentationGeneration else {
-            return
+            return nil
         }
-        guard textRepresentationTask == nil else {
-            return
+        if let textRepresentationTask {
+            return NetworkBodyTextPreparation(task: textRepresentationTask)
         }
         guard let input = preparedTextRepresentationInput() else {
             preparedTextRepresentationGeneration = textRepresentationGeneration
-            return
+            return nil
         }
 
         let generation = textRepresentationGeneration
-        textRepresentationTask = Task.detached(priority: .utility) { [weak self] in
+        let task = Task.detached(priority: .utility) { [weak self] in
             let result = NetworkBodyPreparedTextRepresentation.make(from: input)
             guard Task.isCancelled == false else {
                 return
             }
             await self?.applyPreparedTextRepresentation(result, generation: generation)
         }
+        textRepresentationTask = task
+        return NetworkBodyTextPreparation(task: task)
     }
 
     package static func makeRequestBody(for request: NetworkRequestPayload) -> NetworkBody? {

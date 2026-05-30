@@ -439,11 +439,8 @@ func networkResponseBodyFetchAppliesResultToCoreRequest() async throws {
 
     #expect(await body.fetchState == .loaded)
     #expect(await body.textRepresentation == #"{"ok":true}"#)
-    await body.prepareTextRepresentation()
-    let didPrepareJSON: Bool = try await awaitValueAfterActorTurns {
-        await body.textRepresentation?.contains("\n") == true ? true : nil
-    }
-    #expect(didPrepareJSON)
+    let preparation = try #require(await body.prepareTextRepresentation())
+    await preparation.wait()
     #expect(await body.textRepresentation?.contains("\n") == true)
     #expect(await body.textRepresentation?.contains(#""ok""#) == true)
 }

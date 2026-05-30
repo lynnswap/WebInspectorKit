@@ -205,12 +205,9 @@ func responseReceivedCreatesFetchableResponseBodyAndAppliesFetchedContent() asyn
     #expect(body.textRepresentation == #"{"name":"codex","value":42}"#)
     #expect(body.textRepresentationSyntaxKind == .json)
 
-    body.prepareTextRepresentation()
+    let preparation = try #require(body.prepareTextRepresentation())
+    await preparation.wait()
 
-    let didPrepareJSON = await waitUntil {
-        body.textRepresentation?.contains("\n") == true
-    }
-    #expect(didPrepareJSON)
     #expect(body.textRepresentation?.contains("\n") == true)
     #expect(body.textRepresentation?.contains(#""name""#) == true)
     #expect(body.textRepresentationSyntaxKind == .json)
@@ -227,13 +224,11 @@ func preparedResponseBodyTextInvalidatesWhenFetchedContentChanges() async throws
         fetchState: .loaded
     )
 
-    body.prepareTextRepresentation()
+    let firstPreparation = try #require(body.prepareTextRepresentation())
+    await firstPreparation.wait()
 
-    let didPrepareFirstBody = await waitUntil {
-        body.textRepresentation?.contains("\n") == true
-            && body.textRepresentation?.contains(#""first""#) == true
-    }
-    #expect(didPrepareFirstBody)
+    #expect(body.textRepresentation?.contains("\n") == true)
+    #expect(body.textRepresentation?.contains(#""first""#) == true)
 
     body.apply(
         NetworkBodyPayload(
@@ -245,13 +240,11 @@ func preparedResponseBodyTextInvalidatesWhenFetchedContentChanges() async throws
     #expect(body.textRepresentation == #"{"second":true}"#)
     #expect(body.textRepresentation?.contains(#""first""#) == false)
 
-    body.prepareTextRepresentation()
+    let secondPreparation = try #require(body.prepareTextRepresentation())
+    await secondPreparation.wait()
 
-    let didPrepareSecondBody = await waitUntil {
-        body.textRepresentation?.contains("\n") == true
-            && body.textRepresentation?.contains(#""second""#) == true
-    }
-    #expect(didPrepareSecondBody)
+    #expect(body.textRepresentation?.contains("\n") == true)
+    #expect(body.textRepresentation?.contains(#""second""#) == true)
     #expect(body.textRepresentation?.contains(#""first""#) == false)
 }
 
@@ -269,8 +262,9 @@ func invalidJSONLookingPlainTextKeepsPlainTextSyntax() async {
     #expect(body.textRepresentation == "[INFO] started")
     #expect(body.textRepresentationSyntaxKind == .plainText)
 
-    body.prepareTextRepresentation()
-    await yieldForTextRepresentationPreparation()
+    if let preparation = body.prepareTextRepresentation() {
+        await preparation.wait()
+    }
 
     #expect(body.textRepresentation == "[INFO] started")
     #expect(body.textRepresentationSyntaxKind == .plainText)
@@ -730,24 +724,4 @@ func loadingFailureOnlyUpdatesMatchingTargetScopedRequest() async throws {
 
     #expect(page.state == .pending)
     #expect(frame.state == .failed(errorText: "cancelled", canceled: true))
-}
-
-@MainActor
-private func waitUntil(
-    maxTicks: Int = 256,
-    _ condition: @MainActor () -> Bool
-) async -> Bool {
-    for _ in 0..<maxTicks {
-        if condition() {
-            return true
-        }
-        await Task.yield()
-    }
-    return false
-}
-
-private func yieldForTextRepresentationPreparation(maxTicks: Int = 16) async {
-    for _ in 0..<maxTicks {
-        await Task.yield()
-    }
 }
