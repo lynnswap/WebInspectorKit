@@ -740,7 +740,7 @@ extension BrowserStore: WKUIDelegate {
             }
 
             let openInAppAction = UIAction(
-                title: monoclyLocalized("monocly.context.open_in_monocly"),
+                title: String(localized: "monocly.context.open_in_monocly", bundle: .main),
                 image: UIImage(systemName: "safari")
             ) { _ in
                 guard let webView else {
@@ -787,7 +787,7 @@ private extension BrowserStore {
         }
         await withCheckedContinuation { continuation in
             let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
-            alert.addAction(UIAlertAction(title: monoclyLocalized("common.ok"), style: .default) { _ in
+            alert.addAction(UIAlertAction(title: String(localized: "common.ok", bundle: .main), style: .default) { _ in
                 continuation.resume()
             })
             presenter.present(alert, animated: true)
@@ -802,10 +802,10 @@ private extension BrowserStore {
         }
         return await withCheckedContinuation { continuation in
             let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
-            alert.addAction(UIAlertAction(title: monoclyLocalized("common.cancel"), style: .cancel) { _ in
+            alert.addAction(UIAlertAction(title: String(localized: "common.cancel", bundle: .main), style: .cancel) { _ in
                 continuation.resume(returning: false)
             })
-            alert.addAction(UIAlertAction(title: monoclyLocalized("common.ok"), style: .default) { _ in
+            alert.addAction(UIAlertAction(title: String(localized: "common.ok", bundle: .main), style: .default) { _ in
                 continuation.resume(returning: true)
             })
             presenter.present(alert, animated: true)
@@ -823,10 +823,10 @@ private extension BrowserStore {
             alert.addTextField { textField in
                 textField.text = defaultText
             }
-            alert.addAction(UIAlertAction(title: monoclyLocalized("common.cancel"), style: .cancel) { _ in
+            alert.addAction(UIAlertAction(title: String(localized: "common.cancel", bundle: .main), style: .cancel) { _ in
                 continuation.resume(returning: nil)
             })
-            alert.addAction(UIAlertAction(title: monoclyLocalized("common.ok"), style: .default) { _ in
+            alert.addAction(UIAlertAction(title: String(localized: "common.ok", bundle: .main), style: .default) { _ in
                 continuation.resume(returning: alert.textFields?.first?.text)
             })
             presenter.present(alert, animated: true)

@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Copy</key>
+	<string>कॉपी</string>
+	<key>dom.element.styles.empty.title</key>
+	<string>कोई एलिमेंट चयनित नहीं</string>
+	<key>dom.element.styles.not_editable.accessibility_value</key>
+	<string>संपादन योग्य नहीं</string>
+	<key>dom.element.styles.origin.author</key>
+	<string>लेखक स्टाइल शीट</string>
+	<key>dom.element.styles.origin.inspector</key>
+	<string>Web Inspector</string>
+	<key>dom.element.styles.origin.user</key>
+	<string>यूज़र स्टाइल शीट</string>
+	<key>dom.element.styles.origin.user_agent</key>
+	<string>User Agent स्टाइल शीट</string>
+	<key>dom.element.styles.overridden.accessibility_value</key>
+	<string>ओवरराइड किया गया</string>
+	<key>dom.element.styles.property_disabled.accessibility_value</key>
+	<string>अक्षम</string>
+	<key>dom.element.styles.property_enabled.accessibility_value</key>
+	<string>सक्षम</string>
+	<key>dom.element.styles.toggle_property.accessibility_label</key>
+	<string>%@ टॉगल करें</string>
+	<key>dom.tree.extend_selection_down</key>
+	<string>चयन नीचे तक बढ़ाएँ</string>
+	<key>dom.tree.extend_selection_up</key>
+	<string>चयन ऊपर तक बढ़ाएँ</string>
+	<key>dom.tree.find</key>
+	<string>ढूँढें</string>
+	<key>dom.tree.select_all</key>
+	<string>सभी चुनें</string>
+	<key>inspector.delete_node</key>
+	<string>नोड हटाएँ</string>
+	<key>inspector.delete_nodes</key>
+	<string>नोड हटाएँ</string>
+	<key>network.body.fetch.error.decode_failed</key>
+	<string>बॉडी डिकोड नहीं हो सकी</string>
+	<key>network.body.fetch.error.unavailable</key>
+	<string>बॉडी उपलब्ध नहीं</string>
+	<key>network.body.fetch.error.unknown</key>
+	<string>बॉडी प्राप्त नहीं हो सकी</string>
+	<key>network.body.fetching.accessibility_label</key>
+	<string>रेस्पॉन्स बॉडी प्राप्त की जा रही है</string>
+	<key>network.body.unavailable</key>
+	<string>बॉडी उपलब्ध नहीं</string>
+	<key>network.controls.clear</key>
+	<string>साफ़ करें</string>
+	<key>network.detail.section.overview</key>
+	<string>अवलोकन</string>
+	<key>network.empty.selection.title</key>
+	<string>कोई अनुरोध चयनित नहीं</string>
+	<key>network.empty.title</key>
+	<string>कोई अनुरोध नहीं</string>
+	<key>network.filter.all</key>
+	<string>सभी</string>
+	<key>network.filter.document</key>
+	<string>दस्तावेज़</string>
+	<key>network.filter.font</key>
+	<string>फ़ॉन्ट</string>
+	<key>network.filter.image</key>
+	<string>छवि</string>
+	<key>network.filter.other</key>
+	<string>अन्य</string>
+	<key>network.headers.empty</key>
+	<string>कोई हैडर नहीं</string>
+	<key>network.search.placeholder</key>
+	<string>रिक्वेस्ट खोजें</string>
+	<key>network.section.body.request</key>
+	<string>अनुरोध बॉडी</string>
+	<key>network.section.body.response</key>
+	<string>रेस्पॉन्स बॉडी</string>
+	<key>network.section.request</key>
+	<string>अनुरोध</string>
+	<key>network.section.response</key>
+	<string>प्रतिक्रिया</string>
+	<key>redo</key>
+	<string>फिर से करें</string>
+	<key>reload</key>
+	<string>रीलोड करें</string>
+	<key>undo</key>
+	<string>पूर्ववत करें</string>
+</dict>
+</plist>

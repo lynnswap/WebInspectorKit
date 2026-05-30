@@ -104,10 +104,11 @@ let package = Package(
                 .product(name: "SyntaxEditorUI", package: "SyntaxEditorUI", condition: .when(platforms: [.iOS]))
             ],
             exclude: [
-                "Docs"
+                "Docs",
+                "Localizable.xcstrings",
             ],
             resources: [
-                .process("Localizable.xcstrings")
+                .process("LocalizationRuntime")
             ],
             swiftSettings: strictSwiftSettings
         ),

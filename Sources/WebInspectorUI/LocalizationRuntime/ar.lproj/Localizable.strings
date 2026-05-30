@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Copy</key>
+	<string>نسخ</string>
+	<key>dom.element.styles.empty.title</key>
+	<string>لم يتم تحديد عنصر</string>
+	<key>dom.element.styles.not_editable.accessibility_value</key>
+	<string>غير قابل للتحرير</string>
+	<key>dom.element.styles.origin.author</key>
+	<string>ورقة أنماط المؤلف</string>
+	<key>dom.element.styles.origin.inspector</key>
+	<string>Web Inspector</string>
+	<key>dom.element.styles.origin.user</key>
+	<string>ورقة أنماط المستخدم</string>
+	<key>dom.element.styles.origin.user_agent</key>
+	<string>ورقة أنماط User Agent</string>
+	<key>dom.element.styles.overridden.accessibility_value</key>
+	<string>تم تجاوزه</string>
+	<key>dom.element.styles.property_disabled.accessibility_value</key>
+	<string>معطّل</string>
+	<key>dom.element.styles.property_enabled.accessibility_value</key>
+	<string>مفعّل</string>
+	<key>dom.element.styles.toggle_property.accessibility_label</key>
+	<string>تبديل %@</string>
+	<key>dom.tree.extend_selection_down</key>
+	<string>توسيع التحديد لأسفل</string>
+	<key>dom.tree.extend_selection_up</key>
+	<string>توسيع التحديد لأعلى</string>
+	<key>dom.tree.find</key>
+	<string>بحث</string>
+	<key>dom.tree.select_all</key>
+	<string>تحديد الكل</string>
+	<key>inspector.delete_node</key>
+	<string>حذف العقدة</string>
+	<key>inspector.delete_nodes</key>
+	<string>حذف العقد</string>
+	<key>network.body.fetch.error.decode_failed</key>
+	<string>فشل فك ترميز المحتوى</string>
+	<key>network.body.fetch.error.unavailable</key>
+	<string>المحتوى غير متوفر</string>
+	<key>network.body.fetch.error.unknown</key>
+	<string>فشل جلب المحتوى</string>
+	<key>network.body.fetching.accessibility_label</key>
+	<string>جارٍ جلب محتوى الاستجابة</string>
+	<key>network.body.unavailable</key>
+	<string>المحتوى غير متوفر</string>
+	<key>network.controls.clear</key>
+	<string>مسح</string>
+	<key>network.detail.section.overview</key>
+	<string>نظرة عامة</string>
+	<key>network.empty.selection.title</key>
+	<string>لم يتم تحديد طلب</string>
+	<key>network.empty.title</key>
+	<string>لا توجد طلبات</string>
+	<key>network.filter.all</key>
+	<string>الكل</string>
+	<key>network.filter.document</key>
+	<string>مستند</string>
+	<key>network.filter.font</key>
+	<string>خط</string>
+	<key>network.filter.image</key>
+	<string>صورة</string>
+	<key>network.filter.other</key>
+	<string>أخرى</string>
+	<key>network.headers.empty</key>
+	<string>لا توجد رؤوس</string>
+	<key>network.search.placeholder</key>
+	<string>ابحث عن الطلبات</string>
+	<key>network.section.body.request</key>
+	<string>محتوى الطلب</string>
+	<key>network.section.body.response</key>
+	<string>محتوى الاستجابة</string>
+	<key>network.section.request</key>
+	<string>الطلب</string>
+	<key>network.section.response</key>
+	<string>الاستجابة</string>
+	<key>redo</key>
+	<string>إعادة</string>
+	<key>reload</key>
+	<string>إعادة التحميل</string>
+	<key>undo</key>
+	<string>تراجع</string>
+</dict>
+</plist>

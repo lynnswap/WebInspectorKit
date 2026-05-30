@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Copy</key>
+	<string>Kopiëren</string>
+	<key>dom.element.styles.empty.title</key>
+	<string>Geen element geselecteerd</string>
+	<key>dom.element.styles.not_editable.accessibility_value</key>
+	<string>Niet bewerkbaar</string>
+	<key>dom.element.styles.origin.author</key>
+	<string>Auteursstijlblad</string>
+	<key>dom.element.styles.origin.inspector</key>
+	<string>Web Inspector</string>
+	<key>dom.element.styles.origin.user</key>
+	<string>Gebruikersstijlblad</string>
+	<key>dom.element.styles.origin.user_agent</key>
+	<string>User-agent-stijlblad</string>
+	<key>dom.element.styles.overridden.accessibility_value</key>
+	<string>Overschreven</string>
+	<key>dom.element.styles.property_disabled.accessibility_value</key>
+	<string>Uitgeschakeld</string>
+	<key>dom.element.styles.property_enabled.accessibility_value</key>
+	<string>Ingeschakeld</string>
+	<key>dom.element.styles.toggle_property.accessibility_label</key>
+	<string>%@ wisselen</string>
+	<key>dom.tree.extend_selection_down</key>
+	<string>Selectie omlaag uitbreiden</string>
+	<key>dom.tree.extend_selection_up</key>
+	<string>Selectie omhoog uitbreiden</string>
+	<key>dom.tree.find</key>
+	<string>Zoeken</string>
+	<key>dom.tree.select_all</key>
+	<string>Alles selecteren</string>
+	<key>inspector.delete_node</key>
+	<string>Node verwijderen</string>
+	<key>inspector.delete_nodes</key>
+	<string>Nodes verwijderen</string>
+	<key>network.body.fetch.error.decode_failed</key>
+	<string>Body decoderen mislukt</string>
+	<key>network.body.fetch.error.unavailable</key>
+	<string>Body niet beschikbaar</string>
+	<key>network.body.fetch.error.unknown</key>
+	<string>Body ophalen mislukt</string>
+	<key>network.body.fetching.accessibility_label</key>
+	<string>Antwoordbody ophalen</string>
+	<key>network.body.unavailable</key>
+	<string>Body niet beschikbaar</string>
+	<key>network.controls.clear</key>
+	<string>Wissen</string>
+	<key>network.detail.section.overview</key>
+	<string>Overzicht</string>
+	<key>network.empty.selection.title</key>
+	<string>Geen verzoek geselecteerd</string>
+	<key>network.empty.title</key>
+	<string>Geen verzoeken</string>
+	<key>network.filter.all</key>
+	<string>Alle</string>
+	<key>network.filter.document</key>
+	<string>Document</string>
+	<key>network.filter.font</key>
+	<string>Lettertype</string>
+	<key>network.filter.image</key>
+	<string>Afbeelding</string>
+	<key>network.filter.other</key>
+	<string>Overig</string>
+	<key>network.headers.empty</key>
+	<string>Geen headers</string>
+	<key>network.search.placeholder</key>
+	<string>Verzoeken zoeken</string>
+	<key>network.section.body.request</key>
+	<string>Verzoekbody</string>
+	<key>network.section.body.response</key>
+	<string>Antwoordbody</string>
+	<key>network.section.request</key>
+	<string>Verzoek</string>
+	<key>network.section.response</key>
+	<string>Antwoord</string>
+	<key>redo</key>
+	<string>Opnieuw</string>
+	<key>reload</key>
+	<string>Opnieuw laden</string>
+	<key>undo</key>
+	<string>Ongedaan maken</string>
+</dict>
+</plist>

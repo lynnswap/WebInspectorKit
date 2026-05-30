@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Copy</key>
+	<string>Copia</string>
+	<key>dom.element.styles.empty.title</key>
+	<string>Nessun elemento selezionato</string>
+	<key>dom.element.styles.not_editable.accessibility_value</key>
+	<string>Non modificabile</string>
+	<key>dom.element.styles.origin.author</key>
+	<string>Foglio di stile autore</string>
+	<key>dom.element.styles.origin.inspector</key>
+	<string>Web Inspector</string>
+	<key>dom.element.styles.origin.user</key>
+	<string>Foglio di stile utente</string>
+	<key>dom.element.styles.origin.user_agent</key>
+	<string>Foglio di stile user agent</string>
+	<key>dom.element.styles.overridden.accessibility_value</key>
+	<string>Sostituito</string>
+	<key>dom.element.styles.property_disabled.accessibility_value</key>
+	<string>Disattivato</string>
+	<key>dom.element.styles.property_enabled.accessibility_value</key>
+	<string>Attivato</string>
+	<key>dom.element.styles.toggle_property.accessibility_label</key>
+	<string>Attiva/disattiva %@</string>
+	<key>dom.tree.extend_selection_down</key>
+	<string>Estendi selezione verso il basso</string>
+	<key>dom.tree.extend_selection_up</key>
+	<string>Estendi selezione verso l’alto</string>
+	<key>dom.tree.find</key>
+	<string>Trova</string>
+	<key>dom.tree.select_all</key>
+	<string>Seleziona tutto</string>
+	<key>inspector.delete_node</key>
+	<string>Elimina nodo</string>
+	<key>inspector.delete_nodes</key>
+	<string>Elimina nodi</string>
+	<key>network.body.fetch.error.decode_failed</key>
+	<string>Decodifica del corpo non riuscita</string>
+	<key>network.body.fetch.error.unavailable</key>
+	<string>Corpo non disponibile</string>
+	<key>network.body.fetch.error.unknown</key>
+	<string>Recupero del corpo non riuscito</string>
+	<key>network.body.fetching.accessibility_label</key>
+	<string>Recupero del corpo della risposta</string>
+	<key>network.body.unavailable</key>
+	<string>Corpo non disponibile</string>
+	<key>network.controls.clear</key>
+	<string>Cancella</string>
+	<key>network.detail.section.overview</key>
+	<string>Panoramica</string>
+	<key>network.empty.selection.title</key>
+	<string>Nessuna richiesta selezionata</string>
+	<key>network.empty.title</key>
+	<string>Nessuna richiesta</string>
+	<key>network.filter.all</key>
+	<string>Tutti</string>
+	<key>network.filter.document</key>
+	<string>Documento</string>
+	<key>network.filter.font</key>
+	<string>Font</string>
+	<key>network.filter.image</key>
+	<string>Immagine</string>
+	<key>network.filter.other</key>
+	<string>Altro</string>
+	<key>network.headers.empty</key>
+	<string>Nessuna intestazione</string>
+	<key>network.search.placeholder</key>
+	<string>Cerca richieste</string>
+	<key>network.section.body.request</key>
+	<string>Corpo della richiesta</string>
+	<key>network.section.body.response</key>
+	<string>Corpo della risposta</string>
+	<key>network.section.request</key>
+	<string>Richiesta</string>
+	<key>network.section.response</key>
+	<string>Risposta</string>
+	<key>redo</key>
+	<string>Ripeti</string>
+	<key>reload</key>
+	<string>Ricarica</string>
+	<key>undo</key>
+	<string>Annulla</string>
+</dict>
+</plist>

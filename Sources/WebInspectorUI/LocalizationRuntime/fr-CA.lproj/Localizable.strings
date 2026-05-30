@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Copy</key>
+	<string>Copier</string>
+	<key>dom.element.styles.empty.title</key>
+	<string>Aucun élément sélectionné</string>
+	<key>dom.element.styles.not_editable.accessibility_value</key>
+	<string>Non modifiable</string>
+	<key>dom.element.styles.origin.author</key>
+	<string>Feuille de style de l’auteur</string>
+	<key>dom.element.styles.origin.inspector</key>
+	<string>Web Inspector</string>
+	<key>dom.element.styles.origin.user</key>
+	<string>Feuille de style utilisateur</string>
+	<key>dom.element.styles.origin.user_agent</key>
+	<string>Feuille de style de l’agent utilisateur</string>
+	<key>dom.element.styles.overridden.accessibility_value</key>
+	<string>Remplacé</string>
+	<key>dom.element.styles.property_disabled.accessibility_value</key>
+	<string>Désactivé</string>
+	<key>dom.element.styles.property_enabled.accessibility_value</key>
+	<string>Activé</string>
+	<key>dom.element.styles.toggle_property.accessibility_label</key>
+	<string>Basculer %@</string>
+	<key>dom.tree.extend_selection_down</key>
+	<string>Étendre la sélection vers le bas</string>
+	<key>dom.tree.extend_selection_up</key>
+	<string>Étendre la sélection vers le haut</string>
+	<key>dom.tree.find</key>
+	<string>Rechercher</string>
+	<key>dom.tree.select_all</key>
+	<string>Tout sélectionner</string>
+	<key>inspector.delete_node</key>
+	<string>Supprimer le nœud</string>
+	<key>inspector.delete_nodes</key>
+	<string>Supprimer les nœuds</string>
+	<key>network.body.fetch.error.decode_failed</key>
+	<string>Échec du décodage du corps</string>
+	<key>network.body.fetch.error.unavailable</key>
+	<string>Corps indisponible</string>
+	<key>network.body.fetch.error.unknown</key>
+	<string>Échec de la récupération du corps</string>
+	<key>network.body.fetching.accessibility_label</key>
+	<string>Récupération du corps de la réponse</string>
+	<key>network.body.unavailable</key>
+	<string>Corps indisponible</string>
+	<key>network.controls.clear</key>
+	<string>Effacer</string>
+	<key>network.detail.section.overview</key>
+	<string>Aperçu</string>
+	<key>network.empty.selection.title</key>
+	<string>Aucune requête sélectionnée</string>
+	<key>network.empty.title</key>
+	<string>Aucune requête</string>
+	<key>network.filter.all</key>
+	<string>Tout</string>
+	<key>network.filter.document</key>
+	<string>Document</string>
+	<key>network.filter.font</key>
+	<string>Police</string>
+	<key>network.filter.image</key>
+	<string>Image</string>
+	<key>network.filter.other</key>
+	<string>Autre</string>
+	<key>network.headers.empty</key>
+	<string>Aucun en-tête</string>
+	<key>network.search.placeholder</key>
+	<string>Rechercher des requêtes</string>
+	<key>network.section.body.request</key>
+	<string>Corps de la requête</string>
+	<key>network.section.body.response</key>
+	<string>Corps de la réponse</string>
+	<key>network.section.request</key>
+	<string>Requête</string>
+	<key>network.section.response</key>
+	<string>Réponse</string>
+	<key>redo</key>
+	<string>Rétablir</string>
+	<key>reload</key>
+	<string>Recharger</string>
+	<key>undo</key>
+	<string>Annuler</string>
+</dict>
+</plist>

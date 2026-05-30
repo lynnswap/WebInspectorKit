@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Copy</key>
+	<string>複製</string>
+	<key>dom.element.styles.empty.title</key>
+	<string>未選擇元素</string>
+	<key>dom.element.styles.not_editable.accessibility_value</key>
+	<string>不可編輯</string>
+	<key>dom.element.styles.origin.author</key>
+	<string>作者樣式表</string>
+	<key>dom.element.styles.origin.inspector</key>
+	<string>Web Inspector</string>
+	<key>dom.element.styles.origin.user</key>
+	<string>使用者樣式表</string>
+	<key>dom.element.styles.origin.user_agent</key>
+	<string>User Agent 樣式表</string>
+	<key>dom.element.styles.overridden.accessibility_value</key>
+	<string>已覆寫</string>
+	<key>dom.element.styles.property_disabled.accessibility_value</key>
+	<string>已停用</string>
+	<key>dom.element.styles.property_enabled.accessibility_value</key>
+	<string>已啟用</string>
+	<key>dom.element.styles.toggle_property.accessibility_label</key>
+	<string>切換%@</string>
+	<key>dom.tree.extend_selection_down</key>
+	<string>向下延伸選取範圍</string>
+	<key>dom.tree.extend_selection_up</key>
+	<string>向上延伸選取範圍</string>
+	<key>dom.tree.find</key>
+	<string>尋找</string>
+	<key>dom.tree.select_all</key>
+	<string>全選</string>
+	<key>inspector.delete_node</key>
+	<string>刪除節點</string>
+	<key>inspector.delete_nodes</key>
+	<string>刪除節點</string>
+	<key>network.body.fetch.error.decode_failed</key>
+	<string>本文解碼失敗</string>
+	<key>network.body.fetch.error.unavailable</key>
+	<string>本文無法使用</string>
+	<key>network.body.fetch.error.unknown</key>
+	<string>本文擷取失敗</string>
+	<key>network.body.fetching.accessibility_label</key>
+	<string>正在擷取回應本文</string>
+	<key>network.body.unavailable</key>
+	<string>本文無法使用</string>
+	<key>network.controls.clear</key>
+	<string>清除</string>
+	<key>network.detail.section.overview</key>
+	<string>概覽</string>
+	<key>network.empty.selection.title</key>
+	<string>未選擇請求</string>
+	<key>network.empty.title</key>
+	<string>沒有請求</string>
+	<key>network.filter.all</key>
+	<string>全部</string>
+	<key>network.filter.document</key>
+	<string>文件</string>
+	<key>network.filter.font</key>
+	<string>字體</string>
+	<key>network.filter.image</key>
+	<string>影像</string>
+	<key>network.filter.other</key>
+	<string>其他</string>
+	<key>network.headers.empty</key>
+	<string>沒有標頭</string>
+	<key>network.search.placeholder</key>
+	<string>搜尋要求</string>
+	<key>network.section.body.request</key>
+	<string>要求本文</string>
+	<key>network.section.body.response</key>
+	<string>回應本文</string>
+	<key>network.section.request</key>
+	<string>要求</string>
+	<key>network.section.response</key>
+	<string>回應</string>
+	<key>redo</key>
+	<string>重做</string>
+	<key>reload</key>
+	<string>重新載入</string>
+	<key>undo</key>
+	<string>撤銷</string>
+</dict>
+</plist>
