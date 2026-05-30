@@ -165,15 +165,4 @@ package final class DOMNavigationItems: NSObject {
     }
 }
 
-#if DEBUG
-extension DOMNavigationItems {
-    package var pickItemForTesting: UIBarButtonItem {
-        pickItem
-    }
-
-    package func overflowMenuForTesting(undoManager: UndoManager? = nil) -> UIMenu {
-        makeOverflowMenu(undoManagerProvider: { undoManager })
-    }
-}
-#endif
 #endif

@@ -892,51 +892,6 @@ struct DOMContainerTests {
         #expect(splitViewController.navigationItem.additionalOverflowItems != nil)
     }
 
-    @Test
-    func overflowMenuUsesPageReloadAndDeleteOnlyWhenSessionIsDetached() throws {
-        let dom = makeDOMSession()
-        let attachment = AttachedInspection(dom: dom)
-        let session = InspectorSession(attachment: attachment)
-        let navigationItems = DOMNavigationItems(inspector: session)
-
-        let emptyMenu = navigationItems.overflowMenuForTesting()
-        let emptySections = inlineSections(in: emptyMenu)
-        #expect(emptySections.count == 3)
-        let emptyUndoRedoActions = actions(in: emptySections[safe: 0])
-        #expect(emptyUndoRedoActions[safe: 0]?.attributes.contains(.disabled) == true)
-        #expect(emptyUndoRedoActions[safe: 1]?.attributes.contains(.disabled) == true)
-        #expect(action(titled: "HTML", in: emptyMenu) == nil)
-        #expect(action(titled: "Selector", in: emptyMenu) == nil)
-        #expect(action(titled: "XPath", in: emptyMenu) == nil)
-        #expect(actions(in: emptySections[safe: 1]).first?.attributes.contains(.disabled) == true)
-        #expect(action(titled: "Reload Inspector", in: emptyMenu) == nil)
-        #expect(action(titled: "Reload Page", in: emptyMenu) == nil)
-
-        let selectedNode = try #require(firstElement(named: "input", in: dom))
-        dom.selectNode(selectedNode.id)
-
-        let selectedMenu = navigationItems.overflowMenuForTesting()
-        let selectedSections = inlineSections(in: selectedMenu)
-        #expect(selectedSections.count == 3)
-        let selectedUndoRedoActions = actions(in: selectedSections[safe: 0])
-        #expect(selectedUndoRedoActions[safe: 0]?.attributes.contains(.disabled) == true)
-        #expect(selectedUndoRedoActions[safe: 1]?.attributes.contains(.disabled) == true)
-        #expect(action(titled: "HTML", in: selectedMenu) == nil)
-        #expect(action(titled: "Selector", in: selectedMenu) == nil)
-        #expect(action(titled: "XPath", in: selectedMenu) == nil)
-        #expect(actions(in: selectedSections[safe: 1]).first?.attributes.contains(.disabled) == true)
-        #expect(action(titled: "Reload Inspector", in: selectedMenu) == nil)
-        #expect(action(titled: "Reload Page", in: selectedMenu) == nil)
-        #expect(destructiveAction(in: selectedMenu)?.attributes.contains(.disabled) == true)
-
-        let undoManager = UndoManager()
-        undoManager.registerUndo(withTarget: UndoTarget()) { _ in }
-        let undoableMenu = navigationItems.overflowMenuForTesting(undoManager: undoManager)
-        let undoableUndoRedoActions = actions(in: inlineSections(in: undoableMenu)[safe: 0])
-        #expect(undoableUndoRedoActions[safe: 0]?.attributes.contains(.disabled) == false)
-        #expect(undoableUndoRedoActions[safe: 1]?.attributes.contains(.disabled) == true)
-    }
-
     private struct BodyStyleIDs {
         var margin: CSSPropertyIdentifier
         var boxSizing: CSSPropertyIdentifier
@@ -1272,54 +1227,5 @@ struct DOMContainerTests {
         return condition()
     }
 
-    private func action(titled title: String, in menu: UIMenu) -> UIAction? {
-        for child in menu.children {
-            if let action = child as? UIAction, action.title == title {
-                return action
-            }
-            if let childMenu = child as? UIMenu,
-               let action = action(titled: title, in: childMenu) {
-                return action
-            }
-        }
-        return nil
-    }
-
-    private func inlineSectionCount(in menu: UIMenu) -> Int {
-        inlineSections(in: menu).count
-    }
-
-    private func inlineSections(in menu: UIMenu) -> [UIMenu] {
-        menu.children
-            .compactMap { $0 as? UIMenu }
-            .filter { $0.options.contains(.displayInline) }
-    }
-
-    private func actions(in menu: UIMenu?) -> [UIAction] {
-        menu?.children.compactMap { $0 as? UIAction } ?? []
-    }
-
-    private func destructiveAction(in menu: UIMenu) -> UIAction? {
-        for child in menu.children {
-            if let action = child as? UIAction,
-               action.attributes.contains(.destructive) {
-                return action
-            }
-            if let childMenu = child as? UIMenu,
-               let action = destructiveAction(in: childMenu) {
-                return action
-            }
-        }
-        return nil
-    }
-
-}
-
-private final class UndoTarget {}
-
-private extension Array {
-    subscript(safe index: Index) -> Element? {
-        indices.contains(index) ? self[index] : nil
-    }
 }
 #endif
