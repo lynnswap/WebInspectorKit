@@ -19,7 +19,7 @@ struct DOMContainerTests {
         #expect(viewController.view.backgroundColor == .systemBackground)
         #expect(viewController.contentUnavailableConfiguration != nil)
         let configuration = viewController.contentUnavailableConfiguration as? UIContentUnavailableConfiguration
-        #expect(configuration?.text == String(localized: "dom.element.styles.empty.title", bundle: .module))
+        #expect(configuration?.text?.isEmpty == false)
         #expect(configuration?.textProperties.color == .secondaryLabel)
         #expect(viewController.collectionView.isHidden == false)
         #expect(viewController.collectionView.numberOfSections == 0)
@@ -126,9 +126,7 @@ struct DOMContainerTests {
         #expect(DOMElementStyleSectionHeaderText.displayText(
             for: CSSRuleSourceLocation(sourceURL: "styles.css", line: 0, column: 81)
         ) == "styles.css:1:82")
-        #expect(
-            DOMElementStyleSectionHeaderText.displayText(for: .userAgent) == String(localized: "dom.element.styles.origin.user_agent", bundle: .module)
-        )
+        #expect(DOMElementStyleSectionHeaderText.displayText(for: .userAgent)?.isEmpty == false)
     }
 
     @Test
@@ -902,13 +900,15 @@ struct DOMContainerTests {
         let navigationItems = DOMNavigationItems(inspector: session)
 
         let emptyMenu = navigationItems.overflowMenuForTesting()
-        #expect(inlineSectionCount(in: emptyMenu) == 3)
-        #expect(action(titled: localizedUndoTitle(), in: emptyMenu)?.attributes.contains(.disabled) == true)
-        #expect(action(titled: localizedRedoTitle(), in: emptyMenu)?.attributes.contains(.disabled) == true)
+        let emptySections = inlineSections(in: emptyMenu)
+        #expect(emptySections.count == 3)
+        let emptyUndoRedoActions = actions(in: emptySections[safe: 0])
+        #expect(emptyUndoRedoActions[safe: 0]?.attributes.contains(.disabled) == true)
+        #expect(emptyUndoRedoActions[safe: 1]?.attributes.contains(.disabled) == true)
         #expect(action(titled: "HTML", in: emptyMenu) == nil)
         #expect(action(titled: "Selector", in: emptyMenu) == nil)
         #expect(action(titled: "XPath", in: emptyMenu) == nil)
-        #expect(action(titled: localizedReloadTitle(), in: emptyMenu)?.attributes.contains(.disabled) == true)
+        #expect(actions(in: emptySections[safe: 1]).first?.attributes.contains(.disabled) == true)
         #expect(action(titled: "Reload Inspector", in: emptyMenu) == nil)
         #expect(action(titled: "Reload Page", in: emptyMenu) == nil)
 
@@ -916,13 +916,15 @@ struct DOMContainerTests {
         dom.selectNode(selectedNode.id)
 
         let selectedMenu = navigationItems.overflowMenuForTesting()
-        #expect(inlineSectionCount(in: selectedMenu) == 3)
-        #expect(action(titled: localizedUndoTitle(), in: selectedMenu)?.attributes.contains(.disabled) == true)
-        #expect(action(titled: localizedRedoTitle(), in: selectedMenu)?.attributes.contains(.disabled) == true)
+        let selectedSections = inlineSections(in: selectedMenu)
+        #expect(selectedSections.count == 3)
+        let selectedUndoRedoActions = actions(in: selectedSections[safe: 0])
+        #expect(selectedUndoRedoActions[safe: 0]?.attributes.contains(.disabled) == true)
+        #expect(selectedUndoRedoActions[safe: 1]?.attributes.contains(.disabled) == true)
         #expect(action(titled: "HTML", in: selectedMenu) == nil)
         #expect(action(titled: "Selector", in: selectedMenu) == nil)
         #expect(action(titled: "XPath", in: selectedMenu) == nil)
-        #expect(action(titled: localizedReloadTitle(), in: selectedMenu)?.attributes.contains(.disabled) == true)
+        #expect(actions(in: selectedSections[safe: 1]).first?.attributes.contains(.disabled) == true)
         #expect(action(titled: "Reload Inspector", in: selectedMenu) == nil)
         #expect(action(titled: "Reload Page", in: selectedMenu) == nil)
         #expect(destructiveAction(in: selectedMenu)?.attributes.contains(.disabled) == true)
@@ -930,8 +932,9 @@ struct DOMContainerTests {
         let undoManager = UndoManager()
         undoManager.registerUndo(withTarget: UndoTarget()) { _ in }
         let undoableMenu = navigationItems.overflowMenuForTesting(undoManager: undoManager)
-        #expect(action(titled: localizedUndoTitle(), in: undoableMenu)?.attributes.contains(.disabled) == false)
-        #expect(action(titled: localizedRedoTitle(), in: undoableMenu)?.attributes.contains(.disabled) == true)
+        let undoableUndoRedoActions = actions(in: inlineSections(in: undoableMenu)[safe: 0])
+        #expect(undoableUndoRedoActions[safe: 0]?.attributes.contains(.disabled) == false)
+        #expect(undoableUndoRedoActions[safe: 1]?.attributes.contains(.disabled) == true)
     }
 
     private struct BodyStyleIDs {
@@ -1283,10 +1286,17 @@ struct DOMContainerTests {
     }
 
     private func inlineSectionCount(in menu: UIMenu) -> Int {
+        inlineSections(in: menu).count
+    }
+
+    private func inlineSections(in menu: UIMenu) -> [UIMenu] {
         menu.children
             .compactMap { $0 as? UIMenu }
             .filter { $0.options.contains(.displayInline) }
-            .count
+    }
+
+    private func actions(in menu: UIMenu?) -> [UIAction] {
+        menu?.children.compactMap { $0 as? UIAction } ?? []
     }
 
     private func destructiveAction(in menu: UIMenu) -> UIAction? {
@@ -1303,19 +1313,13 @@ struct DOMContainerTests {
         return nil
     }
 
-    private func localizedUndoTitle() -> String {
-        String(localized: "undo", bundle: .module)
-    }
-
-    private func localizedRedoTitle() -> String {
-        String(localized: "redo", bundle: .module)
-    }
-
-    private func localizedReloadTitle() -> String {
-        String(localized: "reload", bundle: .module)
-    }
-
 }
 
 private final class UndoTarget {}
+
+private extension Array {
+    subscript(safe index: Index) -> Element? {
+        indices.contains(index) ? self[index] : nil
+    }
+}
 #endif

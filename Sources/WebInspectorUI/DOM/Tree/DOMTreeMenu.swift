@@ -264,6 +264,8 @@ struct DOMTreeMenuView: View {
                 }
                 .disabled(!model.canCopyXPath)
             }
+        } header: {
+            Text(String(localized: "Copy", bundle: .module))
         }
 
         Section {
