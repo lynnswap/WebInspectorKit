@@ -234,16 +234,13 @@ package final class DOMElementViewController: UICollectionViewController {
 
     private func renderUnavailableStyles() {
         if let configuration = contentUnavailableConfiguration as? UIContentUnavailableConfiguration,
-           configuration.text == webInspectorLocalized("dom.element.styles.empty.title", default: "No styles available") {
+           configuration.text == String(localized: "dom.element.styles.empty.title", bundle: .module) {
             applyEmptySnapshot()
             return
         }
         var configuration = UIContentUnavailableConfiguration.empty()
-        configuration.text = webInspectorLocalized("dom.element.styles.empty.title", default: "No styles available")
-        configuration.secondaryText = webInspectorLocalized(
-            "dom.element.styles.empty.description",
-            default: "Select an element in the DOM tree to inspect CSS styles."
-        )
+        configuration.text = String(localized: "dom.element.styles.empty.title", bundle: .module)
+        configuration.textProperties.color = .secondaryLabel
         contentUnavailableConfiguration = configuration
         applyEmptySnapshot()
     }

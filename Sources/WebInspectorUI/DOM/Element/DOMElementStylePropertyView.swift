@@ -106,7 +106,13 @@ package final class DOMElementStylePropertyView: UIView {
     }
 
     private func renderToggleAccessibility(from property: CSSProperty) {
-        toggleSwitch.accessibilityLabel = "\(webInspectorLocalized("dom.element.styles.toggle_property", default: "Toggle")) \(property.name)"
+        toggleSwitch.accessibilityLabel = String(
+            localized: LocalizedStringResource(
+                "dom.element.styles.toggle_property.accessibility_label",
+                defaultValue: "Toggle \(property.name)",
+                bundle: .module
+            )
+        )
     }
 
     private func renderRowAccessibility(from property: CSSProperty) {
@@ -182,14 +188,14 @@ package final class DOMElementStylePropertyView: UIView {
     private func accessibilityValue(for property: CSSProperty) -> String {
         var states = [
             property.isEnabled
-                ? webInspectorLocalized("enabled", default: "Enabled")
-                : webInspectorLocalized("disabled", default: "Disabled"),
+                ? String(localized: "dom.element.styles.property_enabled.accessibility_value", bundle: .module)
+                : String(localized: "dom.element.styles.property_disabled.accessibility_value", bundle: .module),
         ]
         if property.isEditable == false {
-            states.append(webInspectorLocalized("dom.element.styles.not_editable", default: "Not editable"))
+            states.append(String(localized: "dom.element.styles.not_editable.accessibility_value", bundle: .module))
         }
         if property.isOverridden {
-            states.append(webInspectorLocalized("dom.element.styles.overridden", default: "Overridden"))
+            states.append(String(localized: "dom.element.styles.overridden.accessibility_value", bundle: .module))
         }
         return states.joined(separator: ", ")
     }

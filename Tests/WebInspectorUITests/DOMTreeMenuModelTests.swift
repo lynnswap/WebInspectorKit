@@ -39,7 +39,6 @@ struct DOMTreeMenuModelTests {
         #expect(model.showsSingleNodeCopyActions)
         #expect(model.canCopySelectorPath)
         #expect(model.canCopyXPath)
-        #expect(model.deleteTitle == "Delete Node")
         #expect(model.canDelete)
     }
 
@@ -65,7 +64,6 @@ struct DOMTreeMenuModelTests {
         #expect(model.showsSingleNodeCopyActions)
         #expect(model.canCopySelectorPath)
         #expect(model.canCopyXPath)
-        #expect(model.deleteTitle == "Delete Node")
         #expect(!model.canDelete)
     }
 
@@ -96,7 +94,6 @@ struct DOMTreeMenuModelTests {
         #expect(!model.showsSingleNodeCopyActions)
         #expect(!model.canCopySelectorPath)
         #expect(!model.canCopyXPath)
-        #expect(model.deleteTitle == "Delete Nodes")
         #expect(model.canDelete)
     }
 

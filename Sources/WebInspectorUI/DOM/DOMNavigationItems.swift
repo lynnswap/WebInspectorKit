@@ -81,7 +81,7 @@ package final class DOMNavigationItems: NSObject {
     private func makeUndoAction(undoManagerProvider: @escaping UndoManagerProvider) -> UIAction {
         let undoManager = undoManagerProvider()
         return UIAction(
-            title: webInspectorLocalized("undo", default: "Undo"),
+            title: String(localized: "undo", bundle: .module),
             image: UIImage(systemName: "arrow.uturn.backward"),
             attributes: undoManager?.canUndo == true ? [] : [.disabled]
         ) { _ in
@@ -97,7 +97,7 @@ package final class DOMNavigationItems: NSObject {
     private func makeRedoAction(undoManagerProvider: @escaping UndoManagerProvider) -> UIAction {
         let undoManager = undoManagerProvider()
         return UIAction(
-            title: webInspectorLocalized("redo", default: "Redo"),
+            title: String(localized: "redo", bundle: .module),
             image: UIImage(systemName: "arrow.uturn.forward"),
             attributes: undoManager?.canRedo == true ? [] : [.disabled]
         ) { _ in
@@ -112,7 +112,7 @@ package final class DOMNavigationItems: NSObject {
 
     private func makeReloadAction() -> UIAction {
         UIAction(
-            title: webInspectorLocalized("reload", default: "Reload"),
+            title: String(localized: "reload", bundle: .module),
             image: UIImage(systemName: "arrow.clockwise"),
             attributes: (inspector.hasInspectablePageWebView || inspector.attachment.dom.canReloadDocument) ? [] : [.disabled]
         ) { [weak inspector] _ in
@@ -131,7 +131,7 @@ package final class DOMNavigationItems: NSObject {
 
     private func makeDeleteAction(undoManagerProvider: @escaping UndoManagerProvider) -> UIAction {
         UIAction(
-            title: webInspectorLocalized("inspector.delete_node", default: "Delete Node"),
+            title: String(localized: "inspector.delete_node", bundle: .module),
             image: UIImage(systemName: "trash"),
             attributes: inspector.attachment.dom.canDeleteSelectedNode ? [.destructive] : [.disabled, .destructive]
         ) { [weak inspector] _ in
@@ -165,15 +165,4 @@ package final class DOMNavigationItems: NSObject {
     }
 }
 
-#if DEBUG
-extension DOMNavigationItems {
-    package var pickItemForTesting: UIBarButtonItem {
-        pickItem
-    }
-
-    package func overflowMenuForTesting(undoManager: UndoManager? = nil) -> UIMenu {
-        makeOverflowMenu(undoManagerProvider: { undoManager })
-    }
-}
-#endif
 #endif

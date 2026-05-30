@@ -48,21 +48,21 @@ package enum NetworkResourceFilter: String, CaseIterable, Hashable, Sendable, Id
     var localizedTitle: String {
         switch self {
         case .all:
-            webInspectorLocalized("network.filter.all", default: "All")
+            String(localized: "network.filter.all", bundle: .module)
         case .document:
-            webInspectorLocalized("network.filter.document", default: "Document")
+            String(localized: "network.filter.document", bundle: .module)
         case .stylesheet:
-            webInspectorLocalized("network.filter.stylesheet", default: "Stylesheet")
+            "CSS"
         case .image:
-            webInspectorLocalized("network.filter.image", default: "Image")
+            String(localized: "network.filter.image", bundle: .module)
         case .font:
-            webInspectorLocalized("network.filter.font", default: "Font")
+            String(localized: "network.filter.font", bundle: .module)
         case .script:
-            webInspectorLocalized("network.filter.script", default: "Script")
+            "JS"
         case .xhrFetch:
-            webInspectorLocalized("network.filter.xhr_fetch", default: "XHR/Fetch")
+            "XHR / Fetch"
         case .other:
-            webInspectorLocalized("network.filter.other", default: "Other")
+            String(localized: "network.filter.other", bundle: .module)
         }
     }
 

@@ -78,7 +78,9 @@ final class DOMTreeMenuModel {
     }
 
     var deleteTitle: String {
-        isMultiNodeMenu ? "Delete Nodes" : "Delete Node"
+        isMultiNodeMenu
+            ? String(localized: "inspector.delete_nodes", bundle: .module)
+            : String(localized: "inspector.delete_node", bundle: .module)
     }
 
     var canDelete: Bool {
@@ -235,7 +237,7 @@ struct DOMTreeMenuView: View {
                 Button {
                     model.copySelectedText()
                 } label: {
-                    Label("Copy", systemImage: "doc.on.doc")
+                    Label(String(localized: "Copy", bundle: .module), systemImage: "doc.on.doc")
                 }
                 .disabled(!model.canCopySelectedText)
             }
@@ -243,7 +245,7 @@ struct DOMTreeMenuView: View {
             Button {
                 model.copyHTML()
             } label: {
-                Text("Copy HTML")
+                Text(verbatim: "HTML")
             }
             .disabled(!model.canCopyHTML)
 
@@ -251,17 +253,19 @@ struct DOMTreeMenuView: View {
                 Button {
                     model.copySelectorPath()
                 } label: {
-                    Text("Copy Selector Path")
+                    Text(verbatim: "Selector")
                 }
                 .disabled(!model.canCopySelectorPath)
 
                 Button {
                     model.copyXPath()
                 } label: {
-                    Text("Copy XPath")
+                    Text(verbatim: "XPath")
                 }
                 .disabled(!model.canCopyXPath)
             }
+        } header: {
+            Text(String(localized: "Copy", bundle: .module))
         }
 
         Section {

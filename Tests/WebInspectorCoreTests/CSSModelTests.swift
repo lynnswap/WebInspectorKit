@@ -1208,6 +1208,26 @@ func cssSessionCancelsActiveRefreshBackToNeedsRefresh() throws {
 
 @Test
 @MainActor
+func cssSessionIgnoresStaleRefreshCancellationAfterNewRefreshBegins() throws {
+    let css = CSSSession()
+    let identity = cssIdentity()
+
+    let staleToken = try #require(css.beginRefresh(identity: identity))
+    let currentToken = try #require(css.beginRefresh(identity: identity))
+
+    css.cancelRefresh(staleToken)
+
+    #expect(css.selectedState == .loading)
+    #expect(css.refreshState(forSelected: identity) == .loading)
+
+    css.cancelRefresh(currentToken)
+
+    #expect(css.selectedState == .needsRefresh)
+    #expect(css.refreshState(forSelected: identity) == .needsRefresh)
+}
+
+@Test
+@MainActor
 func cssSessionRefreshDoesNotRepublishCurrentSelectedNodeStyles() throws {
     let css = CSSSession()
     let identity = cssIdentity()

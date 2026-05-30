@@ -11,11 +11,11 @@ package enum NetworkDetailMode: CaseIterable, Hashable {
     package var title: String {
         switch self {
         case .overview:
-            webInspectorLocalized("network.detail.section.overview", default: "Overview")
+            String(localized: "network.detail.section.overview", bundle: .module)
         case .requestBody:
-            webInspectorLocalized("network.section.body.request", default: "Request Body")
+            String(localized: "network.section.body.request", bundle: .module)
         case .responseBody:
-            webInspectorLocalized("network.section.body.response", default: "Response Body")
+            String(localized: "network.section.body.response", bundle: .module)
         }
     }
 

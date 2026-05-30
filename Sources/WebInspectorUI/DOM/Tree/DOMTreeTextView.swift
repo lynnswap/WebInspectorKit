@@ -222,32 +222,32 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     override var keyCommands: [UIKeyCommand]? {
         [
             UIKeyCommand(
-                title: webInspectorLocalized("dom.tree.extend_selection_up", default: "Extend Selection Up"),
+                title: String(localized: "dom.tree.extend_selection_up", bundle: .module),
                 action: #selector(extendMultiSelectionUp),
                 input: UIKeyCommand.inputUpArrow,
                 modifierFlags: .shift,
-                discoverabilityTitle: webInspectorLocalized("dom.tree.extend_selection_up", default: "Extend Selection Up")
+                discoverabilityTitle: String(localized: "dom.tree.extend_selection_up", bundle: .module)
             ),
             UIKeyCommand(
-                title: webInspectorLocalized("dom.tree.extend_selection_down", default: "Extend Selection Down"),
+                title: String(localized: "dom.tree.extend_selection_down", bundle: .module),
                 action: #selector(extendMultiSelectionDown),
                 input: UIKeyCommand.inputDownArrow,
                 modifierFlags: .shift,
-                discoverabilityTitle: webInspectorLocalized("dom.tree.extend_selection_down", default: "Extend Selection Down")
+                discoverabilityTitle: String(localized: "dom.tree.extend_selection_down", bundle: .module)
             ),
             UIKeyCommand(
-                title: webInspectorLocalized("dom.tree.select_all", default: "Select All"),
+                title: String(localized: "dom.tree.select_all", bundle: .module),
                 action: #selector(selectAllRenderedRows),
                 input: "a",
                 modifierFlags: .command,
-                discoverabilityTitle: webInspectorLocalized("dom.tree.select_all", default: "Select All")
+                discoverabilityTitle: String(localized: "dom.tree.select_all", bundle: .module)
             ),
             UIKeyCommand(
-                title: webInspectorLocalized("dom.tree.find", default: "Find"),
+                title: String(localized: "dom.tree.find", bundle: .module),
                 action: #selector(showFindNavigator),
                 input: "f",
                 modifierFlags: .command,
-                discoverabilityTitle: webInspectorLocalized("dom.tree.find", default: "Find")
+                discoverabilityTitle: String(localized: "dom.tree.find", bundle: .module)
             )
         ]
     }

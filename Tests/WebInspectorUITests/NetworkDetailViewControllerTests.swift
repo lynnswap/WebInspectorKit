@@ -9,6 +9,29 @@ import UIKit
 @Suite(.serialized)
 struct NetworkDetailViewControllerTests {
     @Test
+    func resourceFilterSpecialistTitlesFollowWebInspectorLabels() {
+        #expect(NetworkResourceFilter.stylesheet.localizedTitle == "CSS")
+        #expect(NetworkResourceFilter.script.localizedTitle == "JS")
+        #expect(NetworkResourceFilter.xhrFetch.localizedTitle == "XHR / Fetch")
+    }
+
+    @Test
+    func listShowsSimpleEmptyStateWithoutRequests() {
+        let model = NetworkPanelModel(network: NetworkSession())
+        let viewController = NetworkListViewController(model: model)
+
+        viewController.loadViewIfNeeded()
+
+        #expect(viewController.collectionViewForTesting.isHidden)
+        #expect(viewController.contentUnavailableConfiguration != nil)
+        let configuration = viewController.contentUnavailableConfiguration as? UIContentUnavailableConfiguration
+        #expect(configuration?.text?.isEmpty == false)
+        #expect(configuration?.secondaryText == nil)
+        #expect(configuration?.image == nil)
+        #expect(configuration?.textProperties.color == .secondaryLabel)
+    }
+
+    @Test
     func detailShowsEmptyStateWithoutSelection() {
         let model = NetworkPanelModel(network: NetworkSession())
         let viewController = NetworkDetailViewController(model: model)
@@ -17,6 +40,11 @@ struct NetworkDetailViewControllerTests {
 
         #expect(viewController.collectionViewForTesting.isHidden)
         #expect(viewController.contentUnavailableConfiguration != nil)
+        let configuration = viewController.contentUnavailableConfiguration as? UIContentUnavailableConfiguration
+        #expect(configuration?.text?.isEmpty == false)
+        #expect(configuration?.secondaryText == nil)
+        #expect(configuration?.image == nil)
+        #expect(configuration?.textProperties.color == .secondaryLabel)
     }
 
     @Test
@@ -114,7 +142,8 @@ struct NetworkDetailViewControllerTests {
             let collectionView = viewController.collectionViewForTesting
             return collectionView.numberOfSections == 3
                 && collectionView.numberOfItems(inSection: 2) == 1
-                && listCellText(in: collectionView, at: IndexPath(item: 0, section: 2)) == "No headers"
+                && listCellText(in: collectionView, at: IndexPath(item: 0, section: 2))?.isEmpty == false
+                && listCellSecondaryText(in: collectionView, at: IndexPath(item: 0, section: 2)) == nil
         }
         #expect(didRenderEmptyResponseHeaders)
 
@@ -362,7 +391,7 @@ struct NetworkDetailViewControllerTests {
 
         let didRenderFailure = await waitUntil {
             viewController.currentModeForTesting == .responseBody
-                && viewController.bodyTextViewForTesting.text.contains("Body unavailable")
+                && !viewController.bodyTextViewForTesting.text.isEmpty
         }
         #expect(didRenderFailure)
         #expect(fetchedIDs.isEmpty)

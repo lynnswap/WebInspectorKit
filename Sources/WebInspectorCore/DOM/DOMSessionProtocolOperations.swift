@@ -9,23 +9,225 @@ final class DOMSessionHighlightController {
 
 @MainActor
 final class DOMSessionElementPickerController {
-    var targetID: ProtocolTargetIdentifier?
-    var generation: UInt64 = 0
-    var acceptsInspectEvents = false
+    final class Session {
+        let targetID: ProtocolTargetIdentifier
+        fileprivate var acceptsInspectEvents = false
+
+        init(targetID: ProtocolTargetIdentifier) {
+            self.targetID = targetID
+        }
+    }
+
+    private var activeSession: Session?
+
+    var targetID: ProtocolTargetIdentifier? {
+        activeSession?.targetID
+    }
+
+    func begin(targetID: ProtocolTargetIdentifier) -> Session {
+        let session = Session(targetID: targetID)
+        activeSession = session
+        return session
+    }
+
+    @discardableResult
+    func beginAcceptingInspectEvents(for session: Session) -> Bool {
+        guard activeSession === session else {
+            return false
+        }
+        session.acceptsInspectEvents = true
+        return true
+    }
+
+    func currentAcceptingSession() -> Session? {
+        guard let activeSession,
+              activeSession.acceptsInspectEvents else {
+            return nil
+        }
+        return activeSession
+    }
+
+    func isCurrentAcceptingSession(_ session: Session) -> Bool {
+        activeSession === session && session.acceptsInspectEvents
+    }
+
+    @discardableResult
+    func clear() -> ProtocolTargetIdentifier? {
+        let targetID = activeSession?.targetID
+        activeSession = nil
+        return targetID
+    }
 }
 
 @MainActor
 final class DOMSessionDocumentRequestController {
-    var handlesByTargetID: [ProtocolTargetIdentifier: DOMSessionDocumentRequestHandle] = [:]
+    private var handlesByTargetID: [ProtocolTargetIdentifier: DOMSessionDocumentRequestHandle] = [:]
+
+    func activeHandle(for targetID: ProtocolTargetIdentifier) -> DOMSessionDocumentRequestHandle? {
+        handlesByTargetID[targetID]
+    }
+
+    func register(_ handle: DOMSessionDocumentRequestHandle) {
+        handlesByTargetID[handle.targetID] = handle
+    }
+
+    func isActive(_ handle: DOMSessionDocumentRequestHandle) -> Bool {
+        handlesByTargetID[handle.targetID] === handle
+    }
+
+    func finish(_ handle: DOMSessionDocumentRequestHandle) {
+        guard isActive(handle) else {
+            return
+        }
+        handlesByTargetID.removeValue(forKey: handle.targetID)
+    }
+
+    func cancel(targetID: ProtocolTargetIdentifier) {
+        let handle = handlesByTargetID.removeValue(forKey: targetID)
+        handle?.cancel()
+    }
+
+    func cancelAll() {
+        let handles = Array(handlesByTargetID.values)
+        handlesByTargetID.removeAll()
+        for handle in handles {
+            handle.cancel()
+        }
+    }
 }
 
 @MainActor
 final class DOMSessionElementStyleHydrationController {
-    let observationScope = ObservationScope()
-    var refreshTask: Task<Void, Never>?
-    var refreshIdentity: CSSNodeStyleIdentity?
-    var isActive = false
-    var propertyUpdateTasks: [CSSPropertyIdentifier: Task<Void, Never>] = [:]
+    private final class Refresh {
+        let identity: CSSNodeStyleIdentity
+        fileprivate var task: Task<Void, Never>?
+
+        init(identity: CSSNodeStyleIdentity) {
+            self.identity = identity
+        }
+
+        func cancel() {
+            task?.cancel()
+            task = nil
+        }
+    }
+
+    private final class PropertyUpdateRequest {
+        let propertyID: CSSPropertyIdentifier
+        fileprivate var task: Task<Void, Never>?
+
+        init(propertyID: CSSPropertyIdentifier) {
+            self.propertyID = propertyID
+        }
+
+        func cancel() {
+            task?.cancel()
+            task = nil
+        }
+    }
+
+    private(set) var isActive = false
+    private let observationScope = ObservationScope()
+    private var activeRefresh: Refresh?
+    private var propertyUpdateRequests: [CSSPropertyIdentifier: PropertyUpdateRequest] = [:]
+
+    func observeSelection(in session: DOMSession, onChange: @escaping @MainActor () -> Void) {
+        observationScope.cancelAll()
+        observationScope.observe(session) { _, _ in
+            onChange()
+        }
+    }
+
+    @discardableResult
+    func setActive(_ isActive: Bool) -> Bool {
+        guard self.isActive != isActive else {
+            return false
+        }
+        self.isActive = isActive
+        return true
+    }
+
+    func cancelObservation() {
+        observationScope.cancelAll()
+    }
+
+    func isRefreshing(identity: CSSNodeStyleIdentity) -> Bool {
+        activeRefresh?.identity == identity
+    }
+
+    @discardableResult
+    func startRefresh(
+        identity: CSSNodeStyleIdentity,
+        operation: @escaping @MainActor (CSSNodeStyleIdentity) async -> Void
+    ) -> CSSNodeStyleIdentity? {
+        let cancelledIdentity = cancelRefresh()
+        let refresh = Refresh(identity: identity)
+        activeRefresh = refresh
+        refresh.task = Task { @MainActor [weak self, weak refresh] in
+            guard let refresh else {
+                return
+            }
+            defer {
+                self?.finishRefresh(refresh)
+            }
+            await operation(refresh.identity)
+        }
+        return cancelledIdentity
+    }
+
+    @discardableResult
+    func cancelRefresh() -> CSSNodeStyleIdentity? {
+        guard let refresh = activeRefresh else {
+            return nil
+        }
+        activeRefresh = nil
+        refresh.cancel()
+        return refresh.identity
+    }
+
+    @discardableResult
+    func startPropertyUpdate(
+        propertyID: CSSPropertyIdentifier,
+        operation: @escaping @MainActor (CSSPropertyIdentifier) async -> Void
+    ) -> Bool {
+        guard propertyUpdateRequests[propertyID] == nil else {
+            return false
+        }
+        let request = PropertyUpdateRequest(propertyID: propertyID)
+        propertyUpdateRequests[propertyID] = request
+        request.task = Task { @MainActor [weak self, weak request] in
+            guard let request else {
+                return
+            }
+            defer {
+                self?.finishPropertyUpdate(request)
+            }
+            await operation(request.propertyID)
+        }
+        return true
+    }
+
+    func cancelPropertyUpdates() {
+        let requests = Array(propertyUpdateRequests.values)
+        propertyUpdateRequests.removeAll()
+        for request in requests {
+            request.cancel()
+        }
+    }
+
+    private func finishRefresh(_ refresh: Refresh) {
+        guard activeRefresh === refresh else {
+            return
+        }
+        activeRefresh = nil
+    }
+
+    private func finishPropertyUpdate(_ request: PropertyUpdateRequest) {
+        guard propertyUpdateRequests[request.propertyID] === request else {
+            return
+        }
+        propertyUpdateRequests.removeValue(forKey: request.propertyID)
+    }
 }
 
 @MainActor
@@ -107,6 +309,11 @@ final class DOMSessionDocumentRequestHandle {
     init(targetID: ProtocolTargetIdentifier, targetKind: ProtocolTargetKind?) {
         self.targetID = targetID
         self.targetKind = targetKind
+    }
+
+    func cancel() {
+        task?.cancel()
+        task = nil
     }
 }
 
@@ -321,10 +528,7 @@ extension DOMSession {
             await cancelElementPicker()
         }
 
-        elementPicker.generation &+= 1
-        let pickerGeneration = elementPicker.generation
-        elementPicker.targetID = targetID
-        elementPicker.acceptsInspectEvents = false
+        let pickerSession = elementPicker.begin(targetID: targetID)
         isSelectingElement = true
 
         do {
@@ -333,10 +537,9 @@ extension DOMSession {
                 throw InspectorSessionError("DOM inspect mode is not available.")
             }
             try await perform(intent)
-            guard isElementPickerSession(generation: pickerGeneration, targetID: targetID) else {
+            guard elementPicker.beginAcceptingInspectEvents(for: pickerSession) else {
                 return
             }
-            elementPicker.acceptsInspectEvents = true
             recordError?(nil)
         } catch {
             recordElementPickerFailure(
@@ -478,10 +681,9 @@ extension DOMSession {
     }
 
     package func setSelectedNodeStyleHydrationActive(_ isActive: Bool) {
-        guard styleHydration.isActive != isActive else {
+        guard styleHydration.setActive(isActive) else {
             return
         }
-        styleHydration.isActive = isActive
         if isActive, commandChannel != nil {
             startSelectedNodeStyleHydration()
         } else {
@@ -492,17 +694,13 @@ extension DOMSession {
     @discardableResult
     package func requestSetCSSProperty(_ propertyID: CSSPropertyIdentifier, enabled: Bool) -> Bool {
         guard commandChannel != nil,
-              styleHydration.propertyUpdateTasks[propertyID] == nil,
               elementStyles.setStyleTextIntent(for: propertyID, enabled: enabled) != nil else {
             return false
         }
 
-        let task = Task { @MainActor [weak self] in
+        return styleHydration.startPropertyUpdate(propertyID: propertyID) { [weak self] propertyID in
             guard let self else {
                 return
-            }
-            defer {
-                styleHydration.propertyUpdateTasks[propertyID] = nil
             }
             guard Task.isCancelled == false else {
                 return
@@ -515,8 +713,6 @@ extension DOMSession {
                 try? await refreshSelectedNodeStyles()
             }
         }
-        styleHydration.propertyUpdateTasks[propertyID] = task
-        return true
     }
 
     package func setCSSProperty(_ propertyID: CSSPropertyIdentifier, enabled: Bool) async throws {
@@ -534,14 +730,13 @@ extension DOMSession {
     }
 
     private func startSelectedNodeStyleHydration() {
-        styleHydration.observationScope.cancelAll()
-        styleHydration.observationScope.observe(self) { [weak self] _, _ in
+        styleHydration.observeSelection(in: self) { [weak self] in
             self?.reconcileSelectedNodeStyleHydration()
         }
     }
 
     private func stopSelectedNodeStyleHydration() {
-        styleHydration.observationScope.cancelAll()
+        styleHydration.cancelObservation()
         cancelSelectedNodeStyleHydrationRefresh()
     }
 
@@ -572,21 +767,13 @@ extension DOMSession {
     }
 
     private func hydrateSelectedNodeStyles(_ identity: CSSNodeStyleIdentity) {
-        guard styleHydration.refreshIdentity != identity else {
+        guard styleHydration.isRefreshing(identity: identity) == false else {
             return
         }
 
-        cancelSelectedNodeStyleHydrationRefresh()
-        styleHydration.refreshIdentity = identity
-        styleHydration.refreshTask = Task { @MainActor [weak self] in
+        if let cancelledIdentity = styleHydration.startRefresh(identity: identity, operation: { [weak self] identity in
             guard let self else {
                 return
-            }
-            defer {
-                if self.styleHydration.refreshIdentity == identity {
-                    self.styleHydration.refreshIdentity = nil
-                    self.styleHydration.refreshTask = nil
-                }
             }
             guard Task.isCancelled == false else {
                 return
@@ -596,20 +783,19 @@ extension DOMSession {
                 try await self.refreshStyles(for: identity)
                 self.recordError?(nil)
             } catch is CancellationError {
-                self.elementStyles.cancelRefresh(identity: identity)
+                return
             } catch {
                 self.recordError?(InspectorSessionError(String(describing: error)))
             }
+        }) {
+            elementStyles.cancelRefresh(identity: cancelledIdentity)
         }
     }
 
     private func cancelSelectedNodeStyleHydrationRefresh() {
-        styleHydration.refreshTask?.cancel()
-        styleHydration.refreshTask = nil
-        if let refreshIdentity = styleHydration.refreshIdentity {
-            elementStyles.cancelRefresh(identity: refreshIdentity)
+        if let cancelledIdentity = styleHydration.cancelRefresh() {
+            elementStyles.cancelRefresh(identity: cancelledIdentity)
         }
-        styleHydration.refreshIdentity = nil
     }
 
     private func refreshSelectedNodeStyles() async throws {
@@ -646,6 +832,7 @@ extension DOMSession {
                 computed: results.computed
             )
         } catch is CancellationError {
+            elementStyles.cancelRefresh(token)
             throw CancellationError()
         } catch {
             elementStyles.markRefreshFailed(token, message: String(describing: error))
@@ -749,19 +936,18 @@ extension DOMSession {
 
     private func handleInspectEvent(_ event: DOMInspectEvent) async {
         guard isSelectingElement,
-              elementPicker.acceptsInspectEvents,
-              let activeTargetID = elementPicker.targetID else {
+              let pickerSession = elementPicker.currentAcceptingSession() else {
             recordElementPickerFailure(
                 reason: "inspectEventWithoutActivePicker",
                 details: "activeTarget=\(elementPicker.targetID?.rawValue ?? "nil")"
             )
             return
         }
-        let pickerGeneration = elementPicker.generation
+        let activeTargetID = pickerSession.targetID
         do {
             try await resolvePickerSelection(event, activeTargetID: activeTargetID)
         } catch {
-            guard isCurrentElementPicker(generation: pickerGeneration, targetID: activeTargetID) else {
+            guard elementPicker.isCurrentAcceptingSession(pickerSession) else {
                 return
             }
             recordElementPickerFailure(
@@ -772,7 +958,7 @@ extension DOMSession {
             recordError?(InspectorSessionError(String(describing: error)))
         }
 
-        await completeElementPicker(generation: pickerGeneration, targetID: activeTargetID)
+        await completeElementPicker(pickerSession)
     }
 
     private func resolvePickerSelection(
@@ -868,7 +1054,7 @@ extension DOMSession {
     ) -> DOMSessionDocumentRequestHandle? {
         if force {
             cancelDocumentRequest(targetID: targetID, reason: "force-\(reason)")
-        } else if let activeHandle = documentRequests.handlesByTargetID[targetID] {
+        } else if let activeHandle = documentRequests.activeHandle(for: targetID) {
             return activeHandle
         }
         guard let intent = getDocumentIntent(targetID: targetID) else {
@@ -882,14 +1068,12 @@ extension DOMSession {
                 return
             }
             defer {
-                if documentRequests.handlesByTargetID[targetID] === handle {
-                    documentRequests.handlesByTargetID.removeValue(forKey: targetID)
-                }
+                documentRequests.finish(handle)
             }
             do {
                 let result = try await send(intent)
                 try Task.checkCancellation()
-                guard documentRequests.handlesByTargetID[targetID] === handle else {
+                guard documentRequests.isActive(handle) else {
                     return
                 }
                 try applyGetDocumentResult(result)
@@ -906,7 +1090,7 @@ extension DOMSession {
             }
         }
         handle.task = task
-        documentRequests.handlesByTargetID[targetID] = handle
+        documentRequests.register(handle)
         return handle
     }
 
@@ -914,7 +1098,7 @@ extension DOMSession {
         guard let targetID = event.targetID ?? currentPageTargetID else {
             return
         }
-        let activeRequest = documentRequests.handlesByTargetID[targetID]
+        let activeRequest = documentRequests.activeHandle(for: targetID)
         let targetKind = targetKind(for: targetID) ?? activeRequest?.targetKind
         let isCurrentPageTarget = currentPageTargetID == targetID
         let hasCurrentDocument = currentDocumentID(for: targetID) != nil
@@ -951,26 +1135,16 @@ extension DOMSession {
     }
 
     private func cancelDocumentRequest(targetID: ProtocolTargetIdentifier, reason _: String) {
-        guard let handle = documentRequests.handlesByTargetID.removeValue(forKey: targetID) else {
-            return
-        }
-        handle.task?.cancel()
+        documentRequests.cancel(targetID: targetID)
     }
 
     private func cancelDocumentRequests() {
-        for handle in documentRequests.handlesByTargetID.values {
-            handle.task?.cancel()
-        }
-        documentRequests.handlesByTargetID.removeAll()
+        documentRequests.cancelAll()
     }
 
     private func cancelCSSActionRequests() {
         cancelSelectedNodeStyleHydrationRefresh()
-
-        for task in styleHydration.propertyUpdateTasks.values {
-            task.cancel()
-        }
-        styleHydration.propertyUpdateTasks.removeAll()
+        styleHydration.cancelPropertyUpdates()
     }
 
     private func clearOwnerHydrationTransaction(for intent: DOMCommandIntent) {
@@ -1070,9 +1244,7 @@ extension DOMSession {
     }
 
     private func clearElementPickerState(invalidatePendingSelection: Bool = false) {
-        elementPicker.generation &+= 1
-        elementPicker.targetID = nil
-        elementPicker.acceptsInspectEvents = false
+        elementPicker.clear()
         isSelectingElement = false
         if invalidatePendingSelection {
             selectNode(selectedNodeID)
@@ -1096,18 +1268,11 @@ extension DOMSession {
         InspectorRuntimeLog.warning(message)
     }
 
-    private func isElementPickerSession(generation: UInt64, targetID: ProtocolTargetIdentifier) -> Bool {
-        isSelectingElement && elementPicker.generation == generation && elementPicker.targetID == targetID
-    }
-
-    private func isCurrentElementPicker(generation: UInt64, targetID: ProtocolTargetIdentifier) -> Bool {
-        isElementPickerSession(generation: generation, targetID: targetID) && elementPicker.acceptsInspectEvents
-    }
-
-    private func completeElementPicker(generation: UInt64, targetID: ProtocolTargetIdentifier) async {
-        guard isCurrentElementPicker(generation: generation, targetID: targetID) else {
+    private func completeElementPicker(_ session: DOMSessionElementPickerController.Session) async {
+        guard elementPicker.isCurrentAcceptingSession(session) else {
             return
         }
+        let targetID = session.targetID
         clearElementPickerState()
         guard let intent = setInspectModeEnabledIntent(targetID: targetID, enabled: false) else {
             return
