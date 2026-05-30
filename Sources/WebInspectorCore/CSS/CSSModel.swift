@@ -570,11 +570,21 @@ package final class CSSSession {
     }
 
     package func cancelRefresh(identity: CSSNodeStyleIdentity) {
-        guard activeRefreshSequenceByNodeID.removeValue(forKey: identity.nodeID) != nil,
+        cancelRefresh(identity: identity, sequence: nil)
+    }
+
+    package func cancelRefresh(_ token: CSSStyleRefreshToken) {
+        cancelRefresh(identity: token.identity, sequence: token.sequence)
+    }
+
+    private func cancelRefresh(identity: CSSNodeStyleIdentity, sequence: UInt64?) {
+        guard let activeSequence = activeRefreshSequenceByNodeID[identity.nodeID],
+              sequence.map({ $0 == activeSequence }) ?? true,
               let nodeStyles = stylesByNodeID[identity.nodeID],
               nodeStyles.state == .loading else {
             return
         }
+        activeRefreshSequenceByNodeID.removeValue(forKey: identity.nodeID)
         nodeStyles.state = .needsRefresh
         if selectedIdentity == identity {
             selectCurrentNodeStyles(nodeStyles)
