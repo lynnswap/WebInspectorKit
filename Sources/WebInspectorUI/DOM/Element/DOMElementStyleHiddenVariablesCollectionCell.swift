@@ -56,9 +56,11 @@ package final class DOMElementStyleHiddenVariablesCollectionCell: UICollectionVi
         var options = String.LocalizationOptions()
         options.replacements = [hiddenVariableCount]
         return String(
-            localized: "Show \(placeholder: .int) unused CSS variables",
-            options: options,
-            bundle: .module
+            localized: LocalizedStringResource(
+                "Show \(placeholder: .int) unused CSS variables",
+                bundle: .atURL(Bundle.module.bundleURL)
+            ),
+            options: options
         )
     }
 }
