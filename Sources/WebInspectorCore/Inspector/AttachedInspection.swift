@@ -353,7 +353,7 @@ package final class InspectorSession {
             ConsoleProtocolEventDispatcher(handler: attachment.console, runtime: attachment.runtime),
             DOMProtocolEventDispatcher(session: attachment.dom),
             InspectorProtocolEventDispatcher(session: attachment.dom),
-            CSSProtocolEventDispatcher(handler: attachment.dom.elementStyles),
+            CSSProtocolEventDispatcher(handler: attachment.dom),
             NetworkProtocolEventDispatcher(session: attachment.network),
         ])
     }

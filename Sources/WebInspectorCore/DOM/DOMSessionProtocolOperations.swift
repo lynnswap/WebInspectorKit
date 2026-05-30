@@ -1,5 +1,4 @@
 import Foundation
-import ObservationBridge
 import WebInspectorTransport
 
 @MainActor
@@ -127,16 +126,8 @@ final class DOMSessionElementStyleHydrationController {
     }
 
     private(set) var isActive = false
-    private let observationScope = ObservationScope()
     private var activeRefresh: Refresh?
     private var propertyUpdateRequests: [CSSPropertyIdentifier: PropertyUpdateRequest] = [:]
-
-    func observeSelection(in session: DOMSession, onChange: @escaping @MainActor () -> Void) {
-        observationScope.cancelAll()
-        observationScope.observe(session) { _, _ in
-            onChange()
-        }
-    }
 
     @discardableResult
     func setActive(_ isActive: Bool) -> Bool {
@@ -145,10 +136,6 @@ final class DOMSessionElementStyleHydrationController {
         }
         self.isActive = isActive
         return true
-    }
-
-    func cancelObservation() {
-        observationScope.cancelAll()
     }
 
     func isRefreshing(identity: CSSNodeStyleIdentity) -> Bool {
@@ -358,13 +345,11 @@ extension DOMSession {
         self.commandChannel = commandChannel
         self.recordError = recordError
         elementStyles.bindProtocolChannel(commandChannel)
-        if styleHydration.isActive {
-            startSelectedNodeStyleHydration()
-        }
+        reconcileSelectedNodeStyleHydrationIfNeeded()
     }
 
     package func unbindProtocolChannel() {
-        stopSelectedNodeStyleHydration()
+        cancelSelectedNodeStyleHydrationRefresh()
         cancelDocumentRequests()
         cancelCSSActionRequests()
         commandChannel = nil
@@ -685,9 +670,9 @@ extension DOMSession {
             return
         }
         if isActive, commandChannel != nil {
-            startSelectedNodeStyleHydration()
+            reconcileSelectedNodeStyleHydrationIfNeeded()
         } else {
-            stopSelectedNodeStyleHydration()
+            cancelSelectedNodeStyleHydrationRefresh()
         }
     }
 
@@ -729,18 +714,10 @@ extension DOMSession {
         recordError?(nil)
     }
 
-    private func startSelectedNodeStyleHydration() {
-        styleHydration.observeSelection(in: self) { [weak self] in
-            self?.reconcileSelectedNodeStyleHydration()
+    package func reconcileSelectedNodeStyleHydrationIfNeeded() {
+        guard styleHydration.isActive else {
+            return
         }
-    }
-
-    private func stopSelectedNodeStyleHydration() {
-        styleHydration.cancelObservation()
-        cancelSelectedNodeStyleHydrationRefresh()
-    }
-
-    private func reconcileSelectedNodeStyleHydration() {
         guard commandChannel != nil else {
             return
         }
@@ -850,11 +827,11 @@ extension DOMSession {
         let targetCommit = result.targetCommit
         if let destroyedTargetID {
             cancelDocumentRequest(targetID: destroyedTargetID, reason: "targetDestroyed")
-            elementStyles.removeStyles(targetID: destroyedTargetID)
+            removeElementStyles(targetID: destroyedTargetID)
         }
         if let oldTargetID = targetCommit?.consumedOldTargetID {
             cancelDocumentRequest(targetID: oldTargetID, reason: "targetCommit")
-            elementStyles.removeStyles(targetID: oldTargetID)
+            removeElementStyles(targetID: oldTargetID)
         }
         applyElementPickerTargetLifecycle(event, targetCommit: targetCommit)
         return result
@@ -870,6 +847,7 @@ extension DOMSession {
                 elementStyles.removeStyles(targetID: targetID)
             }
             refreshDocumentAfterBackendUpdate(event)
+            syncSelectedElementStyles()
             return
         }
         let selectedStyleIdentity = try? selectedCSSNodeStyleIdentity().get()
@@ -878,9 +856,10 @@ extension DOMSession {
            let targetID = event.targetID,
            selectedStyleIdentity.targetID == targetID {
             if selectedNodeID != selectedStyleIdentity.nodeID {
-                elementStyles.removeStyles(targetID: targetID)
+                removeElementStyles(targetID: targetID)
             } else if selectedStylesShouldRefresh(after: event) {
                 elementStyles.markNeedsRefresh(targetID: targetID, nodeID: selectedStyleIdentity.protocolNodeID)
+                reconcileSelectedNodeStyleHydrationIfNeeded()
             }
         }
         if event.method == "DOM.setChildNodes" {
@@ -1178,9 +1157,14 @@ extension DOMSession {
             return
         }
         try protocolCommands.applyGetDocumentResult(result, to: self)
-        elementStyles.removeStyles(targetID: targetID)
+        removeElementStyles(targetID: targetID)
         startPendingFrameOwnerHydration()
         recordError?(nil)
+    }
+
+    private func removeElementStyles(targetID: ProtocolTargetIdentifier) {
+        elementStyles.removeStyles(targetID: targetID)
+        syncSelectedElementStyles()
     }
 
     private var currentAppliedDOMSequence: UInt64 {
@@ -1308,7 +1292,7 @@ extension DOMSession {
         try await perform(intent)
         applyNodeRemoved(nodeID)
         selectNode(nil)
-        elementStyles.removeStyles(targetID: documentID.targetID)
+        removeElementStyles(targetID: documentID.targetID)
         recordError?(nil)
 
         return DOMSessionDeleteUndoState(

@@ -2426,12 +2426,13 @@ package final class DOMSession {
         return .failed(failure)
     }
 
-    private func syncSelectedElementStyles() {
+    package func syncSelectedElementStyles() {
         switch selectedCSSNodeStyleIdentity() {
         case let .success(identity):
             elementStyles.selectNodeStyles(identity: identity)
         case let .failure(reason):
             elementStyles.markSelectedNodeUnavailable(reason)
         }
+        reconcileSelectedNodeStyleHydrationIfNeeded()
     }
 }

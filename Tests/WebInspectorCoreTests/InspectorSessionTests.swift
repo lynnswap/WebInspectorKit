@@ -680,9 +680,7 @@ func selectedElementStyleHydrationCancellationResetsLoadingForFutureRefresh() as
     let firstSentCount = await backend.sentTargetMessages().count
     session.attachment.dom.setSelectedNodeStyleHydrationActive(true)
     _ = try await waitForCSSRefreshMessages(backend, after: firstSentCount)
-    _ = try await awaitValueAfterActorTurns {
-        await session.attachment.dom.elementStyles.selectedState == .loading ? true : nil
-    }
+    #expect(session.attachment.dom.elementStyles.selectedState == .loading)
 
     session.attachment.dom.setSelectedNodeStyleHydrationActive(false)
     #expect(session.attachment.dom.elementStyles.selectedState == .needsRefresh)
@@ -701,6 +699,33 @@ func selectedElementStyleHydrationCancellationResetsLoadingForFutureRefresh() as
         await session.attachment.dom.elementStyles.selectedState == .loaded ? true : nil
     }
     #expect(didLoadStyles)
+    #expect(session.lastError == nil)
+}
+
+@Test
+@MainActor
+func selectedElementStyleHydrationSelectionChangeStartsReplacementRefresh() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
+    let htmlID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(2))
+    let bodyID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(4))
+    session.attachment.dom.setSelectedNodeStyleHydrationActive(true)
+    let firstSentCount = await backend.sentTargetMessages().count
+    session.attachment.dom.selectNode(bodyID)
+
+    let firstMessages = try await waitForCSSRefreshMessages(backend, after: firstSentCount)
+    #expect(try messageParameters(firstMessages.matched.message)["nodeId"] as? Int == 4)
+    #expect(session.attachment.dom.elementStyles.selectedState == .loading)
+
+    let secondSentCount = await backend.sentTargetMessages().count
+    session.attachment.dom.selectNode(htmlID)
+    let secondMessages = try await waitForCSSRefreshMessages(backend, after: secondSentCount)
+    #expect(try messageParameters(secondMessages.matched.message)["nodeId"] as? Int == 2)
+    #expect(session.attachment.dom.elementStyles.selectedNodeStyles?.identity.nodeID == htmlID)
+    #expect(session.attachment.dom.elementStyles.selectedState == .loading)
     #expect(session.lastError == nil)
 }
 
@@ -741,6 +766,118 @@ func selectedElementStyleHydrationClearsStylesAfterSelectionDisappears() async t
     }
 
     #expect(session.attachment.dom.elementStyles.selectedNodeStyles == nil)
+}
+
+@Test
+@MainActor
+func selectedElementStyleHydrationRefreshesAfterCSSEvents() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    let bodyID = try await hydrateSelectedBodyStyles(
+        session: session,
+        transport: transport,
+        backend: backend
+    )
+
+    let sheetChangedCount = await backend.sentTargetMessages().count
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"CSS.styleSheetChanged","params":{"styleSheetId":"sheet-body"}}"#
+    )
+    let sheetChangedMessages = try await waitForCSSRefreshMessages(backend, after: sheetChangedCount)
+    #expect(try messageParameters(sheetChangedMessages.matched.message)["nodeId"] as? Int == 4)
+    try await replyCSSRefresh(
+        transport: transport,
+        messages: sheetChangedMessages,
+        selector: "body",
+        styleSheetID: "sheet-body-refresh"
+    )
+    let didLoadAfterSheetChange = try await awaitValueAfterActorTurns {
+        await session.attachment.dom.elementStyles.selectedState == .loaded ? true : nil
+    }
+    #expect(didLoadAfterSheetChange)
+    #expect(session.attachment.dom.elementStyles.selectedNodeStyles?.identity.nodeID == bodyID)
+    #expect(session.attachment.dom.elementStyles.selectedState == .loaded)
+
+    let layoutChangedCount = await backend.sentTargetMessages().count
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"CSS.nodeLayoutFlagsChanged","params":{"nodeId":4}}"#
+    )
+    let layoutChangedMessages = try await waitForCSSRefreshMessages(backend, after: layoutChangedCount)
+    #expect(try messageParameters(layoutChangedMessages.matched.message)["nodeId"] as? Int == 4)
+    try await replyCSSRefresh(
+        transport: transport,
+        messages: layoutChangedMessages,
+        selector: "body",
+        styleSheetID: "sheet-body-layout"
+    )
+    let didLoadAfterLayoutChange = try await awaitValueAfterActorTurns {
+        await session.attachment.dom.elementStyles.selectedState == .loaded ? true : nil
+    }
+    #expect(didLoadAfterLayoutChange)
+    #expect(session.attachment.dom.elementStyles.selectedNodeStyles?.identity.nodeID == bodyID)
+    #expect(session.attachment.dom.elementStyles.selectedState == .loaded)
+    #expect(session.lastError == nil)
+}
+
+@Test
+@MainActor
+func selectedElementStyleHydrationCancelsAfterDocumentUpdateInvalidatesRoot() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    _ = try await hydrateSelectedBodyStyles(
+        session: session,
+        transport: transport,
+        backend: backend
+    )
+
+    let sentCount = await backend.sentTargetMessages().count
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"DOM.documentUpdated","params":{}}"#
+    )
+
+    let didInvalidateRoot = try await awaitValueAfterActorTurns {
+        await session.attachment.dom.currentPageRootNode == nil ? true : nil
+    }
+    #expect(didInvalidateRoot)
+    #expect(session.attachment.dom.currentPageRootNode == nil)
+    #expect(session.attachment.dom.elementStyles.selectedState == .unavailable(.noSelection))
+    #expect(await backend.sentTargetMessages().count == sentCount)
+}
+
+@Test
+@MainActor
+func selectedElementStyleHydrationClearsAfterSelectedTargetDestroyed() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    _ = try await hydrateSelectedBodyStyles(
+        session: session,
+        transport: transport,
+        backend: backend
+    )
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetDestroyed","params":{"targetId":"page-main"}}"#
+    )
+
+    let didClearSelection = try await awaitValueAfterActorTurns {
+        await session.attachment.dom.selectedNodeID == nil ? true : nil
+    }
+    #expect(didClearSelection)
+    #expect(session.attachment.dom.selectedNodeID == nil)
+    #expect(session.attachment.dom.elementStyles.selectedState == .unavailable(.noSelection))
+    #expect(session.lastError == nil)
 }
 
 @Test
@@ -5010,6 +5147,32 @@ private func waitForBackendTargetMessage(
         }
         return message
     }
+}
+
+@MainActor
+private func hydrateSelectedBodyStyles(
+    session: InspectorSession,
+    transport: TransportSession,
+    backend: FakeTransportBackend
+) async throws -> DOMNodeIdentifier {
+    try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
+    let bodyID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(4))
+    session.attachment.dom.selectNode(bodyID)
+
+    let sentCount = await backend.sentTargetMessages().count
+    session.attachment.dom.setSelectedNodeStyleHydrationActive(true)
+    let messages = try await waitForCSSRefreshMessages(backend, after: sentCount)
+    try await replyCSSRefresh(
+        transport: transport,
+        messages: messages,
+        selector: "body",
+        styleSheetID: "sheet-body"
+    )
+    let didLoadStyles = try await awaitValueAfterActorTurns {
+        await session.attachment.dom.elementStyles.selectedState == .loaded ? true : nil
+    }
+    #expect(didLoadStyles)
+    return bodyID
 }
 
 private struct CSSRefreshMessages {

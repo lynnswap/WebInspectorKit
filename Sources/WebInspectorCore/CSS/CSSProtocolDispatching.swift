@@ -148,6 +148,33 @@ extension CSSSession: CSSProtocolEventHandler {
     }
 }
 
+extension DOMSession: CSSProtocolEventHandler {
+    package func cssStyleSheetChanged(targetID: ProtocolTargetIdentifier) {
+        elementStyles.cssStyleSheetChanged(targetID: targetID)
+        reconcileSelectedNodeStyleHydrationIfNeeded()
+    }
+
+    package func cssStyleSheetRemoved(styleSheetID: CSSStyleSheetIdentifier, targetID: ProtocolTargetIdentifier) {
+        elementStyles.cssStyleSheetRemoved(styleSheetID: styleSheetID, targetID: targetID)
+        reconcileSelectedNodeStyleHydrationIfNeeded()
+    }
+
+    package func cssStyleSheetAdded(_ header: CSSStyleSheetHeaderPayload, targetID: ProtocolTargetIdentifier) {
+        elementStyles.cssStyleSheetAdded(header, targetID: targetID)
+        reconcileSelectedNodeStyleHydrationIfNeeded()
+    }
+
+    package func cssMediaQueryResultChanged(targetID: ProtocolTargetIdentifier) {
+        elementStyles.cssMediaQueryResultChanged(targetID: targetID)
+        reconcileSelectedNodeStyleHydrationIfNeeded()
+    }
+
+    package func cssNodeLayoutFlagsChanged(targetID: ProtocolTargetIdentifier, nodeID: DOMProtocolNodeID) {
+        elementStyles.cssNodeLayoutFlagsChanged(targetID: targetID, nodeID: nodeID)
+        reconcileSelectedNodeStyleHydrationIfNeeded()
+    }
+}
+
 private struct StyleSheetIdentifierParams: Decodable {
     var styleSheetId: CSSStyleSheetIdentifier
 }
