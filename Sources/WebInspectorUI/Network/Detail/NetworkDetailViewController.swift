@@ -19,11 +19,11 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
         var title: String {
             switch self {
             case .overview:
-                webInspectorLocalized("network.detail.section.overview", default: "Overview")
+                String(localized: "network.detail.section.overview", bundle: .module)
             case .request:
-                webInspectorLocalized("network.section.request", default: "Request")
+                String(localized: "network.section.request", bundle: .module)
             case .response:
-                webInspectorLocalized("network.section.response", default: "Response")
+                String(localized: "network.section.response", bundle: .module)
             }
         }
     }
@@ -145,10 +145,7 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
         let activityIndicator = UIActivityIndicatorView(style: .medium)
         activityIndicator.hidesWhenStopped = true
         activityIndicator.accessibilityIdentifier = accessibilityIdentifier
-        activityIndicator.accessibilityLabel = webInspectorLocalized(
-            "network.body.fetching.accessibility_label",
-            default: "Fetching response body"
-        )
+        activityIndicator.accessibilityLabel = String(localized: "network.body.fetching.accessibility_label", bundle: .module)
         activityIndicator.stopAnimating()
         return activityIndicator
     }
@@ -326,17 +323,13 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
         observeDisplayedBody(nil)
         bodyViewController.display(body: nil)
         if let configuration = contentUnavailableConfiguration as? UIContentUnavailableConfiguration,
-           configuration.text == webInspectorLocalized("network.empty.selection.title", default: "No request selected") {
+           configuration.text == String(localized: "network.empty.selection.title", bundle: .module) {
             applyEmptySnapshotUsingReloadData()
             return
         }
         var configuration = UIContentUnavailableConfiguration.empty()
-        configuration.text = webInspectorLocalized("network.empty.selection.title", default: "No request selected")
-        configuration.secondaryText = webInspectorLocalized(
-            "network.empty.selection.description",
-            default: "Select a request from the list to inspect details."
-        )
-        configuration.image = UIImage(systemName: "list.bullet.rectangle")
+        configuration.text = String(localized: "network.empty.selection.title", bundle: .module)
+        configuration.textProperties.color = .secondaryLabel
         contentUnavailableConfiguration = configuration
         applyEmptySnapshotUsingReloadData()
     }

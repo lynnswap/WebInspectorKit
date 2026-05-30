@@ -9,7 +9,7 @@ package struct NetworkListOverflowMenuView: View {
         Button(role: .destructive) {
             model.clearRequests()
         } label: {
-            Label(webInspectorLocalized("network.controls.clear", default: "Clear"), systemImage: "trash")
+            Label(String(localized: "network.controls.clear", bundle: .module), systemImage: "trash")
         }
         .disabled(model.isEmpty)
     }

@@ -33,7 +33,7 @@ final class NetworkFieldCell: UICollectionViewListCell {
             : Self.makeEmptyHeadersConfiguration()
         configurationKind = .empty
 
-        let text = webInspectorLocalized("network.headers.empty", default: "No headers")
+        let text = String(localized: "network.headers.empty", bundle: .module)
         guard !wasEmpty || configuration.text != text else {
             return
         }

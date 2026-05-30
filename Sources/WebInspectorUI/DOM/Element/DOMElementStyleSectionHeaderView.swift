@@ -64,13 +64,13 @@ package enum DOMElementStyleSectionHeaderText {
     package static func displayText(for origin: CSSStyleOrigin) -> String? {
         switch origin {
         case .user:
-            webInspectorLocalized("dom.element.styles.origin.user", default: "User Style Sheet")
+            String(localized: "dom.element.styles.origin.user", bundle: .module)
         case .userAgent:
-            webInspectorLocalized("dom.element.styles.origin.user_agent", default: "User Agent Style Sheet")
+            String(localized: "dom.element.styles.origin.user_agent", bundle: .module)
         case .author:
-            webInspectorLocalized("dom.element.styles.origin.author", default: "Author Style Sheet")
+            String(localized: "dom.element.styles.origin.author", bundle: .module)
         case .inspector:
-            webInspectorLocalized("dom.element.styles.origin.inspector", default: "Web Inspector")
+            String(localized: "dom.element.styles.origin.inspector", bundle: .module)
         case let .other(value):
             value.isEmpty ? nil : value
         }

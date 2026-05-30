@@ -87,7 +87,7 @@ final class NetworkBodyViewController: UIViewController {
         let syntaxKind: NetworkBodySyntaxKind
         guard let body else {
             applyBodyDisplay(
-                text: webInspectorLocalized("network.body.unavailable", default: "Body unavailable"),
+                text: String(localized: "network.body.unavailable", bundle: .module),
                 syntaxKind: .plainText
             )
             return
@@ -99,11 +99,11 @@ final class NetworkBodyViewController: UIViewController {
             syntaxKind = body.textRepresentationSyntaxKind
         case .loaded:
             displayText = body.textRepresentation
-                ?? webInspectorLocalized("network.body.unavailable", default: "Body unavailable")
+                ?? String(localized: "network.body.unavailable", bundle: .module)
             syntaxKind = body.textRepresentationSyntaxKind
         case .failed(let error):
             let text = body.textRepresentation
-                ?? webInspectorLocalized("network.body.unavailable", default: "Body unavailable")
+                ?? String(localized: "network.body.unavailable", bundle: .module)
             displayText = text + "\n\n" + localizedDescription(for: error)
             syntaxKind = body.textRepresentationSyntaxKind
         }
@@ -114,11 +114,11 @@ final class NetworkBodyViewController: UIViewController {
     private func localizedDescription(for error: NetworkBodyFetchError) -> String {
         switch error {
         case .unavailable:
-            webInspectorLocalized("network.body.fetch.error.unavailable", default: "Body unavailable")
+            String(localized: "network.body.fetch.error.unavailable", bundle: .module)
         case .decodeFailed:
-            webInspectorLocalized("network.body.fetch.error.decode_failed", default: "Body decode failed")
+            String(localized: "network.body.fetch.error.decode_failed", bundle: .module)
         case .unknown(let message):
-            message ?? webInspectorLocalized("network.body.fetch.error.unknown", default: "Body fetch failed")
+            message ?? String(localized: "network.body.fetch.error.unknown", bundle: .module)
         }
     }
 

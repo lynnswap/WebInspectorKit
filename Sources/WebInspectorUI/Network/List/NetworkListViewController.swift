@@ -227,7 +227,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     private func makeSearchController() -> UISearchController {
         let searchController = UISearchController(searchResultsController: nil)
         searchController.obscuresBackgroundDuringPresentation = false
-        searchController.searchBar.placeholder = webInspectorLocalized("network.search.placeholder", default: "Search requests")
+        searchController.searchBar.placeholder = String(localized: "network.search.placeholder", bundle: .module)
         searchController.searchBar.text = model.searchText
         searchController.searchResultsUpdater = self
         return searchController
@@ -395,17 +395,17 @@ package final class NetworkListViewController: UICollectionViewController, UISea
             collectionView.isHidden = isEmpty
         }
         if isEmpty {
+            let title = String(localized: "network.empty.title", bundle: .module)
             if let configuration = contentUnavailableConfiguration as? UIContentUnavailableConfiguration,
-               configuration.text == webInspectorLocalized("network.empty.title", default: "No requests yet") {
+               configuration.text == title,
+               configuration.secondaryText == nil,
+               configuration.image == nil,
+               configuration.textProperties.color == .secondaryLabel {
                 return
             }
             var configuration = UIContentUnavailableConfiguration.empty()
-            configuration.text = webInspectorLocalized("network.empty.title", default: "No requests yet")
-            configuration.secondaryText = webInspectorLocalized(
-                "network.empty.description",
-                default: "Trigger a network request to see activity."
-            )
-            configuration.image = UIImage(systemName: "waveform.path.ecg.rectangle")
+            configuration.text = title
+            configuration.textProperties.color = .secondaryLabel
             contentUnavailableConfiguration = configuration
         } else if contentUnavailableConfiguration != nil {
             contentUnavailableConfiguration = nil

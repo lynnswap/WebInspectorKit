@@ -343,7 +343,7 @@ final class BrowserPageViewController: UIViewController {
         let openInWindowAttributes: UIMenuElement.Attributes = disableMenuActions ? [.disabled] : []
 
         let openAsSheet = UIAction(
-            title: "Open as Sheet",
+            title: monoclyLocalized("monocly.inspector.open_as_sheet"),
             image: UIImage(systemName: "rectangle.bottomthird.inset.filled"),
             attributes: openAsSheetAttributes
         ) { [weak self] _ in
@@ -353,7 +353,7 @@ final class BrowserPageViewController: UIViewController {
             _ = self.openInspectorAsSheet()
         }
         let openInWindow = UIAction(
-            title: "Open in New Window",
+            title: monoclyLocalized("monocly.inspector.open_in_new_window"),
             image: UIImage(systemName: "macwindow.on.rectangle"),
             attributes: openInWindowAttributes
         ) { [weak self] _ in

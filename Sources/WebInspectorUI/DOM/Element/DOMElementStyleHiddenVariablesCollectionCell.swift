@@ -53,16 +53,7 @@ package final class DOMElementStyleHiddenVariablesCollectionCell: UICollectionVi
     }
 
     private static func title(forHiddenVariableCount hiddenVariableCount: Int) -> String {
-        let format = hiddenVariableCount == 1
-            ? webInspectorLocalized(
-                "dom.element.styles.show_unused_css_variable",
-                default: "Show %d unused CSS variable"
-            )
-            : webInspectorLocalized(
-                "dom.element.styles.show_unused_css_variables",
-                default: "Show %d unused CSS variables"
-            )
-        return String.localizedStringWithFormat(format, hiddenVariableCount)
+        String(localized: "Show \(hiddenVariableCount) unused CSS variables", bundle: .module)
     }
 }
 

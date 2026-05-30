@@ -106,6 +106,9 @@ let package = Package(
             exclude: [
                 "Docs"
             ],
+            resources: [
+                .process("Localizable.xcstrings")
+            ],
             swiftSettings: strictSwiftSettings
         ),
         .target(

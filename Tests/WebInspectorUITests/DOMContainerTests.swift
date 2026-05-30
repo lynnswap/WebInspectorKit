@@ -18,6 +18,9 @@ struct DOMContainerTests {
 
         #expect(viewController.view.backgroundColor == .systemBackground)
         #expect(viewController.contentUnavailableConfiguration != nil)
+        let configuration = viewController.contentUnavailableConfiguration as? UIContentUnavailableConfiguration
+        #expect(configuration?.text == String(localized: "dom.element.styles.empty.title", bundle: .module))
+        #expect(configuration?.textProperties.color == .secondaryLabel)
         #expect(viewController.collectionView.isHidden == false)
         #expect(viewController.collectionView.numberOfSections == 0)
     }
@@ -123,7 +126,9 @@ struct DOMContainerTests {
         #expect(DOMElementStyleSectionHeaderText.displayText(
             for: CSSRuleSourceLocation(sourceURL: "styles.css", line: 0, column: 81)
         ) == "styles.css:1:82")
-        #expect(DOMElementStyleSectionHeaderText.displayText(for: .userAgent) == "User Agent Style Sheet")
+        #expect(
+            DOMElementStyleSectionHeaderText.displayText(for: .userAgent) == String(localized: "dom.element.styles.origin.user_agent", bundle: .module)
+        )
     }
 
     @Test
@@ -431,7 +436,7 @@ struct DOMContainerTests {
         #expect(collapsedDeclarations.contains("--palette-primary: #111;"))
         #expect(collapsedDeclarations.contains("--unused-a: red;") == false)
         #expect(collapsedDeclarations.contains("--unused-b: blue;") == false)
-        #expect(revealCell.revealTitleForTesting == "Show 2 unused CSS variables")
+        #expect(revealCell.revealTitleForTesting == localizedUnusedCSSVariablesTitle(2))
 
         revealCell.tapRevealForTesting()
 
@@ -478,7 +483,7 @@ struct DOMContainerTests {
         defer { window.isHidden = true }
 
         let didCollapseUnusedVariables = await waitUntilRendered(in: viewController) {
-            hiddenVariableCells(in: viewController).first?.revealTitleForTesting == "Show 2 unused CSS variables"
+            hiddenVariableCells(in: viewController).first?.revealTitleForTesting == localizedUnusedCSSVariablesTitle(2)
         }
         window.layoutIfNeeded()
 
@@ -513,7 +518,7 @@ struct DOMContainerTests {
         defer { window.isHidden = true }
 
         let didCollapseUnusedVariables = await waitUntilRendered(in: viewController) {
-            hiddenVariableCells(in: viewController).first?.revealTitleForTesting == "Show 2 unused CSS variables"
+            hiddenVariableCells(in: viewController).first?.revealTitleForTesting == localizedUnusedCSSVariablesTitle(2)
         }
         window.layoutIfNeeded()
 
@@ -541,7 +546,7 @@ struct DOMContainerTests {
         defer { window.isHidden = true }
 
         let didCollapseOnlyUnusedVariables = await waitUntilRendered(in: viewController) {
-            hiddenVariableCells(in: viewController).first?.revealTitleForTesting == "Show 2 unused CSS variables"
+            hiddenVariableCells(in: viewController).first?.revealTitleForTesting == localizedUnusedCSSVariablesTitle(2)
         }
         window.layoutIfNeeded()
 
@@ -579,7 +584,7 @@ struct DOMContainerTests {
         defer { window.isHidden = true }
 
         let didCollapseUnusedVariables = await waitUntilRendered(in: viewController) {
-            hiddenVariableCells(in: viewController).first?.revealTitleForTesting == "Show 2 unused CSS variables"
+            hiddenVariableCells(in: viewController).first?.revealTitleForTesting == localizedUnusedCSSVariablesTitle(2)
         }
         window.layoutIfNeeded()
 
@@ -613,7 +618,7 @@ struct DOMContainerTests {
         defer { window.isHidden = true }
 
         let didCollapseUnusedVariables = await waitUntilRendered(in: viewController) {
-            hiddenVariableCells(in: viewController).first?.revealTitleForTesting == "Show 2 unused CSS variables"
+            hiddenVariableCells(in: viewController).first?.revealTitleForTesting == localizedUnusedCSSVariablesTitle(2)
         }
         window.layoutIfNeeded()
 
@@ -653,7 +658,7 @@ struct DOMContainerTests {
         defer { window.isHidden = true }
 
         let didCollapseOnlyUnusedVariable = await waitUntilRendered(in: viewController) {
-            hiddenVariableCells(in: viewController).first?.revealTitleForTesting == "Show 1 unused CSS variable"
+            hiddenVariableCells(in: viewController).first?.revealTitleForTesting == localizedUnusedCSSVariablesTitle(1)
         }
         window.layoutIfNeeded()
 
@@ -677,7 +682,7 @@ struct DOMContainerTests {
         defer { window.isHidden = true }
 
         let didCollapseUnusedVariables = await waitUntilRendered(in: viewController) {
-            hiddenVariableCells(in: viewController).first?.revealTitleForTesting == "Show 2 unused CSS variables"
+            hiddenVariableCells(in: viewController).first?.revealTitleForTesting == localizedUnusedCSSVariablesTitle(2)
         }
         #expect(didCollapseUnusedVariables)
 
@@ -695,7 +700,7 @@ struct DOMContainerTests {
         )
 
         let didUpdateHiddenVariableCount = await waitUntilRendered(in: viewController) {
-            hiddenVariableCells(in: viewController).first?.revealTitleForTesting == "Show 3 unused CSS variables"
+            hiddenVariableCells(in: viewController).first?.revealTitleForTesting == localizedUnusedCSSVariablesTitle(3)
         }
         #expect(didUpdateHiddenVariableCount)
     }
@@ -884,12 +889,12 @@ struct DOMContainerTests {
 
         let emptyMenu = navigationItems.overflowMenuForTesting()
         #expect(inlineSectionCount(in: emptyMenu) == 3)
-        #expect(action(titled: "Undo", in: emptyMenu)?.attributes.contains(.disabled) == true)
-        #expect(action(titled: "Redo", in: emptyMenu)?.attributes.contains(.disabled) == true)
+        #expect(action(titled: localizedUndoTitle(), in: emptyMenu)?.attributes.contains(.disabled) == true)
+        #expect(action(titled: localizedRedoTitle(), in: emptyMenu)?.attributes.contains(.disabled) == true)
         #expect(action(titled: "HTML", in: emptyMenu) == nil)
-        #expect(action(titled: "Selector Path", in: emptyMenu) == nil)
+        #expect(action(titled: "Selector", in: emptyMenu) == nil)
         #expect(action(titled: "XPath", in: emptyMenu) == nil)
-        #expect(action(titled: "Reload", in: emptyMenu)?.attributes.contains(.disabled) == true)
+        #expect(action(titled: localizedReloadTitle(), in: emptyMenu)?.attributes.contains(.disabled) == true)
         #expect(action(titled: "Reload Inspector", in: emptyMenu) == nil)
         #expect(action(titled: "Reload Page", in: emptyMenu) == nil)
 
@@ -898,12 +903,12 @@ struct DOMContainerTests {
 
         let selectedMenu = navigationItems.overflowMenuForTesting()
         #expect(inlineSectionCount(in: selectedMenu) == 3)
-        #expect(action(titled: "Undo", in: selectedMenu)?.attributes.contains(.disabled) == true)
-        #expect(action(titled: "Redo", in: selectedMenu)?.attributes.contains(.disabled) == true)
+        #expect(action(titled: localizedUndoTitle(), in: selectedMenu)?.attributes.contains(.disabled) == true)
+        #expect(action(titled: localizedRedoTitle(), in: selectedMenu)?.attributes.contains(.disabled) == true)
         #expect(action(titled: "HTML", in: selectedMenu) == nil)
-        #expect(action(titled: "Selector Path", in: selectedMenu) == nil)
+        #expect(action(titled: "Selector", in: selectedMenu) == nil)
         #expect(action(titled: "XPath", in: selectedMenu) == nil)
-        #expect(action(titled: "Reload", in: selectedMenu)?.attributes.contains(.disabled) == true)
+        #expect(action(titled: localizedReloadTitle(), in: selectedMenu)?.attributes.contains(.disabled) == true)
         #expect(action(titled: "Reload Inspector", in: selectedMenu) == nil)
         #expect(action(titled: "Reload Page", in: selectedMenu) == nil)
         #expect(destructiveAction(in: selectedMenu)?.attributes.contains(.disabled) == true)
@@ -911,8 +916,8 @@ struct DOMContainerTests {
         let undoManager = UndoManager()
         undoManager.registerUndo(withTarget: UndoTarget()) { _ in }
         let undoableMenu = navigationItems.overflowMenuForTesting(undoManager: undoManager)
-        #expect(action(titled: "Undo", in: undoableMenu)?.attributes.contains(.disabled) == false)
-        #expect(action(titled: "Redo", in: undoableMenu)?.attributes.contains(.disabled) == true)
+        #expect(action(titled: localizedUndoTitle(), in: undoableMenu)?.attributes.contains(.disabled) == false)
+        #expect(action(titled: localizedRedoTitle(), in: undoableMenu)?.attributes.contains(.disabled) == true)
     }
 
     private struct BodyStyleIDs {
@@ -1282,6 +1287,22 @@ struct DOMContainerTests {
             }
         }
         return nil
+    }
+
+    private func localizedUnusedCSSVariablesTitle(_ count: Int) -> String {
+        String(localized: "Show \(count) unused CSS variables", bundle: .module)
+    }
+
+    private func localizedUndoTitle() -> String {
+        String(localized: "undo", bundle: .module)
+    }
+
+    private func localizedRedoTitle() -> String {
+        String(localized: "redo", bundle: .module)
+    }
+
+    private func localizedReloadTitle() -> String {
+        String(localized: "reload", bundle: .module)
     }
 
 }
