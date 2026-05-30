@@ -53,7 +53,8 @@ package final class DOMElementStyleHiddenVariablesCollectionCell: UICollectionVi
     }
 
     private static func title(forHiddenVariableCount hiddenVariableCount: Int) -> String {
-        String(localized: "Show \(hiddenVariableCount) unused CSS variables", bundle: .module)
+        let format = String(localized: "Show %lld unused CSS variables", bundle: .module)
+        return String.localizedStringWithFormat(format, hiddenVariableCount)
     }
 }
 

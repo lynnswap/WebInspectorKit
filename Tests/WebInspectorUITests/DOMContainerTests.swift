@@ -1290,7 +1290,8 @@ struct DOMContainerTests {
     }
 
     private func localizedUnusedCSSVariablesTitle(_ count: Int) -> String {
-        String(localized: "Show \(count) unused CSS variables", bundle: .module)
+        let format = String(localized: "Show %lld unused CSS variables", bundle: .module)
+        return String.localizedStringWithFormat(format, count)
     }
 
     private func localizedUndoTitle() -> String {
