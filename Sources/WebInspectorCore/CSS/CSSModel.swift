@@ -383,6 +383,66 @@ package final class CSSSession {
         var propertyIDs: [PropertyMembership]
     }
 
+    private enum RefreshCommandResult: Sendable {
+        case success(ProtocolCommandResult)
+        case failure(RefreshCommandFailure)
+
+        var failure: RefreshCommandFailure? {
+            guard case let .failure(failure) = self else {
+                return nil
+            }
+            return failure
+        }
+
+        func requireSuccess() throws -> ProtocolCommandResult {
+            switch self {
+            case let .success(result):
+                return result
+            case let .failure(failure):
+                throw failure.error
+            }
+        }
+    }
+
+    private enum RefreshCommandFailure: Error, Sendable {
+        case cancellation
+        case transport(TransportError)
+        case inspector(InspectorSessionError)
+        case other(String)
+
+        init(_ error: any Error) {
+            if error is CancellationError {
+                self = .cancellation
+            } else if let error = error as? TransportError {
+                self = .transport(error)
+            } else if let error = error as? InspectorSessionError {
+                self = .inspector(error)
+            } else {
+                self = .other(String(describing: error))
+            }
+        }
+
+        var error: any Error {
+            switch self {
+            case .cancellation:
+                CancellationError()
+            case let .transport(error):
+                error
+            case let .inspector(error):
+                error
+            case let .other(message):
+                InspectorSessionError(message)
+            }
+        }
+
+        var isCancellation: Bool {
+            guard case .cancellation = self else {
+                return false
+            }
+            return true
+        }
+    }
+
     private enum PropertyMembership: Equatable {
         case identified(CSSPropertyIdentifier)
         case anonymous(index: Int)
@@ -1498,15 +1558,36 @@ package final class CSSSession {
     }
 
     private func fetchRefreshResultsWithoutCompatibilityRetry(for identity: CSSNodeStyleIdentity) async throws -> RefreshResults {
-        async let matched = perform(.getMatchedStyles(identity: identity))
-        async let inline = perform(.getInlineStyles(identity: identity))
-        async let computed = perform(.getComputedStyle(identity: identity))
-        let results = try await (matched, inline, computed)
+        async let matched = performRefreshCommand(.getMatchedStyles(identity: identity))
+        async let inline = performRefreshCommand(.getInlineStyles(identity: identity))
+        async let computed = performRefreshCommand(.getComputedStyle(identity: identity))
+        let results = await (matched, inline, computed)
+        let failures = [results.0, results.1, results.2].compactMap(\.failure)
+        if failures.contains(where: \.isCancellation) {
+            throw CancellationError()
+        }
+        if let retryFailure = failures.first(where: { shouldRetryAfterEnablingCSSAgent($0.error) }) {
+            throw retryFailure.error
+        }
+        if let failure = failures.first {
+            throw failure.error
+        }
+        let matchedResult = try results.0.requireSuccess()
+        let inlineResult = try results.1.requireSuccess()
+        let computedResult = try results.2.requireSuccess()
         return RefreshResults(
-            matched: try protocolCommands.matchedStyles(from: results.0),
-            inline: try protocolCommands.inlineStyles(from: results.1),
-            computed: try protocolCommands.computedStyles(from: results.2)
+            matched: try protocolCommands.matchedStyles(from: matchedResult),
+            inline: try protocolCommands.inlineStyles(from: inlineResult),
+            computed: try protocolCommands.computedStyles(from: computedResult)
         )
+    }
+
+    private func performRefreshCommand(_ intent: CSSCommandIntent) async -> RefreshCommandResult {
+        do {
+            return .success(try await perform(intent))
+        } catch {
+            return .failure(RefreshCommandFailure(error))
+        }
     }
 
     private func enableAgentForCompatibility(targetID: ProtocolTargetIdentifier) async throws {
