@@ -183,6 +183,13 @@ private final class InspectorTargetRegistry {
 }
 
 @MainActor
+package protocol InspectorInspectableWebView: AnyObject {
+    var isInspectable: Bool { get set }
+}
+
+extension WKWebView: InspectorInspectableWebView {}
+
+@MainActor
 private final class InspectorConnection {
     let transport: TransportSession
     weak var webView: WKWebView?
@@ -843,13 +850,16 @@ package final class InspectorSession {
         connection === candidate || pendingConnection === candidate
     }
 
-    package static func prepareInspectability(for webView: WKWebView) -> Bool {
+    package static func prepareInspectability<WebView: InspectorInspectableWebView>(for webView: WebView) -> Bool {
         let originalValue = webView.isInspectable
         webView.isInspectable = true
         return originalValue
     }
 
-    package static func restoreInspectabilityIfNeeded(on webView: WKWebView, originalValue: Bool?) {
+    package static func restoreInspectabilityIfNeeded<WebView: InspectorInspectableWebView>(
+        on webView: WebView,
+        originalValue: Bool?
+    ) {
         guard let originalValue else {
             return
         }

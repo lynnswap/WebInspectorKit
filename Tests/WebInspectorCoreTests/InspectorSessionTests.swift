@@ -3179,9 +3179,7 @@ func detachedFrameSetChildNodesRootKeepsRequestNodeSelectable() async throws {
 func requestNodeReplyBeforePathPushKeepsSelectionPendingUntilParentArrives() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
-    let session = await InspectorSession(
-        configuration: .init(responseTimeout: .seconds(1), bootstrapTimeout: .seconds(1))
-    )
+    let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
     let snapshotBeforeSelection = await session.attachment.dom.snapshot()
 
@@ -3741,12 +3739,7 @@ func inspectorInspectSelectsRequestedNodeAndDisablesPicker() async throws {
 func inspectorInspectWaitsForPathPushEventsBeforeSelectingNode() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
-    let session = await InspectorSession(
-        configuration: .init(
-            responseTimeout: .seconds(1),
-            bootstrapTimeout: .seconds(1)
-        )
-    )
+    let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
     await receiveTargetDispatch(
         transport,
@@ -4821,7 +4814,7 @@ func bootstrapFailureClearsSeededModelState() async throws {
     let session = await InspectorSession(
         configuration: .init(
             responseTimeout: .milliseconds(20),
-            bootstrapTimeout: .seconds(1)
+            bootstrapTimeout: testBootstrapTimeout
         )
     )
     await transport.receiveRootMessage(
@@ -4928,8 +4921,7 @@ func domActionAvailabilityWaitsForActiveAttachment() async throws {
 @MainActor
 @Test
 func attachInspectabilityPreparationRestoresOriginalValue() throws {
-    let webView = WKWebView(frame: .zero)
-    let initialValue = webView.isInspectable
+    let webView = TestInspectableWebView(isInspectable: false)
     webView.isInspectable = false
 
     let originalValue = InspectorSession.prepareInspectability(for: webView)
@@ -4940,7 +4932,6 @@ func attachInspectabilityPreparationRestoresOriginalValue() throws {
     InspectorSession.restoreInspectabilityIfNeeded(on: webView, originalValue: originalValue)
 
     #expect(webView.isInspectable == false)
-    webView.isInspectable = initialValue
 }
 
 private func connect(
@@ -4957,11 +4948,8 @@ private func connect(
     do {
         try await completeBootstrap(transport: transport, backend: backend)
     } catch {
-        do {
-            try await connectTask.value
-        } catch {
-            throw error
-        }
+        connectTask.cancel()
+        _ = try? await connectTask.value
         throw error
     }
     try await connectTask.value
@@ -5091,6 +5079,14 @@ private let newDocumentWithHeadChildCountResult = ##"{"root":{"nodeId":1,"nodeTy
 private let firstLazyFrameDocumentResult = ##"{"root":{"nodeId":101,"nodeType":9,"nodeName":"#document","documentURL":"https://frame.example/ad","baseURL":"https://frame.example/ad","children":[{"nodeId":102,"nodeType":1,"nodeName":"HTML","localName":"html","children":[{"nodeId":103,"nodeType":1,"nodeName":"BODY","localName":"body","children":[{"nodeId":104,"nodeType":1,"nodeName":"CANVAS","localName":"canvas"}]}]}]}}"##
 private let secondLazyFrameDocumentResult = ##"{"root":{"nodeId":201,"nodeType":9,"nodeName":"#document","documentURL":"https://frame.example/ad","baseURL":"https://frame.example/ad","children":[{"nodeId":202,"nodeType":1,"nodeName":"HTML","localName":"html","children":[{"nodeId":203,"nodeType":1,"nodeName":"BODY","localName":"body","children":[{"nodeId":204,"nodeType":1,"nodeName":"VIDEO","localName":"video"}]}]}]}}"##
 
+private final class TestInspectableWebView: InspectorInspectableWebView {
+    var isInspectable: Bool
+
+    init(isInspectable: Bool) {
+        self.isInspectable = isInspectable
+    }
+}
+
 private func targetMessageMethods(_ backend: FakeTransportBackend) async -> [String?] {
     await backend.sentTargetMessages().map { try? messageMethod($0.message) }
 }
@@ -5127,7 +5123,7 @@ private func waitForBackendTargetMessage(
     method: String,
     ordinal: Int,
     after count: Int,
-    timeout: Duration = .seconds(5)
+    timeout: Duration = .milliseconds(750)
 ) async throws -> SentTargetMessage {
     try await withThrowingTaskGroup(of: SentTargetMessage.self) { group in
         defer {
@@ -5185,10 +5181,10 @@ private func waitForCSSRefreshMessages(
     _ backend: FakeTransportBackend,
     after count: Int
 ) async throws -> CSSRefreshMessages {
-    async let matched = waitForTargetMessage(backend, method: "CSS.getMatchedStylesForNode", after: count)
-    async let inline = waitForTargetMessage(backend, method: "CSS.getInlineStylesForNode", after: count)
-    async let computed = waitForTargetMessage(backend, method: "CSS.getComputedStyleForNode", after: count)
-    return try await CSSRefreshMessages(matched: matched, inline: inline, computed: computed)
+    let matched = try await waitForTargetMessage(backend, method: "CSS.getMatchedStylesForNode", after: count)
+    let inline = try await waitForTargetMessage(backend, method: "CSS.getInlineStylesForNode", after: count)
+    let computed = try await waitForTargetMessage(backend, method: "CSS.getComputedStyleForNode", after: count)
+    return CSSRefreshMessages(matched: matched, inline: inline, computed: computed)
 }
 
 private func replyCSSRefresh(
@@ -5454,10 +5450,13 @@ private extension ProtocolTargetIdentifier {
 
 private extension InspectorSessionConfiguration {
     static let test = InspectorSessionConfiguration(
-        responseTimeout: .seconds(1),
-        bootstrapTimeout: .seconds(1)
+        responseTimeout: testResponseTimeout,
+        bootstrapTimeout: testBootstrapTimeout
     )
 }
+
+private let testResponseTimeout: Duration = .milliseconds(750)
+private let testBootstrapTimeout: Duration = .milliseconds(750)
 
 private extension DOMSessionSnapshot {
     var currentPageDocumentID: DOMDocumentIdentifier? {

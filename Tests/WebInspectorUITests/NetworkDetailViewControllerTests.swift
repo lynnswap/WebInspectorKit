@@ -203,7 +203,8 @@ struct NetworkDetailViewControllerTests {
         let didSwitch = await waitUntil {
             viewController.currentModeForTesting == .requestBody
                 && viewController.bodyTextViewForTesting.text == "name=Jane Doe\ncity=Tokyo East"
-                && viewController.bodyTextViewForTesting.configuration.drawsBackground == false
+                && viewController.bodyTextViewForTesting.model.language == .plainText
+                && viewController.bodyTextViewForTesting.model.drawsBackground == false
         }
         #expect(didSwitch)
     }
@@ -302,7 +303,7 @@ struct NetworkDetailViewControllerTests {
             return fetchedIDs == [request.id]
                 && viewController.currentModeForTesting == .responseBody
                 && viewController.bodyTextViewForTesting.text.isEmpty
-                && viewController.bodyTextViewForTesting.configuration.language == .json
+                && viewController.bodyTextViewForTesting.model.language == .json
                 && indicatorItem.isHidden == false
                 && activityIndicator.isAnimating
         }
