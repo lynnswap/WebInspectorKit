@@ -6,8 +6,8 @@ import UIKit
 
 @MainActor
 final class NetworkBodyViewController: UIViewController {
-    private let syntaxDocument = SyntaxEditorDocument(text: "")
-    private let syntaxConfiguration = SyntaxEditorConfiguration(
+    private let syntaxModel = SyntaxEditorModel(
+        text: "",
         language: .json,
         isEditable: false,
         lineWrappingEnabled: true,
@@ -15,8 +15,7 @@ final class NetworkBodyViewController: UIViewController {
         drawsBackground: false
     )
     private lazy var syntaxView = SyntaxEditorView(
-        document: syntaxDocument,
-        configuration: syntaxConfiguration
+        model: syntaxModel
     )
     private let observationScope = ObservationScope()
     private weak var body: NetworkBody?
@@ -128,15 +127,15 @@ final class NetworkBodyViewController: UIViewController {
         syntaxKind: NetworkBodySyntaxKind
     ) {
         let syntax = syntaxKind.syntax
-        if syntaxConfiguration.language != syntax.language {
-            syntaxConfiguration.language = syntax.language
+        if syntaxModel.language != syntax.language {
+            syntaxModel.language = syntax.language
         }
         let colorTheme: SyntaxEditorColorTheme = syntax.usesPlainTextTheme ? .v2WebInspectorPlainText : .default
-        if syntaxConfiguration.colorTheme != colorTheme {
-            syntaxConfiguration.colorTheme = colorTheme
+        if syntaxModel.colorTheme != colorTheme {
+            syntaxModel.colorTheme = colorTheme
         }
-        if syntaxDocument.textSnapshot() != text {
-            syntaxDocument.replaceText(text)
+        if syntaxModel.text != text {
+            syntaxModel.replaceText(text)
         }
     }
 }
@@ -162,7 +161,7 @@ private extension NetworkBodySyntaxKind {
     var syntax: (language: SyntaxLanguage, usesPlainTextTheme: Bool) {
         switch self {
         case .plainText:
-            (.json, true)
+            (.plainText, true)
         case .json:
             (.json, false)
         case .html:
