@@ -94,7 +94,7 @@ private final class NetworkListColumnNavigationController: UINavigationControlle
 
 #Preview("Network Split") {
     let model = NetworkPreviewFixtures.makePanelModel(mode: .detail)
-    NetworkSplitViewController(
+    NetworkCompactNavigationController(
         model: model,
         listViewController: NetworkListViewController(
             model: model

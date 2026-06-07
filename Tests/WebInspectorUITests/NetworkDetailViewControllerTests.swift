@@ -79,7 +79,7 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func detailRendersOverviewRequestAndResponseHeaders() async throws {
+    func detailModeControlRendersBodyLinkAndHeadersForSelectedSide() async throws {
         let network = NetworkSession()
         let request = try #require(
             applyRequest(
@@ -87,7 +87,8 @@ struct NetworkDetailViewControllerTests {
                 requestID: "1",
                 url: "https://example.com/api/data.json",
                 requestHeaders: ["accept": "application/json"],
-                responseHeaders: ["content-type": "application/json"]
+                responseHeaders: ["content-type": "application/json"],
+                responseMimeType: "application/json"
             )
         )
         let model = NetworkPanelModel(network: network)
@@ -97,20 +98,29 @@ struct NetworkDetailViewControllerTests {
         defer { window.isHidden = true }
 
         let collectionView = viewController.collectionViewForTesting
-        let didRender = await waitUntil {
-            collectionView.numberOfSections == 3
+        let didRenderRequest = await waitUntil {
+            collectionView.numberOfSections == 2
                 && collectionView.numberOfItems(inSection: 0) == 1
                 && collectionView.numberOfItems(inSection: 1) == 1
-                && collectionView.numberOfItems(inSection: 2) == 1
-                && listCellSecondaryText(in: collectionView, at: IndexPath(item: 0, section: 0)) == "https://example.com/api/data.json"
                 && listCellText(in: collectionView, at: IndexPath(item: 0, section: 1)) == "accept"
                 && listCellSecondaryText(in: collectionView, at: IndexPath(item: 0, section: 1)) == "application/json"
-                && listCellText(in: collectionView, at: IndexPath(item: 0, section: 2)) == "content-type"
-                && listCellSecondaryText(in: collectionView, at: IndexPath(item: 0, section: 2)) == "application/json"
         }
 
-        #expect(didRender)
+        #expect(didRenderRequest)
         #expect(viewController.contentUnavailableConfiguration == nil)
+
+        selectMode(.response, on: viewController)
+
+        let didRenderResponse = await waitUntil {
+            collectionView.numberOfSections == 2
+                && collectionView.numberOfItems(inSection: 0) == 2
+                && collectionView.numberOfItems(inSection: 1) == 1
+                && listCellSecondaryText(in: collectionView, at: IndexPath(item: 0, section: 0)) == "application/json"
+                && listCellText(in: collectionView, at: IndexPath(item: 0, section: 1)) == "content-type"
+                && listCellSecondaryText(in: collectionView, at: IndexPath(item: 0, section: 1)) == "application/json"
+        }
+
+        #expect(didRenderResponse)
     }
 
     @Test
@@ -138,14 +148,13 @@ struct NetworkDetailViewControllerTests {
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
-        let didRenderEmptyResponseHeaders = await waitUntil {
+        let didRenderRequestBodyOnly = await waitUntil {
             let collectionView = viewController.collectionViewForTesting
-            return collectionView.numberOfSections == 3
-                && collectionView.numberOfItems(inSection: 2) == 1
-                && listCellText(in: collectionView, at: IndexPath(item: 0, section: 2))?.isEmpty == false
-                && listCellSecondaryText(in: collectionView, at: IndexPath(item: 0, section: 2)) == nil
+            return collectionView.numberOfSections == 1
+                && viewController.isDetailModeEnabledForTesting(.response) == false
+                && collectionView.numberOfItems(inSection: 0) == 1
         }
-        #expect(didRenderEmptyResponseHeaders)
+        #expect(didRenderRequestBodyOnly)
 
         network.applyResponseReceived(
             targetID: targetID,
@@ -161,11 +170,20 @@ struct NetworkDetailViewControllerTests {
             timestamp: 2
         )
 
+        let didEnableResponseMode = await waitUntil {
+            viewController.isDetailModeEnabledForTesting(.response)
+        }
+        #expect(didEnableResponseMode)
+
+        selectMode(.response, on: viewController)
+
         let didRenderResponseHeaders = await waitUntil {
             let collectionView = viewController.collectionViewForTesting
-            return collectionView.numberOfItems(inSection: 2) == 1
-                && listCellText(in: collectionView, at: IndexPath(item: 0, section: 2)) == "content-type"
-                && listCellSecondaryText(in: collectionView, at: IndexPath(item: 0, section: 2)) == "application/json"
+            return collectionView.numberOfItems(inSection: 0) == 2
+                && listCellSecondaryText(in: collectionView, at: IndexPath(item: 0, section: 0)) == "application/json"
+                && collectionView.numberOfItems(inSection: 1) == 1
+                && listCellText(in: collectionView, at: IndexPath(item: 0, section: 1)) == "content-type"
+                && listCellSecondaryText(in: collectionView, at: IndexPath(item: 0, section: 1)) == "application/json"
         }
         #expect(didRenderResponseHeaders)
     }
@@ -187,25 +205,24 @@ struct NetworkDetailViewControllerTests {
         let model = NetworkPanelModel(network: network)
         model.selectRequest(request)
         let viewController = NetworkDetailViewController(model: model)
-        let window = showInWindow(viewController)
+        let navigationController = UINavigationController(rootViewController: viewController)
+        let window = showInWindow(navigationController)
         defer { window.isHidden = true }
 
         let didRender = await waitUntil {
-            viewController.collectionViewForTesting.numberOfSections == 3
+            viewController.collectionViewForTesting.numberOfSections == 2
         }
         #expect(didRender)
 
-        #expect(viewController.isDetailModeEnabledForTesting(.requestBody))
+        #expect(viewController.currentModeForTesting == .request)
+        viewController.selectBodyLinkForTesting()
 
-        selectMode(.requestBody, on: viewController)
-
-        let didSwitch = await waitUntil {
-            viewController.currentModeForTesting == .requestBody
-                && viewController.bodyTextViewForTesting.text == "name=Jane Doe\ncity=Tokyo East"
-                && viewController.bodyTextViewForTesting.model.language == .plainText
-                && viewController.bodyTextViewForTesting.model.drawsBackground == false
+        let didPushBody = await waitUntil {
+            bodyViewController(in: navigationController)?.syntaxViewForTesting.text == "name=Jane Doe\ncity=Tokyo East"
+                && bodyViewController(in: navigationController)?.syntaxViewForTesting.model.language == .plainText
+                && bodyViewController(in: navigationController)?.syntaxViewForTesting.model.drawsBackground == false
         }
-        #expect(didSwitch)
+        #expect(didPushBody)
     }
 
     @Test
@@ -240,7 +257,7 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func responseBodyModeRequestsRuntimeFetchWhenBodyIsAvailable() async throws {
+    func responseModeRequestsRuntimeFetchWhenBodyIsAvailable() async throws {
         let network = NetworkSession()
         let request = try #require(
             applyRequest(
@@ -262,7 +279,7 @@ struct NetworkDetailViewControllerTests {
         defer { window.isHidden = true }
 
         viewController.loadViewIfNeeded()
-        viewController.setModeForTesting(.responseBody)
+        viewController.setModeForTesting(.response)
 
         let didFetch = await waitUntil {
             fetchedIDs == [request.id]
@@ -271,7 +288,7 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func responseBodyModePrewarmsSyntaxWhileFetching() async throws {
+    func responseBodyLinkPrewarmsSyntaxWhileFetching() async throws {
         let network = NetworkSession()
         let request = try #require(
             applyRequest(
@@ -289,16 +306,19 @@ struct NetworkDetailViewControllerTests {
         }
         model.selectRequest(request)
         let viewController = NetworkDetailViewController(model: model)
-        let window = showInWindow(viewController)
+        let navigationController = UINavigationController(rootViewController: viewController)
+        let window = showInWindow(navigationController)
         defer { window.isHidden = true }
 
-        viewController.setModeForTesting(.responseBody)
+        viewController.setModeForTesting(.response)
+        viewController.selectBodyLinkForTesting()
 
         let didStartFetching = await waitUntil {
+            let bodyViewController = bodyViewController(in: navigationController)
             return fetchedIDs == [request.id]
-                && viewController.currentModeForTesting == .responseBody
-                && viewController.bodyTextViewForTesting.text.isEmpty
-                && viewController.bodyTextViewForTesting.model.language == .json
+                && viewController.currentModeForTesting == .response
+                && bodyViewController?.syntaxViewForTesting.text.isEmpty == true
+                && bodyViewController?.syntaxViewForTesting.model.language == .json
         }
         #expect(didStartFetching)
 
@@ -310,13 +330,13 @@ struct NetworkDetailViewControllerTests {
         )
 
         let didRenderBody = await waitUntil {
-            return viewController.bodyTextViewForTesting.text.contains(#""ok""#)
+            return bodyViewController(in: navigationController)?.syntaxViewForTesting.text.contains(#""ok""#) == true
         }
         #expect(didRenderBody)
     }
 
     @Test
-    func responseBodyModeWaitsForLoadingFinishedBeforeFetching() async throws {
+    func responseModeWaitsForLoadingFinishedBeforeFetching() async throws {
         let network = NetworkSession()
         let request = try #require(
             applyRequest(
@@ -338,7 +358,7 @@ struct NetworkDetailViewControllerTests {
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
-        viewController.setModeForTesting(.responseBody)
+        viewController.setModeForTesting(.response)
         #expect(fetchedIDs.isEmpty)
 
         network.applyLoadingFinished(
@@ -373,14 +393,16 @@ struct NetworkDetailViewControllerTests {
         }
         model.selectRequest(request)
         let viewController = NetworkDetailViewController(model: model)
-        let window = showInWindow(viewController)
+        let navigationController = UINavigationController(rootViewController: viewController)
+        let window = showInWindow(navigationController)
         defer { window.isHidden = true }
 
-        viewController.setModeForTesting(.responseBody)
+        viewController.setModeForTesting(.response)
+        viewController.selectBodyLinkForTesting()
 
         let didRenderFailure = await waitUntil {
-            viewController.currentModeForTesting == .responseBody
-                && !viewController.bodyTextViewForTesting.text.isEmpty
+            viewController.currentModeForTesting == .response
+                && bodyViewController(in: navigationController)?.syntaxViewForTesting.text.isEmpty == false
         }
         #expect(didRenderFailure)
         #expect(fetchedIDs.isEmpty)
@@ -388,7 +410,7 @@ struct NetworkDetailViewControllerTests {
         request.markResponseBodyFailed(.unknown("Still unavailable"))
 
         let didStayIdle = await waitUntil {
-            viewController.bodyTextViewForTesting.text.contains("Still unavailable")
+            bodyViewController(in: navigationController)?.syntaxViewForTesting.text.contains("Still unavailable") == true
                 && fetchedIDs.isEmpty
         }
         #expect(didStayIdle)
@@ -576,6 +598,10 @@ struct NetworkDetailViewControllerTests {
     ) {
         #expect(viewController.isDetailModeEnabledForTesting(mode))
         viewController.selectModeForTesting(mode)
+    }
+
+    private func bodyViewController(in navigationController: UINavigationController) -> NetworkBodyViewController? {
+        navigationController.topViewController as? NetworkBodyViewController
     }
 
     private func selectListItem(

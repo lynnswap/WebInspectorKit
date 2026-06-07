@@ -1,7 +1,6 @@
 #if canImport(UIKit)
 import WebInspectorCore
 import ObservationBridge
-import SyntaxEditorUI
 import UIKit
 
 @MainActor
@@ -11,34 +10,24 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
         var value: String
     }
 
-    private enum SectionIdentifier: Int, CaseIterable, Hashable {
-        case overview
-        case request
-        case response
+    private struct BodyMetadataField: Hashable {
+        var name: String
+        var value: String
+    }
 
-        var title: String {
-            switch self {
-            case .overview:
-                String(localized: "network.detail.section.overview", bundle: .module)
-            case .request:
-                String(localized: "network.section.request", bundle: .module)
-            case .response:
-                String(localized: "network.section.response", bundle: .module)
-            }
-        }
+    private enum SectionIdentifier: Int, CaseIterable, Hashable {
+        case body
+        case headers
     }
 
     private enum ItemIdentifier: Hashable {
-        case overview(NetworkRequest.ID)
-        case requestHeader(HeaderField)
-        case requestHeadersEmpty
-        case responseHeader(HeaderField)
-        case responseHeadersEmpty
+        case bodyMetadata(BodyMetadataField)
+        case bodyLink(NetworkBodyRole)
+        case header(HeaderField)
     }
 
     private let model: NetworkPanelModel
     private let observationScope = ObservationScope()
-    private let bodyViewController = NetworkBodyViewController()
     private var modePalette: UIView?
     private lazy var modeSegmentedControl: UISegmentedControl = {
         let control = UISegmentedControl(items: NetworkDetailMode.allCases.map(\.title))
@@ -62,12 +51,12 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
         return collectionView
     }()
     private lazy var dataSource = makeDataSource()
-    fileprivate var mode: NetworkDetailMode = .overview {
+    fileprivate var mode: NetworkDetailMode = .request {
         didSet {
             guard mode != oldValue else {
                 return
             }
-            renderCurrentMode(reloadData: mode == .overview)
+            startObservingModel()
             renderModeControl()
         }
     }
@@ -99,13 +88,28 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
             }
         }
         installCollectionView()
-        installBodyViewController()
         installModePalette()
         startObservingModel()
     }
 
     package func collectionView(_ collectionView: UICollectionView, shouldSelectItemAt indexPath: IndexPath) -> Bool {
-        false
+        guard let item = dataSource.itemIdentifier(for: indexPath) else {
+            return false
+        }
+        if case .bodyLink(let role) = item, let selectedRequest {
+            return body(in: selectedRequest, for: role) != nil
+        }
+        return false
+    }
+
+    package func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
+        collectionView.deselectItem(at: indexPath, animated: true)
+        guard let item = dataSource.itemIdentifier(for: indexPath),
+              case .bodyLink(let role) = item,
+              let selectedRequest else {
+            return
+        }
+        pushBody(for: role, in: selectedRequest)
     }
 
     private func startObservingModel() {
@@ -128,21 +132,6 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
             collectionView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             collectionView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
-    }
-
-    private func installBodyViewController() {
-        addChild(bodyViewController)
-        bodyViewController.view.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(bodyViewController.view)
-        let safeArea = view.safeAreaLayoutGuide
-        NSLayoutConstraint.activate([
-            bodyViewController.view.topAnchor.constraint(equalTo: view.topAnchor),
-            bodyViewController.view.leadingAnchor.constraint(equalTo: safeArea.leadingAnchor),
-            bodyViewController.view.trailingAnchor.constraint(equalTo: safeArea.trailingAnchor),
-            bodyViewController.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-        ])
-        bodyViewController.didMove(toParent: self)
-        bodyViewController.view.isHidden = true
     }
 
     private func installModePalette() {
@@ -188,10 +177,6 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
     }
 
     private func makeDataSource() -> UICollectionViewDiffableDataSource<SectionIdentifier, ItemIdentifier> {
-        let overviewCellRegistration = UICollectionView.CellRegistration<NetworkOverviewCell, NetworkRequest> {
-            cell, _, request in
-            cell.bind(request: request)
-        }
         let fieldCellRegistration = UICollectionView.CellRegistration<NetworkFieldCell, ItemIdentifier> {
             [weak self] cell, _, item in
             self?.configure(cell, item: item)
@@ -206,23 +191,13 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
                 return
             }
             var configuration = UIListContentConfiguration.header()
-            configuration.text = section.title
+            configuration.text = self.title(for: section)
             header.contentConfiguration = configuration
         }
 
         let dataSource = UICollectionViewDiffableDataSource<SectionIdentifier, ItemIdentifier>(
             collectionView: collectionView
-        ) { [weak self] collectionView, indexPath, item in
-            guard let self else {
-                return nil
-            }
-            if case .overview = item, let selectedRequest = self.selectedRequest {
-                return collectionView.dequeueConfiguredReusableCell(
-                    using: overviewCellRegistration,
-                    for: indexPath,
-                    item: selectedRequest
-                )
-            }
+        ) { collectionView, indexPath, item in
             return collectionView.dequeueConfiguredReusableCell(
                 using: fieldCellRegistration,
                 for: indexPath,
@@ -253,7 +228,7 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
         if contentUnavailableConfiguration != nil {
             contentUnavailableConfiguration = nil
         }
-        renderCurrentMode(reloadData: reloadData)
+        renderCurrentMode(selectedRequest: request, reloadData: reloadData)
         renderModeControl(selectedRequest: request)
     }
 
@@ -292,12 +267,10 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
             return false
         }
         switch mode {
-        case .overview:
+        case .request:
             return true
-        case .requestBody:
-            return request.requestBody != nil
-        case .responseBody:
-            return request.responseBody != nil
+        case .response:
+            return request.response != nil
         }
     }
 
@@ -305,35 +278,25 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
         NetworkDetailMode.allCases.firstIndex(of: mode) ?? UISegmentedControl.noSegment
     }
 
-    private func renderCurrentMode(reloadData: Bool) {
+    private func renderCurrentMode(selectedRequest: NetworkRequest? = nil, reloadData: Bool) {
         guard isViewLoaded else {
             return
         }
-        guard let selectedRequest else {
+        guard let selectedRequest = selectedRequest ?? self.selectedRequest else {
             return
         }
         guard resetUnavailableModeIfNeeded(for: selectedRequest) == false else {
             return
         }
 
-        switch mode {
-        case .overview:
-            showOverview()
-            if reloadData {
-                applySnapshotUsingReloadData()
-            } else {
-                applySnapshot()
-            }
-        case .requestBody, .responseBody:
-            guard let role = mode.bodyRole else {
-                return
-            }
-            let body = body(in: selectedRequest, for: role)
-            showBody()
-            bodyViewController.display(body: body)
-            if role == .response {
-                model.fetchResponseBodyIfNeeded(for: selectedRequest)
-            }
+        showDetailList()
+        if reloadData {
+            applySnapshotUsingReloadData(for: selectedRequest)
+        } else {
+            applySnapshot(for: selectedRequest)
+        }
+        if mode == .response {
+            model.fetchResponseBodyIfNeeded(for: selectedRequest)
         }
     }
 
@@ -341,10 +304,6 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
         if collectionView.isHidden == false {
             collectionView.isHidden = true
         }
-        if bodyViewController.view.isHidden == false {
-            bodyViewController.view.isHidden = true
-        }
-        bodyViewController.display(body: nil)
         if let configuration = contentUnavailableConfiguration as? UIContentUnavailableConfiguration,
            configuration.text == String(localized: "network.empty.selection.title", bundle: .module) {
             applyEmptySnapshotUsingReloadData()
@@ -357,33 +316,17 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
         applyEmptySnapshotUsingReloadData()
     }
 
-    private func showOverview() {
-        if bodyViewController.view.isHidden == false {
-            bodyViewController.view.isHidden = true
-        }
+    private func showDetailList() {
         if collectionView.isHidden {
             collectionView.isHidden = false
-        }
-        bodyViewController.display(body: nil)
-    }
-
-    private func showBody() {
-        if collectionView.isHidden == false {
-            collectionView.isHidden = true
-        }
-        if bodyViewController.view.isHidden {
-            bodyViewController.view.isHidden = false
         }
     }
 
     private func resetUnavailableModeIfNeeded(for request: NetworkRequest) -> Bool {
-        guard let role = mode.bodyRole else {
+        guard mode == .response, request.response == nil else {
             return false
         }
-        guard body(in: request, for: role) == nil else {
-            return false
-        }
-        mode = .overview
+        mode = .request
         return true
     }
 
@@ -396,26 +339,92 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
         }
     }
 
-    private func makeSnapshot() -> NSDiffableDataSourceSnapshot<SectionIdentifier, ItemIdentifier> {
-        guard let selectedRequest else {
-            return NSDiffableDataSourceSnapshot<SectionIdentifier, ItemIdentifier>()
+    private func pushBody(for role: NetworkBodyRole, in request: NetworkRequest) {
+        let bodyViewController = NetworkBodyViewController()
+        bodyViewController.title = title(for: role)
+        bodyViewController.display(body: body(in: request, for: role))
+        navigationController?.pushViewController(bodyViewController, animated: true)
+        if role == .response {
+            model.fetchResponseBodyIfNeeded(for: request)
         }
+    }
 
-        let requestHeaders = headerFields(from: selectedRequest.request.headers)
-        let responseHeaders = headerFields(from: selectedRequest.response?.headers ?? [:])
-        let requestItems: [ItemIdentifier] = requestHeaders.isEmpty
-            ? [.requestHeadersEmpty]
-            : requestHeaders.map { .requestHeader($0) }
-        let responseItems: [ItemIdentifier] = responseHeaders.isEmpty
-            ? [.responseHeadersEmpty]
-            : responseHeaders.map { .responseHeader($0) }
-
+    private func makeSnapshot(
+        for selectedRequest: NetworkRequest
+    ) -> NSDiffableDataSourceSnapshot<SectionIdentifier, ItemIdentifier> {
         var snapshot = NSDiffableDataSourceSnapshot<SectionIdentifier, ItemIdentifier>()
-        snapshot.appendSections(SectionIdentifier.allCases)
-        snapshot.appendItems([.overview(selectedRequest.id)], toSection: .overview)
-        snapshot.appendItems(requestItems, toSection: .request)
-        snapshot.appendItems(responseItems, toSection: .response)
+        snapshot.appendSections([.body])
+        snapshot.appendItems(bodyItems(in: selectedRequest, for: mode.bodyRole), toSection: .body)
+
+        let headers = headerFields(from: headers(in: selectedRequest, for: mode))
+        if headers.isEmpty == false {
+            snapshot.appendSections([.headers])
+            snapshot.appendItems(headers.map { .header($0) }, toSection: .headers)
+        }
         return snapshot
+    }
+
+    private func bodyItems(
+        in request: NetworkRequest,
+        for role: NetworkBodyRole
+    ) -> [ItemIdentifier] {
+        var items: [ItemIdentifier] = []
+        if let mimeType = mimeType(in: request, for: role) {
+            items.append(
+                .bodyMetadata(
+                    BodyMetadataField(
+                        name: String(localized: "network.body.metadata.mime_type", defaultValue: "MIME Type", bundle: .module),
+                        value: mimeType
+                    )
+                )
+            )
+        }
+        items.append(.bodyLink(role))
+        return items
+    }
+
+    private func mimeType(
+        in request: NetworkRequest,
+        for role: NetworkBodyRole
+    ) -> String? {
+        switch role {
+        case .request:
+            return mimeType(from: nil, headers: request.request.headers)
+        case .response:
+            return mimeType(from: request.response?.mimeType, headers: request.response?.headers ?? [:])
+        }
+    }
+
+    private func mimeType(
+        from explicitMimeType: String?,
+        headers: [String: String]
+    ) -> String? {
+        let rawMimeType = explicitMimeType ?? headerValue(named: "content-type", in: headers)
+        let mimeType = rawMimeType?
+            .split(separator: ";", maxSplits: 1, omittingEmptySubsequences: true)
+            .first
+            .map(String.init)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let mimeType, mimeType.isEmpty == false else {
+            return nil
+        }
+        return mimeType
+    }
+
+    private func headerValue(named name: String, in headers: [String: String]) -> String? {
+        headers.first { $0.key.caseInsensitiveCompare(name) == .orderedSame }?.value
+    }
+
+    private func headers(
+        in request: NetworkRequest,
+        for mode: NetworkDetailMode
+    ) -> [String: String] {
+        switch mode {
+        case .request:
+            request.request.headers
+        case .response:
+            request.response?.headers ?? [:]
+        }
     }
 
     private func headerFields(from headers: [String: String]) -> [HeaderField] {
@@ -430,11 +439,11 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
             }
     }
 
-    private func applySnapshot() {
+    private func applySnapshot(for selectedRequest: NetworkRequest) {
         guard isViewLoaded else {
             return
         }
-        let snapshot = makeSnapshot()
+        let snapshot = makeSnapshot(for: selectedRequest)
         let currentSnapshot = dataSource.snapshot()
         guard currentSnapshot.sectionIdentifiers != snapshot.sectionIdentifiers
             || currentSnapshot.itemIdentifiers != snapshot.itemIdentifiers else {
@@ -443,11 +452,11 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
         dataSource.apply(snapshot, animatingDifferences: false)
     }
 
-    private func applySnapshotUsingReloadData() {
+    private func applySnapshotUsingReloadData(for selectedRequest: NetworkRequest) {
         guard isViewLoaded else {
             return
         }
-        let snapshot = makeSnapshot()
+        let snapshot = makeSnapshot(for: selectedRequest)
         dataSource.applySnapshotUsingReloadData(snapshot)
     }
 
@@ -465,12 +474,41 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
 
     private func configure(_ cell: NetworkFieldCell, item: ItemIdentifier) {
         switch item {
-        case .overview:
-            cell.clear()
-        case .requestHeader(let field), .responseHeader(let field):
+        case .bodyMetadata(let field):
+            cell.bindBodyMetadata(name: field.name, value: field.value)
+        case .bodyLink(let role):
+            let body = selectedRequest.flatMap { request in
+                self.body(in: request, for: role)
+            }
+            cell.bindBodyLink(
+                title: String(localized: "network.section.body", defaultValue: "Body", bundle: .module),
+                isEnabled: body != nil
+            )
+        case .header(let field):
             cell.bindHeader(name: field.name, value: field.value)
-        case .requestHeadersEmpty, .responseHeadersEmpty:
-            cell.bindEmptyHeaders()
+        }
+    }
+
+    private func title(for role: NetworkBodyRole) -> String {
+        switch role {
+        case .request:
+            String(localized: "network.section.body.request", bundle: .module)
+        case .response:
+            String(localized: "network.section.body.response", bundle: .module)
+        }
+    }
+
+    private func title(for section: SectionIdentifier) -> String {
+        switch section {
+        case .body:
+            switch mode {
+            case .request:
+                String(localized: "network.section.body.request_data", defaultValue: "Request Data", bundle: .module)
+            case .response:
+                String(localized: "network.section.body.response_data", defaultValue: "Response Data", bundle: .module)
+            }
+        case .headers:
+            String(localized: "network.section.headers", defaultValue: "Headers", bundle: .module)
         }
     }
 }
@@ -575,10 +613,6 @@ extension NetworkDetailViewController {
         mode
     }
 
-    package var bodyTextViewForTesting: SyntaxEditorView {
-        bodyViewController.syntaxViewForTesting
-    }
-
     package var isDetailModeControlEnabledForTesting: Bool {
         modeSegmentedControl.isEnabled
     }
@@ -594,6 +628,14 @@ extension NetworkDetailViewController {
 
     package func setModeForTesting(_ mode: NetworkDetailMode) {
         self.mode = mode
+    }
+
+    package func selectBodyLinkForTesting() {
+        let indexPath = dataSource.indexPath(for: .bodyLink(mode.bodyRole))
+        guard let indexPath, collectionView(collectionView, shouldSelectItemAt: indexPath) else {
+            return
+        }
+        collectionView(collectionView, didSelectItemAt: indexPath)
     }
 }
 #endif

@@ -4,11 +4,42 @@ import UIKit
 @MainActor
 final class NetworkFieldCell: UICollectionViewListCell {
     private enum ConfigurationKind {
+        case bodyMetadata
+        case bodyLink
         case header
-        case empty
     }
 
     private var configurationKind: ConfigurationKind?
+
+    func bindBodyMetadata(name: String, value: String) {
+        let wasBodyMetadata = configurationKind == .bodyMetadata
+        var configuration = wasBodyMetadata
+            ? (contentConfiguration as? UIListContentConfiguration) ?? Self.makeBodyMetadataConfiguration()
+            : Self.makeBodyMetadataConfiguration()
+        configurationKind = .bodyMetadata
+
+        guard !wasBodyMetadata || configuration.text != name || configuration.secondaryText != value else {
+            return
+        }
+
+        configuration.text = name
+        configuration.secondaryText = value
+        contentConfiguration = configuration
+        accessories = []
+    }
+
+    func bindBodyLink(title: String, isEnabled: Bool) {
+        let wasBodyLink = configurationKind == .bodyLink
+        var configuration = wasBodyLink
+            ? (contentConfiguration as? UIListContentConfiguration) ?? Self.makeBodyLinkConfiguration()
+            : Self.makeBodyLinkConfiguration()
+        configurationKind = .bodyLink
+
+        configuration.text = title
+        configuration.textProperties.color = isEnabled ? .label : .secondaryLabel
+        contentConfiguration = configuration
+        accessories = isEnabled ? [.disclosureIndicator()] : []
+    }
 
     func bindHeader(name: String, value: String) {
         let wasHeader = configurationKind == .header
@@ -24,27 +55,38 @@ final class NetworkFieldCell: UICollectionViewListCell {
         configuration.text = name
         configuration.secondaryText = value
         contentConfiguration = configuration
-    }
-
-    func bindEmptyHeaders() {
-        let wasEmpty = configurationKind == .empty
-        var configuration = wasEmpty
-            ? (contentConfiguration as? UIListContentConfiguration) ?? Self.makeEmptyHeadersConfiguration()
-            : Self.makeEmptyHeadersConfiguration()
-        configurationKind = .empty
-
-        let text = String(localized: "network.headers.empty", bundle: .module)
-        guard !wasEmpty || configuration.text != text else {
-            return
-        }
-
-        configuration.text = text
-        contentConfiguration = configuration
+        accessories = []
     }
 
     func clear() {
         configurationKind = nil
         contentConfiguration = nil
+        accessories = []
+    }
+
+    private static func makeBodyMetadataConfiguration() -> UIListContentConfiguration {
+        var configuration = UIListContentConfiguration.valueCell()
+        configuration.textProperties.font = UIFontMetrics(forTextStyle: .body).scaledFont(
+            for: .systemFont(
+                ofSize: UIFont.preferredFont(forTextStyle: .body).pointSize,
+                weight: .semibold
+            )
+        )
+        configuration.textProperties.color = .secondaryLabel
+        configuration.secondaryTextProperties.font = .preferredFont(forTextStyle: .body)
+        configuration.secondaryTextProperties.color = .label
+        return configuration
+    }
+
+    private static func makeBodyLinkConfiguration() -> UIListContentConfiguration {
+        var configuration = UIListContentConfiguration.cell()
+        configuration.textProperties.font = UIFontMetrics(forTextStyle: .body).scaledFont(
+            for: .systemFont(
+                ofSize: UIFont.preferredFont(forTextStyle: .body).pointSize,
+                weight: .regular
+            )
+        )
+        return configuration
     }
 
     private static func makeHeaderConfiguration() -> UIListContentConfiguration {
@@ -69,10 +111,5 @@ final class NetworkFieldCell: UICollectionViewListCell {
         return configuration
     }
 
-    private static func makeEmptyHeadersConfiguration() -> UIListContentConfiguration {
-        var configuration = UIListContentConfiguration.cell()
-        configuration.textProperties.color = .secondaryLabel
-        return configuration
-    }
 }
 #endif
