@@ -38,26 +38,18 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
 
     private let model: NetworkPanelModel
     private let observationScope = ObservationScope()
-    private let bodyObservationScope = ObservationScope()
     private let bodyViewController = NetworkBodyViewController()
-    private weak var observedBody: NetworkBody?
-    private lazy var modeMenu = NetworkDetailModeMenu(
-        detailViewController: self,
-        model: model
-    )
-    private lazy var compactBodyFetchIndicator = makeBodyFetchIndicator(
-        accessibilityIdentifier: "WebInspector.Network.BodyFetchIndicator.Compact"
-    )
-    private lazy var regularBodyFetchIndicator = makeBodyFetchIndicator(
-        accessibilityIdentifier: "WebInspector.Network.BodyFetchIndicator.Regular"
-    )
-    private lazy var compactBodyFetchIndicatorItem = makeBodyFetchIndicatorItem(
-        activityIndicator: compactBodyFetchIndicator,
-        accessibilityIdentifier: "WebInspector.Network.BodyFetchIndicatorItem"
-    )
-    private lazy var regularBodyFetchIndicatorItem = makeBodyFetchIndicatorItem(
-        activityIndicator: regularBodyFetchIndicator,
-        accessibilityIdentifier: "WebInspector.Network.BodyFetchIndicatorItem.Regular"
+    private var modePalette: UIView?
+    private lazy var modeSegmentedControl: UISegmentedControl = {
+        let control = UISegmentedControl(items: NetworkDetailMode.allCases.map(\.title))
+        control.translatesAutoresizingMaskIntoConstraints = false
+        control.selectedSegmentIndex = modeIndex(for: mode)
+        control.accessibilityIdentifier = "WebInspector.Network.DetailModeSegmentedControl"
+        control.addTarget(self, action: #selector(modeSegmentedControlValueChanged(_:)), for: .valueChanged)
+        return control
+    }()
+    private lazy var modePaletteContentView = NetworkDetailModePaletteContentView(
+        segmentedControl: modeSegmentedControl
     )
     private lazy var collectionView: UICollectionView = {
         let collectionView = UICollectionView(frame: .zero, collectionViewLayout: Self.makeListLayout())
@@ -76,7 +68,7 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
                 return
             }
             renderCurrentMode(reloadData: mode == .overview)
-            modeMenu.render()
+            renderModeControl()
         }
     }
 
@@ -96,7 +88,6 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
 
     isolated deinit {
         observationScope.cancelAll()
-        bodyObservationScope.cancelAll()
     }
 
     override package func viewDidLoad() {
@@ -107,9 +98,9 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
                 viewController.applyBackgroundFromTraits()
             }
         }
-        configureNavigationItem()
         installCollectionView()
         installBodyViewController()
+        installModePalette()
         startObservingModel()
     }
 
@@ -127,37 +118,6 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
         let backgroundColor = webInspectorBackgroundPolicy.backgroundColor
         view.backgroundColor = backgroundColor
         collectionView.backgroundColor = backgroundColor
-    }
-
-    private func configureNavigationItem() {
-        navigationItem.trailingItemGroups = [
-            UIBarButtonItemGroup(
-                barButtonItems: [
-                    modeMenu.makeCompactItem(),
-                    compactBodyFetchIndicatorItem,
-                ],
-                representativeItem: nil
-            ),
-        ]
-    }
-
-    private func makeBodyFetchIndicator(accessibilityIdentifier: String) -> UIActivityIndicatorView {
-        let activityIndicator = UIActivityIndicatorView(style: .medium)
-        activityIndicator.hidesWhenStopped = true
-        activityIndicator.accessibilityIdentifier = accessibilityIdentifier
-        activityIndicator.accessibilityLabel = String(localized: "network.body.fetching.accessibility_label", bundle: .module)
-        activityIndicator.stopAnimating()
-        return activityIndicator
-    }
-
-    private func makeBodyFetchIndicatorItem(
-        activityIndicator: UIActivityIndicatorView,
-        accessibilityIdentifier: String
-    ) -> UIBarButtonItem {
-        let item = UIBarButtonItem(customView: activityIndicator)
-        item.accessibilityIdentifier = accessibilityIdentifier
-        item.isHidden = true
-        return item
     }
 
     private func installCollectionView() {
@@ -183,6 +143,23 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
         ])
         bodyViewController.didMove(toParent: self)
         bodyViewController.view.isHidden = true
+    }
+
+    private func installModePalette() {
+        let palette = unsafe Self.makeNavigationBarPalette(contentView: modePaletteContentView)
+        _ = unsafe navigationItem.perform(NetworkDetailModePaletteRuntime.attachSelector, with: palette)
+        modePalette = palette
+        renderModeControl()
+    }
+
+    @unsafe private static func makeNavigationBarPalette(contentView: UIView) -> UIView {
+        let paletteClass = NSClassFromString(NetworkDetailModePaletteRuntime.className) as! NSObject.Type
+        let allocated = unsafe paletteClass.perform(NetworkDetailModePaletteRuntime.allocateSelector)!.takeUnretainedValue()
+        let palette = unsafe (allocated as AnyObject)
+            .perform(NetworkDetailModePaletteRuntime.contentInitializerSelector, with: contentView)!
+            .takeUnretainedValue() as! UIView
+        palette.setValue(1, forKey: NetworkDetailModePaletteRuntime.marginPolicyKey)
+        return palette
     }
 
     private static func makeListLayout() -> UICollectionViewLayout {
@@ -269,7 +246,7 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
         }
         guard let request else {
             showEmptySelection()
-            modeMenu.render(selectedRequest: nil)
+            renderModeControl(selectedRequest: nil)
             return
         }
 
@@ -277,7 +254,55 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
             contentUnavailableConfiguration = nil
         }
         renderCurrentMode(reloadData: reloadData)
-        modeMenu.render(selectedRequest: request)
+        renderModeControl(selectedRequest: request)
+    }
+
+    @objc private func modeSegmentedControlValueChanged(_ sender: UISegmentedControl) {
+        guard NetworkDetailMode.allCases.indices.contains(sender.selectedSegmentIndex) else {
+            renderModeControl()
+            return
+        }
+
+        let selectedMode = NetworkDetailMode.allCases[sender.selectedSegmentIndex]
+        guard isModeEnabled(selectedMode, selectedRequest: selectedRequest) else {
+            renderModeControl()
+            return
+        }
+        mode = selectedMode
+    }
+
+    private func renderModeControl(selectedRequest request: NetworkRequest? = nil) {
+        let request = request ?? selectedRequest
+        modeSegmentedControl.isEnabled = request != nil
+        modeSegmentedControl.selectedSegmentIndex = modeIndex(for: mode)
+        modeSegmentedControl.accessibilityLabel = mode.title
+        for (index, mode) in NetworkDetailMode.allCases.enumerated() {
+            modeSegmentedControl.setEnabled(
+                isModeEnabled(mode, selectedRequest: request),
+                forSegmentAt: index
+            )
+        }
+    }
+
+    private func isModeEnabled(
+        _ mode: NetworkDetailMode,
+        selectedRequest request: NetworkRequest?
+    ) -> Bool {
+        guard let request else {
+            return false
+        }
+        switch mode {
+        case .overview:
+            return true
+        case .requestBody:
+            return request.requestBody != nil
+        case .responseBody:
+            return request.responseBody != nil
+        }
+    }
+
+    private func modeIndex(for mode: NetworkDetailMode) -> Int {
+        NetworkDetailMode.allCases.firstIndex(of: mode) ?? UISegmentedControl.noSegment
     }
 
     private func renderCurrentMode(reloadData: Bool) {
@@ -306,7 +331,6 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
             let body = body(in: selectedRequest, for: role)
             showBody()
             bodyViewController.display(body: body)
-            observeDisplayedBody(body)
             if role == .response {
                 model.fetchResponseBodyIfNeeded(for: selectedRequest)
             }
@@ -320,7 +344,6 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
         if bodyViewController.view.isHidden == false {
             bodyViewController.view.isHidden = true
         }
-        observeDisplayedBody(nil)
         bodyViewController.display(body: nil)
         if let configuration = contentUnavailableConfiguration as? UIContentUnavailableConfiguration,
            configuration.text == String(localized: "network.empty.selection.title", bundle: .module) {
@@ -341,7 +364,6 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
         if collectionView.isHidden {
             collectionView.isHidden = false
         }
-        observeDisplayedBody(nil)
         bodyViewController.display(body: nil)
     }
 
@@ -365,71 +387,12 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
         return true
     }
 
-    package func makeRegularModeItem() -> UIBarButtonItem {
-        modeMenu.makeRegularItem()
-    }
-
-    package func makeRegularBodyFetchIndicatorItem() -> UIBarButtonItem {
-        regularBodyFetchIndicatorItem
-    }
-
     private func body(in request: NetworkRequest, for role: NetworkBodyRole) -> NetworkBody? {
         switch role {
         case .request:
             request.requestBody
         case .response:
             request.responseBody
-        }
-    }
-
-    private func observeDisplayedBody(_ body: NetworkBody?) {
-        guard observedBody !== body else {
-            updateBodyFetchIndicator(for: body)
-            return
-        }
-
-        bodyObservationScope.cancelAll()
-        observedBody = body
-        updateBodyFetchIndicator(for: body)
-
-        guard let body else {
-            return
-        }
-        bodyObservationScope.observe(body) { [weak self] _, body in
-            self?.updateBodyFetchIndicator(for: body)
-        }
-    }
-
-    private func updateBodyFetchIndicator(for body: NetworkBody?) {
-        let isFetching: Bool
-        if let body, case .fetching = body.fetchState {
-            isFetching = true
-        } else {
-            isFetching = false
-        }
-
-        updateBodyFetchIndicatorItem(
-            compactBodyFetchIndicatorItem,
-            activityIndicator: compactBodyFetchIndicator,
-            isFetching: isFetching
-        )
-        updateBodyFetchIndicatorItem(
-            regularBodyFetchIndicatorItem,
-            activityIndicator: regularBodyFetchIndicator,
-            isFetching: isFetching
-        )
-    }
-
-    private func updateBodyFetchIndicatorItem(
-        _ item: UIBarButtonItem,
-        activityIndicator: UIActivityIndicatorView,
-        isFetching: Bool
-    ) {
-        item.isHidden = !isFetching
-        if isFetching {
-            activityIndicator.startAnimating()
-        } else {
-            activityIndicator.stopAnimating()
         }
     }
 
@@ -512,179 +475,93 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
     }
 }
 
+private enum NetworkDetailModePaletteRuntime {
+    // Original: _UINavigationBarPalette
+    static let className = decoded([
+        0x02, 0x08, 0x14, 0x13, 0x3c, 0x2b, 0x34, 0x3a,
+        0x3c, 0x29, 0x34, 0x32, 0x33, 0x1f, 0x3c, 0x2f,
+        0x0d, 0x3c, 0x31, 0x38, 0x29, 0x29, 0x38,
+    ])
+    // Original: _setBottomPalette:
+    static let attachSelector = NSSelectorFromString(decoded([
+        0x02, 0x2e, 0x38, 0x29, 0x1f, 0x32, 0x29, 0x29,
+        0x32, 0x30, 0x0d, 0x3c, 0x31, 0x38, 0x29, 0x29,
+        0x38, 0x67,
+    ]))
+    // Original: alloc
+    static let allocateSelector = NSSelectorFromString(decoded([
+        0x3c, 0x31, 0x31, 0x32, 0x3e,
+    ]))
+    // Original: initWithContentView:
+    static let contentInitializerSelector = NSSelectorFromString(decoded([
+        0x34, 0x33, 0x34, 0x29, 0x0a, 0x34, 0x29, 0x35,
+        0x1e, 0x32, 0x33, 0x29, 0x38, 0x33, 0x29, 0x0b,
+        0x34, 0x38, 0x2a, 0x67,
+    ]))
+    // Original: _contentViewMarginType
+    static let marginPolicyKey = decoded([
+        0x02, 0x3e, 0x32, 0x33, 0x29, 0x38, 0x33, 0x29,
+        0x0b, 0x34, 0x38, 0x2a, 0x10, 0x3c, 0x2f, 0x3a,
+        0x34, 0x33, 0x09, 0x24, 0x2d, 0x38,
+    ])
+
+    private static func decoded(_ bytes: [UInt8]) -> String {
+        String(decoding: bytes.map { $0 ^ 0x5d }, as: UTF8.self)
+    }
+}
+
 @MainActor
-private final class NetworkDetailModeMenu {
-    private struct ModeAvailability {
-        var hasSelectedRequest: Bool
-        var hasRequestBody: Bool
-        var hasResponseBody: Bool
+private final class NetworkDetailModePaletteContentView: UIView {
+    private let segmentedControl: UISegmentedControl
+
+    init(segmentedControl: UISegmentedControl) {
+        self.segmentedControl = segmentedControl
+        let height = Self.preferredHeight(for: segmentedControl)
+        super.init(frame: CGRect(x: 0, y: 0, width: 0, height: height))
+        preservesSuperviewLayoutMargins = true
+        addSubview(segmentedControl)
+        NSLayoutConstraint.activate([
+            segmentedControl.leadingAnchor.constraint(equalTo: layoutMarginsGuide.leadingAnchor),
+            segmentedControl.trailingAnchor.constraint(equalTo: layoutMarginsGuide.trailingAnchor),
+            segmentedControl.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
     }
 
-    private weak var detailViewController: NetworkDetailViewController?
-    private let model: NetworkPanelModel
-    private var compactItem: UIBarButtonItem?
-    private var regularItem: UIBarButtonItem?
-
-    init(detailViewController: NetworkDetailViewController, model: NetworkPanelModel) {
-        self.detailViewController = detailViewController
-        self.model = model
+    override var intrinsicContentSize: CGSize {
+        CGSize(width: UIView.noIntrinsicMetric, height: Self.preferredHeight(for: segmentedControl))
     }
 
-    fileprivate func render(selectedRequest: NetworkRequest? = nil) {
-        let mode = detailViewController?.mode ?? .overview
-        let availability = modeAvailability(for: selectedRequest ?? model.selectedRequest)
-        let isEnabled = availability.hasSelectedRequest
-
-        if let compactItem {
-            compactItem.image = UIImage(systemName: mode.systemImageName)
-            compactItem.title = nil
-            compactItem.isEnabled = isEnabled
-            compactItem.accessibilityLabel = mode.title
-            compactItem.preferredMenuElementOrder = .fixed
-        }
-
-        if let regularItem {
-            regularItem.isEnabled = isEnabled
-            regularItem.accessibilityLabel = mode.title
-            regularItem.preferredMenuElementOrder = .fixed
-
-            if let button = regularItem.customView as? UIButton {
-                var configuration = button.configuration ?? .bordered()
-                configuration.title = mode.title
-                button.configuration = configuration
-                button.isEnabled = isEnabled
-                button.accessibilityLabel = mode.title
-                button.preferredMenuElementOrder = .fixed
-            }
-        }
+    override func sizeThatFits(_ size: CGSize) -> CGSize {
+        CGSize(width: size.width, height: Self.preferredHeight(for: segmentedControl))
     }
 
-    func makeCompactItem() -> UIBarButtonItem {
-        if let compactItem {
-            return compactItem
-        }
-
-        let compactItem = makeCompactBarButtonItem()
-        self.compactItem = compactItem
-        render()
-        return compactItem
+    override func systemLayoutSizeFitting(_ targetSize: CGSize) -> CGSize {
+        fittingSize(for: targetSize)
     }
 
-    func makeRegularItem() -> UIBarButtonItem {
-        if let regularItem {
-            return regularItem
-        }
-
-        let regularItem = makeRegularBarButtonItem()
-        self.regularItem = regularItem
-        render()
-        return regularItem
+    override func systemLayoutSizeFitting(
+        _ targetSize: CGSize,
+        withHorizontalFittingPriority horizontalFittingPriority: UILayoutPriority,
+        verticalFittingPriority: UILayoutPriority
+    ) -> CGSize {
+        fittingSize(for: targetSize)
     }
 
-    func makeMenuForTesting() -> UIMenu {
-        makeMenu(
-            includesImages: true,
-            availability: modeAvailability(for: model.selectedRequest)
-        )
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
     }
 
-    private func makeCompactBarButtonItem() -> UIBarButtonItem {
-        let availability = modeAvailability(for: model.selectedRequest)
-        let item = UIBarButtonItem(
-            image: UIImage(systemName: (detailViewController?.mode ?? .overview).systemImageName),
-            menu: makeDeferredMenu(includesImages: true)
-        )
-        item.accessibilityIdentifier = "WebInspector.Network.DetailModeButton"
-        item.preferredMenuElementOrder = .fixed
-        item.isEnabled = availability.hasSelectedRequest
-        return item
+    private func fittingSize(for targetSize: CGSize) -> CGSize {
+        let width = targetSize.width == 0 ? UIView.noIntrinsicMetric : targetSize.width
+        return CGSize(width: width, height: Self.preferredHeight(for: segmentedControl))
     }
 
-    private func makeRegularBarButtonItem() -> UIBarButtonItem {
-        let item = UIBarButtonItem(customView: makeRegularModeButton())
-        item.accessibilityIdentifier = "WebInspector.Network.DetailModeButton.Regular"
-        item.preferredMenuElementOrder = .fixed
-        return item
-    }
-
-    private func makeRegularModeButton() -> UIButton {
-        let button = UIButton(type: .system)
-        var configuration = UIButton.Configuration.bordered()
-        configuration.title = (detailViewController?.mode ?? .overview).title
-        button.configuration = configuration
-        button.showsMenuAsPrimaryAction = true
-        button.changesSelectionAsPrimaryAction = false
-        button.preferredMenuElementOrder = .fixed
-        button.menu = makeDeferredMenu(includesImages: false)
-        button.accessibilityIdentifier = "WebInspector.Network.DetailModeButton.Regular.Button"
-        button.setContentCompressionResistancePriority(.required, for: .horizontal)
-        return button
-    }
-
-    private func makeDeferredMenu(includesImages: Bool) -> UIMenu {
-        UIMenu(
-            title: "",
-            options: .singleSelection,
-            children: [
-                UIDeferredMenuElement.uncached { [weak self] completion in
-                    guard let self else {
-                        completion([])
-                        return
-                    }
-                    completion(
-                        self.makeMenu(
-                            includesImages: includesImages,
-                            availability: self.modeAvailability(for: self.model.selectedRequest)
-                        ).children
-                    )
-                },
-            ]
-        )
-    }
-
-    private func makeMenu(
-        includesImages: Bool,
-        availability: ModeAvailability
-    ) -> UIMenu {
-        UIMenu(
-            title: "",
-            options: .singleSelection,
-            children: NetworkDetailMode.allCases.map { mode in
-                UIAction(
-                    title: mode.title,
-                    image: includesImages ? UIImage(systemName: mode.systemImageName) : nil,
-                    attributes: isModeEnabled(mode, availability: availability) ? [] : [.disabled],
-                    state: detailViewController?.mode == mode ? .on : .off
-                ) { [weak detailViewController] _ in
-                    detailViewController?.mode = mode
-                }
-            }
-        )
-    }
-
-    private func modeAvailability(for selectedRequest: NetworkRequest?) -> ModeAvailability {
-        ModeAvailability(
-            hasSelectedRequest: selectedRequest != nil,
-            hasRequestBody: selectedRequest?.requestBody != nil,
-            hasResponseBody: selectedRequest?.responseBody != nil
-        )
-    }
-
-    private func isModeEnabled(
-        _ mode: NetworkDetailMode,
-        availability: ModeAvailability
-    ) -> Bool {
-        guard availability.hasSelectedRequest else {
-            return mode == .overview
-        }
-        switch mode {
-        case .overview:
-            return true
-        case .requestBody:
-            return availability.hasRequestBody
-        case .responseBody:
-            return availability.hasResponseBody
-        }
+    private static func preferredHeight(for segmentedControl: UISegmentedControl) -> CGFloat {
+        let navigationBarHeight = UINavigationBar(frame: .zero)
+            .sizeThatFits(CGSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
+            .height
+        return max(segmentedControl.intrinsicContentSize.height, navigationBarHeight)
     }
 }
 
@@ -698,12 +575,21 @@ extension NetworkDetailViewController {
         mode
     }
 
-    package var modeMenuForTesting: UIMenu {
-        modeMenu.makeMenuForTesting()
-    }
-
     package var bodyTextViewForTesting: SyntaxEditorView {
         bodyViewController.syntaxViewForTesting
+    }
+
+    package var isDetailModeControlEnabledForTesting: Bool {
+        modeSegmentedControl.isEnabled
+    }
+
+    package func isDetailModeEnabledForTesting(_ mode: NetworkDetailMode) -> Bool {
+        modeSegmentedControl.isEnabledForSegment(at: modeIndex(for: mode))
+    }
+
+    package func selectModeForTesting(_ mode: NetworkDetailMode) {
+        modeSegmentedControl.selectedSegmentIndex = modeIndex(for: mode)
+        modeSegmentedControlValueChanged(modeSegmentedControl)
     }
 
     package func setModeForTesting(_ mode: NetworkDetailMode) {

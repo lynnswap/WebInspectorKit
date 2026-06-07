@@ -171,7 +171,7 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func detailModeMenuUsesCoreBodyAvailabilityAndRendersRequestBody() async throws {
+    func detailModeControlUsesCoreBodyAvailabilityAndRendersRequestBody() async throws {
         let network = NetworkSession()
         let request = try #require(
             applyRequest(
@@ -195,10 +195,9 @@ struct NetworkDetailViewControllerTests {
         }
         #expect(didRender)
 
-        let requestAction = try action(for: .requestBody, in: viewController.modeMenuForTesting)
-        #expect(requestAction.attributes.contains(.disabled) == false)
+        #expect(viewController.isDetailModeEnabledForTesting(.requestBody))
 
-        requestAction.performWithSender(nil, target: nil)
+        selectMode(.requestBody, on: viewController)
 
         let didSwitch = await waitUntil {
             viewController.currentModeForTesting == .requestBody
@@ -210,7 +209,7 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func detailModeMenuDisablesWhenSelectedRequestDisappears() async throws {
+    func detailModeControlDisablesWhenSelectedRequestDisappears() async throws {
         let network = NetworkSession()
         let request = try #require(
             applyRequest(
@@ -227,14 +226,14 @@ struct NetworkDetailViewControllerTests {
         defer { window.isHidden = true }
 
         let didEnableMenu = await waitUntil {
-            viewController.navigationItem.trailingItemGroups.first?.barButtonItems.first?.isEnabled == true
+            viewController.isDetailModeControlEnabledForTesting
         }
         #expect(didEnableMenu)
 
         network.reset()
 
         let didDisableMenu = await waitUntil {
-            viewController.navigationItem.trailingItemGroups.first?.barButtonItems.first?.isEnabled == false
+            viewController.isDetailModeControlEnabledForTesting == false
                 && viewController.contentUnavailableConfiguration != nil
         }
         #expect(didDisableMenu)
@@ -272,7 +271,7 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func responseBodyModePrewarmsSyntaxAndShowsNavigationActivityWhileFetching() async throws {
+    func responseBodyModePrewarmsSyntaxWhileFetching() async throws {
         let network = NetworkSession()
         let request = try #require(
             applyRequest(
@@ -293,19 +292,13 @@ struct NetworkDetailViewControllerTests {
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
-        let indicatorItem = try #require(bodyFetchIndicatorItem(in: viewController))
         viewController.setModeForTesting(.responseBody)
 
         let didStartFetching = await waitUntil {
-            guard let activityIndicator = indicatorItem.customView as? UIActivityIndicatorView else {
-                return false
-            }
             return fetchedIDs == [request.id]
                 && viewController.currentModeForTesting == .responseBody
                 && viewController.bodyTextViewForTesting.text.isEmpty
                 && viewController.bodyTextViewForTesting.model.language == .json
-                && indicatorItem.isHidden == false
-                && activityIndicator.isAnimating
         }
         #expect(didStartFetching)
 
@@ -317,12 +310,7 @@ struct NetworkDetailViewControllerTests {
         )
 
         let didRenderBody = await waitUntil {
-            guard let activityIndicator = indicatorItem.customView as? UIActivityIndicatorView else {
-                return false
-            }
             return viewController.bodyTextViewForTesting.text.contains(#""ok""#)
-                && indicatorItem.isHidden
-                && activityIndicator.isAnimating == false
         }
         #expect(didRenderBody)
     }
@@ -438,6 +426,50 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func compactContainerCanPushSameRequestAfterBackNavigation() async throws {
+        let network = NetworkSession()
+        _ = try #require(applyRequest(to: network, requestID: "1", url: "https://example.com/app.js"))
+        let model = NetworkPanelModel(network: network)
+        let listViewController = NetworkListViewController(model: model)
+        let detailViewController = NetworkDetailViewController(model: model)
+        let navigationController = NetworkCompactNavigationController(
+            model: model,
+            listViewController: listViewController,
+            detailViewController: detailViewController
+        )
+        let window = showInWindow(navigationController)
+        defer { window.isHidden = true }
+
+        let didRenderList = await waitUntil {
+            listViewController.collectionViewForTesting.numberOfItems(inSection: 0) == 1
+        }
+        #expect(didRenderList)
+
+        selectListItem(at: IndexPath(item: 0, section: 0), in: listViewController)
+        let didPush = await waitUntil {
+            navigationController.viewControllers.last === detailViewController
+        }
+        #expect(didPush)
+        await waitForNavigationTransitionToFinish(in: navigationController)
+
+        _ = withUIKitAnimationsDisabled {
+            navigationController.popViewController(animated: false)
+        }
+        let didReturnToList = await waitUntil {
+            navigationController.viewControllers == [listViewController]
+                && model.selectedRequest == nil
+                && (listViewController.collectionViewForTesting.indexPathsForSelectedItems ?? []).isEmpty
+        }
+        #expect(didReturnToList)
+
+        selectListItem(at: IndexPath(item: 0, section: 0), in: listViewController)
+        let didPushAgain = await waitUntil {
+            navigationController.viewControllers.last === detailViewController
+        }
+        #expect(didPushAgain)
+    }
+
+    @Test
     func compactContainerPopsDetailWhenSelectedRequestDisappears() async throws {
         let network = NetworkSession()
         let request = try #require(applyRequest(to: network, requestID: "1", url: "https://example.com/app.js"))
@@ -538,31 +570,21 @@ struct NetworkDetailViewControllerTests {
         return network.request(for: key)
     }
 
-    private func action(
-        for mode: NetworkDetailMode,
-        in menu: UIMenu
-    ) throws -> UIAction {
-        try #require(action(title: mode.title, in: menu))
+    private func selectMode(
+        _ mode: NetworkDetailMode,
+        on viewController: NetworkDetailViewController
+    ) {
+        #expect(viewController.isDetailModeEnabledForTesting(mode))
+        viewController.selectModeForTesting(mode)
     }
 
-    private func action(title: String, in menu: UIMenu) -> UIAction? {
-        for child in menu.children {
-            if let action = child as? UIAction, action.title == title {
-                return action
-            }
-            if let submenu = child as? UIMenu, let nested = action(title: title, in: submenu) {
-                return nested
-            }
-        }
-        return nil
-    }
-
-    private func bodyFetchIndicatorItem(in viewController: NetworkDetailViewController) -> UIBarButtonItem? {
-        viewController.navigationItem.trailingItemGroups
-            .flatMap(\.barButtonItems)
-            .first {
-                $0.accessibilityIdentifier == "WebInspector.Network.BodyFetchIndicatorItem"
-            }
+    private func selectListItem(
+        at indexPath: IndexPath,
+        in viewController: NetworkListViewController
+    ) {
+        let collectionView = viewController.collectionViewForTesting
+        collectionView.selectItem(at: indexPath, animated: false, scrollPosition: [])
+        viewController.collectionView(collectionView, didSelectItemAt: indexPath)
     }
 
     private func listCellText(

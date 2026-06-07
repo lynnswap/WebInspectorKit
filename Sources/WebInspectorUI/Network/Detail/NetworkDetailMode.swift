@@ -1,6 +1,5 @@
 #if canImport(UIKit)
 import WebInspectorCore
-import UIKit
 
 @MainActor
 package enum NetworkDetailMode: CaseIterable, Hashable {
@@ -16,17 +15,6 @@ package enum NetworkDetailMode: CaseIterable, Hashable {
             String(localized: "network.section.body.request", bundle: .module)
         case .responseBody:
             String(localized: "network.section.body.response", bundle: .module)
-        }
-    }
-
-    package var systemImageName: String {
-        switch self {
-        case .overview:
-            "list.bullet.rectangle"
-        case .requestBody:
-            "arrow.up.doc"
-        case .responseBody:
-            "arrow.down.doc"
         }
     }
 
