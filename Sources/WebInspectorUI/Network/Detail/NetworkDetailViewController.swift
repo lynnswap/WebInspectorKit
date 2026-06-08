@@ -130,11 +130,11 @@ package final class NetworkDetailViewController: UIViewController {
 
         NSLayoutConstraint.activate([
             previewStackView.topAnchor.constraint(equalTo: view.topAnchor),
-            previewStackView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            previewStackView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
             previewStackView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             previewStackView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             headersTextView.topAnchor.constraint(equalTo: view.topAnchor),
-            headersTextView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            headersTextView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
             headersTextView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             headersTextView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])

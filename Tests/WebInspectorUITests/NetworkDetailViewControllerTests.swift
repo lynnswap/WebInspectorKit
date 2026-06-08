@@ -82,6 +82,58 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func regularSplitKeepsPrimarySecondaryLayout() throws {
+        let model = NetworkPanelModel(network: NetworkSession())
+        let listViewController = NetworkListViewController(model: model)
+        let detailViewController = NetworkDetailViewController(model: model)
+        let splitViewController = NetworkSplitViewController(
+            model: model,
+            listViewController: listViewController,
+            detailViewController: detailViewController
+        )
+
+        splitViewController.loadViewIfNeeded()
+
+        let listNavigationController = try #require(
+            splitViewController.viewController(for: .primary) as? UINavigationController
+        )
+        let detailNavigationController = try #require(
+            splitViewController.viewController(for: .secondary) as? UINavigationController
+        )
+        #expect(listNavigationController.viewControllers.first === listViewController)
+        #expect(detailNavigationController.viewControllers.first === detailViewController)
+        if #available(iOS 26.0, *) {
+            #expect(splitViewController.viewController(for: .inspector) == nil)
+        }
+        #expect(splitViewController.preferredDisplayMode == .oneBesideSecondary)
+        #expect(splitViewController.preferredSplitBehavior == .tile)
+        #expect(splitViewController.presentsWithGesture == false)
+    }
+
+    @Test
+    func detailContentUsesLeadingSafeAreaOnly() {
+        let model = NetworkPanelModel(network: NetworkSession())
+        let viewController = NetworkDetailViewController(model: model)
+        viewController.additionalSafeAreaInsets = UIEdgeInsets(top: 44, left: 120, bottom: 10, right: 24)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        viewController.view.layoutIfNeeded()
+
+        let leadingInset = viewController.view.safeAreaLayoutGuide.layoutFrame.minX
+        let bounds = viewController.view.bounds
+        for contentView in [
+            viewController.headersTextViewForTesting,
+            viewController.previewViewForTesting,
+        ] {
+            #expect(contentView.frame.minX == leadingInset)
+            #expect(contentView.frame.minY == bounds.minY)
+            #expect(contentView.frame.maxX == bounds.maxX)
+            #expect(contentView.frame.maxY == bounds.maxY)
+        }
+    }
+
+    @Test
     func detailModeControlSwitchesPreviewAndHeaders() async throws {
         let network = NetworkSession()
         let request = try #require(
@@ -368,6 +420,89 @@ struct NetworkDetailViewControllerTests {
             viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting?.absoluteString == playlistURL
         }
         #expect(didRenderHLSPreview)
+    }
+
+    @Test
+    func imageResponsePreviewUsesScrollViewAndFitsLargeImage() async throws {
+        let imageSize = CGSize(width: 600, height: 1400)
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://media.example.com/large.png",
+                responseHeaders: ["content-type": "image/png"],
+                responseMimeType: "image/png"
+            )
+        )
+        request.applyResponseBody(
+            NetworkBodyPayload(
+                body: pngBase64String(size: imageSize),
+                base64Encoded: true
+            )
+        )
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
+
+        let didRenderImage = await waitUntilRendered(in: viewController) {
+            let bodyViewController = viewController.bodyViewControllerForTesting
+            return bodyViewController.isImagePreviewVisibleForTesting
+                && bodyViewController.syntaxViewForTesting.isHidden
+                && bodyViewController.imageViewForTesting.image?.size == imageSize
+        }
+        #expect(didRenderImage)
+
+        let imageScrollView = viewController.bodyViewControllerForTesting.imageScrollViewForTesting
+        let fitScale = min(
+            imageScrollView.bounds.width / imageSize.width,
+            imageScrollView.bounds.height / imageSize.height
+        )
+        let expectedMinimumZoomScale = min(1, fitScale)
+        #expect(abs(imageScrollView.minimumZoomScale - expectedMinimumZoomScale) < 0.001)
+        #expect(abs(imageScrollView.zoomScale - expectedMinimumZoomScale) < 0.001)
+        #expect(imageScrollView.maximumZoomScale >= 1)
+    }
+
+    @Test
+    func smallImageResponsePreviewStaysAtOneXAndCentersImage() async throws {
+        let imageSize = CGSize(width: 24, height: 12)
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://media.example.com/icon.png",
+                responseHeaders: ["content-type": "image/png"],
+                responseMimeType: "image/png"
+            )
+        )
+        request.applyResponseBody(
+            NetworkBodyPayload(
+                body: pngBase64String(size: imageSize),
+                base64Encoded: true
+            )
+        )
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
+
+        let didRenderImage = await waitUntilRendered(in: viewController) {
+            viewController.bodyViewControllerForTesting.isImagePreviewVisibleForTesting
+        }
+        #expect(didRenderImage)
+
+        let imageScrollView = viewController.bodyViewControllerForTesting.imageScrollViewForTesting
+        #expect(imageScrollView.minimumZoomScale == 1)
+        #expect(imageScrollView.zoomScale == 1)
+        #expect(imageScrollView.contentInset.left > 0)
+        #expect(imageScrollView.contentInset.top > 0)
     }
 
     @Test
@@ -856,6 +991,17 @@ struct NetworkDetailViewControllerTests {
         viewController.loadViewIfNeeded()
         window.layoutIfNeeded()
         return window
+    }
+
+    private func pngBase64String(size: CGSize) -> String {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let renderer = UIGraphicsImageRenderer(size: size, format: format)
+        return renderer.pngData { context in
+            UIColor.red.setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+        }
+        .base64EncodedString()
     }
 
     private func waitUntilRendered(

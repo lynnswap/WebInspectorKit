@@ -26,11 +26,23 @@ final class NetworkBodyViewController: UIViewController {
     private lazy var imageView: UIImageView = {
         let imageView = UIImageView()
         imageView.translatesAutoresizingMaskIntoConstraints = false
-        imageView.contentMode = .scaleAspectFit
+        imageView.contentMode = .scaleToFill
         imageView.backgroundColor = .clear
-        imageView.isHidden = true
         imageView.accessibilityIdentifier = "WebInspector.Network.BodyImagePreview"
         return imageView
+    }()
+    private lazy var imageScrollView: UIScrollView = {
+        let scrollView = UIScrollView()
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.backgroundColor = .clear
+        scrollView.contentInsetAdjustmentBehavior = .never
+        scrollView.delegate = self
+        scrollView.isHidden = true
+        scrollView.maximumZoomScale = 1
+        scrollView.minimumZoomScale = 1
+        scrollView.accessibilityIdentifier = "WebInspector.Network.BodyImageScrollView"
+        scrollView.addSubview(imageView)
+        return scrollView
     }()
     private let observationScope = ObservationScope()
     private weak var body: NetworkBody?
@@ -38,6 +50,9 @@ final class NetworkBodyViewController: UIViewController {
     private var hasDisplayedBody = false
     private var mediaPlayerViewController: AVPlayerViewController?
     private var mediaTemporaryFileURL: URL?
+    private var imageWidthConstraint: NSLayoutConstraint?
+    private var imageHeightConstraint: NSLayoutConstraint?
+    private var shouldResetImageZoomOnNextLayout = false
 #if DEBUG
     private var bodyObservationDelivery: ObservationDelivery?
 #endif
@@ -51,6 +66,11 @@ final class NetworkBodyViewController: UIViewController {
             }
         }
         configureSyntaxView()
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        updateImagePreviewLayoutIfNeeded()
     }
 
     isolated deinit {
@@ -88,17 +108,28 @@ final class NetworkBodyViewController: UIViewController {
         syntaxView.keyboardDismissMode = .onDrag
         syntaxView.accessibilityIdentifier = "WebInspector.Network.BodyView"
         view.addSubview(syntaxView)
-        view.addSubview(imageView)
+        view.addSubview(imageScrollView)
+
+        let imageWidthConstraint = imageView.widthAnchor.constraint(equalToConstant: 0)
+        let imageHeightConstraint = imageView.heightAnchor.constraint(equalToConstant: 0)
+        self.imageWidthConstraint = imageWidthConstraint
+        self.imageHeightConstraint = imageHeightConstraint
 
         NSLayoutConstraint.activate([
             syntaxView.topAnchor.constraint(equalTo: view.topAnchor),
             syntaxView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             syntaxView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             syntaxView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            imageView.topAnchor.constraint(equalTo: view.topAnchor),
-            imageView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            imageView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            imageView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            imageScrollView.topAnchor.constraint(equalTo: view.topAnchor),
+            imageScrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            imageScrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            imageScrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            imageView.topAnchor.constraint(equalTo: imageScrollView.contentLayoutGuide.topAnchor),
+            imageView.leadingAnchor.constraint(equalTo: imageScrollView.contentLayoutGuide.leadingAnchor),
+            imageView.trailingAnchor.constraint(equalTo: imageScrollView.contentLayoutGuide.trailingAnchor),
+            imageView.bottomAnchor.constraint(equalTo: imageScrollView.contentLayoutGuide.bottomAnchor),
+            imageWidthConstraint,
+            imageHeightConstraint,
         ])
     }
 
@@ -245,8 +276,7 @@ final class NetworkBodyViewController: UIViewController {
     }
 
     private func showSyntaxPreview() {
-        imageView.isHidden = true
-        imageView.image = nil
+        hideImagePreview()
         removeMediaPlayerViewController()
         syntaxView.isHidden = false
     }
@@ -256,13 +286,18 @@ final class NetworkBodyViewController: UIViewController {
         removeTemporaryMediaFile(at: mediaTemporaryFileURL)
         mediaTemporaryFileURL = nil
         syntaxView.isHidden = true
+        imageScrollView.isHidden = false
+        shouldResetImageZoomOnNextLayout = true
         imageView.image = image
-        imageView.isHidden = false
+        imageWidthConstraint?.constant = max(image.size.width, 1)
+        imageHeightConstraint?.constant = max(image.size.height, 1)
+        view.setNeedsLayout()
+        view.layoutIfNeeded()
+        updateImagePreviewLayoutIfNeeded()
     }
 
     private func showMoviePreview(_ url: URL) {
-        imageView.isHidden = true
-        imageView.image = nil
+        hideImagePreview()
         syntaxView.isHidden = true
         if mediaTemporaryFileURL != url {
             removeTemporaryMediaFile(at: mediaTemporaryFileURL)
@@ -290,12 +325,81 @@ final class NetworkBodyViewController: UIViewController {
     }
 
     private func hideMediaPreview() {
-        imageView.isHidden = true
-        imageView.image = nil
+        hideImagePreview()
         removeMediaPlayerViewController()
         removeTemporaryMediaFile(at: mediaTemporaryFileURL)
         mediaTemporaryFileURL = nil
         syntaxView.isHidden = false
+    }
+
+    private func hideImagePreview() {
+        imageScrollView.isHidden = true
+        imageView.image = nil
+        imageWidthConstraint?.constant = 0
+        imageHeightConstraint?.constant = 0
+        shouldResetImageZoomOnNextLayout = false
+        imageScrollView.contentInset = .zero
+        imageScrollView.contentOffset = .zero
+        imageScrollView.minimumZoomScale = 1
+        imageScrollView.maximumZoomScale = 1
+        imageScrollView.zoomScale = 1
+    }
+
+    private func updateImagePreviewLayoutIfNeeded() {
+        let didUpdate = updateImagePreviewLayout(resetZoom: shouldResetImageZoomOnNextLayout)
+        if didUpdate {
+            shouldResetImageZoomOnNextLayout = false
+        }
+    }
+
+    @discardableResult
+    private func updateImagePreviewLayout(resetZoom: Bool) -> Bool {
+        guard imageScrollView.isHidden == false,
+              let image = imageView.image,
+              image.size.width > 0,
+              image.size.height > 0,
+              imageScrollView.bounds.width > 0,
+              imageScrollView.bounds.height > 0
+        else {
+            return false
+        }
+
+        imageScrollView.layoutIfNeeded()
+        let fitScale = min(
+            imageScrollView.bounds.width / image.size.width,
+            imageScrollView.bounds.height / image.size.height
+        )
+        let minimumZoomScale = min(1, fitScale)
+        let maximumZoomScale = max(4, 1 / minimumZoomScale)
+        let targetZoomScale = resetZoom
+            ? minimumZoomScale
+            : min(max(imageScrollView.zoomScale, minimumZoomScale), maximumZoomScale)
+
+        imageScrollView.maximumZoomScale = maximumZoomScale
+        imageScrollView.minimumZoomScale = minimumZoomScale
+        imageScrollView.setZoomScale(targetZoomScale, animated: false)
+        updateImageContentInset()
+        return true
+    }
+
+    private func updateImageContentInset() {
+        guard let image = imageView.image else {
+            imageScrollView.contentInset = .zero
+            return
+        }
+
+        let scaledImageSize = CGSize(
+            width: image.size.width * imageScrollView.zoomScale,
+            height: image.size.height * imageScrollView.zoomScale
+        )
+        let horizontalInset = max((imageScrollView.bounds.width - scaledImageSize.width) / 2, 0)
+        let verticalInset = max((imageScrollView.bounds.height - scaledImageSize.height) / 2, 0)
+        imageScrollView.contentInset = UIEdgeInsets(
+            top: verticalInset,
+            left: horizontalInset,
+            bottom: verticalInset,
+            right: horizontalInset
+        )
     }
 
     private func removeMediaPlayerViewController() {
@@ -323,6 +427,20 @@ final class NetworkBodyViewController: UIViewController {
             return fileURL
         } catch {
             return nil
+        }
+    }
+}
+
+extension NetworkBodyViewController: UIScrollViewDelegate {
+    nonisolated func viewForZooming(in scrollView: UIScrollView) -> UIView? {
+        MainActor.assumeIsolated {
+            imageView
+        }
+    }
+
+    nonisolated func scrollViewDidZoom(_ scrollView: UIScrollView) {
+        MainActor.assumeIsolated {
+            updateImageContentInset()
         }
     }
 }
@@ -487,6 +605,21 @@ extension NetworkBodyViewController {
     var syntaxViewForTesting: SyntaxEditorView {
         loadViewIfNeeded()
         return syntaxView
+    }
+
+    var imageScrollViewForTesting: UIScrollView {
+        loadViewIfNeeded()
+        return imageScrollView
+    }
+
+    var imageViewForTesting: UIImageView {
+        loadViewIfNeeded()
+        return imageView
+    }
+
+    var isImagePreviewVisibleForTesting: Bool {
+        loadViewIfNeeded()
+        return imageScrollView.isHidden == false && imageView.image != nil
     }
 
     var mediaPlayerURLForTesting: URL? {
