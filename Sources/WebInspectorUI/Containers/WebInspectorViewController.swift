@@ -1,4 +1,5 @@
 #if canImport(UIKit)
+import ObservationBridge
 import WebInspectorCore
 import UIKit
 import WebKit
@@ -12,6 +13,14 @@ public final class WebInspectorViewController: UIViewController {
 
     public let session: WebInspectorSession
     private var drawsBackgroundStorage = true
+    private var followsInspectedPageAppearanceStorage = false
+    private var appliedInspectedPageInterfaceStyle: UIUserInterfaceStyle?
+    private let observationScope = ObservationScope()
+
+    public var followsInspectedPageAppearance: Bool {
+        get { followsInspectedPageAppearanceStorage }
+        set { setFollowsInspectedPageAppearance(newValue) }
+    }
 
     @available(iOS 26.0, *)
     public var drawsBackground: Bool {
@@ -31,6 +40,7 @@ public final class WebInspectorViewController: UIViewController {
         self.session = session
         super.init(nibName: nil, bundle: nil)
         webInspectorSetDrawsBackgroundTraitOverride(drawsBackgroundStorage)
+        bindInterfaceAppearance()
     }
 
     public convenience init(tabs: [WebInspectorTab]) {
@@ -40,6 +50,10 @@ public final class WebInspectorViewController: UIViewController {
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         nil
+    }
+
+    isolated deinit {
+        observationScope.cancelAll()
     }
 
     public override func viewDidLoad() {
@@ -74,6 +88,48 @@ public final class WebInspectorViewController: UIViewController {
 
     private func applyBackgroundFromTraits() {
         view.backgroundColor = webInspectorBackgroundPolicy.backgroundColor
+    }
+
+    private func bindInterfaceAppearance() {
+        observationScope.observe(session.interface) { [weak self] _, interface in
+            self?.applyPreferredInterfaceStyle(interface.preferredInterfaceStyle)
+        }
+    }
+
+    private func applyPreferredInterfaceStyle(_ style: UIUserInterfaceStyle) {
+        guard followsInspectedPageAppearanceStorage else {
+            return
+        }
+
+        if overrideUserInterfaceStyle != style {
+            overrideUserInterfaceStyle = style
+            appliedInspectedPageInterfaceStyle = style
+        } else if appliedInspectedPageInterfaceStyle != nil {
+            appliedInspectedPageInterfaceStyle = style
+        }
+    }
+
+    private func setFollowsInspectedPageAppearance(_ followsInspectedPageAppearance: Bool) {
+        guard followsInspectedPageAppearanceStorage != followsInspectedPageAppearance else {
+            return
+        }
+        followsInspectedPageAppearanceStorage = followsInspectedPageAppearance
+        guard followsInspectedPageAppearance else {
+            clearAppliedInspectedPageInterfaceStyle()
+            return
+        }
+        applyPreferredInterfaceStyle(session.interface.preferredInterfaceStyle)
+    }
+
+    private func clearAppliedInspectedPageInterfaceStyle() {
+        defer {
+            appliedInspectedPageInterfaceStyle = nil
+        }
+        guard let appliedInspectedPageInterfaceStyle,
+              overrideUserInterfaceStyle == appliedInspectedPageInterfaceStyle else {
+            return
+        }
+        overrideUserInterfaceStyle = .unspecified
     }
 
     private func setDrawsBackground(_ drawsBackground: Bool) {

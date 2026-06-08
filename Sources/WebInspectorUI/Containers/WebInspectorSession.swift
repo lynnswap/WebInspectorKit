@@ -9,6 +9,9 @@ import WebInspectorCore
 public final class WebInspectorSession {
     package let inspector: InspectorSession
     package let interface: InterfaceModel
+    @ObservationIgnored private let attachAction: @MainActor (InspectorSession, WKWebView) async throws -> Void
+    @ObservationIgnored private let detachAction: @MainActor (InspectorSession) async -> Void
+    @ObservationIgnored private var pageAppearanceObserver: WebInspectorPageAppearanceObserver?
 
     public convenience init(tabs: [WebInspectorTab] = [.dom, .network]) {
         self.init(inspector: InspectorSession(), tabs: tabs)
@@ -16,13 +19,22 @@ public final class WebInspectorSession {
 
     package init(
         inspector: InspectorSession,
-        tabs: [WebInspectorTab] = [.dom, .network]
+        tabs: [WebInspectorTab] = [.dom, .network],
+        attachAction: @escaping @MainActor (InspectorSession, WKWebView) async throws -> Void = { inspector, webView in
+            try await inspector.attach(to: webView)
+        },
+        detachAction: @escaping @MainActor (InspectorSession) async -> Void = { inspector in
+            await inspector.detach()
+        }
     ) {
         self.inspector = inspector
         self.interface = InterfaceModel(tabs: tabs)
+        self.attachAction = attachAction
+        self.detachAction = detachAction
     }
 
     isolated deinit {
+        stopPageAppearanceObservation()
         interface.removeContentCache()
     }
 
@@ -31,11 +43,38 @@ public final class WebInspectorSession {
     }
 
     public func attach(to webView: WKWebView) async throws {
-        try await inspector.attach(to: webView)
+        stopPageAppearanceObservation()
+        do {
+            try await attachAction(inspector, webView)
+            startPageAppearanceObservation(for: webView)
+        } catch {
+            stopPageAppearanceObservation()
+            throw error
+        }
     }
 
     public func detach() async {
-        await inspector.detach()
+        stopPageAppearanceObservation()
+        await detachAction(inspector)
+    }
+
+    private func startPageAppearanceObservation(for webView: WKWebView) {
+        let observer = WebInspectorPageAppearanceObserver(webView: webView) { [weak interface] style in
+            interface?.setPreferredInterfaceStyle(style)
+        }
+        pageAppearanceObserver = observer
+        observer.start()
+    }
+
+    private func stopPageAppearanceObservation() {
+        pageAppearanceObserver?.invalidate()
+        pageAppearanceObserver = nil
+        interface.setPreferredInterfaceStyle(.unspecified)
+    }
+
+    package func startPageAppearanceObservationForTesting(webView: WKWebView) {
+        stopPageAppearanceObservation()
+        startPageAppearanceObservation(for: webView)
     }
 }
 
@@ -44,13 +83,16 @@ public final class WebInspectorSession {
 package final class InterfaceModel {
     package private(set) var tabs: [WebInspectorTab]
     package private(set) var selectedItemID: TabDisplayItem.ID?
+    package private(set) var preferredInterfaceStyle: UIUserInterfaceStyle
     @ObservationIgnored private let projection = TabDisplayProjection()
     @ObservationIgnored private let contentCache = TabContentCache()
     @ObservationIgnored private var networkPanelModel: NetworkPanelModel?
 
     package init(tabs: [WebInspectorTab] = [.dom, .network]) {
-        self.tabs = Self.uniqueTabs(tabs)
-        selectedItemID = self.tabs.first?.id
+        let uniqueTabs = Self.uniqueTabs(tabs)
+        self.tabs = uniqueTabs
+        preferredInterfaceStyle = .unspecified
+        selectedItemID = uniqueTabs.first?.id
     }
 
     package func displayItems(for hostLayout: WebInspectorTabHostLayout) -> [TabDisplayItem] {
@@ -105,6 +147,13 @@ package final class InterfaceModel {
             self.selectedItemID = uniqueTabs.first?.id
             return
         }
+    }
+
+    package func setPreferredInterfaceStyle(_ style: UIUserInterfaceStyle) {
+        guard preferredInterfaceStyle != style else {
+            return
+        }
+        preferredInterfaceStyle = style
     }
 
     package func viewController<Content: UIViewController>(
