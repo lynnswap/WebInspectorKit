@@ -468,6 +468,57 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func imageResponsePreviewKeepsAutoFitWhenBoundsShrink() async throws {
+        let imageSize = CGSize(width: 600, height: 1400)
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://media.example.com/large.png",
+                responseHeaders: ["content-type": "image/png"],
+                responseMimeType: "image/png"
+            )
+        )
+        request.applyResponseBody(
+            NetworkBodyPayload(
+                body: pngBase64String(size: imageSize),
+                base64Encoded: true
+            )
+        )
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
+
+        let didRenderImage = await waitUntilRendered(in: viewController) {
+            viewController.bodyViewControllerForTesting.isImagePreviewVisibleForTesting
+        }
+        #expect(didRenderImage)
+
+        let imageScrollView = viewController.bodyViewControllerForTesting.imageScrollViewForTesting
+        let initialBounds = imageScrollView.bounds
+        let initialMinimumZoomScale = imageScrollView.minimumZoomScale
+        window.frame = CGRect(x: 0, y: 0, width: 390, height: 700)
+        window.layoutIfNeeded()
+
+        let didRefitAfterBoundsChange = await waitUntilRendered(in: viewController) {
+            let fitScale = min(
+                imageScrollView.bounds.width / imageSize.width,
+                imageScrollView.bounds.height / imageSize.height
+            )
+            let expectedMinimumZoomScale = min(1, fitScale)
+            return imageScrollView.bounds.height < initialBounds.height
+                && expectedMinimumZoomScale < initialMinimumZoomScale
+                && abs(imageScrollView.minimumZoomScale - expectedMinimumZoomScale) < 0.001
+                && abs(imageScrollView.zoomScale - expectedMinimumZoomScale) < 0.001
+        }
+        #expect(didRefitAfterBoundsChange)
+    }
+
+    @Test
     func smallImageResponsePreviewStaysAtOneXAndCentersImage() async throws {
         let imageSize = CGSize(width: 24, height: 12)
         let network = NetworkSession()

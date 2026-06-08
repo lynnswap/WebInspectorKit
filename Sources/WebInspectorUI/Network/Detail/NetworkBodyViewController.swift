@@ -53,6 +53,7 @@ final class NetworkBodyViewController: UIViewController {
     private var imageWidthConstraint: NSLayoutConstraint?
     private var imageHeightConstraint: NSLayoutConstraint?
     private var shouldResetImageZoomOnNextLayout = false
+    private var imagePreviewLayoutState: ImagePreviewLayoutState?
 #if DEBUG
     private var bodyObservationDelivery: ObservationDelivery?
 #endif
@@ -338,6 +339,7 @@ final class NetworkBodyViewController: UIViewController {
         imageWidthConstraint?.constant = 0
         imageHeightConstraint?.constant = 0
         shouldResetImageZoomOnNextLayout = false
+        imagePreviewLayoutState = nil
         imageScrollView.contentInset = .zero
         imageScrollView.contentOffset = .zero
         imageScrollView.minimumZoomScale = 1
@@ -365,13 +367,20 @@ final class NetworkBodyViewController: UIViewController {
         }
 
         imageScrollView.layoutIfNeeded()
+        let imageSize = image.size
+        let boundsSize = imageScrollView.bounds.size
         let fitScale = min(
-            imageScrollView.bounds.width / image.size.width,
-            imageScrollView.bounds.height / image.size.height
+            boundsSize.width / imageSize.width,
+            boundsSize.height / imageSize.height
         )
         let minimumZoomScale = min(1, fitScale)
         let maximumZoomScale = max(4, 1 / minimumZoomScale)
-        let targetZoomScale = resetZoom
+        let isKeepingAutoFit = imagePreviewLayoutState.map { state in
+            state.imageSize == imageSize
+                && state.boundsSize != boundsSize
+                && abs(imageScrollView.zoomScale - state.minimumZoomScale) < Self.imageZoomScaleTolerance
+        } ?? false
+        let targetZoomScale = resetZoom || isKeepingAutoFit
             ? minimumZoomScale
             : min(max(imageScrollView.zoomScale, minimumZoomScale), maximumZoomScale)
 
@@ -379,6 +388,11 @@ final class NetworkBodyViewController: UIViewController {
         imageScrollView.minimumZoomScale = minimumZoomScale
         imageScrollView.setZoomScale(targetZoomScale, animated: false)
         updateImageContentInset()
+        imagePreviewLayoutState = ImagePreviewLayoutState(
+            imageSize: imageSize,
+            boundsSize: boundsSize,
+            minimumZoomScale: minimumZoomScale
+        )
         return true
     }
 
@@ -448,6 +462,16 @@ extension NetworkBodyViewController: UIScrollViewDelegate {
 private enum NetworkBodyMediaPayload {
     case image(UIImage)
     case movie(URL)
+}
+
+private struct ImagePreviewLayoutState {
+    var imageSize: CGSize
+    var boundsSize: CGSize
+    var minimumZoomScale: CGFloat
+}
+
+private extension NetworkBodyViewController {
+    static let imageZoomScaleTolerance: CGFloat = 0.001
 }
 
 private func normalizedMIMEType(_ mimeType: String?) -> String? {
