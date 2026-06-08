@@ -4,6 +4,7 @@ import Testing
 
 #if os(iOS)
 import UIKit
+import WebKit
 
 @Suite(.serialized)
 @MainActor
@@ -258,6 +259,40 @@ struct BrowserSessionRestoreTests {
     }
 
     @Test
+    func restoredInteractionStateDoesNotTriggerInitialURLLoad() throws {
+        let tabID = UUID()
+        let restoredURL = try #require(URL(string: "https://example.com/restored-state"))
+        let restoredState = Data("restored-state".utf8)
+        let restoredSession = BrowserRestoredSession(
+            snapshot: BrowserSessionSnapshot(
+                selectedTabID: tabID,
+                tabs: [
+                    BrowserTabSnapshot(
+                        id: tabID,
+                        url: restoredURL,
+                        title: "Restored State",
+                        createdAt: Date(timeIntervalSince1970: 100),
+                        lastUsedAt: Date(timeIntervalSince1970: 100),
+                        stateFileName: BrowserTabSnapshot.stateFileName(for: tabID)
+                    )
+                ]
+            ),
+            tabStateDataByID: [tabID: restoredState]
+        )
+        let store = BrowserStore(
+            restoring: restoredSession,
+            fallbackURL: try #require(URL(string: "https://fallback.example/")),
+            sessionStore: nil
+        )
+        let tab = try #require(store.selectedTab)
+
+        store.loadInitialRequestIfNeeded()
+
+        #expect(tab.initialRequestLoadCount == 0)
+        #expect(store.currentURL == restoredURL)
+    }
+
+    @Test
     func autosavePreservesPendingRestoredStateForUnselectedTabs() throws {
         try withTemporarySessionStore { sessionStore, _ in
             let selectedID = UUID()
@@ -329,6 +364,60 @@ struct BrowserSessionRestoreTests {
 
         #expect(store.tabs[0].snapshot(stateFileName: "tab.state").title == "Restored Title")
         #expect(store.displayTitle == "Restored Title")
+    }
+
+    @Test
+    func rootReattachesInspectorSessionAfterSelectedTabWebViewChanges() async throws {
+        let firstID = UUID()
+        let secondID = UUID()
+        let restoredSession = BrowserRestoredSession(
+            snapshot: BrowserSessionSnapshot(
+                selectedTabID: firstID,
+                tabs: [
+                    BrowserTabSnapshot(
+                        id: firstID,
+                        url: try #require(URL(string: "about:blank#first")),
+                        title: "First",
+                        createdAt: Date(timeIntervalSince1970: 100),
+                        lastUsedAt: Date(timeIntervalSince1970: 100),
+                        stateFileName: BrowserTabSnapshot.stateFileName(for: firstID)
+                    ),
+                    BrowserTabSnapshot(
+                        id: secondID,
+                        url: try #require(URL(string: "about:blank#second")),
+                        title: "Second",
+                        createdAt: Date(timeIntervalSince1970: 200),
+                        lastUsedAt: Date(timeIntervalSince1970: 200),
+                        stateFileName: BrowserTabSnapshot.stateFileName(for: secondID)
+                    )
+                ]
+            ),
+            tabStateDataByID: [:]
+        )
+        let store = BrowserStore(
+            restoring: restoredSession,
+            fallbackURL: try #require(URL(string: "about:blank")),
+            sessionStore: nil
+        )
+        let rootViewController = BrowserRootViewController(
+            store: store,
+            launchConfiguration: BrowserLaunchConfiguration(initialURL: try #require(URL(string: "about:blank")))
+        )
+        rootViewController.loadViewIfNeeded()
+        rootViewController.viewControllers.first?.loadViewIfNeeded()
+        let firstWebView = store.tabs[0].webView
+        let secondWebView = store.tabs[1].webView
+        var attachTargets: [WKWebView] = []
+        rootViewController.setInspectorSessionAttachedForTesting(to: firstWebView)
+        rootViewController.onAttachInspectorSessionForTesting = { webView in
+            attachTargets.append(webView)
+        }
+
+        store.selectTab(id: secondID)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        await rootViewController.waitForInspectorSessionTransitions()
+
+        #expect(attachTargets.contains { $0 === secondWebView })
     }
 
     @Test

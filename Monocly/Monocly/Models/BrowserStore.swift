@@ -335,6 +335,7 @@ private enum BrowserTabStoreSPI {
 
     @ObservationIgnored private var cancellables: Set<AnyCancellable> = []
     @ObservationIgnored private var hasLoadedInitialRequest = false
+    @ObservationIgnored private(set) var initialRequestLoadCount = 0
     @ObservationIgnored private var isHoldingRestoredTitle: Bool
     @ObservationIgnored private var restoredInteractionState: Data?
     @ObservationIgnored var onStateChanged: (() -> Void)?
@@ -468,10 +469,12 @@ private enum BrowserTabStoreSPI {
         }
 
         hasLoadedInitialRequest = true
-        webView.load(URLRequest(url: initialURL))
         if let restoredInteractionState {
             webView.interactionState = restoredInteractionState
             self.restoredInteractionState = nil
+        } else {
+            initialRequestLoadCount += 1
+            webView.load(URLRequest(url: initialURL))
         }
         notifyStateChanged()
     }

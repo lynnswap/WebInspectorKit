@@ -53,6 +53,7 @@ final class BrowserPageViewController: UIViewController {
     private var didAutoPresentInspector = false
     private var progressHeightConstraint: NSLayoutConstraint?
     private var currentChromePlacement: ChromePlacement?
+    var onSelectedWebViewInstalled: ((WKWebView) -> Void)?
 
     init(
         store: BrowserStore,
@@ -184,6 +185,7 @@ final class BrowserPageViewController: UIViewController {
         if view.window != nil {
             viewportCoordinator.hostViewDidAppear()
         }
+        onSelectedWebViewInstalled?(webView)
     }
 
     private func configureChrome() {
