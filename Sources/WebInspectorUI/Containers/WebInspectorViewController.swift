@@ -1,4 +1,5 @@
 #if canImport(UIKit)
+import ObservationBridge
 import WebInspectorCore
 import UIKit
 import WebKit
@@ -12,6 +13,7 @@ public final class WebInspectorViewController: UIViewController {
 
     public let session: WebInspectorSession
     private var drawsBackgroundStorage = true
+    private let observationScope = ObservationScope()
 
     @available(iOS 26.0, *)
     public var drawsBackground: Bool {
@@ -31,6 +33,7 @@ public final class WebInspectorViewController: UIViewController {
         self.session = session
         super.init(nibName: nil, bundle: nil)
         webInspectorSetDrawsBackgroundTraitOverride(drawsBackgroundStorage)
+        bindInterfaceAppearance()
     }
 
     public convenience init(tabs: [WebInspectorTab]) {
@@ -40,6 +43,10 @@ public final class WebInspectorViewController: UIViewController {
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         nil
+    }
+
+    isolated deinit {
+        observationScope.cancelAll()
     }
 
     public override func viewDidLoad() {
@@ -74,6 +81,19 @@ public final class WebInspectorViewController: UIViewController {
 
     private func applyBackgroundFromTraits() {
         view.backgroundColor = webInspectorBackgroundPolicy.backgroundColor
+    }
+
+    private func bindInterfaceAppearance() {
+        observationScope.observe(session.interface) { [weak self] _, interface in
+            self?.applyPreferredInterfaceStyle(interface.preferredInterfaceStyle)
+        }
+    }
+
+    private func applyPreferredInterfaceStyle(_ style: UIUserInterfaceStyle) {
+        guard overrideUserInterfaceStyle != style else {
+            return
+        }
+        overrideUserInterfaceStyle = style
     }
 
     private func setDrawsBackground(_ drawsBackground: Bool) {
