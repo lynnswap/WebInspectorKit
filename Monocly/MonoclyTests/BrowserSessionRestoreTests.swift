@@ -293,6 +293,44 @@ struct BrowserSessionRestoreTests {
     }
 
     @Test
+    func explicitNavigationDoesNotSaveStaleRestoredInteractionStateForNewURL() throws {
+        try withTemporarySessionStore { sessionStore, _ in
+            let tabID = UUID()
+            let restoredState = Data("restored-state".utf8)
+            let newURL = try #require(URL(string: "https://example.com/new-page"))
+            let restoredSession = BrowserRestoredSession(
+                snapshot: BrowserSessionSnapshot(
+                    selectedTabID: tabID,
+                    tabs: [
+                        BrowserTabSnapshot(
+                            id: tabID,
+                            url: try #require(URL(string: "https://example.com/restored-state")),
+                            title: "Restored State",
+                            createdAt: Date(timeIntervalSince1970: 100),
+                            lastUsedAt: Date(timeIntervalSince1970: 100),
+                            stateFileName: BrowserTabSnapshot.stateFileName(for: tabID)
+                        )
+                    ]
+                ),
+                tabStateDataByID: [tabID: restoredState]
+            )
+            let store = BrowserStore(
+                restoring: restoredSession,
+                fallbackURL: try #require(URL(string: "https://fallback.example/")),
+                sessionStore: sessionStore
+            )
+
+            store.loadInitialRequestIfNeeded()
+            store.load(url: newURL)
+            store.preserveSession(immediate: true)
+
+            let savedSession = try #require(sessionStore.load())
+            #expect(savedSession.snapshot.tabs.first?.url == newURL)
+            #expect(savedSession.tabStateDataByID[tabID] == nil)
+        }
+    }
+
+    @Test
     func autosavePreservesPendingRestoredStateForUnselectedTabs() throws {
         try withTemporarySessionStore { sessionStore, _ in
             let selectedID = UUID()

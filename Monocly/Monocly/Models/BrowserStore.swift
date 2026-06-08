@@ -338,6 +338,7 @@ private enum BrowserTabStoreSPI {
     @ObservationIgnored private(set) var initialRequestLoadCount = 0
     @ObservationIgnored private var isHoldingRestoredTitle: Bool
     @ObservationIgnored private var restoredInteractionState: Data?
+    @ObservationIgnored private var canSaveWebViewInteractionState = true
     @ObservationIgnored var onStateChanged: (() -> Void)?
 
     var isShowingProgress: Bool {
@@ -365,7 +366,13 @@ private enum BrowserTabStoreSPI {
     }
 
     var interactionStateData: Data? {
-        restoredInteractionState ?? (webView.interactionState as? Data)
+        if let restoredInteractionState {
+            return restoredInteractionState
+        }
+        guard canSaveWebViewInteractionState else {
+            return nil
+        }
+        return webView.interactionState as? Data
     }
 
     init(
@@ -428,25 +435,33 @@ private enum BrowserTabStoreSPI {
         guard webView.canGoBack else {
             return
         }
-        webView.goBack()
+        if webView.goBack() != nil {
+            markWebViewInteractionStatePendingNavigation()
+        }
     }
 
     func goForward() {
         guard webView.canGoForward else {
             return
         }
-        webView.goForward()
+        if webView.goForward() != nil {
+            markWebViewInteractionStatePendingNavigation()
+        }
     }
 
     func go(to item: WKBackForwardListItem) {
-        guard spiGoToHistoryItem(item) == false else {
+        if spiGoToHistoryItem(item) {
+            markWebViewInteractionStatePendingNavigation()
             return
         }
-        webView.go(to: item)
+        if webView.go(to: item) != nil {
+            markWebViewInteractionStatePendingNavigation()
+        }
     }
 
     func load(url: URL) {
         restoredInteractionState = nil
+        markWebViewInteractionStatePendingNavigation()
         isHoldingRestoredTitle = false
         pageTitle = nil
         currentURL = url
@@ -472,8 +487,10 @@ private enum BrowserTabStoreSPI {
         if let restoredInteractionState {
             webView.interactionState = restoredInteractionState
             self.restoredInteractionState = nil
+            canSaveWebViewInteractionState = true
         } else {
             initialRequestLoadCount += 1
+            markWebViewInteractionStatePendingNavigation()
             webView.load(URLRequest(url: initialURL))
         }
         notifyStateChanged()
@@ -593,6 +610,14 @@ private enum BrowserTabStoreSPI {
         currentURL = url
     }
 
+    private func markWebViewInteractionStatePendingNavigation() {
+        canSaveWebViewInteractionState = false
+    }
+
+    private func markWebViewInteractionStateSynchronized() {
+        canSaveWebViewInteractionState = true
+    }
+
     private func isBenignNavigationCancellation(_ error: any Error) -> Bool {
         let nsError = error as NSError
         return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
@@ -690,6 +715,7 @@ private enum BrowserTabStoreSPI {
     }
 
     @objc private func handleRefreshControl() {
+        markWebViewInteractionStatePendingNavigation()
         webView.reload()
     }
 
@@ -719,6 +745,7 @@ extension BrowserTabStore: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        markWebViewInteractionStatePendingNavigation()
         isLoading = true
         estimatedProgress = .zero
         notifyStateChanged()
@@ -776,6 +803,7 @@ extension BrowserTabStore: WKNavigationDelegate {
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         logger.debug("\(#function) web content process terminated")
         isLoading = false
+        markWebViewInteractionStatePendingNavigation()
         webContentTerminationCount += 1
         lastWebContentTerminationDate = Date()
         lastWebContentTerminationURL = webView.url
@@ -785,6 +813,7 @@ extension BrowserTabStore: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         didFinishNavigationCount += 1
+        markWebViewInteractionStateSynchronized()
         if webView.title == nil {
             isHoldingRestoredTitle = false
             pageTitle = nil
