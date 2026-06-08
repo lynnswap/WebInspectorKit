@@ -618,6 +618,13 @@ private enum BrowserTabStoreSPI {
         canSaveWebViewInteractionState = true
     }
 
+    private func markWebViewInteractionStateSynchronizedIfNavigationSettled() {
+        guard webView.isLoading == false else {
+            return
+        }
+        markWebViewInteractionStateSynchronized()
+    }
+
     private func isBenignNavigationCancellation(_ error: any Error) -> Bool {
         let nsError = error as NSError
         return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
@@ -771,6 +778,7 @@ extension BrowserTabStore: WKNavigationDelegate {
             endRefreshingIfNeeded()
 #endif
             syncNavigationState(from: webView)
+            markWebViewInteractionStateSynchronizedIfNavigationSettled()
             return
         }
         lastNavigationErrorDescription = navigationError.localizedDescription
@@ -778,6 +786,7 @@ extension BrowserTabStore: WKNavigationDelegate {
         endRefreshingIfNeeded()
 #endif
         syncNavigationState(from: webView)
+        markWebViewInteractionStateSynchronizedIfNavigationSettled()
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError navigationError: Error) {
@@ -787,6 +796,7 @@ extension BrowserTabStore: WKNavigationDelegate {
             endRefreshingIfNeeded()
 #endif
             syncNavigationState(from: webView)
+            markWebViewInteractionStateSynchronizedIfNavigationSettled()
             return
         }
         lastNavigationErrorDescription = navigationError.localizedDescription
@@ -794,6 +804,7 @@ extension BrowserTabStore: WKNavigationDelegate {
         endRefreshingIfNeeded()
 #endif
         syncNavigationState(from: webView)
+        markWebViewInteractionStateSynchronizedIfNavigationSettled()
     }
 
     func webView(_ webView: WKWebView, didReceiveServerRedirectForProvisionalNavigation navigation: WKNavigation!) {

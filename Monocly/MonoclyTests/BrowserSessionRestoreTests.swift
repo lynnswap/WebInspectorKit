@@ -331,6 +331,50 @@ struct BrowserSessionRestoreTests {
     }
 
     @Test
+    func failedNavigationKeepsSynchronizedInteractionStateSaveable() throws {
+        try withTemporarySessionStore { sessionStore, _ in
+            let tabID = UUID()
+            let restoredURL = try #require(URL(string: "https://example.com/restored-state"))
+            let restoredState = Data("restored-state".utf8)
+            let restoredSession = BrowserRestoredSession(
+                snapshot: BrowserSessionSnapshot(
+                    selectedTabID: tabID,
+                    tabs: [
+                        BrowserTabSnapshot(
+                            id: tabID,
+                            url: restoredURL,
+                            title: "Restored State",
+                            createdAt: Date(timeIntervalSince1970: 100),
+                            lastUsedAt: Date(timeIntervalSince1970: 100),
+                            stateFileName: BrowserTabSnapshot.stateFileName(for: tabID)
+                        )
+                    ]
+                ),
+                tabStateDataByID: [tabID: restoredState]
+            )
+            let store = BrowserStore(
+                restoring: restoredSession,
+                fallbackURL: try #require(URL(string: "https://fallback.example/")),
+                sessionStore: sessionStore
+            )
+            let tab = try #require(store.selectedTab)
+
+            store.loadInitialRequestIfNeeded()
+            tab.webView(tab.webView, didStartProvisionalNavigation: nil)
+            tab.webView(
+                tab.webView,
+                didFailProvisionalNavigation: nil,
+                withError: URLError(.notConnectedToInternet)
+            )
+            store.preserveSession(immediate: true)
+
+            let savedSession = try #require(sessionStore.load())
+            #expect(savedSession.snapshot.tabs.first?.url == restoredURL)
+            #expect(savedSession.tabStateDataByID[tabID] != nil)
+        }
+    }
+
+    @Test
     func autosavePreservesPendingRestoredStateForUnselectedTabs() throws {
         try withTemporarySessionStore { sessionStore, _ in
             let selectedID = UUID()
