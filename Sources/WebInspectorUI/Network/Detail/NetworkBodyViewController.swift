@@ -35,8 +35,12 @@ final class NetworkBodyViewController: UIViewController {
     private let observationScope = ObservationScope()
     private weak var body: NetworkBody?
     private var metadata: NetworkBodyPreviewMetadata?
+    private var hasDisplayedBody = false
     private var mediaPlayerViewController: AVPlayerViewController?
     private var mediaTemporaryFileURL: URL?
+#if DEBUG
+    private var bodyObservationDelivery: ObservationDelivery?
+#endif
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -59,11 +63,15 @@ final class NetworkBodyViewController: UIViewController {
     }
 
     func display(body: NetworkBody?, metadata: NetworkBodyPreviewMetadata?) {
-        guard self.body !== body else {
+        guard hasDisplayedBody == false || self.body !== body else {
+            guard self.metadata != metadata else {
+                return
+            }
             self.metadata = metadata
             renderBody(body)
             return
         }
+        hasDisplayedBody = true
         self.body = body
         self.metadata = metadata
         startObserving(body: body)
@@ -100,15 +108,21 @@ final class NetworkBodyViewController: UIViewController {
 
     private func startObserving(body: NetworkBody?) {
         observationScope.cancelAll()
+#if DEBUG
+        bodyObservationDelivery = nil
+#endif
         guard let body else {
             return
         }
-        observationScope.observe(body) { [weak self] _, body in
+        let delivery = observationScope.observe(body) { [weak self] _, body in
             guard let self, body === self.body else {
                 return
             }
             self.renderBody(body)
         }
+#if DEBUG
+        bodyObservationDelivery = delivery
+#endif
     }
 
     private func renderBody(_ body: NetworkBody?) {
@@ -478,6 +492,10 @@ extension NetworkBodyViewController {
     var mediaPlayerURLForTesting: URL? {
         loadViewIfNeeded()
         return (mediaPlayerViewController?.player?.currentItem?.asset as? AVURLAsset)?.url
+    }
+
+    var bodyObservationDeliveryForTesting: ObservationDelivery? {
+        bodyObservationDelivery
     }
 }
 #endif

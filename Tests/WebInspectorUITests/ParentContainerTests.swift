@@ -255,9 +255,10 @@ struct ParentContainerTests {
                 in: splitViewController
             )
         )
+        detailViewController.loadViewIfNeeded()
 
         let didRenderDetail = await waitUntil {
-            detailViewController.previewViewForTesting.isHidden == false
+            detailViewController.headersTextViewForTesting.renderedTextForTesting.contains("GET /app.js")
         }
         #expect(didRenderDetail)
     }
