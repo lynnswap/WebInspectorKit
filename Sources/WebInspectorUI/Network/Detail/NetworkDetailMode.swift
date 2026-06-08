@@ -1,4 +1,5 @@
 #if canImport(UIKit)
+import Foundation
 import WebInspectorCore
 
 @MainActor
