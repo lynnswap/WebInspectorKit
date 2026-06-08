@@ -13,7 +13,13 @@ public final class WebInspectorViewController: UIViewController {
 
     public let session: WebInspectorSession
     private var drawsBackgroundStorage = true
+    private var followsInspectedPageAppearanceStorage = false
     private let observationScope = ObservationScope()
+
+    public var followsInspectedPageAppearance: Bool {
+        get { followsInspectedPageAppearanceStorage }
+        set { setFollowsInspectedPageAppearance(newValue) }
+    }
 
     @available(iOS 26.0, *)
     public var drawsBackground: Bool {
@@ -90,10 +96,19 @@ public final class WebInspectorViewController: UIViewController {
     }
 
     private func applyPreferredInterfaceStyle(_ style: UIUserInterfaceStyle) {
-        guard overrideUserInterfaceStyle != style else {
+        let resolvedStyle = followsInspectedPageAppearanceStorage ? style : .unspecified
+        guard overrideUserInterfaceStyle != resolvedStyle else {
             return
         }
-        overrideUserInterfaceStyle = style
+        overrideUserInterfaceStyle = resolvedStyle
+    }
+
+    private func setFollowsInspectedPageAppearance(_ followsInspectedPageAppearance: Bool) {
+        guard followsInspectedPageAppearanceStorage != followsInspectedPageAppearance else {
+            return
+        }
+        followsInspectedPageAppearanceStorage = followsInspectedPageAppearance
+        applyPreferredInterfaceStyle(session.interface.preferredInterfaceStyle)
     }
 
     private func setDrawsBackground(_ drawsBackground: Bool) {

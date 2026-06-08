@@ -148,9 +148,45 @@ struct ParentContainerTests {
     }
 
     @Test
-    func viewControllerAppliesSessionPreferredInterfaceStyle() async throws {
+    func viewControllerIgnoresSessionPreferredInterfaceStyleByDefault() async {
         let session = WebInspectorSession()
         let viewController = WebInspectorViewController(session: session)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        #expect(viewController.followsInspectedPageAppearance == false)
+
+        session.interface.setPreferredInterfaceStyle(.dark)
+        await Task.yield()
+        #expect(viewController.overrideUserInterfaceStyle == .unspecified)
+
+        session.interface.setPreferredInterfaceStyle(.light)
+        await Task.yield()
+        #expect(viewController.overrideUserInterfaceStyle == .unspecified)
+    }
+
+    @Test
+    func viewControllerAppliesCurrentSessionPreferredInterfaceStyleWhenOptingIn() async {
+        let session = WebInspectorSession()
+        let viewController = WebInspectorViewController(session: session)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        session.interface.setPreferredInterfaceStyle(.dark)
+        viewController.followsInspectedPageAppearance = true
+
+        let didApplyDarkStyle = await waitUntil {
+            viewController.overrideUserInterfaceStyle == .dark
+                && viewController.traitCollection.userInterfaceStyle == .dark
+        }
+        #expect(didApplyDarkStyle)
+    }
+
+    @Test
+    func viewControllerFollowsSessionPreferredInterfaceStyleWhileOptedIn() async throws {
+        let session = WebInspectorSession()
+        let viewController = WebInspectorViewController(session: session)
+        viewController.followsInspectedPageAppearance = true
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -165,13 +201,63 @@ struct ParentContainerTests {
         let compactHost = try #require(viewController.activeHostViewControllerForTesting as? CompactTabBarController)
         compactHost.loadViewIfNeeded()
         #expect(compactHost.overrideUserInterfaceStyle == .unspecified)
-        #expect(compactHost.traitCollection.userInterfaceStyle == .dark)
+        let didInheritDarkStyle = await waitUntil {
+            compactHost.traitCollection.userInterfaceStyle == .dark
+        }
+        #expect(didInheritDarkStyle)
 
-        session.interface.setPreferredInterfaceStyle(.unspecified)
+        session.interface.setPreferredInterfaceStyle(.light)
+        let didApplyLightStyle = await waitUntil {
+            viewController.overrideUserInterfaceStyle == .light
+                && viewController.traitCollection.userInterfaceStyle == .light
+        }
+        #expect(didApplyLightStyle)
+    }
+
+    @Test
+    func viewControllerClearsAndIgnoresSessionPreferredInterfaceStyleWhenOptingOut() async {
+        let session = WebInspectorSession()
+        let viewController = WebInspectorViewController(session: session)
+        viewController.followsInspectedPageAppearance = true
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        session.interface.setPreferredInterfaceStyle(.dark)
+        let didApplyDarkStyle = await waitUntil {
+            viewController.overrideUserInterfaceStyle == .dark
+        }
+        #expect(didApplyDarkStyle)
+
+        viewController.followsInspectedPageAppearance = false
         let didClearStyle = await waitUntil {
             viewController.overrideUserInterfaceStyle == .unspecified
         }
         #expect(didClearStyle)
+
+        session.interface.setPreferredInterfaceStyle(.light)
+        await Task.yield()
+        #expect(viewController.overrideUserInterfaceStyle == .unspecified)
+    }
+
+    @Test
+    func viewControllerClearsPreferredInterfaceStyleWhenSessionStyleBecomesUnspecified() async {
+        let session = WebInspectorSession()
+        let viewController = WebInspectorViewController(session: session)
+        viewController.followsInspectedPageAppearance = true
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        session.interface.setPreferredInterfaceStyle(.dark)
+        let didApplyDarkStyle = await waitUntil {
+            viewController.overrideUserInterfaceStyle == .dark
+        }
+        #expect(didApplyDarkStyle)
+
+        session.interface.setPreferredInterfaceStyle(.unspecified)
+        let didApplyUnspecifiedStyle = await waitUntil {
+            viewController.overrideUserInterfaceStyle == .unspecified
+        }
+        #expect(didApplyUnspecifiedStyle)
     }
 
     @Test
