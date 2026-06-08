@@ -209,6 +209,18 @@ func mediaPreviewSupportClassifiesAVIFAndExcludesSVG() {
     #expect(NetworkMediaPreviewSupport.previewKind(mimeType: "text/javascript", url: "https://cdn.example.com/player.mp4") == nil)
     #expect(NetworkMediaPreviewSupport.previewKind(mimeType: "text/css", url: "https://cdn.example.com/theme.png") == nil)
     #expect(NetworkMediaPreviewSupport.previewKind(mimeType: "application/octet-stream", url: "https://api.example.com/download") == nil)
+    #expect(NetworkMediaPreviewSupport.temporaryFileExtension(
+        mimeType: "video/mp4",
+        url: "https://api.example.com/download.php"
+    ) == "mp4")
+    #expect(NetworkMediaPreviewSupport.temporaryFileExtension(
+        mimeType: "application/vnd.apple.mpegurl",
+        url: "https://api.example.com/download.php"
+    ) == "m3u8")
+    #expect(NetworkMediaPreviewSupport.temporaryFileExtension(
+        mimeType: "application/octet-stream",
+        url: "https://cdn.example.com/player.mp4"
+    ) == "mp4")
 }
 
 @Test

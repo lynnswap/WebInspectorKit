@@ -99,6 +99,14 @@ final class NetworkBodyViewController: UIViewController {
         renderBody(body)
     }
 
+    func releasePreviewResources() {
+        hasDisplayedBody = false
+        body = nil
+        metadata = nil
+        startObserving(body: nil)
+        hideMediaPreview()
+    }
+
     private func configureSyntaxView() {
         syntaxView.translatesAutoresizingMaskIntoConstraints = false
         syntaxView.isEditable = false

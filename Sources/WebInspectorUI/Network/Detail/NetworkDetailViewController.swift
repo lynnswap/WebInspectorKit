@@ -309,6 +309,7 @@ package final class NetworkDetailViewController: UIViewController {
 
     private func showHeaders() {
         previewStackView.isHidden = true
+        bodyViewController.releasePreviewResources()
         headersTextView.isHidden = false
     }
 

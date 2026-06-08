@@ -90,11 +90,21 @@ package enum NetworkMediaPreviewSupport {
     }
 
     package static func temporaryFileExtension(mimeType: String?, url: String?) -> String {
+        let normalizedMIMEType = normalizedMIMEType(mimeType)
+
+        if let normalizedMIMEType,
+           case .previewable = classification(mimeType: normalizedMIMEType, url: nil) {
+            return temporaryFileExtension(forNormalizedMIMEType: normalizedMIMEType) ?? "mp4"
+        }
+
         if let pathExtension = pathExtension(url), pathExtension.isEmpty == false {
             return pathExtension
         }
 
-        let normalizedMIMEType = normalizedMIMEType(mimeType)
+        return temporaryFileExtension(forNormalizedMIMEType: normalizedMIMEType) ?? "mp4"
+    }
+
+    private static func temporaryFileExtension(forNormalizedMIMEType normalizedMIMEType: String?) -> String? {
         if isHLSMIMEType(normalizedMIMEType) {
             return "m3u8"
         }
@@ -113,7 +123,7 @@ package enum NetworkMediaPreviewSupport {
         case "video/x-m4v":
             return "m4v"
         default:
-            return "mp4"
+            return nil
         }
     }
 
