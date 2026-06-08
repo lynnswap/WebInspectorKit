@@ -86,6 +86,55 @@ struct BrowserSessionRestoreTests {
     }
 
     @Test
+    func sessionStoreScopesSnapshotsBySceneSessionIdentifier() throws {
+        try withTemporaryBrowserSessionDirectory { browserSessionDirectoryURL in
+            let firstStore = BrowserSessionStore(
+                sceneSessionPersistentIdentifier: "scene/a",
+                browserSessionDirectoryURL: browserSessionDirectoryURL
+            )
+            let secondStore = BrowserSessionStore(
+                sceneSessionPersistentIdentifier: "scene/b",
+                browserSessionDirectoryURL: browserSessionDirectoryURL
+            )
+            let firstID = UUID()
+            let secondID = UUID()
+            let firstSnapshot = BrowserSessionSnapshot(
+                selectedTabID: firstID,
+                tabs: [
+                    BrowserTabSnapshot(
+                        id: firstID,
+                        url: try #require(URL(string: "https://example.com/first-scene")),
+                        title: "First Scene",
+                        createdAt: Date(timeIntervalSince1970: 100),
+                        lastUsedAt: Date(timeIntervalSince1970: 100),
+                        stateFileName: BrowserTabSnapshot.stateFileName(for: firstID)
+                    )
+                ]
+            )
+            let secondSnapshot = BrowserSessionSnapshot(
+                selectedTabID: secondID,
+                tabs: [
+                    BrowserTabSnapshot(
+                        id: secondID,
+                        url: try #require(URL(string: "https://example.com/second-scene")),
+                        title: "Second Scene",
+                        createdAt: Date(timeIntervalSince1970: 200),
+                        lastUsedAt: Date(timeIntervalSince1970: 200),
+                        stateFileName: BrowserTabSnapshot.stateFileName(for: secondID)
+                    )
+                ]
+            )
+
+            try firstStore.save(snapshot: firstSnapshot, tabStateDataByID: [:])
+            try secondStore.save(snapshot: secondSnapshot, tabStateDataByID: [:])
+
+            #expect(firstStore.rootDirectoryURL != secondStore.rootDirectoryURL)
+            #expect(firstStore.load()?.snapshot == firstSnapshot)
+            #expect(secondStore.load()?.snapshot == secondSnapshot)
+        }
+    }
+
+    @Test
     func browserStoreCreatesFallbackTabWithoutSnapshot() throws {
         let fallbackURL = try #require(URL(string: "https://fallback.example/"))
         let store = BrowserStore(
@@ -380,12 +429,20 @@ struct BrowserSessionRestoreTests {
     private func withTemporarySessionStore<T>(
         _ body: (BrowserSessionStore, URL) throws -> T
     ) throws -> T {
+        try withTemporaryBrowserSessionDirectory { rootDirectoryURL in
+            try body(BrowserSessionStore(rootDirectoryURL: rootDirectoryURL), rootDirectoryURL)
+        }
+    }
+
+    private func withTemporaryBrowserSessionDirectory<T>(
+        _ body: (URL) throws -> T
+    ) throws -> T {
         let rootDirectoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("MonoclyBrowserSession-\(UUID().uuidString)", isDirectory: true)
         defer {
             try? FileManager.default.removeItem(at: rootDirectoryURL)
         }
-        return try body(BrowserSessionStore(rootDirectoryURL: rootDirectoryURL), rootDirectoryURL)
+        return try body(rootDirectoryURL)
     }
 
     private func makeWindowScene() throws -> UIWindowScene {

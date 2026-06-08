@@ -40,6 +40,7 @@ struct BrowserSessionStore {
     private enum Path {
         static let rootDirectory = "Monocly"
         static let sessionDirectory = "BrowserSession"
+        static let sceneSessionsDirectory = "scene-sessions"
         static let tabsDirectory = "tabs"
         static let sessionFile = "session.json"
     }
@@ -60,6 +61,22 @@ struct BrowserSessionStore {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         self.encoder = encoder
         self.decoder = JSONDecoder()
+    }
+
+    init(
+        sceneSessionPersistentIdentifier: String,
+        browserSessionDirectoryURL: URL? = nil,
+        fileManager: FileManager = .default
+    ) {
+        let browserSessionDirectoryURL = browserSessionDirectoryURL
+            ?? Self.defaultRootDirectoryURL(fileManager: fileManager)
+        let sceneDirectoryURL = browserSessionDirectoryURL
+            .appendingPathComponent(Path.sceneSessionsDirectory, isDirectory: true)
+            .appendingPathComponent(
+                Self.sceneSessionDirectoryName(for: sceneSessionPersistentIdentifier),
+                isDirectory: true
+            )
+        self.init(rootDirectoryURL: sceneDirectoryURL, fileManager: fileManager)
     }
 
     func load() -> BrowserRestoredSession? {
@@ -127,5 +144,13 @@ struct BrowserSessionStore {
         return applicationSupportURL
             .appendingPathComponent(Path.rootDirectory, isDirectory: true)
             .appendingPathComponent(Path.sessionDirectory, isDirectory: true)
+    }
+
+    private static func sceneSessionDirectoryName(for persistentIdentifier: String) -> String {
+        let encodedIdentifier = persistentIdentifier.addingPercentEncoding(withAllowedCharacters: .alphanumerics)
+        guard let encodedIdentifier, encodedIdentifier.isEmpty == false else {
+            return "default"
+        }
+        return encodedIdentifier
     }
 }
