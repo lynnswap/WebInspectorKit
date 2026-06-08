@@ -129,7 +129,7 @@ package final class NetworkDetailViewController: UIViewController {
         bodyViewController.didMove(toParent: self)
 
         NSLayoutConstraint.activate([
-            previewStackView.topAnchor.constraint(equalTo: view.topAnchor),
+            previewStackView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
             previewStackView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
             previewStackView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
             previewStackView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
@@ -152,7 +152,7 @@ package final class NetworkDetailViewController: UIViewController {
         let allocated = unsafe paletteClass.perform(NetworkDetailModePaletteRuntime.allocateSelector)!.takeUnretainedValue()
         let palette = unsafe (allocated as AnyObject)
             .perform(NetworkDetailModePaletteRuntime.contentInitializerSelector, with: contentView)!
-            .takeUnretainedValue() as! UIView
+            .takeRetainedValue() as! UIView
         palette.setValue(1, forKey: NetworkDetailModePaletteRuntime.marginPolicyKey)
         return palette
     }

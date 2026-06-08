@@ -98,7 +98,7 @@ extension NetworkRequest {
         case .previewable:
             return .media
         case .notPreviewable:
-            if resourceType == .media {
+            if resourceType == .image || resourceType == .media {
                 return .media
             }
             return NetworkResourceFilter(mimeType: responseMimeType, url: responseURL)

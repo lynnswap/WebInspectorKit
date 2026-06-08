@@ -200,7 +200,7 @@ func mediaFilterIncludesPreviewableMediaResponses() async throws {
     let model = NetworkPanelModel(network: network)
     model.setResourceFilter(.media, enabled: true)
 
-    #expect(model.displayRequests.map(\.id.requestID.rawValue) == ["19", "16", "8", "7", "6", "5", "4", "3", "2", "1"])
+    #expect(model.displayRequests.map(\.id.requestID.rawValue) == ["19", "16", "9", "8", "7", "6", "5", "4", "3", "2", "1"])
 }
 
 @Test
