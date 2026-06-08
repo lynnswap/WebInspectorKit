@@ -120,10 +120,10 @@ final class NetworkBodyViewController: UIViewController {
             syntaxView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             syntaxView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             syntaxView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            imageScrollView.topAnchor.constraint(equalTo: view.topAnchor),
-            imageScrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            imageScrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            imageScrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            imageScrollView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            imageScrollView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
+            imageScrollView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
+            imageScrollView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
             imageView.topAnchor.constraint(equalTo: imageScrollView.contentLayoutGuide.topAnchor),
             imageView.leadingAnchor.constraint(equalTo: imageScrollView.contentLayoutGuide.leadingAnchor),
             imageView.trailingAnchor.constraint(equalTo: imageScrollView.contentLayoutGuide.trailingAnchor),
@@ -313,10 +313,10 @@ final class NetworkBodyViewController: UIViewController {
             addChild(playerViewController)
             view.addSubview(playerViewController.view)
             NSLayoutConstraint.activate([
-                playerViewController.view.topAnchor.constraint(equalTo: view.topAnchor),
-                playerViewController.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-                playerViewController.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-                playerViewController.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+                playerViewController.view.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+                playerViewController.view.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
+                playerViewController.view.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
+                playerViewController.view.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
             ])
             playerViewController.didMove(toParent: self)
             mediaPlayerViewController = playerViewController
