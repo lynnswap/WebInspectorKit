@@ -4011,144 +4011,144 @@
         }
       }
     },
-    "network.filter.image" : {
+    "network.filter.media" : {
       "localizations" : {
         "ar" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "صورة"
+            "value" : "وسائط"
           }
         },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Bild"
+            "value" : "Medien"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Image"
+            "value" : "Media"
           }
         },
         "en-GB" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Image"
+            "value" : "Media"
           }
         },
         "en-IN" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Image"
+            "value" : "Media"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Imagen"
+            "value" : "Medios"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Imagen"
+            "value" : "Medios"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Image"
+            "value" : "Médias"
           }
         },
         "fr-CA" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Image"
+            "value" : "Médias"
           }
         },
         "hi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "छवि"
+            "value" : "मीडिया"
           }
         },
         "id" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Gambar"
+            "value" : "Media"
           }
         },
         "it" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Immagine"
+            "value" : "Media"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "画像"
+            "value" : "メディア"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "이미지"
+            "value" : "미디어"
           }
         },
         "nl" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Afbeelding"
+            "value" : "Media"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Imagem"
+            "value" : "Mídia"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Imagem"
+            "value" : "Multimédia"
           }
         },
         "ro" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Imagine"
+            "value" : "Media"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Изображение"
+            "value" : "Медиа"
           }
         },
         "th" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "รูปภาพ"
+            "value" : "สื่อ"
           }
         },
         "tr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Görsel"
+            "value" : "Medya"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "图像"
+            "value" : "媒体"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "影像"
+            "value" : "媒體"
           }
         }
       }

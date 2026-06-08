@@ -12,6 +12,8 @@ struct NetworkDetailViewControllerTests {
     @Test
     func resourceFilterSpecialistTitlesFollowWebInspectorLabels() {
         #expect(NetworkResourceFilter.stylesheet.localizedTitle == "CSS")
+        #expect(NetworkResourceFilter.media.localizedTitle == String(localized: "network.filter.media", bundle: .module))
+        #expect(localizedResourceString("network.filter.media", locale: "en") == "Media")
         #expect(NetworkResourceFilter.script.localizedTitle == "JS")
         #expect(NetworkResourceFilter.xhrFetch.localizedTitle == "XHR / Fetch")
     }
@@ -1085,6 +1087,14 @@ struct NetworkDetailViewControllerTests {
         UIView.setAnimationsEnabled(false)
         defer { UIView.setAnimationsEnabled(wereAnimationsEnabled) }
         return body()
+    }
+
+    private func localizedResourceString(_ key: String, locale: String) -> String? {
+        guard let bundleURL = Bundle.module.url(forResource: locale, withExtension: "lproj"),
+              let bundle = Bundle(url: bundleURL) else {
+            return nil
+        }
+        return bundle.localizedString(forKey: key, value: nil, table: nil)
     }
 }
 #endif

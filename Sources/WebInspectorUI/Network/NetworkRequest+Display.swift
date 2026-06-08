@@ -78,12 +78,24 @@ extension NetworkRequest {
     }
 
     package var resourceFilter: NetworkResourceFilter {
+        let responseURL = response?.url ?? request.url
+        switch NetworkMediaPreviewSupport.classification(mimeType: response?.mimeType, url: responseURL) {
+        case .previewable:
+            return .media
+        case .notPreviewable:
+            if resourceType == .media {
+                return .media
+            }
+            return NetworkResourceFilter(mimeType: response?.mimeType, url: responseURL)
+        case .unknown:
+            break
+        }
         if let resourceType {
             return NetworkResourceFilter(resourceType: resourceType)
         }
         return NetworkResourceFilter(
             mimeType: response?.mimeType,
-            url: request.url
+            url: responseURL
         )
     }
 
@@ -139,6 +151,8 @@ extension NetworkResourceType {
             "stylesheet"
         case .image:
             "image"
+        case .media:
+            "media"
         case .font:
             "font"
         case .script:
