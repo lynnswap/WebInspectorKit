@@ -3,24 +3,15 @@ import WebInspectorCore
 
 @MainActor
 package enum NetworkDetailMode: CaseIterable, Hashable {
-    case request
-    case response
+    case preview
+    case headers
 
     package var title: String {
         switch self {
-        case .request:
-            String(localized: "network.section.request", bundle: .module)
-        case .response:
-            String(localized: "network.section.response", bundle: .module)
-        }
-    }
-
-    package var bodyRole: NetworkBodyRole {
-        switch self {
-        case .request:
-            .request
-        case .response:
-            .response
+        case .preview:
+            String(localized: "network.detail.mode.preview", defaultValue: "Preview", bundle: .module)
+        case .headers:
+            String(localized: "network.section.headers", defaultValue: "Headers", bundle: .module)
         }
     }
 }

@@ -257,7 +257,7 @@ struct ParentContainerTests {
         )
 
         let didRenderDetail = await waitUntil {
-            detailViewController.collectionViewForTesting.isHidden == false
+            detailViewController.previewViewForTesting.isHidden == false
         }
         #expect(didRenderDetail)
     }

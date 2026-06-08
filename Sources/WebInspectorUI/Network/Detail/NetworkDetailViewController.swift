@@ -4,31 +4,15 @@ import ObservationBridge
 import UIKit
 
 @MainActor
-package final class NetworkDetailViewController: UIViewController, UICollectionViewDelegate {
-    private struct HeaderField: Hashable {
-        var name: String
-        var value: String
-    }
-
-    private struct BodyMetadataField: Hashable {
-        var name: String
-        var value: String
-    }
-
-    private enum SectionIdentifier: Int, CaseIterable, Hashable {
-        case body
-        case headers
-    }
-
-    private enum ItemIdentifier: Hashable {
-        case bodyMetadata(BodyMetadataField)
-        case bodyLink(NetworkBodyRole)
-        case header(HeaderField)
-    }
-
+package final class NetworkDetailViewController: UIViewController {
     private let model: NetworkPanelModel
-    private let observationScope = ObservationScope()
+    private let modelObservationScope = ObservationScope()
+    private let selectedRequestSurfaceObservationScope = ObservationScope()
+    private let bodyViewController = NetworkBodyViewController()
     private var modePalette: UIView?
+    private var previewRoles: [NetworkBodyRole] = []
+    private var hasBoundSelectedRequest = false
+    private weak var observedRequest: NetworkRequest?
     private lazy var modeSegmentedControl: UISegmentedControl = {
         let control = UISegmentedControl(items: NetworkDetailMode.allCases.map(\.title))
         control.translatesAutoresizingMaskIntoConstraints = false
@@ -40,29 +24,62 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
     private lazy var modePaletteContentView = NetworkDetailModePaletteContentView(
         segmentedControl: modeSegmentedControl
     )
-    private lazy var collectionView: UICollectionView = {
-        let collectionView = UICollectionView(frame: .zero, collectionViewLayout: Self.makeListLayout())
-        collectionView.translatesAutoresizingMaskIntoConstraints = false
-        collectionView.backgroundColor = webInspectorBackgroundPolicy.backgroundColor
-        collectionView.alwaysBounceVertical = true
-        collectionView.accessibilityIdentifier = "WebInspector.Network.Detail"
-        collectionView.delegate = self
-        collectionView.isHidden = true
-        return collectionView
+    private lazy var previewRoleSegmentedControl: UISegmentedControl = {
+        let control = UISegmentedControl()
+        control.translatesAutoresizingMaskIntoConstraints = false
+        control.accessibilityIdentifier = "WebInspector.Network.DetailPreviewRoleSegmentedControl"
+        control.addTarget(self, action: #selector(previewRoleSegmentedControlValueChanged(_:)), for: .valueChanged)
+        return control
     }()
-    private lazy var dataSource = makeDataSource()
-    fileprivate var mode: NetworkDetailMode = .request {
+    private lazy var previewRoleControlContainer: UIView = {
+        let view = UIView()
+        view.translatesAutoresizingMaskIntoConstraints = false
+        view.preservesSuperviewLayoutMargins = true
+        view.addSubview(previewRoleSegmentedControl)
+        NSLayoutConstraint.activate([
+            previewRoleSegmentedControl.topAnchor.constraint(equalTo: view.layoutMarginsGuide.topAnchor),
+            previewRoleSegmentedControl.leadingAnchor.constraint(equalTo: view.layoutMarginsGuide.leadingAnchor),
+            previewRoleSegmentedControl.trailingAnchor.constraint(equalTo: view.layoutMarginsGuide.trailingAnchor),
+            previewRoleSegmentedControl.bottomAnchor.constraint(equalTo: view.layoutMarginsGuide.bottomAnchor),
+        ])
+        return view
+    }()
+    private lazy var previewStackView: UIStackView = {
+        let stackView = UIStackView(arrangedSubviews: [
+            previewRoleControlContainer,
+            bodyViewController.view,
+        ])
+        stackView.translatesAutoresizingMaskIntoConstraints = false
+        stackView.axis = .vertical
+        stackView.spacing = 0
+        stackView.isHidden = true
+        stackView.accessibilityIdentifier = "WebInspector.Network.DetailPreview"
+        return stackView
+    }()
+    private lazy var headersTextView: NetworkHeadersTextView = {
+        let view = NetworkHeadersTextView()
+        view.translatesAutoresizingMaskIntoConstraints = false
+        view.isHidden = true
+        return view
+    }()
+    fileprivate var mode: NetworkDetailMode = .preview {
         didSet {
             guard mode != oldValue else {
                 return
             }
-            startObservingModel()
-            renderModeControl()
+            bindCurrentModeSurface()
+            renderModeControl(selectedRequest: observedRequest)
         }
     }
-
-    private var selectedRequest: NetworkRequest? {
-        model.selectedRequest
+    fileprivate var previewRole: NetworkBodyRole = .response {
+        didSet {
+            guard previewRole != oldValue else {
+                return
+            }
+            if let observedRequest, mode == .preview {
+                renderPreviewSurface(selectedRequest: observedRequest)
+            }
+        }
     }
 
     package init(model: NetworkPanelModel) {
@@ -76,7 +93,8 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
     }
 
     isolated deinit {
-        observationScope.cancelAll()
+        modelObservationScope.cancelAll()
+        selectedRequestSurfaceObservationScope.cancelAll()
     }
 
     override package func viewDidLoad() {
@@ -87,50 +105,40 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
                 viewController.applyBackgroundFromTraits()
             }
         }
-        installCollectionView()
+        installContentViews()
         installModePalette()
         startObservingModel()
     }
 
-    package func collectionView(_ collectionView: UICollectionView, shouldSelectItemAt indexPath: IndexPath) -> Bool {
-        guard let item = dataSource.itemIdentifier(for: indexPath) else {
-            return false
-        }
-        if case .bodyLink(let role) = item, let selectedRequest {
-            return body(in: selectedRequest, for: role) != nil
-        }
-        return false
-    }
-
-    package func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
-        collectionView.deselectItem(at: indexPath, animated: true)
-        guard let item = dataSource.itemIdentifier(for: indexPath),
-              case .bodyLink(let role) = item,
-              let selectedRequest else {
-            return
-        }
-        pushBody(for: role, in: selectedRequest)
-    }
-
     private func startObservingModel() {
-        observationScope.observe(model) { [weak self] event, model in
-            self?.render(selectedRequest: model.selectedRequest, reloadData: event.kind == .initial)
+        modelObservationScope.observe(model) { [weak self] _, model in
+            self?.bindSelectedRequest(model.selectedRequest)
         }
     }
 
     private func applyBackgroundFromTraits() {
         let backgroundColor = webInspectorBackgroundPolicy.backgroundColor
         view.backgroundColor = backgroundColor
-        collectionView.backgroundColor = backgroundColor
+        previewRoleControlContainer.backgroundColor = backgroundColor
+        bodyViewController.view.backgroundColor = backgroundColor
+        headersTextView.backgroundColor = backgroundColor
     }
 
-    private func installCollectionView() {
-        view.addSubview(collectionView)
+    private func installContentViews() {
+        addChild(bodyViewController)
+        view.addSubview(previewStackView)
+        view.addSubview(headersTextView)
+        bodyViewController.didMove(toParent: self)
+
         NSLayoutConstraint.activate([
-            collectionView.topAnchor.constraint(equalTo: view.topAnchor),
-            collectionView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            collectionView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            collectionView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            previewStackView.topAnchor.constraint(equalTo: view.topAnchor),
+            previewStackView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            previewStackView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            previewStackView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            headersTextView.topAnchor.constraint(equalTo: view.topAnchor),
+            headersTextView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            headersTextView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            headersTextView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
     }
 
@@ -151,75 +159,18 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
         return palette
     }
 
-    private static func makeListLayout() -> UICollectionViewLayout {
-        var listConfiguration = UICollectionLayoutListConfiguration(appearance: .insetGrouped)
-        listConfiguration.showsSeparators = true
-        listConfiguration.headerMode = .supplementary
-
-        return UICollectionViewCompositionalLayout { _, environment in
-            let section = NSCollectionLayoutSection.list(
-                using: listConfiguration,
-                layoutEnvironment: environment
-            )
-            let headerSize = NSCollectionLayoutSize(
-                widthDimension: .fractionalWidth(1.0),
-                heightDimension: .estimated(44)
-            )
-            let header = NSCollectionLayoutBoundarySupplementaryItem(
-                layoutSize: headerSize,
-                elementKind: UICollectionView.elementKindSectionHeader,
-                alignment: .top
-            )
-            header.pinToVisibleBounds = true
-            section.boundarySupplementaryItems = [header]
-            return section
-        }
-    }
-
-    private func makeDataSource() -> UICollectionViewDiffableDataSource<SectionIdentifier, ItemIdentifier> {
-        let fieldCellRegistration = UICollectionView.CellRegistration<NetworkFieldCell, ItemIdentifier> {
-            [weak self] cell, _, item in
-            self?.configure(cell, item: item)
-        }
-        let headerRegistration = UICollectionView.SupplementaryRegistration<UICollectionViewListCell>(
-            elementKind: UICollectionView.elementKindSectionHeader
-        ) { [weak self] header, _, indexPath in
-            guard
-                let self,
-                let section = self.dataSource.sectionIdentifier(for: indexPath.section)
-            else {
-                return
-            }
-            var configuration = UIListContentConfiguration.header()
-            configuration.text = self.title(for: section)
-            header.contentConfiguration = configuration
-        }
-
-        let dataSource = UICollectionViewDiffableDataSource<SectionIdentifier, ItemIdentifier>(
-            collectionView: collectionView
-        ) { collectionView, indexPath, item in
-            return collectionView.dequeueConfiguredReusableCell(
-                using: fieldCellRegistration,
-                for: indexPath,
-                item: item
-            )
-        }
-        dataSource.supplementaryViewProvider = { collectionView, _, indexPath in
-            collectionView.dequeueConfiguredReusableSupplementary(
-                using: headerRegistration,
-                for: indexPath
-            )
-        }
-        return dataSource
-    }
-
-    private func render(selectedRequest request: NetworkRequest?, reloadData: Bool) {
-        title = request?.displayName
-
-        guard isViewLoaded else {
+    private func bindSelectedRequest(_ request: NetworkRequest?) {
+        guard hasBoundSelectedRequest == false || observedRequest !== request else {
+            renderModeControl(selectedRequest: request)
             return
         }
+
+        hasBoundSelectedRequest = true
+        selectedRequestSurfaceObservationScope.cancelAll()
+        observedRequest = request
+
         guard let request else {
+            title = nil
             showEmptySelection()
             renderModeControl(selectedRequest: nil)
             return
@@ -228,8 +179,48 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
         if contentUnavailableConfiguration != nil {
             contentUnavailableConfiguration = nil
         }
-        renderCurrentMode(selectedRequest: request, reloadData: reloadData)
         renderModeControl(selectedRequest: request)
+        bindCurrentModeSurface()
+    }
+
+    private func bindCurrentModeSurface() {
+        selectedRequestSurfaceObservationScope.cancelAll()
+        guard let request = observedRequest else {
+            return
+        }
+
+        switch mode {
+        case .preview:
+            selectedRequestSurfaceObservationScope.observe(request, tracking: { request in
+                _ = request.request
+                _ = request.requestBody
+                _ = request.response
+                _ = request.responseBody
+                _ = request.state
+            }) { [weak self] _, request in
+                self?.renderPreviewSurface(selectedRequest: request)
+            }
+        case .headers:
+            selectedRequestSurfaceObservationScope.observe(request, tracking: { request in
+                _ = request.request
+                _ = request.response
+                _ = request.metrics
+            }) { [weak self] _, request in
+                self?.renderHeadersSurface(selectedRequest: request)
+            }
+        }
+    }
+
+    private func renderPreviewSurface(selectedRequest request: NetworkRequest) {
+        title = request.displayName
+        showPreview()
+        renderPreview(selectedRequest: request)
+    }
+
+    private func renderHeadersSurface(selectedRequest request: NetworkRequest) {
+        title = request.displayName
+        showHeaders()
+        headersTextView.render(request: request)
     }
 
     @objc private func modeSegmentedControlValueChanged(_ sender: UISegmentedControl) {
@@ -237,40 +228,24 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
             renderModeControl()
             return
         }
+        mode = NetworkDetailMode.allCases[sender.selectedSegmentIndex]
+    }
 
-        let selectedMode = NetworkDetailMode.allCases[sender.selectedSegmentIndex]
-        guard isModeEnabled(selectedMode, selectedRequest: selectedRequest) else {
-            renderModeControl()
+    @objc private func previewRoleSegmentedControlValueChanged(_ sender: UISegmentedControl) {
+        guard previewRoles.indices.contains(sender.selectedSegmentIndex) else {
+            renderPreviewRoleControl()
             return
         }
-        mode = selectedMode
+        previewRole = previewRoles[sender.selectedSegmentIndex]
     }
 
     private func renderModeControl(selectedRequest request: NetworkRequest? = nil) {
-        let request = request ?? selectedRequest
+        let request = request ?? observedRequest
         modeSegmentedControl.isEnabled = request != nil
         modeSegmentedControl.selectedSegmentIndex = modeIndex(for: mode)
         modeSegmentedControl.accessibilityLabel = mode.title
-        for (index, mode) in NetworkDetailMode.allCases.enumerated() {
-            modeSegmentedControl.setEnabled(
-                isModeEnabled(mode, selectedRequest: request),
-                forSegmentAt: index
-            )
-        }
-    }
-
-    private func isModeEnabled(
-        _ mode: NetworkDetailMode,
-        selectedRequest request: NetworkRequest?
-    ) -> Bool {
-        guard let request else {
-            return false
-        }
-        switch mode {
-        case .request:
-            return true
-        case .response:
-            return request.response != nil
+        for index in NetworkDetailMode.allCases.indices {
+            modeSegmentedControl.setEnabled(request != nil, forSegmentAt: index)
         }
     }
 
@@ -278,56 +253,84 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
         NetworkDetailMode.allCases.firstIndex(of: mode) ?? UISegmentedControl.noSegment
     }
 
-    private func renderCurrentMode(selectedRequest: NetworkRequest? = nil, reloadData: Bool) {
-        guard isViewLoaded else {
-            return
-        }
-        guard let selectedRequest = selectedRequest ?? self.selectedRequest else {
-            return
-        }
-        guard resetUnavailableModeIfNeeded(for: selectedRequest) == false else {
-            return
-        }
-
-        showDetailList()
-        if reloadData {
-            applySnapshotUsingReloadData(for: selectedRequest)
-        } else {
-            applySnapshot(for: selectedRequest)
-        }
-        if mode == .response {
-            model.fetchResponseBodyIfNeeded(for: selectedRequest)
-        }
-    }
-
     private func showEmptySelection() {
-        if collectionView.isHidden == false {
-            collectionView.isHidden = true
-        }
+        previewStackView.isHidden = true
+        headersTextView.isHidden = true
+        bodyViewController.display(body: nil)
+        headersTextView.clear()
+        previewRoles = []
+        renderPreviewRoleControl()
+
         if let configuration = contentUnavailableConfiguration as? UIContentUnavailableConfiguration,
            configuration.text == String(localized: "network.empty.selection.title", bundle: .module) {
-            applyEmptySnapshotUsingReloadData()
             return
         }
         var configuration = UIContentUnavailableConfiguration.empty()
         configuration.text = String(localized: "network.empty.selection.title", bundle: .module)
         configuration.textProperties.color = .secondaryLabel
         contentUnavailableConfiguration = configuration
-        applyEmptySnapshotUsingReloadData()
     }
 
-    private func showDetailList() {
-        if collectionView.isHidden {
-            collectionView.isHidden = false
+    private func showPreview() {
+        headersTextView.isHidden = true
+        previewStackView.isHidden = false
+    }
+
+    private func showHeaders() {
+        previewStackView.isHidden = true
+        headersTextView.isHidden = false
+    }
+
+    private func renderPreview(selectedRequest request: NetworkRequest) {
+        let roles = availablePreviewRoles(in: request)
+        previewRoles = roles
+        if let preferredRole = preferredPreviewRole(from: roles), roles.contains(previewRole) == false {
+            previewRole = preferredRole
+            return
+        }
+        renderPreviewRoleControl()
+
+        guard let role = roles.contains(previewRole) ? previewRole : roles.first else {
+            bodyViewController.display(body: nil)
+            return
+        }
+        bodyViewController.display(
+            body: body(in: request, for: role),
+            metadata: previewMetadata(in: request, for: role)
+        )
+        if role == .response {
+            model.fetchResponseBodyIfNeeded(for: request)
         }
     }
 
-    private func resetUnavailableModeIfNeeded(for request: NetworkRequest) -> Bool {
-        guard mode == .response, request.response == nil else {
-            return false
+    private func availablePreviewRoles(in request: NetworkRequest) -> [NetworkBodyRole] {
+        var roles: [NetworkBodyRole] = []
+        if request.requestBody != nil {
+            roles.append(.request)
         }
-        mode = .request
-        return true
+        if request.responseBody != nil {
+            roles.append(.response)
+        }
+        return roles
+    }
+
+    private func preferredPreviewRole(from roles: [NetworkBodyRole]) -> NetworkBodyRole? {
+        roles.contains(.response) ? .response : roles.first
+    }
+
+    private func renderPreviewRoleControl() {
+        previewRoleSegmentedControl.removeAllSegments()
+        for (index, role) in previewRoles.enumerated() {
+            previewRoleSegmentedControl.insertSegment(
+                withTitle: title(for: role),
+                at: index,
+                animated: false
+            )
+        }
+        previewRoleControlContainer.isHidden = previewRoles.count < 2
+        previewRoleSegmentedControl.selectedSegmentIndex = previewRoles.firstIndex(of: previewRole)
+            ?? UISegmentedControl.noSegment
+        previewRoleSegmentedControl.accessibilityLabel = previewRoles.contains(previewRole) ? title(for: previewRole) : nil
     }
 
     private func body(in request: NetworkRequest, for role: NetworkBodyRole) -> NetworkBody? {
@@ -339,59 +342,21 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
         }
     }
 
-    private func pushBody(for role: NetworkBodyRole, in request: NetworkRequest) {
-        let bodyViewController = NetworkBodyViewController()
-        bodyViewController.title = title(for: role)
-        bodyViewController.display(body: body(in: request, for: role))
-        navigationController?.pushViewController(bodyViewController, animated: true)
-        if role == .response {
-            model.fetchResponseBodyIfNeeded(for: request)
-        }
-    }
-
-    private func makeSnapshot(
-        for selectedRequest: NetworkRequest
-    ) -> NSDiffableDataSourceSnapshot<SectionIdentifier, ItemIdentifier> {
-        var snapshot = NSDiffableDataSourceSnapshot<SectionIdentifier, ItemIdentifier>()
-        snapshot.appendSections([.body])
-        snapshot.appendItems(bodyItems(in: selectedRequest, for: mode.bodyRole), toSection: .body)
-
-        let headers = headerFields(from: headers(in: selectedRequest, for: mode))
-        if headers.isEmpty == false {
-            snapshot.appendSections([.headers])
-            snapshot.appendItems(headers.map { .header($0) }, toSection: .headers)
-        }
-        return snapshot
-    }
-
-    private func bodyItems(
+    private func previewMetadata(
         in request: NetworkRequest,
         for role: NetworkBodyRole
-    ) -> [ItemIdentifier] {
-        var items: [ItemIdentifier] = []
-        if let mimeType = mimeType(in: request, for: role) {
-            items.append(
-                .bodyMetadata(
-                    BodyMetadataField(
-                        name: String(localized: "network.body.metadata.mime_type", defaultValue: "MIME Type", bundle: .module),
-                        value: mimeType
-                    )
-                )
-            )
-        }
-        items.append(.bodyLink(role))
-        return items
-    }
-
-    private func mimeType(
-        in request: NetworkRequest,
-        for role: NetworkBodyRole
-    ) -> String? {
+    ) -> NetworkBodyPreviewMetadata {
         switch role {
         case .request:
-            return mimeType(from: nil, headers: request.request.headers)
+            return NetworkBodyPreviewMetadata(
+                mimeType: mimeType(from: nil, headers: request.request.headers),
+                url: request.request.url
+            )
         case .response:
-            return mimeType(from: request.response?.mimeType, headers: request.response?.headers ?? [:])
+            return NetworkBodyPreviewMetadata(
+                mimeType: mimeType(from: request.response?.mimeType, headers: request.response?.headers ?? [:]),
+                url: request.response?.url ?? request.request.url
+            )
         }
     }
 
@@ -415,100 +380,12 @@ package final class NetworkDetailViewController: UIViewController, UICollectionV
         headers.first { $0.key.caseInsensitiveCompare(name) == .orderedSame }?.value
     }
 
-    private func headers(
-        in request: NetworkRequest,
-        for mode: NetworkDetailMode
-    ) -> [String: String] {
-        switch mode {
-        case .request:
-            request.request.headers
-        case .response:
-            request.response?.headers ?? [:]
-        }
-    }
-
-    private func headerFields(from headers: [String: String]) -> [HeaderField] {
-        headers
-            .map { HeaderField(name: $0.key, value: $0.value) }
-            .sorted {
-                let nameComparison = $0.name.localizedCaseInsensitiveCompare($1.name)
-                if nameComparison == .orderedSame {
-                    return $0.value < $1.value
-                }
-                return nameComparison == .orderedAscending
-            }
-    }
-
-    private func applySnapshot(for selectedRequest: NetworkRequest) {
-        guard isViewLoaded else {
-            return
-        }
-        let snapshot = makeSnapshot(for: selectedRequest)
-        let currentSnapshot = dataSource.snapshot()
-        guard currentSnapshot.sectionIdentifiers != snapshot.sectionIdentifiers
-            || currentSnapshot.itemIdentifiers != snapshot.itemIdentifiers else {
-            return
-        }
-        dataSource.apply(snapshot, animatingDifferences: false)
-    }
-
-    private func applySnapshotUsingReloadData(for selectedRequest: NetworkRequest) {
-        guard isViewLoaded else {
-            return
-        }
-        let snapshot = makeSnapshot(for: selectedRequest)
-        dataSource.applySnapshotUsingReloadData(snapshot)
-    }
-
-    private func applyEmptySnapshotUsingReloadData() {
-        guard isViewLoaded else {
-            return
-        }
-        let snapshot = NSDiffableDataSourceSnapshot<SectionIdentifier, ItemIdentifier>()
-        let currentSnapshot = dataSource.snapshot()
-        guard currentSnapshot.numberOfItems != 0 || currentSnapshot.numberOfSections != 0 else {
-            return
-        }
-        dataSource.applySnapshotUsingReloadData(snapshot)
-    }
-
-    private func configure(_ cell: NetworkFieldCell, item: ItemIdentifier) {
-        switch item {
-        case .bodyMetadata(let field):
-            cell.bindBodyMetadata(name: field.name, value: field.value)
-        case .bodyLink(let role):
-            let body = selectedRequest.flatMap { request in
-                self.body(in: request, for: role)
-            }
-            cell.bindBodyLink(
-                title: String(localized: "network.section.body", defaultValue: "Body", bundle: .module),
-                isEnabled: body != nil
-            )
-        case .header(let field):
-            cell.bindHeader(name: field.name, value: field.value)
-        }
-    }
-
     private func title(for role: NetworkBodyRole) -> String {
         switch role {
         case .request:
-            String(localized: "network.section.body.request", bundle: .module)
+            String(localized: "network.section.request", bundle: .module)
         case .response:
-            String(localized: "network.section.body.response", bundle: .module)
-        }
-    }
-
-    private func title(for section: SectionIdentifier) -> String {
-        switch section {
-        case .body:
-            switch mode {
-            case .request:
-                String(localized: "network.section.body.request_data", defaultValue: "Request Data", bundle: .module)
-            case .response:
-                String(localized: "network.section.body.response_data", defaultValue: "Response Data", bundle: .module)
-            }
-        case .headers:
-            String(localized: "network.section.headers", defaultValue: "Headers", bundle: .module)
+            String(localized: "network.section.response", bundle: .module)
         }
     }
 }
@@ -605,37 +482,51 @@ private final class NetworkDetailModePaletteContentView: UIView {
 
 #if DEBUG
 extension NetworkDetailViewController {
-    package var collectionViewForTesting: UICollectionView {
-        collectionView
+    var previewViewForTesting: UIView {
+        previewStackView
     }
 
-    package var currentModeForTesting: NetworkDetailMode {
+    var headersTextViewForTesting: NetworkHeadersTextView {
+        headersTextView
+    }
+
+    var bodyViewControllerForTesting: NetworkBodyViewController {
+        bodyViewController
+    }
+
+    var currentModeForTesting: NetworkDetailMode {
         mode
     }
 
-    package var isDetailModeControlEnabledForTesting: Bool {
+    var currentPreviewRoleForTesting: NetworkBodyRole {
+        previewRole
+    }
+
+    var isDetailModeControlEnabledForTesting: Bool {
         modeSegmentedControl.isEnabled
     }
 
-    package func isDetailModeEnabledForTesting(_ mode: NetworkDetailMode) -> Bool {
+    var isPreviewRoleControlHiddenForTesting: Bool {
+        previewRoleControlContainer.isHidden
+    }
+
+    func isDetailModeEnabledForTesting(_ mode: NetworkDetailMode) -> Bool {
         modeSegmentedControl.isEnabledForSegment(at: modeIndex(for: mode))
     }
 
-    package func selectModeForTesting(_ mode: NetworkDetailMode) {
+    func selectModeForTesting(_ mode: NetworkDetailMode) {
         modeSegmentedControl.selectedSegmentIndex = modeIndex(for: mode)
         modeSegmentedControlValueChanged(modeSegmentedControl)
     }
 
-    package func setModeForTesting(_ mode: NetworkDetailMode) {
+    func setModeForTesting(_ mode: NetworkDetailMode) {
         self.mode = mode
     }
 
-    package func selectBodyLinkForTesting() {
-        let indexPath = dataSource.indexPath(for: .bodyLink(mode.bodyRole))
-        guard let indexPath, collectionView(collectionView, shouldSelectItemAt: indexPath) else {
-            return
-        }
-        collectionView(collectionView, didSelectItemAt: indexPath)
+    func selectPreviewRoleForTesting(_ role: NetworkBodyRole) {
+        previewRoleSegmentedControl.selectedSegmentIndex = previewRoles.firstIndex(of: role)
+            ?? UISegmentedControl.noSegment
+        previewRoleSegmentedControlValueChanged(previewRoleSegmentedControl)
     }
 }
 #endif
