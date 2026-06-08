@@ -49,7 +49,7 @@ final class NetworkBodyViewController: UIViewController {
     private var metadata: NetworkBodyPreviewMetadata?
     private var hasDisplayedBody = false
     private var mediaPlayerViewController: AVPlayerViewController?
-    private var mediaTemporaryFileURL: URL?
+    private var mediaTemporaryFile: MediaTemporaryFile?
     private var imageWidthConstraint: NSLayoutConstraint?
     private var imageHeightConstraint: NSLayoutConstraint?
     private var shouldResetImageZoomOnNextLayout = false
@@ -76,7 +76,7 @@ final class NetworkBodyViewController: UIViewController {
 
     isolated deinit {
         observationScope.cancelAll()
-        removeTemporaryMediaFile(at: mediaTemporaryFileURL)
+        removeTemporaryMediaFile(at: mediaTemporaryFile?.fileURL)
     }
 
     func display(body: NetworkBody?) {
@@ -281,7 +281,13 @@ final class NetworkBodyViewController: UIViewController {
         }
 
         if previewKind == .movie || previewKind == .hlsPlaylist {
-            guard let fileURL = writeMediaData(data, mimeType: metadata?.mimeType, url: metadata?.url) else {
+            guard let fileURL = temporaryMediaFileURL(
+                for: body,
+                rawBody: rawBody,
+                data: data,
+                mimeType: metadata?.mimeType,
+                url: metadata?.url
+            ) else {
                 return nil
             }
             return .movie(fileURL)
@@ -298,8 +304,7 @@ final class NetworkBodyViewController: UIViewController {
 
     private func showImagePreview(_ image: UIImage) {
         removeMediaPlayerViewController()
-        removeTemporaryMediaFile(at: mediaTemporaryFileURL)
-        mediaTemporaryFileURL = nil
+        removeCachedTemporaryMediaFile()
         syntaxView.isHidden = true
         imageScrollView.isHidden = false
         shouldResetImageZoomOnNextLayout = true
@@ -315,9 +320,8 @@ final class NetworkBodyViewController: UIViewController {
     private func showMoviePreview(_ url: URL) {
         hideImagePreview()
         syntaxView.isHidden = true
-        if mediaTemporaryFileURL != url {
-            removeTemporaryMediaFile(at: mediaTemporaryFileURL)
-            mediaTemporaryFileURL = url
+        if let temporaryFileURL = mediaTemporaryFile?.fileURL, temporaryFileURL != url {
+            removeCachedTemporaryMediaFile()
         }
 
         let playerViewController: AVPlayerViewController
@@ -337,14 +341,16 @@ final class NetworkBodyViewController: UIViewController {
             playerViewController.didMove(toParent: self)
             mediaPlayerViewController = playerViewController
         }
+        if currentMediaURL(in: playerViewController) == url {
+            return
+        }
         playerViewController.player = AVPlayer(url: url)
     }
 
     private func hideMediaPreview() {
         hideImagePreview()
         removeMediaPlayerViewController()
-        removeTemporaryMediaFile(at: mediaTemporaryFileURL)
-        mediaTemporaryFileURL = nil
+        removeCachedTemporaryMediaFile()
         syntaxView.isHidden = false
     }
 
@@ -442,21 +448,53 @@ final class NetworkBodyViewController: UIViewController {
         self.mediaPlayerViewController = nil
     }
 
-    private func writeMediaData(
-        _ data: Data,
+    private func temporaryMediaFileURL(
+        for body: NetworkBody,
+        rawBody: String,
+        data: Data,
         mimeType: String?,
         url: String?
     ) -> URL? {
+        if let mediaTemporaryFile,
+           mediaTemporaryFile.matches(
+               body: body,
+               rawBody: rawBody,
+               isBase64Encoded: body.isBase64Encoded,
+               mimeType: mimeType,
+               url: url
+           ),
+           FileManager.default.fileExists(atPath: mediaTemporaryFile.fileURL.path) {
+            return mediaTemporaryFile.fileURL
+        }
+
+        removeCachedTemporaryMediaFile()
         let fileExtension = mediaFileExtension(mimeType: mimeType, url: url)
         let fileURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
             .appendingPathExtension(fileExtension)
         do {
             try data.write(to: fileURL, options: [.atomic])
+            mediaTemporaryFile = MediaTemporaryFile(
+                bodyID: ObjectIdentifier(body),
+                rawBody: rawBody,
+                isBase64Encoded: body.isBase64Encoded,
+                mimeType: mimeType,
+                url: url,
+                fileURL: fileURL
+            )
             return fileURL
         } catch {
             return nil
         }
+    }
+
+    private func removeCachedTemporaryMediaFile() {
+        removeTemporaryMediaFile(at: mediaTemporaryFile?.fileURL)
+        mediaTemporaryFile = nil
+    }
+
+    private func currentMediaURL(in playerViewController: AVPlayerViewController) -> URL? {
+        (playerViewController.player?.currentItem?.asset as? AVURLAsset)?.url
     }
 }
 
@@ -483,6 +521,29 @@ private struct ImagePreviewLayoutState {
     var imageSize: CGSize
     var boundsSize: CGSize
     var minimumZoomScale: CGFloat
+}
+
+private struct MediaTemporaryFile {
+    var bodyID: ObjectIdentifier
+    var rawBody: String
+    var isBase64Encoded: Bool
+    var mimeType: String?
+    var url: String?
+    var fileURL: URL
+
+    func matches(
+        body: NetworkBody,
+        rawBody: String,
+        isBase64Encoded: Bool,
+        mimeType: String?,
+        url: String?
+    ) -> Bool {
+        bodyID == ObjectIdentifier(body)
+            && self.rawBody == rawBody
+            && self.isBase64Encoded == isBase64Encoded
+            && self.mimeType == mimeType
+            && self.url == url
+    }
 }
 
 private extension NetworkBodyViewController {
@@ -572,7 +633,18 @@ extension NetworkBodyViewController {
 
     var mediaPlayerURLForTesting: URL? {
         loadViewIfNeeded()
-        return (mediaPlayerViewController?.player?.currentItem?.asset as? AVURLAsset)?.url
+        guard let mediaPlayerViewController else {
+            return nil
+        }
+        return currentMediaURL(in: mediaPlayerViewController)
+    }
+
+    var mediaPlayerIdentityForTesting: ObjectIdentifier? {
+        loadViewIfNeeded()
+        guard let player = mediaPlayerViewController?.player else {
+            return nil
+        }
+        return ObjectIdentifier(player)
     }
 
     var bodyObservationDeliveryForTesting: ObservationDelivery? {

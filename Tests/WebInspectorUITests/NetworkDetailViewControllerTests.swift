@@ -539,6 +539,58 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func mediaResponsePreviewReusesPlayerAndTemporaryFileWhenRequestUpdateDoesNotChangeBody() async throws {
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://media.example.com/download.php",
+                responseHeaders: ["content-type": "video/mp4"],
+                responseMimeType: "video/mp4",
+                finishes: false
+            )
+        )
+        request.applyResponseBody(
+            NetworkBodyPayload(
+                body: "not a real movie",
+                base64Encoded: false
+            )
+        )
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
+
+        let didRenderMediaPreview = await waitUntilRendered(in: viewController) {
+            viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting?.pathExtension == "mp4"
+                && viewController.bodyViewControllerForTesting.mediaPlayerIdentityForTesting != nil
+        }
+        #expect(didRenderMediaPreview)
+        let temporaryFileURL = try #require(viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting)
+        let playerIdentity = try #require(viewController.bodyViewControllerForTesting.mediaPlayerIdentityForTesting)
+        let delivery = try #require(viewController.selectedRequestRenderObservationDeliveryForTesting)
+
+        network.applyDataReceived(
+            targetID: request.id.targetID,
+            requestID: request.id.requestID,
+            dataLength: 128,
+            encodedDataLength: 64,
+            timestamp: 4
+        )
+
+        let observedValues = await delivery.values {
+            request.encodedDataLength == 64
+                && viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting == temporaryFileURL
+                && viewController.bodyViewControllerForTesting.mediaPlayerIdentityForTesting == playerIdentity
+                && FileManager.default.fileExists(atPath: temporaryFileURL.path)
+        }
+        #expect(observedValues.latestValue == true)
+    }
+
+    @Test
     func imageResponsePreviewUsesScrollViewAndFitsLargeImage() async throws {
         let imageSize = CGSize(width: 600, height: 1400)
         let network = NetworkSession()
