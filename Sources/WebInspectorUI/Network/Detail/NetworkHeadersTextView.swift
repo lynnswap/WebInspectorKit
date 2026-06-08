@@ -38,6 +38,9 @@ final class NetworkHeadersTextView: UIView {
     private var sectionRules: [SectionRule] = []
     private var renderedText = ""
     private weak var renderedRequest: NetworkRequest?
+#if DEBUG
+    private var attributedTextAssignmentCount = 0
+#endif
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -55,11 +58,27 @@ final class NetworkHeadersTextView: UIView {
     }
 
     func render(request: NetworkRequest) {
+        render(request: request, forceDocumentAssignment: false)
+    }
+
+    private func render(
+        request: NetworkRequest,
+        forceDocumentAssignment: Bool
+    ) {
         renderedRequest = request
         let document = NetworkHeadersTextDocumentBuilder(request: request).makeDocument()
-        renderedText = document.attributedString.string
+        let documentText = document.attributedString.string
+        if forceDocumentAssignment == false, renderedText == documentText {
+            updateSectionRuleRuns()
+            return
+        }
+
+        renderedText = documentText
         sectionRules = document.sectionRules.map { SectionRule(range: $0.range, color: $0.color) }
         textView.attributedText = document.attributedString
+#if DEBUG
+        attributedTextAssignmentCount += 1
+#endif
         updateSectionRuleRuns()
     }
 
@@ -99,7 +118,7 @@ final class NetworkHeadersTextView: UIView {
         guard let renderedRequest else {
             return
         }
-        render(request: renderedRequest)
+        render(request: renderedRequest, forceDocumentAssignment: true)
     }
 
     private func updateSectionRuleRuns() {
@@ -621,6 +640,19 @@ extension NetworkHeadersTextView {
 
     var isSelectableForTesting: Bool {
         textView.isSelectable
+    }
+
+    var selectedRangeForTesting: NSRange {
+        get {
+            textView.selectedRange
+        }
+        set {
+            textView.selectedRange = newValue
+        }
+    }
+
+    var attributedTextAssignmentCountForTesting: Int {
+        attributedTextAssignmentCount
     }
 }
 #endif

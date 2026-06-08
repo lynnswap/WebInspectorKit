@@ -254,8 +254,13 @@ final class NetworkBodyViewController: UIViewController {
             return nil
         }
 
-        if previewKind == .hlsPlaylist, let remoteURL = playableRemoteMediaURL(metadata?.url) {
-            return .movie(remoteURL)
+        if previewKind == .hlsPlaylist {
+            if body.role == .response, let remoteURL = playableRemoteMediaURL(metadata?.url) {
+                return .movie(remoteURL)
+            }
+            if body.role == .request {
+                return nil
+            }
         }
 
         guard let rawBody = body.full else {

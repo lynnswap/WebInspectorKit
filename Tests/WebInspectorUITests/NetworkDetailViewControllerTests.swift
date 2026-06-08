@@ -451,6 +451,44 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func hlsRequestBodyRendersSubmittedTextInsteadOfRemotePlaylist() async throws {
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://media.example.com/upload.m3u8",
+                postData: """
+                #EXTM3U
+                #EXT-X-VERSION:3
+                """,
+                responseHeaders: ["content-type": "application/json"],
+                responseMimeType: "application/json"
+            )
+        )
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
+
+        let didRenderPreviewRoles = await waitUntilRendered(in: viewController) {
+            viewController.isPreviewRoleControlHiddenForTesting == false
+        }
+        #expect(didRenderPreviewRoles)
+
+        viewController.selectPreviewRoleForTesting(.request)
+
+        let didRenderRequestBody = await waitUntilRendered(in: viewController) {
+            viewController.currentPreviewRoleForTesting == .request
+                && viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting == nil
+                && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text.contains("#EXTM3U")
+        }
+        #expect(didRenderRequestBody)
+    }
+
+    @Test
     func mediaResponsePreviewReleasesPlayerAndTemporaryFileWhenShowingHeaders() async throws {
         let network = NetworkSession()
         let request = try #require(
@@ -741,6 +779,52 @@ struct NetworkDetailViewControllerTests {
         }
         #expect(didRenderHeaders)
         #expect(fetchedIDs.isEmpty)
+    }
+
+    @Test
+    func headersModePreservesSelectionWhenRequestUpdateDoesNotChangeDocument() async throws {
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://example.com/api/data.json",
+                responseHeaders: ["content-type": "application/json"],
+                responseMimeType: "application/json",
+                finishes: false
+            )
+        )
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.setModeForTesting(.headers)
+
+        let didRenderHeaders = await waitUntilRendered(in: viewController) {
+            viewController.headersTextViewForTesting.renderedTextForTesting.contains("content-type: application/json")
+        }
+        #expect(didRenderHeaders)
+
+        let selectedRange = NSRange(location: 2, length: 4)
+        viewController.headersTextViewForTesting.selectedRangeForTesting = selectedRange
+        let assignmentCount = viewController.headersTextViewForTesting.attributedTextAssignmentCountForTesting
+        let delivery = try #require(viewController.selectedRequestRenderObservationDeliveryForTesting)
+
+        network.applyDataReceived(
+            targetID: request.id.targetID,
+            requestID: request.id.requestID,
+            dataLength: 128,
+            encodedDataLength: 64,
+            timestamp: 4
+        )
+
+        let observedValues = await delivery.values {
+            request.encodedDataLength == 64
+                && viewController.headersTextViewForTesting.attributedTextAssignmentCountForTesting == assignmentCount
+                && viewController.headersTextViewForTesting.selectedRangeForTesting == selectedRange
+        }
+        #expect(observedValues.latestValue == true)
     }
 
     @Test
