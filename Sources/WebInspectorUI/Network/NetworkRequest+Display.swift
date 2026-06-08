@@ -85,22 +85,23 @@ extension NetworkRequest {
             return NetworkResourceFilter(mimeType: nil, url: request.url)
         }
 
+        let responseMimeType = mimeType(from: response)
         if let resourceType, shouldKeepResourceTypeForURLInferredMedia(resourceType) {
-            if case .previewable = NetworkMediaPreviewSupport.classification(mimeType: response.mimeType, url: nil) {
+            if case .previewable = NetworkMediaPreviewSupport.classification(mimeType: responseMimeType, url: nil) {
                 return .media
             }
             return NetworkResourceFilter(resourceType: resourceType)
         }
 
         let responseURL = response.url
-        switch NetworkMediaPreviewSupport.classification(mimeType: response.mimeType, url: responseURL) {
+        switch NetworkMediaPreviewSupport.classification(mimeType: responseMimeType, url: responseURL) {
         case .previewable:
             return .media
         case .notPreviewable:
             if resourceType == .media {
                 return .media
             }
-            return NetworkResourceFilter(mimeType: response.mimeType, url: responseURL)
+            return NetworkResourceFilter(mimeType: responseMimeType, url: responseURL)
         case .unknown:
             break
         }
@@ -108,7 +109,7 @@ extension NetworkRequest {
             return NetworkResourceFilter(resourceType: resourceType)
         }
         return NetworkResourceFilter(
-            mimeType: response.mimeType,
+            mimeType: responseMimeType,
             url: responseURL
         )
     }
@@ -163,6 +164,26 @@ private func shouldKeepResourceTypeForURLInferredMedia(_ resourceType: NetworkRe
     default:
         return true
     }
+}
+
+private func mimeType(from response: NetworkResponsePayload) -> String? {
+    let rawMimeType = response.mimeType ?? headerValue(named: "content-type", in: response.headers)
+    let mimeType = rawMimeType?
+        .split(separator: ";", maxSplits: 1, omittingEmptySubsequences: true)
+        .first
+        .map(String.init)?
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let mimeType, mimeType.isEmpty == false else {
+        return nil
+    }
+    return mimeType
+}
+
+private func headerValue(named name: String, in headers: [String: String]) -> String? {
+    if let value = headers[name] {
+        return value
+    }
+    return headers.first { $0.key.caseInsensitiveCompare(name) == .orderedSame }?.value
 }
 
 extension NetworkResourceType {

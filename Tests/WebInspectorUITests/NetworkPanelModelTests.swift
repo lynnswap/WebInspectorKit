@@ -187,11 +187,20 @@ func mediaFilterIncludesPreviewableMediaResponses() async throws {
         resourceType: .xhr,
         timestamp: 18
     )
+    applyRequest(
+        to: network,
+        requestID: "19",
+        url: "https://api.example.com/thumbnail",
+        resourceType: .xhr,
+        mimeType: nil,
+        responseHeaders: ["Content-Type": "image/png; charset=utf-8"],
+        timestamp: 19
+    )
 
     let model = NetworkPanelModel(network: network)
     model.setResourceFilter(.media, enabled: true)
 
-    #expect(model.displayRequests.map(\.id.requestID.rawValue) == ["16", "8", "7", "6", "5", "4", "3", "2", "1"])
+    #expect(model.displayRequests.map(\.id.requestID.rawValue) == ["19", "16", "8", "7", "6", "5", "4", "3", "2", "1"])
 }
 
 @Test
@@ -255,7 +264,8 @@ private func applyRequest(
     requestID rawRequestID: String,
     url: String,
     resourceType: NetworkResourceType,
-    mimeType: String,
+    mimeType: String?,
+    responseHeaders: [String: String] = [:],
     timestamp: Double
 ) -> NetworkRequest.ID {
     let targetID = ProtocolTargetIdentifier("page")
@@ -278,6 +288,7 @@ private func applyRequest(
             url: url,
             status: 200,
             statusText: "OK",
+            headers: responseHeaders,
             mimeType: mimeType
         ),
         timestamp: timestamp + 0.1
