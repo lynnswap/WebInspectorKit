@@ -14,6 +14,7 @@ public final class WebInspectorViewController: UIViewController {
     public let session: WebInspectorSession
     private var drawsBackgroundStorage = true
     private var followsInspectedPageAppearanceStorage = false
+    private var appliedInspectedPageInterfaceStyle: UIUserInterfaceStyle?
     private let observationScope = ObservationScope()
 
     public var followsInspectedPageAppearance: Bool {
@@ -96,11 +97,16 @@ public final class WebInspectorViewController: UIViewController {
     }
 
     private func applyPreferredInterfaceStyle(_ style: UIUserInterfaceStyle) {
-        let resolvedStyle = followsInspectedPageAppearanceStorage ? style : .unspecified
-        guard overrideUserInterfaceStyle != resolvedStyle else {
+        guard followsInspectedPageAppearanceStorage else {
             return
         }
-        overrideUserInterfaceStyle = resolvedStyle
+
+        if overrideUserInterfaceStyle != style {
+            overrideUserInterfaceStyle = style
+            appliedInspectedPageInterfaceStyle = style
+        } else if appliedInspectedPageInterfaceStyle != nil {
+            appliedInspectedPageInterfaceStyle = style
+        }
     }
 
     private func setFollowsInspectedPageAppearance(_ followsInspectedPageAppearance: Bool) {
@@ -108,7 +114,22 @@ public final class WebInspectorViewController: UIViewController {
             return
         }
         followsInspectedPageAppearanceStorage = followsInspectedPageAppearance
+        guard followsInspectedPageAppearance else {
+            clearAppliedInspectedPageInterfaceStyle()
+            return
+        }
         applyPreferredInterfaceStyle(session.interface.preferredInterfaceStyle)
+    }
+
+    private func clearAppliedInspectedPageInterfaceStyle() {
+        defer {
+            appliedInspectedPageInterfaceStyle = nil
+        }
+        guard let appliedInspectedPageInterfaceStyle,
+              overrideUserInterfaceStyle == appliedInspectedPageInterfaceStyle else {
+            return
+        }
+        overrideUserInterfaceStyle = .unspecified
     }
 
     private func setDrawsBackground(_ drawsBackground: Bool) {

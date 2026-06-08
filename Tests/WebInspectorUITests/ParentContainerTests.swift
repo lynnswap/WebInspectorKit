@@ -166,6 +166,23 @@ struct ParentContainerTests {
     }
 
     @Test
+    func viewControllerPreservesManualInterfaceStyleOverrideWhenPageFollowingIsDisabled() async {
+        let session = WebInspectorSession()
+        let viewController = WebInspectorViewController(session: session)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        viewController.overrideUserInterfaceStyle = .dark
+        session.interface.setPreferredInterfaceStyle(.light)
+        await Task.yield()
+        #expect(viewController.overrideUserInterfaceStyle == .dark)
+
+        session.interface.setPreferredInterfaceStyle(.unspecified)
+        await Task.yield()
+        #expect(viewController.overrideUserInterfaceStyle == .dark)
+    }
+
+    @Test
     func viewControllerAppliesCurrentSessionPreferredInterfaceStyleWhenOptingIn() async {
         let session = WebInspectorSession()
         let viewController = WebInspectorViewController(session: session)
