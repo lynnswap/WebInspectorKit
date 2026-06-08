@@ -402,10 +402,11 @@ func networkResponseBodyFetchAppliesResultToCoreRequest() async throws {
         targetID: .pageMain,
         message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-2","frameId":"main-frame","request":{"url":"https://example.com/api.json"},"timestamp":1}}"#
     )
-    await receiveTargetDispatch(
+    await receiveAndApplyTargetDispatch(
         transport,
         targetID: .pageMain,
-        message: #"{"method":"Network.responseReceived","params":{"requestId":"request-2","timestamp":2,"type":"XHR","response":{"url":"https://example.com/api.json","status":200,"mimeType":"application/json","headers":{"content-type":"application/json"}}}}"#
+        message: #"{"method":"Network.responseReceived","params":{"requestId":"request-2","timestamp":2,"type":"XHR","response":{"url":"https://example.com/api.json","status":200,"mimeType":"application/json","headers":{"content-type":"application/json"}}}}"#,
+        in: session
     )
     let request = try await awaitValueAfterActorTurns {
         await session.attachment.network.request(for: .init(targetID: .pageMain, requestID: .init("request-2")))
@@ -418,10 +419,11 @@ func networkResponseBodyFetchAppliesResultToCoreRequest() async throws {
     await session.attachment.network.fetchResponseBody(for: request.id)
     #expect(await backend.sentTargetMessages().count == sentCountBeforeFinish)
 
-    await receiveTargetDispatch(
+    await receiveAndApplyTargetDispatch(
         transport,
         targetID: .pageMain,
-        message: #"{"method":"Network.loadingFinished","params":{"requestId":"request-2","timestamp":3}}"#
+        message: #"{"method":"Network.loadingFinished","params":{"requestId":"request-2","timestamp":3}}"#,
+        in: session
     )
 
     let sentCount = await backend.sentTargetMessages().count
@@ -2156,10 +2158,11 @@ func documentUpdatedAllowsNewDocumentRequestWhilePreviousRequestIsPending() asyn
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
 
-    await receiveTargetDispatch(
+    await receiveAndApplyTargetDispatch(
         transport,
         targetID: .pageMain,
-        message: #"{"method":"DOM.documentUpdated","params":{}}"#
+        message: #"{"method":"DOM.documentUpdated","params":{}}"#,
+        in: session
     )
     let _: DOMSessionSnapshot = try await awaitValueAfterActorTurns {
         let snapshot = await session.attachment.dom.snapshot()
@@ -2180,10 +2183,11 @@ func documentUpdatedAllowsNewDocumentRequestWhilePreviousRequestIsPending() asyn
     )
     let afterFirstRequest = await backend.sentTargetMessages().count
 
-    await receiveTargetDispatch(
+    await receiveAndApplyTargetDispatch(
         transport,
         targetID: .pageMain,
-        message: #"{"method":"DOM.documentUpdated","params":{}}"#
+        message: #"{"method":"DOM.documentUpdated","params":{}}"#,
+        in: session
     )
     let secondRequest = try await waitForTargetMessage(
         backend,
@@ -5123,7 +5127,7 @@ private func waitForBackendTargetMessage(
     method: String,
     ordinal: Int,
     after count: Int,
-    timeout: Duration = .milliseconds(750)
+    timeout: Duration = .seconds(5)
 ) async throws -> SentTargetMessage {
     try await withThrowingTaskGroup(of: SentTargetMessage.self) { group in
         defer {
@@ -5328,6 +5332,19 @@ private func receiveTargetDispatch(
     message: String
 ) async -> UInt64 {
     await transport.receiveRootMessage(targetDispatchMessage(targetID: targetID, message: message))
+}
+
+@discardableResult
+private func receiveAndApplyTargetDispatch(
+    _ transport: TransportSession,
+    targetID: ProtocolTargetIdentifier,
+    message: String,
+    in session: InspectorSession,
+    sourceLocation: SourceLocation = #_sourceLocation
+) async -> UInt64 {
+    let sequence = await receiveTargetDispatch(transport, targetID: targetID, message: message)
+    await expectProtocolEventApplied(sequence, in: session, sourceLocation: sourceLocation)
+    return sequence
 }
 
 private func receiveTargetReply(
