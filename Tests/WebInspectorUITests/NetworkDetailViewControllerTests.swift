@@ -425,6 +425,32 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func hlsResponsePreviewUsesPlaylistURLBeforeBodyLoads() async throws {
+        let network = NetworkSession()
+        let playlistURL = "https://media.example.com/live/master.m3u8"
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: playlistURL,
+                responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
+                responseMimeType: "application/vnd.apple.mpegurl"
+            )
+        )
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
+
+        let didRenderHLSPreview = await waitUntilRendered(in: viewController) {
+            viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting?.absoluteString == playlistURL
+        }
+        #expect(didRenderHLSPreview)
+    }
+
+    @Test
     func mediaResponsePreviewReleasesPlayerAndTemporaryFileWhenShowingHeaders() async throws {
         let network = NetworkSession()
         let request = try #require(

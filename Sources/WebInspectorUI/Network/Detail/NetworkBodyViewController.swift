@@ -177,15 +177,16 @@ final class NetworkBodyViewController: UIViewController {
             return
         }
 
+        if renderMediaPreviewIfPossible(for: body) {
+            return
+        }
+
         switch body.fetchState {
         case .available, .fetching:
             hideMediaPreview()
             displayText = ""
             syntaxKind = body.textRepresentationSyntaxKind
         case .loaded:
-            if renderMediaPreviewIfPossible(for: body) {
-                return
-            }
             body.prepareTextRepresentation()
             displayText = body.textRepresentation
                 ?? String(localized: "network.body.unavailable", bundle: .module)
