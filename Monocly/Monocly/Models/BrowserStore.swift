@@ -335,6 +335,7 @@ private enum BrowserTabStoreSPI {
 
     @ObservationIgnored private var cancellables: Set<AnyCancellable> = []
     @ObservationIgnored private var hasLoadedInitialRequest = false
+    @ObservationIgnored private var isHoldingRestoredTitle: Bool
     @ObservationIgnored private var restoredInteractionState: Data?
     @ObservationIgnored var onStateChanged: (() -> Void)?
 
@@ -363,7 +364,7 @@ private enum BrowserTabStoreSPI {
     }
 
     var interactionStateData: Data? {
-        webView.interactionState as? Data
+        restoredInteractionState ?? (webView.interactionState as? Data)
     }
 
     init(
@@ -381,6 +382,7 @@ private enum BrowserTabStoreSPI {
         pageTitle = title
         self.createdAt = createdAt
         self.lastUsedAt = lastUsedAt
+        isHoldingRestoredTitle = title?.isEmpty == false
         self.restoredInteractionState = restoredInteractionState
 
         let configuration = WKWebViewConfiguration()
@@ -444,6 +446,8 @@ private enum BrowserTabStoreSPI {
 
     func load(url: URL) {
         restoredInteractionState = nil
+        isHoldingRestoredTitle = false
+        pageTitle = nil
         currentURL = url
         hasLoadedInitialRequest = true
         webView.load(URLRequest(url: url))
@@ -520,7 +524,15 @@ private enum BrowserTabStoreSPI {
                 guard let self else {
                     return
                 }
+                guard let title else {
+                    if self.isHoldingRestoredTitle == false {
+                        self.pageTitle = nil
+                    }
+                    self.notifyStateChanged()
+                    return
+                }
                 self.pageTitle = title
+                self.isHoldingRestoredTitle = false
                 self.notifyStateChanged()
             }
             .store(in: &cancellables)
@@ -770,6 +782,10 @@ extension BrowserTabStore: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         didFinishNavigationCount += 1
+        if webView.title == nil {
+            isHoldingRestoredTitle = false
+            pageTitle = nil
+        }
 #if canImport(UIKit)
         endRefreshingIfNeeded()
 #endif

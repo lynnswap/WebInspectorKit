@@ -209,6 +209,80 @@ struct BrowserSessionRestoreTests {
     }
 
     @Test
+    func autosavePreservesPendingRestoredStateForUnselectedTabs() throws {
+        try withTemporarySessionStore { sessionStore, _ in
+            let selectedID = UUID()
+            let backgroundID = UUID()
+            let backgroundState = Data("background-state".utf8)
+            let restoredSession = BrowserRestoredSession(
+                snapshot: BrowserSessionSnapshot(
+                    selectedTabID: selectedID,
+                    tabs: [
+                        BrowserTabSnapshot(
+                            id: selectedID,
+                            url: try #require(URL(string: "https://example.com/selected")),
+                            title: "Selected",
+                            createdAt: Date(timeIntervalSince1970: 100),
+                            lastUsedAt: Date(timeIntervalSince1970: 200),
+                            stateFileName: BrowserTabSnapshot.stateFileName(for: selectedID)
+                        ),
+                        BrowserTabSnapshot(
+                            id: backgroundID,
+                            url: try #require(URL(string: "https://example.com/background")),
+                            title: "Background",
+                            createdAt: Date(timeIntervalSince1970: 100),
+                            lastUsedAt: Date(timeIntervalSince1970: 100),
+                            stateFileName: BrowserTabSnapshot.stateFileName(for: backgroundID)
+                        )
+                    ]
+                ),
+                tabStateDataByID: [backgroundID: backgroundState]
+            )
+            let store = BrowserStore(
+                restoring: restoredSession,
+                fallbackURL: try #require(URL(string: "https://fallback.example/")),
+                sessionStore: sessionStore
+            )
+
+            store.loadInitialRequestIfNeeded()
+            store.preserveSession(immediate: true)
+
+            let savedSession = try #require(sessionStore.load())
+            #expect(savedSession.tabStateDataByID[backgroundID] == backgroundState)
+        }
+    }
+
+    @Test
+    func restoredTitleSurvivesInitialNilWebViewTitleObservation() throws {
+        let tabID = UUID()
+        let store = BrowserStore(
+            restoring: BrowserRestoredSession(
+                snapshot: BrowserSessionSnapshot(
+                    selectedTabID: tabID,
+                    tabs: [
+                        BrowserTabSnapshot(
+                            id: tabID,
+                            url: try #require(URL(string: "https://example.com/restored-title")),
+                            title: "Restored Title",
+                            createdAt: Date(timeIntervalSince1970: 100),
+                            lastUsedAt: Date(timeIntervalSince1970: 100),
+                            stateFileName: BrowserTabSnapshot.stateFileName(for: tabID)
+                        )
+                    ]
+                ),
+                tabStateDataByID: [:]
+            ),
+            fallbackURL: try #require(URL(string: "https://fallback.example/")),
+            sessionStore: nil
+        )
+
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        #expect(store.tabs[0].snapshot(stateFileName: "tab.state").title == "Restored Title")
+        #expect(store.displayTitle == "Restored Title")
+    }
+
+    @Test
     func mainSceneDelegateConnectsWithRestoredBrowserStore() throws {
         try withTemporarySessionStore { sessionStore, _ in
             let windowScene = try makeWindowScene()
