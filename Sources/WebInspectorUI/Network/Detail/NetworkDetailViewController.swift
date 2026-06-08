@@ -82,8 +82,12 @@ package final class NetworkDetailViewController: UIViewController {
         }
     }
 
-    package init(model: NetworkPanelModel) {
+    package init(
+        model: NetworkPanelModel,
+        initialMode: NetworkDetailMode = .headers
+    ) {
         self.model = model
+        mode = initialMode
         super.init(nibName: nil, bundle: nil)
     }
 

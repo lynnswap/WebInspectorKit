@@ -104,4 +104,33 @@ private final class NetworkListColumnNavigationController: UINavigationControlle
         )
     )
 }
+
+#Preview("Network Split Log Preview") {
+    makeNetworkSplitPreviewController(
+        initialMode: .preview,
+        selectedDisplayName: "log"
+    )
+}
+
+@MainActor
+private func makeNetworkSplitPreviewController(
+    initialMode: NetworkDetailMode = .headers,
+    selectedDisplayName: String? = nil
+) -> NetworkCompactNavigationController {
+    let model = NetworkPreviewFixtures.makePanelModel(mode: .detail)
+    if let selectedDisplayName,
+       let request = model.displayRequests.first(where: { $0.displayName == selectedDisplayName }) {
+        model.selectRequest(request)
+    }
+    return NetworkCompactNavigationController(
+        model: model,
+        listViewController: NetworkListViewController(
+            model: model
+        ),
+        detailViewController: NetworkDetailViewController(
+            model: model,
+            initialMode: initialMode
+        )
+    )
+}
 #endif
