@@ -52,8 +52,13 @@ package enum NetworkMediaPreviewSupport {
                     break
                 }
             }
-            if normalizedMIMEType.hasPrefix("image/")
-                || normalizedMIMEType.hasPrefix("audio/")
+            if normalizedMIMEType.hasPrefix("image/") {
+                if case .previewable(.image) = imageClassification(url: url) {
+                    return .previewable(.image)
+                }
+                return .notPreviewable
+            }
+            if normalizedMIMEType.hasPrefix("audio/")
                 || normalizedMIMEType.hasPrefix("video/") {
                 return .notPreviewable
             }
@@ -160,7 +165,7 @@ package enum NetworkMediaPreviewSupport {
 
     private static func isSupportedImageMIMEType(_ mimeType: String) -> Bool {
         switch mimeType {
-        case "image/apng":
+        case "image/apng", "image/pjpeg", "image/x-png":
             return true
         default:
             return false
@@ -192,6 +197,16 @@ package enum NetworkMediaPreviewSupport {
         default:
             return false
         }
+    }
+
+    private static func imageClassification(url: String?) -> NetworkMediaPreviewClassification {
+        if isSupportedImageURL(url) {
+            return .previewable(.image)
+        }
+        if let type = contentType(url: url) {
+            return classification(for: type)
+        }
+        return .unknown
     }
 
     private static func normalizedMIMEType(_ mimeType: String?) -> String? {

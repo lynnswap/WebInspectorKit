@@ -78,15 +78,29 @@ extension NetworkRequest {
     }
 
     package var resourceFilter: NetworkResourceFilter {
-        let responseURL = response?.url ?? request.url
-        switch NetworkMediaPreviewSupport.classification(mimeType: response?.mimeType, url: responseURL) {
+        guard let response else {
+            if let resourceType {
+                return NetworkResourceFilter(resourceType: resourceType)
+            }
+            return NetworkResourceFilter(mimeType: nil, url: request.url)
+        }
+
+        if let resourceType, shouldKeepResourceTypeForURLInferredMedia(resourceType) {
+            if case .previewable = NetworkMediaPreviewSupport.classification(mimeType: response.mimeType, url: nil) {
+                return .media
+            }
+            return NetworkResourceFilter(resourceType: resourceType)
+        }
+
+        let responseURL = response.url
+        switch NetworkMediaPreviewSupport.classification(mimeType: response.mimeType, url: responseURL) {
         case .previewable:
             return .media
         case .notPreviewable:
             if resourceType == .media {
                 return .media
             }
-            return NetworkResourceFilter(mimeType: response?.mimeType, url: responseURL)
+            return NetworkResourceFilter(mimeType: response.mimeType, url: responseURL)
         case .unknown:
             break
         }
@@ -94,7 +108,7 @@ extension NetworkRequest {
             return NetworkResourceFilter(resourceType: resourceType)
         }
         return NetworkResourceFilter(
-            mimeType: response?.mimeType,
+            mimeType: response.mimeType,
             url: responseURL
         )
     }
@@ -139,6 +153,15 @@ extension NetworkRequest {
         let formatter = ByteCountFormatter()
         formatter.countStyle = .binary
         return formatter.string(fromByteCount: Int64(length))
+    }
+}
+
+private func shouldKeepResourceTypeForURLInferredMedia(_ resourceType: NetworkResourceType) -> Bool {
+    switch resourceType {
+    case .image, .media, .xhr, .fetch, .other:
+        return false
+    default:
+        return true
     }
 }
 

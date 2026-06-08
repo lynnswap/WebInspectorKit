@@ -172,6 +172,21 @@ func mediaFilterIncludesPreviewableMediaResponses() async throws {
         mimeType: "application/octet-stream",
         timestamp: 16
     )
+    applyRequest(
+        to: network,
+        requestID: "17",
+        url: "https://cdn.example.com/player.mp4",
+        resourceType: .script,
+        mimeType: "application/octet-stream",
+        timestamp: 17
+    )
+    applyPendingRequest(
+        to: network,
+        requestID: "18",
+        url: "https://api.example.com/pending-avatar.png",
+        resourceType: .xhr,
+        timestamp: 18
+    )
 
     let model = NetworkPanelModel(network: network)
     model.setResourceFilter(.media, enabled: true)
@@ -186,6 +201,9 @@ func mediaPreviewSupportClassifiesAVIFAndExcludesSVG() {
     #expect(NetworkMediaPreviewSupport.previewKind(mimeType: "image/apng", url: nil) == .image)
     #expect(NetworkMediaPreviewSupport.previewKind(mimeType: nil, url: "https://cdn.example.com/animated.apng") == .image)
     #expect(NetworkMediaPreviewSupport.previewKind(mimeType: "application/octet-stream", url: "https://cdn.example.com/animated.apng") == .image)
+    #expect(NetworkMediaPreviewSupport.previewKind(mimeType: "image/x-png", url: nil) == .image)
+    #expect(NetworkMediaPreviewSupport.previewKind(mimeType: "image/pjpeg", url: nil) == .image)
+    #expect(NetworkMediaPreviewSupport.previewKind(mimeType: "image/x-unknown", url: "https://cdn.example.com/photo.png") == .image)
     #expect(NetworkMediaPreviewSupport.previewKind(mimeType: "image/svg+xml", url: "https://cdn.example.com/icon.svg") == nil)
     #expect(NetworkMediaPreviewSupport.classification(mimeType: "image/svg+xml", url: "https://cdn.example.com/icon.svg") == .notPreviewable)
     #expect(NetworkMediaPreviewSupport.previewKind(mimeType: "text/javascript", url: "https://cdn.example.com/player.mp4") == nil)
@@ -258,4 +276,25 @@ private func applyRequest(
         timestamp: timestamp + 0.2
     )
     return key
+}
+
+@MainActor
+@discardableResult
+private func applyPendingRequest(
+    to network: NetworkSession,
+    requestID rawRequestID: String,
+    url: String,
+    resourceType: NetworkResourceType,
+    timestamp: Double
+) -> NetworkRequest.ID {
+    network.applyRequestWillBeSent(
+        targetID: ProtocolTargetIdentifier("page"),
+        requestID: NetworkRequestIdentifier(rawRequestID),
+        frameID: DOMFrameIdentifier("main"),
+        loaderID: "loader",
+        documentURL: "https://example.com",
+        request: NetworkRequestPayload(url: url),
+        resourceType: resourceType,
+        timestamp: timestamp
+    )
 }
