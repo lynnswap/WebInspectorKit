@@ -116,10 +116,10 @@ final class NetworkBodyViewController: UIViewController {
         self.imageHeightConstraint = imageHeightConstraint
 
         NSLayoutConstraint.activate([
-            syntaxView.topAnchor.constraint(equalTo: view.topAnchor),
-            syntaxView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            syntaxView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            syntaxView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            syntaxView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            syntaxView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
+            syntaxView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
+            syntaxView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
             imageScrollView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
             imageScrollView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
             imageScrollView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
