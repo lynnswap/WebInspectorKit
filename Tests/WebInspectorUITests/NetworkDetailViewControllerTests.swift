@@ -113,7 +113,7 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func detailContentUsesLeadingSafeAreaOnly() {
+    func detailContentUsesHorizontalSafeArea() {
         let model = NetworkPanelModel(network: NetworkSession())
         let viewController = NetworkDetailViewController(model: model)
         viewController.additionalSafeAreaInsets = UIEdgeInsets(top: 44, left: 120, bottom: 10, right: 24)
@@ -123,6 +123,7 @@ struct NetworkDetailViewControllerTests {
         viewController.view.layoutIfNeeded()
 
         let leadingInset = viewController.view.safeAreaLayoutGuide.layoutFrame.minX
+        let trailingInset = viewController.view.safeAreaLayoutGuide.layoutFrame.maxX
         let bounds = viewController.view.bounds
         for contentView in [
             viewController.headersTextViewForTesting,
@@ -130,7 +131,7 @@ struct NetworkDetailViewControllerTests {
         ] {
             #expect(contentView.frame.minX == leadingInset)
             #expect(contentView.frame.minY == bounds.minY)
-            #expect(contentView.frame.maxX == bounds.maxX)
+            #expect(contentView.frame.maxX == trailingInset)
             #expect(contentView.frame.maxY == bounds.maxY)
         }
     }
