@@ -272,6 +272,7 @@ final class MonoclyMainSceneDelegate: NSObject, UIWindowSceneDelegate {
         guard let windowScene = scene as? UIWindowScene else {
             return
         }
+        rootViewController?.store.preserveSession(immediate: true)
         MonoclyWindowContextStore.shared.sceneWillResignActive(windowScene)
     }
 
@@ -284,16 +285,27 @@ final class MonoclyMainSceneDelegate: NSObject, UIWindowSceneDelegate {
 
     func connect(
         windowScene: UIWindowScene,
-        launchConfiguration: BrowserLaunchConfiguration = .current()
+        launchConfiguration: BrowserLaunchConfiguration = .current(),
+        sessionStore: BrowserSessionStore = BrowserSessionStore()
     ) {
-        let rootViewController = preservedRootViewController
-            ?? BrowserRootViewController(launchConfiguration: launchConfiguration)
-        if preservedRootViewController === rootViewController {
+        let rootViewController: BrowserRootViewController
+        if let preservedRoot = preservedRootViewController {
+            rootViewController = preservedRoot
             BrowserInspectorCoordinator.setInspectorWindowReleaseHandler(
                 for: rootViewController.inspectorSession,
                 nil
             )
             preservedRootViewController = nil
+        } else {
+            let store = BrowserStore(
+                restoring: sessionStore.load(),
+                fallbackURL: launchConfiguration.initialURL,
+                sessionStore: sessionStore
+            )
+            rootViewController = BrowserRootViewController(
+                store: store,
+                launchConfiguration: launchConfiguration
+            )
         }
         let window = UIWindow(windowScene: windowScene)
         window.rootViewController = rootViewController
@@ -311,6 +323,7 @@ final class MonoclyMainSceneDelegate: NSObject, UIWindowSceneDelegate {
 
     func disconnect(windowScene: UIWindowScene) {
         if let rootViewController {
+            rootViewController.store.preserveSession(immediate: true)
             if BrowserInspectorCoordinator.hasInspectorWindow(for: rootViewController.inspectorSession) {
                 preservedRootViewController = rootViewController
                 rootViewController.prepareForSceneDisconnectionPreservingInspectorSession()

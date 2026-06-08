@@ -268,7 +268,7 @@ typealias BrowserPlatformColor = NSColor
 
 private let logger = Logger(
     subsystem: "Monocly",
-    category: "BrowserStore"
+    category: "BrowserTabStore"
 )
 
 enum BrowserHistoryDirection {
@@ -283,7 +283,7 @@ struct BrowserHistoryMenuItem {
     let direction: BrowserHistoryDirection
 }
 
-private enum BrowserStoreSPI {
+private enum BrowserTabStoreSPI {
     private static func deobfuscate(_ reverseTokens: [String]) -> String {
         reverseTokens.reversed().joined()
     }
@@ -308,7 +308,8 @@ private enum BrowserStoreSPI {
 }
 
 @MainActor
-@Observable final class BrowserStore: NSObject {
+@Observable final class BrowserTabStore: NSObject {
+    let id: UUID
     let webView: WKWebView
     private let initialURL: URL
 
@@ -324,6 +325,9 @@ private enum BrowserStoreSPI {
     var lastNavigationErrorDescription: String?
     var didCommitNavigationCount = 0
     var didFinishNavigationCount = 0
+    var pageTitle: String?
+    var createdAt: Date
+    var lastUsedAt: Date
 
 #if canImport(UIKit)
     private var refreshControl: UIRefreshControl?
@@ -331,12 +335,17 @@ private enum BrowserStoreSPI {
 
     @ObservationIgnored private var cancellables: Set<AnyCancellable> = []
     @ObservationIgnored private var hasLoadedInitialRequest = false
+    @ObservationIgnored private var restoredInteractionState: Data?
+    @ObservationIgnored var onStateChanged: (() -> Void)?
 
     var isShowingProgress: Bool {
         isLoading && estimatedProgress < 1.0
     }
 
     var displayTitle: String {
+        if let pageTitle, pageTitle.isEmpty == false {
+            return pageTitle
+        }
         if let host = currentURL?.host(), host.isEmpty == false {
             return host
         }
@@ -349,9 +358,30 @@ private enum BrowserStoreSPI {
         return "Monocly"
     }
 
-    init(url: URL, automaticallyLoadsInitialRequest: Bool = true) {
+    var persistedURL: URL {
+        currentURL ?? webView.url ?? initialURL
+    }
+
+    var interactionStateData: Data? {
+        webView.interactionState as? Data
+    }
+
+    init(
+        id: UUID = UUID(),
+        url: URL,
+        title: String? = nil,
+        createdAt: Date = Date(),
+        lastUsedAt: Date = Date(),
+        restoredInteractionState: Data? = nil,
+        automaticallyLoadsInitialRequest: Bool = true
+    ) {
+        self.id = id
         initialURL = url
         currentURL = url
+        pageTitle = title
+        self.createdAt = createdAt
+        self.lastUsedAt = lastUsedAt
+        self.restoredInteractionState = restoredInteractionState
 
         let configuration = WKWebViewConfiguration()
 #if canImport(UIKit)
@@ -413,14 +443,18 @@ private enum BrowserStoreSPI {
     }
 
     func load(url: URL) {
+        restoredInteractionState = nil
+        currentURL = url
+        hasLoadedInitialRequest = true
         webView.load(URLRequest(url: url))
+        notifyStateChanged()
     }
 
-    func backHistoryItems(limit: Int = BrowserStoreSPI.maximumHistoryMenuItemCount) -> [BrowserHistoryMenuItem] {
+    func backHistoryItems(limit: Int = BrowserTabStoreSPI.maximumHistoryMenuItemCount) -> [BrowserHistoryMenuItem] {
         historyItems(direction: .back, limit: limit)
     }
 
-    func forwardHistoryItems(limit: Int = BrowserStoreSPI.maximumHistoryMenuItemCount) -> [BrowserHistoryMenuItem] {
+    func forwardHistoryItems(limit: Int = BrowserTabStoreSPI.maximumHistoryMenuItemCount) -> [BrowserHistoryMenuItem] {
         historyItems(direction: .forward, limit: limit)
     }
 
@@ -431,6 +465,28 @@ private enum BrowserStoreSPI {
 
         hasLoadedInitialRequest = true
         webView.load(URLRequest(url: initialURL))
+        if let restoredInteractionState {
+            webView.interactionState = restoredInteractionState
+            self.restoredInteractionState = nil
+        }
+        notifyStateChanged()
+    }
+
+    func markSelected(at date: Date = Date()) {
+        lastUsedAt = date
+        loadInitialRequestIfNeeded()
+        notifyStateChanged()
+    }
+
+    func snapshot(stateFileName: String) -> BrowserTabSnapshot {
+        BrowserTabSnapshot(
+            id: id,
+            url: persistedURL,
+            title: pageTitle,
+            createdAt: createdAt,
+            lastUsedAt: lastUsedAt,
+            stateFileName: stateFileName
+        )
     }
 
     private func setObservers() {
@@ -443,6 +499,7 @@ private enum BrowserStoreSPI {
                     return
                 }
                 self.estimatedProgress = progress
+                self.notifyStateChanged()
             }
             .store(in: &cancellables)
 
@@ -453,6 +510,18 @@ private enum BrowserStoreSPI {
                     return
                 }
                 self.syncCurrentURL(url)
+                self.notifyStateChanged()
+            }
+            .store(in: &cancellables)
+
+        webView.publisher(for: \.title, options: [.initial, .new])
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] title in
+                guard let self else {
+                    return
+                }
+                self.pageTitle = title
+                self.notifyStateChanged()
             }
             .store(in: &cancellables)
 
@@ -463,6 +532,7 @@ private enum BrowserStoreSPI {
                     return
                 }
                 self.canGoForward = canGoForward
+                self.notifyStateChanged()
             }
             .store(in: &cancellables)
 
@@ -473,6 +543,7 @@ private enum BrowserStoreSPI {
                     return
                 }
                 self.canGoBack = canGoBack
+                self.notifyStateChanged()
             }
             .store(in: &cancellables)
 
@@ -483,6 +554,7 @@ private enum BrowserStoreSPI {
                     return
                 }
                 self.underPageBackgroundColor = underPageBackgroundColor
+                self.notifyStateChanged()
             }
             .store(in: &cancellables)
     }
@@ -493,11 +565,13 @@ private enum BrowserStoreSPI {
     ) {
         isLoading = webView.isLoading
         estimatedProgress = webView.estimatedProgress
+        lastUsedAt = Date()
         syncCurrentURL(webView.url)
         if clearsNavigationError {
             lastNavigationErrorDescription = nil
         }
         invalidateHistoryIfNeeded()
+        notifyStateChanged()
     }
 
     private func syncCurrentURL(_ url: URL?) {
@@ -512,6 +586,10 @@ private enum BrowserStoreSPI {
     private func invalidateHistoryIfNeeded() {
         canGoBack = webView.canGoBack
         canGoForward = webView.canGoForward
+    }
+
+    private func notifyStateChanged() {
+        onStateChanged?()
     }
 
     private func historyItems(direction: BrowserHistoryDirection, limit: Int) -> [BrowserHistoryMenuItem] {
@@ -536,7 +614,7 @@ private enum BrowserStoreSPI {
     }
 
     private func spiHistoryItems(direction: BrowserHistoryDirection, limit: Int) -> [WKBackForwardListItem] {
-        let clampedLimit = max(0, min(limit, BrowserStoreSPI.maximumHistoryMenuItemCount))
+        let clampedLimit = max(0, min(limit, BrowserTabStoreSPI.maximumHistoryMenuItemCount))
         guard clampedLimit > 0 else {
             return []
         }
@@ -554,8 +632,8 @@ private enum BrowserStoreSPI {
     }
 
     private func spiBrowsingContextController() -> NSObject? {
-        guard webView.responds(to: BrowserStoreSPI.browsingContextControllerSelector),
-              let browsingContextController = webView.perform(BrowserStoreSPI.browsingContextControllerSelector)?
+        guard webView.responds(to: BrowserTabStoreSPI.browsingContextControllerSelector),
+              let browsingContextController = webView.perform(BrowserTabStoreSPI.browsingContextControllerSelector)?
                 .takeUnretainedValue() as? NSObject else {
             return nil
         }
@@ -564,8 +642,8 @@ private enum BrowserStoreSPI {
 
     private func spiBackForwardList() -> WKBackForwardList? {
         guard let browsingContextController = spiBrowsingContextController(),
-              browsingContextController.responds(to: BrowserStoreSPI.backForwardListSelector),
-              let backForwardList = browsingContextController.perform(BrowserStoreSPI.backForwardListSelector)?
+              browsingContextController.responds(to: BrowserTabStoreSPI.backForwardListSelector),
+              let backForwardList = browsingContextController.perform(BrowserTabStoreSPI.backForwardListSelector)?
                 .takeUnretainedValue() as? WKBackForwardList else {
             return nil
         }
@@ -574,18 +652,18 @@ private enum BrowserStoreSPI {
 
     private func spiGoToHistoryItem(_ item: WKBackForwardListItem) -> Bool {
         guard let browsingContextController = spiBrowsingContextController(),
-              browsingContextController.responds(to: BrowserStoreSPI.goToBackForwardListItemSelector) else {
+              browsingContextController.responds(to: BrowserTabStoreSPI.goToBackForwardListItemSelector) else {
             return false
         }
-        browsingContextController.perform(BrowserStoreSPI.goToBackForwardListItemSelector, with: item)
+        browsingContextController.perform(BrowserTabStoreSPI.goToBackForwardListItemSelector, with: item)
         return true
     }
 
     private func configureHistoryDelegateIfAvailable() {
-        guard webView.responds(to: BrowserStoreSPI.setHistoryDelegateSelector) else {
+        guard webView.responds(to: BrowserTabStoreSPI.setHistoryDelegateSelector) else {
             return
         }
-        webView.perform(BrowserStoreSPI.setHistoryDelegateSelector, with: self)
+        webView.perform(BrowserTabStoreSPI.setHistoryDelegateSelector, with: self)
     }
 
 #if canImport(UIKit)
@@ -609,7 +687,7 @@ private enum BrowserStoreSPI {
 #endif
 }
 
-extension BrowserStore: WKNavigationDelegate {
+extension BrowserTabStore: WKNavigationDelegate {
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
 #if canImport(AppKit)
         if navigationAction.navigationType == .linkActivated,
@@ -628,6 +706,7 @@ extension BrowserStore: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         isLoading = true
         estimatedProgress = .zero
+        notifyStateChanged()
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse) async -> WKNavigationResponsePolicy {
@@ -686,6 +765,7 @@ extension BrowserStore: WKNavigationDelegate {
         lastWebContentTerminationDate = Date()
         lastWebContentTerminationURL = webView.url
         invalidateHistoryIfNeeded()
+        notifyStateChanged()
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -697,7 +777,7 @@ extension BrowserStore: WKNavigationDelegate {
     }
 }
 
-extension BrowserStore {
+extension BrowserTabStore {
     @objc(_webView:backForwardListItemAdded:removed:)
     func _webView(
         _ webView: WKWebView!,
@@ -705,20 +785,23 @@ extension BrowserStore {
         removed itemsRemoved: [WKBackForwardListItem]!
     ) {
         invalidateHistoryIfNeeded()
+        notifyStateChanged()
     }
 
     @objc(_webView:didNavigateWithNavigationData:)
     func _webView(_ webView: WKWebView!, didNavigateWith navigationData: NSObject!) {
         invalidateHistoryIfNeeded()
+        notifyStateChanged()
     }
 
     @objc(_webView:didUpdateHistoryTitle:forURL:)
     func _webView(_ webView: WKWebView!, didUpdateHistoryTitle title: String!, forURL url: URL!) {
         invalidateHistoryIfNeeded()
+        notifyStateChanged()
     }
 }
 
-extension BrowserStore: WKUIDelegate {
+extension BrowserTabStore: WKUIDelegate {
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
         guard navigationAction.targetFrame == nil, let url = navigationAction.request.url else {
             return nil
@@ -777,7 +860,7 @@ extension BrowserStore: WKUIDelegate {
     }
 }
 
-private extension BrowserStore {
+private extension BrowserTabStore {
 #if canImport(UIKit)
     @MainActor
     func presentJavaScriptAlert(message: String, webView: WKWebView) async {
