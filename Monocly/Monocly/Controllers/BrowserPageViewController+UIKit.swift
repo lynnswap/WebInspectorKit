@@ -1,6 +1,7 @@
 #if canImport(UIKit)
 import ObservationBridge
 import UIKit
+import WebKit
 import WebInspectorKit
 #if os(iOS)
 import WKViewportCoordinator
@@ -45,11 +46,14 @@ final class BrowserPageViewController: UIViewController {
     private lazy var forwardNavigationAction = UIAction { [weak self] _ in
         self?.store.goForward()
     }
+    private var hostedWebView: WKWebView?
+    private var hostedWebViewConstraints: [NSLayoutConstraint] = []
     private var viewportCoordinator: BrowserViewportCoordinator?
     private var inspectorWindowObserverID: UUID?
     private var didAutoPresentInspector = false
     private var progressHeightConstraint: NSLayoutConstraint?
     private var currentChromePlacement: ChromePlacement?
+    var onSelectedWebViewInstalled: ((WKWebView) -> Void)?
 
     init(
         store: BrowserStore,
@@ -82,11 +86,8 @@ final class BrowserPageViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         configureViewHierarchy()
+        installSelectedWebViewIfNeeded()
         configureChrome()
-        viewportCoordinator = BrowserViewportCoordinator(webView: store.webView)
-        viewportCoordinator?.hostViewController = self
-        (store.webView as? BrowserViewportWebView)?.viewportCoordinator = viewportCoordinator
-        viewportCoordinator?.webViewHierarchyDidChange()
 
         startObservingStore()
         inspectorWindowObserverID = BrowserInspectorCoordinator.observeInspectorWindowPresentation { [weak self] _ in
@@ -133,21 +134,12 @@ final class BrowserPageViewController: UIViewController {
     private func configureViewHierarchy() {
         view.backgroundColor = store.underPageBackgroundColor ?? .clear
 
-        let webView = store.webView
-        webView.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(webView)
-
         progressView.translatesAutoresizingMaskIntoConstraints = false
         progressView.trackTintColor = .clear
         view.addSubview(progressView)
         progressHeightConstraint = progressView.heightAnchor.constraint(equalToConstant: 0)
 
         var constraints = [
-            webView.topAnchor.constraint(equalTo: view.topAnchor),
-            webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            webView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-
             progressView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
             progressView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             progressView.trailingAnchor.constraint(equalTo: view.trailingAnchor)
@@ -158,6 +150,42 @@ final class BrowserPageViewController: UIViewController {
         }
 
         NSLayoutConstraint.activate(constraints)
+    }
+
+    private func installSelectedWebViewIfNeeded() {
+        let webView = store.webView
+        guard hostedWebView !== webView else {
+            return
+        }
+
+        if let hostedWebView {
+            (hostedWebView as? BrowserViewportWebView)?.viewportCoordinator = nil
+            viewportCoordinator?.invalidate()
+            NSLayoutConstraint.deactivate(hostedWebViewConstraints)
+            hostedWebView.removeFromSuperview()
+        }
+
+        hostedWebView = webView
+        hostedWebViewConstraints = [
+            webView.topAnchor.constraint(equalTo: view.topAnchor),
+            webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            webView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        ]
+
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        view.insertSubview(webView, at: 0)
+        NSLayoutConstraint.activate(hostedWebViewConstraints)
+
+        let viewportCoordinator = BrowserViewportCoordinator(webView: webView)
+        viewportCoordinator.hostViewController = self
+        self.viewportCoordinator = viewportCoordinator
+        (webView as? BrowserViewportWebView)?.viewportCoordinator = viewportCoordinator
+        viewportCoordinator.webViewHierarchyDidChange()
+        if view.window != nil {
+            viewportCoordinator.hostViewDidAppear()
+        }
+        onSelectedWebViewInstalled?(webView)
     }
 
     private func configureChrome() {
@@ -420,6 +448,7 @@ final class BrowserPageViewController: UIViewController {
             return
         }
 
+        installSelectedWebViewIfNeeded()
         navigationItem.title = store.displayTitle
         syncNavigationButtonStates(store: store)
 

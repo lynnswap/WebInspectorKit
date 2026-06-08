@@ -259,7 +259,11 @@ struct MonoclyLifecycleTests {
             let windowScene = try makeWindowScene()
             let launchConfiguration = BrowserLaunchConfiguration(initialURL: URL(string: "about:blank")!)
 
-            sceneDelegate.connect(windowScene: windowScene, launchConfiguration: launchConfiguration)
+            sceneDelegate.connect(
+                windowScene: windowScene,
+                launchConfiguration: launchConfiguration,
+                sessionStore: makeTemporarySessionStore(context: context)
+            )
 
             let hostWindow = try #require(sceneDelegate.window)
             context.retain(hostWindow)
@@ -287,7 +291,11 @@ struct MonoclyLifecycleTests {
             let windowScene = try makeWindowScene()
             let launchConfiguration = BrowserLaunchConfiguration(initialURL: URL(string: "about:blank")!)
 
-            sceneDelegate.connect(windowScene: windowScene, launchConfiguration: launchConfiguration)
+            sceneDelegate.connect(
+                windowScene: windowScene,
+                launchConfiguration: launchConfiguration,
+                sessionStore: makeTemporarySessionStore(context: context)
+            )
 
             let hostWindow = try #require(sceneDelegate.window)
             context.retain(hostWindow)
@@ -317,7 +325,11 @@ struct MonoclyLifecycleTests {
                 )
             )
 
-            mainSceneDelegate.connect(windowScene: windowScene, launchConfiguration: launchConfiguration)
+            mainSceneDelegate.connect(
+                windowScene: windowScene,
+                launchConfiguration: launchConfiguration,
+                sessionStore: makeTemporarySessionStore(context: context)
+            )
 
             let mainWindow = try #require(mainSceneDelegate.window)
             context.retain(mainWindow)
@@ -364,7 +376,11 @@ struct MonoclyLifecycleTests {
                 )
             )
 
-            mainSceneDelegate.connect(windowScene: windowScene, launchConfiguration: launchConfiguration)
+            mainSceneDelegate.connect(
+                windowScene: windowScene,
+                launchConfiguration: launchConfiguration,
+                sessionStore: makeTemporarySessionStore(context: context)
+            )
 
             let firstWindow = try #require(mainSceneDelegate.window)
             context.retain(firstWindow)
@@ -380,7 +396,11 @@ struct MonoclyLifecycleTests {
             context.retain(try #require(inspectorSceneDelegate.window))
 
             mainSceneDelegate.disconnect(windowScene: windowScene)
-            mainSceneDelegate.connect(windowScene: windowScene, launchConfiguration: launchConfiguration)
+            mainSceneDelegate.connect(
+                windowScene: windowScene,
+                launchConfiguration: launchConfiguration,
+                sessionStore: makeTemporarySessionStore(context: context)
+            )
 
             let reconnectedWindow = try #require(mainSceneDelegate.window)
             context.retain(reconnectedWindow)
@@ -602,10 +622,27 @@ private extension MonoclyLifecycleTests {
         return try await body(context)
     }
 
+    func makeTemporarySessionStore(context: TestContext) -> BrowserSessionStore {
+        let rootDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MonoclyBrowserSession-\(UUID().uuidString)", isDirectory: true)
+        context.addCleanup {
+            try? FileManager.default.removeItem(at: rootDirectoryURL)
+        }
+        return BrowserSessionStore(rootDirectoryURL: rootDirectoryURL)
+    }
+
     func makeHostedRootViewController(context: TestContext) throws -> HostedRootFixture {
         let windowScene = try makeWindowScene()
         let launchConfiguration = BrowserLaunchConfiguration(initialURL: URL(string: "about:blank")!)
-        let rootViewController = BrowserRootViewController(launchConfiguration: launchConfiguration)
+        let store = BrowserStore(
+            url: launchConfiguration.initialURL,
+            automaticallyLoadsInitialRequest: false,
+            sessionStore: nil
+        )
+        let rootViewController = BrowserRootViewController(
+            store: store,
+            launchConfiguration: launchConfiguration
+        )
         let window = UIWindow(windowScene: windowScene)
         window.rootViewController = rootViewController
         window.makeKeyAndVisible()
