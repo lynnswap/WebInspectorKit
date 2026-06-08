@@ -78,12 +78,38 @@ extension NetworkRequest {
     }
 
     package var resourceFilter: NetworkResourceFilter {
+        guard let response else {
+            if let resourceType {
+                return NetworkResourceFilter(resourceType: resourceType)
+            }
+            return NetworkResourceFilter(mimeType: nil, url: request.url)
+        }
+
+        if let resourceType, shouldKeepResourceTypeForURLInferredMedia(resourceType) {
+            if case .previewable = NetworkMediaPreviewSupport.classification(mimeType: response.mimeType, url: nil) {
+                return .media
+            }
+            return NetworkResourceFilter(resourceType: resourceType)
+        }
+
+        let responseURL = response.url
+        switch NetworkMediaPreviewSupport.classification(mimeType: response.mimeType, url: responseURL) {
+        case .previewable:
+            return .media
+        case .notPreviewable:
+            if resourceType == .media {
+                return .media
+            }
+            return NetworkResourceFilter(mimeType: response.mimeType, url: responseURL)
+        case .unknown:
+            break
+        }
         if let resourceType {
             return NetworkResourceFilter(resourceType: resourceType)
         }
         return NetworkResourceFilter(
-            mimeType: response?.mimeType,
-            url: request.url
+            mimeType: response.mimeType,
+            url: responseURL
         )
     }
 
@@ -130,6 +156,15 @@ extension NetworkRequest {
     }
 }
 
+private func shouldKeepResourceTypeForURLInferredMedia(_ resourceType: NetworkResourceType) -> Bool {
+    switch resourceType {
+    case .image, .media, .xhr, .fetch, .other:
+        return false
+    default:
+        return true
+    }
+}
+
 extension NetworkResourceType {
     fileprivate var displayLabel: String {
         switch self {
@@ -139,6 +174,8 @@ extension NetworkResourceType {
             "stylesheet"
         case .image:
             "image"
+        case .media:
+            "media"
         case .font:
             "font"
         case .script:

@@ -245,6 +245,7 @@ package struct NetworkResourceType: RawRepresentable, Hashable, Sendable {
     package static let document = Self("Document")
     package static let styleSheet = Self("StyleSheet")
     package static let image = Self("Image")
+    package static let media = Self("Media")
     package static let font = Self("Font")
     package static let script = Self("Script")
     package static let xhr = Self("XHR")

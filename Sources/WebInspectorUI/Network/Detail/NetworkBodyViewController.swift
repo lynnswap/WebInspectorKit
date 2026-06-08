@@ -238,13 +238,14 @@ final class NetworkBodyViewController: UIViewController {
     }
 
     private func mediaPayload(for body: NetworkBody) -> NetworkBodyMediaPayload? {
-        let mimeType = normalizedMIMEType(metadata?.mimeType)
-        guard isMediaMIMEType(mimeType) || isMediaURL(metadata?.url) else {
+        guard let previewKind = NetworkMediaPreviewSupport.previewKind(
+            mimeType: metadata?.mimeType,
+            url: metadata?.url
+        ) else {
             return nil
         }
 
-        if isHLSMIMEType(mimeType) || isHLSURL(metadata?.url),
-           let remoteURL = playableRemoteMediaURL(metadata?.url) {
+        if previewKind == .hlsPlaylist, let remoteURL = playableRemoteMediaURL(metadata?.url) {
             return .movie(remoteURL)
         }
 
@@ -261,13 +262,12 @@ final class NetworkBodyViewController: UIViewController {
             return nil
         }
 
-        if isImageMIMEType(mimeType) || isImageURL(metadata?.url),
-           let image = UIImage(data: data) {
+        if previewKind == .image, let image = UIImage(data: data) {
             return .image(image)
         }
 
-        if isPlayableMIMEType(mimeType) || isPlayableURL(metadata?.url) {
-            guard let fileURL = writeMediaData(data, mimeType: mimeType, url: metadata?.url) else {
+        if previewKind == .movie || previewKind == .hlsPlaylist {
+            guard let fileURL = writeMediaData(data, mimeType: metadata?.mimeType, url: metadata?.url) else {
                 return nil
             }
             return .movie(fileURL)
@@ -289,6 +289,7 @@ final class NetworkBodyViewController: UIViewController {
         syntaxView.isHidden = true
         imageScrollView.isHidden = false
         shouldResetImageZoomOnNextLayout = true
+        imagePreviewLayoutState = nil
         imageView.image = image
         imageWidthConstraint?.constant = max(image.size.width, 1)
         imageHeightConstraint?.constant = max(image.size.height, 1)
@@ -386,7 +387,7 @@ final class NetworkBodyViewController: UIViewController {
 
         imageScrollView.maximumZoomScale = maximumZoomScale
         imageScrollView.minimumZoomScale = minimumZoomScale
-        imageScrollView.setZoomScale(targetZoomScale, animated: false)
+        imageScrollView.zoomScale = targetZoomScale
         updateImageContentInset()
         imagePreviewLayoutState = ImagePreviewLayoutState(
             imageSize: imageSize,
@@ -474,67 +475,6 @@ private extension NetworkBodyViewController {
     static let imageZoomScaleTolerance: CGFloat = 0.001
 }
 
-private func normalizedMIMEType(_ mimeType: String?) -> String? {
-    mimeType?
-        .split(separator: ";", maxSplits: 1, omittingEmptySubsequences: true)
-        .first
-        .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
-}
-
-private func isMediaMIMEType(_ mimeType: String?) -> Bool {
-    isImageMIMEType(mimeType) || isPlayableMIMEType(mimeType)
-}
-
-private func isImageMIMEType(_ mimeType: String?) -> Bool {
-    guard let mimeType else {
-        return false
-    }
-    return mimeType.hasPrefix("image/") && mimeType != "image/svg+xml"
-}
-
-private func isPlayableMIMEType(_ mimeType: String?) -> Bool {
-    guard let mimeType else {
-        return false
-    }
-    return mimeType.hasPrefix("video/") || mimeType.hasPrefix("audio/") || isHLSMIMEType(mimeType)
-}
-
-private func isHLSMIMEType(_ mimeType: String?) -> Bool {
-    switch mimeType {
-    case "application/vnd.apple.mpegurl", "application/x-mpegurl", "application/mpegurl",
-         "audio/mpegurl", "audio/x-mpegurl":
-        true
-    default:
-        false
-    }
-}
-
-private func isMediaURL(_ url: String?) -> Bool {
-    isImageURL(url) || isPlayableURL(url)
-}
-
-private func isImageURL(_ url: String?) -> Bool {
-    switch pathExtension(url) {
-    case "apng", "gif", "heic", "heif", "jpg", "jpeg", "png", "tif", "tiff", "webp":
-        return true
-    default:
-        return false
-    }
-}
-
-private func isPlayableURL(_ url: String?) -> Bool {
-    switch pathExtension(url) {
-    case "aac", "aif", "aiff", "m4a", "m4v", "m3u8", "mov", "mp3", "mp4", "wav":
-        return true
-    default:
-        return false
-    }
-}
-
-private func isHLSURL(_ url: String?) -> Bool {
-    pathExtension(url) == "m3u8"
-}
-
 private func playableRemoteMediaURL(_ url: String?) -> URL? {
     guard let url = url.flatMap(URL.init(string:)) else {
         return nil
@@ -547,38 +487,8 @@ private func playableRemoteMediaURL(_ url: String?) -> URL? {
     }
 }
 
-private func pathExtension(_ url: String?) -> String? {
-    guard let url else {
-        return nil
-    }
-    return URL(string: url)?.pathExtension.lowercased()
-}
-
 private func mediaFileExtension(mimeType: String?, url: String?) -> String {
-    if let pathExtension = pathExtension(url), pathExtension.isEmpty == false {
-        return pathExtension
-    }
-    switch mimeType {
-    case "application/vnd.apple.mpegurl", "application/x-mpegurl", "application/mpegurl",
-         "audio/mpegurl", "audio/x-mpegurl":
-        return "m3u8"
-    case "audio/aac":
-        return "aac"
-    case "audio/aiff":
-        return "aiff"
-    case "audio/mpeg":
-        return "mp3"
-    case "audio/mp4":
-        return "m4a"
-    case "audio/wav", "audio/x-wav":
-        return "wav"
-    case "video/quicktime":
-        return "mov"
-    case "video/x-m4v":
-        return "m4v"
-    default:
-        return "mp4"
-    }
+    NetworkMediaPreviewSupport.temporaryFileExtension(mimeType: mimeType, url: url)
 }
 
 private func removeTemporaryMediaFile(at url: URL?) {
