@@ -6,6 +6,10 @@ package enum NetworkDetailMode: CaseIterable, Hashable {
     case preview
     case headers
 
+    nonisolated package static var allCases: [NetworkDetailMode] {
+        [.headers, .preview]
+    }
+
     package var title: String {
         switch self {
         case .preview:

@@ -62,7 +62,7 @@ package final class NetworkDetailViewController: UIViewController {
         view.isHidden = true
         return view
     }()
-    fileprivate var mode: NetworkDetailMode = .preview {
+    fileprivate var mode: NetworkDetailMode = .headers {
         didSet {
             guard mode != oldValue else {
                 return

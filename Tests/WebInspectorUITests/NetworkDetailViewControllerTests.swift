@@ -103,29 +103,10 @@ struct NetworkDetailViewControllerTests {
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
-        let didRenderPreview = await waitUntil {
-            viewController.currentModeForTesting == .preview
-                && viewController.previewViewForTesting.isHidden == false
-                && viewController.headersTextViewForTesting.isHidden
-                && viewController.isPreviewRoleControlHiddenForTesting == false
-        }
-
-        #expect(didRenderPreview)
-        #expect(viewController.contentUnavailableConfiguration == nil)
-
-        viewController.selectPreviewRoleForTesting(.request)
-
-        let didRenderRequestPreview = await waitUntil {
-            viewController.currentPreviewRoleForTesting == .request
-                && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == "name=Jane Doe\ncity=Tokyo East"
-        }
-        #expect(didRenderRequestPreview)
-
-        selectMode(.headers, on: viewController)
-
         let didRenderHeaders = await waitUntil {
             let text = viewController.headersTextViewForTesting.renderedTextForTesting
-            return viewController.previewViewForTesting.isHidden
+            return viewController.currentModeForTesting == .headers
+                && viewController.previewViewForTesting.isHidden
                 && viewController.headersTextViewForTesting.isHidden == false
                 && viewController.headersTextViewForTesting.usesTextKit2ForTesting
                 && viewController.headersTextViewForTesting.isSelectableForTesting
@@ -135,6 +116,25 @@ struct NetworkDetailViewControllerTests {
         }
 
         #expect(didRenderHeaders)
+        #expect(viewController.contentUnavailableConfiguration == nil)
+
+        selectMode(.preview, on: viewController)
+
+        let didRenderPreview = await waitUntil {
+            viewController.currentModeForTesting == .preview
+                && viewController.previewViewForTesting.isHidden == false
+                && viewController.headersTextViewForTesting.isHidden
+                && viewController.isPreviewRoleControlHiddenForTesting == false
+        }
+        #expect(didRenderPreview)
+
+        viewController.selectPreviewRoleForTesting(.request)
+
+        let didRenderRequestPreview = await waitUntil {
+            viewController.currentPreviewRoleForTesting == .request
+                && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == "name=Jane Doe\ncity=Tokyo East"
+        }
+        #expect(didRenderRequestPreview)
     }
 
     @Test
@@ -207,6 +207,7 @@ struct NetworkDetailViewControllerTests {
         let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
 
         let didRender = await waitUntil {
             viewController.previewViewForTesting.isHidden == false
@@ -277,6 +278,7 @@ struct NetworkDetailViewControllerTests {
         let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
 
         let didFetch = await waitUntil {
             fetchedIDs == [request.id]
@@ -307,6 +309,7 @@ struct NetworkDetailViewControllerTests {
         let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
 
         let didStartFetching = await waitUntil {
             return fetchedIDs == [request.id]
@@ -358,6 +361,7 @@ struct NetworkDetailViewControllerTests {
         let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
 
         let didRenderHLSPreview = await waitUntil {
             viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting?.absoluteString == playlistURL
@@ -387,6 +391,7 @@ struct NetworkDetailViewControllerTests {
         let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
 
         #expect(fetchedIDs.isEmpty)
 
@@ -424,6 +429,7 @@ struct NetworkDetailViewControllerTests {
         let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
 
         let didRenderFailure = await waitUntil {
             viewController.currentModeForTesting == .preview
