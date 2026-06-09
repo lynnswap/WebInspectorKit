@@ -5,7 +5,7 @@ package enum NetworkResourceFilter: String, CaseIterable, Hashable, Sendable, Id
     case all
     case document
     case stylesheet
-    case image
+    case media
     case font
     case script
     case xhrFetch
@@ -17,7 +17,7 @@ package enum NetworkResourceFilter: String, CaseIterable, Hashable, Sendable, Id
         [
             .document,
             .stylesheet,
-            .image,
+            .media,
             .font,
             .script,
             .xhrFetch,
@@ -53,8 +53,8 @@ package enum NetworkResourceFilter: String, CaseIterable, Hashable, Sendable, Id
             String(localized: "network.filter.document", bundle: .module)
         case .stylesheet:
             "CSS"
-        case .image:
-            String(localized: "network.filter.image", bundle: .module)
+        case .media:
+            String(localized: "network.filter.media", bundle: .module)
         case .font:
             String(localized: "network.filter.font", bundle: .module)
         case .script:
@@ -72,8 +72,8 @@ package enum NetworkResourceFilter: String, CaseIterable, Hashable, Sendable, Id
             self = .document
         case .styleSheet:
             self = .stylesheet
-        case .image:
-            self = .image
+        case .image, .media:
+            self = .media
         case .font:
             self = .font
         case .script:
@@ -92,10 +92,10 @@ package enum NetworkResourceFilter: String, CaseIterable, Hashable, Sendable, Id
             .lowercased() ?? ""
         let pathExtension = URL(string: url)?.pathExtension.lowercased() ?? ""
 
-        if normalizedMimeType == "text/css" || pathExtension == "css" {
+        if case .previewable = NetworkMediaPreviewSupport.classification(mimeType: mimeType, url: url) {
+            self = .media
+        } else if normalizedMimeType == "text/css" || pathExtension == "css" {
             self = .stylesheet
-        } else if normalizedMimeType.hasPrefix("image/") {
-            self = .image
         } else if normalizedMimeType.hasPrefix("font/") || ["woff", "woff2", "ttf", "otf"].contains(pathExtension) {
             self = .font
         } else if normalizedMimeType.contains("javascript") || ["js", "mjs"].contains(pathExtension) {

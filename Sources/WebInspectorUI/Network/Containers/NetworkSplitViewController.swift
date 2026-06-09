@@ -3,8 +3,6 @@ import UIKit
 
 @MainActor
 package final class NetworkSplitViewController: UISplitViewController {
-    private let listViewController: NetworkListViewController
-    private let detailViewController: NetworkDetailViewController
     private let primaryViewController: NetworkListColumnNavigationController
     private let secondaryViewController: RegularSplitColumnNavigationController
 
@@ -13,13 +11,12 @@ package final class NetworkSplitViewController: UISplitViewController {
         listViewController: NetworkListViewController,
         detailViewController: NetworkDetailViewController
     ) {
-        self.listViewController = listViewController
-        self.detailViewController = detailViewController
         primaryViewController = NetworkListColumnNavigationController(
             rootViewController: listViewController
         )
         secondaryViewController = RegularSplitColumnNavigationController(
-            rootViewController: detailViewController
+            rootViewController: detailViewController,
+            hidesNavigationBar: false
         )
         super.init(style: .doubleColumn)
         listViewController.setRequestSelectionAction { [weak model] request in
@@ -41,7 +38,6 @@ package final class NetworkSplitViewController: UISplitViewController {
                 splitViewController.applyBackgroundFromTraits()
             }
         }
-        configureNavigationItem()
     }
 
     private func applyBackgroundFromTraits() {
@@ -59,24 +55,6 @@ package final class NetworkSplitViewController: UISplitViewController {
         setViewController(secondaryViewController, for: .secondary)
     }
 
-    private func configureNavigationItem() {
-        let item = detailViewController.makeRegularModeItem()
-        let bodyFetchIndicatorItem = detailViewController.makeRegularBodyFetchIndicatorItem()
-        if #available(iOS 26.0, *) {
-            item.hidesSharedBackground = true
-            bodyFetchIndicatorItem.hidesSharedBackground = true
-        }
-        let group = UIBarButtonItemGroup(
-            barButtonItems: [
-                item,
-                bodyFetchIndicatorItem,
-            ],
-            representativeItem: nil
-        )
-        navigationItem.trailingItemGroups = [
-            group,
-        ]
-    }
 }
 
 @MainActor
@@ -116,13 +94,42 @@ private final class NetworkListColumnNavigationController: UINavigationControlle
 
 #Preview("Network Split") {
     let model = NetworkPreviewFixtures.makePanelModel(mode: .detail)
-    NetworkSplitViewController(
+    NetworkCompactNavigationController(
         model: model,
         listViewController: NetworkListViewController(
             model: model
         ),
         detailViewController: NetworkDetailViewController(
             model: model
+        )
+    )
+}
+
+#Preview("Network Split Log Preview") {
+    makeNetworkSplitPreviewController(
+        initialMode: .preview,
+        selectedDisplayName: "log"
+    )
+}
+
+@MainActor
+private func makeNetworkSplitPreviewController(
+    initialMode: NetworkDetailMode = .headers,
+    selectedDisplayName: String? = nil
+) -> NetworkCompactNavigationController {
+    let model = NetworkPreviewFixtures.makePanelModel(mode: .detail)
+    if let selectedDisplayName,
+       let request = model.displayRequests.first(where: { $0.displayName == selectedDisplayName }) {
+        model.selectRequest(request)
+    }
+    return NetworkCompactNavigationController(
+        model: model,
+        listViewController: NetworkListViewController(
+            model: model
+        ),
+        detailViewController: NetworkDetailViewController(
+            model: model,
+            initialMode: initialMode
         )
     )
 }

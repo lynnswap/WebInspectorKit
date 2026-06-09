@@ -158,6 +158,10 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         observationScope.observe(model) { [weak self] _, model in
             self?.resourceFilterSelectionDidChange(effectiveResourceFilters: model.effectiveResourceFilters)
         }
+
+        observationScope.observe(model) { [weak self] _, model in
+            self?.renderSelectedRequestID(model.selectedRequestID)
+        }
     }
 
     private func configureNavigationItem() {
@@ -381,6 +385,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     private func snapshotUpdateDidFinish() {
         applyingSnapshotRequestIDs = nil
         isApplyingSnapshotUpdate = false
+        renderSelectedRequestID(model.selectedRequestID)
         applyPendingSnapshotUpdateIfNeeded()
     }
 
@@ -388,6 +393,22 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         let resolvedDisplayRequests = displayRequests ?? model.displayRequests
         requestSnapshotUpdate(displayRequests: resolvedDisplayRequests)
         renderEmptyState(isEmpty: resolvedDisplayRequests.isEmpty)
+    }
+
+    private func renderSelectedRequestID(_ selectedRequestID: NetworkRequest.ID?) {
+        guard isViewLoaded else {
+            return
+        }
+
+        let selectedIndexPaths = collectionView.indexPathsForSelectedItems ?? []
+        let targetIndexPath = selectedRequestID.flatMap { dataSource.indexPath(for: $0) }
+        for indexPath in selectedIndexPaths where indexPath != targetIndexPath {
+            collectionView.deselectItem(at: indexPath, animated: false)
+        }
+        guard let targetIndexPath, selectedIndexPaths.contains(targetIndexPath) == false else {
+            return
+        }
+        collectionView.selectItem(at: targetIndexPath, animated: false, scrollPosition: [])
     }
 
     private func renderEmptyState(isEmpty: Bool) {

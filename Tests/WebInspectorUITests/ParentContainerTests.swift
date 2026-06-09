@@ -423,34 +423,6 @@ struct ParentContainerTests {
     }
 
     @Test
-    func regularNetworkRootExposesOnlyDetailModeNavigationItem() throws {
-        let session = WebInspectorSession()
-        session.interface.selectTab(.network)
-        let host = RegularTabContentViewController(session: session)
-
-        host.loadViewIfNeeded()
-
-        let rootViewController = try #require(host.viewControllers.first)
-        rootViewController.loadViewIfNeeded()
-
-        #expect(rootViewController.navigationItem.searchController == nil)
-        #expect(rootViewController.navigationItem.additionalOverflowItems == nil)
-        #expect(
-            rootViewController.navigationItem.trailingItemGroups
-                .flatMap(\.barButtonItems)
-                .contains { $0.accessibilityIdentifier == "WebInspector.Network.DetailModeButton.Regular" }
-        )
-        #expect(
-            rootViewController.navigationItem.trailingItemGroups
-                .flatMap(\.barButtonItems)
-                .contains {
-                    $0.accessibilityIdentifier == "WebInspector.Network.FilterButton"
-                        || $0.accessibilityIdentifier == "WebInspector.DOM.PickButton"
-                } == false
-        )
-    }
-
-    @Test
     func cachedDOMTreeControllerIsSharedAcrossCompactAndRegularHosts() throws {
         let session = WebInspectorSession()
         let compactViewController = TabContentFactory.makeViewController(
@@ -528,9 +500,10 @@ struct ParentContainerTests {
                 in: splitViewController
             )
         )
+        detailViewController.loadViewIfNeeded()
 
         let didRenderDetail = await waitUntil {
-            detailViewController.collectionViewForTesting.isHidden == false
+            detailViewController.headersTextViewForTesting.renderedTextForTesting.contains("GET /app.js")
         }
         #expect(didRenderDetail)
     }

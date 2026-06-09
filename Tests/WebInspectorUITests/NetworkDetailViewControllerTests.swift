@@ -1,4 +1,5 @@
 #if canImport(UIKit)
+import ObservationBridge
 import Testing
 import WebInspectorTransport
 import UIKit
@@ -11,6 +12,8 @@ struct NetworkDetailViewControllerTests {
     @Test
     func resourceFilterSpecialistTitlesFollowWebInspectorLabels() {
         #expect(NetworkResourceFilter.stylesheet.localizedTitle == "CSS")
+        #expect(NetworkResourceFilter.media.localizedTitle == String(localized: "network.filter.media", bundle: .module))
+        #expect(localizedResourceString("network.filter.media", locale: "en") == "Media")
         #expect(NetworkResourceFilter.script.localizedTitle == "JS")
         #expect(NetworkResourceFilter.xhrFetch.localizedTitle == "XHR / Fetch")
     }
@@ -38,7 +41,8 @@ struct NetworkDetailViewControllerTests {
 
         viewController.loadViewIfNeeded()
 
-        #expect(viewController.collectionViewForTesting.isHidden)
+        #expect(viewController.previewViewForTesting.isHidden)
+        #expect(viewController.headersTextViewForTesting.isHidden)
         #expect(viewController.contentUnavailableConfiguration != nil)
         let configuration = viewController.contentUnavailableConfiguration as? UIContentUnavailableConfiguration
         #expect(configuration?.text?.isEmpty == false)
@@ -60,7 +64,8 @@ struct NetworkDetailViewControllerTests {
         viewController.loadViewIfNeeded()
 
         #expect(viewController.view.backgroundColor == .clear)
-        #expect(viewController.collectionViewForTesting.backgroundColor == .clear)
+        #expect(viewController.headersTextViewForTesting.backgroundColor == .clear)
+        #expect(viewController.bodyViewControllerForTesting.view.backgroundColor == .clear)
     }
 
     @Test
@@ -79,15 +84,75 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func detailRendersOverviewRequestAndResponseHeaders() async throws {
+    func regularSplitKeepsPrimarySecondaryLayout() throws {
+        let model = NetworkPanelModel(network: NetworkSession())
+        let listViewController = NetworkListViewController(model: model)
+        let detailViewController = NetworkDetailViewController(model: model)
+        let splitViewController = NetworkSplitViewController(
+            model: model,
+            listViewController: listViewController,
+            detailViewController: detailViewController
+        )
+
+        splitViewController.loadViewIfNeeded()
+
+        let listNavigationController = try #require(
+            splitViewController.viewController(for: .primary) as? UINavigationController
+        )
+        let detailNavigationController = try #require(
+            splitViewController.viewController(for: .secondary) as? UINavigationController
+        )
+        #expect(listNavigationController.viewControllers.first === listViewController)
+        #expect(detailNavigationController.viewControllers.first === detailViewController)
+        if #available(iOS 26.0, *) {
+            #expect(splitViewController.viewController(for: .inspector) == nil)
+        }
+        #expect(splitViewController.preferredDisplayMode == .oneBesideSecondary)
+        #expect(splitViewController.preferredSplitBehavior == .tile)
+        #expect(splitViewController.presentsWithGesture == false)
+    }
+
+    @Test
+    func detailContentKeepsPreviewRoleControlInSafeArea() {
+        let model = NetworkPanelModel(network: NetworkSession())
+        let viewController = NetworkDetailViewController(model: model)
+        viewController.additionalSafeAreaInsets = UIEdgeInsets(top: 44, left: 120, bottom: 10, right: 24)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        viewController.view.layoutIfNeeded()
+
+        let leadingInset = viewController.view.safeAreaLayoutGuide.layoutFrame.minX
+        let topInset = viewController.view.safeAreaLayoutGuide.layoutFrame.minY
+        let trailingInset = viewController.view.safeAreaLayoutGuide.layoutFrame.maxX
+        let bounds = viewController.view.bounds
+        for contentView in [
+            viewController.headersTextViewForTesting,
+            viewController.previewViewForTesting,
+        ] {
+            #expect(contentView.frame.minX == leadingInset)
+            #expect(contentView.frame.maxX == trailingInset)
+            #expect(contentView.frame.maxY == bounds.maxY)
+        }
+        #expect(viewController.headersTextViewForTesting.frame.minY == bounds.minY)
+        #expect(viewController.previewViewForTesting.frame.minY == topInset)
+    }
+
+    @Test
+    func detailModeControlSwitchesPreviewAndHeaders() async throws {
         let network = NetworkSession()
         let request = try #require(
             applyRequest(
                 to: network,
                 requestID: "1",
                 url: "https://example.com/api/data.json",
-                requestHeaders: ["accept": "application/json"],
-                responseHeaders: ["content-type": "application/json"]
+                requestHeaders: [
+                    "accept": "application/json",
+                    "content-type": "application/x-www-form-urlencoded",
+                ],
+                postData: "name=Jane+Doe&city=Tokyo%20East",
+                responseHeaders: ["content-type": "application/json"],
+                responseMimeType: "application/json"
             )
         )
         let model = NetworkPanelModel(network: network)
@@ -96,21 +161,38 @@ struct NetworkDetailViewControllerTests {
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
-        let collectionView = viewController.collectionViewForTesting
-        let didRender = await waitUntil {
-            collectionView.numberOfSections == 3
-                && collectionView.numberOfItems(inSection: 0) == 1
-                && collectionView.numberOfItems(inSection: 1) == 1
-                && collectionView.numberOfItems(inSection: 2) == 1
-                && listCellSecondaryText(in: collectionView, at: IndexPath(item: 0, section: 0)) == "https://example.com/api/data.json"
-                && listCellText(in: collectionView, at: IndexPath(item: 0, section: 1)) == "accept"
-                && listCellSecondaryText(in: collectionView, at: IndexPath(item: 0, section: 1)) == "application/json"
-                && listCellText(in: collectionView, at: IndexPath(item: 0, section: 2)) == "content-type"
-                && listCellSecondaryText(in: collectionView, at: IndexPath(item: 0, section: 2)) == "application/json"
+        let didRenderHeaders = await waitUntilRendered(in: viewController) {
+            let text = viewController.headersTextViewForTesting.renderedTextForTesting
+            return viewController.currentModeForTesting == .headers
+                && viewController.previewViewForTesting.isHidden
+                && viewController.headersTextViewForTesting.isHidden == false
+                && viewController.headersTextViewForTesting.usesTextKit2ForTesting
+                && viewController.headersTextViewForTesting.isSelectableForTesting
+                && text.contains("accept: application/json")
+                && text.contains("content-type: application/json")
+                && text.contains("200 OK")
         }
 
-        #expect(didRender)
+        #expect(didRenderHeaders)
         #expect(viewController.contentUnavailableConfiguration == nil)
+
+        selectMode(.preview, on: viewController)
+
+        let didRenderPreview = await waitUntilRendered(in: viewController) {
+            viewController.currentModeForTesting == .preview
+                && viewController.previewViewForTesting.isHidden == false
+                && viewController.headersTextViewForTesting.isHidden
+                && viewController.isPreviewRoleControlHiddenForTesting == false
+        }
+        #expect(didRenderPreview)
+
+        viewController.selectPreviewRoleForTesting(.request)
+
+        let didRenderRequestPreview = await waitUntilRendered(in: viewController) {
+            viewController.currentPreviewRoleForTesting == .request
+                && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == "name=Jane Doe\ncity=Tokyo East"
+        }
+        #expect(didRenderRequestPreview)
     }
 
     @Test
@@ -137,15 +219,12 @@ struct NetworkDetailViewControllerTests {
         let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
+        viewController.setModeForTesting(.headers)
 
-        let didRenderEmptyResponseHeaders = await waitUntil {
-            let collectionView = viewController.collectionViewForTesting
-            return collectionView.numberOfSections == 3
-                && collectionView.numberOfItems(inSection: 2) == 1
-                && listCellText(in: collectionView, at: IndexPath(item: 0, section: 2))?.isEmpty == false
-                && listCellSecondaryText(in: collectionView, at: IndexPath(item: 0, section: 2)) == nil
+        let didRenderRequestHeaders = await waitUntilRendered(in: viewController) {
+            viewController.headersTextViewForTesting.renderedTextForTesting.contains("GET /api/data.json")
         }
-        #expect(didRenderEmptyResponseHeaders)
+        #expect(didRenderRequestHeaders)
 
         network.applyResponseReceived(
             targetID: targetID,
@@ -161,17 +240,14 @@ struct NetworkDetailViewControllerTests {
             timestamp: 2
         )
 
-        let didRenderResponseHeaders = await waitUntil {
-            let collectionView = viewController.collectionViewForTesting
-            return collectionView.numberOfItems(inSection: 2) == 1
-                && listCellText(in: collectionView, at: IndexPath(item: 0, section: 2)) == "content-type"
-                && listCellSecondaryText(in: collectionView, at: IndexPath(item: 0, section: 2)) == "application/json"
+        let didRenderResponseHeaders = await waitUntilRendered(in: viewController) {
+            viewController.headersTextViewForTesting.renderedTextForTesting.contains("content-type: application/json")
         }
         #expect(didRenderResponseHeaders)
     }
 
     @Test
-    func detailModeMenuUsesCoreBodyAvailabilityAndRendersRequestBody() async throws {
+    func detailModeControlUsesCoreBodyAvailabilityAndRendersRequestBody() async throws {
         let network = NetworkSession()
         let request = try #require(
             applyRequest(
@@ -189,28 +265,27 @@ struct NetworkDetailViewControllerTests {
         let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
 
-        let didRender = await waitUntil {
-            viewController.collectionViewForTesting.numberOfSections == 3
+        let didRender = await waitUntilRendered(in: viewController) {
+            viewController.previewViewForTesting.isHidden == false
+                && viewController.isPreviewRoleControlHiddenForTesting == false
         }
         #expect(didRender)
 
-        let requestAction = try action(for: .requestBody, in: viewController.modeMenuForTesting)
-        #expect(requestAction.attributes.contains(.disabled) == false)
+        #expect(viewController.currentModeForTesting == .preview)
+        viewController.selectPreviewRoleForTesting(.request)
 
-        requestAction.performWithSender(nil, target: nil)
-
-        let didSwitch = await waitUntil {
-            viewController.currentModeForTesting == .requestBody
-                && viewController.bodyTextViewForTesting.text == "name=Jane Doe\ncity=Tokyo East"
-                && viewController.bodyTextViewForTesting.model.language == .plainText
-                && viewController.bodyTextViewForTesting.model.drawsBackground == false
+        let didRenderBody = await waitUntilRendered(in: viewController) {
+            viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == "name=Jane Doe\ncity=Tokyo East"
+                && viewController.bodyViewControllerForTesting.syntaxViewForTesting.model.language == .plainText
+                && viewController.bodyViewControllerForTesting.syntaxViewForTesting.model.drawsBackground == false
         }
-        #expect(didSwitch)
+        #expect(didRenderBody)
     }
 
     @Test
-    func detailModeMenuDisablesWhenSelectedRequestDisappears() async throws {
+    func detailModeControlDisablesWhenSelectedRequestDisappears() async throws {
         let network = NetworkSession()
         let request = try #require(
             applyRequest(
@@ -226,22 +301,22 @@ struct NetworkDetailViewControllerTests {
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
-        let didEnableMenu = await waitUntil {
-            viewController.navigationItem.trailingItemGroups.first?.barButtonItems.first?.isEnabled == true
+        let didEnableMenu = await waitUntilRendered(in: viewController) {
+            viewController.isDetailModeControlEnabledForTesting
         }
         #expect(didEnableMenu)
 
         network.reset()
 
-        let didDisableMenu = await waitUntil {
-            viewController.navigationItem.trailingItemGroups.first?.barButtonItems.first?.isEnabled == false
+        let didDisableMenu = await waitUntilRendered(in: viewController) {
+            viewController.isDetailModeControlEnabledForTesting == false
                 && viewController.contentUnavailableConfiguration != nil
         }
         #expect(didDisableMenu)
     }
 
     @Test
-    func responseBodyModeRequestsRuntimeFetchWhenBodyIsAvailable() async throws {
+    func responsePreviewRequestsRuntimeFetchWhenBodyIsAvailable() async throws {
         let network = NetworkSession()
         let request = try #require(
             applyRequest(
@@ -261,18 +336,18 @@ struct NetworkDetailViewControllerTests {
         let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
 
-        viewController.loadViewIfNeeded()
-        viewController.setModeForTesting(.responseBody)
-
-        let didFetch = await waitUntil {
+        let didFetch = await waitUntilRendered(in: viewController) {
             fetchedIDs == [request.id]
+                && viewController.currentModeForTesting == .preview
+                && viewController.currentPreviewRoleForTesting == .response
         }
         #expect(didFetch)
     }
 
     @Test
-    func responseBodyModePrewarmsSyntaxAndShowsNavigationActivityWhileFetching() async throws {
+    func responsePreviewPrewarmsSyntaxWhileFetching() async throws {
         let network = NetworkSession()
         let request = try #require(
             applyRequest(
@@ -292,20 +367,14 @@ struct NetworkDetailViewControllerTests {
         let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
 
-        let indicatorItem = try #require(bodyFetchIndicatorItem(in: viewController))
-        viewController.setModeForTesting(.responseBody)
-
-        let didStartFetching = await waitUntil {
-            guard let activityIndicator = indicatorItem.customView as? UIActivityIndicatorView else {
-                return false
-            }
+        let didStartFetching = await waitUntilRendered(in: viewController) {
             return fetchedIDs == [request.id]
-                && viewController.currentModeForTesting == .responseBody
-                && viewController.bodyTextViewForTesting.text.isEmpty
-                && viewController.bodyTextViewForTesting.model.language == .json
-                && indicatorItem.isHidden == false
-                && activityIndicator.isAnimating
+                && viewController.currentModeForTesting == .preview
+                && viewController.currentPreviewRoleForTesting == .response
+                && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text.isEmpty == true
+                && viewController.bodyViewControllerForTesting.syntaxViewForTesting.model.language == .json
         }
         #expect(didStartFetching)
 
@@ -316,19 +385,350 @@ struct NetworkDetailViewControllerTests {
             )
         )
 
-        let didRenderBody = await waitUntil {
-            guard let activityIndicator = indicatorItem.customView as? UIActivityIndicatorView else {
-                return false
-            }
-            return viewController.bodyTextViewForTesting.text.contains(#""ok""#)
-                && indicatorItem.isHidden
-                && activityIndicator.isAnimating == false
+        let didRenderBody = await waitUntilRendered(in: viewController) {
+            return viewController.bodyViewControllerForTesting.syntaxViewForTesting.text.contains(#""ok""#)
         }
         #expect(didRenderBody)
     }
 
     @Test
-    func responseBodyModeWaitsForLoadingFinishedBeforeFetching() async throws {
+    func hlsResponsePreviewUsesOriginalPlaylistURLForPlayer() async throws {
+        let network = NetworkSession()
+        let playlistURL = "https://media.example.com/live/master.m3u8"
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: playlistURL,
+                responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
+                responseMimeType: "application/vnd.apple.mpegurl"
+            )
+        )
+        request.applyResponseBody(
+            NetworkBodyPayload(
+                body: """
+                #EXTM3U
+                #EXT-X-STREAM-INF:BANDWIDTH=1280000
+                media/playlist.m3u8
+                """,
+                base64Encoded: false
+            )
+        )
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
+
+        let didRenderHLSPreview = await waitUntilRendered(in: viewController) {
+            viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting?.absoluteString == playlistURL
+        }
+        #expect(didRenderHLSPreview)
+    }
+
+    @Test
+    func hlsResponsePreviewUsesPlaylistURLBeforeBodyLoads() async throws {
+        let network = NetworkSession()
+        let playlistURL = "https://media.example.com/live/master.m3u8"
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: playlistURL,
+                responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
+                responseMimeType: "application/vnd.apple.mpegurl"
+            )
+        )
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
+
+        let didRenderHLSPreview = await waitUntilRendered(in: viewController) {
+            viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting?.absoluteString == playlistURL
+        }
+        #expect(didRenderHLSPreview)
+    }
+
+    @Test
+    func hlsRequestBodyRendersSubmittedTextInsteadOfRemotePlaylist() async throws {
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://media.example.com/upload.m3u8",
+                postData: """
+                #EXTM3U
+                #EXT-X-VERSION:3
+                """,
+                responseHeaders: ["content-type": "application/json"],
+                responseMimeType: "application/json"
+            )
+        )
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
+
+        let didRenderPreviewRoles = await waitUntilRendered(in: viewController) {
+            viewController.isPreviewRoleControlHiddenForTesting == false
+        }
+        #expect(didRenderPreviewRoles)
+
+        viewController.selectPreviewRoleForTesting(.request)
+
+        let didRenderRequestBody = await waitUntilRendered(in: viewController) {
+            viewController.currentPreviewRoleForTesting == .request
+                && viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting == nil
+                && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text.contains("#EXTM3U")
+        }
+        #expect(didRenderRequestBody)
+    }
+
+    @Test
+    func mediaResponsePreviewReleasesPlayerAndTemporaryFileWhenShowingHeaders() async throws {
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://media.example.com/download.php",
+                responseHeaders: ["content-type": "video/mp4"],
+                responseMimeType: "video/mp4"
+            )
+        )
+        request.applyResponseBody(
+            NetworkBodyPayload(
+                body: "not a real movie",
+                base64Encoded: false
+            )
+        )
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
+
+        let didRenderMediaPreview = await waitUntilRendered(in: viewController) {
+            viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting?.pathExtension == "mp4"
+        }
+        #expect(didRenderMediaPreview)
+        let temporaryFileURL = try #require(viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting)
+        #expect(FileManager.default.fileExists(atPath: temporaryFileURL.path))
+
+        viewController.setModeForTesting(.headers)
+
+        let didReleaseMediaPreview = await waitUntilRendered(in: viewController) {
+            viewController.currentModeForTesting == .headers
+                && viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting == nil
+                && FileManager.default.fileExists(atPath: temporaryFileURL.path) == false
+        }
+        #expect(didReleaseMediaPreview)
+
+        viewController.setModeForTesting(.preview)
+
+        let didRestoreMediaPreview = await waitUntilRendered(in: viewController) {
+            viewController.currentModeForTesting == .preview
+                && viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting?.pathExtension == "mp4"
+        }
+        #expect(didRestoreMediaPreview)
+    }
+
+    @Test
+    func mediaResponsePreviewReusesPlayerAndTemporaryFileWhenRequestUpdateDoesNotChangeBody() async throws {
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://media.example.com/download.php",
+                responseHeaders: ["content-type": "video/mp4"],
+                responseMimeType: "video/mp4",
+                finishes: false
+            )
+        )
+        request.applyResponseBody(
+            NetworkBodyPayload(
+                body: "not a real movie",
+                base64Encoded: false
+            )
+        )
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
+
+        let didRenderMediaPreview = await waitUntilRendered(in: viewController) {
+            viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting?.pathExtension == "mp4"
+                && viewController.bodyViewControllerForTesting.mediaPlayerIdentityForTesting != nil
+        }
+        #expect(didRenderMediaPreview)
+        let temporaryFileURL = try #require(viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting)
+        let playerIdentity = try #require(viewController.bodyViewControllerForTesting.mediaPlayerIdentityForTesting)
+        let delivery = try #require(viewController.selectedRequestRenderObservationDeliveryForTesting)
+
+        network.applyDataReceived(
+            targetID: request.id.targetID,
+            requestID: request.id.requestID,
+            dataLength: 128,
+            encodedDataLength: 64,
+            timestamp: 4
+        )
+
+        let observedValues = await delivery.values {
+            request.encodedDataLength == 64
+                && viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting == temporaryFileURL
+                && viewController.bodyViewControllerForTesting.mediaPlayerIdentityForTesting == playerIdentity
+                && FileManager.default.fileExists(atPath: temporaryFileURL.path)
+        }
+        #expect(observedValues.latestValue == true)
+    }
+
+    @Test
+    func imageResponsePreviewUsesScrollViewAndFitsLargeImage() async throws {
+        let imageSize = CGSize(width: 600, height: 1400)
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://media.example.com/large.png",
+                responseHeaders: ["content-type": "image/png"],
+                responseMimeType: "image/png"
+            )
+        )
+        request.applyResponseBody(
+            NetworkBodyPayload(
+                body: pngBase64String(size: imageSize),
+                base64Encoded: true
+            )
+        )
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
+
+        let didRenderImage = await waitUntilRendered(in: viewController) {
+            let bodyViewController = viewController.bodyViewControllerForTesting
+            return bodyViewController.isImagePreviewVisibleForTesting
+                && bodyViewController.syntaxViewForTesting.isHidden
+                && bodyViewController.imageViewForTesting.image?.size == imageSize
+        }
+        #expect(didRenderImage)
+
+        let imageScrollView = viewController.bodyViewControllerForTesting.imageScrollViewForTesting
+        let fitScale = min(
+            imageScrollView.bounds.width / imageSize.width,
+            imageScrollView.bounds.height / imageSize.height
+        )
+        let expectedMinimumZoomScale = min(1, fitScale)
+        #expect(abs(imageScrollView.minimumZoomScale - expectedMinimumZoomScale) < 0.001)
+        #expect(abs(imageScrollView.zoomScale - expectedMinimumZoomScale) < 0.001)
+        #expect(imageScrollView.maximumZoomScale >= 1)
+    }
+
+    @Test
+    func imageResponsePreviewKeepsAutoFitWhenBoundsShrink() async throws {
+        let imageSize = CGSize(width: 600, height: 1400)
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://media.example.com/large.png",
+                responseHeaders: ["content-type": "image/png"],
+                responseMimeType: "image/png"
+            )
+        )
+        request.applyResponseBody(
+            NetworkBodyPayload(
+                body: pngBase64String(size: imageSize),
+                base64Encoded: true
+            )
+        )
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
+
+        let didRenderImage = await waitUntilRendered(in: viewController) {
+            viewController.bodyViewControllerForTesting.isImagePreviewVisibleForTesting
+        }
+        #expect(didRenderImage)
+
+        let imageScrollView = viewController.bodyViewControllerForTesting.imageScrollViewForTesting
+        let initialBounds = imageScrollView.bounds
+        let initialMinimumZoomScale = imageScrollView.minimumZoomScale
+        window.frame = CGRect(x: 0, y: 0, width: 390, height: 700)
+        window.layoutIfNeeded()
+
+        let didRefitAfterBoundsChange = await waitUntilRendered(in: viewController) {
+            let fitScale = min(
+                imageScrollView.bounds.width / imageSize.width,
+                imageScrollView.bounds.height / imageSize.height
+            )
+            let expectedMinimumZoomScale = min(1, fitScale)
+            return imageScrollView.bounds.height < initialBounds.height
+                && expectedMinimumZoomScale < initialMinimumZoomScale
+                && abs(imageScrollView.minimumZoomScale - expectedMinimumZoomScale) < 0.001
+                && abs(imageScrollView.zoomScale - expectedMinimumZoomScale) < 0.001
+        }
+        #expect(didRefitAfterBoundsChange)
+    }
+
+    @Test
+    func smallImageResponsePreviewStaysAtOneXAndCentersImage() async throws {
+        let imageSize = CGSize(width: 24, height: 12)
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://media.example.com/icon.png",
+                responseHeaders: ["content-type": "image/png"],
+                responseMimeType: "image/png"
+            )
+        )
+        request.applyResponseBody(
+            NetworkBodyPayload(
+                body: pngBase64String(size: imageSize),
+                base64Encoded: true
+            )
+        )
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
+
+        let didRenderImage = await waitUntilRendered(in: viewController) {
+            viewController.bodyViewControllerForTesting.isImagePreviewVisibleForTesting
+        }
+        #expect(didRenderImage)
+
+        let imageScrollView = viewController.bodyViewControllerForTesting.imageScrollViewForTesting
+        #expect(imageScrollView.minimumZoomScale == 1)
+        #expect(imageScrollView.zoomScale == 1)
+        #expect(imageScrollView.contentInset.left > 0)
+        #expect(imageScrollView.contentInset.top > 0)
+    }
+
+    @Test
+    func responsePreviewWaitsForLoadingFinishedBeforeFetching() async throws {
         let network = NetworkSession()
         let request = try #require(
             applyRequest(
@@ -349,8 +749,8 @@ struct NetworkDetailViewControllerTests {
         let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
 
-        viewController.setModeForTesting(.responseBody)
         #expect(fetchedIDs.isEmpty)
 
         network.applyLoadingFinished(
@@ -359,7 +759,7 @@ struct NetworkDetailViewControllerTests {
             timestamp: 3
         )
 
-        let didFetch = await waitUntil {
+        let didFetch = await waitUntilRendered(in: viewController) {
             fetchedIDs == [request.id]
         }
         #expect(didFetch)
@@ -387,23 +787,276 @@ struct NetworkDetailViewControllerTests {
         let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
 
-        viewController.setModeForTesting(.responseBody)
-
-        let didRenderFailure = await waitUntil {
-            viewController.currentModeForTesting == .responseBody
-                && !viewController.bodyTextViewForTesting.text.isEmpty
+        let didRenderFailure = await waitUntilRendered(in: viewController) {
+            viewController.currentModeForTesting == .preview
+                && viewController.currentPreviewRoleForTesting == .response
+                && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text.isEmpty == false
         }
         #expect(didRenderFailure)
         #expect(fetchedIDs.isEmpty)
 
         request.markResponseBodyFailed(.unknown("Still unavailable"))
 
-        let didStayIdle = await waitUntil {
-            viewController.bodyTextViewForTesting.text.contains("Still unavailable")
+        let didStayIdle = await waitUntilRendered(in: viewController) {
+            viewController.bodyViewControllerForTesting.syntaxViewForTesting.text.contains("Still unavailable")
                 && fetchedIDs.isEmpty
         }
         #expect(didStayIdle)
+    }
+
+    @Test
+    func headersModeDoesNotFetchResponseBody() async throws {
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://example.com/api/data.json",
+                responseHeaders: ["content-type": "application/json"],
+                responseMimeType: "application/json"
+            )
+        )
+        var fetchedIDs: [NetworkRequest.ID] = []
+        let model = NetworkPanelModel(network: network) { id in
+            fetchedIDs.append(id)
+        }
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.setModeForTesting(.headers)
+
+        let didRenderHeaders = await waitUntilRendered(in: viewController) {
+            viewController.currentModeForTesting == .headers
+                && viewController.headersTextViewForTesting.renderedTextForTesting.contains("content-type: application/json")
+        }
+        #expect(didRenderHeaders)
+        #expect(fetchedIDs.isEmpty)
+    }
+
+    @Test
+    func headersModePreservesSelectionWhenRequestUpdateDoesNotChangeDocument() async throws {
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://example.com/api/data.json",
+                responseHeaders: ["content-type": "application/json"],
+                responseMimeType: "application/json",
+                finishes: false
+            )
+        )
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.setModeForTesting(.headers)
+
+        let didRenderHeaders = await waitUntilRendered(in: viewController) {
+            viewController.headersTextViewForTesting.renderedTextForTesting.contains("content-type: application/json")
+        }
+        #expect(didRenderHeaders)
+
+        let selectedRange = NSRange(location: 2, length: 4)
+        viewController.headersTextViewForTesting.selectedRangeForTesting = selectedRange
+        let assignmentCount = viewController.headersTextViewForTesting.attributedTextAssignmentCountForTesting
+        let delivery = try #require(viewController.selectedRequestRenderObservationDeliveryForTesting)
+
+        network.applyDataReceived(
+            targetID: request.id.targetID,
+            requestID: request.id.requestID,
+            dataLength: 128,
+            encodedDataLength: 64,
+            timestamp: 4
+        )
+
+        let observedValues = await delivery.values {
+            request.encodedDataLength == 64
+                && viewController.headersTextViewForTesting.attributedTextAssignmentCountForTesting == assignmentCount
+                && viewController.headersTextViewForTesting.selectedRangeForTesting == selectedRange
+        }
+        #expect(observedValues.latestValue == true)
+    }
+
+    @Test
+    func requestPreviewRoleDoesNotFetchResponseBodyAfterLoadingFinishes() async throws {
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://example.com/api/data.json",
+                requestHeaders: ["content-type": "application/x-www-form-urlencoded"],
+                postData: "name=Jane+Doe",
+                responseHeaders: ["content-type": "application/json"],
+                responseMimeType: "application/json",
+                finishes: false
+            )
+        )
+        var fetchedIDs: [NetworkRequest.ID] = []
+        let model = NetworkPanelModel(network: network) { id in
+            fetchedIDs.append(id)
+        }
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
+
+        let didRenderPreview = await waitUntilRendered(in: viewController) {
+            viewController.currentModeForTesting == .preview
+                && viewController.isPreviewRoleControlHiddenForTesting == false
+        }
+        #expect(didRenderPreview)
+
+        viewController.selectPreviewRoleForTesting(.request)
+
+        let didRenderRequestBody = await waitUntilRendered(in: viewController) {
+            viewController.currentPreviewRoleForTesting == .request
+                && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == "name=Jane Doe"
+        }
+        #expect(didRenderRequestBody)
+
+        network.applyLoadingFinished(
+            targetID: request.id.targetID,
+            requestID: request.id.requestID,
+            timestamp: 3
+        )
+
+        let didStayOnRequestBody = await waitUntilRendered(in: viewController) {
+            viewController.currentPreviewRoleForTesting == .request
+                && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == "name=Jane Doe"
+        }
+        #expect(didStayOnRequestBody)
+        #expect(fetchedIDs.isEmpty)
+    }
+
+    @Test
+    func selectedRequestRebindingIgnoresOldRequestMutations() async throws {
+        let network = NetworkSession()
+        let firstRequest = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://example.com/first.json",
+                responseHeaders: ["x-request": "first"],
+                responseMimeType: "application/json"
+            )
+        )
+        let secondRequest = try #require(
+            applyRequest(
+                to: network,
+                requestID: "2",
+                url: "https://example.com/second.json",
+                responseHeaders: ["x-request": "second"],
+                responseMimeType: "application/json"
+            )
+        )
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(firstRequest)
+        let viewController = NetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.setModeForTesting(.headers)
+
+        let didRenderFirst = await waitUntilRendered(in: viewController) {
+            viewController.headersTextViewForTesting.renderedTextForTesting.contains("x-request: first")
+        }
+        #expect(didRenderFirst)
+
+        model.selectRequest(secondRequest)
+        let didRenderSecond = await waitUntilRendered(in: viewController) {
+            viewController.headersTextViewForTesting.renderedTextForTesting.contains("x-request: second")
+        }
+        #expect(didRenderSecond)
+
+        network.applyResponseReceived(
+            targetID: firstRequest.id.targetID,
+            requestID: firstRequest.id.requestID,
+            resourceType: .script,
+            response: NetworkResponsePayload(
+                url: "https://example.com/first.json",
+                status: 200,
+                statusText: "OK",
+                headers: ["x-old-request": "stale"],
+                mimeType: "application/json"
+            ),
+            timestamp: 4
+        )
+
+        await Task.yield()
+        #expect(viewController.headersTextViewForTesting.renderedTextForTesting.contains("x-old-request: stale") == false)
+
+        network.applyResponseReceived(
+            targetID: secondRequest.id.targetID,
+            requestID: secondRequest.id.requestID,
+            resourceType: .script,
+            response: NetworkResponsePayload(
+                url: "https://example.com/second.json",
+                status: 200,
+                statusText: "OK",
+                headers: ["x-current-request": "updated"],
+                mimeType: "application/json"
+            ),
+            timestamp: 5
+        )
+
+        let didRenderCurrentUpdate = await waitUntilRendered(in: viewController) {
+            let text = viewController.headersTextViewForTesting.renderedTextForTesting
+            return text.contains("x-current-request: updated")
+                && text.contains("x-old-request: stale") == false
+        }
+        #expect(didRenderCurrentUpdate)
+    }
+
+    @Test
+    func previewRoleSwitchPreservesInstalledBodyViews() async throws {
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://example.com/api/data.json",
+                requestHeaders: ["content-type": "application/x-www-form-urlencoded"],
+                postData: "name=Jane+Doe",
+                responseHeaders: ["content-type": "application/json"],
+                responseMimeType: "application/json"
+            )
+        )
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
+
+        let didRenderPreview = await waitUntilRendered(in: viewController) {
+            viewController.currentModeForTesting == .preview
+                && viewController.isPreviewRoleControlHiddenForTesting == false
+        }
+        #expect(didRenderPreview)
+
+        let bodyViewControllerID = ObjectIdentifier(viewController.bodyViewControllerForTesting)
+        let syntaxViewID = ObjectIdentifier(viewController.bodyViewControllerForTesting.syntaxViewForTesting)
+
+        viewController.selectPreviewRoleForTesting(.request)
+        let didRenderRequest = await waitUntilRendered(in: viewController) {
+            viewController.currentPreviewRoleForTesting == .request
+                && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == "name=Jane Doe"
+        }
+        #expect(didRenderRequest)
+
+        viewController.selectPreviewRoleForTesting(.response)
+        let didRenderResponse = await waitUntilRendered(in: viewController) {
+            viewController.currentPreviewRoleForTesting == .response
+        }
+        #expect(didRenderResponse)
+        #expect(ObjectIdentifier(viewController.bodyViewControllerForTesting) == bodyViewControllerID)
+        #expect(ObjectIdentifier(viewController.bodyViewControllerForTesting.syntaxViewForTesting) == syntaxViewID)
     }
 
     @Test
@@ -435,6 +1088,50 @@ struct NetworkDetailViewControllerTests {
             navigationController.viewControllers == [listViewController]
         }
         #expect(didPop)
+    }
+
+    @Test
+    func compactContainerCanPushSameRequestAfterBackNavigation() async throws {
+        let network = NetworkSession()
+        _ = try #require(applyRequest(to: network, requestID: "1", url: "https://example.com/app.js"))
+        let model = NetworkPanelModel(network: network)
+        let listViewController = NetworkListViewController(model: model)
+        let detailViewController = NetworkDetailViewController(model: model)
+        let navigationController = NetworkCompactNavigationController(
+            model: model,
+            listViewController: listViewController,
+            detailViewController: detailViewController
+        )
+        let window = showInWindow(navigationController)
+        defer { window.isHidden = true }
+
+        let didRenderList = await waitUntil {
+            listViewController.collectionViewForTesting.numberOfItems(inSection: 0) == 1
+        }
+        #expect(didRenderList)
+
+        selectListItem(at: IndexPath(item: 0, section: 0), in: listViewController)
+        let didPush = await waitUntil {
+            navigationController.viewControllers.last === detailViewController
+        }
+        #expect(didPush)
+        await waitForNavigationTransitionToFinish(in: navigationController)
+
+        _ = withUIKitAnimationsDisabled {
+            navigationController.popViewController(animated: false)
+        }
+        let didReturnToList = await waitUntil {
+            navigationController.viewControllers == [listViewController]
+                && model.selectedRequest == nil
+                && (listViewController.collectionViewForTesting.indexPathsForSelectedItems ?? []).isEmpty
+        }
+        #expect(didReturnToList)
+
+        selectListItem(at: IndexPath(item: 0, section: 0), in: listViewController)
+        let didPushAgain = await waitUntil {
+            navigationController.viewControllers.last === detailViewController
+        }
+        #expect(didPushAgain)
     }
 
     @Test
@@ -538,51 +1235,21 @@ struct NetworkDetailViewControllerTests {
         return network.request(for: key)
     }
 
-    private func action(
-        for mode: NetworkDetailMode,
-        in menu: UIMenu
-    ) throws -> UIAction {
-        try #require(action(title: mode.title, in: menu))
+    private func selectMode(
+        _ mode: NetworkDetailMode,
+        on viewController: NetworkDetailViewController
+    ) {
+        #expect(viewController.isDetailModeEnabledForTesting(mode))
+        viewController.selectModeForTesting(mode)
     }
 
-    private func action(title: String, in menu: UIMenu) -> UIAction? {
-        for child in menu.children {
-            if let action = child as? UIAction, action.title == title {
-                return action
-            }
-            if let submenu = child as? UIMenu, let nested = action(title: title, in: submenu) {
-                return nested
-            }
-        }
-        return nil
-    }
-
-    private func bodyFetchIndicatorItem(in viewController: NetworkDetailViewController) -> UIBarButtonItem? {
-        viewController.navigationItem.trailingItemGroups
-            .flatMap(\.barButtonItems)
-            .first {
-                $0.accessibilityIdentifier == "WebInspector.Network.BodyFetchIndicatorItem"
-            }
-    }
-
-    private func listCellText(
-        in collectionView: UICollectionView,
-        at indexPath: IndexPath
-    ) -> String? {
-        collectionView.cellForItem(at: indexPath)?
-            .contentConfiguration
-            .flatMap { $0 as? UIListContentConfiguration }?
-            .text
-    }
-
-    private func listCellSecondaryText(
-        in collectionView: UICollectionView,
-        at indexPath: IndexPath
-    ) -> String? {
-        collectionView.cellForItem(at: indexPath)?
-            .contentConfiguration
-            .flatMap { $0 as? UIListContentConfiguration }?
-            .secondaryText
+    private func selectListItem(
+        at indexPath: IndexPath,
+        in viewController: NetworkListViewController
+    ) {
+        let collectionView = viewController.collectionViewForTesting
+        collectionView.selectItem(at: indexPath, animated: false, scrollPosition: [])
+        viewController.collectionView(collectionView, didSelectItemAt: indexPath)
     }
 
     private func showInWindow(_ viewController: UIViewController) -> UIWindow {
@@ -592,6 +1259,66 @@ struct NetworkDetailViewControllerTests {
         viewController.loadViewIfNeeded()
         window.layoutIfNeeded()
         return window
+    }
+
+    private func pngBase64String(size: CGSize) -> String {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let renderer = UIGraphicsImageRenderer(size: size, format: format)
+        return renderer.pngData { context in
+            UIColor.red.setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+        }
+        .base64EncodedString()
+    }
+
+    private func waitUntilRendered(
+        in viewController: NetworkDetailViewController,
+        maxTicks: Int = 256,
+        _ condition: @escaping @MainActor @Sendable () -> Bool
+    ) async -> Bool {
+        if sampleRenderedCondition(in: viewController, condition: condition) {
+            return true
+        }
+
+        for _ in 0..<maxTicks {
+            let deliveries = observationDeliveries(in: viewController)
+            if deliveries.isEmpty == false {
+                var renderedValues: [ObservedValues<Bool>] = []
+                for delivery in deliveries {
+                    renderedValues.append(
+                        await delivery.values {
+                            sampleRenderedCondition(in: viewController, condition: condition)
+                        }
+                    )
+                }
+                if renderedValues.contains(where: { $0.latestValue == true }) {
+                    return true
+                }
+            }
+            if sampleRenderedCondition(in: viewController, condition: condition) {
+                return true
+            }
+            await Task.yield()
+        }
+        return sampleRenderedCondition(in: viewController, condition: condition)
+    }
+
+    private func observationDeliveries(in viewController: NetworkDetailViewController) -> [ObservationDelivery] {
+        [
+            viewController.modelObservationDeliveryForTesting,
+            viewController.selectedRequestRenderObservationDeliveryForTesting,
+            viewController.responseBodyFetchObservationDeliveryForTesting,
+            viewController.bodyViewControllerForTesting.bodyObservationDeliveryForTesting,
+        ].compactMap { $0 }
+    }
+
+    private func sampleRenderedCondition(
+        in viewController: NetworkDetailViewController,
+        condition: @MainActor @Sendable () -> Bool
+    ) -> Bool {
+        viewController.view.layoutIfNeeded()
+        return condition()
     }
 
     private func waitUntil(
@@ -626,6 +1353,14 @@ struct NetworkDetailViewControllerTests {
         UIView.setAnimationsEnabled(false)
         defer { UIView.setAnimationsEnabled(wereAnimationsEnabled) }
         return body()
+    }
+
+    private func localizedResourceString(_ key: String, locale: String) -> String? {
+        guard let bundleURL = Bundle.module.url(forResource: locale, withExtension: "lproj"),
+              let bundle = Bundle(url: bundleURL) else {
+            return nil
+        }
+        return bundle.localizedString(forKey: key, value: nil, table: nil)
     }
 }
 #endif

@@ -89,11 +89,17 @@ func webInspectorApplyNavigationControllerBackground(to navigationController: UI
 
 @MainActor
 final class RegularSplitColumnNavigationController: UINavigationController {
-    override init(rootViewController: UIViewController) {
+    private let hidesNavigationBar: Bool
+
+    init(
+        rootViewController: UIViewController,
+        hidesNavigationBar: Bool = true
+    ) {
+        self.hidesNavigationBar = hidesNavigationBar
         rootViewController.webInspectorDetachFromContainerForReuse()
         super.init(rootViewController: rootViewController)
         webInspectorApplyNavigationControllerBackground(to: self)
-        setNavigationBarHidden(true, animated: false)
+        setNavigationBarHidden(hidesNavigationBar, animated: false)
     }
 
     @available(*, unavailable)
@@ -103,7 +109,7 @@ final class RegularSplitColumnNavigationController: UINavigationController {
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        setNavigationBarHidden(true, animated: false)
+        setNavigationBarHidden(hidesNavigationBar, animated: false)
     }
 
     override func viewDidLoad() {
