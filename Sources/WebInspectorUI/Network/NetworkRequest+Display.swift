@@ -77,58 +77,6 @@ extension NetworkRequest {
         return .neutral
     }
 
-    package var resourceFilter: NetworkResourceFilter {
-        guard let response else {
-            if let resourceType {
-                return NetworkResourceFilter(resourceType: resourceType)
-            }
-            return NetworkResourceFilter(mimeType: nil, url: request.url)
-        }
-
-        let responseMimeType = mimeType(from: response)
-        if let resourceType, shouldKeepResourceTypeForURLInferredMedia(resourceType) {
-            if case .previewable = NetworkMediaPreviewSupport.classification(mimeType: responseMimeType, url: nil) {
-                return .media
-            }
-            return NetworkResourceFilter(resourceType: resourceType)
-        }
-
-        let responseURL = response.url
-        switch NetworkMediaPreviewSupport.classification(mimeType: responseMimeType, url: responseURL) {
-        case .previewable:
-            return .media
-        case .notPreviewable:
-            if resourceType == .image || resourceType == .media {
-                return .media
-            }
-            return NetworkResourceFilter(mimeType: responseMimeType, url: responseURL)
-        case .unknown:
-            break
-        }
-        if let resourceType {
-            return NetworkResourceFilter(resourceType: resourceType)
-        }
-        return NetworkResourceFilter(
-            mimeType: responseMimeType,
-            url: responseURL
-        )
-    }
-
-    package func matchesSearchText(_ query: String) -> Bool {
-        if query.isEmpty {
-            return true
-        }
-        let statusCodeLabel = response.map { String($0.status) } ?? ""
-        let candidates = [
-            request.url,
-            request.method,
-            statusCodeLabel,
-            response?.statusText ?? "",
-            fileTypeLabel,
-        ]
-        return candidates.contains { $0.localizedStandardContains(query) }
-    }
-
     package var duration: TimeInterval? {
         guard let end = finishedOrFailedTimestamp ?? lastDataReceivedTimestamp ?? responseReceivedTimestamp else {
             return nil
@@ -155,35 +103,6 @@ extension NetworkRequest {
         formatter.countStyle = .binary
         return formatter.string(fromByteCount: Int64(length))
     }
-}
-
-private func shouldKeepResourceTypeForURLInferredMedia(_ resourceType: NetworkResourceType) -> Bool {
-    switch resourceType {
-    case .image, .media, .xhr, .fetch, .other:
-        return false
-    default:
-        return true
-    }
-}
-
-private func mimeType(from response: NetworkResponsePayload) -> String? {
-    let rawMimeType = response.mimeType ?? headerValue(named: "content-type", in: response.headers)
-    let mimeType = rawMimeType?
-        .split(separator: ";", maxSplits: 1, omittingEmptySubsequences: true)
-        .first
-        .map(String.init)?
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-    guard let mimeType, mimeType.isEmpty == false else {
-        return nil
-    }
-    return mimeType
-}
-
-private func headerValue(named name: String, in headers: [String: String]) -> String? {
-    if let value = headers[name] {
-        return value
-    }
-    return headers.first { $0.key.caseInsensitiveCompare(name) == .orderedSame }?.value
 }
 
 extension NetworkResourceType {

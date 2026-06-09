@@ -1,11 +1,8 @@
 #if canImport(UIKit)
-import WebInspectorCore
-import ObservationBridge
 import UIKit
 
 @MainActor
 package final class NetworkListCell: UICollectionViewListCell {
-    private let observationScope = ObservationScope()
     private let statusIndicatorView = UIView(frame: CGRect(origin: .zero, size: CGSize(width: 8, height: 8)))
     private let fileTypeLabel = UILabel()
 
@@ -19,24 +16,9 @@ package final class NetworkListCell: UICollectionViewListCell {
         nil
     }
 
-    isolated deinit {
-        observationScope.cancelAll()
-    }
-
-    override package func prepareForReuse() {
-        super.prepareForReuse()
-        observationScope.cancelAll()
-    }
-
-    package func bind(request: NetworkRequest) {
-        render(displayName: request.displayName)
-        renderAccessories(request: request)
-
-        observationScope.cancelAll()
-        observationScope.observe(request) { [weak self] _, request in
-            self?.render(displayName: request.displayName)
-            self?.renderAccessories(request: request)
-        }
+    package func bind(projection: NetworkRequestDisplayProjection) {
+        render(displayName: projection.displayName)
+        renderAccessories(projection: projection)
     }
 
     private func configureStaticViews() {
@@ -79,12 +61,12 @@ package final class NetworkListCell: UICollectionViewListCell {
         contentConfiguration = content
     }
 
-    private func renderAccessories(request: NetworkRequest) {
-        let color = request.statusSeverity.color
+    private func renderAccessories(projection: NetworkRequestDisplayProjection) {
+        let color = projection.statusSeverity.color
         if statusIndicatorView.backgroundColor?.isEqual(color) != true {
             statusIndicatorView.backgroundColor = color
         }
-        let fileTypeLabelText = request.fileTypeLabel
+        let fileTypeLabelText = projection.fileTypeLabel
         if fileTypeLabel.text != fileTypeLabelText {
             fileTypeLabel.text = fileTypeLabelText
         }
