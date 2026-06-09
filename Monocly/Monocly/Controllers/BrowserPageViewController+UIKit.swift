@@ -17,8 +17,14 @@ final class BrowserPageViewController: UIViewController {
     private enum ProgressIndicator {
         static let height: CGFloat = 2
         static let showAnimationDuration: TimeInterval = 0.12
+        static let progressAnimationDuration: TimeInterval = 0.18
         static let completionHoldDuration: UInt64 = 120_000_000
         static let hideAnimationDuration: TimeInterval = 0.18
+        static let animationOptions: UIView.AnimationOptions = [
+            .allowUserInteraction,
+            .beginFromCurrentState,
+            .curveEaseInOut,
+        ]
     }
 
     private let store: BrowserStore
@@ -60,7 +66,6 @@ final class BrowserPageViewController: UIViewController {
     private var didAutoPresentInspector = false
     private var progressHeightConstraint: NSLayoutConstraint?
     private var progressHideTask: Task<Void, Never>?
-    private var progressHideAnimator: UIViewPropertyAnimator?
     private var currentChromePlacement: ChromePlacement?
     var onSelectedWebViewInstalled: ((WKWebView) -> Void)?
 
@@ -85,7 +90,6 @@ final class BrowserPageViewController: UIViewController {
 
     isolated deinit {
         progressHideTask?.cancel()
-        progressHideAnimator?.stopAnimation(true)
         viewportCoordinator?.invalidate()
         observationScope.cancelAll()
         if let inspectorWindowObserverID {
@@ -491,8 +495,7 @@ final class BrowserPageViewController: UIViewController {
     private func showProgressIndicator() {
         progressHideTask?.cancel()
         progressHideTask = nil
-        progressHideAnimator?.stopAnimation(true)
-        progressHideAnimator = nil
+        progressView.layer.removeAllAnimations()
 
         let wasHidden = progressView.isHidden
         if wasHidden {
@@ -505,7 +508,11 @@ final class BrowserPageViewController: UIViewController {
             return
         }
 
-        UIView.animate(withDuration: ProgressIndicator.showAnimationDuration) {
+        UIView.animate(
+            withDuration: ProgressIndicator.showAnimationDuration,
+            delay: 0,
+            options: ProgressIndicator.animationOptions
+        ) {
             self.progressView.alpha = 1
         }
     }
@@ -528,22 +535,22 @@ final class BrowserPageViewController: UIViewController {
                 return
             }
 
-            let animator = UIViewPropertyAnimator(duration: ProgressIndicator.hideAnimationDuration, curve: .easeOut) {
+            UIView.animate(
+                withDuration: ProgressIndicator.hideAnimationDuration,
+                delay: 0,
+                options: ProgressIndicator.animationOptions
+            ) {
                 self.progressView.alpha = 0
-            }
-            self.progressHideAnimator = animator
-            animator.addCompletion { [weak self] position in
-                guard let self, position == .end, self.store.isShowingProgress == false else {
+            } completion: { [weak self] finished in
+                guard let self, finished, self.store.isShowingProgress == false else {
                     return
                 }
 
                 self.progressView.isHidden = true
                 self.progressHeightConstraint?.constant = 0
                 self.progressView.setProgress(0, animated: false)
-                self.progressHideAnimator = nil
                 self.progressHideTask = nil
             }
-            animator.startAnimation()
         }
     }
 
@@ -553,10 +560,20 @@ final class BrowserPageViewController: UIViewController {
             return
         }
 
-        let shouldAnimate = progressView.isHidden == false
-            && progressView.alpha > 0
-            && progress > currentProgress
-        progressView.setProgress(progress, animated: shouldAnimate)
+        guard progressView.isHidden == false,
+              progressView.alpha > 0,
+              progress > currentProgress else {
+            progressView.setProgress(progress, animated: false)
+            return
+        }
+
+        UIView.animate(
+            withDuration: ProgressIndicator.progressAnimationDuration,
+            delay: 0,
+            options: ProgressIndicator.animationOptions
+        ) {
+            self.progressView.setProgress(progress, animated: true)
+        }
     }
 
     private func normalizedProgress(_ progress: Double) -> Float {
