@@ -45,6 +45,7 @@ final class NetworkBodyViewController: UIViewController {
         return scrollView
     }()
     private let observationScope = ObservationScope()
+    private let scrollEdgeState: NetworkPreviewRoleScrollEdgeState?
     private weak var body: NetworkBody?
     private var metadata: NetworkBodyPreviewMetadata?
     private var hasDisplayedBody = false
@@ -57,6 +58,16 @@ final class NetworkBodyViewController: UIViewController {
 #if DEBUG
     private var bodyObservationDelivery: ObservationDelivery?
 #endif
+
+    init(scrollEdgeState: NetworkPreviewRoleScrollEdgeState? = nil) {
+        self.scrollEdgeState = scrollEdgeState
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -300,6 +311,7 @@ final class NetworkBodyViewController: UIViewController {
         hideImagePreview()
         removeMediaPlayerViewController()
         syntaxView.isHidden = false
+        scrollEdgeState?.scrollView = syntaxView
     }
 
     private func showImagePreview(_ image: UIImage) {
@@ -307,6 +319,7 @@ final class NetworkBodyViewController: UIViewController {
         removeCachedTemporaryMediaFile()
         syntaxView.isHidden = true
         imageScrollView.isHidden = false
+        scrollEdgeState?.scrollView = imageScrollView
         shouldResetImageZoomOnNextLayout = true
         imagePreviewLayoutState = nil
         imageView.image = image
@@ -320,6 +333,7 @@ final class NetworkBodyViewController: UIViewController {
     private func showMoviePreview(_ url: URL) {
         hideImagePreview()
         syntaxView.isHidden = true
+        scrollEdgeState?.scrollView = nil
         if let temporaryFileURL = mediaTemporaryFile?.fileURL, temporaryFileURL != url {
             removeCachedTemporaryMediaFile()
         }

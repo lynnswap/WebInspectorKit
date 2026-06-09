@@ -9,7 +9,24 @@ package final class NetworkDetailViewController: UIViewController {
     private let modelObservationScope = ObservationScope()
     private let selectedRequestRenderObservationScope = ObservationScope()
     private let responseBodyFetchObservationScope = ObservationScope()
-    private let bodyViewController = NetworkBodyViewController()
+    private let previewRoleScrollEdgeController = NetworkPreviewRoleScrollEdgeController()
+    private lazy var bodyViewController = NetworkBodyViewController(
+        scrollEdgeState: previewRoleScrollEdgeController.scrollEdgeState
+    )
+    private lazy var modeControlController: NetworkDetailModeControlController = {
+        let controller = NetworkDetailModeControlController(initialMode: mode)
+        controller.selectionHandler = { [weak self] mode in
+            self?.setMode(mode)
+        }
+        return controller
+    }()
+    private lazy var previewRoleControlController: NetworkPreviewRoleControlController = {
+        let controller = NetworkPreviewRoleControlController()
+        controller.selectionHandler = { [weak self] role in
+            self?.setPreviewRole(role)
+        }
+        return controller
+    }()
     private var previewRoles: [NetworkBodyRole] = []
     private var hasBoundSelectedRequest = false
     private weak var observedRequest: NetworkRequest?
@@ -19,26 +36,9 @@ package final class NetworkDetailViewController: UIViewController {
     private var selectedRequestRenderObservationDelivery: ObservationDelivery?
     private var responseBodyFetchObservationDelivery: ObservationDelivery?
 #endif
-    private lazy var modeSegmentedControl: UISegmentedControl = {
-        let control = UISegmentedControl(items: NetworkDetailMode.allCases.map(\.title))
-        control.selectedSegmentIndex = modeIndex(for: mode)
-        control.accessibilityIdentifier = "WebInspector.Network.DetailModeSegmentedControl"
-        control.addTarget(self, action: #selector(modeSegmentedControlValueChanged(_:)), for: .valueChanged)
-        return control
-    }()
-    private lazy var previewRoleSegmentedControl: UISegmentedControl = {
-        let control = UISegmentedControl()
-        control.translatesAutoresizingMaskIntoConstraints = false
-        control.accessibilityIdentifier = "WebInspector.Network.DetailPreviewRoleSegmentedControl"
-        control.addTarget(self, action: #selector(previewRoleSegmentedControlValueChanged(_:)), for: .valueChanged)
-        return control
-    }()
-    private lazy var previewRoleControlContainer = NetworkDetailSegmentedControlContentView(
-        segmentedControl: previewRoleSegmentedControl
-    )
     private lazy var previewStackView: UIStackView = {
         let stackView = UIStackView(arrangedSubviews: [
-            previewRoleControlContainer,
+            previewRoleControlController.containerView,
             bodyViewController.view,
         ])
         stackView.translatesAutoresizingMaskIntoConstraints = false
@@ -87,6 +87,7 @@ package final class NetworkDetailViewController: UIViewController {
         }
         installContentViews()
         installModeTitleView()
+        previewRoleScrollEdgeController.install(in: previewRoleControlController.containerView)
         startObservingModel()
     }
 
@@ -102,7 +103,6 @@ package final class NetworkDetailViewController: UIViewController {
     private func applyBackgroundFromTraits() {
         let backgroundColor = webInspectorBackgroundPolicy.backgroundColor
         view.backgroundColor = backgroundColor
-        previewRoleControlContainer.backgroundColor = backgroundColor
         bodyViewController.view.backgroundColor = backgroundColor
         headersTextView.backgroundColor = backgroundColor
     }
@@ -126,7 +126,7 @@ package final class NetworkDetailViewController: UIViewController {
     }
 
     private func installModeTitleView() {
-        navigationItem.titleView = modeSegmentedControl
+        navigationItem.titleView = modeControlController.view
         renderModeControl()
     }
 
@@ -203,25 +203,6 @@ package final class NetworkDetailViewController: UIViewController {
         headersTextView.render(request: request)
     }
 
-    @objc private func modeSegmentedControlValueChanged(_ sender: UISegmentedControl) {
-        guard NetworkDetailMode.allCases.indices.contains(sender.selectedSegmentIndex) else {
-            renderModeControl()
-            return
-        }
-        setMode(NetworkDetailMode.allCases[sender.selectedSegmentIndex])
-    }
-
-    @objc private func previewRoleSegmentedControlValueChanged(_ sender: UISegmentedControl) {
-        guard previewRoles.indices.contains(sender.selectedSegmentIndex) else {
-            renderPreviewRoleControl(
-                roles: previewRoles,
-                selectedRole: selectedPreviewRole(from: previewRoles)
-            )
-            return
-        }
-        setPreviewRole(previewRoles[sender.selectedSegmentIndex])
-    }
-
     private func setMode(_ nextMode: NetworkDetailMode) {
         guard mode != nextMode else {
             renderModeControl()
@@ -246,16 +227,7 @@ package final class NetworkDetailViewController: UIViewController {
 
     private func renderModeControl(selectedRequest request: NetworkRequest? = nil) {
         let request = request ?? observedRequest
-        modeSegmentedControl.isEnabled = request != nil
-        modeSegmentedControl.selectedSegmentIndex = modeIndex(for: mode)
-        modeSegmentedControl.accessibilityLabel = mode.title
-        for index in NetworkDetailMode.allCases.indices {
-            modeSegmentedControl.setEnabled(request != nil, forSegmentAt: index)
-        }
-    }
-
-    private func modeIndex(for mode: NetworkDetailMode) -> Int {
-        NetworkDetailMode.allCases.firstIndex(of: mode) ?? UISegmentedControl.noSegment
+        modeControlController.render(mode: mode, isEnabled: request != nil)
     }
 
     private func showEmptySelection() {
@@ -282,6 +254,7 @@ package final class NetworkDetailViewController: UIViewController {
 
     private func showHeaders() {
         previewStackView.isHidden = true
+        previewRoleScrollEdgeController.isControlVisible = false
         bodyViewController.releasePreviewResources()
         headersTextView.isHidden = false
     }
@@ -329,21 +302,15 @@ package final class NetworkDetailViewController: UIViewController {
         roles: [NetworkBodyRole],
         selectedRole: NetworkBodyRole?
     ) {
-        if previewRoles != roles {
-            previewRoles = roles
-            previewRoleSegmentedControl.removeAllSegments()
-            for (index, role) in roles.enumerated() {
-                previewRoleSegmentedControl.insertSegment(
-                    withTitle: title(for: role),
-                    at: index,
-                    animated: false
-                )
-            }
-        }
-        previewRoleControlContainer.isHidden = roles.count < 2
-        previewRoleSegmentedControl.selectedSegmentIndex = selectedRole.flatMap(roles.firstIndex(of:))
-            ?? UISegmentedControl.noSegment
-        previewRoleSegmentedControl.accessibilityLabel = selectedRole.map(title(for:))
+        previewRoles = roles
+        let isControlVisible = roles.count >= 2
+        let isVisibleInPreview = isControlVisible && previewStackView.isHidden == false
+        previewRoleControlController.render(
+            roles: roles,
+            selectedRole: selectedRole,
+            isVisible: isVisibleInPreview
+        )
+        previewRoleScrollEdgeController.isControlVisible = isVisibleInPreview
     }
 
     private func bindResponseBodyFetchObservationIfNeeded(
@@ -436,69 +403,6 @@ package final class NetworkDetailViewController: UIViewController {
         headers.first { $0.key.caseInsensitiveCompare(name) == .orderedSame }?.value
     }
 
-    private func title(for role: NetworkBodyRole) -> String {
-        switch role {
-        case .request:
-            String(localized: "network.section.request", bundle: .module)
-        case .response:
-            String(localized: "network.section.response", bundle: .module)
-        }
-    }
-}
-
-@MainActor
-private final class NetworkDetailSegmentedControlContentView: UIView {
-    private let segmentedControl: UISegmentedControl
-
-    init(segmentedControl: UISegmentedControl) {
-        self.segmentedControl = segmentedControl
-        let height = Self.preferredHeight(for: segmentedControl)
-        super.init(frame: CGRect(x: 0, y: 0, width: 0, height: height))
-        preservesSuperviewLayoutMargins = true
-        addSubview(segmentedControl)
-        NSLayoutConstraint.activate([
-            segmentedControl.leadingAnchor.constraint(equalTo: layoutMarginsGuide.leadingAnchor),
-            segmentedControl.trailingAnchor.constraint(equalTo: layoutMarginsGuide.trailingAnchor),
-            segmentedControl.centerYAnchor.constraint(equalTo: centerYAnchor),
-        ])
-    }
-
-    override var intrinsicContentSize: CGSize {
-        CGSize(width: UIView.noIntrinsicMetric, height: Self.preferredHeight(for: segmentedControl))
-    }
-
-    override func sizeThatFits(_ size: CGSize) -> CGSize {
-        CGSize(width: size.width, height: Self.preferredHeight(for: segmentedControl))
-    }
-
-    override func systemLayoutSizeFitting(_ targetSize: CGSize) -> CGSize {
-        fittingSize(for: targetSize)
-    }
-
-    override func systemLayoutSizeFitting(
-        _ targetSize: CGSize,
-        withHorizontalFittingPriority horizontalFittingPriority: UILayoutPriority,
-        verticalFittingPriority: UILayoutPriority
-    ) -> CGSize {
-        fittingSize(for: targetSize)
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        nil
-    }
-
-    private func fittingSize(for targetSize: CGSize) -> CGSize {
-        let width = targetSize.width == 0 ? UIView.noIntrinsicMetric : targetSize.width
-        return CGSize(width: width, height: Self.preferredHeight(for: segmentedControl))
-    }
-
-    private static func preferredHeight(for segmentedControl: UISegmentedControl) -> CGFloat {
-        let navigationBarHeight = UINavigationBar(frame: .zero)
-            .sizeThatFits(CGSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
-            .height
-        return max(segmentedControl.intrinsicContentSize.height, navigationBarHeight)
-    }
 }
 
 #if DEBUG
@@ -524,11 +428,20 @@ extension NetworkDetailViewController {
     }
 
     var isDetailModeControlEnabledForTesting: Bool {
-        modeSegmentedControl.isEnabled
+        modeControlController.isEnabledForTesting
     }
 
     var isPreviewRoleControlHiddenForTesting: Bool {
-        previewRoleControlContainer.isHidden
+        previewRoleControlController.isHiddenForTesting
+    }
+
+    @available(iOS 26.0, *)
+    var previewRoleScrollEdgeInteractionForTesting: UIScrollEdgeElementContainerInteraction? {
+        previewRoleScrollEdgeController.interactionForTesting
+    }
+
+    var previewRoleScrollEdgeObservationDeliveryForTesting: ObservationDelivery? {
+        previewRoleScrollEdgeController.observationDeliveryForTesting
     }
 
     var modelObservationDeliveryForTesting: ObservationDelivery? {
@@ -544,12 +457,11 @@ extension NetworkDetailViewController {
     }
 
     func isDetailModeEnabledForTesting(_ mode: NetworkDetailMode) -> Bool {
-        modeSegmentedControl.isEnabledForSegment(at: modeIndex(for: mode))
+        modeControlController.isModeEnabledForTesting(mode)
     }
 
     func selectModeForTesting(_ mode: NetworkDetailMode) {
-        modeSegmentedControl.selectedSegmentIndex = modeIndex(for: mode)
-        modeSegmentedControlValueChanged(modeSegmentedControl)
+        modeControlController.selectModeForTesting(mode)
     }
 
     func setModeForTesting(_ mode: NetworkDetailMode) {
@@ -557,9 +469,7 @@ extension NetworkDetailViewController {
     }
 
     func selectPreviewRoleForTesting(_ role: NetworkBodyRole) {
-        previewRoleSegmentedControl.selectedSegmentIndex = previewRoles.firstIndex(of: role)
-            ?? UISegmentedControl.noSegment
-        previewRoleSegmentedControlValueChanged(previewRoleSegmentedControl)
+        previewRoleControlController.selectRoleForTesting(role)
     }
 }
 #endif

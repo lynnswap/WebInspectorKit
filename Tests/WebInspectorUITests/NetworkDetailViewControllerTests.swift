@@ -179,10 +179,16 @@ struct NetworkDetailViewControllerTests {
         selectMode(.preview, on: viewController)
 
         let didRenderPreview = await waitUntilRendered(in: viewController) {
-            viewController.currentModeForTesting == .preview
+            let didRenderPreview = viewController.currentModeForTesting == .preview
                 && viewController.previewViewForTesting.isHidden == false
                 && viewController.headersTextViewForTesting.isHidden
                 && viewController.isPreviewRoleControlHiddenForTesting == false
+            if #available(iOS 26.0, *) {
+                return didRenderPreview
+                    && viewController.previewRoleScrollEdgeInteractionForTesting?.edge == .top
+                    && viewController.previewRoleScrollEdgeInteractionForTesting?.scrollView === viewController.bodyViewControllerForTesting.syntaxViewForTesting
+            }
+            return didRenderPreview
         }
         #expect(didRenderPreview)
 
@@ -602,6 +608,7 @@ struct NetworkDetailViewControllerTests {
                 to: network,
                 requestID: "1",
                 url: "https://media.example.com/large.png",
+                postData: "metadata=1",
                 responseHeaders: ["content-type": "image/png"],
                 responseMimeType: "image/png"
             )
@@ -621,9 +628,16 @@ struct NetworkDetailViewControllerTests {
 
         let didRenderImage = await waitUntilRendered(in: viewController) {
             let bodyViewController = viewController.bodyViewControllerForTesting
-            return bodyViewController.isImagePreviewVisibleForTesting
+            let imageScrollView = bodyViewController.imageScrollViewForTesting
+            let didRenderImage = bodyViewController.isImagePreviewVisibleForTesting
                 && bodyViewController.syntaxViewForTesting.isHidden
                 && bodyViewController.imageViewForTesting.image?.size == imageSize
+            if #available(iOS 26.0, *) {
+                return didRenderImage
+                    && viewController.previewRoleScrollEdgeInteractionForTesting?.edge == .top
+                    && viewController.previewRoleScrollEdgeInteractionForTesting?.scrollView === imageScrollView
+            }
+            return didRenderImage
         }
         #expect(didRenderImage)
 
@@ -1309,6 +1323,7 @@ struct NetworkDetailViewControllerTests {
             viewController.modelObservationDeliveryForTesting,
             viewController.selectedRequestRenderObservationDeliveryForTesting,
             viewController.responseBodyFetchObservationDeliveryForTesting,
+            viewController.previewRoleScrollEdgeObservationDeliveryForTesting,
             viewController.bodyViewControllerForTesting.bodyObservationDeliveryForTesting,
         ].compactMap { $0 }
     }
