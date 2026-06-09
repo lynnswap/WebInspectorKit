@@ -135,7 +135,8 @@ struct NetworkDetailViewControllerTests {
             #expect(contentView.frame.maxY == bounds.maxY)
         }
         #expect(viewController.headersTextViewForTesting.frame.minY == bounds.minY)
-        #expect(viewController.previewViewForTesting.frame.minY == topInset)
+        #expect(viewController.previewViewForTesting.frame.minY == bounds.minY)
+        #expect(viewController.previewRoleControlContainerViewForTesting.frame.minY == topInset)
     }
 
     @Test
@@ -163,7 +164,7 @@ struct NetworkDetailViewControllerTests {
 
         let didRenderHeaders = await waitUntilRendered(in: viewController) {
             let text = viewController.headersTextViewForTesting.renderedTextForTesting
-            return viewController.currentModeForTesting == .headers
+            let didRenderHeaders = viewController.currentModeForTesting == .headers
                 && viewController.previewViewForTesting.isHidden
                 && viewController.headersTextViewForTesting.isHidden == false
                 && viewController.headersTextViewForTesting.usesTextKit2ForTesting
@@ -171,6 +172,12 @@ struct NetworkDetailViewControllerTests {
                 && text.contains("accept: application/json")
                 && text.contains("content-type: application/json")
                 && text.contains("200 OK")
+            if #available(iOS 26.0, *) {
+                return didRenderHeaders
+                    && viewController.contentScrollView(for: .top) === viewController.headersTextViewForTesting.contentScrollView
+                    && viewController.contentScrollView(for: .bottom) === viewController.headersTextViewForTesting.contentScrollView
+            }
+            return didRenderHeaders
         }
 
         #expect(didRenderHeaders)
@@ -179,10 +186,18 @@ struct NetworkDetailViewControllerTests {
         selectMode(.preview, on: viewController)
 
         let didRenderPreview = await waitUntilRendered(in: viewController) {
-            viewController.currentModeForTesting == .preview
+            let didRenderPreview = viewController.currentModeForTesting == .preview
                 && viewController.previewViewForTesting.isHidden == false
                 && viewController.headersTextViewForTesting.isHidden
                 && viewController.isPreviewRoleControlHiddenForTesting == false
+            if #available(iOS 26.0, *) {
+                return didRenderPreview
+                    && viewController.previewRoleScrollEdgeInteractionForTesting?.edge == .top
+                    && viewController.previewRoleScrollEdgeInteractionForTesting?.scrollView === viewController.bodyViewControllerForTesting.syntaxViewForTesting
+                    && viewController.contentScrollView(for: .top) === viewController.bodyViewControllerForTesting.syntaxViewForTesting
+                    && viewController.contentScrollView(for: .bottom) === viewController.bodyViewControllerForTesting.syntaxViewForTesting
+            }
+            return didRenderPreview
         }
         #expect(didRenderPreview)
 
@@ -193,6 +208,50 @@ struct NetworkDetailViewControllerTests {
                 && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == "name=Jane Doe\ncity=Tokyo East"
         }
         #expect(didRenderRequestPreview)
+    }
+
+    @Test
+    func previewTextBodyUsesAutomaticInsetsAsRegisteredContentScrollView() async throws {
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://example.com/api/data.txt",
+                responseHeaders: ["content-type": "text/plain"],
+                responseMimeType: "text/plain"
+            )
+        )
+        request.applyResponseBody(
+            NetworkBodyPayload(
+                body: "sample=true\nsource=preview",
+                base64Encoded: false
+            )
+        )
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
+
+        let didRenderPreview = await waitUntilRendered(in: viewController) {
+            viewController.currentModeForTesting == .preview
+                && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == "sample=true\nsource=preview"
+        }
+        #expect(didRenderPreview)
+
+        let bodyViewController = viewController.bodyViewControllerForTesting
+        window.layoutIfNeeded()
+
+        let syntaxView = bodyViewController.syntaxViewForTesting
+        #expect(syntaxView.contentInsetAdjustmentBehavior == .automatic)
+        #expect(syntaxView.frame == bodyViewController.view.bounds)
+        #expect(bodyViewController.view.frame == viewController.previewViewForTesting.bounds)
+        if #available(iOS 26.0, *) {
+            #expect(viewController.contentScrollView(for: .top) === syntaxView)
+            #expect(viewController.contentScrollView(for: .bottom) === syntaxView)
+        }
     }
 
     @Test
@@ -602,6 +661,7 @@ struct NetworkDetailViewControllerTests {
                 to: network,
                 requestID: "1",
                 url: "https://media.example.com/large.png",
+                postData: "metadata=1",
                 responseHeaders: ["content-type": "image/png"],
                 responseMimeType: "image/png"
             )
@@ -615,23 +675,39 @@ struct NetworkDetailViewControllerTests {
         let model = NetworkPanelModel(network: network)
         model.selectRequest(request)
         let viewController = NetworkDetailViewController(model: model)
+        viewController.bodyViewControllerForTesting.additionalSafeAreaInsets = UIEdgeInsets(
+            top: 44,
+            left: 0,
+            bottom: 34,
+            right: 0
+        )
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
         viewController.setModeForTesting(.preview)
 
         let didRenderImage = await waitUntilRendered(in: viewController) {
             let bodyViewController = viewController.bodyViewControllerForTesting
-            return bodyViewController.isImagePreviewVisibleForTesting
+            let imageScrollView = bodyViewController.imageScrollViewForTesting
+            let didRenderImage = bodyViewController.isImagePreviewVisibleForTesting
                 && bodyViewController.syntaxViewForTesting.isHidden
                 && bodyViewController.imageViewForTesting.image?.size == imageSize
+            if #available(iOS 26.0, *) {
+                return didRenderImage
+                    && viewController.previewRoleScrollEdgeInteractionForTesting?.edge == .top
+                    && viewController.previewRoleScrollEdgeInteractionForTesting?.scrollView === imageScrollView
+                    && viewController.contentScrollView(for: .top) === imageScrollView
+                    && viewController.contentScrollView(for: .bottom) === imageScrollView
+            }
+            return didRenderImage
         }
         #expect(didRenderImage)
 
         let imageScrollView = viewController.bodyViewControllerForTesting.imageScrollViewForTesting
-        let fitScale = min(
-            imageScrollView.bounds.width / imageSize.width,
-            imageScrollView.bounds.height / imageSize.height
-        )
+        #expect(imageScrollView.contentInsetAdjustmentBehavior == .automatic)
+        #expect(imageScrollView.contentAlignmentPoint == CGPoint(x: 0.5, y: 0.5))
+        #expect(imageScrollView.contentInset == .zero)
+        #expect(imageScrollView.adjustedContentInset.top > imageScrollView.contentInset.top)
+        let fitScale = expectedImageFitScale(scrollView: imageScrollView, imageSize: imageSize)
         let expectedMinimumZoomScale = min(1, fitScale)
         #expect(abs(imageScrollView.minimumZoomScale - expectedMinimumZoomScale) < 0.001)
         #expect(abs(imageScrollView.zoomScale - expectedMinimumZoomScale) < 0.001)
@@ -676,10 +752,7 @@ struct NetworkDetailViewControllerTests {
         window.layoutIfNeeded()
 
         let didRefitAfterBoundsChange = await waitUntilRendered(in: viewController) {
-            let fitScale = min(
-                imageScrollView.bounds.width / imageSize.width,
-                imageScrollView.bounds.height / imageSize.height
-            )
+            let fitScale = expectedImageFitScale(scrollView: imageScrollView, imageSize: imageSize)
             let expectedMinimumZoomScale = min(1, fitScale)
             return imageScrollView.bounds.height < initialBounds.height
                 && expectedMinimumZoomScale < initialMinimumZoomScale
@@ -723,8 +796,8 @@ struct NetworkDetailViewControllerTests {
         let imageScrollView = viewController.bodyViewControllerForTesting.imageScrollViewForTesting
         #expect(imageScrollView.minimumZoomScale == 1)
         #expect(imageScrollView.zoomScale == 1)
-        #expect(imageScrollView.contentInset.left > 0)
-        #expect(imageScrollView.contentInset.top > 0)
+        #expect(imageScrollView.contentInset == .zero)
+        #expect(imageScrollView.contentAlignmentPoint == CGPoint(x: 0.5, y: 0.5))
     }
 
     @Test
@@ -1272,6 +1345,22 @@ struct NetworkDetailViewControllerTests {
         .base64EncodedString()
     }
 
+    private func expectedImageFitScale(scrollView: UIScrollView, imageSize: CGSize) -> CGFloat {
+        let visibleSize = imageVisibleBoundsSize(scrollView)
+        return min(
+            visibleSize.width / imageSize.width,
+            visibleSize.height / imageSize.height
+        )
+    }
+
+    private func imageVisibleBoundsSize(_ scrollView: UIScrollView) -> CGSize {
+        let adjustedInset = scrollView.adjustedContentInset
+        return CGSize(
+            width: max(scrollView.bounds.width - adjustedInset.left - adjustedInset.right, 0),
+            height: max(scrollView.bounds.height - adjustedInset.top - adjustedInset.bottom, 0)
+        )
+    }
+
     private func waitUntilRendered(
         in viewController: NetworkDetailViewController,
         maxTicks: Int = 256,
@@ -1309,6 +1398,7 @@ struct NetworkDetailViewControllerTests {
             viewController.modelObservationDeliveryForTesting,
             viewController.selectedRequestRenderObservationDeliveryForTesting,
             viewController.responseBodyFetchObservationDeliveryForTesting,
+            viewController.previewRoleScrollEdgeObservationDeliveryForTesting,
             viewController.bodyViewControllerForTesting.bodyObservationDeliveryForTesting,
         ].compactMap { $0 }
     }

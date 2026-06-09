@@ -2,7 +2,7 @@
 import UIKit
 #endif
 
-package enum NetworkStatusSeverity: Sendable {
+package enum NetworkStatusSeverity: Equatable, Sendable {
     case success
     case notice
     case warning

@@ -20,26 +20,49 @@ package final class NetworkPanelModel {
     package private(set) var effectiveResourceFilters: Set<NetworkResourceFilter> = []
     @ObservationIgnored private let responseBodyFetchAction: ResponseBodyFetchAction?
     @ObservationIgnored private var responseBodyFetchesInFlight: Set<NetworkRequest.ID> = []
+    @ObservationIgnored private let displayProjectionCache: NetworkRequestDisplayProjectionCache
 
     package init(
         network: NetworkSession,
-        responseBodyFetchAction: ResponseBodyFetchAction? = nil
+        responseBodyFetchAction: ResponseBodyFetchAction? = nil,
+        mediaPreviewClassifier: @escaping NetworkMediaPreviewClassifier = { mimeType, url in
+            NetworkMediaPreviewSupport.classification(mimeType: mimeType, url: url)
+        }
     ) {
         self.network = network
         self.responseBodyFetchAction = responseBodyFetchAction
+        self.displayProjectionCache = NetworkRequestDisplayProjectionCache(
+            mediaPreviewClassifier: mediaPreviewClassifier
+        )
+    }
+
+    package var displayRows: [NetworkRequestDisplayProjection] {
+        let trimmedQuery = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let requests = network.requests
+        let effectiveResourceFilters = effectiveResourceFilters
+        displayProjectionCache.prune(keeping: Set(requests.map(\.id)))
+        let rows = requests.compactMap { request -> NetworkRequestDisplayProjection? in
+            if effectiveResourceFilters.isEmpty == false {
+                let resourceFilter = displayProjectionCache.resourceFilter(for: request)
+                guard effectiveResourceFilters.contains(resourceFilter) else {
+                    return nil
+                }
+            }
+            let projection = displayProjectionCache.projection(for: request)
+            guard projection.matchesSearchText(trimmedQuery) else {
+                return nil
+            }
+            return projection
+        }
+        return Array(rows.reversed())
+    }
+
+    package var displayRequestIDs: [NetworkRequest.ID] {
+        displayRows.map(\.id)
     }
 
     package var displayRequests: [NetworkRequest] {
-        let trimmedQuery = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        return network.requests
-            .filter { request in
-                if effectiveResourceFilters.isEmpty == false,
-                   effectiveResourceFilters.contains(request.resourceFilter) == false {
-                    return false
-                }
-                return request.matchesSearchText(trimmedQuery)
-            }
-            .reversed()
+        displayRequestIDs.compactMap { network.request(for: $0) }
     }
 
     package var isEmpty: Bool {
@@ -55,6 +78,13 @@ package final class NetworkPanelModel {
 
     package func request(for id: NetworkRequest.ID) -> NetworkRequest? {
         network.request(for: id)
+    }
+
+    package func displayProjection(for id: NetworkRequest.ID) -> NetworkRequestDisplayProjection? {
+        guard let request = network.request(for: id) else {
+            return nil
+        }
+        return displayProjectionCache.projection(for: request)
     }
 
     package func selectRequest(_ request: NetworkRequest?) {
@@ -92,6 +122,7 @@ package final class NetworkPanelModel {
     package func clearRequests() {
         selectedRequestID = nil
         network.reset()
+        displayProjectionCache.removeAll()
     }
 
     package func fetchResponseBodyIfNeeded(for request: NetworkRequest) {

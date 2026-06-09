@@ -43,6 +43,10 @@ package enum NetworkMediaPreviewSupport {
             if isPlayableMIMEType(normalizedMIMEType) {
                 return .previewable(.movie)
             }
+            if normalizedMIMEType.hasPrefix("audio/")
+                || normalizedMIMEType.hasPrefix("video/") {
+                return .notPreviewable
+            }
             if let type = contentType(mimeType: normalizedMIMEType) {
                 let classification = classification(for: type)
                 switch classification {
@@ -58,22 +62,14 @@ package enum NetworkMediaPreviewSupport {
                 }
                 return .notPreviewable
             }
-            if normalizedMIMEType.hasPrefix("audio/")
-                || normalizedMIMEType.hasPrefix("video/") {
-                return .notPreviewable
-            }
         }
 
         guard shouldInferFromURL(mimeType: normalizedMIMEType) else {
             return .unknown
         }
 
-        if isHLSURL(url) {
-            return .previewable(.hlsPlaylist)
-        }
-
-        if isSupportedImageURL(url) {
-            return .previewable(.image)
+        if let classification = fastURLClassification(url) {
+            return classification
         }
 
         if let type = contentType(url: url) {
@@ -170,16 +166,13 @@ package enum NetworkMediaPreviewSupport {
     }
 
     private static func isPlayableMIMEType(_ mimeType: String) -> Bool {
-        supportedAudiovisualMIMETypes.contains(mimeType) || AVURLAsset.isPlayableExtendedMIMEType(mimeType)
+        supportedAudiovisualMIMETypes.contains(mimeType)
+            || knownPlayableMIMETypes.contains(mimeType)
+            || AVURLAsset.isPlayableExtendedMIMEType(mimeType)
     }
 
     private static func isSupportedImageMIMEType(_ mimeType: String) -> Bool {
-        switch mimeType {
-        case "image/apng", "image/pjpeg", "image/x-png":
-            return true
-        default:
-            return false
-        }
+        knownImageMIMETypes.contains(mimeType)
     }
 
     private static func isSVGMIMEType(_ mimeType: String) -> Bool {
@@ -201,12 +194,26 @@ package enum NetworkMediaPreviewSupport {
     }
 
     private static func isSupportedImageURL(_ url: String?) -> Bool {
-        switch pathExtension(url) {
-        case "apng":
-            return true
-        default:
-            return false
+        pathExtension(url).map(knownImagePathExtensions.contains) == true
+    }
+
+    private static func fastURLClassification(_ url: String?) -> NetworkMediaPreviewClassification? {
+        guard let pathExtension = pathExtension(url), pathExtension.isEmpty == false else {
+            return nil
         }
+        if pathExtension == "m3u8" {
+            return .previewable(.hlsPlaylist)
+        }
+        if pathExtension == "svg" {
+            return .notPreviewable
+        }
+        if knownImagePathExtensions.contains(pathExtension) {
+            return .previewable(.image)
+        }
+        if knownPlayablePathExtensions.contains(pathExtension) {
+            return .previewable(.movie)
+        }
+        return nil
     }
 
     private static func imageClassification(url: String?) -> NetworkMediaPreviewClassification {
@@ -248,6 +255,65 @@ package enum NetworkMediaPreviewSupport {
     private static let supportedImageTypes: [UTType] = {
         (CGImageSourceCopyTypeIdentifiers() as? [String] ?? []).compactMap(UTType.init)
     }()
+
+    private static let knownImageMIMETypes: Set<String> = [
+        "image/apng",
+        "image/avif",
+        "image/bmp",
+        "image/gif",
+        "image/heic",
+        "image/heif",
+        "image/jpeg",
+        "image/jpg",
+        "image/pjpeg",
+        "image/png",
+        "image/tiff",
+        "image/webp",
+        "image/x-png",
+    ]
+
+    private static let knownPlayableMIMETypes: Set<String> = [
+        "audio/aac",
+        "audio/aiff",
+        "audio/mp3",
+        "audio/mp4",
+        "audio/mpeg",
+        "audio/wav",
+        "audio/x-aiff",
+        "audio/x-m4a",
+        "audio/x-wav",
+        "video/mp4",
+        "video/quicktime",
+        "video/x-m4v",
+    ]
+
+    private static let knownImagePathExtensions: Set<String> = [
+        "apng",
+        "avif",
+        "bmp",
+        "gif",
+        "heic",
+        "heif",
+        "jpg",
+        "jpeg",
+        "png",
+        "tif",
+        "tiff",
+        "webp",
+    ]
+
+    private static let knownPlayablePathExtensions: Set<String> = [
+        "aac",
+        "aif",
+        "aiff",
+        "caf",
+        "m4a",
+        "m4v",
+        "mov",
+        "mp3",
+        "mp4",
+        "wav",
+    ]
 
     private static let supportedAudiovisualContentTypes = AVURLAsset.audiovisualTypes().compactMap { fileType in
         UTType(fileType.rawValue)

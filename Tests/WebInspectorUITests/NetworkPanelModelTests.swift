@@ -234,6 +234,259 @@ func mediaPreviewSupportClassifiesAVIFAndExcludesSVG() {
 
 @Test
 @MainActor
+func displayProjectionCacheInvalidatesWhenResponseMIMEBecomesPreviewable() async throws {
+    let network = NetworkSession()
+    let requestID = applyPendingRequest(
+        to: network,
+        requestID: "1",
+        url: "https://api.example.com/avatar",
+        resourceType: .xhr,
+        timestamp: 1
+    )
+    let model = NetworkPanelModel(network: network)
+    model.setResourceFilter(.media, enabled: true)
+
+    #expect(model.displayRequestIDs.isEmpty)
+
+    network.applyResponseReceived(
+        targetID: requestID.targetID,
+        requestID: requestID.requestID,
+        resourceType: .xhr,
+        response: NetworkResponsePayload(
+            url: "https://api.example.com/avatar",
+            status: 200,
+            statusText: "OK",
+            mimeType: "image/png"
+        ),
+        timestamp: 1.1
+    )
+
+    #expect(model.displayRequestIDs == [requestID])
+    #expect(model.displayProjection(for: requestID)?.resourceFilter == .media)
+}
+
+@Test
+@MainActor
+func displayProjectionCacheInvalidatesStatusSeverity() async throws {
+    let network = NetworkSession()
+    let requestID = applyRequest(
+        to: network,
+        requestID: "1",
+        url: "https://api.example.com/data.json",
+        resourceType: .xhr,
+        mimeType: "application/json",
+        status: 500,
+        statusText: "Server Error",
+        timestamp: 1
+    )
+    let model = NetworkPanelModel(network: network)
+
+    #expect(model.displayProjection(for: requestID)?.statusSeverity == .error)
+
+    network.applyResponseReceived(
+        targetID: requestID.targetID,
+        requestID: requestID.requestID,
+        resourceType: .xhr,
+        response: NetworkResponsePayload(
+            url: "https://api.example.com/data.json",
+            status: 204,
+            statusText: "No Content",
+            mimeType: "application/json"
+        ),
+        timestamp: 2
+    )
+
+    #expect(model.displayProjection(for: requestID)?.statusSeverity == .success)
+}
+
+@Test
+@MainActor
+func displayProjectionCacheInvalidatesSearchFields() async throws {
+    let network = NetworkSession()
+    let targetID = ProtocolTargetIdentifier("page")
+    let rawRequestID = NetworkRequestIdentifier("1")
+    let requestID = network.applyRequestWillBeSent(
+        targetID: targetID,
+        requestID: rawRequestID,
+        frameID: DOMFrameIdentifier("main"),
+        loaderID: "loader",
+        documentURL: "https://example.com",
+        request: NetworkRequestPayload(url: "https://api.example.com/old", method: "POST"),
+        resourceType: .xhr,
+        timestamp: 1
+    )
+    let model = NetworkPanelModel(network: network)
+
+    model.setSearchText("new-endpoint")
+    #expect(model.displayRequestIDs.isEmpty)
+
+    _ = network.applyRequestWillBeSent(
+        targetID: targetID,
+        requestID: rawRequestID,
+        frameID: DOMFrameIdentifier("main"),
+        loaderID: "loader",
+        documentURL: "https://example.com",
+        request: NetworkRequestPayload(url: "https://api.example.com/new-endpoint", method: "PATCH"),
+        resourceType: .xhr,
+        redirectResponse: NetworkResponsePayload(url: "https://api.example.com/old", status: 302),
+        timestamp: 2
+    )
+
+    #expect(model.displayRequestIDs == [requestID])
+    model.setSearchText("PATCH")
+    #expect(model.displayRequestIDs == [requestID])
+
+    model.setSearchText("json")
+    #expect(model.displayRequestIDs.isEmpty)
+
+    network.applyResponseReceived(
+        targetID: targetID,
+        requestID: rawRequestID,
+        resourceType: .xhr,
+        response: NetworkResponsePayload(
+            url: "https://api.example.com/new-endpoint",
+            status: 201,
+            statusText: "Created",
+            mimeType: "application/json"
+        ),
+        timestamp: 2.1
+    )
+
+    #expect(model.displayRequestIDs == [requestID])
+    model.setSearchText("Created")
+    #expect(model.displayRequestIDs == [requestID])
+}
+
+@Test
+@MainActor
+func displayProjectionCacheInvalidatesWhenRawMIMETypeAppears() async throws {
+    let network = NetworkSession()
+    let targetID = ProtocolTargetIdentifier("page")
+    let rawRequestID = NetworkRequestIdentifier("1")
+    let requestID = network.applyRequestWillBeSent(
+        targetID: targetID,
+        requestID: rawRequestID,
+        frameID: DOMFrameIdentifier("main"),
+        loaderID: "loader",
+        documentURL: "https://example.com",
+        request: NetworkRequestPayload(url: "https://api.example.com/resource", method: "GET"),
+        resourceType: .xhr,
+        timestamp: 1
+    )
+    network.applyResponseReceived(
+        targetID: targetID,
+        requestID: rawRequestID,
+        resourceType: .xhr,
+        response: NetworkResponsePayload(
+            url: "https://api.example.com/resource",
+            status: 200,
+            statusText: "OK",
+            headers: ["Content-Type": "application/json"],
+            mimeType: nil
+        ),
+        timestamp: 1.1
+    )
+    let model = NetworkPanelModel(network: network)
+
+    #expect(model.displayProjection(for: requestID)?.fileTypeLabel == "xhr")
+    model.setSearchText("json")
+    #expect(model.displayRequestIDs.isEmpty)
+
+    network.applyResponseReceived(
+        targetID: targetID,
+        requestID: rawRequestID,
+        resourceType: .xhr,
+        response: NetworkResponsePayload(
+            url: "https://api.example.com/resource",
+            status: 200,
+            statusText: "OK",
+            headers: ["Content-Type": "application/json"],
+            mimeType: "application/json"
+        ),
+        timestamp: 1.2
+    )
+
+    #expect(model.displayProjection(for: requestID)?.fileTypeLabel == "json")
+    #expect(model.displayRequestIDs == [requestID])
+}
+
+@Test
+@MainActor
+func displayProjectionCacheReusesMediaClassificationForUnchangedRequests() async throws {
+    let network = NetworkSession()
+    let requestID = applyRequest(
+        to: network,
+        requestID: "1",
+        url: "https://media.example.com/clip.mp4",
+        resourceType: .fetch,
+        mimeType: "application/octet-stream",
+        timestamp: 1
+    )
+    var classificationCount = 0
+    let model = NetworkPanelModel(
+        network: network,
+        mediaPreviewClassifier: { mimeType, url in
+            classificationCount += 1
+            return NetworkMediaPreviewSupport.classification(mimeType: mimeType, url: url)
+        }
+    )
+    model.setResourceFilter(.media, enabled: true)
+
+    #expect(model.displayRequestIDs == [requestID])
+    #expect(classificationCount == 1)
+
+    #expect(model.displayRequestIDs == [requestID])
+    #expect(model.displayRequests.map(\.id) == [requestID])
+    #expect(classificationCount == 1)
+
+    network.applyDataReceived(
+        targetID: requestID.targetID,
+        requestID: requestID.requestID,
+        dataLength: 1024,
+        encodedDataLength: 512,
+        timestamp: 2
+    )
+
+    #expect(model.displayRequestIDs == [requestID])
+    #expect(classificationCount == 1)
+}
+
+@Test
+@MainActor
+func displayProjectionCacheSkipsMediaClassificationWhenUnfiltered() async throws {
+    let network = NetworkSession()
+    let requestID = applyRequest(
+        to: network,
+        requestID: "1",
+        url: "https://media.example.com/clip.mp4",
+        resourceType: .fetch,
+        mimeType: "application/octet-stream",
+        timestamp: 1
+    )
+    var classificationCount = 0
+    let model = NetworkPanelModel(
+        network: network,
+        mediaPreviewClassifier: { mimeType, url in
+            classificationCount += 1
+            return NetworkMediaPreviewSupport.classification(mimeType: mimeType, url: url)
+        }
+    )
+
+    #expect(model.displayRequestIDs == [requestID])
+    #expect(model.displayProjection(for: requestID)?.displayName == "clip.mp4")
+    #expect(classificationCount == 0)
+
+    model.setSearchText("clip")
+    #expect(model.displayRequestIDs == [requestID])
+    #expect(classificationCount == 0)
+
+    model.setResourceFilter(.media, enabled: true)
+    #expect(model.displayRequestIDs == [requestID])
+    #expect(classificationCount == 1)
+}
+
+@Test
+@MainActor
 func clearRequestsClearsSelectionButPreservesDisplayCriteria() async throws {
     let network = NetworkSession()
     let requestID = applyRequest(
@@ -255,6 +508,7 @@ func clearRequestsClearsSelectionButPreservesDisplayCriteria() async throws {
     #expect(model.searchText == "cdn")
     #expect(model.activeResourceFilters == [.script])
     #expect(model.displayRequests.isEmpty)
+    #expect(model.displayProjection(for: requestID) == nil)
 }
 
 @MainActor
@@ -266,6 +520,8 @@ private func applyRequest(
     resourceType: NetworkResourceType,
     mimeType: String?,
     responseHeaders: [String: String] = [:],
+    status: Int = 200,
+    statusText: String = "OK",
     timestamp: Double
 ) -> NetworkRequest.ID {
     let targetID = ProtocolTargetIdentifier("page")
@@ -286,8 +542,8 @@ private func applyRequest(
         resourceType: resourceType,
         response: NetworkResponsePayload(
             url: url,
-            status: 200,
-            statusText: "OK",
+            status: status,
+            statusText: statusText,
             headers: responseHeaders,
             mimeType: mimeType
         ),
