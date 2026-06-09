@@ -90,6 +90,10 @@ final class NetworkHeadersTextView: UIView {
         updateSectionRuleRuns()
     }
 
+    var contentScrollView: UIScrollView {
+        textView
+    }
+
     private func configureTextSystem() {
         backgroundColor = .clear
         accessibilityIdentifier = "WebInspector.Network.HeadersTextView"

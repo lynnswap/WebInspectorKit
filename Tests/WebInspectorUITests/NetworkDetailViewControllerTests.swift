@@ -135,7 +135,8 @@ struct NetworkDetailViewControllerTests {
             #expect(contentView.frame.maxY == bounds.maxY)
         }
         #expect(viewController.headersTextViewForTesting.frame.minY == bounds.minY)
-        #expect(viewController.previewViewForTesting.frame.minY == topInset)
+        #expect(viewController.previewViewForTesting.frame.minY == bounds.minY)
+        #expect(viewController.previewRoleControlContainerViewForTesting.frame.minY == topInset)
     }
 
     @Test
@@ -163,7 +164,7 @@ struct NetworkDetailViewControllerTests {
 
         let didRenderHeaders = await waitUntilRendered(in: viewController) {
             let text = viewController.headersTextViewForTesting.renderedTextForTesting
-            return viewController.currentModeForTesting == .headers
+            let didRenderHeaders = viewController.currentModeForTesting == .headers
                 && viewController.previewViewForTesting.isHidden
                 && viewController.headersTextViewForTesting.isHidden == false
                 && viewController.headersTextViewForTesting.usesTextKit2ForTesting
@@ -171,6 +172,12 @@ struct NetworkDetailViewControllerTests {
                 && text.contains("accept: application/json")
                 && text.contains("content-type: application/json")
                 && text.contains("200 OK")
+            if #available(iOS 26.0, *) {
+                return didRenderHeaders
+                    && viewController.contentScrollView(for: .top) === viewController.headersTextViewForTesting.contentScrollView
+                    && viewController.contentScrollView(for: .bottom) === viewController.headersTextViewForTesting.contentScrollView
+            }
+            return didRenderHeaders
         }
 
         #expect(didRenderHeaders)
@@ -187,6 +194,8 @@ struct NetworkDetailViewControllerTests {
                 return didRenderPreview
                     && viewController.previewRoleScrollEdgeInteractionForTesting?.edge == .top
                     && viewController.previewRoleScrollEdgeInteractionForTesting?.scrollView === viewController.bodyViewControllerForTesting.syntaxViewForTesting
+                    && viewController.contentScrollView(for: .top) === viewController.bodyViewControllerForTesting.syntaxViewForTesting
+                    && viewController.contentScrollView(for: .bottom) === viewController.bodyViewControllerForTesting.syntaxViewForTesting
             }
             return didRenderPreview
         }
@@ -199,6 +208,50 @@ struct NetworkDetailViewControllerTests {
                 && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == "name=Jane Doe\ncity=Tokyo East"
         }
         #expect(didRenderRequestPreview)
+    }
+
+    @Test
+    func previewTextBodyUsesAutomaticInsetsAsRegisteredContentScrollView() async throws {
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://example.com/api/data.txt",
+                responseHeaders: ["content-type": "text/plain"],
+                responseMimeType: "text/plain"
+            )
+        )
+        request.applyResponseBody(
+            NetworkBodyPayload(
+                body: "sample=true\nsource=preview",
+                base64Encoded: false
+            )
+        )
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
+
+        let didRenderPreview = await waitUntilRendered(in: viewController) {
+            viewController.currentModeForTesting == .preview
+                && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == "sample=true\nsource=preview"
+        }
+        #expect(didRenderPreview)
+
+        let bodyViewController = viewController.bodyViewControllerForTesting
+        window.layoutIfNeeded()
+
+        let syntaxView = bodyViewController.syntaxViewForTesting
+        #expect(syntaxView.contentInsetAdjustmentBehavior == .automatic)
+        #expect(syntaxView.frame == bodyViewController.view.bounds)
+        #expect(bodyViewController.view.frame == viewController.previewViewForTesting.bounds)
+        if #available(iOS 26.0, *) {
+            #expect(viewController.contentScrollView(for: .top) === syntaxView)
+            #expect(viewController.contentScrollView(for: .bottom) === syntaxView)
+        }
     }
 
     @Test
@@ -636,12 +689,15 @@ struct NetworkDetailViewControllerTests {
                 return didRenderImage
                     && viewController.previewRoleScrollEdgeInteractionForTesting?.edge == .top
                     && viewController.previewRoleScrollEdgeInteractionForTesting?.scrollView === imageScrollView
+                    && viewController.contentScrollView(for: .top) === imageScrollView
+                    && viewController.contentScrollView(for: .bottom) === imageScrollView
             }
             return didRenderImage
         }
         #expect(didRenderImage)
 
         let imageScrollView = viewController.bodyViewControllerForTesting.imageScrollViewForTesting
+        #expect(imageScrollView.contentInsetAdjustmentBehavior == .automatic)
         let fitScale = min(
             imageScrollView.bounds.width / imageSize.width,
             imageScrollView.bounds.height / imageSize.height

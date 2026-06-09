@@ -9,9 +9,9 @@ package final class NetworkDetailViewController: UIViewController {
     private let modelObservationScope = ObservationScope()
     private let selectedRequestRenderObservationScope = ObservationScope()
     private let responseBodyFetchObservationScope = ObservationScope()
-    private let previewRoleScrollEdgeController = NetworkPreviewRoleScrollEdgeController()
+    private let scrollEdgeController = NetworkDetailScrollEdgeController()
     private lazy var bodyViewController = NetworkBodyViewController(
-        scrollEdgeState: previewRoleScrollEdgeController.scrollEdgeState
+        scrollEdgeState: scrollEdgeController.scrollEdgeState
     )
     private lazy var modeControlController: NetworkDetailModeControlController = {
         let controller = NetworkDetailModeControlController(initialMode: mode)
@@ -36,17 +36,12 @@ package final class NetworkDetailViewController: UIViewController {
     private var selectedRequestRenderObservationDelivery: ObservationDelivery?
     private var responseBodyFetchObservationDelivery: ObservationDelivery?
 #endif
-    private lazy var previewStackView: UIStackView = {
-        let stackView = UIStackView(arrangedSubviews: [
-            previewRoleControlController.containerView,
-            bodyViewController.view,
-        ])
-        stackView.translatesAutoresizingMaskIntoConstraints = false
-        stackView.axis = .vertical
-        stackView.spacing = 0
-        stackView.isHidden = true
-        stackView.accessibilityIdentifier = "WebInspector.Network.DetailPreview"
-        return stackView
+    private lazy var previewContainerView: UIView = {
+        let view = UIView()
+        view.translatesAutoresizingMaskIntoConstraints = false
+        view.isHidden = true
+        view.accessibilityIdentifier = "WebInspector.Network.DetailPreview"
+        return view
     }()
     private lazy var headersTextView: NetworkHeadersTextView = {
         let view = NetworkHeadersTextView()
@@ -87,8 +82,15 @@ package final class NetworkDetailViewController: UIViewController {
         }
         installContentViews()
         installModeTitleView()
-        previewRoleScrollEdgeController.install(in: previewRoleControlController.containerView)
+        scrollEdgeController.install(previewRoleControlContainerView: previewRoleControlController.containerView)
         startObservingModel()
+    }
+
+    override package func contentScrollView(for edge: NSDirectionalRectEdge) -> UIScrollView? {
+        if edge == .top || edge == .bottom {
+            return scrollEdgeController.contentScrollView ?? super.contentScrollView(for: edge)
+        }
+        return super.contentScrollView(for: edge)
     }
 
     private func startObservingModel() {
@@ -109,15 +111,26 @@ package final class NetworkDetailViewController: UIViewController {
 
     private func installContentViews() {
         addChild(bodyViewController)
-        view.addSubview(previewStackView)
+        view.addSubview(previewContainerView)
         view.addSubview(headersTextView)
+        bodyViewController.view.translatesAutoresizingMaskIntoConstraints = false
+        previewRoleControlController.containerView.translatesAutoresizingMaskIntoConstraints = false
+        previewContainerView.addSubview(bodyViewController.view)
+        previewContainerView.addSubview(previewRoleControlController.containerView)
         bodyViewController.didMove(toParent: self)
 
         NSLayoutConstraint.activate([
-            previewStackView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
-            previewStackView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
-            previewStackView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
-            previewStackView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            previewContainerView.topAnchor.constraint(equalTo: view.topAnchor),
+            previewContainerView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
+            previewContainerView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
+            previewContainerView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            bodyViewController.view.topAnchor.constraint(equalTo: previewContainerView.topAnchor),
+            bodyViewController.view.leadingAnchor.constraint(equalTo: previewContainerView.leadingAnchor),
+            bodyViewController.view.trailingAnchor.constraint(equalTo: previewContainerView.trailingAnchor),
+            bodyViewController.view.bottomAnchor.constraint(equalTo: previewContainerView.bottomAnchor),
+            previewRoleControlController.containerView.topAnchor.constraint(equalTo: previewContainerView.safeAreaLayoutGuide.topAnchor),
+            previewRoleControlController.containerView.leadingAnchor.constraint(equalTo: previewContainerView.leadingAnchor),
+            previewRoleControlController.containerView.trailingAnchor.constraint(equalTo: previewContainerView.trailingAnchor),
             headersTextView.topAnchor.constraint(equalTo: view.topAnchor),
             headersTextView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
             headersTextView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
@@ -231,11 +244,12 @@ package final class NetworkDetailViewController: UIViewController {
     }
 
     private func showEmptySelection() {
-        previewStackView.isHidden = true
+        previewContainerView.isHidden = true
         headersTextView.isHidden = true
         bodyViewController.display(body: nil)
         headersTextView.clear()
         renderPreviewRoleControl(roles: [], selectedRole: nil)
+        scrollEdgeController.contentScrollView = nil
 
         if let configuration = contentUnavailableConfiguration as? UIContentUnavailableConfiguration,
            configuration.text == String(localized: "network.empty.selection.title", bundle: .module) {
@@ -249,14 +263,15 @@ package final class NetworkDetailViewController: UIViewController {
 
     private func showPreview() {
         headersTextView.isHidden = true
-        previewStackView.isHidden = false
+        previewContainerView.isHidden = false
     }
 
     private func showHeaders() {
-        previewStackView.isHidden = true
-        previewRoleScrollEdgeController.isControlVisible = false
+        previewContainerView.isHidden = true
+        scrollEdgeController.isPreviewRoleControlVisible = false
         bodyViewController.releasePreviewResources()
         headersTextView.isHidden = false
+        scrollEdgeController.contentScrollView = headersTextView.contentScrollView
     }
 
     private func renderPreview(selectedRequest request: NetworkRequest) {
@@ -304,13 +319,13 @@ package final class NetworkDetailViewController: UIViewController {
     ) {
         previewRoles = roles
         let isControlVisible = roles.count >= 2
-        let isVisibleInPreview = isControlVisible && previewStackView.isHidden == false
+        let isVisibleInPreview = isControlVisible && previewContainerView.isHidden == false
         previewRoleControlController.render(
             roles: roles,
             selectedRole: selectedRole,
             isVisible: isVisibleInPreview
         )
-        previewRoleScrollEdgeController.isControlVisible = isVisibleInPreview
+        scrollEdgeController.isPreviewRoleControlVisible = isVisibleInPreview
     }
 
     private func bindResponseBodyFetchObservationIfNeeded(
@@ -408,7 +423,11 @@ package final class NetworkDetailViewController: UIViewController {
 #if DEBUG
 extension NetworkDetailViewController {
     var previewViewForTesting: UIView {
-        previewStackView
+        previewContainerView
+    }
+
+    var previewRoleControlContainerViewForTesting: UIView {
+        previewRoleControlController.containerView
     }
 
     var headersTextViewForTesting: NetworkHeadersTextView {
@@ -437,11 +456,11 @@ extension NetworkDetailViewController {
 
     @available(iOS 26.0, *)
     var previewRoleScrollEdgeInteractionForTesting: UIScrollEdgeElementContainerInteraction? {
-        previewRoleScrollEdgeController.interactionForTesting
+        scrollEdgeController.interactionForTesting
     }
 
     var previewRoleScrollEdgeObservationDeliveryForTesting: ObservationDelivery? {
-        previewRoleScrollEdgeController.observationDeliveryForTesting
+        scrollEdgeController.observationDeliveryForTesting
     }
 
     var modelObservationDeliveryForTesting: ObservationDelivery? {

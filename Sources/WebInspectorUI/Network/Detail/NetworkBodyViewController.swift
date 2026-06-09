@@ -35,7 +35,7 @@ final class NetworkBodyViewController: UIViewController {
         let scrollView = UIScrollView()
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.backgroundColor = .clear
-        scrollView.contentInsetAdjustmentBehavior = .never
+        scrollView.contentInsetAdjustmentBehavior = .automatic
         scrollView.delegate = self
         scrollView.isHidden = true
         scrollView.maximumZoomScale = 1
@@ -45,7 +45,7 @@ final class NetworkBodyViewController: UIViewController {
         return scrollView
     }()
     private let observationScope = ObservationScope()
-    private let scrollEdgeState: NetworkPreviewRoleScrollEdgeState?
+    private let scrollEdgeState: NetworkDetailScrollEdgeState?
     private weak var body: NetworkBody?
     private var metadata: NetworkBodyPreviewMetadata?
     private var hasDisplayedBody = false
@@ -59,7 +59,7 @@ final class NetworkBodyViewController: UIViewController {
     private var bodyObservationDelivery: ObservationDelivery?
 #endif
 
-    init(scrollEdgeState: NetworkPreviewRoleScrollEdgeState? = nil) {
+    init(scrollEdgeState: NetworkDetailScrollEdgeState? = nil) {
         self.scrollEdgeState = scrollEdgeState
         super.init(nibName: nil, bundle: nil)
     }
@@ -116,6 +116,7 @@ final class NetworkBodyViewController: UIViewController {
         metadata = nil
         startObserving(body: nil)
         hideMediaPreview()
+        scrollEdgeState?.contentScrollView = nil
     }
 
     private func configureSyntaxView() {
@@ -140,10 +141,10 @@ final class NetworkBodyViewController: UIViewController {
             syntaxView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             syntaxView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             syntaxView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            imageScrollView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
-            imageScrollView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
-            imageScrollView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
-            imageScrollView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
+            imageScrollView.topAnchor.constraint(equalTo: view.topAnchor),
+            imageScrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            imageScrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            imageScrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             imageView.topAnchor.constraint(equalTo: imageScrollView.contentLayoutGuide.topAnchor),
             imageView.leadingAnchor.constraint(equalTo: imageScrollView.contentLayoutGuide.leadingAnchor),
             imageView.trailingAnchor.constraint(equalTo: imageScrollView.contentLayoutGuide.trailingAnchor),
@@ -311,7 +312,7 @@ final class NetworkBodyViewController: UIViewController {
         hideImagePreview()
         removeMediaPlayerViewController()
         syntaxView.isHidden = false
-        scrollEdgeState?.scrollView = syntaxView
+        scrollEdgeState?.contentScrollView = syntaxView
     }
 
     private func showImagePreview(_ image: UIImage) {
@@ -319,7 +320,7 @@ final class NetworkBodyViewController: UIViewController {
         removeCachedTemporaryMediaFile()
         syntaxView.isHidden = true
         imageScrollView.isHidden = false
-        scrollEdgeState?.scrollView = imageScrollView
+        scrollEdgeState?.contentScrollView = imageScrollView
         shouldResetImageZoomOnNextLayout = true
         imagePreviewLayoutState = nil
         imageView.image = image
@@ -333,7 +334,7 @@ final class NetworkBodyViewController: UIViewController {
     private func showMoviePreview(_ url: URL) {
         hideImagePreview()
         syntaxView.isHidden = true
-        scrollEdgeState?.scrollView = nil
+        scrollEdgeState?.contentScrollView = nil
         if let temporaryFileURL = mediaTemporaryFile?.fileURL, temporaryFileURL != url {
             removeCachedTemporaryMediaFile()
         }
