@@ -215,7 +215,6 @@ struct MonoclyLifecycleTests {
                 coordinator.presentedSheetControllerForTesting as? WebInspectorViewController
             )
             #expect(didPresent)
-            #expect(sheetController.followsInspectedPageAppearance)
             if #available(iOS 26.0, *) {
                 #expect(sheetController.drawsBackground == false)
             }
@@ -436,7 +435,6 @@ struct MonoclyLifecycleTests {
             let inspectorWindow = try #require(sceneDelegate.window)
             context.retain(inspectorWindow)
             #expect(inspectorWindow.rootViewController === sceneDelegate.inspectorViewController)
-            #expect(sceneDelegate.inspectorViewController?.inspectorContainerForTesting?.followsInspectedPageAppearance == false)
             if #available(iOS 26.0, *) {
                 #expect(sceneDelegate.inspectorViewController?.inspectorContainerForTesting?.drawsBackground == true)
             }

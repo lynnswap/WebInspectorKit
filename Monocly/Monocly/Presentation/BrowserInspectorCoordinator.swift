@@ -266,7 +266,6 @@ final class BrowserInspectorCoordinator {
 
         let anchor = resolvePresentationAnchor(from: presenter)
         let sheetController = WebInspectorViewController(session: inspectorSession)
-        sheetController.followsInspectedPageAppearance = true
         if #available(iOS 26.0, *) {
             sheetController.drawsBackground = false
         }
