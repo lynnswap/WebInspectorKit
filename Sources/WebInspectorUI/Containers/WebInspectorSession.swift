@@ -9,8 +9,13 @@ import WebInspectorCore
 public final class WebInspectorSession {
     package let inspector: InspectorSession
     package let interface: InterfaceModel
+    /// The user interface style inferred from the inspected page.
+    ///
+    /// The value is `.unspecified` until the page style is known or when no useful style can be inferred.
+    public private(set) var pageUserInterfaceStyle: UIUserInterfaceStyle = .unspecified
     @ObservationIgnored private let attachAction: @MainActor (InspectorSession, WKWebView) async throws -> Void
     @ObservationIgnored private let detachAction: @MainActor (InspectorSession) async -> Void
+    @ObservationIgnored private var pageUserInterfaceStyleObserver: WebInspectorPageUserInterfaceStyleObserver?
 
     public convenience init(tabs: [WebInspectorTab] = [.dom, .network]) {
         self.init(inspector: InspectorSession(), tabs: tabs)
@@ -33,6 +38,7 @@ public final class WebInspectorSession {
     }
 
     isolated deinit {
+        stopPageUserInterfaceStyleObservation()
         interface.removeContentCache()
     }
 
@@ -41,11 +47,40 @@ public final class WebInspectorSession {
     }
 
     public func attach(to webView: WKWebView) async throws {
-        try await attachAction(inspector, webView)
+        stopPageUserInterfaceStyleObservation()
+        do {
+            try await attachAction(inspector, webView)
+            startPageUserInterfaceStyleObservation(for: webView)
+        } catch {
+            stopPageUserInterfaceStyleObservation()
+            throw error
+        }
     }
 
     public func detach() async {
+        stopPageUserInterfaceStyleObservation()
         await detachAction(inspector)
+    }
+
+    private func startPageUserInterfaceStyleObservation(for webView: WKWebView) {
+        let observer = WebInspectorPageUserInterfaceStyleObserver(webView: webView) { [weak self] style in
+            self?.setPageUserInterfaceStyle(style)
+        }
+        pageUserInterfaceStyleObserver = observer
+        observer.start()
+    }
+
+    private func stopPageUserInterfaceStyleObservation() {
+        pageUserInterfaceStyleObserver?.invalidate()
+        pageUserInterfaceStyleObserver = nil
+        setPageUserInterfaceStyle(.unspecified)
+    }
+
+    private func setPageUserInterfaceStyle(_ style: UIUserInterfaceStyle) {
+        guard pageUserInterfaceStyle != style else {
+            return
+        }
+        pageUserInterfaceStyle = style
     }
 }
 

@@ -2,12 +2,15 @@
 import Testing
 import WebInspectorTransport
 import UIKit
+import WebKit
 @testable import WebInspectorCore
 @testable import WebInspectorUI
 
 @MainActor
 @Suite(.serialized)
 struct ParentContainerTests {
+    private struct AttachmentFailure: Error {}
+
     @Test
     func sessionAndViewControllerUseDOMAndNetworkTabsByDefault() {
         let session = WebInspectorSession()
@@ -15,9 +18,128 @@ struct ParentContainerTests {
 
         #expect(session.interface.tabs.map(\.id) == [WebInspectorTab.dom.id, WebInspectorTab.network.id])
         #expect(viewController.session.interface.tabs.map(\.id) == [WebInspectorTab.dom.id, WebInspectorTab.network.id])
+        #expect(session.pageUserInterfaceStyle == .unspecified)
         if #available(iOS 26.0, *) {
             #expect(viewController.drawsBackground)
         }
+    }
+
+    @Test
+    func pageUserInterfaceStyleUsesWebKitLightnessThreshold() {
+        let traits = UITraitCollection(userInterfaceStyle: .light)
+
+        #expect(WebInspectorPageUserInterfaceStyle.style(for: .white, in: traits) == .light)
+        #expect(WebInspectorPageUserInterfaceStyle.style(for: .black, in: traits) == .dark)
+        #expect(WebInspectorPageUserInterfaceStyle.style(for: .clear, in: traits) == .unspecified)
+        #expect(WebInspectorPageUserInterfaceStyle.style(for: nil, in: traits) == .unspecified)
+    }
+
+    @Test
+    func pageUserInterfaceStyleResolvesDynamicColorsWithWebViewTraits() {
+        let dynamicColor = UIColor { traits in
+            traits.userInterfaceStyle == .dark ? .black : .white
+        }
+
+        #expect(
+            WebInspectorPageUserInterfaceStyle.style(
+                for: dynamicColor,
+                in: UITraitCollection(userInterfaceStyle: .light)
+            ) == .light
+        )
+        #expect(
+            WebInspectorPageUserInterfaceStyle.style(
+                for: dynamicColor,
+                in: UITraitCollection(userInterfaceStyle: .dark)
+            ) == .dark
+        )
+    }
+
+    @Test
+    func sessionUpdatesPageUserInterfaceStyleFromUnderPageBackgroundColor() async throws {
+        let session = makeSessionWithNoOpAttachment()
+        let webView = WKWebView(frame: .zero)
+
+        try await session.attach(to: webView)
+        webView.underPageBackgroundColor = .black
+
+        let didApplyDarkStyle = await waitUntil {
+            session.pageUserInterfaceStyle == .dark
+        }
+        #expect(didApplyDarkStyle)
+
+        webView.underPageBackgroundColor = .white
+        let didApplyLightStyle = await waitUntil {
+            session.pageUserInterfaceStyle == .light
+        }
+        #expect(didApplyLightStyle)
+    }
+
+    @Test
+    func sessionClearsPageUserInterfaceStyleAndStopsObservingOnDetach() async throws {
+        let session = makeSessionWithNoOpAttachment()
+        let webView = WKWebView(frame: .zero)
+
+        try await session.attach(to: webView)
+        webView.underPageBackgroundColor = .black
+        let didApplyDarkStyle = await waitUntil {
+            session.pageUserInterfaceStyle == .dark
+        }
+        #expect(didApplyDarkStyle)
+
+        await session.detach()
+
+        #expect(session.pageUserInterfaceStyle == .unspecified)
+        webView.underPageBackgroundColor = .white
+        await Task.yield()
+        #expect(session.pageUserInterfaceStyle == .unspecified)
+    }
+
+    @Test
+    func sessionClearsPageUserInterfaceStyleAndStopsObservingWhenAttachFails() async throws {
+        let observedWebView = WKWebView(frame: .zero)
+        let observedWebViewID = ObjectIdentifier(observedWebView)
+        let session = makeSessionWithNoOpAttachment { _, webView in
+            if ObjectIdentifier(webView) != observedWebViewID {
+                throw AttachmentFailure()
+            }
+        }
+
+        try await session.attach(to: observedWebView)
+        observedWebView.underPageBackgroundColor = .black
+        let didApplyDarkStyle = await waitUntil {
+            session.pageUserInterfaceStyle == .dark
+        }
+        #expect(didApplyDarkStyle)
+
+        do {
+            try await session.attach(to: WKWebView(frame: .zero))
+            Issue.record("Expected attach to fail")
+        } catch {
+            #expect(error is AttachmentFailure)
+        }
+
+        #expect(session.pageUserInterfaceStyle == .unspecified)
+        observedWebView.underPageBackgroundColor = .white
+        await Task.yield()
+        #expect(session.pageUserInterfaceStyle == .unspecified)
+    }
+
+    @Test
+    func viewControllerDoesNotApplyPageUserInterfaceStyle() async throws {
+        let session = makeSessionWithNoOpAttachment()
+        let viewController = WebInspectorViewController(session: session)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        let webView = WKWebView(frame: .zero)
+
+        try await session.attach(to: webView)
+        webView.underPageBackgroundColor = .black
+        let didApplyDarkStyle = await waitUntil {
+            session.pageUserInterfaceStyle == .dark
+        }
+
+        #expect(didApplyDarkStyle)
+        #expect(viewController.overrideUserInterfaceStyle == .unspecified)
     }
 
     @Test
@@ -353,6 +475,17 @@ struct ParentContainerTests {
             await Task.yield()
         }
         return false
+    }
+
+    private func makeSessionWithNoOpAttachment(
+        attachAction: @escaping @MainActor (InspectorSession, WKWebView) async throws -> Void = { _, _ in },
+        detachAction: @escaping @MainActor (InspectorSession) async -> Void = { _ in }
+    ) -> WebInspectorSession {
+        WebInspectorSession(
+            inspector: InspectorSession(),
+            attachAction: attachAction,
+            detachAction: detachAction
+        )
     }
 }
 #endif

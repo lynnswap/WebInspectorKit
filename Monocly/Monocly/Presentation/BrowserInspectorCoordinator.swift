@@ -1,4 +1,5 @@
 import Foundation
+import ObservationBridge
 import WebInspectorKit
 
 #if canImport(UIKit)
@@ -251,6 +252,7 @@ final class BrowserInspectorCoordinator {
 
     private weak var presentedSheetController: UIViewController?
     private let sheetObserver = InspectorSheetObserver()
+    private let sheetUserInterfaceStyleObservationScope = ObservationScope()
     private var sceneActivationRequester = BrowserInspectorSceneActivationRequester.live
     private var supportsMultipleScenesProvider: @MainActor () -> Bool = { UIApplication.shared.supportsMultipleScenes }
 
@@ -271,6 +273,7 @@ final class BrowserInspectorCoordinator {
         }
         sheetController.modalPresentationStyle = .pageSheet
         applyDefaultDetents(to: sheetController)
+        bindSheetUserInterfaceStyle(to: sheetController, inspectorSession: inspectorSession)
         presentedSheetController = sheetController
         sheetObserver.onDismiss = { [weak self, weak sheetController] in
             guard let self else {
@@ -278,6 +281,7 @@ final class BrowserInspectorCoordinator {
             }
             if self.presentedSheetController === sheetController {
                 self.presentedSheetController = nil
+                self.sheetUserInterfaceStyleObservationScope.cancelAll()
                 self.notifyPresentationStateChanged()
             }
         }
@@ -346,6 +350,7 @@ final class BrowserInspectorCoordinator {
     func invalidate() {
         sheetObserver.onDismiss = nil
         presentedSheetController = nil
+        sheetUserInterfaceStyleObservationScope.cancelAll()
     }
 
     func setSceneActivationRequesterForTesting(_ requester: BrowserInspectorSceneActivationRequester) {
@@ -437,6 +442,26 @@ final class BrowserInspectorCoordinator {
         sheet.largestUndimmedDetentIdentifier = .medium
     }
 
+    private func bindSheetUserInterfaceStyle(
+        to sheetController: UIViewController,
+        inspectorSession: WebInspectorSession
+    ) {
+        sheetUserInterfaceStyleObservationScope.cancelAll()
+        sheetUserInterfaceStyleObservationScope.observe(inspectorSession) { [weak self, weak sheetController] _, session in
+            guard let sheet = sheetController?.sheetPresentationController else {
+                return
+            }
+            self?.applySheetUserInterfaceStyle(session.pageUserInterfaceStyle, to: sheet)
+        }
+    }
+
+    private func applySheetUserInterfaceStyle(
+        _ style: UIUserInterfaceStyle,
+        to sheet: UISheetPresentationController
+    ) {
+        sheet.traitOverrides.userInterfaceStyle = style
+    }
+
     private func topViewController(from root: UIViewController?) -> UIViewController? {
         guard let root else {
             return nil
@@ -471,6 +496,7 @@ final class BrowserInspectorCoordinator {
             return
         }
         self.presentedSheetController = nil
+        sheetUserInterfaceStyleObservationScope.cancelAll()
     }
 
     private func isPresentedViewControllerInChain(
