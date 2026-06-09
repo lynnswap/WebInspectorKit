@@ -543,11 +543,11 @@ private enum NetworkHeadersWebKitStyle {
     static let rowWrappedLineHeadIndent = rowFirstLineHeadIndent + detailsValueIndent
 
     static var bodyFont: UIFont {
-        UIFont.preferredFont(forTextStyle: .body)
+        UIFont.preferredFont(forTextStyle: .callout)
     }
 
     static var keyFont: UIFont {
-        UIFont.preferredFont(forTextStyle: .body).withWeight(.medium)
+        UIFont.preferredFont(forTextStyle: .callout).withWeight(.medium)
     }
 
     static var sectionTitleFont: UIFont {
