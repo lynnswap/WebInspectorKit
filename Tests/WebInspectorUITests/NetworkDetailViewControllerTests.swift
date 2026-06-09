@@ -675,6 +675,12 @@ struct NetworkDetailViewControllerTests {
         let model = NetworkPanelModel(network: network)
         model.selectRequest(request)
         let viewController = NetworkDetailViewController(model: model)
+        viewController.bodyViewControllerForTesting.additionalSafeAreaInsets = UIEdgeInsets(
+            top: 44,
+            left: 0,
+            bottom: 34,
+            right: 0
+        )
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
         viewController.setModeForTesting(.preview)
@@ -698,10 +704,10 @@ struct NetworkDetailViewControllerTests {
 
         let imageScrollView = viewController.bodyViewControllerForTesting.imageScrollViewForTesting
         #expect(imageScrollView.contentInsetAdjustmentBehavior == .automatic)
-        let fitScale = min(
-            imageScrollView.bounds.width / imageSize.width,
-            imageScrollView.bounds.height / imageSize.height
-        )
+        #expect(imageScrollView.contentAlignmentPoint == CGPoint(x: 0.5, y: 0.5))
+        #expect(imageScrollView.contentInset == .zero)
+        #expect(imageScrollView.adjustedContentInset.top > imageScrollView.contentInset.top)
+        let fitScale = expectedImageFitScale(scrollView: imageScrollView, imageSize: imageSize)
         let expectedMinimumZoomScale = min(1, fitScale)
         #expect(abs(imageScrollView.minimumZoomScale - expectedMinimumZoomScale) < 0.001)
         #expect(abs(imageScrollView.zoomScale - expectedMinimumZoomScale) < 0.001)
@@ -746,10 +752,7 @@ struct NetworkDetailViewControllerTests {
         window.layoutIfNeeded()
 
         let didRefitAfterBoundsChange = await waitUntilRendered(in: viewController) {
-            let fitScale = min(
-                imageScrollView.bounds.width / imageSize.width,
-                imageScrollView.bounds.height / imageSize.height
-            )
+            let fitScale = expectedImageFitScale(scrollView: imageScrollView, imageSize: imageSize)
             let expectedMinimumZoomScale = min(1, fitScale)
             return imageScrollView.bounds.height < initialBounds.height
                 && expectedMinimumZoomScale < initialMinimumZoomScale
@@ -793,8 +796,8 @@ struct NetworkDetailViewControllerTests {
         let imageScrollView = viewController.bodyViewControllerForTesting.imageScrollViewForTesting
         #expect(imageScrollView.minimumZoomScale == 1)
         #expect(imageScrollView.zoomScale == 1)
-        #expect(imageScrollView.contentInset.left > 0)
-        #expect(imageScrollView.contentInset.top > 0)
+        #expect(imageScrollView.contentInset == .zero)
+        #expect(imageScrollView.contentAlignmentPoint == CGPoint(x: 0.5, y: 0.5))
     }
 
     @Test
@@ -1340,6 +1343,22 @@ struct NetworkDetailViewControllerTests {
             context.fill(CGRect(origin: .zero, size: size))
         }
         .base64EncodedString()
+    }
+
+    private func expectedImageFitScale(scrollView: UIScrollView, imageSize: CGSize) -> CGFloat {
+        let visibleSize = imageVisibleBoundsSize(scrollView)
+        return min(
+            visibleSize.width / imageSize.width,
+            visibleSize.height / imageSize.height
+        )
+    }
+
+    private func imageVisibleBoundsSize(_ scrollView: UIScrollView) -> CGSize {
+        let adjustedInset = scrollView.adjustedContentInset
+        return CGSize(
+            width: max(scrollView.bounds.width - adjustedInset.left - adjustedInset.right, 0),
+            height: max(scrollView.bounds.height - adjustedInset.top - adjustedInset.bottom, 0)
+        )
     }
 
     private func waitUntilRendered(

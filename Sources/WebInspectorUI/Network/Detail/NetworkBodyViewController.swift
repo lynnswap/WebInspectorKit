@@ -36,6 +36,7 @@ final class NetworkBodyViewController: UIViewController {
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.backgroundColor = .clear
         scrollView.contentInsetAdjustmentBehavior = .automatic
+        scrollView.contentAlignmentPoint = CGPoint(x: 0.5, y: 0.5)
         scrollView.delegate = self
         scrollView.isHidden = true
         scrollView.maximumZoomScale = 1
@@ -403,17 +404,21 @@ final class NetworkBodyViewController: UIViewController {
         }
 
         imageScrollView.layoutIfNeeded()
+        imageScrollView.contentInset = .zero
         let imageSize = image.size
-        let boundsSize = imageScrollView.bounds.size
+        let visibleBoundsSize = imagePreviewVisibleBoundsSize()
+        guard visibleBoundsSize.width > 0, visibleBoundsSize.height > 0 else {
+            return false
+        }
         let fitScale = min(
-            boundsSize.width / imageSize.width,
-            boundsSize.height / imageSize.height
+            visibleBoundsSize.width / imageSize.width,
+            visibleBoundsSize.height / imageSize.height
         )
         let minimumZoomScale = min(1, fitScale)
         let maximumZoomScale = max(4, 1 / minimumZoomScale)
         let isKeepingAutoFit = imagePreviewLayoutState.map { state in
             state.imageSize == imageSize
-                && state.boundsSize != boundsSize
+                && state.visibleBoundsSize != visibleBoundsSize
                 && abs(imageScrollView.zoomScale - state.minimumZoomScale) < Self.imageZoomScaleTolerance
         } ?? false
         let targetZoomScale = resetZoom || isKeepingAutoFit
@@ -423,32 +428,19 @@ final class NetworkBodyViewController: UIViewController {
         imageScrollView.maximumZoomScale = maximumZoomScale
         imageScrollView.minimumZoomScale = minimumZoomScale
         imageScrollView.zoomScale = targetZoomScale
-        updateImageContentInset()
         imagePreviewLayoutState = ImagePreviewLayoutState(
             imageSize: imageSize,
-            boundsSize: boundsSize,
+            visibleBoundsSize: visibleBoundsSize,
             minimumZoomScale: minimumZoomScale
         )
         return true
     }
 
-    private func updateImageContentInset() {
-        guard let image = imageView.image else {
-            imageScrollView.contentInset = .zero
-            return
-        }
-
-        let scaledImageSize = CGSize(
-            width: image.size.width * imageScrollView.zoomScale,
-            height: image.size.height * imageScrollView.zoomScale
-        )
-        let horizontalInset = max((imageScrollView.bounds.width - scaledImageSize.width) / 2, 0)
-        let verticalInset = max((imageScrollView.bounds.height - scaledImageSize.height) / 2, 0)
-        imageScrollView.contentInset = UIEdgeInsets(
-            top: verticalInset,
-            left: horizontalInset,
-            bottom: verticalInset,
-            right: horizontalInset
+    private func imagePreviewVisibleBoundsSize() -> CGSize {
+        let adjustedInset = imageScrollView.adjustedContentInset
+        return CGSize(
+            width: max(imageScrollView.bounds.width - adjustedInset.left - adjustedInset.right, 0),
+            height: max(imageScrollView.bounds.height - adjustedInset.top - adjustedInset.bottom, 0)
         )
     }
 
@@ -516,13 +508,16 @@ final class NetworkBodyViewController: UIViewController {
 extension NetworkBodyViewController: UIScrollViewDelegate {
     nonisolated func viewForZooming(in scrollView: UIScrollView) -> UIView? {
         MainActor.assumeIsolated {
-            imageView
+            scrollView === imageScrollView ? imageView : nil
         }
     }
 
-    nonisolated func scrollViewDidZoom(_ scrollView: UIScrollView) {
+    nonisolated func scrollViewDidChangeAdjustedContentInset(_ scrollView: UIScrollView) {
         MainActor.assumeIsolated {
-            updateImageContentInset()
+            guard scrollView === imageScrollView else {
+                return
+            }
+            updateImagePreviewLayoutIfNeeded()
         }
     }
 }
@@ -534,7 +529,7 @@ private enum NetworkBodyMediaPayload {
 
 private struct ImagePreviewLayoutState {
     var imageSize: CGSize
-    var boundsSize: CGSize
+    var visibleBoundsSize: CGSize
     var minimumZoomScale: CGFloat
 }
 
