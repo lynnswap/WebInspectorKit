@@ -31,6 +31,8 @@ package final class NetworkDetailViewController: UIViewController {
     private var hasBoundSelectedRequest = false
     private weak var observedRequest: NetworkRequest?
     private weak var responseBodyFetchRequest: NetworkRequest?
+    private var bodyTopToPreviewContainerConstraint: NSLayoutConstraint?
+    private var bodyTopToPreviewRoleControlConstraint: NSLayoutConstraint?
 #if DEBUG
     private var modelObservationDelivery: ObservationDelivery?
     private var selectedRequestRenderObservationDelivery: ObservationDelivery?
@@ -119,12 +121,21 @@ package final class NetworkDetailViewController: UIViewController {
         previewContainerView.addSubview(previewRoleControlController.containerView)
         bodyViewController.didMove(toParent: self)
 
+        let bodyTopToPreviewContainerConstraint = bodyViewController.view.topAnchor.constraint(
+            equalTo: previewContainerView.topAnchor
+        )
+        let bodyTopToPreviewRoleControlConstraint = bodyViewController.view.topAnchor.constraint(
+            equalTo: previewRoleControlController.containerView.bottomAnchor
+        )
+        self.bodyTopToPreviewContainerConstraint = bodyTopToPreviewContainerConstraint
+        self.bodyTopToPreviewRoleControlConstraint = bodyTopToPreviewRoleControlConstraint
+        bodyTopToPreviewContainerConstraint.isActive = true
+
         NSLayoutConstraint.activate([
             previewContainerView.topAnchor.constraint(equalTo: view.topAnchor),
             previewContainerView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
             previewContainerView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
             previewContainerView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            bodyViewController.view.topAnchor.constraint(equalTo: previewContainerView.topAnchor),
             bodyViewController.view.leadingAnchor.constraint(equalTo: previewContainerView.leadingAnchor),
             bodyViewController.view.trailingAnchor.constraint(equalTo: previewContainerView.trailingAnchor),
             bodyViewController.view.bottomAnchor.constraint(equalTo: previewContainerView.bottomAnchor),
@@ -136,6 +147,16 @@ package final class NetworkDetailViewController: UIViewController {
             headersTextView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
             headersTextView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
+    }
+
+    private func updatePreviewRoleControlLayout(isVisible: Bool) {
+        if #available(iOS 26.0, *) {
+            bodyTopToPreviewRoleControlConstraint?.isActive = false
+            bodyTopToPreviewContainerConstraint?.isActive = true
+        } else {
+            bodyTopToPreviewContainerConstraint?.isActive = isVisible == false
+            bodyTopToPreviewRoleControlConstraint?.isActive = isVisible
+        }
     }
 
     private func installModeTitleView() {
@@ -325,6 +346,7 @@ package final class NetworkDetailViewController: UIViewController {
             selectedRole: selectedRole,
             isVisible: isVisibleInPreview
         )
+        updatePreviewRoleControlLayout(isVisible: isVisibleInPreview)
         scrollEdgeController.isPreviewRoleControlVisible = isVisibleInPreview
     }
 
