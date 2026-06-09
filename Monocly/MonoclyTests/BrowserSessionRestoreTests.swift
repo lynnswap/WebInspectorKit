@@ -375,6 +375,59 @@ struct BrowserSessionRestoreTests {
     }
 
     @Test
+    func loadingProgressRemainsVisibleAtCompletedEstimatedProgressUntilNavigationSettles() throws {
+        let store = BrowserStore(
+            url: try #require(URL(string: "about:blank")),
+            automaticallyLoadsInitialRequest: false,
+            sessionStore: nil
+        )
+        let tab = try #require(store.selectedTab)
+
+        tab.webView(tab.webView, didStartProvisionalNavigation: nil)
+        tab.estimatedProgress = 1
+
+        #expect(tab.isShowingProgress)
+        #expect(store.isShowingProgress)
+    }
+
+    @Test
+    func explicitNavigationShowsProgressImmediatelyFromCompletedPreviousProgress() throws {
+        let store = BrowserStore(
+            url: try #require(URL(string: "about:blank")),
+            automaticallyLoadsInitialRequest: false,
+            sessionStore: nil
+        )
+        let tab = try #require(store.selectedTab)
+        tab.isLoading = false
+        tab.estimatedProgress = 1
+        let nextURL = try #require(URL(string: "https://example.com/next"))
+
+        store.load(url: nextURL)
+
+        #expect(store.currentURL == nextURL)
+        #expect(tab.isLoading)
+        #expect(tab.estimatedProgress == .zero)
+        #expect(store.isShowingProgress)
+    }
+
+    @Test
+    func sameDocumentNavigationSettlesProgressStartedForHistoryNavigation() throws {
+        let store = BrowserStore(
+            url: try #require(URL(string: "about:blank")),
+            automaticallyLoadsInitialRequest: false,
+            sessionStore: nil
+        )
+        let tab = try #require(store.selectedTab)
+        tab.isLoading = true
+        tab.estimatedProgress = 0.5
+
+        tab.handleSameDocumentNavigationBridge(tab.webView, navigation: nil, navigationType: 0)
+
+        #expect(tab.isLoading == false)
+        #expect(store.isShowingProgress == false)
+    }
+
+    @Test
     func autosavePreservesPendingRestoredStateForUnselectedTabs() throws {
         try withTemporarySessionStore { sessionStore, _ in
             let selectedID = UUID()

@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import Observation
+import ObjectiveC
 import OSLog
 import WebKit
 
@@ -304,6 +305,10 @@ private enum BrowserTabStoreSPI {
     static let setHistoryDelegateSelector = NSSelectorFromString(
         deobfuscate([":", "Delegate", "History", "_set"])
     )
+    // _webView:navigation:didSameDocumentNavigation:
+    static let sameDocumentNavigationSelector = NSSelectorFromString(
+        deobfuscate([":", "Navigation", "Document", "Same", "did", ":", "navigation", ":", "webView", "_"])
+    )
     static let maximumHistoryMenuItemCount = 20
 }
 
@@ -340,9 +345,10 @@ private enum BrowserTabStoreSPI {
     @ObservationIgnored private var restoredInteractionState: Data?
     @ObservationIgnored private var canSaveWebViewInteractionState = true
     @ObservationIgnored var onStateChanged: (() -> Void)?
+    @ObservationIgnored private static var didInstallSameDocumentNavigationDelegateMethod = false
 
     var isShowingProgress: Bool {
-        isLoading && estimatedProgress < 1.0
+        isLoading
     }
 
     var displayTitle: String {
@@ -421,6 +427,7 @@ private enum BrowserTabStoreSPI {
         configureRefreshControl()
 #endif
 
+        Self.installSameDocumentNavigationDelegateMethodIfNeeded()
         webView.navigationDelegate = self
         webView.uiDelegate = self
         configureHistoryDelegateIfAvailable()
@@ -437,6 +444,8 @@ private enum BrowserTabStoreSPI {
         }
         if webView.goBack() != nil {
             markWebViewInteractionStatePendingNavigation()
+            beginLoadingProgress()
+            notifyStateChanged()
         }
     }
 
@@ -446,16 +455,22 @@ private enum BrowserTabStoreSPI {
         }
         if webView.goForward() != nil {
             markWebViewInteractionStatePendingNavigation()
+            beginLoadingProgress()
+            notifyStateChanged()
         }
     }
 
     func go(to item: WKBackForwardListItem) {
         if spiGoToHistoryItem(item) {
             markWebViewInteractionStatePendingNavigation()
+            beginLoadingProgress()
+            notifyStateChanged()
             return
         }
         if webView.go(to: item) != nil {
             markWebViewInteractionStatePendingNavigation()
+            beginLoadingProgress()
+            notifyStateChanged()
         }
     }
 
@@ -466,7 +481,9 @@ private enum BrowserTabStoreSPI {
         pageTitle = nil
         currentURL = url
         hasLoadedInitialRequest = true
-        webView.load(URLRequest(url: url))
+        if webView.load(URLRequest(url: url)) != nil {
+            beginLoadingProgress()
+        }
         notifyStateChanged()
     }
 
@@ -491,7 +508,9 @@ private enum BrowserTabStoreSPI {
         } else {
             initialRequestLoadCount += 1
             markWebViewInteractionStatePendingNavigation()
-            webView.load(URLRequest(url: initialURL))
+            if webView.load(URLRequest(url: initialURL)) != nil {
+                beginLoadingProgress()
+            }
         }
         notifyStateChanged()
     }
@@ -614,6 +633,11 @@ private enum BrowserTabStoreSPI {
         canSaveWebViewInteractionState = false
     }
 
+    private func beginLoadingProgress() {
+        isLoading = true
+        estimatedProgress = .zero
+    }
+
     private func markWebViewInteractionStateSynchronized() {
         canSaveWebViewInteractionState = true
     }
@@ -713,6 +737,26 @@ private enum BrowserTabStoreSPI {
         webView.perform(BrowserTabStoreSPI.setHistoryDelegateSelector, with: self)
     }
 
+    private static func installSameDocumentNavigationDelegateMethodIfNeeded() {
+        guard didInstallSameDocumentNavigationDelegateMethod == false else {
+            return
+        }
+        guard let method = class_getInstanceMethod(
+            Self.self,
+            #selector(handleSameDocumentNavigationBridge(_:navigation:navigationType:))
+        ) else {
+            return
+        }
+
+        class_addMethod(
+            Self.self,
+            BrowserTabStoreSPI.sameDocumentNavigationSelector,
+            method_getImplementation(method),
+            method_getTypeEncoding(method)
+        )
+        didInstallSameDocumentNavigationDelegateMethod = true
+    }
+
 #if canImport(UIKit)
     private func configureRefreshControl() {
         let control = UIRefreshControl()
@@ -723,7 +767,10 @@ private enum BrowserTabStoreSPI {
 
     @objc private func handleRefreshControl() {
         markWebViewInteractionStatePendingNavigation()
-        webView.reload()
+        if webView.reload() != nil {
+            beginLoadingProgress()
+            notifyStateChanged()
+        }
     }
 
     private func endRefreshingIfNeeded() {
@@ -753,8 +800,7 @@ extension BrowserTabStore: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         markWebViewInteractionStatePendingNavigation()
-        isLoading = true
-        estimatedProgress = .zero
+        beginLoadingProgress()
         notifyStateChanged()
     }
 
@@ -857,6 +903,12 @@ extension BrowserTabStore {
     func _webView(_ webView: WKWebView!, didUpdateHistoryTitle title: String!, forURL url: URL!) {
         invalidateHistoryIfNeeded()
         notifyStateChanged()
+    }
+
+    @objc(browserTabStoreHandleWebView:navigation:navigationType:)
+    func handleSameDocumentNavigationBridge(_ webView: WKWebView!, navigation: WKNavigation!, navigationType: Int64) {
+        syncNavigationState(from: webView)
+        markWebViewInteractionStateSynchronizedIfNavigationSettled()
     }
 }
 

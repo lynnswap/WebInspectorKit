@@ -14,6 +14,19 @@ final class BrowserPageViewController: UIViewController {
         case regularNavigationBar
     }
 
+    private enum ProgressIndicator {
+        static let height: CGFloat = 2
+        static let showAnimationDuration: TimeInterval = 0.12
+        static let progressAnimationDuration: TimeInterval = 0.18
+        static let completionHoldDuration: UInt64 = 120_000_000
+        static let hideAnimationDuration: TimeInterval = 0.18
+        static let animationOptions: UIView.AnimationOptions = [
+            .allowUserInteraction,
+            .beginFromCurrentState,
+            .curveEaseInOut,
+        ]
+    }
+
     private let store: BrowserStore
     private let inspectorSession: WebInspectorSession
     private let launchConfiguration: BrowserLaunchConfiguration
@@ -52,6 +65,7 @@ final class BrowserPageViewController: UIViewController {
     private var inspectorWindowObserverID: UUID?
     private var didAutoPresentInspector = false
     private var progressHeightConstraint: NSLayoutConstraint?
+    private var progressHideTask: Task<Void, Never>?
     private var currentChromePlacement: ChromePlacement?
     var onSelectedWebViewInstalled: ((WKWebView) -> Void)?
 
@@ -75,6 +89,7 @@ final class BrowserPageViewController: UIViewController {
     }
 
     isolated deinit {
+        progressHideTask?.cancel()
         viewportCoordinator?.invalidate()
         observationScope.cancelAll()
         if let inspectorWindowObserverID {
@@ -136,6 +151,8 @@ final class BrowserPageViewController: UIViewController {
 
         progressView.translatesAutoresizingMaskIntoConstraints = false
         progressView.trackTintColor = .clear
+        progressView.isHidden = true
+        progressView.alpha = 0
         view.addSubview(progressView)
         progressHeightConstraint = progressView.heightAnchor.constraint(equalToConstant: 0)
 
@@ -452,12 +469,115 @@ final class BrowserPageViewController: UIViewController {
         navigationItem.title = store.displayTitle
         syncNavigationButtonStates(store: store)
 
-        let progressIsVisible = store.isShowingProgress
-        progressView.progress = Float(store.estimatedProgress)
-        progressView.isHidden = progressIsVisible == false
-        progressHeightConstraint?.constant = progressIsVisible ? 2 : 0
+        renderProgressIndicator(
+            isVisible: store.isShowingProgress,
+            progress: store.estimatedProgress
+        )
 
         view.backgroundColor = store.underPageBackgroundColor ?? .clear
+    }
+
+    private func renderProgressIndicator(isVisible: Bool, progress: Double) {
+        let progress = normalizedProgress(progress)
+
+        if isVisible {
+            showProgressIndicator()
+            setProgressIndicatorProgress(progress)
+            return
+        }
+
+        if progressView.isHidden == false {
+            setProgressIndicatorProgress(progress)
+        }
+        scheduleProgressIndicatorHide()
+    }
+
+    private func showProgressIndicator() {
+        progressHideTask?.cancel()
+        progressHideTask = nil
+        progressView.layer.removeAllAnimations()
+
+        let wasHidden = progressView.isHidden
+        if wasHidden {
+            progressView.isHidden = false
+            progressView.alpha = 0
+        }
+        progressHeightConstraint?.constant = ProgressIndicator.height
+
+        guard progressView.alpha < 1 else {
+            return
+        }
+
+        UIView.animate(
+            withDuration: ProgressIndicator.showAnimationDuration,
+            delay: 0,
+            options: ProgressIndicator.animationOptions
+        ) {
+            self.progressView.alpha = 1
+        }
+    }
+
+    private func scheduleProgressIndicatorHide() {
+        guard progressView.isHidden == false || progressView.alpha > 0 else {
+            return
+        }
+        guard progressHideTask == nil else {
+            return
+        }
+
+        progressHideTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: ProgressIndicator.completionHoldDuration)
+            } catch {
+                return
+            }
+            guard let self, Task.isCancelled == false, self.store.isShowingProgress == false else {
+                return
+            }
+
+            UIView.animate(
+                withDuration: ProgressIndicator.hideAnimationDuration,
+                delay: 0,
+                options: ProgressIndicator.animationOptions
+            ) {
+                self.progressView.alpha = 0
+            } completion: { [weak self] finished in
+                guard let self, finished, self.store.isShowingProgress == false else {
+                    return
+                }
+
+                self.progressView.isHidden = true
+                self.progressHeightConstraint?.constant = 0
+                self.progressView.setProgress(0, animated: false)
+                self.progressHideTask = nil
+            }
+        }
+    }
+
+    private func setProgressIndicatorProgress(_ progress: Float) {
+        let currentProgress = progressView.progress
+        guard currentProgress != progress else {
+            return
+        }
+
+        guard progressView.isHidden == false,
+              progressView.alpha > 0,
+              progress > currentProgress else {
+            progressView.setProgress(progress, animated: false)
+            return
+        }
+
+        UIView.animate(
+            withDuration: ProgressIndicator.progressAnimationDuration,
+            delay: 0,
+            options: ProgressIndicator.animationOptions
+        ) {
+            self.progressView.setProgress(progress, animated: true)
+        }
+    }
+
+    private func normalizedProgress(_ progress: Double) -> Float {
+        Float(min(1, max(0, progress)))
     }
 
     private func maybeAutoPresentInspectorIfNeeded() {
