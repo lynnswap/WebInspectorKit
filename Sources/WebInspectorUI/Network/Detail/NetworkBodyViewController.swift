@@ -17,7 +17,7 @@ final class NetworkBodyViewController: UIViewController {
         language: .json,
         isEditable: false,
         lineWrappingEnabled: true,
-        colorTheme: .v2WebInspectorPlainText,
+        theme: .default,
         drawsBackground: false
     )
     private lazy var syntaxView = SyntaxEditorView(
@@ -230,13 +230,12 @@ final class NetworkBodyViewController: UIViewController {
         text: String,
         syntaxKind: NetworkBodySyntaxKind
     ) {
-        let syntax = syntaxKind.syntax
-        if syntaxModel.language != syntax.language {
-            syntaxModel.language = syntax.language
+        let language = syntaxKind.language
+        if syntaxModel.language != language {
+            syntaxModel.language = language
         }
-        let colorTheme: SyntaxEditorColorTheme = syntax.usesPlainTextTheme ? .v2WebInspectorPlainText : .default
-        if syntaxModel.colorTheme != colorTheme {
-            syntaxModel.colorTheme = colorTheme
+        if syntaxModel.theme != .default {
+            syntaxModel.theme = .default
         }
         if syntaxModel.text != text {
             syntaxModel.replaceText(text)
@@ -583,38 +582,21 @@ private func removeTemporaryMediaFile(at url: URL?) {
     try? FileManager.default.removeItem(at: url)
 }
 
-@MainActor
-extension SyntaxEditorColorTheme {
-    static let v2WebInspectorPlainText = SyntaxEditorColorTheme(
-        baseForeground: .label,
-        bracketBackground: .clear,
-        comment: .label,
-        string: .label,
-        keyword: .label,
-        number: .label,
-        function: .label,
-        type: .label,
-        constant: .label,
-        variable: .label,
-        punctuation: .label
-    )
-}
-
 private extension NetworkBodySyntaxKind {
-    var syntax: (language: SyntaxLanguage, usesPlainTextTheme: Bool) {
+    var language: SyntaxLanguage {
         switch self {
         case .plainText:
-            (.plainText, true)
+            .plainText
         case .json:
-            (.json, false)
+            .json
         case .html:
-            (.html, false)
+            .html
         case .xml:
-            (.xml, false)
+            .xml
         case .css:
-            (.css, false)
+            .css
         case .javascript:
-            (.javascript, false)
+            .javascript
         }
     }
 }

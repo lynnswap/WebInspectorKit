@@ -24,8 +24,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/ObservationBridge.git",
       "state" : {
-        "revision" : "9c4a7ba48cc8593e4ffe2d6fef01652d11e9afc1",
-        "version" : "0.11.0"
+        "revision" : "859e630ec6633fa3cb632df308eec6c041207888",
+        "version" : "0.11.1"
       }
     },
     {
@@ -105,8 +105,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/SyntaxEditorUI.git",
       "state" : {
-        "revision" : "aa0ce5d2dc44915310c0714fab6101f074b965ce",
-        "version" : "0.11.0"
+        "revision" : "0230895781b2889948e93ce8502af4aa8e194362",
+        "version" : "0.12.0"
       }
     },
     {
