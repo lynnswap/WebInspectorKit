@@ -345,6 +345,7 @@ xcodebuild test \
 - Monocly の `BrowserInspectorCoordinator.InspectorWindowRegistry` から `InspectorWindowSceneRegistry` を分離。window context / release handler / presentation observers は registry 本体、scene session の weak storage、reusable session、restorable/stale identifier state は scene registry が所有する。scene activation reuse、disconnect 後の pending reuse、orphan restored scene 破棄の挙動は既存 lifecycle tests で維持した。
 - Monocly の `InspectorWindowSceneRegistry` は `sceneSessionsByIdentifier` / `restorableSceneSessionIdentifiers` / `staleSceneSessionIdentifiers` / reusable session box の同一 scene session identity 分散を `SceneSessionRecord` に集約。attached weak session、reusable weak session、`.restorable / .stale` phase を identifier ごとの record が持ち、restore/connect/release 判定は record query から導出する形にした。
 - Monocly の `MonoclyWindowContextStore` は `sceneRegistry` と `activeSceneIdentifiers` の同一 scene identity 二重同期を `ConnectedWindowSceneRegistry` に集約。observable な `currentWindowScene` / `currentWindow` は store に残し、weak scene storage、active order、disconnect pruning、foreground scene resolution の不変条件を registry owner が持つ形にした。
+- Monocly の `BrowserRootViewController` は inspector session attach/detach の desired/resolved/pending/task/attached web view state を `BrowserInspectorSessionAttachmentLifecycle` に集約。UIKit view appearance、scene disconnection preservation、page view controller bridge は root controller に残し、`WebInspectorSession.attach` / `detach` の逐次処理、finalize gate、selected web view 変更時の再 attach 判定を lifecycle owner が持つ形にした。
 
 最新の局所検証:
 
@@ -391,6 +392,7 @@ xcodebuild test \
 - `xcodebuild test -project Monocly/Monocly.xcodeproj -scheme Monocly -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest'` (2026-06-13、Monocly inspector scene session record 化後 green)
 - `xcodebuild test -project Monocly/Monocly.xcodeproj -scheme Monocly -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' -only-testing:MonoclyTests/MonoclyLifecycleTests` (2026-06-13、Monocly current window scene registry owner 化後 green)
 - `xcodebuild test -project Monocly/Monocly.xcodeproj -scheme Monocly -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest'` (2026-06-13、Monocly current window scene registry owner 化後 green)
+- `xcodebuild test -project Monocly/Monocly.xcodeproj -scheme Monocly -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest'` (2026-06-13、Monocly inspector session attachment lifecycle owner 化後 green)
 - `swift test --filter WebInspectorTransportTests -Xswiftc -strict-concurrency=minimal` (2026-06-13、Transport event sequence tracker owner 化後 green)
 - `swift test -Xswiftc -strict-concurrency=minimal` (2026-06-13、Transport event sequence tracker owner 化後 green)
 - `xcodebuild test -workspace WebInspectorKit.xcworkspace -scheme WebInspectorKit -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest'` (2026-06-13、Transport event sequence tracker owner 化後 green)
