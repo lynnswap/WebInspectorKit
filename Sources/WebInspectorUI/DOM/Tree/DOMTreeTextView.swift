@@ -6,31 +6,6 @@ import UIHostingMenu
 import UIKit
 
 @MainActor
-@Observable
-private final class DOMTreeExpansionState {
-    private var states: [DOMNode.ID: Bool] = [:]
-
-    var snapshot: [DOMNode.ID: Bool] {
-        states
-    }
-
-    func isOpen(_ nodeID: DOMNode.ID) -> Bool? {
-        states[nodeID]
-    }
-
-    func setIsOpen(_ isOpen: Bool, for nodeID: DOMNode.ID) {
-        states[nodeID] = isOpen
-    }
-
-    func removeAll() {
-        guard !states.isEmpty else {
-            return
-        }
-        states.removeAll(keepingCapacity: true)
-    }
-}
-
-@MainActor
 final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutControllerDelegate, UITextInput, UITextInteractionDelegate {
     typealias RequestChildrenAction = @MainActor (DOMNode.ID) async -> Bool
     typealias HighlightNodeAction = @MainActor (DOMNode.ID) async -> Void
@@ -62,42 +37,6 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         paragraphStyle.paragraphSpacingBefore = 0
         return paragraphStyle
     }()
-    private struct ObservedTreeLine: Equatable {
-        var nodeID: DOMNode.ID
-        var depth: Int
-        var text: String
-        var tokens: [DOMTreeToken]
-        var displayColumnCount: Int
-        var hasDisclosure: Bool
-        var isOpen: Bool
-        var isClosingTag: Bool
-
-        @MainActor
-        init(_ line: DOMTreeLine) {
-            nodeID = line.node.id
-            depth = line.depth
-            text = line.text
-            tokens = line.tokens
-            displayColumnCount = line.displayColumnCount
-            hasDisclosure = line.hasDisclosure
-            isOpen = line.isOpen
-            isClosingTag = line.isClosingTag
-        }
-    }
-
-    private struct ObservedTreeContent: Equatable {
-        var lines: [ObservedTreeLine]
-        var text: String
-        var maxLineDisplayColumnCount: Int
-
-        @MainActor
-        init(_ buildResult: (rows: [DOMTreeLine], text: String, maxLineDisplayColumnCount: Int)) {
-            lines = buildResult.rows.map(ObservedTreeLine.init)
-            text = buildResult.text
-            maxLineDisplayColumnCount = buildResult.maxLineDisplayColumnCount
-        }
-    }
-
     private let dom: DOMSession
     private let menuModel: DOMTreeMenuModel
     private let observationScope = ObservationScope()
@@ -136,7 +75,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     private var lastBoundsSize: CGSize = .zero
     private var rowIndexByNodeID: [DOMNode.ID: Int] = [:]
     private var lastRenderedDocumentRootID: DOMNode.ID?
-    private var lastObservedTreeContent: ObservedTreeContent?
+    private var lastObservedTreeContent: DOMTreeObservedContent?
     private var lastRoutedSelectedNodeID: DOMNode.ID?
     private var lastObservedSelectedNodeID: DOMNode.ID?
     private var pendingRevealSelectedNodeID: DOMNode.ID?
@@ -622,7 +561,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
 
     private func routeDOMInvalidation(from dom: DOMSession, isInitial: Bool) {
         let buildResult = buildRenderedRows()
-        let nextTreeContent = ObservedTreeContent(buildResult)
+        let nextTreeContent = DOMTreeObservedContent(buildResult)
         let nextSelectedNodeID = dom.selectedNodeID
         let treeChanged = isInitial || lastObservedTreeContent != nextTreeContent
         let selectionChanged = lastRoutedSelectedNodeID != nextSelectedNodeID
@@ -701,7 +640,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         prepareSelectionForRendering()
         let buildResult = buildRenderedRows()
         rows = buildResult.rows
-        lastObservedTreeContent = ObservedTreeContent(buildResult)
+        lastObservedTreeContent = DOMTreeObservedContent(buildResult)
         lastRoutedSelectedNodeID = dom.selectedNodeID
         rebuildRowIndexAndPruneMarkupCache()
         reconcileMultiSelectionAfterReload()

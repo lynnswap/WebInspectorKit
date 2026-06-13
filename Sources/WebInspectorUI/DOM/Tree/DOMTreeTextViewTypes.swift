@@ -1,6 +1,68 @@
 #if canImport(UIKit)
 import WebInspectorCore
+import Observation
 import UIKit
+
+@MainActor
+@Observable
+final class DOMTreeExpansionState {
+    private var states: [DOMNode.ID: Bool] = [:]
+
+    var snapshot: [DOMNode.ID: Bool] {
+        states
+    }
+
+    func isOpen(_ nodeID: DOMNode.ID) -> Bool? {
+        states[nodeID]
+    }
+
+    func setIsOpen(_ isOpen: Bool, for nodeID: DOMNode.ID) {
+        states[nodeID] = isOpen
+    }
+
+    func removeAll() {
+        guard !states.isEmpty else {
+            return
+        }
+        states.removeAll(keepingCapacity: true)
+    }
+}
+
+struct DOMTreeObservedLine: Equatable {
+    var nodeID: DOMNode.ID
+    var depth: Int
+    var text: String
+    var tokens: [DOMTreeToken]
+    var displayColumnCount: Int
+    var hasDisclosure: Bool
+    var isOpen: Bool
+    var isClosingTag: Bool
+
+    @MainActor
+    init(_ line: DOMTreeLine) {
+        nodeID = line.node.id
+        depth = line.depth
+        text = line.text
+        tokens = line.tokens
+        displayColumnCount = line.displayColumnCount
+        hasDisclosure = line.hasDisclosure
+        isOpen = line.isOpen
+        isClosingTag = line.isClosingTag
+    }
+}
+
+struct DOMTreeObservedContent: Equatable {
+    var lines: [DOMTreeObservedLine]
+    var text: String
+    var maxLineDisplayColumnCount: Int
+
+    @MainActor
+    init(_ buildResult: (rows: [DOMTreeLine], text: String, maxLineDisplayColumnCount: Int)) {
+        lines = buildResult.rows.map(DOMTreeObservedLine.init)
+        text = buildResult.text
+        maxLineDisplayColumnCount = buildResult.maxLineDisplayColumnCount
+    }
+}
 
 @MainActor
 struct DOMTreeLine {
