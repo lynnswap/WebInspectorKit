@@ -65,6 +65,73 @@ struct DOMTreeObservedContent: Equatable {
 }
 
 @MainActor
+struct DOMTreeRenderedRows {
+    private(set) var rows: [DOMTreeLine]
+    private(set) var visibleNodeIDs: Set<DOMNode.ID>
+    private var rowIndexByNodeID: [DOMNode.ID: Int]
+
+    init(rows: [DOMTreeLine] = []) {
+        self.rows = rows
+        visibleNodeIDs = []
+        rowIndexByNodeID = [:]
+        rebuildIndex()
+    }
+
+    mutating func replaceRows(_ rows: [DOMTreeLine]) {
+        self.rows = rows
+        rebuildIndex()
+    }
+
+    func rowIndex(for nodeID: DOMNode.ID) -> Int? {
+        rowIndexByNodeID[nodeID]
+    }
+
+    func contains(nodeID: DOMNode.ID) -> Bool {
+        rowIndexByNodeID[nodeID] != nil
+    }
+
+    func row(for nodeID: DOMNode.ID) -> DOMTreeLine? {
+        guard let rowIndex = rowIndexByNodeID[nodeID],
+              rows.indices.contains(rowIndex) else {
+            return nil
+        }
+        return rows[rowIndex]
+    }
+
+    func rowsBetween(_ firstNodeID: DOMNode.ID, _ secondNodeID: DOMNode.ID) -> ArraySlice<DOMTreeLine> {
+        guard let firstIndex = rowIndexByNodeID[firstNodeID],
+              let secondIndex = rowIndexByNodeID[secondNodeID]
+        else {
+            return []
+        }
+        let lowerBound = min(firstIndex, secondIndex)
+        let upperBound = max(firstIndex, secondIndex)
+        return rows[lowerBound...upperBound]
+    }
+
+#if DEBUG
+    mutating func removeRowIndex(for nodeID: DOMNode.ID) {
+        rowIndexByNodeID.removeValue(forKey: nodeID)
+    }
+#endif
+
+    private mutating func rebuildIndex() {
+        var nextRowIndexByNodeID: [DOMNode.ID: Int] = [:]
+        nextRowIndexByNodeID.reserveCapacity(rows.count)
+        var nextVisibleNodeIDs = Set<DOMNode.ID>()
+        nextVisibleNodeIDs.reserveCapacity(rows.count)
+        for row in rows {
+            if !row.isClosingTag, nextRowIndexByNodeID[row.node.id] == nil {
+                nextRowIndexByNodeID[row.node.id] = row.rowIndex
+            }
+            nextVisibleNodeIDs.insert(row.node.id)
+        }
+        rowIndexByNodeID = nextRowIndexByNodeID
+        visibleNodeIDs = nextVisibleNodeIDs
+    }
+}
+
+@MainActor
 struct DOMTreeLine {
     let node: DOMNode
     let depth: Int

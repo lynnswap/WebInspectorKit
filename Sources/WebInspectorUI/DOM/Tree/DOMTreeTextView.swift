@@ -59,7 +59,15 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         rootView: DOMTreeMenuView(model: menuModel)
     )
 
-    private var rows: [DOMTreeLine] = []
+    private var renderedRows = DOMTreeRenderedRows()
+    private var rows: [DOMTreeLine] {
+        get {
+            renderedRows.rows
+        }
+        set {
+            renderedRows.replaceRows(newValue)
+        }
+    }
     private var renderedText = ""
     private let expansionState = DOMTreeExpansionState()
     private var hoveredNodeID: DOMNode.ID?
@@ -73,7 +81,6 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     private var pendingFindDecorationInvalidationRanges: [NSRange] = []
     private var measuredTextWidth: CGFloat = 0
     private var lastBoundsSize: CGSize = .zero
-    private var rowIndexByNodeID: [DOMNode.ID: Int] = [:]
     private var lastRenderedDocumentRootID: DOMNode.ID?
     private var lastObservedTreeContent: DOMTreeObservedContent?
     private var lastRoutedSelectedNodeID: DOMNode.ID?
@@ -642,7 +649,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         rows = buildResult.rows
         lastObservedTreeContent = DOMTreeObservedContent(buildResult)
         lastRoutedSelectedNodeID = dom.selectedNodeID
-        rebuildRowIndexAndPruneMarkupCache()
+        pruneMarkupCacheForRenderedRows()
         reconcileMultiSelectionAfterReload()
         renderedText = buildResult.text
         clampTextSelectionAfterTextChange()
@@ -701,7 +708,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
             return false
         }
 
-        let affectedRowIndices = affectedKeys.compactMap { rowIndexByNodeID[$0] }
+        let affectedRowIndices = affectedKeys.compactMap { renderedRows.rowIndex(for: $0) }
         guard !affectedRowIndices.isEmpty else {
             return true
         }
@@ -1018,19 +1025,8 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         return prefix
     }
 
-    private func rebuildRowIndexAndPruneMarkupCache() {
-        var nextRowIndexByNodeID: [DOMNode.ID: Int] = [:]
-        nextRowIndexByNodeID.reserveCapacity(rows.count)
-        var visibleNodeIDs = Set<DOMNode.ID>()
-        visibleNodeIDs.reserveCapacity(rows.count)
-        for row in rows {
-            if !row.isClosingTag, nextRowIndexByNodeID[row.node.id] == nil {
-                nextRowIndexByNodeID[row.node.id] = row.rowIndex
-            }
-            visibleNodeIDs.insert(row.node.id)
-        }
-        rowIndexByNodeID = nextRowIndexByNodeID
-        pruneMarkupCache(keeping: visibleNodeIDs)
+    private func pruneMarkupCacheForRenderedRows() {
+        pruneMarkupCache(keeping: renderedRows.visibleNodeIDs)
     }
 
     private func recomputeMaxLineDisplayColumnCount() -> Int {
@@ -1104,10 +1100,10 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         var selectedIDs = multiSelectedNodeIDs
         if selectedIDs.isEmpty {
             if let lastNodeID = multiSelectionLastNodeID,
-               rowIndexByNodeID[lastNodeID] != nil {
+               renderedRows.contains(nodeID: lastNodeID) {
                 selectedIDs.insert(lastNodeID)
             } else if let selectedNodeID = dom.selectedNodeID,
-                      rowIndexByNodeID[selectedNodeID] != nil {
+                      renderedRows.contains(nodeID: selectedNodeID) {
                 selectedIDs.insert(selectedNodeID)
             }
         }
@@ -1141,7 +1137,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         var selectedIDs = multiSelectedNodeIDs
         if selectedIDs.isEmpty,
            let selectedNodeID = dom.selectedNodeID,
-           rowIndexByNodeID[selectedNodeID] != nil {
+           renderedRows.contains(nodeID: selectedNodeID) {
             selectedIDs.insert(selectedNodeID)
         }
         selectedIDs.subtract(multiSelectionShiftRangeNodeIDs)
@@ -1163,7 +1159,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
             ?? dom.selectedNodeID
             ?? rows.first?.node.id
         guard let focusedNodeID,
-              let focusedIndex = rowIndexByNodeID[focusedNodeID]
+              let focusedIndex = renderedRows.rowIndex(for: focusedNodeID)
         else {
             return
         }
@@ -1179,29 +1175,22 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
 
     private func multiSelectionAnchorNodeID() -> DOMNode.ID? {
         if let anchorNodeID = multiSelectionShiftAnchorNodeID,
-           rowIndexByNodeID[anchorNodeID] != nil {
+           renderedRows.contains(nodeID: anchorNodeID) {
             return anchorNodeID
         }
         if let lastNodeID = multiSelectionLastNodeID,
-           rowIndexByNodeID[lastNodeID] != nil {
+           renderedRows.contains(nodeID: lastNodeID) {
             return lastNodeID
         }
         if let selectedNodeID = dom.selectedNodeID,
-           rowIndexByNodeID[selectedNodeID] != nil {
+           renderedRows.contains(nodeID: selectedNodeID) {
             return selectedNodeID
         }
         return rows.first?.node.id
     }
 
     private func rowsBetween(_ firstNodeID: DOMNode.ID, _ secondNodeID: DOMNode.ID) -> ArraySlice<DOMTreeLine> {
-        guard let firstIndex = rowIndexByNodeID[firstNodeID],
-              let secondIndex = rowIndexByNodeID[secondNodeID]
-        else {
-            return []
-        }
-        let lowerBound = min(firstIndex, secondIndex)
-        let upperBound = max(firstIndex, secondIndex)
-        return rows[lowerBound...upperBound]
+        renderedRows.rowsBetween(firstNodeID, secondNodeID)
     }
 
     private func clearMultiSelection(keepingLast nodeID: DOMNode.ID?) {
@@ -1213,7 +1202,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     }
 
     private func reconcileMultiSelectionAfterReload() {
-        let visibleNodeIDs = Set(rows.map(\.node.id))
+        let visibleNodeIDs = renderedRows.visibleNodeIDs
         multiSelectedNodeIDs.formIntersection(visibleNodeIDs)
         multiSelectionShiftRangeNodeIDs.formIntersection(visibleNodeIDs)
         if let nodeID = multiSelectionLastNodeID, !visibleNodeIDs.contains(nodeID) {
@@ -1764,7 +1753,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         guard let selectedNodeID = dom.selectedNodeID else {
             return false
         }
-        return rowIndexByNodeID[selectedNodeID] == nil
+        return !renderedRows.contains(nodeID: selectedNodeID)
     }
 
     private func multiSelectionContentRowRects() -> [CGRect] {
@@ -1781,12 +1770,10 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     }
 
     private func rowRects(for nodeID: DOMNode.ID) -> [CGRect] {
-        guard let rowIndex = rowIndexByNodeID[nodeID],
-              rows.indices.contains(rowIndex)
-        else {
+        guard let row = renderedRows.row(for: nodeID) else {
             return []
         }
-        return contentRowRects(for: rows[rowIndex])
+        return contentRowRects(for: row)
     }
 
     private func contentRowRects(for row: DOMTreeLine) -> [CGRect] {
@@ -2061,15 +2048,13 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
 
     private func revealPendingSelectedNodeIfPossible() {
         guard let selectedNodeID = pendingRevealSelectedNodeID,
-              let rowIndex = rowIndexByNodeID[selectedNodeID],
-              rows.indices.contains(rowIndex),
+              let row = renderedRows.row(for: selectedNodeID),
               bounds.width > 0,
               bounds.height > 0
         else {
             return
         }
 
-        let row = rows[rowIndex]
         guard let rowRect = contentRowRects(for: row).first else {
             return
         }
@@ -2415,7 +2400,7 @@ extension DOMTreeTextView {
         guard let row = rows.first(where: { $0.text.contains(text) }) else {
             return
         }
-        rowIndexByNodeID.removeValue(forKey: row.node.id)
+        renderedRows.removeRowIndex(for: row.node.id)
     }
 
     var disclosureAttachmentSnapshotsForTesting: [DisclosureAttachmentSnapshot] {

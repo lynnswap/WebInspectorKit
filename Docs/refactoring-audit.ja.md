@@ -316,6 +316,7 @@ xcodebuild test \
 - `TransportReplyStore` は target reply 本体と root wrapper id -> target reply key の別辞書 index を、`TargetReplyRecord(rootWrapperID, pending)` に置換。wrapper ACK、target reply remove、target commit retarget の逆引き同期をなくし、reply resolution ordering は `TransportSession` に残した。
 - `CSSSession` は `stylesByNodeID` と `activeRefreshSequenceByNodeID` の同一 node identity 二辞書を廃止し、`CSSNodeStyles` が `RefreshPhase.idle / refreshing(sequence:)` を所有する形に置換。style state と stale refresh token 判定を node styles owner に集約し、WebKit の `DOMNodeStyles` owner 境界と揃えた。
 - `RuntimeState` は `targetStatesByID` と `runtimeAgentStatesByID` の同一 target id 二辞書を、`RuntimeTargetSlot(targetState, agentState)` の単一辞書へ置換。target projection と runtime-agent state は意味が違うため統合せず、slot が独立寿命と空 slot 掃除を所有する。
+- `DOMTreeTextView` は row 配列と `rowIndexByNodeID` の別管理を `DOMTreeRenderedRows` に集約。visible node set、node id -> row index、row lookup/range lookup を rendered rows owner が持ち、TextKit/scroll view 側は owner query だけを使う。
 
 最新の局所検証:
 
@@ -323,7 +324,7 @@ xcodebuild test \
 - `swift test --filter CSSModelTests -Xswiftc -strict-concurrency=minimal` (2026-06-13、CSS refresh phase owner 化後 green)
 - `swift test --filter RuntimeModelTests -Xswiftc -strict-concurrency=minimal` (2026-06-13、Runtime target slot 化後 green)
 - `swift test --filter WebInspectorCoreTests -Xswiftc -strict-concurrency=minimal` (2026-06-13、Runtime target slot 化後 green)
+- `swift test --filter WebInspectorUITests -Xswiftc -strict-concurrency=minimal` (2026-06-13、DOM tree rendered rows owner 化後 green)
 - `swift test --filter WebInspectorArchitectureTests` (2026-06-13、element picker / stylesheet route 変更後 green)
-- `swift test -Xswiftc -strict-concurrency=minimal` (2026-06-13、Runtime target slot 化後 green)
-- `swift test --filter WebInspectorUITests` (2026-06-13、`b9b29aa4` 直前 green)
-- `xcodebuild test -workspace WebInspectorKit.xcworkspace -scheme WebInspectorKit -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest'` (2026-06-13、`b9b29aa4` 直前 green)
+- `swift test -Xswiftc -strict-concurrency=minimal` (2026-06-13、DOM tree rendered rows owner 化後 green)
+- `xcodebuild test -workspace WebInspectorKit.xcworkspace -scheme WebInspectorKit -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest'` (2026-06-13、DOM tree rendered rows owner 化後 green)
