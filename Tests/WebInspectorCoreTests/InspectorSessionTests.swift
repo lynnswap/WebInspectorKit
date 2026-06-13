@@ -720,18 +720,14 @@ func selectedElementStyleHydrationClearsStylesAfterSelectionDisappears() async t
         await session.attachment.dom.elementStyles.selectedState == .loaded ? true : nil
     }
 
-    await receiveTargetDispatch(
+    await receiveAndApplyTargetDispatch(
         transport,
         targetID: .pageMain,
-        message: #"{"method":"DOM.childNodeRemoved","params":{"nodeId":4}}"#
+        message: #"{"method":"DOM.childNodeRemoved","params":{"nodeId":4}}"#,
+        in: session
     )
-    _ = try await awaitValueAfterActorTurns {
-        await session.attachment.dom.selectedNodeID == nil ? true : nil
-    }
-    _ = try await awaitValueAfterActorTurns {
-        await session.attachment.dom.elementStyles.selectedNodeStyles == nil ? true : nil
-    }
 
+    #expect(session.attachment.dom.selectedNodeID == nil)
     #expect(session.attachment.dom.elementStyles.selectedNodeStyles == nil)
 }
 
@@ -806,16 +802,13 @@ func selectedElementStyleHydrationCancelsAfterDocumentUpdateInvalidatesRoot() as
     )
 
     let sentCount = await backend.sentTargetMessages().count
-    await receiveTargetDispatch(
+    await receiveAndApplyTargetDispatch(
         transport,
         targetID: .pageMain,
-        message: #"{"method":"DOM.documentUpdated","params":{}}"#
+        message: #"{"method":"DOM.documentUpdated","params":{}}"#,
+        in: session
     )
 
-    let didInvalidateRoot = try await awaitValueAfterActorTurns {
-        await session.attachment.dom.currentPageRootNode == nil ? true : nil
-    }
-    #expect(didInvalidateRoot)
     #expect(session.attachment.dom.currentPageRootNode == nil)
     #expect(session.attachment.dom.elementStyles.selectedState == .unavailable(.noSelection))
     #expect(await backend.sentTargetMessages().count == sentCount)
@@ -834,14 +827,12 @@ func selectedElementStyleHydrationClearsAfterSelectedTargetDestroyed() async thr
         backend: backend
     )
 
-    await transport.receiveRootMessage(
-        #"{"method":"Target.targetDestroyed","params":{"targetId":"page-main"}}"#
+    await receiveAndApplyRootMessage(
+        transport,
+        message: #"{"method":"Target.targetDestroyed","params":{"targetId":"page-main"}}"#,
+        in: session
     )
 
-    let didClearSelection = try await awaitValueAfterActorTurns {
-        await session.attachment.dom.selectedNodeID == nil ? true : nil
-    }
-    #expect(didClearSelection)
     #expect(session.attachment.dom.selectedNodeID == nil)
     #expect(session.attachment.dom.elementStyles.selectedState == .unavailable(.noSelection))
     #expect(session.lastError == nil)
