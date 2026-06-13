@@ -71,22 +71,17 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     private let expansionState = DOMTreeExpansionState()
     private var hoveredNodeID: DOMNode.ID?
     private var requestedChildNodeIDs: Set<DOMNode.ID> = []
-    private var findFoundRanges: [NSRange] = []
-    private var findHighlightedRanges: [NSRange] = []
+    private let findDecorationState = DOMTreeFindDecorationState()
     private var hoverRowRects: [CGRect] = []
     private var selectedRowRects: [CGRect] = []
     private var multiSelectedRowRects: [CGRect] = []
-    private var findDecorationBatchDepth = 0
-    private var pendingFindDecorationInvalidationRanges: [NSRange] = []
     private var measuredTextWidth: CGFloat = 0
     private var lastBoundsSize: CGSize = .zero
     private var lastRenderedDocumentRootID: DOMNode.ID?
     private var lastObservedTreeContent: DOMTreeObservedContent?
     private var lastRoutedSelectedNodeID: DOMNode.ID?
-    private var lastObservedSelectedNodeID: DOMNode.ID?
-    private var pendingRevealSelectedNodeID: DOMNode.ID?
-    private var pendingTreeInvalidation: DOMTreeInvalidation?
-    private var scheduledTreeReloadTask: Task<Void, Never>?
+    private let selectionRevealState = DOMTreeSelectionRevealState()
+    private let reloadScheduler = DOMTreeReloadScheduler()
     private var resolvedTextAttributesCache: DOMTreeResolvedTextAttributes?
     private var disclosureSymbolImageCache: [DisclosureSymbolImageCacheKey: UIImage] = [:]
     private var renderedLinePrefixCache: [Int: String] = [:]
@@ -102,11 +97,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     private let hideHighlightAction: HideHighlightAction?
     weak var inputDelegate: UITextInputDelegate?
 #if DEBUG
-    private var reloadTreeCallCount = 0
-    private var buildRenderedRowsCallCount = 0
-    private var rebuildTextStorageCallCount = 0
-    private var incrementalTextStorageEditCallCount = 0
-    private var resetTextFragmentViewsCallCount = 0
+    private let performanceCounters = DOMTreeTextViewPerformanceCounters()
 #endif
 
     private var textStorage: NSTextStorage {
@@ -153,7 +144,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     }
 
     isolated deinit {
-        scheduledTreeReloadTask?.cancel()
+        reloadScheduler.cancel()
         documentObservation?.cancel()
     }
 
@@ -385,85 +376,29 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
 
     func decorateFindTextRange(_ range: NSRange, style: UITextSearchFoundTextStyle) {
         let clampedRange = clampedTextRange(range)
-        guard clampedRange.length > 0 else {
-            return
-        }
-
-        switch style {
-        case .normal:
-            guard findFoundRanges.contains(clampedRange) || findHighlightedRanges.contains(clampedRange) else {
-                return
-            }
-            findFoundRanges.removeAll { $0 == clampedRange }
-            findHighlightedRanges.removeAll { $0 == clampedRange }
-        case .found:
-            guard !findFoundRanges.contains(clampedRange) || findHighlightedRanges.contains(clampedRange) else {
-                return
-            }
-            findFoundRanges.removeAll { $0 == clampedRange }
-            findHighlightedRanges.removeAll { $0 == clampedRange }
-            findFoundRanges.append(clampedRange)
-        case .highlighted:
-            guard findFoundRanges.contains(clampedRange) || !findHighlightedRanges.contains(clampedRange) else {
-                return
-            }
-            findFoundRanges.removeAll { $0 == clampedRange }
-            findHighlightedRanges.removeAll { $0 == clampedRange }
-            findHighlightedRanges.append(clampedRange)
-        @unknown default:
-            guard !findFoundRanges.contains(clampedRange) || findHighlightedRanges.contains(clampedRange) else {
-                return
-            }
-            findFoundRanges.removeAll { $0 == clampedRange }
-            findHighlightedRanges.removeAll { $0 == clampedRange }
-            findFoundRanges.append(clampedRange)
-        }
-        invalidateFindDecorationRanges([clampedRange])
+        applyFindDecorationInvalidation(
+            findDecorationState.decorate(clampedRange, style: style)
+        )
     }
 
     func clearFindDecorations() {
-        let previousRanges = findFoundRanges + findHighlightedRanges
-        guard !previousRanges.isEmpty else {
-            return
-        }
-        findFoundRanges.removeAll()
-        findHighlightedRanges.removeAll()
-        invalidateFindDecorationRanges(previousRanges)
+        applyFindDecorationInvalidation(findDecorationState.clear())
     }
 
     func beginFindDecorationBatch() {
-        findDecorationBatchDepth += 1
+        findDecorationState.beginBatch()
     }
 
     func endFindDecorationBatch() {
-        guard findDecorationBatchDepth > 0 else {
-            return
-        }
-        findDecorationBatchDepth -= 1
-        guard findDecorationBatchDepth == 0 else {
-            return
-        }
+        applyFindDecorationInvalidation(findDecorationState.endBatch())
+    }
 
-        let ranges = pendingFindDecorationInvalidationRanges
-        pendingFindDecorationInvalidationRanges.removeAll(keepingCapacity: true)
+    private func applyFindDecorationInvalidation(_ ranges: [NSRange]) {
         guard !ranges.isEmpty else {
             return
         }
         setNeedsDisplayForTextRanges(ranges)
         updateFindHighlightFragmentViews()
-    }
-
-    private func invalidateFindDecorationRanges(_ ranges: [NSRange]) {
-        guard !ranges.isEmpty else {
-            return
-        }
-
-        if findDecorationBatchDepth > 0 {
-            pendingFindDecorationInvalidationRanges.append(contentsOf: ranges)
-        } else {
-            setNeedsDisplayForTextRanges(ranges)
-            updateFindHighlightFragmentViews()
-        }
     }
 
     func clampedTextRange(_ range: NSRange) -> NSRange {
@@ -588,36 +523,14 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     }
 
     private func scheduleTreeReload(for invalidation: DOMTreeInvalidation) {
-        if invalidation.requiresImmediateReload {
-            pendingTreeInvalidation = nil
-            scheduledTreeReloadTask?.cancel()
-            scheduledTreeReloadTask = nil
-            reloadTree(for: invalidation)
-            return
-        }
-
-        if let pending = pendingTreeInvalidation {
-            pendingTreeInvalidation = pending.merged(with: invalidation)
-        } else {
-            pendingTreeInvalidation = invalidation
-        }
-        guard scheduledTreeReloadTask == nil else {
-            return
-        }
-        scheduledTreeReloadTask = Task { @MainActor [weak self] in
-            guard let self else {
-                return
-            }
-            let invalidation = self.pendingTreeInvalidation
-            self.pendingTreeInvalidation = nil
-            self.scheduledTreeReloadTask = nil
-            self.reloadTree(for: invalidation)
+        reloadScheduler.schedule(for: invalidation) { [weak self] invalidation in
+            self?.reloadTree(for: invalidation)
         }
     }
 
     private func reloadTree(for invalidation: DOMTreeInvalidation?) {
 #if DEBUG
-        reloadTreeCallCount += 1
+        performanceCounters.reloadTreeCallCount += 1
 #endif
         if case let .content(affectedKeys) = invalidation,
            applyContentInvalidation(affectedKeys: affectedKeys) {
@@ -629,7 +542,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     private func reloadTree(resetFragments: Bool, countsCall: Bool = true) {
 #if DEBUG
         if countsCall {
-            reloadTreeCallCount += 1
+            performanceCounters.reloadTreeCallCount += 1
         }
 #endif
         resetLocalDocumentStateIfNeeded()
@@ -687,8 +600,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         hoverRowRects.removeAll(keepingCapacity: true)
         selectedRowRects.removeAll(keepingCapacity: true)
         multiSelectedRowRects.removeAll(keepingCapacity: true)
-        lastObservedSelectedNodeID = nil
-        pendingRevealSelectedNodeID = nil
+        selectionRevealState.reset()
         multiSelection.reset()
         dismissDOMMenuAnchor()
         clearTextSelection()
@@ -769,7 +681,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
             }
         }
 #if DEBUG
-        incrementalTextStorageEditCallCount += 1
+        performanceCounters.incrementalTextStorageEditCallCount += 1
 #endif
 
         let changedRows = changedRowIndices.sorted().map { rows[$0] }
@@ -786,20 +698,15 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
 
     private func prepareSelectionForRendering(clearsMultiSelectionForDocumentSelection: Bool = false) {
         let selectedNode = dom.selectedNode
-        let selectedNodeID = selectedNode?.id
-        let selectedNodeIDChanged = selectedNodeID != lastObservedSelectedNodeID
-        if selectedNodeIDChanged {
-            lastObservedSelectedNodeID = selectedNodeID
-            pendingRevealSelectedNodeID = selectedNodeID
-        }
+        let observation = selectionRevealState.observe(selectedNodeID: selectedNode?.id)
         reconcileMultiSelectionForRenderedSelection(
-            selectedNodeID: selectedNodeID,
-            selectedNodeIDChanged: selectedNodeIDChanged,
+            selectedNodeID: observation.selectedNodeID,
+            selectedNodeIDChanged: observation.selectedNodeIDChanged,
             clearsMultiSelectionForDocumentSelection: clearsMultiSelectionForDocumentSelection
         )
 
         guard let selectedNode else {
-            pendingRevealSelectedNodeID = nil
+            selectionRevealState.clearPendingSelection()
             return
         }
         openAncestors(of: selectedNode)
@@ -836,7 +743,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
 
     private func buildRenderedRows() -> (rows: [DOMTreeLine], text: String, maxLineDisplayColumnCount: Int) {
 #if DEBUG
-        buildRenderedRowsCallCount += 1
+        performanceCounters.buildRenderedRowsCallCount += 1
 #endif
         guard let rootNode = dom.currentPageRootNode else {
             return ([], "", 0)
@@ -1318,7 +1225,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         applyRowAttributes(to: attributedText)
         applyDisclosureAttachments(to: attributedText, rows: rows)
 #if DEBUG
-        rebuildTextStorageCallCount += 1
+        performanceCounters.rebuildTextStorageCallCount += 1
 #endif
         textContentStorage.performEditingTransaction {
             textStorage.setAttributedString(attributedText)
@@ -1350,7 +1257,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
             textStorage.replaceCharacters(in: edit.range, with: edit.replacement)
         }
 #if DEBUG
-        incrementalTextStorageEditCallCount += 1
+        performanceCounters.incrementalTextStorageEditCallCount += 1
 #endif
 
         let changedRows = Array(nextRows[diff.nextStart..<diff.nextEnd])
@@ -1571,7 +1478,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
 
     private func resetTextFragmentViews() {
 #if DEBUG
-        resetTextFragmentViewsCallCount += 1
+        performanceCounters.resetTextFragmentViewsCallCount += 1
 #endif
         for case let fragmentView as DOMTreeTextLayoutFragmentView in textContentView.subviews {
             fragmentView.removeFromSuperview()
@@ -1591,18 +1498,18 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     ) {
         let foundRects: [CGRect]
         let highlightedRects: [CGRect]
-        if findFoundRanges.isEmpty && findHighlightedRanges.isEmpty {
+        if findDecorationState.isEmpty {
             foundRects = []
             highlightedRects = []
         } else {
             let fragmentRange = textRange(for: fragmentView.layoutFragment)
             foundRects = textRects(
                 in: surfaceFrame,
-                ranges: Self.ranges(findFoundRanges, intersecting: fragmentRange)
+                ranges: Self.ranges(findDecorationState.foundRanges, intersecting: fragmentRange)
             )
             highlightedRects = textRects(
                 in: surfaceFrame,
-                ranges: Self.ranges(findHighlightedRanges, intersecting: fragmentRange)
+                ranges: Self.ranges(findDecorationState.highlightedRanges, intersecting: fragmentRange)
             )
         }
         let foundColor = foundRects.isEmpty
@@ -1949,7 +1856,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     }
 
     private func revealPendingSelectedNodeIfPossible() {
-        guard let selectedNodeID = pendingRevealSelectedNodeID,
+        guard let selectedNodeID = selectionRevealState.pendingSelectedNodeID,
               let row = renderedRows.row(for: selectedNodeID),
               bounds.width > 0,
               bounds.height > 0
@@ -1971,7 +1878,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
             targetRect.insetBy(dx: 0, dy: -rowRect.height * 2),
             animated: window != nil
         )
-        pendingRevealSelectedNodeID = nil
+        selectionRevealState.consumePendingSelection()
     }
 }
 
@@ -2332,39 +2239,35 @@ extension DOMTreeTextView {
     }
 
     var reloadTreeCallCountForTesting: Int {
-        reloadTreeCallCount
+        performanceCounters.reloadTreeCallCount
     }
 
     var buildRenderedRowsCallCountForTesting: Int {
-        buildRenderedRowsCallCount
+        performanceCounters.buildRenderedRowsCallCount
     }
 
     var rebuildTextStorageCallCountForTesting: Int {
-        rebuildTextStorageCallCount
+        performanceCounters.rebuildTextStorageCallCount
     }
 
     var incrementalTextStorageEditCallCountForTesting: Int {
-        incrementalTextStorageEditCallCount
+        performanceCounters.incrementalTextStorageEditCallCount
     }
 
     var resetTextFragmentViewsCallCountForTesting: Int {
-        resetTextFragmentViewsCallCount
+        performanceCounters.resetTextFragmentViewsCallCount
     }
 
     func resetPerformanceCountersForTesting() {
-        reloadTreeCallCount = 0
-        buildRenderedRowsCallCount = 0
-        rebuildTextStorageCallCount = 0
-        incrementalTextStorageEditCallCount = 0
-        resetTextFragmentViewsCallCount = 0
+        performanceCounters.reset()
     }
 
     var findFoundRangesForTesting: [NSRange] {
-        findFoundRanges
+        findDecorationState.foundRanges
     }
 
     var findHighlightedRangesForTesting: [NSRange] {
-        findHighlightedRanges
+        findDecorationState.highlightedRanges
     }
 
     func selectRowForTesting(containing text: String) {
