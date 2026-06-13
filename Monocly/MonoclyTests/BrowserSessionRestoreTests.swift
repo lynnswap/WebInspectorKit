@@ -5,6 +5,7 @@ import Testing
 #if os(iOS)
 import UIKit
 import WebKit
+import WebInspectorKit
 
 @Suite(.serialized)
 @MainActor
@@ -608,6 +609,83 @@ struct BrowserSessionRestoreTests {
     }
 
     @Test
+    func attachmentLifecycleAttachesLatestWebViewAfterInFlightSelectionChange() async throws {
+        let fixture = try makeAttachmentLifecycleFixture()
+        let actions = ControlledInspectorAttachmentActions()
+        let lifecycle = BrowserInspectorSessionAttachmentLifecycle(
+            store: fixture.store,
+            inspectorSession: WebInspectorSession(),
+            attachAction: actions.attach,
+            detachAction: actions.detach
+        )
+
+        lifecycle.request(.attached)
+        await actions.waitUntilAttachStarted(count: 1)
+
+        fixture.store.selectTab(id: fixture.secondTabID)
+        lifecycle.selectedWebViewDidChange(to: fixture.secondWebView)
+        actions.releaseAttach()
+        await actions.waitUntilAttachStarted(count: 2)
+        actions.releaseAttach()
+        await lifecycle.waitForTransitions()
+
+        #expect(actions.attachedWebViews == [fixture.firstWebView, fixture.secondWebView])
+        #expect(actions.detachCount == 0)
+    }
+
+    @Test
+    func attachmentLifecycleFinalizesByDetachingAfterInFlightAttachCompletes() async throws {
+        let fixture = try makeAttachmentLifecycleFixture()
+        let actions = ControlledInspectorAttachmentActions()
+        let lifecycle = BrowserInspectorSessionAttachmentLifecycle(
+            store: fixture.store,
+            inspectorSession: WebInspectorSession(),
+            attachAction: actions.attach,
+            detachAction: actions.detach
+        )
+
+        lifecycle.request(.attached)
+        await actions.waitUntilAttachStarted(count: 1)
+        #expect(lifecycle.finalize())
+
+        actions.releaseAttach()
+        await actions.waitUntilDetachCount(1)
+        await lifecycle.waitForTransitions()
+        lifecycle.request(.attached)
+
+        #expect(actions.attachedWebViews == [fixture.firstWebView])
+        #expect(actions.detachCount == 1)
+    }
+
+    @Test
+    func attachmentLifecycleDoesNotAutomaticallyRetryFailedAttach() async throws {
+        let fixture = try makeAttachmentLifecycleFixture()
+        let actions = ControlledInspectorAttachmentActions()
+        let lifecycle = BrowserInspectorSessionAttachmentLifecycle(
+            store: fixture.store,
+            inspectorSession: WebInspectorSession(),
+            attachAction: actions.attach,
+            detachAction: actions.detach
+        )
+
+        lifecycle.request(.attached)
+        await actions.waitUntilAttachStarted(count: 1)
+        actions.releaseAttach(result: .failure(NSError(domain: "BrowserSessionRestoreTests", code: 1)))
+        await lifecycle.waitForTransitions()
+
+        #expect(actions.attachedWebViews == [fixture.firstWebView])
+        #expect(actions.detachCount == 0)
+
+        lifecycle.request(.attached)
+        await actions.waitUntilAttachStarted(count: 2)
+        actions.releaseAttach()
+        await lifecycle.waitForTransitions()
+
+        #expect(actions.attachedWebViews == [fixture.firstWebView, fixture.firstWebView])
+        #expect(actions.detachCount == 0)
+    }
+
+    @Test
     func mainSceneDelegateConnectsWithRestoredBrowserStore() throws {
         try withTemporarySessionStore { sessionStore, _ in
             let windowScene = try makeWindowScene()
@@ -729,6 +807,53 @@ struct BrowserSessionRestoreTests {
         )
     }
 
+    private struct AttachmentLifecycleFixture {
+        var secondTabID: UUID
+        var store: BrowserStore
+        var firstWebView: WKWebView
+        var secondWebView: WKWebView
+    }
+
+    private func makeAttachmentLifecycleFixture() throws -> AttachmentLifecycleFixture {
+        let firstID = UUID()
+        let secondID = UUID()
+        let restoredSession = BrowserRestoredSession(
+            snapshot: BrowserSessionSnapshot(
+                selectedTabID: firstID,
+                tabs: [
+                    BrowserTabSnapshot(
+                        id: firstID,
+                        url: try #require(URL(string: "about:blank#first")),
+                        title: "First",
+                        createdAt: Date(timeIntervalSince1970: 100),
+                        lastUsedAt: Date(timeIntervalSince1970: 100),
+                        stateFileName: BrowserTabSnapshot.stateFileName(for: firstID)
+                    ),
+                    BrowserTabSnapshot(
+                        id: secondID,
+                        url: try #require(URL(string: "about:blank#second")),
+                        title: "Second",
+                        createdAt: Date(timeIntervalSince1970: 200),
+                        lastUsedAt: Date(timeIntervalSince1970: 200),
+                        stateFileName: BrowserTabSnapshot.stateFileName(for: secondID)
+                    )
+                ]
+            ),
+            tabStateDataByID: [:]
+        )
+        let store = BrowserStore(
+            restoring: restoredSession,
+            fallbackURL: try #require(URL(string: "about:blank")),
+            sessionStore: nil
+        )
+        return AttachmentLifecycleFixture(
+            secondTabID: secondID,
+            store: store,
+            firstWebView: store.tabs[0].webView,
+            secondWebView: store.tabs[1].webView
+        )
+    }
+
     @MainActor
     private final class ManualDelayScheduler: MainActorDelayScheduling {
         private var operation: (@Sendable @MainActor () -> Void)?
@@ -777,6 +902,73 @@ struct BrowserSessionRestoreTests {
             }
             await withCheckedContinuation { continuation in
                 waitersByWebViewID[webViewID, default: []].append(continuation)
+            }
+        }
+    }
+
+    @MainActor
+    private final class ControlledInspectorAttachmentActions {
+        private(set) var attachedWebViews: [WKWebView] = []
+        private(set) var detachCount = 0
+        private var attachContinuation: CheckedContinuation<Void, Never>?
+        private var attachResult: Result<Void, any Error> = .success(())
+        private var attachStartedWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
+        private var detachWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
+
+        func attach(_ inspectorSession: WebInspectorSession, _ webView: WKWebView) async throws {
+            attachedWebViews.append(webView)
+            resumeAttachStartedWaiters()
+            await withCheckedContinuation { continuation in
+                attachContinuation = continuation
+            }
+            let result = attachResult
+            attachResult = .success(())
+            try result.get()
+        }
+
+        func detach(_ inspectorSession: WebInspectorSession) async {
+            detachCount += 1
+            resumeDetachWaiters()
+        }
+
+        func waitUntilAttachStarted(count: Int) async {
+            guard attachedWebViews.count < count else {
+                return
+            }
+            await withCheckedContinuation { continuation in
+                attachStartedWaiters.append((count, continuation))
+            }
+        }
+
+        func waitUntilDetachCount(_ count: Int) async {
+            guard detachCount < count else {
+                return
+            }
+            await withCheckedContinuation { continuation in
+                detachWaiters.append((count, continuation))
+            }
+        }
+
+        func releaseAttach(result: Result<Void, any Error> = .success(())) {
+            attachResult = result
+            let continuation = attachContinuation
+            attachContinuation = nil
+            continuation?.resume()
+        }
+
+        private func resumeAttachStartedWaiters() {
+            let readyWaiters = attachStartedWaiters.filter { attachedWebViews.count >= $0.0 }
+            attachStartedWaiters.removeAll { attachedWebViews.count >= $0.0 }
+            for waiter in readyWaiters {
+                waiter.1.resume()
+            }
+        }
+
+        private func resumeDetachWaiters() {
+            let readyWaiters = detachWaiters.filter { detachCount >= $0.0 }
+            detachWaiters.removeAll { detachCount >= $0.0 }
+            for waiter in readyWaiters {
+                waiter.1.resume()
             }
         }
     }
