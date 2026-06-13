@@ -330,6 +330,7 @@ xcodebuild test \
 - `TransportTargetRegistry` の `targetsByID` / `frameTargetIDsByFrameID` / `currentMainPageTargetID` を `private(set)` 化し、target create / destroy / commit / runtime frame projection の mutation を registry method に集約。reply retarget、stylesheet replay、runtime context retarget、buffer retarget は副作用 owner が別なので `TransportTargetCommitMutation` / `TransportFrameTargetResolution` として `TransportSession` に返し、actor 本体が既存順序で実行する。
 - `TransportSession` の `nextSequence` / `lastSequenceByDomain` を `TransportEventSequenceTracker` に集約。event emission の順序制御と subscriber delivery は actor 本体に残し、sequence 採番と per-domain watermark snapshot の同期だけを tracker owner が担う形にした。
 - `TransportSession` の domain/ordered event subscriber dictionaries と subscriber id 採番を `TransportEventSubscriberRegistry` に集約。stream 作成と termination callback は actor 本体に残し、subscriber storage / removal / detach 時 finish の不変条件を registry owner に閉じた。
+- `RuntimeContextRegistry` を package owner にし、Transport と DOM `TargetGraph` が同じ runtime-agent scoped context registry を使う形にした。`targetID` と `runtimeAgentTargetID` は意味が違うため統合せず、`removeContexts(targetID:)` と `clear(runtimeAgentTargetID:)` を分けて target destroy / Runtime.executionContextsCleared の不変条件を維持した。
 - `DOMSession` の `currentPageTargetID` と `mainFrameID` の直接保持を `DOMCurrentPage` に集約。page promotion / provisional commit retarget / target destroy clear を同じ owner の mutation にし、`TargetGraph` は引き続き semantic target/frame/document projection を所有する。WebKit の page target transition owner と frame document splice owner が分かれている構造に合わせ、snapshot 互換 getter は維持した。
 - `DOMSelection` は `selectedNodeID` / `pendingRequest` / `failure` の三つの独立 optional から、`selectedNodeID + DOMSelectionResolutionPhase.idle/pending/failed` を持つ `DOMSelectionState` に置換。選択更新、request 開始、成功、失敗、stale selected node cleanup を selection owner の mutation に集約し、pending request 置換時は古い request transaction を破棄する。古い requestNode 応答は current pending を消さず stale として返すテストを追加した。
 - `DOMSessionDeleteUndoOperationQueue` は `tail` / `tasksByID` / `nextTaskID` の別管理を、`QueuedOperation` と `tailOperationID` に置換。operation が generation と task を所有し、invalidate / finish / previous wait の不変条件を queue owner 内に閉じた。UndoManager 登録と protocol command 実行順序は `DOMSessionProtocolOperations` 側に残した。
@@ -375,6 +376,11 @@ xcodebuild test \
 - `swift test --filter WebInspectorTransportTests -Xswiftc -strict-concurrency=minimal` (2026-06-13、Transport event subscriber registry owner 化後 green)
 - `swift test -Xswiftc -strict-concurrency=minimal` (2026-06-13、Transport event subscriber registry owner 化後 green)
 - `xcodebuild test -workspace WebInspectorKit.xcworkspace -scheme WebInspectorKit -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest'` (2026-06-13、Transport event subscriber registry owner 化後 green)
+- `swift test --filter WebInspectorTransportTests -Xswiftc -strict-concurrency=minimal` (2026-06-13、RuntimeContextRegistry 共通 owner 化後 green)
+- `swift test --filter DOMModelTests -Xswiftc -strict-concurrency=minimal` (2026-06-13、RuntimeContextRegistry 共通 owner 化後 green)
+- `swift test --filter RuntimeModelTests -Xswiftc -strict-concurrency=minimal` (2026-06-13、RuntimeContextRegistry 共通 owner 化後 green)
+- `swift test -Xswiftc -strict-concurrency=minimal` (2026-06-13、RuntimeContextRegistry 共通 owner 化後 green)
+- `xcodebuild test -workspace WebInspectorKit.xcworkspace -scheme WebInspectorKit -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest'` (2026-06-13、RuntimeContextRegistry 共通 owner 化後 green)
 - `swift test --filter WebInspectorUITests -Xswiftc -strict-concurrency=minimal` (2026-06-13、Network list snapshot state owner 化後 green)
 - `swift test --filter WebInspectorArchitectureTests` (2026-06-13、element picker / stylesheet route 変更後 green)
 - `swift test -Xswiftc -strict-concurrency=minimal` (2026-06-13、TransportTargetRegistry mutation owner 化後 green)

@@ -15,18 +15,18 @@ package struct TargetRemoval: Equatable, Sendable {
 package final class TargetGraph {
     private var targetsByID: [ProtocolTarget.ID: ProtocolTarget]
     private var framesByID: [DOMFrame.ID: DOMFrame]
-    private var executionContextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContextRecord]
+    private var runtimeContexts: RuntimeContextRegistry
 
     package init() {
         targetsByID = [:]
         framesByID = [:]
-        executionContextsByKey = [:]
+        runtimeContexts = RuntimeContextRegistry()
     }
 
     package func reset() {
         targetsByID.removeAll()
         framesByID.removeAll()
-        executionContextsByKey.removeAll()
+        runtimeContexts = RuntimeContextRegistry()
     }
 
     package func containsTarget(_ targetID: ProtocolTarget.ID) -> Bool {
@@ -270,38 +270,23 @@ package final class TargetGraph {
     }
 
     package func removeExecutionContexts(targetID: ProtocolTarget.ID) {
-        executionContextsByKey = executionContextsByKey.filter { $0.value.targetID != targetID }
+        runtimeContexts.removeContexts(targetID: targetID)
     }
 
     package func removeExecutionContexts(runtimeAgentTargetID: ProtocolTarget.ID) {
-        executionContextsByKey = executionContextsByKey.filter { $0.value.runtimeAgentTargetID != runtimeAgentTargetID }
+        runtimeContexts.clear(runtimeAgentTargetID: runtimeAgentTargetID)
     }
 
     package func removeExecutionContext(_ contextKey: RuntimeExecutionContextKey) {
-        executionContextsByKey.removeValue(forKey: contextKey)
+        runtimeContexts.remove(contextKey)
     }
 
     package func retargetExecutionContexts(from oldTargetID: ProtocolTarget.ID, to newTargetID: ProtocolTarget.ID) {
-        for (contextKey, record) in Array(executionContextsByKey) {
-            var movedRecord = record
-            if movedRecord.targetID == oldTargetID {
-                movedRecord.targetID = newTargetID
-            }
-            if movedRecord.runtimeAgentTargetID == oldTargetID {
-                movedRecord.runtimeAgentTargetID = newTargetID
-            }
-            guard movedRecord != record else {
-                continue
-            }
-            executionContextsByKey.removeValue(forKey: contextKey)
-            if executionContextsByKey[movedRecord.key] == nil {
-                executionContextsByKey[movedRecord.key] = movedRecord
-            }
-        }
+        runtimeContexts.retarget(oldTargetID: oldTargetID, newTargetID: newTargetID)
     }
 
     package func recordExecutionContext(_ context: RuntimeExecutionContextRecord) {
-        executionContextsByKey[context.key] = context
+        runtimeContexts.record(context)
     }
 
     package func targetSnapshots(
@@ -334,6 +319,6 @@ package final class TargetGraph {
     }
 
     package func executionContextSnapshots() -> [RuntimeExecutionContextKey: RuntimeExecutionContextRecord] {
-        executionContextsByKey
+        runtimeContexts.contextsByKey
     }
 }

@@ -1,6 +1,6 @@
 import Foundation
 
-struct RuntimeContextAgentState: Sendable {
+private struct RuntimeContextAgentState: Sendable {
     var targetID: ProtocolTargetIdentifier
     var contextsByID: [ExecutionContextID: RuntimeExecutionContextRecord] = [:]
 
@@ -9,10 +9,12 @@ struct RuntimeContextAgentState: Sendable {
     }
 }
 
-struct RuntimeContextRegistry: Sendable {
+package struct RuntimeContextRegistry: Sendable {
     private var agentStatesByID: [ProtocolTargetIdentifier: RuntimeContextAgentState] = [:]
 
-    var contextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContextRecord] {
+    package init() {}
+
+    package var contextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContextRecord] {
         Dictionary(
             uniqueKeysWithValues: agentStatesByID.values.flatMap { state in
                 state.contextsByID.values.map { ($0.key, $0) }
@@ -20,17 +22,17 @@ struct RuntimeContextRegistry: Sendable {
         )
     }
 
-    func targetID(for key: RuntimeExecutionContextKey) -> ProtocolTargetIdentifier? {
+    package func targetID(for key: RuntimeExecutionContextKey) -> ProtocolTargetIdentifier? {
         agentStatesByID[key.runtimeAgentTargetID]?.contextsByID[key.contextID]?.targetID
     }
 
-    mutating func record(_ context: RuntimeExecutionContextRecord) {
+    package mutating func record(_ context: RuntimeExecutionContextRecord) {
         var state = agentState(for: context.runtimeAgentTargetID)
         state.contextsByID[context.id] = context
         store(state)
     }
 
-    mutating func remove(_ key: RuntimeExecutionContextKey) {
+    package mutating func remove(_ key: RuntimeExecutionContextKey) {
         guard var state = agentStatesByID[key.runtimeAgentTargetID] else {
             return
         }
@@ -38,7 +40,7 @@ struct RuntimeContextRegistry: Sendable {
         store(state)
     }
 
-    mutating func clear(runtimeAgentTargetID: ProtocolTargetIdentifier) {
+    package mutating func clear(runtimeAgentTargetID: ProtocolTargetIdentifier) {
         guard var state = agentStatesByID[runtimeAgentTargetID] else {
             return
         }
@@ -46,8 +48,7 @@ struct RuntimeContextRegistry: Sendable {
         store(state)
     }
 
-    mutating func removeTarget(_ targetID: ProtocolTargetIdentifier) {
-        agentStatesByID.removeValue(forKey: targetID)
+    package mutating func removeContexts(targetID: ProtocolTargetIdentifier) {
         for agentID in Array(agentStatesByID.keys) {
             guard var state = agentStatesByID[agentID] else {
                 continue
@@ -57,7 +58,12 @@ struct RuntimeContextRegistry: Sendable {
         }
     }
 
-    mutating func retarget(oldTargetID: ProtocolTargetIdentifier, newTargetID: ProtocolTargetIdentifier) {
+    package mutating func removeTarget(_ targetID: ProtocolTargetIdentifier) {
+        agentStatesByID.removeValue(forKey: targetID)
+        removeContexts(targetID: targetID)
+    }
+
+    package mutating func retarget(oldTargetID: ProtocolTargetIdentifier, newTargetID: ProtocolTargetIdentifier) {
         let currentContexts = contextsByKey
         var nextContexts = currentContexts
         for (contextKey, context) in currentContexts {
