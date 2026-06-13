@@ -122,7 +122,8 @@ let package = Package(
             name: "WebInspectorCoreTests",
             dependencies: [
                 "WebInspectorCore",
-                "WebInspectorTransport"
+                "WebInspectorTransport",
+                "WebInspectorTestSupport"
             ],
             path: "Tests/WebInspectorCoreTests",
             swiftSettings: strictSwiftSettings
@@ -131,9 +132,23 @@ let package = Package(
             name: "WebInspectorTransportTests",
             dependencies: [
                 "WebInspectorCore",
-                "WebInspectorTransport"
+                "WebInspectorTransport",
+                "WebInspectorTestSupport"
             ],
             path: "Tests/WebInspectorTransportTests",
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
+            name: "WebInspectorTestSupport",
+            dependencies: [
+                "WebInspectorTransport"
+            ],
+            path: "Tests/WebInspectorTestSupport",
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
+            name: "WebInspectorArchitectureTests",
+            path: "Tests/WebInspectorArchitectureTests",
             swiftSettings: strictSwiftSettings
         ),
         .target(

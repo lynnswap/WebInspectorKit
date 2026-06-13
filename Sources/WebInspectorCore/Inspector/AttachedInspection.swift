@@ -1,6 +1,5 @@
 import Foundation
 import Observation
-import Synchronization
 import WebKit
 import WebInspectorTransport
 
@@ -211,6 +210,56 @@ private final class InspectorConnection {
 }
 
 @MainActor
+private enum InspectorConnectionPhase {
+    case idle
+    case pending(InspectorConnection)
+    case active(InspectorConnection)
+
+    var activeConnection: InspectorConnection? {
+        guard case let .active(connection) = self else {
+            return nil
+        }
+        return connection
+    }
+
+    var pendingConnection: InspectorConnection? {
+        guard case let .pending(connection) = self else {
+            return nil
+        }
+        return connection
+    }
+
+    var connectionsForDetach: [InspectorConnection] {
+        switch self {
+        case .idle:
+            []
+        case let .pending(connection), let .active(connection):
+            [connection]
+        }
+    }
+
+    var hasAnyConnection: Bool {
+        connectionsForDetach.isEmpty == false
+    }
+
+    func isCurrent(_ candidate: InspectorConnection) -> Bool {
+        switch self {
+        case .idle:
+            false
+        case let .pending(connection), let .active(connection):
+            connection === candidate
+        }
+    }
+
+    func isAttached(_ candidate: InspectorConnection) -> Bool {
+        guard case let .active(connection) = self else {
+            return false
+        }
+        return connection === candidate
+    }
+}
+
+@MainActor
 @Observable
 package final class AttachedInspection {
     package let targetGraph: TargetGraph
@@ -260,14 +309,21 @@ package final class AttachedInspection {
 package final class InspectorSession {
     package let attachment: AttachedInspection
     package var hasActiveConnection: Bool {
-        connection != nil
+        connectionPhase.activeConnection != nil
     }
     package private(set) var lastError: InspectorSessionError?
 
     @ObservationIgnored private let configuration: InspectorSessionConfiguration
-    @ObservationIgnored private var connection: InspectorConnection?
-    @ObservationIgnored private var pendingConnection: InspectorConnection?
+    @ObservationIgnored private var connectionPhase: InspectorConnectionPhase
     @ObservationIgnored private var protocolEventDispatchers: ProtocolDomainEventDispatcherRegistry
+
+    private var connection: InspectorConnection? {
+        connectionPhase.activeConnection
+    }
+
+    private var pendingConnection: InspectorConnection? {
+        connectionPhase.pendingConnection
+    }
 
     private var targetGraph: TargetGraph {
         attachment.targetGraph
@@ -298,8 +354,7 @@ package final class InspectorSession {
         self.attachment = resolvedAttachment
         protocolEventDispatchers = ProtocolDomainEventDispatcherRegistry()
         lastError = nil
-        connection = nil
-        pendingConnection = nil
+        connectionPhase = .idle
         configureProtocolEventDispatchers()
     }
 
@@ -322,8 +377,7 @@ package final class InspectorSession {
         self.attachment = attachment
         protocolEventDispatchers = ProtocolDomainEventDispatcherRegistry()
         lastError = nil
-        connection = nil
-        pendingConnection = nil
+        connectionPhase = .idle
         configureProtocolEventDispatchers()
     }
 
@@ -346,8 +400,7 @@ package final class InspectorSession {
         self.attachment = attachment
         protocolEventDispatchers = ProtocolDomainEventDispatcherRegistry()
         lastError = nil
-        connection = nil
-        pendingConnection = nil
+        connectionPhase = .idle
         configureProtocolEventDispatchers()
     }
 
@@ -418,7 +471,7 @@ package final class InspectorSession {
             webView: webView,
             originalInspectability: originalInspectability
         )
-        pendingConnection = nextConnection
+        connectionPhase = .pending(nextConnection)
         bindProtocolChannel(for: nextConnection)
         lastError = nil
         await startPumps(connection: nextConnection)
@@ -435,22 +488,16 @@ package final class InspectorSession {
             syncTargets(for: nextConnection)
             try await bootstrap(mainTargetID: mainTarget.targetID, connection: nextConnection)
             try ensureCurrentConnection(nextConnection)
-            pendingConnection = nil
-            connection = nextConnection
+            connectionPhase = .active(nextConnection)
             dom.startDocumentRequestsForAttachedFrameTargets()
             startRuntimeConsoleEnableForAttachedTargets()
             lastError = nil
         } catch {
-            guard connection === nextConnection || pendingConnection === nextConnection else {
+            guard connectionPhase.isCurrent(nextConnection) else {
                 throw error
             }
             stopPumps(nextConnection)
-            if pendingConnection === nextConnection {
-                pendingConnection = nil
-            }
-            if connection === nextConnection {
-                connection = nil
-            }
+            connectionPhase = .idle
             await transport.detach()
             restoreInspectabilityIfNeeded(for: nextConnection)
             unbindProtocolChannel()
@@ -465,27 +512,19 @@ package final class InspectorSession {
     }
 
     package func detach() async {
-        guard connection != nil || pendingConnection != nil else {
+        guard connectionPhase.hasAnyConnection else {
             return
         }
 
-        let previousConnection = connection
-        let previousPendingConnection = pendingConnection
-        connection = nil
-        pendingConnection = nil
+        let previousConnections = connectionPhase.connectionsForDetach
+        connectionPhase = .idle
         unbindProtocolChannel()
 
-        if let previousConnection {
+        for previousConnection in previousConnections {
             cancelRuntimeConsoleEnableTasks(previousConnection)
             stopPumps(previousConnection)
             await previousConnection.transport.detach()
             restoreInspectabilityIfNeeded(for: previousConnection)
-        }
-        if let previousPendingConnection {
-            cancelRuntimeConsoleEnableTasks(previousPendingConnection)
-            stopPumps(previousPendingConnection)
-            await previousPendingConnection.transport.detach()
-            restoreInspectabilityIfNeeded(for: previousPendingConnection)
         }
         dom.reset()
         network.reset()
@@ -808,7 +847,7 @@ package final class InspectorSession {
                 guard let self, let connection else {
                     return false
                 }
-                return self.connection === connection
+                return self.connectionPhase.isAttached(connection)
             },
             appliedSequence: { [weak connection] in
                 connection?.eventPump?.appliedSequence ?? 0
@@ -847,7 +886,7 @@ package final class InspectorSession {
     }
 
     private func isCurrentConnection(_ candidate: InspectorConnection) -> Bool {
-        connection === candidate || pendingConnection === candidate
+        connectionPhase.isCurrent(candidate)
     }
 
     package static func prepareInspectability<WebView: InspectorInspectableWebView>(for webView: WebView) -> Bool {
@@ -871,72 +910,5 @@ package final class InspectorSession {
             return
         }
         Self.restoreInspectabilityIfNeeded(on: webView, originalValue: connection.originalInspectability)
-    }
-}
-
-private final class TransportReceiver: @unchecked Sendable {
-    private struct State: Sendable {
-        var transport: TransportSession?
-        var messages: [String] = []
-        var messageStartIndex = 0
-        var isDraining = false
-    }
-
-    private let state = Mutex(State())
-
-    func setTransport(_ transport: TransportSession) {
-        state.withLock {
-            $0.transport = transport
-        }
-    }
-
-    func receive(_ message: String) {
-        let shouldStartDraining = state.withLock {
-            $0.messages.append(message)
-            guard !$0.isDraining else {
-                return false
-            }
-            $0.isDraining = true
-            return true
-        }
-
-        guard shouldStartDraining else {
-            return
-        }
-        Task {
-            await drain()
-        }
-    }
-
-    private func drain() async {
-        while let next = nextMessage() {
-            await next.transport?.receiveRootMessage(next.message)
-        }
-    }
-
-    private func nextMessage() -> (transport: TransportSession?, message: String)? {
-        state.withLock {
-            guard $0.messageStartIndex < $0.messages.count else {
-                $0.messages.removeAll(keepingCapacity: true)
-                $0.messageStartIndex = 0
-                $0.isDraining = false
-                return nil
-            }
-
-            let message = $0.messages[$0.messageStartIndex]
-            $0.messageStartIndex += 1
-            compactMessagesIfNeeded(in: &$0)
-            return ($0.transport, message)
-        }
-    }
-
-    private func compactMessagesIfNeeded(in state: inout State) {
-        if state.messageStartIndex == state.messages.count {
-            state.messages.removeAll(keepingCapacity: true)
-            state.messageStartIndex = 0
-        } else if state.messageStartIndex >= 64 && state.messageStartIndex * 2 >= state.messages.count {
-            state.messages.removeFirst(state.messageStartIndex)
-            state.messageStartIndex = 0
-        }
     }
 }

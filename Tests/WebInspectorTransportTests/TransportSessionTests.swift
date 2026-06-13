@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import WebInspectorTestSupport
 @testable import WebInspectorCore
 @testable import WebInspectorTransport
 

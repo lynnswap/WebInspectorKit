@@ -1,125 +1,6 @@
 import Foundation
 
 package actor TransportSession {
-    private struct PendingReply: Sendable {
-        var domain: ProtocolDomain
-        var method: String
-        var targetID: ProtocolTargetIdentifier?
-        var promise: ReplyPromise<ProtocolCommandResult>
-        var hasBufferedProvisionalResponse: Bool
-    }
-
-    private struct ResolvedStyleSheetAddedEvent: Sendable {
-        var targetID: ProtocolTargetIdentifier
-        var paramsData: Data
-    }
-
-    private struct RuntimeContextAgentState: Sendable {
-        var targetID: ProtocolTargetIdentifier
-        var contextsByID: [ExecutionContextID: RuntimeExecutionContextRecord] = [:]
-
-        var isEmpty: Bool {
-            contextsByID.isEmpty
-        }
-    }
-
-    private struct RuntimeContextRegistry: Sendable {
-        private var agentStatesByID: [ProtocolTargetIdentifier: RuntimeContextAgentState] = [:]
-
-        var contextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContextRecord] {
-            Dictionary(
-                uniqueKeysWithValues: agentStatesByID.values.flatMap { state in
-                    state.contextsByID.values.map { ($0.key, $0) }
-                }
-            )
-        }
-
-        func targetID(for key: RuntimeExecutionContextKey) -> ProtocolTargetIdentifier? {
-            agentStatesByID[key.runtimeAgentTargetID]?.contextsByID[key.contextID]?.targetID
-        }
-
-        mutating func record(_ context: RuntimeExecutionContextRecord) {
-            var state = agentState(for: context.runtimeAgentTargetID)
-            state.contextsByID[context.id] = context
-            store(state)
-        }
-
-        mutating func remove(_ key: RuntimeExecutionContextKey) {
-            guard var state = agentStatesByID[key.runtimeAgentTargetID] else {
-                return
-            }
-            state.contextsByID.removeValue(forKey: key.contextID)
-            store(state)
-        }
-
-        mutating func clear(runtimeAgentTargetID: ProtocolTargetIdentifier) {
-            guard var state = agentStatesByID[runtimeAgentTargetID] else {
-                return
-            }
-            state.contextsByID.removeAll()
-            store(state)
-        }
-
-        mutating func removeTarget(_ targetID: ProtocolTargetIdentifier) {
-            agentStatesByID.removeValue(forKey: targetID)
-            for agentID in Array(agentStatesByID.keys) {
-                guard var state = agentStatesByID[agentID] else {
-                    continue
-                }
-                state.contextsByID = state.contextsByID.filter { $0.value.targetID != targetID }
-                store(state)
-            }
-        }
-
-        mutating func retarget(oldTargetID: ProtocolTargetIdentifier, newTargetID: ProtocolTargetIdentifier) {
-            let currentContexts = contextsByKey
-            var nextContexts = currentContexts
-            for (contextKey, context) in currentContexts {
-                var movedContext = context
-                if movedContext.targetID == oldTargetID {
-                    movedContext.targetID = newTargetID
-                }
-                if movedContext.runtimeAgentTargetID == oldTargetID {
-                    movedContext.runtimeAgentTargetID = newTargetID
-                }
-                guard movedContext != context else {
-                    continue
-                }
-                nextContexts.removeValue(forKey: contextKey)
-                if nextContexts[movedContext.key] == nil {
-                    nextContexts[movedContext.key] = movedContext
-                }
-            }
-            replace(with: nextContexts)
-        }
-
-        private func agentState(for targetID: ProtocolTargetIdentifier) -> RuntimeContextAgentState {
-            agentStatesByID[targetID] ?? RuntimeContextAgentState(targetID: targetID)
-        }
-
-        private mutating func store(_ state: RuntimeContextAgentState) {
-            if state.isEmpty {
-                agentStatesByID.removeValue(forKey: state.targetID)
-            } else {
-                agentStatesByID[state.targetID] = state
-            }
-        }
-
-        private mutating func replace(with contextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContextRecord]) {
-            for agentID in agentStatesByID.keys {
-                agentStatesByID[agentID]?.contextsByID.removeAll()
-            }
-            for context in contextsByKey.values {
-                record(context)
-            }
-            for agentID in Array(agentStatesByID.keys) {
-                if let state = agentStatesByID[agentID] {
-                    store(state)
-                }
-            }
-        }
-    }
-
     package typealias ResponseTimeoutSleep = @Sendable (Duration) async throws -> Void
     package typealias ResponseTimeoutDidFire = @Sendable () async -> Void
 
@@ -132,24 +13,15 @@ package actor TransportSession {
     private var lastSequenceByDomain: [ProtocolDomain: UInt64]
     private var nextSubscriberID: UInt64
     private var nextMainPageTargetWaiterID: UInt64
-    private var rootReplies: [UInt64: PendingReply]
-    private var targetReplies: [TargetReplyKey: PendingReply]
-    private var targetReplyKeysByRootWrapperID: [UInt64: TargetReplyKey]
+    private var replyStore: TransportReplyStore
     private var mainPageTargetWaiters: [UInt64: ReplyPromise<TransportMainPageTarget>]
-    private var targetsByID: [ProtocolTargetIdentifier: ProtocolTargetRecord]
+    private var targetRegistry: TransportTargetRegistry
     private var provisionalTargetMessagesByTargetID: [ProtocolTargetIdentifier: [ParsedProtocolMessage]]
-    private var frameTargetIDsByFrameID: [DOMFrameIdentifier: ProtocolTargetIdentifier]
-    private var styleSheetTargetIDsByStyleSheetID: [String: ProtocolTargetIdentifier]
-    private var unresolvedStyleSheetFrameIDsByStyleSheetID: [String: DOMFrameIdentifier]
-    private var unresolvedStyleSheetAddedParamsDataByStyleSheetID: [String: Data]
-    private var pendingResolvedStyleSheetAddedEvents: [ResolvedStyleSheetAddedEvent]
+    private var styleSheetRouting: TransportStyleSheetRouting
     private var runtimeContextRegistry: RuntimeContextRegistry
-    private var currentMainPageTargetID: ProtocolTargetIdentifier?
     private var subscribers: [ProtocolDomain: [UInt64: AsyncStream<ProtocolEventEnvelope>.Continuation]]
     private var orderedSubscribers: [UInt64: AsyncStream<ProtocolEventEnvelope>.Continuation]
-    private var inboundMessages: [String]
-    private var inboundMessageStartIndex: Int
-    private var isDrainingInboundMessages: Bool
+    private var inboundMessageQueue: TransportInboundMessageQueue
     private var closed: Bool
 
     package init(
@@ -167,25 +39,31 @@ package actor TransportSession {
         lastSequenceByDomain = [:]
         nextSubscriberID = 0
         nextMainPageTargetWaiterID = 0
-        rootReplies = [:]
-        targetReplies = [:]
-        targetReplyKeysByRootWrapperID = [:]
+        replyStore = TransportReplyStore()
         mainPageTargetWaiters = [:]
-        targetsByID = [:]
+        targetRegistry = TransportTargetRegistry()
         provisionalTargetMessagesByTargetID = [:]
-        frameTargetIDsByFrameID = [:]
-        styleSheetTargetIDsByStyleSheetID = [:]
-        unresolvedStyleSheetFrameIDsByStyleSheetID = [:]
-        unresolvedStyleSheetAddedParamsDataByStyleSheetID = [:]
-        pendingResolvedStyleSheetAddedEvents = []
+        styleSheetRouting = TransportStyleSheetRouting()
         runtimeContextRegistry = RuntimeContextRegistry()
-        currentMainPageTargetID = nil
         subscribers = [:]
         orderedSubscribers = [:]
-        inboundMessages = []
-        inboundMessageStartIndex = 0
-        isDrainingInboundMessages = false
+        inboundMessageQueue = TransportInboundMessageQueue()
         closed = false
+    }
+
+    private var targetsByID: [ProtocolTargetIdentifier: ProtocolTargetRecord] {
+        get { targetRegistry.targetsByID }
+        set { targetRegistry.targetsByID = newValue }
+    }
+
+    private var frameTargetIDsByFrameID: [DOMFrameIdentifier: ProtocolTargetIdentifier] {
+        get { targetRegistry.frameTargetIDsByFrameID }
+        set { targetRegistry.frameTargetIDsByFrameID = newValue }
+    }
+
+    private var currentMainPageTargetID: ProtocolTargetIdentifier? {
+        get { targetRegistry.currentMainPageTargetID }
+        set { targetRegistry.currentMainPageTargetID = newValue }
     }
 
     package func events(for domain: ProtocolDomain) -> AsyncStream<ProtocolEventEnvelope> {
@@ -244,7 +122,7 @@ package actor TransportSession {
 
     @discardableResult
     package func receiveRootMessage(_ message: String) async -> UInt64 {
-        inboundMessages.append(message)
+        inboundMessageQueue.append(message)
         await drainInboundMessages()
         return nextSequence
     }
@@ -254,18 +132,13 @@ package actor TransportSession {
             return
         }
         closed = true
-        for (_, pending) in rootReplies {
-            await pending.promise.fulfill(.failure(TransportError.transportClosed))
-        }
-        for (_, pending) in targetReplies {
+        for pending in replyStore.pendingReplies {
             await pending.promise.fulfill(.failure(TransportError.transportClosed))
         }
         for (_, waiter) in mainPageTargetWaiters {
             await waiter.fulfill(.failure(TransportError.transportClosed))
         }
-        rootReplies.removeAll()
-        targetReplies.removeAll()
-        targetReplyKeysByRootWrapperID.removeAll()
+        replyStore.removeAll()
         mainPageTargetWaiters.removeAll()
         provisionalTargetMessagesByTargetID.removeAll()
         for continuations in subscribers.values {
@@ -328,8 +201,8 @@ package actor TransportSession {
             targetsByID: targetsByID,
             frameTargetIDsByFrameID: frameTargetIDsByFrameID,
             executionContextsByKey: runtimeContextRegistry.contextsByKey,
-            pendingRootReplyIDs: rootReplies.keys.sorted(),
-            pendingTargetReplyKeys: targetReplies.keys.sorted()
+            pendingRootReplyIDs: replyStore.pendingRootReplyIDs,
+            pendingTargetReplyKeys: replyStore.pendingTargetReplyKeys
         )
     }
 
@@ -344,13 +217,13 @@ package actor TransportSession {
     private func sendRoot(_ command: ProtocolCommand) async throws -> ProtocolCommandResult {
         let commandID = allocateCommandID()
         let promise = ReplyPromise<ProtocolCommandResult>()
-        rootReplies[commandID] = PendingReply(
+        replyStore.insertRootReply(TransportPendingReply(
             domain: command.domain,
             method: command.method,
             targetID: nil,
             promise: promise,
             hasBufferedProvisionalResponse: false
-        )
+        ), commandID: commandID)
         do {
             let message = try TransportMessageParser.makeCommandString(
                 id: commandID,
@@ -359,7 +232,7 @@ package actor TransportSession {
             )
             try await backend.sendJSONString(message)
         } catch {
-            rootReplies.removeValue(forKey: commandID)
+            _ = replyStore.removeRootReply(commandID: commandID)
             await promise.fulfill(.failure(error))
             throw error
         }
@@ -379,14 +252,13 @@ package actor TransportSession {
         let outerCommandID = allocateCommandID()
         let key = TargetReplyKey(targetID: targetID, commandID: innerCommandID)
         let promise = ReplyPromise<ProtocolCommandResult>()
-        targetReplies[key] = PendingReply(
+        replyStore.insertTargetReply(TransportPendingReply(
             domain: command.domain,
             method: command.method,
             targetID: targetID,
             promise: promise,
             hasBufferedProvisionalResponse: false
-        )
-        targetReplyKeysByRootWrapperID[outerCommandID] = key
+        ), key: key, rootWrapperID: outerCommandID)
         do {
             let message = try TransportMessageParser.makeCommandString(
                 id: innerCommandID,
@@ -400,7 +272,7 @@ package actor TransportSession {
             )
             try await backend.sendJSONString(wrapperMessage)
         } catch {
-            _ = removeTargetReply(for: key)
+            _ = replyStore.removeTargetReply(for: key)
             await promise.fulfill(.failure(error))
             throw error
         }
@@ -410,11 +282,6 @@ package actor TransportSession {
             method: command.method,
             targetID: targetID
         )
-    }
-
-    private enum PendingKey: Sendable {
-        case root(UInt64)
-        case target(TargetReplyKey)
     }
 
     private func transportLocalResult(
@@ -435,16 +302,15 @@ package actor TransportSession {
     }
 
     private func drainInboundMessages() async {
-        guard !isDrainingInboundMessages else {
+        guard inboundMessageQueue.startDraining() else {
             return
         }
 
-        isDrainingInboundMessages = true
         defer {
-            isDrainingInboundMessages = false
+            inboundMessageQueue.finishDraining()
         }
 
-        while let rawMessage = nextInboundMessage() {
+        while let rawMessage = inboundMessageQueue.popNext() {
             guard let parsed = try? await TransportMessageParser.parse(rawMessage) else {
                 continue
             }
@@ -452,32 +318,9 @@ package actor TransportSession {
         }
     }
 
-    private func nextInboundMessage() -> String? {
-        guard inboundMessageStartIndex < inboundMessages.count else {
-            inboundMessages.removeAll(keepingCapacity: true)
-            inboundMessageStartIndex = 0
-            return nil
-        }
-
-        let message = inboundMessages[inboundMessageStartIndex]
-        inboundMessageStartIndex += 1
-        compactInboundMessagesIfNeeded()
-        return message
-    }
-
-    private func compactInboundMessagesIfNeeded() {
-        if inboundMessageStartIndex == inboundMessages.count {
-            inboundMessages.removeAll(keepingCapacity: true)
-            inboundMessageStartIndex = 0
-        } else if inboundMessageStartIndex >= 64 && inboundMessageStartIndex * 2 >= inboundMessages.count {
-            inboundMessages.removeFirst(inboundMessageStartIndex)
-            inboundMessageStartIndex = 0
-        }
-    }
-
     private func awaitReply(
         _ promise: ReplyPromise<ProtocolCommandResult>,
-        timeout key: PendingKey,
+        timeout key: TransportPendingKey,
         method: String,
         targetID: ProtocolTargetIdentifier?
     ) async throws -> ProtocolCommandResult {
@@ -516,16 +359,16 @@ package actor TransportSession {
 
     private func handleRootMessage(_ parsed: ParsedProtocolMessage) async {
         if let id = parsed.id,
-           let key = targetReplyKeysByRootWrapperID.removeValue(forKey: id) {
+           let key = replyStore.takeTargetReplyKey(forRootWrapperID: id) {
             if parsed.errorMessage != nil,
-               let pending = removeTargetReply(for: key) {
+               let pending = replyStore.removeTargetReply(for: key) {
                 await resolve(pending, parsed: parsed)
             }
             return
         }
 
         if let id = parsed.id,
-           let pending = rootReplies.removeValue(forKey: id) {
+           let pending = replyStore.removeRootReply(commandID: id) {
             await resolve(pending, parsed: parsed)
             return
         }
@@ -573,7 +416,7 @@ package actor TransportSession {
 
         if let id = parsed.id {
             let key = TargetReplyKey(targetID: targetID, commandID: id)
-            if let pending = removeTargetReply(for: key) {
+            if let pending = replyStore.removeTargetReply(for: key) {
                 await resolve(pending, parsed: parsed)
                 return
             }
@@ -612,7 +455,7 @@ package actor TransportSession {
         )
     }
 
-    private func resolve(_ pending: PendingReply, parsed: ParsedProtocolMessage) async {
+    private func resolve(_ pending: TransportPendingReply, parsed: ParsedProtocolMessage) async {
         if let errorMessage = parsed.errorMessage {
             await pending.promise.fulfill(
                 .failure(
@@ -803,11 +646,9 @@ package actor TransportSession {
         targetsByID.removeValue(forKey: targetID)
         provisionalTargetMessagesByTargetID.removeValue(forKey: targetID)
         frameTargetIDsByFrameID = frameTargetIDsByFrameID.filter { $0.value != targetID }
-        styleSheetTargetIDsByStyleSheetID = styleSheetTargetIDsByStyleSheetID.filter { $0.value != targetID }
+        styleSheetRouting.removeTarget(targetID)
         runtimeContextRegistry.removeTarget(targetID)
-        let pendingReplies = targetReplies.keys
-            .filter { $0.targetID == targetID }
-            .compactMap { removeTargetReply(for: $0) }
+        let pendingReplies = replyStore.removeTargetReplies(for: targetID)
         for pending in pendingReplies {
             await pending.promise.fulfill(.failure(TransportError.missingTarget(targetID)))
         }
@@ -848,11 +689,9 @@ package actor TransportSession {
         targetsByID[newTargetID] = newRecord
 
         if let oldTargetID = committedOldTargetID {
-            retargetPendingReplies(from: oldTargetID, to: newTargetID)
+            replyStore.retargetPendingReplies(from: oldTargetID, to: newTargetID)
             frameTargetIDsByFrameID = frameTargetIDsByFrameID.filter { $0.value != oldTargetID }
-            for (styleSheetID, targetID) in styleSheetTargetIDsByStyleSheetID where targetID == oldTargetID {
-                styleSheetTargetIDsByStyleSheetID[styleSheetID] = newTargetID
-            }
+            styleSheetRouting.retarget(from: oldTargetID, to: newTargetID)
         }
 
         if let frameID = newRecord.frameID {
@@ -982,17 +821,17 @@ package actor TransportSession {
             }
             return targetID
         }
-        return styleSheetTargetIDsByStyleSheetID[params.header.styleSheetID] ?? currentMainPageTargetID
+        return styleSheetRouting.targetID(for: params.header.styleSheetID) ?? currentMainPageTargetID
     }
 
     private func targetIDForCSSStyleSheetID(paramsData: Data) -> ProtocolTargetIdentifier? {
         guard let params = try? TransportMessageParser.decode(CSSStyleSheetIDParams.self, from: paramsData) else {
             return nil
         }
-        if unresolvedStyleSheetFrameIDsByStyleSheetID[params.styleSheetID] != nil {
+        if styleSheetRouting.hasUnresolvedStyleSheet(params.styleSheetID) {
             return nil
         }
-        return styleSheetTargetIDsByStyleSheetID[params.styleSheetID]
+        return styleSheetRouting.targetID(for: params.styleSheetID)
     }
 
     private func updateCSSStyleSheetRegistry(
@@ -1008,55 +847,49 @@ package actor TransportSession {
             if let frameID = params.header.frameID {
                 if let resolvedTargetID = frameTargetIDsByFrameID[frameID],
                    targetsByID[resolvedTargetID]?.isProvisional != true {
-                    styleSheetTargetIDsByStyleSheetID[params.header.styleSheetID] = resolvedTargetID
-                    unresolvedStyleSheetFrameIDsByStyleSheetID.removeValue(forKey: params.header.styleSheetID)
-                    unresolvedStyleSheetAddedParamsDataByStyleSheetID.removeValue(forKey: params.header.styleSheetID)
+                    styleSheetRouting.recordAdded(
+                        styleSheetID: params.header.styleSheetID,
+                        frameID: frameID,
+                        paramsData: paramsData,
+                        resolvedTargetID: resolvedTargetID
+                    )
                 } else {
-                    styleSheetTargetIDsByStyleSheetID.removeValue(forKey: params.header.styleSheetID)
-                    unresolvedStyleSheetFrameIDsByStyleSheetID[params.header.styleSheetID] = frameID
-                    unresolvedStyleSheetAddedParamsDataByStyleSheetID[params.header.styleSheetID] = paramsData
+                    styleSheetRouting.recordAdded(
+                        styleSheetID: params.header.styleSheetID,
+                        frameID: frameID,
+                        paramsData: paramsData,
+                        resolvedTargetID: nil
+                    )
                 }
                 return
             }
             if let resolvedTargetID = targetID {
-                styleSheetTargetIDsByStyleSheetID[params.header.styleSheetID] = resolvedTargetID
-                unresolvedStyleSheetFrameIDsByStyleSheetID.removeValue(forKey: params.header.styleSheetID)
-                unresolvedStyleSheetAddedParamsDataByStyleSheetID.removeValue(forKey: params.header.styleSheetID)
+                styleSheetRouting.recordAdded(
+                    styleSheetID: params.header.styleSheetID,
+                    frameID: nil,
+                    paramsData: paramsData,
+                    resolvedTargetID: resolvedTargetID
+                )
             }
         case "CSS.styleSheetRemoved":
             guard let params = try? TransportMessageParser.decode(CSSStyleSheetIDParams.self, from: paramsData) else {
                 return
             }
-            styleSheetTargetIDsByStyleSheetID.removeValue(forKey: params.styleSheetID)
-            unresolvedStyleSheetFrameIDsByStyleSheetID.removeValue(forKey: params.styleSheetID)
-            unresolvedStyleSheetAddedParamsDataByStyleSheetID.removeValue(forKey: params.styleSheetID)
+            styleSheetRouting.remove(styleSheetID: params.styleSheetID)
         default:
             return
         }
     }
 
     private func resolvePendingStyleSheets(frameID: DOMFrameIdentifier, targetID: ProtocolTargetIdentifier) {
-        let styleSheetIDs = unresolvedStyleSheetFrameIDsByStyleSheetID
-            .filter { $0.value == frameID }
-            .map(\.key)
-        for styleSheetID in styleSheetIDs {
-            styleSheetTargetIDsByStyleSheetID[styleSheetID] = targetID
-            unresolvedStyleSheetFrameIDsByStyleSheetID.removeValue(forKey: styleSheetID)
-            if let paramsData = unresolvedStyleSheetAddedParamsDataByStyleSheetID.removeValue(forKey: styleSheetID) {
-                pendingResolvedStyleSheetAddedEvents.append(ResolvedStyleSheetAddedEvent(
-                    targetID: targetID,
-                    paramsData: paramsData
-                ))
-            }
-        }
+        styleSheetRouting.resolvePending(frameID: frameID, targetID: targetID)
     }
 
     private func emitPendingResolvedStyleSheetAddedEvents() async {
-        guard !pendingResolvedStyleSheetAddedEvents.isEmpty else {
+        let events = styleSheetRouting.takePendingResolvedAddedEvents()
+        guard !events.isEmpty else {
             return
         }
-        let events = pendingResolvedStyleSheetAddedEvents
-        pendingResolvedStyleSheetAddedEvents.removeAll(keepingCapacity: true)
         for event in events {
             await emit(
                 domain: .css,
@@ -1139,61 +972,31 @@ package actor TransportSession {
         orderedSubscribers.removeValue(forKey: subscriberID)
     }
 
-    private func removePendingReply(_ key: PendingKey) {
-        switch key {
-        case let .root(commandID):
-            rootReplies.removeValue(forKey: commandID)
-        case let .target(targetReplyKey):
-            _ = removeTargetReply(for: targetReplyKey)
-        }
+    private func removePendingReply(_ key: TransportPendingKey) {
+        replyStore.removePendingReply(key)
     }
 
-    private func failPendingReply(_ key: PendingKey, error: any Error) async {
-        let pending: PendingReply?
+    private func failPendingReply(_ key: TransportPendingKey, error: any Error) async {
+        let pending: TransportPendingReply?
         switch key {
         case let .root(commandID):
-            pending = rootReplies.removeValue(forKey: commandID)
+            pending = replyStore.removeRootReply(commandID: commandID)
         case let .target(targetReplyKey):
-            pending = removeTargetReply(for: targetReplyKey)
-                ?? removeRetargetedReply(commandID: targetReplyKey.commandID)
+            pending = replyStore.removeTargetReply(for: targetReplyKey)
+                ?? replyStore.removeRetargetedReply(commandID: targetReplyKey.commandID)
         }
         await pending?.promise.fulfill(.failure(error))
     }
 
-    private func failPendingReplyFromTimeout(_ key: PendingKey, error: any Error) async {
-        let pending: PendingReply?
+    private func failPendingReplyFromTimeout(_ key: TransportPendingKey, error: any Error) async {
+        let pending: TransportPendingReply?
         switch key {
         case let .root(commandID):
-            pending = rootReplies.removeValue(forKey: commandID)
+            pending = replyStore.removeRootReply(commandID: commandID)
         case let .target(targetReplyKey):
-            pending = removeTargetReplyForTimeout(targetReplyKey)
+            pending = replyStore.removeTargetReplyForTimeout(targetReplyKey)
         }
         await pending?.promise.fulfill(.failure(error))
-    }
-
-    private func removeTargetReply(for key: TargetReplyKey) -> PendingReply? {
-        let pending = targetReplies.removeValue(forKey: key)
-        if let wrapperID = targetReplyKeysByRootWrapperID.first(where: { $0.value == key })?.key {
-            targetReplyKeysByRootWrapperID.removeValue(forKey: wrapperID)
-        }
-        return pending
-    }
-
-    private func removeTargetReplyForTimeout(_ key: TargetReplyKey) -> PendingReply? {
-        if let pending = targetReplies[key] {
-            guard !pending.hasBufferedProvisionalResponse else {
-                return nil
-            }
-            return removeTargetReply(for: key)
-        }
-
-        guard let retargetedKey = targetReplies.keys.first(where: { $0.commandID == key.commandID }) else {
-            return nil
-        }
-        guard targetReplies[retargetedKey]?.hasBufferedProvisionalResponse != true else {
-            return nil
-        }
-        return removeTargetReply(for: retargetedKey)
     }
 
     private func markTargetReplyAsBufferedIfNeeded(
@@ -1203,37 +1006,7 @@ package actor TransportSession {
         guard let commandID = parsed.id else {
             return
         }
-        let key = TargetReplyKey(targetID: targetID, commandID: commandID)
-        guard var pending = targetReplies[key] else {
-            return
-        }
-        pending.hasBufferedProvisionalResponse = true
-        targetReplies[key] = pending
-    }
-
-    private func removeRetargetedReply(commandID: UInt64) -> PendingReply? {
-        guard let key = targetReplies.keys.first(where: { $0.commandID == commandID }) else {
-            return nil
-        }
-        return removeTargetReply(for: key)
-    }
-
-    private func retargetPendingReplies(
-        from oldTargetID: ProtocolTargetIdentifier,
-        to newTargetID: ProtocolTargetIdentifier
-    ) {
-        let oldKeys = targetReplies.keys.filter { $0.targetID == oldTargetID }
-        for oldKey in oldKeys {
-            guard var pending = targetReplies.removeValue(forKey: oldKey) else {
-                continue
-            }
-            let newKey = TargetReplyKey(targetID: newTargetID, commandID: oldKey.commandID)
-            pending.targetID = newTargetID
-            targetReplies[newKey] = pending
-            if let wrapperID = targetReplyKeysByRootWrapperID.first(where: { $0.value == oldKey })?.key {
-                targetReplyKeysByRootWrapperID[wrapperID] = newKey
-            }
-        }
+        replyStore.markTargetReplyAsBufferedIfNeeded(commandID: commandID, targetID: targetID)
     }
 }
 
