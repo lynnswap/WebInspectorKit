@@ -46,7 +46,7 @@ final class BrowserInspectorCoordinator {
         }
     }
 
-    private final class InspectorWindowRegistry {
+    private final class InspectorWindowSceneRegistry {
         private final class WeakSceneSessionBox {
             weak var session: UISceneSession?
 
@@ -55,19 +55,11 @@ final class BrowserInspectorCoordinator {
             }
         }
 
-        private var context: BrowserInspectorWindowContext?
         private var sceneSessionsByIdentifier: [String: WeakSceneSessionBox] = [:]
         private var reusableSceneSession: WeakSceneSessionBox?
         private var reusableSceneSessionIdentifier: String?
         private var restorableSceneSessionIdentifiers: Set<String> = []
         private var staleSceneSessionIdentifiers: Set<String> = []
-        private var isPendingPresentation = false
-        private var observers: [UUID: (Bool) -> Void] = [:]
-        private var releaseHandlersByInspectorSessionID: [ObjectIdentifier: () -> Void] = [:]
-
-        var currentContext: BrowserInspectorWindowContext? {
-            context
-        }
 
         var currentSceneSessions: [UISceneSession] {
             pruneDisconnectedSceneSessions()
@@ -85,12 +77,128 @@ final class BrowserInspectorCoordinator {
             return sceneSessionsByIdentifier.isEmpty == false
         }
 
-        var presentationState: Bool {
+        var attachedSceneCount: Int {
             pruneDisconnectedSceneSessions()
-            return Self.isPresentationActive(
+            return sceneSessionsByIdentifier.count
+        }
+
+        var shouldReleaseContextAfterDisconnect: Bool {
+            pruneDisconnectedSceneSessions()
+            return restorableSceneSessionIdentifiers.isEmpty
+        }
+
+        var shouldReleaseContextAfterDiscard: Bool {
+            pruneDisconnectedSceneSessions()
+            return restorableSceneSessionIdentifiers.isEmpty && sceneSessionsByIdentifier.isEmpty
+        }
+
+        func prepareForPendingPresentation() {
+            staleSceneSessionIdentifiers.formUnion(restorableSceneSessionIdentifiers)
+            restorableSceneSessionIdentifiers.removeAll()
+        }
+
+        func attachSceneSession(_ sceneSession: UISceneSession) {
+            let persistentIdentifier = sceneSession.persistentIdentifier
+            sceneSessionsByIdentifier[persistentIdentifier] = WeakSceneSessionBox(session: sceneSession)
+            if reusableSceneSessionIdentifier == persistentIdentifier {
+                reusableSceneSession = nil
+                reusableSceneSessionIdentifier = nil
+            }
+            staleSceneSessionIdentifiers.remove(persistentIdentifier)
+            restorableSceneSessionIdentifiers.insert(persistentIdentifier)
+        }
+
+        func sceneDidDisconnect(_ sceneSession: UISceneSession) {
+            let persistentIdentifier = sceneSession.persistentIdentifier
+            sceneSessionsByIdentifier.removeValue(forKey: persistentIdentifier)
+            reusableSceneSession = WeakSceneSessionBox(session: sceneSession)
+            reusableSceneSessionIdentifier = persistentIdentifier
+            restorableSceneSessionIdentifiers.remove(persistentIdentifier)
+            staleSceneSessionIdentifiers.insert(persistentIdentifier)
+            pruneDisconnectedSceneSessions()
+        }
+
+        func discardSceneSessions(_ sceneSessions: some Sequence<UISceneSession>) {
+            for sceneSession in sceneSessions {
+                let persistentIdentifier = sceneSession.persistentIdentifier
+                sceneSessionsByIdentifier.removeValue(forKey: persistentIdentifier)
+                if reusableSceneSessionIdentifier == persistentIdentifier {
+                    reusableSceneSession = nil
+                    reusableSceneSessionIdentifier = nil
+                }
+                restorableSceneSessionIdentifiers.remove(persistentIdentifier)
+                staleSceneSessionIdentifiers.remove(persistentIdentifier)
+            }
+            pruneDisconnectedSceneSessions()
+        }
+
+        func canRestoreSceneSession(_ sceneSession: UISceneSession, hasContext: Bool) -> Bool {
+            hasContext
+                && staleSceneSessionIdentifiers.contains(sceneSession.persistentIdentifier) == false
+                && restorableSceneSessionIdentifiers.contains(sceneSession.persistentIdentifier)
+        }
+
+        func canConnectSceneSession(
+            _ sceneSession: UISceneSession,
+            hasContext: Bool,
+            isPendingPresentation: Bool
+        ) -> Bool {
+            let persistentIdentifier = sceneSession.persistentIdentifier
+            return hasContext
+                && (
+                    isPendingPresentation
+                        || (
+                            staleSceneSessionIdentifiers.contains(persistentIdentifier) == false
+                                && restorableSceneSessionIdentifiers.contains(persistentIdentifier)
+                        )
+                )
+        }
+
+        func clear() {
+            sceneSessionsByIdentifier.removeAll()
+            reusableSceneSession = nil
+            reusableSceneSessionIdentifier = nil
+            restorableSceneSessionIdentifiers.removeAll()
+            staleSceneSessionIdentifiers.removeAll()
+        }
+
+        private func pruneDisconnectedSceneSessions() {
+            sceneSessionsByIdentifier = sceneSessionsByIdentifier.filter { $0.value.session != nil }
+            if reusableSceneSession?.session == nil {
+                reusableSceneSession = nil
+                reusableSceneSessionIdentifier = nil
+            }
+        }
+    }
+
+    private final class InspectorWindowRegistry {
+        private var context: BrowserInspectorWindowContext?
+        private let sceneRegistry = InspectorWindowSceneRegistry()
+        private var isPendingPresentation = false
+        private var observers: [UUID: (Bool) -> Void] = [:]
+        private var releaseHandlersByInspectorSessionID: [ObjectIdentifier: () -> Void] = [:]
+
+        var currentContext: BrowserInspectorWindowContext? {
+            context
+        }
+
+        var currentSceneSessions: [UISceneSession] {
+            sceneRegistry.currentSceneSessions
+        }
+
+        var preferredActivationSceneSession: UISceneSession? {
+            sceneRegistry.preferredActivationSceneSession
+        }
+
+        var hasAttachedSceneSession: Bool {
+            sceneRegistry.hasAttachedSceneSession
+        }
+
+        var presentationState: Bool {
+            Self.isPresentationActive(
                 hasContext: context != nil,
                 isPendingPresentation: isPendingPresentation,
-                attachedSceneCount: sceneSessionsByIdentifier.count
+                attachedSceneCount: sceneRegistry.attachedSceneCount
             )
         }
 
@@ -105,36 +213,22 @@ final class BrowserInspectorCoordinator {
 
         func beginPendingPresentation() {
             let previousState = presentationState
-            staleSceneSessionIdentifiers.formUnion(restorableSceneSessionIdentifiers)
-            restorableSceneSessionIdentifiers.removeAll()
+            sceneRegistry.prepareForPendingPresentation()
             isPendingPresentation = true
             notifyObserversIfNeeded(previousState: previousState)
         }
 
         func attachSceneSession(_ sceneSession: UISceneSession) {
             let previousState = presentationState
-            let persistentIdentifier = sceneSession.persistentIdentifier
-            sceneSessionsByIdentifier[persistentIdentifier] = WeakSceneSessionBox(session: sceneSession)
-            if reusableSceneSessionIdentifier == persistentIdentifier {
-                reusableSceneSession = nil
-                reusableSceneSessionIdentifier = nil
-            }
-            staleSceneSessionIdentifiers.remove(persistentIdentifier)
-            restorableSceneSessionIdentifiers.insert(persistentIdentifier)
+            sceneRegistry.attachSceneSession(sceneSession)
             isPendingPresentation = false
             notifyObserversIfNeeded(previousState: previousState)
         }
 
         func sceneDidDisconnect(_ sceneSession: UISceneSession) {
             let previousState = presentationState
-            let persistentIdentifier = sceneSession.persistentIdentifier
-            sceneSessionsByIdentifier.removeValue(forKey: persistentIdentifier)
-            reusableSceneSession = WeakSceneSessionBox(session: sceneSession)
-            reusableSceneSessionIdentifier = persistentIdentifier
-            restorableSceneSessionIdentifiers.remove(persistentIdentifier)
-            staleSceneSessionIdentifiers.insert(persistentIdentifier)
-            pruneDisconnectedSceneSessions()
-            if restorableSceneSessionIdentifiers.isEmpty, isPendingPresentation == false {
+            sceneRegistry.sceneDidDisconnect(sceneSession)
+            if sceneRegistry.shouldReleaseContextAfterDisconnect, isPendingPresentation == false {
                 setContext(nil)
             }
             notifyObserversIfNeeded(previousState: previousState)
@@ -142,20 +236,8 @@ final class BrowserInspectorCoordinator {
 
         func discardSceneSessions(_ sceneSessions: some Sequence<UISceneSession>) {
             let previousState = presentationState
-            for sceneSession in sceneSessions {
-                let persistentIdentifier = sceneSession.persistentIdentifier
-                sceneSessionsByIdentifier.removeValue(forKey: persistentIdentifier)
-                if reusableSceneSessionIdentifier == persistentIdentifier {
-                    reusableSceneSession = nil
-                    reusableSceneSessionIdentifier = nil
-                }
-                restorableSceneSessionIdentifiers.remove(persistentIdentifier)
-                staleSceneSessionIdentifiers.remove(persistentIdentifier)
-            }
-            pruneDisconnectedSceneSessions()
-            if restorableSceneSessionIdentifiers.isEmpty,
-               sceneSessionsByIdentifier.isEmpty,
-               isPendingPresentation == false {
+            sceneRegistry.discardSceneSessions(sceneSessions)
+            if sceneRegistry.shouldReleaseContextAfterDiscard, isPendingPresentation == false {
                 setContext(nil)
             }
             notifyObserversIfNeeded(previousState: previousState)
@@ -174,32 +256,22 @@ final class BrowserInspectorCoordinator {
         }
 
         func canRestoreSceneSession(_ sceneSession: UISceneSession) -> Bool {
-            context != nil
-                && staleSceneSessionIdentifiers.contains(sceneSession.persistentIdentifier) == false
-                && restorableSceneSessionIdentifiers.contains(sceneSession.persistentIdentifier)
+            sceneRegistry.canRestoreSceneSession(sceneSession, hasContext: context != nil)
         }
 
         func canConnectSceneSession(_ sceneSession: UISceneSession) -> Bool {
-            let persistentIdentifier = sceneSession.persistentIdentifier
-            return context != nil
-                && (
-                    isPendingPresentation
-                        || (
-                            staleSceneSessionIdentifiers.contains(persistentIdentifier) == false
-                                && restorableSceneSessionIdentifiers.contains(persistentIdentifier)
-                        )
-                )
+            sceneRegistry.canConnectSceneSession(
+                sceneSession,
+                hasContext: context != nil,
+                isPendingPresentation: isPendingPresentation
+            )
         }
 
         func clear() {
             let previousState = presentationState
             let previousInspectorSessionID = context.map { ObjectIdentifier($0.inspectorSession) }
             setContext(nil)
-            sceneSessionsByIdentifier.removeAll()
-            reusableSceneSession = nil
-            reusableSceneSessionIdentifier = nil
-            restorableSceneSessionIdentifiers.removeAll()
-            staleSceneSessionIdentifiers.removeAll()
+            sceneRegistry.clear()
             isPendingPresentation = false
             releaseContext(for: previousInspectorSessionID)
             notifyObserversIfNeeded(previousState: previousState)
@@ -214,14 +286,6 @@ final class BrowserInspectorCoordinator {
 
         func removeObserver(_ observerID: UUID) {
             observers[observerID] = nil
-        }
-
-        private func pruneDisconnectedSceneSessions() {
-            sceneSessionsByIdentifier = sceneSessionsByIdentifier.filter { $0.value.session != nil }
-            if reusableSceneSession?.session == nil {
-                reusableSceneSession = nil
-                reusableSceneSessionIdentifier = nil
-            }
         }
 
         private func releaseContext(for inspectorSessionID: ObjectIdentifier?) {
