@@ -1,7 +1,7 @@
 import Synchronization
 import WebInspectorTransport
 
-package final class TransportReceiver: @unchecked Sendable {
+package final class TransportReceiver: Sendable {
     private struct State: Sendable {
         var transport: TransportSession?
         var messages: [String] = []
