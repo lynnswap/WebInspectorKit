@@ -1398,7 +1398,6 @@ struct NetworkDetailViewControllerTests {
             viewController.modelObservationDeliveryForTesting,
             viewController.selectedRequestRenderObservationDeliveryForTesting,
             viewController.responseBodyFetchObservationDeliveryForTesting,
-            viewController.previewRoleScrollEdgeObservationDeliveryForTesting,
             viewController.bodyViewControllerForTesting.bodyObservationDeliveryForTesting,
         ].compactMap { $0 }
     }

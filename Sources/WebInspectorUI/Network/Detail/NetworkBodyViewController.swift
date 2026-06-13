@@ -46,7 +46,7 @@ final class NetworkBodyViewController: UIViewController {
         return scrollView
     }()
     private var bodyObservation: PortableObservationTracking.Token?
-    private let scrollEdgeState: NetworkDetailScrollEdgeState?
+    private weak var scrollEdgeSink: (any NetworkBodyScrollEdgeSink)?
     private weak var body: NetworkBody?
     private var metadata: NetworkBodyPreviewMetadata?
     private var hasDisplayedBody = false
@@ -60,8 +60,8 @@ final class NetworkBodyViewController: UIViewController {
     private var bodyObservationDelivery: PortableObservationTracking.Token?
 #endif
 
-    init(scrollEdgeState: NetworkDetailScrollEdgeState? = nil) {
-        self.scrollEdgeState = scrollEdgeState
+    init(scrollEdgeSink: (any NetworkBodyScrollEdgeSink)? = nil) {
+        self.scrollEdgeSink = scrollEdgeSink
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -117,7 +117,7 @@ final class NetworkBodyViewController: UIViewController {
         metadata = nil
         startObserving(body: nil)
         hideMediaPreview()
-        scrollEdgeState?.contentScrollView = nil
+        scrollEdgeSink?.contentScrollView = nil
     }
 
     private func configureSyntaxView() {
@@ -316,7 +316,7 @@ final class NetworkBodyViewController: UIViewController {
         hideImagePreview()
         removeMediaPlayerViewController()
         syntaxView.isHidden = false
-        scrollEdgeState?.contentScrollView = syntaxView
+        scrollEdgeSink?.contentScrollView = syntaxView
     }
 
     private func showImagePreview(_ image: UIImage) {
@@ -324,7 +324,7 @@ final class NetworkBodyViewController: UIViewController {
         removeCachedTemporaryMediaFile()
         syntaxView.isHidden = true
         imageScrollView.isHidden = false
-        scrollEdgeState?.contentScrollView = imageScrollView
+        scrollEdgeSink?.contentScrollView = imageScrollView
         shouldResetImageZoomOnNextLayout = true
         imagePreviewLayoutState = nil
         imageView.image = image
@@ -338,7 +338,7 @@ final class NetworkBodyViewController: UIViewController {
     private func showMoviePreview(_ url: URL) {
         hideImagePreview()
         syntaxView.isHidden = true
-        scrollEdgeState?.contentScrollView = nil
+        scrollEdgeSink?.contentScrollView = nil
         if let temporaryFileURL = mediaTemporaryFile?.fileURL, temporaryFileURL != url {
             removeCachedTemporaryMediaFile()
         }

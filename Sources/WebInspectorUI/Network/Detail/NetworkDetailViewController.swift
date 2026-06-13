@@ -53,7 +53,7 @@ package final class NetworkDetailViewController: UIViewController {
     private let responseBodyFetchObservationBinding = NetworkResponseBodyFetchObservationBinding()
     private let scrollEdgeController = NetworkDetailScrollEdgeController()
     private lazy var bodyViewController = NetworkBodyViewController(
-        scrollEdgeState: scrollEdgeController.scrollEdgeState
+        scrollEdgeSink: scrollEdgeController
     )
     private lazy var modeControlController: NetworkDetailModeControlController = {
         let controller = NetworkDetailModeControlController(initialMode: mode)
@@ -509,10 +509,6 @@ extension NetworkDetailViewController {
     @available(iOS 26.0, *)
     var previewRoleScrollEdgeInteractionForTesting: UIScrollEdgeElementContainerInteraction? {
         scrollEdgeController.interactionForTesting
-    }
-
-    var previewRoleScrollEdgeObservationDeliveryForTesting: PortableObservationTracking.Token? {
-        scrollEdgeController.observationDeliveryForTesting
     }
 
     var modelObservationDeliveryForTesting: PortableObservationTracking.Token? {
