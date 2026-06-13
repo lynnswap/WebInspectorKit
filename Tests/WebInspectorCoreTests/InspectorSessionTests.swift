@@ -1026,12 +1026,12 @@ func cssAndDOMStyleInvalidationsMarkSelectedNodeStylesNeedsRefresh() async throw
     await refreshTask.value
     #expect(await session.attachment.dom.elementStyles.selectedState == .loaded)
 
-    await transport.receiveRootMessage(
-        #"{"method":"CSS.styleSheetChanged","params":{"styleSheetId":"sheet-body"}}"#
+    await receiveAndApplyRootMessage(
+        transport,
+        message: #"{"method":"CSS.styleSheetChanged","params":{"styleSheetId":"sheet-body"}}"#,
+        in: session
     )
-    _ = try await awaitValueAfterActorTurns {
-        await session.attachment.dom.elementStyles.selectedState == .needsRefresh ? true : nil
-    }
+    #expect(await session.attachment.dom.elementStyles.selectedState == .needsRefresh)
 
     let refreshAgainCount = await backend.sentTargetMessages().count
     let refreshAgain = Task {
@@ -1042,14 +1042,13 @@ func cssAndDOMStyleInvalidationsMarkSelectedNodeStylesNeedsRefresh() async throw
     await refreshAgain.value
     #expect(await session.attachment.dom.elementStyles.selectedState == .loaded)
 
-    await receiveTargetDispatch(
+    await receiveAndApplyTargetDispatch(
         transport,
         targetID: .pageMain,
-        message: #"{"method":"DOM.attributeModified","params":{"nodeId":4,"name":"class","value":"featured"}}"#
+        message: #"{"method":"DOM.attributeModified","params":{"nodeId":4,"name":"class","value":"featured"}}"#,
+        in: session
     )
-    _ = try await awaitValueAfterActorTurns {
-        await session.attachment.dom.elementStyles.selectedState == .needsRefresh ? true : nil
-    }
+    #expect(await session.attachment.dom.elementStyles.selectedState == .needsRefresh)
 
     let refreshAfterAttributeCount = await backend.sentTargetMessages().count
     let refreshAfterAttribute = Task {
@@ -1060,14 +1059,13 @@ func cssAndDOMStyleInvalidationsMarkSelectedNodeStylesNeedsRefresh() async throw
     await refreshAfterAttribute.value
     #expect(await session.attachment.dom.elementStyles.selectedState == .loaded)
 
-    await receiveTargetDispatch(
+    await receiveAndApplyTargetDispatch(
         transport,
         targetID: .pageMain,
-        message: #"{"method":"DOM.attributeModified","params":{"nodeId":5,"name":"class","value":"child-only"}}"#
+        message: #"{"method":"DOM.attributeModified","params":{"nodeId":5,"name":"class","value":"child-only"}}"#,
+        in: session
     )
-    _ = try await awaitValueAfterActorTurns {
-        await session.attachment.dom.elementStyles.selectedState == .needsRefresh ? true : nil
-    }
+    #expect(await session.attachment.dom.elementStyles.selectedState == .needsRefresh)
 
     let refreshAfterRelatedAttributeCount = await backend.sentTargetMessages().count
     let refreshAfterRelatedAttribute = Task {
@@ -1086,14 +1084,13 @@ func cssAndDOMStyleInvalidationsMarkSelectedNodeStylesNeedsRefresh() async throw
     await refreshAfterRelatedAttribute.value
     #expect(await session.attachment.dom.elementStyles.selectedState == .loaded)
 
-    await receiveTargetDispatch(
+    await receiveAndApplyTargetDispatch(
         transport,
         targetID: .pageMain,
-        message: #"{"method":"DOM.childNodeInserted","params":{"parentNodeId":4,"previousNodeId":5,"node":{"nodeId":6,"nodeType":1,"nodeName":"ASIDE","localName":"aside"}}}"#
+        message: #"{"method":"DOM.childNodeInserted","params":{"parentNodeId":4,"previousNodeId":5,"node":{"nodeId":6,"nodeType":1,"nodeName":"ASIDE","localName":"aside"}}}"#,
+        in: session
     )
-    _ = try await awaitValueAfterActorTurns {
-        await session.attachment.dom.elementStyles.selectedState == .needsRefresh ? true : nil
-    }
+    #expect(await session.attachment.dom.elementStyles.selectedState == .needsRefresh)
 
     let refreshAfterChildInsertCount = await backend.sentTargetMessages().count
     let refreshAfterChildInsert = Task {
@@ -1109,14 +1106,13 @@ func cssAndDOMStyleInvalidationsMarkSelectedNodeStylesNeedsRefresh() async throw
     await refreshAfterChildInsert.value
     #expect(await session.attachment.dom.elementStyles.selectedState == .loaded)
 
-    await receiveTargetDispatch(
+    await receiveAndApplyTargetDispatch(
         transport,
         targetID: .pageMain,
-        message: #"{"method":"DOM.childNodeCountUpdated","params":{"nodeId":4,"childNodeCount":3}}"#
+        message: #"{"method":"DOM.childNodeCountUpdated","params":{"nodeId":4,"childNodeCount":3}}"#,
+        in: session
     )
-    _ = try await awaitValueAfterActorTurns {
-        await session.attachment.dom.elementStyles.selectedState == .needsRefresh ? true : nil
-    }
+    #expect(await session.attachment.dom.elementStyles.selectedState == .needsRefresh)
 }
 
 @Test
@@ -1203,14 +1199,12 @@ func domMutationRemovingSelectedNodeClearsSelectedCSSNodeStyles() async throws {
     await refreshTask.value
     #expect(await session.attachment.dom.elementStyles.selectedState == .loaded)
 
-    await receiveTargetDispatch(
+    await receiveAndApplyTargetDispatch(
         transport,
         targetID: .pageMain,
-        message: #"{"method":"DOM.childNodeRemoved","params":{"nodeId":4}}"#
+        message: #"{"method":"DOM.childNodeRemoved","params":{"nodeId":4}}"#,
+        in: session
     )
-    _ = try await awaitValueAfterActorTurns {
-        await session.attachment.dom.selectedNodeID == nil ? true : nil
-    }
 
     #expect(await session.attachment.dom.elementStyles.selectedNodeStyles == nil)
 }
@@ -1292,16 +1286,16 @@ func frameTargetWithoutDOMCapabilityDoesNotHydrateOnCreationOrDocumentUpdated() 
     try await connect(session, transport: transport, backend: backend)
 
     let sentCount = await backend.sentTargetMessages().count
-    await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":[],"isProvisional":false}}}"#
+    await receiveAndApplyRootMessage(
+        transport,
+        message: #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":[],"isProvisional":false}}}"#,
+        in: session
     )
-    _ = try await awaitValueAfterActorTurns {
-        await session.attachment.dom.snapshot().targetsByID[.frameAd]
-    }
-    await receiveTargetDispatch(
+    await receiveAndApplyTargetDispatch(
         transport,
         targetID: .frameAd,
-        message: #"{"method":"DOM.documentUpdated","params":{}}"#
+        message: #"{"method":"DOM.documentUpdated","params":{}}"#,
+        in: session
     )
 
     #expect(await backend.sentTargetMessages().count == sentCount)
@@ -1837,25 +1831,22 @@ func subframeCommitDoesNotRetargetPageRuntimeOrConsoleState() async throws {
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
 
-    await receiveTargetDispatch(
+    await receiveAndApplyTargetDispatch(
         transport,
         targetID: .pageMain,
-        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"type":"normal","frameId":"main-frame"}}}"#
+        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"type":"normal","frameId":"main-frame"}}}"#,
+        in: session
     )
-    await receiveTargetDispatch(
+    await receiveAndApplyTargetDispatch(
         transport,
         targetID: .pageMain,
-        message: #"{"method":"Console.messageAdded","params":{"message":{"source":"console-api","level":"log","text":"page message","type":"log"}}}"#
+        message: #"{"method":"Console.messageAdded","params":{"message":{"source":"console-api","level":"log","text":"page message","type":"log"}}}"#,
+        in: session
     )
-    let _: Bool = try await awaitValueAfterActorTurns {
-        let runtimeSnapshot = await session.attachment.runtime.snapshot()
-        let consoleSnapshot = await session.attachment.console.snapshot()
-        guard runtimeSnapshot.executionContextsByKey[contextKey(.pageMain, 7)]?.targetID == .pageMain,
-              consoleSnapshot.orderedMessageIDs.first?.targetID == .pageMain else {
-            return nil
-        }
-        return true
-    }
+    let initialRuntimeSnapshot = await session.attachment.runtime.snapshot()
+    let initialConsoleSnapshot = await session.attachment.console.snapshot()
+    #expect(initialRuntimeSnapshot.executionContextsByKey[contextKey(.pageMain, 7)]?.targetID == .pageMain)
+    #expect(initialConsoleSnapshot.orderedMessageIDs.first?.targetID == .pageMain)
 
     await transport.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-committed","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["Runtime","Console"],"isProvisional":true}}}"#
