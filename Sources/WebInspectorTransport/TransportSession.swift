@@ -10,7 +10,6 @@ package actor TransportSession {
     private let responseTimeoutDidFire: ResponseTimeoutDidFire
     private var nextCommandID: UInt64
     private var eventSequences: TransportEventSequenceTracker
-    private var nextSubscriberID: UInt64
     private var nextMainPageTargetWaiterID: UInt64
     private var replyStore: TransportReplyStore
     private var mainPageTargetWaiters: [UInt64: ReplyPromise<TransportMainPageTarget>]
@@ -18,8 +17,7 @@ package actor TransportSession {
     private var provisionalTargetMessageStore: TransportProvisionalTargetMessageStore
     private var styleSheetRouting: TransportStyleSheetRouting
     private var runtimeContextRegistry: RuntimeContextRegistry
-    private var subscribers: [ProtocolDomain: [UInt64: AsyncStream<ProtocolEventEnvelope>.Continuation]]
-    private var orderedSubscribers: [UInt64: AsyncStream<ProtocolEventEnvelope>.Continuation]
+    private var eventSubscribers: TransportEventSubscriberRegistry
     private var inboundMessageQueue: TransportInboundMessageQueue
     private var closed: Bool
 
@@ -35,7 +33,6 @@ package actor TransportSession {
         self.responseTimeoutDidFire = responseTimeoutDidFire ?? {}
         nextCommandID = 0
         eventSequences = TransportEventSequenceTracker()
-        nextSubscriberID = 0
         nextMainPageTargetWaiterID = 0
         replyStore = TransportReplyStore()
         mainPageTargetWaiters = [:]
@@ -43,17 +40,14 @@ package actor TransportSession {
         provisionalTargetMessageStore = TransportProvisionalTargetMessageStore()
         styleSheetRouting = TransportStyleSheetRouting()
         runtimeContextRegistry = RuntimeContextRegistry()
-        subscribers = [:]
-        orderedSubscribers = [:]
+        eventSubscribers = TransportEventSubscriberRegistry()
         inboundMessageQueue = TransportInboundMessageQueue()
         closed = false
     }
 
     package func events(for domain: ProtocolDomain) -> AsyncStream<ProtocolEventEnvelope> {
         let pair = AsyncStream<ProtocolEventEnvelope>.makeStream(bufferingPolicy: .unbounded)
-        nextSubscriberID &+= 1
-        let subscriberID = nextSubscriberID
-        subscribers[domain, default: [:]][subscriberID] = pair.continuation
+        let subscriberID = eventSubscribers.insert(pair.continuation, domain: domain)
         pair.continuation.onTermination = { [weak self] _ in
             Task {
                 await self?.removeSubscriber(subscriberID, domain: domain)
@@ -64,9 +58,7 @@ package actor TransportSession {
 
     package func orderedEvents() -> AsyncStream<ProtocolEventEnvelope> {
         let pair = AsyncStream<ProtocolEventEnvelope>.makeStream(bufferingPolicy: .unbounded)
-        nextSubscriberID &+= 1
-        let subscriberID = nextSubscriberID
-        orderedSubscribers[subscriberID] = pair.continuation
+        let subscriberID = eventSubscribers.insertOrdered(pair.continuation)
         pair.continuation.onTermination = { [weak self] _ in
             Task {
                 await self?.removeOrderedSubscriber(subscriberID)
@@ -124,16 +116,7 @@ package actor TransportSession {
         replyStore.removeAll()
         mainPageTargetWaiters.removeAll()
         provisionalTargetMessageStore.removeAll()
-        for continuations in subscribers.values {
-            for continuation in continuations.values {
-                continuation.finish()
-            }
-        }
-        for continuation in orderedSubscribers.values {
-            continuation.finish()
-        }
-        subscribers.removeAll()
-        orderedSubscribers.removeAll()
+        eventSubscribers.finishAndRemoveAll()
         await backend.detach()
     }
 
@@ -818,11 +801,10 @@ package actor TransportSession {
             receivedDomainSequences: eventSequence.receivedDomainSequences,
             paramsData: paramsData
         )
-        let continuations = subscribers[domain].map { Array($0.values) } ?? []
-        for continuation in continuations {
+        for continuation in eventSubscribers.continuations(for: domain) {
             continuation.yield(envelope)
         }
-        for continuation in orderedSubscribers.values {
+        for continuation in eventSubscribers.orderedContinuations {
             continuation.yield(envelope)
         }
         await notifyMainPageTargetWaitersIfNeeded(receivedSequence: eventSequence.sequence)
@@ -850,14 +832,11 @@ package actor TransportSession {
     }
 
     private func removeSubscriber(_ subscriberID: UInt64, domain: ProtocolDomain) {
-        subscribers[domain]?.removeValue(forKey: subscriberID)
-        if subscribers[domain]?.isEmpty == true {
-            subscribers.removeValue(forKey: domain)
-        }
+        eventSubscribers.remove(subscriberID, domain: domain)
     }
 
     private func removeOrderedSubscriber(_ subscriberID: UInt64) {
-        orderedSubscribers.removeValue(forKey: subscriberID)
+        eventSubscribers.removeOrdered(subscriberID)
     }
 
     private func removePendingReply(_ key: TransportPendingKey) {
