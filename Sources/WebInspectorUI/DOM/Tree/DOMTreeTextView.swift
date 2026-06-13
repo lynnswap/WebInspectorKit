@@ -16,8 +16,6 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     static let font = UIFont.monospacedSystemFont(ofSize: 13, weight: .regular)
     private static let lineSpacing: CGFloat = 2
     private static let textInsets = UIEdgeInsets(top: 8, left: 10, bottom: 8, right: 16)
-    private static let indentSpacesPerDepth = 2
-    private static let disclosureSlotSpaces = 2
     private static let characterWidth: CGFloat = {
         (" " as NSString).size(withAttributes: [.font: font]).width
     }()
@@ -44,8 +42,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     private let layoutManager = NSTextLayoutManager()
     private let textContainer = NSTextContainer()
     private let textContentView = DOMTreeTextContentView()
-    private let fragmentViewMap = NSMapTable<NSTextLayoutFragment, DOMTreeTextLayoutFragmentView>.weakToWeakObjects()
-    private var lastUsedFragmentViews: Set<DOMTreeTextLayoutFragmentView> = []
+    private lazy var viewportLayoutCoordinator = DOMTreeViewportLayoutCoordinator(textContentView: textContentView)
     private lazy var findCoordinator = DOMTreeFindCoordinator(textView: self)
     private lazy var textSelectionInteraction: UITextInteraction = {
         let interaction = UITextInteraction(for: .nonEditable)
@@ -69,6 +66,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     }
     private var renderedText = ""
     private let expansionState = DOMTreeExpansionState()
+    private lazy var renderedRowsBuilder = DOMTreeRenderedRowsBuilder(dom: dom, expansionState: expansionState)
     private var hoveredNodeID: DOMNode.ID?
     private var requestedChildNodeIDs: Set<DOMNode.ID> = []
     private let findDecorationState = DOMTreeFindDecorationState()
@@ -84,8 +82,6 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     private let reloadScheduler = DOMTreeReloadScheduler()
     private var resolvedTextAttributesCache: DOMTreeResolvedTextAttributes?
     private var disclosureSymbolImageCache: [DisclosureSymbolImageCacheKey: UIImage] = [:]
-    private var renderedLinePrefixCache: [Int: String] = [:]
-    private var markupCache: [DOMNode.ID: DOMTreeCachedMarkup] = [:]
     private var maxLineDisplayColumnCount = 0
     private var multiSelection = DOMTreeSelectionController()
     private var menuAnchorButton: UIButton?
@@ -208,57 +204,27 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     }
 
     func textViewportLayoutControllerWillLayout(_ textViewportLayoutController: NSTextViewportLayoutController) {
-        lastUsedFragmentViews = Set(textContentView.subviews.compactMap { $0 as? DOMTreeTextLayoutFragmentView })
+        viewportLayoutCoordinator.prepareForLayout()
     }
 
     func textViewportLayoutController(
         _ textViewportLayoutController: NSTextViewportLayoutController,
         configureRenderingSurfaceFor textLayoutFragment: NSTextLayoutFragment
     ) {
-        let layoutFrame = textLayoutFragment.layoutFragmentFrame
-        let visibleTextRect = visibleTextRect()
-        let surfaceFrame = CGRect(
-            x: visibleTextRect.minX,
-            y: layoutFrame.minY,
-            width: max(visibleTextRect.width, 1),
-            height: layoutFrame.height
+        viewportLayoutCoordinator.configureRenderingSurface(
+            for: textLayoutFragment,
+            visibleTextRect: visibleTextRect(),
+            configureHighlights: { [unowned self] fragmentView, surfaceFrame in
+                configureHighlights(for: fragmentView, surfaceFrame: surfaceFrame)
+            },
+            configureRowBackgrounds: { [unowned self] fragmentView, surfaceFrame in
+                configureRowBackgrounds(for: fragmentView, surfaceFrame: surfaceFrame)
+            }
         )
-        let fragmentView: DOMTreeTextLayoutFragmentView
-        if let cachedView = fragmentViewMap.object(forKey: textLayoutFragment) {
-            fragmentView = cachedView
-            lastUsedFragmentViews.remove(cachedView)
-        } else {
-            fragmentView = DOMTreeTextLayoutFragmentView(layoutFragment: textLayoutFragment, frame: surfaceFrame)
-            fragmentViewMap.setObject(fragmentView, forKey: textLayoutFragment)
-        }
-
-        fragmentView.layoutFragmentDrawPoint = CGPoint(
-            x: layoutFrame.minX - surfaceFrame.minX,
-            y: layoutFrame.minY - surfaceFrame.minY
-        )
-        configureHighlights(
-            for: fragmentView,
-            surfaceFrame: surfaceFrame
-        )
-        configureRowBackgrounds(
-            for: fragmentView,
-            surfaceFrame: surfaceFrame
-        )
-
-        if !fragmentView.frame.wiIsNearlyEqual(to: surfaceFrame) {
-            fragmentView.frame = surfaceFrame
-            fragmentView.setNeedsDisplay()
-        }
-        if fragmentView.superview !== textContentView {
-            textContentView.addSubview(fragmentView)
-        }
     }
 
     func textViewportLayoutControllerDidLayout(_ textViewportLayoutController: NSTextViewportLayoutController) {
-        for staleView in lastUsedFragmentViews {
-            staleView.removeFromSuperview()
-        }
-        lastUsedFragmentViews.removeAll()
+        viewportLayoutCoordinator.finishLayout()
         updateTextLayoutGeometry()
     }
 
@@ -496,7 +462,13 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     }
 
     private func routeDOMInvalidation(from dom: DOMSession, isInitial: Bool) {
-        let buildResult = buildRenderedRows()
+#if DEBUG
+        performanceCounters.buildRenderedRowsCallCount += 1
+#endif
+        let buildResult = renderedRowsBuilder.build(
+            previousRowCapacity: rows.count,
+            previousTextCapacity: renderedText.count
+        )
         let nextTreeContent = DOMTreeObservedContent(buildResult)
         let nextSelectedNodeID = dom.selectedNodeID
         let treeChanged = isInitial || lastObservedTreeContent != nextTreeContent
@@ -549,14 +521,20 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         let previousRows = rows
         let previousText = renderedText
         if resetFragments {
-            markupCache.removeAll(keepingCapacity: true)
+            renderedRowsBuilder.removeCachedMarkup(keepingCapacity: true)
         }
         prepareSelectionForRendering()
-        let buildResult = buildRenderedRows()
+#if DEBUG
+        performanceCounters.buildRenderedRowsCallCount += 1
+#endif
+        let buildResult = renderedRowsBuilder.build(
+            previousRowCapacity: rows.count,
+            previousTextCapacity: renderedText.count
+        )
         rows = buildResult.rows
         lastObservedTreeContent = DOMTreeObservedContent(buildResult)
         lastRoutedSelectedNodeID = dom.selectedNodeID
-        pruneMarkupCacheForRenderedRows()
+        renderedRowsBuilder.pruneCachedMarkup(keeping: renderedRows.visibleNodeIDs)
         reconcileMultiSelectionAfterReload()
         renderedText = buildResult.text
         clampTextSelectionAfterTextChange()
@@ -628,12 +606,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
 
         for rowIndex in affectedRowIndices.sorted(by: >) {
             let previousRow = nextRows[rowIndex]
-            let nextRow = renderedRow(
-                for: previousRow.node,
-                depth: previousRow.depth,
-                rowIndex: rowIndex,
-                utf16Location: previousRow.textRange.location
-            )
+            let nextRow = renderedRowsBuilder.rebuildRow(previousRow, rowIndex: rowIndex)
             guard !previousRow.hasSameRenderedContent(as: nextRow) else {
                 continue
             }
@@ -741,174 +714,6 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         }
     }
 
-    private func buildRenderedRows() -> (rows: [DOMTreeLine], text: String, maxLineDisplayColumnCount: Int) {
-#if DEBUG
-        performanceCounters.buildRenderedRowsCallCount += 1
-#endif
-        guard let rootNode = dom.currentPageRootNode else {
-            return ([], "", 0)
-        }
-
-        var nextRows: [DOMTreeLine] = []
-        nextRows.reserveCapacity(rows.count)
-        var nextText = ""
-        nextText.reserveCapacity(renderedText.count)
-        var utf16Location = 0
-        var maxLineDisplayColumnCount = 0
-
-        func appendLine(_ node: DOMNode, depth: Int, isClosingTag: Bool) -> DOMTreeLine {
-            let rowIndex = nextRows.count
-            let row = renderedRow(
-                for: node,
-                depth: depth,
-                rowIndex: rowIndex,
-                utf16Location: utf16Location,
-                isClosingTag: isClosingTag
-            )
-
-            maxLineDisplayColumnCount = max(maxLineDisplayColumnCount, row.displayColumnCount)
-            nextRows.append(row)
-            if rowIndex > 0 {
-                nextText.append("\n")
-            }
-            nextText.append(row.text)
-            utf16Location += row.textRange.length + 1
-            return row
-        }
-
-        func append(_ node: DOMNode, depth: Int) {
-            let row = appendLine(node, depth: depth, isClosingTag: false)
-            guard row.hasDisclosure, row.isOpen else {
-                return
-            }
-            for child in dom.visibleDOMTreeChildren(of: node) {
-                append(child, depth: depth + 1)
-            }
-            if DOMTreeMarkupBuilder.rendersClosingTagRow(for: node) {
-                _ = appendLine(node, depth: depth, isClosingTag: true)
-            }
-        }
-
-        let displayRoots = rootNode.nodeType == .document ? dom.visibleDOMTreeChildren(of: rootNode) : [rootNode]
-        for node in displayRoots {
-            append(node, depth: 0)
-        }
-
-        return (nextRows, nextText, maxLineDisplayColumnCount)
-    }
-
-    private func renderedRow(
-        for node: DOMNode,
-        depth: Int,
-        rowIndex: Int,
-        utf16Location: Int,
-        isClosingTag: Bool = false
-    ) -> DOMTreeLine {
-        let hasDisclosure = !isClosingTag && nodeHasDisclosure(node)
-        let isOpen = !isClosingTag && isNodeOpen(node, depth: depth)
-        let markup = cachedMarkup(
-            for: node,
-            hasDisclosure: hasDisclosure,
-            isOpen: isOpen,
-            isClosingTag: isClosingTag
-        )
-        let prefix = renderedLinePrefix(depth: depth)
-        let line = prefix + markup.text
-        let prefixLength = depth * Self.indentSpacesPerDepth + Self.disclosureSlotSpaces
-        let lineLength = prefixLength + markup.utf16Length
-        var tokens: [DOMTreeToken] = []
-        tokens.reserveCapacity(markup.tokens.count)
-        for token in markup.tokens {
-            tokens.append(
-                DOMTreeToken(
-                    kind: token.kind,
-                    range: NSRange(location: prefixLength + token.range.location, length: token.range.length)
-                )
-            )
-        }
-
-        return DOMTreeLine(
-            node: node,
-            depth: depth,
-            rowIndex: rowIndex,
-            text: line,
-            textRange: NSRange(location: utf16Location, length: lineLength),
-            markupRange: NSRange(location: prefixLength, length: markup.utf16Length),
-            tokens: tokens,
-            displayColumnCount: prefixLength + markup.displayColumnCount,
-            hasDisclosure: hasDisclosure,
-            isOpen: isOpen,
-            isClosingTag: isClosingTag
-        )
-    }
-
-    private func cachedMarkup(
-        for node: DOMNode,
-        hasDisclosure: Bool,
-        isOpen: Bool,
-        isClosingTag: Bool
-    ) -> DOMTreeMarkup {
-        let signature = DOMTreeMarkupSignature(
-            nodeType: node.nodeType,
-            nodeName: node.nodeName,
-            localName: node.localName,
-            nodeValue: node.nodeValue,
-            pseudoType: node.pseudoType,
-            shadowRootType: node.shadowRootType,
-            isTemplateContent: dom.isTemplateContent(node),
-            attributes: node.attributes,
-            childCount: node.regularChildren.knownCount,
-            hasDisclosure: hasDisclosure,
-            isOpen: isOpen,
-            isClosingTag: isClosingTag
-        )
-        if let cached = markupCache[node.id],
-           cached.signature == signature {
-            return cached.markup
-        }
-        let markup = DOMTreeMarkupBuilder.markup(
-            for: node,
-            hasDisclosure: hasDisclosure,
-            isOpen: isOpen,
-            isClosingTag: isClosingTag,
-            isTemplateContent: dom.isTemplateContent(node)
-        )
-        markupCache[node.id] = DOMTreeCachedMarkup(signature: signature, markup: markup)
-        return markup
-    }
-
-    private func pruneMarkupCache(keeping nodeIDs: Set<DOMNode.ID>) {
-        markupCache = markupCache.filter { nodeIDs.contains($0.key) }
-    }
-
-    private func nodeHasDisclosure(_ node: DOMNode) -> Bool {
-        dom.hasVisibleDOMTreeChildren(node)
-    }
-
-    private func isNodeOpen(_ node: DOMNode, depth: Int) -> Bool {
-        if let explicitState = expansionState.isOpen(node.id) {
-            return explicitState
-        }
-        if nodeName(for: node).lowercased() == "head" {
-            return false
-        }
-        let name = nodeName(for: node).lowercased()
-        return name == "html" || name == "body"
-    }
-
-    private func renderedLinePrefix(depth: Int) -> String {
-        if let cached = renderedLinePrefixCache[depth] {
-            return cached
-        }
-        let prefix = String(repeating: " ", count: depth * Self.indentSpacesPerDepth + Self.disclosureSlotSpaces)
-        renderedLinePrefixCache[depth] = prefix
-        return prefix
-    }
-
-    private func pruneMarkupCacheForRenderedRows() {
-        pruneMarkupCache(keeping: renderedRows.visibleNodeIDs)
-    }
-
     private func recomputeMaxLineDisplayColumnCount() -> Int {
         var maxColumnCount = 0
         for row in rows where row.displayColumnCount > maxColumnCount {
@@ -937,16 +742,6 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         for row in rows where row.hasDisclosure && row.isOpen {
             requestChildrenIfNeeded(for: row.node)
         }
-    }
-
-    private func nodeName(for node: DOMNode) -> String {
-        if !node.localName.isEmpty {
-            return node.localName
-        }
-        if !node.nodeName.isEmpty {
-            return node.nodeName
-        }
-        return node.nodeValue.isEmpty ? node.nodeName : node.nodeValue
     }
 
     private func requestChildrenIfNeeded(for node: DOMNode) {
@@ -1480,11 +1275,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
 #if DEBUG
         performanceCounters.resetTextFragmentViewsCallCount += 1
 #endif
-        for case let fragmentView as DOMTreeTextLayoutFragmentView in textContentView.subviews {
-            fragmentView.removeFromSuperview()
-        }
-        fragmentViewMap.removeAllObjects()
-        lastUsedFragmentViews.removeAll(keepingCapacity: true)
+        viewportLayoutCoordinator.resetFragmentViews()
     }
 
     private func invalidateTextLayout() {
@@ -1641,13 +1432,13 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     }
 
     private func disclosureAttachmentRange(for row: DOMTreeLine) -> NSRange {
-        NSRange(location: row.textRange.location + row.depth * Self.indentSpacesPerDepth, length: 1)
+        NSRange(location: row.textRange.location + row.depth * DOMTreeTextIndentMetrics.indentSpacesPerDepth, length: 1)
     }
 
     private func disclosureSlotRange(for row: DOMTreeLine) -> NSRange {
         NSRange(
-            location: row.textRange.location + row.depth * Self.indentSpacesPerDepth,
-            length: Self.disclosureSlotSpaces
+            location: row.textRange.location + row.depth * DOMTreeTextIndentMetrics.indentSpacesPerDepth,
+            length: DOMTreeTextIndentMetrics.disclosureSlotSpaces
         )
     }
 

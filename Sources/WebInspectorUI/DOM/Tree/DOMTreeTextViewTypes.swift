@@ -3,6 +3,11 @@ import WebInspectorCore
 import Observation
 import UIKit
 
+enum DOMTreeTextIndentMetrics {
+    static let indentSpacesPerDepth = 2
+    static let disclosureSlotSpaces = 2
+}
+
 @MainActor
 @Observable
 final class DOMTreeExpansionState {
