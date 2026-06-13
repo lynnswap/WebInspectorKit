@@ -10,50 +10,75 @@ final class DOMSessionHighlightController {
 final class DOMSessionElementPickerController {
     final class Session {
         let targetID: ProtocolTargetIdentifier
-        fileprivate var acceptsInspectEvents = false
 
         init(targetID: ProtocolTargetIdentifier) {
             self.targetID = targetID
         }
     }
 
-    private var activeSession: Session?
+    private enum Phase {
+        case idle
+        case enabling(Session)
+        case accepting(Session)
+
+        var session: Session? {
+            switch self {
+            case .idle:
+                nil
+            case let .enabling(session), let .accepting(session):
+                session
+            }
+        }
+
+        func acceptingSession() -> Session? {
+            guard case let .accepting(session) = self else {
+                return nil
+            }
+            return session
+        }
+    }
+
+    private var phase: Phase = .idle
 
     var targetID: ProtocolTargetIdentifier? {
-        activeSession?.targetID
+        phase.session?.targetID
+    }
+
+    var isSelecting: Bool {
+        phase.session != nil
     }
 
     func begin(targetID: ProtocolTargetIdentifier) -> Session {
         let session = Session(targetID: targetID)
-        activeSession = session
+        phase = .enabling(session)
         return session
     }
 
     @discardableResult
     func beginAcceptingInspectEvents(for session: Session) -> Bool {
-        guard activeSession === session else {
+        guard case let .enabling(currentSession) = phase,
+              currentSession === session else {
             return false
         }
-        session.acceptsInspectEvents = true
+        phase = .accepting(session)
         return true
     }
 
     func currentAcceptingSession() -> Session? {
-        guard let activeSession,
-              activeSession.acceptsInspectEvents else {
-            return nil
-        }
-        return activeSession
+        phase.acceptingSession()
     }
 
     func isCurrentAcceptingSession(_ session: Session) -> Bool {
-        activeSession === session && session.acceptsInspectEvents
+        guard let currentSession = phase.acceptingSession() else {
+            return false
+        }
+        return currentSession === session
     }
 
     @discardableResult
     func clear() -> ProtocolTargetIdentifier? {
-        let targetID = activeSession?.targetID
-        activeSession = nil
+        let targetID = phase.session?.targetID
+        phase = .idle
         return targetID
     }
 }

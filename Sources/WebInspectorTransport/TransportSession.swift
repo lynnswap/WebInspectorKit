@@ -390,7 +390,7 @@ package actor TransportSession {
 
         let targetID = targetIDForRootEvent(method: method, paramsData: parsed.paramsData)
         let sourceTargetID = sourceTargetIDForRootEvent(method: method, targetID: targetID)
-        await updateRegistryFromRootEvent(
+        let pendingStyleSheetAddedEvents = await updateRegistryFromRootEvent(
             method: method,
             targetID: targetID,
             sourceTargetID: sourceTargetID,
@@ -403,7 +403,7 @@ package actor TransportSession {
             sourceTargetID: sourceTargetID,
             paramsData: parsed.paramsData
         )
-        await emitPendingResolvedStyleSheetAddedEvents()
+        await emitResolvedStyleSheetAddedEvents(pendingStyleSheetAddedEvents)
         await dispatchCommittedProvisionalTargetMessagesIfNeeded(method: method, paramsData: parsed.paramsData)
     }
 
@@ -487,23 +487,24 @@ package actor TransportSession {
         targetID: ProtocolTargetIdentifier?,
         sourceTargetID: ProtocolTargetIdentifier?,
         paramsData: Data
-    ) async {
+    ) async -> [ResolvedStyleSheetAddedEvent] {
         switch method {
         case "Target.targetCreated":
             guard let params = try? TransportMessageParser.decode(TargetCreatedParams.self, from: paramsData) else {
-                return
+                return []
             }
-            applyTargetCreated(record(for: params.targetInfo))
+            return applyTargetCreated(record(for: params.targetInfo))
         case "Target.targetDestroyed":
             guard let params = try? TransportMessageParser.decode(TargetDestroyedParams.self, from: paramsData) else {
-                return
+                return []
             }
             await applyTargetDestroyed(params.targetId)
+            return []
         case "Target.didCommitProvisionalTarget":
             guard let params = try? TransportMessageParser.decode(TargetCommittedParams.self, from: paramsData) else {
-                return
+                return []
             }
-            applyTargetCommitted(oldTargetID: params.oldTargetId, newTargetID: params.newTargetId)
+            return applyTargetCommitted(oldTargetID: params.oldTargetId, newTargetID: params.newTargetId)
         case "Runtime.executionContextCreated", "Runtime.executionContextDestroyed", "Runtime.executionContextsCleared":
             updateRegistryFromTargetEvent(
                 method: method,
@@ -511,10 +512,12 @@ package actor TransportSession {
                 sourceTargetID: sourceTargetID,
                 paramsData: paramsData
             )
+            return []
         case "CSS.styleSheetAdded", "CSS.styleSheetRemoved":
             updateCSSStyleSheetRegistry(method: method, targetID: targetID, paramsData: paramsData)
+            return []
         default:
-            break
+            return []
         }
     }
 
@@ -572,12 +575,13 @@ package actor TransportSession {
         }
     }
 
-    private func applyTargetCreated(_ record: ProtocolTargetRecord) {
+    private func applyTargetCreated(_ record: ProtocolTargetRecord) -> [ResolvedStyleSheetAddedEvent] {
+        var styleSheetAddedEvents: [ResolvedStyleSheetAddedEvent] = []
         targetsByID[record.id] = record
         if let frameID = record.frameID {
             frameTargetIDsByFrameID[frameID] = record.id
             if !record.isProvisional {
-                resolvePendingStyleSheets(frameID: frameID, targetID: record.id)
+                styleSheetAddedEvents.append(contentsOf: resolvePendingStyleSheets(frameID: frameID, targetID: record.id))
             }
         }
         if currentMainPageTargetID == nil,
@@ -586,6 +590,7 @@ package actor TransportSession {
            !record.isProvisional {
             currentMainPageTargetID = record.id
         }
+        return styleSheetAddedEvents
     }
 
     private func record(for targetInfo: TargetInfoPayload) -> ProtocolTargetRecord {
@@ -657,7 +662,11 @@ package actor TransportSession {
         }
     }
 
-    private func applyTargetCommitted(oldTargetID: ProtocolTargetIdentifier?, newTargetID: ProtocolTargetIdentifier) {
+    private func applyTargetCommitted(
+        oldTargetID: ProtocolTargetIdentifier?,
+        newTargetID: ProtocolTargetIdentifier
+    ) -> [ResolvedStyleSheetAddedEvent] {
+        var styleSheetAddedEvents: [ResolvedStyleSheetAddedEvent] = []
         let committedOldTargetID = oldTargetID ?? inferredOldTargetIDForOldlessCommit(newTargetID: newTargetID)
         if let committedOldTargetID {
             moveBufferedProvisionalTargetMessages(from: committedOldTargetID, to: newTargetID)
@@ -671,14 +680,14 @@ package actor TransportSession {
             targetsByID[newTargetID] = committedSubframeRecord
             if let frameID = committedSubframeRecord.frameID {
                 frameTargetIDsByFrameID[frameID] = newTargetID
-                resolvePendingStyleSheets(frameID: frameID, targetID: newTargetID)
+                styleSheetAddedEvents.append(contentsOf: resolvePendingStyleSheets(frameID: frameID, targetID: newTargetID))
             }
-            return
+            return styleSheetAddedEvents
         }
 
         let oldRecord = committedOldTargetID.flatMap { targetsByID.removeValue(forKey: $0) }
         guard oldRecord != nil || targetsByID[newTargetID] != nil else {
-            return
+            return styleSheetAddedEvents
         }
 
         var newRecord = targetsByID[newTargetID] ?? oldRecord!
@@ -696,7 +705,7 @@ package actor TransportSession {
 
         if let frameID = newRecord.frameID {
             frameTargetIDsByFrameID[frameID] = newTargetID
-            resolvePendingStyleSheets(frameID: frameID, targetID: newTargetID)
+            styleSheetAddedEvents.append(contentsOf: resolvePendingStyleSheets(frameID: frameID, targetID: newTargetID))
         }
         if let oldTargetID = committedOldTargetID {
             runtimeContextRegistry.retarget(oldTargetID: oldTargetID, newTargetID: newTargetID)
@@ -710,6 +719,7 @@ package actor TransportSession {
            newRecord.parentFrameID == nil {
             currentMainPageTargetID = newTargetID
         }
+        return styleSheetAddedEvents
     }
 
     private func moveBufferedProvisionalTargetMessages(
@@ -881,12 +891,14 @@ package actor TransportSession {
         }
     }
 
-    private func resolvePendingStyleSheets(frameID: DOMFrameIdentifier, targetID: ProtocolTargetIdentifier) {
+    private func resolvePendingStyleSheets(
+        frameID: DOMFrameIdentifier,
+        targetID: ProtocolTargetIdentifier
+    ) -> [ResolvedStyleSheetAddedEvent] {
         styleSheetRouting.resolvePending(frameID: frameID, targetID: targetID)
     }
 
-    private func emitPendingResolvedStyleSheetAddedEvents() async {
-        let events = styleSheetRouting.takePendingResolvedAddedEvents()
+    private func emitResolvedStyleSheetAddedEvents(_ events: [ResolvedStyleSheetAddedEvent]) async {
         guard !events.isEmpty else {
             return
         }

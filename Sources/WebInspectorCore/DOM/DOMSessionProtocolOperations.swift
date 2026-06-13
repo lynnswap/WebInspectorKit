@@ -187,7 +187,7 @@ extension DOMSession {
         }
 
         let pickerSession = elementPicker.begin(targetID: targetID)
-        isSelectingElement = true
+        syncElementPickerSelectionState()
 
         do {
             guard let intent = setInspectModeEnabledIntent(targetID: targetID, enabled: true) else {
@@ -902,10 +902,14 @@ extension DOMSession {
 
     private func clearElementPickerState(invalidatePendingSelection: Bool = false) {
         elementPicker.clear()
-        isSelectingElement = false
+        syncElementPickerSelectionState()
         if invalidatePendingSelection {
             selectNode(selectedNodeID)
         }
+    }
+
+    private func syncElementPickerSelectionState() {
+        isSelectingElement = elementPicker.isSelecting
     }
 
     private func recordElementPickerFailure(

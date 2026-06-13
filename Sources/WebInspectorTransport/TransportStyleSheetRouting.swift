@@ -6,17 +6,40 @@ struct ResolvedStyleSheetAddedEvent: Sendable {
 }
 
 struct TransportStyleSheetRouting: Sendable {
-    private var targetIDsByStyleSheetID: [String: ProtocolTargetIdentifier] = [:]
-    private var unresolvedFrameIDsByStyleSheetID: [String: DOMFrameIdentifier] = [:]
-    private var unresolvedAddedParamsDataByStyleSheetID: [String: Data] = [:]
-    private var pendingResolvedAddedEvents: [ResolvedStyleSheetAddedEvent] = []
+    private enum Route: Sendable {
+        case resolved(ProtocolTargetIdentifier)
+        case unresolved(frameID: DOMFrameIdentifier, addedParamsData: Data)
+
+        var targetID: ProtocolTargetIdentifier? {
+            guard case let .resolved(targetID) = self else {
+                return nil
+            }
+            return targetID
+        }
+
+        var unresolvedFrameID: DOMFrameIdentifier? {
+            guard case let .unresolved(frameID, _) = self else {
+                return nil
+            }
+            return frameID
+        }
+
+        var unresolvedAddedParamsData: Data? {
+            guard case let .unresolved(_, paramsData) = self else {
+                return nil
+            }
+            return paramsData
+        }
+    }
+
+    private var routesByStyleSheetID: [String: Route] = [:]
 
     func targetID(for styleSheetID: String) -> ProtocolTargetIdentifier? {
-        targetIDsByStyleSheetID[styleSheetID]
+        routesByStyleSheetID[styleSheetID]?.targetID
     }
 
     func hasUnresolvedStyleSheet(_ styleSheetID: String) -> Bool {
-        unresolvedFrameIDsByStyleSheetID[styleSheetID] != nil
+        routesByStyleSheetID[styleSheetID]?.unresolvedFrameID != nil
     }
 
     mutating func recordAdded(
@@ -26,57 +49,52 @@ struct TransportStyleSheetRouting: Sendable {
         resolvedTargetID: ProtocolTargetIdentifier?
     ) {
         if let frameID, resolvedTargetID == nil {
-            targetIDsByStyleSheetID.removeValue(forKey: styleSheetID)
-            unresolvedFrameIDsByStyleSheetID[styleSheetID] = frameID
-            unresolvedAddedParamsDataByStyleSheetID[styleSheetID] = paramsData
+            routesByStyleSheetID[styleSheetID] = .unresolved(frameID: frameID, addedParamsData: paramsData)
             return
         }
 
         guard let resolvedTargetID else {
             return
         }
-        targetIDsByStyleSheetID[styleSheetID] = resolvedTargetID
-        unresolvedFrameIDsByStyleSheetID.removeValue(forKey: styleSheetID)
-        unresolvedAddedParamsDataByStyleSheetID.removeValue(forKey: styleSheetID)
+        routesByStyleSheetID[styleSheetID] = .resolved(resolvedTargetID)
     }
 
     mutating func remove(styleSheetID: String) {
-        targetIDsByStyleSheetID.removeValue(forKey: styleSheetID)
-        unresolvedFrameIDsByStyleSheetID.removeValue(forKey: styleSheetID)
-        unresolvedAddedParamsDataByStyleSheetID.removeValue(forKey: styleSheetID)
+        routesByStyleSheetID.removeValue(forKey: styleSheetID)
     }
 
     mutating func removeTarget(_ targetID: ProtocolTargetIdentifier) {
-        targetIDsByStyleSheetID = targetIDsByStyleSheetID.filter { $0.value != targetID }
+        routesByStyleSheetID = routesByStyleSheetID.filter {
+            $0.value.targetID != targetID
+        }
     }
 
     mutating func retarget(from oldTargetID: ProtocolTargetIdentifier, to newTargetID: ProtocolTargetIdentifier) {
-        for (styleSheetID, targetID) in targetIDsByStyleSheetID where targetID == oldTargetID {
-            targetIDsByStyleSheetID[styleSheetID] = newTargetID
+        for (styleSheetID, route) in routesByStyleSheetID where route.targetID == oldTargetID {
+            routesByStyleSheetID[styleSheetID] = .resolved(newTargetID)
         }
     }
 
-    mutating func resolvePending(frameID: DOMFrameIdentifier, targetID: ProtocolTargetIdentifier) {
-        let styleSheetIDs = unresolvedFrameIDsByStyleSheetID
-            .filter { $0.value == frameID }
+    mutating func resolvePending(
+        frameID: DOMFrameIdentifier,
+        targetID: ProtocolTargetIdentifier
+    ) -> [ResolvedStyleSheetAddedEvent] {
+        let styleSheetIDs = routesByStyleSheetID
+            .filter { $0.value.unresolvedFrameID == frameID }
             .map(\.key)
+        var events: [ResolvedStyleSheetAddedEvent] = []
         for styleSheetID in styleSheetIDs {
-            targetIDsByStyleSheetID[styleSheetID] = targetID
-            unresolvedFrameIDsByStyleSheetID.removeValue(forKey: styleSheetID)
-            if let paramsData = unresolvedAddedParamsDataByStyleSheetID.removeValue(forKey: styleSheetID) {
-                pendingResolvedAddedEvents.append(
-                    ResolvedStyleSheetAddedEvent(
-                        targetID: targetID,
-                        paramsData: paramsData
-                    )
-                )
+            guard let paramsData = routesByStyleSheetID[styleSheetID]?.unresolvedAddedParamsData else {
+                continue
             }
+            routesByStyleSheetID[styleSheetID] = .resolved(targetID)
+            events.append(
+                ResolvedStyleSheetAddedEvent(
+                    targetID: targetID,
+                    paramsData: paramsData
+                )
+            )
         }
-    }
-
-    mutating func takePendingResolvedAddedEvents() -> [ResolvedStyleSheetAddedEvent] {
-        let events = pendingResolvedAddedEvents
-        pendingResolvedAddedEvents.removeAll(keepingCapacity: true)
         return events
     }
 }
