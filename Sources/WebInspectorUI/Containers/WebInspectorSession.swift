@@ -84,6 +84,14 @@ public final class WebInspectorSession {
     }
 }
 
+#if DEBUG
+extension WebInspectorSession {
+    package var hasPageUserInterfaceStyleObserverForTesting: Bool {
+        pageUserInterfaceStyleObserver != nil
+    }
+}
+#endif
+
 @MainActor
 @Observable
 package final class InterfaceModel {

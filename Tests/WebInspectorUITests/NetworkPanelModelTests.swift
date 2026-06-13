@@ -534,7 +534,6 @@ func responseBodyFetchesAreDeduplicatedWhileInFlight() async throws {
     model.fetchResponseBodyIfNeeded(for: request)
     await probe.waitForFetchCount(1)
     model.fetchResponseBodyIfNeeded(for: request)
-    await Task.yield()
 
     #expect(probe.fetchedIDs == [requestID])
 

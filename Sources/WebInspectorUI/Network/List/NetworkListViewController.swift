@@ -39,6 +39,9 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     private var snapshotState = NetworkListSnapshotState()
     private var isApplyingSearchPresentation = false
     private var activeSearchController: UISearchController?
+#if DEBUG
+    private var deinitHandlerForTesting: (@MainActor () -> Void)?
+#endif
     private lazy var filterHostingMenu = UIHostingMenu(
         rootView: NetworkListFilterMenuView(model: model)
     )
@@ -77,6 +80,9 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         selectedRequestObservation?.cancel()
         displayRowsReloadScheduler.cancel()
         detachSearchPresentation()
+#if DEBUG
+        deinitHandlerForTesting?()
+#endif
     }
 
     package func setRequestSelectionAction(_ action: @escaping RequestSelectionAction) {
@@ -525,6 +531,18 @@ extension NetworkListViewController {
 
     package var filterItemForTesting: UIBarButtonItem {
         filterItem
+    }
+
+    package var displayRowsObservationDeliveryForTesting: PortableObservationTracking.Token? {
+        displayRowsObservation
+    }
+
+    package var selectedRequestObservationDeliveryForTesting: PortableObservationTracking.Token? {
+        selectedRequestObservation
+    }
+
+    package func setDeinitHandlerForTesting(_ handler: @escaping @MainActor () -> Void) {
+        deinitHandlerForTesting = handler
     }
 }
 #endif

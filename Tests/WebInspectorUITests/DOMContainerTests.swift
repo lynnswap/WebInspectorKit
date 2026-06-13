@@ -1189,33 +1189,17 @@ struct DOMContainerTests {
         in viewController: DOMElementViewController,
         condition: @escaping @MainActor @Sendable () -> Bool
     ) async -> Bool {
-        if sampleRenderedCondition(in: viewController, condition: condition) {
-            return true
-        }
-
-        let deliveries = [
-            viewController.selectedNodeStyleObservationDeliveryForTesting,
-            viewController.elementStylesObservationDeliveryForTesting,
-        ].compactMap { $0 }
-        guard deliveries.isEmpty == false else {
-            return sampleRenderedCondition(in: viewController, condition: condition)
-        }
-
-        var renderedValues: [ObservedValues<Bool>] = []
-        for delivery in deliveries {
-            renderedValues.append(
-                await delivery.values {
-                    sampleRenderedCondition(in: viewController, condition: condition)
-                }
-            )
-        }
-        for _ in 0..<256 {
-            if renderedValues.contains(where: { $0.latestValue == true }) {
-                return true
+        await waitForObservedCondition(
+            deliveries: {
+                [
+                    viewController.selectedNodeStyleObservationDeliveryForTesting,
+                    viewController.elementStylesObservationDeliveryForTesting,
+                ].compactMap { $0 }
+            },
+            sample: {
+                sampleRenderedCondition(in: viewController, condition: condition)
             }
-            await Task.yield()
-        }
-        return sampleRenderedCondition(in: viewController, condition: condition)
+        )
     }
 
     private func sampleRenderedCondition(

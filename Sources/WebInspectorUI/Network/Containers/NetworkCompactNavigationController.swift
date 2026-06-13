@@ -167,4 +167,12 @@ package final class NetworkCompactNavigationController: UINavigationController, 
         webInspectorApplyNavigationControllerBackground(to: self)
     }
 }
+
+#if DEBUG
+extension NetworkCompactNavigationController {
+    package var selectionObservationDeliveryForTesting: PortableObservationTracking.Token? {
+        selectionObservation
+    }
+}
+#endif
 #endif

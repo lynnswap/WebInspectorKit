@@ -1061,7 +1061,6 @@ struct NetworkDetailViewControllerTests {
             timestamp: 4
         )
 
-        await Task.yield()
         #expect(viewController.headersTextViewForTesting.renderedTextForTesting.contains("x-old-request: stale") == false)
 
         network.applyResponseReceived(
@@ -1148,7 +1147,7 @@ struct NetworkDetailViewControllerTests {
         defer { window.isHidden = true }
 
         model.selectRequest(request)
-        let didPush = await waitUntil {
+        let didPush = await waitUntilNavigationStackSynced(in: navigationController) {
             navigationController.viewControllers.last === detailViewController
         }
         #expect(didPush)
@@ -1157,7 +1156,7 @@ struct NetworkDetailViewControllerTests {
         withUIKitAnimationsDisabled {
             model.selectRequest(nil)
         }
-        let didPop = await waitUntil {
+        let didPop = await waitUntilNavigationStackSynced(in: navigationController) {
             navigationController.viewControllers == [listViewController]
         }
         #expect(didPop)
@@ -1178,13 +1177,18 @@ struct NetworkDetailViewControllerTests {
         let window = showInWindow(navigationController)
         defer { window.isHidden = true }
 
-        let didRenderList = await waitUntil {
-            listViewController.collectionViewForTesting.numberOfItems(inSection: 0) == 1
-        }
+        let didRenderList = await waitForObservedCondition(
+            deliveries: {
+                [listViewController.displayRowsObservationDeliveryForTesting].compactMap { $0 }
+            },
+            sample: {
+                listViewController.collectionViewForTesting.numberOfItems(inSection: 0) == 1
+            }
+        )
         #expect(didRenderList)
 
         selectListItem(at: IndexPath(item: 0, section: 0), in: listViewController)
-        let didPush = await waitUntil {
+        let didPush = await waitUntilNavigationStackSynced(in: navigationController) {
             navigationController.viewControllers.last === detailViewController
         }
         #expect(didPush)
@@ -1193,7 +1197,7 @@ struct NetworkDetailViewControllerTests {
         _ = withUIKitAnimationsDisabled {
             navigationController.popViewController(animated: false)
         }
-        let didReturnToList = await waitUntil {
+        let didReturnToList = await waitUntilNavigationStackSynced(in: navigationController) {
             navigationController.viewControllers == [listViewController]
                 && model.selectedRequest == nil
                 && (listViewController.collectionViewForTesting.indexPathsForSelectedItems ?? []).isEmpty
@@ -1201,7 +1205,7 @@ struct NetworkDetailViewControllerTests {
         #expect(didReturnToList)
 
         selectListItem(at: IndexPath(item: 0, section: 0), in: listViewController)
-        let didPushAgain = await waitUntil {
+        let didPushAgain = await waitUntilNavigationStackSynced(in: navigationController) {
             navigationController.viewControllers.last === detailViewController
         }
         #expect(didPushAgain)
@@ -1223,7 +1227,7 @@ struct NetworkDetailViewControllerTests {
         defer { window.isHidden = true }
 
         model.selectRequest(request)
-        let didPush = await waitUntil {
+        let didPush = await waitUntilNavigationStackSynced(in: navigationController) {
             navigationController.viewControllers.last === detailViewController
         }
         #expect(didPush)
@@ -1235,7 +1239,7 @@ struct NetworkDetailViewControllerTests {
         #expect(model.selectedRequestID == request.id)
         #expect(model.selectedRequest == nil)
 
-        let didPop = await waitUntil {
+        let didPop = await waitUntilNavigationStackSynced(in: navigationController) {
             navigationController.viewControllers == [listViewController]
         }
         #expect(didPop)
@@ -1244,18 +1248,21 @@ struct NetworkDetailViewControllerTests {
     @Test
     func listControllerDeallocatesWhileDisplayRequestObservationIsActive() async throws {
         let model = NetworkPanelModel(network: NetworkSession())
+        let deinitProbe = UITestDeinitProbe()
         weak var weakViewController: NetworkListViewController?
 
         do {
             let viewController = NetworkListViewController(model: model)
             viewController.loadViewIfNeeded()
+            viewController.setDeinitHandlerForTesting {
+                deinitProbe.signalDeinit()
+            }
             weakViewController = viewController
         }
 
-        let didDeallocate = await waitUntil {
-            weakViewController == nil
-        }
+        let didDeallocate = await deinitProbe.wait()
         #expect(didDeallocate)
+        #expect(weakViewController == nil)
     }
 
     private func applyRequest(
@@ -1363,34 +1370,40 @@ struct NetworkDetailViewControllerTests {
 
     private func waitUntilRendered(
         in viewController: NetworkDetailViewController,
-        maxTicks: Int = 256,
         _ condition: @escaping @MainActor @Sendable () -> Bool
     ) async -> Bool {
-        if sampleRenderedCondition(in: viewController, condition: condition) {
-            return true
-        }
+        await waitForObservedCondition(
+            deliveries: {
+                observationDeliveries(in: viewController)
+            },
+            sample: {
+                sampleRenderedCondition(in: viewController, condition: condition)
+            }
+        )
+    }
 
-        for _ in 0..<maxTicks {
-            let deliveries = observationDeliveries(in: viewController)
-            if deliveries.isEmpty == false {
-                var renderedValues: [ObservedValues<Bool>] = []
-                for delivery in deliveries {
-                    renderedValues.append(
-                        await delivery.values {
-                            sampleRenderedCondition(in: viewController, condition: condition)
-                        }
-                    )
-                }
-                if renderedValues.contains(where: { $0.latestValue == true }) {
-                    return true
-                }
+    private func waitUntilNavigationStackSynced(
+        in navigationController: NetworkCompactNavigationController,
+        _ condition: @escaping @MainActor @Sendable () -> Bool
+    ) async -> Bool {
+        await waitForObservedCondition(
+            deliveries: {
+                [navigationController.selectionObservationDeliveryForTesting].compactMap { $0 }
+            },
+            sample: {
+                condition()
             }
-            if sampleRenderedCondition(in: viewController, condition: condition) {
-                return true
-            }
-            await Task.yield()
+        )
+    }
+
+    private func waitUntilNavigationStackSynced(
+        in navigationController: UINavigationController,
+        _ condition: @escaping @MainActor @Sendable () -> Bool
+    ) async -> Bool {
+        guard let compactNavigationController = navigationController as? NetworkCompactNavigationController else {
+            return condition()
         }
-        return sampleRenderedCondition(in: viewController, condition: condition)
+        return await waitUntilNavigationStackSynced(in: compactNavigationController, condition)
     }
 
     private func observationDeliveries(in viewController: NetworkDetailViewController) -> [PortableObservationTracking.Token] {
@@ -1408,19 +1421,6 @@ struct NetworkDetailViewControllerTests {
     ) -> Bool {
         viewController.view.layoutIfNeeded()
         return condition()
-    }
-
-    private func waitUntil(
-        maxTicks: Int = 256,
-        _ condition: @MainActor () -> Bool
-    ) async -> Bool {
-        for _ in 0..<maxTicks {
-            if condition() {
-                return true
-            }
-            await Task.yield()
-        }
-        return false
     }
 
     private func waitForNavigationTransitionToFinish(in navigationController: UINavigationController) async {

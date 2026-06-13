@@ -1,4 +1,5 @@
 #if canImport(UIKit)
+import ObservationBridge
 import Testing
 import WebInspectorTransport
 import UIKit
@@ -60,18 +61,15 @@ struct ParentContainerTests {
         let webView = WKWebView(frame: .zero)
 
         try await session.attach(to: webView)
+        let styleObservation = await observePageUserInterfaceStyle(in: session)
+        defer { styleObservation.cancel() }
+
         webView.underPageBackgroundColor = .black
 
-        let didApplyDarkStyle = await waitUntil {
-            session.pageUserInterfaceStyle == .dark
-        }
-        #expect(didApplyDarkStyle)
+        #expect(await styleObservation.values.waitUntilValue(UIUserInterfaceStyle.dark.rawValue))
 
         webView.underPageBackgroundColor = .white
-        let didApplyLightStyle = await waitUntil {
-            session.pageUserInterfaceStyle == .light
-        }
-        #expect(didApplyLightStyle)
+        #expect(await styleObservation.values.waitUntilValue(UIUserInterfaceStyle.light.rawValue))
     }
 
     @Test
@@ -80,17 +78,17 @@ struct ParentContainerTests {
         let webView = WKWebView(frame: .zero)
 
         try await session.attach(to: webView)
+        let styleObservation = await observePageUserInterfaceStyle(in: session)
+        defer { styleObservation.cancel() }
+
         webView.underPageBackgroundColor = .black
-        let didApplyDarkStyle = await waitUntil {
-            session.pageUserInterfaceStyle == .dark
-        }
-        #expect(didApplyDarkStyle)
+        #expect(await styleObservation.values.waitUntilValue(UIUserInterfaceStyle.dark.rawValue))
 
         await session.detach()
 
+        #expect(session.hasPageUserInterfaceStyleObserverForTesting == false)
         #expect(session.pageUserInterfaceStyle == .unspecified)
         webView.underPageBackgroundColor = .white
-        await Task.yield()
         #expect(session.pageUserInterfaceStyle == .unspecified)
     }
 
@@ -105,11 +103,11 @@ struct ParentContainerTests {
         }
 
         try await session.attach(to: observedWebView)
+        let styleObservation = await observePageUserInterfaceStyle(in: session)
+        defer { styleObservation.cancel() }
+
         observedWebView.underPageBackgroundColor = .black
-        let didApplyDarkStyle = await waitUntil {
-            session.pageUserInterfaceStyle == .dark
-        }
-        #expect(didApplyDarkStyle)
+        #expect(await styleObservation.values.waitUntilValue(UIUserInterfaceStyle.dark.rawValue))
 
         do {
             try await session.attach(to: WKWebView(frame: .zero))
@@ -118,9 +116,9 @@ struct ParentContainerTests {
             #expect(error is AttachmentFailure)
         }
 
+        #expect(session.hasPageUserInterfaceStyleObserverForTesting == false)
         #expect(session.pageUserInterfaceStyle == .unspecified)
         observedWebView.underPageBackgroundColor = .white
-        await Task.yield()
         #expect(session.pageUserInterfaceStyle == .unspecified)
     }
 
@@ -133,12 +131,12 @@ struct ParentContainerTests {
         let webView = WKWebView(frame: .zero)
 
         try await session.attach(to: webView)
-        webView.underPageBackgroundColor = .black
-        let didApplyDarkStyle = await waitUntil {
-            session.pageUserInterfaceStyle == .dark
-        }
+        let styleObservation = await observePageUserInterfaceStyle(in: session)
+        defer { styleObservation.cancel() }
 
-        #expect(didApplyDarkStyle)
+        webView.underPageBackgroundColor = .black
+
+        #expect(await styleObservation.values.waitUntilValue(UIUserInterfaceStyle.dark.rawValue))
         #expect(viewController.overrideUserInterfaceStyle == .unspecified)
     }
 
@@ -356,7 +354,7 @@ struct ParentContainerTests {
 
         model.selectRequest(request)
 
-        let didPushDetail = await waitUntil {
+        let didPushDetail = await waitUntilNetworkStackSynced(in: compactNavigationController) {
             compactNavigationController.viewControllers.last is NetworkDetailViewController
         }
         #expect(didPushDetail)
@@ -379,7 +377,7 @@ struct ParentContainerTests {
         )
         detailViewController.loadViewIfNeeded()
 
-        let didRenderDetail = await waitUntil {
+        let didRenderDetail = await waitUntilNetworkDetailRendered(in: detailViewController) {
             detailViewController.headersTextViewForTesting.renderedTextForTesting.contains("GET /app.js")
         }
         #expect(didRenderDetail)
@@ -464,19 +462,6 @@ struct ParentContainerTests {
         return window
     }
 
-    private func waitUntil(
-        maxTicks: Int = 256,
-        _ condition: @MainActor () -> Bool
-    ) async -> Bool {
-        for _ in 0..<maxTicks {
-            if condition() {
-                return true
-            }
-            await Task.yield()
-        }
-        return false
-    }
-
     private func makeSessionWithNoOpAttachment(
         attachAction: @escaping @MainActor (InspectorSession, WKWebView) async throws -> Void = { _, _ in },
         detachAction: @escaping @MainActor (InspectorSession) async -> Void = { _ in }
@@ -485,6 +470,62 @@ struct ParentContainerTests {
             inspector: InspectorSession(),
             attachAction: attachAction,
             detachAction: detachAction
+        )
+    }
+
+    private struct PageUserInterfaceStyleObservation {
+        var token: PortableObservationTracking.Token
+        var values: ObservedValues<Int>
+
+        func cancel() {
+            values.cancel()
+            token.cancel()
+        }
+    }
+
+    private func observePageUserInterfaceStyle(
+        in session: WebInspectorSession
+    ) async -> PageUserInterfaceStyleObservation {
+        let token = withPortableContinuousObservation { _ in
+            _ = session.pageUserInterfaceStyle
+        }
+        let values = await token.values {
+            session.pageUserInterfaceStyle.rawValue
+        }
+        return PageUserInterfaceStyleObservation(token: token, values: values)
+    }
+
+    private func waitUntilNetworkStackSynced(
+        in navigationController: NetworkCompactNavigationController,
+        _ condition: @escaping @MainActor @Sendable () -> Bool
+    ) async -> Bool {
+        await waitForObservedCondition(
+            deliveries: {
+                [navigationController.selectionObservationDeliveryForTesting].compactMap { $0 }
+            },
+            sample: {
+                condition()
+            }
+        )
+    }
+
+    private func waitUntilNetworkDetailRendered(
+        in viewController: NetworkDetailViewController,
+        _ condition: @escaping @MainActor @Sendable () -> Bool
+    ) async -> Bool {
+        await waitForObservedCondition(
+            deliveries: {
+                [
+                    viewController.modelObservationDeliveryForTesting,
+                    viewController.selectedRequestRenderObservationDeliveryForTesting,
+                    viewController.responseBodyFetchObservationDeliveryForTesting,
+                    viewController.bodyViewControllerForTesting.bodyObservationDeliveryForTesting,
+                ].compactMap { $0 }
+            },
+            sample: {
+                viewController.view.layoutIfNeeded()
+                return condition()
+            }
         )
     }
 }
