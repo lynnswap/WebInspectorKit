@@ -63,6 +63,55 @@ package final class DOMFrame {
     }
 }
 
+package struct DOMCurrentPage: Equatable, Sendable {
+    package private(set) var targetID: ProtocolTarget.ID?
+    package private(set) var mainFrameID: DOMFrame.ID?
+
+    package init(targetID: ProtocolTarget.ID? = nil, mainFrameID: DOMFrame.ID? = nil) {
+        self.targetID = targetID
+        self.mainFrameID = mainFrameID
+    }
+
+    package var isEmpty: Bool {
+        targetID == nil
+    }
+
+    package func isCurrentTarget(_ targetID: ProtocolTarget.ID) -> Bool {
+        self.targetID == targetID
+    }
+
+    @discardableResult
+    package mutating func promote(targetID: ProtocolTarget.ID, mainFrameID: DOMFrame.ID) -> Bool {
+        let didReplaceExistingPage = self.targetID != nil && self.targetID != targetID
+        self.targetID = targetID
+        self.mainFrameID = mainFrameID
+        return didReplaceExistingPage
+    }
+
+    @discardableResult
+    package mutating func retarget(from oldTargetID: ProtocolTarget.ID, to newTargetID: ProtocolTarget.ID) -> Bool {
+        guard targetID == oldTargetID else {
+            return false
+        }
+        targetID = newTargetID
+        return true
+    }
+
+    @discardableResult
+    package mutating func clear(ifTarget targetID: ProtocolTarget.ID) -> Bool {
+        guard self.targetID == targetID else {
+            return false
+        }
+        clear()
+        return true
+    }
+
+    package mutating func clear() {
+        targetID = nil
+        mainFrameID = nil
+    }
+}
+
 @MainActor
 package struct DOMDocumentNodeIndex {
     private var nodesByIdentifier: [DOMNode.ID: DOMNode]

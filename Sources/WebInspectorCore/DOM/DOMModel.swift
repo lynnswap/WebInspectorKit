@@ -23,12 +23,11 @@ private extension UnicodeScalar {
 @MainActor
 @Observable
 package final class DOMSession {
-    package private(set) var currentPageTargetID: ProtocolTarget.ID?
-    package private(set) var mainFrameID: DOMFrame.ID?
     package private(set) var elementStyles: CSSSession
     package var isSelectingElement: Bool
 
     private let targetGraph: TargetGraph
+    private var currentPage: DOMCurrentPage
     private var documentStore: DOMDocumentStore
     private var frameDocumentProjectionIndex: FrameDocumentProjectionIndex
     private var selection: DOMSelection
@@ -46,11 +45,10 @@ package final class DOMSession {
         targetGraph: TargetGraph = TargetGraph(),
         elementStyles: CSSSession = CSSSession()
     ) {
-        currentPageTargetID = nil
-        mainFrameID = nil
         self.elementStyles = elementStyles
         isSelectingElement = false
         self.targetGraph = targetGraph
+        currentPage = DOMCurrentPage()
         documentStore = DOMDocumentStore()
         frameDocumentProjectionIndex = FrameDocumentProjectionIndex()
         selection = DOMSelection()
@@ -65,11 +63,19 @@ package final class DOMSession {
         deleteUndoController = DOMSessionDeleteUndoController()
     }
 
+    package var currentPageTargetID: ProtocolTarget.ID? {
+        currentPage.targetID
+    }
+
+    package var mainFrameID: DOMFrame.ID? {
+        currentPage.mainFrameID
+    }
+
     private func targetBelongsToCurrentPage(_ targetID: ProtocolTarget.ID) -> Bool {
         targetGraph.targetBelongsToCurrentPage(
             targetID,
-            currentPageTargetID: currentPageTargetID,
-            mainFrameID: mainFrameID
+            currentPageTargetID: currentPage.targetID,
+            mainFrameID: currentPage.mainFrameID
         )
     }
 
@@ -78,7 +84,7 @@ package final class DOMSession {
     }
 
     private func currentState(for targetID: ProtocolTarget.ID) -> DOMTargetState? {
-        guard targetBelongsToCurrentPage(targetID) || currentPageTargetID == nil else {
+        guard targetBelongsToCurrentPage(targetID) || currentPage.isEmpty else {
             return nil
         }
         return documentStore.stateIfPresent(for: targetID)
@@ -93,12 +99,11 @@ package final class DOMSession {
     }
 
     private func attachKnownFrameTargets() {
-        targetGraph.attachKnownFrameTargets(mainFrameID: mainFrameID)
+        targetGraph.attachKnownFrameTargets(mainFrameID: currentPage.mainFrameID)
     }
 
     package func reset() {
-        currentPageTargetID = nil
-        mainFrameID = nil
+        currentPage.clear()
         targetGraph.reset()
         documentStore.reset()
         frameDocumentProjectionIndex.removeAll()
@@ -132,11 +137,9 @@ package final class DOMSession {
         }
 
         let resolvedMainFrameID = targetGraph.targetFrameID(for: targetID) ?? DOMFrame.ID("main:\(targetID.rawValue)")
-        if let currentPageTargetID, currentPageTargetID != targetID {
+        if currentPage.promote(targetID: targetID, mainFrameID: resolvedMainFrameID) {
             selection = DOMSelection()
         }
-        currentPageTargetID = targetID
-        mainFrameID = resolvedMainFrameID
         _ = state(for: targetID)
         targetGraph.assignMainFrame(resolvedMainFrameID, to: targetID)
         attachKnownFrameTargets()
@@ -152,7 +155,7 @@ package final class DOMSession {
             return
         }
 
-        if currentPageTargetID == oldTargetID,
+        if currentPage.isCurrentTarget(oldTargetID),
            targetGraph.containsTarget(newTargetID),
            !targetGraph.isTopLevelPageTarget(newTargetID) {
             applyTargetCommitted(targetID: newTargetID)
@@ -183,9 +186,8 @@ package final class DOMSession {
 
         targetGraph.retargetExecutionContexts(from: oldTargetID, to: newTargetID)
 
-        if currentPageTargetID == oldTargetID {
-            currentPageTargetID = newTargetID
-            if let mainFrameID {
+        if currentPage.retarget(from: oldTargetID, to: newTargetID) {
+            if let mainFrameID = currentPage.mainFrameID {
                 targetGraph.setFrameTargetID(newTargetID, for: mainFrameID)
             }
         }
@@ -208,9 +210,7 @@ package final class DOMSession {
             targetGraph.setFrameTargetID(nil, for: frameID)
             targetGraph.setFrameCurrentDocumentID(nil, for: frameID)
         }
-        if currentPageTargetID == targetID {
-            currentPageTargetID = nil
-            mainFrameID = nil
+        if currentPage.clear(ifTarget: targetID) {
             selection = DOMSelection()
         }
         documentStore.removeState(for: targetID)
@@ -269,8 +269,8 @@ package final class DOMSession {
         if let frameID = targetGraph.targetFrameID(for: targetID) {
             targetGraph.setFrameCurrentDocumentID(documentID, for: frameID)
         }
-        if currentPageTargetID == targetID,
-           let mainFrameID {
+        if currentPage.isCurrentTarget(targetID),
+           let mainFrameID = currentPage.mainFrameID {
             targetGraph.setFrameCurrentDocumentID(documentID, for: mainFrameID)
         }
         if targetGraph.targetKind(for: targetID) == .frame {
@@ -294,8 +294,8 @@ package final class DOMSession {
            targetGraph.frameCurrentDocumentID(frameID) == documentID {
             targetGraph.setFrameCurrentDocumentID(nil, for: frameID)
         }
-        if currentPageTargetID == targetID,
-           let mainFrameID {
+        if currentPage.isCurrentTarget(targetID),
+           let mainFrameID = currentPage.mainFrameID {
             targetGraph.clearFrameCurrentDocumentID(mainFrameID, matching: documentID)
         }
         if let projection = frameDocumentProjectionIndex[targetID],
