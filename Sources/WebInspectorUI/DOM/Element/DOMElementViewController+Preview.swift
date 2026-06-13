@@ -52,13 +52,19 @@ private enum DOMElementViewControllerPreview {
     }
 
     private static func installPreviewTransport(on dom: DOMSession) {
+        let replies = AsyncStream<String>.makeStream(bufferingPolicy: .unbounded)
         let backend = DOMElementViewControllerPreviewTransportBackend(
             styleID: styleID,
             ruleID: ruleID,
-            cssText: previewCSSText
+            cssText: previewCSSText,
+            replyContinuation: replies.continuation
         )
         let transport = TransportSession(backend: backend, responseTimeout: nil)
-        backend.transport = transport
+        Task {
+            for await message in replies.stream {
+                await transport.receiveRootMessage(message)
+            }
+        }
         seedPreviewTarget(in: transport)
         let channel = ProtocolCommandChannel(
             transport: transport,
@@ -165,7 +171,7 @@ private enum DOMElementViewControllerPreview {
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"\#(targetID.rawValue)","type":"page","frameId":"\#(frameID.rawValue)","domains":["DOM","Runtime","Target","Inspector","Network","CSS"],"isProvisional":false}}}"#
     }
 
-    private final class DOMElementViewControllerPreviewTransportBackend: TransportBackend, @unchecked Sendable {
+    private actor DOMElementViewControllerPreviewTransportBackend: TransportBackend {
         private struct TargetCommand {
             var targetID: ProtocolTargetIdentifier
             var commandID: UInt64
@@ -214,16 +220,21 @@ private enum DOMElementViewControllerPreview {
             var computedStyle: [CSSComputedStylePropertyPayload]
         }
 
-        private let lock = NSLock()
         private let styleID: CSSStyleIdentifier
         private let ruleID: CSSRuleIdentifier
+        private let replyContinuation: AsyncStream<String>.Continuation
         private var cssText: String
         private var properties: [CSSPropertyPayload]
-        weak var transport: TransportSession?
 
-        init(styleID: CSSStyleIdentifier, ruleID: CSSRuleIdentifier, cssText: String) {
+        init(
+            styleID: CSSStyleIdentifier,
+            ruleID: CSSRuleIdentifier,
+            cssText: String,
+            replyContinuation: AsyncStream<String>.Continuation
+        ) {
             self.styleID = styleID
             self.ruleID = ruleID
+            self.replyContinuation = replyContinuation
             self.cssText = cssText
             self.properties = DOMElementViewControllerPreview.previewProperties(from: cssText)
         }
@@ -252,7 +263,7 @@ private enum DOMElementViewControllerPreview {
                 resultJSON = "{}"
             }
 
-            await sendTargetReply(
+            sendTargetReply(
                 targetID: command.targetID,
                 commandID: command.commandID,
                 resultJSON: resultJSON
@@ -260,23 +271,20 @@ private enum DOMElementViewControllerPreview {
         }
 
         func detach() async {
+            replyContinuation.finish()
         }
 
         private func updateStyleText(_ text: String) -> CSSStylePayload {
-            withLockedState {
-                cssText = text
-                properties = DOMElementViewControllerPreview.previewProperties(from: text)
-                return currentStylePayload()
-            }
+            cssText = text
+            properties = DOMElementViewControllerPreview.previewProperties(from: text)
+            return currentStylePayload()
         }
 
         private func matchedStyles() -> CSSMatchedStylesPayload {
-            withLockedState {
-                DOMElementViewControllerPreview.previewMatchedStyles(
-                    ruleID: ruleID,
-                    style: currentStylePayload()
-                )
-            }
+            DOMElementViewControllerPreview.previewMatchedStyles(
+                ruleID: ruleID,
+                style: currentStylePayload()
+            )
         }
 
         private func currentStylePayload() -> CSSStylePayload {
@@ -287,19 +295,11 @@ private enum DOMElementViewControllerPreview {
             )
         }
 
-        private func withLockedState<T>(_ body: () throws -> T) rethrows -> T {
-            lock.lock()
-            defer {
-                lock.unlock()
-            }
-            return try body()
-        }
-
         private func sendTargetReply(
             targetID: ProtocolTargetIdentifier,
             commandID: UInt64,
             resultJSON: String
-        ) async {
+        ) {
             let targetMessage = #"{"id":\#(commandID),"result":\#(resultJSON)}"#
             let rootMessage = TargetDispatchMessage(
                 params: TargetDispatchParameters(
@@ -311,7 +311,7 @@ private enum DOMElementViewControllerPreview {
                   let message = String(data: data, encoding: .utf8) else {
                 return
             }
-            await transport?.receiveRootMessage(message)
+            replyContinuation.yield(message)
         }
 
         private static func targetCommand(from message: String) -> TargetCommand? {
