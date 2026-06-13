@@ -20,6 +20,7 @@ final class BrowserRootViewController: UINavigationController {
     private var isFinalizingInspectorSession = false
     private var isPreservingInspectorSessionForSceneDisconnection = false
     private weak var attachedWebView: WKWebView?
+    var onSelectedWebViewInstalledForTesting: ((WKWebView) -> Void)?
     var onAttachInspectorSessionForTesting: ((WKWebView) -> Void)?
 
     init(
@@ -46,6 +47,7 @@ final class BrowserRootViewController: UINavigationController {
         super.init(rootViewController: pageViewController)
 
         pageViewController.onSelectedWebViewInstalled = { [weak self] webView in
+            self?.onSelectedWebViewInstalledForTesting?(webView)
             self?.selectedWebViewDidChange(to: webView)
         }
     }

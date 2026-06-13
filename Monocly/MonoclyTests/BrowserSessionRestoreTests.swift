@@ -542,17 +542,20 @@ struct BrowserSessionRestoreTests {
         rootViewController.viewControllers.first?.loadViewIfNeeded()
         let firstWebView = store.tabs[0].webView
         let secondWebView = store.tabs[1].webView
-        var attachTargets: [WKWebView] = []
+        let selectedWebViewInstalled = WebViewIdentitySignal()
+        let inspectorSessionAttached = WebViewIdentitySignal()
         rootViewController.setInspectorSessionAttachedForTesting(to: firstWebView)
+        rootViewController.onSelectedWebViewInstalledForTesting = { webView in
+            selectedWebViewInstalled.record(webView)
+        }
         rootViewController.onAttachInspectorSessionForTesting = { webView in
-            attachTargets.append(webView)
+            inspectorSessionAttached.record(webView)
         }
 
         store.selectTab(id: secondID)
-        try await Task.sleep(nanoseconds: 100_000_000)
+        await selectedWebViewInstalled.wait(for: secondWebView)
         await rootViewController.waitForInspectorSessionTransitions()
-
-        #expect(attachTargets.contains { $0 === secondWebView })
+        await inspectorSessionAttached.wait(for: secondWebView)
     }
 
     @Test
@@ -675,6 +678,31 @@ struct BrowserSessionRestoreTests {
                 .compactMap { $0 as? UIWindowScene }
                 .first
         )
+    }
+
+    @MainActor
+    private final class WebViewIdentitySignal {
+        private var seenWebViewIDs: Set<ObjectIdentifier> = []
+        private var waitersByWebViewID: [ObjectIdentifier: [CheckedContinuation<Void, Never>]] = [:]
+
+        func record(_ webView: WKWebView) {
+            let webViewID = ObjectIdentifier(webView)
+            seenWebViewIDs.insert(webViewID)
+            let waiters = waitersByWebViewID.removeValue(forKey: webViewID) ?? []
+            for waiter in waiters {
+                waiter.resume()
+            }
+        }
+
+        func wait(for webView: WKWebView) async {
+            let webViewID = ObjectIdentifier(webView)
+            guard seenWebViewIDs.contains(webViewID) == false else {
+                return
+            }
+            await withCheckedContinuation { continuation in
+                waitersByWebViewID[webViewID, default: []].append(continuation)
+            }
+        }
     }
 }
 #endif
