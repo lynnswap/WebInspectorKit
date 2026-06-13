@@ -180,7 +180,7 @@ package struct RuntimeExecutionContextPayload: Equatable, Sendable, Decodable {
     }
 }
 
-package final class RuntimeRemoteObjectPayloadBox: Codable, Equatable, @unchecked Sendable {
+package final class RuntimeRemoteObjectPayloadBox: Codable, Equatable, Sendable {
     package let value: RuntimeRemoteObjectPayload
 
     package init(_ value: RuntimeRemoteObjectPayload) {
@@ -200,7 +200,7 @@ package final class RuntimeRemoteObjectPayloadBox: Codable, Equatable, @unchecke
     }
 }
 
-package final class RuntimeObjectPreviewPayloadBox: Codable, Equatable, @unchecked Sendable {
+package final class RuntimeObjectPreviewPayloadBox: Codable, Equatable, Sendable {
     package let value: RuntimeObjectPreviewPayload
 
     package init(_ value: RuntimeObjectPreviewPayload) {
