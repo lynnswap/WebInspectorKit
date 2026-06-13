@@ -16,7 +16,7 @@ package actor TransportSession {
     private var replyStore: TransportReplyStore
     private var mainPageTargetWaiters: [UInt64: ReplyPromise<TransportMainPageTarget>]
     private var targetRegistry: TransportTargetRegistry
-    private var provisionalTargetMessagesByTargetID: [ProtocolTargetIdentifier: [ParsedProtocolMessage]]
+    private var provisionalTargetMessageStore: TransportProvisionalTargetMessageStore
     private var styleSheetRouting: TransportStyleSheetRouting
     private var runtimeContextRegistry: RuntimeContextRegistry
     private var subscribers: [ProtocolDomain: [UInt64: AsyncStream<ProtocolEventEnvelope>.Continuation]]
@@ -42,7 +42,7 @@ package actor TransportSession {
         replyStore = TransportReplyStore()
         mainPageTargetWaiters = [:]
         targetRegistry = TransportTargetRegistry()
-        provisionalTargetMessagesByTargetID = [:]
+        provisionalTargetMessageStore = TransportProvisionalTargetMessageStore()
         styleSheetRouting = TransportStyleSheetRouting()
         runtimeContextRegistry = RuntimeContextRegistry()
         subscribers = [:]
@@ -140,7 +140,7 @@ package actor TransportSession {
         }
         replyStore.removeAll()
         mainPageTargetWaiters.removeAll()
-        provisionalTargetMessagesByTargetID.removeAll()
+        provisionalTargetMessageStore.removeAll()
         for continuations in subscribers.values {
             for continuation in continuations.values {
                 continuation.finish()
@@ -410,7 +410,7 @@ package actor TransportSession {
     private func handleTargetMessage(_ parsed: ParsedProtocolMessage, targetID: ProtocolTargetIdentifier) async {
         if targetsByID[targetID]?.isProvisional == true {
             markTargetReplyAsBufferedIfNeeded(parsed, targetID: targetID)
-            provisionalTargetMessagesByTargetID[targetID, default: []].append(parsed)
+            provisionalTargetMessageStore.append(parsed, for: targetID)
             return
         }
 
@@ -649,7 +649,7 @@ package actor TransportSession {
 
     private func applyTargetDestroyed(_ targetID: ProtocolTargetIdentifier) async {
         targetsByID.removeValue(forKey: targetID)
-        provisionalTargetMessagesByTargetID.removeValue(forKey: targetID)
+        provisionalTargetMessageStore.removeTarget(targetID)
         frameTargetIDsByFrameID = frameTargetIDsByFrameID.filter { $0.value != targetID }
         styleSheetRouting.removeTarget(targetID)
         runtimeContextRegistry.removeTarget(targetID)
@@ -726,21 +726,16 @@ package actor TransportSession {
         from oldTargetID: ProtocolTargetIdentifier,
         to newTargetID: ProtocolTargetIdentifier
     ) {
-        guard oldTargetID != newTargetID,
-              let messages = provisionalTargetMessagesByTargetID.removeValue(forKey: oldTargetID),
-              messages.isEmpty == false else {
-            return
-        }
-        provisionalTargetMessagesByTargetID[newTargetID, default: []].append(contentsOf: messages)
+        provisionalTargetMessageStore.retargetMessages(from: oldTargetID, to: newTargetID)
     }
 
     private func dispatchCommittedProvisionalTargetMessagesIfNeeded(method: String, paramsData: Data) async {
         guard method == "Target.didCommitProvisionalTarget",
-              let params = try? TransportMessageParser.decode(TargetCommittedParams.self, from: paramsData),
-              let messages = provisionalTargetMessagesByTargetID.removeValue(forKey: params.newTargetId) else {
+              let params = try? TransportMessageParser.decode(TargetCommittedParams.self, from: paramsData) else {
             return
         }
 
+        let messages = provisionalTargetMessageStore.takeMessages(for: params.newTargetId)
         for message in messages {
             await handleTargetMessage(message, targetID: params.newTargetId)
         }
