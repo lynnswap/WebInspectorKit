@@ -429,14 +429,13 @@ func networkResponseBodyFetchErrorDoesNotRetry() async throws {
         targetID: .pageMain,
         message: #"{"method":"Network.responseReceived","params":{"requestId":"request-error","timestamp":2,"type":"XHR","response":{"url":"https://example.com/api.json","status":200,"mimeType":"application/json","headers":{"content-type":"application/json"}}}}"#
     )
-    await receiveTargetDispatch(
+    await receiveAndApplyTargetDispatch(
         transport,
         targetID: .pageMain,
-        message: #"{"method":"Network.loadingFinished","params":{"requestId":"request-error","timestamp":3}}"#
+        message: #"{"method":"Network.loadingFinished","params":{"requestId":"request-error","timestamp":3}}"#,
+        in: session
     )
-    let request = try await awaitValueAfterActorTurns {
-        await session.attachment.network.request(for: .init(targetID: .pageMain, requestID: .init("request-error")))
-    }
+    let request = try #require(await session.attachment.network.request(for: .init(targetID: .pageMain, requestID: .init("request-error"))))
     let responseBody = await request.responseBody
     let body = try #require(responseBody)
     #expect(await body.fetchState == .available)
@@ -1134,14 +1133,12 @@ func documentUpdatedClearsSelectedCSSNodeStylesForInvalidatedDocument() async th
     await refreshTask.value
     #expect(await session.attachment.dom.elementStyles.selectedNodeStyles != nil)
 
-    await receiveTargetDispatch(
+    await receiveAndApplyTargetDispatch(
         transport,
         targetID: .pageMain,
-        message: #"{"method":"DOM.documentUpdated","params":{}}"#
+        message: #"{"method":"DOM.documentUpdated","params":{}}"#,
+        in: session
     )
-    _ = try await awaitValueAfterActorTurns {
-        await session.attachment.dom.elementStyles.selectedNodeStyles == nil ? true : nil
-    }
     #expect(await session.attachment.dom.elementStyles.selectedNodeStyles == nil)
 }
 
@@ -1254,12 +1251,11 @@ func frameDocumentRefreshUpdatesOnlyFrameDocument() async throws {
     let pageDocumentID = try #require(await session.attachment.dom.snapshot().currentPageDocumentID)
 
     let sentCount = await backend.sentTargetMessages().count
-    await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["DOM"],"isProvisional":false}}}"#
+    await receiveAndApplyRootMessage(
+        transport,
+        message: #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["DOM"],"isProvisional":false}}}"#,
+        in: session
     )
-    _ = try await awaitValueAfterActorTurns {
-        await session.attachment.dom.snapshot().targetsByID[.frameAd]
-    }
 
     let sent = try await waitForTargetMessage(backend, method: "DOM.getDocument", after: sentCount)
     await receiveTargetReply(
@@ -1310,12 +1306,11 @@ func frameTargetWithoutAdvertisedDomainsUsesWebKitFrameDefaultAndDoesNotHydrateO
     try await connect(session, transport: transport, backend: backend)
 
     let sentCount = await backend.sentTargetMessages().count
-    await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
+    await receiveAndApplyRootMessage(
+        transport,
+        message: #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","isProvisional":false}}}"#,
+        in: session
     )
-    _ = try await awaitValueAfterActorTurns {
-        await session.attachment.dom.snapshot().targetsByID[.frameAd]
-    }
 
     #expect(await backend.sentTargetMessages().count == sentCount)
     #expect(await session.attachment.dom.snapshot().targetsByID[.frameAd]?.currentDocumentID == nil)
@@ -2035,18 +2030,13 @@ func pageDocumentUpdatedInvalidatesCurrentPageDocumentWithoutReloading() async t
     let pageDocumentID = try #require(await session.attachment.dom.snapshot().currentPageDocumentID)
     let sentCount = await backend.sentTargetMessages().count
 
-    await receiveTargetDispatch(
+    await receiveAndApplyTargetDispatch(
         transport,
         targetID: .pageMain,
-        message: #"{"method":"DOM.documentUpdated","params":{}}"#
+        message: #"{"method":"DOM.documentUpdated","params":{}}"#,
+        in: session
     )
-    let snapshot: DOMSessionSnapshot = try await awaitValueAfterActorTurns {
-        let snapshot = await session.attachment.dom.snapshot()
-        guard snapshot.currentPageDocumentID == nil else {
-            return nil
-        }
-        return snapshot
-    }
+    let snapshot = await session.attachment.dom.snapshot()
 
     #expect(snapshot.currentPageDocumentID == nil)
     #expect(snapshot.documentsByID[pageDocumentID]?.lifecycle == .invalidated)
@@ -2061,18 +2051,13 @@ func ensureDOMDocumentLoadedReloadsInvalidatedPageDocument() async throws {
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
 
-    await receiveTargetDispatch(
+    await receiveAndApplyTargetDispatch(
         transport,
         targetID: .pageMain,
-        message: #"{"method":"DOM.documentUpdated","params":{}}"#
+        message: #"{"method":"DOM.documentUpdated","params":{}}"#,
+        in: session
     )
-    let invalidatedSnapshot: DOMSessionSnapshot = try await awaitValueAfterActorTurns {
-        let snapshot = await session.attachment.dom.snapshot()
-        guard snapshot.currentPageDocumentID == nil else {
-            return nil
-        }
-        return snapshot
-    }
+    let invalidatedSnapshot = await session.attachment.dom.snapshot()
     #expect(invalidatedSnapshot.currentPageDocumentID == nil)
 
     let sentCount = await backend.sentTargetMessages().count
@@ -2111,13 +2096,7 @@ func documentUpdatedAllowsNewDocumentRequestWhilePreviousRequestIsPending() asyn
         message: #"{"method":"DOM.documentUpdated","params":{}}"#,
         in: session
     )
-    let _: DOMSessionSnapshot = try await awaitValueAfterActorTurns {
-        let snapshot = await session.attachment.dom.snapshot()
-        guard snapshot.currentPageDocumentID == nil else {
-            return nil
-        }
-        return snapshot
-    }
+    #expect(await session.attachment.dom.snapshot().currentPageDocumentID == nil)
 
     let sentCount = await backend.sentTargetMessages().count
     let ensureTask = Task {
