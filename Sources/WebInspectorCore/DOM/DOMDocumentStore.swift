@@ -4,52 +4,83 @@ import WebInspectorTransport
 @MainActor
 @Observable
 package final class DOMDocumentStore {
-    private var targetStatesByID: [ProtocolTarget.ID: DOMTargetState]
-    private var lastDocumentLifetimeIDByTargetID: [ProtocolTarget.ID: UInt64]
+    private struct TargetSlot {
+        var state: DOMTargetState?
+        var lastDocumentLifetimeID: UInt64 = 0
+
+        var isEmpty: Bool {
+            state == nil && lastDocumentLifetimeID == 0
+        }
+
+        mutating func nextDocumentID(for targetID: ProtocolTarget.ID) -> DOMDocument.ID {
+            lastDocumentLifetimeID += 1
+            return DOMDocument.ID(
+                targetID: targetID,
+                localDocumentLifetimeID: DOMDocumentLifetimeIdentifier(lastDocumentLifetimeID)
+            )
+        }
+
+        @MainActor
+        mutating func state(for targetID: ProtocolTarget.ID) -> DOMTargetState {
+            if let state {
+                return state
+            }
+            let state = DOMTargetState(targetID: targetID)
+            self.state = state
+            return state
+        }
+    }
+
+    private var slotsByTargetID: [ProtocolTarget.ID: TargetSlot]
 
     package init() {
-        targetStatesByID = [:]
-        lastDocumentLifetimeIDByTargetID = [:]
+        slotsByTargetID = [:]
     }
 
     package func reset() {
         // Document identifiers are scoped to the DOMSession lifetime; reset only drops current document state.
-        targetStatesByID.removeAll()
+        slotsByTargetID = slotsByTargetID.compactMapValues { slot in
+            var slot = slot
+            slot.state = nil
+            return slot.isEmpty ? nil : slot
+        }
     }
 
     package func nextDocumentID(for targetID: ProtocolTarget.ID) -> DOMDocument.ID {
-        let nextDocumentLifetimeID = (lastDocumentLifetimeIDByTargetID[targetID] ?? 0) + 1
-        lastDocumentLifetimeIDByTargetID[targetID] = nextDocumentLifetimeID
-        return DOMDocument.ID(
-            targetID: targetID,
-            localDocumentLifetimeID: DOMDocumentLifetimeIdentifier(nextDocumentLifetimeID)
-        )
+        var slot = slotsByTargetID[targetID] ?? TargetSlot()
+        let documentID = slot.nextDocumentID(for: targetID)
+        slotsByTargetID[targetID] = slot
+        return documentID
     }
 
     package func state(for targetID: ProtocolTarget.ID) -> DOMTargetState {
-        if let state = targetStatesByID[targetID] {
-            return state
-        }
-        let state = DOMTargetState(targetID: targetID)
-        targetStatesByID[targetID] = state
+        var slot = slotsByTargetID[targetID] ?? TargetSlot()
+        let state = slot.state(for: targetID)
+        slotsByTargetID[targetID] = slot
         return state
     }
 
     package func stateIfPresent(for targetID: ProtocolTarget.ID) -> DOMTargetState? {
-        targetStatesByID[targetID]
+        slotsByTargetID[targetID]?.state
     }
 
     @discardableResult
     package func removeState(for targetID: ProtocolTarget.ID) -> DOMTargetState? {
-        targetStatesByID.removeValue(forKey: targetID)
+        guard var slot = slotsByTargetID[targetID] else {
+            return nil
+        }
+        let state = slot.state
+        slot.state = nil
+        store(slot, for: targetID)
+        return state
     }
 
     package func currentDocument(forTargetID targetID: ProtocolTarget.ID) -> DOMDocument? {
-        targetStatesByID[targetID]?.currentDocument
+        slotsByTargetID[targetID]?.state?.currentDocument
     }
 
     package func currentLoadedDocumentID(for targetID: ProtocolTarget.ID) -> DOMDocument.ID? {
-        guard let document = targetStatesByID[targetID]?.currentDocument,
+        guard let document = slotsByTargetID[targetID]?.state?.currentDocument,
               document.lifecycle == .loaded else {
             return nil
         }
@@ -57,7 +88,7 @@ package final class DOMDocumentStore {
     }
 
     package func currentDocument(for documentID: DOMDocument.ID) -> DOMDocument? {
-        guard let document = targetStatesByID[documentID.targetID]?.currentDocument,
+        guard let document = slotsByTargetID[documentID.targetID]?.state?.currentDocument,
               document.id == documentID,
               document.lifecycle == .loaded else {
             return nil
@@ -70,11 +101,12 @@ package final class DOMDocumentStore {
     }
 
     package var currentDocuments: [DOMDocument] {
-        targetStatesByID.values.compactMap(\.currentDocument)
+        slotsByTargetID.values.compactMap { $0.state?.currentDocument }
     }
 
     package func currentNodeIDsByKey() -> [DOMNodeCurrentKey: DOMNode.ID] {
-        Dictionary(uniqueKeysWithValues: targetStatesByID.values.compactMap { state -> [(DOMNodeCurrentKey, DOMNode.ID)]? in
+        let states = slotsByTargetID.values.compactMap(\.state)
+        return Dictionary(uniqueKeysWithValues: states.compactMap { state -> [(DOMNodeCurrentKey, DOMNode.ID)]? in
             guard let document = state.currentDocument else {
                 return nil
             }
@@ -94,32 +126,46 @@ package final class DOMDocumentStore {
     }
 
     package func currentNodeID(targetID: ProtocolTarget.ID, rawNodeID: DOMProtocolNodeID) -> DOMNode.ID? {
-        targetStatesByID[targetID]?.currentDocument?.currentNodeIDByProtocolNodeID[rawNodeID]
+        slotsByTargetID[targetID]?.state?.currentDocument?.currentNodeIDByProtocolNodeID[rawNodeID]
     }
 
     package func removeTransaction(_ transactionID: DOMTransaction.ID, targetID: ProtocolTarget.ID?) {
         if let targetID {
-            targetStatesByID[targetID]?.currentDocument?.removeTransaction(transactionID)
+            slotsByTargetID[targetID]?.state?.currentDocument?.removeTransaction(transactionID)
             return
         }
-        for state in targetStatesByID.values {
+        for state in slotsByTargetID.values.compactMap(\.state) {
             state.currentDocument?.removeTransaction(transactionID)
         }
     }
 
     package func clearOwnerHydrationTransactions(targetID: ProtocolTarget.ID) {
-        targetStatesByID[targetID]?.currentDocument?.removeOwnerHydrationTransactions()
+        slotsByTargetID[targetID]?.state?.currentDocument?.removeOwnerHydrationTransactions()
     }
 
     package func targetStateSnapshots(
         currentDocumentID: (ProtocolTarget.ID) -> DOMDocument.ID?
     ) -> [ProtocolTarget.ID: DOMTargetStateSnapshot] {
-        targetStatesByID.mapValues { state in
-            DOMTargetStateSnapshot(
-                targetID: state.targetID,
-                currentDocumentID: currentDocumentID(state.targetID),
-                transactionIDs: state.currentDocument.map { Array($0.transactions.keys) } ?? []
+        Dictionary(uniqueKeysWithValues: slotsByTargetID.compactMap { targetID, slot in
+            guard let state = slot.state else {
+                return nil
+            }
+            return (
+                targetID,
+                DOMTargetStateSnapshot(
+                    targetID: state.targetID,
+                    currentDocumentID: currentDocumentID(state.targetID),
+                    transactionIDs: state.currentDocument.map { Array($0.transactions.keys) } ?? []
+                )
             )
+        })
+    }
+
+    private func store(_ slot: TargetSlot, for targetID: ProtocolTarget.ID) {
+        if slot.isEmpty {
+            slotsByTargetID.removeValue(forKey: targetID)
+        } else {
+            slotsByTargetID[targetID] = slot
         }
     }
 }

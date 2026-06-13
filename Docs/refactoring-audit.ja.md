@@ -312,11 +312,13 @@ xcodebuild test \
 - `DOMSessionAvailability.swift` を追加し、DOM action availability の owner を protocol operation 実行本体から分離。
 - `DOMSessionElementPickerController` は `activeSession + acceptsInspectEvents` から `.idle / .enabling / .accepting` phase に置換し、inspect-mode enable 応答前の inspect event 無視と stale session 拒否を controller の状態遷移として表現。
 - `TransportStyleSheetRouting` は `styleSheetID` ごとの resolved target / unresolved frame / replay payload を三つの辞書で同期する構造から、単一 `Route` enum 辞書に置換。frame target 解決時の replay は hidden queue ではなく `ResolvedStyleSheetAddedEvent` effect として `TransportSession` に返し、event emission ordering は actor 本体が維持。
+- `DOMDocumentStore` は `targetStatesByID` と `lastDocumentLifetimeIDByTargetID` の同一 `targetID` 二辞書を単一 `TargetSlot` 辞書に置換。`reset` は document state だけを落とし、session 内 document lifetime counter は維持する不変条件を slot が持つ。
 
 最新の局所検証:
 
 - `swift test --filter WebInspectorTransportTests` (2026-06-13、stylesheet route enum 化後 green)
-- `swift test --filter WebInspectorCoreTests` (2026-06-13、element picker phase 化後 green)
+- `swift test --filter WebInspectorCoreTests` (2026-06-13、element picker phase 化 / document store slot 化後 green)
 - `swift test --filter WebInspectorArchitectureTests` (2026-06-13、element picker / stylesheet route 変更後 green)
+- `swift test` (2026-06-13、element picker / stylesheet route 変更後 green)
 - `swift test --filter WebInspectorUITests` (2026-06-13、`b9b29aa4` 直前 green)
 - `xcodebuild test -workspace WebInspectorKit.xcworkspace -scheme WebInspectorKit -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest'` (2026-06-13、`b9b29aa4` 直前 green)
