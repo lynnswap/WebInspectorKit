@@ -31,7 +31,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     private var searchTextObservation: PortableObservationTracking.Token?
     private var resourceFilterObservation: PortableObservationTracking.Token?
     private var selectedRequestObservation: PortableObservationTracking.Token?
-    private var displayRowsThrottleTask: Task<Void, Never>?
+    private let displayRowsReloadScheduler = MainActorDelayScheduler()
     private var pendingThrottledDisplayRows: [NetworkRequestDisplayProjection]?
 
     private var needsSnapshotReloadOnNextAppearance = false
@@ -75,7 +75,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         searchTextObservation?.cancel()
         resourceFilterObservation?.cancel()
         selectedRequestObservation?.cancel()
-        displayRowsThrottleTask?.cancel()
+        displayRowsReloadScheduler.cancel()
         detachSearchPresentation()
     }
 
@@ -173,26 +173,20 @@ package final class NetworkListViewController: UICollectionViewController, UISea
 
     private func scheduleThrottledDisplayRowsReload(_ displayRows: [NetworkRequestDisplayProjection]) {
         pendingThrottledDisplayRows = displayRows
-        guard displayRowsThrottleTask == nil else {
+        guard displayRowsReloadScheduler.hasScheduledDelay == false else {
             return
         }
 
-        displayRowsThrottleTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: Self.snapshotThrottleInterval)
-            guard let self, !Task.isCancelled else {
-                return
-            }
-            flushThrottledDisplayRowsReload()
+        displayRowsReloadScheduler.schedule(after: Self.snapshotThrottleInterval) { [weak self] in
+            self?.flushThrottledDisplayRowsReload()
         }
     }
 
     private func flushThrottledDisplayRowsReload() {
         guard let displayRows = pendingThrottledDisplayRows else {
-            displayRowsThrottleTask = nil
             return
         }
         pendingThrottledDisplayRows = nil
-        displayRowsThrottleTask = nil
         reloadDataFromModel(displayRows: displayRows)
     }
 

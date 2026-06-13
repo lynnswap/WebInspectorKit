@@ -472,7 +472,55 @@ struct BrowserSessionRestoreTests {
     }
 
     @Test
-    func restoredTitleSurvivesInitialNilWebViewTitleObservation() throws {
+    func browserStoreDebouncedAutosaveUsesInjectedScheduler() throws {
+        try withTemporarySessionStore { sessionStore, _ in
+            let scheduler = ManualDelayScheduler()
+            let navigatedURL = try #require(URL(string: "https://example.com/debounced-save"))
+            let store = BrowserStore(
+                url: try #require(URL(string: "about:blank")),
+                automaticallyLoadsInitialRequest: false,
+                sessionStore: sessionStore,
+                saveDelayScheduler: scheduler
+            )
+
+            store.load(url: navigatedURL)
+
+            #expect(scheduler.hasScheduledDelay)
+            #expect(sessionStore.load() == nil)
+
+            scheduler.fire()
+
+            let savedSession = try #require(sessionStore.load())
+            #expect(savedSession.snapshot.tabs.first?.url == navigatedURL)
+            #expect(scheduler.hasScheduledDelay == false)
+        }
+    }
+
+    @Test
+    func browserStoreImmediateSaveCancelsPendingDebounce() throws {
+        try withTemporarySessionStore { sessionStore, _ in
+            let scheduler = ManualDelayScheduler()
+            let navigatedURL = try #require(URL(string: "https://example.com/immediate-save"))
+            let store = BrowserStore(
+                url: try #require(URL(string: "about:blank")),
+                automaticallyLoadsInitialRequest: false,
+                sessionStore: sessionStore,
+                saveDelayScheduler: scheduler
+            )
+
+            store.load(url: navigatedURL)
+            #expect(scheduler.hasScheduledDelay)
+
+            store.preserveSession(immediate: true)
+
+            #expect(scheduler.hasScheduledDelay == false)
+            let savedSession = try #require(sessionStore.load())
+            #expect(savedSession.snapshot.tabs.first?.url == navigatedURL)
+        }
+    }
+
+    @Test
+    func restoredTitleSurvivesInitialEmptyOrNilWebViewTitleObservation() async throws {
         let tabID = UUID()
         let store = BrowserStore(
             restoring: BrowserRestoredSession(
@@ -494,8 +542,9 @@ struct BrowserSessionRestoreTests {
             fallbackURL: try #require(URL(string: "https://fallback.example/")),
             sessionStore: nil
         )
+        let tab = try #require(store.tabs.first)
 
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        await tab.waitUntilTitleObservationApplied()
 
         #expect(store.tabs[0].snapshot(stateFileName: "tab.state").title == "Restored Title")
         #expect(store.displayTitle == "Restored Title")
@@ -678,6 +727,33 @@ struct BrowserSessionRestoreTests {
                 .compactMap { $0 as? UIWindowScene }
                 .first
         )
+    }
+
+    @MainActor
+    private final class ManualDelayScheduler: MainActorDelayScheduling {
+        private var operation: (@Sendable @MainActor () -> Void)?
+
+        var hasScheduledDelay: Bool {
+            operation != nil
+        }
+
+        func cancel() {
+            operation = nil
+        }
+
+        func schedule(after duration: Duration, operation: @escaping @Sendable @MainActor () -> Void) {
+            self.operation = operation
+        }
+
+        func schedule(nanoseconds: UInt64, operation: @escaping @Sendable @MainActor () -> Void) {
+            self.operation = operation
+        }
+
+        func fire() {
+            let operation = operation
+            self.operation = nil
+            operation?()
+        }
     }
 
     @MainActor

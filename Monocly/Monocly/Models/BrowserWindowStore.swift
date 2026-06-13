@@ -14,7 +14,7 @@ final class BrowserStore {
     private(set) var stateRevision = 0
 
     @ObservationIgnored private var restorationComplete = false
-    @ObservationIgnored private var saveTask: Task<Void, Never>?
+    @ObservationIgnored private let saveDelayScheduler: MainActorDelayScheduling
 
     var selectedTab: BrowserTabStore? {
         _ = stateRevision
@@ -85,11 +85,13 @@ final class BrowserStore {
         url: URL,
         automaticallyLoadsInitialRequest: Bool = true,
         sessionStore: BrowserSessionStore? = BrowserSessionStore(),
-        saveDebounceDuration: UInt64 = 500_000_000
+        saveDebounceDuration: UInt64 = 500_000_000,
+        saveDelayScheduler: MainActorDelayScheduling = MainActorDelayScheduler()
     ) {
         fallbackURL = url
         self.sessionStore = sessionStore
         self.saveDebounceDuration = saveDebounceDuration
+        self.saveDelayScheduler = saveDelayScheduler
 
         let tab = BrowserTabStore(url: url, automaticallyLoadsInitialRequest: automaticallyLoadsInitialRequest)
         tabs = [tab]
@@ -103,11 +105,13 @@ final class BrowserStore {
         restoring restoredSession: BrowserRestoredSession?,
         fallbackURL: URL,
         sessionStore: BrowserSessionStore? = BrowserSessionStore(),
-        saveDebounceDuration: UInt64 = 500_000_000
+        saveDebounceDuration: UInt64 = 500_000_000,
+        saveDelayScheduler: MainActorDelayScheduling = MainActorDelayScheduler()
     ) {
         self.fallbackURL = fallbackURL
         self.sessionStore = sessionStore
         self.saveDebounceDuration = saveDebounceDuration
+        self.saveDelayScheduler = saveDelayScheduler
 
         if let restoredSession,
            restoredSession.snapshot.tabs.isEmpty == false {
@@ -135,8 +139,8 @@ final class BrowserStore {
         configureTabCallbacks()
     }
 
-    deinit {
-        saveTask?.cancel()
+    isolated deinit {
+        saveDelayScheduler.cancel()
     }
 
     func selectTab(id: UUID) {
@@ -186,24 +190,15 @@ final class BrowserStore {
             return
         }
 
-        saveTask?.cancel()
-        saveTask = nil
+        saveDelayScheduler.cancel()
 
         if immediate {
             saveCurrentSession()
             return
         }
 
-        saveTask = Task { @MainActor [weak self] in
-            guard let self else {
-                return
-            }
-            try? await Task.sleep(nanoseconds: self.saveDebounceDuration)
-            guard Task.isCancelled == false else {
-                return
-            }
-            self.saveTask = nil
-            self.saveCurrentSession()
+        saveDelayScheduler.schedule(nanoseconds: saveDebounceDuration) { [weak self] in
+            self?.saveCurrentSession()
         }
     }
 

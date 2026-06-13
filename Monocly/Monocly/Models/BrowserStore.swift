@@ -345,6 +345,8 @@ private enum BrowserTabStoreSPI {
     @ObservationIgnored private var restoredInteractionState: Data?
     @ObservationIgnored private var canSaveWebViewInteractionState = true
     @ObservationIgnored var onStateChanged: (() -> Void)?
+    @ObservationIgnored private var titleObservationAppliedCount = 0
+    @ObservationIgnored private var titleObservationWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
     @ObservationIgnored private static var didInstallSameDocumentNavigationDelegateMethod = false
 
     var isShowingProgress: Bool {
@@ -532,6 +534,15 @@ private enum BrowserTabStoreSPI {
         )
     }
 
+    func waitUntilTitleObservationApplied(atLeast count: Int = 1) async {
+        guard titleObservationAppliedCount < count else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            titleObservationWaiters.append((count, continuation))
+        }
+    }
+
     private func setObservers() {
         cancellables.removeAll()
 
@@ -563,16 +574,18 @@ private enum BrowserTabStoreSPI {
                 guard let self else {
                     return
                 }
-                guard let title else {
+                guard let title, title.isEmpty == false else {
                     if self.isHoldingRestoredTitle == false {
                         self.pageTitle = nil
                     }
                     self.notifyStateChanged()
+                    self.noteTitleObservationApplied()
                     return
                 }
                 self.pageTitle = title
                 self.isHoldingRestoredTitle = false
                 self.notifyStateChanged()
+                self.noteTitleObservationApplied()
             }
             .store(in: &cancellables)
 
@@ -661,6 +674,19 @@ private enum BrowserTabStoreSPI {
 
     private func notifyStateChanged() {
         onStateChanged?()
+    }
+
+    private func noteTitleObservationApplied() {
+        titleObservationAppliedCount += 1
+        var remainingWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
+        for (count, continuation) in titleObservationWaiters {
+            if titleObservationAppliedCount >= count {
+                continuation.resume()
+            } else {
+                remainingWaiters.append((count, continuation))
+            }
+        }
+        titleObservationWaiters = remainingWaiters
     }
 
     private func historyItems(direction: BrowserHistoryDirection, limit: Int) -> [BrowserHistoryMenuItem] {
