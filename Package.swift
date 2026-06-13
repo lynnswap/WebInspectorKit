@@ -146,11 +146,6 @@ let package = Package(
             path: "Tests/WebInspectorTestSupport",
             swiftSettings: strictSwiftSettings
         ),
-        .testTarget(
-            name: "WebInspectorArchitectureTests",
-            path: "Tests/WebInspectorArchitectureTests",
-            swiftSettings: strictSwiftSettings
-        ),
         .target(
             name: "WebInspectorNativeSymbolFixtures",
             path: "Tests/WebInspectorNativeSymbolFixtures",
