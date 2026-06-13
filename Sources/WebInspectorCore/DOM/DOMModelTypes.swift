@@ -447,23 +447,159 @@ package final class DOMNode {
     }
 }
 
-package struct DOMSelectionRequest {
+package struct DOMSelectionRequest: Equatable, Sendable {
     package var id: SelectionRequestIdentifier
     package var targetID: ProtocolTarget.ID
     package var documentID: DOMDocument.ID
     package var transactionID: DOMTransaction.ID?
 }
 
+package enum DOMSelectionResolutionPhase: Equatable, Sendable {
+    case idle
+    case pending(DOMSelectionRequest)
+    case failed(SelectionResolutionFailure)
+
+    package var pendingRequest: DOMSelectionRequest? {
+        guard case let .pending(request) = self else {
+            return nil
+        }
+        return request
+    }
+
+    package var failure: SelectionResolutionFailure? {
+        guard case let .failed(failure) = self else {
+            return nil
+        }
+        return failure
+    }
+
+    package var isIdle: Bool {
+        if case .idle = self {
+            return true
+        }
+        return false
+    }
+}
+
+package struct DOMSelectionState: Equatable, Sendable {
+    package var selectedNodeID: DOMNode.ID?
+    package var resolution: DOMSelectionResolutionPhase
+
+    package init(
+        selectedNodeID: DOMNode.ID? = nil,
+        resolution: DOMSelectionResolutionPhase = .idle
+    ) {
+        self.selectedNodeID = selectedNodeID
+        self.resolution = resolution
+    }
+
+    package var pendingRequest: DOMSelectionRequest? {
+        resolution.pendingRequest
+    }
+
+    package var failure: SelectionResolutionFailure? {
+        resolution.failure
+    }
+}
+
 @MainActor
 @Observable
 package final class DOMSelection {
-    package var selectedNodeID: DOMNode.ID?
-    package var pendingRequest: DOMSelectionRequest?
-    package var failure: SelectionResolutionFailure?
+    private var state: DOMSelectionState
 
-    package init() {
-        selectedNodeID = nil
-        pendingRequest = nil
-        failure = nil
+    package init(state: DOMSelectionState = DOMSelectionState()) {
+        self.state = state
+    }
+
+    package var selectedNodeID: DOMNode.ID? {
+        state.selectedNodeID
+    }
+
+    package var pendingRequest: DOMSelectionRequest? {
+        state.pendingRequest
+    }
+
+    package var failure: SelectionResolutionFailure? {
+        state.failure
+    }
+
+    package func hasStateChange(selecting nodeID: DOMNode.ID?) -> Bool {
+        state.selectedNodeID != nodeID || !state.resolution.isIdle
+    }
+
+    @discardableResult
+    package func select(_ nodeID: DOMNode.ID?) -> DOMSelectionRequest? {
+        let cancelledRequest = state.pendingRequest
+        state.selectedNodeID = nodeID
+        state.resolution = .idle
+        return cancelledRequest
+    }
+
+    @discardableResult
+    package func beginRequest(_ request: DOMSelectionRequest) -> DOMSelectionRequest? {
+        let cancelledRequest = state.pendingRequest
+        state.resolution = .pending(request)
+        return cancelledRequest
+    }
+
+    package func clearFailure() {
+        guard case .failed = state.resolution else {
+            return
+        }
+        state.resolution = .idle
+    }
+
+    @discardableResult
+    package func clearSelected(ifDocument documentID: DOMDocument.ID) -> Bool {
+        guard state.selectedNodeID?.documentID == documentID else {
+            return false
+        }
+        state.selectedNodeID = nil
+        clearFailure()
+        return true
+    }
+
+    @discardableResult
+    package func clearSelectedIfStale(nodeExists: (DOMNode.ID) -> Bool) -> Bool {
+        guard let selectedNodeID = state.selectedNodeID,
+              nodeExists(selectedNodeID) == false else {
+            return false
+        }
+        state.selectedNodeID = nil
+        clearFailure()
+        return true
+    }
+
+    @discardableResult
+    package func complete(
+        _ selectedNodeID: DOMNode.ID,
+        pendingRequest: DOMSelectionRequest
+    ) -> DOMSelectionRequest? {
+        guard state.pendingRequest == pendingRequest else {
+            return nil
+        }
+        state.selectedNodeID = selectedNodeID
+        state.resolution = .idle
+        return pendingRequest
+    }
+
+    @discardableResult
+    package func fail(
+        _ failure: SelectionResolutionFailure,
+        clearSelected: Bool = true
+    ) -> DOMSelectionRequest? {
+        let cancelledRequest = state.pendingRequest
+        if clearSelected {
+            state.selectedNodeID = nil
+        }
+        state.resolution = .failed(failure)
+        return cancelledRequest
+    }
+
+    package func rejectStaleRequest(_ failure: SelectionResolutionFailure) {
+        guard state.pendingRequest == nil else {
+            return
+        }
+        state.resolution = .failed(failure)
     }
 }

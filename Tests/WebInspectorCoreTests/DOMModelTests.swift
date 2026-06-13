@@ -1004,6 +1004,82 @@ func clearingNodeSelectionCancelsPendingInspectSelection() async throws {
 }
 
 @Test
+func replacingInspectSelectionRequestCancelsPreviousTransactionAndIgnoresOldReply() async throws {
+    let pageTargetID = ProtocolTarget.ID("page-main")
+    let session = await DOMSession()
+
+    await session.applyTargetCreated(.init(id: pageTargetID, kind: .page), makeCurrentMainPage: true)
+    _ = await session.replaceDocumentRoot(pageDocumentWithoutIframe(), targetID: pageTargetID)
+
+    let firstCommand = await session.beginInspectSelectionRequest(
+        targetID: pageTargetID,
+        objectID: "first-object"
+    )
+    let firstRequestID: SelectionRequestIdentifier
+    guard case let .success(.requestNode(id, _, _)) = firstCommand else {
+        Issue.record("Expected first pending requestNode selection")
+        return
+    }
+    firstRequestID = id
+
+    let secondCommand = await session.beginInspectSelectionRequest(
+        targetID: pageTargetID,
+        objectID: "second-object"
+    )
+    let secondRequestID: SelectionRequestIdentifier
+    guard case let .success(.requestNode(id, _, _)) = secondCommand else {
+        Issue.record("Expected second pending requestNode selection")
+        return
+    }
+    secondRequestID = id
+
+    var snapshot = await session.snapshot()
+    #expect(snapshot.selection.pendingRequest?.id == secondRequestID)
+    var requestNodeTransactions = snapshot.transactions.filter { transaction in
+        if case .requestNode = transaction.kind {
+            return true
+        }
+        return false
+    }
+    #expect(requestNodeTransactions.map(\.kind) == [
+        .requestNode(selectionRequestID: secondRequestID, objectID: "second-object")
+    ])
+
+    let staleResult = await session.applyRequestNodeResult(
+        selectionRequestID: firstRequestID,
+        targetID: pageTargetID,
+        nodeID: .init(2)
+    )
+    guard case let .failed(.staleSelectionRequest(expected, received)) = staleResult else {
+        Issue.record("Expected stale first request to be rejected")
+        return
+    }
+    #expect(expected == secondRequestID)
+    #expect(received == firstRequestID)
+
+    snapshot = await session.snapshot()
+    #expect(snapshot.selection.pendingRequest?.id == secondRequestID)
+    #expect(snapshot.selection.failure == nil)
+    requestNodeTransactions = snapshot.transactions.filter { transaction in
+        if case .requestNode = transaction.kind {
+            return true
+        }
+        return false
+    }
+    #expect(requestNodeTransactions.map(\.kind) == [
+        .requestNode(selectionRequestID: secondRequestID, objectID: "second-object")
+    ])
+
+    let selectedNodeID = try await session.applyRequestNodeResult(
+        selectionRequestID: secondRequestID,
+        targetID: pageTargetID,
+        nodeID: .init(2)
+    ).get()
+    #expect(await session.selectedNodeID == selectedNodeID)
+    #expect((await session.snapshot()).selection.pendingRequest == nil)
+}
+
+@Test
 func protocolNodeSelectionResolvesCurrentNodeKey() async throws {
     let pageTargetID = ProtocolTarget.ID("page-main")
     let session = await DOMSession()

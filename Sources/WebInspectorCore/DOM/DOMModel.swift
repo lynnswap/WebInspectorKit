@@ -614,18 +614,10 @@ package final class DOMSession {
                 return
             }
         }
-        if let pendingTransactionID = selection.pendingRequest?.transactionID {
-            removeTransaction(pendingTransactionID, targetID: selection.pendingRequest?.targetID)
-        }
-        let hasSelectionStateChange = selection.selectedNodeID != nodeID
-            || selection.pendingRequest != nil
-            || selection.failure != nil
-        guard hasSelectionStateChange else {
+        guard selection.hasStateChange(selecting: nodeID) else {
             return
         }
-        selection.selectedNodeID = nodeID
-        selection.pendingRequest = nil
-        selection.failure = nil
+        cancelSelectionTransaction(for: selection.select(nodeID))
         syncSelectedElementStyles()
     }
 
@@ -845,13 +837,12 @@ package final class DOMSession {
             kind: .requestNode(selectionRequestID: requestID, objectID: objectID),
             issuedSequence: issuedSequence
         )
-        selection.pendingRequest = DOMSelectionRequest(
+        cancelSelectionTransaction(for: selection.beginRequest(DOMSelectionRequest(
             id: requestID,
             targetID: targetID,
             documentID: document.id,
             transactionID: transactionID
-        )
-        selection.failure = nil
+        )))
         return .success(.requestNode(selectionRequestID: requestID, targetID: targetID, objectID: objectID))
     }
 
@@ -864,12 +855,19 @@ package final class DOMSession {
               document.lifecycle == .loaded else {
             return failSelection(.missingCurrentDocument(targetID), clearSelected: false)
         }
-        guard let pendingRequest = selection.pendingRequest,
-              pendingRequest.id == selectionRequestID else {
+        guard let pendingRequest = selection.pendingRequest else {
             return failSelection(
-                .staleSelectionRequest(expected: selection.pendingRequest?.id, received: selectionRequestID),
+                .staleSelectionRequest(expected: nil, received: selectionRequestID),
                 clearSelected: false
             )
+        }
+        guard pendingRequest.id == selectionRequestID else {
+            let failure = SelectionResolutionFailure.staleSelectionRequest(
+                expected: pendingRequest.id,
+                received: selectionRequestID
+            )
+            selection.rejectStaleRequest(failure)
+            return .failed(failure)
         }
         guard pendingRequest.targetID == targetID else {
             return failSelection(.targetMismatch(expected: pendingRequest.targetID, received: targetID))
@@ -896,7 +894,7 @@ package final class DOMSession {
               document.recordRequestedProtocolNodeID(nodeID, for: transactionID) else {
             return failSelection(.unresolvedNode(key))
         }
-        selection.failure = nil
+        selection.clearFailure()
         return .pending(key)
     }
 
@@ -1104,9 +1102,7 @@ package final class DOMSession {
         document.transactions.removeAll()
         clearCurrentDocumentReference(documentID, targetID: document.targetID)
         updateAllFrameDocumentProjectionStates()
-        if selection.selectedNodeID?.documentID == documentID {
-            selection.selectedNodeID = nil
-            selection.failure = nil
+        if selection.clearSelected(ifDocument: documentID) {
             syncSelectedElementStyles()
         }
     }
@@ -1149,6 +1145,14 @@ package final class DOMSession {
 
     private func removeTransaction(_ transactionID: DOMTransaction.ID, targetID: ProtocolTarget.ID?) {
         documentStore.removeTransaction(transactionID, targetID: targetID)
+    }
+
+    private func cancelSelectionTransaction(for request: DOMSelectionRequest?) {
+        guard let request,
+              let transactionID = request.transactionID else {
+            return
+        }
+        removeTransaction(transactionID, targetID: request.targetID)
     }
 
     private func hasActiveOwnerHydrationTransaction(
@@ -1996,13 +2000,12 @@ package final class DOMSession {
     }
 
     private func reconcileSelection() {
-        guard let selectedNodeID = selection.selectedNodeID,
-              node(for: selectedNodeID) == nil else {
+        guard selection.clearSelectedIfStale(nodeExists: { nodeID in
+            node(for: nodeID) != nil
+        }) else {
             syncSelectedElementStyles()
             return
         }
-        selection.selectedNodeID = nil
-        selection.failure = nil
         syncSelectedElementStyles()
     }
 
@@ -2010,12 +2013,7 @@ package final class DOMSession {
         _ selectedNodeID: DOMNode.ID,
         pendingRequest: DOMSelectionRequest
     ) {
-        if let transactionID = pendingRequest.transactionID {
-            removeTransaction(transactionID, targetID: pendingRequest.targetID)
-        }
-        selection.selectedNodeID = selectedNodeID
-        selection.pendingRequest = nil
-        selection.failure = nil
+        cancelSelectionTransaction(for: selection.complete(selectedNodeID, pendingRequest: pendingRequest))
         syncSelectedElementStyles()
     }
 
@@ -2023,14 +2021,7 @@ package final class DOMSession {
         _ failure: SelectionResolutionFailure,
         clearSelected: Bool = true
     ) -> Result<DOMCommandIntent, SelectionResolutionFailure> {
-        if let pendingTransactionID = selection.pendingRequest?.transactionID {
-            removeTransaction(pendingTransactionID, targetID: selection.pendingRequest?.targetID)
-        }
-        if clearSelected {
-            selection.selectedNodeID = nil
-        }
-        selection.pendingRequest = nil
-        selection.failure = failure
+        recordSelectionFailure(failure, clearSelected: clearSelected)
         syncSelectedElementStyles()
         return .failure(failure)
     }
@@ -2039,14 +2030,7 @@ package final class DOMSession {
         _ failure: SelectionResolutionFailure,
         clearSelected: Bool = true
     ) -> Result<DOMNode.ID, SelectionResolutionFailure> {
-        if let pendingTransactionID = selection.pendingRequest?.transactionID {
-            removeTransaction(pendingTransactionID, targetID: selection.pendingRequest?.targetID)
-        }
-        if clearSelected {
-            selection.selectedNodeID = nil
-        }
-        selection.pendingRequest = nil
-        selection.failure = failure
+        recordSelectionFailure(failure, clearSelected: clearSelected)
         syncSelectedElementStyles()
         return .failure(failure)
     }
@@ -2055,16 +2039,16 @@ package final class DOMSession {
         _ failure: SelectionResolutionFailure,
         clearSelected: Bool = true
     ) -> DOMRequestNodeResolution {
-        if let pendingTransactionID = selection.pendingRequest?.transactionID {
-            removeTransaction(pendingTransactionID, targetID: selection.pendingRequest?.targetID)
-        }
-        if clearSelected {
-            selection.selectedNodeID = nil
-        }
-        selection.pendingRequest = nil
-        selection.failure = failure
+        recordSelectionFailure(failure, clearSelected: clearSelected)
         syncSelectedElementStyles()
         return .failed(failure)
+    }
+
+    private func recordSelectionFailure(
+        _ failure: SelectionResolutionFailure,
+        clearSelected: Bool
+    ) {
+        cancelSelectionTransaction(for: selection.fail(failure, clearSelected: clearSelected))
     }
 
     package func syncSelectedElementStyles() {
