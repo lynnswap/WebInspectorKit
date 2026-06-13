@@ -129,6 +129,7 @@ final class NetworkBodyViewController: UIViewController {
         syntaxView.contentInsetAdjustmentBehavior = .automatic
         syntaxView.keyboardDismissMode = .onDrag
         syntaxView.accessibilityIdentifier = "WebInspector.Network.BodyView"
+        applyScrollEdgeObservedBackgrounds()
         view.addSubview(syntaxView)
         view.addSubview(imageScrollView)
 
@@ -156,7 +157,25 @@ final class NetworkBodyViewController: UIViewController {
     }
 
     private func applyBackgroundFromTraits() {
-        view.backgroundColor = webInspectorBackgroundPolicy.backgroundColor
+        let backgroundColor = webInspectorBackgroundPolicy.backgroundColor
+        view.backgroundColor = backgroundColor
+        applyScrollEdgeObservedBackgrounds(backgroundColor: backgroundColor)
+    }
+
+    private func applyScrollEdgeObservedBackgrounds(
+        backgroundColor: UIColor? = nil
+    ) {
+        let backgroundColor = backgroundColor ?? webInspectorBackgroundPolicy.backgroundColor
+        webInspectorConfigureScrollEdgeObservedScrollView(
+            syntaxView,
+            backgroundColor: backgroundColor,
+            traitCollection: traitCollection
+        )
+        webInspectorConfigureScrollEdgeObservedScrollView(
+            imageScrollView,
+            backgroundColor: backgroundColor,
+            traitCollection: traitCollection
+        )
     }
 
     private func startObserving(body: NetworkBody?) {
@@ -316,6 +335,7 @@ final class NetworkBodyViewController: UIViewController {
         hideImagePreview()
         removeMediaPlayerViewController()
         syntaxView.isHidden = false
+        applyScrollEdgeObservedBackgrounds()
         scrollEdgeSink?.contentScrollView = syntaxView
     }
 
@@ -324,6 +344,7 @@ final class NetworkBodyViewController: UIViewController {
         removeCachedTemporaryMediaFile()
         syntaxView.isHidden = true
         imageScrollView.isHidden = false
+        applyScrollEdgeObservedBackgrounds()
         scrollEdgeSink?.contentScrollView = imageScrollView
         shouldResetImageZoomOnNextLayout = true
         imagePreviewLayoutState = nil

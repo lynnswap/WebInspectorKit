@@ -6,8 +6,9 @@ import UIKit
 @testable import WebInspectorCore
 @testable import WebInspectorUI
 
+extension WebInspectorUIRenderingTests {
 @MainActor
-@Suite(.serialized)
+@Suite
 struct DOMContainerTests {
     @Test
     func elementViewControllerShowsUnavailableStateWithoutSelectedStyles() {
@@ -1211,5 +1212,6 @@ struct DOMContainerTests {
         return condition()
     }
 
+}
 }
 #endif

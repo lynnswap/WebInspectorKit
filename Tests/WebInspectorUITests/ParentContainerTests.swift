@@ -7,8 +7,9 @@ import WebKit
 @testable import WebInspectorCore
 @testable import WebInspectorUI
 
+extension WebInspectorUIRenderingTests {
 @MainActor
-@Suite(.serialized)
+@Suite
 struct ParentContainerTests {
     private struct AttachmentFailure: Error {}
 
@@ -528,5 +529,6 @@ struct ParentContainerTests {
             }
         )
     }
+}
 }
 #endif

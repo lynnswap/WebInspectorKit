@@ -103,6 +103,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         collectionView.alwaysBounceVertical = true
         collectionView.keyboardDismissMode = .onDrag
         collectionView.accessibilityIdentifier = "WebInspector.Network.List"
+        applyBackgroundFromTraits()
 
         configureNavigationItem()
         reloadDataFromModel()
@@ -216,7 +217,11 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private func applyBackgroundFromTraits() {
-        collectionView.backgroundColor = webInspectorBackgroundPolicy.backgroundColor
+        webInspectorConfigureScrollEdgeObservedScrollView(
+            collectionView,
+            backgroundColor: webInspectorBackgroundPolicy.backgroundColor,
+            traitCollection: traitCollection
+        )
     }
 
     package func updateSearchResults(for searchController: UISearchController) {

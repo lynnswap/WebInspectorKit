@@ -6,8 +6,9 @@ import UIKit
 @testable import WebInspectorCore
 @testable import WebInspectorUI
 
+extension WebInspectorUIRenderingTests {
 @MainActor
-@Suite(.serialized)
+@Suite
 struct NetworkDetailViewControllerTests {
     @Test
     func resourceFilterSpecialistTitlesFollowWebInspectorLabels() {
@@ -736,7 +737,7 @@ struct NetworkDetailViewControllerTests {
         let model = NetworkPanelModel(network: network)
         model.selectRequest(request)
         let viewController = NetworkDetailViewController(model: model)
-        let window = showInWindow(viewController)
+        let window = showInWindow(viewController, makeVisible: true)
         defer { window.isHidden = true }
         viewController.setModeForTesting(.preview)
 
@@ -1143,7 +1144,7 @@ struct NetworkDetailViewControllerTests {
             listViewController: listViewController,
             detailViewController: detailViewController
         )
-        let window = showInWindow(navigationController)
+        let window = showInWindow(navigationController, makeVisible: true)
         defer { window.isHidden = true }
 
         model.selectRequest(request)
@@ -1174,7 +1175,7 @@ struct NetworkDetailViewControllerTests {
             listViewController: listViewController,
             detailViewController: detailViewController
         )
-        let window = showInWindow(navigationController)
+        let window = showInWindow(navigationController, makeVisible: true)
         defer { window.isHidden = true }
 
         let didRenderList = await waitForObservedCondition(
@@ -1223,7 +1224,7 @@ struct NetworkDetailViewControllerTests {
             listViewController: listViewController,
             detailViewController: detailViewController
         )
-        let window = showInWindow(navigationController)
+        let window = showInWindow(navigationController, makeVisible: true)
         defer { window.isHidden = true }
 
         model.selectRequest(request)
@@ -1332,10 +1333,15 @@ struct NetworkDetailViewControllerTests {
         viewController.collectionView(collectionView, didSelectItemAt: indexPath)
     }
 
-    private func showInWindow(_ viewController: UIViewController) -> UIWindow {
+    private func showInWindow(
+        _ viewController: UIViewController,
+        makeVisible: Bool = false
+    ) -> UIWindow {
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         window.rootViewController = viewController
-        window.makeKeyAndVisible()
+        if makeVisible {
+            window.makeKeyAndVisible()
+        }
         viewController.loadViewIfNeeded()
         window.layoutIfNeeded()
         return window
@@ -1451,5 +1457,6 @@ struct NetworkDetailViewControllerTests {
         }
         return bundle.localizedString(forKey: key, value: nil, table: nil)
     }
+}
 }
 #endif

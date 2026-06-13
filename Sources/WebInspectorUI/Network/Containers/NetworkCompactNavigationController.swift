@@ -24,6 +24,8 @@ package final class NetworkCompactNavigationController: UINavigationController, 
         listViewController.webInspectorDetachFromContainerForReuse()
         super.init(rootViewController: listViewController)
         navigationBar.prefersLargeTitles = false
+        navigationBar.scrollEdgeAppearance = navigationBar.standardAppearance
+        navigationBar.compactScrollEdgeAppearance = navigationBar.compactAppearance ?? navigationBar.standardAppearance
         webInspectorApplyNavigationControllerBackground(to: self)
         delegate = self
         listViewController.setRequestSelectionAction { [weak model] request in
