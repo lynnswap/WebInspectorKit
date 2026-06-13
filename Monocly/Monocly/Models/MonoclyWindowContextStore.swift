@@ -1,10 +1,10 @@
-@preconcurrency import Foundation
+import Foundation
 import Observation
 
 #if canImport(UIKit)
 import UIKit
 #elseif canImport(AppKit)
-@preconcurrency import AppKit
+import AppKit
 #endif
 
 @MainActor

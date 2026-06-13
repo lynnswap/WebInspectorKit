@@ -1,6 +1,6 @@
 import Foundation
 import WebKit
-@unsafe @preconcurrency import WebInspectorNativeBridge
+import WebInspectorNativeBridge
 
 @MainActor
 package final class NativeInspectorBackend: TransportBackend {

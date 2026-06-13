@@ -6,7 +6,7 @@ import UIHostingMenu
 import UIKit
 
 @MainActor
-final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutControllerDelegate, UITextInput, UITextInteractionDelegate {
+final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegate {
     typealias RequestChildrenAction = @MainActor (DOMNode.ID) async -> Bool
     typealias HighlightNodeAction = @MainActor (DOMNode.ID) async -> Void
     typealias HideHighlightAction = @MainActor () async -> Void
@@ -42,6 +42,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     private let layoutManager = NSTextLayoutManager()
     private let textContainer = NSTextContainer()
     private let textContentView = DOMTreeTextContentView()
+    private lazy var viewportLayoutDelegate = DOMTreeTextViewportLayoutDelegate(textView: self)
     private lazy var viewportLayoutCoordinator = DOMTreeViewportLayoutCoordinator(textContentView: textContentView)
     private lazy var findCoordinator = DOMTreeFindCoordinator(textView: self)
     private lazy var textSelectionInteraction: UITextInteraction = {
@@ -423,7 +424,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         textContainer.lineFragmentPadding = 0
         textContainer.lineBreakMode = .byClipping
         layoutManager.textContainer = textContainer
-        layoutManager.textViewportLayoutController.delegate = self
+        layoutManager.textViewportLayoutController.delegate = viewportLayoutDelegate
         textContentStorage.addTextLayoutManager(layoutManager)
         textContentStorage.primaryTextLayoutManager = layoutManager
 
@@ -2166,6 +2167,40 @@ extension DOMTreeTextView {
         DOMTreeHighlightTheme.webInspector.disclosure.resolvedColor(
             with: UITraitCollection(userInterfaceStyle: style)
         )
+    }
+}
+
+@MainActor
+private final class DOMTreeTextViewportLayoutDelegate: NSObject, @preconcurrency NSTextViewportLayoutControllerDelegate {
+    private weak var textView: DOMTreeTextView?
+
+    init(textView: DOMTreeTextView) {
+        self.textView = textView
+        super.init()
+    }
+
+    // TextKit2 invokes this delegate from the UIKit main-thread layout pipeline,
+    // but the imported delegate protocol is not annotated with MainActor isolation.
+    func viewportBounds(for textViewportLayoutController: NSTextViewportLayoutController) -> CGRect {
+        textView?.viewportBounds(for: textViewportLayoutController) ?? .zero
+    }
+
+    func textViewportLayoutControllerWillLayout(_ textViewportLayoutController: NSTextViewportLayoutController) {
+        textView?.textViewportLayoutControllerWillLayout(textViewportLayoutController)
+    }
+
+    func textViewportLayoutController(
+        _ textViewportLayoutController: NSTextViewportLayoutController,
+        configureRenderingSurfaceFor textLayoutFragment: NSTextLayoutFragment
+    ) {
+        textView?.textViewportLayoutController(
+            textViewportLayoutController,
+            configureRenderingSurfaceFor: textLayoutFragment
+        )
+    }
+
+    func textViewportLayoutControllerDidLayout(_ textViewportLayoutController: NSTextViewportLayoutController) {
+        textView?.textViewportLayoutControllerDidLayout(textViewportLayoutController)
     }
 }
 #endif
