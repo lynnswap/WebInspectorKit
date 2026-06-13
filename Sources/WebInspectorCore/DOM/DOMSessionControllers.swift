@@ -271,44 +271,79 @@ final class DOMSessionDeleteUndoState {
 
 @MainActor
 final class DOMSessionDeleteUndoOperationQueue {
-    private var generation: UInt64 = 0
-    private var tail: Task<Void, Never>?
-    private var tasksByID: [UInt64: Task<Void, Never>] = [:]
-    private var nextTaskID: UInt64 = 0
+    @MainActor
+    private final class QueuedOperation {
+        let id: UInt64
+        let generation: UInt64
+        var task: Task<Void, Never>?
 
-    func enqueue(_ operation: @escaping @MainActor (UInt64) async -> Void) {
-        let previousOperation = tail
+        init(id: UInt64, generation: UInt64) {
+            self.id = id
+            self.generation = generation
+        }
+
+        func wait() async {
+            await task?.value
+        }
+
+        func cancel() {
+            task?.cancel()
+            task = nil
+        }
+    }
+
+    private var generation: UInt64 = 0
+    private var operationsByID: [UInt64: QueuedOperation] = [:]
+    private var tailOperationID: UInt64?
+    private var nextOperationID: UInt64 = 0
+
+    func enqueue(_ body: @escaping @MainActor (UInt64) async -> Void) {
+        let previousOperation = tailOperationID.flatMap { operationsByID[$0] }
         let operationGeneration = generation
-        nextTaskID &+= 1
-        let taskID = nextTaskID
+        nextOperationID &+= 1
+        let operation = QueuedOperation(id: nextOperationID, generation: operationGeneration)
+        let operationID = operation.id
         let task = Task { @MainActor [weak self] in
-            await previousOperation?.value
-            guard let self else {
+            await previousOperation?.wait()
+            guard let self,
+                  let currentOperation = operationsByID[operationID] else {
                 return
             }
             defer {
-                tasksByID[taskID] = nil
+                finish(currentOperation)
             }
             guard isCurrent(operationGeneration) else {
                 return
             }
-            await operation(operationGeneration)
+            await body(operationGeneration)
         }
-        tail = task
-        tasksByID[taskID] = task
+        operation.task = task
+        operationsByID[operation.id] = operation
+        tailOperationID = operation.id
     }
 
     func invalidate() {
         generation &+= 1
-        for task in tasksByID.values {
-            task.cancel()
+        for operation in operationsByID.values {
+            operation.cancel()
         }
-        tasksByID.removeAll()
-        tail = nil
+        operationsByID.removeAll()
+        tailOperationID = nil
     }
 
     func isCurrent(_ operationGeneration: UInt64) -> Bool {
         Task.isCancelled == false && generation == operationGeneration
+    }
+
+    private func finish(_ operation: QueuedOperation) {
+        guard operationsByID[operation.id] === operation else {
+            return
+        }
+        operationsByID.removeValue(forKey: operation.id)
+        operation.task = nil
+        if tailOperationID == operation.id {
+            tailOperationID = nil
+        }
     }
 }
 
