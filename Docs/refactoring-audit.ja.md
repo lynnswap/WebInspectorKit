@@ -295,7 +295,7 @@ xcodebuild test \
 - `DOMModel.swift` は state/component ファイル分割後も private helper が多く、snapshot / frame projection / selector path の owner split は未完。可視性を広げる前に owner 境界を再確認する。
 - `DOMSessionProtocolOperations.swift` は controller 導入済みで、availability は `DOMSessionAvailability.swift` に分離済み。ただし document request / picker / style hydration / delete-undo の file-level split は未完。現状は `perform` / `reloadDocument` / `removeElementStyles` / `clearDeleteUndoHistory` など private helper をまたぐため、可視性拡大なしに切れる範囲を優先する。
 - `DOMTreeTextView` は markup、下位型、補助 state を分離済みだが、rendered rows builder、selection controller、testing/performance extension の分離は未完。testing extension は private member に広く触るため、別ファイル化には可視性拡大が必要。
-- 挙動判断ではこの資料だけで足りない場合に `/Users/kn/Dev/WebKit` を参照する。今回確認した範囲では、WebKit の `DOMManager.inspectModeEnabled` は `DOM.setInspectModeEnabled` 成功 callback 後に state を更新し、`inspectElement` で inspect mode state を false に戻す。CSS 側は `CSSObserver` が `styleSheetAdded` / `styleSheetRemoved` / `styleSheetChanged` を `CSSManager` に渡し、`CSSManager` は `styleSheetId` を単一 map の identity として扱う。`CSSManager.stylesForNode` は node id から `DOMNodeStyles` を単一 owner として返し、`DOMNodeStyles` 自身が `_pendingRefreshTask` / `_needsRefresh` を持って refresh 状態を表現する。Runtime 側は `Frame` が `ExecutionContextList` を所有し、normal page execution context は frame の projection として扱われる。WebInspectorKit の frame/provisional target routing と runtime-agent routing は Transport/Core 固有の補償なので、event ordering を保つ範囲で内部表現を型に畳んでよい。
+- 挙動判断ではこの資料だけで足りない場合に `/Users/kn/Dev/WebKit` を参照する。今回確認した範囲では、WebKit の `DOMManager.inspectModeEnabled` は `DOM.setInspectModeEnabled` 成功 callback 後に state を更新し、`inspectElement` で inspect mode state を false に戻す。CSS 側は `CSSObserver` が `styleSheetAdded` / `styleSheetRemoved` / `styleSheetChanged` を `CSSManager` に渡し、`CSSManager` は `styleSheetId` を単一 map の identity として扱う。`CSSManager.stylesForNode` は node id から `DOMNodeStyles` を単一 owner として返し、`DOMNodeStyles` 自身が `_pendingRefreshTask` / `_needsRefresh` を持って refresh 状態を表現する。Runtime 側は `Frame` が `ExecutionContextList` を所有し、normal page execution context は frame の projection として扱われる。WebKit の `TreeOutline` は複数選択の selected items / last selected / shift anchor を `SelectionController` に委譲し、`DOMTreeOutline` は DOM node と tree element の橋渡しに集中する。WebInspectorKit の frame/provisional target routing と runtime-agent routing は Transport/Core 固有の補償なので、event ordering を保つ範囲で内部表現を型に畳んでよい。
 
 ## 8. 実施状況
 
@@ -317,6 +317,7 @@ xcodebuild test \
 - `CSSSession` は `stylesByNodeID` と `activeRefreshSequenceByNodeID` の同一 node identity 二辞書を廃止し、`CSSNodeStyles` が `RefreshPhase.idle / refreshing(sequence:)` を所有する形に置換。style state と stale refresh token 判定を node styles owner に集約し、WebKit の `DOMNodeStyles` owner 境界と揃えた。
 - `RuntimeState` は `targetStatesByID` と `runtimeAgentStatesByID` の同一 target id 二辞書を、`RuntimeTargetSlot(targetState, agentState)` の単一辞書へ置換。target projection と runtime-agent state は意味が違うため統合せず、slot が独立寿命と空 slot 掃除を所有する。
 - `DOMTreeTextView` は row 配列と `rowIndexByNodeID` の別管理を `DOMTreeRenderedRows` に集約。visible node set、node id -> row index、row lookup/range lookup を rendered rows owner が持ち、TextKit/scroll view 側は owner query だけを使う。
+- `DOMTreeTextView` の複数選択 state (`selectedNodeIDs` / last node / shift anchor / shift range) を `DOMTreeSelectionController` に集約。WebKit の `SelectionController` 境界に合わせ、TextKit view は gesture/key/menu 起点と装飾更新だけを担当する。
 
 最新の局所検証:
 
@@ -324,7 +325,7 @@ xcodebuild test \
 - `swift test --filter CSSModelTests -Xswiftc -strict-concurrency=minimal` (2026-06-13、CSS refresh phase owner 化後 green)
 - `swift test --filter RuntimeModelTests -Xswiftc -strict-concurrency=minimal` (2026-06-13、Runtime target slot 化後 green)
 - `swift test --filter WebInspectorCoreTests -Xswiftc -strict-concurrency=minimal` (2026-06-13、Runtime target slot 化後 green)
-- `swift test --filter WebInspectorUITests -Xswiftc -strict-concurrency=minimal` (2026-06-13、DOM tree rendered rows owner 化後 green)
+- `swift test --filter WebInspectorUITests -Xswiftc -strict-concurrency=minimal` (2026-06-13、DOM tree selection controller 化後 green)
 - `swift test --filter WebInspectorArchitectureTests` (2026-06-13、element picker / stylesheet route 変更後 green)
-- `swift test -Xswiftc -strict-concurrency=minimal` (2026-06-13、DOM tree rendered rows owner 化後 green)
-- `xcodebuild test -workspace WebInspectorKit.xcworkspace -scheme WebInspectorKit -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest'` (2026-06-13、DOM tree rendered rows owner 化後 green)
+- `swift test -Xswiftc -strict-concurrency=minimal` (2026-06-13、DOM tree selection controller 化後 green)
+- `xcodebuild test -workspace WebInspectorKit.xcworkspace -scheme WebInspectorKit -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest'` (2026-06-13、DOM tree selection controller 化後 green)

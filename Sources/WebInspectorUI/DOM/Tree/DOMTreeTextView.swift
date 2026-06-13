@@ -93,10 +93,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     private var renderedLinePrefixCache: [Int: String] = [:]
     private var markupCache: [DOMNode.ID: DOMTreeCachedMarkup] = [:]
     private var maxLineDisplayColumnCount = 0
-    private var multiSelectedNodeIDs: Set<DOMNode.ID> = []
-    private var multiSelectionLastNodeID: DOMNode.ID?
-    private var multiSelectionShiftAnchorNodeID: DOMNode.ID?
-    private var multiSelectionShiftRangeNodeIDs: Set<DOMNode.ID> = []
+    private var multiSelection = DOMTreeSelectionController()
     private var menuAnchorButton: UIButton?
     private var selectedTextNSRange = NSRange(location: 0, length: 0)
     private var markedTextNSRange: NSRange?
@@ -312,7 +309,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         }
 
         let nodes: [DOMNode]
-        if multiSelectedNodeIDs.count > 1, multiSelectedNodeIDs.contains(row.node.id) {
+        if multiSelection.selectedCount > 1, multiSelection.contains(row.node.id) {
             nodes = multiSelectedNodesInDisplayOrder()
         } else {
             clearMultiSelection(keepingLast: row.node.id)
@@ -335,10 +332,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
             clearMultiSelection(keepingLast: nil)
             return
         }
-        multiSelectedNodeIDs = Set(rows.map(\.node.id))
-        multiSelectionLastNodeID = rows.last?.node.id
-        multiSelectionShiftAnchorNodeID = rows.first?.node.id
-        multiSelectionShiftRangeNodeIDs = multiSelectedNodeIDs
+        multiSelection.selectAll(rows: rows)
         updateContentDecorations()
     }
 
@@ -487,7 +481,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
             return false
         }
         dismissDOMMenuAnchor()
-        clearMultiSelection(keepingLast: multiSelectionLastNodeID)
+        clearMultiSelection(keepingLast: multiSelection.lastNodeID)
         return true
     }
 
@@ -695,10 +689,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         multiSelectedRowRects.removeAll(keepingCapacity: true)
         lastObservedSelectedNodeID = nil
         pendingRevealSelectedNodeID = nil
-        multiSelectedNodeIDs.removeAll(keepingCapacity: true)
-        multiSelectionLastNodeID = nil
-        multiSelectionShiftAnchorNodeID = nil
-        multiSelectionShiftRangeNodeIDs.removeAll(keepingCapacity: true)
+        multiSelection.reset()
         dismissDOMMenuAnchor()
         clearTextSelection()
     }
@@ -819,30 +810,12 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         selectedNodeIDChanged: Bool,
         clearsMultiSelectionForDocumentSelection: Bool
     ) {
-        if clearsMultiSelectionForDocumentSelection {
-            if let selectedNodeID {
-                if !multiSelectedNodeIDs.isEmpty
-                    || multiSelectionLastNodeID != selectedNodeID
-                    || multiSelectionShiftAnchorNodeID != nil
-                    || !multiSelectionShiftRangeNodeIDs.isEmpty {
-                    clearMultiSelection(keepingLast: selectedNodeID)
-                }
-            } else if !multiSelectedNodeIDs.isEmpty
-                        || multiSelectionLastNodeID != nil
-                        || multiSelectionShiftAnchorNodeID != nil
-                        || !multiSelectionShiftRangeNodeIDs.isEmpty {
-                clearMultiSelection(keepingLast: nil)
-            }
-            return
-        }
-
-        guard selectedNodeIDChanged else {
-            return
-        }
-        if let selectedNodeID, !multiSelectedNodeIDs.contains(selectedNodeID) {
-            clearMultiSelection(keepingLast: selectedNodeID)
-        } else if selectedNodeID == nil {
-            clearMultiSelection(keepingLast: nil)
+        if multiSelection.reconcileRenderedSelection(
+            selectedNodeID: selectedNodeID,
+            selectedNodeIDChanged: selectedNodeIDChanged,
+            clearsMultiSelectionForDocumentSelection: clearsMultiSelectionForDocumentSelection
+        ) {
+            updateContentDecorations()
         }
     }
 
@@ -1092,62 +1065,27 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     }
 
     private func select(_ node: DOMNode) {
-        multiSelectionLastNodeID = node.id
+        multiSelection.notePrimarySelection(node.id)
         dom.selectNode(node.id)
     }
 
     private func toggleMultiSelection(row: DOMTreeLine) {
-        var selectedIDs = multiSelectedNodeIDs
-        if selectedIDs.isEmpty {
-            if let lastNodeID = multiSelectionLastNodeID,
-               renderedRows.contains(nodeID: lastNodeID) {
-                selectedIDs.insert(lastNodeID)
-            } else if let selectedNodeID = dom.selectedNodeID,
-                      renderedRows.contains(nodeID: selectedNodeID) {
-                selectedIDs.insert(selectedNodeID)
-            }
-        }
-
-        if selectedIDs.contains(row.node.id) {
-            selectedIDs.remove(row.node.id)
-        } else {
-            selectedIDs.insert(row.node.id)
-        }
-        if selectedIDs.isEmpty {
-            selectedIDs.insert(row.node.id)
-        }
-
-        multiSelectedNodeIDs = selectedIDs
-        multiSelectionLastNodeID = row.node.id
-        multiSelectionShiftAnchorNodeID = nil
-        multiSelectionShiftRangeNodeIDs.removeAll(keepingCapacity: true)
+        multiSelection.toggle(
+            row: row,
+            renderedRows: renderedRows,
+            selectedNodeID: dom.selectedNodeID
+        )
         updateContentDecorations()
     }
 
     private func extendMultiSelection(to row: DOMTreeLine) {
-        guard let anchorNodeID = multiSelectionAnchorNodeID() else {
-            return
+        if multiSelection.extend(
+            to: row,
+            renderedRows: renderedRows,
+            selectedNodeID: dom.selectedNodeID
+        ) {
+            updateContentDecorations()
         }
-        let rangeRows = rowsBetween(anchorNodeID, row.node.id)
-        let rangeNodeIDs = Set(rangeRows.map(\.node.id))
-        guard !rangeNodeIDs.isEmpty else {
-            return
-        }
-
-        var selectedIDs = multiSelectedNodeIDs
-        if selectedIDs.isEmpty,
-           let selectedNodeID = dom.selectedNodeID,
-           renderedRows.contains(nodeID: selectedNodeID) {
-            selectedIDs.insert(selectedNodeID)
-        }
-        selectedIDs.subtract(multiSelectionShiftRangeNodeIDs)
-        selectedIDs.formUnion(rangeNodeIDs)
-
-        multiSelectedNodeIDs = selectedIDs
-        multiSelectionShiftAnchorNodeID = anchorNodeID
-        multiSelectionShiftRangeNodeIDs = rangeNodeIDs
-        multiSelectionLastNodeID = row.node.id
-        updateContentDecorations()
     }
 
     private func extendMultiSelectionByKeyboard(delta: Int) {
@@ -1155,9 +1093,10 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
             return
         }
 
-        let focusedNodeID = multiSelectionLastNodeID
-            ?? dom.selectedNodeID
-            ?? rows.first?.node.id
+        let focusedNodeID = multiSelection.focusedNodeID(
+            selectedNodeID: dom.selectedNodeID,
+            fallbackNodeID: rows.first?.node.id
+        )
         guard let focusedNodeID,
               let focusedIndex = renderedRows.rowIndex(for: focusedNodeID)
         else {
@@ -1173,54 +1112,17 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
         scrollRowToVisible(targetRow)
     }
 
-    private func multiSelectionAnchorNodeID() -> DOMNode.ID? {
-        if let anchorNodeID = multiSelectionShiftAnchorNodeID,
-           renderedRows.contains(nodeID: anchorNodeID) {
-            return anchorNodeID
-        }
-        if let lastNodeID = multiSelectionLastNodeID,
-           renderedRows.contains(nodeID: lastNodeID) {
-            return lastNodeID
-        }
-        if let selectedNodeID = dom.selectedNodeID,
-           renderedRows.contains(nodeID: selectedNodeID) {
-            return selectedNodeID
-        }
-        return rows.first?.node.id
-    }
-
-    private func rowsBetween(_ firstNodeID: DOMNode.ID, _ secondNodeID: DOMNode.ID) -> ArraySlice<DOMTreeLine> {
-        renderedRows.rowsBetween(firstNodeID, secondNodeID)
-    }
-
     private func clearMultiSelection(keepingLast nodeID: DOMNode.ID?) {
-        multiSelectedNodeIDs.removeAll(keepingCapacity: true)
-        multiSelectionLastNodeID = nodeID
-        multiSelectionShiftAnchorNodeID = nil
-        multiSelectionShiftRangeNodeIDs.removeAll(keepingCapacity: true)
+        multiSelection.clear(keepingLast: nodeID)
         updateContentDecorations()
     }
 
     private func reconcileMultiSelectionAfterReload() {
-        let visibleNodeIDs = renderedRows.visibleNodeIDs
-        multiSelectedNodeIDs.formIntersection(visibleNodeIDs)
-        multiSelectionShiftRangeNodeIDs.formIntersection(visibleNodeIDs)
-        if let nodeID = multiSelectionLastNodeID, !visibleNodeIDs.contains(nodeID) {
-            multiSelectionLastNodeID = nil
-        }
-        if let nodeID = multiSelectionShiftAnchorNodeID, !visibleNodeIDs.contains(nodeID) {
-            multiSelectionShiftAnchorNodeID = nil
-            multiSelectionShiftRangeNodeIDs.removeAll(keepingCapacity: true)
-        }
-        if multiSelectedNodeIDs.isEmpty {
-            multiSelectionShiftRangeNodeIDs.removeAll(keepingCapacity: true)
-        }
+        multiSelection.reconcileAfterReload(visibleNodeIDs: renderedRows.visibleNodeIDs)
     }
 
     private func multiSelectedNodesInDisplayOrder() -> [DOMNode] {
-        rows.compactMap { row in
-            !row.isClosingTag && multiSelectedNodeIDs.contains(row.node.id) ? row.node : nil
-        }
+        multiSelection.selectedNodesInDisplayOrder(rows: rows)
     }
 
     private func scrollRowToVisible(_ row: DOMTreeLine) {
@@ -1740,7 +1642,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     }
 
     private func selectedContentRowRects() -> [CGRect] {
-        guard multiSelectedNodeIDs.isEmpty else {
+        guard !multiSelection.hasExplicitSelection else {
             return []
         }
         guard let selectedNodeID = dom.selectedNodeID else {
@@ -1758,7 +1660,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
 
     private func multiSelectionContentRowRects() -> [CGRect] {
         rows.flatMap { row in
-            !row.isClosingTag && multiSelectedNodeIDs.contains(row.node.id) ? contentRowRects(for: row) : []
+            !row.isClosingTag && multiSelection.contains(row.node.id) ? contentRowRects(for: row) : []
         }
     }
 

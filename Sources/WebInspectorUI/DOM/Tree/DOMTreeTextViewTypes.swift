@@ -132,6 +132,207 @@ struct DOMTreeRenderedRows {
 }
 
 @MainActor
+struct DOMTreeSelectionController {
+    private(set) var selectedNodeIDs: Set<DOMNode.ID> = []
+    private(set) var lastNodeID: DOMNode.ID?
+    private var shiftAnchorNodeID: DOMNode.ID?
+    private var shiftRangeNodeIDs: Set<DOMNode.ID> = []
+
+    var hasExplicitSelection: Bool {
+        !selectedNodeIDs.isEmpty
+    }
+
+    var selectedCount: Int {
+        selectedNodeIDs.count
+    }
+
+    var hasState: Bool {
+        !selectedNodeIDs.isEmpty
+            || lastNodeID != nil
+            || shiftAnchorNodeID != nil
+            || !shiftRangeNodeIDs.isEmpty
+    }
+
+    func contains(_ nodeID: DOMNode.ID) -> Bool {
+        selectedNodeIDs.contains(nodeID)
+    }
+
+    mutating func notePrimarySelection(_ nodeID: DOMNode.ID) {
+        lastNodeID = nodeID
+    }
+
+    mutating func clear(keepingLast nodeID: DOMNode.ID?) {
+        selectedNodeIDs.removeAll(keepingCapacity: true)
+        lastNodeID = nodeID
+        shiftAnchorNodeID = nil
+        shiftRangeNodeIDs.removeAll(keepingCapacity: true)
+    }
+
+    mutating func reset() {
+        clear(keepingLast: nil)
+    }
+
+    mutating func selectAll(rows: [DOMTreeLine]) {
+        guard !rows.isEmpty else {
+            clear(keepingLast: nil)
+            return
+        }
+        selectedNodeIDs = Set(rows.map(\.node.id))
+        lastNodeID = rows.last?.node.id
+        shiftAnchorNodeID = rows.first?.node.id
+        shiftRangeNodeIDs = selectedNodeIDs
+    }
+
+    mutating func toggle(
+        row: DOMTreeLine,
+        renderedRows: DOMTreeRenderedRows,
+        selectedNodeID: DOMNode.ID?
+    ) {
+        var nextSelectedNodeIDs = selectedNodeIDs
+        if nextSelectedNodeIDs.isEmpty {
+            if let lastNodeID, renderedRows.contains(nodeID: lastNodeID) {
+                nextSelectedNodeIDs.insert(lastNodeID)
+            } else if let selectedNodeID, renderedRows.contains(nodeID: selectedNodeID) {
+                nextSelectedNodeIDs.insert(selectedNodeID)
+            }
+        }
+
+        if nextSelectedNodeIDs.contains(row.node.id) {
+            nextSelectedNodeIDs.remove(row.node.id)
+        } else {
+            nextSelectedNodeIDs.insert(row.node.id)
+        }
+        if nextSelectedNodeIDs.isEmpty {
+            nextSelectedNodeIDs.insert(row.node.id)
+        }
+
+        selectedNodeIDs = nextSelectedNodeIDs
+        lastNodeID = row.node.id
+        shiftAnchorNodeID = nil
+        shiftRangeNodeIDs.removeAll(keepingCapacity: true)
+    }
+
+    mutating func extend(
+        to row: DOMTreeLine,
+        renderedRows: DOMTreeRenderedRows,
+        selectedNodeID: DOMNode.ID?
+    ) -> Bool {
+        guard let anchorNodeID = anchorNodeID(
+            renderedRows: renderedRows,
+            selectedNodeID: selectedNodeID
+        ) else {
+            return false
+        }
+        let rangeRows = renderedRows.rowsBetween(anchorNodeID, row.node.id)
+        let rangeNodeIDs = Set(rangeRows.map(\.node.id))
+        guard !rangeNodeIDs.isEmpty else {
+            return false
+        }
+
+        var nextSelectedNodeIDs = selectedNodeIDs
+        if nextSelectedNodeIDs.isEmpty,
+           let selectedNodeID,
+           renderedRows.contains(nodeID: selectedNodeID) {
+            nextSelectedNodeIDs.insert(selectedNodeID)
+        }
+        nextSelectedNodeIDs.subtract(shiftRangeNodeIDs)
+        nextSelectedNodeIDs.formUnion(rangeNodeIDs)
+
+        selectedNodeIDs = nextSelectedNodeIDs
+        shiftAnchorNodeID = anchorNodeID
+        shiftRangeNodeIDs = rangeNodeIDs
+        lastNodeID = row.node.id
+        return true
+    }
+
+    func focusedNodeID(selectedNodeID: DOMNode.ID?, fallbackNodeID: DOMNode.ID?) -> DOMNode.ID? {
+        lastNodeID ?? selectedNodeID ?? fallbackNodeID
+    }
+
+    mutating func reconcileAfterReload(visibleNodeIDs: Set<DOMNode.ID>) {
+        selectedNodeIDs.formIntersection(visibleNodeIDs)
+        shiftRangeNodeIDs.formIntersection(visibleNodeIDs)
+        if let nodeID = lastNodeID, !visibleNodeIDs.contains(nodeID) {
+            lastNodeID = nil
+        }
+        if let nodeID = shiftAnchorNodeID, !visibleNodeIDs.contains(nodeID) {
+            shiftAnchorNodeID = nil
+            shiftRangeNodeIDs.removeAll(keepingCapacity: true)
+        }
+        if selectedNodeIDs.isEmpty {
+            shiftRangeNodeIDs.removeAll(keepingCapacity: true)
+        }
+    }
+
+    mutating func reconcileRenderedSelection(
+        selectedNodeID: DOMNode.ID?,
+        selectedNodeIDChanged: Bool,
+        clearsMultiSelectionForDocumentSelection: Bool
+    ) -> Bool {
+        if clearsMultiSelectionForDocumentSelection {
+            if let selectedNodeID {
+                guard hasStateForClearing(keepingLast: selectedNodeID) else {
+                    return false
+                }
+                clear(keepingLast: selectedNodeID)
+                return true
+            }
+
+            guard hasState else {
+                return false
+            }
+            clear(keepingLast: nil)
+            return true
+        }
+
+        guard selectedNodeIDChanged else {
+            return false
+        }
+        if let selectedNodeID, !selectedNodeIDs.contains(selectedNodeID) {
+            clear(keepingLast: selectedNodeID)
+            return true
+        }
+        if selectedNodeID == nil {
+            clear(keepingLast: nil)
+            return true
+        }
+        return false
+    }
+
+    func selectedNodesInDisplayOrder(rows: [DOMTreeLine]) -> [DOMNode] {
+        rows.compactMap { row in
+            !row.isClosingTag && selectedNodeIDs.contains(row.node.id) ? row.node : nil
+        }
+    }
+
+    private func anchorNodeID(
+        renderedRows: DOMTreeRenderedRows,
+        selectedNodeID: DOMNode.ID?
+    ) -> DOMNode.ID? {
+        if let shiftAnchorNodeID,
+           renderedRows.contains(nodeID: shiftAnchorNodeID) {
+            return shiftAnchorNodeID
+        }
+        if let lastNodeID,
+           renderedRows.contains(nodeID: lastNodeID) {
+            return lastNodeID
+        }
+        if let selectedNodeID,
+           renderedRows.contains(nodeID: selectedNodeID) {
+            return selectedNodeID
+        }
+        return renderedRows.rows.first?.node.id
+    }
+
+    private func hasStateForClearing(keepingLast nodeID: DOMNode.ID) -> Bool {
+        !selectedNodeIDs.isEmpty
+            || lastNodeID != nodeID
+            || shiftAnchorNodeID != nil
+            || !shiftRangeNodeIDs.isEmpty
+    }
+}
+
+@MainActor
 struct DOMTreeLine {
     let node: DOMNode
     let depth: Int
