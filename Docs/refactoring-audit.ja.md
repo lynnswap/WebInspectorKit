@@ -334,6 +334,7 @@ xcodebuild test \
 - `DOMSession` の `currentPageTargetID` と `mainFrameID` の直接保持を `DOMCurrentPage` に集約。page promotion / provisional commit retarget / target destroy clear を同じ owner の mutation にし、`TargetGraph` は引き続き semantic target/frame/document projection を所有する。WebKit の page target transition owner と frame document splice owner が分かれている構造に合わせ、snapshot 互換 getter は維持した。
 - `DOMSelection` は `selectedNodeID` / `pendingRequest` / `failure` の三つの独立 optional から、`selectedNodeID + DOMSelectionResolutionPhase.idle/pending/failed` を持つ `DOMSelectionState` に置換。選択更新、request 開始、成功、失敗、stale selected node cleanup を selection owner の mutation に集約し、pending request 置換時は古い request transaction を破棄する。古い requestNode 応答は current pending を消さず stale として返すテストを追加した。
 - `DOMPathBuilder` を追加し、selector path / XPath 生成、CSS identifier escape、DOM parent/sibling query を DOM mutation owner から分離。`DOMSession.selectorPath` / `xPath` の package API は維持し、node lookup closure だけを builder に渡す形にした。
+- `DOMSessionSnapshotBuilder` を追加し、documents/nodes/transactions/selection の snapshot wire shape 組み立てを DOM mutation owner から分離。`DOMSession.snapshot()` は source state の収集と builder 呼び出しだけにし、既存 `DOMSessionSnapshot` のキー・配列形状は維持した。
 - `DOMSessionDeleteUndoOperationQueue` は `tail` / `tasksByID` / `nextTaskID` の別管理を、`QueuedOperation` と `tailOperationID` に置換。operation が generation と task を所有し、invalidate / finish / previous wait の不変条件を queue owner 内に閉じた。UndoManager 登録と protocol command 実行順序は `DOMSessionProtocolOperations` 側に残した。
 - `ConsoleTargetState` の `orderedMessageIDs` / `messagesByID` / `lastRepeatableMessageID` / severity count を `ConsoleMessageStore` に集約。target state は clear reason と unsupported command capability を持ち、message identity/order/repeat/count の不変条件は store owner が持つ形にした。WebKit の `ConsoleObserver` は protocol event を `ConsoleManager.messageWasAdded` / `messageRepeatCountUpdated` / `messagesCleared` に渡すため、WebInspectorKit でも protocol dispatch と snapshot wire shape は維持した。
 - ObservationBridge v0.12.0 / SyntaxEditorUI v0.13.0 へ更新し、Swift tools / README 要件を 6.3 に上げた。UI 側の `ObservationScope.observe` / `ObservationDelivery` / stream API は、owner ごとの `PortableObservationTracking.Token` へ置換。`NetworkListViewController` の displayRows 80ms latest throttle は挙動仕様として残し、旧 stream API ではなく list owner の `pendingThrottledDisplayRows` / `displayRowsThrottleTask` が所有する形にした。
@@ -386,6 +387,10 @@ xcodebuild test \
 - `swift test --filter WebInspectorCoreTests -Xswiftc -strict-concurrency=minimal` (2026-06-13、DOMPathBuilder owner 化後 green)
 - `swift test -Xswiftc -strict-concurrency=minimal` (2026-06-13、DOMPathBuilder owner 化後 green)
 - `xcodebuild test -workspace WebInspectorKit.xcworkspace -scheme WebInspectorKit -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest'` (2026-06-13、DOMPathBuilder owner 化後 green)
+- `swift test --filter DOMModelTests -Xswiftc -strict-concurrency=minimal` (2026-06-13、DOMSessionSnapshotBuilder owner 化後 green)
+- `swift test --filter WebInspectorCoreTests -Xswiftc -strict-concurrency=minimal` (2026-06-13、DOMSessionSnapshotBuilder owner 化後 green)
+- `swift test -Xswiftc -strict-concurrency=minimal` (2026-06-13、DOMSessionSnapshotBuilder owner 化後 green)
+- `xcodebuild test -workspace WebInspectorKit.xcworkspace -scheme WebInspectorKit -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest'` (2026-06-13、DOMSessionSnapshotBuilder owner 化後 green)
 - `swift test --filter WebInspectorUITests -Xswiftc -strict-concurrency=minimal` (2026-06-13、Network list snapshot state owner 化後 green)
 - `swift test --filter WebInspectorArchitectureTests` (2026-06-13、element picker / stylesheet route 変更後 green)
 - `swift test -Xswiftc -strict-concurrency=minimal` (2026-06-13、TransportTargetRegistry mutation owner 化後 green)

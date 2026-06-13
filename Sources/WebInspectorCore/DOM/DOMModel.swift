@@ -864,75 +864,19 @@ package final class DOMSession {
     }
 
     package func snapshot() -> DOMSessionSnapshot {
-        let documents = documentStore.currentDocuments
-        let documentsByID = Dictionary(uniqueKeysWithValues: documents.map { ($0.id, $0) })
-        let nodesByID = Dictionary(uniqueKeysWithValues: documents.flatMap { document in
-            document.nodesByID.map { ($0.key, $0.value) }
-        })
-        let currentNodeIDByKey = documentStore.currentNodeIDsByKey()
-        let transactions = documentStore.transactions()
-        return DOMSessionSnapshot(
+        DOMSessionSnapshotBuilder(
             currentPageTargetID: currentPageTargetID,
             mainFrameID: mainFrameID,
-            targetsByID: targetGraph.targetSnapshots(currentDocumentID: currentDocumentID(for:)),
-            targetStatesByID: documentStore.targetStateSnapshots(currentDocumentID: currentDocumentID(for:)),
-            framesByID: targetGraph.frameSnapshots(),
-            documentsByID: documentsByID.mapValues {
-                DOMDocumentSnapshot(
-                    id: $0.id,
-                    targetID: $0.targetID,
-                    localDocumentLifetimeID: $0.localDocumentLifetimeID,
-                    lifecycle: $0.lifecycle,
-                    rootNodeID: $0.rootNodeID
-                )
-            },
-            nodesByID: nodesByID.mapValues { node in
-                DOMNodeSnapshot(
-                    id: node.id,
-                    protocolNodeID: node.protocolNodeID,
-                    nodeType: node.nodeType,
-                    nodeName: node.nodeName,
-                    localName: node.localName,
-                    nodeValue: node.nodeValue,
-                    ownerFrameID: node.ownerFrameID,
-                    documentURL: node.documentURL,
-                    baseURL: node.baseURL,
-                    attributes: node.attributes,
-                    parentID: node.parentID,
-                    previousSiblingID: node.previousSiblingID,
-                    nextSiblingID: node.nextSiblingID,
-                    regularChildren: snapshotRegularChildren(node.regularChildren),
-                    contentDocumentID: node.contentDocumentID,
-                    shadowRootIDs: node.shadowRootIDs,
-                    templateContentID: node.templateContentID,
-                    beforePseudoElementID: node.beforePseudoElementID,
-                    otherPseudoElementIDs: node.otherPseudoElementIDs,
-                    afterPseudoElementID: node.afterPseudoElementID,
-                    pseudoType: node.pseudoType,
-                    shadowRootType: node.shadowRootType
-                )
-            },
+            targetSnapshots: targetGraph.targetSnapshots(currentDocumentID: currentDocumentID(for:)),
+            targetStateSnapshots: documentStore.targetStateSnapshots(currentDocumentID: currentDocumentID(for:)),
+            frameSnapshots: targetGraph.frameSnapshots(),
+            documents: documentStore.currentDocuments,
             frameDocumentProjections: frameDocumentProjectionIndex.snapshots(),
-            transactions: transactions.map {
-                DOMTransactionSnapshot(
-                    id: $0.id,
-                    targetID: $0.targetID,
-                    documentID: $0.documentID,
-                    kind: $0.kind,
-                    issuedSequence: $0.issuedSequence,
-                    requestedProtocolNodeID: $0.requestedProtocolNodeID
-                )
-            },
-            currentNodeIDByKey: currentNodeIDByKey,
+            transactions: documentStore.transactions(),
+            currentNodeIDByKey: documentStore.currentNodeIDsByKey(),
             executionContextsByKey: targetGraph.executionContextSnapshots(),
-            selection: DOMSelectionSnapshot(
-                selectedNodeID: selection.selectedNodeID,
-                pendingRequest: selection.pendingRequest.map {
-                    SelectionRequestSnapshot(id: $0.id, targetID: $0.targetID, documentID: $0.documentID)
-                },
-                failure: selection.failure
-            )
-        )
+            selection: selection
+        ).build()
     }
 
     private func buildSubtree(
@@ -1702,15 +1646,6 @@ package final class DOMSession {
     private func projectedVisibleChildren(of node: DOMNode) -> [DOMNode.ID] {
         DOMTreeProjectionBuilder.visibleChildIDs(of: node) { [weak self] ownerNodeID in
             self?.projectedFrameDocumentRootID(for: ownerNodeID)
-        }
-    }
-
-    private func snapshotRegularChildren(_ regularChildren: DOMRegularChildState) -> DOMRegularChildrenSnapshot {
-        switch regularChildren {
-        case let .unrequested(count):
-            return .unrequested(count: count)
-        case let .loaded(children):
-            return .loaded(children)
         }
     }
 
