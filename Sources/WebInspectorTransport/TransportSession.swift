@@ -10,9 +10,8 @@ package actor TransportSession {
     private let responseTimeoutDidFire: ResponseTimeoutDidFire
     private var nextCommandID: UInt64
     private var eventSequences: TransportEventSequenceTracker
-    private var nextMainPageTargetWaiterID: UInt64
     private var replyStore: TransportReplyStore
-    private var mainPageTargetWaiters: [UInt64: ReplyPromise<TransportMainPageTarget>]
+    private var mainPageTargetWaiterStore: TransportMainPageTargetWaiterStore
     private var targetRegistry: TransportTargetRegistry
     private var provisionalTargetMessageStore: TransportProvisionalTargetMessageStore
     private var styleSheetRouting: TransportStyleSheetRouting
@@ -33,9 +32,8 @@ package actor TransportSession {
         self.responseTimeoutDidFire = responseTimeoutDidFire ?? {}
         nextCommandID = 0
         eventSequences = TransportEventSequenceTracker()
-        nextMainPageTargetWaiterID = 0
         replyStore = TransportReplyStore()
-        mainPageTargetWaiters = [:]
+        mainPageTargetWaiterStore = TransportMainPageTargetWaiterStore()
         targetRegistry = TransportTargetRegistry()
         provisionalTargetMessageStore = TransportProvisionalTargetMessageStore()
         styleSheetRouting = TransportStyleSheetRouting()
@@ -110,11 +108,10 @@ package actor TransportSession {
         for pending in replyStore.pendingReplies {
             await pending.promise.fulfill(.failure(TransportError.transportClosed))
         }
-        for (_, waiter) in mainPageTargetWaiters {
+        for waiter in mainPageTargetWaiterStore.removeAll() {
             await waiter.fulfill(.failure(TransportError.transportClosed))
         }
         replyStore.removeAll()
-        mainPageTargetWaiters.removeAll()
         provisionalTargetMessageStore.removeAll()
         eventSubscribers.finishAndRemoveAll()
         await backend.detach()
@@ -131,10 +128,7 @@ package actor TransportSession {
             )
         }
 
-        nextMainPageTargetWaiterID &+= 1
-        let waiterID = nextMainPageTargetWaiterID
-        let promise = ReplyPromise<TransportMainPageTarget>()
-        mainPageTargetWaiters[waiterID] = promise
+        let waiter = mainPageTargetWaiterStore.insert()
 
         let timeoutTask: Task<Void, Never>? = timeout.map { timeout in
             Task {
@@ -143,7 +137,7 @@ package actor TransportSession {
                 } catch {
                     return
                 }
-                await self.failMainPageTargetWaiter(waiterID, error: TransportError.missingMainPageTarget)
+                await self.failMainPageTargetWaiter(waiter.id, error: TransportError.missingMainPageTarget)
             }
         }
         defer {
@@ -152,14 +146,14 @@ package actor TransportSession {
 
         do {
             return try await withTaskCancellationHandler {
-                try await promise.value()
+                try await waiter.promise.value()
             } onCancel: {
                 Task {
-                    await self.failMainPageTargetWaiter(waiterID, error: CancellationError())
+                    await self.failMainPageTargetWaiter(waiter.id, error: CancellationError())
                 }
             }
         } catch {
-            mainPageTargetWaiters.removeValue(forKey: waiterID)
+            mainPageTargetWaiterStore.remove(id: waiter.id)
             throw error
         }
     }
@@ -812,22 +806,21 @@ package actor TransportSession {
 
     private func notifyMainPageTargetWaitersIfNeeded(receivedSequence: UInt64) async {
         guard let currentMainPageTargetID = targetRegistry.currentMainPageTargetID,
-              !mainPageTargetWaiters.isEmpty else {
+              !mainPageTargetWaiterStore.isEmpty else {
             return
         }
-        let waiters = mainPageTargetWaiters
-        mainPageTargetWaiters.removeAll()
+        let waiters = mainPageTargetWaiterStore.removeAll()
         let result = TransportMainPageTarget(
             targetID: currentMainPageTargetID,
             receivedSequence: receivedSequence
         )
-        for waiter in waiters.values {
+        for waiter in waiters {
             await waiter.fulfill(.success(result))
         }
     }
 
     private func failMainPageTargetWaiter(_ waiterID: UInt64, error: any Error) async {
-        let waiter = mainPageTargetWaiters.removeValue(forKey: waiterID)
+        let waiter = mainPageTargetWaiterStore.remove(id: waiterID)
         await waiter?.fulfill(.failure(error))
     }
 
