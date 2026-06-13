@@ -285,13 +285,26 @@ xcodebuild test \
 
 ## 7. 検証残件
 
-- repo-local の full `xcodebuild test` baseline は未実行。
+- repo-local の full `xcodebuild test` baseline は実行済み:
+  `xcodebuild test -workspace WebInspectorKit.xcworkspace -scheme WebInspectorKit -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest'`
+  (2026-06-13、`ed2cf253` 時点 green)。
 - `TransportMessageParser.parse` の detached parse は、削除/同期化前に message volume と latency を測る。
 - NativeBridge / NativeSymbols は private/undocumented API を含むため、公開 docs だけで安全性を判断しない。実バイナリ/実 OS での attach smoke が必要。
-- test support target の形は未決定。SwiftPM test target 間共有と Xcode workspace の見え方を確認してから決める。
 - `DOM.enable` local/compatibility path と CSS compatibility enable は、実 WebKit/mcp 相当の挙動確認なしに削除しない。
+- `InspectorSessionTests.awaitValueAfterActorTurns` は 79 箇所残る。event pump sequence / domain-specific signal で待てる cluster から段階的に置換する。
+- `DOMModel.swift` は state/component ファイル分割後も private helper が多く、snapshot / frame projection / selector path の owner split は未完。可視性を広げる前に owner 境界を再確認する。
+- `DOMSessionProtocolOperations.swift` は controller 導入済みだが、document request / picker / style hydration / delete-undo の file-level split は未完。
+- `DOMTreeTextView` は markup と下位型を分離済みだが、rendered rows builder、selection controller、testing/performance extension の分離は未完。
 
 ## 8. 実施状況
 
-2026-06-13 時点では調査資料の作成のみ。リファクタリング本体、ArchitectureTests 追加、test support 移動、状態機械化は未実施。
+2026-06-13 時点の実施済み:
 
+- `Tests/WebInspectorArchitectureTests` を追加し、import boundary、UI raw JSON parse 禁止、production test fake 禁止、`@_exported import` 制約、unsafe concurrency allowlist を固定。
+- `FakeTransportBackend` / `SentTargetMessage` を `WebInspectorTestSupport` target に移し、production `WebInspectorTransport` から test support を除去。
+- `TransportSession` actor は維持しつつ、reply store / target registry / stylesheet routing / inbound queue / runtime context registry を helper に分割。
+- `InspectorSession` の connection state を `InspectorConnectionPhase` に置換し、`connection` / `pendingConnection` を phase から導出。
+- DOM 側は `DOMSessionControllers.swift`、`DOMModelTypes.swift`、`TargetGraph.swift`、`DOMDocumentStore.swift`、`FrameDocumentProjectionIndex.swift`、`DOMTreeProjectionBuilder.swift` へ段階分割。
+- UI 側は `DOMTreeMarkup.swift`、`DOMTreeTextViewTypes.swift`、`DOMTreeTextFragmentViews.swift` を分離。`DOMTreeFindCoordinator` は detached task へ `UITextSearchAggregator` を渡さない構造へ変更。
+- `BrowserSessionRestoreTests` の 100ms sleep を selected web view install signal に置換。
+- `InspectorSessionTests` の domain pump 系 cluster は `waitUntilProtocolEventApplied` / `receiveAndApply...` helper に寄せ、actor-turn polling を一部削減。
