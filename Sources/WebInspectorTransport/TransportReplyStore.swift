@@ -8,6 +8,11 @@ struct TransportPendingReply: Sendable {
     var hasBufferedProvisionalResponse: Bool
 }
 
+private struct TargetReplyRecord: Sendable {
+    var pending: TransportPendingReply
+    var rootWrapperID: UInt64?
+}
+
 enum TransportPendingKey: Sendable {
     case root(UInt64)
     case target(TargetReplyKey)
@@ -15,8 +20,7 @@ enum TransportPendingKey: Sendable {
 
 struct TransportReplyStore: Sendable {
     private var rootReplies: [UInt64: TransportPendingReply] = [:]
-    private var targetReplies: [TargetReplyKey: TransportPendingReply] = [:]
-    private var targetReplyKeysByRootWrapperID: [UInt64: TargetReplyKey] = [:]
+    private var targetReplies: [TargetReplyKey: TargetReplyRecord] = [:]
 
     var pendingRootReplyIDs: [UInt64] {
         rootReplies.keys.sorted()
@@ -27,7 +31,7 @@ struct TransportReplyStore: Sendable {
     }
 
     var pendingReplies: [TransportPendingReply] {
-        Array(rootReplies.values) + Array(targetReplies.values)
+        Array(rootReplies.values) + targetReplies.values.map(\.pending)
     }
 
     mutating func insertRootReply(_ pending: TransportPendingReply, commandID: UInt64) {
@@ -39,8 +43,7 @@ struct TransportReplyStore: Sendable {
         key: TargetReplyKey,
         rootWrapperID: UInt64
     ) {
-        targetReplies[key] = pending
-        targetReplyKeysByRootWrapperID[rootWrapperID] = key
+        targetReplies[key] = TargetReplyRecord(pending: pending, rootWrapperID: rootWrapperID)
     }
 
     mutating func removeRootReply(commandID: UInt64) -> TransportPendingReply? {
@@ -48,15 +51,15 @@ struct TransportReplyStore: Sendable {
     }
 
     mutating func takeTargetReplyKey(forRootWrapperID rootWrapperID: UInt64) -> TargetReplyKey? {
-        targetReplyKeysByRootWrapperID.removeValue(forKey: rootWrapperID)
+        guard let key = targetReplies.first(where: { $0.value.rootWrapperID == rootWrapperID })?.key else {
+            return nil
+        }
+        targetReplies[key]?.rootWrapperID = nil
+        return key
     }
 
     mutating func removeTargetReply(for key: TargetReplyKey) -> TransportPendingReply? {
-        let pending = targetReplies.removeValue(forKey: key)
-        if let wrapperID = targetReplyKeysByRootWrapperID.first(where: { $0.value == key })?.key {
-            targetReplyKeysByRootWrapperID.removeValue(forKey: wrapperID)
-        }
-        return pending
+        targetReplies.removeValue(forKey: key)?.pending
     }
 
     mutating func removePendingReply(_ key: TransportPendingKey) {
@@ -75,8 +78,8 @@ struct TransportReplyStore: Sendable {
     }
 
     mutating func removeTargetReplyForTimeout(_ key: TargetReplyKey) -> TransportPendingReply? {
-        if let pending = targetReplies[key] {
-            guard !pending.hasBufferedProvisionalResponse else {
+        if let record = targetReplies[key] {
+            guard !record.pending.hasBufferedProvisionalResponse else {
                 return nil
             }
             return removeTargetReply(for: key)
@@ -85,7 +88,7 @@ struct TransportReplyStore: Sendable {
         guard let retargetedKey = targetReplies.keys.first(where: { $0.commandID == key.commandID }) else {
             return nil
         }
-        guard targetReplies[retargetedKey]?.hasBufferedProvisionalResponse != true else {
+        guard targetReplies[retargetedKey]?.pending.hasBufferedProvisionalResponse != true else {
             return nil
         }
         return removeTargetReply(for: retargetedKey)
@@ -93,11 +96,11 @@ struct TransportReplyStore: Sendable {
 
     mutating func markTargetReplyAsBufferedIfNeeded(commandID: UInt64, targetID: ProtocolTargetIdentifier) {
         let key = TargetReplyKey(targetID: targetID, commandID: commandID)
-        guard var pending = targetReplies[key] else {
+        guard var record = targetReplies[key] else {
             return
         }
-        pending.hasBufferedProvisionalResponse = true
-        targetReplies[key] = pending
+        record.pending.hasBufferedProvisionalResponse = true
+        targetReplies[key] = record
     }
 
     mutating func removeRetargetedReply(commandID: UInt64) -> TransportPendingReply? {
@@ -113,21 +116,17 @@ struct TransportReplyStore: Sendable {
     ) {
         let oldKeys = targetReplies.keys.filter { $0.targetID == oldTargetID }
         for oldKey in oldKeys {
-            guard var pending = targetReplies.removeValue(forKey: oldKey) else {
+            guard var record = targetReplies.removeValue(forKey: oldKey) else {
                 continue
             }
             let newKey = TargetReplyKey(targetID: newTargetID, commandID: oldKey.commandID)
-            pending.targetID = newTargetID
-            targetReplies[newKey] = pending
-            if let wrapperID = targetReplyKeysByRootWrapperID.first(where: { $0.value == oldKey })?.key {
-                targetReplyKeysByRootWrapperID[wrapperID] = newKey
-            }
+            record.pending.targetID = newTargetID
+            targetReplies[newKey] = record
         }
     }
 
     mutating func removeAll() {
         rootReplies.removeAll()
         targetReplies.removeAll()
-        targetReplyKeysByRootWrapperID.removeAll()
     }
 }
