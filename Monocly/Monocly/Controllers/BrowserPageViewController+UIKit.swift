@@ -31,7 +31,7 @@ final class BrowserPageViewController: UIViewController {
     private let inspectorSession: WebInspectorSession
     private let launchConfiguration: BrowserLaunchConfiguration
     private let inspectorCoordinator = BrowserInspectorCoordinator()
-    private let observationScope = ObservationScope()
+    private var storeObservation: PortableObservationTracking.Token?
 
     private let progressView = UIProgressView(progressViewStyle: .bar)
 
@@ -91,7 +91,7 @@ final class BrowserPageViewController: UIViewController {
     isolated deinit {
         progressHideTask?.cancel()
         viewportCoordinator?.invalidate()
-        observationScope.cancelAll()
+        storeObservation?.cancel()
         if let inspectorWindowObserverID {
             BrowserInspectorCoordinator.removeInspectorWindowObservation(inspectorWindowObserverID)
         }
@@ -130,9 +130,13 @@ final class BrowserPageViewController: UIViewController {
     }
 
     private func startObservingStore() {
-        observationScope.observe(store) { [weak self] _, store in
-            self?.renderState(from: store)
-            self?.maybeAutoPresentInspectorIfNeeded()
+        storeObservation?.cancel()
+        storeObservation = withPortableContinuousObservation { [weak self] _ in
+            guard let self else {
+                return
+            }
+            renderState(from: store)
+            maybeAutoPresentInspectorIfNeeded()
         }
     }
 
