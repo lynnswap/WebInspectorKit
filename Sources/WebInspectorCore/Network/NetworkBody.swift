@@ -67,6 +67,71 @@ package struct NetworkBodyTextPreparation: Sendable {
 }
 
 @MainActor
+private final class NetworkBodyTextRepresentationPreparationState {
+    private(set) var generation = 0
+    private var preparedGeneration: Int?
+    private var task: Task<Void, Never>?
+    private var isBatchingInvalidation = false
+    private var needsInvalidation = false
+
+    var needsPreparation: Bool {
+        preparedGeneration != generation
+    }
+
+    var currentPreparation: NetworkBodyTextPreparation? {
+        task.map(NetworkBodyTextPreparation.init(task:))
+    }
+
+    func withInvalidationBatch(_ updates: () -> Void, invalidate: () -> Void) {
+        isBatchingInvalidation = true
+        updates()
+        isBatchingInvalidation = false
+
+        if needsInvalidation {
+            needsInvalidation = false
+            invalidate()
+        }
+    }
+
+    @discardableResult
+    func invalidate() -> Bool {
+        guard isBatchingInvalidation == false else {
+            needsInvalidation = true
+            return false
+        }
+        generation += 1
+        preparedGeneration = nil
+        cancelPreparation()
+        return true
+    }
+
+    func markCurrentGenerationPrepared() {
+        preparedGeneration = generation
+    }
+
+    func startPreparation(_ task: Task<Void, Never>) {
+        self.task = task
+    }
+
+    func isCurrent(generation: Int) -> Bool {
+        generation == self.generation
+    }
+
+    func finishPreparation(generation: Int) {
+        guard generation == self.generation else {
+            return
+        }
+        preparedGeneration = generation
+        task = nil
+    }
+
+    func cancelPreparation() {
+        task?.cancel()
+        task = nil
+    }
+}
+
+@MainActor
 @Observable
 package final class NetworkBody {
     package let role: NetworkBodyRole
@@ -95,11 +160,7 @@ package final class NetworkBody {
     }
     package private(set) var textRepresentation: String?
     package private(set) var textRepresentationSyntaxKind: NetworkBodySyntaxKind
-    @ObservationIgnored private var textRepresentationGeneration = 0
-    @ObservationIgnored private var preparedTextRepresentationGeneration: Int?
-    @ObservationIgnored private var textRepresentationTask: Task<Void, Never>?
-    @ObservationIgnored private var isBatchingTextRepresentationInvalidation = false
-    @ObservationIgnored private var needsTextRepresentationInvalidation = false
+    @ObservationIgnored private let textRepresentationPreparation = NetworkBodyTextRepresentationPreparationState()
 
     package init(
         role: NetworkBodyRole,
@@ -125,7 +186,7 @@ package final class NetworkBody {
     }
 
     isolated deinit {
-        textRepresentationTask?.cancel()
+        textRepresentationPreparation.cancelPreparation()
     }
 
     package var needsFetch: Bool {
@@ -167,18 +228,18 @@ package final class NetworkBody {
         guard case .loaded = fetchState else {
             return nil
         }
-        guard preparedTextRepresentationGeneration != textRepresentationGeneration else {
+        guard textRepresentationPreparation.needsPreparation else {
             return nil
         }
-        if let textRepresentationTask {
-            return NetworkBodyTextPreparation(task: textRepresentationTask)
+        if let currentPreparation = textRepresentationPreparation.currentPreparation {
+            return currentPreparation
         }
         guard let input = preparedTextRepresentationInput() else {
-            preparedTextRepresentationGeneration = textRepresentationGeneration
+            textRepresentationPreparation.markCurrentGenerationPrepared()
             return nil
         }
 
-        let generation = textRepresentationGeneration
+        let generation = textRepresentationPreparation.generation
         let task = Task.detached(priority: .utility) { [weak self] in
             let result = NetworkBodyPreparedTextRepresentation.make(from: input)
             guard Task.isCancelled == false else {
@@ -186,7 +247,7 @@ package final class NetworkBody {
             }
             await self?.applyPreparedTextRepresentation(result, generation: generation)
         }
-        textRepresentationTask = task
+        textRepresentationPreparation.startPreparation(task)
         return NetworkBodyTextPreparation(task: task)
     }
 
@@ -282,25 +343,15 @@ package final class NetworkBody {
     }
 
     private func withTextRepresentationInvalidationBatch(_ updates: () -> Void) {
-        isBatchingTextRepresentationInvalidation = true
-        updates()
-        isBatchingTextRepresentationInvalidation = false
-
-        if needsTextRepresentationInvalidation {
-            needsTextRepresentationInvalidation = false
+        textRepresentationPreparation.withInvalidationBatch(updates) {
             invalidatePreparedTextRepresentation()
         }
     }
 
     private func invalidatePreparedTextRepresentation() {
-        guard isBatchingTextRepresentationInvalidation == false else {
-            needsTextRepresentationInvalidation = true
+        guard textRepresentationPreparation.invalidate() else {
             return
         }
-        textRepresentationGeneration += 1
-        preparedTextRepresentationGeneration = nil
-        textRepresentationTask?.cancel()
-        textRepresentationTask = nil
         refreshTextRepresentation()
     }
 
@@ -341,7 +392,7 @@ package final class NetworkBody {
         _ result: NetworkBodyPreparedTextRepresentation.Result?,
         generation: Int
     ) {
-        guard generation == textRepresentationGeneration else {
+        guard textRepresentationPreparation.isCurrent(generation: generation) else {
             return
         }
         if let result {
@@ -352,8 +403,7 @@ package final class NetworkBody {
                 textRepresentationSyntaxKind = result.syntaxKind
             }
         }
-        preparedTextRepresentationGeneration = generation
-        textRepresentationTask = nil
+        textRepresentationPreparation.finishPreparation(generation: generation)
     }
 
     private func decodedContentText() -> String? {
