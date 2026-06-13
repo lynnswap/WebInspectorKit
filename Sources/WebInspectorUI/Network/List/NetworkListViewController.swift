@@ -18,8 +18,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private struct PendingSnapshotUpdate {
-        var requestIDs: [NetworkRequest.ID]
-        var projectionByID: [NetworkRequest.ID: NetworkRequestDisplayProjection]
+        var rows: NetworkListSnapshotRows
         var reconfiguredIDs: Set<NetworkRequest.ID>
         var mode: SnapshotApplyMode
     }
@@ -40,10 +39,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
 
     private var needsSnapshotReloadOnNextAppearance = false
     private var pendingSnapshotUpdate: PendingSnapshotUpdate?
-    private var applyingSnapshotRequestIDs: [NetworkRequest.ID]?
-    private var applyingSnapshotProjectionByID: [NetworkRequest.ID: NetworkRequestDisplayProjection]?
-    private var displayedProjectionByID: [NetworkRequest.ID: NetworkRequestDisplayProjection] = [:]
-    private var isApplyingSnapshotUpdate = false
+    private var snapshotState = NetworkListSnapshotState()
     private var isApplyingSearchPresentation = false
     private var activeSearchController: UISearchController?
     private lazy var filterHostingMenu = UIHostingMenu(
@@ -323,44 +319,28 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private func requestSnapshotUpdate(displayRows: [NetworkRequestDisplayProjection]) {
-        let requestIDs = displayRows.map(\.id)
-        let nextProjectionByID = Dictionary(uniqueKeysWithValues: displayRows.map { ($0.id, $0) })
-        let reconfiguredIDs = Set(requestIDs.filter { id in
-            guard let previous = displayedProjectionByID[id],
-                  let next = nextProjectionByID[id] else {
-                return false
-            }
-            return previous != next
-        })
+        let rows = NetworkListSnapshotRows(displayRows: displayRows)
+        let reconfiguredIDs = snapshotState.reconfiguredIDs(comparedTo: rows)
         requestSnapshotUpdate(
-            requestIDs: requestIDs,
-            projectionByID: nextProjectionByID,
+            rows: rows,
             reconfiguredIDs: reconfiguredIDs
         )
     }
 
     private func requestSnapshotUpdate(
-        requestIDs: [NetworkRequest.ID],
-        projectionByID: [NetworkRequest.ID: NetworkRequestDisplayProjection],
+        rows: NetworkListSnapshotRows,
         reconfiguredIDs: Set<NetworkRequest.ID>
     ) {
-        precondition(
-            requestIDs.count == Set(requestIDs).count,
-            "Duplicate row IDs detected in NetworkListViewController"
-        )
         var effectiveReconfiguredIDs = reconfiguredIDs
-        if let applyingSnapshotRequestIDs {
-            if applyingSnapshotRequestIDs == requestIDs && effectiveReconfiguredIDs.isEmpty {
-                effectiveReconfiguredIDs = reconfiguredIDsAgainstApplyingProjection(
-                    requestIDs: requestIDs,
-                    projectionByID: projectionByID
-                )
+        if let applyingRows = snapshotState.applyingRows {
+            if applyingRows.requestIDs == rows.requestIDs && effectiveReconfiguredIDs.isEmpty {
+                effectiveReconfiguredIDs = snapshotState.reconfiguredIDsAgainstApplyingRows(rows)
             }
-            if applyingSnapshotRequestIDs == requestIDs && effectiveReconfiguredIDs.isEmpty {
+            if applyingRows.requestIDs == rows.requestIDs && effectiveReconfiguredIDs.isEmpty {
                 pendingSnapshotUpdate = nil
                 return
             }
-        } else if dataSource.snapshot().itemIdentifiers == requestIDs && effectiveReconfiguredIDs.isEmpty {
+        } else if dataSource.snapshot().itemIdentifiers == rows.requestIDs && effectiveReconfiguredIDs.isEmpty {
             pendingSnapshotUpdate = nil
             return
         }
@@ -370,23 +350,10 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         }
         needsSnapshotReloadOnNextAppearance = false
         enqueueSnapshotUpdate(
-            requestIDs: requestIDs,
-            projectionByID: projectionByID,
+            rows: rows,
             reconfiguredIDs: effectiveReconfiguredIDs,
             mode: .apply
         )
-    }
-
-    private func reconfiguredIDsAgainstApplyingProjection(
-        requestIDs: [NetworkRequest.ID],
-        projectionByID: [NetworkRequest.ID: NetworkRequestDisplayProjection]
-    ) -> Set<NetworkRequest.ID> {
-        guard let applyingSnapshotProjectionByID else {
-            return []
-        }
-        return Set(requestIDs.filter { id in
-            applyingSnapshotProjectionByID[id] != projectionByID[id]
-        })
     }
 
     private func flushPendingSnapshotUpdateIfNeeded() {
@@ -395,39 +362,34 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         }
         needsSnapshotReloadOnNextAppearance = false
         let displayRows = model.displayRows
-        let projectionByID = Dictionary(uniqueKeysWithValues: displayRows.map { ($0.id, $0) })
         enqueueSnapshotUpdate(
-            requestIDs: displayRows.map(\.id),
-            projectionByID: projectionByID,
+            rows: NetworkListSnapshotRows(displayRows: displayRows),
             reconfiguredIDs: [],
             mode: .reloadData
         )
     }
 
     private func enqueueSnapshotUpdate(
-        requestIDs: [NetworkRequest.ID],
-        projectionByID: [NetworkRequest.ID: NetworkRequestDisplayProjection],
+        rows: NetworkListSnapshotRows,
         reconfiguredIDs: Set<NetworkRequest.ID>,
         mode: SnapshotApplyMode
     ) {
-        if let pendingSnapshotUpdate, pendingSnapshotUpdate.requestIDs == requestIDs {
+        if let pendingSnapshotUpdate, pendingSnapshotUpdate.rows.requestIDs == rows.requestIDs {
             self.pendingSnapshotUpdate = PendingSnapshotUpdate(
-                requestIDs: requestIDs,
-                projectionByID: projectionByID,
+                rows: rows,
                 reconfiguredIDs: pendingSnapshotUpdate.reconfiguredIDs.union(reconfiguredIDs),
                 mode: pendingSnapshotUpdate.mode == .reloadData || mode == .reloadData ? .reloadData : .apply
             )
             return
         }
-        guard applyingSnapshotRequestIDs != nil
-            || dataSource.snapshot().itemIdentifiers != requestIDs
+        guard snapshotState.isApplying
+            || dataSource.snapshot().itemIdentifiers != rows.requestIDs
             || reconfiguredIDs.isEmpty == false
             || mode == .reloadData else {
             return
         }
         pendingSnapshotUpdate = PendingSnapshotUpdate(
-            requestIDs: requestIDs,
-            projectionByID: projectionByID,
+            rows: rows,
             reconfiguredIDs: reconfiguredIDs,
             mode: mode
         )
@@ -435,20 +397,18 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private func applyPendingSnapshotUpdateIfNeeded() {
-        guard !isApplyingSnapshotUpdate, let update = pendingSnapshotUpdate else {
+        guard !snapshotState.isApplying, let update = pendingSnapshotUpdate else {
             return
         }
         pendingSnapshotUpdate = nil
-        isApplyingSnapshotUpdate = true
-        applyingSnapshotRequestIDs = update.requestIDs
-        applyingSnapshotProjectionByID = update.projectionByID
+        snapshotState.beginApplying(update.rows)
 
         let snapshot = makeSnapshot(
-            requestIDs: update.requestIDs,
+            requestIDs: update.rows.requestIDs,
             reconfiguredIDs: update.mode == .reloadData ? [] : update.reconfiguredIDs
         )
         let completion: () -> Void = { [weak self] in
-            self?.snapshotUpdateDidFinish(appliedProjectionByID: update.projectionByID)
+            self?.snapshotUpdateDidFinish(appliedRows: update.rows)
         }
         switch update.mode {
         case .apply:
@@ -459,12 +419,9 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private func snapshotUpdateDidFinish(
-        appliedProjectionByID: [NetworkRequest.ID: NetworkRequestDisplayProjection]
+        appliedRows: NetworkListSnapshotRows
     ) {
-        displayedProjectionByID = appliedProjectionByID
-        applyingSnapshotRequestIDs = nil
-        applyingSnapshotProjectionByID = nil
-        isApplyingSnapshotUpdate = false
+        snapshotState.finishApplying(appliedRows)
         renderSelectedRequestID(model.selectedRequestID)
         applyPendingSnapshotUpdateIfNeeded()
     }
