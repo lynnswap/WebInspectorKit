@@ -271,38 +271,80 @@ package struct NetworkSessionSnapshot: Equatable, Sendable {
 }
 
 @MainActor
-package struct NetworkRequestStore {
+private extension NetworkRedirectHop {
+    var snapshot: NetworkRedirectHopSnapshot {
+        NetworkRedirectHopSnapshot(
+            id: id,
+            request: request,
+            response: response,
+            timestamp: timestamp
+        )
+    }
+}
+
+@MainActor
+private extension NetworkRequest {
+    var snapshot: NetworkRequestSnapshot {
+        NetworkRequestSnapshot(
+            id: id,
+            frameID: frameID,
+            loaderID: loaderID,
+            documentURL: documentURL,
+            resourceType: resourceType,
+            originatingTargetID: originatingTargetID,
+            backendResourceIdentifier: backendResourceIdentifier,
+            initiator: initiator,
+            request: request,
+            response: response,
+            sourceMapURL: sourceMapURL,
+            metrics: metrics,
+            cachedResourceBodySize: cachedResourceBodySize,
+            webSocketHandshakeRequest: webSocketHandshakeRequest,
+            webSocketHandshakeResponse: webSocketHandshakeResponse,
+            webSocketReadyState: webSocketReadyState,
+            webSocketFrames: webSocketFrames,
+            redirects: redirects.map(\.snapshot),
+            requestSentTimestamp: requestSentTimestamp,
+            requestSentWalltime: requestSentWalltime,
+            responseReceivedTimestamp: responseReceivedTimestamp,
+            lastDataReceivedTimestamp: lastDataReceivedTimestamp,
+            finishedOrFailedTimestamp: finishedOrFailedTimestamp,
+            encodedDataLength: encodedDataLength,
+            decodedDataLength: decodedDataLength,
+            state: state
+        )
+    }
+}
+
+@MainActor
+private struct NetworkRequestStore {
     private var orderedIDs: [NetworkRequest.ID]
     private var requestsByIdentifier: [NetworkRequest.ID: NetworkRequest]
 
-    package init() {
+    init() {
         orderedIDs = []
         requestsByIdentifier = [:]
     }
 
-    package var orderedRequestIDs: [NetworkRequest.ID] {
+    var orderedRequestIDs: [NetworkRequest.ID] {
         orderedIDs
     }
 
-    package var requestsByID: [NetworkRequest.ID: NetworkRequest] {
-        requestsByIdentifier
-    }
-
-    package var requests: [NetworkRequest] {
+    var requests: [NetworkRequest] {
         orderedIDs.compactMap { requestsByIdentifier[$0] }
     }
 
-    package func request(for id: NetworkRequest.ID) -> NetworkRequest? {
+    func request(for id: NetworkRequest.ID) -> NetworkRequest? {
         requestsByIdentifier[id]
     }
 
-    package mutating func removeAll() {
+    mutating func removeAll() {
         orderedIDs.removeAll()
         requestsByIdentifier.removeAll()
     }
 
     @discardableResult
-    package mutating func insert(_ request: NetworkRequest) -> NetworkRequest {
+    mutating func insert(_ request: NetworkRequest) -> NetworkRequest {
         if let existing = requestsByIdentifier[request.id] {
             return existing
         }
@@ -311,7 +353,7 @@ package struct NetworkRequestStore {
         return request
     }
 
-    package mutating func requestOrInsert(
+    mutating func requestOrInsert(
         id: NetworkRequest.ID,
         makeRequest: () -> NetworkRequest
     ) -> NetworkRequest {
@@ -323,6 +365,17 @@ package struct NetworkRequestStore {
         requestsByIdentifier[id] = request
         orderedIDs.append(id)
         return request
+    }
+
+    func snapshot() -> NetworkSessionSnapshot {
+        NetworkSessionSnapshot(
+            orderedRequestIDs: orderedIDs,
+            requestsByID: Dictionary(
+                uniqueKeysWithValues: orderedIDs.compactMap { id in
+                    requestsByIdentifier[id].map { (id, $0.snapshot) }
+                }
+            )
+        )
     }
 }
 
@@ -688,7 +741,7 @@ package final class NetworkSession {
     }
 
     package func requestSnapshot(for id: NetworkRequest.ID) -> NetworkRequestSnapshot? {
-        requestStore.request(for: id).map(snapshot(for:))
+        requestStore.request(for: id)?.snapshot
     }
 
     package func responseBodyCommandIntent(for id: NetworkRequest.ID) -> NetworkCommandIntent? {
@@ -709,51 +762,7 @@ package final class NetworkSession {
     }
 
     package func snapshot() -> NetworkSessionSnapshot {
-        let requestsByID = requestStore.requestsByID
-        return NetworkSessionSnapshot(
-            orderedRequestIDs: requestStore.orderedRequestIDs,
-            requestsByID: Dictionary(uniqueKeysWithValues: requestsByID.map { key, value in
-                (key, snapshot(for: value))
-            })
-        )
-    }
-
-    private func snapshot(for request: NetworkRequest) -> NetworkRequestSnapshot {
-        NetworkRequestSnapshot(
-            id: request.id,
-            frameID: request.frameID,
-            loaderID: request.loaderID,
-            documentURL: request.documentURL,
-            resourceType: request.resourceType,
-            originatingTargetID: request.originatingTargetID,
-            backendResourceIdentifier: request.backendResourceIdentifier,
-            initiator: request.initiator,
-            request: request.request,
-            response: request.response,
-            sourceMapURL: request.sourceMapURL,
-            metrics: request.metrics,
-            cachedResourceBodySize: request.cachedResourceBodySize,
-            webSocketHandshakeRequest: request.webSocketHandshakeRequest,
-            webSocketHandshakeResponse: request.webSocketHandshakeResponse,
-            webSocketReadyState: request.webSocketReadyState,
-            webSocketFrames: request.webSocketFrames,
-            redirects: request.redirects.map { redirect in
-                NetworkRedirectHopSnapshot(
-                    id: redirect.id,
-                    request: redirect.request,
-                    response: redirect.response,
-                    timestamp: redirect.timestamp
-                )
-            },
-            requestSentTimestamp: request.requestSentTimestamp,
-            requestSentWalltime: request.requestSentWalltime,
-            responseReceivedTimestamp: request.responseReceivedTimestamp,
-            lastDataReceivedTimestamp: request.lastDataReceivedTimestamp,
-            finishedOrFailedTimestamp: request.finishedOrFailedTimestamp,
-            encodedDataLength: request.encodedDataLength,
-            decodedDataLength: request.decodedDataLength,
-            state: request.state
-        )
+        requestStore.snapshot()
     }
 
     private func applyWebSocketFrame(
