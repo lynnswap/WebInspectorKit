@@ -2687,12 +2687,11 @@ func lazyIframeOwnerFrameIdIsNotTreatedAsChildFrameIdentity() async throws {
         protocolNodeID: .init(5)
     )
 
-    await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
+    await receiveAndApplyRootMessage(
+        transport,
+        message: #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","isProvisional":false}}}"#,
+        in: session
     )
-    _ = try await awaitValueAfterActorTurns {
-        await session.attachment.dom.snapshot().targetsByID[.frameAd]
-    }
 
     await receiveTargetDispatch(
         transport,
@@ -2911,17 +2910,7 @@ func requestNodeWaitsForPathPushBeforeSelectingNode() async throws {
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
 
-    await receiveTargetDispatch(
-        transport,
-        targetID: .pageMain,
-        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"main-frame"}}}"#
-    )
-    _ = try await awaitValueAfterActorTurns {
-        await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
-    }
-    _ = try await awaitValueAfterActorTurns {
-        await session.attachment.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
-    }
+    await receiveAndApplyRuntimeContextCreated(transport, contextID: 7, in: session)
     #expect(await session.attachment.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]?.targetID == .pageMain)
     let intent = await session.attachment.dom.beginInspectSelectionRequest(
         targetID: .pageMain,
@@ -3113,14 +3102,7 @@ func requestNodeReplyBeforePathPushKeepsSelectionPendingUntilParentArrives() asy
     try await connect(session, transport: transport, backend: backend)
     let snapshotBeforeSelection = await session.attachment.dom.snapshot()
 
-    await receiveTargetDispatch(
-        transport,
-        targetID: .pageMain,
-        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"main-frame"}}}"#
-    )
-    _ = try await awaitValueAfterActorTurns {
-        await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
-    }
+    await receiveAndApplyRuntimeContextCreated(transport, contextID: 7, in: session)
     let intent = await session.attachment.dom.beginInspectSelectionRequest(
         targetID: .pageMain,
         objectID: "missing-object"
@@ -3332,14 +3314,7 @@ func elementPickerIgnoresInspectEventBeforeInspectModeReply() async throws {
     let transport = testTransport(backend)
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
-    await receiveTargetDispatch(
-        transport,
-        targetID: .pageMain,
-        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"main-frame"}}}"#
-    )
-    _ = try await awaitValueAfterActorTurns {
-        await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
-    }
+    await receiveAndApplyRuntimeContextCreated(transport, contextID: 7, in: session)
 
     let sentCount = await backend.sentTargetMessages().count
     let beginTask = Task {
@@ -3415,14 +3390,7 @@ func restartedElementPickerIgnoresStaleInspectEventBeforeInspectModeReply() asyn
     let transport = testTransport(backend)
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
-    await receiveTargetDispatch(
-        transport,
-        targetID: .pageMain,
-        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"main-frame"}}}"#
-    )
-    _ = try await awaitValueAfterActorTurns {
-        await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
-    }
+    await receiveAndApplyRuntimeContextCreated(transport, contextID: 7, in: session)
 
     let sentCountBeforeFirstBegin = await backend.sentTargetMessages().count
     let firstBeginTask = Task {
@@ -3536,14 +3504,7 @@ func staleInspectEventCompletionDoesNotCancelRestartedPicker() async throws {
     let transport = testTransport(backend)
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
-    await receiveTargetDispatch(
-        transport,
-        targetID: .pageMain,
-        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"main-frame"}}}"#
-    )
-    _ = try await awaitValueAfterActorTurns {
-        await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
-    }
+    await receiveAndApplyRuntimeContextCreated(transport, contextID: 7, in: session)
     try await beginPicker(session: session, transport: transport, backend: backend)
 
     let sentCountBeforeInspect = await backend.sentTargetMessages().count
@@ -3616,14 +3577,7 @@ func inspectorInspectSelectsRequestedNodeAndDisablesPicker() async throws {
     let transport = testTransport(backend)
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
-    await receiveTargetDispatch(
-        transport,
-        targetID: .pageMain,
-        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"main-frame"}}}"#
-    )
-    _ = try await awaitValueAfterActorTurns {
-        await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
-    }
+    await receiveAndApplyRuntimeContextCreated(transport, contextID: 7, in: session)
     try await beginPicker(session: session, transport: transport, backend: backend)
     let sentCountBeforeInspect = await backend.sentTargetMessages().count
 
@@ -3671,14 +3625,7 @@ func inspectorInspectWaitsForPathPushEventsBeforeSelectingNode() async throws {
     let transport = testTransport(backend)
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
-    await receiveTargetDispatch(
-        transport,
-        targetID: .pageMain,
-        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"frameId":"main-frame"}}}"#
-    )
-    _ = try await awaitValueAfterActorTurns {
-        await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 7)]
-    }
+    await receiveAndApplyRuntimeContextCreated(transport, contextID: 7, in: session)
     try await beginPicker(session: session, transport: transport, backend: backend)
     let sentCountBeforeInspect = await backend.sentTargetMessages().count
 
@@ -3743,14 +3690,13 @@ func inspectorInspectRecordedExecutionContextOverridesEventTargetHint() async th
         ),
         targetID: .frameAd
     )
-    await receiveTargetDispatch(
+    await receiveAndApplyRuntimeContextCreated(
         transport,
         targetID: .frameAd,
-        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":77,"frameId":"ad-frame"}}}"#
+        contextID: 77,
+        frameID: "ad-frame",
+        in: session
     )
-    _ = try await awaitValueAfterActorTurns {
-        await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.frameAd, 77)]
-    }
     try await beginPicker(session: session, transport: transport, backend: backend)
     let sentCountBeforeInspect = await backend.sentTargetMessages().count
 
@@ -3852,12 +3798,11 @@ func targetScopedInspectorInspectUsesEventTargetAsFallback() async throws {
     let transport = testTransport(backend)
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
-    await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
+    await receiveAndApplyRootMessage(
+        transport,
+        message: #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","isProvisional":false}}}"#,
+        in: session
     )
-    _ = try await awaitValueAfterActorTurns {
-        await session.attachment.dom.snapshot().targetsByID[.frameAd]
-    }
     _ = await session.attachment.dom.replaceDocumentRoot(
         DOMNodePayload(
             nodeID: .init(1),
@@ -3921,12 +3866,11 @@ func targetScopedInspectorInspectFallsBackToEventTargetWhenContextIsUnrecorded()
     let transport = testTransport(backend)
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
-    await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
+    await receiveAndApplyRootMessage(
+        transport,
+        message: #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","isProvisional":false}}}"#,
+        in: session
     )
-    _ = try await awaitValueAfterActorTurns {
-        await session.attachment.dom.snapshot().targetsByID[.frameAd]
-    }
     _ = await session.attachment.dom.replaceDocumentRoot(
         DOMNodePayload(
             nodeID: .init(1),
@@ -5271,6 +5215,23 @@ private func receiveAndApplyTargetDispatch(
     let sequence = await receiveTargetDispatch(transport, targetID: targetID, message: message)
     await expectProtocolEventApplied(sequence, in: session, sourceLocation: sourceLocation)
     return sequence
+}
+
+private func receiveAndApplyRuntimeContextCreated(
+    _ transport: TransportSession,
+    targetID: ProtocolTargetIdentifier = .pageMain,
+    contextID: Int,
+    frameID: String = "main-frame",
+    in session: InspectorSession,
+    sourceLocation: SourceLocation = #_sourceLocation
+) async {
+    await receiveAndApplyTargetDispatch(
+        transport,
+        targetID: targetID,
+        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":\#(contextID),"frameId":"\#(jsonEscapedString(frameID))"}}}"#,
+        in: session,
+        sourceLocation: sourceLocation
+    )
 }
 
 @discardableResult
