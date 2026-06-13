@@ -346,10 +346,29 @@ package final class CSSStyleSection: Equatable {
 @MainActor
 @Observable
 package final class CSSNodeStyles {
+    private enum RefreshPhase: Equatable {
+        case idle
+        case refreshing(sequence: UInt64)
+
+        var sequence: UInt64? {
+            switch self {
+            case .idle:
+                nil
+            case let .refreshing(sequence):
+                sequence
+            }
+        }
+
+        var isRefreshing: Bool {
+            sequence != nil
+        }
+    }
+
     package let identity: CSSNodeStyleIdentity
     package var state: CSSNodeStylesState
     package var sections: [CSSStyleSection]
     package var computedProperties: [CSSComputedStyleProperty]
+    @ObservationIgnored private var refreshPhase: RefreshPhase
 
     package init(
         identity: CSSNodeStyleIdentity,
@@ -361,6 +380,42 @@ package final class CSSNodeStyles {
         self.state = state
         self.sections = sections
         self.computedProperties = computedProperties
+        refreshPhase = .idle
+    }
+
+    fileprivate var isRefreshing: Bool {
+        refreshPhase.isRefreshing
+    }
+
+    fileprivate func beginRefresh(sequence: UInt64) {
+        state = .loading
+        refreshPhase = .refreshing(sequence: sequence)
+    }
+
+    fileprivate func isActiveRefresh(_ token: CSSStyleRefreshToken) -> Bool {
+        identity == token.identity && refreshPhase.sequence == token.sequence
+    }
+
+    fileprivate func clearRefresh(_ token: CSSStyleRefreshToken) {
+        guard isActiveRefresh(token) else {
+            return
+        }
+        refreshPhase = .idle
+    }
+
+    fileprivate func clearRefresh() {
+        refreshPhase = .idle
+    }
+
+    fileprivate func cancelRefresh(sequence: UInt64?) -> Bool {
+        guard let activeSequence = refreshPhase.sequence,
+              sequence.map({ $0 == activeSequence }) ?? true,
+              state == .loading else {
+            return false
+        }
+        refreshPhase = .idle
+        state = .needsRefresh
+        return true
     }
 }
 
@@ -465,7 +520,6 @@ package final class CSSSession {
     @ObservationIgnored private var selectedIdentity: CSSNodeStyleIdentity?
     @ObservationIgnored private var stylesByNodeID: [DOMNodeIdentifier: CSSNodeStyles]
     @ObservationIgnored private var styleSheetHeadersByKey: [StyleSheetKey: CSSStyleSheetHeaderPayload]
-    @ObservationIgnored private var activeRefreshSequenceByNodeID: [DOMNodeIdentifier: UInt64]
     @ObservationIgnored private var nextRefreshSequence: UInt64
     @ObservationIgnored private var commandChannel: ProtocolCommandChannel?
     @ObservationIgnored private let protocolCommands: CSSProtocolCommands
@@ -476,7 +530,6 @@ package final class CSSSession {
         selectedIdentity = nil
         stylesByNodeID = [:]
         styleSheetHeadersByKey = [:]
-        activeRefreshSequenceByNodeID = [:]
         nextRefreshSequence = 0
         commandChannel = nil
         protocolCommands = CSSProtocolCommands()
@@ -488,7 +541,6 @@ package final class CSSSession {
         selectedIdentity = nil
         stylesByNodeID.removeAll()
         styleSheetHeadersByKey.removeAll()
-        activeRefreshSequenceByNodeID.removeAll()
         nextRefreshSequence = 0
     }
 
@@ -544,7 +596,7 @@ package final class CSSSession {
     ) {
         let nodeStyles = ensureNodeStyles(for: identity)
         nodeStyles.state = .unavailable(reason)
-        activeRefreshSequenceByNodeID.removeValue(forKey: identity.nodeID)
+        nodeStyles.clearRefresh()
         guard selectedIdentity == identity || selectedNodeStyles === nodeStyles else {
             return
         }
@@ -564,10 +616,9 @@ package final class CSSSession {
 
         nextRefreshSequence &+= 1
         let nodeStyles = ensureNodeStyles(for: identity)
-        nodeStyles.state = .loading
+        nodeStyles.beginRefresh(sequence: nextRefreshSequence)
         selectedIdentity = identity
         selectCurrentNodeStyles(nodeStyles)
-        activeRefreshSequenceByNodeID[identity.nodeID] = nextRefreshSequence
         return CSSStyleRefreshToken(identity: identity, sequence: nextRefreshSequence)
     }
 
@@ -577,8 +628,8 @@ package final class CSSSession {
         inline: CSSInlineStylesPayload,
         computed: [CSSComputedStylePropertyPayload]
     ) {
-        guard activeRefreshSequenceByNodeID[token.identity.nodeID] == token.sequence,
-              let nodeStyles = stylesByNodeID[token.identity.nodeID] else {
+        guard let nodeStyles = stylesByNodeID[token.identity.nodeID],
+              nodeStyles.isActiveRefresh(token) else {
             return
         }
 
@@ -596,7 +647,7 @@ package final class CSSSession {
             with: computed.map(CSSComputedStyleProperty.init(payload:))
         )
         nodeStyles.state = .loaded
-        activeRefreshSequenceByNodeID.removeValue(forKey: token.identity.nodeID)
+        nodeStyles.clearRefresh(token)
         if selectedIdentity == token.identity {
             selectCurrentNodeStyles(nodeStyles)
         }
@@ -617,12 +668,12 @@ package final class CSSSession {
     }
 
     package func markRefreshFailed(_ token: CSSStyleRefreshToken, message: String) {
-        guard activeRefreshSequenceByNodeID[token.identity.nodeID] == token.sequence,
-              let nodeStyles = stylesByNodeID[token.identity.nodeID] else {
+        guard let nodeStyles = stylesByNodeID[token.identity.nodeID],
+              nodeStyles.isActiveRefresh(token) else {
             return
         }
         nodeStyles.state = .failed(message)
-        activeRefreshSequenceByNodeID.removeValue(forKey: token.identity.nodeID)
+        nodeStyles.clearRefresh(token)
         if selectedIdentity == token.identity {
             selectedNodeStyles = nil
             selectedUnavailableReason = .staleNode(token.identity.nodeID)
@@ -638,14 +689,10 @@ package final class CSSSession {
     }
 
     private func cancelRefresh(identity: CSSNodeStyleIdentity, sequence: UInt64?) {
-        guard let activeSequence = activeRefreshSequenceByNodeID[identity.nodeID],
-              sequence.map({ $0 == activeSequence }) ?? true,
-              let nodeStyles = stylesByNodeID[identity.nodeID],
-              nodeStyles.state == .loading else {
+        guard let nodeStyles = nodeStyles(for: identity),
+              nodeStyles.cancelRefresh(sequence: sequence) else {
             return
         }
-        activeRefreshSequenceByNodeID.removeValue(forKey: identity.nodeID)
-        nodeStyles.state = .needsRefresh
         if selectedIdentity == identity {
             selectCurrentNodeStyles(nodeStyles)
         }
@@ -667,11 +714,11 @@ package final class CSSSession {
     ) {
         for nodeStyles in stylesByNodeID.values
         where nodeStyles.identity.targetID == targetID && shouldMark(nodeStyles) {
-            guard !(nodeStyles.state == .loading && activeRefreshSequenceByNodeID[nodeStyles.identity.nodeID] != nil) else {
+            guard !(nodeStyles.state == .loading && nodeStyles.isRefreshing) else {
                 continue
             }
             nodeStyles.state = .needsRefresh
-            activeRefreshSequenceByNodeID.removeValue(forKey: nodeStyles.identity.nodeID)
+            nodeStyles.clearRefresh()
         }
     }
 
@@ -694,11 +741,11 @@ package final class CSSSession {
         }) else {
             return
         }
-        guard !(current.state == .loading && activeRefreshSequenceByNodeID[current.identity.nodeID] != nil) else {
+        guard !(current.state == .loading && current.isRefreshing) else {
             return
         }
         current.state = .needsRefresh
-        activeRefreshSequenceByNodeID.removeValue(forKey: current.identity.nodeID)
+        current.clearRefresh()
     }
 
     package func removeStyles(targetID: ProtocolTargetIdentifier) {
@@ -711,7 +758,6 @@ package final class CSSSession {
         }
         for nodeID in removedIDs {
             stylesByNodeID.removeValue(forKey: nodeID)
-            activeRefreshSequenceByNodeID.removeValue(forKey: nodeID)
         }
         if let selectedNodeStyles,
            selectedNodeStyles.identity.targetID == targetID {
