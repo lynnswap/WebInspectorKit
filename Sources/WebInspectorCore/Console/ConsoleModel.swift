@@ -109,31 +109,35 @@ package struct ConsoleSessionSnapshot: Equatable, Sendable {
 @Observable
 package final class ConsoleTargetState {
     package let targetID: ProtocolTargetIdentifier
-    package private(set) var orderedMessageIDs: [ConsoleMessageIdentifier]
-    private var messagesByID: [ConsoleMessageIdentifier: ConsoleMessage]
-    private var lastRepeatableMessageID: ConsoleMessageIdentifier?
-    package private(set) var warningCount: Int
-    package private(set) var errorCount: Int
+    private var messageStore: ConsoleMessageStore
     package private(set) var lastClearReason: ConsoleClearReason?
     private var unsupportedCommands: Set<String>
 
     init(targetID: ProtocolTargetIdentifier) {
         self.targetID = targetID
-        orderedMessageIDs = []
-        messagesByID = [:]
-        lastRepeatableMessageID = nil
-        warningCount = 0
-        errorCount = 0
+        messageStore = ConsoleMessageStore()
         lastClearReason = nil
         unsupportedCommands = []
     }
 
+    package var warningCount: Int {
+        messageStore.warningCount
+    }
+
+    package var errorCount: Int {
+        messageStore.errorCount
+    }
+
+    package var orderedMessageIDs: [ConsoleMessageIdentifier] {
+        messageStore.orderedMessageIDs
+    }
+
     package var messages: [ConsoleMessage] {
-        orderedMessageIDs.compactMap { messagesByID[$0] }
+        messageStore.messages
     }
 
     package func message(for id: ConsoleMessageIdentifier) -> ConsoleMessage? {
-        messagesByID[id]
+        messageStore.message(for: id)
     }
 
     func append(
@@ -143,103 +147,33 @@ package final class ConsoleTargetState {
     ) -> ConsoleMessageIdentifier {
         let id = ConsoleMessageIdentifier(targetID: targetID, ordinal: ordinal)
         let message = ConsoleMessage(id: id, targetID: targetID, payload: payload, parameters: parameters)
-        orderedMessageIDs.append(id)
-        messagesByID[id] = message
-        if payload.type != .clear {
-            lastRepeatableMessageID = id
-        }
-        incrementSeverity(level: message.level, repeatCount: message.repeatCount)
+        messageStore.append(message, canRepeat: payload.type != .clear)
         return id
     }
 
     func updateRepeatCount(count: Int, timestamp: Double?) {
-        guard let messageID = lastRepeatableMessageID,
-              let message = messagesByID[messageID] else {
-            return
-        }
-        incrementSeverity(level: message.level, repeatCount: -message.repeatCount)
-        message.repeatCount = max(1, count)
-        if let timestamp {
-            message.timestamp = timestamp
-        }
-        incrementSeverity(level: message.level, repeatCount: message.repeatCount)
+        messageStore.updateLastRepeatCount(count: count, timestamp: timestamp)
     }
 
     func clearMessages(reason: ConsoleClearReason) {
         lastClearReason = reason
-        orderedMessageIDs.removeAll()
-        messagesByID.removeAll()
-        lastRepeatableMessageID = nil
-        warningCount = 0
-        errorCount = 0
+        messageStore.removeAll()
     }
 
     func retargeted(to newTargetID: ProtocolTargetIdentifier) -> ConsoleTargetState {
         let nextState = ConsoleTargetState(targetID: newTargetID)
         nextState.lastClearReason = lastClearReason
         nextState.unsupportedCommands = unsupportedCommands
-        for oldID in orderedMessageIDs {
-            guard let message = messagesByID[oldID] else {
-                continue
-            }
-            let newID = ConsoleMessageIdentifier(targetID: newTargetID, ordinal: oldID.ordinal)
-            nextState.orderedMessageIDs.append(newID)
-            nextState.messagesByID[newID] = ConsoleMessage(
-                id: newID,
-                targetID: newTargetID,
-                payload: ConsoleMessagePayload(
-                    source: message.source,
-                    level: message.level,
-                    text: message.text,
-                    type: message.type,
-                    url: message.url,
-                    line: message.line,
-                    column: message.column,
-                    repeatCount: message.repeatCount,
-                    parameters: message.parameters.map(\.payload),
-                    stackTrace: message.stackTrace,
-                    networkRequestID: message.networkRequestKey?.requestID,
-                    timestamp: message.timestamp
-                ),
-                parameters: message.parameters.map(Self.displayOnlyParameter)
-            )
-        }
-        if let lastRepeatableMessageID {
-            nextState.lastRepeatableMessageID = ConsoleMessageIdentifier(
-                targetID: newTargetID,
-                ordinal: lastRepeatableMessageID.ordinal
-            )
-        }
-        nextState.recalculateSeverityCounts()
+        nextState.messageStore = messageStore.retargeted(to: newTargetID)
         return nextState
     }
 
-    private static func displayOnlyParameter(_ parameter: RuntimeRemoteObject) -> RuntimeRemoteObject {
-        RuntimeRemoteObject(
-            payload: parameter.payload,
-            objectGroup: parameter.objectGroup,
-            executionContextKey: parameter.executionContextKey
-        )
-    }
-
     func mergeCommittedState(_ committedState: ConsoleTargetState) {
-        orderedMessageIDs.append(contentsOf: committedState.orderedMessageIDs)
-        orderedMessageIDs.sort()
-        for (id, message) in committedState.messagesByID {
-            messagesByID[id] = message
-        }
-        if let committedLastRepeatableMessageID = committedState.lastRepeatableMessageID {
-            if let currentLastRepeatableMessageID = lastRepeatableMessageID {
-                lastRepeatableMessageID = max(currentLastRepeatableMessageID, committedLastRepeatableMessageID)
-            } else {
-                lastRepeatableMessageID = committedLastRepeatableMessageID
-            }
-        }
+        messageStore.mergeCommittedStore(committedState.messageStore)
         if let lastClearReason = committedState.lastClearReason {
             self.lastClearReason = lastClearReason
         }
         unsupportedCommands.formUnion(committedState.unsupportedCommands)
-        recalculateSeverityCounts()
     }
 
     func markCommandUnsupported(_ method: String) {
@@ -251,49 +185,11 @@ package final class ConsoleTargetState {
     }
 
     fileprivate var messageSnapshotEntries: [(ConsoleMessageIdentifier, ConsoleMessageSnapshot)] {
-        messagesByID.map { id, message in
-            (
-                id,
-                ConsoleMessageSnapshot(
-                    id: message.id,
-                    source: message.source,
-                    level: message.level,
-                    text: message.text,
-                    type: message.type,
-                    url: message.url,
-                    line: message.line,
-                    column: message.column,
-                    repeatCount: message.repeatCount,
-                    parameters: message.parameters.map(\.payload),
-                    stackTrace: message.stackTrace,
-                    networkRequestKey: message.networkRequestKey,
-                    timestamp: message.timestamp
-                )
-            )
-        }
+        messageStore.messageSnapshotEntries
     }
 
     fileprivate var unsupportedCommandSnapshot: Set<String> {
         unsupportedCommands
-    }
-
-    private func incrementSeverity(level: ConsoleMessageLevel, repeatCount: Int) {
-        switch level {
-        case .warning:
-            warningCount += repeatCount
-        case .error:
-            errorCount += repeatCount
-        default:
-            break
-        }
-    }
-
-    private func recalculateSeverityCounts() {
-        warningCount = 0
-        errorCount = 0
-        for message in messagesByID.values {
-            incrementSeverity(level: message.level, repeatCount: message.repeatCount)
-        }
     }
 }
 

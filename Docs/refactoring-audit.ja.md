@@ -330,6 +330,7 @@ xcodebuild test \
 - `DOMSession` の `currentPageTargetID` と `mainFrameID` の直接保持を `DOMCurrentPage` に集約。page promotion / provisional commit retarget / target destroy clear を同じ owner の mutation にし、`TargetGraph` は引き続き semantic target/frame/document projection を所有する。WebKit の page target transition owner と frame document splice owner が分かれている構造に合わせ、snapshot 互換 getter は維持した。
 - `DOMSelection` は `selectedNodeID` / `pendingRequest` / `failure` の三つの独立 optional から、`selectedNodeID + DOMSelectionResolutionPhase.idle/pending/failed` を持つ `DOMSelectionState` に置換。選択更新、request 開始、成功、失敗、stale selected node cleanup を selection owner の mutation に集約し、pending request 置換時は古い request transaction を破棄する。古い requestNode 応答は current pending を消さず stale として返すテストを追加した。
 - `DOMSessionDeleteUndoOperationQueue` は `tail` / `tasksByID` / `nextTaskID` の別管理を、`QueuedOperation` と `tailOperationID` に置換。operation が generation と task を所有し、invalidate / finish / previous wait の不変条件を queue owner 内に閉じた。UndoManager 登録と protocol command 実行順序は `DOMSessionProtocolOperations` 側に残した。
+- `ConsoleTargetState` の `orderedMessageIDs` / `messagesByID` / `lastRepeatableMessageID` / severity count を `ConsoleMessageStore` に集約。target state は clear reason と unsupported command capability を持ち、message identity/order/repeat/count の不変条件は store owner が持つ形にした。WebKit の `ConsoleObserver` は protocol event を `ConsoleManager.messageWasAdded` / `messageRepeatCountUpdated` / `messagesCleared` に渡すため、WebInspectorKit でも protocol dispatch と snapshot wire shape は維持した。
 - ObservationBridge v0.12.0 / SyntaxEditorUI v0.13.0 へ更新し、Swift tools / README 要件を 6.3 に上げた。UI 側の `ObservationScope.observe` / `ObservationDelivery` / stream API は、owner ごとの `PortableObservationTracking.Token` へ置換。`NetworkListViewController` の displayRows 80ms latest throttle は挙動仕様として残し、旧 stream API ではなく list owner の `pendingThrottledDisplayRows` / `displayRowsThrottleTask` が所有する形にした。
 - Monocly app 側に残っていた `ObservationScope` も、`BrowserPageViewController` の store observation と `BrowserInspectorCoordinator` の sheet user-interface-style observation に分けて、それぞれ owner が `PortableObservationTracking.Token` を保持/cancel する形へ追従した。
 
@@ -347,6 +348,12 @@ xcodebuild test \
 - `swift test --filter WebInspectorCoreTests -Xswiftc -strict-concurrency=minimal` (2026-06-13、DOM selection resolution phase owner 化後 green)
 - `swift test --filter deleteUndo -Xswiftc -strict-concurrency=minimal` (2026-06-13、DOM delete/undo queue owner 化後 green)
 - `swift test --filter WebInspectorCoreTests -Xswiftc -strict-concurrency=minimal` (2026-06-13、DOM delete/undo queue owner 化後 green)
+- `swift test --filter ConsoleModelTests -Xswiftc -strict-concurrency=minimal` (2026-06-13、Console message store owner 化後 green)
+- `swift test --filter ConsoleProtocolDispatchingTests -Xswiftc -strict-concurrency=minimal` (2026-06-13、Console message store owner 化後 green)
+- `swift test --filter WebInspectorCoreTests -Xswiftc -strict-concurrency=minimal` (2026-06-13、Console message store owner 化後 green)
+- `swift test --filter WebInspectorArchitectureTests -Xswiftc -strict-concurrency=minimal` (2026-06-13、Console message store owner 化後 green)
+- `swift test -Xswiftc -strict-concurrency=minimal` (2026-06-13、Console message store owner 化後 green)
+- `xcodebuild test -workspace WebInspectorKit.xcworkspace -scheme WebInspectorKit -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest'` (2026-06-13、Console message store owner 化後 green)
 - `swift test -Xswiftc -strict-concurrency=minimal` (2026-06-13、ObservationBridge v0.12.0 / SyntaxEditorUI v0.13.0 更新後 green)
 - `xcodebuild test -workspace WebInspectorKit.xcworkspace -scheme WebInspectorKit -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' -only-testing:WebInspectorUITests/NetworkDetailViewControllerTests` (2026-06-13、ObservationBridge v0.12.0 token 移行後 green)
 - `xcodebuild test -workspace WebInspectorKit.xcworkspace -scheme WebInspectorKit -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest'` (2026-06-13、ObservationBridge v0.12.0 / SyntaxEditorUI v0.13.0 更新後 green)
