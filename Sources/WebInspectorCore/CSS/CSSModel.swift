@@ -420,6 +420,72 @@ package final class CSSNodeStyles {
 }
 
 @MainActor
+private struct CSSSelectedNodeStylesSelection {
+    private(set) var identity: CSSNodeStyleIdentity?
+    private var unavailableReason: CSSNodeStylesUnavailableReason
+
+    init() {
+        identity = nil
+        unavailableReason = .noSelection
+    }
+
+    func state(displayedNodeStyles: CSSNodeStyles?) -> CSSNodeStylesState {
+        displayedNodeStyles?.state ?? .unavailable(unavailableReason)
+    }
+
+    mutating func select(_ identity: CSSNodeStyleIdentity) {
+        self.identity = identity
+        unavailableReason = .noSelection
+    }
+
+    mutating func markUnavailable(_ reason: CSSNodeStylesUnavailableReason) {
+        identity = nil
+        unavailableReason = reason
+    }
+
+    mutating func markSelectedStylesUnavailable(
+        identity: CSSNodeStyleIdentity,
+        displayedNodeStyles: CSSNodeStyles?,
+        unavailableNodeStyles: CSSNodeStyles,
+        reason: CSSNodeStylesUnavailableReason
+    ) -> Bool {
+        if self.identity == identity {
+            unavailableReason = reason
+            return true
+        }
+        guard displayedNodeStyles === unavailableNodeStyles else {
+            return false
+        }
+        unavailableReason = reason
+        return true
+    }
+
+    mutating func markRefreshFailed(_ token: CSSStyleRefreshToken) -> Bool {
+        guard identity == token.identity else {
+            return false
+        }
+        unavailableReason = .staleNode(token.identity.nodeID)
+        return true
+    }
+
+    mutating func clearIfRemovingTarget(
+        _ targetID: ProtocolTargetIdentifier,
+        displayedNodeStyles: CSSNodeStyles?
+    ) -> Bool {
+        var didClearDisplayedNodeStyles = false
+        if let displayedNodeStyles,
+           displayedNodeStyles.identity.targetID == targetID {
+            unavailableReason = .staleNode(displayedNodeStyles.identity.nodeID)
+            didClearDisplayedNodeStyles = true
+        }
+        if identity?.targetID == targetID {
+            identity = nil
+        }
+        return didClearDisplayedNodeStyles
+    }
+}
+
+@MainActor
 @Observable
 package final class CSSSession {
     package struct RefreshResults {
@@ -505,7 +571,7 @@ package final class CSSSession {
 
     package private(set) var selectedNodeStyles: CSSNodeStyles?
     package var selectedState: CSSNodeStylesState {
-        selectedNodeStyles?.state ?? .unavailable(selectedUnavailableReason)
+        selection.state(displayedNodeStyles: selectedNodeStyles)
     }
 
     package func nodeStyles(for identity: CSSNodeStyleIdentity) -> CSSNodeStyles? {
@@ -516,8 +582,7 @@ package final class CSSSession {
         return nodeStyles
     }
 
-    private var selectedUnavailableReason: CSSNodeStylesUnavailableReason
-    @ObservationIgnored private var selectedIdentity: CSSNodeStyleIdentity?
+    private var selection: CSSSelectedNodeStylesSelection
     @ObservationIgnored private var stylesByNodeID: [DOMNodeIdentifier: CSSNodeStyles]
     @ObservationIgnored private var styleSheetHeadersByKey: [StyleSheetKey: CSSStyleSheetHeaderPayload]
     @ObservationIgnored private var nextRefreshSequence: UInt64
@@ -526,8 +591,7 @@ package final class CSSSession {
 
     package init() {
         selectedNodeStyles = nil
-        selectedUnavailableReason = .noSelection
-        selectedIdentity = nil
+        selection = CSSSelectedNodeStylesSelection()
         stylesByNodeID = [:]
         styleSheetHeadersByKey = [:]
         nextRefreshSequence = 0
@@ -537,8 +601,7 @@ package final class CSSSession {
 
     package func reset() {
         selectedNodeStyles = nil
-        selectedUnavailableReason = .noSelection
-        selectedIdentity = nil
+        selection = CSSSelectedNodeStylesSelection()
         stylesByNodeID.removeAll()
         styleSheetHeadersByKey.removeAll()
         nextRefreshSequence = 0
@@ -575,19 +638,17 @@ package final class CSSSession {
     }
 
     package func selectNodeStyles(identity: CSSNodeStyleIdentity) {
-        selectedIdentity = identity
-        selectedUnavailableReason = .noSelection
+        selection.select(identity)
         let nodeStyles = ensureNodeStyles(for: identity, initialState: .needsRefresh)
         selectCurrentNodeStyles(nodeStyles)
     }
 
     package func markSelectedNodeUnavailable(_ reason: CSSNodeStylesUnavailableReason) {
-        selectedIdentity = nil
+        selection.markUnavailable(reason)
         guard selectedNodeStyles != nil || selectedState != .unavailable(reason) else {
             return
         }
         selectedNodeStyles = nil
-        selectedUnavailableReason = reason
     }
 
     package func markSelectedNodeStylesUnavailable(
@@ -597,11 +658,15 @@ package final class CSSSession {
         let nodeStyles = ensureNodeStyles(for: identity)
         nodeStyles.state = .unavailable(reason)
         nodeStyles.clearRefresh()
-        guard selectedIdentity == identity || selectedNodeStyles === nodeStyles else {
+        guard selection.markSelectedStylesUnavailable(
+            identity: identity,
+            displayedNodeStyles: selectedNodeStyles,
+            unavailableNodeStyles: nodeStyles,
+            reason: reason
+        ) else {
             return
         }
         selectedNodeStyles = nil
-        selectedUnavailableReason = reason
     }
 
     package func refreshState(forSelected identity: CSSNodeStyleIdentity) -> CSSNodeStylesState? {
@@ -617,7 +682,7 @@ package final class CSSSession {
         nextRefreshSequence &+= 1
         let nodeStyles = ensureNodeStyles(for: identity)
         nodeStyles.beginRefresh(sequence: nextRefreshSequence)
-        selectedIdentity = identity
+        selection.select(identity)
         selectCurrentNodeStyles(nodeStyles)
         return CSSStyleRefreshToken(identity: identity, sequence: nextRefreshSequence)
     }
@@ -648,7 +713,7 @@ package final class CSSSession {
         )
         nodeStyles.state = .loaded
         nodeStyles.clearRefresh(token)
-        if selectedIdentity == token.identity {
+        if selection.identity == token.identity {
             selectCurrentNodeStyles(nodeStyles)
         }
     }
@@ -674,9 +739,8 @@ package final class CSSSession {
         }
         nodeStyles.state = .failed(message)
         nodeStyles.clearRefresh(token)
-        if selectedIdentity == token.identity {
+        if selection.markRefreshFailed(token) {
             selectedNodeStyles = nil
-            selectedUnavailableReason = .staleNode(token.identity.nodeID)
         }
     }
 
@@ -693,7 +757,7 @@ package final class CSSSession {
               nodeStyles.cancelRefresh(sequence: sequence) else {
             return
         }
-        if selectedIdentity == identity {
+        if selection.identity == identity {
             selectCurrentNodeStyles(nodeStyles)
         }
     }
@@ -759,19 +823,14 @@ package final class CSSSession {
         for nodeID in removedIDs {
             stylesByNodeID.removeValue(forKey: nodeID)
         }
-        if let selectedNodeStyles,
-           selectedNodeStyles.identity.targetID == targetID {
+        if selection.clearIfRemovingTarget(targetID, displayedNodeStyles: selectedNodeStyles) {
             self.selectedNodeStyles = nil
-            selectedUnavailableReason = .staleNode(selectedNodeStyles.identity.nodeID)
-        }
-        if selectedIdentity?.targetID == targetID {
-            selectedIdentity = nil
         }
     }
 
     package func setStyleTextIntent(for propertyID: CSSPropertyIdentifier, enabled: Bool) -> CSSCommandIntent? {
         guard let nodeStyles = selectedNodeStyles,
-              selectedIdentity == nodeStyles.identity,
+              selection.identity == nodeStyles.identity,
               case .loaded = selectedState,
               case .loaded = nodeStyles.state,
               let (sectionIndex, propertyIndex) = Self.locateProperty(propertyID, in: nodeStyles.sections),
@@ -802,7 +861,7 @@ package final class CSSSession {
             }
             selectedNodeStyles = nil
         case .loading, .loaded, .needsRefresh:
-            selectedUnavailableReason = .noSelection
+            selection.select(nodeStyles.identity)
             guard selectedNodeStyles !== nodeStyles else {
                 return
             }
