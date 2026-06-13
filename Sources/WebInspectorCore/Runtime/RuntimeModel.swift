@@ -318,11 +318,92 @@ private struct RuntimeTargetSlot {
 }
 
 @MainActor
+private struct RuntimeTargetRegistry {
+    private var slotsByTargetID: [ProtocolTargetIdentifier: RuntimeTargetSlot] = [:]
+
+    var targetStates: [RuntimeTargetState] {
+        slotsByTargetID.values.compactMap(\.targetState).sorted { $0.targetID.rawValue < $1.targetID.rawValue }
+    }
+
+    var runtimeAgentStates: [RuntimeAgentState] {
+        slotsByTargetID.values.compactMap(\.agentState).sorted { $0.targetID.rawValue < $1.targetID.rawValue }
+    }
+
+    var targetIDs: [ProtocolTargetIdentifier] {
+        Array(slotsByTargetID.keys)
+    }
+
+    mutating func removeAll() {
+        slotsByTargetID.removeAll()
+    }
+
+    func targetState(for targetID: ProtocolTargetIdentifier) -> RuntimeTargetState? {
+        slotsByTargetID[targetID]?.targetState
+    }
+
+    func runtimeAgentState(for targetID: ProtocolTargetIdentifier) -> RuntimeAgentState? {
+        slotsByTargetID[targetID]?.agentState
+    }
+
+    mutating func ensureTargetState(for targetID: ProtocolTargetIdentifier) -> RuntimeTargetState {
+        if let state = targetState(for: targetID) {
+            return state
+        }
+        let state = RuntimeTargetState(targetID: targetID)
+        var slot = slotsByTargetID[targetID] ?? RuntimeTargetSlot()
+        slot.targetState = state
+        slotsByTargetID[targetID] = slot
+        return state
+    }
+
+    mutating func ensureRuntimeAgentState(for targetID: ProtocolTargetIdentifier) -> RuntimeAgentState {
+        if let state = runtimeAgentState(for: targetID) {
+            return state
+        }
+        let state = RuntimeAgentState(targetID: targetID)
+        var slot = slotsByTargetID[targetID] ?? RuntimeTargetSlot()
+        slot.agentState = state
+        slotsByTargetID[targetID] = slot
+        return state
+    }
+
+    @discardableResult
+    mutating func removeTargetState(for targetID: ProtocolTargetIdentifier) -> RuntimeTargetState? {
+        guard var slot = slotsByTargetID[targetID],
+              let state = slot.targetState else {
+            return nil
+        }
+        slot.targetState = nil
+        storeSlot(slot, for: targetID)
+        return state
+    }
+
+    @discardableResult
+    mutating func removeRuntimeAgentState(for targetID: ProtocolTargetIdentifier) -> RuntimeAgentState? {
+        guard var slot = slotsByTargetID[targetID],
+              let state = slot.agentState else {
+            return nil
+        }
+        slot.agentState = nil
+        storeSlot(slot, for: targetID)
+        return state
+    }
+
+    private mutating func storeSlot(_ slot: RuntimeTargetSlot, for targetID: ProtocolTargetIdentifier) {
+        if slot.isEmpty {
+            slotsByTargetID.removeValue(forKey: targetID)
+        } else {
+            slotsByTargetID[targetID] = slot
+        }
+    }
+}
+
+@MainActor
 @Observable
 package final class RuntimeState {
     package private(set) var selectedContextKey: RuntimeExecutionContextKey?
 
-    private var slotsByTargetID: [ProtocolTargetIdentifier: RuntimeTargetSlot]
+    private var targetRegistry: RuntimeTargetRegistry
     @ObservationIgnored private var selectedContextIsExplicit: Bool
     @ObservationIgnored private var commandChannel: ProtocolCommandChannel?
     @ObservationIgnored private let protocolCommands: RuntimeProtocolCommands
@@ -330,7 +411,7 @@ package final class RuntimeState {
 
     package init() {
         selectedContextKey = nil
-        slotsByTargetID = [:]
+        targetRegistry = RuntimeTargetRegistry()
         selectedContextIsExplicit = false
         commandChannel = nil
         protocolCommands = RuntimeProtocolCommands()
@@ -339,7 +420,7 @@ package final class RuntimeState {
 
     package func reset() {
         selectedContextKey = nil
-        slotsByTargetID.removeAll()
+        targetRegistry.removeAll()
         selectedContextIsExplicit = false
     }
 
@@ -419,19 +500,19 @@ package final class RuntimeState {
     }
 
     package var targetStates: [RuntimeTargetState] {
-        slotsByTargetID.values.compactMap(\.targetState).sorted { $0.targetID.rawValue < $1.targetID.rawValue }
+        targetRegistry.targetStates
     }
 
     package var runtimeAgentStates: [RuntimeAgentState] {
-        slotsByTargetID.values.compactMap(\.agentState).sorted { $0.targetID.rawValue < $1.targetID.rawValue }
+        targetRegistry.runtimeAgentStates
     }
 
     package func targetState(for targetID: ProtocolTargetIdentifier) -> RuntimeTargetState? {
-        slotsByTargetID[targetID]?.targetState
+        targetRegistry.targetState(for: targetID)
     }
 
     package func runtimeAgentState(for targetID: ProtocolTargetIdentifier) -> RuntimeAgentState? {
-        slotsByTargetID[targetID]?.agentState
+        targetRegistry.runtimeAgentState(for: targetID)
     }
 
     package func selectedContext(targetID: ProtocolTargetIdentifier? = nil) -> RuntimeExecutionContext? {
@@ -551,7 +632,7 @@ package final class RuntimeState {
         if let removedAgent = removeRuntimeAgentState(for: targetID) {
             removedContexts.append(contentsOf: removedAgent.executionContextsByID.values)
         }
-        for agentID in Array(slotsByTargetID.keys) {
+        for agentID in targetRegistry.targetIDs {
             guard let agentState = runtimeAgentState(for: agentID) else {
                 continue
             }
@@ -715,55 +796,21 @@ package final class RuntimeState {
     }
 
     private func ensureTargetState(for targetID: ProtocolTargetIdentifier) -> RuntimeTargetState {
-        if let state = targetState(for: targetID) {
-            return state
-        }
-        let state = RuntimeTargetState(targetID: targetID)
-        var slot = slotsByTargetID[targetID] ?? RuntimeTargetSlot()
-        slot.targetState = state
-        slotsByTargetID[targetID] = slot
-        return state
+        targetRegistry.ensureTargetState(for: targetID)
     }
 
     private func ensureRuntimeAgentState(for targetID: ProtocolTargetIdentifier) -> RuntimeAgentState {
-        if let state = runtimeAgentState(for: targetID) {
-            return state
-        }
-        let state = RuntimeAgentState(targetID: targetID)
-        var slot = slotsByTargetID[targetID] ?? RuntimeTargetSlot()
-        slot.agentState = state
-        slotsByTargetID[targetID] = slot
-        return state
+        targetRegistry.ensureRuntimeAgentState(for: targetID)
     }
 
     @discardableResult
     private func removeTargetState(for targetID: ProtocolTargetIdentifier) -> RuntimeTargetState? {
-        guard var slot = slotsByTargetID[targetID],
-              let state = slot.targetState else {
-            return nil
-        }
-        slot.targetState = nil
-        storeSlot(slot, for: targetID)
-        return state
+        targetRegistry.removeTargetState(for: targetID)
     }
 
     @discardableResult
     private func removeRuntimeAgentState(for targetID: ProtocolTargetIdentifier) -> RuntimeAgentState? {
-        guard var slot = slotsByTargetID[targetID],
-              let state = slot.agentState else {
-            return nil
-        }
-        slot.agentState = nil
-        storeSlot(slot, for: targetID)
-        return state
-    }
-
-    private func storeSlot(_ slot: RuntimeTargetSlot, for targetID: ProtocolTargetIdentifier) {
-        if slot.isEmpty {
-            slotsByTargetID.removeValue(forKey: targetID)
-        } else {
-            slotsByTargetID[targetID] = slot
-        }
+        targetRegistry.removeRuntimeAgentState(for: targetID)
     }
 
     private func shouldUseAsDefaultNormalContext(
