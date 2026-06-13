@@ -4,8 +4,8 @@
 
 - 調査日: 2026-06-13
 - 対象: `/Users/kn/Dev/WebInspectorKit`
-- ブランチ: `main`
-- 作業内容: 調査と資料作成のみ。コードのリファクタリングは未実施。
+- ブランチ: `refactor/structural-cleanup`
+- 作業内容: behavior-preserving な構造整理を段階実施中。各段階で局所テストを通し、フェーズ単位で commit。
 - Package 設定: Swift tools 6.2、`.swiftLanguageMode(.v6)`、`.defaultIsolation(nil)`、`.strictMemorySafety()`。
 - repo-local 検証コマンド:
 
@@ -291,9 +291,9 @@ xcodebuild test \
 - `TransportMessageParser.parse` の detached parse は、削除/同期化前に message volume と latency を測る。
 - NativeBridge / NativeSymbols は private/undocumented API を含むため、公開 docs だけで安全性を判断しない。実バイナリ/実 OS での attach smoke が必要。
 - `DOM.enable` local/compatibility path と CSS compatibility enable は、実 WebKit/mcp 相当の挙動確認なしに削除しない。
-- `InspectorSessionTests.awaitValueAfterActorTurns` は 79 箇所残る。event pump sequence / domain-specific signal で待てる cluster から段階的に置換する。
+- `InspectorSessionTests.awaitValueAfterActorTurns` は 48 箇所残る。event pump sequence / domain-specific signal で待てる cluster は削減済みで、残りは CSS refresh reply、document reload task、picker selection completion など command task 完了待ちと密接な箇所が多い。
 - `DOMModel.swift` は state/component ファイル分割後も private helper が多く、snapshot / frame projection / selector path の owner split は未完。可視性を広げる前に owner 境界を再確認する。
-- `DOMSessionProtocolOperations.swift` は controller 導入済みだが、document request / picker / style hydration / delete-undo の file-level split は未完。
+- `DOMSessionProtocolOperations.swift` は controller 導入済みで、availability は `DOMSessionAvailability.swift` に分離済み。ただし document request / picker / style hydration / delete-undo の file-level split は未完。現状は `perform` / `reloadDocument` / `removeElementStyles` / `clearDeleteUndoHistory` など private helper をまたぐため、可視性拡大なしに切れる範囲を優先する。
 - `DOMTreeTextView` は markup と下位型を分離済みだが、rendered rows builder、selection controller、testing/performance extension の分離は未完。
 
 ## 8. 実施状況
@@ -307,4 +307,10 @@ xcodebuild test \
 - DOM 側は `DOMSessionControllers.swift`、`DOMModelTypes.swift`、`TargetGraph.swift`、`DOMDocumentStore.swift`、`FrameDocumentProjectionIndex.swift`、`DOMTreeProjectionBuilder.swift` へ段階分割。
 - UI 側は `DOMTreeMarkup.swift`、`DOMTreeTextViewTypes.swift`、`DOMTreeTextFragmentViews.swift` を分離。`DOMTreeFindCoordinator` は detached task へ `UITextSearchAggregator` を渡さない構造へ変更。
 - `BrowserSessionRestoreTests` の 100ms sleep を selected web view install signal に置換。
-- `InspectorSessionTests` の domain pump 系 cluster は `waitUntilProtocolEventApplied` / `receiveAndApply...` helper に寄せ、actor-turn polling を一部削減。
+- `InspectorSessionTests` の domain pump / DOM event / style invalidation / runtime context cluster は `waitUntilProtocolEventApplied` / `receiveAndApply...` helper に寄せ、actor-turn polling を 79 から 48 箇所まで削減。
+- `DOMSessionAvailability.swift` を追加し、DOM action availability の owner を protocol operation 実行本体から分離。
+
+最新の局所検証:
+
+- `swift test --filter WebInspectorCoreTests` (2026-06-13、`7defc0b9` 時点 green)
+- `swift test --filter WebInspectorArchitectureTests` (2026-06-13、`7defc0b9` 時点 green)
