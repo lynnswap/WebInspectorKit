@@ -4,11 +4,53 @@ import ObservationBridge
 import UIKit
 
 @MainActor
+private final class NetworkResponseBodyFetchObservationBinding {
+    private var observation: PortableObservationTracking.Token?
+    private weak var request: NetworkRequest?
+#if DEBUG
+    private(set) var observationDelivery: PortableObservationTracking.Token?
+#endif
+
+    func bindIfNeeded(
+        to request: NetworkRequest,
+        handler: @escaping @MainActor (NetworkRequest) -> Void
+    ) {
+        guard self.request !== request else {
+            return
+        }
+
+        cancel()
+        self.request = request
+        let token = withPortableContinuousObservation { [weak self, weak request] _ in
+            guard let self,
+                  let request,
+                  self.request === request else {
+                return
+            }
+            handler(request)
+        }
+        observation = token
+#if DEBUG
+        observationDelivery = token
+#endif
+    }
+
+    func cancel() {
+        observation?.cancel()
+        observation = nil
+        request = nil
+#if DEBUG
+        observationDelivery = nil
+#endif
+    }
+}
+
+@MainActor
 package final class NetworkDetailViewController: UIViewController {
     private let model: NetworkPanelModel
     private var modelObservation: PortableObservationTracking.Token?
     private var selectedRequestRenderObservation: PortableObservationTracking.Token?
-    private var responseBodyFetchObservation: PortableObservationTracking.Token?
+    private let responseBodyFetchObservationBinding = NetworkResponseBodyFetchObservationBinding()
     private let scrollEdgeController = NetworkDetailScrollEdgeController()
     private lazy var bodyViewController = NetworkBodyViewController(
         scrollEdgeState: scrollEdgeController.scrollEdgeState
@@ -30,13 +72,11 @@ package final class NetworkDetailViewController: UIViewController {
     private var previewRoles: [NetworkBodyRole] = []
     private var hasBoundSelectedRequest = false
     private weak var observedRequest: NetworkRequest?
-    private weak var responseBodyFetchRequest: NetworkRequest?
     private var bodyTopToPreviewContainerConstraint: NSLayoutConstraint?
     private var bodyTopToPreviewRoleControlConstraint: NSLayoutConstraint?
 #if DEBUG
     private var modelObservationDelivery: PortableObservationTracking.Token?
     private var selectedRequestRenderObservationDelivery: PortableObservationTracking.Token?
-    private var responseBodyFetchObservationDelivery: PortableObservationTracking.Token?
 #endif
     private lazy var previewContainerView: UIView = {
         let view = UIView()
@@ -71,7 +111,7 @@ package final class NetworkDetailViewController: UIViewController {
     isolated deinit {
         modelObservation?.cancel()
         selectedRequestRenderObservation?.cancel()
-        responseBodyFetchObservation?.cancel()
+        responseBodyFetchObservationBinding.cancel()
     }
 
     override package func viewDidLoad() {
@@ -364,32 +404,13 @@ package final class NetworkDetailViewController: UIViewController {
             unbindResponseBodyFetchObservation()
             return
         }
-        guard responseBodyFetchRequest !== request else {
-            return
-        }
-
-        responseBodyFetchObservation?.cancel()
-        responseBodyFetchRequest = request
-        let token = withPortableContinuousObservation { [weak self, weak request] _ in
-            guard let request,
-                  self?.responseBodyFetchRequest === request else {
-                return
-            }
+        responseBodyFetchObservationBinding.bindIfNeeded(to: request) { [weak self] request in
             self?.fetchResponseBodyIfNeededForVisibleResponse(request)
         }
-        responseBodyFetchObservation = token
-#if DEBUG
-        responseBodyFetchObservationDelivery = token
-#endif
     }
 
     private func unbindResponseBodyFetchObservation() {
-        responseBodyFetchObservation?.cancel()
-        responseBodyFetchObservation = nil
-        responseBodyFetchRequest = nil
-#if DEBUG
-        responseBodyFetchObservationDelivery = nil
-#endif
+        responseBodyFetchObservationBinding.cancel()
     }
 
     private func fetchResponseBodyIfNeededForVisibleResponse(_ request: NetworkRequest) {
@@ -503,7 +524,7 @@ extension NetworkDetailViewController {
     }
 
     var responseBodyFetchObservationDeliveryForTesting: PortableObservationTracking.Token? {
-        responseBodyFetchObservationDelivery
+        responseBodyFetchObservationBinding.observationDelivery
     }
 
     func isDetailModeEnabledForTesting(_ mode: NetworkDetailMode) -> Bool {
