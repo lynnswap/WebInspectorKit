@@ -90,7 +90,6 @@ final class DOMTreeFindCoordinator: NSObject, @MainActor UIFindInteractionDelega
             compareOptions: sanitizedCompareOptions(options.stringCompareOptions),
             wordMatchMethod: options.wordMatchMethod,
             documentIdentifier: documentIdentifier,
-            resultAggregator: resultAggregator,
             cancellation: cancellation
         )
 
@@ -110,22 +109,7 @@ final class DOMTreeFindCoordinator: NSObject, @MainActor UIFindInteractionDelega
 
                 let ranges = pendingRanges
                 pendingRanges.removeAll(keepingCapacity: true)
-                return await MainActor.run {
-                    guard !search.cancellation.isCancelled else {
-                        return false
-                    }
-                    for range in ranges {
-                        guard !search.cancellation.isCancelled else {
-                            return false
-                        }
-                        search.resultAggregator.foundRange(
-                            DOMTreeTextRange(nsRange: range, findSearchIdentifier: search.identifier),
-                            searchString: search.queryString,
-                            document: search.documentIdentifier
-                        )
-                    }
-                    return true
-                }
+                return await self?.publishFoundRanges(ranges, for: search) ?? false
             }
 
             let completedSearch = await Self.enumerateSearchRangesAsync(
@@ -145,12 +129,7 @@ final class DOMTreeFindCoordinator: NSObject, @MainActor UIFindInteractionDelega
             }
 
             if completedSearch, await flushPendingRanges(), !search.cancellation.isCancelled {
-                await MainActor.run {
-                    guard !search.cancellation.isCancelled else {
-                        return
-                    }
-                    search.resultAggregator.finishedSearching()
-                }
+                await self?.finishCompletedTextSearch(search)
             }
 
             await self?.finishTextSearch(cancellation: search.cancellation)
@@ -243,6 +222,37 @@ final class DOMTreeFindCoordinator: NSObject, @MainActor UIFindInteractionDelega
         if activeSearchCancellation === cancellation {
             activeSearchCancellation = nil
         }
+    }
+
+    private func publishFoundRanges(_ ranges: [NSRange], for search: DOMTreeFindSearchRequest) -> Bool {
+        guard isActive(search), let resultAggregator = activeResultAggregator else {
+            return false
+        }
+
+        for range in ranges {
+            guard isActive(search) else {
+                return false
+            }
+            resultAggregator.foundRange(
+                DOMTreeTextRange(nsRange: range, findSearchIdentifier: search.identifier),
+                searchString: search.queryString,
+                document: search.documentIdentifier
+            )
+        }
+        return true
+    }
+
+    private func finishCompletedTextSearch(_ search: DOMTreeFindSearchRequest) {
+        guard isActive(search), let resultAggregator = activeResultAggregator else {
+            return
+        }
+        resultAggregator.finishedSearching()
+    }
+
+    private func isActive(_ search: DOMTreeFindSearchRequest) -> Bool {
+        activeSearchIdentifier == search.identifier
+            && activeSearchCancellation === search.cancellation
+            && !search.cancellation.isCancelled
     }
 
     private func isCurrentFindTextRange(_ textRange: UITextRange) -> Bool {
@@ -457,14 +467,13 @@ private final class DOMTreeTextRange: UITextRange {
     }
 }
 
-private struct DOMTreeFindSearchRequest: @unchecked Sendable {
+private struct DOMTreeFindSearchRequest: Sendable {
     let identifier: Int
     let source: String
     let queryString: String
     let compareOptions: NSString.CompareOptions
     let wordMatchMethod: UITextSearchOptions.WordMatchMethod
     let documentIdentifier: Int
-    let resultAggregator: UITextSearchAggregator<Int>
     let cancellation: DOMTreeFindSearchCancellation
 }
 
