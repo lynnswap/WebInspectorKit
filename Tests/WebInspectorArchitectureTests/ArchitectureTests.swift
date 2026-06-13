@@ -84,57 +84,75 @@ func productionSourcesDoNotContainTransportTestSupport() throws {
 
 @Test
 func unsafeConcurrencyEscapeHatchesStayOnAllowlist() throws {
-    let allowedFiles: Set<String> = [
-        "Sources/WebInspectorCore/Inspector/AttachedInspection.swift",
-        "Sources/WebInspectorCore/Inspector/TransportReceiver.swift",
-        "Sources/WebInspectorCore/Runtime/RuntimeProtocol.swift",
-        "Sources/WebInspectorNativeSymbols/DEBUG/NativeInspectorAttachSymbolDiagnostics.swift",
-        "Sources/WebInspectorNativeSymbols/DEBUG/NativeInspectorAttachSymbolScanning.swift",
-        "Sources/WebInspectorNativeSymbols/MachOKitSymbolLookup.swift",
-        "Sources/WebInspectorNativeSymbols/NativeInspectorAttachEntryPointFallback.swift",
-        "Sources/WebInspectorNativeSymbols/NativeInspectorLoadedImageLookup.swift",
-        "Sources/WebInspectorNativeSymbols/NativeInspectorSymbolLookupResultFormatting.swift",
-        "Sources/WebInspectorNativeSymbols/NativeInspectorSymbolResolver.swift",
-        "Sources/WebInspectorTransport/NativeInspectorBackend.swift",
-        "Sources/WebInspectorTransport/NativeInspectorBackendFactory.swift",
-        "Sources/WebInspectorUI/DOM/Element/DOMElementViewController+Preview.swift",
-        "Sources/WebInspectorUI/DOM/Tree/DOMTreeFindCoordinator.swift",
-        "Sources/WebInspectorUI/DOM/Tree/DOMTreeTextView.swift",
+    let expectedFilesByMarker: [String: Set<String>] = [
+        "@unchecked Sendable": [
+            "Sources/WebInspectorCore/Inspector/TransportReceiver.swift",
+            "Sources/WebInspectorCore/Runtime/RuntimeProtocol.swift",
+            "Sources/WebInspectorNativeSymbols/DEBUG/NativeInspectorAttachSymbolDiagnostics.swift",
+            "Sources/WebInspectorUI/DOM/Element/DOMElementViewController+Preview.swift",
+        ],
+        "@unsafe": [
+            "Sources/WebInspectorNativeSymbols/DEBUG/NativeInspectorAttachSymbolDiagnostics.swift",
+            "Sources/WebInspectorNativeSymbols/DEBUG/NativeInspectorAttachSymbolScanning.swift",
+            "Sources/WebInspectorNativeSymbols/MachOKitSymbolLookup.swift",
+            "Sources/WebInspectorNativeSymbols/NativeInspectorAttachEntryPointFallback.swift",
+            "Sources/WebInspectorNativeSymbols/NativeInspectorLoadedImageLookup.swift",
+            "Sources/WebInspectorNativeSymbols/NativeInspectorSymbolLookupResultFormatting.swift",
+            "Sources/WebInspectorNativeSymbols/NativeInspectorSymbolResolver.swift",
+            "Sources/WebInspectorTransport/NativeInspectorBackend.swift",
+            "Sources/WebInspectorTransport/NativeInspectorBackendFactory.swift",
+        ],
+        "@preconcurrency": [
+            "Sources/WebInspectorTransport/NativeInspectorBackend.swift",
+            "Sources/WebInspectorTransport/NativeInspectorBackendFactory.swift",
+            "Sources/WebInspectorUI/DOM/Tree/DOMTreeTextView.swift",
+        ],
+        "nonisolated(unsafe)": [],
     ]
 
-    let markers = [
-        "@unchecked Sendable",
-        "@unsafe",
-        "@preconcurrency",
-        "nonisolated(unsafe)",
-    ]
-    let violations = try sourceFiles(under: "Sources")
-        .filter { url in
-            let contents = try fileContents(url)
-            return markers.contains { contents.contains($0) }
-                && allowedFiles.contains(relativePath(url)) == false
-        }
-        .map(relativePath)
-
-    #expect(violations.isEmpty, "New concurrency escape hatches must be reviewed and allowlisted: \(violations)")
+    try expectMarkerFiles(
+        expectedFilesByMarker,
+        under: "Sources",
+        message: "Concurrency escape hatch usage must match the reviewed allowlist"
+    )
 }
 
 @Test
 func detachedTaskUsageStaysOnAllowlist() throws {
-    let allowedFiles: Set<String> = [
+    let expectedFiles: Set<String> = [
         "Sources/WebInspectorCore/Network/NetworkBody.swift",
         "Sources/WebInspectorTransport/TransportMessageParser.swift",
         "Sources/WebInspectorUI/DOM/Tree/DOMTreeFindCoordinator.swift",
     ]
 
-    let violations = try sourceFiles(under: "Sources")
-        .filter { url in
-            try fileContents(url).contains("Task.detached")
-                && allowedFiles.contains(relativePath(url)) == false
-        }
-        .map(relativePath)
+    let actualFiles = try filesContaining("Task.detached", under: "Sources")
 
-    #expect(violations.isEmpty, "Task.detached must stay limited to reviewed heavy-work paths: \(violations)")
+    #expect(
+        actualFiles == expectedFiles,
+        "Task.detached usage must match reviewed heavy-work paths. Missing: \(expectedFiles.subtracting(actualFiles).sorted()), unexpected: \(actualFiles.subtracting(expectedFiles).sorted())"
+    )
+}
+
+@Test
+func monoclyConcurrencyAndTimingEscapeHatchesStayOnAllowlist() throws {
+    try expectMarkerFiles(
+        [
+            "Task.sleep": [
+                "Monocly/Monocly/Models/MainActorDelayScheduler.swift",
+            ],
+            "Task.detached": [],
+            "RunLoop.main.run": [],
+            "DispatchQueue.main.asyncAfter": [],
+            "@unchecked Sendable": [],
+            "@unsafe": [],
+            "@preconcurrency": [
+                "Monocly/Monocly/Models/MonoclyWindowContextStore.swift",
+            ],
+            "nonisolated(unsafe)": [],
+        ],
+        under: "Monocly/Monocly",
+        message: "Monocly production timing and concurrency escape hatches must match the reviewed allowlist"
+    )
 }
 
 private func packageRoot() throws -> URL {
@@ -175,6 +193,28 @@ private func sourceFiles(under relativeDirectory: String) throws -> [URL] {
 
 private func fileContents(_ url: URL) throws -> String {
     try String(contentsOf: url, encoding: .utf8)
+}
+
+private func expectMarkerFiles(
+    _ expectedFilesByMarker: [String: Set<String>],
+    under relativeDirectory: String,
+    message: String
+) throws {
+    for (marker, expectedFiles) in expectedFilesByMarker.sorted(by: { $0.key < $1.key }) {
+        let actualFiles = try filesContaining(marker, under: relativeDirectory)
+        #expect(
+            actualFiles == expectedFiles,
+            "\(message) for \(marker). Missing: \(expectedFiles.subtracting(actualFiles).sorted()), unexpected: \(actualFiles.subtracting(expectedFiles).sorted())"
+        )
+    }
+}
+
+private func filesContaining(_ marker: String, under relativeDirectory: String) throws -> Set<String> {
+    Set(
+        try sourceFiles(under: relativeDirectory)
+            .filter { try fileContents($0).contains(marker) }
+            .map(relativePath)
+    )
 }
 
 private func importLines(in url: URL) throws -> [String] {
