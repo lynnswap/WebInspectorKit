@@ -116,14 +116,15 @@ func domainPumpsApplyNetworkEventsToNetworkSession() async throws {
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
 
-    await receiveTargetDispatch(
+    await receiveAndApplyTargetDispatch(
         transport,
         targetID: .pageMain,
-        message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-1","frameId":"main-frame","request":{"url":"https://example.com/app.js"},"timestamp":1}}"#
+        message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-1","frameId":"main-frame","request":{"url":"https://example.com/app.js"},"timestamp":1}}"#,
+        in: session
     )
-    let request = try await awaitValueAfterActorTurns {
+    let request = try #require(
         await session.attachment.network.requestSnapshot(for: .init(targetID: .pageMain, requestID: .init("request-1")))
-    }
+    )
 
     #expect(request.id.targetID == ProtocolTargetIdentifier.pageMain)
     #expect(request.request.url == "https://example.com/app.js")
@@ -136,19 +137,14 @@ func domainPumpsApplyConsoleEventsToConsoleSession() async throws {
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
 
-    await receiveTargetDispatch(
+    await receiveAndApplyTargetDispatch(
         transport,
         targetID: .pageMain,
-        message: #"{"method":"Console.messageAdded","params":{"message":{"source":"console-api","level":"warning","text":"hello","type":"log","networkRequestId":"request-1"}}}"#
+        message: #"{"method":"Console.messageAdded","params":{"message":{"source":"console-api","level":"warning","text":"hello","type":"log","networkRequestId":"request-1"}}}"#,
+        in: session
     )
 
-    let snapshot: ConsoleSessionSnapshot = try await awaitValueAfterActorTurns {
-        let snapshot = await session.attachment.console.snapshot()
-        guard snapshot.orderedMessageIDs.isEmpty == false else {
-            return nil
-        }
-        return snapshot
-    }
+    let snapshot = await session.attachment.console.snapshot()
     let messageID = try #require(snapshot.orderedMessageIDs.first)
     #expect(snapshot.messagesByID[messageID]?.networkRequestKey == NetworkRequestIdentifierKey(targetID: .pageMain, requestID: .init("request-1")))
     #expect(snapshot.warningCount == 1)
@@ -161,50 +157,42 @@ func domainPumpsReleaseConsoleRuntimeObjectsOnConsoleClear() async throws {
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
 
-    await receiveTargetDispatch(
+    await receiveAndApplyTargetDispatch(
         transport,
         targetID: .pageMain,
-        message: #"{"method":"Console.messageAdded","params":{"message":{"source":"console-api","level":"log","text":"hello","type":"log","parameters":[{"type":"object","objectId":"console-object","description":"Object"}]}}}"#
+        message: #"{"method":"Console.messageAdded","params":{"message":{"source":"console-api","level":"log","text":"hello","type":"log","parameters":[{"type":"object","objectId":"console-object","description":"Object"}]}}}"#,
+        in: session
     )
 
     let objectKey = RuntimeRemoteObjectIdentifierKey(
         runtimeAgentTargetID: .pageMain,
         objectID: RuntimeRemoteObjectIdentifier("console-object")
     )
-    let _: Bool = try await awaitValueAfterActorTurns {
-        let runtimeSnapshot = await session.attachment.runtime.snapshot()
-        let consoleSnapshot = await session.attachment.console.snapshot()
-        let linkedParameter = await MainActor.run {
-            guard let runtimeObject = session.attachment.runtime.runtimeAgentState(for: .pageMain)?.remoteObjects.first,
-                  let parameter = session.attachment.console.messages.first?.parameters.first else {
-                return false
-            }
-            return parameter === runtimeObject
+    let runtimeSnapshot = await session.attachment.runtime.snapshot()
+    let consoleSnapshot = await session.attachment.console.snapshot()
+    let linkedParameter = await MainActor.run {
+        guard let runtimeObject = session.attachment.runtime.runtimeAgentState(for: .pageMain)?.remoteObjects.first,
+              let parameter = session.attachment.console.messages.first?.parameters.first else {
+            return false
         }
-        guard runtimeSnapshot.remoteObjectsByID[objectKey]?.objectGroup == .console,
-              consoleSnapshot.orderedMessageIDs.isEmpty == false,
-              linkedParameter else {
-            return nil
-        }
-        return true
+        return parameter === runtimeObject
     }
+    #expect(runtimeSnapshot.remoteObjectsByID[objectKey]?.objectGroup == .console)
+    #expect(consoleSnapshot.orderedMessageIDs.isEmpty == false)
+    #expect(linkedParameter)
 
-    await receiveTargetDispatch(
+    await receiveAndApplyTargetDispatch(
         transport,
         targetID: .pageMain,
-        message: #"{"method":"Console.messagesCleared","params":{"reason":"console-api"}}"#
+        message: #"{"method":"Console.messagesCleared","params":{"reason":"console-api"}}"#,
+        in: session
     )
 
-    let _: Bool = try await awaitValueAfterActorTurns {
-        let runtimeSnapshot = await session.attachment.runtime.snapshot()
-        let consoleSnapshot = await session.attachment.console.snapshot()
-        guard runtimeSnapshot.remoteObjectsByID[objectKey] == nil,
-              runtimeSnapshot.objectGroupRuntimeAgentTargetsByGroup[.console] == nil,
-              consoleSnapshot.lastClearReasonByTargetID[.pageMain] == .consoleAPI else {
-            return nil
-        }
-        return true
-    }
+    let clearedRuntimeSnapshot = await session.attachment.runtime.snapshot()
+    let clearedConsoleSnapshot = await session.attachment.console.snapshot()
+    #expect(clearedRuntimeSnapshot.remoteObjectsByID[objectKey] == nil)
+    #expect(clearedRuntimeSnapshot.objectGroupRuntimeAgentTargetsByGroup[.console] == nil)
+    #expect(clearedConsoleSnapshot.lastClearReasonByTargetID[.pageMain] == .consoleAPI)
 }
 
 @Test
@@ -214,17 +202,13 @@ func domainPumpsApplyRootScopedConsoleEventsToMainPageConsoleSession() async thr
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
 
-    await transport.receiveRootMessage(
-        #"{"method":"Console.messageAdded","params":{"message":{"source":"console-api","level":"error","text":"root hello","type":"log","networkRequestId":"request-root"}}}"#
+    await receiveAndApplyRootMessage(
+        transport,
+        message: #"{"method":"Console.messageAdded","params":{"message":{"source":"console-api","level":"error","text":"root hello","type":"log","networkRequestId":"request-root"}}}"#,
+        in: session
     )
 
-    let snapshot: ConsoleSessionSnapshot = try await awaitValueAfterActorTurns {
-        let snapshot = await session.attachment.console.snapshot()
-        guard snapshot.orderedMessageIDs.isEmpty == false else {
-            return nil
-        }
-        return snapshot
-    }
+    let snapshot = await session.attachment.console.snapshot()
     let messageID = try #require(snapshot.orderedMessageIDs.first)
     #expect(snapshot.messagesByID[messageID]?.networkRequestKey == NetworkRequestIdentifierKey(targetID: .pageMain, requestID: .init("request-root")))
     #expect(snapshot.errorCount == 1)
@@ -237,47 +221,39 @@ func domainPumpsApplyRuntimeContextTeardownToRuntimeAndDOMSessions() async throw
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
 
-    await receiveTargetDispatch(
+    await receiveAndApplyTargetDispatch(
         transport,
         targetID: .pageMain,
-        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":81,"type":"normal","frameId":"main-frame"}}}"#
+        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":81,"type":"normal","frameId":"main-frame"}}}"#,
+        in: session
     )
-    _ = try await awaitValueAfterActorTurns {
-        await session.attachment.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 81)]
-    }
-    _ = try await awaitValueAfterActorTurns {
-        await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 81)]
-    }
+    #expect(await session.attachment.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 81)] != nil)
+    #expect(await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 81)] != nil)
 
-    await receiveTargetDispatch(
+    await receiveAndApplyTargetDispatch(
         transport,
         targetID: .pageMain,
-        message: #"{"method":"Runtime.executionContextDestroyed","params":{"executionContextId":81}}"#
+        message: #"{"method":"Runtime.executionContextDestroyed","params":{"executionContextId":81}}"#,
+        in: session
     )
-    _ = try await awaitValueAfterActorTurns {
-        let runtimeContext = await session.attachment.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 81)]
-        let domContext = await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 81)]
-        return runtimeContext == nil && domContext == nil ? true : nil
-    }
+    #expect(await session.attachment.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 81)] == nil)
+    #expect(await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 81)] == nil)
 
-    await receiveTargetDispatch(
+    await receiveAndApplyTargetDispatch(
         transport,
         targetID: .pageMain,
-        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":82,"type":"normal","frameId":"main-frame"}}}"#
+        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":82,"type":"normal","frameId":"main-frame"}}}"#,
+        in: session
     )
-    _ = try await awaitValueAfterActorTurns {
-        await session.attachment.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 82)]
-    }
-    await receiveTargetDispatch(
+    #expect(await session.attachment.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 82)] != nil)
+    await receiveAndApplyTargetDispatch(
         transport,
         targetID: .pageMain,
-        message: #"{"method":"Runtime.executionContextsCleared","params":{}}"#
+        message: #"{"method":"Runtime.executionContextsCleared","params":{}}"#,
+        in: session
     )
-    _ = try await awaitValueAfterActorTurns {
-        let runtimeContext = await session.attachment.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 82)]
-        let domContext = await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 82)]
-        return runtimeContext == nil && domContext == nil ? true : nil
-    }
+    #expect(await session.attachment.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 82)] == nil)
+    #expect(await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 82)] == nil)
 }
 
 @Test
@@ -287,32 +263,22 @@ func runtimeContextDispatchedOnPageResolvesToFrameTargetByFrameID() async throws
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
 
-    await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["Runtime"],"isProvisional":false}}}"#
+    await receiveAndApplyRootMessage(
+        transport,
+        message: #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["Runtime"],"isProvisional":false}}}"#,
+        in: session
     )
-    _ = try await awaitValueAfterActorTurns {
-        await session.attachment.dom.snapshot().targetsByID[.frameAd]
-    }
-    await receiveTargetDispatch(
+    #expect(await session.attachment.dom.snapshot().targetsByID[.frameAd] != nil)
+    await receiveAndApplyTargetDispatch(
         transport,
         targetID: .pageMain,
-        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":77,"frameId":"ad-frame"}}}"#
+        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":77,"frameId":"ad-frame"}}}"#,
+        in: session
     )
 
-    let runtimeSnapshot: RuntimeStateSnapshot = try await awaitValueAfterActorTurns {
-        let snapshot = await session.attachment.runtime.snapshot()
-        guard snapshot.executionContextsByKey[contextKey(.pageMain, 77)]?.targetID == .frameAd else {
-            return nil
-        }
-        return snapshot
-    }
-    let domSnapshot: DOMSessionSnapshot = try await awaitValueAfterActorTurns {
-        let snapshot = await session.attachment.dom.snapshot()
-        guard snapshot.executionContextsByKey[contextKey(.pageMain, 77)]?.targetID == .frameAd else {
-            return nil
-        }
-        return snapshot
-    }
+    let runtimeSnapshot = await session.attachment.runtime.snapshot()
+    let domSnapshot = await session.attachment.dom.snapshot()
+    #expect(runtimeSnapshot.executionContextsByKey[contextKey(.pageMain, 77)]?.targetID == .frameAd)
     #expect(runtimeSnapshot.normalContextKeyByTargetID[.frameAd] == contextKey(.pageMain, 77))
     #expect(domSnapshot.executionContextsByKey[contextKey(.pageMain, 77)]?.targetID == .frameAd)
 }
@@ -324,34 +290,32 @@ func rootRuntimeClearRemovesFrameContextOwnedByPageRuntimeAgent() async throws {
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
 
-    await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["Runtime"],"isProvisional":false}}}"#
+    await receiveAndApplyRootMessage(
+        transport,
+        message: #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["Runtime"],"isProvisional":false}}}"#,
+        in: session
     )
-    _ = try await awaitValueAfterActorTurns {
-        await session.attachment.dom.snapshot().targetsByID[.frameAd]
-    }
-    await transport.receiveRootMessage(
-        #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":78,"frameId":"ad-frame"}}}"#
+    #expect(await session.attachment.dom.snapshot().targetsByID[.frameAd] != nil)
+    await receiveAndApplyRootMessage(
+        transport,
+        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":78,"frameId":"ad-frame"}}}"#,
+        in: session
     )
 
-    let _: Bool = try await awaitValueAfterActorTurns {
-        let runtimeContext = await session.attachment.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 78)]
-        let domContext = await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 78)]
-        guard runtimeContext?.targetID == .frameAd,
-              runtimeContext?.runtimeAgentTargetID == .pageMain,
-              domContext?.targetID == .frameAd,
-              domContext?.runtimeAgentTargetID == .pageMain else {
-            return nil
-        }
-        return true
-    }
+    let runtimeContext = await session.attachment.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 78)]
+    let domContext = await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 78)]
+    #expect(runtimeContext?.targetID == .frameAd)
+    #expect(runtimeContext?.runtimeAgentTargetID == .pageMain)
+    #expect(domContext?.targetID == .frameAd)
+    #expect(domContext?.runtimeAgentTargetID == .pageMain)
 
-    await transport.receiveRootMessage(#"{"method":"Runtime.executionContextsCleared","params":{}}"#)
-    let _: Bool = try await awaitValueAfterActorTurns {
-        let runtimeContext = await session.attachment.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 78)]
-        let domContext = await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 78)]
-        return runtimeContext == nil && domContext == nil ? true : nil
-    }
+    await receiveAndApplyRootMessage(
+        transport,
+        message: #"{"method":"Runtime.executionContextsCleared","params":{}}"#,
+        in: session
+    )
+    #expect(await session.attachment.runtime.snapshot().executionContextsByKey[contextKey(.pageMain, 78)] == nil)
+    #expect(await session.attachment.dom.snapshot().executionContextsByKey[contextKey(.pageMain, 78)] == nil)
 }
 
 @Test
@@ -409,9 +373,9 @@ func networkResponseBodyFetchAppliesResultToCoreRequest() async throws {
         message: #"{"method":"Network.responseReceived","params":{"requestId":"request-2","timestamp":2,"type":"XHR","response":{"url":"https://example.com/api.json","status":200,"mimeType":"application/json","headers":{"content-type":"application/json"}}}}"#,
         in: session
     )
-    let request = try await awaitValueAfterActorTurns {
+    let request = try #require(
         await session.attachment.network.request(for: .init(targetID: .pageMain, requestID: .init("request-2")))
-    }
+    )
     let responseBody = await request.responseBody
     let body = try #require(responseBody)
     #expect(await body.fetchState == .available)
@@ -5344,6 +5308,18 @@ private func receiveAndApplyTargetDispatch(
     sourceLocation: SourceLocation = #_sourceLocation
 ) async -> UInt64 {
     let sequence = await receiveTargetDispatch(transport, targetID: targetID, message: message)
+    await expectProtocolEventApplied(sequence, in: session, sourceLocation: sourceLocation)
+    return sequence
+}
+
+@discardableResult
+private func receiveAndApplyRootMessage(
+    _ transport: TransportSession,
+    message: String,
+    in session: InspectorSession,
+    sourceLocation: SourceLocation = #_sourceLocation
+) async -> UInt64 {
+    let sequence = await transport.receiveRootMessage(message)
     await expectProtocolEventApplied(sequence, in: session, sourceLocation: sourceLocation)
     return sequence
 }
