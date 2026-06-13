@@ -13,19 +13,76 @@ final class MonoclyWindowContextStore {
     static let shared = MonoclyWindowContextStore()
 
 #if canImport(UIKit)
-    private final class WeakSceneBox {
-        weak var scene: UIWindowScene?
+    private final class ConnectedWindowSceneRegistry {
+        private final class WeakSceneBox {
+            weak var scene: UIWindowScene?
 
-        init(scene: UIWindowScene) {
-            self.scene = scene
+            init(scene: UIWindowScene) {
+                self.scene = scene
+            }
+        }
+
+        private var scenesByIdentifier: [String: WeakSceneBox] = [:]
+        private var activeSceneIdentifiers: [String] = []
+
+        func registerConnected(_ scene: UIWindowScene) {
+            scenesByIdentifier[scene.session.persistentIdentifier] = WeakSceneBox(scene: scene)
+            pruneDisconnectedScenes()
+        }
+
+        func markActive(_ scene: UIWindowScene) {
+            let sceneIdentifier = scene.session.persistentIdentifier
+            scenesByIdentifier[sceneIdentifier] = WeakSceneBox(scene: scene)
+            activeSceneIdentifiers.removeAll { $0 == sceneIdentifier }
+            activeSceneIdentifiers.insert(sceneIdentifier, at: 0)
+        }
+
+        func removeActive(_ scene: UIWindowScene) {
+            activeSceneIdentifiers.removeAll { $0 == scene.session.persistentIdentifier }
+        }
+
+        func disconnect(_ scene: UIWindowScene) {
+            let sceneIdentifier = scene.session.persistentIdentifier
+            scenesByIdentifier[sceneIdentifier] = nil
+            activeSceneIdentifiers.removeAll { $0 == sceneIdentifier }
+        }
+
+        func removeAll() {
+            scenesByIdentifier.removeAll()
+            activeSceneIdentifiers.removeAll()
+        }
+
+        func setOnlyActive(_ scene: UIWindowScene) {
+            let sceneIdentifier = scene.session.persistentIdentifier
+            scenesByIdentifier = [sceneIdentifier: WeakSceneBox(scene: scene)]
+            activeSceneIdentifiers = [sceneIdentifier]
+        }
+
+        func resolvedCurrentScene() -> UIWindowScene? {
+            pruneDisconnectedScenes()
+
+            for sceneIdentifier in activeSceneIdentifiers {
+                if let scene = scenesByIdentifier[sceneIdentifier]?.scene,
+                   scene.activationState == .foregroundActive {
+                    return scene
+                }
+            }
+
+            let connectedScenes = scenesByIdentifier.values.compactMap(\.scene)
+            return connectedScenes.first { $0.activationState == .foregroundActive }
+                ?? connectedScenes.first { $0.activationState == .foregroundInactive }
+        }
+
+        private func pruneDisconnectedScenes() {
+            scenesByIdentifier = scenesByIdentifier.filter { $0.value.scene != nil }
+            activeSceneIdentifiers.removeAll { scenesByIdentifier[$0]?.scene == nil }
         }
     }
 
     private(set) var currentWindowScene: UIWindowScene?
     private(set) var currentWindow: UIWindow?
 
-    @ObservationIgnored private var sceneRegistry: [String: WeakSceneBox] = [:]
-    @ObservationIgnored private var activeSceneIdentifiers: [String] = []
+    @ObservationIgnored private let sceneRegistry = ConnectedWindowSceneRegistry()
 #elseif canImport(AppKit)
     private(set) var currentWindow: NSWindow?
 #endif
@@ -36,20 +93,16 @@ final class MonoclyWindowContextStore {
 #if canImport(UIKit)
 extension MonoclyWindowContextStore {
     func registerConnectedScene(_ scene: UIWindowScene) {
-        sceneRegistry[scene.session.persistentIdentifier] = WeakSceneBox(scene: scene)
-        pruneDisconnectedScenes()
+        sceneRegistry.registerConnected(scene)
     }
 
     func sceneDidBecomeActive(_ scene: UIWindowScene) {
-        let sceneIdentifier = scene.session.persistentIdentifier
-        sceneRegistry[sceneIdentifier] = WeakSceneBox(scene: scene)
-        activeSceneIdentifiers.removeAll { $0 == sceneIdentifier }
-        activeSceneIdentifiers.insert(sceneIdentifier, at: 0)
+        sceneRegistry.markActive(scene)
         setCurrentScene(scene)
     }
 
     func sceneWillResignActive(_ scene: UIWindowScene) {
-        activeSceneIdentifiers.removeAll { $0 == scene.session.persistentIdentifier }
+        sceneRegistry.removeActive(scene)
         if currentWindowScene === scene {
             refreshCurrentScene()
         } else if let currentWindowScene {
@@ -58,9 +111,7 @@ extension MonoclyWindowContextStore {
     }
 
     func sceneDidDisconnect(_ scene: UIWindowScene) {
-        let sceneIdentifier = scene.session.persistentIdentifier
-        sceneRegistry[sceneIdentifier] = nil
-        activeSceneIdentifiers.removeAll { $0 == sceneIdentifier }
+        sceneRegistry.disconnect(scene)
 
         if currentWindowScene === scene {
             currentWindowScene = nil
@@ -74,7 +125,6 @@ extension MonoclyWindowContextStore {
         currentWindowScene = nil
         currentWindow = nil
         sceneRegistry.removeAll()
-        activeSceneIdentifiers.removeAll()
     }
 
     func setCurrentSceneForTesting(_ scene: UIWindowScene?, window: UIWindow? = nil) {
@@ -83,9 +133,7 @@ extension MonoclyWindowContextStore {
             return
         }
 
-        let sceneIdentifier = scene.session.persistentIdentifier
-        sceneRegistry[sceneIdentifier] = WeakSceneBox(scene: scene)
-        activeSceneIdentifiers = [sceneIdentifier]
+        sceneRegistry.setOnlyActive(scene)
         currentWindowScene = scene
         currentWindow = window ?? Self.preferredWindow(in: scene)
     }
@@ -96,34 +144,13 @@ extension MonoclyWindowContextStore {
     }
 
     private func refreshCurrentScene() {
-        pruneDisconnectedScenes()
-
-        if let scene = resolvedCurrentScene() {
+        if let scene = sceneRegistry.resolvedCurrentScene() {
             setCurrentScene(scene)
             return
         }
 
         currentWindowScene = nil
         currentWindow = nil
-    }
-
-    private func resolvedCurrentScene() -> UIWindowScene? {
-        for sceneIdentifier in activeSceneIdentifiers {
-            if let scene = sceneRegistry[sceneIdentifier]?.scene,
-               scene.activationState == .foregroundActive {
-                return scene
-            }
-        }
-
-        let connectedScenes = sceneRegistry.values.compactMap(\.scene)
-
-        return connectedScenes.first { $0.activationState == .foregroundActive }
-            ?? connectedScenes.first { $0.activationState == .foregroundInactive }
-    }
-
-    private func pruneDisconnectedScenes() {
-        sceneRegistry = sceneRegistry.filter { $0.value.scene != nil }
-        activeSceneIdentifiers.removeAll { sceneRegistry[$0]?.scene == nil }
     }
 
     private static func preferredWindow(in scene: UIWindowScene) -> UIWindow? {

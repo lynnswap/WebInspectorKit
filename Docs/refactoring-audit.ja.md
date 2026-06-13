@@ -341,6 +341,7 @@ xcodebuild test \
 - ObservationBridge v0.12.0 / SyntaxEditorUI v0.13.0 へ更新し、Swift tools / README 要件を 6.3 に上げた。UI 側の `ObservationScope.observe` / `ObservationDelivery` / stream API は、owner ごとの `PortableObservationTracking.Token` へ置換。`NetworkListViewController` の displayRows 80ms latest throttle は挙動仕様として残し、旧 stream API ではなく list owner の `pendingThrottledDisplayRows` / `displayRowsThrottleTask` が所有する形にした。
 - Monocly app 側に残っていた `ObservationScope` も、`BrowserPageViewController` の store observation と `BrowserInspectorCoordinator` の sheet user-interface-style observation に分けて、それぞれ owner が `PortableObservationTracking.Token` を保持/cancel する形へ追従した。
 - Monocly の `BrowserInspectorCoordinator.InspectorWindowRegistry` から `InspectorWindowSceneRegistry` を分離。window context / release handler / presentation observers は registry 本体、scene session の weak storage、reusable session、restorable/stale identifier state は scene registry が所有する。scene activation reuse、disconnect 後の pending reuse、orphan restored scene 破棄の挙動は既存 lifecycle tests で維持した。
+- Monocly の `MonoclyWindowContextStore` は `sceneRegistry` と `activeSceneIdentifiers` の同一 scene identity 二重同期を `ConnectedWindowSceneRegistry` に集約。observable な `currentWindowScene` / `currentWindow` は store に残し、weak scene storage、active order、disconnect pruning、foreground scene resolution の不変条件を registry owner が持つ形にした。
 
 最新の局所検証:
 
@@ -373,6 +374,8 @@ xcodebuild test \
 - `xcodebuild test -project Monocly/Monocly.xcodeproj -scheme Monocly -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest'` (2026-06-13、Monocly app の ObservationBridge v0.12.0 追従後 green)
 - `xcodebuild test -project Monocly/Monocly.xcodeproj -scheme Monocly -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' -only-testing:MonoclyTests/MonoclyLifecycleTests` (2026-06-13、Monocly inspector window scene registry owner 化後 green)
 - `xcodebuild test -project Monocly/Monocly.xcodeproj -scheme Monocly -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest'` (2026-06-13、Monocly inspector window scene registry owner 化後 green)
+- `xcodebuild test -project Monocly/Monocly.xcodeproj -scheme Monocly -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' -only-testing:MonoclyTests/MonoclyLifecycleTests` (2026-06-13、Monocly current window scene registry owner 化後 green)
+- `xcodebuild test -project Monocly/Monocly.xcodeproj -scheme Monocly -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest'` (2026-06-13、Monocly current window scene registry owner 化後 green)
 - `swift test --filter WebInspectorTransportTests -Xswiftc -strict-concurrency=minimal` (2026-06-13、Transport event sequence tracker owner 化後 green)
 - `swift test -Xswiftc -strict-concurrency=minimal` (2026-06-13、Transport event sequence tracker owner 化後 green)
 - `xcodebuild test -workspace WebInspectorKit.xcworkspace -scheme WebInspectorKit -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest'` (2026-06-13、Transport event sequence tracker owner 化後 green)
