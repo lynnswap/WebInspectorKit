@@ -323,6 +323,7 @@ xcodebuild test \
 - `DOMTreeTextView` は row 配列と `rowIndexByNodeID` の別管理を `DOMTreeRenderedRows` に集約。visible node set、node id -> row index、row lookup/range lookup を rendered rows owner が持ち、TextKit/scroll view 側は owner query だけを使う。
 - `DOMTreeTextView` の複数選択 state (`selectedNodeIDs` / last node / shift anchor / shift range) を `DOMTreeSelectionController` に集約。WebKit の `SelectionController` 境界に合わせ、TextKit view は gesture/key/menu 起点と装飾更新だけを担当する。
 - `NetworkListViewController` の `requestIDs` と projection map の別管理を `NetworkListSnapshotRows` に畳み、表示済み/適用中 projection 比較を `NetworkListSnapshotState` に移した。diffable snapshot の apply/reconfigure 判定は view controller の UIKit boundary に残し、同一 row identity の同期だけを owner 化。
+- `NetworkPanelModel` の response body fetch action と in-flight request id set を `NetworkResponseBodyFetchCoordinator` に集約。model は表示条件、選択、projection cache の owner に戻し、response preview からの lazy fetch 二重起動防止と action 完了後の in-flight 解放は coordinator が持つ形にした。in-flight 中の同一 request fetch が二重起動しない contract test を追加した。
 - `DOMTreeProjection` の children map と parent map を `DOMTreeProjectionEdges` に集約。projection の既存 query/互換 getter は残しつつ、builder は visible child edge を単一 owner に追加するだけにした。WebKit の `TreeOutline` が child list と parent pointer を同じ操作で更新する境界に合わせた。
 - `DOMDocumentState` の `nodesByID` と `currentNodeIDByProtocolNodeID` の直接書き換えを `DOMDocumentNodeIndex` に集約。snapshot/API 互換 getter は残し、subtree build / remove が node storage と protocol raw id index を同じ owner 経由で更新する形にした。WebKit の `DOMManager._idToDOMNode` に相当するが、WebInspectorKit は multi-target/document lifetime を持つため document 単位の index としている。
 - `NetworkSession` の `requestsByID` と `orderedRequestIDs` の直接同期を `NetworkRequestStore` に集約。request lifecycle mutation は `NetworkRequest` / `NetworkSession` に残し、store は target-scoped request identity と表示順の不変条件だけを所有する。WebKit の `NetworkManager._resourceRequestIdentifierMap` と `ResourceCollection` の index owner 境界に合わせた。
@@ -421,6 +422,10 @@ xcodebuild test \
 - `swift test -Xswiftc -strict-concurrency=minimal` (2026-06-13、FrameDocumentProjectionResolver owner 化後 green)
 - `xcodebuild test -workspace WebInspectorKit.xcworkspace -scheme WebInspectorKit -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest'` (2026-06-13、FrameDocumentProjectionResolver owner 化後 green)
 - `swift test --filter WebInspectorUITests -Xswiftc -strict-concurrency=minimal` (2026-06-13、Network list snapshot state owner 化後 green)
+- `swift test --filter WebInspectorUITests -Xswiftc -strict-concurrency=minimal` (2026-06-13、Network response body fetch coordinator owner 化後 green)
+- `swift test -Xswiftc -strict-concurrency=minimal` (2026-06-13、Network response body fetch coordinator owner 化後 green)
+- `xcodebuild test -workspace WebInspectorKit.xcworkspace -scheme WebInspectorKit -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' -only-testing:WebInspectorUITests/NetworkDetailViewControllerTests` (2026-06-13、Network response body fetch coordinator owner 化後 green)
+- `xcodebuild test -workspace WebInspectorKit.xcworkspace -scheme WebInspectorKit -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest'` (2026-06-13、Network response body fetch coordinator owner 化後 green)
 - `swift test --filter WebInspectorArchitectureTests` (2026-06-13、element picker / stylesheet route 変更後 green)
 - `swift test -Xswiftc -strict-concurrency=minimal` (2026-06-13、TransportTargetRegistry mutation owner 化後 green)
 - `xcodebuild test -workspace WebInspectorKit.xcworkspace -scheme WebInspectorKit -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest'` (2026-06-13、TransportTargetRegistry mutation owner 化後 green)

@@ -511,6 +511,36 @@ func clearRequestsClearsSelectionButPreservesDisplayCriteria() async throws {
     #expect(model.displayProjection(for: requestID) == nil)
 }
 
+@Test
+@MainActor
+func responseBodyFetchesAreDeduplicatedWhileInFlight() async throws {
+    let network = NetworkSession()
+    let requestID = applyRequest(
+        to: network,
+        requestID: "1",
+        url: "https://api.example.com/data.json",
+        resourceType: .xhr,
+        mimeType: "application/json",
+        timestamp: 1
+    )
+    let request = try #require(network.request(for: requestID))
+    let probe = ResponseBodyFetchProbe()
+    let model = NetworkPanelModel(network: network) { id in
+        await probe.fetch(id)
+    }
+
+    #expect(request.canFetchResponseBody)
+
+    model.fetchResponseBodyIfNeeded(for: request)
+    await probe.waitForFetchCount(1)
+    model.fetchResponseBodyIfNeeded(for: request)
+    await Task.yield()
+
+    #expect(probe.fetchedIDs == [requestID])
+
+    probe.finishCurrentFetch()
+}
+
 @MainActor
 @discardableResult
 private func applyRequest(
@@ -576,4 +606,50 @@ private func applyPendingRequest(
         resourceType: resourceType,
         timestamp: timestamp
     )
+}
+
+@MainActor
+private final class ResponseBodyFetchProbe {
+    private struct Waiter {
+        var count: Int
+        var continuation: CheckedContinuation<Void, Never>
+    }
+
+    private(set) var fetchedIDs: [NetworkRequest.ID] = []
+    private var waiters: [Waiter] = []
+    private var finishContinuation: CheckedContinuation<Void, Never>?
+
+    func fetch(_ id: NetworkRequest.ID) async {
+        fetchedIDs.append(id)
+        resumeSatisfiedWaiters()
+        await withCheckedContinuation { continuation in
+            finishContinuation = continuation
+        }
+    }
+
+    func waitForFetchCount(_ count: Int) async {
+        guard fetchedIDs.count < count else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            waiters.append(Waiter(count: count, continuation: continuation))
+        }
+    }
+
+    func finishCurrentFetch() {
+        finishContinuation?.resume()
+        finishContinuation = nil
+    }
+
+    private func resumeSatisfiedWaiters() {
+        var remaining: [Waiter] = []
+        for waiter in waiters {
+            if fetchedIDs.count >= waiter.count {
+                waiter.continuation.resume()
+            } else {
+                remaining.append(waiter)
+            }
+        }
+        waiters = remaining
+    }
 }

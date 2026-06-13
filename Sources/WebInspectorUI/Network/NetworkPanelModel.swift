@@ -2,6 +2,31 @@ import WebInspectorCore
 import Observation
 
 @MainActor
+private final class NetworkResponseBodyFetchCoordinator {
+    private let action: NetworkPanelModel.ResponseBodyFetchAction?
+    private var fetchesInFlight: Set<NetworkRequest.ID> = []
+
+    init(action: NetworkPanelModel.ResponseBodyFetchAction?) {
+        self.action = action
+    }
+
+    func fetchIfNeeded(for request: NetworkRequest) {
+        guard request.canFetchResponseBody,
+              fetchesInFlight.contains(request.id) == false,
+              let action else {
+            return
+        }
+        fetchesInFlight.insert(request.id)
+        Task { @MainActor in
+            defer {
+                fetchesInFlight.remove(request.id)
+            }
+            await action(request.id)
+        }
+    }
+}
+
+@MainActor
 @Observable
 package final class NetworkPanelModel {
     package typealias ResponseBodyFetchAction = @MainActor (NetworkRequest.ID) async -> Void
@@ -18,8 +43,7 @@ package final class NetworkPanelModel {
         }
     }
     package private(set) var effectiveResourceFilters: Set<NetworkResourceFilter> = []
-    @ObservationIgnored private let responseBodyFetchAction: ResponseBodyFetchAction?
-    @ObservationIgnored private var responseBodyFetchesInFlight: Set<NetworkRequest.ID> = []
+    @ObservationIgnored private let responseBodyFetchCoordinator: NetworkResponseBodyFetchCoordinator
     @ObservationIgnored private let displayProjectionCache: NetworkRequestDisplayProjectionCache
 
     package init(
@@ -30,7 +54,7 @@ package final class NetworkPanelModel {
         }
     ) {
         self.network = network
-        self.responseBodyFetchAction = responseBodyFetchAction
+        self.responseBodyFetchCoordinator = NetworkResponseBodyFetchCoordinator(action: responseBodyFetchAction)
         self.displayProjectionCache = NetworkRequestDisplayProjectionCache(
             mediaPreviewClassifier: mediaPreviewClassifier
         )
@@ -126,17 +150,6 @@ package final class NetworkPanelModel {
     }
 
     package func fetchResponseBodyIfNeeded(for request: NetworkRequest) {
-        guard request.canFetchResponseBody,
-              responseBodyFetchesInFlight.contains(request.id) == false,
-              let responseBodyFetchAction else {
-            return
-        }
-        responseBodyFetchesInFlight.insert(request.id)
-        Task { @MainActor in
-            defer {
-                responseBodyFetchesInFlight.remove(request.id)
-            }
-            await responseBodyFetchAction(request.id)
-        }
+        responseBodyFetchCoordinator.fetchIfNeeded(for: request)
     }
 }
