@@ -226,7 +226,7 @@ func remoteErrorAndTimeoutFailPendingReplies() async throws {
     let timeoutSession = TransportSession(
         backend: timeoutBackend,
         responseTimeout: .milliseconds(20),
-        responseTimeoutSleep: { duration in
+        timeoutSleep: { duration in
             try await responseTimeout.sleep(for: duration)
         }
     )
@@ -370,7 +370,7 @@ func waitForCurrentMainPageTargetTimeoutUsesInjectedSleep() async throws {
     let session = TransportSession(
         backend: backend,
         responseTimeout: testResponseTimeout,
-        responseTimeoutSleep: { duration in
+        timeoutSleep: { duration in
             try await timeout.sleep(for: duration)
         }
     )
@@ -542,7 +542,7 @@ func bufferedProvisionalTargetReplySurvivesResponseTimeoutBeforeCommit() async t
     let session = TransportSession(
         backend: backend,
         responseTimeout: .milliseconds(20),
-        responseTimeoutSleep: { duration in
+        timeoutSleep: { duration in
             try await responseTimeout.sleep(for: duration)
         },
         responseTimeoutDidFire: {

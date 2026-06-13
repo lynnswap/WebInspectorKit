@@ -2,7 +2,6 @@ import Foundation
 
 package actor TransportSession {
     package typealias TimeoutSleep = @Sendable (Duration) async throws -> Void
-    package typealias ResponseTimeoutSleep = TimeoutSleep
     package typealias ResponseTimeoutDidFire = @Sendable () async -> Void
 
     private let backend: any TransportBackend
@@ -24,12 +23,12 @@ package actor TransportSession {
     package init(
         backend: any TransportBackend,
         responseTimeout: Duration? = .seconds(5),
-        responseTimeoutSleep: ResponseTimeoutSleep? = nil,
+        timeoutSleep: TimeoutSleep? = nil,
         responseTimeoutDidFire: ResponseTimeoutDidFire? = nil
     ) {
         self.backend = backend
         self.responseTimeout = responseTimeout
-        self.timeoutSleep = responseTimeoutSleep ?? { try await Task.sleep(for: $0) }
+        self.timeoutSleep = timeoutSleep ?? { try await Task.sleep(for: $0) }
         self.responseTimeoutDidFire = responseTimeoutDidFire ?? {}
         nextCommandID = 0
         eventSequences = TransportEventSequenceTracker()
