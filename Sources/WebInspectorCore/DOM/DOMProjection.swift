@@ -18,11 +18,69 @@ package struct DOMTreeRow: Equatable, Sendable {
     }
 }
 
+package struct DOMTreeProjectionEdges: Equatable, Sendable {
+    private var childrenByParentID: [DOMNodeIdentifier: [DOMNodeIdentifier]]
+    private var parentByChildID: [DOMNodeIdentifier: DOMNodeIdentifier]
+
+    package init(
+        childrenByNodeID: [DOMNodeIdentifier: [DOMNodeIdentifier]] = [:],
+        parentByNodeID: [DOMNodeIdentifier: DOMNodeIdentifier] = [:]
+    ) {
+        self.childrenByParentID = childrenByNodeID
+        self.parentByChildID = parentByNodeID
+    }
+
+    package var childrenByNodeID: [DOMNodeIdentifier: [DOMNodeIdentifier]] {
+        childrenByParentID
+    }
+
+    package var parentByNodeID: [DOMNodeIdentifier: DOMNodeIdentifier] {
+        parentByChildID
+    }
+
+    package mutating func setChildren(
+        _ childIDs: [DOMNodeIdentifier],
+        of parentID: DOMNodeIdentifier
+    ) {
+        childrenByParentID[parentID] = childIDs
+        for childID in childIDs {
+            parentByChildID[childID] = parentID
+        }
+    }
+
+    package func children(of nodeID: DOMNodeIdentifier) -> [DOMNodeIdentifier] {
+        childrenByParentID[nodeID] ?? []
+    }
+
+    package func parent(of nodeID: DOMNodeIdentifier) -> DOMNodeIdentifier? {
+        parentByChildID[nodeID]
+    }
+
+    package func ancestorNodeIDs(of nodeID: DOMNodeIdentifier) -> [DOMNodeIdentifier] {
+        var ancestors: [DOMNodeIdentifier] = []
+        var visited = Set<DOMNodeIdentifier>()
+        var current = parentByChildID[nodeID]
+        while let ancestorID = current,
+              visited.insert(ancestorID).inserted {
+            ancestors.append(ancestorID)
+            current = parentByChildID[ancestorID]
+        }
+        return ancestors
+    }
+}
+
 package struct DOMTreeProjection: Equatable, Sendable {
     package var rows: [DOMTreeRow]
     package var rootNodeIDs: [DOMNodeIdentifier]
-    package var childrenByNodeID: [DOMNodeIdentifier: [DOMNodeIdentifier]]
-    package var parentByNodeID: [DOMNodeIdentifier: DOMNodeIdentifier]
+    private var edges: DOMTreeProjectionEdges
+
+    package var childrenByNodeID: [DOMNodeIdentifier: [DOMNodeIdentifier]] {
+        edges.childrenByNodeID
+    }
+
+    package var parentByNodeID: [DOMNodeIdentifier: DOMNodeIdentifier] {
+        edges.parentByNodeID
+    }
 
     package init(
         rows: [DOMTreeRow] = [],
@@ -30,30 +88,36 @@ package struct DOMTreeProjection: Equatable, Sendable {
         childrenByNodeID: [DOMNodeIdentifier: [DOMNodeIdentifier]] = [:],
         parentByNodeID: [DOMNodeIdentifier: DOMNodeIdentifier] = [:]
     ) {
+        self.init(
+            rows: rows,
+            rootNodeIDs: rootNodeIDs,
+            edges: DOMTreeProjectionEdges(
+                childrenByNodeID: childrenByNodeID,
+                parentByNodeID: parentByNodeID
+            )
+        )
+    }
+
+    package init(
+        rows: [DOMTreeRow],
+        rootNodeIDs: [DOMNodeIdentifier],
+        edges: DOMTreeProjectionEdges
+    ) {
         self.rows = rows
         self.rootNodeIDs = rootNodeIDs
-        self.childrenByNodeID = childrenByNodeID
-        self.parentByNodeID = parentByNodeID
+        self.edges = edges
     }
 
     package func children(of nodeID: DOMNodeIdentifier) -> [DOMNodeIdentifier] {
-        childrenByNodeID[nodeID] ?? []
+        edges.children(of: nodeID)
     }
 
     package func parent(of nodeID: DOMNodeIdentifier) -> DOMNodeIdentifier? {
-        parentByNodeID[nodeID]
+        edges.parent(of: nodeID)
     }
 
     package func ancestorNodeIDs(of nodeID: DOMNodeIdentifier) -> [DOMNodeIdentifier] {
-        var ancestors: [DOMNodeIdentifier] = []
-        var visited = Set<DOMNodeIdentifier>()
-        var current = parentByNodeID[nodeID]
-        while let ancestorID = current,
-              visited.insert(ancestorID).inserted {
-            ancestors.append(ancestorID)
-            current = parentByNodeID[ancestorID]
-        }
-        return ancestors
+        edges.ancestorNodeIDs(of: nodeID)
     }
 }
 

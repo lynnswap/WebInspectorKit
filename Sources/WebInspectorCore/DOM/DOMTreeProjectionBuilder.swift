@@ -19,24 +19,21 @@ package struct DOMTreeProjectionBuilder {
 
     package func build() -> DOMTreeProjection {
         var rows: [DOMTreeRow] = []
-        var childrenByNodeID: [DOMNode.ID: [DOMNode.ID]] = [:]
-        var parentByNodeID: [DOMNode.ID: DOMNode.ID] = [:]
+        var edges = DOMTreeProjectionEdges()
         var visited = Set<DOMNode.ID>()
 
         append(
             rootDocument.rootNodeID,
             depth: 0,
             rows: &rows,
-            childrenByNodeID: &childrenByNodeID,
-            parentByNodeID: &parentByNodeID,
+            edges: &edges,
             visited: &visited
         )
 
         return DOMTreeProjection(
             rows: rows,
             rootNodeIDs: [rootDocument.rootNodeID],
-            childrenByNodeID: childrenByNodeID,
-            parentByNodeID: parentByNodeID
+            edges: edges
         )
     }
 
@@ -77,8 +74,7 @@ package struct DOMTreeProjectionBuilder {
         _ nodeID: DOMNode.ID,
         depth: Int,
         rows: inout [DOMTreeRow],
-        childrenByNodeID: inout [DOMNode.ID: [DOMNode.ID]],
-        parentByNodeID: inout [DOMNode.ID: DOMNode.ID],
+        edges: inout DOMTreeProjectionEdges,
         visited: inout Set<DOMNode.ID>
     ) {
         guard visited.insert(nodeID).inserted,
@@ -89,7 +85,7 @@ package struct DOMTreeProjectionBuilder {
             of: node,
             frameDocumentRootResolver: frameDocumentRootResolver
         )
-        childrenByNodeID[nodeID] = visibleChildren
+        edges.setChildren(visibleChildren, of: nodeID)
         rows.append(
             DOMTreeRow(
                 nodeID: nodeID,
@@ -99,13 +95,11 @@ package struct DOMTreeProjectionBuilder {
             )
         )
         for childID in visibleChildren {
-            parentByNodeID[childID] = nodeID
             append(
                 childID,
                 depth: depth + 1,
                 rows: &rows,
-                childrenByNodeID: &childrenByNodeID,
-                parentByNodeID: &parentByNodeID,
+                edges: &edges,
                 visited: &visited
             )
         }
