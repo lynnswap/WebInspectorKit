@@ -39,6 +39,8 @@ final class DOMSessionElementPickerController {
     }
 
     private var phase: Phase = .idle
+    private var completionSession: Session?
+    private var idleWaiters: [CheckedContinuation<Void, Never>] = []
 
     var targetID: ProtocolTargetIdentifier? {
         phase.session?.targetID
@@ -76,10 +78,52 @@ final class DOMSessionElementPickerController {
     }
 
     @discardableResult
+    func beginCompletion(for session: Session) -> Bool {
+        guard isCurrentAcceptingSession(session) else {
+            return false
+        }
+        completionSession = session
+        return true
+    }
+
+    func finishCompletion(for session: Session) {
+        guard completionSession === session else {
+            return
+        }
+        completionSession = nil
+        resumeIdleWaitersIfNeeded()
+    }
+
+    @discardableResult
     func clear() -> ProtocolTargetIdentifier? {
         let targetID = phase.session?.targetID
         phase = .idle
+        resumeIdleWaitersIfNeeded()
         return targetID
+    }
+
+    func waitUntilIdle() async {
+        guard phase.session != nil || completionSession != nil else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            if phase.session == nil && completionSession == nil {
+                continuation.resume()
+            } else {
+                idleWaiters.append(continuation)
+            }
+        }
+    }
+
+    private func resumeIdleWaitersIfNeeded() {
+        guard phase.session == nil && completionSession == nil else {
+            return
+        }
+        let waiters = idleWaiters
+        idleWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
     }
 }
 
@@ -118,10 +162,24 @@ final class DOMSessionDocumentRequestController {
             handle.cancel()
         }
     }
+
+    func waitUntilIdle(targetID: ProtocolTargetIdentifier? = nil) async {
+        while let handle = activeHandle(matching: targetID) {
+            await handle.wait()
+        }
+    }
+
+    private func activeHandle(matching targetID: ProtocolTargetIdentifier?) -> DOMSessionDocumentRequestHandle? {
+        if let targetID {
+            return handlesByTargetID[targetID]
+        }
+        return handlesByTargetID.values.first
+    }
 }
 
 @MainActor
 final class DOMSessionElementStyleHydrationController {
+    @MainActor
     private final class Refresh {
         let identity: CSSNodeStyleIdentity
         fileprivate var task: Task<Void, Never>?
@@ -130,18 +188,27 @@ final class DOMSessionElementStyleHydrationController {
             self.identity = identity
         }
 
+        func wait() async {
+            await task?.value
+        }
+
         func cancel() {
             task?.cancel()
             task = nil
         }
     }
 
+    @MainActor
     private final class PropertyUpdateRequest {
         let propertyID: CSSPropertyIdentifier
         fileprivate var task: Task<Void, Never>?
 
         init(propertyID: CSSPropertyIdentifier) {
             self.propertyID = propertyID
+        }
+
+        func wait() async {
+            await task?.value
         }
 
         func cancel() {
@@ -224,6 +291,29 @@ final class DOMSessionElementStyleHydrationController {
         propertyUpdateRequests.removeAll()
         for request in requests {
             request.cancel()
+        }
+    }
+
+    func waitUntilRefreshIdle() async {
+        while let refresh = activeRefresh {
+            await refresh.wait()
+        }
+    }
+
+    func waitUntilIdle() async {
+        while activeRefresh != nil || propertyUpdateRequests.isEmpty == false {
+            if let request = propertyUpdateRequests.values.first {
+                await request.wait()
+            }
+            if let refresh = activeRefresh {
+                await refresh.wait()
+            }
+        }
+    }
+
+    func waitUntilPropertyUpdatesIdle() async {
+        while let request = propertyUpdateRequests.values.first {
+            await request.wait()
         }
     }
 
@@ -335,6 +425,12 @@ final class DOMSessionDeleteUndoOperationQueue {
         Task.isCancelled == false && generation == operationGeneration
     }
 
+    func waitUntilIdle() async {
+        while let operation = tailOperationID.flatMap({ operationsByID[$0] }) {
+            await operation.wait()
+        }
+    }
+
     private func finish(_ operation: QueuedOperation) {
         guard operationsByID[operation.id] === operation else {
             return
@@ -356,6 +452,10 @@ final class DOMSessionDocumentRequestHandle {
     init(targetID: ProtocolTargetIdentifier, targetKind: ProtocolTargetKind?) {
         self.targetID = targetID
         self.targetKind = targetKind
+    }
+
+    func wait() async {
+        _ = try? await task?.value
     }
 
     func cancel() {

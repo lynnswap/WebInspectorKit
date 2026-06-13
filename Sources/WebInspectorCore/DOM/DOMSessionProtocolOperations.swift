@@ -47,6 +47,22 @@ extension DOMSession {
         cancelCSSActionRequests()
     }
 
+    package func waitUntilDocumentRequestsIdle(targetID: ProtocolTargetIdentifier? = nil) async {
+        await documentRequests.waitUntilIdle(targetID: targetID)
+    }
+
+    package func waitUntilSelectedStyleRefreshIdle() async {
+        await styleHydration.waitUntilIdle()
+    }
+
+    package func waitUntilElementPickerIdle() async {
+        await elementPicker.waitUntilIdle()
+    }
+
+    package func waitUntilDeleteUndoOperationsIdle() async {
+        await deleteUndoController.operationQueue.waitUntilIdle()
+    }
+
     @discardableResult
     package func perform(_ intent: DOMCommandIntent) async throws -> ProtocolCommandResult {
         try await perform(intent, requiresActiveConnection: true)
@@ -594,6 +610,12 @@ extension DOMSession {
                 details: "activeTarget=\(elementPicker.targetID?.rawValue ?? "nil")"
             )
             return
+        }
+        guard elementPicker.beginCompletion(for: pickerSession) else {
+            return
+        }
+        defer {
+            elementPicker.finishCompletion(for: pickerSession)
         }
         let activeTargetID = pickerSession.targetID
         do {
