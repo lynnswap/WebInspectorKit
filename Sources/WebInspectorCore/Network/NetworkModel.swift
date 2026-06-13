@@ -271,33 +271,86 @@ package struct NetworkSessionSnapshot: Equatable, Sendable {
 }
 
 @MainActor
+package struct NetworkRequestStore {
+    private var orderedIDs: [NetworkRequest.ID]
+    private var requestsByIdentifier: [NetworkRequest.ID: NetworkRequest]
+
+    package init() {
+        orderedIDs = []
+        requestsByIdentifier = [:]
+    }
+
+    package var orderedRequestIDs: [NetworkRequest.ID] {
+        orderedIDs
+    }
+
+    package var requestsByID: [NetworkRequest.ID: NetworkRequest] {
+        requestsByIdentifier
+    }
+
+    package var requests: [NetworkRequest] {
+        orderedIDs.compactMap { requestsByIdentifier[$0] }
+    }
+
+    package func request(for id: NetworkRequest.ID) -> NetworkRequest? {
+        requestsByIdentifier[id]
+    }
+
+    package mutating func removeAll() {
+        orderedIDs.removeAll()
+        requestsByIdentifier.removeAll()
+    }
+
+    @discardableResult
+    package mutating func insert(_ request: NetworkRequest) -> NetworkRequest {
+        if let existing = requestsByIdentifier[request.id] {
+            return existing
+        }
+        requestsByIdentifier[request.id] = request
+        orderedIDs.append(request.id)
+        return request
+    }
+
+    package mutating func requestOrInsert(
+        id: NetworkRequest.ID,
+        makeRequest: () -> NetworkRequest
+    ) -> NetworkRequest {
+        if let existing = requestsByIdentifier[id] {
+            return existing
+        }
+        let request = makeRequest()
+        precondition(request.id == id, "NetworkRequestStore inserted a request with a mismatched id.")
+        requestsByIdentifier[id] = request
+        orderedIDs.append(id)
+        return request
+    }
+}
+
+@MainActor
 @Observable
 package final class NetworkSession {
-    private var orderedRequestIDs: [NetworkRequest.ID]
-    private var requestsByID: [NetworkRequest.ID: NetworkRequest]
+    private var requestStore: NetworkRequestStore
     @ObservationIgnored private var commandChannel: ProtocolCommandChannel?
     @ObservationIgnored private let protocolCommands: NetworkProtocolCommands
     @ObservationIgnored private var recordError: ((InspectorSessionError?) -> Void)?
 
     package init() {
-        orderedRequestIDs = []
-        requestsByID = [:]
+        requestStore = NetworkRequestStore()
         commandChannel = nil
         protocolCommands = NetworkProtocolCommands()
         recordError = nil
     }
 
     package var requests: [NetworkRequest] {
-        orderedRequestIDs.compactMap { requestsByID[$0] }
+        requestStore.requests
     }
 
     package func request(for id: NetworkRequest.ID) -> NetworkRequest? {
-        requestsByID[id]
+        requestStore.request(for: id)
     }
 
     package func reset() {
-        orderedRequestIDs.removeAll()
-        requestsByID.removeAll()
+        requestStore.removeAll()
     }
 
     package func bindProtocolChannel(
@@ -359,7 +412,7 @@ package final class NetworkSession {
     ) -> NetworkRequest.ID {
         let key = NetworkRequest.ID(targetID: targetID, requestID: requestID)
 
-        if let existing = requestsByID[key] {
+        if let existing = requestStore.request(for: key) {
             if let redirectResponse {
                 existing.frameID = frameID ?? existing.frameID
                 existing.loaderID = loaderID ?? existing.loaderID
@@ -375,23 +428,21 @@ package final class NetworkSession {
             return key
         }
 
-        let networkRequest = NetworkRequest(
-            id: key,
-            frameID: frameID,
-            loaderID: loaderID,
-            documentURL: documentURL,
-            request: request,
-            resourceType: resourceType,
-            originatingTargetID: originatingTargetID,
-            backendResourceIdentifier: backendResourceIdentifier,
-            initiator: initiator,
-            timestamp: timestamp,
-            walltime: walltime
+        requestStore.insert(
+            NetworkRequest(
+                id: key,
+                frameID: frameID,
+                loaderID: loaderID,
+                documentURL: documentURL,
+                request: request,
+                resourceType: resourceType,
+                originatingTargetID: originatingTargetID,
+                backendResourceIdentifier: backendResourceIdentifier,
+                initiator: initiator,
+                timestamp: timestamp,
+                walltime: walltime
+            )
         )
-        requestsByID[key] = networkRequest
-        if !orderedRequestIDs.contains(key) {
-            orderedRequestIDs.append(key)
-        }
         return key
     }
 
@@ -404,7 +455,7 @@ package final class NetworkSession {
         response: NetworkResponsePayload,
         timestamp: Double
     ) {
-        guard let request = requestsByID[.init(targetID: targetID, requestID: requestID)] else {
+        guard let request = requestStore.request(for: .init(targetID: targetID, requestID: requestID)) else {
             return
         }
         request.frameID = frameID ?? request.frameID
@@ -427,7 +478,7 @@ package final class NetworkSession {
         encodedDataLength: Int,
         timestamp: Double
     ) {
-        guard let request = requestsByID[.init(targetID: targetID, requestID: requestID)] else {
+        guard let request = requestStore.request(for: .init(targetID: targetID, requestID: requestID)) else {
             return
         }
         request.decodedDataLength += max(0, dataLength)
@@ -442,7 +493,7 @@ package final class NetworkSession {
         sourceMapURL: String? = nil,
         metrics: NetworkLoadMetricsPayload? = nil
     ) {
-        guard let request = requestsByID[.init(targetID: targetID, requestID: requestID)] else {
+        guard let request = requestStore.request(for: .init(targetID: targetID, requestID: requestID)) else {
             return
         }
         if let sourceMapURL {
@@ -462,7 +513,7 @@ package final class NetworkSession {
         errorText: String,
         canceled: Bool = false
     ) {
-        guard let request = requestsByID[.init(targetID: targetID, requestID: requestID)] else {
+        guard let request = requestStore.request(for: .init(targetID: targetID, requestID: requestID)) else {
             return
         }
         request.finishedOrFailedTimestamp = timestamp
@@ -481,19 +532,21 @@ package final class NetworkSession {
         resource: NetworkCachedResourcePayload
     ) -> NetworkRequest.ID {
         let key = NetworkRequest.ID(targetID: targetID, requestID: requestID)
-        let networkRequest = requestsByID[key] ?? NetworkRequest(
-            id: key,
-            frameID: frameID,
-            loaderID: loaderID,
-            documentURL: documentURL,
-            request: .init(url: resource.url),
-            resourceType: resource.type,
-            originatingTargetID: nil,
-            backendResourceIdentifier: nil,
-            initiator: initiator,
-            timestamp: timestamp,
-            walltime: nil
-        )
+        let networkRequest = requestStore.requestOrInsert(id: key) {
+            NetworkRequest(
+                id: key,
+                frameID: frameID,
+                loaderID: loaderID,
+                documentURL: documentURL,
+                request: .init(url: resource.url),
+                resourceType: resource.type,
+                originatingTargetID: nil,
+                backendResourceIdentifier: nil,
+                initiator: initiator,
+                timestamp: timestamp,
+                walltime: nil
+            )
+        }
 
         networkRequest.frameID = frameID
         networkRequest.loaderID = loaderID
@@ -513,11 +566,6 @@ package final class NetworkSession {
         networkRequest.encodedDataLength = max(0, resource.bodySize)
         networkRequest.finishedOrFailedTimestamp = timestamp
         networkRequest.state = .finished
-
-        if requestsByID[key] == nil {
-            requestsByID[key] = networkRequest
-            orderedRequestIDs.append(key)
-        }
         return key
     }
 
@@ -528,7 +576,7 @@ package final class NetworkSession {
         url: String
     ) -> NetworkRequest.ID {
         let key = NetworkRequest.ID(targetID: targetID, requestID: requestID)
-        if let existing = requestsByID[key] {
+        if let existing = requestStore.request(for: key) {
             existing.request.url = url
             existing.resourceType = .webSocket
             existing.webSocketReadyState = .connecting
@@ -549,8 +597,7 @@ package final class NetworkSession {
             walltime: nil
         )
         networkRequest.webSocketReadyState = .connecting
-        requestsByID[key] = networkRequest
-        orderedRequestIDs.append(key)
+        requestStore.insert(networkRequest)
         return key
     }
 
@@ -562,7 +609,7 @@ package final class NetworkSession {
         request: NetworkWebSocketRequestPayload
     ) {
         let key = NetworkRequest.ID(targetID: targetID, requestID: requestID)
-        guard let networkRequest = requestsByID[key] else {
+        guard let networkRequest = requestStore.request(for: key) else {
             return
         }
         networkRequest.webSocketHandshakeRequest = request
@@ -580,7 +627,7 @@ package final class NetworkSession {
         response: NetworkWebSocketResponsePayload
     ) {
         let key = NetworkRequest.ID(targetID: targetID, requestID: requestID)
-        guard let networkRequest = requestsByID[key] else {
+        guard let networkRequest = requestStore.request(for: key) else {
             return
         }
         networkRequest.webSocketHandshakeResponse = response
@@ -620,7 +667,7 @@ package final class NetworkSession {
         timestamp: Double,
         errorMessage: String
     ) {
-        guard let request = requestsByID[.init(targetID: targetID, requestID: requestID)] else {
+        guard let request = requestStore.request(for: .init(targetID: targetID, requestID: requestID)) else {
             return
         }
         request.webSocketFrames.append(.init(payload: nil, direction: .error(errorMessage), timestamp: timestamp))
@@ -632,7 +679,7 @@ package final class NetworkSession {
         requestID: NetworkRequestIdentifier,
         timestamp: Double
     ) {
-        guard let request = requestsByID[.init(targetID: targetID, requestID: requestID)] else {
+        guard let request = requestStore.request(for: .init(targetID: targetID, requestID: requestID)) else {
             return
         }
         request.webSocketReadyState = .closed
@@ -641,11 +688,11 @@ package final class NetworkSession {
     }
 
     package func requestSnapshot(for id: NetworkRequest.ID) -> NetworkRequestSnapshot? {
-        requestsByID[id].map(snapshot(for:))
+        requestStore.request(for: id).map(snapshot(for:))
     }
 
     package func responseBodyCommandIntent(for id: NetworkRequest.ID) -> NetworkCommandIntent? {
-        guard let request = requestsByID[id],
+        guard let request = requestStore.request(for: id),
               request.canFetchResponseBody else {
             return nil
         }
@@ -656,14 +703,15 @@ package final class NetworkSession {
     }
 
     package func serializedCertificateCommandIntent(for id: NetworkRequest.ID) -> NetworkCommandIntent? {
-        requestsByID[id].map {
+        requestStore.request(for: id).map {
             .getSerializedCertificate(requestKey: id, backendResourceIdentifier: $0.backendResourceIdentifier)
         }
     }
 
     package func snapshot() -> NetworkSessionSnapshot {
-        NetworkSessionSnapshot(
-            orderedRequestIDs: orderedRequestIDs,
+        let requestsByID = requestStore.requestsByID
+        return NetworkSessionSnapshot(
+            orderedRequestIDs: requestStore.orderedRequestIDs,
             requestsByID: Dictionary(uniqueKeysWithValues: requestsByID.map { key, value in
                 (key, snapshot(for: value))
             })
@@ -715,7 +763,7 @@ package final class NetworkSession {
         response: NetworkWebSocketFramePayload,
         direction: NetworkWebSocketFrameEntry.Direction
     ) {
-        guard let request = requestsByID[.init(targetID: targetID, requestID: requestID)] else {
+        guard let request = requestStore.request(for: .init(targetID: targetID, requestID: requestID)) else {
             return
         }
         request.webSocketFrames.append(.init(payload: response, direction: direction, timestamp: timestamp))
