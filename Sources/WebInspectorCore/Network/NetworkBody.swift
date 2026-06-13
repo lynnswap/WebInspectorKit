@@ -240,12 +240,19 @@ package final class NetworkBody {
         }
 
         let generation = textRepresentationPreparation.generation
-        let task = Task.detached(priority: .utility) { [weak self] in
-            let result = NetworkBodyPreparedTextRepresentation.make(from: input)
+        let worker = Task.detached(priority: .utility) {
+            NetworkBodyPreparedTextRepresentation.make(from: input)
+        }
+        let task = Task { @MainActor [weak self, worker] in
+            let result = await withTaskCancellationHandler {
+                await worker.value
+            } onCancel: {
+                worker.cancel()
+            }
             guard Task.isCancelled == false else {
                 return
             }
-            await self?.applyPreparedTextRepresentation(result, generation: generation)
+            self?.applyPreparedTextRepresentation(result, generation: generation)
         }
         textRepresentationPreparation.startPreparation(task)
         return NetworkBodyTextPreparation(task: task)

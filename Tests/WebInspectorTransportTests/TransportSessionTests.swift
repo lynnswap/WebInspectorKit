@@ -8,6 +8,23 @@ private let testResponseTimeout: Duration = .milliseconds(750)
 private let testWaitTimeout: Duration = .milliseconds(750)
 
 @Test
+func transportMessageParserUsesPolicyForInlineAndDetachedParsing() async throws {
+    let message = #"{"id":42,"method":"Runtime.consoleAPICalled","params":{"type":"log"},"result":{"ok":true}}"#
+    let inline = try await TransportMessageParser.parse(
+        message,
+        policy: TransportMessageParsePolicy(detachedParsingThresholdBytes: .max)
+    )
+    let detached = try await TransportMessageParser.parse(
+        message,
+        policy: TransportMessageParsePolicy(detachedParsingThresholdBytes: 0)
+    )
+
+    #expect(inline == detached)
+    #expect(inline.id == 42)
+    #expect(inline.method == "Runtime.consoleAPICalled")
+}
+
+@Test
 func rootCommandResolvesFromRootReply() async throws {
     let backend = FakeTransportBackend()
     let session = TransportSession(backend: backend, responseTimeout: testResponseTimeout)

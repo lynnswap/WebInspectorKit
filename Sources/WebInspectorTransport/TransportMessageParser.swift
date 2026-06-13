@@ -22,9 +22,29 @@ package struct ParsedProtocolMessage: Equatable, Sendable {
     }
 }
 
+package struct TransportMessageParsePolicy: Equatable, Sendable {
+    package static let `default` = TransportMessageParsePolicy(detachedParsingThresholdBytes: 64 * 1024)
+
+    package var detachedParsingThresholdBytes: Int
+
+    package init(detachedParsingThresholdBytes: Int) {
+        self.detachedParsingThresholdBytes = max(0, detachedParsingThresholdBytes)
+    }
+
+    package func shouldParseDetached(_ message: String) -> Bool {
+        message.utf8.count >= detachedParsingThresholdBytes
+    }
+}
+
 package enum TransportMessageParser {
-    package static func parse(_ message: String) async throws -> ParsedProtocolMessage {
-        try await Task.detached(priority: .userInitiated) {
+    package static func parse(
+        _ message: String,
+        policy: TransportMessageParsePolicy = .default
+    ) async throws -> ParsedProtocolMessage {
+        guard policy.shouldParseDetached(message) else {
+            return try parseSync(message)
+        }
+        return try await Task.detached(priority: .userInitiated) {
             try parseSync(message)
         }.value
     }

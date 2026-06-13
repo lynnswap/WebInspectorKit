@@ -119,6 +119,24 @@ func unsafeConcurrencyEscapeHatchesStayOnAllowlist() throws {
     #expect(violations.isEmpty, "New concurrency escape hatches must be reviewed and allowlisted: \(violations)")
 }
 
+@Test
+func detachedTaskUsageStaysOnAllowlist() throws {
+    let allowedFiles: Set<String> = [
+        "Sources/WebInspectorCore/Network/NetworkBody.swift",
+        "Sources/WebInspectorTransport/TransportMessageParser.swift",
+        "Sources/WebInspectorUI/DOM/Tree/DOMTreeFindCoordinator.swift",
+    ]
+
+    let violations = try sourceFiles(under: "Sources")
+        .filter { url in
+            try fileContents(url).contains("Task.detached")
+                && allowedFiles.contains(relativePath(url)) == false
+        }
+        .map(relativePath)
+
+    #expect(violations.isEmpty, "Task.detached must stay limited to reviewed heavy-work paths: \(violations)")
+}
+
 private func packageRoot() throws -> URL {
     var candidate = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
     let fileManager = FileManager.default

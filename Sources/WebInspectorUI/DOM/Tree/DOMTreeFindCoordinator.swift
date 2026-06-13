@@ -9,7 +9,7 @@ final class DOMTreeFindCoordinator: NSObject, @MainActor UIFindInteractionDelega
     private weak var textView: DOMTreeTextView?
     lazy var findInteraction = UIFindInteraction(sessionDelegate: self)
     private var activeResultAggregator: UITextSearchAggregator<Int>?
-    private var activeSearchCancellation: DOMTreeFindSearchCancellation?
+    private var activeSearchTask: Task<Void, Never>?
     private var activeSearchIdentifier: Int?
     private var nextSearchIdentifier = 0
 
@@ -77,10 +77,8 @@ final class DOMTreeFindCoordinator: NSObject, @MainActor UIFindInteractionDelega
         }
 
         cancelActiveSearch()
-        let cancellation = DOMTreeFindSearchCancellation()
         let searchIdentifier = nextSearchIdentifier
         nextSearchIdentifier += 1
-        activeSearchCancellation = cancellation
         activeSearchIdentifier = searchIdentifier
         activeResultAggregator = resultAggregator
         let search = DOMTreeFindSearchRequest(
@@ -89,50 +87,31 @@ final class DOMTreeFindCoordinator: NSObject, @MainActor UIFindInteractionDelega
             queryString: queryString,
             compareOptions: sanitizedCompareOptions(options.stringCompareOptions),
             wordMatchMethod: options.wordMatchMethod,
-            documentIdentifier: documentIdentifier,
-            cancellation: cancellation
+            documentIdentifier: documentIdentifier
         )
 
         textView.clearFindDecorations()
         textView.beginFindDecorationBatch()
-        cancellation.beginDecorationBatch()
-
-        Task.detached(priority: .userInitiated) { [weak self, search] in
-            let searchResultBatchSize = 128
-            var pendingRanges: [NSRange] = []
-            pendingRanges.reserveCapacity(searchResultBatchSize)
-
-            func flushPendingRanges() async -> Bool {
-                guard !pendingRanges.isEmpty else {
-                    return !search.cancellation.isCancelled
+        let batches = Self.searchBatches(for: search)
+        activeSearchTask = Task { @MainActor [weak self] in
+            var shouldContinue = true
+            for await batch in batches {
+                guard shouldContinue, let self, isActive(search.identifier) else {
+                    break
                 }
-
-                let ranges = pendingRanges
-                pendingRanges.removeAll(keepingCapacity: true)
-                return await self?.publishFoundRanges(ranges, for: search) ?? false
-            }
-
-            let completedSearch = await Self.enumerateSearchRangesAsync(
-                in: search.source,
-                queryString: search.queryString,
-                compareOptions: search.compareOptions,
-                wordMatchMethod: search.wordMatchMethod
-            ) { range in
-                guard !search.cancellation.isCancelled else {
-                    return false
+                switch batch {
+                case let .foundRanges(ranges):
+                    shouldContinue = publishFoundRanges(
+                        ranges,
+                        searchIdentifier: search.identifier,
+                        queryString: search.queryString,
+                        documentIdentifier: search.documentIdentifier
+                    )
+                case .finished:
+                    finishCompletedTextSearch(searchIdentifier: search.identifier)
                 }
-                pendingRanges.append(range)
-                if pendingRanges.count >= searchResultBatchSize {
-                    return await flushPendingRanges()
-                }
-                return true
             }
-
-            if completedSearch, await flushPendingRanges(), !search.cancellation.isCancelled {
-                await self?.finishCompletedTextSearch(search)
-            }
-
-            await self?.finishTextSearch(cancellation: search.cancellation)
+            self?.finishTextSearch(searchIdentifier: search.identifier)
         }
     }
 
@@ -204,10 +183,11 @@ final class DOMTreeFindCoordinator: NSObject, @MainActor UIFindInteractionDelega
     }
 
     private func cancelActiveSearch() {
-        if activeSearchCancellation?.cancelAndClaimDecorationBatch() == true {
+        if activeSearchTask != nil {
             textView?.endFindDecorationBatch()
         }
-        activeSearchCancellation = nil
+        activeSearchTask?.cancel()
+        activeSearchTask = nil
         activeSearchIdentifier = nil
 
         let resultAggregator = activeResultAggregator
@@ -215,44 +195,46 @@ final class DOMTreeFindCoordinator: NSObject, @MainActor UIFindInteractionDelega
         resultAggregator?.invalidate()
     }
 
-    private func finishTextSearch(cancellation: DOMTreeFindSearchCancellation) {
-        if cancellation.finishAndClaimDecorationBatch() {
-            textView?.endFindDecorationBatch()
+    private func finishTextSearch(searchIdentifier: Int) {
+        guard activeSearchIdentifier == searchIdentifier else {
+            return
         }
-        if activeSearchCancellation === cancellation {
-            activeSearchCancellation = nil
-        }
+        textView?.endFindDecorationBatch()
+        activeSearchTask = nil
     }
 
-    private func publishFoundRanges(_ ranges: [NSRange], for search: DOMTreeFindSearchRequest) -> Bool {
-        guard isActive(search), let resultAggregator = activeResultAggregator else {
+    private func publishFoundRanges(
+        _ ranges: [NSRange],
+        searchIdentifier: Int,
+        queryString: String,
+        documentIdentifier: Int
+    ) -> Bool {
+        guard isActive(searchIdentifier), let resultAggregator = activeResultAggregator else {
             return false
         }
 
         for range in ranges {
-            guard isActive(search) else {
+            guard isActive(searchIdentifier) else {
                 return false
             }
             resultAggregator.foundRange(
-                DOMTreeTextRange(nsRange: range, findSearchIdentifier: search.identifier),
-                searchString: search.queryString,
-                document: search.documentIdentifier
+                DOMTreeTextRange(nsRange: range, findSearchIdentifier: searchIdentifier),
+                searchString: queryString,
+                document: documentIdentifier
             )
         }
         return true
     }
 
-    private func finishCompletedTextSearch(_ search: DOMTreeFindSearchRequest) {
-        guard isActive(search), let resultAggregator = activeResultAggregator else {
+    private func finishCompletedTextSearch(searchIdentifier: Int) {
+        guard isActive(searchIdentifier), let resultAggregator = activeResultAggregator else {
             return
         }
         resultAggregator.finishedSearching()
     }
 
-    private func isActive(_ search: DOMTreeFindSearchRequest) -> Bool {
-        activeSearchIdentifier == search.identifier
-            && activeSearchCancellation === search.cancellation
-            && !search.cancellation.isCancelled
+    private func isActive(_ searchIdentifier: Int) -> Bool {
+        activeSearchIdentifier == searchIdentifier
     }
 
     private func isCurrentFindTextRange(_ textRange: UITextRange) -> Bool {
@@ -325,27 +307,57 @@ final class DOMTreeFindCoordinator: NSObject, @MainActor UIFindInteractionDelega
         return ranges
     }
 
-    @discardableResult
-    private nonisolated static func enumerateSearchRangesAsync(
-        in source: String,
-        queryString: String,
-        compareOptions: NSString.CompareOptions,
-        wordMatchMethod: UITextSearchOptions.WordMatchMethod,
-        _ body: (NSRange) async -> Bool
-    ) async -> Bool {
-        guard !source.isEmpty, !queryString.isEmpty else {
-            return true
+    private nonisolated static func searchBatches(
+        for request: DOMTreeFindSearchRequest,
+        batchSize: Int = 128
+    ) -> AsyncStream<DOMTreeFindSearchBatch> {
+        AsyncStream { continuation in
+            let task = Task.detached(priority: .userInitiated) {
+                enumerateSearchBatches(for: request, batchSize: batchSize) { batch in
+                    continuation.yield(batch)
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in
+                task.cancel()
+            }
+        }
+    }
+
+    private nonisolated static func enumerateSearchBatches(
+        for request: DOMTreeFindSearchRequest,
+        batchSize: Int,
+        yield: (DOMTreeFindSearchBatch) -> Void
+    ) {
+        guard !request.source.isEmpty, !request.queryString.isEmpty else {
+            yield(.finished)
+            return
         }
 
-        let sourceString = source as NSString
+        let sourceString = request.source as NSString
         var searchRange = NSRange(location: 0, length: sourceString.length)
-        var options = compareOptions
+        var options = request.compareOptions
         options.remove(.backwards)
         options.remove(.anchored)
+        var pendingRanges: [NSRange] = []
+        pendingRanges.reserveCapacity(batchSize)
+
+        func flushPendingRanges() -> Bool {
+            guard !pendingRanges.isEmpty else {
+                return Task.isCancelled == false
+            }
+            let ranges = pendingRanges
+            pendingRanges.removeAll(keepingCapacity: true)
+            yield(.foundRanges(ranges))
+            return Task.isCancelled == false
+        }
 
         while searchRange.length > 0 {
+            guard Task.isCancelled == false else {
+                return
+            }
             let foundRange = sourceString.range(
-                of: queryString,
+                of: request.queryString,
                 options: options,
                 range: searchRange
             )
@@ -354,9 +366,10 @@ final class DOMTreeFindCoordinator: NSObject, @MainActor UIFindInteractionDelega
             }
 
             let alignedRange = composedCharacterAlignedRange(foundRange, in: sourceString)
-            if accepts(range: alignedRange, in: sourceString, wordMatchMethod: wordMatchMethod) {
-                guard await body(alignedRange) else {
-                    return false
+            if accepts(range: alignedRange, in: sourceString, wordMatchMethod: request.wordMatchMethod) {
+                pendingRanges.append(alignedRange)
+                guard pendingRanges.count < batchSize || flushPendingRanges() else {
+                    return
                 }
             }
 
@@ -367,7 +380,10 @@ final class DOMTreeFindCoordinator: NSObject, @MainActor UIFindInteractionDelega
             searchRange = NSRange(location: nextLocation, length: sourceString.length - nextLocation)
         }
 
-        return true
+        guard flushPendingRanges() else {
+            return
+        }
+        yield(.finished)
     }
 
     private nonisolated static func composedCharacterAlignedRange(_ range: NSRange, in source: NSString) -> NSRange {
@@ -474,42 +490,11 @@ private struct DOMTreeFindSearchRequest: Sendable {
     let compareOptions: NSString.CompareOptions
     let wordMatchMethod: UITextSearchOptions.WordMatchMethod
     let documentIdentifier: Int
-    let cancellation: DOMTreeFindSearchCancellation
 }
 
-private final class DOMTreeFindSearchCancellation: @unchecked Sendable {
-    private let lock = NSLock()
-    private var cancelled = false
-    private var decorationBatchActive = false
-
-    var isCancelled: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return cancelled
-    }
-
-    func beginDecorationBatch() {
-        lock.lock()
-        decorationBatchActive = true
-        lock.unlock()
-    }
-
-    func cancelAndClaimDecorationBatch() -> Bool {
-        lock.lock()
-        cancelled = true
-        let shouldEndDecorationBatch = decorationBatchActive
-        decorationBatchActive = false
-        lock.unlock()
-        return shouldEndDecorationBatch
-    }
-
-    func finishAndClaimDecorationBatch() -> Bool {
-        lock.lock()
-        let shouldEndDecorationBatch = decorationBatchActive
-        decorationBatchActive = false
-        lock.unlock()
-        return shouldEndDecorationBatch
-    }
+private enum DOMTreeFindSearchBatch: Sendable {
+    case foundRanges([NSRange])
+    case finished
 }
 
 #endif
