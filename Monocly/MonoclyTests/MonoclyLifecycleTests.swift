@@ -509,6 +509,105 @@ struct MonoclyLifecycleTests {
     }
 
     @Test
+    func inspectorWindowActivationFailureClearsPendingPresentation() throws {
+        try withCleanState { context in
+            let fixture = try makeHostedRootViewController(context: context)
+            let coordinator = BrowserInspectorCoordinator()
+
+            coordinator.setSupportsMultipleScenesProviderForTesting { true }
+            coordinator.setSceneActivationRequesterForTesting(
+                BrowserInspectorSceneActivationRequester(
+                    activateScene: { _, _, _, errorHandler in
+                        errorHandler(NSError(domain: "MonoclyLifecycleTests", code: 1))
+                    }
+                )
+            )
+
+            #expect(coordinator.presentWindow(
+                from: fixture.rootViewController,
+                browserStore: fixture.rootViewController.store,
+                inspectorSession: fixture.rootViewController.inspectorSession
+            ))
+            #expect(coordinator.hasInspectorWindowForTesting == false)
+            #expect(BrowserInspectorCoordinator.inspectorWindowContext() == nil)
+        }
+    }
+
+    @Test
+    func inspectorWindowPresentationObserversReceivePhaseChanges() throws {
+        try withCleanState { context in
+            let fixture = try makeHostedRootViewController(context: context)
+            let coordinator = BrowserInspectorCoordinator()
+            var observedStates: [Bool] = []
+
+            coordinator.setSupportsMultipleScenesProviderForTesting { true }
+            coordinator.setSceneActivationRequesterForTesting(
+                BrowserInspectorSceneActivationRequester(
+                    activateScene: { _, _, _, _ in }
+                )
+            )
+
+            let observerID = BrowserInspectorCoordinator.observeInspectorWindowPresentation {
+                observedStates.append($0)
+            }
+            defer {
+                BrowserInspectorCoordinator.removeInspectorWindowObservation(observerID)
+            }
+
+            #expect(observedStates == [false])
+            #expect(coordinator.presentWindow(
+                from: fixture.rootViewController,
+                browserStore: fixture.rootViewController.store,
+                inspectorSession: fixture.rootViewController.inspectorSession
+            ))
+            #expect(observedStates == [false, true])
+
+            BrowserInspectorCoordinator.clearInspectorWindowPresentation()
+            #expect(observedStates == [false, true, false])
+
+            BrowserInspectorCoordinator.removeInspectorWindowObservation(observerID)
+            #expect(coordinator.presentWindow(
+                from: fixture.rootViewController,
+                browserStore: fixture.rootViewController.store,
+                inspectorSession: fixture.rootViewController.inspectorSession
+            ))
+            #expect(observedStates == [false, true, false])
+        }
+    }
+
+    @Test
+    func inspectorWindowReleaseHandlerRunsOnceWhenPresentationClears() throws {
+        try withCleanState { context in
+            let fixture = try makeHostedRootViewController(context: context)
+            let coordinator = BrowserInspectorCoordinator()
+            var releaseCount = 0
+
+            coordinator.setSupportsMultipleScenesProviderForTesting { true }
+            coordinator.setSceneActivationRequesterForTesting(
+                BrowserInspectorSceneActivationRequester(
+                    activateScene: { _, _, _, _ in }
+                )
+            )
+
+            #expect(coordinator.presentWindow(
+                from: fixture.rootViewController,
+                browserStore: fixture.rootViewController.store,
+                inspectorSession: fixture.rootViewController.inspectorSession
+            ))
+            BrowserInspectorCoordinator.setInspectorWindowReleaseHandler(
+                for: fixture.rootViewController.inspectorSession
+            ) {
+                releaseCount += 1
+            }
+
+            BrowserInspectorCoordinator.clearInspectorWindowPresentation()
+            BrowserInspectorCoordinator.clearInspectorWindowPresentation()
+
+            #expect(releaseCount == 1)
+        }
+    }
+
+    @Test
     func inspectorSceneDelegateDestroysOrphanedRestoredSessionWithoutContext() throws {
         try withCleanState { _ in
             let windowScene = try makeWindowScene()
