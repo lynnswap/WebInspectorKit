@@ -21,6 +21,8 @@ enum TransportPendingKey: Sendable {
 struct TransportReplyStore: Sendable {
     private var rootReplies: [UInt64: TransportPendingReply] = [:]
     private var targetReplies: [TargetReplyKey: TargetReplyRecord] = [:]
+    private var targetReplyKeysByRootWrapperID: [UInt64: TargetReplyKey] = [:]
+    private var targetReplyKeysByCommandID: [UInt64: TargetReplyKey] = [:]
 
     var pendingRootReplyIDs: [UInt64] {
         rootReplies.keys.sorted()
@@ -43,7 +45,19 @@ struct TransportReplyStore: Sendable {
         key: TargetReplyKey,
         rootWrapperID: UInt64
     ) {
-        targetReplies[key] = TargetReplyRecord(pending: pending, rootWrapperID: rootWrapperID)
+        if let existingKey = targetReplyKeysByCommandID[key.commandID] {
+            _ = removeTargetReply(for: existingKey)
+        }
+        if let existingKey = targetReplyKeysByRootWrapperID[rootWrapperID] {
+            _ = removeTargetReply(for: existingKey)
+        }
+        if let existingRecord = targetReplies.removeValue(forKey: key) {
+            removeIndexes(for: key, record: existingRecord)
+        }
+
+        let record = TargetReplyRecord(pending: pending, rootWrapperID: rootWrapperID)
+        targetReplies[key] = record
+        insertIndexes(for: key, record: record)
     }
 
     mutating func removeRootReply(commandID: UInt64) -> TransportPendingReply? {
@@ -51,7 +65,8 @@ struct TransportReplyStore: Sendable {
     }
 
     mutating func takeTargetReplyKey(forRootWrapperID rootWrapperID: UInt64) -> TargetReplyKey? {
-        guard let key = targetReplies.first(where: { $0.value.rootWrapperID == rootWrapperID })?.key else {
+        guard let key = targetReplyKeysByRootWrapperID.removeValue(forKey: rootWrapperID),
+              targetReplies[key]?.rootWrapperID == rootWrapperID else {
             return nil
         }
         targetReplies[key]?.rootWrapperID = nil
@@ -59,7 +74,11 @@ struct TransportReplyStore: Sendable {
     }
 
     mutating func removeTargetReply(for key: TargetReplyKey) -> TransportPendingReply? {
-        targetReplies.removeValue(forKey: key)?.pending
+        guard let record = targetReplies.removeValue(forKey: key) else {
+            return nil
+        }
+        removeIndexes(for: key, record: record)
+        return record.pending
     }
 
     mutating func removePendingReply(_ key: TransportPendingKey) {
@@ -85,7 +104,7 @@ struct TransportReplyStore: Sendable {
             return removeTargetReply(for: key)
         }
 
-        guard let retargetedKey = targetReplies.keys.first(where: { $0.commandID == key.commandID }) else {
+        guard let retargetedKey = targetReplyKeysByCommandID[key.commandID] else {
             return nil
         }
         guard targetReplies[retargetedKey]?.pending.hasBufferedProvisionalResponse != true else {
@@ -104,7 +123,7 @@ struct TransportReplyStore: Sendable {
     }
 
     mutating func removeRetargetedReply(commandID: UInt64) -> TransportPendingReply? {
-        guard let key = targetReplies.keys.first(where: { $0.commandID == commandID }) else {
+        guard let key = targetReplyKeysByCommandID[commandID] else {
             return nil
         }
         return removeTargetReply(for: key)
@@ -119,14 +138,38 @@ struct TransportReplyStore: Sendable {
             guard var record = targetReplies.removeValue(forKey: oldKey) else {
                 continue
             }
+            removeIndexes(for: oldKey, record: record)
             let newKey = TargetReplyKey(targetID: newTargetID, commandID: oldKey.commandID)
+            if let existingRecord = targetReplies.removeValue(forKey: newKey) {
+                removeIndexes(for: newKey, record: existingRecord)
+            }
             record.pending.targetID = newTargetID
             targetReplies[newKey] = record
+            insertIndexes(for: newKey, record: record)
         }
     }
 
     mutating func removeAll() {
         rootReplies.removeAll()
         targetReplies.removeAll()
+        targetReplyKeysByRootWrapperID.removeAll()
+        targetReplyKeysByCommandID.removeAll()
+    }
+
+    private mutating func insertIndexes(for key: TargetReplyKey, record: TargetReplyRecord) {
+        if let rootWrapperID = record.rootWrapperID {
+            targetReplyKeysByRootWrapperID[rootWrapperID] = key
+        }
+        targetReplyKeysByCommandID[key.commandID] = key
+    }
+
+    private mutating func removeIndexes(for key: TargetReplyKey, record: TargetReplyRecord) {
+        if let rootWrapperID = record.rootWrapperID,
+           targetReplyKeysByRootWrapperID[rootWrapperID] == key {
+            targetReplyKeysByRootWrapperID.removeValue(forKey: rootWrapperID)
+        }
+        if targetReplyKeysByCommandID[key.commandID] == key {
+            targetReplyKeysByCommandID.removeValue(forKey: key.commandID)
+        }
     }
 }
