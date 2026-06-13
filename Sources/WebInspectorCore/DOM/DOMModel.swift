@@ -249,22 +249,20 @@ package final class DOMSession {
         removeDocuments(for: targetID)
 
         let documentID = documentStore.nextDocumentID(for: targetID)
-        var nodesByID: [DOMNode.ID: DOMNode] = [:]
-        var currentNodeIDByProtocolNodeID: [DOMProtocolNodeID: DOMNode.ID] = [:]
+        var nodeIndex = DOMDocumentNodeIndex()
         let rootNodeID = buildSubtree(
             root,
             documentID: documentID,
             parentID: nil,
-            nodesByID: &nodesByID,
-            currentNodeIDByProtocolNodeID: &currentNodeIDByProtocolNodeID
+            nodeIndex: &nodeIndex
         )
         let document = DOMDocument(
             id: documentID,
             targetID: targetID,
             lifecycle: .loaded,
             rootNodeID: rootNodeID,
-            nodesByID: nodesByID,
-            currentNodeIDByProtocolNodeID: currentNodeIDByProtocolNodeID
+            nodesByID: nodeIndex.nodesByID,
+            currentNodeIDByProtocolNodeID: nodeIndex.currentNodeIDByProtocolNodeID
         )
         targetState.currentDocument = document
 
@@ -995,19 +993,17 @@ package final class DOMSession {
         _ payload: DOMNodePayload,
         documentID: DOMDocument.ID,
         parentID: DOMNode.ID?,
-        nodesByID: inout [DOMNode.ID: DOMNode],
-        currentNodeIDByProtocolNodeID: inout [DOMProtocolNodeID: DOMNode.ID]
+        nodeIndex: inout DOMDocumentNodeIndex
     ) -> DOMNode.ID {
         let nodeID = DOMNode.ID(documentID: documentID, nodeID: payload.nodeID)
         let node: DOMNode
-        if let existingNode = nodesByID[nodeID] {
+        if let existingNode = nodeIndex.node(for: nodeID) {
             node = existingNode
             node.update(from: payload, parentID: parentID)
         } else {
             node = DOMNode(id: nodeID, payload: payload, parentID: parentID)
-            nodesByID[nodeID] = node
         }
-        currentNodeIDByProtocolNodeID[payload.nodeID] = nodeID
+        nodeIndex.store(node, rawNodeID: payload.nodeID)
 
         switch payload.regularChildren {
         case let .unrequested(count):
@@ -1019,33 +1015,32 @@ package final class DOMSession {
                         $0,
                         documentID: documentID,
                         parentID: nodeID,
-                        nodesByID: &nodesByID,
-                        currentNodeIDByProtocolNodeID: &currentNodeIDByProtocolNodeID
+                        nodeIndex: &nodeIndex
                     )
                 }
             )
         }
 
         node.contentDocumentID = payload.contentDocument.first.map {
-            buildSubtree($0, documentID: documentID, parentID: nodeID, nodesByID: &nodesByID, currentNodeIDByProtocolNodeID: &currentNodeIDByProtocolNodeID)
+            buildSubtree($0, documentID: documentID, parentID: nodeID, nodeIndex: &nodeIndex)
         }
         node.shadowRootIDs = payload.shadowRoots.map {
-            buildSubtree($0, documentID: documentID, parentID: nodeID, nodesByID: &nodesByID, currentNodeIDByProtocolNodeID: &currentNodeIDByProtocolNodeID)
+            buildSubtree($0, documentID: documentID, parentID: nodeID, nodeIndex: &nodeIndex)
         }
         node.templateContentID = payload.templateContent.first.map {
-            buildSubtree($0, documentID: documentID, parentID: nodeID, nodesByID: &nodesByID, currentNodeIDByProtocolNodeID: &currentNodeIDByProtocolNodeID)
+            buildSubtree($0, documentID: documentID, parentID: nodeID, nodeIndex: &nodeIndex)
         }
         node.beforePseudoElementID = payload.beforePseudoElement.first.map {
-            buildSubtree($0, documentID: documentID, parentID: nodeID, nodesByID: &nodesByID, currentNodeIDByProtocolNodeID: &currentNodeIDByProtocolNodeID)
+            buildSubtree($0, documentID: documentID, parentID: nodeID, nodeIndex: &nodeIndex)
         }
         node.otherPseudoElementIDs = payload.otherPseudoElements.map {
-            buildSubtree($0, documentID: documentID, parentID: nodeID, nodesByID: &nodesByID, currentNodeIDByProtocolNodeID: &currentNodeIDByProtocolNodeID)
+            buildSubtree($0, documentID: documentID, parentID: nodeID, nodeIndex: &nodeIndex)
         }
         node.afterPseudoElementID = payload.afterPseudoElement.first.map {
-            buildSubtree($0, documentID: documentID, parentID: nodeID, nodesByID: &nodesByID, currentNodeIDByProtocolNodeID: &currentNodeIDByProtocolNodeID)
+            buildSubtree($0, documentID: documentID, parentID: nodeID, nodeIndex: &nodeIndex)
         }
 
-        relinkProtocolEffectiveChildren(of: node, nodesByID: nodesByID)
+        relinkProtocolEffectiveChildren(of: node, nodesByID: nodeIndex.nodesByID)
         return nodeID
     }
 
@@ -1062,20 +1057,16 @@ package final class DOMSession {
         pruneOmittedOwnedChildren(fromExistingSubtreeMatching: payload, in: document)
         let oldNodeIDs = Set(document.nodesByID.keys)
         let oldCurrentNodeIDByProtocolNodeID = document.currentNodeIDByProtocolNodeID
-        var nodesByID = document.nodesByID
-        var currentNodeIDByProtocolNodeID = document.currentNodeIDByProtocolNodeID
+        var nodeIndex = document.nodeIndexSnapshot
         let nodeID = buildSubtree(
             payload,
             documentID: document.id,
             parentID: parentID,
-            nodesByID: &nodesByID,
-            currentNodeIDByProtocolNodeID: &currentNodeIDByProtocolNodeID
+            nodeIndex: &nodeIndex
         )
-        if Set(nodesByID.keys) != oldNodeIDs {
-            document.nodesByID = nodesByID
-        }
-        if currentNodeIDByProtocolNodeID != oldCurrentNodeIDByProtocolNodeID {
-            document.currentNodeIDByProtocolNodeID = currentNodeIDByProtocolNodeID
+        if Set(nodeIndex.nodesByID.keys) != oldNodeIDs
+            || nodeIndex.currentNodeIDByProtocolNodeID != oldCurrentNodeIDByProtocolNodeID {
+            document.replaceNodeIndex(nodeIndex)
         }
         return nodeID
     }
@@ -1473,10 +1464,7 @@ package final class DOMSession {
         for projection in frameDocumentProjectionIndex.values where projection.ownerNodeID == nodeID {
             detachFrameDocumentProjection(frameTargetID: projection.frameTargetID)
         }
-        if document.currentNodeIDByProtocolNodeID[node.protocolNodeID] == nodeID {
-            document.currentNodeIDByProtocolNodeID.removeValue(forKey: node.protocolNodeID)
-        }
-        document.nodesByID.removeValue(forKey: nodeID)
+        document.removeNode(nodeID, ifCurrentFor: node.protocolNodeID)
     }
 
     private func detachNode(_ nodeID: DOMNode.ID, from parentID: DOMNode.ID?) {

@@ -64,6 +64,48 @@ package final class DOMFrame {
 }
 
 @MainActor
+package struct DOMDocumentNodeIndex {
+    private var nodesByIdentifier: [DOMNode.ID: DOMNode]
+    private var currentNodeIDByRawNodeID: [DOMProtocolNodeID: DOMNode.ID]
+
+    package init(
+        nodesByID: [DOMNode.ID: DOMNode] = [:],
+        currentNodeIDByProtocolNodeID: [DOMProtocolNodeID: DOMNode.ID] = [:]
+    ) {
+        self.nodesByIdentifier = nodesByID
+        self.currentNodeIDByRawNodeID = currentNodeIDByProtocolNodeID
+    }
+
+    package var nodesByID: [DOMNode.ID: DOMNode] {
+        nodesByIdentifier
+    }
+
+    package var currentNodeIDByProtocolNodeID: [DOMProtocolNodeID: DOMNode.ID] {
+        currentNodeIDByRawNodeID
+    }
+
+    package func node(for nodeID: DOMNode.ID) -> DOMNode? {
+        nodesByIdentifier[nodeID]
+    }
+
+    package func currentNodeID(for rawNodeID: DOMProtocolNodeID) -> DOMNode.ID? {
+        currentNodeIDByRawNodeID[rawNodeID]
+    }
+
+    package mutating func store(_ node: DOMNode, rawNodeID: DOMProtocolNodeID) {
+        nodesByIdentifier[node.id] = node
+        currentNodeIDByRawNodeID[rawNodeID] = node.id
+    }
+
+    package mutating func removeNode(_ nodeID: DOMNode.ID, ifCurrentFor rawNodeID: DOMProtocolNodeID) {
+        if currentNodeIDByRawNodeID[rawNodeID] == nodeID {
+            currentNodeIDByRawNodeID.removeValue(forKey: rawNodeID)
+        }
+        nodesByIdentifier.removeValue(forKey: nodeID)
+    }
+}
+
+@MainActor
 @Observable
 package final class DOMDocumentState {
     package typealias ID = DOMDocumentIdentifier
@@ -73,8 +115,7 @@ package final class DOMDocumentState {
     package let localDocumentLifetimeID: DOMDocumentLifetimeIdentifier
     package var lifecycle: DOMDocumentLifecycle
     package let rootNodeID: DOMNode.ID
-    package var nodesByID: [DOMNode.ID: DOMNode]
-    package var currentNodeIDByProtocolNodeID: [DOMProtocolNodeID: DOMNode.ID]
+    private var nodeIndex: DOMDocumentNodeIndex
     package var transactions: [DOMTransaction.ID: DOMTransaction]
     package var nextTransactionID: UInt64
 
@@ -91,10 +132,40 @@ package final class DOMDocumentState {
         self.localDocumentLifetimeID = id.localDocumentLifetimeID
         self.lifecycle = lifecycle
         self.rootNodeID = rootNodeID
-        self.nodesByID = nodesByID
-        self.currentNodeIDByProtocolNodeID = currentNodeIDByProtocolNodeID
+        nodeIndex = DOMDocumentNodeIndex(
+            nodesByID: nodesByID,
+            currentNodeIDByProtocolNodeID: currentNodeIDByProtocolNodeID
+        )
         transactions = [:]
         nextTransactionID = 0
+    }
+
+    package var nodesByID: [DOMNode.ID: DOMNode] {
+        nodeIndex.nodesByID
+    }
+
+    package var currentNodeIDByProtocolNodeID: [DOMProtocolNodeID: DOMNode.ID] {
+        nodeIndex.currentNodeIDByProtocolNodeID
+    }
+
+    package var nodeIndexSnapshot: DOMDocumentNodeIndex {
+        nodeIndex
+    }
+
+    package func replaceNodeIndex(_ newIndex: DOMDocumentNodeIndex) {
+        nodeIndex = newIndex
+    }
+
+    package func node(for nodeID: DOMNode.ID) -> DOMNode? {
+        nodeIndex.node(for: nodeID)
+    }
+
+    package func currentNodeID(for rawNodeID: DOMProtocolNodeID) -> DOMNode.ID? {
+        nodeIndex.currentNodeID(for: rawNodeID)
+    }
+
+    package func removeNode(_ nodeID: DOMNode.ID, ifCurrentFor rawNodeID: DOMProtocolNodeID) {
+        nodeIndex.removeNode(nodeID, ifCurrentFor: rawNodeID)
     }
 
     package func nextTransactionIdentifier() -> DOMTransaction.ID {
