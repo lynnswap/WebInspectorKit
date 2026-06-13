@@ -364,6 +364,29 @@ func waitForCurrentMainPageTargetFailsAfterDetach() async throws {
 }
 
 @Test
+func waitForCurrentMainPageTargetTimeoutUsesInjectedSleep() async throws {
+    let backend = FakeTransportBackend()
+    let timeout = ManualResponseTimeout()
+    let session = TransportSession(
+        backend: backend,
+        responseTimeout: testResponseTimeout,
+        responseTimeoutSleep: { duration in
+            try await timeout.sleep(for: duration)
+        }
+    )
+
+    let waitTask = Task {
+        try await session.waitForCurrentMainPageTarget(timeout: .milliseconds(20))
+    }
+    await timeout.waitUntilSuspended()
+    await timeout.fireNext()
+
+    await #expect(throws: TransportError.missingMainPageTarget) {
+        try await waitTask.value
+    }
+}
+
+@Test
 func targetLifecycleUpdatesSnapshotWithoutPrefixGuessing() async throws {
     let backend = FakeTransportBackend()
     let session = TransportSession(backend: backend)

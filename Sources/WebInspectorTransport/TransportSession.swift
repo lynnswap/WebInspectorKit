@@ -1,12 +1,13 @@
 import Foundation
 
 package actor TransportSession {
-    package typealias ResponseTimeoutSleep = @Sendable (Duration) async throws -> Void
+    package typealias TimeoutSleep = @Sendable (Duration) async throws -> Void
+    package typealias ResponseTimeoutSleep = TimeoutSleep
     package typealias ResponseTimeoutDidFire = @Sendable () async -> Void
 
     private let backend: any TransportBackend
     private let responseTimeout: Duration?
-    private let responseTimeoutSleep: ResponseTimeoutSleep
+    private let timeoutSleep: TimeoutSleep
     private let responseTimeoutDidFire: ResponseTimeoutDidFire
     private var nextCommandID: UInt64
     private var eventSequences: TransportEventSequenceTracker
@@ -28,7 +29,7 @@ package actor TransportSession {
     ) {
         self.backend = backend
         self.responseTimeout = responseTimeout
-        self.responseTimeoutSleep = responseTimeoutSleep ?? { try await Task.sleep(for: $0) }
+        self.timeoutSleep = responseTimeoutSleep ?? { try await Task.sleep(for: $0) }
         self.responseTimeoutDidFire = responseTimeoutDidFire ?? {}
         nextCommandID = 0
         eventSequences = TransportEventSequenceTracker()
@@ -131,9 +132,10 @@ package actor TransportSession {
         let waiter = mainPageTargetWaiterStore.insert()
 
         let timeoutTask: Task<Void, Never>? = timeout.map { timeout in
-            Task {
+            let timeoutSleep = self.timeoutSleep
+            return Task {
                 do {
-                    try await Task.sleep(for: timeout)
+                    try await timeoutSleep(timeout)
                 } catch {
                     return
                 }
@@ -289,11 +291,11 @@ package actor TransportSession {
         targetID: ProtocolTargetIdentifier?
     ) async throws -> ProtocolCommandResult {
         let timeoutTask: Task<Void, Never>? = responseTimeout.map { responseTimeout in
-            let responseTimeoutSleep = self.responseTimeoutSleep
+            let timeoutSleep = self.timeoutSleep
             let responseTimeoutDidFire = self.responseTimeoutDidFire
             return Task {
                 do {
-                    try await responseTimeoutSleep(responseTimeout)
+                    try await timeoutSleep(responseTimeout)
                 } catch {
                     return
                 }
