@@ -9,8 +9,7 @@ package actor TransportSession {
     private let responseTimeoutSleep: ResponseTimeoutSleep
     private let responseTimeoutDidFire: ResponseTimeoutDidFire
     private var nextCommandID: UInt64
-    private var nextSequence: UInt64
-    private var lastSequenceByDomain: [ProtocolDomain: UInt64]
+    private var eventSequences: TransportEventSequenceTracker
     private var nextSubscriberID: UInt64
     private var nextMainPageTargetWaiterID: UInt64
     private var replyStore: TransportReplyStore
@@ -35,8 +34,7 @@ package actor TransportSession {
         self.responseTimeoutSleep = responseTimeoutSleep ?? { try await Task.sleep(for: $0) }
         self.responseTimeoutDidFire = responseTimeoutDidFire ?? {}
         nextCommandID = 0
-        nextSequence = 0
-        lastSequenceByDomain = [:]
+        eventSequences = TransportEventSequenceTracker()
         nextSubscriberID = 0
         nextMainPageTargetWaiterID = 0
         replyStore = TransportReplyStore()
@@ -109,7 +107,7 @@ package actor TransportSession {
     package func receiveRootMessage(_ message: String) async -> UInt64 {
         inboundMessageQueue.append(message)
         await drainInboundMessages()
-        return nextSequence
+        return eventSequences.current.sequence
     }
 
     package func detach() async {
@@ -144,7 +142,10 @@ package actor TransportSession {
             throw TransportError.transportClosed
         }
         if let currentMainPageTargetID = targetRegistry.currentMainPageTargetID {
-            return TransportMainPageTarget(targetID: currentMainPageTargetID, receivedSequence: nextSequence)
+            return TransportMainPageTarget(
+                targetID: currentMainPageTargetID,
+                receivedSequence: eventSequences.current.sequence
+            )
         }
 
         nextMainPageTargetWaiterID &+= 1
@@ -276,12 +277,13 @@ package actor TransportSession {
         guard command.method == "DOM.enable" else {
             return nil
         }
+        let eventSequence = eventSequences.current
         return ProtocolCommandResult(
             domain: command.domain,
             method: command.method,
             targetID: targetID,
-            receivedSequence: nextSequence,
-            receivedDomainSequences: lastSequenceByDomain,
+            receivedSequence: eventSequence.sequence,
+            receivedDomainSequences: eventSequence.receivedDomainSequences,
             resultData: Data("{}".utf8)
         )
     }
@@ -453,14 +455,15 @@ package actor TransportSession {
             )
             return
         }
+        let eventSequence = eventSequences.current
         await pending.promise.fulfill(
             .success(
                 ProtocolCommandResult(
                     domain: pending.domain,
                     method: pending.method,
                     targetID: pending.targetID,
-                    receivedSequence: nextSequence,
-                    receivedDomainSequences: lastSequenceByDomain,
+                    receivedSequence: eventSequence.sequence,
+                    receivedDomainSequences: eventSequence.receivedDomainSequences,
                     resultData: parsed.resultData
                 )
             )
@@ -805,15 +808,14 @@ package actor TransportSession {
         sourceTargetID: ProtocolTargetIdentifier? = nil,
         paramsData: Data
     ) async {
-        nextSequence &+= 1
-        lastSequenceByDomain[domain] = nextSequence
+        let eventSequence = eventSequences.recordEvent(domain: domain)
         let envelope = ProtocolEventEnvelope(
-            sequence: nextSequence,
+            sequence: eventSequence.sequence,
             domain: domain,
             method: method,
             targetID: targetID,
             sourceTargetID: sourceTargetID,
-            receivedDomainSequences: lastSequenceByDomain,
+            receivedDomainSequences: eventSequence.receivedDomainSequences,
             paramsData: paramsData
         )
         let continuations = subscribers[domain].map { Array($0.values) } ?? []
@@ -823,7 +825,7 @@ package actor TransportSession {
         for continuation in orderedSubscribers.values {
             continuation.yield(envelope)
         }
-        await notifyMainPageTargetWaitersIfNeeded(receivedSequence: nextSequence)
+        await notifyMainPageTargetWaitersIfNeeded(receivedSequence: eventSequence.sequence)
     }
 
     private func notifyMainPageTargetWaitersIfNeeded(receivedSequence: UInt64) async {
