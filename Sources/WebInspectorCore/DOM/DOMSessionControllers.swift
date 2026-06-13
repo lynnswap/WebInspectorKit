@@ -337,6 +337,65 @@ final class DOMSessionDeleteUndoController {
     weak var undoManager: UndoManager?
     var states: [DOMSessionDeleteUndoState] = []
     let operationQueue = DOMSessionDeleteUndoOperationQueue()
+
+    func remember(_ undoManager: UndoManager) {
+        self.undoManager = undoManager
+    }
+
+    func track(_ state: DOMSessionDeleteUndoState) {
+        guard states.contains(where: { $0 === state }) == false else {
+            return
+        }
+        states.append(state)
+    }
+
+    func clear(using undoManager: UndoManager? = nil, undoTarget: AnyObject) {
+        let manager = undoManager ?? self.undoManager
+        manager?.removeAllActions(withTarget: undoTarget)
+        if let manager, manager === self.undoManager {
+            self.undoManager = nil
+        }
+        states.removeAll()
+        operationQueue.invalidate()
+    }
+
+    func stateIsCurrent(
+        _ state: DOMSessionDeleteUndoState,
+        currentDocumentID: DOMDocumentIdentifier?,
+        undoManager: UndoManager,
+        undoTarget: AnyObject,
+        operation: String,
+        recordError: (InspectorSessionError?) -> Void
+    ) -> Bool {
+        guard currentDocumentID == state.documentID else {
+            clear(using: undoManager, undoTarget: undoTarget)
+            recordError(InspectorSessionError("DOM document changed before \(operation)."))
+            return false
+        }
+        return true
+    }
+
+    func updateDocumentID(
+        for state: DOMSessionDeleteUndoState,
+        currentDocumentID: DOMDocumentIdentifier?,
+        undoManager: UndoManager,
+        undoTarget: AnyObject,
+        recordError: (InspectorSessionError?) -> Void
+    ) {
+        guard let currentDocumentID else {
+            clear(using: undoManager, undoTarget: undoTarget)
+            recordError(InspectorSessionError("DOM document is unavailable after delete undo operation."))
+            return
+        }
+        var updatedTrackedState = false
+        for trackedState in states where trackedState.documentTargetID == state.documentTargetID {
+            trackedState.documentID = currentDocumentID
+            updatedTrackedState = true
+        }
+        if updatedTrackedState == false {
+            state.documentID = currentDocumentID
+        }
+    }
 }
 
 @MainActor

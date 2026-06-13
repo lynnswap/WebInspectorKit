@@ -1013,8 +1013,8 @@ extension DOMSession {
     }
 
     private func registerUndoDelete(_ state: DOMSessionDeleteUndoState, undoManager: UndoManager) {
-        rememberDeleteUndoManager(undoManager)
-        trackDeleteUndoState(state)
+        deleteUndoController.remember(undoManager)
+        deleteUndoController.track(state)
         undoManager.registerUndo(withTarget: self) { target in
             target.registerRedoDelete(state, undoManager: undoManager)
             target.enqueueDeleteUndoOperation { [weak target] generation in
@@ -1025,8 +1025,8 @@ extension DOMSession {
     }
 
     private func registerRedoDelete(_ state: DOMSessionDeleteUndoState, undoManager: UndoManager) {
-        rememberDeleteUndoManager(undoManager)
-        trackDeleteUndoState(state)
+        deleteUndoController.remember(undoManager)
+        deleteUndoController.track(state)
         undoManager.registerUndo(withTarget: self) { target in
             target.registerUndoDelete(state, undoManager: undoManager)
             target.enqueueDeleteUndoOperation { [weak target] generation in
@@ -1142,48 +1142,27 @@ extension DOMSession {
         undoManager: UndoManager,
         operation: String
     ) -> Bool {
-        guard currentDocumentID(for: state.documentTargetID) == state.documentID else {
-            clearDeleteUndoHistory(using: undoManager)
-            recordError?(InspectorSessionError("DOM document changed before \(operation)."))
-            return false
-        }
-        return true
+        deleteUndoController.stateIsCurrent(
+            state,
+            currentDocumentID: currentDocumentID(for: state.documentTargetID),
+            undoManager: undoManager,
+            undoTarget: self,
+            operation: operation,
+            recordError: { [weak self] error in self?.recordError?(error) }
+        )
     }
 
     private func updateDeleteUndoDocumentID(_ state: DOMSessionDeleteUndoState, undoManager: UndoManager) {
-        guard let documentID = currentDocumentID(for: state.documentTargetID) else {
-            clearDeleteUndoHistory(using: undoManager)
-            recordError?(InspectorSessionError("DOM document is unavailable after delete undo operation."))
-            return
-        }
-        var updatedTrackedState = false
-        for trackedState in deleteUndoController.states where trackedState.documentTargetID == state.documentTargetID {
-            trackedState.documentID = documentID
-            updatedTrackedState = true
-        }
-        if updatedTrackedState == false {
-            state.documentID = documentID
-        }
-    }
-
-    private func rememberDeleteUndoManager(_ undoManager: UndoManager) {
-        deleteUndoController.undoManager = undoManager
-    }
-
-    private func trackDeleteUndoState(_ state: DOMSessionDeleteUndoState) {
-        guard deleteUndoController.states.contains(where: { $0 === state }) == false else {
-            return
-        }
-        deleteUndoController.states.append(state)
+        deleteUndoController.updateDocumentID(
+            for: state,
+            currentDocumentID: currentDocumentID(for: state.documentTargetID),
+            undoManager: undoManager,
+            undoTarget: self,
+            recordError: { [weak self] error in self?.recordError?(error) }
+        )
     }
 
     private func clearDeleteUndoHistory(using undoManager: UndoManager? = nil) {
-        let manager = undoManager ?? deleteUndoController.undoManager
-        manager?.removeAllActions(withTarget: self)
-        if let manager, manager === deleteUndoController.undoManager {
-            deleteUndoController.undoManager = nil
-        }
-        deleteUndoController.states.removeAll()
-        deleteUndoController.operationQueue.invalidate()
+        deleteUndoController.clear(using: undoManager, undoTarget: self)
     }
 }

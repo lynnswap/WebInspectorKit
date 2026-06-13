@@ -113,13 +113,13 @@ package final class CSSProperty: Equatable {
         return lhs === rhs
     }
 
-    fileprivate func rememberInspectorBaselineIfNeeded() {
+    func rememberInspectorBaselineIfNeeded() {
         if inspectorBaseline == nil {
             inspectorBaseline = CSSPropertyInspectorBaseline(self)
         }
     }
 
-    fileprivate func updateInspectorModificationState() {
+    func updateInspectorModificationState() {
         guard let inspectorBaseline else {
             isModifiedByInspector = false
             return
@@ -556,7 +556,7 @@ private struct CSSNodeStyleStore {
     }
 }
 
-private struct CSSStyleSheetHeaderRegistry {
+struct CSSStyleSheetHeaderRegistry {
     private var headersByKey: [CSSStyleSheetHeaderKey: CSSStyleSheetHeaderPayload] = [:]
 
     mutating func removeAll() {
@@ -606,76 +606,6 @@ package final class CSSSession {
         package var computed: [CSSComputedStylePropertyPayload]
     }
 
-    private struct SectionMembership: Equatable {
-        var id: CSSStyleSectionIdentifier
-        var propertyIDs: [PropertyMembership]
-    }
-
-    private enum RefreshCommandResult: Sendable {
-        case success(ProtocolCommandResult)
-        case failure(RefreshCommandFailure)
-
-        var failure: RefreshCommandFailure? {
-            guard case let .failure(failure) = self else {
-                return nil
-            }
-            return failure
-        }
-
-        func requireSuccess() throws -> ProtocolCommandResult {
-            switch self {
-            case let .success(result):
-                return result
-            case let .failure(failure):
-                throw failure.error
-            }
-        }
-    }
-
-    private enum RefreshCommandFailure: Error, Sendable {
-        case cancellation
-        case transport(TransportError)
-        case inspector(InspectorSessionError)
-        case other(String)
-
-        init(_ error: any Error) {
-            if error is CancellationError {
-                self = .cancellation
-            } else if let error = error as? TransportError {
-                self = .transport(error)
-            } else if let error = error as? InspectorSessionError {
-                self = .inspector(error)
-            } else {
-                self = .other(String(describing: error))
-            }
-        }
-
-        var error: any Error {
-            switch self {
-            case .cancellation:
-                CancellationError()
-            case let .transport(error):
-                error
-            case let .inspector(error):
-                error
-            case let .other(message):
-                InspectorSessionError(message)
-            }
-        }
-
-        var isCancellation: Bool {
-            guard case .cancellation = self else {
-                return false
-            }
-            return true
-        }
-    }
-
-    private enum PropertyMembership: Equatable {
-        case identified(CSSPropertyIdentifier)
-        case anonymous(index: Int)
-    }
-
     package private(set) var selectedNodeStyles: CSSNodeStyles?
     package var selectedState: CSSNodeStylesState {
         selection.state(displayedNodeStyles: selectedNodeStyles)
@@ -689,8 +619,7 @@ package final class CSSSession {
     @ObservationIgnored private var nodeStyleStore: CSSNodeStyleStore
     @ObservationIgnored private var styleSheetHeaders: CSSStyleSheetHeaderRegistry
     @ObservationIgnored private var nextRefreshSequence: UInt64
-    @ObservationIgnored private var commandChannel: ProtocolCommandChannel?
-    @ObservationIgnored private let protocolCommands: CSSProtocolCommands
+    @ObservationIgnored private let refreshCoordinator: CSSStyleRefreshCoordinator
 
     package init() {
         selectedNodeStyles = nil
@@ -698,8 +627,7 @@ package final class CSSSession {
         nodeStyleStore = CSSNodeStyleStore()
         styleSheetHeaders = CSSStyleSheetHeaderRegistry()
         nextRefreshSequence = 0
-        commandChannel = nil
-        protocolCommands = CSSProtocolCommands()
+        refreshCoordinator = CSSStyleRefreshCoordinator()
     }
 
     package func reset() {
@@ -711,33 +639,24 @@ package final class CSSSession {
     }
 
     package func bindProtocolChannel(_ commandChannel: ProtocolCommandChannel) {
-        self.commandChannel = commandChannel
+        refreshCoordinator.bindProtocolChannel(commandChannel)
     }
 
     package func unbindProtocolChannel() {
-        commandChannel = nil
+        refreshCoordinator.unbindProtocolChannel()
     }
 
     @discardableResult
     package func perform(_ intent: CSSCommandIntent) async throws -> ProtocolCommandResult {
-        let commandChannel = try requireCommandChannel()
-        return try await commandChannel.send(try protocolCommands.command(for: intent))
+        try await refreshCoordinator.perform(intent)
     }
 
     package func fetchRefreshResults(for identity: CSSNodeStyleIdentity) async throws -> RefreshResults {
-        do {
-            return try await fetchRefreshResultsWithoutCompatibilityRetry(for: identity)
-        } catch {
-            guard shouldRetryAfterEnablingCSSAgent(error) else {
-                throw error
-            }
-            try await enableAgentForCompatibility(targetID: identity.targetID)
-            return try await fetchRefreshResultsWithoutCompatibilityRetry(for: identity)
-        }
+        try await refreshCoordinator.fetchRefreshResults(for: identity)
     }
 
     package func setStyleTextResult(from result: ProtocolCommandResult) throws -> CSSStylePayload {
-        try protocolCommands.setStyleTextResult(from: result)
+        try refreshCoordinator.setStyleTextResult(from: result)
     }
 
     package func selectNodeStyles(identity: CSSNodeStyleIdentity) {
@@ -801,16 +720,16 @@ package final class CSSSession {
             return
         }
 
-        Self.updateSections(
+        CSSStyleReconciler.updateSections(
             in: nodeStyles,
-            with: Self.makeSections(
+            with: CSSStyleSectionBuilder.makeSections(
                 identity: token.identity,
                 matched: matched,
                 inline: inline,
                 styleSheetHeaders: styleSheetHeaders
             )
         )
-        Self.updateComputedProperties(
+        CSSStyleReconciler.updateComputedProperties(
             in: nodeStyles,
             with: computed.map(CSSComputedStyleProperty.init(payload:))
         )
@@ -929,7 +848,7 @@ package final class CSSSession {
         let property = style.cssProperties[propertyIndex]
         guard property.isEditable,
               property.isEnabled != enabled,
-              let text = Self.rewrittenStyleText(style: style, propertyIndex: propertyIndex, enabled: enabled) else {
+              let text = CSSStyleTextRewriter.rewrittenStyleText(style: style, propertyIndex: propertyIndex, enabled: enabled) else {
             return nil
         }
         return .setStyleText(targetID: nodeStyles.identity.targetID, styleID: propertyID.styleID, text: text)
@@ -970,12 +889,12 @@ package final class CSSSession {
                    section.style.cssProperties[propertyID.propertyIndex].id == propertyID {
                     section.style.cssProperties[propertyID.propertyIndex].rememberInspectorBaselineIfNeeded()
                 }
-                let normalizedStyle = Self.normalizedStyle(
+                let normalizedStyle = CSSStyleSectionBuilder.normalizedStyle(
                     style,
                     isEditable: section.isEditable,
                     ruleOrigin: section.rule?.origin
                 )
-                Self.updateStyle(section.style, from: normalizedStyle)
+                CSSStyleReconciler.updateStyle(section.style, from: normalizedStyle)
                 if section.style.cssProperties.indices.contains(propertyID.propertyIndex),
                    section.style.cssProperties[propertyID.propertyIndex].id == propertyID {
                     section.style.cssProperties[propertyID.propertyIndex].updateInspectorModificationState()
@@ -1003,787 +922,4 @@ package final class CSSSession {
         return nil
     }
 
-    private static func makeSections(
-        identity: CSSNodeStyleIdentity,
-        matched: CSSMatchedStylesPayload,
-        inline: CSSInlineStylesPayload,
-        styleSheetHeaders: CSSStyleSheetHeaderRegistry
-    ) -> [CSSStyleSection] {
-        var sections: [CSSStyleSection] = []
-        var ordinal = 0
-
-        if let inlineStyle = inline.inlineStyle {
-            appendSection(
-                &sections,
-                identity: identity,
-                ordinal: &ordinal,
-                kind: .inlineStyle,
-                title: "element.style",
-                style: inlineStyle,
-                isEditable: inlineStyle.id != nil
-            )
-        }
-
-        for match in matched.matchedRules.reversed() {
-            appendRuleSection(
-                &sections,
-                identity: identity,
-                ordinal: &ordinal,
-                match: match,
-                kind: .rule,
-                styleSheetHeaders: styleSheetHeaders
-            )
-        }
-
-        if let attributesStyle = inline.attributesStyle {
-            appendSection(
-                &sections,
-                identity: identity,
-                ordinal: &ordinal,
-                kind: .attributesStyle,
-                title: "Attributes",
-                style: attributesStyle,
-                isEditable: false
-            )
-        }
-
-        for pseudo in matched.pseudoElements {
-            for match in pseudo.matches.reversed() {
-                appendRuleSection(
-                    &sections,
-                    identity: identity,
-                    ordinal: &ordinal,
-                    match: match,
-                    kind: .pseudoElement(pseudo.pseudoID),
-                    styleSheetHeaders: styleSheetHeaders
-                )
-            }
-        }
-
-        for (ancestorIndex, inherited) in matched.inherited.enumerated() {
-            if let inlineStyle = inherited.inlineStyle {
-                appendSection(
-                    &sections,
-                    identity: identity,
-                    ordinal: &ordinal,
-                    kind: .inheritedInlineStyle(ancestorIndex: ancestorIndex),
-                    title: "Inherited element.style",
-                    style: inlineStyle,
-                    isEditable: inlineStyle.id != nil
-                )
-            }
-            for match in inherited.matchedRules.reversed() {
-                appendRuleSection(
-                    &sections,
-                    identity: identity,
-                    ordinal: &ordinal,
-                    match: match,
-                    kind: .inheritedRule(ancestorIndex: ancestorIndex),
-                    styleSheetHeaders: styleSheetHeaders
-                )
-            }
-        }
-
-        return sections
-    }
-
-    private static func updateSections(
-        in nodeStyles: CSSNodeStyles,
-        with refreshedSections: [CSSStyleSection]
-    ) {
-        let oldMembership = sectionMembership(in: nodeStyles.sections)
-        let existingSectionsByID = Dictionary(uniqueKeysWithValues: nodeStyles.sections.map { ($0.id, $0) })
-        let reconciledSections = refreshedSections.map { refreshedSection in
-            guard let existingSection = existingSectionsByID[refreshedSection.id] else {
-                return refreshedSection
-            }
-            updateSection(existingSection, from: refreshedSection)
-            return existingSection
-        }
-
-        if oldMembership != sectionMembership(in: reconciledSections) {
-            nodeStyles.sections = reconciledSections
-        }
-    }
-
-    private static func updateSection(_ section: CSSStyleSection, from refreshedSection: CSSStyleSection) {
-        section.kind = refreshedSection.kind
-        section.title = refreshedSection.title
-        section.isEditable = refreshedSection.isEditable
-
-        if let refreshedRule = refreshedSection.rule {
-            if let rule = section.rule {
-                updateRule(rule, from: refreshedRule)
-                section.style = rule.style
-            } else {
-                section.rule = refreshedRule
-                section.style = refreshedRule.style
-            }
-        } else {
-            section.rule = nil
-            updateStyle(section.style, from: refreshedSection.style)
-        }
-    }
-
-    private static func updateRule(_ rule: CSSRule, from refreshedRule: CSSRule) {
-        rule.id = refreshedRule.id
-        rule.selectorList = refreshedRule.selectorList
-        rule.sourceURL = refreshedRule.sourceURL
-        rule.sourceLine = refreshedRule.sourceLine
-        rule.styleSheetSourceLocation = refreshedRule.styleSheetSourceLocation
-        rule.origin = refreshedRule.origin
-        rule.groupings = refreshedRule.groupings
-        rule.isImplicitlyNested = refreshedRule.isImplicitlyNested
-        updateStyle(rule.style, from: refreshedRule.style)
-    }
-
-    private static func updateStyle(_ style: CSSStyle, from refreshedStyle: CSSStyle) {
-        style.id = refreshedStyle.id
-        style.shorthandEntries = refreshedStyle.shorthandEntries
-        style.cssText = refreshedStyle.cssText
-        style.range = refreshedStyle.range
-        style.width = refreshedStyle.width
-        style.height = refreshedStyle.height
-        style.isEditable = refreshedStyle.isEditable
-        updateProperties(in: style, with: refreshedStyle.cssProperties)
-    }
-
-    private static func updateProperties(in style: CSSStyle, with refreshedProperties: [CSSProperty]) {
-        let oldMembership = propertyMembership(in: style.cssProperties)
-        let existingPropertiesByID = Dictionary(
-            uniqueKeysWithValues: style.cssProperties.compactMap { property in
-                property.id.map { ($0, property) }
-            }
-        )
-        let reconciledProperties = refreshedProperties.enumerated().map { index, refreshedProperty in
-            let existingProperty: CSSProperty?
-            if let propertyID = refreshedProperty.id {
-                existingProperty = existingPropertiesByID[propertyID]
-            } else if style.cssProperties.indices.contains(index),
-                      style.cssProperties[index].id == nil {
-                existingProperty = style.cssProperties[index]
-            } else {
-                existingProperty = nil
-            }
-
-            guard let existingProperty else {
-                return refreshedProperty
-            }
-            updateProperty(existingProperty, from: refreshedProperty)
-            return existingProperty
-        }
-
-        if oldMembership != propertyMembership(in: reconciledProperties) {
-            style.cssProperties = reconciledProperties
-        }
-    }
-
-    private static func updateProperty(_ property: CSSProperty, from refreshedProperty: CSSProperty) {
-        property.id = refreshedProperty.id
-        property.name = refreshedProperty.name
-        property.value = refreshedProperty.value
-        property.priority = refreshedProperty.priority
-        property.text = refreshedProperty.text
-        property.parsedOk = refreshedProperty.parsedOk
-        property.status = refreshedProperty.status
-        property.implicit = refreshedProperty.implicit
-        property.range = refreshedProperty.range
-        property.isEditable = refreshedProperty.isEditable
-        property.updateInspectorModificationState()
-    }
-
-    private static func updateComputedProperties(
-        in nodeStyles: CSSNodeStyles,
-        with refreshedProperties: [CSSComputedStyleProperty]
-    ) {
-        let existingPropertiesByName = Dictionary(uniqueKeysWithValues: nodeStyles.computedProperties.map { ($0.name, $0) })
-        let oldNames = nodeStyles.computedProperties.map(\.name)
-        let reconciledProperties = refreshedProperties.map { refreshedProperty in
-            guard let existingProperty = existingPropertiesByName[refreshedProperty.name] else {
-                return refreshedProperty
-            }
-            existingProperty.value = refreshedProperty.value
-            return existingProperty
-        }
-
-        if oldNames != reconciledProperties.map(\.name) {
-            nodeStyles.computedProperties = reconciledProperties
-        }
-    }
-
-    private static func sectionMembership(in sections: [CSSStyleSection]) -> [SectionMembership] {
-        sections.map { section in
-            SectionMembership(
-                id: section.id,
-                propertyIDs: propertyMembership(in: section.style.cssProperties)
-            )
-        }
-    }
-
-    private static func propertyMembership(in properties: [CSSProperty]) -> [PropertyMembership] {
-        properties.enumerated().map { index, property in
-            if let propertyID = property.id {
-                return .identified(propertyID)
-            }
-            return .anonymous(index: index)
-        }
-    }
-
-    private static func appendRuleSection(
-        _ sections: inout [CSSStyleSection],
-        identity: CSSNodeStyleIdentity,
-        ordinal: inout Int,
-        match: CSSRuleMatchPayload,
-        kind: CSSStyleSectionKind,
-        styleSheetHeaders: CSSStyleSheetHeaderRegistry
-    ) {
-        let isEditable = match.rule.origin != .userAgent && match.rule.style.id != nil
-        let ruleStyle = normalizedStyle(match.rule.style, isEditable: isEditable, ruleOrigin: match.rule.origin)
-        let rule = CSSRule(
-            id: match.rule.id,
-            selectorList: match.rule.selectorList,
-            sourceURL: match.rule.sourceURL,
-            sourceLine: match.rule.sourceLine,
-            styleSheetSourceLocation: styleSheetHeaders.sourceLocation(
-                for: match.rule,
-                targetID: identity.targetID
-            ),
-            origin: match.rule.origin,
-            style: ruleStyle,
-            groupings: match.rule.groupings,
-            isImplicitlyNested: match.rule.isImplicitlyNested
-        )
-        sections.append(
-            CSSStyleSection(
-                id: .init(nodeID: identity.nodeID, kind: kind, ordinal: ordinal),
-                kind: kind,
-                title: rule.selectorList.text,
-                rule: rule,
-                style: rule.style,
-                isEditable: isEditable
-            )
-        )
-        ordinal += 1
-    }
-
-    private static func appendSection(
-        _ sections: inout [CSSStyleSection],
-        identity: CSSNodeStyleIdentity,
-        ordinal: inout Int,
-        kind: CSSStyleSectionKind,
-        title: String,
-        style: CSSStylePayload,
-        isEditable: Bool
-    ) {
-        sections.append(
-            CSSStyleSection(
-                id: .init(nodeID: identity.nodeID, kind: kind, ordinal: ordinal),
-                kind: kind,
-                title: title,
-                style: normalizedStyle(style, isEditable: isEditable, ruleOrigin: nil),
-                isEditable: isEditable
-            )
-        )
-        ordinal += 1
-    }
-
-    private static func normalizedStyle(
-        _ style: CSSStylePayload,
-        isEditable: Bool,
-        ruleOrigin: CSSStyleOrigin?
-    ) -> CSSStyle {
-        let styleID = style.id
-        let effectiveEditable = isEditable && styleID != nil && ruleOrigin != .userAgent
-        let normalizedProperties = style.cssProperties.enumerated().map { index, property in
-            let propertyID = styleID.map { CSSPropertyIdentifier(styleID: $0, propertyIndex: index) }
-            let isEditable = effectiveEditable
-                && canSafelyRewriteStyleText(for: style, propertyIndex: index)
-                && property.text != nil
-                && canTogglePropertyText(property)
-            return CSSProperty(payload: property, id: propertyID, isEditable: isEditable)
-        }
-        return CSSStyle(
-            id: style.id,
-            cssProperties: normalizedProperties,
-            shorthandEntries: style.shorthandEntries,
-            cssText: style.cssText,
-            range: style.range,
-            width: style.width,
-            height: style.height,
-            isEditable: effectiveEditable
-        )
-    }
-
-    private static func canSafelyRewriteStyleText(for style: CSSStylePayload, propertyIndex: Int) -> Bool {
-        guard style.cssProperties.indices.contains(propertyIndex) else {
-            return false
-        }
-        if let cssText = style.cssText,
-           !cssText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let property = style.cssProperties[propertyIndex]
-            guard let propertyText = property.text?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !propertyText.isEmpty else {
-                return false
-            }
-            return authoredDeclarationRange(
-                for: propertyText,
-                sourceRange: property.range,
-                in: cssText,
-                previousPropertyTexts: style.cssProperties[..<propertyIndex].map(\.text)
-            ) != nil
-        }
-        return style.cssProperties.allSatisfy { property in
-            property.text != nil
-                && !property.implicit
-                && property.status != .inactive
-        }
-    }
-
-    private static func rewrittenStyleText(style: CSSStyle, propertyIndex: Int, enabled: Bool) -> String? {
-        guard style.cssProperties.indices.contains(propertyIndex) else {
-            return nil
-        }
-        let property = style.cssProperties[propertyIndex]
-        guard property.isEditable,
-              let toggledText = toggledPropertyText(property, enabled: enabled) else {
-            return nil
-        }
-        if let cssText = style.cssText,
-           !cssText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return rewriteAuthoredStyleText(
-                cssText,
-                replacing: property,
-                in: style,
-                propertyIndex: propertyIndex,
-                with: toggledText
-            )
-        }
-
-        var texts: [String] = []
-        for index in style.cssProperties.indices {
-            if index == propertyIndex {
-                texts.append(toggledText)
-                continue
-            }
-            let property = style.cssProperties[index]
-            guard let text = property.text,
-                  !property.implicit,
-                  property.status != .inactive else {
-                return nil
-            }
-            texts.append(text)
-        }
-        return texts.joined(separator: "\n")
-    }
-
-    private static func rewriteAuthoredStyleText(
-        _ cssText: String,
-        replacing property: CSSProperty,
-        in style: CSSStyle,
-        propertyIndex: Int,
-        with toggledText: String
-    ) -> String? {
-        guard let propertyText = property.text?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !propertyText.isEmpty else {
-            return nil
-        }
-        let nsText = cssText as NSString
-        if let range = authoredDeclarationRange(
-            for: propertyText,
-            sourceRange: property.range,
-            in: cssText,
-            previousPropertyTexts: style.cssProperties[..<propertyIndex].map(\.text)
-        ) {
-            return nsText.replacingCharacters(in: range, with: toggledText)
-        }
-
-        return nil
-    }
-
-    private static func authoredDeclarationRange(
-        for propertyText: String,
-        sourceRange: CSSSourceRange?,
-        in cssText: String,
-        previousPropertyTexts: [String?]
-    ) -> NSRange? {
-        let nsText = cssText as NSString
-        if let range = sourceRange.flatMap({ nsRange(in: cssText, sourceRange: $0) }),
-           NSMaxRange(range) <= nsText.length,
-           nsText.substring(with: range).trimmingCharacters(in: .whitespacesAndNewlines) == propertyText {
-            return range
-        }
-
-        let ranges = declarationRanges(of: propertyText, in: cssText)
-        if ranges.count == 1 {
-            return ranges[0]
-        }
-        let occurrence = previousPropertyTexts.filter { previousText in
-            previousText?.trimmingCharacters(in: .whitespacesAndNewlines) == propertyText
-        }.count
-        guard ranges.indices.contains(occurrence) else {
-            return nil
-        }
-        return ranges[occurrence]
-    }
-
-    private static func nsRange(in text: String, sourceRange: CSSSourceRange) -> NSRange? {
-        guard sourceRange.startLine >= 0,
-              sourceRange.endLine >= sourceRange.startLine,
-              sourceRange.startColumn >= 0,
-              sourceRange.endColumn >= 0 else {
-            return nil
-        }
-
-        let lineStartOffsets = lineStartUTF16Offsets(in: text)
-        guard sourceRange.startLine < lineStartOffsets.count,
-              sourceRange.endLine < lineStartOffsets.count else {
-            return nil
-        }
-        let startOffset = lineStartOffsets[sourceRange.startLine] + sourceRange.startColumn
-        let endOffset = lineStartOffsets[sourceRange.endLine] + sourceRange.endColumn
-        guard endOffset >= startOffset,
-              endOffset <= (text as NSString).length else {
-            return nil
-        }
-        return NSRange(location: startOffset, length: endOffset - startOffset)
-    }
-
-    private static func lineStartUTF16Offsets(in text: String) -> [Int] {
-        var offsets = [0]
-        var offset = 0
-        for scalar in text.unicodeScalars {
-            offset += scalar.utf16.count
-            if scalar == "\n" {
-                offsets.append(offset)
-            }
-        }
-        return offsets
-    }
-
-    private static func declarationRanges(of needle: String, in haystack: String) -> [NSRange] {
-        let nsHaystack = haystack as NSString
-        var searchRange = NSRange(location: 0, length: nsHaystack.length)
-        var ranges: [NSRange] = []
-        while searchRange.length > 0 {
-            let range = nsHaystack.range(of: needle, options: [], range: searchRange)
-            guard range.location != NSNotFound else {
-                break
-            }
-            if isDeclarationRange(range, propertyText: needle, in: nsHaystack) {
-                ranges.append(range)
-            }
-            let nextLocation = range.location + max(range.length, 1)
-            searchRange = NSRange(location: nextLocation, length: nsHaystack.length - nextLocation)
-        }
-        return ranges
-    }
-
-    private static func isDeclarationRange(_ range: NSRange, propertyText: String, in text: NSString) -> Bool {
-        isNormalCSSPosition(range.location, in: text)
-            && hasDeclarationBoundary(before: range.location, in: text)
-            && hasDeclarationEndBoundary(after: NSMaxRange(range), propertyText: propertyText, in: text)
-    }
-
-    private static func isNormalCSSPosition(_ location: Int, in text: NSString) -> Bool {
-        var index = 0
-        var quotedString: unichar?
-        var isEscaped = false
-        var isComment = false
-        while index < location {
-            let character = text.character(at: index)
-            let nextCharacter = index + 1 < text.length ? text.character(at: index + 1) : 0
-
-            if isComment {
-                if character == asterisk && nextCharacter == slash {
-                    isComment = false
-                    index += 2
-                    continue
-                }
-                index += 1
-                continue
-            }
-
-            if let quote = quotedString {
-                if isEscaped {
-                    isEscaped = false
-                } else if character == backslash {
-                    isEscaped = true
-                } else if character == quote {
-                    quotedString = nil
-                }
-                index += 1
-                continue
-            }
-
-            if character == slash && nextCharacter == asterisk {
-                isComment = true
-                index += 2
-                continue
-            }
-            if character == doubleQuote || character == singleQuote {
-                quotedString = character
-            }
-            index += 1
-        }
-        return !isComment && quotedString == nil
-    }
-
-    private static func hasDeclarationBoundary(before location: Int, in text: NSString) -> Bool {
-        var index = location - 1
-        while index >= 0 {
-            let character = text.character(at: index)
-            if character == slash,
-               index > 0,
-               text.character(at: index - 1) == asterisk {
-                guard let commentStart = cssCommentStart(endingAt: index, in: text) else {
-                    return false
-                }
-                index = commentStart - 1
-                continue
-            }
-            if !isCSSWhitespace(character) {
-                return character == semicolon || character == leftBrace
-            }
-            index -= 1
-        }
-        return true
-    }
-
-    private static func hasDeclarationBoundary(after location: Int, in text: NSString) -> Bool {
-        var index = location
-        while index < text.length {
-            let character = text.character(at: index)
-            let nextCharacter = index + 1 < text.length ? text.character(at: index + 1) : 0
-            if character == slash,
-               nextCharacter == asterisk {
-                guard let commentEnd = cssCommentEnd(startingAt: index, in: text) else {
-                    return false
-                }
-                index = commentEnd + 1
-                continue
-            }
-            if !isCSSWhitespace(character) {
-                return character == semicolon || character == rightBrace
-            }
-            index += 1
-        }
-        return true
-    }
-
-    private static func hasDeclarationEndBoundary(after location: Int, propertyText: String, in text: NSString) -> Bool {
-        let trimmedPropertyText = propertyText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmedPropertyText.hasSuffix(";")
-            || trimmedPropertyText.hasSuffix("*/") {
-            return true
-        }
-        return hasDeclarationBoundary(after: location, in: text)
-    }
-
-    private static func cssCommentStart(endingAt commentEndSlashIndex: Int, in text: NSString) -> Int? {
-        var index = 0
-        var quotedString: unichar?
-        var isEscaped = false
-        var commentStart: Int?
-        while index <= commentEndSlashIndex {
-            let character = text.character(at: index)
-            let nextCharacter = index + 1 < text.length ? text.character(at: index + 1) : 0
-
-            if let start = commentStart {
-                if character == asterisk,
-                   nextCharacter == slash {
-                    if index + 1 == commentEndSlashIndex {
-                        return start
-                    }
-                    commentStart = nil
-                    index += 2
-                    continue
-                }
-                index += 1
-                continue
-            }
-
-            if let quote = quotedString {
-                if isEscaped {
-                    isEscaped = false
-                } else if character == backslash {
-                    isEscaped = true
-                } else if character == quote {
-                    quotedString = nil
-                }
-                index += 1
-                continue
-            }
-
-            if character == slash,
-               nextCharacter == asterisk {
-                commentStart = index
-                index += 2
-                continue
-            }
-            if character == doubleQuote || character == singleQuote {
-                quotedString = character
-            }
-            index += 1
-        }
-        return nil
-    }
-
-    private static func cssCommentEnd(startingAt commentStartSlashIndex: Int, in text: NSString) -> Int? {
-        var index = commentStartSlashIndex + 2
-        while index < text.length {
-            if text.character(at: index - 1) == asterisk,
-               text.character(at: index) == slash {
-                return index
-            }
-            index += 1
-        }
-        return nil
-    }
-
-    private static func isCSSWhitespace(_ character: unichar) -> Bool {
-        character == space
-            || character == tab
-            || character == newline
-            || character == carriageReturn
-            || character == formFeed
-    }
-
-    private static let tab = unichar(9)
-    private static let newline = unichar(10)
-    private static let formFeed = unichar(12)
-    private static let carriageReturn = unichar(13)
-    private static let space = unichar(32)
-    private static let doubleQuote = unichar(34)
-    private static let singleQuote = unichar(39)
-    private static let asterisk = unichar(42)
-    private static let semicolon = unichar(59)
-    private static let leftBrace = unichar(123)
-    private static let backslash = unichar(92)
-    private static let rightBrace = unichar(125)
-    private static let slash = unichar(47)
-
-    private static func canTogglePropertyText(_ property: CSSProperty) -> Bool {
-        guard property.status != .inactive else {
-            return false
-        }
-        return toggledPropertyText(property, enabled: !property.isEnabled) != nil
-    }
-
-    private static func canTogglePropertyText(_ property: CSSPropertyPayload) -> Bool {
-        guard property.status != .inactive else {
-            return false
-        }
-        return toggledPropertyText(property, enabled: property.status == .disabled) != nil
-    }
-
-    private static func toggledPropertyText(_ property: CSSProperty, enabled: Bool) -> String? {
-        guard let text = property.text?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !text.isEmpty,
-              property.isEnabled != enabled else {
-            return nil
-        }
-
-        if enabled {
-            guard text.hasPrefix("/*"),
-                  text.hasSuffix("*/") else {
-                return nil
-            }
-            let inner = String(text.dropFirst(2).dropLast(2)).trimmingCharacters(in: .whitespacesAndNewlines)
-            return inner.isEmpty ? nil : inner
-        }
-
-        guard !text.contains("/*"),
-              !text.contains("*/") else {
-            return nil
-        }
-        return "/* \(text) */"
-    }
-
-    private static func toggledPropertyText(_ property: CSSPropertyPayload, enabled: Bool) -> String? {
-        guard let text = property.text?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !text.isEmpty,
-              (property.status != .disabled) != enabled else {
-            return nil
-        }
-
-        if enabled {
-            guard text.hasPrefix("/*"),
-                  text.hasSuffix("*/") else {
-                return nil
-            }
-            let inner = String(text.dropFirst(2).dropLast(2)).trimmingCharacters(in: .whitespacesAndNewlines)
-            return inner.isEmpty ? nil : inner
-        }
-
-        guard !text.contains("/*"),
-              !text.contains("*/") else {
-            return nil
-        }
-        return "/* \(text) */"
-    }
-
-    private func fetchRefreshResultsWithoutCompatibilityRetry(for identity: CSSNodeStyleIdentity) async throws -> RefreshResults {
-        async let matched = performRefreshCommand(.getMatchedStyles(identity: identity))
-        async let inline = performRefreshCommand(.getInlineStyles(identity: identity))
-        async let computed = performRefreshCommand(.getComputedStyle(identity: identity))
-        let results = await (matched, inline, computed)
-        let failures = [results.0, results.1, results.2].compactMap(\.failure)
-        if failures.contains(where: \.isCancellation) {
-            throw CancellationError()
-        }
-        if let retryFailure = failures.first(where: { shouldRetryAfterEnablingCSSAgent($0.error) }) {
-            throw retryFailure.error
-        }
-        if let failure = failures.first {
-            throw failure.error
-        }
-        let matchedResult = try results.0.requireSuccess()
-        let inlineResult = try results.1.requireSuccess()
-        let computedResult = try results.2.requireSuccess()
-        return RefreshResults(
-            matched: try protocolCommands.matchedStyles(from: matchedResult),
-            inline: try protocolCommands.inlineStyles(from: inlineResult),
-            computed: try protocolCommands.computedStyles(from: computedResult)
-        )
-    }
-
-    private func performRefreshCommand(_ intent: CSSCommandIntent) async -> RefreshCommandResult {
-        do {
-            return .success(try await perform(intent))
-        } catch {
-            return .failure(RefreshCommandFailure(error))
-        }
-    }
-
-    private func enableAgentForCompatibility(targetID: ProtocolTargetIdentifier) async throws {
-        let commandChannel = try requireCommandChannel()
-        guard commandChannel.cssAgentShouldBeEnabledForCompatibility(targetID: targetID) else {
-            return
-        }
-
-        // Do not enable the WebKit CSS agent proactively. On current simulator
-        // WebContent, CSS.enable can crash while synchronizing stylesheet
-        // headers during page load, while the read commands work without it.
-        _ = try await perform(.enable(targetID: targetID))
-        commandChannel.markEnabled(.css, targetID: targetID)
-    }
-
-    private func shouldRetryAfterEnablingCSSAgent(_ error: any Error) -> Bool {
-        guard case let TransportError.remoteError(method, _, message) = error,
-              method.hasPrefix("CSS.") else {
-            return false
-        }
-
-        let normalizedMessage = message.lowercased()
-        return normalizedMessage.contains("enable")
-            || normalizedMessage.contains("enabled")
-    }
-
-    private func requireCommandChannel() throws -> ProtocolCommandChannel {
-        guard let commandChannel else {
-            throw InspectorSessionError("Inspector session is not attached.")
-        }
-        try commandChannel.requireAttached()
-        return commandChannel
-    }
 }
