@@ -308,6 +308,7 @@ xcodebuild test \
 - `FakeTransportBackend` / `SentTargetMessage` を `WebInspectorTestSupport` target に移し、production `WebInspectorTransport` から test support を除去。
 - `TransportSession` actor は維持しつつ、reply store / target registry / stylesheet routing / inbound queue / runtime context registry を helper に分割。
 - `InspectorSession` の connection state を `InspectorConnectionPhase` に置換し、`connection` / `pendingConnection` を phase から導出。
+- `InspectorTarget` の bootstrap 完了、enabled domain、runtime/console enable task/waiter を `InspectorTargetLifecycleState` に集約。target snapshot 由来の identity/metadata と agent enable lifecycle を分離しつつ、`Runtime.enable` → `Console.enable` の順序、unsupported runtime 後の console 継続、provisional commit 後の再 enable は `InspectorSession` 本体が従来順序で維持する。
 - DOM 側は `DOMSessionControllers.swift`、`DOMModelTypes.swift`、`TargetGraph.swift`、`DOMDocumentStore.swift`、`FrameDocumentProjectionIndex.swift`、`DOMTreeProjectionBuilder.swift` へ段階分割。
 - UI 側は `DOMTreeMarkup.swift`、`DOMTreeTextViewTypes.swift`、`DOMTreeTextFragmentViews.swift` を分離し、DOM tree expansion / observed content state も types 側へ移動。`DOMTreeFindCoordinator` は detached task へ `UITextSearchAggregator` を渡さない構造へ変更。
 - `BrowserSessionRestoreTests` の 100ms sleep を selected web view install signal に置換。
@@ -351,6 +352,11 @@ xcodebuild test \
 - `swift test --filter ConsoleModelTests -Xswiftc -strict-concurrency=minimal` (2026-06-13、Console message store owner 化後 green)
 - `swift test --filter ConsoleProtocolDispatchingTests -Xswiftc -strict-concurrency=minimal` (2026-06-13、Console message store owner 化後 green)
 - `swift test --filter WebInspectorCoreTests -Xswiftc -strict-concurrency=minimal` (2026-06-13、Console message store owner 化後 green)
+- `swift test --filter InspectorSessionTests -Xswiftc -strict-concurrency=minimal` (2026-06-13、InspectorTarget lifecycle state owner 化後 green)
+- `swift test --filter WebInspectorCoreTests -Xswiftc -strict-concurrency=minimal` (2026-06-13、InspectorTarget lifecycle state owner 化後 green)
+- `swift test --filter WebInspectorArchitectureTests -Xswiftc -strict-concurrency=minimal` (2026-06-13、InspectorTarget lifecycle state owner 化後 green)
+- `swift test -Xswiftc -strict-concurrency=minimal` (2026-06-13、InspectorTarget lifecycle state owner 化後 green)
+- `xcodebuild test -workspace WebInspectorKit.xcworkspace -scheme WebInspectorKit -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest'` (2026-06-13、InspectorTarget lifecycle state owner 化後 green)
 - `swift test --filter WebInspectorArchitectureTests -Xswiftc -strict-concurrency=minimal` (2026-06-13、Console message store owner 化後 green)
 - `swift test -Xswiftc -strict-concurrency=minimal` (2026-06-13、Console message store owner 化後 green)
 - `xcodebuild test -workspace WebInspectorKit.xcworkspace -scheme WebInspectorKit -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest'` (2026-06-13、Console message store owner 化後 green)

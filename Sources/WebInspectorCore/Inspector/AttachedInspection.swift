@@ -29,71 +29,38 @@ package struct InspectorSessionConfiguration: Equatable, Sendable {
 }
 
 @MainActor
-private final class InspectorTarget {
-    let id: ProtocolTargetIdentifier
-    var kind: ProtocolTargetKind
-    var frameID: DOMFrameIdentifier?
-    var parentFrameID: DOMFrameIdentifier?
-    var capabilities: ProtocolTargetCapabilities
-    var isProvisional: Bool
-    var isPaused: Bool
-    var isBootstrapped: Bool
+private final class InspectorTargetLifecycleState {
+    private(set) var isBootstrapped = false
     private var enabledDomains: ProtocolTargetCapabilities
     private var runtimeConsoleEnableTask: Task<Void, Never>?
     private var runtimeConsoleEnableTaskWaiters: [CheckedContinuation<Void, Never>]
 
-    init(snapshot: ProtocolTargetSnapshot) {
-        id = snapshot.id
-        kind = snapshot.kind
-        frameID = snapshot.frameID
-        parentFrameID = snapshot.parentFrameID
-        capabilities = snapshot.capabilities
-        isProvisional = snapshot.isProvisional
-        isPaused = snapshot.isPaused
-        isBootstrapped = false
+    init() {
         enabledDomains = []
         runtimeConsoleEnableTask = nil
         runtimeConsoleEnableTaskWaiters = []
     }
 
-    func update(from snapshot: ProtocolTargetSnapshot) {
-        kind = snapshot.kind
-        frameID = snapshot.frameID
-        parentFrameID = snapshot.parentFrameID
-        capabilities = snapshot.capabilities
-        isProvisional = snapshot.isProvisional
-        isPaused = snapshot.isPaused
-    }
-
-    func hasDomain(_ domain: ProtocolTargetCapabilities) -> Bool {
-        capabilities.contains(domain)
+    func markBootstrapped() {
+        isBootstrapped = true
     }
 
     func markEnabled(_ domain: ProtocolTargetCapabilities) {
         enabledDomains.insert(domain)
     }
 
-    func shouldEnableCompatibilityCSS() -> Bool {
-        hasDomain(.css) && enabledDomains.contains(.css) == false
+    func hasEnabled(_ domain: ProtocolTargetCapabilities) -> Bool {
+        enabledDomains.contains(domain)
     }
 
-    func shouldEnableRuntime(using runtime: RuntimeState) -> Bool {
-        isProvisional == false
-            && hasDomain(.runtime)
-            && enabledDomains.contains(.runtime) == false
-            && runtime.supportsCommand("Runtime.enable", targetID: id)
+    func shouldEnable(_ domain: ProtocolTargetCapabilities, capabilities: ProtocolTargetCapabilities, force: Bool = false) -> Bool {
+        capabilities.contains(domain)
+            && (force || hasEnabled(domain) == false)
     }
 
-    func shouldEnableConsole(using console: ConsoleSession, force: Bool = false) -> Bool {
-        isProvisional == false
-            && hasDomain(.console)
-            && (force || enabledDomains.contains(.console) == false)
-            && console.supportsCommand("Console.enable", targetID: id)
-    }
-
-    func canStartRuntimeConsoleEnable(using runtime: RuntimeState, console: ConsoleSession) -> Bool {
+    func canStartRuntimeConsoleEnable(needsRuntime: Bool, needsConsole: Bool) -> Bool {
         runtimeConsoleEnableTask == nil
-            && (shouldEnableRuntime(using: runtime) || shouldEnableConsole(using: console))
+            && (needsRuntime || needsConsole)
     }
 
     func startRuntimeConsoleEnableTask(_ task: Task<Void, Never>) {
@@ -130,6 +97,93 @@ private final class InspectorTarget {
         for waiter in waiters {
             waiter.resume()
         }
+    }
+}
+
+@MainActor
+private final class InspectorTarget {
+    let id: ProtocolTargetIdentifier
+    var kind: ProtocolTargetKind
+    var frameID: DOMFrameIdentifier?
+    var parentFrameID: DOMFrameIdentifier?
+    var capabilities: ProtocolTargetCapabilities
+    var isProvisional: Bool
+    var isPaused: Bool
+    private let lifecycle: InspectorTargetLifecycleState
+
+    init(snapshot: ProtocolTargetSnapshot) {
+        id = snapshot.id
+        kind = snapshot.kind
+        frameID = snapshot.frameID
+        parentFrameID = snapshot.parentFrameID
+        capabilities = snapshot.capabilities
+        isProvisional = snapshot.isProvisional
+        isPaused = snapshot.isPaused
+        lifecycle = InspectorTargetLifecycleState()
+    }
+
+    var isBootstrapped: Bool {
+        lifecycle.isBootstrapped
+    }
+
+    func update(from snapshot: ProtocolTargetSnapshot) {
+        kind = snapshot.kind
+        frameID = snapshot.frameID
+        parentFrameID = snapshot.parentFrameID
+        capabilities = snapshot.capabilities
+        isProvisional = snapshot.isProvisional
+        isPaused = snapshot.isPaused
+    }
+
+    func hasDomain(_ domain: ProtocolTargetCapabilities) -> Bool {
+        capabilities.contains(domain)
+    }
+
+    func markBootstrapped() {
+        lifecycle.markBootstrapped()
+    }
+
+    func markEnabled(_ domain: ProtocolTargetCapabilities) {
+        lifecycle.markEnabled(domain)
+    }
+
+    func shouldEnableCompatibilityCSS() -> Bool {
+        hasDomain(.css) && lifecycle.hasEnabled(.css) == false
+    }
+
+    func shouldEnableRuntime(using runtime: RuntimeState) -> Bool {
+        isProvisional == false
+            && lifecycle.shouldEnable(.runtime, capabilities: capabilities)
+            && runtime.supportsCommand("Runtime.enable", targetID: id)
+    }
+
+    func shouldEnableConsole(using console: ConsoleSession, force: Bool = false) -> Bool {
+        isProvisional == false
+            && lifecycle.shouldEnable(.console, capabilities: capabilities, force: force)
+            && console.supportsCommand("Console.enable", targetID: id)
+    }
+
+    func canStartRuntimeConsoleEnable(using runtime: RuntimeState, console: ConsoleSession) -> Bool {
+        lifecycle.canStartRuntimeConsoleEnable(
+            needsRuntime: shouldEnableRuntime(using: runtime),
+            needsConsole: shouldEnableConsole(using: console)
+        )
+    }
+
+    func startRuntimeConsoleEnableTask(_ task: Task<Void, Never>) {
+        lifecycle.startRuntimeConsoleEnableTask(task)
+    }
+
+    func finishRuntimeConsoleEnableTask() {
+        lifecycle.finishRuntimeConsoleEnableTask()
+    }
+
+    func cancelRuntimeConsoleEnableTask() {
+        lifecycle.cancelRuntimeConsoleEnableTask()
+    }
+
+    func waitUntilRuntimeConsoleEnableTaskFinished() async {
+        await lifecycle.waitUntilRuntimeConsoleEnableTaskFinished()
     }
 }
 
@@ -595,7 +649,7 @@ package final class InspectorSession {
             force: true,
             requiresActiveConnection: false
         )
-        connection.targets.target(for: mainTargetID)?.isBootstrapped = true
+        connection.targets.target(for: mainTargetID)?.markBootstrapped()
     }
 
     private func sendTargetCommand(
