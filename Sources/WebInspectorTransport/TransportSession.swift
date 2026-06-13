@@ -51,21 +51,6 @@ package actor TransportSession {
         closed = false
     }
 
-    private var targetsByID: [ProtocolTargetIdentifier: ProtocolTargetRecord] {
-        get { targetRegistry.targetsByID }
-        set { targetRegistry.targetsByID = newValue }
-    }
-
-    private var frameTargetIDsByFrameID: [DOMFrameIdentifier: ProtocolTargetIdentifier] {
-        get { targetRegistry.frameTargetIDsByFrameID }
-        set { targetRegistry.frameTargetIDsByFrameID = newValue }
-    }
-
-    private var currentMainPageTargetID: ProtocolTargetIdentifier? {
-        get { targetRegistry.currentMainPageTargetID }
-        set { targetRegistry.currentMainPageTargetID = newValue }
-    }
-
     package func events(for domain: ProtocolDomain) -> AsyncStream<ProtocolEventEnvelope> {
         let pair = AsyncStream<ProtocolEventEnvelope>.makeStream(bufferingPolicy: .unbounded)
         nextSubscriberID &+= 1
@@ -101,7 +86,7 @@ package actor TransportSession {
         case .root:
             return try await sendRoot(command)
         case let .target(targetID):
-            guard targetsByID[targetID] != nil else {
+            guard targetRegistry.containsTarget(targetID) else {
                 throw TransportError.missingTarget(targetID)
             }
             if let result = transportLocalResult(for: command, targetID: targetID) {
@@ -110,7 +95,7 @@ package actor TransportSession {
             return try await sendTarget(command, targetID: targetID)
         case let .octopus(pageTarget):
             let resolvedTarget = try pageTarget ?? currentMainPageTarget()
-            guard targetsByID[resolvedTarget] != nil else {
+            guard targetRegistry.containsTarget(resolvedTarget) else {
                 throw TransportError.missingTarget(resolvedTarget)
             }
             if let result = transportLocalResult(for: command, targetID: resolvedTarget) {
@@ -158,7 +143,7 @@ package actor TransportSession {
         guard !closed else {
             throw TransportError.transportClosed
         }
-        if let currentMainPageTargetID {
+        if let currentMainPageTargetID = targetRegistry.currentMainPageTargetID {
             return TransportMainPageTarget(targetID: currentMainPageTargetID, receivedSequence: nextSequence)
         }
 
@@ -197,9 +182,9 @@ package actor TransportSession {
 
     package func snapshot() -> TransportSnapshot {
         TransportSnapshot(
-            currentMainPageTargetID: currentMainPageTargetID,
-            targetsByID: targetsByID,
-            frameTargetIDsByFrameID: frameTargetIDsByFrameID,
+            currentMainPageTargetID: targetRegistry.currentMainPageTargetID,
+            targetsByID: targetRegistry.targetsByID,
+            frameTargetIDsByFrameID: targetRegistry.frameTargetIDsByFrameID,
             executionContextsByKey: runtimeContextRegistry.contextsByKey,
             pendingRootReplyIDs: replyStore.pendingRootReplyIDs,
             pendingTargetReplyKeys: replyStore.pendingTargetReplyKeys
@@ -211,7 +196,7 @@ package actor TransportSession {
     }
 
     package func targetIdentifier(forFrameID frameID: DOMFrameIdentifier) -> ProtocolTargetIdentifier? {
-        frameTargetIDsByFrameID[frameID]
+        targetRegistry.targetID(forFrameID: frameID)
     }
 
     private func sendRoot(_ command: ProtocolCommand) async throws -> ProtocolCommandResult {
@@ -408,7 +393,7 @@ package actor TransportSession {
     }
 
     private func handleTargetMessage(_ parsed: ParsedProtocolMessage, targetID: ProtocolTargetIdentifier) async {
-        if targetsByID[targetID]?.isProvisional == true {
+        if targetRegistry.target(for: targetID)?.isProvisional == true {
             markTargetReplyAsBufferedIfNeeded(parsed, targetID: targetID)
             provisionalTargetMessageStore.append(parsed, for: targetID)
             return
@@ -540,7 +525,7 @@ package actor TransportSession {
                 return
             }
             let frameID = params.context.frameId
-            let resolvedTargetID = resolvedTargetIDForRuntimeContext(
+            let resolvedTargetID = targetRegistry.recordRuntimeContext(
                 deliveredTargetID: targetID,
                 frameID: frameID
             )
@@ -553,9 +538,6 @@ package actor TransportSession {
                 frameID: frameID
             )
             runtimeContextRegistry.record(context)
-            if let frameID {
-                frameTargetIDsByFrameID[frameID] = resolvedTargetID
-            }
         case "Runtime.executionContextDestroyed":
             guard let params = try? TransportMessageParser.decode(RuntimeExecutionContextDestroyedParams.self, from: paramsData) else {
                 return
@@ -576,25 +558,16 @@ package actor TransportSession {
     }
 
     private func applyTargetCreated(_ record: ProtocolTargetRecord) -> [ResolvedStyleSheetAddedEvent] {
-        var styleSheetAddedEvents: [ResolvedStyleSheetAddedEvent] = []
-        targetsByID[record.id] = record
-        if let frameID = record.frameID {
-            frameTargetIDsByFrameID[frameID] = record.id
-            if !record.isProvisional {
-                styleSheetAddedEvents.append(contentsOf: resolvePendingStyleSheets(frameID: frameID, targetID: record.id))
-            }
-        }
-        if currentMainPageTargetID == nil,
-           record.kind == .page,
-           record.parentFrameID == nil,
-           !record.isProvisional {
-            currentMainPageTargetID = record.id
-        }
-        return styleSheetAddedEvents
+        resolvePendingStyleSheets(for: targetRegistry.recordTargetCreated(record))
     }
 
     private func record(for targetInfo: TargetInfoPayload) -> ProtocolTargetRecord {
-        let kind = targetKind(for: targetInfo)
+        let kind = targetRegistry.targetKind(
+            protocolType: targetInfo.type,
+            frameID: targetInfo.frameId,
+            parentFrameID: targetInfo.parentFrameId,
+            isProvisional: targetInfo.isProvisional
+        )
         return ProtocolTargetRecord(
             id: targetInfo.targetId,
             kind: kind,
@@ -610,55 +583,14 @@ package actor TransportSession {
         ProtocolTargetCapabilities.resolved(for: kind, domainNames: targetInfo.domains)
     }
 
-    private func targetKind(for targetInfo: TargetInfoPayload) -> ProtocolTargetKind {
-        let protocolKind = ProtocolTargetKind(protocolType: targetInfo.type)
-        guard protocolKind == .page else {
-            return protocolKind
-        }
-        if targetInfo.parentFrameId != nil {
-            return .frame
-        }
-        if let currentMainFrameID,
-           let frameID = targetInfo.frameId,
-           frameID != currentMainFrameID {
-            return .frame
-        }
-        if currentMainFrameID == nil,
-           targetInfo.isProvisional == true {
-            return .frame
-        }
-        return .page
-    }
-
-    private var currentMainFrameID: DOMFrameIdentifier? {
-        currentMainPageTargetID.flatMap { targetsByID[$0]?.frameID }
-    }
-
-    private func resolvedTargetIDForRuntimeContext(
-        deliveredTargetID: ProtocolTargetIdentifier,
-        frameID: DOMFrameIdentifier?
-    ) -> ProtocolTargetIdentifier {
-        guard let frameID,
-              let existingTargetID = frameTargetIDsByFrameID[frameID],
-              targetsByID[existingTargetID]?.kind == .frame,
-              targetsByID[deliveredTargetID]?.kind != .frame else {
-            return deliveredTargetID
-        }
-        return existingTargetID
-    }
-
     private func applyTargetDestroyed(_ targetID: ProtocolTargetIdentifier) async {
-        targetsByID.removeValue(forKey: targetID)
+        targetRegistry.removeTarget(targetID)
         provisionalTargetMessageStore.removeTarget(targetID)
-        frameTargetIDsByFrameID = frameTargetIDsByFrameID.filter { $0.value != targetID }
         styleSheetRouting.removeTarget(targetID)
         runtimeContextRegistry.removeTarget(targetID)
         let pendingReplies = replyStore.removeTargetReplies(for: targetID)
         for pending in pendingReplies {
             await pending.promise.fulfill(.failure(TransportError.missingTarget(targetID)))
-        }
-        if currentMainPageTargetID == targetID {
-            currentMainPageTargetID = nil
         }
     }
 
@@ -666,60 +598,28 @@ package actor TransportSession {
         oldTargetID: ProtocolTargetIdentifier?,
         newTargetID: ProtocolTargetIdentifier
     ) -> [ResolvedStyleSheetAddedEvent] {
-        var styleSheetAddedEvents: [ResolvedStyleSheetAddedEvent] = []
-        let committedOldTargetID = oldTargetID ?? inferredOldTargetIDForOldlessCommit(newTargetID: newTargetID)
-        if let committedOldTargetID {
+        let mutation = targetRegistry.commitTarget(oldTargetID: oldTargetID, newTargetID: newTargetID)
+        if let committedOldTargetID = mutation.committedOldTargetID {
             moveBufferedProvisionalTargetMessages(from: committedOldTargetID, to: newTargetID)
         }
-        if let oldTargetID = committedOldTargetID,
-           oldTargetID == currentMainPageTargetID,
-           let existingNewRecord = targetsByID[newTargetID],
-           !existingNewRecord.isTopLevelPage {
-            var committedSubframeRecord = existingNewRecord
-            committedSubframeRecord.isProvisional = false
-            targetsByID[newTargetID] = committedSubframeRecord
-            if let frameID = committedSubframeRecord.frameID {
-                frameTargetIDsByFrameID[frameID] = newTargetID
-                styleSheetAddedEvents.append(contentsOf: resolvePendingStyleSheets(frameID: frameID, targetID: newTargetID))
-            }
-            return styleSheetAddedEvents
-        }
 
-        let oldRecord = committedOldTargetID.flatMap { targetsByID.removeValue(forKey: $0) }
-        guard oldRecord != nil || targetsByID[newTargetID] != nil else {
-            return styleSheetAddedEvents
-        }
-
-        var newRecord = targetsByID[newTargetID] ?? oldRecord!
-        newRecord.id = newTargetID
-        newRecord.frameID = newRecord.frameID ?? oldRecord?.frameID
-        newRecord.parentFrameID = newRecord.parentFrameID ?? oldRecord?.parentFrameID
-        newRecord.isProvisional = false
-        targetsByID[newTargetID] = newRecord
-
-        if let oldTargetID = committedOldTargetID {
+        if mutation.shouldRetargetExternalState,
+           let oldTargetID = mutation.committedOldTargetID {
             replyStore.retargetPendingReplies(from: oldTargetID, to: newTargetID)
-            frameTargetIDsByFrameID = frameTargetIDsByFrameID.filter { $0.value != oldTargetID }
             styleSheetRouting.retarget(from: oldTargetID, to: newTargetID)
+            runtimeContextRegistry.retarget(oldTargetID: oldTargetID, newTargetID: newTargetID)
         }
 
-        if let frameID = newRecord.frameID {
-            frameTargetIDsByFrameID[frameID] = newTargetID
-            styleSheetAddedEvents.append(contentsOf: resolvePendingStyleSheets(frameID: frameID, targetID: newTargetID))
+        return resolvePendingStyleSheets(for: mutation.resolvedFrameTarget)
+    }
+
+    private func resolvePendingStyleSheets(
+        for frameTarget: TransportFrameTargetResolution?
+    ) -> [ResolvedStyleSheetAddedEvent] {
+        guard let frameTarget else {
+            return []
         }
-        if let oldTargetID = committedOldTargetID {
-            runtimeContextRegistry.retarget(oldTargetID: oldTargetID, newTargetID: newTargetID)
-            if currentMainPageTargetID == oldTargetID,
-               newRecord.isTopLevelPage {
-                currentMainPageTargetID = newTargetID
-            }
-        }
-        if currentMainPageTargetID == nil,
-           newRecord.kind == .page,
-           newRecord.parentFrameID == nil {
-            currentMainPageTargetID = newTargetID
-        }
-        return styleSheetAddedEvents
+        return resolvePendingStyleSheets(frameID: frameTarget.frameID, targetID: frameTarget.targetID)
     }
 
     private func moveBufferedProvisionalTargetMessages(
@@ -741,27 +641,6 @@ package actor TransportSession {
         }
     }
 
-    private func inferredOldTargetIDForOldlessCommit(
-        newTargetID: ProtocolTargetIdentifier
-    ) -> ProtocolTargetIdentifier? {
-        if let newRecord = targetsByID[newTargetID],
-           newRecord.isProvisional,
-           newRecord.isTopLevelPage,
-           let currentMainPageTargetID,
-           currentMainPageTargetID != newTargetID {
-            return currentMainPageTargetID
-        }
-
-        guard targetsByID[newTargetID] == nil else {
-            return nil
-        }
-
-        let provisionalTargetIDs = targetsByID
-            .filter { $0.value.isProvisional }
-            .map(\.key)
-        return provisionalTargetIDs.count == 1 ? provisionalTargetIDs[0] : nil
-    }
-
     private func targetIDForRootEvent(method: String, paramsData: Data) -> ProtocolTargetIdentifier? {
         switch method {
         case "Target.targetCreated":
@@ -772,9 +651,9 @@ package actor TransportSession {
             return (try? TransportMessageParser.decode(TargetCommittedParams.self, from: paramsData))?.newTargetId
         case "Runtime.executionContextCreated":
             if let frameID = (try? TransportMessageParser.decode(RuntimeExecutionContextCreatedParams.self, from: paramsData))?.context.frameId {
-                return frameTargetIDsByFrameID[frameID] ?? currentMainPageTargetID
+                return targetRegistry.targetID(forFrameID: frameID) ?? targetRegistry.currentMainPageTargetID
             }
-            return currentMainPageTargetID
+            return targetRegistry.currentMainPageTargetID
         case "CSS.styleSheetAdded":
             return targetIDForCSSStyleSheetAdded(paramsData: paramsData)
         case "CSS.styleSheetChanged", "CSS.styleSheetRemoved":
@@ -784,7 +663,7 @@ package actor TransportSession {
         default:
             switch ProtocolDomain(method: method) {
             case .dom, .runtime, .css, .console, .network, .page, .storage:
-                return currentMainPageTargetID
+                return targetRegistry.currentMainPageTargetID
             default:
                 return nil
             }
@@ -797,7 +676,7 @@ package actor TransportSession {
     ) -> ProtocolTargetIdentifier? {
         switch ProtocolDomain(method: method) {
         case .runtime:
-            return currentMainPageTargetID ?? targetID
+            return targetRegistry.currentMainPageTargetID ?? targetID
         default:
             return targetID
         }
@@ -812,7 +691,7 @@ package actor TransportSession {
               let frameID = (try? TransportMessageParser.decode(RuntimeExecutionContextCreatedParams.self, from: paramsData))?.context.frameId else {
             return deliveredTargetID
         }
-        return resolvedTargetIDForRuntimeContext(deliveredTargetID: deliveredTargetID, frameID: frameID)
+        return targetRegistry.resolvedTargetIDForRuntimeContext(deliveredTargetID: deliveredTargetID, frameID: frameID)
     }
 
     private func targetIDForCSSStyleSheetAdded(paramsData: Data) -> ProtocolTargetIdentifier? {
@@ -820,13 +699,13 @@ package actor TransportSession {
             return nil
         }
         if let frameID = params.header.frameID {
-            guard let targetID = frameTargetIDsByFrameID[frameID],
-                  targetsByID[targetID]?.isProvisional != true else {
+            guard let targetID = targetRegistry.targetID(forFrameID: frameID),
+                  targetRegistry.target(for: targetID)?.isProvisional != true else {
                 return nil
             }
             return targetID
         }
-        return styleSheetRouting.targetID(for: params.header.styleSheetID) ?? currentMainPageTargetID
+        return styleSheetRouting.targetID(for: params.header.styleSheetID) ?? targetRegistry.currentMainPageTargetID
     }
 
     private func targetIDForCSSStyleSheetID(paramsData: Data) -> ProtocolTargetIdentifier? {
@@ -850,8 +729,8 @@ package actor TransportSession {
                 return
             }
             if let frameID = params.header.frameID {
-                if let resolvedTargetID = frameTargetIDsByFrameID[frameID],
-                   targetsByID[resolvedTargetID]?.isProvisional != true {
+                if let resolvedTargetID = targetRegistry.targetID(forFrameID: frameID),
+                   targetRegistry.target(for: resolvedTargetID)?.isProvisional != true {
                     styleSheetRouting.recordAdded(
                         styleSheetID: params.header.styleSheetID,
                         frameID: frameID,
@@ -908,7 +787,7 @@ package actor TransportSession {
     }
 
     private func currentMainPageTarget() throws -> ProtocolTargetIdentifier {
-        guard let currentMainPageTargetID else {
+        guard let currentMainPageTargetID = targetRegistry.currentMainPageTargetID else {
             throw TransportError.missingMainPageTarget
         }
         return currentMainPageTargetID
@@ -948,7 +827,7 @@ package actor TransportSession {
     }
 
     private func notifyMainPageTargetWaitersIfNeeded(receivedSequence: UInt64) async {
-        guard let currentMainPageTargetID,
+        guard let currentMainPageTargetID = targetRegistry.currentMainPageTargetID,
               !mainPageTargetWaiters.isEmpty else {
             return
         }
@@ -1080,11 +959,5 @@ private struct CSSStyleSheetIDParams: Decodable {
 
     private enum CodingKeys: String, CodingKey {
         case styleSheetID = "styleSheetId"
-    }
-}
-
-private extension ProtocolTargetRecord {
-    var isTopLevelPage: Bool {
-        kind == .page && parentFrameID == nil
     }
 }

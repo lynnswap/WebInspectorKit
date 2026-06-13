@@ -323,10 +323,11 @@ xcodebuild test \
 - `DOMDocumentState` の `nodesByID` と `currentNodeIDByProtocolNodeID` の直接書き換えを `DOMDocumentNodeIndex` に集約。snapshot/API 互換 getter は残し、subtree build / remove が node storage と protocol raw id index を同じ owner 経由で更新する形にした。WebKit の `DOMManager._idToDOMNode` に相当するが、WebInspectorKit は multi-target/document lifetime を持つため document 単位の index としている。
 - `NetworkSession` の `requestsByID` と `orderedRequestIDs` の直接同期を `NetworkRequestStore` に集約。request lifecycle mutation は `NetworkRequest` / `NetworkSession` に残し、store は target-scoped request identity と表示順の不変条件だけを所有する。WebKit の `NetworkManager._resourceRequestIdentifierMap` と `ResourceCollection` の index owner 境界に合わせた。
 - `TransportSession` の provisional target message buffer を `TransportProvisionalTargetMessageStore` に集約。commit 前 target message の append、destroy 時 remove、commit retarget、commit 後 take を単一 owner が担い、emit と buffered message dispatch の順序制御は `TransportSession` actor に残した。WebKit の `TargetManager` は commit 時に `dispatchProvisionalMessages()` を明示順序で drain するため、WebInspectorKit でも既存 raw event ordering を保ったまま buffer 再配送は並列化せず actor 本体で逐次実行する。
+- `TransportTargetRegistry` の `targetsByID` / `frameTargetIDsByFrameID` / `currentMainPageTargetID` を `private(set)` 化し、target create / destroy / commit / runtime frame projection の mutation を registry method に集約。reply retarget、stylesheet replay、runtime context retarget、buffer retarget は副作用 owner が別なので `TransportTargetCommitMutation` / `TransportFrameTargetResolution` として `TransportSession` に返し、actor 本体が既存順序で実行する。
 
 最新の局所検証:
 
-- `swift test --filter WebInspectorTransportTests -Xswiftc -strict-concurrency=minimal` (2026-06-13、provisional target message store owner 化後 green)
+- `swift test --filter WebInspectorTransportTests -Xswiftc -strict-concurrency=minimal` (2026-06-13、TransportTargetRegistry mutation owner 化後 green)
 - `swift test --filter CSSModelTests -Xswiftc -strict-concurrency=minimal` (2026-06-13、CSS refresh phase owner 化後 green)
 - `swift test --filter RuntimeModelTests -Xswiftc -strict-concurrency=minimal` (2026-06-13、Runtime target slot 化後 green)
 - `swift test --filter NetworkModelTests -Xswiftc -strict-concurrency=minimal` (2026-06-13、Network request store owner 化後 green)
@@ -334,5 +335,5 @@ xcodebuild test \
 - `swift test --filter DOMModelTests -Xswiftc -strict-concurrency=minimal` (2026-06-13、DOM document node index owner 化後 green)
 - `swift test --filter WebInspectorUITests -Xswiftc -strict-concurrency=minimal` (2026-06-13、Network list snapshot state owner 化後 green)
 - `swift test --filter WebInspectorArchitectureTests` (2026-06-13、element picker / stylesheet route 変更後 green)
-- `swift test -Xswiftc -strict-concurrency=minimal` (2026-06-13、provisional target message store owner 化後 green)
-- `xcodebuild test -workspace WebInspectorKit.xcworkspace -scheme WebInspectorKit -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest'` (2026-06-13、provisional target message store owner 化後 green)
+- `swift test -Xswiftc -strict-concurrency=minimal` (2026-06-13、TransportTargetRegistry mutation owner 化後 green)
+- `xcodebuild test -workspace WebInspectorKit.xcworkspace -scheme WebInspectorKit -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest'` (2026-06-13、TransportTargetRegistry mutation owner 化後 green)
