@@ -7,7 +7,7 @@ import UIKit
 package final class DOMElementStylePropertyView: UIView {
     package typealias ToggleAction = @MainActor (CSSPropertyIdentifier, Bool) -> Bool
 
-    private let observationScope = ObservationScope()
+    private var propertyObservation: PortableObservationTracking.Token?
     private let declarationTextView = UITextView()
     private let toggleSwitch = UISwitch()
     private var property: CSSProperty?
@@ -24,7 +24,7 @@ package final class DOMElementStylePropertyView: UIView {
     }
 
     isolated deinit {
-        observationScope.cancelAll()
+        propertyObservation?.cancel()
     }
 
     package func bind(
@@ -34,14 +34,16 @@ package final class DOMElementStylePropertyView: UIView {
         self.property = property
         toggleAction = onToggle
 
-        observationScope.cancelAll()
-        observationScope.observe(property) { [weak self] _, property in
+        propertyObservation?.cancel()
+        propertyObservation = withPortableContinuousObservation { [weak self, weak property] _ in
+            guard let property else { return }
             self?.renderAll(from: property)
         }
     }
 
     package func clear() {
-        observationScope.cancelAll()
+        propertyObservation?.cancel()
+        propertyObservation = nil
         property = nil
         toggleAction = nil
         declarationTextView.attributedText = nil

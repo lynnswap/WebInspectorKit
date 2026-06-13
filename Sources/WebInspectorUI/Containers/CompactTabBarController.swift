@@ -7,7 +7,7 @@ package final class CompactTabBarController: UITabBarController, UITabBarControl
     private let session: WebInspectorSession
     private let tabTransitionAnimator = NoAnimationTabTransitionAnimator()
     private var nativeTabByItemID: [TabDisplayItem.ID: UITab] = [:]
-    private let observationScope = ObservationScope()
+    private var interfaceObservation: PortableObservationTracking.Token?
     private var isRenderingSelection = false
 
     package init(session: WebInspectorSession) {
@@ -25,7 +25,7 @@ package final class CompactTabBarController: UITabBarController, UITabBarControl
     }
 
     isolated deinit {
-        observationScope.cancelAll()
+        interfaceObservation?.cancel()
     }
 
     override package func viewDidLoad() {
@@ -63,8 +63,9 @@ package final class CompactTabBarController: UITabBarController, UITabBarControl
     }
 
     private func bindInterface() {
-        observationScope.observe(session.interface) { [weak self] event, interface in
-            self?.renderInterface(interface, animated: event.kind != .initial)
+        interfaceObservation = withPortableContinuousObservation { [weak self] event in
+            guard let self else { return }
+            renderInterface(session.interface, animated: event.kind != .initial)
         }
     }
 

@@ -7,7 +7,7 @@ import UIKit
 package final class DOMElementStylePropertyCollectionCell: UICollectionViewListCell {
     private static let modifiedBackgroundColor = UIColor.systemGreen.withProminence(.quaternary).withAlphaComponent(0.99)
 
-    private let observationScope = ObservationScope()
+    private var propertyObservation: PortableObservationTracking.Token?
     private let propertyView = DOMElementStylePropertyView()
     private weak var property: CSSProperty?
 
@@ -22,7 +22,7 @@ package final class DOMElementStylePropertyCollectionCell: UICollectionViewListC
     }
 
     isolated deinit {
-        observationScope.cancelAll()
+        propertyObservation?.cancel()
     }
 
     override package func prepareForReuse() {
@@ -48,9 +48,16 @@ package final class DOMElementStylePropertyCollectionCell: UICollectionViewListC
             onToggle: onToggle
         )
 
-        observationScope.cancelAll()
-        observationScope.observe(property) { [weak self] _, property in
+        propertyObservation?.cancel()
+        propertyObservation = withPortableContinuousObservation { [weak self, weak property] _ in
             guard let self else {
+                return
+            }
+            guard let property else {
+                renderBackground(
+                    isModifiedByInspector: false,
+                    state: configurationState
+                )
                 return
             }
             self.renderBackground(
@@ -61,7 +68,8 @@ package final class DOMElementStylePropertyCollectionCell: UICollectionViewListC
     }
 
     package func clear() {
-        observationScope.cancelAll()
+        propertyObservation?.cancel()
+        propertyObservation = nil
         property = nil
         propertyView.clear()
         renderBackground(
@@ -71,7 +79,8 @@ package final class DOMElementStylePropertyCollectionCell: UICollectionViewListC
     }
 
     private func unbind() {
-        observationScope.cancelAll()
+        propertyObservation?.cancel()
+        propertyObservation = nil
         property = nil
         renderBackground(
             isModifiedByInspector: false,

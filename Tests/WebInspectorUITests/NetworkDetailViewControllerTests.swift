@@ -1393,7 +1393,7 @@ struct NetworkDetailViewControllerTests {
         return sampleRenderedCondition(in: viewController, condition: condition)
     }
 
-    private func observationDeliveries(in viewController: NetworkDetailViewController) -> [ObservationDelivery] {
+    private func observationDeliveries(in viewController: NetworkDetailViewController) -> [PortableObservationTracking.Token] {
         [
             viewController.modelObservationDeliveryForTesting,
             viewController.selectedRequestRenderObservationDeliveryForTesting,

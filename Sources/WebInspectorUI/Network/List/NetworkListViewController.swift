@@ -23,19 +23,16 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         var mode: SnapshotApplyMode
     }
 
-    private static let snapshotStreamOptions = ObservationStreamOptions.rateLimit(
-        .throttle(
-            ObservationThrottle(
-                interval: .milliseconds(80),
-                mode: .latest
-            )
-        )
-    )
+    private static let snapshotThrottleInterval: Duration = .milliseconds(80)
 
     private let model: NetworkPanelModel
     private var requestSelectionAction: RequestSelectionAction
-    private let observationScope = ObservationScope()
-    private var displayRequestsObservationTask: Task<Void, Never>?
+    private var displayRowsObservation: PortableObservationTracking.Token?
+    private var searchTextObservation: PortableObservationTracking.Token?
+    private var resourceFilterObservation: PortableObservationTracking.Token?
+    private var selectedRequestObservation: PortableObservationTracking.Token?
+    private var displayRowsThrottleTask: Task<Void, Never>?
+    private var pendingThrottledDisplayRows: [NetworkRequestDisplayProjection]?
 
     private var needsSnapshotReloadOnNextAppearance = false
     private var pendingSnapshotUpdate: PendingSnapshotUpdate?
@@ -74,8 +71,11 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     isolated deinit {
-        displayRequestsObservationTask?.cancel()
-        observationScope.cancelAll()
+        displayRowsObservation?.cancel()
+        searchTextObservation?.cancel()
+        resourceFilterObservation?.cancel()
+        selectedRequestObservation?.cancel()
+        displayRowsThrottleTask?.cancel()
         detachSearchPresentation()
     }
 
@@ -137,31 +137,63 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private func startObservingModel() {
-        displayRequestsObservationTask?.cancel()
-        let model = model
-        displayRequestsObservationTask = Task { @MainActor [weak self, model] in
-            let stream = makeObservationBridgeStream(options: Self.snapshotStreamOptions) {
-                model.displayRows
+        displayRowsObservation?.cancel()
+        displayRowsObservation = withPortableContinuousObservation { [weak self] event in
+            guard let self else { return }
+            let displayRows = model.displayRows
+            guard isViewLoaded else {
+                needsSnapshotReloadOnNextAppearance = true
+                return
             }
-            for await displayRows in stream {
-                guard let self else {
-                    return
-                }
-                self.reloadDataFromModel(displayRows: displayRows)
+            if event.kind == .initial {
+                reloadDataFromModel(displayRows: displayRows)
+            } else {
+                scheduleThrottledDisplayRowsReload(displayRows)
             }
         }
 
-        observationScope.observe(model) { [weak self] _, model in
-            self?.renderSearchText(model.searchText)
+        searchTextObservation?.cancel()
+        searchTextObservation = withPortableContinuousObservation { [weak self] _ in
+            guard let self else { return }
+            renderSearchText(model.searchText)
         }
 
-        observationScope.observe(model) { [weak self] _, model in
-            self?.resourceFilterSelectionDidChange(effectiveResourceFilters: model.effectiveResourceFilters)
+        resourceFilterObservation?.cancel()
+        resourceFilterObservation = withPortableContinuousObservation { [weak self] _ in
+            guard let self else { return }
+            resourceFilterSelectionDidChange(effectiveResourceFilters: model.effectiveResourceFilters)
         }
 
-        observationScope.observe(model) { [weak self] _, model in
-            self?.renderSelectedRequestID(model.selectedRequestID)
+        selectedRequestObservation?.cancel()
+        selectedRequestObservation = withPortableContinuousObservation { [weak self] _ in
+            guard let self else { return }
+            renderSelectedRequestID(model.selectedRequestID)
         }
+    }
+
+    private func scheduleThrottledDisplayRowsReload(_ displayRows: [NetworkRequestDisplayProjection]) {
+        pendingThrottledDisplayRows = displayRows
+        guard displayRowsThrottleTask == nil else {
+            return
+        }
+
+        displayRowsThrottleTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: Self.snapshotThrottleInterval)
+            guard let self, !Task.isCancelled else {
+                return
+            }
+            flushThrottledDisplayRowsReload()
+        }
+    }
+
+    private func flushThrottledDisplayRowsReload() {
+        guard let displayRows = pendingThrottledDisplayRows else {
+            displayRowsThrottleTask = nil
+            return
+        }
+        pendingThrottledDisplayRows = nil
+        displayRowsThrottleTask = nil
+        reloadDataFromModel(displayRows: displayRows)
     }
 
     private func configureNavigationItem() {

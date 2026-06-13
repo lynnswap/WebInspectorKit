@@ -45,7 +45,7 @@ final class NetworkBodyViewController: UIViewController {
         scrollView.addSubview(imageView)
         return scrollView
     }()
-    private let observationScope = ObservationScope()
+    private var bodyObservation: PortableObservationTracking.Token?
     private let scrollEdgeState: NetworkDetailScrollEdgeState?
     private weak var body: NetworkBody?
     private var metadata: NetworkBodyPreviewMetadata?
@@ -57,7 +57,7 @@ final class NetworkBodyViewController: UIViewController {
     private var shouldResetImageZoomOnNextLayout = false
     private var imagePreviewLayoutState: ImagePreviewLayoutState?
 #if DEBUG
-    private var bodyObservationDelivery: ObservationDelivery?
+    private var bodyObservationDelivery: PortableObservationTracking.Token?
 #endif
 
     init(scrollEdgeState: NetworkDetailScrollEdgeState? = nil) {
@@ -87,7 +87,7 @@ final class NetworkBodyViewController: UIViewController {
     }
 
     isolated deinit {
-        observationScope.cancelAll()
+        bodyObservation?.cancel()
         removeTemporaryMediaFile(at: mediaTemporaryFile?.fileURL)
     }
 
@@ -160,21 +160,25 @@ final class NetworkBodyViewController: UIViewController {
     }
 
     private func startObserving(body: NetworkBody?) {
-        observationScope.cancelAll()
+        bodyObservation?.cancel()
+        bodyObservation = nil
 #if DEBUG
         bodyObservationDelivery = nil
 #endif
         guard let body else {
             return
         }
-        let delivery = observationScope.observe(body) { [weak self] _, body in
-            guard let self, body === self.body else {
+        let token = withPortableContinuousObservation { [weak self, weak body] _ in
+            guard let self,
+                  let body,
+                  body === self.body else {
                 return
             }
             self.renderBody(body)
         }
+        bodyObservation = token
 #if DEBUG
-        bodyObservationDelivery = delivery
+        bodyObservationDelivery = token
 #endif
     }
 
@@ -639,7 +643,7 @@ extension NetworkBodyViewController {
         return ObjectIdentifier(player)
     }
 
-    var bodyObservationDeliveryForTesting: ObservationDelivery? {
+    var bodyObservationDeliveryForTesting: PortableObservationTracking.Token? {
         bodyObservationDelivery
     }
 }

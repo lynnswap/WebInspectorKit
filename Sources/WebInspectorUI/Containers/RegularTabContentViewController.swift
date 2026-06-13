@@ -7,7 +7,7 @@ package final class RegularTabContentViewController: UINavigationController {
     private let session: WebInspectorSession
     private var segmentDisplayItemIDs: [TabDisplayItem.ID] = []
     private var displayedDisplayItemID: TabDisplayItem.ID?
-    private let observationScope = ObservationScope()
+    private var interfaceObservation: PortableObservationTracking.Token?
 
     private lazy var segmentBarButtonItem: UIBarButtonItem = {
         let item = UIBarButtonItem(customView: segmentedControl)
@@ -43,7 +43,7 @@ package final class RegularTabContentViewController: UINavigationController {
     }
 
     isolated deinit {
-        observationScope.cancelAll()
+        interfaceObservation?.cancel()
     }
 
     override package func viewDidLoad() {
@@ -73,8 +73,9 @@ package final class RegularTabContentViewController: UINavigationController {
     }
 
     private func bindInterface() {
-        observationScope.observe(session.interface) { [weak self] _, interface in
-            self?.renderInterface(interface)
+        interfaceObservation = withPortableContinuousObservation { [weak self] _ in
+            guard let self else { return }
+            renderInterface(session.interface)
         }
     }
 

@@ -8,7 +8,7 @@ package final class NetworkCompactNavigationController: UINavigationController, 
     private let model: NetworkPanelModel
     private let listViewController: NetworkListViewController
     private let detailViewController: NetworkDetailViewController
-    private let observationScope = ObservationScope()
+    private var selectionObservation: PortableObservationTracking.Token?
     private var isSyncingStack = false
     private var isStackSyncScheduledAfterTransition = false
     private var pendingStackSyncAnimates = false
@@ -37,7 +37,7 @@ package final class NetworkCompactNavigationController: UINavigationController, 
     }
 
     isolated deinit {
-        observationScope.cancelAll()
+        selectionObservation?.cancel()
     }
 
     override package func viewWillAppear(_ animated: Bool) {
@@ -75,9 +75,10 @@ package final class NetworkCompactNavigationController: UINavigationController, 
     }
 
     private func startObservingSelection() {
-        observationScope.cancelAll()
-        observationScope.observe(model) { [weak self] event, model in
-            self?.syncStack(
+        selectionObservation?.cancel()
+        selectionObservation = withPortableContinuousObservation { [weak self] event in
+            guard let self else { return }
+            syncStack(
                 hasSelection: model.selectedRequest != nil,
                 animated: event.kind != .initial
             )
@@ -85,7 +86,8 @@ package final class NetworkCompactNavigationController: UINavigationController, 
     }
 
     private func stopObservingSelection() {
-        observationScope.cancelAll()
+        selectionObservation?.cancel()
+        selectionObservation = nil
     }
 
     private func syncStack(hasSelection: Bool, animated: Bool) {

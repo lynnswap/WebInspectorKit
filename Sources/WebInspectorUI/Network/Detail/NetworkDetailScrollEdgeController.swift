@@ -13,11 +13,11 @@ final class NetworkDetailScrollEdgeState {
 @MainActor
 final class NetworkDetailScrollEdgeController {
     let scrollEdgeState = NetworkDetailScrollEdgeState()
-    private let observationScope = ObservationScope()
+    private var scrollEdgeObservation: PortableObservationTracking.Token?
     private var interaction: UIInteraction?
     private weak var registeredInteractionScrollView: UIScrollView?
 #if DEBUG
-    private var observationDelivery: ObservationDelivery?
+    private var observationDelivery: PortableObservationTracking.Token?
 #endif
 
     var isPreviewRoleControlVisible: Bool {
@@ -39,7 +39,7 @@ final class NetworkDetailScrollEdgeController {
     }
 
     isolated deinit {
-        observationScope.cancelAll()
+        scrollEdgeObservation?.cancel()
     }
 
     func install(previewRoleControlContainerView: UIView) {
@@ -51,12 +51,13 @@ final class NetworkDetailScrollEdgeController {
             interaction.edge = .top
             previewRoleControlContainerView.addInteraction(interaction)
             self.interaction = interaction
-            let delivery = observationScope.observe(scrollEdgeState) { [weak self] _, state in
-                self?.render(state)
+            let token = withPortableContinuousObservation { [weak self] _ in
+                guard let self else { return }
+                render(scrollEdgeState)
             }
-            render(scrollEdgeState)
+            scrollEdgeObservation = token
 #if DEBUG
-            observationDelivery = delivery
+            observationDelivery = token
 #endif
         }
     }
@@ -84,7 +85,7 @@ extension NetworkDetailScrollEdgeController {
         interaction as? UIScrollEdgeElementContainerInteraction
     }
 
-    var observationDeliveryForTesting: ObservationDelivery? {
+    var observationDeliveryForTesting: PortableObservationTracking.Token? {
         observationDelivery
     }
 }

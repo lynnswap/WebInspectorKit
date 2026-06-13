@@ -8,7 +8,7 @@ package final class DOMNavigationItems: NSObject {
     private typealias UndoManagerProvider = @MainActor () -> UndoManager?
 
     private let inspector: InspectorSession
-    private let observationScope = ObservationScope()
+    private var domObservation: PortableObservationTracking.Token?
     private var undoManagerProvider: UndoManagerProvider = { nil }
 
     private lazy var pickItem: UIBarButtonItem = {
@@ -29,7 +29,7 @@ package final class DOMNavigationItems: NSObject {
     }
 
     isolated deinit {
-        observationScope.cancelAll()
+        domObservation?.cancel()
     }
 
     package func install(
@@ -48,7 +48,9 @@ package final class DOMNavigationItems: NSObject {
     }
 
     private func startObservingInspection() {
-        observationScope.observe(inspector.attachment.dom) { [weak self] _, _ in
+        domObservation = withPortableContinuousObservation { [weak self, inspector] _ in
+            _ = inspector.attachment.dom.canBeginElementPicker
+            _ = inspector.attachment.dom.isSelectingElement
             self?.renderPickItem()
         }
     }

@@ -6,9 +6,9 @@ import UIKit
 @MainActor
 package final class NetworkDetailViewController: UIViewController {
     private let model: NetworkPanelModel
-    private let modelObservationScope = ObservationScope()
-    private let selectedRequestRenderObservationScope = ObservationScope()
-    private let responseBodyFetchObservationScope = ObservationScope()
+    private var modelObservation: PortableObservationTracking.Token?
+    private var selectedRequestRenderObservation: PortableObservationTracking.Token?
+    private var responseBodyFetchObservation: PortableObservationTracking.Token?
     private let scrollEdgeController = NetworkDetailScrollEdgeController()
     private lazy var bodyViewController = NetworkBodyViewController(
         scrollEdgeState: scrollEdgeController.scrollEdgeState
@@ -34,9 +34,9 @@ package final class NetworkDetailViewController: UIViewController {
     private var bodyTopToPreviewContainerConstraint: NSLayoutConstraint?
     private var bodyTopToPreviewRoleControlConstraint: NSLayoutConstraint?
 #if DEBUG
-    private var modelObservationDelivery: ObservationDelivery?
-    private var selectedRequestRenderObservationDelivery: ObservationDelivery?
-    private var responseBodyFetchObservationDelivery: ObservationDelivery?
+    private var modelObservationDelivery: PortableObservationTracking.Token?
+    private var selectedRequestRenderObservationDelivery: PortableObservationTracking.Token?
+    private var responseBodyFetchObservationDelivery: PortableObservationTracking.Token?
 #endif
     private lazy var previewContainerView: UIView = {
         let view = UIView()
@@ -69,9 +69,9 @@ package final class NetworkDetailViewController: UIViewController {
     }
 
     isolated deinit {
-        modelObservationScope.cancelAll()
-        selectedRequestRenderObservationScope.cancelAll()
-        responseBodyFetchObservationScope.cancelAll()
+        modelObservation?.cancel()
+        selectedRequestRenderObservation?.cancel()
+        responseBodyFetchObservation?.cancel()
     }
 
     override package func viewDidLoad() {
@@ -96,11 +96,13 @@ package final class NetworkDetailViewController: UIViewController {
     }
 
     private func startObservingModel() {
-        let delivery = modelObservationScope.observe(model) { [weak self] _, model in
-            self?.bindSelectedRequest(model.selectedRequest)
+        let token = withPortableContinuousObservation { [weak self] _ in
+            guard let self else { return }
+            bindSelectedRequest(model.selectedRequest)
         }
+        modelObservation = token
 #if DEBUG
-        modelObservationDelivery = delivery
+        modelObservationDelivery = token
 #endif
     }
 
@@ -171,7 +173,8 @@ package final class NetworkDetailViewController: UIViewController {
         }
 
         hasBoundSelectedRequest = true
-        selectedRequestRenderObservationScope.cancelAll()
+        selectedRequestRenderObservation?.cancel()
+        selectedRequestRenderObservation = nil
         unbindResponseBodyFetchObservation()
         observedRequest = request
 #if DEBUG
@@ -193,7 +196,8 @@ package final class NetworkDetailViewController: UIViewController {
     }
 
     private func rebindSelectedRequestRendering() {
-        selectedRequestRenderObservationScope.cancelAll()
+        selectedRequestRenderObservation?.cancel()
+        selectedRequestRenderObservation = nil
         unbindResponseBodyFetchObservation()
 #if DEBUG
         selectedRequestRenderObservationDelivery = nil
@@ -205,14 +209,16 @@ package final class NetworkDetailViewController: UIViewController {
     }
 
     private func bindSelectedRequestRendering(_ request: NetworkRequest) {
-        let delivery = selectedRequestRenderObservationScope.observe(request) { [weak self] _, request in
-            guard self?.observedRequest === request else {
+        let token = withPortableContinuousObservation { [weak self, weak request] _ in
+            guard let request,
+                  self?.observedRequest === request else {
                 return
             }
             self?.renderSelectedRequest(request)
         }
+        selectedRequestRenderObservation = token
 #if DEBUG
-        selectedRequestRenderObservationDelivery = delivery
+        selectedRequestRenderObservationDelivery = token
 #endif
     }
 
@@ -362,21 +368,24 @@ package final class NetworkDetailViewController: UIViewController {
             return
         }
 
-        responseBodyFetchObservationScope.cancelAll()
+        responseBodyFetchObservation?.cancel()
         responseBodyFetchRequest = request
-        let delivery = responseBodyFetchObservationScope.observe(request) { [weak self] _, request in
-            guard self?.responseBodyFetchRequest === request else {
+        let token = withPortableContinuousObservation { [weak self, weak request] _ in
+            guard let request,
+                  self?.responseBodyFetchRequest === request else {
                 return
             }
             self?.fetchResponseBodyIfNeededForVisibleResponse(request)
         }
+        responseBodyFetchObservation = token
 #if DEBUG
-        responseBodyFetchObservationDelivery = delivery
+        responseBodyFetchObservationDelivery = token
 #endif
     }
 
     private func unbindResponseBodyFetchObservation() {
-        responseBodyFetchObservationScope.cancelAll()
+        responseBodyFetchObservation?.cancel()
+        responseBodyFetchObservation = nil
         responseBodyFetchRequest = nil
 #if DEBUG
         responseBodyFetchObservationDelivery = nil
@@ -481,19 +490,19 @@ extension NetworkDetailViewController {
         scrollEdgeController.interactionForTesting
     }
 
-    var previewRoleScrollEdgeObservationDeliveryForTesting: ObservationDelivery? {
+    var previewRoleScrollEdgeObservationDeliveryForTesting: PortableObservationTracking.Token? {
         scrollEdgeController.observationDeliveryForTesting
     }
 
-    var modelObservationDeliveryForTesting: ObservationDelivery? {
+    var modelObservationDeliveryForTesting: PortableObservationTracking.Token? {
         modelObservationDelivery
     }
 
-    var selectedRequestRenderObservationDeliveryForTesting: ObservationDelivery? {
+    var selectedRequestRenderObservationDeliveryForTesting: PortableObservationTracking.Token? {
         selectedRequestRenderObservationDelivery
     }
 
-    var responseBodyFetchObservationDeliveryForTesting: ObservationDelivery? {
+    var responseBodyFetchObservationDeliveryForTesting: PortableObservationTracking.Token? {
         responseBodyFetchObservationDelivery
     }
 

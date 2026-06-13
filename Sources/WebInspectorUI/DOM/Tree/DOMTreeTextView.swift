@@ -39,8 +39,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     }()
     private let dom: DOMSession
     private let menuModel: DOMTreeMenuModel
-    private let observationScope = ObservationScope()
-    private var documentObservationDelivery: ObservationDelivery?
+    private var documentObservation: PortableObservationTracking.Token?
     private let textContentStorage = NSTextContentStorage()
     private let layoutManager = NSTextLayoutManager()
     private let textContainer = NSTextContainer()
@@ -155,7 +154,7 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
 
     isolated deinit {
         scheduledTreeReloadTask?.cancel()
-        observationScope.cancelAll()
+        documentObservation?.cancel()
     }
 
     override var canBecomeFirstResponder: Bool {
@@ -555,8 +554,9 @@ final class DOMTreeTextView: UIScrollView, @preconcurrency NSTextViewportLayoutC
     }
 
     private func startObservingDocument() {
-        documentObservationDelivery = observationScope.observe(dom) { [weak self] event, dom in
-            self?.routeDOMInvalidation(from: dom, isInitial: event.kind == .initial)
+        documentObservation = withPortableContinuousObservation { [weak self] event in
+            guard let self else { return }
+            routeDOMInvalidation(from: dom, isInitial: event.kind == .initial)
         }
     }
 
@@ -2271,8 +2271,8 @@ extension DOMTreeTextView {
         renderedText
     }
 
-    var documentObservationDeliveryForTesting: ObservationDelivery {
-        documentObservationDelivery!
+    var documentObservationDeliveryForTesting: PortableObservationTracking.Token {
+        documentObservation!
     }
 
     var rowCountForTesting: Int {

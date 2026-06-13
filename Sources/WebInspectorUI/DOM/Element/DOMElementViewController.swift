@@ -16,16 +16,16 @@ package final class DOMElementViewController: UICollectionViewController {
     }
 
     private let inspection: AttachedInspection
-    private let observationScope = ObservationScope()
-    private let selectedNodeStyleObservationScope = ObservationScope()
+    private var elementStylesObservation: PortableObservationTracking.Token?
+    private var selectedNodeStyleObservation: PortableObservationTracking.Token?
     private weak var observedNodeStyles: CSSNodeStyles?
     private var expandedUnusedVariableSectionIDs = Set<CSSStyleSectionIdentifier>()
     private var displayedNodeStyles: CSSNodeStyles?
 
 #if DEBUG
     package private(set) var lastSnapshotAnimatedForTesting = false
-    private var elementStylesObservationDelivery: ObservationDelivery?
-    private var selectedNodeStyleObservationDelivery: ObservationDelivery?
+    private var elementStylesObservationDelivery: PortableObservationTracking.Token?
+    private var selectedNodeStyleObservationDelivery: PortableObservationTracking.Token?
 #endif
 
     private lazy var dataSource = makeDataSource()
@@ -42,8 +42,8 @@ package final class DOMElementViewController: UICollectionViewController {
 
     isolated deinit {
         inspection.dom.setSelectedNodeStyleHydrationActive(false)
-        observationScope.cancelAll()
-        selectedNodeStyleObservationScope.cancelAll()
+        elementStylesObservation?.cancel()
+        selectedNodeStyleObservation?.cancel()
     }
 
     override package func viewDidLoad() {
@@ -168,23 +168,26 @@ package final class DOMElementViewController: UICollectionViewController {
     }
 
     private func startObservingState() {
-        let delivery = observationScope.observe(inspection.dom.elementStyles, tracking: { elementStyles in
-            _ = elementStyles.selectedNodeStyles
-        }) { [weak self] _, elementStyles in
+        let elementStyles = inspection.dom.elementStyles
+        let token = withPortableContinuousObservation { [weak self, elementStyles] _ in
+            let selectedNodeStyles = elementStyles.selectedNodeStyles
+            let selectedState = elementStyles.selectedState
             self?.bindSelectedNodeStyles(
-                elementStyles.selectedNodeStyles,
-                unavailableState: elementStyles.selectedState
+                selectedNodeStyles,
+                unavailableState: selectedState
             )
         }
 #if DEBUG
-        elementStylesObservationDelivery = delivery
+        elementStylesObservationDelivery = token
 #endif
+        elementStylesObservation = token
     }
 
     private func bindSelectedNodeStyles(_ nodeStyles: CSSNodeStyles?, unavailableState: CSSNodeStylesState) {
         guard let nodeStyles else {
             observedNodeStyles = nil
-            selectedNodeStyleObservationScope.cancelAll()
+            selectedNodeStyleObservation?.cancel()
+            selectedNodeStyleObservation = nil
 #if DEBUG
             selectedNodeStyleObservationDelivery = nil
 #endif
@@ -196,15 +199,17 @@ package final class DOMElementViewController: UICollectionViewController {
             return
         }
         observedNodeStyles = nodeStyles
-        selectedNodeStyleObservationScope.cancelAll()
-        let delivery = selectedNodeStyleObservationScope.observe(nodeStyles) { [weak self] _, nodeStyles in
-            guard self?.observedNodeStyles === nodeStyles else {
+        selectedNodeStyleObservation?.cancel()
+        let token = withPortableContinuousObservation { [weak self, weak nodeStyles] _ in
+            guard let nodeStyles,
+                  self?.observedNodeStyles === nodeStyles else {
                 return
             }
             self?.render(nodeStyles)
         }
+        selectedNodeStyleObservation = token
 #if DEBUG
-        selectedNodeStyleObservationDelivery = delivery
+        selectedNodeStyleObservationDelivery = token
 #endif
     }
 
@@ -345,11 +350,11 @@ package final class DOMElementViewController: UICollectionViewController {
     }
 
 #if DEBUG
-    package var elementStylesObservationDeliveryForTesting: ObservationDelivery? {
+    package var elementStylesObservationDeliveryForTesting: PortableObservationTracking.Token? {
         elementStylesObservationDelivery
     }
 
-    package var selectedNodeStyleObservationDeliveryForTesting: ObservationDelivery? {
+    package var selectedNodeStyleObservationDeliveryForTesting: PortableObservationTracking.Token? {
         selectedNodeStyleObservationDelivery
     }
 #endif
