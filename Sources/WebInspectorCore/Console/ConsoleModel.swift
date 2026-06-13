@@ -194,6 +194,106 @@ package final class ConsoleTargetState {
 }
 
 @MainActor
+private struct ConsoleTargetRegistry {
+    private var statesByID: [ProtocolTargetIdentifier: ConsoleTargetState] = [:]
+
+    var targetStates: [ConsoleTargetState] {
+        statesByID.values.sorted { $0.targetID.rawValue < $1.targetID.rawValue }
+    }
+
+    var orderedMessageIDs: [ConsoleMessageIdentifier] {
+        statesByID.values.flatMap(\.orderedMessageIDs).sorted()
+    }
+
+    var messages: [ConsoleMessage] {
+        orderedMessageIDs.compactMap { message(for: $0) }
+    }
+
+    var warningCount: Int {
+        statesByID.values.reduce(0) { $0 + $1.warningCount }
+    }
+
+    var errorCount: Int {
+        statesByID.values.reduce(0) { $0 + $1.errorCount }
+    }
+
+    mutating func removeAll() {
+        statesByID.removeAll()
+    }
+
+    func targetState(for targetID: ProtocolTargetIdentifier) -> ConsoleTargetState? {
+        statesByID[targetID]
+    }
+
+    func message(for id: ConsoleMessageIdentifier) -> ConsoleMessage? {
+        statesByID[id.targetID]?.message(for: id)
+    }
+
+    mutating func ensureTargetState(for targetID: ProtocolTargetIdentifier) -> ConsoleTargetState {
+        if let state = statesByID[targetID] {
+            return state
+        }
+        let state = ConsoleTargetState(targetID: targetID)
+        statesByID[targetID] = state
+        return state
+    }
+
+    mutating func removeTargetState(for targetID: ProtocolTargetIdentifier) {
+        statesByID.removeValue(forKey: targetID)
+    }
+
+    mutating func retarget(oldTargetID: ProtocolTargetIdentifier, newTargetID: ProtocolTargetIdentifier) {
+        guard let oldState = statesByID.removeValue(forKey: oldTargetID) else {
+            return
+        }
+        let committedState = oldState.retargeted(to: newTargetID)
+        if let newState = statesByID[newTargetID] {
+            newState.mergeCommittedState(committedState)
+        } else {
+            statesByID[newTargetID] = committedState
+        }
+    }
+
+    func warningCountByTargetID() -> [ProtocolTargetIdentifier: Int] {
+        Dictionary(
+            uniqueKeysWithValues: statesByID.values
+                .filter { $0.warningCount > 0 }
+                .map { ($0.targetID, $0.warningCount) }
+        )
+    }
+
+    func errorCountByTargetID() -> [ProtocolTargetIdentifier: Int] {
+        Dictionary(
+            uniqueKeysWithValues: statesByID.values
+                .filter { $0.errorCount > 0 }
+                .map { ($0.targetID, $0.errorCount) }
+        )
+    }
+
+    func messageSnapshotEntries() -> [(ConsoleMessageIdentifier, ConsoleMessageSnapshot)] {
+        statesByID.values.flatMap { state in
+            state.messageSnapshotEntries
+        }
+    }
+
+    func lastClearReasonByTargetID() -> [ProtocolTargetIdentifier: ConsoleClearReason] {
+        Dictionary(
+            uniqueKeysWithValues: statesByID.values.compactMap { state in
+                state.lastClearReason.map { (state.targetID, $0) }
+            }
+        )
+    }
+
+    func unsupportedCommandsByTargetID() -> [ProtocolTargetIdentifier: Set<String>] {
+        Dictionary(
+            uniqueKeysWithValues: statesByID.values
+                .filter { $0.unsupportedCommandSnapshot.isEmpty == false }
+                .map { ($0.targetID, $0.unsupportedCommandSnapshot) }
+        )
+    }
+}
+
+@MainActor
 @Observable
 package final class ConsoleSession {
     package private(set) var warningCount: Int
@@ -203,7 +303,7 @@ package final class ConsoleSession {
     @ObservationIgnored private var commandChannel: ProtocolCommandChannel?
     @ObservationIgnored private let protocolCommands: ConsoleProtocolCommands
     @ObservationIgnored private var recordError: ((InspectorSessionError?) -> Void)?
-    private var targetStatesByID: [ProtocolTargetIdentifier: ConsoleTargetState]
+    private var targetRegistry: ConsoleTargetRegistry
 
     package init() {
         warningCount = 0
@@ -212,14 +312,14 @@ package final class ConsoleSession {
         commandChannel = nil
         protocolCommands = ConsoleProtocolCommands()
         recordError = nil
-        targetStatesByID = [:]
+        targetRegistry = ConsoleTargetRegistry()
     }
 
     package func reset() {
         warningCount = 0
         errorCount = 0
         nextMessageOrdinal = 0
-        targetStatesByID.removeAll()
+        targetRegistry.removeAll()
     }
 
     package func bindProtocolChannel(
@@ -264,19 +364,19 @@ package final class ConsoleSession {
     }
 
     package var messages: [ConsoleMessage] {
-        orderedMessageIDs.compactMap { targetStatesByID[$0.targetID]?.message(for: $0) }
+        targetRegistry.messages
     }
 
     package var targetStates: [ConsoleTargetState] {
-        targetStatesByID.values.sorted { $0.targetID.rawValue < $1.targetID.rawValue }
+        targetRegistry.targetStates
     }
 
     package func targetState(for targetID: ProtocolTargetIdentifier) -> ConsoleTargetState? {
-        targetStatesByID[targetID]
+        targetRegistry.targetState(for: targetID)
     }
 
     package func message(for id: ConsoleMessageIdentifier) -> ConsoleMessage? {
-        targetStatesByID[id.targetID]?.message(for: id)
+        targetRegistry.message(for: id)
     }
 
     package func snapshot() -> ConsoleSessionSnapshot {
@@ -284,32 +384,14 @@ package final class ConsoleSession {
         return ConsoleSessionSnapshot(
             orderedMessageIDs: orderedMessageIDs,
             messagesByID: Dictionary(
-                uniqueKeysWithValues: targetStatesByID.values.flatMap { state in
-                    state.messageSnapshotEntries
-                }
+                uniqueKeysWithValues: targetRegistry.messageSnapshotEntries()
             ),
             warningCount: warningCount,
             errorCount: errorCount,
-            warningCountByTargetID: Dictionary(
-                uniqueKeysWithValues: targetStatesByID.values
-                    .filter { $0.warningCount > 0 }
-                    .map { ($0.targetID, $0.warningCount) }
-            ),
-            errorCountByTargetID: Dictionary(
-                uniqueKeysWithValues: targetStatesByID.values
-                    .filter { $0.errorCount > 0 }
-                    .map { ($0.targetID, $0.errorCount) }
-            ),
-            lastClearReasonByTargetID: Dictionary(
-                uniqueKeysWithValues: targetStatesByID.values.compactMap { state in
-                    state.lastClearReason.map { (state.targetID, $0) }
-                }
-            ),
-            unsupportedCommandsByTargetID: Dictionary(
-                uniqueKeysWithValues: targetStatesByID.values
-                    .filter { $0.unsupportedCommandSnapshot.isEmpty == false }
-                    .map { ($0.targetID, $0.unsupportedCommandSnapshot) }
-            )
+            warningCountByTargetID: targetRegistry.warningCountByTargetID(),
+            errorCountByTargetID: targetRegistry.errorCountByTargetID(),
+            lastClearReasonByTargetID: targetRegistry.lastClearReasonByTargetID(),
+            unsupportedCommandsByTargetID: targetRegistry.unsupportedCommandsByTargetID()
         )
     }
 
@@ -320,14 +402,14 @@ package final class ConsoleSession {
         parameters: [RuntimeRemoteObject]? = nil
     ) -> ConsoleMessageIdentifier {
         nextMessageOrdinal &+= 1
-        let state = ensureTargetState(for: targetID)
+        let state = targetRegistry.ensureTargetState(for: targetID)
         let id = state.append(payload, ordinal: nextMessageOrdinal, parameters: parameters)
         updateAggregateSeverityCounts()
         return id
     }
 
     package func applyRepeatCountUpdated(count: Int, timestamp: Double?, targetID: ProtocolTargetIdentifier) {
-        guard let state = targetStatesByID[targetID] else {
+        guard let state = targetRegistry.targetState(for: targetID) else {
             return
         }
         state.updateRepeatCount(count: count, timestamp: timestamp)
@@ -335,37 +417,31 @@ package final class ConsoleSession {
     }
 
     package func applyMessagesCleared(reason: ConsoleClearReason, targetID: ProtocolTargetIdentifier) {
-        let state = ensureTargetState(for: targetID)
+        let state = targetRegistry.ensureTargetState(for: targetID)
         state.clearMessages(reason: reason)
         updateAggregateSeverityCounts()
     }
 
     package func applyTargetDestroyed(_ targetID: ProtocolTargetIdentifier) {
-        targetStatesByID.removeValue(forKey: targetID)
+        targetRegistry.removeTargetState(for: targetID)
         updateAggregateSeverityCounts()
     }
 
     package func applyTargetCommitted(oldTargetID: ProtocolTargetIdentifier?, newTargetID: ProtocolTargetIdentifier) {
-        guard let oldTargetID,
-              let oldState = targetStatesByID.removeValue(forKey: oldTargetID) else {
+        guard let oldTargetID else {
             return
         }
-        let committedState = oldState.retargeted(to: newTargetID)
-        if let newState = targetStatesByID[newTargetID] {
-            newState.mergeCommittedState(committedState)
-        } else {
-            targetStatesByID[newTargetID] = committedState
-        }
+        targetRegistry.retarget(oldTargetID: oldTargetID, newTargetID: newTargetID)
         updateAggregateSeverityCounts()
     }
 
     package func markCommandUnsupported(_ method: String, targetID: ProtocolTargetIdentifier) {
-        let state = ensureTargetState(for: targetID)
+        let state = targetRegistry.ensureTargetState(for: targetID)
         state.markCommandUnsupported(method)
     }
 
     package func supportsCommand(_ method: String, targetID: ProtocolTargetIdentifier) -> Bool {
-        targetStatesByID[targetID]?.supportsCommand(method) ?? true
+        targetRegistry.targetState(for: targetID)?.supportsCommand(method) ?? true
     }
 
     package func enableIntent(targetID: ProtocolTargetIdentifier) -> ConsoleCommandIntent {
@@ -373,21 +449,12 @@ package final class ConsoleSession {
     }
 
     private var orderedMessageIDs: [ConsoleMessageIdentifier] {
-        targetStatesByID.values.flatMap(\.orderedMessageIDs).sorted()
-    }
-
-    private func ensureTargetState(for targetID: ProtocolTargetIdentifier) -> ConsoleTargetState {
-        if let state = targetStatesByID[targetID] {
-            return state
-        }
-        let state = ConsoleTargetState(targetID: targetID)
-        targetStatesByID[targetID] = state
-        return state
+        targetRegistry.orderedMessageIDs
     }
 
     private func updateAggregateSeverityCounts() {
-        warningCount = targetStatesByID.values.reduce(0) { $0 + $1.warningCount }
-        errorCount = targetStatesByID.values.reduce(0) { $0 + $1.errorCount }
+        warningCount = targetRegistry.warningCount
+        errorCount = targetRegistry.errorCount
     }
 
     private func markCommandUnsupportedIfNeeded(
