@@ -1,4 +1,3 @@
-import Foundation
 import Observation
 import WebInspectorTransport
 
@@ -336,7 +335,7 @@ package final class DOMSession {
         guard canApplyDOMEvent(to: nodeID) else {
             return
         }
-        let affectsVisibleTree = nodeIsConnectedToDocumentTree(nodeID, in: document)
+        let affectsVisibleTree = document.containsConnectedNode(nodeID)
         if parent.isFrameOwner,
            projectedFrameDocumentRootID(for: parent.id) != nil {
             document.removeChildNodesTransactions(parentRawNodeID: parent.protocolNodeID)
@@ -385,7 +384,7 @@ package final class DOMSession {
         guard canApplyDOMEvent(to: parentID) else {
             return nil
         }
-        let affectsVisibleTree = nodeIsConnectedToDocumentTree(parentID, in: document)
+        let affectsVisibleTree = document.containsConnectedNode(parentID)
         let replacementOwnerKeys = document.currentNodeIDByProtocolNodeID[payload.nodeID]
             .map { projectedFrameOwnerKeys(inSubtree: $0) } ?? [:]
         let childID = buildSubtree(payload, document: document, parentID: parentID)
@@ -413,7 +412,7 @@ package final class DOMSession {
               canApplyDOMEvent(to: nodeID) else {
             return
         }
-        let affectsVisibleTree = nodeIsConnectedToDocumentTree(nodeID, in: document)
+        let affectsVisibleTree = document.containsConnectedNode(nodeID)
         removeNodeSubtree(nodeID, detachFromParent: true)
         if affectsVisibleTree {
             updateAllFrameDocumentProjectionStates()
@@ -647,7 +646,7 @@ package final class DOMSession {
             return nil
         }
         let frameTargetID = pendingProjection.frameTargetID
-        guard let ownerDocument = ownerDocument(forFrameTargetID: frameTargetID),
+        guard let ownerDocument = frameDocumentProjectionResolver().ownerDocument(forFrameTargetID: frameTargetID),
               let node = ownerHydrationNode(in: ownerDocument) else {
             return nil
         }
@@ -1305,22 +1304,9 @@ package final class DOMSession {
         return document.nodesByID[nodeID] != nil
     }
 
-    private func nodeIsConnectedToDocumentTree(_ nodeID: DOMNode.ID, in document: DOMDocument) -> Bool {
-        var currentNodeID: DOMNode.ID? = nodeID
-        var visitedNodeIDs = Set<DOMNode.ID>()
-        while let candidateID = currentNodeID,
-              visitedNodeIDs.insert(candidateID).inserted {
-            if candidateID == document.rootNodeID {
-                return true
-            }
-            currentNodeID = document.nodesByID[candidateID]?.parentID
-        }
-        return false
-    }
-
     private func payloadContainsConnectedDocumentNode(_ payload: DOMNodePayload, in document: DOMDocument) -> Bool {
         if let existingNodeID = document.currentNodeIDByProtocolNodeID[payload.nodeID],
-           nodeIsConnectedToDocumentTree(existingNodeID, in: document) {
+           document.containsConnectedNode(existingNodeID) {
             return true
         }
         for child in payloadOwnedChildren(payload) {
@@ -1445,27 +1431,22 @@ package final class DOMSession {
         guard let projection = frameDocumentProjectionIndex[frameTargetID] else {
             return
         }
-        guard let document = currentDocument(for: projection.frameDocumentID),
-              let frameRoot = document.nodesByID[document.rootNodeID] else {
-            detachFrameDocumentProjection(frameTargetID: frameTargetID)
-            return
-        }
 
-        if let ownerNodeID = projection.ownerNodeID,
-           frameDocumentProjection(projection, canRemainAttachedTo: ownerNodeID, frameRoot: frameRoot) {
+        switch frameDocumentProjectionResolver().resolve(projection) {
+        case let .attach(ownerNodeID):
             attachFrameDocumentProjection(frameTargetID: frameTargetID, to: ownerNodeID)
-            return
+        case let .detach(state):
+            detachFrameDocumentProjection(frameTargetID: frameTargetID, state: state)
         }
+    }
 
-        let candidates = ownerCandidates(forFrameDocumentRoot: frameRoot)
-        switch candidates.count {
-        case 0:
-            detachFrameDocumentProjection(frameTargetID: frameTargetID)
-        case 1:
-            attachFrameDocumentProjection(frameTargetID: frameTargetID, to: candidates[0])
-        default:
-            detachFrameDocumentProjection(frameTargetID: frameTargetID, state: .ambiguous)
-        }
+    private func frameDocumentProjectionResolver() -> FrameDocumentProjectionResolver {
+        FrameDocumentProjectionResolver(
+            currentPageTargetID: currentPageTargetID,
+            targetGraph: targetGraph,
+            documentStore: documentStore,
+            projectionIndex: frameDocumentProjectionIndex
+        )
     }
 
     private func attachFrameDocumentProjection(
@@ -1480,161 +1461,6 @@ package final class DOMSession {
         state: FrameDocumentProjectionState = .pending
     ) {
         frameDocumentProjectionIndex.detach(frameTargetID: frameTargetID, state: state)
-    }
-
-    private func frameDocumentProjection(
-        _ projection: FrameDocumentProjection,
-        canRemainAttachedTo ownerNodeID: DOMNode.ID,
-        frameRoot: DOMNode
-    ) -> Bool {
-        guard let document = currentDocument(for: ownerNodeID.documentID),
-              let ownerNode = document.nodesByID[ownerNodeID] else {
-            return false
-        }
-        let frameTargetID = frameRoot.id.documentID.targetID
-        return ownerNode.isFrameOwner
-            && ownerDocument(forFrameTargetID: frameTargetID)?.id == document.id
-            && nodeIsConnectedToDocumentTree(ownerNodeID, in: document)
-            && frameOwner(ownerNode, matchesFrameTargetID: frameTargetID, frameDocumentURL: frameRoot.documentURL)
-            && frameDocumentProjectionIndex.values.allSatisfy {
-                $0.frameTargetID == projection.frameTargetID || $0.ownerNodeID != ownerNodeID || $0.state != .attached
-            }
-    }
-
-    private func ownerCandidates(forFrameDocumentRoot frameRoot: DOMNode) -> [DOMNode.ID] {
-        let frameTargetID = frameRoot.id.documentID.targetID
-        guard let ownerDocument = ownerDocument(forFrameTargetID: frameTargetID) else {
-            return []
-        }
-
-        let attachableCandidates = ownerCandidateNodes(in: ownerDocument)
-            .filter { projectionCanAttach(to: $0.node, in: $0.document) }
-        if let frameID = targetGraph.targetFrameID(for: frameTargetID) {
-            let frameIDMatches = attachableCandidates
-                .filter { $0.node.ownerFrameID == frameID }
-            if frameIDMatches.isEmpty == false {
-                return frameIDMatches
-                    .map { $0.node.id }
-                    .sorted(by: sortNodeIDs)
-            }
-        }
-
-        guard let frameDocumentURL = frameRoot.documentURL,
-              frameDocumentURL.isEmpty == false else {
-            return []
-        }
-        return attachableCandidates
-            .filter { frameOwner($0.node, matchesFrameDocumentURL: frameDocumentURL) }
-            .map { $0.node.id }
-            .sorted(by: sortNodeIDs)
-    }
-
-    private func ownerCandidateNodes(in document: DOMDocument) -> [(document: DOMDocument, node: DOMNode)] {
-        document.nodesByID.values.map { (document, $0) }
-    }
-
-    private func ownerDocument(forFrameTargetID frameTargetID: ProtocolTarget.ID) -> DOMDocument? {
-        guard targetGraph.containsTarget(frameTargetID) else {
-            return nil
-        }
-
-        if let parentFrameID = targetGraph.targetParentFrameID(for: frameTargetID) {
-            guard let parentDocumentID = targetGraph.frameCurrentDocumentID(parentFrameID) else {
-                return nil
-            }
-            return currentDocument(for: parentDocumentID)
-        }
-        guard let pageTargetID = currentPageTargetID,
-              let pageDocument = documentStore.currentDocument(forTargetID: pageTargetID),
-              pageDocument.lifecycle == .loaded else {
-            return nil
-        }
-        return pageDocument
-    }
-
-    private func projectionCanAttach(to candidate: DOMNode, in document: DOMDocument) -> Bool {
-        candidate.isFrameOwner
-            && frameOwnerIsAlreadyAttached(candidate.id) == false
-            && nodeIsConnectedToDocumentTree(candidate.id, in: document)
-    }
-
-    private func frameOwnerIsAlreadyAttached(_ nodeID: DOMNode.ID) -> Bool {
-        frameDocumentProjectionIndex.values.contains {
-            $0.ownerNodeID == nodeID && $0.state == .attached
-        }
-    }
-
-    private func sortNodeIDs(_ lhs: DOMNode.ID, _ rhs: DOMNode.ID) -> Bool {
-        if lhs.documentID.targetID.rawValue != rhs.documentID.targetID.rawValue {
-            return lhs.documentID.targetID.rawValue < rhs.documentID.targetID.rawValue
-        }
-        if lhs.documentID.localDocumentLifetimeID != rhs.documentID.localDocumentLifetimeID {
-            return lhs.documentID.localDocumentLifetimeID < rhs.documentID.localDocumentLifetimeID
-        }
-        return lhs.nodeID.rawValue < rhs.nodeID.rawValue
-    }
-
-    private func frameOwner(_ owner: DOMNode, matchesFrameDocumentURL frameDocumentURL: String) -> Bool {
-        guard let source = explicitFrameSource(for: owner) else {
-            return frameDocumentURLIsDefaultBlank(frameDocumentURL)
-        }
-        if source == frameDocumentURL {
-            return true
-        }
-        guard let resolvedSource = resolvedURL(source, relativeTo: documentURL(for: owner)),
-              let resolvedFrameDocumentURL = resolvedURL(frameDocumentURL, relativeTo: nil) else {
-            return false
-        }
-        return resolvedSource == resolvedFrameDocumentURL
-    }
-
-    private func frameOwner(
-        _ owner: DOMNode,
-        matchesFrameTargetID frameTargetID: ProtocolTarget.ID,
-        frameDocumentURL: String?
-    ) -> Bool {
-        if let frameID = targetGraph.targetFrameID(for: frameTargetID),
-           owner.ownerFrameID == frameID {
-            return true
-        }
-        guard let frameDocumentURL,
-              frameDocumentURL.isEmpty == false else {
-            return false
-        }
-        return frameOwner(owner, matchesFrameDocumentURL: frameDocumentURL)
-    }
-
-    private func explicitFrameSource(for owner: DOMNode) -> String? {
-        guard let source = attribute(named: "src", in: owner),
-              source.isEmpty == false else {
-            return nil
-        }
-        return source
-    }
-
-    private func frameDocumentURLIsDefaultBlank(_ url: String) -> Bool {
-        url == "about:blank" || resolvedURL(url, relativeTo: nil) == "about:blank"
-    }
-
-    private func attribute(named name: String, in node: DOMNode) -> String? {
-        node.attributes.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }?.value
-    }
-
-    private func documentURL(for node: DOMNode) -> String? {
-        guard let document = currentDocument(for: node.id.documentID),
-              let root = document.nodesByID[document.rootNodeID] else {
-            return nil
-        }
-        return root.baseURL ?? root.documentURL
-    }
-
-    private func resolvedURL(_ string: String, relativeTo base: String?) -> String? {
-        if let base,
-           let baseURL = URL(string: base),
-           let url = URL(string: string, relativeTo: baseURL) {
-            return url.absoluteURL.absoluteString
-        }
-        return URL(string: string)?.absoluteURL.absoluteString
     }
 
     private func projectedFrameDocumentRootID(for ownerNodeID: DOMNode.ID) -> DOMNode.ID? {

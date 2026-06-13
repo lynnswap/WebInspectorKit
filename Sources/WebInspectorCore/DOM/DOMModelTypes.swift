@@ -213,6 +213,23 @@ package final class DOMDocumentState {
         nodeIndex.currentNodeID(for: rawNodeID)
     }
 
+    package func containsConnectedNode(_ nodeID: DOMNode.ID) -> Bool {
+        guard nodeID.documentID == id else {
+            return false
+        }
+
+        var currentNodeID: DOMNode.ID? = nodeID
+        var visitedNodeIDs = Set<DOMNode.ID>()
+        while let candidateID = currentNodeID,
+              visitedNodeIDs.insert(candidateID).inserted {
+            if candidateID == rootNodeID {
+                return true
+            }
+            currentNodeID = nodeIndex.node(for: candidateID)?.parentID
+        }
+        return false
+    }
+
     package func removeNode(_ nodeID: DOMNode.ID, ifCurrentFor rawNodeID: DOMProtocolNodeID) {
         nodeIndex.removeNode(nodeID, ifCurrentFor: rawNodeID)
     }
