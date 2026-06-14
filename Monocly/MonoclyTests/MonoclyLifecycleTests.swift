@@ -178,7 +178,7 @@ struct MonoclyLifecycleTests {
 
             coordinator.setSupportsMultipleScenesProviderForTesting { false }
             coordinator.setSceneActivationRequesterForTesting(
-                BrowserInspectorSceneActivationRequester(
+                BrowserInspectorCoordinator.SceneActivationRequester(
                     activateScene: { _, _, _, _ in
                         activationCount += 1
                     }
@@ -319,7 +319,7 @@ struct MonoclyLifecycleTests {
 
             coordinator.setSupportsMultipleScenesProviderForTesting { true }
             coordinator.setSceneActivationRequesterForTesting(
-                BrowserInspectorSceneActivationRequester(
+                BrowserInspectorCoordinator.SceneActivationRequester(
                     activateScene: { _, _, _, _ in }
                 )
             )
@@ -370,7 +370,7 @@ struct MonoclyLifecycleTests {
 
             coordinator.setSupportsMultipleScenesProviderForTesting { true }
             coordinator.setSceneActivationRequesterForTesting(
-                BrowserInspectorSceneActivationRequester(
+                BrowserInspectorCoordinator.SceneActivationRequester(
                     activateScene: { _, _, _, _ in }
                 )
             )
@@ -418,7 +418,7 @@ struct MonoclyLifecycleTests {
 
             coordinator.setSupportsMultipleScenesProviderForTesting { true }
             coordinator.setSceneActivationRequesterForTesting(
-                BrowserInspectorSceneActivationRequester(
+                BrowserInspectorCoordinator.SceneActivationRequester(
                     activateScene: { _, _, _, _ in }
                 )
             )
@@ -465,7 +465,7 @@ struct MonoclyLifecycleTests {
 
             coordinator.setSupportsMultipleScenesProviderForTesting { true }
             coordinator.setSceneActivationRequesterForTesting(
-                BrowserInspectorSceneActivationRequester(
+                BrowserInspectorCoordinator.SceneActivationRequester(
                     activateScene: { sceneSession, _, _, _ in
                         activatedSceneSession = sceneSession
                     }
@@ -516,7 +516,7 @@ struct MonoclyLifecycleTests {
 
             coordinator.setSupportsMultipleScenesProviderForTesting { true }
             coordinator.setSceneActivationRequesterForTesting(
-                BrowserInspectorSceneActivationRequester(
+                BrowserInspectorCoordinator.SceneActivationRequester(
                     activateScene: { _, _, _, errorHandler in
                         errorHandler(NSError(domain: "MonoclyLifecycleTests", code: 1))
                     }
@@ -542,7 +542,7 @@ struct MonoclyLifecycleTests {
 
             coordinator.setSupportsMultipleScenesProviderForTesting { true }
             coordinator.setSceneActivationRequesterForTesting(
-                BrowserInspectorSceneActivationRequester(
+                BrowserInspectorCoordinator.SceneActivationRequester(
                     activateScene: { _, _, _, _ in }
                 )
             )
@@ -584,7 +584,7 @@ struct MonoclyLifecycleTests {
 
             coordinator.setSupportsMultipleScenesProviderForTesting { true }
             coordinator.setSceneActivationRequesterForTesting(
-                BrowserInspectorSceneActivationRequester(
+                BrowserInspectorCoordinator.SceneActivationRequester(
                     activateScene: { _, _, _, _ in }
                 )
             )
@@ -647,7 +647,7 @@ struct MonoclyLifecycleTests {
 
             coordinator.setSupportsMultipleScenesProviderForTesting { true }
             coordinator.setSceneActivationRequesterForTesting(
-                BrowserInspectorSceneActivationRequester(
+                BrowserInspectorCoordinator.SceneActivationRequester(
                     activateScene: { sceneSession, _, _, _ in
                         activatedSceneSession = sceneSession
                     }

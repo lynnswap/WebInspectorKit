@@ -1,4 +1,5 @@
 #if canImport(UIKit)
+import WebInspectorCore
 import UIKit
 
 @MainActor

@@ -1,39 +1,45 @@
 import Foundation
 
-struct BrowserSessionSnapshot: Codable, Equatable {
-    static let currentSchemaVersion = 1
+extension BrowserSessionStore {
+    struct Snapshot: Codable, Equatable {
+        static let currentSchemaVersion = 1
 
-    let schemaVersion: Int
-    let selectedTabID: UUID
-    let tabs: [BrowserTabSnapshot]
+        let schemaVersion: Int
+        let selectedTabID: UUID
+        let tabs: [BrowserTabStore.Snapshot]
 
-    init(
-        schemaVersion: Int = BrowserSessionSnapshot.currentSchemaVersion,
-        selectedTabID: UUID,
-        tabs: [BrowserTabSnapshot]
-    ) {
-        self.schemaVersion = schemaVersion
-        self.selectedTabID = selectedTabID
-        self.tabs = tabs
+        init(
+            schemaVersion: Int = BrowserSessionStore.Snapshot.currentSchemaVersion,
+            selectedTabID: UUID,
+            tabs: [BrowserTabStore.Snapshot]
+        ) {
+            self.schemaVersion = schemaVersion
+            self.selectedTabID = selectedTabID
+            self.tabs = tabs
+        }
     }
 }
 
-struct BrowserTabSnapshot: Codable, Equatable, Identifiable {
-    let id: UUID
-    let url: URL
-    let title: String?
-    let createdAt: Date
-    let lastUsedAt: Date
-    let stateFileName: String
+extension BrowserTabStore {
+    struct Snapshot: Codable, Equatable, Identifiable {
+        let id: UUID
+        let url: URL
+        let title: String?
+        let createdAt: Date
+        let lastUsedAt: Date
+        let stateFileName: String
 
-    static func stateFileName(for id: UUID) -> String {
-        "\(id.uuidString).state"
+        static func stateFileName(for id: UUID) -> String {
+            "\(id.uuidString).state"
+        }
     }
 }
 
-struct BrowserRestoredSession {
-    let snapshot: BrowserSessionSnapshot
-    let tabStateDataByID: [UUID: Data]
+extension BrowserSessionStore {
+    struct RestoredSession {
+        let snapshot: BrowserSessionStore.Snapshot
+        let tabStateDataByID: [UUID: Data]
+    }
 }
 
 struct BrowserSessionStore {
@@ -79,10 +85,10 @@ struct BrowserSessionStore {
         self.init(rootDirectoryURL: sceneDirectoryURL, fileManager: fileManager)
     }
 
-    func load() -> BrowserRestoredSession? {
+    func load() -> BrowserSessionStore.RestoredSession? {
         guard let data = try? Data(contentsOf: sessionFileURL),
-              let snapshot = try? decoder.decode(BrowserSessionSnapshot.self, from: data),
-              snapshot.schemaVersion == BrowserSessionSnapshot.currentSchemaVersion,
+              let snapshot = try? decoder.decode(BrowserSessionStore.Snapshot.self, from: data),
+              snapshot.schemaVersion == BrowserSessionStore.Snapshot.currentSchemaVersion,
               snapshot.tabs.isEmpty == false else {
             return nil
         }
@@ -94,10 +100,10 @@ struct BrowserSessionStore {
             }
         }
 
-        return BrowserRestoredSession(snapshot: snapshot, tabStateDataByID: tabStateDataByID)
+        return BrowserSessionStore.RestoredSession(snapshot: snapshot, tabStateDataByID: tabStateDataByID)
     }
 
-    func save(snapshot: BrowserSessionSnapshot, tabStateDataByID: [UUID: Data]) throws {
+    func save(snapshot: BrowserSessionStore.Snapshot, tabStateDataByID: [UUID: Data]) throws {
         try fileManager.createDirectory(at: tabsDirectoryURL, withIntermediateDirectories: true)
 
         let validStateFileNames = Set(snapshot.tabs.map(\.stateFileName))

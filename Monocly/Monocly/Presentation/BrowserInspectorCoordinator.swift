@@ -7,30 +7,34 @@ import UIKit
 #endif
 
 #if canImport(UIKit)
-struct BrowserInspectorWindowContext {
-    static let sceneActivityType = "lynnpd.webspector.web-inspector"
+extension BrowserInspectorCoordinator {
+    struct WindowContext {
+        static let sceneActivityType = "lynnpd.webspector.web-inspector"
 
-    let browserStore: BrowserStore
-    let inspectorSession: WebInspectorSession
+        let browserStore: BrowserStore
+        let inspectorSession: WebInspectorSession
+    }
 }
 
-struct BrowserInspectorSceneActivationRequester {
-    let activateScene: @MainActor (
-        _ sceneSession: UISceneSession?,
-        _ userActivity: NSUserActivity,
-        _ requestingScene: UIScene?,
-        _ errorHandler: @escaping (Error) -> Void
-    ) -> Void
+extension BrowserInspectorCoordinator {
+    struct SceneActivationRequester {
+        let activateScene: @MainActor (
+            _ sceneSession: UISceneSession?,
+            _ userActivity: NSUserActivity,
+            _ requestingScene: UIScene?,
+            _ errorHandler: @escaping (Error) -> Void
+        ) -> Void
 
-    static let live = BrowserInspectorSceneActivationRequester { sceneSession, userActivity, requestingScene, errorHandler in
-        let options = UIScene.ActivationRequestOptions()
-        options.requestingScene = requestingScene
-        UIApplication.shared.requestSceneSessionActivation(
-            sceneSession,
-            userActivity: userActivity,
-            options: options,
-            errorHandler: errorHandler
-        )
+        static let live = BrowserInspectorCoordinator.SceneActivationRequester { sceneSession, userActivity, requestingScene, errorHandler in
+            let options = UIScene.ActivationRequestOptions()
+            options.requestingScene = requestingScene
+            UIApplication.shared.requestSceneSessionActivation(
+                sceneSession,
+                userActivity: userActivity,
+                options: options,
+                errorHandler: errorHandler
+            )
+        }
     }
 }
 #endif
@@ -51,7 +55,7 @@ final class BrowserInspectorCoordinator {
     private weak var presentedSheetController: UIViewController?
     private let sheetObserver = InspectorSheetObserver()
     private var sheetUserInterfaceStyleObservation: PortableObservationTracking.Token?
-    private var sceneActivationRequester = BrowserInspectorSceneActivationRequester.live
+    private var sceneActivationRequester = BrowserInspectorCoordinator.SceneActivationRequester.live
     private var supportsMultipleScenesProvider: @MainActor () -> Bool = { UIApplication.shared.supportsMultipleScenes }
 
     var onPresentationStateChange: (() -> Void)?
@@ -102,7 +106,7 @@ final class BrowserInspectorCoordinator {
         }
 
         Self.inspectorWindowRegistry.setContext(
-            BrowserInspectorWindowContext(
+            BrowserInspectorCoordinator.WindowContext(
                 browserStore: browserStore,
                 inspectorSession: inspectorSession
             )
@@ -151,7 +155,7 @@ final class BrowserInspectorCoordinator {
         cancelSheetUserInterfaceStyleObservation()
     }
 
-    func setSceneActivationRequesterForTesting(_ requester: BrowserInspectorSceneActivationRequester) {
+    func setSceneActivationRequesterForTesting(_ requester: BrowserInspectorCoordinator.SceneActivationRequester) {
         sceneActivationRequester = requester
     }
 
@@ -168,10 +172,10 @@ final class BrowserInspectorCoordinator {
     }
 
     static var inspectorWindowSceneActivityType: String {
-        BrowserInspectorWindowContext.sceneActivityType
+        BrowserInspectorCoordinator.WindowContext.sceneActivityType
     }
 
-    static func inspectorWindowContext() -> BrowserInspectorWindowContext? {
+    static func inspectorWindowContext() -> BrowserInspectorCoordinator.WindowContext? {
         inspectorWindowRegistry.currentContext
     }
 
@@ -219,8 +223,8 @@ final class BrowserInspectorCoordinator {
     }
 
     private static func makeInspectorWindowUserActivity() -> NSUserActivity {
-        let userActivity = NSUserActivity(activityType: BrowserInspectorWindowContext.sceneActivityType)
-        userActivity.targetContentIdentifier = BrowserInspectorWindowContext.sceneActivityType
+        let userActivity = NSUserActivity(activityType: BrowserInspectorCoordinator.WindowContext.sceneActivityType)
+        userActivity.targetContentIdentifier = BrowserInspectorCoordinator.WindowContext.sceneActivityType
         return userActivity
     }
 

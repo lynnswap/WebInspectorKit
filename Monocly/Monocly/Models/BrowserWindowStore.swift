@@ -102,7 +102,7 @@ final class BrowserStore {
     }
 
     init(
-        restoring restoredSession: BrowserRestoredSession?,
+        restoring restoredSession: BrowserSessionStore.RestoredSession?,
         fallbackURL: URL,
         sessionStore: BrowserSessionStore? = BrowserSessionStore(),
         saveDebounceDuration: UInt64 = 500_000_000,
@@ -168,11 +168,11 @@ final class BrowserStore {
         selectedTab?.load(url: url)
     }
 
-    func backHistoryItems(limit: Int = 20) -> [BrowserHistoryMenuItem] {
+    func backHistoryItems(limit: Int = 20) -> [BrowserTabStore.HistoryMenuItem] {
         selectedTab?.backHistoryItems(limit: limit) ?? []
     }
 
-    func forwardHistoryItems(limit: Int = 20) -> [BrowserHistoryMenuItem] {
+    func forwardHistoryItems(limit: Int = 20) -> [BrowserTabStore.HistoryMenuItem] {
         selectedTab?.forwardHistoryItems(limit: limit) ?? []
     }
 
@@ -248,10 +248,10 @@ final class BrowserStore {
             if let stateData = tab.interactionStateData {
                 tabStateDataByID[tab.id] = stateData
             }
-            return tab.snapshot(stateFileName: BrowserTabSnapshot.stateFileName(for: tab.id))
+            return tab.snapshot(stateFileName: BrowserTabStore.Snapshot.stateFileName(for: tab.id))
         }
 
-        let snapshot = BrowserSessionSnapshot(selectedTabID: selectedID, tabs: tabSnapshots)
+        let snapshot = BrowserSessionStore.Snapshot(selectedTabID: selectedID, tabs: tabSnapshots)
         try? sessionStore.save(snapshot: snapshot, tabStateDataByID: tabStateDataByID)
     }
 }

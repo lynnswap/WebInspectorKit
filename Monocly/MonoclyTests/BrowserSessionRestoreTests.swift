@@ -17,24 +17,24 @@ struct BrowserSessionRestoreTests {
             let secondID = UUID()
             let firstDate = Date(timeIntervalSince1970: 100)
             let secondDate = Date(timeIntervalSince1970: 200)
-            let snapshot = BrowserSessionSnapshot(
+            let snapshot = BrowserSessionStore.Snapshot(
                 selectedTabID: secondID,
                 tabs: [
-                    BrowserTabSnapshot(
+                    BrowserTabStore.Snapshot(
                         id: firstID,
                         url: try #require(URL(string: "https://example.com/first")),
                         title: "First",
                         createdAt: firstDate,
                         lastUsedAt: firstDate,
-                        stateFileName: BrowserTabSnapshot.stateFileName(for: firstID)
+                        stateFileName: BrowserTabStore.Snapshot.stateFileName(for: firstID)
                     ),
-                    BrowserTabSnapshot(
+                    BrowserTabStore.Snapshot(
                         id: secondID,
                         url: try #require(URL(string: "https://example.com/second")),
                         title: "Second",
                         createdAt: secondDate,
                         lastUsedAt: secondDate,
-                        stateFileName: BrowserTabSnapshot.stateFileName(for: secondID)
+                        stateFileName: BrowserTabStore.Snapshot.stateFileName(for: secondID)
                     )
                 ]
             )
@@ -65,16 +65,16 @@ struct BrowserSessionRestoreTests {
     func sessionStoreLoadsSnapshotWhenStateBlobIsMissing() throws {
         try withTemporarySessionStore { sessionStore, _ in
             let tabID = UUID()
-            let snapshot = BrowserSessionSnapshot(
+            let snapshot = BrowserSessionStore.Snapshot(
                 selectedTabID: tabID,
                 tabs: [
-                    BrowserTabSnapshot(
+                    BrowserTabStore.Snapshot(
                         id: tabID,
                         url: try #require(URL(string: "https://example.com/missing-state")),
                         title: "Missing State",
                         createdAt: Date(timeIntervalSince1970: 100),
                         lastUsedAt: Date(timeIntervalSince1970: 200),
-                        stateFileName: BrowserTabSnapshot.stateFileName(for: tabID)
+                        stateFileName: BrowserTabStore.Snapshot.stateFileName(for: tabID)
                     )
                 ]
             )
@@ -100,29 +100,29 @@ struct BrowserSessionRestoreTests {
             )
             let firstID = UUID()
             let secondID = UUID()
-            let firstSnapshot = BrowserSessionSnapshot(
+            let firstSnapshot = BrowserSessionStore.Snapshot(
                 selectedTabID: firstID,
                 tabs: [
-                    BrowserTabSnapshot(
+                    BrowserTabStore.Snapshot(
                         id: firstID,
                         url: try #require(URL(string: "https://example.com/first-scene")),
                         title: "First Scene",
                         createdAt: Date(timeIntervalSince1970: 100),
                         lastUsedAt: Date(timeIntervalSince1970: 100),
-                        stateFileName: BrowserTabSnapshot.stateFileName(for: firstID)
+                        stateFileName: BrowserTabStore.Snapshot.stateFileName(for: firstID)
                     )
                 ]
             )
-            let secondSnapshot = BrowserSessionSnapshot(
+            let secondSnapshot = BrowserSessionStore.Snapshot(
                 selectedTabID: secondID,
                 tabs: [
-                    BrowserTabSnapshot(
+                    BrowserTabStore.Snapshot(
                         id: secondID,
                         url: try #require(URL(string: "https://example.com/second-scene")),
                         title: "Second Scene",
                         createdAt: Date(timeIntervalSince1970: 200),
                         lastUsedAt: Date(timeIntervalSince1970: 200),
-                        stateFileName: BrowserTabSnapshot.stateFileName(for: secondID)
+                        stateFileName: BrowserTabStore.Snapshot.stateFileName(for: secondID)
                     )
                 ]
             )
@@ -157,25 +157,25 @@ struct BrowserSessionRestoreTests {
         let secondID = UUID()
         let fallbackURL = try #require(URL(string: "https://fallback.example/"))
         let selectedURL = try #require(URL(string: "https://example.com/selected"))
-        let restoredSession = BrowserRestoredSession(
-            snapshot: BrowserSessionSnapshot(
+        let restoredSession = BrowserSessionStore.RestoredSession(
+            snapshot: BrowserSessionStore.Snapshot(
                 selectedTabID: secondID,
                 tabs: [
-                    BrowserTabSnapshot(
+                    BrowserTabStore.Snapshot(
                         id: firstID,
                         url: try #require(URL(string: "https://example.com/first")),
                         title: "First",
                         createdAt: Date(timeIntervalSince1970: 100),
                         lastUsedAt: Date(timeIntervalSince1970: 100),
-                        stateFileName: BrowserTabSnapshot.stateFileName(for: firstID)
+                        stateFileName: BrowserTabStore.Snapshot.stateFileName(for: firstID)
                     ),
-                    BrowserTabSnapshot(
+                    BrowserTabStore.Snapshot(
                         id: secondID,
                         url: selectedURL,
                         title: "Selected",
                         createdAt: Date(timeIntervalSince1970: 200),
                         lastUsedAt: Date(timeIntervalSince1970: 300),
-                        stateFileName: BrowserTabSnapshot.stateFileName(for: secondID)
+                        stateFileName: BrowserTabStore.Snapshot.stateFileName(for: secondID)
                     )
                 ]
             ),
@@ -199,17 +199,17 @@ struct BrowserSessionRestoreTests {
     func browserStoreNormalizesInvalidSelectedTabToFirstRestoredTab() throws {
         let tabID = UUID()
         let restoredURL = try #require(URL(string: "https://example.com/restored"))
-        let restoredSession = BrowserRestoredSession(
-            snapshot: BrowserSessionSnapshot(
+        let restoredSession = BrowserSessionStore.RestoredSession(
+            snapshot: BrowserSessionStore.Snapshot(
                 selectedTabID: UUID(),
                 tabs: [
-                    BrowserTabSnapshot(
+                    BrowserTabStore.Snapshot(
                         id: tabID,
                         url: restoredURL,
                         title: "Restored",
                         createdAt: Date(timeIntervalSince1970: 100),
                         lastUsedAt: Date(timeIntervalSince1970: 100),
-                        stateFileName: BrowserTabSnapshot.stateFileName(for: tabID)
+                        stateFileName: BrowserTabStore.Snapshot.stateFileName(for: tabID)
                     )
                 ]
             ),
@@ -231,17 +231,17 @@ struct BrowserSessionRestoreTests {
         let tabID = UUID()
         let restoredURL = try #require(URL(string: "https://example.com/restored"))
         let fallbackURL = try #require(URL(string: "https://fallback.example/"))
-        let restoredSession = BrowserRestoredSession(
-            snapshot: BrowserSessionSnapshot(
+        let restoredSession = BrowserSessionStore.RestoredSession(
+            snapshot: BrowserSessionStore.Snapshot(
                 selectedTabID: tabID,
                 tabs: [
-                    BrowserTabSnapshot(
+                    BrowserTabStore.Snapshot(
                         id: tabID,
                         url: restoredURL,
                         title: "Restored",
                         createdAt: Date(timeIntervalSince1970: 100),
                         lastUsedAt: Date(timeIntervalSince1970: 100),
-                        stateFileName: BrowserTabSnapshot.stateFileName(for: tabID)
+                        stateFileName: BrowserTabStore.Snapshot.stateFileName(for: tabID)
                     )
                 ]
             ),
@@ -264,17 +264,17 @@ struct BrowserSessionRestoreTests {
         let tabID = UUID()
         let restoredURL = try #require(URL(string: "https://example.com/restored-state"))
         let restoredState = Data("restored-state".utf8)
-        let restoredSession = BrowserRestoredSession(
-            snapshot: BrowserSessionSnapshot(
+        let restoredSession = BrowserSessionStore.RestoredSession(
+            snapshot: BrowserSessionStore.Snapshot(
                 selectedTabID: tabID,
                 tabs: [
-                    BrowserTabSnapshot(
+                    BrowserTabStore.Snapshot(
                         id: tabID,
                         url: restoredURL,
                         title: "Restored State",
                         createdAt: Date(timeIntervalSince1970: 100),
                         lastUsedAt: Date(timeIntervalSince1970: 100),
-                        stateFileName: BrowserTabSnapshot.stateFileName(for: tabID)
+                        stateFileName: BrowserTabStore.Snapshot.stateFileName(for: tabID)
                     )
                 ]
             ),
@@ -299,17 +299,17 @@ struct BrowserSessionRestoreTests {
             let tabID = UUID()
             let restoredState = Data("restored-state".utf8)
             let newURL = try #require(URL(string: "https://example.com/new-page"))
-            let restoredSession = BrowserRestoredSession(
-                snapshot: BrowserSessionSnapshot(
+            let restoredSession = BrowserSessionStore.RestoredSession(
+                snapshot: BrowserSessionStore.Snapshot(
                     selectedTabID: tabID,
                     tabs: [
-                        BrowserTabSnapshot(
+                        BrowserTabStore.Snapshot(
                             id: tabID,
                             url: try #require(URL(string: "https://example.com/restored-state")),
                             title: "Restored State",
                             createdAt: Date(timeIntervalSince1970: 100),
                             lastUsedAt: Date(timeIntervalSince1970: 100),
-                            stateFileName: BrowserTabSnapshot.stateFileName(for: tabID)
+                            stateFileName: BrowserTabStore.Snapshot.stateFileName(for: tabID)
                         )
                     ]
                 ),
@@ -337,17 +337,17 @@ struct BrowserSessionRestoreTests {
             let tabID = UUID()
             let restoredURL = try #require(URL(string: "https://example.com/restored-state"))
             let restoredState = Data("restored-state".utf8)
-            let restoredSession = BrowserRestoredSession(
-                snapshot: BrowserSessionSnapshot(
+            let restoredSession = BrowserSessionStore.RestoredSession(
+                snapshot: BrowserSessionStore.Snapshot(
                     selectedTabID: tabID,
                     tabs: [
-                        BrowserTabSnapshot(
+                        BrowserTabStore.Snapshot(
                             id: tabID,
                             url: restoredURL,
                             title: "Restored State",
                             createdAt: Date(timeIntervalSince1970: 100),
                             lastUsedAt: Date(timeIntervalSince1970: 100),
-                            stateFileName: BrowserTabSnapshot.stateFileName(for: tabID)
+                            stateFileName: BrowserTabStore.Snapshot.stateFileName(for: tabID)
                         )
                     ]
                 ),
@@ -434,25 +434,25 @@ struct BrowserSessionRestoreTests {
             let selectedID = UUID()
             let backgroundID = UUID()
             let backgroundState = Data("background-state".utf8)
-            let restoredSession = BrowserRestoredSession(
-                snapshot: BrowserSessionSnapshot(
+            let restoredSession = BrowserSessionStore.RestoredSession(
+                snapshot: BrowserSessionStore.Snapshot(
                     selectedTabID: selectedID,
                     tabs: [
-                        BrowserTabSnapshot(
+                        BrowserTabStore.Snapshot(
                             id: selectedID,
                             url: try #require(URL(string: "https://example.com/selected")),
                             title: "Selected",
                             createdAt: Date(timeIntervalSince1970: 100),
                             lastUsedAt: Date(timeIntervalSince1970: 200),
-                            stateFileName: BrowserTabSnapshot.stateFileName(for: selectedID)
+                            stateFileName: BrowserTabStore.Snapshot.stateFileName(for: selectedID)
                         ),
-                        BrowserTabSnapshot(
+                        BrowserTabStore.Snapshot(
                             id: backgroundID,
                             url: try #require(URL(string: "https://example.com/background")),
                             title: "Background",
                             createdAt: Date(timeIntervalSince1970: 100),
                             lastUsedAt: Date(timeIntervalSince1970: 100),
-                            stateFileName: BrowserTabSnapshot.stateFileName(for: backgroundID)
+                            stateFileName: BrowserTabStore.Snapshot.stateFileName(for: backgroundID)
                         )
                     ]
                 ),
@@ -524,17 +524,17 @@ struct BrowserSessionRestoreTests {
     func restoredTitleSurvivesInitialEmptyOrNilWebViewTitleObservation() async throws {
         let tabID = UUID()
         let store = BrowserStore(
-            restoring: BrowserRestoredSession(
-                snapshot: BrowserSessionSnapshot(
+            restoring: BrowserSessionStore.RestoredSession(
+                snapshot: BrowserSessionStore.Snapshot(
                     selectedTabID: tabID,
                     tabs: [
-                        BrowserTabSnapshot(
+                        BrowserTabStore.Snapshot(
                             id: tabID,
                             url: try #require(URL(string: "https://example.com/restored-title")),
                             title: "Restored Title",
                             createdAt: Date(timeIntervalSince1970: 100),
                             lastUsedAt: Date(timeIntervalSince1970: 100),
-                            stateFileName: BrowserTabSnapshot.stateFileName(for: tabID)
+                            stateFileName: BrowserTabStore.Snapshot.stateFileName(for: tabID)
                         )
                     ]
                 ),
@@ -555,25 +555,25 @@ struct BrowserSessionRestoreTests {
     func rootReattachesInspectorSessionAfterSelectedTabWebViewChanges() async throws {
         let firstID = UUID()
         let secondID = UUID()
-        let restoredSession = BrowserRestoredSession(
-            snapshot: BrowserSessionSnapshot(
+        let restoredSession = BrowserSessionStore.RestoredSession(
+            snapshot: BrowserSessionStore.Snapshot(
                 selectedTabID: firstID,
                 tabs: [
-                    BrowserTabSnapshot(
+                    BrowserTabStore.Snapshot(
                         id: firstID,
                         url: try #require(URL(string: "about:blank#first")),
                         title: "First",
                         createdAt: Date(timeIntervalSince1970: 100),
                         lastUsedAt: Date(timeIntervalSince1970: 100),
-                        stateFileName: BrowserTabSnapshot.stateFileName(for: firstID)
+                        stateFileName: BrowserTabStore.Snapshot.stateFileName(for: firstID)
                     ),
-                    BrowserTabSnapshot(
+                    BrowserTabStore.Snapshot(
                         id: secondID,
                         url: try #require(URL(string: "about:blank#second")),
                         title: "Second",
                         createdAt: Date(timeIntervalSince1970: 200),
                         lastUsedAt: Date(timeIntervalSince1970: 200),
-                        stateFileName: BrowserTabSnapshot.stateFileName(for: secondID)
+                        stateFileName: BrowserTabStore.Snapshot.stateFileName(for: secondID)
                     )
                 ]
             ),
@@ -694,16 +694,16 @@ struct BrowserSessionRestoreTests {
             let launchConfiguration = BrowserLaunchConfiguration(
                 initialURL: try #require(URL(string: "https://fallback.example/"))
             )
-            let snapshot = BrowserSessionSnapshot(
+            let snapshot = BrowserSessionStore.Snapshot(
                 selectedTabID: selectedTabID,
                 tabs: [
-                    BrowserTabSnapshot(
+                    BrowserTabStore.Snapshot(
                         id: selectedTabID,
                         url: restoredURL,
                         title: "Restored",
                         createdAt: Date(timeIntervalSince1970: 100),
                         lastUsedAt: Date(timeIntervalSince1970: 100),
-                        stateFileName: BrowserTabSnapshot.stateFileName(for: selectedTabID)
+                        stateFileName: BrowserTabStore.Snapshot.stateFileName(for: selectedTabID)
                     )
                 ]
             )
@@ -817,25 +817,25 @@ struct BrowserSessionRestoreTests {
     private func makeAttachmentLifecycleFixture() throws -> AttachmentLifecycleFixture {
         let firstID = UUID()
         let secondID = UUID()
-        let restoredSession = BrowserRestoredSession(
-            snapshot: BrowserSessionSnapshot(
+        let restoredSession = BrowserSessionStore.RestoredSession(
+            snapshot: BrowserSessionStore.Snapshot(
                 selectedTabID: firstID,
                 tabs: [
-                    BrowserTabSnapshot(
+                    BrowserTabStore.Snapshot(
                         id: firstID,
                         url: try #require(URL(string: "about:blank#first")),
                         title: "First",
                         createdAt: Date(timeIntervalSince1970: 100),
                         lastUsedAt: Date(timeIntervalSince1970: 100),
-                        stateFileName: BrowserTabSnapshot.stateFileName(for: firstID)
+                        stateFileName: BrowserTabStore.Snapshot.stateFileName(for: firstID)
                     ),
-                    BrowserTabSnapshot(
+                    BrowserTabStore.Snapshot(
                         id: secondID,
                         url: try #require(URL(string: "about:blank#second")),
                         title: "Second",
                         createdAt: Date(timeIntervalSince1970: 200),
                         lastUsedAt: Date(timeIntervalSince1970: 200),
-                        stateFileName: BrowserTabSnapshot.stateFileName(for: secondID)
+                        stateFileName: BrowserTabStore.Snapshot.stateFileName(for: secondID)
                     )
                 ]
             ),

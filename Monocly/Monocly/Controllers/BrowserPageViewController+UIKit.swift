@@ -251,7 +251,7 @@ final class BrowserPageViewController: UIViewController {
 
     private func configureNavigationHistoryButtonItem(
         _ item: UIBarButtonItem,
-        direction: BrowserHistoryDirection,
+        direction: BrowserTabStore.HistoryDirection,
         action: UIAction
     ) {
         item.target = nil
@@ -282,7 +282,7 @@ final class BrowserPageViewController: UIViewController {
         inspectorButtonItem.accessibilityIdentifier = "Monocly.openInspectorButton.\(suffix)"
     }
 
-    private func makeDeferredHistoryMenu(direction: BrowserHistoryDirection) -> UIMenu {
+    private func makeDeferredHistoryMenu(direction: BrowserTabStore.HistoryDirection) -> UIMenu {
         UIMenu(
             title: "",
             children: [
@@ -298,7 +298,7 @@ final class BrowserPageViewController: UIViewController {
         )
     }
 
-    private func makeHistoryMenu(direction: BrowserHistoryDirection, placement: ChromePlacement) -> UIMenu {
+    private func makeHistoryMenu(direction: BrowserTabStore.HistoryDirection, placement: ChromePlacement) -> UIMenu {
         let historyItems = displayedHistoryMenuItems(direction: direction, placement: placement)
 
         let actions = historyItems.map { historyItem in
@@ -312,7 +312,7 @@ final class BrowserPageViewController: UIViewController {
         return UIMenu(title: "", children: actions)
     }
 
-    private func historyMenuItems(direction: BrowserHistoryDirection) -> [BrowserHistoryMenuItem] {
+    private func historyMenuItems(direction: BrowserTabStore.HistoryDirection) -> [BrowserTabStore.HistoryMenuItem] {
         switch direction {
         case .back:
             store.backHistoryItems()
@@ -322,9 +322,9 @@ final class BrowserPageViewController: UIViewController {
     }
 
     private func displayedHistoryMenuItems(
-        direction: BrowserHistoryDirection,
+        direction: BrowserTabStore.HistoryDirection,
         placement: ChromePlacement
-    ) -> [BrowserHistoryMenuItem] {
+    ) -> [BrowserTabStore.HistoryMenuItem] {
         let historyItems = historyMenuItems(direction: direction)
         return switch placement {
         case .compactToolbar:

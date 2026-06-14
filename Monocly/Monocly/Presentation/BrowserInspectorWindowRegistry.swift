@@ -8,11 +8,11 @@ import UIKit
 final class BrowserInspectorWindowRegistry {
     private enum PresentationPhase {
         case idle
-        case ready(BrowserInspectorWindowContext)
-        case pending(BrowserInspectorWindowContext)
-        case active(BrowserInspectorWindowContext)
+        case ready(BrowserInspectorCoordinator.WindowContext)
+        case pending(BrowserInspectorCoordinator.WindowContext)
+        case active(BrowserInspectorCoordinator.WindowContext)
 
-        var context: BrowserInspectorWindowContext? {
+        var context: BrowserInspectorCoordinator.WindowContext? {
             switch self {
             case .idle:
                 nil
@@ -29,7 +29,7 @@ final class BrowserInspectorWindowRegistry {
         }
 
         func replacingContext(
-            _ context: BrowserInspectorWindowContext?,
+            _ context: BrowserInspectorCoordinator.WindowContext?,
             hasAttachedSceneSession: Bool
         ) -> PresentationPhase {
             guard let context else {
@@ -75,7 +75,7 @@ final class BrowserInspectorWindowRegistry {
     }
 
     private enum RegistryEvent {
-        case setContext(BrowserInspectorWindowContext?)
+        case setContext(BrowserInspectorCoordinator.WindowContext?)
         case beginPendingPresentation
         case attachSceneSession(UISceneSession)
         case sceneDidDisconnect(UISceneSession)
@@ -89,11 +89,11 @@ final class BrowserInspectorWindowRegistry {
     }
 
     private var phase: PresentationPhase = .idle
-    private let sceneRegistry = BrowserInspectorWindowSceneRegistry()
+    private let sceneRegistry = BrowserInspectorWindowRegistry.SceneRegistry()
     private var observers: [UUID: (Bool) -> Void] = [:]
     private var releaseHandlersByInspectorSessionID: [ObjectIdentifier: () -> Void] = [:]
 
-    var currentContext: BrowserInspectorWindowContext? {
+    var currentContext: BrowserInspectorCoordinator.WindowContext? {
         phase.context
     }
 
@@ -113,7 +113,7 @@ final class BrowserInspectorWindowRegistry {
         phase.isPresented(attachedSceneCount: sceneRegistry.attachedSceneCount)
     }
 
-    func setContext(_ context: BrowserInspectorWindowContext?) {
+    func setContext(_ context: BrowserInspectorCoordinator.WindowContext?) {
         publish(apply(.setContext(context)))
     }
 
@@ -254,145 +254,147 @@ final class BrowserInspectorWindowRegistry {
     }
 }
 
-@MainActor
-private final class BrowserInspectorWindowSceneRegistry {
-    private enum SceneSessionRestorationState {
-        case restorable
-        case stale
-    }
-
-    private final class SceneSessionRecord {
-        weak var attachedSession: UISceneSession?
-        weak var reusableSession: UISceneSession?
-        var restorationState: SceneSessionRestorationState?
-
-        var isRestorable: Bool {
-            restorationState == .restorable
+extension BrowserInspectorWindowRegistry {
+    @MainActor
+    private final class SceneRegistry {
+        private enum SceneSessionRestorationState {
+            case restorable
+            case stale
         }
 
-        var isStale: Bool {
-            restorationState == .stale
-        }
+        private final class SceneSessionRecord {
+            weak var attachedSession: UISceneSession?
+            weak var reusableSession: UISceneSession?
+            var restorationState: SceneSessionRestorationState?
 
-        var canRestore: Bool {
-            isStale == false && isRestorable
-        }
-
-        var hasAttachedSession: Bool {
-            attachedSession != nil
-        }
-    }
-
-    private var sceneSessionRecordsByIdentifier: [String: SceneSessionRecord] = [:]
-    private var reusableSceneSessionIdentifier: String?
-
-    var currentSceneSessions: [UISceneSession] {
-        pruneDisconnectedSceneSessions()
-        return sceneSessionRecordsByIdentifier.values.compactMap(\.attachedSession)
-    }
-
-    var preferredActivationSceneSession: UISceneSession? {
-        pruneDisconnectedSceneSessions()
-        return sceneSessionRecordsByIdentifier.values.compactMap(\.attachedSession).first
-            ?? reusableSceneSessionIdentifier.flatMap {
-                sceneSessionRecordsByIdentifier[$0]?.reusableSession
+            var isRestorable: Bool {
+                restorationState == .restorable
             }
-    }
 
-    var hasAttachedSceneSession: Bool {
-        pruneDisconnectedSceneSessions()
-        return sceneSessionRecordsByIdentifier.values.contains { $0.hasAttachedSession }
-    }
+            var isStale: Bool {
+                restorationState == .stale
+            }
 
-    var attachedSceneCount: Int {
-        pruneDisconnectedSceneSessions()
-        return sceneSessionRecordsByIdentifier.values.filter { $0.hasAttachedSession }.count
-    }
+            var canRestore: Bool {
+                isStale == false && isRestorable
+            }
 
-    var shouldReleaseContextAfterDisconnect: Bool {
-        pruneDisconnectedSceneSessions()
-        return hasRestorableSceneSession == false
-    }
-
-    var shouldReleaseContextAfterDiscard: Bool {
-        pruneDisconnectedSceneSessions()
-        return hasRestorableSceneSession == false && hasAttachedSceneSession == false
-    }
-
-    func prepareForPendingPresentation() {
-        for record in sceneSessionRecordsByIdentifier.values where record.isRestorable {
-            record.restorationState = .stale
+            var hasAttachedSession: Bool {
+                attachedSession != nil
+            }
         }
-    }
 
-    func attachSceneSession(_ sceneSession: UISceneSession) {
-        let persistentIdentifier = sceneSession.persistentIdentifier
-        let record = record(for: persistentIdentifier)
-        record.attachedSession = sceneSession
-        if reusableSceneSessionIdentifier == persistentIdentifier {
-            record.reusableSession = nil
-            reusableSceneSessionIdentifier = nil
+        private var sceneSessionRecordsByIdentifier: [String: SceneSessionRecord] = [:]
+        private var reusableSceneSessionIdentifier: String?
+
+        var currentSceneSessions: [UISceneSession] {
+            pruneDisconnectedSceneSessions()
+            return sceneSessionRecordsByIdentifier.values.compactMap(\.attachedSession)
         }
-        record.restorationState = .restorable
-    }
 
-    func sceneDidDisconnect(_ sceneSession: UISceneSession) {
-        let persistentIdentifier = sceneSession.persistentIdentifier
-        clearReusableSceneSession()
-        let record = record(for: persistentIdentifier)
-        record.attachedSession = nil
-        record.reusableSession = sceneSession
-        reusableSceneSessionIdentifier = persistentIdentifier
-        record.restorationState = .stale
-        pruneDisconnectedSceneSessions()
-    }
+        var preferredActivationSceneSession: UISceneSession? {
+            pruneDisconnectedSceneSessions()
+            return sceneSessionRecordsByIdentifier.values.compactMap(\.attachedSession).first
+                ?? reusableSceneSessionIdentifier.flatMap {
+                    sceneSessionRecordsByIdentifier[$0]?.reusableSession
+                }
+        }
 
-    func discardSceneSessions(_ sceneSessions: some Sequence<UISceneSession>) {
-        for sceneSession in sceneSessions {
+        var hasAttachedSceneSession: Bool {
+            pruneDisconnectedSceneSessions()
+            return sceneSessionRecordsByIdentifier.values.contains { $0.hasAttachedSession }
+        }
+
+        var attachedSceneCount: Int {
+            pruneDisconnectedSceneSessions()
+            return sceneSessionRecordsByIdentifier.values.filter { $0.hasAttachedSession }.count
+        }
+
+        var shouldReleaseContextAfterDisconnect: Bool {
+            pruneDisconnectedSceneSessions()
+            return hasRestorableSceneSession == false
+        }
+
+        var shouldReleaseContextAfterDiscard: Bool {
+            pruneDisconnectedSceneSessions()
+            return hasRestorableSceneSession == false && hasAttachedSceneSession == false
+        }
+
+        func prepareForPendingPresentation() {
+            for record in sceneSessionRecordsByIdentifier.values where record.isRestorable {
+                record.restorationState = .stale
+            }
+        }
+
+        func attachSceneSession(_ sceneSession: UISceneSession) {
             let persistentIdentifier = sceneSession.persistentIdentifier
+            let record = record(for: persistentIdentifier)
+            record.attachedSession = sceneSession
             if reusableSceneSessionIdentifier == persistentIdentifier {
+                record.reusableSession = nil
                 reusableSceneSessionIdentifier = nil
             }
-            sceneSessionRecordsByIdentifier.removeValue(forKey: persistentIdentifier)
+            record.restorationState = .restorable
         }
-        pruneDisconnectedSceneSessions()
-    }
 
-    func canRestoreSceneSession(_ sceneSession: UISceneSession) -> Bool {
-        let record = sceneSessionRecordsByIdentifier[sceneSession.persistentIdentifier]
-        return record?.canRestore == true
-    }
+        func sceneDidDisconnect(_ sceneSession: UISceneSession) {
+            let persistentIdentifier = sceneSession.persistentIdentifier
+            clearReusableSceneSession()
+            let record = record(for: persistentIdentifier)
+            record.attachedSession = nil
+            record.reusableSession = sceneSession
+            reusableSceneSessionIdentifier = persistentIdentifier
+            record.restorationState = .stale
+            pruneDisconnectedSceneSessions()
+        }
 
-    func clear() {
-        sceneSessionRecordsByIdentifier.removeAll()
-        reusableSceneSessionIdentifier = nil
-    }
+        func discardSceneSessions(_ sceneSessions: some Sequence<UISceneSession>) {
+            for sceneSession in sceneSessions {
+                let persistentIdentifier = sceneSession.persistentIdentifier
+                if reusableSceneSessionIdentifier == persistentIdentifier {
+                    reusableSceneSessionIdentifier = nil
+                }
+                sceneSessionRecordsByIdentifier.removeValue(forKey: persistentIdentifier)
+            }
+            pruneDisconnectedSceneSessions()
+        }
 
-    private var hasRestorableSceneSession: Bool {
-        sceneSessionRecordsByIdentifier.values.contains { $0.isRestorable }
-    }
+        func canRestoreSceneSession(_ sceneSession: UISceneSession) -> Bool {
+            let record = sceneSessionRecordsByIdentifier[sceneSession.persistentIdentifier]
+            return record?.canRestore == true
+        }
 
-    private func record(for persistentIdentifier: String) -> SceneSessionRecord {
-        if let record = sceneSessionRecordsByIdentifier[persistentIdentifier] {
+        func clear() {
+            sceneSessionRecordsByIdentifier.removeAll()
+            reusableSceneSessionIdentifier = nil
+        }
+
+        private var hasRestorableSceneSession: Bool {
+            sceneSessionRecordsByIdentifier.values.contains { $0.isRestorable }
+        }
+
+        private func record(for persistentIdentifier: String) -> SceneSessionRecord {
+            if let record = sceneSessionRecordsByIdentifier[persistentIdentifier] {
+                return record
+            }
+            let record = SceneSessionRecord()
+            sceneSessionRecordsByIdentifier[persistentIdentifier] = record
             return record
         }
-        let record = SceneSessionRecord()
-        sceneSessionRecordsByIdentifier[persistentIdentifier] = record
-        return record
-    }
 
-    private func clearReusableSceneSession() {
-        guard let reusableSceneSessionIdentifier else {
-            return
+        private func clearReusableSceneSession() {
+            guard let reusableSceneSessionIdentifier else {
+                return
+            }
+            sceneSessionRecordsByIdentifier[reusableSceneSessionIdentifier]?.reusableSession = nil
+            self.reusableSceneSessionIdentifier = nil
         }
-        sceneSessionRecordsByIdentifier[reusableSceneSessionIdentifier]?.reusableSession = nil
-        self.reusableSceneSessionIdentifier = nil
-    }
 
-    private func pruneDisconnectedSceneSessions() {
-        if let currentReusableSceneSessionIdentifier = reusableSceneSessionIdentifier,
-           sceneSessionRecordsByIdentifier[currentReusableSceneSessionIdentifier]?.reusableSession == nil {
-            reusableSceneSessionIdentifier = nil
+        private func pruneDisconnectedSceneSessions() {
+            if let currentReusableSceneSessionIdentifier = reusableSceneSessionIdentifier,
+               sceneSessionRecordsByIdentifier[currentReusableSceneSessionIdentifier]?.reusableSession == nil {
+                reusableSceneSessionIdentifier = nil
+            }
         }
     }
 }
