@@ -124,8 +124,35 @@ jobs:
           echo "Resolved iOS: ${RESOLVED_IOS_VERSION}"
           echo "Test scheme: ${TEST_SCHEME}"
 
+      - name: Check SwiftPM tools compatibility
+        run: |
+          set +e
+          swift package resolve > /tmp/swift-package-resolve.log 2>&1
+          resolve_status=$?
+          set -e
+
+          if [ "${resolve_status}" -eq 0 ]; then
+            echo "SKIP_IOS_TESTS=false" >> "${GITHUB_ENV}"
+            exit 0
+          fi
+
+          if grep -E "using Swift tools version|installed version" /tmp/swift-package-resolve.log >/dev/null; then
+            cat /tmp/swift-package-resolve.log
+            echo "::warning::Skipping ${TEST_SCHEME} because the selected Xcode cannot resolve this Swift tools version."
+            echo "SKIP_IOS_TESTS=true" >> "${GITHUB_ENV}"
+            exit 0
+          fi
+
+          cat /tmp/swift-package-resolve.log
+          exit "${resolve_status}"
+
       - name: Run iOS tests
         run: |
+          if [ "${SKIP_IOS_TESTS:-false}" = "true" ]; then
+            echo "Skipping ${TEST_SCHEME}: selected Xcode cannot resolve this Swift tools version."
+            exit 0
+          fi
+
           xcodebuild test \
             -workspace WebInspectorKit.xcworkspace \
             -scheme "${TEST_SCHEME}" \
