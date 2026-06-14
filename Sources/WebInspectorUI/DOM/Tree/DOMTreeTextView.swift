@@ -78,7 +78,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     private var measuredTextWidth: CGFloat = 0
     private var lastBoundsSize: CGSize = .zero
     private var lastRenderedDocumentRootID: DOMNode.ID?
-    private var lastObservedTreeRevision: UInt64?
+    private var lastRoutedTreeRevision: UInt64?
     private var lastObservedTreeContent: DOMTreeTextView.ObservedContent?
     private var lastRoutedSelectedNodeID: DOMNode.ID?
     private let selectionRevealState = DOMTreeTextView.SelectionRevealState()
@@ -462,8 +462,8 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         documentObservation = withPortableContinuousObservation { [weak self] event in
             guard let self else { return }
             let treeRevision = dom.treeRevision
-            let shouldRouteDOMInvalidation = event.kind == .initial || lastObservedTreeRevision != treeRevision
-            lastObservedTreeRevision = treeRevision
+            let shouldRouteDOMInvalidation = event.kind == .initial || lastRoutedTreeRevision != treeRevision
+            lastRoutedTreeRevision = treeRevision
             guard shouldRouteDOMInvalidation else {
                 return
             }

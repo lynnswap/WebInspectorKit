@@ -950,6 +950,7 @@ struct DOMContainerTests {
 
         #expect(await renderedDocumentState.waitUntilValue(true))
         #expect(await renderedTreeText.waitUntil { $0.contains("<html") } != nil)
+        #expect(await backend.sentTargetMessages().count == 1)
     }
 
     @Test
