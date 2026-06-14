@@ -466,12 +466,9 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
             }
             routeDOMInvalidation(from: dom, isInitial: event.kind == .initial)
         }
-        selectionObservation = withPortableContinuousObservation { [weak self] event in
+        selectionObservation = withPortableContinuousObservation { [weak self] _ in
             guard let self else { return }
             _ = dom.selectionRevision
-            guard event.kind == .initial || event.matches(\DOMSession.selectionRevision) else {
-                return
-            }
             routeSelectionInvalidation(from: dom)
         }
     }
@@ -498,7 +495,6 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         guard lastRoutedSelectedNodeID != nextSelectedNodeID else {
             return
         }
-        lastRoutedSelectedNodeID = nextSelectedNodeID
         handleSelectedNodeChange()
     }
 
@@ -688,11 +684,14 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func prepareSelectionForRendering(clearsMultiSelectionForDocumentSelection: Bool = false) {
-        let selectedNode = lastRoutedSelectedNodeID.flatMap { dom.node(for: $0) }
+        let nextSelectedNodeID = dom.selectedNodeID
+        let selectedNodeIDChanged = lastRoutedSelectedNodeID != nextSelectedNodeID
+        lastRoutedSelectedNodeID = nextSelectedNodeID
+        let selectedNode = nextSelectedNodeID.flatMap { dom.node(for: $0) }
         let observation = selectionRevealState.observe(selectedNodeID: selectedNode?.id)
         reconcileMultiSelectionForRenderedSelection(
             selectedNodeID: observation.selectedNodeID,
-            selectedNodeIDChanged: observation.selectedNodeIDChanged,
+            selectedNodeIDChanged: selectedNodeIDChanged || observation.selectedNodeIDChanged,
             clearsMultiSelectionForDocumentSelection: clearsMultiSelectionForDocumentSelection
         )
 
@@ -1368,7 +1367,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func selectedNodeNeedsRowReload() -> Bool {
-        guard let selectedNodeID = lastRoutedSelectedNodeID else {
+        guard let selectedNodeID = dom.selectedNodeID else {
             return false
         }
         return !renderedRows.contains(nodeID: selectedNodeID)

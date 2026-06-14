@@ -6,6 +6,7 @@ import UIKit
 @testable import WebInspectorUI
 
 @MainActor
+@Suite(.serialized)
 struct DOMTreeTextViewTests {
     @Test
     func rendersDOMMarkupFromDOMSession() throws {
@@ -162,43 +163,46 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
-    func selectingProjectedFrameNodeOpensComposedAncestors() async throws {
-        let pageTargetID = ProtocolTarget.ID("page-main")
-        let frameTargetID = ProtocolTarget.ID("frame-ad-target")
-        let frameID = DOMFrame.ID("frame-ad")
-        let session = DOMSession()
+    func initialSelectionOpensProjectedFrameAncestors() throws {
+        let fixture = try makeProjectedFrameSession()
+        fixture.session.selectNode(fixture.selectedNodeID)
 
-        session.applyTargetCreated(
-            ProtocolTarget.Record(id: pageTargetID, kind: .page, frameID: DOMFrame.ID("main-frame")),
-            makeCurrentMainPage: true
-        )
-        session.applyTargetCreated(
-            ProtocolTarget.Record(id: frameTargetID, kind: .frame, frameID: frameID)
-        )
-        _ = session.replaceDocumentRoot(projectedPageDocument(frameID: frameID), targetID: pageTargetID)
-        let frameRootID = session.replaceDocumentRoot(projectedFrameDocument(), targetID: frameTargetID)
-        let selectedNodeID = try #require(
-            session.snapshot().currentNodeIDByKey[DOMNode.CurrentKey(targetID: frameTargetID, nodeID: .init(8))]
-        )
-        let view = makeTreeView(session: session)
-        let renderedState = await view.selectionObservationDeliveryForTesting.values {
+        let view = makeTreeView(session: fixture.session)
+
+        let projection = fixture.session.treeProjection(rootTargetID: fixture.pageTargetID)
+        #expect(fixture.session.snapshot().nodesByID[fixture.frameRootID]?.parentID == nil)
+        #expect(projection.ancestorNodeIDs(of: fixture.selectedNodeID).contains(fixture.frameRootID))
+        #expect(view.renderedTextForTesting.contains("#document"))
+        #expect(view.renderedTextForTesting.contains("<img id=\"ad-node\">"))
+        #expect(view.selectedRowRectsForTesting().count == 1)
+    }
+
+    @Test
+    func selectingProjectedFrameNodeOpensComposedAncestors() async throws {
+        let fixture = try makeProjectedFrameSession()
+        let view = makeTreeView(session: fixture.session)
+
+        let sampleRenderedState: @MainActor @Sendable () -> RenderedDOMTreeState = {
             view.layoutIfNeeded()
             return RenderedDOMTreeState(
                 text: view.renderedTextForTesting,
                 selectedRowCount: view.selectedRowRectsForTesting().count
             )
         }
+        let renderedState = await view.selectionObservationDeliveryForTesting.values(sampleRenderedState)
+        defer { renderedState.cancel() }
 
-        session.selectNode(selectedNodeID)
-        let didRenderSelection = await renderedState.waitUntil { state in
-            state.text.contains("#document")
-                && state.text.contains("<img id=\"ad-node\">")
-                && state.selectedRowCount == 1
-        } != nil
+        fixture.session.selectNode(fixture.selectedNodeID)
+        var didRenderSelection = renderedState.latestValue?.hasProjectedFrameSelection == true
+            || sampleRenderedState().hasProjectedFrameSelection
+        if !didRenderSelection {
+            didRenderSelection = await renderedState.waitUntil { $0.hasProjectedFrameSelection } != nil
+                || sampleRenderedState().hasProjectedFrameSelection
+        }
 
-        let projection = session.treeProjection(rootTargetID: pageTargetID)
-        #expect(session.snapshot().nodesByID[frameRootID]?.parentID == nil)
-        #expect(projection.ancestorNodeIDs(of: selectedNodeID).contains(frameRootID))
+        let projection = fixture.session.treeProjection(rootTargetID: fixture.pageTargetID)
+        #expect(fixture.session.snapshot().nodesByID[fixture.frameRootID]?.parentID == nil)
+        #expect(projection.ancestorNodeIDs(of: fixture.selectedNodeID).contains(fixture.frameRootID))
         #expect(didRenderSelection)
     }
 }
@@ -206,6 +210,12 @@ struct DOMTreeTextViewTests {
 private struct RenderedDOMTreeState: Equatable, Sendable {
     var text: String
     var selectedRowCount: Int
+
+    var hasProjectedFrameSelection: Bool {
+        text.contains("#document")
+            && text.contains("<img id=\"ad-node\">")
+            && selectedRowCount == 1
+    }
 }
 
 @MainActor
@@ -256,6 +266,34 @@ private func makeDOMSession(root: DOMNode.Payload = documentNode()) -> DOMSessio
     )
     _ = session.replaceDocumentRoot(root, targetID: targetID)
     return session
+}
+
+@MainActor
+private func makeProjectedFrameSession() throws -> (
+    session: DOMSession,
+    pageTargetID: ProtocolTarget.ID,
+    frameRootID: DOMNode.ID,
+    selectedNodeID: DOMNode.ID
+) {
+    let pageTargetID = ProtocolTarget.ID("page-main")
+    let frameTargetID = ProtocolTarget.ID("frame-ad-target")
+    let frameID = DOMFrame.ID("frame-ad")
+    let session = DOMSession()
+
+    session.applyTargetCreated(
+        ProtocolTarget.Record(id: pageTargetID, kind: .page, frameID: DOMFrame.ID("main-frame")),
+        makeCurrentMainPage: true
+    )
+    session.applyTargetCreated(
+        ProtocolTarget.Record(id: frameTargetID, kind: .frame, frameID: frameID)
+    )
+    _ = session.replaceDocumentRoot(projectedPageDocument(frameID: frameID), targetID: pageTargetID)
+    let frameRootID = session.replaceDocumentRoot(projectedFrameDocument(), targetID: frameTargetID)
+    let selectedNodeID = try #require(
+        session.snapshot().currentNodeIDByKey[DOMNode.CurrentKey(targetID: frameTargetID, nodeID: .init(8))]
+    )
+
+    return (session, pageTargetID, frameRootID, selectedNodeID)
 }
 
 private func documentNode() -> DOMNode.Payload {
