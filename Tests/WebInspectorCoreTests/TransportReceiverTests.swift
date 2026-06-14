@@ -37,6 +37,47 @@ func transportReceiverBuffersMessagesUntilTransportIsSetAndPreservesOrder() asyn
     #expect(await transport.snapshot().targetsByID[ProtocolTargetIdentifier("page-main")]?.frameID?.rawValue == "main-frame")
 }
 
+@Test
+func transportReceiverCloseDropsBufferedAndFutureMessages() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    let receiver = TransportReceiver()
+
+    receiver.receive(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"buffered-page","type":"page","frameId":"buffered-frame","isProvisional":false}}}"#)
+    receiver.close()
+    receiver.setTransport(transport)
+    receiver.receive(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"late-page","type":"page","frameId":"late-frame","isProvisional":false}}}"#)
+
+    #expect(await transport.snapshot().targetsByID.isEmpty)
+}
+
+@Test
+func closedReceiverDoesNotDirtyReplacementTransport() async throws {
+    let oldBackend = FakeTransportBackend()
+    let oldTransport = TransportSession(backend: oldBackend, responseTimeout: .milliseconds(750))
+    let oldReceiver = TransportReceiver()
+    oldReceiver.setTransport(oldTransport)
+    oldReceiver.close()
+
+    let newBackend = FakeTransportBackend()
+    let newTransport = TransportSession(backend: newBackend, responseTimeout: .milliseconds(750))
+    let stream = await newTransport.orderedEvents()
+    let newReceiver = TransportReceiver()
+    newReceiver.setTransport(newTransport)
+
+    let eventsTask = Task {
+        var iterator = stream.makeAsyncIterator()
+        return await iterator.next()?.method
+    }
+
+    oldReceiver.receive(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"old-page","type":"page","frameId":"old-frame","isProvisional":false}}}"#)
+    newReceiver.receive(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"new-page","type":"page","frameId":"new-frame","isProvisional":false}}}"#)
+
+    #expect(try #require(await value(of: eventsTask)) == "Target.targetCreated")
+    #expect(await oldTransport.snapshot().targetsByID.isEmpty)
+    #expect(await newTransport.snapshot().targetsByID[ProtocolTargetIdentifier("new-page")]?.frameID?.rawValue == "new-frame")
+}
+
 private func value<Value: Sendable>(
     of task: Task<Value, Never>,
     timeout: Duration = .milliseconds(750)

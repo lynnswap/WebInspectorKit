@@ -95,6 +95,9 @@ package actor TransportSession {
 
     @discardableResult
     package func receiveRootMessage(_ message: String) async -> UInt64 {
+        guard !closed else {
+            return eventSequences.current.sequence
+        }
         inboundMessageQueue.append(message)
         await drainInboundMessages()
         return eventSequences.current.sequence

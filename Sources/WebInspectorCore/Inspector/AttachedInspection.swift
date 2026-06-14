@@ -245,6 +245,7 @@ extension WKWebView: InspectorInspectableWebView {}
 @MainActor
 private final class InspectorConnection {
     let transport: TransportSession
+    let receiver: TransportReceiver?
     weak var webView: WKWebView?
     let originalInspectability: Bool?
     var eventPump: DomainEventPump?
@@ -252,10 +253,12 @@ private final class InspectorConnection {
 
     init(
         transport: TransportSession,
+        receiver: TransportReceiver? = nil,
         webView: WKWebView? = nil,
         originalInspectability: Bool? = nil
     ) {
         self.transport = transport
+        self.receiver = receiver
         self.webView = webView
         self.originalInspectability = originalInspectability
         eventPump = nil
@@ -500,10 +503,12 @@ package final class InspectorSession {
             try backend.attach()
             try await connect(
                 transport: createdTransport,
+                receiver: receiver,
                 webView: webView,
                 originalInspectability: originalInspectability
             )
         } catch {
+            receiver.close()
             Self.restoreInspectabilityIfNeeded(on: webView, originalValue: originalInspectability)
             await transport?.detach()
             throw error
@@ -516,12 +521,14 @@ package final class InspectorSession {
 
     private func connect(
         transport: TransportSession,
+        receiver: TransportReceiver? = nil,
         webView: WKWebView?,
         originalInspectability: Bool?
     ) async throws {
         await detach()
         let nextConnection = InspectorConnection(
             transport: transport,
+            receiver: receiver,
             webView: webView,
             originalInspectability: originalInspectability
         )
@@ -550,6 +557,7 @@ package final class InspectorSession {
             guard connectionPhase.isCurrent(nextConnection) else {
                 throw error
             }
+            nextConnection.receiver?.close()
             stopPumps(nextConnection)
             connectionPhase = .idle
             await transport.detach()
@@ -576,6 +584,7 @@ package final class InspectorSession {
 
         for previousConnection in previousConnections {
             cancelRuntimeConsoleEnableTasks(previousConnection)
+            previousConnection.receiver?.close()
             stopPumps(previousConnection)
             await previousConnection.transport.detach()
             restoreInspectabilityIfNeeded(for: previousConnection)

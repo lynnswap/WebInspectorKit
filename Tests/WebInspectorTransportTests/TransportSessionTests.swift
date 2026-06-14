@@ -364,6 +364,20 @@ func waitForCurrentMainPageTargetFailsAfterDetach() async throws {
 }
 
 @Test
+func receiveRootMessageAfterDetachDoesNotMutateSnapshot() async throws {
+    let backend = FakeTransportBackend()
+    let session = TransportSession(backend: backend, responseTimeout: testResponseTimeout)
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#)
+    let snapshotBeforeDetach = await session.snapshot()
+
+    await session.detach()
+    let sequenceAfterDetach = await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"late-page","type":"page","frameId":"late-frame","isProvisional":false}}}"#)
+
+    #expect(sequenceAfterDetach == 1)
+    #expect(await session.snapshot() == snapshotBeforeDetach)
+}
+
+@Test
 func waitForCurrentMainPageTargetTimeoutUsesInjectedSleep() async throws {
     let backend = FakeTransportBackend()
     let timeout = ManualResponseTimeout()
