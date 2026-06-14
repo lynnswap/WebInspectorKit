@@ -2,7 +2,7 @@ import Foundation
 import WebInspectorTransport
 
 package struct ConsoleProtocolCommands {
-    package func command(for intent: ConsoleCommandIntent) throws -> ProtocolCommand {
+    package func command(for intent: ConsoleCommand.Intent) throws -> ProtocolCommand {
         switch intent {
         case let .enable(targetID):
             return ProtocolCommand(domain: .console, method: "Console.enable", routing: .target(targetID))
@@ -32,7 +32,7 @@ package struct ConsoleProtocolCommands {
         }
     }
 
-    package func loggingChannels(from result: ProtocolCommand.Result) throws -> [ConsoleLoggingChannelPayload] {
+    package func loggingChannels(from result: ProtocolCommand.Result) throws -> [ConsoleLoggingChannel.Payload] {
         let payload = try TransportMessageParser.decode(LoggingChannelsResult.self, from: result.resultData)
         return payload.channels
     }
@@ -44,9 +44,9 @@ package struct ConsoleProtocolCommands {
 
 @MainActor
 package protocol ConsoleProtocolEventHandler: AnyObject {
-    func consoleMessageAdded(_ message: ConsoleMessagePayload, targetID: ProtocolTarget.ID, parameters: [RuntimeRemoteObject]?)
+    func consoleMessageAdded(_ message: ConsoleMessage.Payload, targetID: ProtocolTarget.ID, parameters: [RuntimeRemoteObject]?)
     func consoleRepeatCountUpdated(count: Int, timestamp: Double?, targetID: ProtocolTarget.ID)
-    func consoleMessagesCleared(reason: ConsoleClearReason, targetID: ProtocolTarget.ID)
+    func consoleMessagesCleared(reason: ConsoleSession.ClearReason, targetID: ProtocolTarget.ID)
 }
 
 @MainActor
@@ -96,7 +96,7 @@ package final class ConsoleProtocolEventDispatcher: ProtocolDomainEventDispatche
 
 extension ConsoleSession: ConsoleProtocolEventHandler {
     package func consoleMessageAdded(
-        _ message: ConsoleMessagePayload,
+        _ message: ConsoleMessage.Payload,
         targetID: ProtocolTarget.ID,
         parameters: [RuntimeRemoteObject]?
     ) {
@@ -107,17 +107,17 @@ extension ConsoleSession: ConsoleProtocolEventHandler {
         applyRepeatCountUpdated(count: count, timestamp: timestamp, targetID: targetID)
     }
 
-    package func consoleMessagesCleared(reason: ConsoleClearReason, targetID: ProtocolTarget.ID) {
+    package func consoleMessagesCleared(reason: ConsoleSession.ClearReason, targetID: ProtocolTarget.ID) {
         applyMessagesCleared(reason: reason, targetID: targetID)
     }
 }
 
 private struct LoggingChannelsResult: Decodable {
-    var channels: [ConsoleLoggingChannelPayload]
+    var channels: [ConsoleLoggingChannel.Payload]
 }
 
 private struct MessageAddedParams: Decodable {
-    var message: ConsoleMessagePayload
+    var message: ConsoleMessage.Payload
 }
 
 private struct MessageRepeatCountUpdatedParams: Decodable {
@@ -126,5 +126,5 @@ private struct MessageRepeatCountUpdatedParams: Decodable {
 }
 
 private struct MessagesClearedParams: Decodable {
-    var reason: ConsoleClearReason
+    var reason: ConsoleSession.ClearReason
 }

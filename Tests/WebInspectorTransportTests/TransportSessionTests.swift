@@ -2102,10 +2102,10 @@ private func jsonObject(from data: Data) throws -> [String: Any] {
     try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
 }
 
-private func contextKey(_ runtimeAgentTargetID: String, _ contextID: Int) -> RuntimeExecutionContextKey {
-    RuntimeExecutionContextKey(
+private func contextKey(_ runtimeAgentTargetID: String, _ contextID: Int) -> RuntimeContext.Key {
+    RuntimeContext.Key(
         runtimeAgentTargetID: ProtocolTarget.ID(runtimeAgentTargetID),
-        contextID: ExecutionContextID(contextID)
+        contextID: RuntimeContext.ID(contextID)
     )
 }
 

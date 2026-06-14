@@ -11,7 +11,7 @@ struct DOMSessionSnapshotBuilder {
     var frameDocumentProjections: [ProtocolTarget.ID: FrameDocumentProjection.Snapshot]
     var transactions: [DOMTransaction]
     var currentNodeIDByKey: [DOMNode.CurrentKey: DOMNode.ID]
-    var executionContextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContextRecord]
+    var executionContextsByKey: [RuntimeContext.Key: RuntimeContext.Record]
     var selection: DOMSelection
 
     func build() -> DOMSession.Snapshot {

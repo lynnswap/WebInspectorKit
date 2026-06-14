@@ -277,7 +277,7 @@ package final class TargetGraph {
         runtimeContexts.clear(runtimeAgentTargetID: runtimeAgentTargetID)
     }
 
-    package func removeExecutionContext(_ contextKey: RuntimeExecutionContextKey) {
+    package func removeExecutionContext(_ contextKey: RuntimeContext.Key) {
         runtimeContexts.remove(contextKey)
     }
 
@@ -285,7 +285,7 @@ package final class TargetGraph {
         runtimeContexts.retarget(oldTargetID: oldTargetID, newTargetID: newTargetID)
     }
 
-    package func recordExecutionContext(_ context: RuntimeExecutionContextRecord) {
+    package func recordExecutionContext(_ context: RuntimeContext.Record) {
         runtimeContexts.record(context)
     }
 
@@ -318,7 +318,7 @@ package final class TargetGraph {
         }
     }
 
-    package func executionContextSnapshots() -> [RuntimeExecutionContextKey: RuntimeExecutionContextRecord] {
+    package func executionContextSnapshots() -> [RuntimeContext.Key: RuntimeContext.Record] {
         runtimeContexts.contextsByKey
     }
 }

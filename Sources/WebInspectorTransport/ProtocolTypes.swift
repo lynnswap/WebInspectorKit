@@ -1,5 +1,6 @@
 package enum ProtocolTarget {}
 package enum ProtocolFrame {}
+package enum RuntimeContext {}
 
 package extension ProtocolTarget {
     struct ID: RawRepresentable, Hashable, Codable, Sendable, CustomStringConvertible {
@@ -37,15 +38,16 @@ package extension ProtocolFrame {
     }
 }
 
-package struct ExecutionContextID: RawRepresentable, Hashable, Codable, Sendable {
-    package let rawValue: Int
+extension RuntimeContext {
+    package struct ID: RawRepresentable, Hashable, Codable, Sendable {        package let rawValue: Int
 
-    package init(_ rawValue: Int) {
-        self.rawValue = rawValue
-    }
+        package init(_ rawValue: Int) {
+            self.rawValue = rawValue
+        }
 
-    package init(rawValue: Int) {
-        self.rawValue = rawValue
+        package init(rawValue: Int) {
+            self.rawValue = rawValue
+        }
     }
 }
 

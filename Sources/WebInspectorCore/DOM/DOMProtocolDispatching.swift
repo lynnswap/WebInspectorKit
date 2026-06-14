@@ -242,21 +242,21 @@ package struct DOMProtocolCommands {
         ]
     }
 
-    private func injectedScriptID(from objectID: String) -> ExecutionContextID? {
+    private func injectedScriptID(from objectID: String) -> RuntimeContext.ID? {
         guard let data = objectID.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return nil
         }
         if let injectedScriptID = object["injectedScriptId"] as? Int {
-            return ExecutionContextID(injectedScriptID)
+            return RuntimeContext.ID(injectedScriptID)
         }
         if let injectedScriptID = object["injectedScriptId"] as? NSNumber,
            CFGetTypeID(injectedScriptID) != CFBooleanGetTypeID() {
-            return ExecutionContextID(injectedScriptID.intValue)
+            return RuntimeContext.ID(injectedScriptID.intValue)
         }
         if let injectedScriptID = object["injectedScriptId"] as? String,
            let rawValue = Int(injectedScriptID) {
-            return ExecutionContextID(rawValue)
+            return RuntimeContext.ID(rawValue)
         }
         return nil
     }
@@ -297,11 +297,11 @@ package final class InspectorProtocolEventDispatcher: ProtocolDomainEventDispatc
 }
 
 extension DOMSession: RuntimeProtocolEventHandler {
-    package func runtimeExecutionContextCreated(_ record: RuntimeExecutionContextRecord) {
+    package func runtimeExecutionContextCreated(_ record: RuntimeContext.Record) {
         applyExecutionContextCreated(record)
     }
 
-    package func runtimeExecutionContextDestroyed(_ key: RuntimeExecutionContextKey) {
+    package func runtimeExecutionContextDestroyed(_ key: RuntimeContext.Key) {
         applyExecutionContextDestroyed(key)
     }
 

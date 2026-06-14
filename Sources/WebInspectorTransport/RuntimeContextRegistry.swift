@@ -2,7 +2,7 @@ import Foundation
 
 private struct RuntimeContextAgentState: Sendable {
     var targetID: ProtocolTarget.ID
-    var contextsByID: [ExecutionContextID: RuntimeExecutionContextRecord] = [:]
+    var contextsByID: [RuntimeContext.ID: RuntimeContext.Record] = [:]
 
     var isEmpty: Bool {
         contextsByID.isEmpty
@@ -14,7 +14,7 @@ package struct RuntimeContextRegistry: Sendable {
 
     package init() {}
 
-    package var contextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContextRecord] {
+    package var contextsByKey: [RuntimeContext.Key: RuntimeContext.Record] {
         Dictionary(
             uniqueKeysWithValues: agentStatesByID.values.flatMap { state in
                 state.contextsByID.values.map { ($0.key, $0) }
@@ -22,17 +22,17 @@ package struct RuntimeContextRegistry: Sendable {
         )
     }
 
-    package func targetID(for key: RuntimeExecutionContextKey) -> ProtocolTarget.ID? {
+    package func targetID(for key: RuntimeContext.Key) -> ProtocolTarget.ID? {
         agentStatesByID[key.runtimeAgentTargetID]?.contextsByID[key.contextID]?.targetID
     }
 
-    package mutating func record(_ context: RuntimeExecutionContextRecord) {
+    package mutating func record(_ context: RuntimeContext.Record) {
         var state = agentState(for: context.runtimeAgentTargetID)
         state.contextsByID[context.id] = context
         store(state)
     }
 
-    package mutating func remove(_ key: RuntimeExecutionContextKey) {
+    package mutating func remove(_ key: RuntimeContext.Key) {
         guard var state = agentStatesByID[key.runtimeAgentTargetID] else {
             return
         }
@@ -97,7 +97,7 @@ package struct RuntimeContextRegistry: Sendable {
         }
     }
 
-    private mutating func replace(with contextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContextRecord]) {
+    private mutating func replace(with contextsByKey: [RuntimeContext.Key: RuntimeContext.Record]) {
         for agentID in agentStatesByID.keys {
             agentStatesByID[agentID]?.contextsByID.removeAll()
         }

@@ -262,9 +262,9 @@ package extension DOMAction {
 package enum DOMInspectEvent: Equatable, Sendable {
     package struct RemoteObject: Equatable, Sendable {
         package var objectID: String
-        package var injectedScriptID: ExecutionContextID?
+        package var injectedScriptID: RuntimeContext.ID?
 
-        package init(objectID: String, injectedScriptID: ExecutionContextID?) {
+        package init(objectID: String, injectedScriptID: RuntimeContext.ID?) {
             self.objectID = objectID
             self.injectedScriptID = injectedScriptID
         }
@@ -297,7 +297,7 @@ package extension DOMSelection {
     enum Failure: Swift.Error, Equatable, Sendable {
         case missingObjectID
         case missingInjectedScriptID
-        case unknownExecutionContext(ExecutionContextID)
+        case unknownExecutionContext(RuntimeContext.ID)
         case missingCurrentDocument(ProtocolTarget.ID)
         case staleSelectionRequest(expected: Request.ID?, received: Request.ID)
         case targetMismatch(expected: ProtocolTarget.ID, received: ProtocolTarget.ID)

@@ -6,14 +6,14 @@ import WebInspectorTransport
 @Test
 func runtimeProtocolDispatchingBuildsEvaluateCommandAndDecodesResult() throws {
     let targetID = ProtocolTarget.ID("page")
-    let intent = RuntimeCommandIntent.evaluate(
-        RuntimeEvaluationRequest(
+    let intent = RuntimeCommand.Intent.evaluate(
+        RuntimeEvaluation.Request(
             runtimeAgentTargetID: targetID,
             expression: "document.title",
-            objectGroup: RuntimeObjectGroup("console"),
+            objectGroup: RuntimeRemoteObject.Group("console"),
             includeCommandLineAPI: true,
             doNotPauseOnExceptionsAndMuteConsole: false,
-            contextID: ExecutionContextID(7),
+            contextID: RuntimeContext.ID(7),
             returnByValue: false,
             generatePreview: true,
             saveResult: true,
@@ -46,9 +46,9 @@ func runtimeProtocolDispatchingBuildsEvaluateCommandAndDecodesResult() throws {
 
 @Test
 func runtimeProtocolDispatchingBuildsObjectCommandsAndDecodesPropertiesAndCollections() throws {
-    let key = RuntimeRemoteObjectIdentifierKey(
+    let key = RuntimeRemoteObject.ID(
         runtimeAgentTargetID: ProtocolTarget.ID("frame"),
-        objectID: RuntimeRemoteObjectIdentifier("object-1")
+        objectID: RuntimeRemoteObject.ProtocolID("object-1")
     )
 
     let propertiesCommand = try RuntimeProtocolCommands().command(
@@ -69,7 +69,7 @@ func runtimeProtocolDispatchingBuildsObjectCommandsAndDecodesPropertiesAndCollec
     let properties = try RuntimeProtocolCommands().propertiesResult(from: propertiesResult)
     #expect(properties.properties.first?.name == "length")
     #expect(properties.properties.first?.value?.value == .number(3))
-    #expect(properties.internalProperties.first?.value?.objectID == RuntimeRemoteObjectIdentifier("proto"))
+    #expect(properties.internalProperties.first?.value?.objectID == RuntimeRemoteObject.ProtocolID("proto"))
 
     let entriesResult = ProtocolCommand.Result(
         domain: .runtime,
@@ -171,6 +171,6 @@ private func parametersObject(_ data: Data) throws -> [String: Any] {
     try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
 }
 
-private func contextKey(_ runtimeAgentTargetID: ProtocolTarget.ID, _ contextID: Int) -> RuntimeExecutionContextKey {
-    RuntimeExecutionContextKey(runtimeAgentTargetID: runtimeAgentTargetID, contextID: ExecutionContextID(contextID))
+private func contextKey(_ runtimeAgentTargetID: ProtocolTarget.ID, _ contextID: Int) -> RuntimeContext.Key {
+    RuntimeContext.Key(runtimeAgentTargetID: runtimeAgentTargetID, contextID: RuntimeContext.ID(contextID))
 }

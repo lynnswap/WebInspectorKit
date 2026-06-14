@@ -173,7 +173,7 @@ package actor TransportSession {
         )
     }
 
-    package func targetIdentifier(forExecutionContext key: RuntimeExecutionContextKey) -> ProtocolTarget.ID? {
+    package func targetIdentifier(forExecutionContext key: RuntimeContext.Key) -> ProtocolTarget.ID? {
         runtimeContextRegistry.targetID(for: key)
     }
 
@@ -513,7 +513,7 @@ package actor TransportSession {
                 deliveredTargetID: targetID,
                 frameID: frameID
             )
-            let context = RuntimeExecutionContextRecord(
+            let context = RuntimeContext.Record(
                 id: params.context.id,
                 targetID: resolvedTargetID,
                 runtimeAgentTargetID: sourceTargetID ?? targetID,
@@ -528,7 +528,7 @@ package actor TransportSession {
             }
             let runtimeAgentTargetID = sourceTargetID ?? targetID
             runtimeContextRegistry.remove(
-                RuntimeExecutionContextKey(
+                RuntimeContext.Key(
                     runtimeAgentTargetID: runtimeAgentTargetID,
                     contextID: params.executionContextId
                 )
@@ -905,8 +905,8 @@ private struct TargetCommittedParams: Decodable {
 
 private struct RuntimeExecutionContextCreatedParams: Decodable {
     struct Context: Decodable {
-        var id: ExecutionContextID
-        var type: RuntimeExecutionContextType?
+        var id: RuntimeContext.ID
+        var type: RuntimeContext.Kind?
         var name: String?
         var frameId: ProtocolFrame.ID?
     }
@@ -915,7 +915,7 @@ private struct RuntimeExecutionContextCreatedParams: Decodable {
 }
 
 private struct RuntimeExecutionContextDestroyedParams: Decodable {
-    var executionContextId: ExecutionContextID
+    var executionContextId: RuntimeContext.ID
 }
 
 private struct CSSStyleSheetAddedParams: Decodable {

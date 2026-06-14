@@ -339,8 +339,8 @@ private final class StackTracePayload: Decodable {
     var truncated: Bool?
     var parentStackTrace: StackTracePayload?
 
-    var payload: ConsoleStackTracePayload {
-        ConsoleStackTracePayload(
+    var payload: ConsoleMessage.StackTracePayload {
+        ConsoleMessage.StackTracePayload(
             callFrames: callFrames.map(\.payload),
             topCallFrameIsBoundary: topCallFrameIsBoundary,
             truncated: truncated,
@@ -356,8 +356,8 @@ private struct CallFramePayload: Decodable {
     var lineNumber: Int
     var columnNumber: Int
 
-    var payload: ConsoleCallFramePayload {
-        ConsoleCallFramePayload(
+    var payload: ConsoleMessage.CallFramePayload {
+        ConsoleMessage.CallFramePayload(
             functionName: functionName,
             url: url,
             scriptID: scriptId,

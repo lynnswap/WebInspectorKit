@@ -363,14 +363,14 @@ extension NetworkRequest.Initiator {
 
 extension NetworkRequest.Initiator {
     package struct Payload: Equatable, Sendable {        package var type: NetworkRequest.Initiator.Kind
-        package var stackTrace: ConsoleStackTracePayload?
+        package var stackTrace: ConsoleMessage.StackTracePayload?
         package var url: String?
         package var lineNumber: Double?
         package var nodeID: DOMNode.ProtocolID?
 
         package init(
             type: NetworkRequest.Initiator.Kind,
-            stackTrace: ConsoleStackTracePayload? = nil,
+            stackTrace: ConsoleMessage.StackTracePayload? = nil,
             url: String? = nil,
             lineNumber: Double? = nil,
             nodeID: DOMNode.ProtocolID? = nil

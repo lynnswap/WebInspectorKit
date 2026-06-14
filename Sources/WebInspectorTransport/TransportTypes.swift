@@ -158,7 +158,7 @@ package extension TransportSession {
         package var currentMainPageTargetID: ProtocolTarget.ID?
         package var targetsByID: [ProtocolTarget.ID: ProtocolTarget.Record]
         package var frameTargetIDsByFrameID: [ProtocolFrame.ID: ProtocolTarget.ID]
-        package var executionContextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContextRecord]
+        package var executionContextsByKey: [RuntimeContext.Key: RuntimeContext.Record]
         package var pendingRootReplyIDs: [UInt64]
         package var pendingTargetReplyKeys: [ReplyKey]
 
@@ -166,7 +166,7 @@ package extension TransportSession {
             currentMainPageTargetID: ProtocolTarget.ID?,
             targetsByID: [ProtocolTarget.ID: ProtocolTarget.Record],
             frameTargetIDsByFrameID: [ProtocolFrame.ID: ProtocolTarget.ID],
-            executionContextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContextRecord],
+            executionContextsByKey: [RuntimeContext.Key: RuntimeContext.Record],
             pendingRootReplyIDs: [UInt64],
             pendingTargetReplyKeys: [ReplyKey]
         ) {

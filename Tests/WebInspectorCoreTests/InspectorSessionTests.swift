@@ -164,9 +164,9 @@ func domainPumpsReleaseConsoleRuntimeObjectsOnConsoleClear() async throws {
         in: session
     )
 
-    let objectKey = RuntimeRemoteObjectIdentifierKey(
+    let objectKey = RuntimeRemoteObject.ID(
         runtimeAgentTargetID: .pageMain,
-        objectID: RuntimeRemoteObjectIdentifier("console-object")
+        objectID: RuntimeRemoteObject.ProtocolID("console-object")
     )
     let runtimeSnapshot = await session.attachment.runtime.snapshot()
     let consoleSnapshot = await session.attachment.console.snapshot()
@@ -2778,7 +2778,7 @@ func runtimeEvaluationResultUsesCommittedReplyTargetAfterNavigationCommit() asyn
     )
     let result = try await evaluateTask.value
 
-    let objectID = RuntimeRemoteObjectIdentifier("eval-object")
+    let objectID = RuntimeRemoteObject.ProtocolID("eval-object")
     let snapshot = await session.attachment.runtime.snapshot()
     #expect(result.targetID == ProtocolTarget.ID.pageNext)
     #expect(snapshot.remoteObjectsByID[.init(runtimeAgentTargetID: .pageMain, objectID: objectID)] == nil)
@@ -5186,8 +5186,8 @@ private func pendingTargetReplyKeys(_ transport: TransportSession) async -> [Tra
 private func contextKey(
     _ runtimeAgentTargetID: ProtocolTarget.ID,
     _ contextID: Int
-) -> RuntimeExecutionContextKey {
-    RuntimeExecutionContextKey(runtimeAgentTargetID: runtimeAgentTargetID, contextID: ExecutionContextID(contextID))
+) -> RuntimeContext.Key {
+    RuntimeContext.Key(runtimeAgentTargetID: runtimeAgentTargetID, contextID: RuntimeContext.ID(contextID))
 }
 
 private func targetDispatchMessage(

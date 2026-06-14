@@ -291,7 +291,7 @@ package extension DOMSession {
         package var frameDocumentProjections: [ProtocolTarget.ID: FrameDocumentProjection.Snapshot]
         package var transactions: [DOMTransaction.Snapshot]
         package var currentNodeIDByKey: [DOMNode.CurrentKey: DOMNode.ID]
-        package var executionContextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContextRecord]
+        package var executionContextsByKey: [RuntimeContext.Key: RuntimeContext.Record]
         package var selection: DOMSelection.Snapshot
     }
 }
@@ -307,14 +307,14 @@ package extension DOMSession.Snapshot {
 
     func executionContext(
         runtimeAgentTargetID: ProtocolTarget.ID,
-        contextID: ExecutionContextID
-    ) -> RuntimeExecutionContextRecord? {
+        contextID: RuntimeContext.ID
+    ) -> RuntimeContext.Record? {
         executionContextsByKey[
-            RuntimeExecutionContextKey(runtimeAgentTargetID: runtimeAgentTargetID, contextID: contextID)
+            RuntimeContext.Key(runtimeAgentTargetID: runtimeAgentTargetID, contextID: contextID)
         ]
     }
 
-    func uniqueExecutionContext(contextID: ExecutionContextID) -> RuntimeExecutionContextRecord? {
+    func uniqueExecutionContext(contextID: RuntimeContext.ID) -> RuntimeContext.Record? {
         let matches = executionContextsByKey.values.filter { $0.id == contextID }
         return matches.count == 1 ? matches[0] : nil
     }

@@ -2,7 +2,7 @@ import Foundation
 import WebInspectorTransport
 
 package struct RuntimeProtocolCommands {
-    package func command(for intent: RuntimeCommandIntent) throws -> ProtocolCommand {
+    package func command(for intent: RuntimeCommand.Intent) throws -> ProtocolCommand {
         switch intent {
         case let .enable(targetID):
             return ProtocolCommand(domain: .runtime, method: "Runtime.enable", routing: .target(targetID))
@@ -99,27 +99,27 @@ package struct RuntimeProtocolCommands {
         }
     }
 
-    package func evaluationResult(from result: ProtocolCommand.Result) throws -> RuntimeEvaluationResultPayload {
-        try TransportMessageParser.decode(RuntimeEvaluationResultPayload.self, from: result.resultData)
+    package func evaluationResult(from result: ProtocolCommand.Result) throws -> RuntimeEvaluation.ResultPayload {
+        try TransportMessageParser.decode(RuntimeEvaluation.ResultPayload.self, from: result.resultData)
     }
 
-    package func previewResult(from result: ProtocolCommand.Result) throws -> RuntimePreviewResultPayload {
-        try TransportMessageParser.decode(RuntimePreviewResultPayload.self, from: result.resultData)
+    package func previewResult(from result: ProtocolCommand.Result) throws -> RuntimeRemoteObject.Preview.ResultPayload {
+        try TransportMessageParser.decode(RuntimeRemoteObject.Preview.ResultPayload.self, from: result.resultData)
     }
 
-    package func propertiesResult(from result: ProtocolCommand.Result) throws -> RuntimePropertiesResultPayload {
-        try TransportMessageParser.decode(RuntimePropertiesResultPayload.self, from: result.resultData)
+    package func propertiesResult(from result: ProtocolCommand.Result) throws -> RuntimeRemoteObject.PropertiesResultPayload {
+        try TransportMessageParser.decode(RuntimeRemoteObject.PropertiesResultPayload.self, from: result.resultData)
     }
 
-    package func collectionEntriesResult(from result: ProtocolCommand.Result) throws -> RuntimeCollectionEntriesResultPayload {
-        try TransportMessageParser.decode(RuntimeCollectionEntriesResultPayload.self, from: result.resultData)
+    package func collectionEntriesResult(from result: ProtocolCommand.Result) throws -> RuntimeRemoteObject.CollectionEntriesResultPayload {
+        try TransportMessageParser.decode(RuntimeRemoteObject.CollectionEntriesResultPayload.self, from: result.resultData)
     }
 
-    package func saveResult(from result: ProtocolCommand.Result) throws -> RuntimeSaveResultPayload {
-        try TransportMessageParser.decode(RuntimeSaveResultPayload.self, from: result.resultData)
+    package func saveResult(from result: ProtocolCommand.Result) throws -> RuntimeEvaluation.SaveResultPayload {
+        try TransportMessageParser.decode(RuntimeEvaluation.SaveResultPayload.self, from: result.resultData)
     }
 
-    private func evaluationParameters(_ request: RuntimeEvaluationRequest) -> [String: Any] {
+    private func evaluationParameters(_ request: RuntimeEvaluation.Request) -> [String: Any] {
         var parameters: [String: Any] = [
             "expression": request.expression,
         ]
@@ -151,7 +151,7 @@ package struct RuntimeProtocolCommands {
     }
 
     private func objectParameters(
-        _ object: RuntimeRemoteObjectIdentifierKey,
+        _ object: RuntimeRemoteObject.ID,
         ownProperties: Bool? = nil,
         fetchStart: Int? = nil,
         fetchCount: Int? = nil,
@@ -182,8 +182,8 @@ package struct RuntimeProtocolCommands {
 
 @MainActor
 package protocol RuntimeProtocolEventHandler: AnyObject {
-    func runtimeExecutionContextCreated(_ record: RuntimeExecutionContextRecord)
-    func runtimeExecutionContextDestroyed(_ key: RuntimeExecutionContextKey)
+    func runtimeExecutionContextCreated(_ record: RuntimeContext.Record)
+    func runtimeExecutionContextDestroyed(_ key: RuntimeContext.Key)
     func runtimeExecutionContextsCleared(runtimeAgentTargetID: ProtocolTarget.ID)
 }
 
@@ -205,7 +205,7 @@ package final class RuntimeProtocolEventDispatcher: ProtocolDomainEventDispatche
         switch event.method {
         case "Runtime.executionContextCreated":
             let params = try TransportMessageParser.decode(ExecutionContextCreatedParams.self, from: event.paramsData)
-            let record = RuntimeExecutionContextRecord(
+            let record = RuntimeContext.Record(
                 id: params.context.id,
                 targetID: targetID,
                 runtimeAgentTargetID: event.sourceTargetID ?? targetID,
@@ -218,7 +218,7 @@ package final class RuntimeProtocolEventDispatcher: ProtocolDomainEventDispatche
             }
         case "Runtime.executionContextDestroyed":
             let params = try TransportMessageParser.decode(ExecutionContextDestroyedParams.self, from: event.paramsData)
-            let key = RuntimeExecutionContextKey(
+            let key = RuntimeContext.Key(
                 runtimeAgentTargetID: event.sourceTargetID ?? targetID,
                 contextID: params.executionContextId
             )
@@ -237,11 +237,11 @@ package final class RuntimeProtocolEventDispatcher: ProtocolDomainEventDispatche
 }
 
 extension RuntimeState: RuntimeProtocolEventHandler {
-    package func runtimeExecutionContextCreated(_ record: RuntimeExecutionContextRecord) {
+    package func runtimeExecutionContextCreated(_ record: RuntimeContext.Record) {
         applyExecutionContextCreated(record)
     }
 
-    package func runtimeExecutionContextDestroyed(_ key: RuntimeExecutionContextKey) {
+    package func runtimeExecutionContextDestroyed(_ key: RuntimeContext.Key) {
         applyExecutionContextDestroyed(key)
     }
 
@@ -251,9 +251,9 @@ extension RuntimeState: RuntimeProtocolEventHandler {
 }
 
 private struct ExecutionContextCreatedParams: Decodable {
-    var context: RuntimeExecutionContextPayload
+    var context: RuntimeExecutionContext.Payload
 }
 
 private struct ExecutionContextDestroyedParams: Decodable {
-    var executionContextId: ExecutionContextID
+    var executionContextId: RuntimeContext.ID
 }

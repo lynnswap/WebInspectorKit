@@ -26,7 +26,7 @@ func consoleProtocolDispatchingBuildsCommandsAndDecodesLoggingChannels() throws 
         resultData: Data(#"{"channels":[{"source":"network","level":"verbose"}]}"#.utf8)
     )
     #expect(try ConsoleProtocolCommands().loggingChannels(from: result) == [
-        ConsoleLoggingChannelPayload(source: .network, level: .verbose),
+        ConsoleLoggingChannel.Payload(source: .network, level: .verbose),
     ])
 }
 
@@ -63,7 +63,7 @@ func consoleProtocolDispatchingAppliesTargetScopedConsoleEvents() async throws {
     #expect(messageID.targetID == targetID)
     #expect(message.level == .error)
     #expect(message.repeatCount == 4)
-    #expect(message.parameters.first?.objectID == RuntimeRemoteObjectIdentifier("object-1"))
+    #expect(message.parameters.first?.objectID == RuntimeRemoteObject.ProtocolID("object-1"))
     #expect(message.networkRequestKey == NetworkRequest.ID(targetID: targetID, requestID: .init("request-1")))
     #expect(snapshot.errorCount == 4)
 

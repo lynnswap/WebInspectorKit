@@ -1,46 +1,45 @@
 import Observation
 import WebInspectorTransport
 
-package struct ConsoleMessageIdentifier: Hashable, Sendable, Comparable {
-    package var targetID: ProtocolTarget.ID
-    package var ordinal: UInt64
+extension ConsoleMessage {
+    package struct ID: Hashable, Sendable, Comparable {        package var targetID: ProtocolTarget.ID
+        package var ordinal: UInt64
 
-    package init(targetID: ProtocolTarget.ID, ordinal: UInt64) {
-        self.targetID = targetID
-        self.ordinal = ordinal
-    }
-
-    package static func < (lhs: ConsoleMessageIdentifier, rhs: ConsoleMessageIdentifier) -> Bool {
-        if lhs.ordinal == rhs.ordinal {
-            return lhs.targetID.rawValue < rhs.targetID.rawValue
+        package init(targetID: ProtocolTarget.ID, ordinal: UInt64) {
+            self.targetID = targetID
+            self.ordinal = ordinal
         }
-        return lhs.ordinal < rhs.ordinal
+
+        package static func < (lhs: ConsoleMessage.ID, rhs: ConsoleMessage.ID) -> Bool {
+            if lhs.ordinal == rhs.ordinal {
+                return lhs.targetID.rawValue < rhs.targetID.rawValue
+            }
+            return lhs.ordinal < rhs.ordinal
+        }
     }
 }
 
 @MainActor
 @Observable
 package final class ConsoleMessage {
-    package typealias ID = ConsoleMessageIdentifier
-
     package let id: ID
-    package var source: ConsoleMessageSource
-    package var level: ConsoleMessageLevel
+    package var source: ConsoleMessage.Source
+    package var level: ConsoleMessage.Level
     package var text: String
-    package var type: ConsoleMessageType?
+    package var type: ConsoleMessage.Kind?
     package var url: String?
     package var line: Int?
     package var column: Int?
     package var repeatCount: Int
     package var parameters: [RuntimeRemoteObject]
-    package var stackTrace: ConsoleStackTracePayload?
+    package var stackTrace: ConsoleMessage.StackTracePayload?
     package var networkRequestKey: NetworkRequest.ID?
     package var timestamp: Double?
 
     package init(
         id: ID,
         targetID: ProtocolTarget.ID,
-        payload: ConsoleMessagePayload,
+        payload: ConsoleMessage.Payload,
         parameters: [RuntimeRemoteObject]? = nil
     ) {
         self.id = id
@@ -65,7 +64,7 @@ package final class ConsoleMessage {
     }
 
     private static func parameterObjects(
-        from payloads: [RuntimeRemoteObjectPayload],
+        from payloads: [RuntimeRemoteObject.Payload],
         targetID: ProtocolTarget.ID
     ) -> [RuntimeRemoteObject] {
         payloads.map { payload in
@@ -78,130 +77,133 @@ package final class ConsoleMessage {
     }
 }
 
-package struct ConsoleMessageSnapshot: Equatable, Sendable {
-    package var id: ConsoleMessageIdentifier
-    package var source: ConsoleMessageSource
-    package var level: ConsoleMessageLevel
-    package var text: String
-    package var type: ConsoleMessageType?
-    package var url: String?
-    package var line: Int?
-    package var column: Int?
-    package var repeatCount: Int
-    package var parameters: [RuntimeRemoteObjectPayload]
-    package var stackTrace: ConsoleStackTracePayload?
-    package var networkRequestKey: NetworkRequest.ID?
-    package var timestamp: Double?
+extension ConsoleMessage {
+    package struct Snapshot: Equatable, Sendable {        package var id: ConsoleMessage.ID
+        package var source: ConsoleMessage.Source
+        package var level: ConsoleMessage.Level
+        package var text: String
+        package var type: ConsoleMessage.Kind?
+        package var url: String?
+        package var line: Int?
+        package var column: Int?
+        package var repeatCount: Int
+        package var parameters: [RuntimeRemoteObject.Payload]
+        package var stackTrace: ConsoleMessage.StackTracePayload?
+        package var networkRequestKey: NetworkRequest.ID?
+        package var timestamp: Double?
+    }
 }
 
-package struct ConsoleSessionSnapshot: Equatable, Sendable {
-    package var orderedMessageIDs: [ConsoleMessageIdentifier]
-    package var messagesByID: [ConsoleMessageIdentifier: ConsoleMessageSnapshot]
-    package var warningCount: Int
-    package var errorCount: Int
-    package var warningCountByTargetID: [ProtocolTarget.ID: Int]
-    package var errorCountByTargetID: [ProtocolTarget.ID: Int]
-    package var lastClearReasonByTargetID: [ProtocolTarget.ID: ConsoleClearReason]
-    package var unsupportedCommandsByTargetID: [ProtocolTarget.ID: Set<String>]
+extension ConsoleSession {
+    package struct Snapshot: Equatable, Sendable {        package var orderedMessageIDs: [ConsoleMessage.ID]
+        package var messagesByID: [ConsoleMessage.ID: ConsoleMessage.Snapshot]
+        package var warningCount: Int
+        package var errorCount: Int
+        package var warningCountByTargetID: [ProtocolTarget.ID: Int]
+        package var errorCountByTargetID: [ProtocolTarget.ID: Int]
+        package var lastClearReasonByTargetID: [ProtocolTarget.ID: ConsoleSession.ClearReason]
+        package var unsupportedCommandsByTargetID: [ProtocolTarget.ID: Set<String>]
+    }
 }
 
-@MainActor
-@Observable
-package final class ConsoleTargetState {
-    package let targetID: ProtocolTarget.ID
-    private var messageStore: ConsoleMessageStore
-    package private(set) var lastClearReason: ConsoleClearReason?
-    private var unsupportedCommands: Set<String>
+extension ConsoleSession {
+    @MainActor
+    @Observable
+    package final class TargetState {        package let targetID: ProtocolTarget.ID
+        private var messageStore: ConsoleSession.MessageStore
+        package private(set) var lastClearReason: ConsoleSession.ClearReason?
+        private var unsupportedCommands: Set<String>
 
-    init(targetID: ProtocolTarget.ID) {
-        self.targetID = targetID
-        messageStore = ConsoleMessageStore()
-        lastClearReason = nil
-        unsupportedCommands = []
-    }
-
-    package var warningCount: Int {
-        messageStore.warningCount
-    }
-
-    package var errorCount: Int {
-        messageStore.errorCount
-    }
-
-    package var orderedMessageIDs: [ConsoleMessageIdentifier] {
-        messageStore.orderedMessageIDs
-    }
-
-    package var messages: [ConsoleMessage] {
-        messageStore.messages
-    }
-
-    package func message(for id: ConsoleMessageIdentifier) -> ConsoleMessage? {
-        messageStore.message(for: id)
-    }
-
-    func append(
-        _ payload: ConsoleMessagePayload,
-        ordinal: UInt64,
-        parameters: [RuntimeRemoteObject]? = nil
-    ) -> ConsoleMessageIdentifier {
-        let id = ConsoleMessageIdentifier(targetID: targetID, ordinal: ordinal)
-        let message = ConsoleMessage(id: id, targetID: targetID, payload: payload, parameters: parameters)
-        messageStore.append(message, canRepeat: payload.type != .clear)
-        return id
-    }
-
-    func updateRepeatCount(count: Int, timestamp: Double?) {
-        messageStore.updateLastRepeatCount(count: count, timestamp: timestamp)
-    }
-
-    func clearMessages(reason: ConsoleClearReason) {
-        lastClearReason = reason
-        messageStore.removeAll()
-    }
-
-    func retargeted(to newTargetID: ProtocolTarget.ID) -> ConsoleTargetState {
-        let nextState = ConsoleTargetState(targetID: newTargetID)
-        nextState.lastClearReason = lastClearReason
-        nextState.unsupportedCommands = unsupportedCommands
-        nextState.messageStore = messageStore.retargeted(to: newTargetID)
-        return nextState
-    }
-
-    func mergeCommittedState(_ committedState: ConsoleTargetState) {
-        messageStore.mergeCommittedStore(committedState.messageStore)
-        if let lastClearReason = committedState.lastClearReason {
-            self.lastClearReason = lastClearReason
+        init(targetID: ProtocolTarget.ID) {
+            self.targetID = targetID
+            messageStore = ConsoleSession.MessageStore()
+            lastClearReason = nil
+            unsupportedCommands = []
         }
-        unsupportedCommands.formUnion(committedState.unsupportedCommands)
-    }
 
-    func markCommandUnsupported(_ method: String) {
-        unsupportedCommands.insert(method)
-    }
+        package var warningCount: Int {
+            messageStore.warningCount
+        }
 
-    func supportsCommand(_ method: String) -> Bool {
-        unsupportedCommands.contains(method) == false
-    }
+        package var errorCount: Int {
+            messageStore.errorCount
+        }
 
-    fileprivate var messageSnapshotEntries: [(ConsoleMessageIdentifier, ConsoleMessageSnapshot)] {
-        messageStore.messageSnapshotEntries
-    }
+        package var orderedMessageIDs: [ConsoleMessage.ID] {
+            messageStore.orderedMessageIDs
+        }
 
-    fileprivate var unsupportedCommandSnapshot: Set<String> {
-        unsupportedCommands
+        package var messages: [ConsoleMessage] {
+            messageStore.messages
+        }
+
+        package func message(for id: ConsoleMessage.ID) -> ConsoleMessage? {
+            messageStore.message(for: id)
+        }
+
+        func append(
+            _ payload: ConsoleMessage.Payload,
+            ordinal: UInt64,
+            parameters: [RuntimeRemoteObject]? = nil
+        ) -> ConsoleMessage.ID {
+            let id = ConsoleMessage.ID(targetID: targetID, ordinal: ordinal)
+            let message = ConsoleMessage(id: id, targetID: targetID, payload: payload, parameters: parameters)
+            messageStore.append(message, canRepeat: payload.type != .clear)
+            return id
+        }
+
+        func updateRepeatCount(count: Int, timestamp: Double?) {
+            messageStore.updateLastRepeatCount(count: count, timestamp: timestamp)
+        }
+
+        func clearMessages(reason: ConsoleSession.ClearReason) {
+            lastClearReason = reason
+            messageStore.removeAll()
+        }
+
+        func retargeted(to newTargetID: ProtocolTarget.ID) -> ConsoleSession.TargetState {
+            let nextState = ConsoleSession.TargetState(targetID: newTargetID)
+            nextState.lastClearReason = lastClearReason
+            nextState.unsupportedCommands = unsupportedCommands
+            nextState.messageStore = messageStore.retargeted(to: newTargetID)
+            return nextState
+        }
+
+        func mergeCommittedState(_ committedState: ConsoleSession.TargetState) {
+            messageStore.mergeCommittedStore(committedState.messageStore)
+            if let lastClearReason = committedState.lastClearReason {
+                self.lastClearReason = lastClearReason
+            }
+            unsupportedCommands.formUnion(committedState.unsupportedCommands)
+        }
+
+        func markCommandUnsupported(_ method: String) {
+            unsupportedCommands.insert(method)
+        }
+
+        func supportsCommand(_ method: String) -> Bool {
+            unsupportedCommands.contains(method) == false
+        }
+
+        fileprivate var messageSnapshotEntries: [(ConsoleMessage.ID, ConsoleMessage.Snapshot)] {
+            messageStore.messageSnapshotEntries
+        }
+
+        fileprivate var unsupportedCommandSnapshot: Set<String> {
+            unsupportedCommands
+        }
     }
 }
 
 @MainActor
 private struct ConsoleTargetRegistry {
-    private var statesByID: [ProtocolTarget.ID: ConsoleTargetState] = [:]
+    private var statesByID: [ProtocolTarget.ID: ConsoleSession.TargetState] = [:]
 
-    var targetStates: [ConsoleTargetState] {
+    var targetStates: [ConsoleSession.TargetState] {
         statesByID.values.sorted { $0.targetID.rawValue < $1.targetID.rawValue }
     }
 
-    var orderedMessageIDs: [ConsoleMessageIdentifier] {
+    var orderedMessageIDs: [ConsoleMessage.ID] {
         statesByID.values.flatMap(\.orderedMessageIDs).sorted()
     }
 
@@ -221,19 +223,19 @@ private struct ConsoleTargetRegistry {
         statesByID.removeAll()
     }
 
-    func targetState(for targetID: ProtocolTarget.ID) -> ConsoleTargetState? {
+    func targetState(for targetID: ProtocolTarget.ID) -> ConsoleSession.TargetState? {
         statesByID[targetID]
     }
 
-    func message(for id: ConsoleMessageIdentifier) -> ConsoleMessage? {
+    func message(for id: ConsoleMessage.ID) -> ConsoleMessage? {
         statesByID[id.targetID]?.message(for: id)
     }
 
-    mutating func ensureTargetState(for targetID: ProtocolTarget.ID) -> ConsoleTargetState {
+    mutating func ensureTargetState(for targetID: ProtocolTarget.ID) -> ConsoleSession.TargetState {
         if let state = statesByID[targetID] {
             return state
         }
-        let state = ConsoleTargetState(targetID: targetID)
+        let state = ConsoleSession.TargetState(targetID: targetID)
         statesByID[targetID] = state
         return state
     }
@@ -270,13 +272,13 @@ private struct ConsoleTargetRegistry {
         )
     }
 
-    func messageSnapshotEntries() -> [(ConsoleMessageIdentifier, ConsoleMessageSnapshot)] {
+    func messageSnapshotEntries() -> [(ConsoleMessage.ID, ConsoleMessage.Snapshot)] {
         statesByID.values.flatMap { state in
             state.messageSnapshotEntries
         }
     }
 
-    func lastClearReasonByTargetID() -> [ProtocolTarget.ID: ConsoleClearReason] {
+    func lastClearReasonByTargetID() -> [ProtocolTarget.ID: ConsoleSession.ClearReason] {
         Dictionary(
             uniqueKeysWithValues: statesByID.values.compactMap { state in
                 state.lastClearReason.map { (state.targetID, $0) }
@@ -336,13 +338,13 @@ package final class ConsoleSession {
     }
 
     @discardableResult
-    package func perform(_ intent: ConsoleCommandIntent) async throws -> ProtocolCommand.Result {
+    package func perform(_ intent: ConsoleCommand.Intent) async throws -> ProtocolCommand.Result {
         try await perform(intent, requiresActiveConnection: true)
     }
 
     @discardableResult
     private func perform(
-        _ intent: ConsoleCommandIntent,
+        _ intent: ConsoleCommand.Intent,
         requiresActiveConnection: Bool
     ) async throws -> ProtocolCommand.Result {
         let commandChannel = try requireCommandChannel(requiresActiveConnection: requiresActiveConnection)
@@ -367,21 +369,21 @@ package final class ConsoleSession {
         targetRegistry.messages
     }
 
-    package var targetStates: [ConsoleTargetState] {
+    package var targetStates: [ConsoleSession.TargetState] {
         targetRegistry.targetStates
     }
 
-    package func targetState(for targetID: ProtocolTarget.ID) -> ConsoleTargetState? {
+    package func targetState(for targetID: ProtocolTarget.ID) -> ConsoleSession.TargetState? {
         targetRegistry.targetState(for: targetID)
     }
 
-    package func message(for id: ConsoleMessageIdentifier) -> ConsoleMessage? {
+    package func message(for id: ConsoleMessage.ID) -> ConsoleMessage? {
         targetRegistry.message(for: id)
     }
 
-    package func snapshot() -> ConsoleSessionSnapshot {
+    package func snapshot() -> ConsoleSession.Snapshot {
         let orderedMessageIDs = orderedMessageIDs
-        return ConsoleSessionSnapshot(
+        return ConsoleSession.Snapshot(
             orderedMessageIDs: orderedMessageIDs,
             messagesByID: Dictionary(
                 uniqueKeysWithValues: targetRegistry.messageSnapshotEntries()
@@ -397,10 +399,10 @@ package final class ConsoleSession {
 
     @discardableResult
     package func applyMessageAdded(
-        _ payload: ConsoleMessagePayload,
+        _ payload: ConsoleMessage.Payload,
         targetID: ProtocolTarget.ID,
         parameters: [RuntimeRemoteObject]? = nil
-    ) -> ConsoleMessageIdentifier {
+    ) -> ConsoleMessage.ID {
         nextMessageOrdinal &+= 1
         let state = targetRegistry.ensureTargetState(for: targetID)
         let id = state.append(payload, ordinal: nextMessageOrdinal, parameters: parameters)
@@ -416,7 +418,7 @@ package final class ConsoleSession {
         updateAggregateSeverityCounts()
     }
 
-    package func applyMessagesCleared(reason: ConsoleClearReason, targetID: ProtocolTarget.ID) {
+    package func applyMessagesCleared(reason: ConsoleSession.ClearReason, targetID: ProtocolTarget.ID) {
         let state = targetRegistry.ensureTargetState(for: targetID)
         state.clearMessages(reason: reason)
         updateAggregateSeverityCounts()
@@ -444,11 +446,11 @@ package final class ConsoleSession {
         targetRegistry.targetState(for: targetID)?.supportsCommand(method) ?? true
     }
 
-    package func enableIntent(targetID: ProtocolTarget.ID) -> ConsoleCommandIntent {
+    package func enableIntent(targetID: ProtocolTarget.ID) -> ConsoleCommand.Intent {
         .enable(targetID: targetID)
     }
 
-    private var orderedMessageIDs: [ConsoleMessageIdentifier] {
+    private var orderedMessageIDs: [ConsoleMessage.ID] {
         targetRegistry.orderedMessageIDs
     }
 

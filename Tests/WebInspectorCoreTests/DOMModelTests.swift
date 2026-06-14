@@ -86,10 +86,10 @@ func targetCommitPreservesCommittedExecutionContextWhenIDsCollide() async throws
     await session.applyTargetCreated(.init(id: oldTargetID, kind: .page, isProvisional: true), makeCurrentMainPage: true)
     await session.applyTargetCreated(.init(id: newTargetID, kind: .page))
     await session.applyExecutionContextCreated(
-        RuntimeExecutionContextRecord(id: ExecutionContextID(7), targetID: oldTargetID, name: "old")
+        RuntimeContext.Record(id: RuntimeContext.ID(7), targetID: oldTargetID, name: "old")
     )
     await session.applyExecutionContextCreated(
-        RuntimeExecutionContextRecord(id: ExecutionContextID(7), targetID: newTargetID, name: "new")
+        RuntimeContext.Record(id: RuntimeContext.ID(7), targetID: newTargetID, name: "new")
     )
 
     await session.applyTargetCommitted(oldTargetID: oldTargetID, newTargetID: newTargetID)
@@ -165,8 +165,8 @@ func targetDestroyedRemovesExecutionContextsOwnedByRuntimeAgentTarget() async th
     await session.applyTargetCreated(.init(id: pageTargetID, kind: .page, frameID: mainFrameID), makeCurrentMainPage: true)
     await session.applyTargetCreated(.init(id: frameTargetID, kind: .frame, frameID: frameID, parentFrameID: mainFrameID))
     await session.applyExecutionContextCreated(
-        RuntimeExecutionContextRecord(
-            id: ExecutionContextID(7),
+        RuntimeContext.Record(
+            id: RuntimeContext.ID(7),
             targetID: frameTargetID,
             runtimeAgentTargetID: pageTargetID,
             frameID: frameID
@@ -1735,8 +1735,8 @@ private func frameDocument(
     )
 }
 
-private func contextKey(_ runtimeAgentTargetID: ProtocolTarget.ID, _ contextID: Int) -> RuntimeExecutionContextKey {
-    RuntimeExecutionContextKey(runtimeAgentTargetID: runtimeAgentTargetID, contextID: ExecutionContextID(contextID))
+private func contextKey(_ runtimeAgentTargetID: ProtocolTarget.ID, _ contextID: Int) -> RuntimeContext.Key {
+    RuntimeContext.Key(runtimeAgentTargetID: runtimeAgentTargetID, contextID: RuntimeContext.ID(contextID))
 }
 
 private extension DOMNode.Payload {

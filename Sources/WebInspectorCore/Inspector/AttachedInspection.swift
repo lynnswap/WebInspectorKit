@@ -889,7 +889,7 @@ package final class InspectorSession {
                     && record.parentFrameID == nil
             )
         }
-        for record in snapshot.executionContextsByKey.values.sorted(by: RuntimeExecutionContextRecord.stableOrder) {
+        for record in snapshot.executionContextsByKey.values.sorted(by: RuntimeContext.Record.stableOrder) {
             dom.applyExecutionContextCreated(record)
         }
     }
@@ -898,7 +898,7 @@ package final class InspectorSession {
         for record in snapshot.targetsByID.values.sorted(by: { $0.id.rawValue < $1.id.rawValue }) {
             runtime.applyTargetCreated(record)
         }
-        for record in snapshot.executionContextsByKey.values.sorted(by: RuntimeExecutionContextRecord.stableOrder) {
+        for record in snapshot.executionContextsByKey.values.sorted(by: RuntimeContext.Record.stableOrder) {
             runtime.applyExecutionContextCreated(record)
         }
     }

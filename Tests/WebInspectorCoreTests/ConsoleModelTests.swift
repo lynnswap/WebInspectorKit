@@ -12,7 +12,7 @@ func consoleSessionAppendsMessagesUpdatesTargetScopedRepeatsAndClearsByTarget() 
     let frameTargetID = ProtocolTarget.ID("frame")
 
     let pageMessageID = session.applyMessageAdded(
-        ConsoleMessagePayload(
+        ConsoleMessage.Payload(
             source: .consoleAPI,
             level: .warning,
             text: "Repeated warning",
@@ -22,7 +22,7 @@ func consoleSessionAppendsMessagesUpdatesTargetScopedRepeatsAndClearsByTarget() 
         targetID: pageTargetID
     )
     _ = session.applyMessageAdded(
-        ConsoleMessagePayload(source: .javascript, level: .error, text: "Frame error", type: .log),
+        ConsoleMessage.Payload(source: .javascript, level: .error, text: "Frame error", type: .log),
         targetID: frameTargetID
     )
     session.applyRepeatCountUpdated(count: 3, timestamp: 42, targetID: pageTargetID)
@@ -58,7 +58,7 @@ func consoleSessionMessagesInvalidatesObserversWhenNormalMessageIsAdded() {
     }
 
     session.applyMessageAdded(
-        ConsoleMessagePayload(source: .consoleAPI, level: .log, text: "hello", type: .log),
+        ConsoleMessage.Payload(source: .consoleAPI, level: .log, text: "hello", type: .log),
         targetID: ProtocolTarget.ID("page")
     )
 
@@ -72,7 +72,7 @@ func consoleTargetStateKeepsStableObservableIdentity() throws {
     let targetID = ProtocolTarget.ID("page")
 
     session.applyMessageAdded(
-        ConsoleMessagePayload(source: .consoleAPI, level: .log, text: "first", type: .log),
+        ConsoleMessage.Payload(source: .consoleAPI, level: .log, text: "first", type: .log),
         targetID: targetID
     )
 
@@ -86,7 +86,7 @@ func consoleTargetStateKeepsStableObservableIdentity() throws {
     }
 
     session.applyMessageAdded(
-        ConsoleMessagePayload(source: .consoleAPI, level: .warning, text: "second", type: .log),
+        ConsoleMessage.Payload(source: .consoleAPI, level: .warning, text: "second", type: .log),
         targetID: targetID
     )
 
@@ -101,16 +101,16 @@ func consoleTargetStateKeepsStableObservableIdentity() throws {
 func consoleMessageParametersUseObservableRuntimeObjects() throws {
     let session = ConsoleSession()
     let targetID = ProtocolTarget.ID("page")
-    let objectID = RuntimeRemoteObjectIdentifier("console-object")
+    let objectID = RuntimeRemoteObject.ProtocolID("console-object")
 
     let messageID = session.applyMessageAdded(
-        ConsoleMessagePayload(
+        ConsoleMessage.Payload(
             source: .consoleAPI,
             level: .log,
             text: "object",
             type: .log,
             parameters: [
-                RuntimeRemoteObjectPayload(type: .object, description: "before", objectID: objectID),
+                RuntimeRemoteObject.Payload(type: .object, description: "before", objectID: objectID),
             ]
         ),
         targetID: targetID
@@ -126,9 +126,9 @@ func consoleMessageParametersUseObservableRuntimeObjects() throws {
         didChange.withLock { $0 = true }
     }
 
-    parameter.payload = RuntimeRemoteObjectPayload(type: .object, description: "after", objectID: objectID)
+    parameter.payload = RuntimeRemoteObject.Payload(type: .object, description: "after", objectID: objectID)
 
-    #expect(parameter.remoteObjectKey == RuntimeRemoteObjectIdentifierKey(runtimeAgentTargetID: targetID, objectID: objectID))
+    #expect(parameter.remoteObjectKey == RuntimeRemoteObject.ID(runtimeAgentTargetID: targetID, objectID: objectID))
     #expect(message.parameters.first === parameter)
     #expect(session.snapshot().messagesByID[messageID]?.parameters.first?.description == "after")
     #expect(didChange.withLock { $0 })
@@ -142,11 +142,11 @@ func consoleTargetCommitKeepsRepeatUpdatesPointedAtNewestMessage() throws {
     let newTargetID = ProtocolTarget.ID("page-new")
 
     let oldMessageID = session.applyMessageAdded(
-        ConsoleMessagePayload(source: .consoleAPI, level: .warning, text: "old", type: .log),
+        ConsoleMessage.Payload(source: .consoleAPI, level: .warning, text: "old", type: .log),
         targetID: oldTargetID
     )
     let newMessageID = session.applyMessageAdded(
-        ConsoleMessagePayload(source: .consoleAPI, level: .warning, text: "new", type: .log),
+        ConsoleMessage.Payload(source: .consoleAPI, level: .warning, text: "new", type: .log),
         targetID: newTargetID
     )
 
@@ -154,7 +154,7 @@ func consoleTargetCommitKeepsRepeatUpdatesPointedAtNewestMessage() throws {
     session.applyRepeatCountUpdated(count: 4, timestamp: 12, targetID: newTargetID)
 
     let snapshot = session.snapshot()
-    let retargetedOldMessageID = ConsoleMessageIdentifier(
+    let retargetedOldMessageID = ConsoleMessage.ID(
         targetID: newTargetID,
         ordinal: oldMessageID.ordinal
     )
@@ -170,16 +170,16 @@ func consoleTargetCommitPreservesDisplayParametersWithoutRekeyingStaleObjectHand
     let session = ConsoleSession()
     let oldTargetID = ProtocolTarget.ID("page-old")
     let newTargetID = ProtocolTarget.ID("page-new")
-    let objectID = RuntimeRemoteObjectIdentifier("old-agent-object")
+    let objectID = RuntimeRemoteObject.ProtocolID("old-agent-object")
 
     let oldMessageID = session.applyMessageAdded(
-        ConsoleMessagePayload(
+        ConsoleMessage.Payload(
             source: .consoleAPI,
             level: .log,
             text: "old object",
             type: .log,
             parameters: [
-                RuntimeRemoteObjectPayload(type: .object, description: "stale", objectID: objectID),
+                RuntimeRemoteObject.Payload(type: .object, description: "stale", objectID: objectID),
             ]
         ),
         targetID: oldTargetID
@@ -187,7 +187,7 @@ func consoleTargetCommitPreservesDisplayParametersWithoutRekeyingStaleObjectHand
 
     session.applyTargetCommitted(oldTargetID: oldTargetID, newTargetID: newTargetID)
 
-    let retargetedMessageID = ConsoleMessageIdentifier(
+    let retargetedMessageID = ConsoleMessage.ID(
         targetID: newTargetID,
         ordinal: oldMessageID.ordinal
     )

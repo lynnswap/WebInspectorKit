@@ -224,14 +224,14 @@ package final class DOMSession {
         reconcileSelection()
     }
 
-    package func applyExecutionContextCreated(_ context: RuntimeExecutionContextRecord) {
+    package func applyExecutionContextCreated(_ context: RuntimeContext.Record) {
         guard targetGraph.containsTarget(context.targetID) else {
             return
         }
         targetGraph.recordExecutionContext(context)
     }
 
-    package func applyExecutionContextDestroyed(_ contextKey: RuntimeExecutionContextKey) {
+    package func applyExecutionContextDestroyed(_ contextKey: RuntimeContext.Key) {
         targetGraph.removeExecutionContext(contextKey)
     }
 
@@ -240,11 +240,11 @@ package final class DOMSession {
     }
 
     package func applyExecutionContextCreated(
-        _ id: ExecutionContextID,
+        _ id: RuntimeContext.ID,
         targetID: ProtocolTarget.ID,
         frameID: DOMFrame.ID? = nil
     ) {
-        applyExecutionContextCreated(RuntimeExecutionContextRecord(id: id, targetID: targetID, frameID: frameID))
+        applyExecutionContextCreated(RuntimeContext.Record(id: id, targetID: targetID, frameID: frameID))
     }
 
     @discardableResult
