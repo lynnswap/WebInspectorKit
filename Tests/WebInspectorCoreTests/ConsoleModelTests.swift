@@ -8,8 +8,8 @@ import WebInspectorTransport
 @MainActor
 func consoleSessionAppendsMessagesUpdatesTargetScopedRepeatsAndClearsByTarget() throws {
     let session = ConsoleSession()
-    let pageTargetID = ProtocolTargetIdentifier("page")
-    let frameTargetID = ProtocolTargetIdentifier("frame")
+    let pageTargetID = ProtocolTarget.ID("page")
+    let frameTargetID = ProtocolTarget.ID("frame")
 
     let pageMessageID = session.applyMessageAdded(
         ConsoleMessagePayload(
@@ -59,7 +59,7 @@ func consoleSessionMessagesInvalidatesObserversWhenNormalMessageIsAdded() {
 
     session.applyMessageAdded(
         ConsoleMessagePayload(source: .consoleAPI, level: .log, text: "hello", type: .log),
-        targetID: ProtocolTargetIdentifier("page")
+        targetID: ProtocolTarget.ID("page")
     )
 
     #expect(didChange.withLock { $0 })
@@ -69,7 +69,7 @@ func consoleSessionMessagesInvalidatesObserversWhenNormalMessageIsAdded() {
 @MainActor
 func consoleTargetStateKeepsStableObservableIdentity() throws {
     let session = ConsoleSession()
-    let targetID = ProtocolTargetIdentifier("page")
+    let targetID = ProtocolTarget.ID("page")
 
     session.applyMessageAdded(
         ConsoleMessagePayload(source: .consoleAPI, level: .log, text: "first", type: .log),
@@ -100,7 +100,7 @@ func consoleTargetStateKeepsStableObservableIdentity() throws {
 @MainActor
 func consoleMessageParametersUseObservableRuntimeObjects() throws {
     let session = ConsoleSession()
-    let targetID = ProtocolTargetIdentifier("page")
+    let targetID = ProtocolTarget.ID("page")
     let objectID = RuntimeRemoteObjectIdentifier("console-object")
 
     let messageID = session.applyMessageAdded(
@@ -138,8 +138,8 @@ func consoleMessageParametersUseObservableRuntimeObjects() throws {
 @MainActor
 func consoleTargetCommitKeepsRepeatUpdatesPointedAtNewestMessage() throws {
     let session = ConsoleSession()
-    let oldTargetID = ProtocolTargetIdentifier("page-old")
-    let newTargetID = ProtocolTargetIdentifier("page-new")
+    let oldTargetID = ProtocolTarget.ID("page-old")
+    let newTargetID = ProtocolTarget.ID("page-new")
 
     let oldMessageID = session.applyMessageAdded(
         ConsoleMessagePayload(source: .consoleAPI, level: .warning, text: "old", type: .log),
@@ -168,8 +168,8 @@ func consoleTargetCommitKeepsRepeatUpdatesPointedAtNewestMessage() throws {
 @MainActor
 func consoleTargetCommitPreservesDisplayParametersWithoutRekeyingStaleObjectHandles() throws {
     let session = ConsoleSession()
-    let oldTargetID = ProtocolTargetIdentifier("page-old")
-    let newTargetID = ProtocolTargetIdentifier("page-new")
+    let oldTargetID = ProtocolTarget.ID("page-old")
+    let newTargetID = ProtocolTarget.ID("page-new")
     let objectID = RuntimeRemoteObjectIdentifier("old-agent-object")
 
     let oldMessageID = session.applyMessageAdded(

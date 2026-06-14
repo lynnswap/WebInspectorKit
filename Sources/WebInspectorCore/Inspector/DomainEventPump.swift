@@ -18,8 +18,8 @@ package final class DomainEventPump {
     }
 
     package func start(
-        stream: AsyncStream<ProtocolEventEnvelope>,
-        apply: @escaping @MainActor @Sendable (ProtocolEventEnvelope) async -> Void
+        stream: AsyncStream<ProtocolEvent>,
+        apply: @escaping @MainActor @Sendable (ProtocolEvent) async -> Void
     ) {
         stop()
         task = Task { @MainActor [weak self] in

@@ -109,7 +109,7 @@ package final class DOMSession {
     }
 
     package func applyTargetCreated(
-        _ record: ProtocolTargetRecord,
+        _ record: ProtocolTarget.Record,
         makeCurrentMainPage: Bool = false
     ) {
         targetGraph.upsertTarget(from: record)
@@ -510,11 +510,11 @@ package final class DOMSession {
         documentStore.currentLoadedDocumentID(for: targetID)
     }
 
-    package func targetCapabilities(for targetID: ProtocolTarget.ID) -> ProtocolTargetCapabilities {
+    package func targetCapabilities(for targetID: ProtocolTarget.ID) -> ProtocolTarget.Capabilities {
         targetGraph.targetCapabilities(for: targetID)
     }
 
-    package func targetKind(for targetID: ProtocolTarget.ID) -> ProtocolTargetKind? {
+    package func targetKind(for targetID: ProtocolTarget.ID) -> ProtocolTarget.Kind? {
         targetGraph.targetKind(for: targetID)
     }
 

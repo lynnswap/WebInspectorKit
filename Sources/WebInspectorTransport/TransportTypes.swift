@@ -67,22 +67,51 @@ package enum ProtocolDomain: Hashable, Sendable, CustomStringConvertible {
     }
 }
 
-package enum ProtocolCommandRouting: Equatable, Sendable {
-    case root
-    case target(ProtocolTargetIdentifier)
-    case octopus(pageTarget: ProtocolTargetIdentifier?)
-}
-
 package struct ProtocolCommand: Equatable, Sendable {
+    package enum Routing: Equatable, Sendable {
+        case root
+        case target(ProtocolTarget.ID)
+        case octopus(pageTarget: ProtocolTarget.ID?)
+    }
+
+    package struct Result: Equatable, Sendable {
+        package var domain: ProtocolDomain
+        package var method: String
+        package var targetID: ProtocolTarget.ID?
+        package var receivedSequence: UInt64
+        package var receivedDomainSequences: [ProtocolDomain: UInt64]
+        package var resultData: Data
+
+        package init(
+            domain: ProtocolDomain,
+            method: String,
+            targetID: ProtocolTarget.ID?,
+            receivedSequence: UInt64 = 0,
+            receivedDomainSequences: [ProtocolDomain: UInt64] = [:],
+            resultData: Data
+        ) {
+            self.domain = domain
+            self.method = method
+            self.targetID = targetID
+            self.receivedSequence = receivedSequence
+            self.receivedDomainSequences = receivedDomainSequences
+            self.resultData = resultData
+        }
+
+        package func receivedSequence(for domain: ProtocolDomain) -> UInt64 {
+            receivedDomainSequences[domain] ?? 0
+        }
+    }
+
     package var domain: ProtocolDomain
     package var method: String
-    package var routing: ProtocolCommandRouting
+    package var routing: Routing
     package var parametersData: Data
 
     package init(
         domain: ProtocolDomain,
         method: String,
-        routing: ProtocolCommandRouting,
+        routing: Routing,
         parametersData: Data = Data("{}".utf8)
     ) {
         self.domain = domain
@@ -92,41 +121,12 @@ package struct ProtocolCommand: Equatable, Sendable {
     }
 }
 
-package struct ProtocolCommandResult: Equatable, Sendable {
-    package var domain: ProtocolDomain
-    package var method: String
-    package var targetID: ProtocolTargetIdentifier?
-    package var receivedSequence: UInt64
-    package var receivedDomainSequences: [ProtocolDomain: UInt64]
-    package var resultData: Data
-
-    package init(
-        domain: ProtocolDomain,
-        method: String,
-        targetID: ProtocolTargetIdentifier?,
-        receivedSequence: UInt64 = 0,
-        receivedDomainSequences: [ProtocolDomain: UInt64] = [:],
-        resultData: Data
-    ) {
-        self.domain = domain
-        self.method = method
-        self.targetID = targetID
-        self.receivedSequence = receivedSequence
-        self.receivedDomainSequences = receivedDomainSequences
-        self.resultData = resultData
-    }
-
-    package func receivedSequence(for domain: ProtocolDomain) -> UInt64 {
-        receivedDomainSequences[domain] ?? 0
-    }
-}
-
-package struct ProtocolEventEnvelope: Equatable, Sendable {
+package struct ProtocolEvent: Equatable, Sendable {
     package var sequence: UInt64
     package var domain: ProtocolDomain
     package var method: String
-    package var targetID: ProtocolTargetIdentifier?
-    package var sourceTargetID: ProtocolTargetIdentifier?
+    package var targetID: ProtocolTarget.ID?
+    package var sourceTargetID: ProtocolTarget.ID?
     package var receivedDomainSequences: [ProtocolDomain: UInt64]
     package var paramsData: Data
 
@@ -134,8 +134,8 @@ package struct ProtocolEventEnvelope: Equatable, Sendable {
         sequence: UInt64,
         domain: ProtocolDomain,
         method: String,
-        targetID: ProtocolTargetIdentifier?,
-        sourceTargetID: ProtocolTargetIdentifier? = nil,
+        targetID: ProtocolTarget.ID?,
+        sourceTargetID: ProtocolTarget.ID? = nil,
         receivedDomainSequences: [ProtocolDomain: UInt64] = [:],
         paramsData: Data
     ) {
@@ -153,63 +153,65 @@ package struct ProtocolEventEnvelope: Equatable, Sendable {
     }
 }
 
-package struct TransportSnapshot: Equatable, Sendable {
-    package var currentMainPageTargetID: ProtocolTargetIdentifier?
-    package var targetsByID: [ProtocolTargetIdentifier: ProtocolTargetRecord]
-    package var frameTargetIDsByFrameID: [DOMFrameIdentifier: ProtocolTargetIdentifier]
-    package var executionContextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContextRecord]
-    package var pendingRootReplyIDs: [UInt64]
-    package var pendingTargetReplyKeys: [TargetReplyKey]
+package extension TransportSession {
+    struct Snapshot: Equatable, Sendable {
+        package var currentMainPageTargetID: ProtocolTarget.ID?
+        package var targetsByID: [ProtocolTarget.ID: ProtocolTarget.Record]
+        package var frameTargetIDsByFrameID: [DOMFrameIdentifier: ProtocolTarget.ID]
+        package var executionContextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContextRecord]
+        package var pendingRootReplyIDs: [UInt64]
+        package var pendingTargetReplyKeys: [ReplyKey]
 
-    package init(
-        currentMainPageTargetID: ProtocolTargetIdentifier?,
-        targetsByID: [ProtocolTargetIdentifier: ProtocolTargetRecord],
-        frameTargetIDsByFrameID: [DOMFrameIdentifier: ProtocolTargetIdentifier],
-        executionContextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContextRecord],
-        pendingRootReplyIDs: [UInt64],
-        pendingTargetReplyKeys: [TargetReplyKey]
-    ) {
-        self.currentMainPageTargetID = currentMainPageTargetID
-        self.targetsByID = targetsByID
-        self.frameTargetIDsByFrameID = frameTargetIDsByFrameID
-        self.executionContextsByKey = executionContextsByKey
-        self.pendingRootReplyIDs = pendingRootReplyIDs
-        self.pendingTargetReplyKeys = pendingTargetReplyKeys
-    }
-}
-
-package struct TransportMainPageTarget: Equatable, Sendable {
-    package var targetID: ProtocolTargetIdentifier
-    package var receivedSequence: UInt64
-
-    package init(targetID: ProtocolTargetIdentifier, receivedSequence: UInt64) {
-        self.targetID = targetID
-        self.receivedSequence = receivedSequence
-    }
-}
-
-package struct TargetReplyKey: Hashable, Comparable, Sendable {
-    package var targetID: ProtocolTargetIdentifier
-    package var commandID: UInt64
-
-    package init(targetID: ProtocolTargetIdentifier, commandID: UInt64) {
-        self.targetID = targetID
-        self.commandID = commandID
-    }
-
-    package static func < (lhs: TargetReplyKey, rhs: TargetReplyKey) -> Bool {
-        if lhs.targetID.rawValue == rhs.targetID.rawValue {
-            return lhs.commandID < rhs.commandID
+        package init(
+            currentMainPageTargetID: ProtocolTarget.ID?,
+            targetsByID: [ProtocolTarget.ID: ProtocolTarget.Record],
+            frameTargetIDsByFrameID: [DOMFrameIdentifier: ProtocolTarget.ID],
+            executionContextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContextRecord],
+            pendingRootReplyIDs: [UInt64],
+            pendingTargetReplyKeys: [ReplyKey]
+        ) {
+            self.currentMainPageTargetID = currentMainPageTargetID
+            self.targetsByID = targetsByID
+            self.frameTargetIDsByFrameID = frameTargetIDsByFrameID
+            self.executionContextsByKey = executionContextsByKey
+            self.pendingRootReplyIDs = pendingRootReplyIDs
+            self.pendingTargetReplyKeys = pendingTargetReplyKeys
         }
-        return lhs.targetID.rawValue < rhs.targetID.rawValue
     }
-}
 
-package enum TransportError: Error, Equatable, Sendable {
-    case malformedMessage
-    case missingTarget(ProtocolTargetIdentifier)
-    case missingMainPageTarget
-    case replyTimeout(method: String, targetID: ProtocolTargetIdentifier?)
-    case remoteError(method: String, targetID: ProtocolTargetIdentifier?, message: String)
-    case transportClosed
+    struct MainPageTarget: Equatable, Sendable {
+        package var targetID: ProtocolTarget.ID
+        package var receivedSequence: UInt64
+
+        package init(targetID: ProtocolTarget.ID, receivedSequence: UInt64) {
+            self.targetID = targetID
+            self.receivedSequence = receivedSequence
+        }
+    }
+
+    struct ReplyKey: Hashable, Comparable, Sendable {
+        package var targetID: ProtocolTarget.ID
+        package var commandID: UInt64
+
+        package init(targetID: ProtocolTarget.ID, commandID: UInt64) {
+            self.targetID = targetID
+            self.commandID = commandID
+        }
+
+        package static func < (lhs: ReplyKey, rhs: ReplyKey) -> Bool {
+            if lhs.targetID.rawValue == rhs.targetID.rawValue {
+                return lhs.commandID < rhs.commandID
+            }
+            return lhs.targetID.rawValue < rhs.targetID.rawValue
+        }
+    }
+
+    enum Error: Swift.Error, Equatable, Sendable {
+        case malformedMessage
+        case missingTarget(ProtocolTarget.ID)
+        case missingMainPageTarget
+        case replyTimeout(method: String, targetID: ProtocolTarget.ID?)
+        case remoteError(method: String, targetID: ProtocolTarget.ID?, message: String)
+        case transportClosed
+    }
 }

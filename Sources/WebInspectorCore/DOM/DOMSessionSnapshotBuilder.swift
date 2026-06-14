@@ -2,13 +2,13 @@ import WebInspectorTransport
 
 @MainActor
 struct DOMSessionSnapshotBuilder {
-    var currentPageTargetID: ProtocolTargetIdentifier?
+    var currentPageTargetID: ProtocolTarget.ID?
     var mainFrameID: DOMFrameIdentifier?
-    var targetSnapshots: [ProtocolTargetIdentifier: ProtocolTargetSnapshot]
-    var targetStateSnapshots: [ProtocolTargetIdentifier: DOMTargetStateSnapshot]
+    var targetSnapshots: [ProtocolTarget.ID: ProtocolTargetSnapshot]
+    var targetStateSnapshots: [ProtocolTarget.ID: DOMTargetStateSnapshot]
     var frameSnapshots: [DOMFrameIdentifier: DOMFrameSnapshot]
     var documents: [DOMDocument]
-    var frameDocumentProjections: [ProtocolTargetIdentifier: FrameDocumentProjectionSnapshot]
+    var frameDocumentProjections: [ProtocolTarget.ID: FrameDocumentProjectionSnapshot]
     var transactions: [DOMTransaction]
     var currentNodeIDByKey: [DOMNodeCurrentKey: DOMNodeIdentifier]
     var executionContextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContextRecord]

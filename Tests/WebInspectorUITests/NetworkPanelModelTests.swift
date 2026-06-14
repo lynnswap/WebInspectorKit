@@ -303,7 +303,7 @@ func displayProjectionCacheInvalidatesStatusSeverity() async throws {
 @MainActor
 func displayProjectionCacheInvalidatesSearchFields() async throws {
     let network = NetworkSession()
-    let targetID = ProtocolTargetIdentifier("page")
+    let targetID = ProtocolTarget.ID("page")
     let rawRequestID = NetworkRequestIdentifier("1")
     let requestID = network.applyRequestWillBeSent(
         targetID: targetID,
@@ -361,7 +361,7 @@ func displayProjectionCacheInvalidatesSearchFields() async throws {
 @MainActor
 func displayProjectionCacheInvalidatesWhenRawMIMETypeAppears() async throws {
     let network = NetworkSession()
-    let targetID = ProtocolTargetIdentifier("page")
+    let targetID = ProtocolTarget.ID("page")
     let rawRequestID = NetworkRequestIdentifier("1")
     let requestID = network.applyRequestWillBeSent(
         targetID: targetID,
@@ -553,7 +553,7 @@ private func applyRequest(
     statusText: String = "OK",
     timestamp: Double
 ) -> NetworkRequest.ID {
-    let targetID = ProtocolTargetIdentifier("page")
+    let targetID = ProtocolTarget.ID("page")
     let requestID = NetworkRequestIdentifier(rawRequestID)
     let key = network.applyRequestWillBeSent(
         targetID: targetID,
@@ -596,7 +596,7 @@ private func applyPendingRequest(
     timestamp: Double
 ) -> NetworkRequest.ID {
     network.applyRequestWillBeSent(
-        targetID: ProtocolTargetIdentifier("page"),
+        targetID: ProtocolTarget.ID("page"),
         requestID: NetworkRequestIdentifier(rawRequestID),
         frameID: DOMFrameIdentifier("main"),
         loaderID: "loader",

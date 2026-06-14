@@ -191,18 +191,18 @@ package struct ConsoleMessagePayload: Equatable, Sendable, Codable {
 }
 
 package enum ConsoleCommandIntent: Equatable, Sendable {
-    case enable(targetID: ProtocolTargetIdentifier)
-    case disable(targetID: ProtocolTargetIdentifier)
-    case clearMessages(targetID: ProtocolTargetIdentifier)
-    case setConsoleClearAPIEnabled(targetID: ProtocolTargetIdentifier, enabled: Bool)
-    case getLoggingChannels(targetID: ProtocolTargetIdentifier)
+    case enable(targetID: ProtocolTarget.ID)
+    case disable(targetID: ProtocolTarget.ID)
+    case clearMessages(targetID: ProtocolTarget.ID)
+    case setConsoleClearAPIEnabled(targetID: ProtocolTarget.ID, enabled: Bool)
+    case getLoggingChannels(targetID: ProtocolTarget.ID)
     case setLoggingChannelLevel(
-        targetID: ProtocolTargetIdentifier,
+        targetID: ProtocolTarget.ID,
         source: ConsoleMessageSource,
         level: ConsoleLoggingChannelLevel
     )
 
-    package var targetID: ProtocolTargetIdentifier {
+    package var targetID: ProtocolTarget.ID {
         switch self {
         case let .enable(targetID):
             targetID

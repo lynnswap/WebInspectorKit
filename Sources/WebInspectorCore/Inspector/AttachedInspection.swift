@@ -31,7 +31,7 @@ package struct InspectorSessionConfiguration: Equatable, Sendable {
 @MainActor
 private final class InspectorTargetLifecycleState {
     private(set) var isBootstrapped = false
-    private var enabledDomains: ProtocolTargetCapabilities
+    private var enabledDomains: ProtocolTarget.Capabilities
     private var runtimeConsoleEnableTask: Task<Void, Never>?
     private var runtimeConsoleEnableTaskWaiters: [CheckedContinuation<Void, Never>]
 
@@ -45,15 +45,15 @@ private final class InspectorTargetLifecycleState {
         isBootstrapped = true
     }
 
-    func markEnabled(_ domain: ProtocolTargetCapabilities) {
+    func markEnabled(_ domain: ProtocolTarget.Capabilities) {
         enabledDomains.insert(domain)
     }
 
-    func hasEnabled(_ domain: ProtocolTargetCapabilities) -> Bool {
+    func hasEnabled(_ domain: ProtocolTarget.Capabilities) -> Bool {
         enabledDomains.contains(domain)
     }
 
-    func shouldEnable(_ domain: ProtocolTargetCapabilities, capabilities: ProtocolTargetCapabilities, force: Bool = false) -> Bool {
+    func shouldEnable(_ domain: ProtocolTarget.Capabilities, capabilities: ProtocolTarget.Capabilities, force: Bool = false) -> Bool {
         capabilities.contains(domain)
             && (force || hasEnabled(domain) == false)
     }
@@ -102,11 +102,11 @@ private final class InspectorTargetLifecycleState {
 
 @MainActor
 private final class InspectorTarget {
-    let id: ProtocolTargetIdentifier
-    var kind: ProtocolTargetKind
+    let id: ProtocolTarget.ID
+    var kind: ProtocolTarget.Kind
     var frameID: DOMFrameIdentifier?
     var parentFrameID: DOMFrameIdentifier?
-    var capabilities: ProtocolTargetCapabilities
+    var capabilities: ProtocolTarget.Capabilities
     var isProvisional: Bool
     var isPaused: Bool
     private let lifecycle: InspectorTargetLifecycleState
@@ -135,7 +135,7 @@ private final class InspectorTarget {
         isPaused = snapshot.isPaused
     }
 
-    func hasDomain(_ domain: ProtocolTargetCapabilities) -> Bool {
+    func hasDomain(_ domain: ProtocolTarget.Capabilities) -> Bool {
         capabilities.contains(domain)
     }
 
@@ -143,7 +143,7 @@ private final class InspectorTarget {
         lifecycle.markBootstrapped()
     }
 
-    func markEnabled(_ domain: ProtocolTargetCapabilities) {
+    func markEnabled(_ domain: ProtocolTarget.Capabilities) {
         lifecycle.markEnabled(domain)
     }
 
@@ -189,7 +189,7 @@ private final class InspectorTarget {
 
 @MainActor
 private final class InspectorTargetRegistry {
-    private var targetsByID: [ProtocolTargetIdentifier: InspectorTarget] = [:]
+    private var targetsByID: [ProtocolTarget.ID: InspectorTarget] = [:]
 
     func sync(from snapshot: DOMSessionSnapshot) {
         let currentTargetIDs = Set(snapshot.targetsByID.keys)
@@ -201,7 +201,7 @@ private final class InspectorTargetRegistry {
         }
     }
 
-    func target(for targetID: ProtocolTargetIdentifier) -> InspectorTarget? {
+    func target(for targetID: ProtocolTarget.ID) -> InspectorTarget? {
         targetsByID[targetID]
     }
 
@@ -216,7 +216,7 @@ private final class InspectorTargetRegistry {
         return target
     }
 
-    func removeTarget(_ targetID: ProtocolTargetIdentifier) {
+    func removeTarget(_ targetID: ProtocolTarget.ID) {
         targetsByID.removeValue(forKey: targetID)?.cancelRuntimeConsoleEnableTask()
     }
 
@@ -226,7 +226,7 @@ private final class InspectorTargetRegistry {
         }
     }
 
-    func waitUntilRuntimeConsoleEnableTaskFinished(targetID: ProtocolTargetIdentifier) async -> Bool {
+    func waitUntilRuntimeConsoleEnableTaskFinished(targetID: ProtocolTarget.ID) async -> Bool {
         guard let target = targetsByID[targetID] else {
             return false
         }
@@ -622,14 +622,14 @@ package final class InspectorSession {
         return await eventPump.waitUntilApplied(sequence)
     }
 
-    package func waitUntilRuntimeConsoleEnableFinished(targetID: ProtocolTargetIdentifier) async -> Bool {
+    package func waitUntilRuntimeConsoleEnableFinished(targetID: ProtocolTarget.ID) async -> Bool {
         guard let connection else {
             return false
         }
         return await connection.targets.waitUntilRuntimeConsoleEnableTaskFinished(targetID: targetID)
     }
 
-    private func bootstrap(mainTargetID: ProtocolTargetIdentifier, connection: InspectorConnection) async throws {
+    private func bootstrap(mainTargetID: ProtocolTarget.ID, connection: InspectorConnection) async throws {
         _ = try await sendTargetCommand(domain: ProtocolDomain.inspector, method: "Inspector.enable", targetID: mainTargetID, connection: connection)
         try ensureCurrentConnection(connection)
         _ = try await sendTargetCommand(domain: ProtocolDomain.inspector, method: "Inspector.initialized", targetID: mainTargetID, connection: connection)
@@ -648,7 +648,7 @@ package final class InspectorSession {
             domain: ProtocolDomain.network,
             method: "Network.enable",
             targetID: mainTargetID,
-            routing: ProtocolCommandRouting.octopus(pageTarget: mainTargetID),
+            routing: ProtocolCommand.Routing.octopus(pageTarget: mainTargetID),
             connection: connection
         )
         try ensureCurrentConnection(connection)
@@ -664,15 +664,15 @@ package final class InspectorSession {
     private func sendTargetCommand(
         domain: ProtocolDomain,
         method: String,
-        targetID: ProtocolTargetIdentifier,
-        routing: ProtocolCommandRouting? = nil,
+        targetID: ProtocolTarget.ID,
+        routing: ProtocolCommand.Routing? = nil,
         connection: InspectorConnection
-    ) async throws -> ProtocolCommandResult {
+    ) async throws -> ProtocolCommand.Result {
         try await connection.transport.send(
             ProtocolCommand(
                 domain: domain,
                 method: method,
-                routing: routing ?? ProtocolCommandRouting.target(targetID)
+                routing: routing ?? ProtocolCommand.Routing.target(targetID)
             )
         )
     }
@@ -692,7 +692,7 @@ package final class InspectorSession {
         connection.eventPump = nil
     }
 
-    private func handleProtocolEvent(_ event: ProtocolEventEnvelope) async {
+    private func handleProtocolEvent(_ event: ProtocolEvent) async {
         do {
             _ = try await protocolEventDispatchers.dispatch(event)
         } catch {
@@ -701,7 +701,7 @@ package final class InspectorSession {
     }
 
     private func handleAppliedTargetEvent(
-        _ event: ProtocolEventEnvelope,
+        _ event: ProtocolEvent,
         result: TargetProtocolEventResult
     ) async {
         if let createdTarget = result.createdTarget {
@@ -716,7 +716,7 @@ package final class InspectorSession {
         if hasActiveConnection,
            let createdTarget = result.createdTarget {
             if createdTarget.kind == .frame,
-               createdTarget.capabilities.contains(ProtocolTargetCapabilities.dom) {
+               createdTarget.capabilities.contains(ProtocolTarget.Capabilities.dom) {
                 dom.startFrameTargetDocumentRequestIfNeeded(targetID: createdTarget.id, reason: "frameTargetCreated")
             }
             startRuntimeConsoleEnableIfNeeded(targetID: createdTarget.id, reason: "targetCreated")
@@ -757,7 +757,7 @@ package final class InspectorSession {
         }
     }
 
-    private func startRuntimeConsoleEnableIfNeeded(targetID: ProtocolTargetIdentifier, reason: String) {
+    private func startRuntimeConsoleEnableIfNeeded(targetID: ProtocolTarget.ID, reason: String) {
         guard hasActiveConnection,
               let connection else {
             return
@@ -787,7 +787,7 @@ package final class InspectorSession {
     }
 
     private func enableRuntimeConsoleIfNeeded(
-        targetID: ProtocolTargetIdentifier,
+        targetID: ProtocolTarget.ID,
         connection: InspectorConnection
     ) async throws {
         try Task.checkCancellation()
@@ -817,7 +817,7 @@ package final class InspectorSession {
     }
 
     private func enableConsoleAgentIfSupported(
-        targetID: ProtocolTargetIdentifier,
+        targetID: ProtocolTarget.ID,
         connection: InspectorConnection,
         force: Bool = false,
         requiresActiveConnection: Bool = true
@@ -843,14 +843,14 @@ package final class InspectorSession {
         }
     }
 
-    private func cancelRuntimeConsoleEnableTask(targetID: ProtocolTargetIdentifier) {
+    private func cancelRuntimeConsoleEnableTask(targetID: ProtocolTarget.ID) {
         guard let connection else {
             return
         }
         connection.targets.target(for: targetID)?.cancelRuntimeConsoleEnableTask()
     }
 
-    private func applyDestroyedTargetRemoval(targetID: ProtocolTargetIdentifier) {
+    private func applyDestroyedTargetRemoval(targetID: ProtocolTarget.ID) {
         cancelRuntimeConsoleEnableTask(targetID: targetID)
         runtime.applyTargetDestroyed(targetID)
         console.applyTargetDestroyed(targetID)
@@ -862,7 +862,7 @@ package final class InspectorSession {
         connection.targets.cancelRuntimeConsoleEnableTasks()
     }
 
-    private func discardConnectionTargetState(targetID: ProtocolTargetIdentifier) {
+    private func discardConnectionTargetState(targetID: ProtocolTarget.ID) {
         guard let connection else {
             return
         }
@@ -876,7 +876,7 @@ package final class InspectorSession {
         return webView
     }
 
-    private func seedDOMSession(from snapshot: TransportSnapshot) {
+    private func seedDOMSession(from snapshot: TransportSession.Snapshot) {
         for record in snapshot.targetsByID.values.sorted(by: { $0.id.rawValue < $1.id.rawValue }) {
             dom.applyTargetCreated(
                 record,
@@ -890,7 +890,7 @@ package final class InspectorSession {
         }
     }
 
-    private func seedRuntimeState(from snapshot: TransportSnapshot) {
+    private func seedRuntimeState(from snapshot: TransportSession.Snapshot) {
         for record in snapshot.targetsByID.values.sorted(by: { $0.id.rawValue < $1.id.rawValue }) {
             runtime.applyTargetCreated(record)
         }
@@ -950,7 +950,7 @@ package final class InspectorSession {
 
     private func ensureCurrentConnection(_ candidate: InspectorConnection) throws {
         guard isCurrentConnection(candidate) else {
-            throw TransportError.transportClosed
+            throw TransportSession.Error.transportClosed
         }
     }
 

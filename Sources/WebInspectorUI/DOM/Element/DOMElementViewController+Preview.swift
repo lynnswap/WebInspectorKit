@@ -9,7 +9,7 @@ import UIKit
 
 @MainActor
 private enum DOMElementViewControllerPreview {
-    private static let targetID = ProtocolTargetIdentifier("preview-page")
+    private static let targetID = ProtocolTarget.ID("preview-page")
     private static let frameID = DOMFrameIdentifier("preview-frame")
     private static let styleSheetID = CSSStyleSheetIdentifier("preview")
     private static let styleID = CSSStyleIdentifier(styleSheetID: styleSheetID, ordinal: 0)
@@ -19,7 +19,7 @@ private enum DOMElementViewControllerPreview {
     static func makeViewController() -> UINavigationController {
         let dom = DOMPreviewFixtures.makeDOMSession()
         dom.applyTargetCreated(
-            ProtocolTargetRecord(
+            ProtocolTarget.Record(
                 id: targetID,
                 kind: .page,
                 frameID: frameID,
@@ -173,7 +173,7 @@ private enum DOMElementViewControllerPreview {
 
     private actor DOMElementViewControllerPreviewTransportBackend: TransportBackend {
         private struct TargetCommand {
-            var targetID: ProtocolTargetIdentifier
+            var targetID: ProtocolTarget.ID
             var commandID: UInt64
             var method: String
             var message: String
@@ -296,7 +296,7 @@ private enum DOMElementViewControllerPreview {
         }
 
         private func sendTargetReply(
-            targetID: ProtocolTargetIdentifier,
+            targetID: ProtocolTarget.ID,
             commandID: UInt64,
             resultJSON: String
         ) {
@@ -323,7 +323,7 @@ private enum DOMElementViewControllerPreview {
                 return nil
             }
             return TargetCommand(
-                targetID: ProtocolTargetIdentifier(envelope.params.targetId),
+                targetID: ProtocolTarget.ID(envelope.params.targetId),
                 commandID: inner.id,
                 method: inner.method,
                 message: envelope.params.message

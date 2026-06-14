@@ -75,7 +75,7 @@ struct ConsoleMessageStore {
         errorCount = 0
     }
 
-    func retargeted(to newTargetID: ProtocolTargetIdentifier) -> ConsoleMessageStore {
+    func retargeted(to newTargetID: ProtocolTarget.ID) -> ConsoleMessageStore {
         var retargetedStore = ConsoleMessageStore()
         for oldID in orderedMessageIDs {
             guard let message = messagesByID[oldID] else {

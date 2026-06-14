@@ -37,7 +37,7 @@ package final class NativeInspectorBackend: TransportBackend {
     package nonisolated func sendJSONString(_ message: String) async throws {
         try await MainActor.run {
             guard let bridge else {
-                throw TransportError.transportClosed
+                throw TransportSession.Error.transportClosed
             }
             try bridge.sendJSONString(message)
         }

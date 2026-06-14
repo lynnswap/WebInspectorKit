@@ -13,7 +13,7 @@ package struct TargetRemoval: Equatable, Sendable {
 @MainActor
 @Observable
 package final class TargetGraph {
-    private var targetsByID: [ProtocolTarget.ID: ProtocolTarget]
+    private var targetsByID: [ProtocolTarget.ID: DOMTarget]
     private var framesByID: [DOMFrame.ID: DOMFrame]
     private var runtimeContexts: RuntimeContextRegistry
 
@@ -33,15 +33,15 @@ package final class TargetGraph {
         targetsByID[targetID] != nil
     }
 
-    private func target(for targetID: ProtocolTarget.ID) -> ProtocolTarget? {
+    private func target(for targetID: ProtocolTarget.ID) -> DOMTarget? {
         targetsByID[targetID]
     }
 
-    package func targetKind(for targetID: ProtocolTarget.ID) -> ProtocolTargetKind? {
+    package func targetKind(for targetID: ProtocolTarget.ID) -> ProtocolTarget.Kind? {
         targetsByID[targetID]?.kind
     }
 
-    package func targetCapabilities(for targetID: ProtocolTarget.ID) -> ProtocolTargetCapabilities {
+    package func targetCapabilities(for targetID: ProtocolTarget.ID) -> ProtocolTarget.Capabilities {
         targetsByID[targetID]?.capabilities ?? []
     }
 
@@ -60,12 +60,12 @@ package final class TargetGraph {
         return target.kind == .page && target.parentFrameID == nil
     }
 
-    package func upsertTarget(from record: ProtocolTargetRecord) {
-        let target: ProtocolTarget
+    package func upsertTarget(from record: ProtocolTarget.Record) {
+        let target: DOMTarget
         if let existingTarget = targetsByID[record.id] {
             target = existingTarget
         } else {
-            target = ProtocolTarget(
+            target = DOMTarget(
                 id: record.id,
                 kind: record.kind,
                 frameID: record.frameID,
@@ -110,11 +110,11 @@ package final class TargetGraph {
         let existingNewTarget = targetsByID[newTargetID]
         let frameID = existingNewTarget?.frameID ?? oldTarget.frameID
         let parentFrameID = existingNewTarget?.parentFrameID ?? oldTarget.parentFrameID
-        let committedTarget: ProtocolTarget
+        let committedTarget: DOMTarget
         if let existingNewTarget {
             committedTarget = existingNewTarget
         } else {
-            committedTarget = ProtocolTarget(
+            committedTarget = DOMTarget(
                 id: newTargetID,
                 kind: oldTarget.kind,
                 frameID: frameID,
@@ -219,7 +219,7 @@ package final class TargetGraph {
         attachFrameTarget(target)
     }
 
-    private func attachFrameTarget(_ target: ProtocolTarget) {
+    private func attachFrameTarget(_ target: DOMTarget) {
         guard let frameID = target.frameID else {
             return
         }

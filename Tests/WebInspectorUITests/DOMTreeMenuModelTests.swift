@@ -156,10 +156,10 @@ private struct DOMTreeMenuModelFixture {
 
 @MainActor
 private func makeMenuFixture() throws -> DOMTreeMenuModelFixture {
-    let targetID = ProtocolTargetIdentifier("page-main")
+    let targetID = ProtocolTarget.ID("page-main")
     let session = DOMSession()
     session.applyTargetCreated(
-        ProtocolTargetRecord(
+        ProtocolTarget.Record(
             id: targetID,
             kind: .page,
             frameID: DOMFrameIdentifier("main-frame")

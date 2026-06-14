@@ -54,7 +54,7 @@ package final class NetworkRequest {
     package var loaderID: String?
     package var documentURL: String?
     package var resourceType: NetworkResourceType?
-    package var originatingTargetID: ProtocolTargetIdentifier?
+    package var originatingTargetID: ProtocolTarget.ID?
     package var backendResourceIdentifier: NetworkBackendResourceIdentifier?
     package var initiator: NetworkInitiatorPayload?
     package var request: NetworkRequestPayload
@@ -85,7 +85,7 @@ package final class NetworkRequest {
         documentURL: String?,
         request: NetworkRequestPayload,
         resourceType: NetworkResourceType?,
-        originatingTargetID: ProtocolTargetIdentifier?,
+        originatingTargetID: ProtocolTarget.ID?,
         backendResourceIdentifier: NetworkBackendResourceIdentifier?,
         initiator: NetworkInitiatorPayload?,
         timestamp: Double,
@@ -158,7 +158,7 @@ package final class NetworkRequest {
         documentURL: String?,
         request: NetworkRequestPayload,
         resourceType: NetworkResourceType?,
-        originatingTargetID: ProtocolTargetIdentifier?,
+        originatingTargetID: ProtocolTarget.ID?,
         backendResourceIdentifier: NetworkBackendResourceIdentifier?,
         initiator: NetworkInitiatorPayload?,
         timestamp: Double,
@@ -283,7 +283,7 @@ package struct NetworkRequestSnapshot: Equatable, Sendable {
     package var loaderID: String?
     package var documentURL: String?
     package var resourceType: NetworkResourceType?
-    package var originatingTargetID: ProtocolTargetIdentifier?
+    package var originatingTargetID: ProtocolTarget.ID?
     package var backendResourceIdentifier: NetworkBackendResourceIdentifier?
     package var initiator: NetworkInitiatorPayload?
     package var request: NetworkRequestPayload
@@ -405,7 +405,7 @@ private struct NetworkRequestStore {
         activeRequestIDs.remove(id)
     }
 
-    mutating func closeActiveRequests(targetID: ProtocolTargetIdentifier) {
+    mutating func closeActiveRequests(targetID: ProtocolTarget.ID) {
         activeRequestIDs = activeRequestIDs.filter { $0.targetID != targetID }
     }
 
@@ -480,7 +480,7 @@ package final class NetworkSession {
     }
 
     @discardableResult
-    package func perform(_ intent: NetworkCommandIntent) async throws -> ProtocolCommandResult {
+    package func perform(_ intent: NetworkCommandIntent) async throws -> ProtocolCommand.Result {
         let commandChannel = try requireCommandChannel()
         return try await commandChannel.send(protocolCommands.command(for: intent))
     }
@@ -509,14 +509,14 @@ package final class NetworkSession {
 
     @discardableResult
     package func applyRequestWillBeSent(
-        targetID: ProtocolTargetIdentifier,
+        targetID: ProtocolTarget.ID,
         requestID: NetworkRequestIdentifier,
         frameID: DOMFrameIdentifier?,
         loaderID: String?,
         documentURL: String?,
         request: NetworkRequestPayload,
         resourceType: NetworkResourceType? = nil,
-        originatingTargetID: ProtocolTargetIdentifier? = nil,
+        originatingTargetID: ProtocolTarget.ID? = nil,
         backendResourceIdentifier: NetworkBackendResourceIdentifier? = nil,
         initiator: NetworkInitiatorPayload? = nil,
         redirectResponse: NetworkResponsePayload? = nil,
@@ -577,7 +577,7 @@ package final class NetworkSession {
     }
 
     package func applyResponseReceived(
-        targetID: ProtocolTargetIdentifier,
+        targetID: ProtocolTarget.ID,
         requestID: NetworkRequestIdentifier,
         frameID: DOMFrameIdentifier? = nil,
         loaderID: String? = nil,
@@ -602,7 +602,7 @@ package final class NetworkSession {
     }
 
     package func applyDataReceived(
-        targetID: ProtocolTargetIdentifier,
+        targetID: ProtocolTarget.ID,
         requestID: NetworkRequestIdentifier,
         dataLength: Int,
         encodedDataLength: Int,
@@ -617,7 +617,7 @@ package final class NetworkSession {
     }
 
     package func applyLoadingFinished(
-        targetID: ProtocolTargetIdentifier,
+        targetID: ProtocolTarget.ID,
         requestID: NetworkRequestIdentifier,
         timestamp: Double,
         sourceMapURL: String? = nil,
@@ -638,7 +638,7 @@ package final class NetworkSession {
     }
 
     package func applyLoadingFailed(
-        targetID: ProtocolTargetIdentifier,
+        targetID: ProtocolTarget.ID,
         requestID: NetworkRequestIdentifier,
         timestamp: Double,
         errorText: String,
@@ -654,7 +654,7 @@ package final class NetworkSession {
 
     @discardableResult
     package func applyRequestServedFromMemoryCache(
-        targetID: ProtocolTargetIdentifier,
+        targetID: ProtocolTarget.ID,
         requestID: NetworkRequestIdentifier,
         frameID: DOMFrameIdentifier,
         loaderID: String,
@@ -703,7 +703,7 @@ package final class NetworkSession {
 
     @discardableResult
     package func applyWebSocketCreated(
-        targetID: ProtocolTargetIdentifier,
+        targetID: ProtocolTarget.ID,
         requestID: NetworkRequestIdentifier,
         url: String
     ) -> NetworkRequest.ID {
@@ -735,7 +735,7 @@ package final class NetworkSession {
     }
 
     package func applyWebSocketWillSendHandshakeRequest(
-        targetID: ProtocolTargetIdentifier,
+        targetID: ProtocolTarget.ID,
         requestID: NetworkRequestIdentifier,
         timestamp: Double,
         walltime: Double,
@@ -754,7 +754,7 @@ package final class NetworkSession {
     }
 
     package func applyWebSocketHandshakeResponseReceived(
-        targetID: ProtocolTargetIdentifier,
+        targetID: ProtocolTarget.ID,
         requestID: NetworkRequestIdentifier,
         timestamp: Double,
         response: NetworkWebSocketResponsePayload
@@ -777,7 +777,7 @@ package final class NetworkSession {
     }
 
     package func applyWebSocketFrameReceived(
-        targetID: ProtocolTargetIdentifier,
+        targetID: ProtocolTarget.ID,
         requestID: NetworkRequestIdentifier,
         timestamp: Double,
         response: NetworkWebSocketFramePayload
@@ -786,7 +786,7 @@ package final class NetworkSession {
     }
 
     package func applyWebSocketFrameSent(
-        targetID: ProtocolTargetIdentifier,
+        targetID: ProtocolTarget.ID,
         requestID: NetworkRequestIdentifier,
         timestamp: Double,
         response: NetworkWebSocketFramePayload
@@ -795,7 +795,7 @@ package final class NetworkSession {
     }
 
     package func applyWebSocketFrameError(
-        targetID: ProtocolTargetIdentifier,
+        targetID: ProtocolTarget.ID,
         requestID: NetworkRequestIdentifier,
         timestamp: Double,
         errorMessage: String
@@ -808,7 +808,7 @@ package final class NetworkSession {
     }
 
     package func applyWebSocketClosed(
-        targetID: ProtocolTargetIdentifier,
+        targetID: ProtocolTarget.ID,
         requestID: NetworkRequestIdentifier,
         timestamp: Double
     ) {
@@ -821,7 +821,7 @@ package final class NetworkSession {
         requestStore.closeActive(.init(targetID: targetID, requestID: requestID))
     }
 
-    package func applyTargetDestroyed(_ targetID: ProtocolTargetIdentifier) {
+    package func applyTargetDestroyed(_ targetID: ProtocolTarget.ID) {
         requestStore.closeActiveRequests(targetID: targetID)
     }
 
@@ -851,7 +851,7 @@ package final class NetworkSession {
     }
 
     private func applyWebSocketFrame(
-        targetID: ProtocolTargetIdentifier,
+        targetID: ProtocolTarget.ID,
         requestID: NetworkRequestIdentifier,
         timestamp: Double,
         response: NetworkWebSocketFramePayload,

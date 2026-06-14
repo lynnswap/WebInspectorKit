@@ -418,7 +418,7 @@ struct ParentContainerTests {
         requestID rawRequestID: String,
         url: String
     ) -> NetworkRequest? {
-        let targetID = ProtocolTargetIdentifier("page")
+        let targetID = ProtocolTarget.ID("page")
         let requestID = NetworkRequestIdentifier(rawRequestID)
         let key = network.applyRequestWillBeSent(
             targetID: targetID,

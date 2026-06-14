@@ -3,15 +3,15 @@ import WebInspectorTransport
 
 @MainActor
 final class DOMSessionHighlightController {
-    var targetID: ProtocolTargetIdentifier?
+    var targetID: ProtocolTarget.ID?
 }
 
 @MainActor
 final class DOMSessionElementPickerController {
     final class Session {
-        let targetID: ProtocolTargetIdentifier
+        let targetID: ProtocolTarget.ID
 
-        init(targetID: ProtocolTargetIdentifier) {
+        init(targetID: ProtocolTarget.ID) {
             self.targetID = targetID
         }
     }
@@ -42,7 +42,7 @@ final class DOMSessionElementPickerController {
     private var completionSession: Session?
     private var idleWaiters: [CheckedContinuation<Void, Never>] = []
 
-    var targetID: ProtocolTargetIdentifier? {
+    var targetID: ProtocolTarget.ID? {
         phase.session?.targetID
     }
 
@@ -50,7 +50,7 @@ final class DOMSessionElementPickerController {
         phase.session != nil
     }
 
-    func begin(targetID: ProtocolTargetIdentifier) -> Session {
+    func begin(targetID: ProtocolTarget.ID) -> Session {
         let session = Session(targetID: targetID)
         phase = .enabling(session)
         return session
@@ -95,7 +95,7 @@ final class DOMSessionElementPickerController {
     }
 
     @discardableResult
-    func clear() -> ProtocolTargetIdentifier? {
+    func clear() -> ProtocolTarget.ID? {
         let targetID = phase.session?.targetID
         phase = .idle
         resumeIdleWaitersIfNeeded()
@@ -129,9 +129,9 @@ final class DOMSessionElementPickerController {
 
 @MainActor
 final class DOMSessionDocumentRequestController {
-    private var handlesByTargetID: [ProtocolTargetIdentifier: DOMSessionDocumentRequestHandle] = [:]
+    private var handlesByTargetID: [ProtocolTarget.ID: DOMSessionDocumentRequestHandle] = [:]
 
-    func activeHandle(for targetID: ProtocolTargetIdentifier) -> DOMSessionDocumentRequestHandle? {
+    func activeHandle(for targetID: ProtocolTarget.ID) -> DOMSessionDocumentRequestHandle? {
         handlesByTargetID[targetID]
     }
 
@@ -150,7 +150,7 @@ final class DOMSessionDocumentRequestController {
         handlesByTargetID.removeValue(forKey: handle.targetID)
     }
 
-    func cancel(targetID: ProtocolTargetIdentifier) {
+    func cancel(targetID: ProtocolTarget.ID) {
         let handle = handlesByTargetID.removeValue(forKey: targetID)
         handle?.cancel()
     }
@@ -163,13 +163,13 @@ final class DOMSessionDocumentRequestController {
         }
     }
 
-    func waitUntilIdle(targetID: ProtocolTargetIdentifier? = nil) async {
+    func waitUntilIdle(targetID: ProtocolTarget.ID? = nil) async {
         while let handle = activeHandle(matching: targetID) {
             await handle.wait()
         }
     }
 
-    private func activeHandle(matching targetID: ProtocolTargetIdentifier?) -> DOMSessionDocumentRequestHandle? {
+    private func activeHandle(matching targetID: ProtocolTarget.ID?) -> DOMSessionDocumentRequestHandle? {
         if let targetID {
             return handlesByTargetID[targetID]
         }
@@ -400,14 +400,14 @@ final class DOMSessionDeleteUndoController {
 
 @MainActor
 final class DOMSessionDeleteUndoState {
-    let documentTargetID: ProtocolTargetIdentifier
-    let commandTargetID: ProtocolTargetIdentifier
+    let documentTargetID: ProtocolTarget.ID
+    let commandTargetID: ProtocolTarget.ID
     var documentID: DOMDocumentIdentifier
     var actionName: String
 
     init(
-        documentTargetID: ProtocolTargetIdentifier,
-        commandTargetID: ProtocolTargetIdentifier,
+        documentTargetID: ProtocolTarget.ID,
+        commandTargetID: ProtocolTarget.ID,
         documentID: DOMDocumentIdentifier,
         actionName: String = "Delete Node"
     ) {
@@ -504,11 +504,11 @@ final class DOMSessionDeleteUndoOperationQueue {
 
 @MainActor
 final class DOMSessionDocumentRequestHandle {
-    let targetID: ProtocolTargetIdentifier
-    let targetKind: ProtocolTargetKind?
+    let targetID: ProtocolTarget.ID
+    let targetKind: ProtocolTarget.Kind?
     var task: Task<Void, Error>?
 
-    init(targetID: ProtocolTargetIdentifier, targetKind: ProtocolTargetKind?) {
+    init(targetID: ProtocolTarget.ID, targetKind: ProtocolTarget.Kind?) {
         self.targetID = targetID
         self.targetKind = targetKind
     }

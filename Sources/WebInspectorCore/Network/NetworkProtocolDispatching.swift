@@ -28,7 +28,7 @@ package struct NetworkProtocolCommands {
     }
 
     @MainActor
-    package func applyResponseBodyResult(_ result: ProtocolCommandResult, to request: NetworkRequest) throws {
+    package func applyResponseBodyResult(_ result: ProtocolCommand.Result, to request: NetworkRequest) throws {
         let payload = try TransportMessageParser.decode(ResponseBodyResult.self, from: result.resultData)
         request.applyResponseBody(
             NetworkBodyPayload(
@@ -65,7 +65,7 @@ package final class NetworkProtocolEventDispatcher: ProtocolDomainEventDispatche
 
     package var domain: ProtocolDomain { .network }
 
-    package func dispatch(_ event: ProtocolEventEnvelope) async throws {
+    package func dispatch(_ event: ProtocolEvent) async throws {
         guard event.domain == .network,
               let targetID = event.targetID,
               let session else {
@@ -212,7 +212,7 @@ private struct RequestWillBeSentParams: Decodable {
     var documentURL: String?
     var request: RequestPayload
     var type: String?
-    var targetId: ProtocolTargetIdentifier?
+    var targetId: ProtocolTarget.ID?
     var backendResourceIdentifier: NetworkBackendResourceIdentifier?
     var initiator: InitiatorPayload?
     var redirectResponse: ResponsePayload?

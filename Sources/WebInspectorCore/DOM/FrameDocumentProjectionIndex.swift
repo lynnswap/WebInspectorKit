@@ -1,4 +1,5 @@
 import Observation
+import WebInspectorTransport
 
 package struct FrameDocumentProjection: Equatable, Sendable {
     package var ownerNodeID: DOMNode.ID?

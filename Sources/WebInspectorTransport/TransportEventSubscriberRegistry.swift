@@ -1,5 +1,5 @@
 struct TransportEventSubscriberRegistry {
-    typealias Continuation = AsyncStream<ProtocolEventEnvelope>.Continuation
+    typealias Continuation = AsyncStream<ProtocolEvent>.Continuation
 
     private var nextSubscriberID: UInt64 = 0
     private var domainSubscribers: [ProtocolDomain: [UInt64: Continuation]] = [:]

@@ -1,9 +1,9 @@
 import Foundation
 
 struct TransportProvisionalTargetMessageStore: Sendable {
-    private var messagesByTargetID: [ProtocolTargetIdentifier: [ParsedProtocolMessage]] = [:]
+    private var messagesByTargetID: [ProtocolTarget.ID: [ParsedProtocolMessage]] = [:]
 
-    mutating func append(_ message: ParsedProtocolMessage, for targetID: ProtocolTargetIdentifier) {
+    mutating func append(_ message: ParsedProtocolMessage, for targetID: ProtocolTarget.ID) {
         messagesByTargetID[targetID, default: []].append(message)
     }
 
@@ -11,11 +11,11 @@ struct TransportProvisionalTargetMessageStore: Sendable {
         messagesByTargetID.removeAll()
     }
 
-    mutating func removeTarget(_ targetID: ProtocolTargetIdentifier) {
+    mutating func removeTarget(_ targetID: ProtocolTarget.ID) {
         messagesByTargetID.removeValue(forKey: targetID)
     }
 
-    mutating func retargetMessages(from oldTargetID: ProtocolTargetIdentifier, to newTargetID: ProtocolTargetIdentifier) {
+    mutating func retargetMessages(from oldTargetID: ProtocolTarget.ID, to newTargetID: ProtocolTarget.ID) {
         guard oldTargetID != newTargetID,
               let messages = messagesByTargetID.removeValue(forKey: oldTargetID),
               messages.isEmpty == false else {
@@ -24,7 +24,7 @@ struct TransportProvisionalTargetMessageStore: Sendable {
         messagesByTargetID[newTargetID, default: []].append(contentsOf: messages)
     }
 
-    mutating func takeMessages(for targetID: ProtocolTargetIdentifier) -> [ParsedProtocolMessage] {
+    mutating func takeMessages(for targetID: ProtocolTarget.ID) -> [ParsedProtocolMessage] {
         messagesByTargetID.removeValue(forKey: targetID) ?? []
     }
 }

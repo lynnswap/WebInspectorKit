@@ -4,7 +4,7 @@ import WebInspectorTransport
 @MainActor
 final class CSSStyleRefreshCoordinator {
     private enum RefreshCommandResult: Sendable {
-        case success(ProtocolCommandResult)
+        case success(ProtocolCommand.Result)
         case failure(RefreshCommandFailure)
 
         var failure: RefreshCommandFailure? {
@@ -14,7 +14,7 @@ final class CSSStyleRefreshCoordinator {
             return failure
         }
 
-        func requireSuccess() throws -> ProtocolCommandResult {
+        func requireSuccess() throws -> ProtocolCommand.Result {
             switch self {
             case let .success(result):
                 return result
@@ -26,14 +26,14 @@ final class CSSStyleRefreshCoordinator {
 
     private enum RefreshCommandFailure: Error, Sendable {
         case cancellation
-        case transport(TransportError)
+        case transport(TransportSession.Error)
         case inspector(InspectorSessionError)
         case other(String)
 
         init(_ error: any Error) {
             if error is CancellationError {
                 self = .cancellation
-            } else if let error = error as? TransportError {
+            } else if let error = error as? TransportSession.Error {
                 self = .transport(error)
             } else if let error = error as? InspectorSessionError {
                 self = .inspector(error)
@@ -79,7 +79,7 @@ final class CSSStyleRefreshCoordinator {
     }
 
     @discardableResult
-    func perform(_ intent: CSSCommandIntent) async throws -> ProtocolCommandResult {
+    func perform(_ intent: CSSCommandIntent) async throws -> ProtocolCommand.Result {
         let commandChannel = try requireCommandChannel()
         return try await commandChannel.send(try protocolCommands.command(for: intent))
     }
@@ -96,7 +96,7 @@ final class CSSStyleRefreshCoordinator {
         }
     }
 
-    func setStyleTextResult(from result: ProtocolCommandResult) throws -> CSSStylePayload {
+    func setStyleTextResult(from result: ProtocolCommand.Result) throws -> CSSStylePayload {
         try protocolCommands.setStyleTextResult(from: result)
     }
 
@@ -135,7 +135,7 @@ final class CSSStyleRefreshCoordinator {
         }
     }
 
-    private func enableAgentForCompatibility(targetID: ProtocolTargetIdentifier) async throws {
+    private func enableAgentForCompatibility(targetID: ProtocolTarget.ID) async throws {
         let commandChannel = try requireCommandChannel()
         guard commandChannel.cssAgentShouldBeEnabledForCompatibility(targetID: targetID) else {
             return
@@ -149,7 +149,7 @@ final class CSSStyleRefreshCoordinator {
     }
 
     private func shouldRetryAfterEnablingCSSAgent(_ error: any Error) -> Bool {
-        guard case let TransportError.remoteError(method, _, message) = error,
+        guard case let TransportSession.Error.remoteError(method, _, message) = error,
               method.hasPrefix("CSS.") else {
             return false
         }

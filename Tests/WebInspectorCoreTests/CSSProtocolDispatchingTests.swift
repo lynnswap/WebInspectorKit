@@ -44,7 +44,7 @@ func cssProtocolDispatchingBuildsSetStyleTextCommand() throws {
 
 @Test
 func cssProtocolDispatchingDecodesReadAndSetStyleTextResults() throws {
-    let matched = try CSSProtocolCommands().matchedStyles(from: ProtocolCommandResult(
+    let matched = try CSSProtocolCommands().matchedStyles(from: ProtocolCommand.Result(
         domain: .css,
         method: "CSS.getMatchedStylesForNode",
         targetID: .init("page"),
@@ -70,7 +70,7 @@ func cssProtocolDispatchingDecodesReadAndSetStyleTextResults() throws {
     #expect(matched.matchedRules.first?.rule.selectorList.text == "body")
     #expect(matched.matchedRules.first?.rule.style.cssProperties.first?.status == .style)
 
-    let inline = try CSSProtocolCommands().inlineStyles(from: ProtocolCommandResult(
+    let inline = try CSSProtocolCommands().inlineStyles(from: ProtocolCommand.Result(
         domain: .css,
         method: "CSS.getInlineStylesForNode",
         targetID: .init("page"),
@@ -85,7 +85,7 @@ func cssProtocolDispatchingDecodesReadAndSetStyleTextResults() throws {
     ))
     #expect(inline.inlineStyle?.cssProperties.first?.name == "padding")
 
-    let computed = try CSSProtocolCommands().computedStyles(from: ProtocolCommandResult(
+    let computed = try CSSProtocolCommands().computedStyles(from: ProtocolCommand.Result(
         domain: .css,
         method: "CSS.getComputedStyleForNode",
         targetID: .init("page"),
@@ -93,7 +93,7 @@ func cssProtocolDispatchingDecodesReadAndSetStyleTextResults() throws {
     ))
     #expect(computed == [CSSComputedStylePropertyPayload(name: "display", value: "block")])
 
-    let setStyle = try CSSProtocolCommands().setStyleTextResult(from: ProtocolCommandResult(
+    let setStyle = try CSSProtocolCommands().setStyleTextResult(from: ProtocolCommand.Result(
         domain: .css,
         method: "CSS.setStyleText",
         targetID: .init("page"),
@@ -122,7 +122,7 @@ func cssProtocolDispatchingAppliesTargetScopedInvalidationEvents() async throws 
     )
 
     try await CSSProtocolEventDispatcher(handler: css).dispatch(
-        ProtocolEventEnvelope(
+        ProtocolEvent(
             sequence: 1,
             domain: .css,
             method: "CSS.styleSheetChanged",
@@ -148,7 +148,7 @@ func cssProtocolDispatchingAppliesTargetScopedInvalidationEvents() async throws 
     )
 
     try await CSSProtocolEventDispatcher(handler: css).dispatch(
-        ProtocolEventEnvelope(
+        ProtocolEvent(
             sequence: 2,
             domain: .css,
             method: "CSS.styleSheetChanged",
@@ -166,7 +166,7 @@ func cssProtocolDispatchingRegistersStyleSheetHeaderOffsets() async throws {
     let identity = cssIdentity()
 
     try await CSSProtocolEventDispatcher(handler: css).dispatch(
-        ProtocolEventEnvelope(
+        ProtocolEvent(
             sequence: 1,
             domain: .css,
             method: "CSS.styleSheetAdded",
@@ -215,7 +215,7 @@ func cssProtocolDispatchingRegistersStyleSheetHeaderOffsets() async throws {
 }
 
 private func cssIdentity() -> CSSNodeStyleIdentity {
-    let targetID = ProtocolTargetIdentifier("page")
+    let targetID = ProtocolTarget.ID("page")
     let documentID = DOMDocumentIdentifier(targetID: targetID, localDocumentLifetimeID: .init(1))
     return CSSNodeStyleIdentity(
         nodeID: DOMNodeIdentifier(documentID: documentID, nodeID: .init(2)),

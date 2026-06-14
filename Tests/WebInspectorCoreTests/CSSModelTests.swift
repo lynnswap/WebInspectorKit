@@ -6,25 +6,25 @@ import WebInspectorTransport
 
 @Test
 func protocolTargetCapabilitiesTreatPageTargetsAsCSSCapable() {
-    #expect(ProtocolTargetKind(protocolType: "web-page") == .page)
-    #expect(ProtocolTargetCapabilities.pageDefault.contains(.css))
-    #expect(ProtocolTargetCapabilities.pageDefault.contains(.console))
-    #expect(ProtocolTargetCapabilities.protocolDefault(for: .page).contains(.css))
-    #expect(ProtocolTargetCapabilities.protocolDefault(for: .worker).contains(.console))
-    #expect(ProtocolTargetCapabilities.protocolDefault(for: .serviceWorker).contains(.console))
-    #expect(ProtocolTargetCapabilities.protocolDefault(for: .frame).contains(.css) == false)
-    #expect(ProtocolTargetCapabilities.protocolDefault(for: .frame).contains(.console) == false)
-    #expect(ProtocolTargetCapabilities(domainNames: ["DOM", "CSS", "Console"]).contains(.css))
-    #expect(ProtocolTargetCapabilities(domainNames: ["DOM", "CSS", "Console"]).contains(.console))
-    #expect(ProtocolTargetCapabilities.resolved(for: .page, domainNames: ["DOM"]).contains(.css))
-    #expect(ProtocolTargetCapabilities.resolved(for: .page, domainNames: ["DOM"]).contains(.console))
-    #expect(ProtocolTargetCapabilities.resolved(for: .frame, domainNames: ["DOM"]).contains(.css) == false)
-    #expect(ProtocolTargetCapabilities.resolved(for: .frame, domainNames: ["DOM"]).contains(.console) == false)
+    #expect(ProtocolTarget.Kind(protocolType: "web-page") == .page)
+    #expect(ProtocolTarget.Capabilities.pageDefault.contains(.css))
+    #expect(ProtocolTarget.Capabilities.pageDefault.contains(.console))
+    #expect(ProtocolTarget.Capabilities.protocolDefault(for: .page).contains(.css))
+    #expect(ProtocolTarget.Capabilities.protocolDefault(for: .worker).contains(.console))
+    #expect(ProtocolTarget.Capabilities.protocolDefault(for: .serviceWorker).contains(.console))
+    #expect(ProtocolTarget.Capabilities.protocolDefault(for: .frame).contains(.css) == false)
+    #expect(ProtocolTarget.Capabilities.protocolDefault(for: .frame).contains(.console) == false)
+    #expect(ProtocolTarget.Capabilities(domainNames: ["DOM", "CSS", "Console"]).contains(.css))
+    #expect(ProtocolTarget.Capabilities(domainNames: ["DOM", "CSS", "Console"]).contains(.console))
+    #expect(ProtocolTarget.Capabilities.resolved(for: .page, domainNames: ["DOM"]).contains(.css))
+    #expect(ProtocolTarget.Capabilities.resolved(for: .page, domainNames: ["DOM"]).contains(.console))
+    #expect(ProtocolTarget.Capabilities.resolved(for: .frame, domainNames: ["DOM"]).contains(.css) == false)
+    #expect(ProtocolTarget.Capabilities.resolved(for: .frame, domainNames: ["DOM"]).contains(.console) == false)
 }
 
 @Test
 func selectedCSSNodeStyleIdentityRequiresElementCurrentNodeAndCSSTarget() async throws {
-    let pageTargetID = ProtocolTargetIdentifier("page")
+    let pageTargetID = ProtocolTarget.ID("page")
     let session = await DOMSession()
     await session.applyTargetCreated(
         .init(id: pageTargetID, kind: .page),
@@ -76,7 +76,7 @@ func selectedCSSNodeStyleIdentityRequiresElementCurrentNodeAndCSSTarget() async 
 @Test
 @MainActor
 func selectedNodeStylesResolvesSelectedDOMNodeThroughCSSSession() throws {
-    let pageTargetID = ProtocolTargetIdentifier("page")
+    let pageTargetID = ProtocolTarget.ID("page")
     let css = CSSSession()
     let session = DOMSession(elementStyles: css)
     session.applyTargetCreated(
@@ -1270,7 +1270,7 @@ func cssSessionRefreshDoesNotRepublishCurrentSelectedNodeStyles() throws {
 }
 
 private func cssIdentity(
-    targetID: ProtocolTargetIdentifier = ProtocolTargetIdentifier("page"),
+    targetID: ProtocolTarget.ID = ProtocolTarget.ID("page"),
     nodeRawID: Int = 2
 ) -> CSSNodeStyleIdentity {
     let documentID = DOMDocumentIdentifier(targetID: targetID, localDocumentLifetimeID: .init(1))

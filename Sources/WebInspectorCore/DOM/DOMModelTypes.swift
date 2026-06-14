@@ -3,23 +3,21 @@ import WebInspectorTransport
 
 @MainActor
 @Observable
-package final class ProtocolTarget {
-    package typealias ID = ProtocolTargetIdentifier
-
-    package let id: ID
-    package var kind: ProtocolTargetKind
+package final class DOMTarget {
+    package let id: ProtocolTarget.ID
+    package var kind: ProtocolTarget.Kind
     package var frameID: DOMFrame.ID?
     package var parentFrameID: DOMFrame.ID?
-    package var capabilities: ProtocolTargetCapabilities
+    package var capabilities: ProtocolTarget.Capabilities
     package var isProvisional: Bool
     package var isPaused: Bool
 
     package init(
-        id: ID,
-        kind: ProtocolTargetKind,
+        id: ProtocolTarget.ID,
+        kind: ProtocolTarget.Kind,
         frameID: DOMFrame.ID?,
         parentFrameID: DOMFrame.ID?,
-        capabilities: ProtocolTargetCapabilities,
+        capabilities: ProtocolTarget.Capabilities,
         isProvisional: Bool,
         isPaused: Bool
     ) {

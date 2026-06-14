@@ -3,10 +3,10 @@ import WebInspectorTransport
 
 package struct SentTargetMessage: Equatable, Sendable {
     package var message: String
-    package var targetIdentifier: ProtocolTargetIdentifier
+    package var targetIdentifier: ProtocolTarget.ID
     package var outerIdentifier: UInt64
 
-    package init(message: String, targetIdentifier: ProtocolTargetIdentifier, outerIdentifier: UInt64) {
+    package init(message: String, targetIdentifier: ProtocolTarget.ID, outerIdentifier: UInt64) {
         self.message = message
         self.targetIdentifier = targetIdentifier
         self.outerIdentifier = outerIdentifier
@@ -414,7 +414,7 @@ package actor FakeTransportBackend: TransportBackend {
 
         return SentTargetMessage(
             message: innerMessage,
-            targetIdentifier: ProtocolTargetIdentifier(targetIdentifier),
+            targetIdentifier: ProtocolTarget.ID(targetIdentifier),
             outerIdentifier: outerIdentifier
         )
     }

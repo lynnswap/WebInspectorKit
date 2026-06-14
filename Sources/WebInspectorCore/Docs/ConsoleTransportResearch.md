@@ -28,7 +28,7 @@ This note records the WebKit Console and Runtime transport behavior that
   Console events are applied to Core yet.
 - `InspectorSession` owns `dom`, `css`, and `network`, but has no
   `ConsoleSession`.
-- `ProtocolTargetCapabilities` has `.dom`, `.runtime`, `.target`,
+- `ProtocolTarget.Capabilities` has `.dom`, `.runtime`, `.target`,
   `.inspector`, `.network`, and `.css`, but no `.console`.
 - Page default capabilities currently omit Console. If `Target.targetCreated`
   does not advertise a `domains` array, Console would not be discoverable from
@@ -296,7 +296,7 @@ becomes unique with its protocol event target.
   observed fields when present. Console must follow the same rule as DOM/CSS:
   use advertised capabilities when available, and conservative defaults when
   they are absent.
-- Current `ProtocolTargetCapabilities.frameDefault` is empty. For frame Console
+- Current `ProtocolTarget.Capabilities.frameDefault` is empty. For frame Console
   support, do not default-enable frame Console unless `domains` advertises it or
   a verified target metadata path proves it for the running backend.
 - Page targets should default to Console support for legacy metadata-free
@@ -465,7 +465,7 @@ Add `ConsoleProtocolDispatching.swift`:
 - decode `Console.messageAdded`
 - decode `Console.messageRepeatCountUpdated`
 - decode `Console.messagesCleared`
-- preserve target id from `ProtocolEventEnvelope.targetID`
+- preserve target id from `ProtocolEvent.targetID`
 
 Add `RuntimeProtocolDispatching.swift`:
 
@@ -477,7 +477,7 @@ Add `RuntimeProtocolDispatching.swift`:
 - decode Runtime command results.
 - decode `Runtime.executionContextCreated`,
   `Runtime.executionContextDestroyed`, and `Runtime.executionContextsCleared`.
-- preserve `ProtocolEventEnvelope.sourceTargetID` as the Runtime agent source
+- preserve `ProtocolEvent.sourceTargetID` as the Runtime agent source
   when recording contexts and applying clear events.
 
 ### Runtime State
@@ -507,7 +507,7 @@ Observation-backed Core boundary.
 
 ### Capability Changes
 
-`ProtocolTargetCapabilities` should add:
+`ProtocolTarget.Capabilities` should add:
 
 ```swift
 package static let console = Self(rawValue: 1 << 6)
@@ -523,7 +523,7 @@ Check the `UInt8` capacity before adding further domains; bit 6 still fits.
 
 Useful tests before UI work:
 
-- `ProtocolTargetCapabilities` decodes `domains: ["Console", "Runtime"]`.
+- `ProtocolTarget.Capabilities` decodes `domains: ["Console", "Runtime"]`.
 - Metadata-free page target has Console capability.
 - Metadata-free frame target does not assume Console capability.
 - `ConsoleProtocolCommands` builds `Console.enable` as a target command.

@@ -258,7 +258,7 @@ struct NetworkDetailViewControllerTests {
     @Test
     func detailUpdatesResponseHeadersAfterSelection() async throws {
         let network = NetworkSession()
-        let targetID = ProtocolTargetIdentifier("page")
+        let targetID = ProtocolTarget.ID("page")
         let requestID = NetworkRequestIdentifier("1")
         let key = network.applyRequestWillBeSent(
             targetID: targetID,
@@ -1276,7 +1276,7 @@ struct NetworkDetailViewControllerTests {
         responseMimeType: String = "text/javascript",
         finishes: Bool = true
     ) -> NetworkRequest? {
-        let targetID = ProtocolTargetIdentifier("page")
+        let targetID = ProtocolTarget.ID("page")
         let requestID = NetworkRequestIdentifier(rawRequestID)
         let key = network.applyRequestWillBeSent(
             targetID: targetID,

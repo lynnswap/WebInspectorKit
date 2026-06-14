@@ -11,7 +11,7 @@ package actor TransportSession {
     private var nextCommandID: UInt64
     private var eventSequences: TransportEventSequenceTracker
     private var replyStore: TransportReplyStore
-    private var mainPageTargetWaiterStore: TransportMainPageTargetWaiterStore
+    private var mainPageTargetWaiterStore: TransportSession.MainPageTargetWaiterStore
     private var targetRegistry: TransportTargetRegistry
     private var provisionalTargetMessageStore: TransportProvisionalTargetMessageStore
     private var styleSheetRouting: TransportStyleSheetRouting
@@ -33,7 +33,7 @@ package actor TransportSession {
         nextCommandID = 0
         eventSequences = TransportEventSequenceTracker()
         replyStore = TransportReplyStore()
-        mainPageTargetWaiterStore = TransportMainPageTargetWaiterStore()
+        mainPageTargetWaiterStore = TransportSession.MainPageTargetWaiterStore()
         targetRegistry = TransportTargetRegistry()
         provisionalTargetMessageStore = TransportProvisionalTargetMessageStore()
         styleSheetRouting = TransportStyleSheetRouting()
@@ -43,8 +43,8 @@ package actor TransportSession {
         closed = false
     }
 
-    package func events(for domain: ProtocolDomain) -> AsyncStream<ProtocolEventEnvelope> {
-        let pair = AsyncStream<ProtocolEventEnvelope>.makeStream(bufferingPolicy: .unbounded)
+    package func events(for domain: ProtocolDomain) -> AsyncStream<ProtocolEvent> {
+        let pair = AsyncStream<ProtocolEvent>.makeStream(bufferingPolicy: .unbounded)
         let subscriberID = eventSubscribers.insert(pair.continuation, domain: domain)
         pair.continuation.onTermination = { [weak self] _ in
             Task {
@@ -54,8 +54,8 @@ package actor TransportSession {
         return pair.stream
     }
 
-    package func orderedEvents() -> AsyncStream<ProtocolEventEnvelope> {
-        let pair = AsyncStream<ProtocolEventEnvelope>.makeStream(bufferingPolicy: .unbounded)
+    package func orderedEvents() -> AsyncStream<ProtocolEvent> {
+        let pair = AsyncStream<ProtocolEvent>.makeStream(bufferingPolicy: .unbounded)
         let subscriberID = eventSubscribers.insertOrdered(pair.continuation)
         pair.continuation.onTermination = { [weak self] _ in
             Task {
@@ -65,9 +65,9 @@ package actor TransportSession {
         return pair.stream
     }
 
-    package func send(_ command: ProtocolCommand) async throws -> ProtocolCommandResult {
+    package func send(_ command: ProtocolCommand) async throws -> ProtocolCommand.Result {
         guard !closed else {
-            throw TransportError.transportClosed
+            throw TransportSession.Error.transportClosed
         }
 
         switch command.routing {
@@ -75,7 +75,7 @@ package actor TransportSession {
             return try await sendRoot(command)
         case let .target(targetID):
             guard targetRegistry.containsTarget(targetID) else {
-                throw TransportError.missingTarget(targetID)
+                throw TransportSession.Error.missingTarget(targetID)
             }
             if let result = transportLocalResult(for: command, targetID: targetID) {
                 return result
@@ -84,7 +84,7 @@ package actor TransportSession {
         case let .octopus(pageTarget):
             let resolvedTarget = try pageTarget ?? currentMainPageTarget()
             guard targetRegistry.containsTarget(resolvedTarget) else {
-                throw TransportError.missingTarget(resolvedTarget)
+                throw TransportSession.Error.missingTarget(resolvedTarget)
             }
             if let result = transportLocalResult(for: command, targetID: resolvedTarget) {
                 return result
@@ -109,10 +109,10 @@ package actor TransportSession {
         }
         closed = true
         for pending in replyStore.pendingReplies {
-            await pending.promise.fulfill(.failure(TransportError.transportClosed))
+            await pending.promise.fulfill(.failure(TransportSession.Error.transportClosed))
         }
         for waiter in mainPageTargetWaiterStore.removeAll() {
-            await waiter.fulfill(.failure(TransportError.transportClosed))
+            await waiter.fulfill(.failure(TransportSession.Error.transportClosed))
         }
         replyStore.removeAll()
         provisionalTargetMessageStore.removeAll()
@@ -120,12 +120,12 @@ package actor TransportSession {
         await backend.detach()
     }
 
-    package func waitForCurrentMainPageTarget(timeout: Duration? = nil) async throws -> TransportMainPageTarget {
+    package func waitForCurrentMainPageTarget(timeout: Duration? = nil) async throws -> TransportSession.MainPageTarget {
         guard !closed else {
-            throw TransportError.transportClosed
+            throw TransportSession.Error.transportClosed
         }
         if let currentMainPageTargetID = targetRegistry.currentMainPageTargetID {
-            return TransportMainPageTarget(
+            return TransportSession.MainPageTarget(
                 targetID: currentMainPageTargetID,
                 receivedSequence: eventSequences.current.sequence
             )
@@ -141,7 +141,7 @@ package actor TransportSession {
                 } catch {
                     return
                 }
-                await self.failMainPageTargetWaiter(waiter.id, error: TransportError.missingMainPageTarget)
+                await self.failMainPageTargetWaiter(waiter.id, error: TransportSession.Error.missingMainPageTarget)
             }
         }
         defer {
@@ -162,8 +162,8 @@ package actor TransportSession {
         }
     }
 
-    package func snapshot() -> TransportSnapshot {
-        TransportSnapshot(
+    package func snapshot() -> TransportSession.Snapshot {
+        TransportSession.Snapshot(
             currentMainPageTargetID: targetRegistry.currentMainPageTargetID,
             targetsByID: targetRegistry.targetsByID,
             frameTargetIDsByFrameID: targetRegistry.frameTargetIDsByFrameID,
@@ -173,18 +173,18 @@ package actor TransportSession {
         )
     }
 
-    package func targetIdentifier(forExecutionContext key: RuntimeExecutionContextKey) -> ProtocolTargetIdentifier? {
+    package func targetIdentifier(forExecutionContext key: RuntimeExecutionContextKey) -> ProtocolTarget.ID? {
         runtimeContextRegistry.targetID(for: key)
     }
 
-    package func targetIdentifier(forFrameID frameID: DOMFrameIdentifier) -> ProtocolTargetIdentifier? {
+    package func targetIdentifier(forFrameID frameID: DOMFrameIdentifier) -> ProtocolTarget.ID? {
         targetRegistry.targetID(forFrameID: frameID)
     }
 
-    private func sendRoot(_ command: ProtocolCommand) async throws -> ProtocolCommandResult {
+    private func sendRoot(_ command: ProtocolCommand) async throws -> ProtocolCommand.Result {
         let commandID = allocateCommandID()
-        let promise = ReplyPromise<ProtocolCommandResult>()
-        replyStore.insertRootReply(TransportPendingReply(
+        let promise = ReplyPromise<ProtocolCommand.Result>()
+        replyStore.insertRootReply(TransportSession.PendingReply(
             domain: command.domain,
             method: command.method,
             targetID: nil,
@@ -213,13 +213,13 @@ package actor TransportSession {
 
     private func sendTarget(
         _ command: ProtocolCommand,
-        targetID: ProtocolTargetIdentifier
-    ) async throws -> ProtocolCommandResult {
+        targetID: ProtocolTarget.ID
+    ) async throws -> ProtocolCommand.Result {
         let innerCommandID = allocateCommandID()
         let outerCommandID = allocateCommandID()
-        let key = TargetReplyKey(targetID: targetID, commandID: innerCommandID)
-        let promise = ReplyPromise<ProtocolCommandResult>()
-        replyStore.insertTargetReply(TransportPendingReply(
+        let key = TransportSession.ReplyKey(targetID: targetID, commandID: innerCommandID)
+        let promise = ReplyPromise<ProtocolCommand.Result>()
+        replyStore.insertTargetReply(TransportSession.PendingReply(
             domain: command.domain,
             method: command.method,
             targetID: targetID,
@@ -253,13 +253,13 @@ package actor TransportSession {
 
     private func transportLocalResult(
         for command: ProtocolCommand,
-        targetID: ProtocolTargetIdentifier
-    ) -> ProtocolCommandResult? {
+        targetID: ProtocolTarget.ID
+    ) -> ProtocolCommand.Result? {
         guard command.method == "DOM.enable" else {
             return nil
         }
         let eventSequence = eventSequences.current
-        return ProtocolCommandResult(
+        return ProtocolCommand.Result(
             domain: command.domain,
             method: command.method,
             targetID: targetID,
@@ -287,11 +287,11 @@ package actor TransportSession {
     }
 
     private func awaitReply(
-        _ promise: ReplyPromise<ProtocolCommandResult>,
-        timeout key: TransportPendingKey,
+        _ promise: ReplyPromise<ProtocolCommand.Result>,
+        timeout key: TransportSession.PendingKey,
         method: String,
-        targetID: ProtocolTargetIdentifier?
-    ) async throws -> ProtocolCommandResult {
+        targetID: ProtocolTarget.ID?
+    ) async throws -> ProtocolCommand.Result {
         let timeoutTask: Task<Void, Never>? = responseTimeout.map { responseTimeout in
             let timeoutSleep = self.timeoutSleep
             let responseTimeoutDidFire = self.responseTimeoutDidFire
@@ -303,7 +303,7 @@ package actor TransportSession {
                 }
                 await self.failPendingReplyFromTimeout(
                     key,
-                    error: TransportError.replyTimeout(method: method, targetID: targetID)
+                    error: TransportSession.Error.replyTimeout(method: method, targetID: targetID)
                 )
                 await responseTimeoutDidFire()
             }
@@ -375,7 +375,7 @@ package actor TransportSession {
         await dispatchCommittedProvisionalTargetMessagesIfNeeded(method: method, paramsData: parsed.paramsData)
     }
 
-    private func handleTargetMessage(_ parsed: ParsedProtocolMessage, targetID: ProtocolTargetIdentifier) async {
+    private func handleTargetMessage(_ parsed: ParsedProtocolMessage, targetID: ProtocolTarget.ID) async {
         if targetRegistry.target(for: targetID)?.isProvisional == true {
             markTargetReplyAsBufferedIfNeeded(parsed, targetID: targetID)
             provisionalTargetMessageStore.append(parsed, for: targetID)
@@ -383,7 +383,7 @@ package actor TransportSession {
         }
 
         if let id = parsed.id {
-            let key = TargetReplyKey(targetID: targetID, commandID: id)
+            let key = TransportSession.ReplyKey(targetID: targetID, commandID: id)
             if let pending = replyStore.removeTargetReply(for: key) {
                 await resolve(pending, parsed: parsed)
                 return
@@ -423,11 +423,11 @@ package actor TransportSession {
         )
     }
 
-    private func resolve(_ pending: TransportPendingReply, parsed: ParsedProtocolMessage) async {
+    private func resolve(_ pending: TransportSession.PendingReply, parsed: ParsedProtocolMessage) async {
         if let errorMessage = parsed.errorMessage {
             await pending.promise.fulfill(
                 .failure(
-                    TransportError.remoteError(
+                    TransportSession.Error.remoteError(
                         method: pending.method,
                         targetID: pending.targetID,
                         message: errorMessage
@@ -439,7 +439,7 @@ package actor TransportSession {
         let eventSequence = eventSequences.current
         await pending.promise.fulfill(
             .success(
-                ProtocolCommandResult(
+                ProtocolCommand.Result(
                     domain: pending.domain,
                     method: pending.method,
                     targetID: pending.targetID,
@@ -453,8 +453,8 @@ package actor TransportSession {
 
     private func updateRegistryFromRootEvent(
         method: String,
-        targetID: ProtocolTargetIdentifier?,
-        sourceTargetID: ProtocolTargetIdentifier?,
+        targetID: ProtocolTarget.ID?,
+        sourceTargetID: ProtocolTarget.ID?,
         paramsData: Data
     ) async -> [ResolvedStyleSheetAddedEvent] {
         switch method {
@@ -492,8 +492,8 @@ package actor TransportSession {
 
     private func updateRegistryFromTargetEvent(
         method: String,
-        targetID: ProtocolTargetIdentifier?,
-        sourceTargetID: ProtocolTargetIdentifier? = nil,
+        targetID: ProtocolTarget.ID?,
+        sourceTargetID: ProtocolTarget.ID? = nil,
         paramsData: Data
     ) {
         guard let targetID else {
@@ -541,18 +541,18 @@ package actor TransportSession {
         }
     }
 
-    private func applyTargetCreated(_ record: ProtocolTargetRecord) -> [ResolvedStyleSheetAddedEvent] {
+    private func applyTargetCreated(_ record: ProtocolTarget.Record) -> [ResolvedStyleSheetAddedEvent] {
         resolvePendingStyleSheets(for: targetRegistry.recordTargetCreated(record))
     }
 
-    private func record(for targetInfo: TargetInfoPayload) -> ProtocolTargetRecord {
+    private func record(for targetInfo: TargetInfoPayload) -> ProtocolTarget.Record {
         let kind = targetRegistry.targetKind(
             protocolType: targetInfo.type,
             frameID: targetInfo.frameId,
             parentFrameID: targetInfo.parentFrameId,
             isProvisional: targetInfo.isProvisional
         )
-        return ProtocolTargetRecord(
+        return ProtocolTarget.Record(
             id: targetInfo.targetId,
             kind: kind,
             frameID: targetInfo.frameId,
@@ -563,24 +563,24 @@ package actor TransportSession {
         )
     }
 
-    private func capabilities(for targetInfo: TargetInfoPayload, kind: ProtocolTargetKind) -> ProtocolTargetCapabilities {
-        ProtocolTargetCapabilities.resolved(for: kind, domainNames: targetInfo.domains)
+    private func capabilities(for targetInfo: TargetInfoPayload, kind: ProtocolTarget.Kind) -> ProtocolTarget.Capabilities {
+        ProtocolTarget.Capabilities.resolved(for: kind, domainNames: targetInfo.domains)
     }
 
-    private func applyTargetDestroyed(_ targetID: ProtocolTargetIdentifier) async {
+    private func applyTargetDestroyed(_ targetID: ProtocolTarget.ID) async {
         targetRegistry.removeTarget(targetID)
         provisionalTargetMessageStore.removeTarget(targetID)
         styleSheetRouting.removeTarget(targetID)
         runtimeContextRegistry.removeTarget(targetID)
         let pendingReplies = replyStore.removeTargetReplies(for: targetID)
         for pending in pendingReplies {
-            await pending.promise.fulfill(.failure(TransportError.missingTarget(targetID)))
+            await pending.promise.fulfill(.failure(TransportSession.Error.missingTarget(targetID)))
         }
     }
 
     private func applyTargetCommitted(
-        oldTargetID: ProtocolTargetIdentifier?,
-        newTargetID: ProtocolTargetIdentifier
+        oldTargetID: ProtocolTarget.ID?,
+        newTargetID: ProtocolTarget.ID
     ) -> [ResolvedStyleSheetAddedEvent] {
         let mutation = targetRegistry.commitTarget(oldTargetID: oldTargetID, newTargetID: newTargetID)
         if let committedOldTargetID = mutation.committedOldTargetID {
@@ -607,8 +607,8 @@ package actor TransportSession {
     }
 
     private func moveBufferedProvisionalTargetMessages(
-        from oldTargetID: ProtocolTargetIdentifier,
-        to newTargetID: ProtocolTargetIdentifier
+        from oldTargetID: ProtocolTarget.ID,
+        to newTargetID: ProtocolTarget.ID
     ) {
         provisionalTargetMessageStore.retargetMessages(from: oldTargetID, to: newTargetID)
     }
@@ -625,7 +625,7 @@ package actor TransportSession {
         }
     }
 
-    private func targetIDForRootEvent(method: String, paramsData: Data) -> ProtocolTargetIdentifier? {
+    private func targetIDForRootEvent(method: String, paramsData: Data) -> ProtocolTarget.ID? {
         switch method {
         case "Target.targetCreated":
             return (try? TransportMessageParser.decode(TargetCreatedParams.self, from: paramsData))?.targetInfo.targetId
@@ -656,8 +656,8 @@ package actor TransportSession {
 
     private func sourceTargetIDForRootEvent(
         method: String,
-        targetID: ProtocolTargetIdentifier?
-    ) -> ProtocolTargetIdentifier? {
+        targetID: ProtocolTarget.ID?
+    ) -> ProtocolTarget.ID? {
         switch ProtocolDomain(method: method) {
         case .runtime:
             return targetRegistry.currentMainPageTargetID ?? targetID
@@ -668,9 +668,9 @@ package actor TransportSession {
 
     private func targetIDForTargetEvent(
         method: String,
-        deliveredTargetID: ProtocolTargetIdentifier,
+        deliveredTargetID: ProtocolTarget.ID,
         paramsData: Data
-    ) -> ProtocolTargetIdentifier {
+    ) -> ProtocolTarget.ID {
         guard method == "Runtime.executionContextCreated",
               let frameID = (try? TransportMessageParser.decode(RuntimeExecutionContextCreatedParams.self, from: paramsData))?.context.frameId else {
             return deliveredTargetID
@@ -678,7 +678,7 @@ package actor TransportSession {
         return targetRegistry.resolvedTargetIDForRuntimeContext(deliveredTargetID: deliveredTargetID, frameID: frameID)
     }
 
-    private func targetIDForCSSStyleSheetAdded(paramsData: Data) -> ProtocolTargetIdentifier? {
+    private func targetIDForCSSStyleSheetAdded(paramsData: Data) -> ProtocolTarget.ID? {
         guard let params = try? TransportMessageParser.decode(CSSStyleSheetAddedParams.self, from: paramsData) else {
             return nil
         }
@@ -692,7 +692,7 @@ package actor TransportSession {
         return styleSheetRouting.targetID(for: params.header.styleSheetID) ?? targetRegistry.currentMainPageTargetID
     }
 
-    private func targetIDForCSSStyleSheetID(paramsData: Data) -> ProtocolTargetIdentifier? {
+    private func targetIDForCSSStyleSheetID(paramsData: Data) -> ProtocolTarget.ID? {
         guard let params = try? TransportMessageParser.decode(CSSStyleSheetIDParams.self, from: paramsData) else {
             return nil
         }
@@ -704,7 +704,7 @@ package actor TransportSession {
 
     private func updateCSSStyleSheetRegistry(
         method: String,
-        targetID: ProtocolTargetIdentifier?,
+        targetID: ProtocolTarget.ID?,
         paramsData: Data
     ) {
         switch method {
@@ -751,7 +751,7 @@ package actor TransportSession {
 
     private func resolvePendingStyleSheets(
         frameID: DOMFrameIdentifier,
-        targetID: ProtocolTargetIdentifier
+        targetID: ProtocolTarget.ID
     ) -> [ResolvedStyleSheetAddedEvent] {
         styleSheetRouting.resolvePending(frameID: frameID, targetID: targetID)
     }
@@ -770,9 +770,9 @@ package actor TransportSession {
         }
     }
 
-    private func currentMainPageTarget() throws -> ProtocolTargetIdentifier {
+    private func currentMainPageTarget() throws -> ProtocolTarget.ID {
         guard let currentMainPageTargetID = targetRegistry.currentMainPageTargetID else {
-            throw TransportError.missingMainPageTarget
+            throw TransportSession.Error.missingMainPageTarget
         }
         return currentMainPageTargetID
     }
@@ -785,12 +785,12 @@ package actor TransportSession {
     private func emit(
         domain: ProtocolDomain,
         method: String,
-        targetID: ProtocolTargetIdentifier?,
-        sourceTargetID: ProtocolTargetIdentifier? = nil,
+        targetID: ProtocolTarget.ID?,
+        sourceTargetID: ProtocolTarget.ID? = nil,
         paramsData: Data
     ) async {
         let eventSequence = eventSequences.recordEvent(domain: domain)
-        let envelope = ProtocolEventEnvelope(
+        let envelope = ProtocolEvent(
             sequence: eventSequence.sequence,
             domain: domain,
             method: method,
@@ -814,7 +814,7 @@ package actor TransportSession {
             return
         }
         let waiters = mainPageTargetWaiterStore.removeAll()
-        let result = TransportMainPageTarget(
+        let result = TransportSession.MainPageTarget(
             targetID: currentMainPageTargetID,
             receivedSequence: receivedSequence
         )
@@ -823,7 +823,7 @@ package actor TransportSession {
         }
     }
 
-    private func failMainPageTargetWaiter(_ waiterID: UInt64, error: any Error) async {
+    private func failMainPageTargetWaiter(_ waiterID: UInt64, error: any Swift.Error) async {
         let waiter = mainPageTargetWaiterStore.remove(id: waiterID)
         await waiter?.fulfill(.failure(error))
     }
@@ -836,12 +836,12 @@ package actor TransportSession {
         eventSubscribers.removeOrdered(subscriberID)
     }
 
-    private func removePendingReply(_ key: TransportPendingKey) {
+    private func removePendingReply(_ key: TransportSession.PendingKey) {
         replyStore.removePendingReply(key)
     }
 
-    private func failPendingReply(_ key: TransportPendingKey, error: any Error) async {
-        let pending: TransportPendingReply?
+    private func failPendingReply(_ key: TransportSession.PendingKey, error: any Swift.Error) async {
+        let pending: TransportSession.PendingReply?
         switch key {
         case let .root(commandID):
             pending = replyStore.removeRootReply(commandID: commandID)
@@ -852,8 +852,8 @@ package actor TransportSession {
         await pending?.promise.fulfill(.failure(error))
     }
 
-    private func failPendingReplyFromTimeout(_ key: TransportPendingKey, error: any Error) async {
-        let pending: TransportPendingReply?
+    private func failPendingReplyFromTimeout(_ key: TransportSession.PendingKey, error: any Swift.Error) async {
+        let pending: TransportSession.PendingReply?
         switch key {
         case let .root(commandID):
             pending = replyStore.removeRootReply(commandID: commandID)
@@ -865,7 +865,7 @@ package actor TransportSession {
 
     private func markTargetReplyAsBufferedIfNeeded(
         _ parsed: ParsedProtocolMessage,
-        targetID: ProtocolTargetIdentifier
+        targetID: ProtocolTarget.ID
     ) {
         guard let commandID = parsed.id else {
             return
@@ -875,7 +875,7 @@ package actor TransportSession {
 }
 
 private struct TargetDispatchParams: Decodable {
-    var targetId: ProtocolTargetIdentifier
+    var targetId: ProtocolTarget.ID
     var message: String
 }
 
@@ -884,7 +884,7 @@ private struct TargetCreatedParams: Decodable {
 }
 
 private struct TargetInfoPayload: Decodable {
-    var targetId: ProtocolTargetIdentifier
+    var targetId: ProtocolTarget.ID
     var type: String
     var frameId: DOMFrameIdentifier?
     var parentFrameId: DOMFrameIdentifier?
@@ -895,12 +895,12 @@ private struct TargetInfoPayload: Decodable {
 }
 
 private struct TargetDestroyedParams: Decodable {
-    var targetId: ProtocolTargetIdentifier
+    var targetId: ProtocolTarget.ID
 }
 
 private struct TargetCommittedParams: Decodable {
-    var oldTargetId: ProtocolTargetIdentifier?
-    var newTargetId: ProtocolTargetIdentifier
+    var oldTargetId: ProtocolTarget.ID?
+    var newTargetId: ProtocolTarget.ID
 }
 
 private struct RuntimeExecutionContextCreatedParams: Decodable {

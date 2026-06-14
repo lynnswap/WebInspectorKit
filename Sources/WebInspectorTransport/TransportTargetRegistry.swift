@@ -1,23 +1,23 @@
 import Foundation
 
 struct TransportTargetRegistry: Sendable {
-    private(set) var targetsByID: [ProtocolTargetIdentifier: ProtocolTargetRecord] = [:]
-    private(set) var frameTargetIDsByFrameID: [DOMFrameIdentifier: ProtocolTargetIdentifier] = [:]
-    private(set) var currentMainPageTargetID: ProtocolTargetIdentifier?
+    private(set) var targetsByID: [ProtocolTarget.ID: ProtocolTarget.Record] = [:]
+    private(set) var frameTargetIDsByFrameID: [DOMFrameIdentifier: ProtocolTarget.ID] = [:]
+    private(set) var currentMainPageTargetID: ProtocolTarget.ID?
 
     var currentMainFrameID: DOMFrameIdentifier? {
         currentMainPageTargetID.flatMap { targetsByID[$0]?.frameID }
     }
 
-    func target(for targetID: ProtocolTargetIdentifier) -> ProtocolTargetRecord? {
+    func target(for targetID: ProtocolTarget.ID) -> ProtocolTarget.Record? {
         targetsByID[targetID]
     }
 
-    func containsTarget(_ targetID: ProtocolTargetIdentifier) -> Bool {
+    func containsTarget(_ targetID: ProtocolTarget.ID) -> Bool {
         targetsByID[targetID] != nil
     }
 
-    func targetID(forFrameID frameID: DOMFrameIdentifier) -> ProtocolTargetIdentifier? {
+    func targetID(forFrameID frameID: DOMFrameIdentifier) -> ProtocolTarget.ID? {
         frameTargetIDsByFrameID[frameID]
     }
 
@@ -26,8 +26,8 @@ struct TransportTargetRegistry: Sendable {
         frameID: DOMFrameIdentifier?,
         parentFrameID: DOMFrameIdentifier?,
         isProvisional: Bool?
-    ) -> ProtocolTargetKind {
-        let protocolKind = ProtocolTargetKind(protocolType: protocolType)
+    ) -> ProtocolTarget.Kind {
+        let protocolKind = ProtocolTarget.Kind(protocolType: protocolType)
         guard protocolKind == .page else {
             return protocolKind
         }
@@ -47,9 +47,9 @@ struct TransportTargetRegistry: Sendable {
     }
 
     func resolvedTargetIDForRuntimeContext(
-        deliveredTargetID: ProtocolTargetIdentifier,
+        deliveredTargetID: ProtocolTarget.ID,
         frameID: DOMFrameIdentifier?
-    ) -> ProtocolTargetIdentifier {
+    ) -> ProtocolTarget.ID {
         guard let frameID,
               let existingTargetID = frameTargetIDsByFrameID[frameID],
               targetsByID[existingTargetID]?.kind == .frame,
@@ -60,9 +60,9 @@ struct TransportTargetRegistry: Sendable {
     }
 
     mutating func recordRuntimeContext(
-        deliveredTargetID: ProtocolTargetIdentifier,
+        deliveredTargetID: ProtocolTarget.ID,
         frameID: DOMFrameIdentifier?
-    ) -> ProtocolTargetIdentifier {
+    ) -> ProtocolTarget.ID {
         let resolvedTargetID = resolvedTargetIDForRuntimeContext(
             deliveredTargetID: deliveredTargetID,
             frameID: frameID
@@ -73,7 +73,7 @@ struct TransportTargetRegistry: Sendable {
         return resolvedTargetID
     }
 
-    mutating func recordTargetCreated(_ record: ProtocolTargetRecord) -> TransportFrameTargetResolution? {
+    mutating func recordTargetCreated(_ record: ProtocolTarget.Record) -> TransportFrameTargetResolution? {
         targetsByID[record.id] = record
         let resolvedFrameTarget = committedFrameTargetResolution(for: record)
         if let frameID = record.frameID {
@@ -88,7 +88,7 @@ struct TransportTargetRegistry: Sendable {
         return resolvedFrameTarget
     }
 
-    mutating func removeTarget(_ targetID: ProtocolTargetIdentifier) {
+    mutating func removeTarget(_ targetID: ProtocolTarget.ID) {
         targetsByID.removeValue(forKey: targetID)
         frameTargetIDsByFrameID = frameTargetIDsByFrameID.filter { $0.value != targetID }
         if currentMainPageTargetID == targetID {
@@ -97,8 +97,8 @@ struct TransportTargetRegistry: Sendable {
     }
 
     mutating func commitTarget(
-        oldTargetID: ProtocolTargetIdentifier?,
-        newTargetID: ProtocolTargetIdentifier
+        oldTargetID: ProtocolTarget.ID?,
+        newTargetID: ProtocolTarget.ID
     ) -> TransportTargetCommitMutation {
         let committedOldTargetID = oldTargetID ?? inferredOldTargetIDForOldlessCommit(newTargetID: newTargetID)
 
@@ -161,8 +161,8 @@ struct TransportTargetRegistry: Sendable {
     }
 
     private func inferredOldTargetIDForOldlessCommit(
-        newTargetID: ProtocolTargetIdentifier
-    ) -> ProtocolTargetIdentifier? {
+        newTargetID: ProtocolTarget.ID
+    ) -> ProtocolTarget.ID? {
         if let newRecord = targetsByID[newTargetID],
            newRecord.isProvisional,
            newRecord.isTopLevelPage,
@@ -182,7 +182,7 @@ struct TransportTargetRegistry: Sendable {
     }
 
     private func committedFrameTargetResolution(
-        for record: ProtocolTargetRecord
+        for record: ProtocolTarget.Record
     ) -> TransportFrameTargetResolution? {
         guard let frameID = record.frameID,
               !record.isProvisional else {
@@ -192,7 +192,7 @@ struct TransportTargetRegistry: Sendable {
     }
 }
 
-private extension ProtocolTargetRecord {
+private extension ProtocolTarget.Record {
     var isTopLevelPage: Bool {
         kind == .page && parentFrameID == nil
     }
@@ -200,11 +200,11 @@ private extension ProtocolTargetRecord {
 
 struct TransportFrameTargetResolution: Sendable {
     var frameID: DOMFrameIdentifier
-    var targetID: ProtocolTargetIdentifier
+    var targetID: ProtocolTarget.ID
 }
 
 struct TransportTargetCommitMutation: Sendable {
-    var committedOldTargetID: ProtocolTargetIdentifier?
+    var committedOldTargetID: ProtocolTarget.ID?
     var shouldRetargetExternalState: Bool
     var resolvedFrameTarget: TransportFrameTargetResolution?
 }

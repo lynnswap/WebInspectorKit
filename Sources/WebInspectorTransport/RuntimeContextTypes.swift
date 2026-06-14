@@ -1,8 +1,8 @@
 package struct RuntimeExecutionContextKey: Hashable, Sendable {
-    package var runtimeAgentTargetID: ProtocolTargetIdentifier
+    package var runtimeAgentTargetID: ProtocolTarget.ID
     package var contextID: ExecutionContextID
 
-    package init(runtimeAgentTargetID: ProtocolTargetIdentifier, contextID: ExecutionContextID) {
+    package init(runtimeAgentTargetID: ProtocolTarget.ID, contextID: ExecutionContextID) {
         self.runtimeAgentTargetID = runtimeAgentTargetID
         self.contextID = contextID
     }
@@ -26,16 +26,16 @@ package struct RuntimeExecutionContextType: RawRepresentable, Hashable, Codable,
 
 package struct RuntimeExecutionContextRecord: Equatable, Sendable {
     package var id: ExecutionContextID
-    package var targetID: ProtocolTargetIdentifier
-    package var runtimeAgentTargetID: ProtocolTargetIdentifier
+    package var targetID: ProtocolTarget.ID
+    package var runtimeAgentTargetID: ProtocolTarget.ID
     package var type: RuntimeExecutionContextType
     package var name: String
     package var frameID: DOMFrameIdentifier?
 
     package init(
         id: ExecutionContextID,
-        targetID: ProtocolTargetIdentifier,
-        runtimeAgentTargetID: ProtocolTargetIdentifier? = nil,
+        targetID: ProtocolTarget.ID,
+        runtimeAgentTargetID: ProtocolTarget.ID? = nil,
         type: RuntimeExecutionContextType = .normal,
         name: String = "",
         frameID: DOMFrameIdentifier? = nil

@@ -28,12 +28,12 @@ package struct DOMDocumentLifetimeIdentifier: RawRepresentable, Hashable, Compar
 }
 
 package struct DOMDocumentIdentifier: Hashable, Sendable {
-    package var targetID: ProtocolTargetIdentifier
+    package var targetID: ProtocolTarget.ID
     package var localDocumentLifetimeID: DOMDocumentLifetimeIdentifier
 
     /// Local handle used for snapshots and node identity. This is not a
     /// protocol identity and must not be used for target/frame discovery.
-    package init(targetID: ProtocolTargetIdentifier, localDocumentLifetimeID: DOMDocumentLifetimeIdentifier) {
+    package init(targetID: ProtocolTarget.ID, localDocumentLifetimeID: DOMDocumentLifetimeIdentifier) {
         self.targetID = targetID
         self.localDocumentLifetimeID = localDocumentLifetimeID
     }
@@ -54,10 +54,10 @@ package struct DOMNodeIdentifier: Hashable, Sendable {
 }
 
 package struct DOMNodeCurrentKey: Hashable, Sendable {
-    package var targetID: ProtocolTargetIdentifier
+    package var targetID: ProtocolTarget.ID
     package var nodeID: DOMProtocolNodeID
 
-    package init(targetID: ProtocolTargetIdentifier, nodeID: DOMProtocolNodeID) {
+    package init(targetID: ProtocolTarget.ID, nodeID: DOMProtocolNodeID) {
         self.targetID = targetID
         self.nodeID = nodeID
     }
@@ -78,7 +78,7 @@ package struct DOMTransactionIdentifier: RawRepresentable, Hashable, Codable, Se
 package enum DOMTransactionKind: Equatable, Sendable {
     case requestChildNodes(parentRawNodeID: DOMProtocolNodeID)
     case requestNode(selectionRequestID: SelectionRequestIdentifier, objectID: String)
-    case ownerHydration(frameTargetID: ProtocolTargetIdentifier)
+    case ownerHydration(frameTargetID: ProtocolTarget.ID)
 }
 
 package enum DOMRequestNodeResolution: Equatable, Sendable {
@@ -212,7 +212,7 @@ package enum DOMCommandNodeID: Equatable, Hashable, Sendable {
     /// `<frame target identifier>:<raw node id>` and sends that identifier to
     /// the page DOM agent for node-editing commands that FrameDOMAgent stubs.
     /// See WebKit's `DOMNode.js` `constructor`, `getOuterHTML`, and `removeNode`.
-    case scoped(targetID: ProtocolTargetIdentifier, nodeID: DOMProtocolNodeID)
+    case scoped(targetID: ProtocolTarget.ID, nodeID: DOMProtocolNodeID)
 
     package var rawProtocolNodeID: DOMProtocolNodeID {
         switch self {
@@ -224,15 +224,15 @@ package enum DOMCommandNodeID: Equatable, Hashable, Sendable {
 }
 
 package struct DOMActionIdentity: Equatable, Hashable, Sendable {
-    package var documentTargetID: ProtocolTargetIdentifier
+    package var documentTargetID: ProtocolTarget.ID
     package var rawNodeID: DOMProtocolNodeID
-    package var commandTargetID: ProtocolTargetIdentifier
+    package var commandTargetID: ProtocolTarget.ID
     package var commandNodeID: DOMCommandNodeID
 
     package init(
-        documentTargetID: ProtocolTargetIdentifier,
+        documentTargetID: ProtocolTarget.ID,
         rawNodeID: DOMProtocolNodeID,
-        commandTargetID: ProtocolTargetIdentifier,
+        commandTargetID: ProtocolTarget.ID,
         commandNodeID: DOMCommandNodeID
     ) {
         self.documentTargetID = documentTargetID
@@ -243,8 +243,8 @@ package struct DOMActionIdentity: Equatable, Hashable, Sendable {
 }
 
 package enum DOMInspectEvent: Equatable, Sendable {
-    case remoteObject(targetID: ProtocolTargetIdentifier?, remoteObject: RemoteObject)
-    case protocolNode(targetID: ProtocolTargetIdentifier, nodeID: DOMProtocolNodeID)
+    case remoteObject(targetID: ProtocolTarget.ID?, remoteObject: RemoteObject)
+    case protocolNode(targetID: ProtocolTarget.ID, nodeID: DOMProtocolNodeID)
 }
 
 package struct SelectionRequestIdentifier: RawRepresentable, Hashable, Sendable {
@@ -260,25 +260,25 @@ package struct SelectionRequestIdentifier: RawRepresentable, Hashable, Sendable 
 }
 
 package enum DOMCommandIntent: Equatable, Sendable {
-    case getDocument(targetID: ProtocolTargetIdentifier)
-    case requestChildNodes(targetID: ProtocolTargetIdentifier, nodeID: DOMProtocolNodeID, depth: Int)
-    case requestNode(selectionRequestID: SelectionRequestIdentifier, targetID: ProtocolTargetIdentifier, objectID: String)
+    case getDocument(targetID: ProtocolTarget.ID)
+    case requestChildNodes(targetID: ProtocolTarget.ID, nodeID: DOMProtocolNodeID, depth: Int)
+    case requestNode(selectionRequestID: SelectionRequestIdentifier, targetID: ProtocolTarget.ID, objectID: String)
     case highlightNode(identity: DOMActionIdentity)
-    case hideHighlight(targetID: ProtocolTargetIdentifier)
-    case setInspectModeEnabled(targetID: ProtocolTargetIdentifier, enabled: Bool)
+    case hideHighlight(targetID: ProtocolTarget.ID)
+    case setInspectModeEnabled(targetID: ProtocolTarget.ID, enabled: Bool)
     case getOuterHTML(identity: DOMActionIdentity)
     case removeNode(identity: DOMActionIdentity)
-    case undo(targetID: ProtocolTargetIdentifier)
-    case redo(targetID: ProtocolTargetIdentifier)
+    case undo(targetID: ProtocolTarget.ID)
+    case redo(targetID: ProtocolTarget.ID)
 }
 
 package enum SelectionResolutionFailure: Error, Equatable, Sendable {
     case missingObjectID
     case missingInjectedScriptID
     case unknownExecutionContext(ExecutionContextID)
-    case missingCurrentDocument(ProtocolTargetIdentifier)
+    case missingCurrentDocument(ProtocolTarget.ID)
     case staleSelectionRequest(expected: SelectionRequestIdentifier?, received: SelectionRequestIdentifier)
-    case targetMismatch(expected: ProtocolTargetIdentifier, received: ProtocolTargetIdentifier)
+    case targetMismatch(expected: ProtocolTarget.ID, received: ProtocolTarget.ID)
     case staleDocument(expected: DOMDocumentIdentifier, actual: DOMDocumentIdentifier?)
     case unresolvedNode(DOMNodeCurrentKey)
 }

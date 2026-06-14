@@ -235,17 +235,17 @@ extension CSSPropertyStatus: Codable {
 
 package struct CSSNodeStyleIdentity: Equatable, Hashable, Sendable {
     package var nodeID: DOMNodeIdentifier
-    package var targetID: ProtocolTargetIdentifier
+    package var targetID: ProtocolTarget.ID
     package var documentID: DOMDocumentIdentifier
     package var protocolNodeID: DOMProtocolNodeID
-    package var targetCapabilities: ProtocolTargetCapabilities
+    package var targetCapabilities: ProtocolTarget.Capabilities
 
     package init(
         nodeID: DOMNodeIdentifier,
-        targetID: ProtocolTargetIdentifier,
+        targetID: ProtocolTarget.ID,
         documentID: DOMDocumentIdentifier,
         protocolNodeID: DOMProtocolNodeID,
-        targetCapabilities: ProtocolTargetCapabilities
+        targetCapabilities: ProtocolTarget.Capabilities
     ) {
         self.nodeID = nodeID
         self.targetID = targetID
@@ -259,15 +259,15 @@ package enum CSSNodeStylesUnavailableReason: Error, Equatable, Sendable {
     case noSelection
     case nonElementNode(DOMNodeType)
     case staleNode(DOMNodeIdentifier)
-    case cssUnavailableForTarget(ProtocolTargetIdentifier)
+    case cssUnavailableForTarget(ProtocolTarget.ID)
 }
 
 package enum CSSCommandIntent: Equatable, Sendable {
-    case enable(targetID: ProtocolTargetIdentifier)
+    case enable(targetID: ProtocolTarget.ID)
     case getMatchedStyles(identity: CSSNodeStyleIdentity, includePseudo: Bool = true, includeInherited: Bool = true)
     case getInlineStyles(identity: CSSNodeStyleIdentity)
     case getComputedStyle(identity: CSSNodeStyleIdentity)
-    case setStyleText(targetID: ProtocolTargetIdentifier, styleID: CSSStyleIdentifier, text: String)
+    case setStyleText(targetID: ProtocolTarget.ID, styleID: CSSStyleIdentifier, text: String)
 }
 
 package struct CSSPropertyIdentifier: Hashable, Codable, Sendable {

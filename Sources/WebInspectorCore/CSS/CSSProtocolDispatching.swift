@@ -48,20 +48,20 @@ package struct CSSProtocolCommands {
         }
     }
 
-    package func matchedStyles(from result: ProtocolCommandResult) throws -> CSSMatchedStylesPayload {
+    package func matchedStyles(from result: ProtocolCommand.Result) throws -> CSSMatchedStylesPayload {
         try TransportMessageParser.decode(CSSMatchedStylesPayload.self, from: result.resultData)
     }
 
-    package func inlineStyles(from result: ProtocolCommandResult) throws -> CSSInlineStylesPayload {
+    package func inlineStyles(from result: ProtocolCommand.Result) throws -> CSSInlineStylesPayload {
         try TransportMessageParser.decode(CSSInlineStylesPayload.self, from: result.resultData)
     }
 
-    package func computedStyles(from result: ProtocolCommandResult) throws -> [CSSComputedStylePropertyPayload] {
+    package func computedStyles(from result: ProtocolCommand.Result) throws -> [CSSComputedStylePropertyPayload] {
         let payload = try TransportMessageParser.decode(ComputedStyleResult.self, from: result.resultData)
         return payload.computedStyle
     }
 
-    package func setStyleTextResult(from result: ProtocolCommandResult) throws -> CSSStylePayload {
+    package func setStyleTextResult(from result: ProtocolCommand.Result) throws -> CSSStylePayload {
         let payload = try TransportMessageParser.decode(SetStyleTextResult.self, from: result.resultData)
         return payload.style
     }
@@ -80,11 +80,11 @@ package struct CSSProtocolCommands {
 
 @MainActor
 package protocol CSSProtocolEventHandler: AnyObject {
-    func cssStyleSheetChanged(targetID: ProtocolTargetIdentifier)
-    func cssStyleSheetRemoved(styleSheetID: CSSStyleSheetIdentifier, targetID: ProtocolTargetIdentifier)
-    func cssStyleSheetAdded(_ header: CSSStyleSheetHeaderPayload, targetID: ProtocolTargetIdentifier)
-    func cssMediaQueryResultChanged(targetID: ProtocolTargetIdentifier)
-    func cssNodeLayoutFlagsChanged(targetID: ProtocolTargetIdentifier, nodeID: DOMProtocolNodeID)
+    func cssStyleSheetChanged(targetID: ProtocolTarget.ID)
+    func cssStyleSheetRemoved(styleSheetID: CSSStyleSheetIdentifier, targetID: ProtocolTarget.ID)
+    func cssStyleSheetAdded(_ header: CSSStyleSheetHeaderPayload, targetID: ProtocolTarget.ID)
+    func cssMediaQueryResultChanged(targetID: ProtocolTarget.ID)
+    func cssNodeLayoutFlagsChanged(targetID: ProtocolTarget.ID, nodeID: DOMProtocolNodeID)
 }
 
 @MainActor
@@ -97,7 +97,7 @@ package final class CSSProtocolEventDispatcher: ProtocolDomainEventDispatcher {
 
     package var domain: ProtocolDomain { .css }
 
-    package func dispatch(_ event: ProtocolEventEnvelope) async throws {
+    package func dispatch(_ event: ProtocolEvent) async throws {
         guard event.domain == .css,
               let targetID = event.targetID,
               let handler else {
@@ -125,51 +125,51 @@ package final class CSSProtocolEventDispatcher: ProtocolDomainEventDispatcher {
 }
 
 extension CSSSession: CSSProtocolEventHandler {
-    package func cssStyleSheetChanged(targetID: ProtocolTargetIdentifier) {
+    package func cssStyleSheetChanged(targetID: ProtocolTarget.ID) {
         markNeedsRefresh(targetID: targetID)
     }
 
-    package func cssStyleSheetRemoved(styleSheetID: CSSStyleSheetIdentifier, targetID: ProtocolTargetIdentifier) {
+    package func cssStyleSheetRemoved(styleSheetID: CSSStyleSheetIdentifier, targetID: ProtocolTarget.ID) {
         removeStyleSheetHeader(styleSheetID: styleSheetID, targetID: targetID)
         markNeedsRefresh(targetID: targetID, styleSheetID: styleSheetID)
     }
 
-    package func cssStyleSheetAdded(_ header: CSSStyleSheetHeaderPayload, targetID: ProtocolTargetIdentifier) {
+    package func cssStyleSheetAdded(_ header: CSSStyleSheetHeaderPayload, targetID: ProtocolTarget.ID) {
         registerStyleSheetHeader(header, targetID: targetID)
         markNeedsRefresh(targetID: targetID)
     }
 
-    package func cssMediaQueryResultChanged(targetID: ProtocolTargetIdentifier) {
+    package func cssMediaQueryResultChanged(targetID: ProtocolTarget.ID) {
         markNeedsRefresh(targetID: targetID)
     }
 
-    package func cssNodeLayoutFlagsChanged(targetID: ProtocolTargetIdentifier, nodeID: DOMProtocolNodeID) {
+    package func cssNodeLayoutFlagsChanged(targetID: ProtocolTarget.ID, nodeID: DOMProtocolNodeID) {
         markNeedsRefresh(targetID: targetID, nodeID: nodeID)
     }
 }
 
 extension DOMSession: CSSProtocolEventHandler {
-    package func cssStyleSheetChanged(targetID: ProtocolTargetIdentifier) {
+    package func cssStyleSheetChanged(targetID: ProtocolTarget.ID) {
         elementStyles.cssStyleSheetChanged(targetID: targetID)
         reconcileSelectedNodeStyleHydrationIfNeeded()
     }
 
-    package func cssStyleSheetRemoved(styleSheetID: CSSStyleSheetIdentifier, targetID: ProtocolTargetIdentifier) {
+    package func cssStyleSheetRemoved(styleSheetID: CSSStyleSheetIdentifier, targetID: ProtocolTarget.ID) {
         elementStyles.cssStyleSheetRemoved(styleSheetID: styleSheetID, targetID: targetID)
         reconcileSelectedNodeStyleHydrationIfNeeded()
     }
 
-    package func cssStyleSheetAdded(_ header: CSSStyleSheetHeaderPayload, targetID: ProtocolTargetIdentifier) {
+    package func cssStyleSheetAdded(_ header: CSSStyleSheetHeaderPayload, targetID: ProtocolTarget.ID) {
         elementStyles.cssStyleSheetAdded(header, targetID: targetID)
         reconcileSelectedNodeStyleHydrationIfNeeded()
     }
 
-    package func cssMediaQueryResultChanged(targetID: ProtocolTargetIdentifier) {
+    package func cssMediaQueryResultChanged(targetID: ProtocolTarget.ID) {
         elementStyles.cssMediaQueryResultChanged(targetID: targetID)
         reconcileSelectedNodeStyleHydrationIfNeeded()
     }
 
-    package func cssNodeLayoutFlagsChanged(targetID: ProtocolTargetIdentifier, nodeID: DOMProtocolNodeID) {
+    package func cssNodeLayoutFlagsChanged(targetID: ProtocolTarget.ID, nodeID: DOMProtocolNodeID) {
         elementStyles.cssNodeLayoutFlagsChanged(targetID: targetID, nodeID: nodeID)
         reconcileSelectedNodeStyleHydrationIfNeeded()
     }

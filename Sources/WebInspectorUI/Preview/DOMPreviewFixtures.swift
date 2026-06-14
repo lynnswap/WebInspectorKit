@@ -5,9 +5,9 @@ import WebInspectorTransport
 enum DOMPreviewFixtures {
     static func makeDOMSession() -> DOMSession {
         let session = DOMSession()
-        let targetID = ProtocolTargetIdentifier("preview-page")
+        let targetID = ProtocolTarget.ID("preview-page")
         session.applyTargetCreated(
-            ProtocolTargetRecord(
+            ProtocolTarget.Record(
                 id: targetID,
                 kind: .page,
                 frameID: DOMFrameIdentifier("preview-frame")

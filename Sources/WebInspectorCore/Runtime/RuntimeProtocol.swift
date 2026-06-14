@@ -83,10 +83,10 @@ package struct RuntimeRemoteObjectIdentifier: RawRepresentable, Hashable, Codabl
 }
 
 package struct RuntimeRemoteObjectIdentifierKey: Hashable, Sendable {
-    package var runtimeAgentTargetID: ProtocolTargetIdentifier
+    package var runtimeAgentTargetID: ProtocolTarget.ID
     package var objectID: RuntimeRemoteObjectIdentifier
 
-    package init(runtimeAgentTargetID: ProtocolTargetIdentifier, objectID: RuntimeRemoteObjectIdentifier) {
+    package init(runtimeAgentTargetID: ProtocolTarget.ID, objectID: RuntimeRemoteObjectIdentifier) {
         self.runtimeAgentTargetID = runtimeAgentTargetID
         self.objectID = objectID
     }
@@ -253,7 +253,7 @@ package struct RuntimeRemoteObjectPayload: Equatable, Sendable, Codable {
         self.preview = preview
     }
 
-    package func identifierKey(runtimeAgentTargetID: ProtocolTargetIdentifier) -> RuntimeRemoteObjectIdentifierKey? {
+    package func identifierKey(runtimeAgentTargetID: ProtocolTarget.ID) -> RuntimeRemoteObjectIdentifierKey? {
         objectID.map { RuntimeRemoteObjectIdentifierKey(runtimeAgentTargetID: runtimeAgentTargetID, objectID: $0) }
     }
 
@@ -533,7 +533,7 @@ package struct RuntimeCallArgumentPayload: Equatable, Sendable {
 }
 
 package struct RuntimeEvaluationRequest: Equatable, Sendable {
-    package var runtimeAgentTargetID: ProtocolTargetIdentifier
+    package var runtimeAgentTargetID: ProtocolTarget.ID
     package var expression: String
     package var objectGroup: RuntimeObjectGroup?
     package var includeCommandLineAPI: Bool?
@@ -545,7 +545,7 @@ package struct RuntimeEvaluationRequest: Equatable, Sendable {
     package var emulateUserGesture: Bool?
 
     package init(
-        runtimeAgentTargetID: ProtocolTargetIdentifier,
+        runtimeAgentTargetID: ProtocolTarget.ID,
         expression: String,
         objectGroup: RuntimeObjectGroup? = nil,
         includeCommandLineAPI: Bool? = nil,
@@ -570,7 +570,7 @@ package struct RuntimeEvaluationRequest: Equatable, Sendable {
 }
 
 package enum RuntimeCommandIntent: Equatable, Sendable {
-    case enable(targetID: ProtocolTargetIdentifier)
+    case enable(targetID: ProtocolTarget.ID)
     case evaluate(RuntimeEvaluationRequest)
     case getPreview(object: RuntimeRemoteObjectIdentifierKey)
     case getProperties(
@@ -592,12 +592,12 @@ package enum RuntimeCommandIntent: Equatable, Sendable {
         fetchStart: Int?,
         fetchCount: Int?
     )
-    case saveResult(targetID: ProtocolTargetIdentifier, argument: RuntimeCallArgumentPayload, contextID: ExecutionContextID?)
-    case setSavedResultAlias(targetID: ProtocolTargetIdentifier, alias: String?)
+    case saveResult(targetID: ProtocolTarget.ID, argument: RuntimeCallArgumentPayload, contextID: ExecutionContextID?)
+    case setSavedResultAlias(targetID: ProtocolTarget.ID, alias: String?)
     case releaseObject(RuntimeRemoteObjectIdentifierKey)
-    case releaseObjectGroup(runtimeAgentTargetID: ProtocolTargetIdentifier, objectGroup: RuntimeObjectGroup)
+    case releaseObjectGroup(runtimeAgentTargetID: ProtocolTarget.ID, objectGroup: RuntimeObjectGroup)
 
-    package var routingTargetID: ProtocolTargetIdentifier {
+    package var routingTargetID: ProtocolTarget.ID {
         switch self {
         case let .enable(targetID):
             targetID

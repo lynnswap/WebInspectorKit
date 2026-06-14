@@ -77,7 +77,7 @@ enum NetworkPreviewFixtures {
         timestamp: Double,
         encodedBodyLength: Int
     ) -> NetworkRequest.ID {
-        let targetID = ProtocolTargetIdentifier("preview-page")
+        let targetID = ProtocolTarget.ID("preview-page")
         let requestID = NetworkRequestIdentifier(requestID)
         let key = network.applyRequestWillBeSent(
             targetID: targetID,

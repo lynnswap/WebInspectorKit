@@ -4,7 +4,7 @@ import WebInspectorTransport
 package protocol ProtocolDomainEventDispatcher {
     var domain: ProtocolDomain { get }
 
-    func dispatch(_ event: ProtocolEventEnvelope) async throws
+    func dispatch(_ event: ProtocolEvent) async throws
 }
 
 @MainActor
@@ -23,7 +23,7 @@ package final class ProtocolDomainEventDispatcherRegistry {
     }
 
     @discardableResult
-    package func dispatch(_ event: ProtocolEventEnvelope) async throws -> Bool {
+    package func dispatch(_ event: ProtocolEvent) async throws -> Bool {
         guard let dispatcher = dispatchersByDomain[event.domain] else {
             return false
         }

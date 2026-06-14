@@ -87,7 +87,7 @@ package struct DOMProtocolCommands {
     @MainActor
     @discardableResult
     package func applyGetDocumentResult(
-        _ result: ProtocolCommandResult,
+        _ result: ProtocolCommand.Result,
         to session: DOMSession
     ) throws -> DOMNodeIdentifier? {
         guard let targetID = result.targetID else {
@@ -99,12 +99,12 @@ package struct DOMProtocolCommands {
 
     @MainActor
     package func applyRequestNodeResult(
-        _ result: ProtocolCommandResult,
+        _ result: ProtocolCommand.Result,
         selectionRequestID: SelectionRequestIdentifier,
         to session: DOMSession
     ) throws -> DOMRequestNodeResolution {
         guard let targetID = result.targetID else {
-            return .failed(.targetMismatch(expected: ProtocolTargetIdentifier(""), received: ProtocolTargetIdentifier("")))
+            return .failed(.targetMismatch(expected: ProtocolTarget.ID(""), received: ProtocolTarget.ID("")))
         }
         let payload = try TransportMessageParser.decode(RequestNodeResult.self, from: result.resultData)
         return session.applyRequestNodeResult(
@@ -114,12 +114,12 @@ package struct DOMProtocolCommands {
         )
     }
 
-    package func outerHTML(from result: ProtocolCommandResult) throws -> String {
+    package func outerHTML(from result: ProtocolCommand.Result) throws -> String {
         let payload = try TransportMessageParser.decode(GetOuterHTMLResult.self, from: result.resultData)
         return payload.outerHTML
     }
 
-    package func inspectEvent(from event: ProtocolEventEnvelope) throws -> DOMInspectEvent? {
+    package func inspectEvent(from event: ProtocolEvent) throws -> DOMInspectEvent? {
         switch event.method {
         case "DOM.inspect":
             guard let targetID = event.targetID else {
@@ -142,7 +142,7 @@ package struct DOMProtocolCommands {
     }
 
     @MainActor
-    package func applyDOMEvent(_ event: ProtocolEventEnvelope, to session: DOMSession) throws {
+    package func applyDOMEvent(_ event: ProtocolEvent, to session: DOMSession) throws {
         guard let targetID = event.targetID else {
             return
         }
@@ -272,7 +272,7 @@ package final class DOMProtocolEventDispatcher: ProtocolDomainEventDispatcher {
 
     package var domain: ProtocolDomain { .dom }
 
-    package func dispatch(_ event: ProtocolEventEnvelope) async throws {
+    package func dispatch(_ event: ProtocolEvent) async throws {
         try await session?.handleDOMProtocolEvent(event)
     }
 }
@@ -287,7 +287,7 @@ package final class InspectorProtocolEventDispatcher: ProtocolDomainEventDispatc
 
     package var domain: ProtocolDomain { .inspector }
 
-    package func dispatch(_ event: ProtocolEventEnvelope) async throws {
+    package func dispatch(_ event: ProtocolEvent) async throws {
         guard let session,
               let inspectEvent = try session.inspectEvent(from: event) else {
             return
@@ -305,7 +305,7 @@ extension DOMSession: RuntimeProtocolEventHandler {
         applyExecutionContextDestroyed(key)
     }
 
-    package func runtimeExecutionContextsCleared(runtimeAgentTargetID: ProtocolTargetIdentifier) {
+    package func runtimeExecutionContextsCleared(runtimeAgentTargetID: ProtocolTarget.ID) {
         applyExecutionContextsCleared(runtimeAgentTargetID: runtimeAgentTargetID)
     }
 }

@@ -2,12 +2,12 @@ import Foundation
 import WebInspectorTransport
 
 private enum DOMInspectRoute {
-    case remoteObject(targetID: ProtocolTargetIdentifier, objectID: String)
-    case protocolNode(targetID: ProtocolTargetIdentifier, nodeID: DOMProtocolNodeID)
+    case remoteObject(targetID: ProtocolTarget.ID, objectID: String)
+    case protocolNode(targetID: ProtocolTarget.ID, nodeID: DOMProtocolNodeID)
 }
 
 private struct TargetDestroyedEventParams: Decodable {
-    var targetId: ProtocolTargetIdentifier
+    var targetId: ProtocolTarget.ID
 }
 
 extension DOMSession {
@@ -47,7 +47,7 @@ extension DOMSession {
         cancelCSSActionRequests()
     }
 
-    package func waitUntilDocumentRequestsIdle(targetID: ProtocolTargetIdentifier? = nil) async {
+    package func waitUntilDocumentRequestsIdle(targetID: ProtocolTarget.ID? = nil) async {
         await documentRequests.waitUntilIdle(targetID: targetID)
     }
 
@@ -64,12 +64,12 @@ extension DOMSession {
     }
 
     @discardableResult
-    package func perform(_ intent: DOMCommandIntent) async throws -> ProtocolCommandResult {
+    package func perform(_ intent: DOMCommandIntent) async throws -> ProtocolCommand.Result {
         try await perform(intent, requiresActiveConnection: true)
     }
 
     @discardableResult
-    package func performDuringBootstrap(_ intent: DOMCommandIntent) async throws -> ProtocolCommandResult {
+    package func performDuringBootstrap(_ intent: DOMCommandIntent) async throws -> ProtocolCommand.Result {
         try await perform(intent, requiresActiveConnection: false)
     }
 
@@ -77,7 +77,7 @@ extension DOMSession {
     private func perform(
         _ intent: DOMCommandIntent,
         requiresActiveConnection: Bool
-    ) async throws -> ProtocolCommandResult {
+    ) async throws -> ProtocolCommand.Result {
         let result = try await send(intent, requiresActiveConnection: requiresActiveConnection)
 
         switch intent {
@@ -118,7 +118,7 @@ extension DOMSession {
     private func send(
         _ intent: DOMCommandIntent,
         requiresActiveConnection: Bool = true
-    ) async throws -> ProtocolCommandResult {
+    ) async throws -> ProtocolCommand.Result {
         let commandChannel = try requireCommandChannel(requiresActiveConnection: requiresActiveConnection)
         let command = try protocolCommands.command(for: intent)
         return try await commandChannel.send(command)
@@ -506,11 +506,11 @@ extension DOMSession {
         }
     }
 
-    package func inspectEvent(from event: ProtocolEventEnvelope) throws -> DOMInspectEvent? {
+    package func inspectEvent(from event: ProtocolEvent) throws -> DOMInspectEvent? {
         try protocolCommands.inspectEvent(from: event)
     }
 
-    package func applyTargetProtocolEvent(_ event: ProtocolEventEnvelope) throws -> TargetProtocolEventResult {
+    package func applyTargetProtocolEvent(_ event: ProtocolEvent) throws -> TargetProtocolEventResult {
         let result = try TargetProtocolEventDispatcher().dispatch(event, to: self)
         let destroyedTargetID = result.destroyedTargetID
         let targetCommit = result.targetCommit
@@ -526,7 +526,7 @@ extension DOMSession {
         return result
     }
 
-    package func handleDOMProtocolEvent(_ event: ProtocolEventEnvelope) async throws {
+    package func handleDOMProtocolEvent(_ event: ProtocolEvent) async throws {
         if let inspectEvent = try protocolCommands.inspectEvent(from: event) {
             await handleInspectEvent(inspectEvent)
             return
@@ -565,7 +565,7 @@ extension DOMSession {
         }
     }
 
-    package func startFrameTargetDocumentRequestIfNeeded(targetID: ProtocolTargetIdentifier, reason: String) {
+    package func startFrameTargetDocumentRequestIfNeeded(targetID: ProtocolTarget.ID, reason: String) {
         guard commandChannel != nil,
               let target = snapshot().targetsByID[targetID],
               target.kind == .frame,
@@ -577,7 +577,7 @@ extension DOMSession {
     }
 
     package func startPageTargetDocumentRequestAfterCommit(
-        targetID: ProtocolTargetIdentifier,
+        targetID: ProtocolTarget.ID,
         isBootstrapped: Bool,
         bootstrap: @escaping @MainActor () async throws -> Void
     ) {
@@ -637,7 +637,7 @@ extension DOMSession {
 
     private func resolvePickerSelection(
         _ event: DOMInspectEvent,
-        activeTargetID: ProtocolTargetIdentifier
+        activeTargetID: ProtocolTarget.ID
     ) async throws {
         switch inspectRoute(for: event, activeTargetID: activeTargetID) {
         case let .remoteObject(targetID, objectID):
@@ -675,7 +675,7 @@ extension DOMSession {
 
     private func inspectRoute(
         for event: DOMInspectEvent,
-        activeTargetID: ProtocolTargetIdentifier
+        activeTargetID: ProtocolTarget.ID
     ) -> DOMInspectRoute {
         switch event {
         case let .remoteObject(eventTargetID, remoteObject):
@@ -691,9 +691,9 @@ extension DOMSession {
 
     private func inspectTargetID(
         for remoteObject: RemoteObject,
-        eventTargetID: ProtocolTargetIdentifier?,
-        activeTargetID: ProtocolTargetIdentifier
-    ) -> ProtocolTargetIdentifier {
+        eventTargetID: ProtocolTarget.ID?,
+        activeTargetID: ProtocolTarget.ID
+    ) -> ProtocolTarget.ID {
         if let executionContextID = remoteObject.injectedScriptID {
             let snapshot = snapshot()
             if let targetID = snapshot.executionContext(
@@ -710,7 +710,7 @@ extension DOMSession {
     }
 
     private func reloadDocument(
-        targetID: ProtocolTargetIdentifier,
+        targetID: ProtocolTarget.ID,
         force: Bool = false
     ) async throws {
         guard let handle = startDocumentRequest(targetID: targetID, force: force, reason: "explicit") else {
@@ -722,7 +722,7 @@ extension DOMSession {
 
     @discardableResult
     private func startDocumentRequest(
-        targetID: ProtocolTargetIdentifier,
+        targetID: ProtocolTarget.ID,
         force: Bool = false,
         reason: String
     ) -> DOMSessionDocumentRequestHandle? {
@@ -768,7 +768,7 @@ extension DOMSession {
         return handle
     }
 
-    private func refreshDocumentAfterBackendUpdate(_ event: ProtocolEventEnvelope) {
+    private func refreshDocumentAfterBackendUpdate(_ event: ProtocolEvent) {
         guard let targetID = event.targetID ?? currentPageTargetID else {
             return
         }
@@ -808,7 +808,7 @@ extension DOMSession {
         }
     }
 
-    private func cancelDocumentRequest(targetID: ProtocolTargetIdentifier, reason _: String) {
+    private func cancelDocumentRequest(targetID: ProtocolTarget.ID, reason _: String) {
         documentRequests.cancel(targetID: targetID)
     }
 
@@ -832,7 +832,7 @@ extension DOMSession {
         switch error {
         case is CancellationError:
             return true
-        case let error as TransportError:
+        case let error as TransportSession.Error:
             switch error {
             case .missingTarget, .replyTimeout:
                 return true
@@ -844,7 +844,7 @@ extension DOMSession {
         }
     }
 
-    private func applyGetDocumentResult(_ result: ProtocolCommandResult) throws {
+    private func applyGetDocumentResult(_ result: ProtocolCommand.Result) throws {
         guard let targetID = result.targetID else {
             return
         }
@@ -857,7 +857,7 @@ extension DOMSession {
         recordError?(nil)
     }
 
-    private func removeElementStyles(targetID: ProtocolTargetIdentifier) {
+    private func removeElementStyles(targetID: ProtocolTarget.ID) {
         elementStyles.removeStyles(targetID: targetID)
         syncSelectedElementStyles()
     }
@@ -867,7 +867,7 @@ extension DOMSession {
     }
 
     private func applyElementPickerTargetLifecycle(
-        _ event: ProtocolEventEnvelope,
+        _ event: ProtocolEvent,
         targetCommit: TargetProtocolCommitResolution?
     ) {
         guard let activeTargetID = elementPicker.targetID else {
@@ -901,7 +901,7 @@ extension DOMSession {
         }
     }
 
-    private func selectedStylesShouldRefresh(after event: ProtocolEventEnvelope) -> Bool {
+    private func selectedStylesShouldRefresh(after event: ProtocolEvent) -> Bool {
         switch event.method {
         case "DOM.attributeModified",
              "DOM.attributeRemoved",
@@ -914,7 +914,7 @@ extension DOMSession {
         }
     }
 
-    private func currentPageTargetForDOMAction() throws -> ProtocolTargetIdentifier {
+    private func currentPageTargetForDOMAction() throws -> ProtocolTarget.ID {
         guard commandChannel != nil,
               let targetID = currentPageTargetID else {
             throw InspectorSessionError("Inspector session is not attached to a DOM page.")
@@ -936,7 +936,7 @@ extension DOMSession {
 
     private func recordElementPickerFailure(
         reason: String,
-        targetID: ProtocolTargetIdentifier? = nil,
+        targetID: ProtocolTarget.ID? = nil,
         details: String = ""
     ) {
         let resolvedTargetID = targetID ?? elementPicker.targetID

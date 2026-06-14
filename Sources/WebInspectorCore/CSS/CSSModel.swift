@@ -420,7 +420,7 @@ package final class CSSNodeStyles {
 }
 
 private struct CSSStyleSheetHeaderKey: Equatable, Hashable {
-    var targetID: ProtocolTargetIdentifier
+    var targetID: ProtocolTarget.ID
     var styleSheetID: CSSStyleSheetIdentifier
 }
 
@@ -474,7 +474,7 @@ private struct CSSSelectedStyleCoordinator {
     }
 
     mutating func clearIfRemovingTarget(
-        _ targetID: ProtocolTargetIdentifier,
+        _ targetID: ProtocolTarget.ID,
         displayedNodeStyles: CSSNodeStyles?
     ) -> Bool {
         var didClearDisplayedNodeStyles = false
@@ -518,18 +518,18 @@ private struct CSSNodeStyleStore {
         return nodeStyles
     }
 
-    func nodeStyles(targetID: ProtocolTargetIdentifier) -> [CSSNodeStyles] {
+    func nodeStyles(targetID: ProtocolTarget.ID) -> [CSSNodeStyles] {
         stylesByNodeID.values.filter { $0.identity.targetID == targetID }
     }
 
-    func nodeStyles(targetID: ProtocolTargetIdentifier, protocolNodeID: DOMProtocolNodeID) -> CSSNodeStyles? {
+    func nodeStyles(targetID: ProtocolTarget.ID, protocolNodeID: DOMProtocolNodeID) -> CSSNodeStyles? {
         stylesByNodeID.values.first {
             $0.identity.targetID == targetID && $0.identity.protocolNodeID == protocolNodeID
         }
     }
 
     mutating func markNeedsRefresh(
-        targetID: ProtocolTargetIdentifier,
+        targetID: ProtocolTarget.ID,
         including shouldMark: (CSSNodeStyles) -> Bool
     ) {
         for nodeStyles in stylesByNodeID.values
@@ -542,7 +542,7 @@ private struct CSSNodeStyleStore {
         }
     }
 
-    mutating func removeStyles(targetID: ProtocolTargetIdentifier) -> Bool {
+    mutating func removeStyles(targetID: ProtocolTarget.ID) -> Bool {
         let removedIDs = stylesByNodeID
             .filter { $0.value.identity.targetID == targetID }
             .map(\.key)
@@ -563,27 +563,27 @@ struct CSSStyleSheetHeaderRegistry {
         headersByKey.removeAll()
     }
 
-    mutating func register(_ header: CSSStyleSheetHeaderPayload, targetID: ProtocolTargetIdentifier) {
+    mutating func register(_ header: CSSStyleSheetHeaderPayload, targetID: ProtocolTarget.ID) {
         headersByKey[CSSStyleSheetHeaderKey(
             targetID: targetID,
             styleSheetID: header.styleSheetID
         )] = header
     }
 
-    mutating func remove(styleSheetID: CSSStyleSheetIdentifier, targetID: ProtocolTargetIdentifier) {
+    mutating func remove(styleSheetID: CSSStyleSheetIdentifier, targetID: ProtocolTarget.ID) {
         headersByKey.removeValue(forKey: CSSStyleSheetHeaderKey(
             targetID: targetID,
             styleSheetID: styleSheetID
         ))
     }
 
-    mutating func removeTarget(_ targetID: ProtocolTargetIdentifier) {
+    mutating func removeTarget(_ targetID: ProtocolTarget.ID) {
         headersByKey = headersByKey.filter { $0.key.targetID != targetID }
     }
 
     func sourceLocation(
         for rule: CSSRulePayload,
-        targetID: ProtocolTargetIdentifier
+        targetID: ProtocolTarget.ID
     ) -> CSSStyleSheetSourceLocation? {
         guard let styleSheetID = rule.id?.styleSheetID ?? rule.style.id?.styleSheetID,
               let header = headersByKey[CSSStyleSheetHeaderKey(targetID: targetID, styleSheetID: styleSheetID)] else {
@@ -647,7 +647,7 @@ package final class CSSSession {
     }
 
     @discardableResult
-    package func perform(_ intent: CSSCommandIntent) async throws -> ProtocolCommandResult {
+    package func perform(_ intent: CSSCommandIntent) async throws -> ProtocolCommand.Result {
         try await refreshCoordinator.perform(intent)
     }
 
@@ -655,7 +655,7 @@ package final class CSSSession {
         try await refreshCoordinator.fetchRefreshResults(for: identity)
     }
 
-    package func setStyleTextResult(from result: ProtocolCommandResult) throws -> CSSStylePayload {
+    package func setStyleTextResult(from result: ProtocolCommand.Result) throws -> CSSStylePayload {
         try refreshCoordinator.setStyleTextResult(from: result)
     }
 
@@ -740,11 +740,11 @@ package final class CSSSession {
         }
     }
 
-    package func registerStyleSheetHeader(_ header: CSSStyleSheetHeaderPayload, targetID: ProtocolTargetIdentifier) {
+    package func registerStyleSheetHeader(_ header: CSSStyleSheetHeaderPayload, targetID: ProtocolTarget.ID) {
         styleSheetHeaders.register(header, targetID: targetID)
     }
 
-    package func removeStyleSheetHeader(styleSheetID: CSSStyleSheetIdentifier, targetID: ProtocolTargetIdentifier) {
+    package func removeStyleSheetHeader(styleSheetID: CSSStyleSheetIdentifier, targetID: ProtocolTarget.ID) {
         styleSheetHeaders.remove(styleSheetID: styleSheetID, targetID: targetID)
     }
 
@@ -778,18 +778,18 @@ package final class CSSSession {
         }
     }
 
-    package func markNeedsRefresh(targetID: ProtocolTargetIdentifier) {
+    package func markNeedsRefresh(targetID: ProtocolTarget.ID) {
         markNeedsRefresh(targetID: targetID, including: { _ in true })
     }
 
-    package func markNeedsRefresh(targetID: ProtocolTargetIdentifier, styleSheetID: CSSStyleSheetIdentifier) {
+    package func markNeedsRefresh(targetID: ProtocolTarget.ID, styleSheetID: CSSStyleSheetIdentifier) {
         markNeedsRefresh(targetID: targetID, including: { nodeStyles in
             Self.nodeStyles(nodeStyles, references: styleSheetID)
         })
     }
 
     private func markNeedsRefresh(
-        targetID: ProtocolTargetIdentifier,
+        targetID: ProtocolTarget.ID,
         including shouldMark: (CSSNodeStyles) -> Bool
     ) {
         nodeStyleStore.markNeedsRefresh(targetID: targetID, including: shouldMark)
@@ -808,7 +808,7 @@ package final class CSSSession {
         }
     }
 
-    package func markNeedsRefresh(targetID: ProtocolTargetIdentifier, nodeID: DOMProtocolNodeID) {
+    package func markNeedsRefresh(targetID: ProtocolTarget.ID, nodeID: DOMProtocolNodeID) {
         guard let current = nodeStyleStore.nodeStyles(targetID: targetID, protocolNodeID: nodeID) else {
             return
         }
@@ -819,7 +819,7 @@ package final class CSSSession {
         current.clearRefresh()
     }
 
-    package func removeStyles(targetID: ProtocolTargetIdentifier) {
+    package func removeStyles(targetID: ProtocolTarget.ID) {
         styleSheetHeaders.removeTarget(targetID)
         guard nodeStyleStore.removeStyles(targetID: targetID) else {
             return
@@ -880,7 +880,7 @@ package final class CSSSession {
     package func applySetStyleTextResult(
         _ style: CSSStylePayload,
         propertyID: CSSPropertyIdentifier,
-        targetID: ProtocolTargetIdentifier
+        targetID: ProtocolTarget.ID
     ) {
         for nodeStyles in nodeStyleStore.nodeStyles(targetID: targetID) {
             for sectionIndex in nodeStyles.sections.indices where nodeStyles.sections[sectionIndex].style.id == propertyID.styleID {

@@ -1,16 +1,16 @@
 import Foundation
 
 struct ResolvedStyleSheetAddedEvent: Sendable {
-    var targetID: ProtocolTargetIdentifier
+    var targetID: ProtocolTarget.ID
     var paramsData: Data
 }
 
 struct TransportStyleSheetRouting: Sendable {
     private enum Route: Sendable {
-        case resolved(ProtocolTargetIdentifier)
+        case resolved(ProtocolTarget.ID)
         case unresolved(frameID: DOMFrameIdentifier, addedParamsData: Data)
 
-        var targetID: ProtocolTargetIdentifier? {
+        var targetID: ProtocolTarget.ID? {
             guard case let .resolved(targetID) = self else {
                 return nil
             }
@@ -34,7 +34,7 @@ struct TransportStyleSheetRouting: Sendable {
 
     private var routesByStyleSheetID: [String: Route] = [:]
 
-    func targetID(for styleSheetID: String) -> ProtocolTargetIdentifier? {
+    func targetID(for styleSheetID: String) -> ProtocolTarget.ID? {
         routesByStyleSheetID[styleSheetID]?.targetID
     }
 
@@ -46,7 +46,7 @@ struct TransportStyleSheetRouting: Sendable {
         styleSheetID: String,
         frameID: DOMFrameIdentifier?,
         paramsData: Data,
-        resolvedTargetID: ProtocolTargetIdentifier?
+        resolvedTargetID: ProtocolTarget.ID?
     ) {
         if let frameID, resolvedTargetID == nil {
             routesByStyleSheetID[styleSheetID] = .unresolved(frameID: frameID, addedParamsData: paramsData)
@@ -63,13 +63,13 @@ struct TransportStyleSheetRouting: Sendable {
         routesByStyleSheetID.removeValue(forKey: styleSheetID)
     }
 
-    mutating func removeTarget(_ targetID: ProtocolTargetIdentifier) {
+    mutating func removeTarget(_ targetID: ProtocolTarget.ID) {
         routesByStyleSheetID = routesByStyleSheetID.filter {
             $0.value.targetID != targetID
         }
     }
 
-    mutating func retarget(from oldTargetID: ProtocolTargetIdentifier, to newTargetID: ProtocolTargetIdentifier) {
+    mutating func retarget(from oldTargetID: ProtocolTarget.ID, to newTargetID: ProtocolTarget.ID) {
         for (styleSheetID, route) in routesByStyleSheetID where route.targetID == oldTargetID {
             routesByStyleSheetID[styleSheetID] = .resolved(newTargetID)
         }
@@ -77,7 +77,7 @@ struct TransportStyleSheetRouting: Sendable {
 
     mutating func resolvePending(
         frameID: DOMFrameIdentifier,
-        targetID: ProtocolTargetIdentifier
+        targetID: ProtocolTarget.ID
     ) -> [ResolvedStyleSheetAddedEvent] {
         let styleSheetIDs = routesByStyleSheetID
             .filter { $0.value.unresolvedFrameID == frameID }

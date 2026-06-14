@@ -44,10 +44,10 @@ struct DOMContainerTests {
 
     @Test
     func elementViewControllerKeepsUnavailableStateWhenDocumentRootArrivesWithoutSelection() async throws {
-        let targetID = ProtocolTargetIdentifier("page-main")
+        let targetID = ProtocolTarget.ID("page-main")
         let dom = DOMSession()
         dom.applyTargetCreated(
-            ProtocolTargetRecord(
+            ProtocolTarget.Record(
                 id: targetID,
                 kind: .page,
                 frameID: DOMFrameIdentifier("main-frame"),
@@ -899,11 +899,11 @@ struct DOMContainerTests {
         var fontSize: CSSPropertyIdentifier
     }
 
-    private func makeDOMSession(capabilities: ProtocolTargetCapabilities = []) -> DOMSession {
-        let targetID = ProtocolTargetIdentifier("page-main")
+    private func makeDOMSession(capabilities: ProtocolTarget.Capabilities = []) -> DOMSession {
+        let targetID = ProtocolTarget.ID("page-main")
         let session = DOMSession()
         session.applyTargetCreated(
-            ProtocolTargetRecord(
+            ProtocolTarget.Record(
                 id: targetID,
                 kind: .page,
                 frameID: DOMFrameIdentifier("main-frame"),

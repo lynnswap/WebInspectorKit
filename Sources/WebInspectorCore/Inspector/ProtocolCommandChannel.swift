@@ -6,16 +6,16 @@ package final class ProtocolCommandChannel {
     private let isCurrent: @MainActor () -> Bool
     private let isAttached: @MainActor () -> Bool
     private let appliedSequence: @MainActor () -> UInt64
-    private let shouldEnableCompatibilityCSS: @MainActor (ProtocolTargetIdentifier) -> Bool
-    private let markTargetDomainEnabled: @MainActor (ProtocolTargetIdentifier, ProtocolTargetCapabilities) -> Void
+    private let shouldEnableCompatibilityCSS: @MainActor (ProtocolTarget.ID) -> Bool
+    private let markTargetDomainEnabled: @MainActor (ProtocolTarget.ID, ProtocolTarget.Capabilities) -> Void
 
     package init(
         transport: TransportSession,
         isCurrent: @escaping @MainActor () -> Bool,
         isAttached: @escaping @MainActor () -> Bool,
         appliedSequence: @escaping @MainActor () -> UInt64,
-        shouldEnableCompatibilityCSS: @escaping @MainActor (ProtocolTargetIdentifier) -> Bool,
-        markTargetDomainEnabled: @escaping @MainActor (ProtocolTargetIdentifier, ProtocolTargetCapabilities) -> Void
+        shouldEnableCompatibilityCSS: @escaping @MainActor (ProtocolTarget.ID) -> Bool,
+        markTargetDomainEnabled: @escaping @MainActor (ProtocolTarget.ID, ProtocolTarget.Capabilities) -> Void
     ) {
         self.transport = transport
         self.isCurrent = isCurrent
@@ -33,7 +33,7 @@ package final class ProtocolCommandChannel {
         isAttached()
     }
 
-    package func snapshot() async -> TransportSnapshot {
+    package func snapshot() async -> TransportSession.Snapshot {
         await transport.snapshot()
     }
 
@@ -44,11 +44,11 @@ package final class ProtocolCommandChannel {
     }
 
     @discardableResult
-    package func send(_ command: ProtocolCommand) async throws -> ProtocolCommandResult {
+    package func send(_ command: ProtocolCommand) async throws -> ProtocolCommand.Result {
         guard isCurrent() else {
-            throw TransportError.transportClosed
+            throw TransportSession.Error.transportClosed
         }
-        let result: ProtocolCommandResult
+        let result: ProtocolCommand.Result
         do {
             result = try await transport.send(command)
         } catch {
@@ -56,16 +56,16 @@ package final class ProtocolCommandChannel {
             throw error
         }
         guard isCurrent() else {
-            throw TransportError.transportClosed
+            throw TransportSession.Error.transportClosed
         }
         return result
     }
 
-    package func cssAgentShouldBeEnabledForCompatibility(targetID: ProtocolTargetIdentifier) -> Bool {
+    package func cssAgentShouldBeEnabledForCompatibility(targetID: ProtocolTarget.ID) -> Bool {
         shouldEnableCompatibilityCSS(targetID)
     }
 
-    package func markEnabled(_ domain: ProtocolTargetCapabilities, targetID: ProtocolTargetIdentifier) {
+    package func markEnabled(_ domain: ProtocolTarget.Capabilities, targetID: ProtocolTarget.ID) {
         markTargetDomainEnabled(targetID, domain)
     }
 }

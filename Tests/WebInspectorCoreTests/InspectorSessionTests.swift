@@ -23,7 +23,7 @@ func connectBootstrapsMainPageDocumentInOrder() async throws {
         "Console.enable",
     ])
     #expect(await session.hasActiveConnection)
-    #expect(await session.attachment.dom.snapshot().currentPageTargetID == ProtocolTargetIdentifier.pageMain)
+    #expect(await session.attachment.dom.snapshot().currentPageTargetID == ProtocolTarget.ID.pageMain)
     #expect(await session.attachment.dom.snapshot().documentsByID.count == 1)
 }
 
@@ -106,7 +106,7 @@ func connectBootstrapsWebPageTargetWithoutDomainMetadataAsCSSCapable() async thr
     }
 
     #expect(bootstrapMessages.compactMap { try? messageMethod($0.message) }.contains("CSS.enable") == false)
-    #expect(identity.targetID == ProtocolTargetIdentifier.pageMain)
+    #expect(identity.targetID == ProtocolTarget.ID.pageMain)
 }
 
 @Test
@@ -126,7 +126,7 @@ func domainPumpsApplyNetworkEventsToNetworkSession() async throws {
         await session.attachment.network.requestSnapshot(for: .init(targetID: .pageMain, requestID: .init("request-1")))
     )
 
-    #expect(request.id.targetID == ProtocolTargetIdentifier.pageMain)
+    #expect(request.id.targetID == ProtocolTarget.ID.pageMain)
     #expect(request.request.url == "https://example.com/app.js")
 }
 
@@ -339,7 +339,7 @@ func networkLazyFetchReturnsCommandResultFromRequestTarget() async throws {
     }
     let sent = try await waitForTargetMessage(backend, method: "Network.getResponseBody", after: sentCount)
 
-    #expect(sent.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    #expect(sent.targetIdentifier == ProtocolTarget.ID.frameAd)
     #expect(String(data: Data(sent.message.utf8), encoding: .utf8)?.contains(#""requestId":"request-1""#) == true)
 
     await receiveTargetReply(
@@ -351,7 +351,7 @@ func networkLazyFetchReturnsCommandResultFromRequestTarget() async throws {
     let result = try await performTask.value
 
     #expect(result.method == "Network.getResponseBody")
-    #expect(result.targetID == ProtocolTargetIdentifier.frameAd)
+    #expect(result.targetID == ProtocolTarget.ID.frameAd)
     #expect(String(data: result.resultData, encoding: .utf8)?.contains(#""body":"hello""#) == true)
 }
 
@@ -498,7 +498,7 @@ func selectedElementStyleRefreshLoadsCSSSession() async throws {
 @Test
 @MainActor
 func selectedNodeStylesTracksNewSelectionWhileElementStylesLoad() async throws {
-    let targetID = ProtocolTargetIdentifier("page")
+    let targetID = ProtocolTarget.ID("page")
     let css = CSSSession()
     let dom = DOMSession(elementStyles: css)
     dom.applyTargetCreated(
@@ -945,7 +945,7 @@ func cssPropertyToggleSendsSetStyleTextAndRefreshesStyles() async throws {
     let toggleSentCount = await backend.sentTargetMessages().count
     session.attachment.dom.requestSetCSSProperty(propertyID, enabled: false)
     let setStyleText = try await waitForTargetMessage(backend, method: "CSS.setStyleText", after: toggleSentCount)
-    #expect(setStyleText.targetIdentifier == ProtocolTargetIdentifier.pageMain)
+    #expect(setStyleText.targetIdentifier == ProtocolTarget.ID.pageMain)
     #expect(try messageParameters(setStyleText.message)["text"] as? String == "/* margin: 0; */")
     let refreshAfterToggleCount = await backend.sentTargetMessages().count
     await receiveTargetReply(
@@ -1300,7 +1300,7 @@ func frameTargetWithAdvertisedDOMCapabilityHydratesOnCreation() async throws {
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["DOM","Runtime"],"isProvisional":false}}}"#
     )
     let sent = try await waitForTargetMessage(backend, method: "DOM.getDocument", after: sentCount)
-    #expect(sent.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    #expect(sent.targetIdentifier == ProtocolTarget.ID.frameAd)
     await receiveTargetReply(
         transport,
         targetID: sent.targetIdentifier,
@@ -1318,7 +1318,7 @@ func frameTargetWithAdvertisedCSSCapabilityHydratesDOMWithoutCSSEnableOnCreation
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
 
-    let frameTargetID = ProtocolTargetIdentifier("frame-css")
+    let frameTargetID = ProtocolTarget.ID("frame-css")
     let sentCount = await backend.sentTargetMessages().count
     await transport.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-css","type":"frame","frameId":"css-frame","parentFrameId":"main-frame","domains":["DOM","CSS"],"isProvisional":false}}}"#
@@ -1366,7 +1366,7 @@ func frameTargetWithAdvertisedRuntimeAndConsoleEnablesRuntimeBeforeConsole() asy
     )
 
     let runtimeEnable = try await waitForTargetMessage(backend, method: "Runtime.enable", after: sentCount)
-    #expect(runtimeEnable.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    #expect(runtimeEnable.targetIdentifier == ProtocolTarget.ID.frameAd)
     await receiveTargetReply(
         transport,
         targetID: runtimeEnable.targetIdentifier,
@@ -1375,7 +1375,7 @@ func frameTargetWithAdvertisedRuntimeAndConsoleEnablesRuntimeBeforeConsole() asy
     )
 
     let consoleEnable = try await waitForTargetMessage(backend, method: "Console.enable", after: sentCount)
-    #expect(consoleEnable.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    #expect(consoleEnable.targetIdentifier == ProtocolTarget.ID.frameAd)
     await receiveTargetReply(
         transport,
         targetID: consoleEnable.targetIdentifier,
@@ -1397,7 +1397,7 @@ func frameTargetWithUnsupportedRuntimeStillEnablesConsole() async throws {
     )
 
     let runtimeEnable = try await waitForTargetMessage(backend, method: "Runtime.enable", after: sentCount)
-    #expect(runtimeEnable.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    #expect(runtimeEnable.targetIdentifier == ProtocolTarget.ID.frameAd)
     await receiveTargetErrorReply(
         transport,
         targetID: runtimeEnable.targetIdentifier,
@@ -1406,7 +1406,7 @@ func frameTargetWithUnsupportedRuntimeStillEnablesConsole() async throws {
     )
 
     let consoleEnable = try await waitForTargetMessage(backend, method: "Console.enable", after: sentCount)
-    #expect(consoleEnable.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    #expect(consoleEnable.targetIdentifier == ProtocolTarget.ID.frameAd)
     await receiveTargetReply(
         transport,
         targetID: consoleEnable.targetIdentifier,
@@ -1431,7 +1431,7 @@ func consoleEnableTargetNotFoundDoesNotMarkCommandUnsupported() async throws {
     )
 
     let runtimeEnable = try await waitForTargetMessage(backend, method: "Runtime.enable", after: sentCount)
-    #expect(runtimeEnable.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    #expect(runtimeEnable.targetIdentifier == ProtocolTarget.ID.frameAd)
     await receiveTargetReply(
         transport,
         targetID: runtimeEnable.targetIdentifier,
@@ -1440,7 +1440,7 @@ func consoleEnableTargetNotFoundDoesNotMarkCommandUnsupported() async throws {
     )
 
     let consoleEnable = try await waitForTargetMessage(backend, method: "Console.enable", after: sentCount)
-    #expect(consoleEnable.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    #expect(consoleEnable.targetIdentifier == ProtocolTarget.ID.frameAd)
     await receiveTargetErrorReply(
         transport,
         targetID: consoleEnable.targetIdentifier,
@@ -1466,7 +1466,7 @@ func frameTargetWithAdvertisedRuntimeOnlyEnablesRuntimeWithoutConsole() async th
     )
 
     let runtimeEnable = try await waitForTargetMessage(backend, method: "Runtime.enable", after: sentCount)
-    #expect(runtimeEnable.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    #expect(runtimeEnable.targetIdentifier == ProtocolTarget.ID.frameAd)
     await receiveTargetReply(
         transport,
         targetID: runtimeEnable.targetIdentifier,
@@ -1486,7 +1486,7 @@ func serviceWorkerTargetCreatedAfterAttachEnablesRuntimeBeforeConsole() async th
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
 
-    let serviceWorkerTargetID = ProtocolTargetIdentifier("service-worker-1")
+    let serviceWorkerTargetID = ProtocolTarget.ID("service-worker-1")
     let sentCount = await backend.sentTargetMessages().count
     await transport.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"service-worker-1","type":"service-worker","isProvisional":false}}}"#
@@ -1518,7 +1518,7 @@ func workerTargetCreatedAfterAttachEnablesRuntimeBeforeConsoleWithoutDomainMetad
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
 
-    let workerTargetID = ProtocolTargetIdentifier("worker-1")
+    let workerTargetID = ProtocolTarget.ID("worker-1")
     let sentCount = await backend.sentTargetMessages().count
     await transport.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"worker-1","type":"worker","isProvisional":false}}}"#
@@ -1548,7 +1548,7 @@ func serviceWorkerTargetDiscoveredBeforeAttachEnablesRuntimeBeforeConsoleAfterCo
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
     let session = await InspectorSession(configuration: .test)
-    let serviceWorkerTargetID = ProtocolTargetIdentifier("service-worker-1")
+    let serviceWorkerTargetID = ProtocolTarget.ID("service-worker-1")
 
     await transport.receiveRootMessage(
         cssCapablePageTargetCreatedMessage(targetID: "page-main", frameID: "main-frame", isProvisional: false)
@@ -1606,7 +1606,7 @@ func domCapableFrameTargetDiscoveredBeforeAttachHydratesAfterConnect() async thr
         method: "DOM.getDocument",
         after: bootstrapMessages.count
     )
-    #expect(frameRequest.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    #expect(frameRequest.targetIdentifier == ProtocolTarget.ID.frameAd)
     await receiveTargetReply(
         transport,
         targetID: frameRequest.targetIdentifier,
@@ -1624,7 +1624,7 @@ func provisionalFrameDocumentReplyBeforeCommitRehydratesCommittedFrame() async t
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
 
-    let provisionalTargetID = ProtocolTargetIdentifier("frame-provisional")
+    let provisionalTargetID = ProtocolTarget.ID("frame-provisional")
     let sentCountBeforeFrameTarget = await backend.sentTargetMessages().count
     await transport.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-provisional","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["DOM","Runtime"],"isProvisional":true}}}"#
@@ -1652,7 +1652,7 @@ func provisionalFrameDocumentReplyBeforeCommitRehydratesCommittedFrame() async t
         method: "DOM.getDocument",
         after: sentCountBeforeCommit
     )
-    #expect(committedRequest.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    #expect(committedRequest.targetIdentifier == ProtocolTarget.ID.frameAd)
     await receiveTargetReply(
         transport,
         targetID: committedRequest.targetIdentifier,
@@ -1662,7 +1662,7 @@ func provisionalFrameDocumentReplyBeforeCommitRehydratesCommittedFrame() async t
     await session.attachment.dom.waitUntilDocumentRequestsIdle(targetID: committedRequest.targetIdentifier)
 
     let snapshot = await session.attachment.dom.snapshot()
-    #expect(snapshot.targetsByID[ProtocolTargetIdentifier.frameAd]?.currentDocumentID != nil)
+    #expect(snapshot.targetsByID[ProtocolTarget.ID.frameAd]?.currentDocumentID != nil)
     #expect(snapshot.targetsByID[provisionalTargetID] == nil)
 }
 
@@ -1689,7 +1689,7 @@ func committedProvisionalFrameWithRuntimeAndConsoleEnablesCommittedTarget() asyn
         method: "Runtime.enable",
         after: sentCountBeforeFrameTarget
     )
-    #expect(runtimeEnable.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    #expect(runtimeEnable.targetIdentifier == ProtocolTarget.ID.frameAd)
     await receiveTargetReply(
         transport,
         targetID: runtimeEnable.targetIdentifier,
@@ -1702,7 +1702,7 @@ func committedProvisionalFrameWithRuntimeAndConsoleEnablesCommittedTarget() asyn
         method: "Console.enable",
         after: sentCountBeforeFrameTarget
     )
-    #expect(consoleEnable.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    #expect(consoleEnable.targetIdentifier == ProtocolTarget.ID.frameAd)
     await receiveTargetReply(
         transport,
         targetID: consoleEnable.targetIdentifier,
@@ -1727,7 +1727,7 @@ func committedNavigatedFrameReEnablesRuntimeAndConsoleOnNewTarget() async throws
         method: "Runtime.enable",
         after: sentCountBeforeFrameTarget
     )
-    #expect(firstRuntimeEnable.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    #expect(firstRuntimeEnable.targetIdentifier == ProtocolTarget.ID.frameAd)
     await receiveTargetReply(
         transport,
         targetID: firstRuntimeEnable.targetIdentifier,
@@ -1739,7 +1739,7 @@ func committedNavigatedFrameReEnablesRuntimeAndConsoleOnNewTarget() async throws
         method: "Console.enable",
         after: sentCountBeforeFrameTarget
     )
-    #expect(firstConsoleEnable.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    #expect(firstConsoleEnable.targetIdentifier == ProtocolTarget.ID.frameAd)
     await receiveTargetReply(
         transport,
         targetID: firstConsoleEnable.targetIdentifier,
@@ -1763,7 +1763,7 @@ func committedNavigatedFrameReEnablesRuntimeAndConsoleOnNewTarget() async throws
         method: "Runtime.enable",
         after: sentCountBeforeNavigation
     )
-    #expect(secondRuntimeEnable.targetIdentifier == ProtocolTargetIdentifier("frame-next"))
+    #expect(secondRuntimeEnable.targetIdentifier == ProtocolTarget.ID("frame-next"))
     await receiveTargetReply(
         transport,
         targetID: secondRuntimeEnable.targetIdentifier,
@@ -1776,7 +1776,7 @@ func committedNavigatedFrameReEnablesRuntimeAndConsoleOnNewTarget() async throws
         method: "Console.enable",
         after: sentCountBeforeNavigation
     )
-    #expect(secondConsoleEnable.targetIdentifier == ProtocolTargetIdentifier("frame-next"))
+    #expect(secondConsoleEnable.targetIdentifier == ProtocolTarget.ID("frame-next"))
     await receiveTargetReply(
         transport,
         targetID: secondConsoleEnable.targetIdentifier,
@@ -1820,9 +1820,9 @@ func subframeCommitDoesNotRetargetPageRuntimeOrConsoleState() async throws {
     let consoleSnapshot = await session.attachment.console.snapshot()
 
     #expect(runtimeSnapshot.executionContextsByKey[contextKey(.pageMain, 7)]?.targetID == .pageMain)
-    #expect(runtimeSnapshot.executionContextsByKey[contextKey(ProtocolTargetIdentifier("frame-committed"), 7)] == nil)
+    #expect(runtimeSnapshot.executionContextsByKey[contextKey(ProtocolTarget.ID("frame-committed"), 7)] == nil)
     #expect(consoleSnapshot.orderedMessageIDs.first?.targetID == .pageMain)
-    #expect(consoleSnapshot.orderedMessageIDs.contains { $0.targetID == ProtocolTargetIdentifier("frame-committed") } == false)
+    #expect(consoleSnapshot.orderedMessageIDs.contains { $0.targetID == ProtocolTarget.ID("frame-committed") } == false)
 }
 
 @Test
@@ -1832,7 +1832,7 @@ func provisionalFrameCommitCancelsInFlightDocumentRequestBeforeRehydrating() asy
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
 
-    let provisionalTargetID = ProtocolTargetIdentifier("frame-provisional")
+    let provisionalTargetID = ProtocolTarget.ID("frame-provisional")
     let sentCountBeforeFrameTarget = await backend.sentTargetMessages().count
     await transport.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-provisional","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["DOM","Runtime"],"isProvisional":true}}}"#
@@ -1854,7 +1854,7 @@ func provisionalFrameCommitCancelsInFlightDocumentRequestBeforeRehydrating() asy
         method: "DOM.getDocument",
         after: sentCountBeforeCommit
     )
-    #expect(committedRequest.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    #expect(committedRequest.targetIdentifier == ProtocolTarget.ID.frameAd)
     await receiveTargetReply(
         transport,
         targetID: committedRequest.targetIdentifier,
@@ -1865,7 +1865,7 @@ func provisionalFrameCommitCancelsInFlightDocumentRequestBeforeRehydrating() asy
 
     #expect(
         await pendingTargetReplyKeys(transport).contains(
-            TargetReplyKey(targetID: .frameAd, commandID: firstRequestMessageID)
+            TransportSession.ReplyKey(targetID: .frameAd, commandID: firstRequestMessageID)
         ) == false
     )
     await receiveTargetReply(
@@ -1887,7 +1887,7 @@ func oldlessProvisionalFrameCommitCancelsInFlightDocumentRequestBeforeRehydratin
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
 
-    let provisionalTargetID = ProtocolTargetIdentifier("frame-provisional")
+    let provisionalTargetID = ProtocolTarget.ID("frame-provisional")
     let sentCountBeforeFrameTarget = await backend.sentTargetMessages().count
     await transport.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-provisional","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","domains":["DOM","Runtime"],"isProvisional":true}}}"#
@@ -1909,7 +1909,7 @@ func oldlessProvisionalFrameCommitCancelsInFlightDocumentRequestBeforeRehydratin
         method: "DOM.getDocument",
         after: sentCountBeforeCommit
     )
-    #expect(committedRequest.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    #expect(committedRequest.targetIdentifier == ProtocolTarget.ID.frameAd)
     await receiveTargetReply(
         transport,
         targetID: committedRequest.targetIdentifier,
@@ -1920,7 +1920,7 @@ func oldlessProvisionalFrameCommitCancelsInFlightDocumentRequestBeforeRehydratin
 
     #expect(
         await pendingTargetReplyKeys(transport).contains(
-            TargetReplyKey(targetID: .frameAd, commandID: firstRequestMessageID)
+            TransportSession.ReplyKey(targetID: .frameAd, commandID: firstRequestMessageID)
         ) == false
     )
     await receiveTargetReply(
@@ -1951,7 +1951,7 @@ func frameDocumentRequestDoesNotBlockPageDOMEvents() async throws {
         method: "DOM.getDocument",
         after: sentCountBeforeFrameTarget
     )
-    #expect(frameDocumentRequest.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    #expect(frameDocumentRequest.targetIdentifier == ProtocolTarget.ID.frameAd)
 
     await receiveTargetDispatch(
         transport,
@@ -2027,7 +2027,7 @@ func ensureDOMDocumentLoadedReloadsInvalidatedPageDocument() async throws {
         method: "DOM.getDocument",
         after: sentCount
     )
-    #expect(reload.targetIdentifier == ProtocolTargetIdentifier.pageMain)
+    #expect(reload.targetIdentifier == ProtocolTarget.ID.pageMain)
     await receiveTargetReply(
         transport,
         targetID: reload.targetIdentifier,
@@ -2079,7 +2079,7 @@ func documentUpdatedAllowsNewDocumentRequestWhilePreviousRequestIsPending() asyn
         after: afterFirstRequest
     )
 
-    #expect(secondRequest.targetIdentifier == ProtocolTargetIdentifier.pageMain)
+    #expect(secondRequest.targetIdentifier == ProtocolTarget.ID.pageMain)
     #expect(try messageID(secondRequest.message) != messageID(firstRequest.message))
 
     await receiveTargetReply(
@@ -2092,7 +2092,7 @@ func documentUpdatedAllowsNewDocumentRequestWhilePreviousRequestIsPending() asyn
 
     #expect(
         await pendingTargetReplyKeys(transport).contains(
-            TargetReplyKey(targetID: firstRequest.targetIdentifier, commandID: try messageID(firstRequest.message))
+            TransportSession.ReplyKey(targetID: firstRequest.targetIdentifier, commandID: try messageID(firstRequest.message))
         ) == false
     )
     await receiveTargetReply(
@@ -2133,7 +2133,7 @@ func elementPickerBeginsAfterDocumentUpdatedInvalidatesLoadedDocument() async th
         method: "DOM.getDocument",
         after: sentCount
     )
-    #expect(documentRequest.targetIdentifier == ProtocolTargetIdentifier.pageMain)
+    #expect(documentRequest.targetIdentifier == ProtocolTarget.ID.pageMain)
     #expect(
         await backend.sentTargetMessages().dropFirst(sentCount).compactMap { try? messageMethod($0.message) } == [
             "DOM.getDocument",
@@ -2153,7 +2153,7 @@ func elementPickerBeginsAfterDocumentUpdatedInvalidatesLoadedDocument() async th
         method: "DOM.setInspectModeEnabled",
         after: afterDocumentRequest
     )
-    #expect(enableMessage.targetIdentifier == ProtocolTargetIdentifier.pageMain)
+    #expect(enableMessage.targetIdentifier == ProtocolTarget.ID.pageMain)
     #expect(try boolParameter("enabled", in: enableMessage.message) == true)
     await receiveTargetReply(
         transport,
@@ -2280,7 +2280,7 @@ func rootScopedDocumentUpdatedInvalidatesCurrentPageDocument() async throws {
         method: "DOM.getDocument",
         after: sentCountBeforeFrameTarget
     )
-    #expect(frameDocumentRequest.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    #expect(frameDocumentRequest.targetIdentifier == ProtocolTarget.ID.frameAd)
     await receiveTargetReply(
         transport,
         targetID: frameDocumentRequest.targetIdentifier,
@@ -2320,7 +2320,7 @@ func rootScopedDocumentUpdatedInvalidatesCurrentPageDocument() async throws {
 
     let afterUpdate = await session.attachment.dom.snapshot()
     #expect(afterUpdate.currentPageDocumentID == nil)
-    #expect(afterUpdate.targetsByID[ProtocolTargetIdentifier.frameAd]?.currentDocumentID == frameDocumentID)
+    #expect(afterUpdate.targetsByID[ProtocolTarget.ID.frameAd]?.currentDocumentID == frameDocumentID)
     #expect(afterUpdate.selection.selectedNodeID == nil)
     #expect(await backend.sentTargetMessages().count == sentCountBeforeTargetlessUpdate)
     #expect((await session.attachment.dom.treeProjection(rootTargetID: .pageMain)).rows.map(\.nodeID).contains(frameRootID) == false)
@@ -2349,7 +2349,7 @@ func lazyIframeInsertionAndFrameDocumentUpdateKeepParentPageTree() async throws 
         method: "DOM.getDocument",
         after: sentCountBeforeFrameTarget
     )
-    #expect(firstFrameDocumentRequest.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    #expect(firstFrameDocumentRequest.targetIdentifier == ProtocolTarget.ID.frameAd)
     await receiveTargetReply(
         transport,
         targetID: firstFrameDocumentRequest.targetIdentifier,
@@ -2420,7 +2420,7 @@ func lazyIframeInsertionAndFrameDocumentUpdateKeepParentPageTree() async throws 
         method: "DOM.getDocument",
         after: sentCountBeforeFrameUpdate
     )
-    #expect(frameDocumentReload.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    #expect(frameDocumentReload.targetIdentifier == ProtocolTarget.ID.frameAd)
     await receiveTargetReply(
         transport,
         targetID: frameDocumentReload.targetIdentifier,
@@ -2461,7 +2461,7 @@ func repeatedFrameDocumentUpdatedReissuesInFlightFrameReload() async throws {
         method: "DOM.getDocument",
         after: sentCountBeforeFrameTarget
     )
-    #expect(initialFrameDocumentRequest.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    #expect(initialFrameDocumentRequest.targetIdentifier == ProtocolTarget.ID.frameAd)
     await receiveTargetReply(
         transport,
         targetID: initialFrameDocumentRequest.targetIdentifier,
@@ -2481,7 +2481,7 @@ func repeatedFrameDocumentUpdatedReissuesInFlightFrameReload() async throws {
         method: "DOM.getDocument",
         after: sentCountBeforeFirstUpdate
     )
-    #expect(firstReload.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    #expect(firstReload.targetIdentifier == ProtocolTarget.ID.frameAd)
 
     let sentCountBeforeSecondUpdate = await backend.sentTargetMessages().count
     await receiveTargetDispatch(
@@ -2494,12 +2494,12 @@ func repeatedFrameDocumentUpdatedReissuesInFlightFrameReload() async throws {
         method: "DOM.getDocument",
         after: sentCountBeforeSecondUpdate
     )
-    #expect(secondReload.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    #expect(secondReload.targetIdentifier == ProtocolTarget.ID.frameAd)
     #expect(try messageID(secondReload.message) != messageID(firstReload.message))
 
     #expect(
         await pendingTargetReplyKeys(transport).contains(
-            TargetReplyKey(targetID: firstReload.targetIdentifier, commandID: try messageID(firstReload.message))
+            TransportSession.ReplyKey(targetID: firstReload.targetIdentifier, commandID: try messageID(firstReload.message))
         ) == false
     )
     await receiveTargetReply(
@@ -2539,7 +2539,7 @@ func pendingFrameDocumentHydratesPageOwnerPathBeforeProjection() async throws {
         method: "DOM.getDocument",
         after: sentCountBeforeFrameTarget
     )
-    #expect(frameDocumentRequest.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    #expect(frameDocumentRequest.targetIdentifier == ProtocolTarget.ID.frameAd)
     await receiveTargetReply(
         transport,
         targetID: frameDocumentRequest.targetIdentifier,
@@ -2552,7 +2552,7 @@ func pendingFrameDocumentHydratesPageOwnerPathBeforeProjection() async throws {
         method: "DOM.requestChildNodes",
         after: sentCountBeforeFrameTarget
     )
-    #expect(htmlHydrationRequest.targetIdentifier == ProtocolTargetIdentifier.pageMain)
+    #expect(htmlHydrationRequest.targetIdentifier == ProtocolTarget.ID.pageMain)
     #expect(try integerParameter("nodeId", in: htmlHydrationRequest.message) == 2)
     let sentCountAfterHTMLHydrationRequest = await backend.sentTargetMessages().count
     await receiveTargetDispatch(
@@ -2572,7 +2572,7 @@ func pendingFrameDocumentHydratesPageOwnerPathBeforeProjection() async throws {
         method: "DOM.requestChildNodes",
         after: sentCountAfterHTMLHydrationRequest
     )
-    #expect(bodyHydrationRequest.targetIdentifier == ProtocolTargetIdentifier.pageMain)
+    #expect(bodyHydrationRequest.targetIdentifier == ProtocolTarget.ID.pageMain)
     #expect(try integerParameter("nodeId", in: bodyHydrationRequest.message) == 4)
     await receiveTargetDispatch(
         transport,
@@ -2729,7 +2729,7 @@ func targetCommitBootstrapsCommittedMainPageTarget() async throws {
     )
 
     let snapshot = await session.attachment.dom.snapshot()
-    #expect(snapshot.currentPageTargetID == ProtocolTargetIdentifier.pageNext)
+    #expect(snapshot.currentPageTargetID == ProtocolTarget.ID.pageNext)
     #expect(snapshot.targetsByID[.pageNext]?.currentDocumentID != nil)
     #expect(snapshot.targetsByID[.pageMain] == nil)
     #expect(bootstrapMessages.map(\.targetIdentifier).allSatisfy { $0 == .pageNext })
@@ -2780,7 +2780,7 @@ func runtimeEvaluationResultUsesCommittedReplyTargetAfterNavigationCommit() asyn
 
     let objectID = RuntimeRemoteObjectIdentifier("eval-object")
     let snapshot = await session.attachment.runtime.snapshot()
-    #expect(result.targetID == ProtocolTargetIdentifier.pageNext)
+    #expect(result.targetID == ProtocolTarget.ID.pageNext)
     #expect(snapshot.remoteObjectsByID[.init(runtimeAgentTargetID: .pageMain, objectID: objectID)] == nil)
     #expect(snapshot.remoteObjectsByID[.init(runtimeAgentTargetID: .pageNext, objectID: objectID)]?.payload.description == "Window")
 
@@ -3015,7 +3015,7 @@ func detachedFrameSetChildNodesRootKeepsRequestNodeSelectable() async throws {
 
     let selectedNode = try #require(await session.attachment.dom.selectedNode)
     #expect(await selectedNode.nodeName == "IMG")
-    #expect(await session.attachment.dom.selectedNodeID?.documentID.targetID == ProtocolTargetIdentifier.frameAd)
+    #expect(await session.attachment.dom.selectedNodeID?.documentID.targetID == ProtocolTarget.ID.frameAd)
 }
 
 @Test
@@ -3224,7 +3224,7 @@ func elementPickerUsesBootstrappedTargetAfterTargetCommit() async throws {
         method: "DOM.setInspectModeEnabled",
         after: sentCountBeforePicker
     )
-    #expect(enableMessage.targetIdentifier == ProtocolTargetIdentifier.pageNext)
+    #expect(enableMessage.targetIdentifier == ProtocolTarget.ID.pageNext)
     await receiveTargetReply(
         transport,
         targetID: enableMessage.targetIdentifier,
@@ -3277,7 +3277,7 @@ func elementPickerIgnoresInspectEventBeforeInspectModeReply() async throws {
         method: "DOM.requestNode",
         after: sentCountBeforeAcceptedInspect
     )
-    #expect(requestNode.targetIdentifier == ProtocolTargetIdentifier.pageMain)
+    #expect(requestNode.targetIdentifier == ProtocolTarget.ID.pageMain)
 
     await receiveTargetDispatch(
         transport,
@@ -3391,7 +3391,7 @@ func restartedElementPickerIgnoresStaleInspectEventBeforeInspectModeReply() asyn
         method: "DOM.requestNode",
         after: sentCountBeforeAcceptedInspect
     )
-    #expect(requestNode.targetIdentifier == ProtocolTargetIdentifier.pageMain)
+    #expect(requestNode.targetIdentifier == ProtocolTarget.ID.pageMain)
     await receiveTargetDispatch(
         transport,
         targetID: .pageMain,
@@ -3512,7 +3512,7 @@ func inspectorInspectSelectsRequestedNodeAndDisablesPicker() async throws {
         method: "DOM.requestNode",
         after: sentCountBeforeInspect
     )
-    #expect(requestNode.targetIdentifier == ProtocolTargetIdentifier.pageMain)
+    #expect(requestNode.targetIdentifier == ProtocolTarget.ID.pageMain)
     await receiveTargetDispatch(
         transport,
         targetID: .pageMain,
@@ -3633,7 +3633,7 @@ func inspectorInspectRecordedExecutionContextOverridesEventTargetHint() async th
         method: "DOM.requestNode",
         after: sentCountBeforeInspect
     )
-    #expect(requestNode.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    #expect(requestNode.targetIdentifier == ProtocolTarget.ID.frameAd)
 
     await receiveTargetDispatch(
         transport,
@@ -3680,7 +3680,7 @@ func inspectorInspectOpaqueObjectIDFallsBackToPickerTarget() async throws {
         method: "DOM.requestNode",
         after: sentCountBeforeInspect
     )
-    #expect(requestNode.targetIdentifier == ProtocolTargetIdentifier.pageMain)
+    #expect(requestNode.targetIdentifier == ProtocolTarget.ID.pageMain)
     #expect(String(data: Data(requestNode.message.utf8), encoding: .utf8)?.contains(#""objectId":"opaque-remote-node""#) == true)
 
     await receiveTargetDispatch(
@@ -3748,7 +3748,7 @@ func targetScopedInspectorInspectUsesEventTargetAsFallback() async throws {
         method: "DOM.requestNode",
         after: sentCountBeforeInspect
     )
-    #expect(requestNode.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    #expect(requestNode.targetIdentifier == ProtocolTarget.ID.frameAd)
 
     await receiveTargetDispatch(
         transport,
@@ -3816,7 +3816,7 @@ func targetScopedInspectorInspectFallsBackToEventTargetWhenContextIsUnrecorded()
         method: "DOM.requestNode",
         after: sentCountBeforeInspect
     )
-    #expect(requestNode.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    #expect(requestNode.targetIdentifier == ProtocolTarget.ID.frameAd)
 
     await receiveTargetDispatch(
         transport,
@@ -4114,7 +4114,7 @@ func frameDOMNodeCopyDeleteRouteThroughPageTargetWithScopedNodeID() async throws
         await session.attachment.dom.highlightNode(for: frameHTMLID)
     }
     let highlightNode = try await waitForTargetMessage(backend, method: "DOM.highlightNode", after: countBeforeHighlight)
-    #expect(highlightNode.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    #expect(highlightNode.targetIdentifier == ProtocolTarget.ID.frameAd)
     #expect(try integerParameter("nodeId", in: highlightNode.message) == 102)
     await receiveTargetReply(
         transport,
@@ -4133,7 +4133,7 @@ func frameDOMNodeCopyDeleteRouteThroughPageTargetWithScopedNodeID() async throws
         method: "DOM.hideHighlight",
         after: countBeforeHideHighlight
     )
-    #expect(hideHighlight.targetIdentifier == ProtocolTargetIdentifier.frameAd)
+    #expect(hideHighlight.targetIdentifier == ProtocolTarget.ID.frameAd)
     await receiveTargetReply(
         transport,
         targetID: hideHighlight.targetIdentifier,
@@ -4147,7 +4147,7 @@ func frameDOMNodeCopyDeleteRouteThroughPageTargetWithScopedNodeID() async throws
         try await session.attachment.dom.copySelectedNodeText(.html)
     }
     let outerHTML = try await waitForTargetMessage(backend, method: "DOM.getOuterHTML", after: countBeforeHTMLCopy)
-    #expect(outerHTML.targetIdentifier == ProtocolTargetIdentifier.pageMain)
+    #expect(outerHTML.targetIdentifier == ProtocolTarget.ID.pageMain)
     #expect(try stringParameter("nodeId", in: outerHTML.message) == "frame-ad:102")
     await receiveTargetReply(
         transport,
@@ -4162,7 +4162,7 @@ func frameDOMNodeCopyDeleteRouteThroughPageTargetWithScopedNodeID() async throws
         try await session.attachment.dom.deleteSelectedNode(undoManager: nil)
     }
     let removeNode = try await waitForTargetMessage(backend, method: "DOM.removeNode", after: countBeforeDelete)
-    #expect(removeNode.targetIdentifier == ProtocolTargetIdentifier.pageMain)
+    #expect(removeNode.targetIdentifier == ProtocolTarget.ID.pageMain)
     #expect(try stringParameter("nodeId", in: removeNode.message) == "frame-ad:102")
     await receiveTargetReply(
         transport,
@@ -4500,7 +4500,7 @@ func deleteUndoKeepsOlderUndoStatesCurrentAfterReload() async throws {
     let countBeforeSecondUndo = await backend.sentTargetMessages().count
     undoManager.undo()
     let secondUndo = try await waitForTargetMessage(backend, method: "DOM.undo", after: countBeforeSecondUndo)
-    #expect(secondUndo.targetIdentifier == ProtocolTargetIdentifier.pageMain)
+    #expect(secondUndo.targetIdentifier == ProtocolTarget.ID.pageMain)
     await receiveTargetReply(
         transport,
         targetID: secondUndo.targetIdentifier,
@@ -4587,7 +4587,7 @@ func detachDuringConnectKeepsSessionDetached() async throws {
 
     await session.detach()
 
-    await #expect(throws: TransportError.transportClosed) {
+    await #expect(throws: TransportSession.Error.transportClosed) {
         try await connectTask.value
     }
     #expect(await session.hasActiveConnection == false)
@@ -4609,7 +4609,7 @@ func bootstrapFailureClearsSeededModelState() async throws {
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#
     )
 
-    await #expect(throws: TransportError.replyTimeout(method: "Inspector.enable", targetID: .pageMain)) {
+    await #expect(throws: TransportSession.Error.replyTimeout(method: "Inspector.enable", targetID: .pageMain)) {
         try await session.connect(transport: transport)
     }
 
@@ -4922,11 +4922,11 @@ private func waitForBackendTargetMessage(
         }
         group.addTask {
             try await Task.sleep(for: timeout)
-            throw TransportError.replyTimeout(method: method, targetID: nil)
+            throw TransportSession.Error.replyTimeout(method: method, targetID: nil)
         }
 
         guard let message = try await group.next() else {
-            throw TransportError.replyTimeout(method: method, targetID: nil)
+            throw TransportSession.Error.replyTimeout(method: method, targetID: nil)
         }
         return message
     }
@@ -5061,7 +5061,7 @@ private func applySingleRuleStyles(
 
 private func waitForCurrentNode(
     in session: InspectorSession,
-    targetID: ProtocolTargetIdentifier,
+    targetID: ProtocolTarget.ID,
     protocolNodeID: DOMProtocolNodeID
 ) async throws -> DOMNodeIdentifier {
     await session.attachment.dom.waitUntilDocumentRequestsIdle(targetID: targetID)
@@ -5097,7 +5097,7 @@ private func assertProjectionContainsFrameDocument(
 @discardableResult
 private func receiveTargetDispatch(
     _ transport: TransportSession,
-    targetID: ProtocolTargetIdentifier,
+    targetID: ProtocolTarget.ID,
     message: String
 ) async -> UInt64 {
     await transport.receiveRootMessage(targetDispatchMessage(targetID: targetID, message: message))
@@ -5106,7 +5106,7 @@ private func receiveTargetDispatch(
 @discardableResult
 private func receiveAndApplyTargetDispatch(
     _ transport: TransportSession,
-    targetID: ProtocolTargetIdentifier,
+    targetID: ProtocolTarget.ID,
     message: String,
     in session: InspectorSession,
     sourceLocation: SourceLocation = #_sourceLocation
@@ -5118,7 +5118,7 @@ private func receiveAndApplyTargetDispatch(
 
 private func receiveAndApplyRuntimeContextCreated(
     _ transport: TransportSession,
-    targetID: ProtocolTargetIdentifier = .pageMain,
+    targetID: ProtocolTarget.ID = .pageMain,
     contextID: Int,
     frameID: String = "main-frame",
     in session: InspectorSession,
@@ -5147,7 +5147,7 @@ private func receiveAndApplyRootMessage(
 
 private func receiveTargetReply(
     _ transport: TransportSession,
-    targetID: ProtocolTargetIdentifier,
+    targetID: ProtocolTarget.ID,
     messageID: UInt64,
     result: String
 ) async {
@@ -5160,7 +5160,7 @@ private func receiveTargetReply(
 
 private func receiveTargetErrorReply(
     _ transport: TransportSession,
-    targetID: ProtocolTargetIdentifier,
+    targetID: ProtocolTarget.ID,
     messageID: UInt64,
     message: String
 ) async {
@@ -5179,19 +5179,19 @@ private func expectProtocolEventApplied(
     #expect(await session.waitUntilProtocolEventApplied(sequence), sourceLocation: sourceLocation)
 }
 
-private func pendingTargetReplyKeys(_ transport: TransportSession) async -> [TargetReplyKey] {
+private func pendingTargetReplyKeys(_ transport: TransportSession) async -> [TransportSession.ReplyKey] {
     await transport.snapshot().pendingTargetReplyKeys
 }
 
 private func contextKey(
-    _ runtimeAgentTargetID: ProtocolTargetIdentifier,
+    _ runtimeAgentTargetID: ProtocolTarget.ID,
     _ contextID: Int
 ) -> RuntimeExecutionContextKey {
     RuntimeExecutionContextKey(runtimeAgentTargetID: runtimeAgentTargetID, contextID: ExecutionContextID(contextID))
 }
 
 private func targetDispatchMessage(
-    targetID: ProtocolTargetIdentifier,
+    targetID: ProtocolTarget.ID,
     message: String
 ) -> String {
     let escapedTargetID = jsonEscapedString(targetID.rawValue)
@@ -5217,7 +5217,7 @@ private func messageID(_ message: String) throws -> UInt64 {
        let id = UInt64(string) {
         return id
     }
-    throw TransportError.malformedMessage
+    throw TransportSession.Error.malformedMessage
 }
 
 private func messageMethod(_ message: String) throws -> String? {
@@ -5257,10 +5257,10 @@ private func integerParameter(_ name: String, in message: String) throws -> Int?
     return nil
 }
 
-private extension ProtocolTargetIdentifier {
-    static let pageMain = ProtocolTargetIdentifier("page-main")
-    static let pageNext = ProtocolTargetIdentifier("page-next")
-    static let frameAd = ProtocolTargetIdentifier("frame-ad")
+private extension ProtocolTarget.ID {
+    static let pageMain = ProtocolTarget.ID("page-main")
+    static let pageNext = ProtocolTarget.ID("page-next")
+    static let frameAd = ProtocolTarget.ID("frame-ad")
 }
 
 private extension InspectorSessionConfiguration {

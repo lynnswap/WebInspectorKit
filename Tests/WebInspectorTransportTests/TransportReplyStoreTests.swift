@@ -5,8 +5,8 @@ import Testing
 @Test
 func replyStoreRetargetsWrapperIndexWithPendingTargetReply() {
     var store = TransportReplyStore()
-    let oldKey = TargetReplyKey(targetID: .init("frame-old"), commandID: 7)
-    let newKey = TargetReplyKey(targetID: .init("frame-new"), commandID: 7)
+    let oldKey = TransportSession.ReplyKey(targetID: .init("frame-old"), commandID: 7)
+    let newKey = TransportSession.ReplyKey(targetID: .init("frame-new"), commandID: 7)
 
     store.insertTargetReply(
         pendingReply(targetID: .init("frame-old")),
@@ -24,7 +24,7 @@ func replyStoreRetargetsWrapperIndexWithPendingTargetReply() {
 @Test
 func replyStoreUsesCommandIndexForRetargetedTimeout() {
     var store = TransportReplyStore()
-    let oldKey = TargetReplyKey(targetID: .init("frame-old"), commandID: 7)
+    let oldKey = TransportSession.ReplyKey(targetID: .init("frame-old"), commandID: 7)
 
     store.insertTargetReply(
         pendingReply(targetID: .init("frame-old")),
@@ -34,15 +34,15 @@ func replyStoreUsesCommandIndexForRetargetedTimeout() {
     store.retargetPendingReplies(from: .init("frame-old"), to: .init("frame-new"))
     let removed = store.removeTargetReplyForTimeout(oldKey)
 
-    #expect(removed?.targetID == ProtocolTargetIdentifier("frame-new"))
+    #expect(removed?.targetID == ProtocolTarget.ID("frame-new"))
     #expect(store.pendingTargetReplyKeys.isEmpty)
 }
 
 @Test
 func replyStoreReplacingCommandCleansStaleIndexes() {
     var store = TransportReplyStore()
-    let oldKey = TargetReplyKey(targetID: .init("frame-old"), commandID: 7)
-    let newKey = TargetReplyKey(targetID: .init("frame-new"), commandID: 7)
+    let oldKey = TransportSession.ReplyKey(targetID: .init("frame-old"), commandID: 7)
+    let newKey = TransportSession.ReplyKey(targetID: .init("frame-new"), commandID: 7)
 
     store.insertTargetReply(
         pendingReply(targetID: .init("frame-old")),
@@ -60,12 +60,12 @@ func replyStoreReplacingCommandCleansStaleIndexes() {
     #expect(store.takeTargetReplyKey(forRootWrapperID: 200) == newKey)
 }
 
-private func pendingReply(targetID: ProtocolTargetIdentifier) -> TransportPendingReply {
-    TransportPendingReply(
+private func pendingReply(targetID: ProtocolTarget.ID) -> TransportSession.PendingReply {
+    TransportSession.PendingReply(
         domain: .dom,
         method: "DOM.getDocument",
         targetID: targetID,
-        promise: ReplyPromise<ProtocolCommandResult>(),
+        promise: ReplyPromise<ProtocolCommand.Result>(),
         hasBufferedProvisionalResponse: false
     )
 }

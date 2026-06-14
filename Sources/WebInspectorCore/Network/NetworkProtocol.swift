@@ -16,10 +16,10 @@ package struct NetworkRequestIdentifier: RawRepresentable, Hashable, Codable, Se
 }
 
 package struct NetworkRequestIdentifierKey: Hashable, Sendable {
-    package var targetID: ProtocolTargetIdentifier
+    package var targetID: ProtocolTarget.ID
     package var requestID: NetworkRequestIdentifier
 
-    package init(targetID: ProtocolTargetIdentifier, requestID: NetworkRequestIdentifier) {
+    package init(targetID: ProtocolTarget.ID, requestID: NetworkRequestIdentifier) {
         self.targetID = targetID
         self.requestID = requestID
     }

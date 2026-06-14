@@ -57,7 +57,7 @@ package enum TransportMessageParser {
         object["params"] = try jsonObject(from: parametersData)
         let data = try JSONSerialization.data(withJSONObject: object, options: [])
         guard let string = String(data: data, encoding: .utf8) else {
-            throw TransportError.malformedMessage
+            throw TransportSession.Error.malformedMessage
         }
         return string
     }
@@ -77,7 +77,7 @@ package enum TransportMessageParser {
         ]
         let data = try JSONSerialization.data(withJSONObject: object, options: [])
         guard let string = String(data: data, encoding: .utf8) else {
-            throw TransportError.malformedMessage
+            throw TransportSession.Error.malformedMessage
         }
         return string
     }
@@ -110,7 +110,7 @@ package enum TransportMessageParser {
     private static func parseSync(_ message: String) throws -> ParsedProtocolMessage {
         guard let data = message.data(using: .utf8),
               let object = try JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] else {
-            throw TransportError.malformedMessage
+            throw TransportSession.Error.malformedMessage
         }
 
         return ParsedProtocolMessage(

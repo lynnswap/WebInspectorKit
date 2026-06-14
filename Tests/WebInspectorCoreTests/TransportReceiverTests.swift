@@ -34,7 +34,7 @@ func transportReceiverBuffersMessagesUntilTransportIsSetAndPreservesOrder() asyn
         "Target.targetCreated",
         "Runtime.executionContextCreated",
     ])
-    #expect(await transport.snapshot().targetsByID[ProtocolTargetIdentifier("page-main")]?.frameID?.rawValue == "main-frame")
+    #expect(await transport.snapshot().targetsByID[ProtocolTarget.ID("page-main")]?.frameID?.rawValue == "main-frame")
 }
 
 @Test
@@ -75,7 +75,7 @@ func closedReceiverDoesNotDirtyReplacementTransport() async throws {
 
     #expect(try #require(await value(of: eventsTask)) == "Target.targetCreated")
     #expect(await oldTransport.snapshot().targetsByID.isEmpty)
-    #expect(await newTransport.snapshot().targetsByID[ProtocolTargetIdentifier("new-page")]?.frameID?.rawValue == "new-frame")
+    #expect(await newTransport.snapshot().targetsByID[ProtocolTarget.ID("new-page")]?.frameID?.rawValue == "new-frame")
 }
 
 private func value<Value: Sendable>(

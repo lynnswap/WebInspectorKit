@@ -122,19 +122,19 @@ package struct DOMTreeProjection: Equatable, Sendable {
 }
 
 package struct ProtocolTargetSnapshot: Equatable, Sendable {
-    package var id: ProtocolTargetIdentifier
-    package var kind: ProtocolTargetKind
+    package var id: ProtocolTarget.ID
+    package var kind: ProtocolTarget.Kind
     package var frameID: DOMFrameIdentifier?
     package var parentFrameID: DOMFrameIdentifier?
-    package var capabilities: ProtocolTargetCapabilities
+    package var capabilities: ProtocolTarget.Capabilities
     package var isProvisional: Bool
     package var isPaused: Bool
     package var currentDocumentID: DOMDocumentIdentifier?
 }
 
 package extension ProtocolTargetSnapshot {
-    var record: ProtocolTargetRecord {
-        ProtocolTargetRecord(
+    var record: ProtocolTarget.Record {
+        ProtocolTarget.Record(
             id: id,
             kind: kind,
             frameID: frameID,
@@ -150,7 +150,7 @@ package struct DOMFrameSnapshot: Equatable, Sendable {
     package var id: DOMFrameIdentifier
     package var parentFrameID: DOMFrameIdentifier?
     package var childFrameIDs: Set<DOMFrameIdentifier>
-    package var targetID: ProtocolTargetIdentifier?
+    package var targetID: ProtocolTarget.ID?
     package var currentDocumentID: DOMDocumentIdentifier?
 }
 
@@ -162,7 +162,7 @@ package enum DOMDocumentLifecycle: Equatable, Sendable {
 
 package struct DOMDocumentSnapshot: Equatable, Sendable {
     package var id: DOMDocumentIdentifier
-    package var targetID: ProtocolTargetIdentifier
+    package var targetID: ProtocolTarget.ID
     package var localDocumentLifetimeID: DOMDocumentLifetimeIdentifier
     package var lifecycle: DOMDocumentLifecycle
     package var rootNodeID: DOMNodeIdentifier
@@ -176,7 +176,7 @@ package enum FrameDocumentProjectionState: Equatable, Sendable {
 
 package struct FrameDocumentProjectionSnapshot: Equatable, Sendable {
     package var ownerNodeID: DOMNodeIdentifier?
-    package var frameTargetID: ProtocolTargetIdentifier
+    package var frameTargetID: ProtocolTarget.ID
     package var frameDocumentID: DOMDocumentIdentifier
     package var state: FrameDocumentProjectionState
 }
@@ -235,19 +235,19 @@ package struct DOMNodeSnapshot: Equatable, Sendable {
 
 package struct SelectionRequestSnapshot: Equatable, Sendable {
     package var id: SelectionRequestIdentifier
-    package var targetID: ProtocolTargetIdentifier
+    package var targetID: ProtocolTarget.ID
     package var documentID: DOMDocumentIdentifier
 }
 
 package struct DOMTargetStateSnapshot: Equatable, Sendable {
-    package var targetID: ProtocolTargetIdentifier
+    package var targetID: ProtocolTarget.ID
     package var currentDocumentID: DOMDocumentIdentifier?
     package var transactionIDs: [DOMTransactionIdentifier]
 }
 
 package struct DOMTransactionSnapshot: Equatable, Sendable {
     package var id: DOMTransactionIdentifier
-    package var targetID: ProtocolTargetIdentifier
+    package var targetID: ProtocolTarget.ID
     package var documentID: DOMDocumentIdentifier
     package var kind: DOMTransactionKind
     package var issuedSequence: UInt64
@@ -261,14 +261,14 @@ package struct DOMSelectionSnapshot: Equatable, Sendable {
 }
 
 package struct DOMSessionSnapshot: Equatable, Sendable {
-    package var currentPageTargetID: ProtocolTargetIdentifier?
+    package var currentPageTargetID: ProtocolTarget.ID?
     package var mainFrameID: DOMFrameIdentifier?
-    package var targetsByID: [ProtocolTargetIdentifier: ProtocolTargetSnapshot]
-    package var targetStatesByID: [ProtocolTargetIdentifier: DOMTargetStateSnapshot]
+    package var targetsByID: [ProtocolTarget.ID: ProtocolTargetSnapshot]
+    package var targetStatesByID: [ProtocolTarget.ID: DOMTargetStateSnapshot]
     package var framesByID: [DOMFrameIdentifier: DOMFrameSnapshot]
     package var documentsByID: [DOMDocumentIdentifier: DOMDocumentSnapshot]
     package var nodesByID: [DOMNodeIdentifier: DOMNodeSnapshot]
-    package var frameDocumentProjections: [ProtocolTargetIdentifier: FrameDocumentProjectionSnapshot]
+    package var frameDocumentProjections: [ProtocolTarget.ID: FrameDocumentProjectionSnapshot]
     package var transactions: [DOMTransactionSnapshot]
     package var currentNodeIDByKey: [DOMNodeCurrentKey: DOMNodeIdentifier]
     package var executionContextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContextRecord]
@@ -285,7 +285,7 @@ package extension DOMSessionSnapshot {
     }
 
     func executionContext(
-        runtimeAgentTargetID: ProtocolTargetIdentifier,
+        runtimeAgentTargetID: ProtocolTarget.ID,
         contextID: ExecutionContextID
     ) -> RuntimeExecutionContextRecord? {
         executionContextsByKey[

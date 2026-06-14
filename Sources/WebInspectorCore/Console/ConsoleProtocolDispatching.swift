@@ -32,7 +32,7 @@ package struct ConsoleProtocolCommands {
         }
     }
 
-    package func loggingChannels(from result: ProtocolCommandResult) throws -> [ConsoleLoggingChannelPayload] {
+    package func loggingChannels(from result: ProtocolCommand.Result) throws -> [ConsoleLoggingChannelPayload] {
         let payload = try TransportMessageParser.decode(LoggingChannelsResult.self, from: result.resultData)
         return payload.channels
     }
@@ -44,9 +44,9 @@ package struct ConsoleProtocolCommands {
 
 @MainActor
 package protocol ConsoleProtocolEventHandler: AnyObject {
-    func consoleMessageAdded(_ message: ConsoleMessagePayload, targetID: ProtocolTargetIdentifier, parameters: [RuntimeRemoteObject]?)
-    func consoleRepeatCountUpdated(count: Int, timestamp: Double?, targetID: ProtocolTargetIdentifier)
-    func consoleMessagesCleared(reason: ConsoleClearReason, targetID: ProtocolTargetIdentifier)
+    func consoleMessageAdded(_ message: ConsoleMessagePayload, targetID: ProtocolTarget.ID, parameters: [RuntimeRemoteObject]?)
+    func consoleRepeatCountUpdated(count: Int, timestamp: Double?, targetID: ProtocolTarget.ID)
+    func consoleMessagesCleared(reason: ConsoleClearReason, targetID: ProtocolTarget.ID)
 }
 
 @MainActor
@@ -61,7 +61,7 @@ package final class ConsoleProtocolEventDispatcher: ProtocolDomainEventDispatche
 
     package var domain: ProtocolDomain { .console }
 
-    package func dispatch(_ event: ProtocolEventEnvelope) async throws {
+    package func dispatch(_ event: ProtocolEvent) async throws {
         guard event.domain == .console,
               let targetID = event.targetID,
               let handler else {
@@ -97,17 +97,17 @@ package final class ConsoleProtocolEventDispatcher: ProtocolDomainEventDispatche
 extension ConsoleSession: ConsoleProtocolEventHandler {
     package func consoleMessageAdded(
         _ message: ConsoleMessagePayload,
-        targetID: ProtocolTargetIdentifier,
+        targetID: ProtocolTarget.ID,
         parameters: [RuntimeRemoteObject]?
     ) {
         applyMessageAdded(message, targetID: targetID, parameters: parameters)
     }
 
-    package func consoleRepeatCountUpdated(count: Int, timestamp: Double?, targetID: ProtocolTargetIdentifier) {
+    package func consoleRepeatCountUpdated(count: Int, timestamp: Double?, targetID: ProtocolTarget.ID) {
         applyRepeatCountUpdated(count: count, timestamp: timestamp, targetID: targetID)
     }
 
-    package func consoleMessagesCleared(reason: ConsoleClearReason, targetID: ProtocolTargetIdentifier) {
+    package func consoleMessagesCleared(reason: ConsoleClearReason, targetID: ProtocolTarget.ID) {
         applyMessagesCleared(reason: reason, targetID: targetID)
     }
 }

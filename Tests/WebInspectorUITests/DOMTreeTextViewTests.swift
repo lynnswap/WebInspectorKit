@@ -122,10 +122,10 @@ struct DOMTreeTextViewTests {
         view.toggleRowForTesting(containing: "<article")
         #expect(view.renderedTextForTesting.contains("<span id=\"nested-child\"></span>"))
 
-        let targetID = ProtocolTargetIdentifier("page-main")
+        let targetID = ProtocolTarget.ID("page-main")
         session.reset()
         session.applyTargetCreated(
-            ProtocolTargetRecord(
+            ProtocolTarget.Record(
                 id: targetID,
                 kind: .page,
                 frameID: DOMFrameIdentifier("main-frame")
@@ -163,17 +163,17 @@ struct DOMTreeTextViewTests {
 
     @Test
     func selectingProjectedFrameNodeOpensComposedAncestors() async throws {
-        let pageTargetID = ProtocolTargetIdentifier("page-main")
-        let frameTargetID = ProtocolTargetIdentifier("frame-ad-target")
+        let pageTargetID = ProtocolTarget.ID("page-main")
+        let frameTargetID = ProtocolTarget.ID("frame-ad-target")
         let frameID = DOMFrameIdentifier("frame-ad")
         let session = DOMSession()
 
         session.applyTargetCreated(
-            ProtocolTargetRecord(id: pageTargetID, kind: .page, frameID: DOMFrameIdentifier("main-frame")),
+            ProtocolTarget.Record(id: pageTargetID, kind: .page, frameID: DOMFrameIdentifier("main-frame")),
             makeCurrentMainPage: true
         )
         session.applyTargetCreated(
-            ProtocolTargetRecord(id: frameTargetID, kind: .frame, frameID: frameID)
+            ProtocolTarget.Record(id: frameTargetID, kind: .frame, frameID: frameID)
         )
         _ = session.replaceDocumentRoot(projectedPageDocument(frameID: frameID), targetID: pageTargetID)
         let frameRootID = session.replaceDocumentRoot(projectedFrameDocument(), targetID: frameTargetID)
@@ -244,10 +244,10 @@ private func makeTreeView(session: DOMSession) -> DOMTreeTextView {
 
 @MainActor
 private func makeDOMSession(root: DOMNodePayload = documentNode()) -> DOMSession {
-    let targetID = ProtocolTargetIdentifier("page-main")
+    let targetID = ProtocolTarget.ID("page-main")
     let session = DOMSession()
     session.applyTargetCreated(
-        ProtocolTargetRecord(
+        ProtocolTarget.Record(
             id: targetID,
             kind: .page,
             frameID: DOMFrameIdentifier("main-frame")
