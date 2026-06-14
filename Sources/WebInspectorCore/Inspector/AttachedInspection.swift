@@ -3,28 +3,30 @@ import Observation
 import WebKit
 import WebInspectorTransport
 
-package struct InspectorSessionError: Error, Equatable, Sendable, CustomStringConvertible {
-    package var message: String
+package extension InspectorSession {
+    struct Error: Swift.Error, Equatable, Sendable, CustomStringConvertible {
+        package var message: String
 
-    package init(_ message: String) {
-        self.message = message
+        package init(_ message: String) {
+            self.message = message
+        }
+
+        package var description: String {
+            message
+        }
     }
 
-    package var description: String {
-        message
-    }
-}
+    struct Configuration: Equatable, Sendable {
+        package var responseTimeout: Duration
+        package var bootstrapTimeout: Duration
 
-package struct InspectorSessionConfiguration: Equatable, Sendable {
-    package var responseTimeout: Duration
-    package var bootstrapTimeout: Duration
-
-    package init(
-        responseTimeout: Duration = .seconds(5),
-        bootstrapTimeout: Duration = .seconds(5)
-    ) {
-        self.responseTimeout = responseTimeout
-        self.bootstrapTimeout = bootstrapTimeout
+        package init(
+            responseTimeout: Duration = .seconds(5),
+            bootstrapTimeout: Duration = .seconds(5)
+        ) {
+            self.responseTimeout = responseTimeout
+            self.bootstrapTimeout = bootstrapTimeout
+        }
     }
 }
 
@@ -235,12 +237,14 @@ private final class InspectorTargetRegistry {
     }
 }
 
-@MainActor
-package protocol InspectorInspectableWebView: AnyObject {
-    var isInspectable: Bool { get set }
+package extension InspectorSession {
+    @MainActor
+    protocol InspectableWebView: AnyObject {
+        var isInspectable: Bool { get set }
+    }
 }
 
-extension WKWebView: InspectorInspectableWebView {}
+extension WKWebView: InspectorSession.InspectableWebView {}
 
 @MainActor
 private final class InspectorConnection {
@@ -368,9 +372,9 @@ package final class InspectorSession {
     package var hasActiveConnection: Bool {
         connectionPhase.activeConnection != nil
     }
-    package private(set) var lastError: InspectorSessionError?
+    package private(set) var lastError: InspectorSession.Error?
 
-    @ObservationIgnored private let configuration: InspectorSessionConfiguration
+    @ObservationIgnored private let configuration: InspectorSession.Configuration
     @ObservationIgnored private var connectionPhase: InspectorConnectionPhase
     @ObservationIgnored private var protocolEventDispatchers: ProtocolDomainEventDispatcherRegistry
 
@@ -403,7 +407,7 @@ package final class InspectorSession {
     }
 
     package init(
-        configuration: InspectorSessionConfiguration = .init(),
+        configuration: InspectorSession.Configuration = .init(),
         attachment: AttachedInspection? = nil
     ) {
         self.configuration = configuration
@@ -416,7 +420,7 @@ package final class InspectorSession {
     }
 
     package init(
-        configuration: InspectorSessionConfiguration = .init(),
+        configuration: InspectorSession.Configuration = .init(),
         targetGraph: TargetGraph = TargetGraph(),
         elementStyles: CSSSession = CSSSession(),
         network: NetworkSession = NetworkSession(),
@@ -439,7 +443,7 @@ package final class InspectorSession {
     }
 
     package init(
-        configuration: InspectorSessionConfiguration = .init(),
+        configuration: InspectorSession.Configuration = .init(),
         targetGraph: TargetGraph = TargetGraph(),
         dom: DOMSession,
         network: NetworkSession = NetworkSession(),
@@ -489,7 +493,7 @@ package final class InspectorSession {
                 },
                 fatalFailureHandler: { [weak self] message in
                     Task { @MainActor in
-                        self?.lastError = InspectorSessionError(message)
+                        self?.lastError = InspectorSession.Error(message)
                     }
                 }
             )
@@ -567,7 +571,7 @@ package final class InspectorSession {
             network.reset()
             runtime.reset()
             console.reset()
-            let sessionError = InspectorSessionError(String(describing: error))
+            let sessionError = InspectorSession.Error(String(describing: error))
             lastError = sessionError
             throw error
         }
@@ -696,7 +700,7 @@ package final class InspectorSession {
         do {
             _ = try await protocolEventDispatchers.dispatch(event)
         } catch {
-            lastError = InspectorSessionError("\(event.method): \(error)")
+            lastError = InspectorSession.Error("\(event.method): \(error)")
         }
     }
 
@@ -780,7 +784,7 @@ package final class InspectorSession {
             } catch is CancellationError {
             } catch {
                 InspectorRuntimeLog.warning("runtimeConsoleEnable.failed target=\(targetID.rawValue) reason=\(reason) error=\(error)")
-                lastError = InspectorSessionError(String(describing: error))
+                lastError = InspectorSession.Error(String(describing: error))
             }
         }
         target.startRuntimeConsoleEnableTask(task)
@@ -871,7 +875,7 @@ package final class InspectorSession {
 
     private func requireInspectableWebView() throws -> WKWebView {
         guard let webView = connection?.webView else {
-            throw InspectorSessionError("Inspector session is not attached to a WKWebView.")
+            throw InspectorSession.Error("Inspector session is not attached to a WKWebView.")
         }
         return webView
     }
@@ -932,7 +936,7 @@ package final class InspectorSession {
                 connection?.targets.target(for: targetID)?.markEnabled(domain)
             }
         )
-        let recordError: (InspectorSessionError?) -> Void = { [weak self] error in
+        let recordError: (InspectorSession.Error?) -> Void = { [weak self] error in
             self?.lastError = error
         }
         dom.bindProtocolChannel(channel, recordError: recordError)
@@ -958,13 +962,13 @@ package final class InspectorSession {
         connectionPhase.isCurrent(candidate)
     }
 
-    package static func prepareInspectability<WebView: InspectorInspectableWebView>(for webView: WebView) -> Bool {
+    package static func prepareInspectability<WebView: InspectorSession.InspectableWebView>(for webView: WebView) -> Bool {
         let originalValue = webView.isInspectable
         webView.isInspectable = true
         return originalValue
     }
 
-    package static func restoreInspectabilityIfNeeded<WebView: InspectorInspectableWebView>(
+    package static func restoreInspectabilityIfNeeded<WebView: InspectorSession.InspectableWebView>(
         on webView: WebView,
         originalValue: Bool?
     ) {

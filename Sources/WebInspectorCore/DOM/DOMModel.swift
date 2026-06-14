@@ -17,7 +17,7 @@ package final class DOMSession {
     private var nextSelectionRequestRawID: UInt64
     @ObservationIgnored var commandChannel: ProtocolCommandChannel?
     @ObservationIgnored let protocolCommands: DOMProtocolCommands
-    @ObservationIgnored var recordError: ((InspectorSessionError?) -> Void)?
+    @ObservationIgnored var recordError: ((InspectorSession.Error?) -> Void)?
     @ObservationIgnored let highlightController: DOMSessionHighlightController
     @ObservationIgnored let elementPicker: DOMSessionElementPickerController
     @ObservationIgnored let documentRequests: DOMSessionDocumentRequestController

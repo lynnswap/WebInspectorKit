@@ -407,7 +407,7 @@ package final class RuntimeState {
     @ObservationIgnored private var selectedContextIsExplicit: Bool
     @ObservationIgnored private var commandChannel: ProtocolCommandChannel?
     @ObservationIgnored private let protocolCommands: RuntimeProtocolCommands
-    @ObservationIgnored private var recordError: ((InspectorSessionError?) -> Void)?
+    @ObservationIgnored private var recordError: ((InspectorSession.Error?) -> Void)?
 
     package init() {
         selectedContextKey = nil
@@ -426,7 +426,7 @@ package final class RuntimeState {
 
     package func bindProtocolChannel(
         _ commandChannel: ProtocolCommandChannel,
-        recordError: @escaping (InspectorSessionError?) -> Void
+        recordError: @escaping (InspectorSession.Error?) -> Void
     ) {
         self.commandChannel = commandChannel
         self.recordError = recordError
@@ -1009,7 +1009,7 @@ package final class RuntimeState {
 
     private func requireCommandChannel(requiresActiveConnection: Bool = true) throws -> ProtocolCommandChannel {
         guard let commandChannel else {
-            throw InspectorSessionError("Inspector session is not attached.")
+            throw InspectorSession.Error("Inspector session is not attached.")
         }
         if requiresActiveConnection {
             try commandChannel.requireAttached()

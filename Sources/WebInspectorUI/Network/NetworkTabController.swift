@@ -2,9 +2,9 @@
 import UIKit
 
 @MainActor
-package struct NetworkTabController: BuiltInTabController {
+package struct NetworkTabController: WebInspectorTab.BuiltInController {
     package let tabID = WebInspectorTab.network.id
-    package let descriptor = TabDisplayDescriptor(
+    package let descriptor = WebInspectorTab.DisplayDescriptor(
         title: WebInspectorTab.network.title,
         image: WebInspectorTab.network.image
     )
@@ -15,9 +15,9 @@ package struct NetworkTabController: BuiltInTabController {
     }
 
     package func contentKeys(
-        for layout: WebInspectorTabHostLayout,
-        displayItem: TabDisplayItem
-    ) -> [TabContentKey] {
+        for layout: WebInspectorTab.HostLayout,
+        displayItem: WebInspectorTab.DisplayItem
+    ) -> [WebInspectorTab.ContentKey] {
         [
             contentKey(ContentID.list),
             contentKey(ContentID.detail),
@@ -25,9 +25,9 @@ package struct NetworkTabController: BuiltInTabController {
     }
 
     package func makeViewController(
-        for displayItem: TabDisplayItem,
+        for displayItem: WebInspectorTab.DisplayItem,
         session: WebInspectorSession,
-        layout: WebInspectorTabHostLayout
+        layout: WebInspectorTab.HostLayout
     ) -> UIViewController {
         let model = session.interface.networkPanelModel(for: session.attachment)
         let listViewController = cachedListViewController(session: session, model: model)
@@ -69,8 +69,8 @@ package struct NetworkTabController: BuiltInTabController {
         }
     }
 
-    private func contentKey(_ contentID: String) -> TabContentKey {
-        TabContentKey(tabID: tabID, contentID: contentID)
+    private func contentKey(_ contentID: String) -> WebInspectorTab.ContentKey {
+        WebInspectorTab.ContentKey(tabID: tabID, contentID: contentID)
     }
 }
 #endif

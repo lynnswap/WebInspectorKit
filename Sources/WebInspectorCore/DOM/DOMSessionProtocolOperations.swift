@@ -13,7 +13,7 @@ private struct TargetDestroyedEventParams: Decodable {
 extension DOMSession {
     package func bindProtocolChannel(
         _ commandChannel: ProtocolCommandChannel,
-        recordError: @escaping (InspectorSessionError?) -> Void
+        recordError: @escaping (InspectorSession.Error?) -> Void
     ) {
         self.commandChannel = commandChannel
         self.recordError = recordError
@@ -94,7 +94,7 @@ extension DOMSession {
                 break
             case let .failed(failure):
                 InspectorRuntimeLog.warning("requestNode.selectFailure target=\(targetID.rawValue) failure=\(failure)")
-                recordError?(InspectorSessionError(String(describing: failure)))
+                recordError?(InspectorSession.Error(String(describing: failure)))
             }
         case .requestChildNodes:
             break
@@ -137,7 +137,7 @@ extension DOMSession {
             try await perform(intent)
             return true
         } catch {
-            recordError?(InspectorSessionError(String(describing: error)))
+            recordError?(InspectorSession.Error(String(describing: error)))
             return false
         }
     }
@@ -149,7 +149,7 @@ extension DOMSession {
         do {
             try await perform(intent)
         } catch {
-            recordError?(InspectorSessionError(String(describing: error)))
+            recordError?(InspectorSession.Error(String(describing: error)))
         }
     }
 
@@ -160,7 +160,7 @@ extension DOMSession {
         do {
             try await perform(intent)
         } catch {
-            recordError?(InspectorSessionError(String(describing: error)))
+            recordError?(InspectorSession.Error(String(describing: error)))
         }
     }
 
@@ -172,7 +172,7 @@ extension DOMSession {
         do {
             try await beginElementPicker()
         } catch {
-            recordError?(InspectorSessionError(String(describing: error)))
+            recordError?(InspectorSession.Error(String(describing: error)))
         }
     }
 
@@ -186,7 +186,7 @@ extension DOMSession {
                     targetID: targetID,
                     details: "current=\(currentPageTargetID?.rawValue ?? "nil") root=false"
                 )
-                throw InspectorSessionError("DOM is not ready for element selection.")
+                throw InspectorSession.Error("DOM is not ready for element selection.")
             }
             targetID = try currentPageTargetForDOMAction()
         }
@@ -196,7 +196,7 @@ extension DOMSession {
                 targetID: targetID,
                 details: "current=\(currentPageTargetID?.rawValue ?? "nil") root=\(currentPageRootNode != nil) connected=\(commandChannel != nil)"
             )
-            throw InspectorSessionError("DOM is not ready for element selection.")
+            throw InspectorSession.Error("DOM is not ready for element selection.")
         }
         if isSelectingElement {
             await cancelElementPicker()
@@ -208,7 +208,7 @@ extension DOMSession {
         do {
             guard let intent = setInspectModeEnabledIntent(targetID: targetID, enabled: true) else {
                 recordElementPickerFailure(reason: "inspectModeUnavailable", targetID: targetID)
-                throw InspectorSessionError("DOM inspect mode is not available.")
+                throw InspectorSession.Error("DOM inspect mode is not available.")
             }
             try await perform(intent)
             guard elementPicker.beginAcceptingInspectEvents(for: pickerSession) else {
@@ -236,40 +236,40 @@ extension DOMSession {
         do {
             try await perform(intent)
         } catch {
-            recordError?(InspectorSessionError(String(describing: error)))
+            recordError?(InspectorSession.Error(String(describing: error)))
         }
     }
 
     package func copySelectedNodeText(_ kind: DOMNodeCopyTextKind) async throws -> String {
         guard commandChannel != nil else {
-            throw InspectorSessionError("Inspector session is not attached.")
+            throw InspectorSession.Error("Inspector session is not attached.")
         }
         guard let nodeID = selectedNodeID else {
-            throw InspectorSessionError("No DOM node is selected.")
+            throw InspectorSession.Error("No DOM node is selected.")
         }
         return try await copyNodeText(kind, for: nodeID)
     }
 
     package func copyNodeText(_ kind: DOMNodeCopyTextKind, for nodeID: DOMNode.ID) async throws -> String {
         guard commandChannel != nil else {
-            throw InspectorSessionError("Inspector session is not attached.")
+            throw InspectorSession.Error("Inspector session is not attached.")
         }
         switch kind {
         case .html:
             let commandTargetID = try currentPageTargetForDOMAction()
             guard let intent = outerHTMLIntent(for: nodeID, commandTargetID: commandTargetID) else {
-                throw InspectorSessionError("DOM node is no longer available.")
+                throw InspectorSession.Error("DOM node is no longer available.")
             }
             let result = try await perform(intent)
             return try protocolCommands.outerHTML(from: result)
         case .selectorPath:
             guard let node = node(for: nodeID) else {
-                throw InspectorSessionError("DOM node is no longer available.")
+                throw InspectorSession.Error("DOM node is no longer available.")
             }
             return selectorPath(for: node)
         case .xPath:
             guard let node = node(for: nodeID) else {
-                throw InspectorSessionError("DOM node is no longer available.")
+                throw InspectorSession.Error("DOM node is no longer available.")
             }
             return xPath(for: node)
         }
@@ -277,10 +277,10 @@ extension DOMSession {
 
     package func deleteSelectedNode(undoManager: UndoManager?) async throws {
         guard commandChannel != nil else {
-            throw InspectorSessionError("Inspector session is not attached.")
+            throw InspectorSession.Error("Inspector session is not attached.")
         }
         guard let nodeID = selectedNodeID else {
-            throw InspectorSessionError("No DOM node is selected.")
+            throw InspectorSession.Error("No DOM node is selected.")
         }
         try await deleteNode(nodeID, undoManager: undoManager)
     }
@@ -336,11 +336,11 @@ extension DOMSession {
                 try await reloadDocument(targetID: targetID)
                 return currentPageRootNode != nil
             } catch {
-                recordError?(InspectorSessionError(String(describing: error)))
+                recordError?(InspectorSession.Error(String(describing: error)))
                 return false
             }
         } catch {
-            recordError?(InspectorSessionError(String(describing: error)))
+            recordError?(InspectorSession.Error(String(describing: error)))
             return false
         }
     }
@@ -350,7 +350,7 @@ extension DOMSession {
             try await refreshSelectedNodeStyles()
             recordError?(nil)
         } catch {
-            recordError?(InspectorSessionError(String(describing: error)))
+            recordError?(InspectorSession.Error(String(describing: error)))
         }
     }
 
@@ -383,7 +383,7 @@ extension DOMSession {
             do {
                 try await setCSSProperty(propertyID, enabled: enabled)
             } catch {
-                recordError?(InspectorSessionError(String(describing: error)))
+                recordError?(InspectorSession.Error(String(describing: error)))
                 try? await refreshSelectedNodeStyles()
             }
         }
@@ -391,11 +391,11 @@ extension DOMSession {
 
     package func setCSSProperty(_ propertyID: CSSPropertyIdentifier, enabled: Bool) async throws {
         guard let intent = elementStyles.setStyleTextIntent(for: propertyID, enabled: enabled) else {
-            throw InspectorSessionError("CSS property is not editable.")
+            throw InspectorSession.Error("CSS property is not editable.")
         }
         let result = try await elementStyles.perform(intent)
         guard case let .setStyleText(targetID, _, _) = intent else {
-            throw InspectorSessionError("Unexpected CSS command intent.")
+            throw InspectorSession.Error("Unexpected CSS command intent.")
         }
         let style = try elementStyles.setStyleTextResult(from: result)
         elementStyles.applySetStyleTextResult(style, propertyID: propertyID, targetID: targetID)
@@ -451,7 +451,7 @@ extension DOMSession {
             } catch is CancellationError {
                 return
             } catch {
-                self.recordError?(InspectorSessionError(String(describing: error)))
+                self.recordError?(InspectorSession.Error(String(describing: error)))
             }
         }) {
             elementStyles.cancelRefresh(identity: cancelledIdentity)
@@ -593,7 +593,7 @@ extension DOMSession {
             do {
                 try await bootstrap()
             } catch {
-                recordError?(InspectorSessionError(String(describing: error)))
+                recordError?(InspectorSession.Error(String(describing: error)))
             }
         }
     }
@@ -629,7 +629,7 @@ extension DOMSession {
                 targetID: activeTargetID,
                 details: "error=\(error)"
             )
-            recordError?(InspectorSessionError(String(describing: error)))
+            recordError?(InspectorSession.Error(String(describing: error)))
         }
 
         await completeElementPicker(pickerSession)
@@ -653,21 +653,21 @@ extension DOMSession {
             case let .success(intent):
                 try await perform(intent)
                 if let failure = snapshot().selection.failure {
-                    throw InspectorSessionError("DOM.requestNode failed: \(failure)")
+                    throw InspectorSession.Error("DOM.requestNode failed: \(failure)")
                 }
             case let .failure(failure):
-                throw InspectorSessionError("DOM.requestNode could not be issued: \(failure)")
+                throw InspectorSession.Error("DOM.requestNode could not be issued: \(failure)")
             }
         case let .protocolNode(targetID, nodeID):
             let result = selectProtocolNode(targetID: targetID, nodeID: nodeID)
             if case let .failure(failure) = result {
                 guard case .unresolvedNode = failure else {
-                    throw InspectorSessionError("DOM protocol-node selection failed: \(failure)")
+                    throw InspectorSession.Error("DOM protocol-node selection failed: \(failure)")
                 }
                 try await reloadDocument(targetID: targetID)
                 let retryResult = selectProtocolNode(targetID: targetID, nodeID: nodeID)
                 if case let .failure(retryFailure) = retryResult {
-                    throw InspectorSessionError("DOM protocol-node selection failed after reload: \(retryFailure)")
+                    throw InspectorSession.Error("DOM protocol-node selection failed after reload: \(retryFailure)")
                 }
             }
         }
@@ -759,7 +759,7 @@ extension DOMSession {
                     return
                 }
                 InspectorRuntimeLog.error("getDocument.failed target=\(targetID.rawValue) reason=\(reason) error=\(error)")
-                recordError?(InspectorSessionError(String(describing: error)))
+                recordError?(InspectorSession.Error(String(describing: error)))
                 throw error
             }
         }
@@ -803,7 +803,7 @@ extension DOMSession {
             } catch {
                 InspectorRuntimeLog.warning("frameOwnerHydration.failed intent=\(intent) error=\(error)")
                 clearOwnerHydrationTransaction(for: intent)
-                recordError?(InspectorSessionError(String(describing: error)))
+                recordError?(InspectorSession.Error(String(describing: error)))
             }
         }
     }
@@ -917,7 +917,7 @@ extension DOMSession {
     private func currentPageTargetForDOMAction() throws -> ProtocolTarget.ID {
         guard commandChannel != nil,
               let targetID = currentPageTargetID else {
-            throw InspectorSessionError("Inspector session is not attached to a DOM page.")
+            throw InspectorSession.Error("Inspector session is not attached to a DOM page.")
         }
         return targetID
     }
@@ -963,13 +963,13 @@ extension DOMSession {
         do {
             try await perform(intent)
         } catch {
-            recordError?(InspectorSessionError(String(describing: error)))
+            recordError?(InspectorSession.Error(String(describing: error)))
         }
     }
 
     private func requireCommandChannel(requiresActiveConnection: Bool = true) throws -> ProtocolCommandChannel {
         guard let commandChannel else {
-            throw InspectorSessionError("Inspector session is not attached.")
+            throw InspectorSession.Error("Inspector session is not attached.")
         }
         if requiresActiveConnection {
             try commandChannel.requireAttached()
@@ -979,12 +979,12 @@ extension DOMSession {
 
     private func performDeleteNode(_ nodeID: DOMNode.ID) async throws -> DOMSessionDeleteUndoState {
         guard commandChannel != nil else {
-            throw InspectorSessionError("Inspector session is not attached.")
+            throw InspectorSession.Error("Inspector session is not attached.")
         }
         let commandTargetID = try currentPageTargetForDOMAction()
         guard let identity = actionIdentity(for: nodeID, commandTargetID: commandTargetID),
               let intent = removeNodeIntent(for: nodeID, commandTargetID: identity.commandTargetID) else {
-            throw InspectorSessionError("DOM node is no longer available.")
+            throw InspectorSession.Error("DOM node is no longer available.")
         }
         let documentID = nodeID.documentID
 
@@ -1134,7 +1134,7 @@ extension DOMSession {
             return
         }
         clearDeleteUndoHistory(using: undoManager)
-        recordError?(InspectorSessionError(String(describing: error)))
+        recordError?(InspectorSession.Error(String(describing: error)))
     }
 
     private func deleteUndoStateIsCurrent(

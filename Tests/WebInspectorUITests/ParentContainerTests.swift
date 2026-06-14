@@ -192,11 +192,11 @@ struct ParentContainerTests {
     @Test
     func displayProjectionKeepsCompactElementTabAndRegularCombinedDOM() {
         let tabs: [WebInspectorTab] = [.dom, .network]
-        let projection = TabDisplayProjection()
+        let projection = WebInspectorTab.DisplayProjection()
 
         #expect(
             projection.displayItems(for: .compact, tabs: tabs).map(\.id)
-                == [WebInspectorTab.dom.id, TabDisplayItem.domElementID, WebInspectorTab.network.id]
+                == [WebInspectorTab.dom.id, WebInspectorTab.DisplayItem.domElementID, WebInspectorTab.network.id]
         )
         #expect(
             projection.displayItems(for: .regular, tabs: tabs).map(\.id)
@@ -245,7 +245,7 @@ struct ParentContainerTests {
 
         #expect(
             host.displayedTabIdentifiersForTesting
-                == [WebInspectorTab.dom.id, TabDisplayItem.domElementID, WebInspectorTab.network.id]
+                == [WebInspectorTab.dom.id, WebInspectorTab.DisplayItem.domElementID, WebInspectorTab.network.id]
         )
     }
 
@@ -253,7 +253,7 @@ struct ParentContainerTests {
     func compactFactoryUsesDomainNavigationControllers() throws {
         let session = WebInspectorSession()
 
-        let domViewController = TabContentFactory.makeViewController(
+        let domViewController = WebInspectorTab.ContentFactory.makeViewController(
             for: .dom,
             session: session,
             hostLayout: .compact
@@ -261,7 +261,7 @@ struct ParentContainerTests {
         let domNavigationController = try #require(domViewController as? DOMCompactNavigationController)
         #expect(domNavigationController.viewControllers.first is DOMTreeViewController)
 
-        let elementViewController = TabContentFactory.makeViewController(
+        let elementViewController = WebInspectorTab.ContentFactory.makeViewController(
             for: .domElement(parent: WebInspectorTab.dom.id),
             session: session,
             hostLayout: .compact
@@ -269,7 +269,7 @@ struct ParentContainerTests {
         let elementNavigationController = try #require(elementViewController as? DOMCompactNavigationController)
         #expect(elementNavigationController.viewControllers.first is DOMElementViewController)
 
-        let networkViewController = TabContentFactory.makeViewController(
+        let networkViewController = WebInspectorTab.ContentFactory.makeViewController(
             for: .network,
             session: session,
             hostLayout: .compact
@@ -301,7 +301,7 @@ struct ParentContainerTests {
     @Test
     func cachedDOMTreeControllerIsSharedAcrossCompactAndRegularHosts() throws {
         let session = WebInspectorSession()
-        let compactViewController = TabContentFactory.makeViewController(
+        let compactViewController = WebInspectorTab.ContentFactory.makeViewController(
             for: .dom,
             session: session,
             hostLayout: .compact
@@ -311,7 +311,7 @@ struct ParentContainerTests {
             compactNavigationController.viewControllers.first as? DOMTreeViewController
         )
 
-        let regularRoot = TabContentFactory.makeViewController(
+        let regularRoot = WebInspectorTab.ContentFactory.makeViewController(
             for: .dom,
             session: session,
             hostLayout: .regular
@@ -344,7 +344,7 @@ struct ParentContainerTests {
         )
         let model = session.interface.networkPanelModel(for: session.attachment)
         let compactNavigationController = try #require(
-            TabContentFactory.makeViewController(
+            WebInspectorTab.ContentFactory.makeViewController(
                 for: .network,
                 session: session,
                 hostLayout: .compact
@@ -360,7 +360,7 @@ struct ParentContainerTests {
         }
         #expect(didPushDetail)
 
-        let regularRoot = TabContentFactory.makeViewController(
+        let regularRoot = WebInspectorTab.ContentFactory.makeViewController(
             for: .network,
             session: session,
             hostLayout: .regular

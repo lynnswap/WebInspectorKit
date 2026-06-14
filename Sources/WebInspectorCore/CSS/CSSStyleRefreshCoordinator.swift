@@ -27,7 +27,7 @@ final class CSSStyleRefreshCoordinator {
     private enum RefreshCommandFailure: Error, Sendable {
         case cancellation
         case transport(TransportSession.Error)
-        case inspector(InspectorSessionError)
+        case inspector(InspectorSession.Error)
         case other(String)
 
         init(_ error: any Error) {
@@ -35,7 +35,7 @@ final class CSSStyleRefreshCoordinator {
                 self = .cancellation
             } else if let error = error as? TransportSession.Error {
                 self = .transport(error)
-            } else if let error = error as? InspectorSessionError {
+            } else if let error = error as? InspectorSession.Error {
                 self = .inspector(error)
             } else {
                 self = .other(String(describing: error))
@@ -51,7 +51,7 @@ final class CSSStyleRefreshCoordinator {
             case let .inspector(error):
                 error
             case let .other(message):
-                InspectorSessionError(message)
+                InspectorSession.Error(message)
             }
         }
 
@@ -161,7 +161,7 @@ final class CSSStyleRefreshCoordinator {
 
     private func requireCommandChannel() throws -> ProtocolCommandChannel {
         guard let commandChannel else {
-            throw InspectorSessionError("Inspector session is not attached.")
+            throw InspectorSession.Error("Inspector session is not attached.")
         }
         try commandChannel.requireAttached()
         return commandChannel

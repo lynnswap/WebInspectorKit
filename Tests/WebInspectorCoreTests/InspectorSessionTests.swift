@@ -4371,7 +4371,7 @@ func deleteUndoReloadCancellationClearsUndoHistory() async throws {
     await session.attachment.dom.waitUntilDeleteUndoOperationsIdle()
     #expect(undoManager.canUndo == false)
     #expect(undoManager.canRedo == false)
-    #expect(session.lastError == InspectorSessionError(String(describing: CancellationError())))
+    #expect(session.lastError == InspectorSession.Error(String(describing: CancellationError())))
 }
 
 @MainActor
@@ -4553,7 +4553,7 @@ func deleteUndoIsDiscardedWhenDocumentIdentityChanges() async throws {
     #expect(await backend.sentTargetMessages().count == countBeforeUndo)
     #expect(undoManager.canUndo == false)
     #expect(undoManager.canRedo == false)
-    #expect(session.lastError == InspectorSessionError("DOM document changed before undo."))
+    #expect(session.lastError == InspectorSession.Error("DOM document changed before undo."))
 }
 
 @Test
@@ -4633,7 +4633,7 @@ func performIsRejectedUntilBootstrapAttaches() async throws {
     }
     _ = try await waitForTargetMessage(backend, method: "Inspector.enable")
 
-    await #expect(throws: InspectorSessionError("Inspector session is not attached.")) {
+    await #expect(throws: InspectorSession.Error("Inspector session is not attached.")) {
         try await session.attachment.dom.perform(.getDocument(targetID: .pageMain))
     }
 
@@ -4866,7 +4866,7 @@ private let newDocumentWithHeadChildCountResult = ##"{"root":{"nodeId":1,"nodeTy
 private let firstLazyFrameDocumentResult = ##"{"root":{"nodeId":101,"nodeType":9,"nodeName":"#document","documentURL":"https://frame.example/ad","baseURL":"https://frame.example/ad","children":[{"nodeId":102,"nodeType":1,"nodeName":"HTML","localName":"html","children":[{"nodeId":103,"nodeType":1,"nodeName":"BODY","localName":"body","children":[{"nodeId":104,"nodeType":1,"nodeName":"CANVAS","localName":"canvas"}]}]}]}}"##
 private let secondLazyFrameDocumentResult = ##"{"root":{"nodeId":201,"nodeType":9,"nodeName":"#document","documentURL":"https://frame.example/ad","baseURL":"https://frame.example/ad","children":[{"nodeId":202,"nodeType":1,"nodeName":"HTML","localName":"html","children":[{"nodeId":203,"nodeType":1,"nodeName":"BODY","localName":"body","children":[{"nodeId":204,"nodeType":1,"nodeName":"VIDEO","localName":"video"}]}]}]}}"##
 
-private final class TestInspectableWebView: InspectorInspectableWebView {
+private final class TestInspectableWebView: InspectorSession.InspectableWebView {
     var isInspectable: Bool
 
     init(isInspectable: Bool) {
@@ -5263,8 +5263,8 @@ private extension ProtocolTarget.ID {
     static let frameAd = ProtocolTarget.ID("frame-ad")
 }
 
-private extension InspectorSessionConfiguration {
-    static let test = InspectorSessionConfiguration(
+private extension InspectorSession.Configuration {
+    static let test = InspectorSession.Configuration(
         responseTimeout: testResponseTimeout,
         bootstrapTimeout: testBootstrapTimeout
     )

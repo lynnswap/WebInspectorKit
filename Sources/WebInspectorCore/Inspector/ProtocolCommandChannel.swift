@@ -39,7 +39,7 @@ package final class ProtocolCommandChannel {
 
     package func requireAttached() throws {
         guard isAttached() else {
-            throw InspectorSessionError("Inspector session is not attached.")
+            throw InspectorSession.Error("Inspector session is not attached.")
         }
     }
 

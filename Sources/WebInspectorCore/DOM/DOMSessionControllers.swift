@@ -365,11 +365,11 @@ final class DOMSessionDeleteUndoController {
         undoManager: UndoManager,
         undoTarget: AnyObject,
         operation: String,
-        recordError: (InspectorSessionError?) -> Void
+        recordError: (InspectorSession.Error?) -> Void
     ) -> Bool {
         guard currentDocumentID == state.documentID else {
             clear(using: undoManager, undoTarget: undoTarget)
-            recordError(InspectorSessionError("DOM document changed before \(operation)."))
+            recordError(InspectorSession.Error("DOM document changed before \(operation)."))
             return false
         }
         return true
@@ -380,11 +380,11 @@ final class DOMSessionDeleteUndoController {
         currentDocumentID: DOMDocumentIdentifier?,
         undoManager: UndoManager,
         undoTarget: AnyObject,
-        recordError: (InspectorSessionError?) -> Void
+        recordError: (InspectorSession.Error?) -> Void
     ) {
         guard let currentDocumentID else {
             clear(using: undoManager, undoTarget: undoTarget)
-            recordError(InspectorSessionError("DOM document is unavailable after delete undo operation."))
+            recordError(InspectorSession.Error("DOM document is unavailable after delete undo operation."))
             return
         }
         var updatedTrackedState = false

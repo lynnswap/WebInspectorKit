@@ -6,7 +6,7 @@ import UIKit
 package final class CompactTabBarController: UITabBarController, UITabBarControllerDelegate {
     private let session: WebInspectorSession
     private let tabTransitionAnimator = NoAnimationTabTransitionAnimator()
-    private var nativeTabByItemID: [TabDisplayItem.ID: UITab] = [:]
+    private var nativeTabByItemID: [WebInspectorTab.DisplayItem.ID: UITab] = [:]
     private var interfaceObservation: PortableObservationTracking.Token?
     private var isRenderingSelection = false
 
@@ -82,7 +82,7 @@ package final class CompactTabBarController: UITabBarController, UITabBarControl
         }
     }
 
-    private func setTabsIfNeeded(for displayItems: [TabDisplayItem], animated: Bool) {
+    private func setTabsIfNeeded(for displayItems: [WebInspectorTab.DisplayItem], animated: Bool) {
         let nextItemIDs = displayItems.map(\.id)
         guard tabs.map(\.identifier) != nextItemIDs else {
             return
@@ -90,7 +90,7 @@ package final class CompactTabBarController: UITabBarController, UITabBarControl
         setTabs(nativeTabs(for: displayItems), animated: animated)
     }
 
-    private func renderSelection(_ selectedDisplayItem: TabDisplayItem?) {
+    private func renderSelection(_ selectedDisplayItem: WebInspectorTab.DisplayItem?) {
         let nextSelectedTab = tabs.first { $0.identifier == selectedDisplayItem?.id }
         guard selectedTab?.identifier != nextSelectedTab?.identifier else {
             return
@@ -107,13 +107,13 @@ package final class CompactTabBarController: UITabBarController, UITabBarControl
         render()
     }
 
-    private func nativeTabs(for displayItems: [TabDisplayItem]) -> [UITab] {
+    private func nativeTabs(for displayItems: [WebInspectorTab.DisplayItem]) -> [UITab] {
         let activeItemIDs = Set(displayItems.map(\.id))
         nativeTabByItemID = nativeTabByItemID.filter { activeItemIDs.contains($0.key) }
         return displayItems.map(nativeTab(for:))
     }
 
-    private func nativeTab(for displayItem: TabDisplayItem) -> UITab {
+    private func nativeTab(for displayItem: WebInspectorTab.DisplayItem) -> UITab {
         let itemID = displayItem.id
         if let nativeTab = nativeTabByItemID[itemID] {
             return nativeTab
@@ -127,7 +127,7 @@ package final class CompactTabBarController: UITabBarController, UITabBarControl
             image: descriptor?.image,
             identifier: itemID
         ) { _ in
-            TabContentFactory.makeViewController(
+            WebInspectorTab.ContentFactory.makeViewController(
                 for: displayItem,
                 session: session,
                 hostLayout: .compact,

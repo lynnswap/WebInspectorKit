@@ -445,7 +445,7 @@ package final class NetworkSession {
     private var requestStore: NetworkRequestStore
     @ObservationIgnored private var commandChannel: ProtocolCommandChannel?
     @ObservationIgnored private let protocolCommands: NetworkProtocolCommands
-    @ObservationIgnored private var recordError: ((InspectorSessionError?) -> Void)?
+    @ObservationIgnored private var recordError: ((InspectorSession.Error?) -> Void)?
 
     package init() {
         requestStore = NetworkRequestStore()
@@ -468,7 +468,7 @@ package final class NetworkSession {
 
     package func bindProtocolChannel(
         _ commandChannel: ProtocolCommandChannel,
-        recordError: @escaping (InspectorSessionError?) -> Void
+        recordError: @escaping (InspectorSession.Error?) -> Void
     ) {
         self.commandChannel = commandChannel
         self.recordError = recordError
@@ -503,7 +503,7 @@ package final class NetworkSession {
             try protocolCommands.applyResponseBodyResult(result, to: request)
         } catch {
             request.markResponseBodyFailed(.unknown(String(describing: error)))
-            recordError?(InspectorSessionError(String(describing: error)))
+            recordError?(InspectorSession.Error(String(describing: error)))
         }
     }
 
@@ -867,7 +867,7 @@ package final class NetworkSession {
 
     private func requireCommandChannel() throws -> ProtocolCommandChannel {
         guard let commandChannel else {
-            throw InspectorSessionError("Inspector session is not attached.")
+            throw InspectorSession.Error("Inspector session is not attached.")
         }
         try commandChannel.requireAttached()
         return commandChannel

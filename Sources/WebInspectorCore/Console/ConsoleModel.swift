@@ -302,7 +302,7 @@ package final class ConsoleSession {
     @ObservationIgnored private var nextMessageOrdinal: UInt64
     @ObservationIgnored private var commandChannel: ProtocolCommandChannel?
     @ObservationIgnored private let protocolCommands: ConsoleProtocolCommands
-    @ObservationIgnored private var recordError: ((InspectorSessionError?) -> Void)?
+    @ObservationIgnored private var recordError: ((InspectorSession.Error?) -> Void)?
     private var targetRegistry: ConsoleTargetRegistry
 
     package init() {
@@ -324,7 +324,7 @@ package final class ConsoleSession {
 
     package func bindProtocolChannel(
         _ commandChannel: ProtocolCommandChannel,
-        recordError: @escaping (InspectorSessionError?) -> Void
+        recordError: @escaping (InspectorSession.Error?) -> Void
     ) {
         self.commandChannel = commandChannel
         self.recordError = recordError
@@ -470,7 +470,7 @@ package final class ConsoleSession {
 
     private func requireCommandChannel(requiresActiveConnection: Bool = true) throws -> ProtocolCommandChannel {
         guard let commandChannel else {
-            throw InspectorSessionError("Inspector session is not attached.")
+            throw InspectorSession.Error("Inspector session is not attached.")
         }
         if requiresActiveConnection {
             try commandChannel.requireAttached()
