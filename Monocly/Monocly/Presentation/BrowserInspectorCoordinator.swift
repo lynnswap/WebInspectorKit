@@ -70,6 +70,9 @@ final class BrowserInspectorCoordinator {
 
         let anchor = resolvePresentationAnchor(from: presenter)
         let sheetController = WebInspectorViewController(session: inspectorSession)
+        if #available(iOS 26.0, *) {
+            sheetController.drawsBackground = false
+        }
         sheetController.modalPresentationStyle = .pageSheet
         applyDefaultDetents(to: sheetController)
         bindSheetUserInterfaceStyle(to: sheetController, inspectorSession: inspectorSession)

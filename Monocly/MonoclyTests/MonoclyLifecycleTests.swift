@@ -197,7 +197,7 @@ struct MonoclyLifecycleTests {
     }
 
     @Test
-    func presentSheetKeepsReadableInspectorBackground() throws {
+    func presentSheetUsesLiquidGlassBackgroundPolicy() throws {
         try withCleanState { context in
             let fixture = try makeHostedRootViewController(context: context)
             let coordinator = BrowserInspectorCoordinator()
@@ -216,7 +216,7 @@ struct MonoclyLifecycleTests {
             )
             #expect(didPresent)
             if #available(iOS 26.0, *) {
-                #expect(sheetController.drawsBackground)
+                #expect(sheetController.drawsBackground == false)
             }
         }
     }
