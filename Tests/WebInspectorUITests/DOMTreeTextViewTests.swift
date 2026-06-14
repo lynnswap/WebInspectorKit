@@ -91,6 +91,27 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func selectionChangeUpdatesDecorationsWithoutRebuildingRenderedRows() async throws {
+        let session = makeDOMSession()
+        let view = makeTreeView(session: session)
+        let selectedRowCounts = await view.selectionObservationDeliveryForTesting.values {
+            view.selectedRowRectsForTesting().count
+        }
+        view.resetPerformanceCountersForTesting()
+
+        let htmlID = try #require(
+            session.snapshot().nodesByID.first { entry in
+                entry.value.localName == "html"
+            }?.key
+        )
+        session.selectNode(htmlID)
+
+        let didRenderSelection = await selectedRowCounts.waitUntil { $0 == 1 } != nil
+        #expect(didRenderSelection)
+        #expect(view.buildRenderedRowsCallCountForTesting == 0)
+    }
+
+    @Test
     func documentResetClearsLocalExpansionStateEvenWhenNodeIDsRepeat() async throws {
         let session = makeDOMSession()
         let view = makeTreeView(session: session)
@@ -160,7 +181,7 @@ struct DOMTreeTextViewTests {
             session.snapshot().currentNodeIDByKey[DOMNodeCurrentKey(targetID: frameTargetID, nodeID: .init(8))]
         )
         let view = makeTreeView(session: session)
-        let renderedState = await view.documentObservationDeliveryForTesting.values {
+        let renderedState = await view.selectionObservationDeliveryForTesting.values {
             view.layoutIfNeeded()
             return RenderedDOMTreeState(
                 text: view.renderedTextForTesting,

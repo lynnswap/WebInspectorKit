@@ -38,6 +38,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     private let dom: DOMSession
     private let menuModel: DOMTreeMenuModel
     private var documentObservation: PortableObservationTracking.Token?
+    private var selectionObservation: PortableObservationTracking.Token?
     private let textContentStorage = NSTextContentStorage()
     private let layoutManager = NSTextLayoutManager()
     private let textContainer = NSTextContainer()
@@ -143,6 +144,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     isolated deinit {
         reloadScheduler.cancel()
         documentObservation?.cancel()
+        selectionObservation?.cancel()
     }
 
     override var canBecomeFirstResponder: Bool {
@@ -458,7 +460,23 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     private func startObservingDocument() {
         documentObservation = withPortableContinuousObservation { [weak self] event in
             guard let self else { return }
+            _ = dom.treeRevision
+            guard event.kind == .initial || event.matches(\DOMSession.treeRevision) else {
+                return
+            }
             routeDOMInvalidation(from: dom, isInitial: event.kind == .initial)
+        }
+        selectionObservation = withPortableContinuousObservation { [weak self] event in
+            guard let self else { return }
+            _ = dom.selectionRevision
+            _ = dom.observedSelectedNodeID
+            guard event.kind == .initial
+                || event.matches(\DOMSession.selectionRevision)
+                || event.matches(\DOMSession.observedSelectedNodeID)
+            else {
+                return
+            }
+            routeSelectionInvalidation(from: dom)
         }
     }
 
@@ -471,17 +489,21 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
             previousTextCapacity: renderedText.count
         )
         let nextTreeContent = DOMTreeObservedContent(buildResult)
-        let nextSelectedNodeID = dom.selectedNodeID
         let treeChanged = isInitial || lastObservedTreeContent != nextTreeContent
-        let selectionChanged = lastRoutedSelectedNodeID != nextSelectedNodeID
         lastObservedTreeContent = nextTreeContent
-        lastRoutedSelectedNodeID = nextSelectedNodeID
 
         if treeChanged {
             scheduleTreeReload(for: .documentReset)
-        } else if selectionChanged {
-            handleSelectedNodeChange()
         }
+    }
+
+    private func routeSelectionInvalidation(from dom: DOMSession) {
+        let nextSelectedNodeID = dom.observedSelectedNodeID
+        guard lastRoutedSelectedNodeID != nextSelectedNodeID else {
+            return
+        }
+        lastRoutedSelectedNodeID = nextSelectedNodeID
+        handleSelectedNodeChange()
     }
 
     private func handleSelectedNodeChange() {
@@ -534,7 +556,6 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         )
         rows = buildResult.rows
         lastObservedTreeContent = DOMTreeObservedContent(buildResult)
-        lastRoutedSelectedNodeID = dom.selectedNodeID
         renderedRowsBuilder.pruneCachedMarkup(keeping: renderedRows.visibleNodeIDs)
         reconcileMultiSelectionAfterReload()
         renderedText = buildResult.text
@@ -671,7 +692,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func prepareSelectionForRendering(clearsMultiSelectionForDocumentSelection: Bool = false) {
-        let selectedNode = dom.selectedNode
+        let selectedNode = lastRoutedSelectedNodeID.flatMap { dom.node(for: $0) }
         let observation = selectionRevealState.observe(selectedNodeID: selectedNode?.id)
         reconcileMultiSelectionForRenderedSelection(
             selectedNodeID: observation.selectedNodeID,
@@ -1351,7 +1372,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func selectedNodeNeedsRowReload() -> Bool {
-        guard let selectedNodeID = dom.selectedNodeID else {
+        guard let selectedNodeID = lastRoutedSelectedNodeID else {
             return false
         }
         return !renderedRows.contains(nodeID: selectedNodeID)
@@ -1972,6 +1993,10 @@ extension DOMTreeTextView {
 
     var documentObservationDeliveryForTesting: PortableObservationTracking.Token {
         documentObservation!
+    }
+
+    var selectionObservationDeliveryForTesting: PortableObservationTracking.Token {
+        selectionObservation!
     }
 
     var rowCountForTesting: Int {

@@ -6,6 +6,9 @@ import WebInspectorTransport
 package final class DOMSession {
     package private(set) var elementStyles: CSSSession
     package var isSelectingElement: Bool
+    package private(set) var treeRevision: UInt64
+    package private(set) var selectionRevision: UInt64
+    package private(set) var observedSelectedNodeID: DOMNode.ID?
 
     private let targetGraph: TargetGraph
     private var currentPage: DOMCurrentPage
@@ -28,6 +31,9 @@ package final class DOMSession {
     ) {
         self.elementStyles = elementStyles
         isSelectingElement = false
+        treeRevision = 0
+        selectionRevision = 0
+        observedSelectedNodeID = nil
         self.targetGraph = targetGraph
         currentPage = DOMCurrentPage()
         documentStore = DOMDocumentStore()
@@ -83,6 +89,15 @@ package final class DOMSession {
         targetGraph.attachKnownFrameTargets(mainFrameID: currentPage.mainFrameID)
     }
 
+    private func recordTreeMutation() {
+        treeRevision &+= 1
+    }
+
+    private func recordSelectionMutation() {
+        observedSelectedNodeID = selection.selectedNodeID
+        selectionRevision &+= 1
+    }
+
     package func reset() {
         currentPage.clear()
         targetGraph.reset()
@@ -92,6 +107,8 @@ package final class DOMSession {
         elementStyles.reset()
         nextSelectionRequestRawID = 0
         isSelectingElement = false
+        recordTreeMutation()
+        recordSelectionMutation()
     }
 
     package func applyTargetCreated(
@@ -104,6 +121,7 @@ package final class DOMSession {
         if record.kind == .frame {
             targetGraph.attachFrameTarget(record.id)
         }
+        recordTreeMutation()
 
         guard makeCurrentMainPage, record.kind == .page else {
             return
@@ -120,14 +138,18 @@ package final class DOMSession {
         let resolvedMainFrameID = targetGraph.targetFrameID(for: targetID) ?? DOMFrame.ID("main:\(targetID.rawValue)")
         if currentPage.promote(targetID: targetID, mainFrameID: resolvedMainFrameID) {
             selection = DOMSelection()
+            recordSelectionMutation()
         }
         _ = state(for: targetID)
         targetGraph.assignMainFrame(resolvedMainFrameID, to: targetID)
         attachKnownFrameTargets()
+        recordTreeMutation()
     }
 
     package func applyTargetCommitted(targetID: ProtocolTarget.ID) {
-        targetGraph.markTargetCommitted(targetID)
+        if targetGraph.markTargetCommitted(targetID) {
+            recordTreeMutation()
+        }
     }
 
     package func applyTargetCommitted(oldTargetID: ProtocolTarget.ID, newTargetID: ProtocolTarget.ID) {
@@ -177,6 +199,7 @@ package final class DOMSession {
             }
         }
 
+        recordTreeMutation()
         reconcileSelection()
     }
 
@@ -197,8 +220,10 @@ package final class DOMSession {
         }
         if currentPage.clear(ifTarget: targetID) {
             selection = DOMSelection()
+            recordSelectionMutation()
         }
         documentStore.removeState(for: targetID)
+        recordTreeMutation()
         reconcileSelection()
     }
 
@@ -263,6 +288,7 @@ package final class DOMSession {
         }
         updateAllFrameDocumentProjectionStates()
 
+        recordTreeMutation()
         reconcileSelection()
         return rootNodeID
     }
@@ -287,6 +313,7 @@ package final class DOMSession {
             frameTargetID: targetID,
             documentID: documentID
         )
+        recordTreeMutation()
         reconcileSelection()
     }
 
@@ -328,6 +355,7 @@ package final class DOMSession {
             removeNodeSubtree(nodeID, detachFromParent: true)
         }
         buildSubtree(payload, document: document, parentID: nil)
+        recordTreeMutation()
         completePendingSelectionIfPossible(in: document)
     }
 
@@ -368,6 +396,7 @@ package final class DOMSession {
         document.removeOwnerHydrationTransactions()
         splicePendingTransactionFragments(parentRawNodeID: parent.protocolNodeID, into: document)
         if affectsVisibleTree {
+            recordTreeMutation()
             updateAllFrameDocumentProjectionStates()
             reconcileSelection()
         } else {
@@ -402,6 +431,7 @@ package final class DOMSession {
         parent.regularChildren = .loaded(children)
         relinkProtocolEffectiveChildren(of: parent)
         if affectsVisibleTree {
+            recordTreeMutation()
             reattachFrameDocumentProjections(using: replacementOwnerKeys)
             updateAllFrameDocumentProjectionStates()
             reconcileSelection()
@@ -419,6 +449,7 @@ package final class DOMSession {
         let affectsVisibleTree = document.containsConnectedNode(nodeID)
         removeNodeSubtree(nodeID, detachFromParent: true)
         if affectsVisibleTree {
+            recordTreeMutation()
             updateAllFrameDocumentProjectionStates()
             reconcileSelection()
         }
@@ -431,7 +462,14 @@ package final class DOMSession {
             return
         }
         if case .unrequested = node.regularChildren {
-            node.regularChildren = .unrequested(count: max(0, count))
+            let nextCount = max(0, count)
+            guard node.regularChildren.knownCount != nextCount else {
+                return
+            }
+            node.regularChildren = .unrequested(count: nextCount)
+            if document.containsConnectedNode(nodeID) {
+                recordTreeMutation()
+            }
         }
     }
 
@@ -449,6 +487,7 @@ package final class DOMSession {
         } else {
             node.attributes.append(.init(name: name, value: value))
         }
+        recordTreeMutation()
         if node.isFrameOwner,
            name.caseInsensitiveCompare("src") == .orderedSame {
             updateAllFrameDocumentProjectionStates()
@@ -463,6 +502,7 @@ package final class DOMSession {
             return
         }
         node.attributes.remove(at: index)
+        recordTreeMutation()
         if node.isFrameOwner,
            name.caseInsensitiveCompare("src") == .orderedSame {
             updateAllFrameDocumentProjectionStates()
@@ -603,6 +643,7 @@ package final class DOMSession {
             return
         }
         cancelSelectionTransaction(for: selection.select(nodeID))
+        recordSelectionMutation()
         syncSelectedElementStyles()
     }
 
@@ -995,6 +1036,7 @@ package final class DOMSession {
         clearCurrentDocumentReference(documentID, targetID: document.targetID)
         updateAllFrameDocumentProjectionStates()
         if selection.clearSelected(ifDocument: documentID) {
+            recordSelectionMutation()
             syncSelectedElementStyles()
         }
     }
@@ -1396,11 +1438,11 @@ package final class DOMSession {
     }
 
     private func reconcileSelection() {
-        guard selection.clearSelectedIfStale(nodeExists: { nodeID in
+        let didClearSelection = selection.clearSelectedIfStale(nodeExists: { nodeID in
             node(for: nodeID) != nil
-        }) else {
-            syncSelectedElementStyles()
-            return
+        })
+        if didClearSelection {
+            recordSelectionMutation()
         }
         syncSelectedElementStyles()
     }
@@ -1409,7 +1451,11 @@ package final class DOMSession {
         _ selectedNodeID: DOMNode.ID,
         pendingRequest: DOMSelectionRequest
     ) {
-        cancelSelectionTransaction(for: selection.complete(selectedNodeID, pendingRequest: pendingRequest))
+        let completedRequest = selection.complete(selectedNodeID, pendingRequest: pendingRequest)
+        cancelSelectionTransaction(for: completedRequest)
+        if completedRequest != nil {
+            recordSelectionMutation()
+        }
         syncSelectedElementStyles()
     }
 
@@ -1444,7 +1490,11 @@ package final class DOMSession {
         _ failure: SelectionResolutionFailure,
         clearSelected: Bool
     ) {
+        let previousSelectedNodeID = selection.selectedNodeID
         cancelSelectionTransaction(for: selection.fail(failure, clearSelected: clearSelected))
+        if selection.selectedNodeID != previousSelectedNodeID {
+            recordSelectionMutation()
+        }
     }
 
     package func syncSelectedElementStyles() {

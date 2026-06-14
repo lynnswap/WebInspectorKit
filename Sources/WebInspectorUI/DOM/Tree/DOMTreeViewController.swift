@@ -93,8 +93,14 @@ package final class DOMTreeViewController: UIViewController {
 
     private func startObservingDOMRoot(inspection: AttachedInspection) {
         domRootObservation?.cancel()
-        domRootObservation = withPortableContinuousObservation { [weak self, weak inspection] _ in
-            _ = inspection?.dom.currentPageRootNode
+        domRootObservation = withPortableContinuousObservation { [weak self, weak inspection] event in
+            guard let dom = inspection?.dom else {
+                return
+            }
+            _ = dom.treeRevision
+            guard event.kind == .initial || event.matches(\DOMSession.treeRevision) else {
+                return
+            }
             self?.ensureDOMDocumentLoadedIfNeeded()
         }
     }
