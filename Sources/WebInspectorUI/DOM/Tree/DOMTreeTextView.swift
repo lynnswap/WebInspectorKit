@@ -469,11 +469,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         selectionObservation = withPortableContinuousObservation { [weak self] event in
             guard let self else { return }
             _ = dom.selectionRevision
-            _ = dom.observedSelectedNodeID
-            guard event.kind == .initial
-                || event.matches(\DOMSession.selectionRevision)
-                || event.matches(\DOMSession.observedSelectedNodeID)
-            else {
+            guard event.kind == .initial || event.matches(\DOMSession.selectionRevision) else {
                 return
             }
             routeSelectionInvalidation(from: dom)
@@ -498,7 +494,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func routeSelectionInvalidation(from dom: DOMSession) {
-        let nextSelectedNodeID = dom.observedSelectedNodeID
+        let nextSelectedNodeID = dom.selectedNodeID
         guard lastRoutedSelectedNodeID != nextSelectedNodeID else {
             return
         }

@@ -8,7 +8,6 @@ package final class DOMSession {
     package var isSelectingElement: Bool
     package private(set) var treeRevision: UInt64
     package private(set) var selectionRevision: UInt64
-    package private(set) var observedSelectedNodeID: DOMNode.ID?
 
     private let targetGraph: TargetGraph
     private var currentPage: DOMCurrentPage
@@ -33,7 +32,6 @@ package final class DOMSession {
         isSelectingElement = false
         treeRevision = 0
         selectionRevision = 0
-        observedSelectedNodeID = nil
         self.targetGraph = targetGraph
         currentPage = DOMCurrentPage()
         documentStore = DOMDocumentStore()
@@ -94,7 +92,6 @@ package final class DOMSession {
     }
 
     private func recordSelectionMutation() {
-        observedSelectedNodeID = selection.selectedNodeID
         selectionRevision &+= 1
     }
 
