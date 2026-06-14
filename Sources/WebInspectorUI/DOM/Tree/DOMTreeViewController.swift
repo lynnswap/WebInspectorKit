@@ -9,6 +9,8 @@ package final class DOMTreeViewController: UIViewController {
     private weak var inspection: AttachedInspection?
     private var domRootObservation: PortableObservationTracking.Token?
     private var isEnsuringDOMDocumentLoaded = false
+    private var lastObservedTreeRevision: UInt64?
+    private var lastObservedCommandAvailabilityRevision: UInt64?
 
     package var domTreeUndoManager: UndoManager? {
         treeView.undoManager
@@ -94,17 +96,20 @@ package final class DOMTreeViewController: UIViewController {
     private func startObservingDOMRoot(inspection: AttachedInspection) {
         domRootObservation?.cancel()
         domRootObservation = withPortableContinuousObservation { [weak self, weak inspection] event in
-            guard let dom = inspection?.dom else {
+            guard let self, let dom = inspection?.dom else {
                 return
             }
-            _ = dom.treeRevision
-            _ = dom.commandAvailabilityRevision
-            guard event.kind == .initial
-                    || event.matches(\DOMSession.treeRevision)
-                    || event.matches(\DOMSession.commandAvailabilityRevision) else {
+            let treeRevision = dom.treeRevision
+            let commandAvailabilityRevision = dom.commandAvailabilityRevision
+            let shouldEnsureDocumentLoaded = event.kind == .initial
+                || lastObservedTreeRevision != treeRevision
+                || lastObservedCommandAvailabilityRevision != commandAvailabilityRevision
+            lastObservedTreeRevision = treeRevision
+            lastObservedCommandAvailabilityRevision = commandAvailabilityRevision
+            guard shouldEnsureDocumentLoaded else {
                 return
             }
-            self?.ensureDOMDocumentLoadedIfNeeded()
+            ensureDOMDocumentLoadedIfNeeded()
         }
     }
 

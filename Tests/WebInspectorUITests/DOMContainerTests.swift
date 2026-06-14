@@ -929,6 +929,10 @@ struct DOMContainerTests {
         let renderedDocumentState = await observation.values {
             dom.currentPageRootNode != nil
         }
+        let treeTextView = treeViewController.displayedDOMTreeTextViewForTesting
+        let renderedTreeText = await treeTextView.documentObservationDeliveryForTesting.values {
+            treeTextView.renderedTextForTesting
+        }
         #expect(await renderedDocumentState.waitUntilValue(false))
         #expect(await backend.sentTargetMessages().isEmpty)
 
@@ -945,6 +949,7 @@ struct DOMContainerTests {
         await dom.waitUntilDocumentRequestsIdle(targetID: documentRequest.targetIdentifier)
 
         #expect(await renderedDocumentState.waitUntilValue(true))
+        #expect(await renderedTreeText.waitUntil { $0.contains("<html") } != nil)
     }
 
     @Test
