@@ -55,10 +55,12 @@ public final class WebInspectorViewController: UIViewController {
         }
     }
 
+    /// Attaches to `webView` and returns after transport connection and protocol bootstrap complete.
     public func attach(to webView: WKWebView) async throws {
         try await session.attach(to: webView)
     }
 
+    /// Detaches from the inspected page and returns after transport teardown and model cleanup complete.
     public func detach() async {
         await session.detach()
     }

@@ -46,6 +46,13 @@ let inspector = WebInspectorViewController()
 try await inspector.attach(to: webView)
 ```
 
+The lifecycle methods are still async intentionally. `attach(to:)` returns only
+after transport connection and bootstrap have completed. `detach()` returns
+after transport teardown, model cleanup, and inspectability restoration have
+completed. If older app code treated attach or detach as fire-and-forget, keep
+that work in a `Task`, but keep UI that depends on inspector readiness after
+the `await`.
+
 Remove any app-side DOM snapshot depth, subtree depth, or auto-update debounce tuning.
 Those values are now owned by the native DOM runtime.
 

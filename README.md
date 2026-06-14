@@ -53,6 +53,12 @@ final class BrowserViewController: UIViewController {
 }
 ```
 
+`attach(to:)` completes after the inspector transport is connected and the
+initial WebKit protocol bootstrap has finished. `detach()` completes after
+transport teardown, model cleanup, and inspectability restoration have been
+applied. Treat both methods as lifecycle completion points, not fire-and-forget
+start requests.
+
 ## Tabs
 
 ```swift

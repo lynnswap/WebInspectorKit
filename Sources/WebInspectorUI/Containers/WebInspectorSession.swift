@@ -46,6 +46,7 @@ public final class WebInspectorSession {
         inspector.attachment
     }
 
+    /// Attaches to `webView` and returns after transport connection and protocol bootstrap complete.
     public func attach(to webView: WKWebView) async throws {
         stopPageUserInterfaceStyleObservation()
         do {
@@ -57,6 +58,7 @@ public final class WebInspectorSession {
         }
     }
 
+    /// Detaches from the inspected page and returns after transport teardown and model cleanup complete.
     public func detach() async {
         stopPageUserInterfaceStyleObservation()
         await detachAction(inspector)
