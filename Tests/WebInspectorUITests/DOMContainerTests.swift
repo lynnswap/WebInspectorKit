@@ -110,7 +110,7 @@ struct DOMContainerTests {
 
     @Test
     func elementStyleSectionHeaderTextFormatsRuleOriginText() {
-        let stylesheetLocation = CSSRuleSourceLocation(
+        let stylesheetLocation = CSSRule.SourceLocation(
             sourceURL: "https://styles.example/assets/result-card.css",
             line: 27,
             column: 22164
@@ -119,13 +119,13 @@ struct DOMContainerTests {
         #expect(DOMElementStyleSectionHeaderText.fullDisplayText(for: stylesheetLocation) == "https://styles.example/assets/result-card.css:28:22165")
 
         #expect(DOMElementStyleSectionHeaderText.displayText(
-            for: CSSRuleSourceLocation(sourceURL: "styles.css", line: 1)
+            for: CSSRule.SourceLocation(sourceURL: "styles.css", line: 1)
         ) == "styles.css:2")
         #expect(DOMElementStyleSectionHeaderText.displayText(
-            for: CSSRuleSourceLocation(sourceURL: "styles.css", line: 0, column: 80)
+            for: CSSRule.SourceLocation(sourceURL: "styles.css", line: 0, column: 80)
         ) == "styles.css:1")
         #expect(DOMElementStyleSectionHeaderText.displayText(
-            for: CSSRuleSourceLocation(sourceURL: "styles.css", line: 0, column: 81)
+            for: CSSRule.SourceLocation(sourceURL: "styles.css", line: 0, column: 81)
         ) == "styles.css:1:82")
         #expect(DOMElementStyleSectionHeaderText.displayText(for: .userAgent)?.isEmpty == false)
     }
@@ -461,13 +461,13 @@ struct DOMContainerTests {
             to: css,
             in: dom,
             additionalBodyProperties: [
-                CSSPropertyPayload(
+                CSSProperty.Payload(
                     name: "content",
                     value: #""var(--unused-a)""#,
                     text: #"content: "var(--unused-a)";"#,
                     status: .active
                 ),
-                CSSPropertyPayload(
+                CSSProperty.Payload(
                     name: "background",
                     value: "/* var(--unused-b) */ transparent",
                     text: "background: /* var(--unused-b) */ transparent;",
@@ -502,7 +502,7 @@ struct DOMContainerTests {
             to: css,
             in: dom,
             additionalBodyProperties: [
-                CSSPropertyPayload(
+                CSSProperty.Payload(
                     name: "border-color",
                     value: "var(--unused-a)",
                     text: "border-color: var(--unused-a);",
@@ -568,7 +568,7 @@ struct DOMContainerTests {
             to: css,
             in: dom,
             additionalBodyProperties: [
-                CSSPropertyPayload(
+                CSSProperty.Payload(
                     name: "background",
                     value: "myvar(--unused-a)",
                     text: "background: myvar(--unused-a);",
@@ -602,7 +602,7 @@ struct DOMContainerTests {
             to: css,
             in: dom,
             additionalBodyProperties: [
-                CSSPropertyPayload(
+                CSSProperty.Payload(
                     name: "--local-unused",
                     value: "var(--unused-a)",
                     text: "--local-unused: var(--unused-a);",
@@ -636,13 +636,13 @@ struct DOMContainerTests {
             to: css,
             in: dom,
             additionalBodyProperties: [
-                CSSPropertyPayload(
+                CSSProperty.Payload(
                     name: "--local-used",
                     value: "var(--unused-a)",
                     text: "--local-used: var(--unused-a);",
                     status: .active
                 ),
-                CSSPropertyPayload(
+                CSSProperty.Payload(
                     name: "border-color",
                     value: "var(--local-used)",
                     text: "border-color: var(--local-used);",
@@ -688,7 +688,7 @@ struct DOMContainerTests {
             to: css,
             in: dom,
             additionalRootProperties: [
-                CSSPropertyPayload(
+                CSSProperty.Payload(
                     name: "--unused-c",
                     value: "green",
                     text: "--unused-c: green;",
@@ -720,8 +720,8 @@ struct DOMContainerTests {
 
     @Test
     func elementStylePropertyViewSendsToggleActionWithImmediateControlFeedback() {
-        let propertyID = CSSPropertyIdentifier(
-            styleID: CSSStyleIdentifier(styleSheetID: CSSStyleSheetIdentifier("test-sheet"), ordinal: 0),
+        let propertyID = CSSProperty.ID(
+            styleID: CSSStyle.ID(styleSheetID: CSSStyleSheet.ID("test-sheet"), ordinal: 0),
             propertyIndex: 0
         )
         let property = CSSProperty(
@@ -733,7 +733,7 @@ struct DOMContainerTests {
             isEditable: true
         )
         let propertyView = DOMElementStylePropertyView()
-        var requestedPropertyID: CSSPropertyIdentifier?
+        var requestedPropertyID: CSSProperty.ID?
         var requestedEnabled: Bool?
         propertyView.bind(property: property) { propertyID, enabled in
             requestedPropertyID = propertyID
@@ -758,8 +758,8 @@ struct DOMContainerTests {
 
     @Test
     func elementStylePropertyViewIgnoresNonEditableAndAnonymousProperties() {
-        let styleID = CSSStyleIdentifier(styleSheetID: CSSStyleSheetIdentifier("test-sheet"), ordinal: 0)
-        let nonEditableID = CSSPropertyIdentifier(styleID: styleID, propertyIndex: 0)
+        let styleID = CSSStyle.ID(styleSheetID: CSSStyleSheet.ID("test-sheet"), ordinal: 0)
+        let nonEditableID = CSSProperty.ID(styleID: styleID, propertyIndex: 0)
         let nonEditable = CSSProperty(
             id: nonEditableID,
             name: "margin",
@@ -894,9 +894,9 @@ struct DOMContainerTests {
     }
 
     private struct BodyStyleIDs {
-        var margin: CSSPropertyIdentifier
-        var boxSizing: CSSPropertyIdentifier
-        var fontSize: CSSPropertyIdentifier
+        var margin: CSSProperty.ID
+        var boxSizing: CSSProperty.ID
+        var fontSize: CSSProperty.ID
     }
 
     private func makeDOMSession(capabilities: ProtocolTarget.Capabilities = []) -> DOMSession {
@@ -923,7 +923,7 @@ struct DOMContainerTests {
     private func applyBodyStyles(
         to css: CSSSession,
         in dom: DOMSession,
-        token: CSSStyleRefreshToken? = nil,
+        token: CSSStyle.RefreshToken? = nil,
         selector: String = "body",
         sourceURL: String = "styles.css",
         sourceLine: Int = 1,
@@ -932,38 +932,38 @@ struct DOMContainerTests {
     ) throws -> BodyStyleIDs {
         let identity = try dom.selectedCSSNodeStyleIdentity().get()
         let token = try #require(token ?? css.beginRefresh(identity: identity))
-        let styleSheetID = CSSStyleSheetIdentifier("test-sheet")
-        let styleID = CSSStyleIdentifier(styleSheetID: styleSheetID, ordinal: 0)
+        let styleSheetID = CSSStyleSheet.ID("test-sheet")
+        let styleID = CSSStyle.ID(styleSheetID: styleSheetID, ordinal: 0)
         css.applyRefresh(
             token: token,
-            matched: CSSMatchedStylesPayload(
+            matched: CSSStyle.MatchedStylesPayload(
                 matchedRules: [
-                    CSSRuleMatchPayload(
-                        rule: CSSRulePayload(
-                            id: CSSRuleIdentifier(styleSheetID: styleSheetID, ordinal: 0),
-                            selectorList: CSSSelectorList(
-                                selectors: [CSSSelector(text: selector)],
+                    CSSRule.MatchPayload(
+                        rule: CSSRule.Payload(
+                            id: CSSRule.ID(styleSheetID: styleSheetID, ordinal: 0),
+                            selectorList: CSSRule.SelectorList(
+                                selectors: [CSSRule.Selector(text: selector)],
                                 text: selector
                             ),
                             sourceURL: sourceURL,
                             sourceLine: sourceLine,
                             origin: .author,
-                            style: CSSStylePayload(
+                            style: CSSStyle.Payload(
                                 id: styleID,
                                 cssProperties: [
-                                    CSSPropertyPayload(
+                                    CSSProperty.Payload(
                                         name: "margin",
                                         value: marginValue,
                                         text: marginText,
                                         status: .active
                                     ),
-                                    CSSPropertyPayload(
+                                    CSSProperty.Payload(
                                         name: "box-sizing",
                                         value: "border-box",
                                         text: "/* box-sizing: border-box; */",
                                         status: .disabled
                                     ),
-                                    CSSPropertyPayload(
+                                    CSSProperty.Payload(
                                         name: "font-size",
                                         value: "12px",
                                         text: "font-size: 12px;",
@@ -977,13 +977,13 @@ struct DOMContainerTests {
                     ),
                 ]
             ),
-            inline: CSSInlineStylesPayload(),
+            inline: CSSStyle.InlineStylesPayload(),
             computed: []
         )
         return BodyStyleIDs(
-            margin: CSSPropertyIdentifier(styleID: styleID, propertyIndex: 0),
-            boxSizing: CSSPropertyIdentifier(styleID: styleID, propertyIndex: 1),
-            fontSize: CSSPropertyIdentifier(styleID: styleID, propertyIndex: 2)
+            margin: CSSProperty.ID(styleID: styleID, propertyIndex: 0),
+            boxSizing: CSSProperty.ID(styleID: styleID, propertyIndex: 1),
+            fontSize: CSSProperty.ID(styleID: styleID, propertyIndex: 2)
         )
     }
 
@@ -992,16 +992,16 @@ struct DOMContainerTests {
         in dom: DOMSession,
         bodyColorValue: String = "var(--foreground)",
         foregroundValue: String = "var(--palette-primary)",
-        additionalBodyProperties: [CSSPropertyPayload] = [],
-        additionalRootProperties: [CSSPropertyPayload] = []
+        additionalBodyProperties: [CSSProperty.Payload] = [],
+        additionalRootProperties: [CSSProperty.Payload] = []
     ) throws {
         let identity = try dom.selectedCSSNodeStyleIdentity().get()
         let token = try #require(css.beginRefresh(identity: identity))
-        let styleSheetID = CSSStyleSheetIdentifier("variables")
-        let bodyStyleID = CSSStyleIdentifier(styleSheetID: styleSheetID, ordinal: 0)
-        let rootStyleID = CSSStyleIdentifier(styleSheetID: styleSheetID, ordinal: 1)
+        let styleSheetID = CSSStyleSheet.ID("variables")
+        let bodyStyleID = CSSStyle.ID(styleSheetID: styleSheetID, ordinal: 0)
+        let rootStyleID = CSSStyle.ID(styleSheetID: styleSheetID, ordinal: 1)
         let bodyProperties = [
-            CSSPropertyPayload(
+            CSSProperty.Payload(
                 name: "color",
                 value: bodyColorValue,
                 text: "color: \(bodyColorValue);",
@@ -1009,25 +1009,25 @@ struct DOMContainerTests {
             ),
         ] + additionalBodyProperties
         let rootProperties = [
-            CSSPropertyPayload(
+            CSSProperty.Payload(
                 name: "--foreground",
                 value: foregroundValue,
                 text: "--foreground: \(foregroundValue);",
                 status: .active
             ),
-            CSSPropertyPayload(
+            CSSProperty.Payload(
                 name: "--palette-primary",
                 value: "#111",
                 text: "--palette-primary: #111;",
                 status: .active
             ),
-            CSSPropertyPayload(
+            CSSProperty.Payload(
                 name: "--unused-a",
                 value: "red",
                 text: "--unused-a: red;",
                 status: .active
             ),
-            CSSPropertyPayload(
+            CSSProperty.Payload(
                 name: "--unused-b",
                 value: "blue",
                 text: "--unused-b: blue;",
@@ -1037,19 +1037,19 @@ struct DOMContainerTests {
 
         css.applyRefresh(
             token: token,
-            matched: CSSMatchedStylesPayload(
+            matched: CSSStyle.MatchedStylesPayload(
                 matchedRules: [
-                    CSSRuleMatchPayload(
-                        rule: CSSRulePayload(
-                            id: CSSRuleIdentifier(styleSheetID: styleSheetID, ordinal: 0),
-                            selectorList: CSSSelectorList(
-                                selectors: [CSSSelector(text: "body")],
+                    CSSRule.MatchPayload(
+                        rule: CSSRule.Payload(
+                            id: CSSRule.ID(styleSheetID: styleSheetID, ordinal: 0),
+                            selectorList: CSSRule.SelectorList(
+                                selectors: [CSSRule.Selector(text: "body")],
                                 text: "body"
                             ),
                             sourceURL: "variables.css",
                             sourceLine: 12,
                             origin: .author,
-                            style: CSSStylePayload(
+                            style: CSSStyle.Payload(
                                 id: bodyStyleID,
                                 cssProperties: bodyProperties,
                                 cssText: bodyProperties.compactMap(\.text).joined(separator: "\n")
@@ -1059,19 +1059,19 @@ struct DOMContainerTests {
                     ),
                 ],
                 inherited: [
-                    CSSInheritedStyleEntry(
+                    CSSStyle.InheritedStyleEntry(
                         matchedRules: [
-                            CSSRuleMatchPayload(
-                                rule: CSSRulePayload(
-                                    id: CSSRuleIdentifier(styleSheetID: styleSheetID, ordinal: 1),
-                                    selectorList: CSSSelectorList(
-                                        selectors: [CSSSelector(text: ":root")],
+                            CSSRule.MatchPayload(
+                                rule: CSSRule.Payload(
+                                    id: CSSRule.ID(styleSheetID: styleSheetID, ordinal: 1),
+                                    selectorList: CSSRule.SelectorList(
+                                        selectors: [CSSRule.Selector(text: ":root")],
                                         text: ":root"
                                     ),
                                     sourceURL: "variables.css",
                                     sourceLine: 1,
                                     origin: .author,
-                                    style: CSSStylePayload(
+                                    style: CSSStyle.Payload(
                                         id: rootStyleID,
                                         cssProperties: rootProperties,
                                         cssText: rootProperties.compactMap(\.text).joined(separator: "\n")
@@ -1083,7 +1083,7 @@ struct DOMContainerTests {
                     ),
                 ]
             ),
-            inline: CSSInlineStylesPayload(),
+            inline: CSSStyle.InlineStylesPayload(),
             computed: []
         )
     }

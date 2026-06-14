@@ -181,10 +181,10 @@ final class DOMSessionDocumentRequestController {
 final class DOMSessionElementStyleHydrationController {
     @MainActor
     private final class Refresh {
-        let identity: CSSNodeStyleIdentity
+        let identity: CSSNodeStyles.Identity
         fileprivate var task: Task<Void, Never>?
 
-        init(identity: CSSNodeStyleIdentity) {
+        init(identity: CSSNodeStyles.Identity) {
             self.identity = identity
         }
 
@@ -200,10 +200,10 @@ final class DOMSessionElementStyleHydrationController {
 
     @MainActor
     private final class PropertyUpdateRequest {
-        let propertyID: CSSPropertyIdentifier
+        let propertyID: CSSProperty.ID
         fileprivate var task: Task<Void, Never>?
 
-        init(propertyID: CSSPropertyIdentifier) {
+        init(propertyID: CSSProperty.ID) {
             self.propertyID = propertyID
         }
 
@@ -219,7 +219,7 @@ final class DOMSessionElementStyleHydrationController {
 
     private(set) var isActive = false
     private var activeRefresh: Refresh?
-    private var propertyUpdateRequests: [CSSPropertyIdentifier: PropertyUpdateRequest] = [:]
+    private var propertyUpdateRequests: [CSSProperty.ID: PropertyUpdateRequest] = [:]
 
     @discardableResult
     func setActive(_ isActive: Bool) -> Bool {
@@ -230,15 +230,15 @@ final class DOMSessionElementStyleHydrationController {
         return true
     }
 
-    func isRefreshing(identity: CSSNodeStyleIdentity) -> Bool {
+    func isRefreshing(identity: CSSNodeStyles.Identity) -> Bool {
         activeRefresh?.identity == identity
     }
 
     @discardableResult
     func startRefresh(
-        identity: CSSNodeStyleIdentity,
-        operation: @escaping @MainActor (CSSNodeStyleIdentity) async -> Void
-    ) -> CSSNodeStyleIdentity? {
+        identity: CSSNodeStyles.Identity,
+        operation: @escaping @MainActor (CSSNodeStyles.Identity) async -> Void
+    ) -> CSSNodeStyles.Identity? {
         let cancelledIdentity = cancelRefresh()
         let refresh = Refresh(identity: identity)
         activeRefresh = refresh
@@ -255,7 +255,7 @@ final class DOMSessionElementStyleHydrationController {
     }
 
     @discardableResult
-    func cancelRefresh() -> CSSNodeStyleIdentity? {
+    func cancelRefresh() -> CSSNodeStyles.Identity? {
         guard let refresh = activeRefresh else {
             return nil
         }
@@ -266,8 +266,8 @@ final class DOMSessionElementStyleHydrationController {
 
     @discardableResult
     func startPropertyUpdate(
-        propertyID: CSSPropertyIdentifier,
-        operation: @escaping @MainActor (CSSPropertyIdentifier) async -> Void
+        propertyID: CSSProperty.ID,
+        operation: @escaping @MainActor (CSSProperty.ID) async -> Void
     ) -> Bool {
         guard propertyUpdateRequests[propertyID] == nil else {
             return false

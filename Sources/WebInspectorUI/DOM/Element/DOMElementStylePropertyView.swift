@@ -5,7 +5,7 @@ import UIKit
 
 @MainActor
 package final class DOMElementStylePropertyView: UIView {
-    package typealias ToggleAction = @MainActor (CSSPropertyIdentifier, Bool) -> Bool
+    package typealias ToggleAction = @MainActor (CSSProperty.ID, Bool) -> Bool
 
     private var propertyObservation: PortableObservationTracking.Token?
     private let declarationTextView = UITextView()
@@ -228,7 +228,7 @@ package final class DOMElementStylePropertyView: UIView {
 
 @MainActor
 private enum DOMElementStylePropertyViewPreviewData {
-    private static let styleID = CSSStyleIdentifier(styleSheetID: .init("preview"), ordinal: 0)
+    private static let styleID = CSSStyle.ID(styleSheetID: .init("preview"), ordinal: 0)
 
     static func sourceText(for property: CSSProperty) -> String {
         var text = "\(property.name): \(property.value)"
@@ -241,7 +241,7 @@ private enum DOMElementStylePropertyViewPreviewData {
     static func makeProperties() -> [CSSProperty] {
         [
             CSSProperty(
-                id: CSSPropertyIdentifier(styleID: styleID, propertyIndex: 0),
+                id: CSSProperty.ID(styleID: styleID, propertyIndex: 0),
                 name: "margin",
                 value: "0",
                 text: "margin: 0;",
@@ -249,7 +249,7 @@ private enum DOMElementStylePropertyViewPreviewData {
                 isEditable: true
             ),
             CSSProperty(
-                id: CSSPropertyIdentifier(styleID: styleID, propertyIndex: 1),
+                id: CSSProperty.ID(styleID: styleID, propertyIndex: 1),
                 name: "box-sizing",
                 value: "border-box",
                 text: "/* box-sizing: border-box; */",
@@ -257,7 +257,7 @@ private enum DOMElementStylePropertyViewPreviewData {
                 isEditable: true
             ),
             CSSProperty(
-                id: CSSPropertyIdentifier(styleID: styleID, propertyIndex: 2),
+                id: CSSProperty.ID(styleID: styleID, propertyIndex: 2),
                 name: "font-size",
                 value: "12px",
                 text: "font-size: 12px;",

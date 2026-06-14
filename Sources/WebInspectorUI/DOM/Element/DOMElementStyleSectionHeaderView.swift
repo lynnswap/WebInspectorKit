@@ -21,7 +21,7 @@ package enum DOMElementStyleSectionHeaderText {
         return displayText(for: rule.origin)
     }
 
-    package static func displayText(for sourceLocation: CSSRuleSourceLocation) -> String {
+    package static func displayText(for sourceLocation: CSSRule.SourceLocation) -> String {
         var text = displayName(forSourceURL: sourceLocation.sourceURL)
         text += ":\(sourceLocation.line + 1)"
         if let column = sourceLocation.column, column > largeColumnNumber {
@@ -30,7 +30,7 @@ package enum DOMElementStyleSectionHeaderText {
         return text
     }
 
-    package static func fullDisplayText(for sourceLocation: CSSRuleSourceLocation) -> String {
+    package static func fullDisplayText(for sourceLocation: CSSRule.SourceLocation) -> String {
         var text = sourceLocation.sourceURL
         text += ":\(sourceLocation.line + 1)"
         if let column = sourceLocation.column {
@@ -61,7 +61,7 @@ package enum DOMElementStyleSectionHeaderText {
         return sourceURL
     }
 
-    package static func displayText(for origin: CSSStyleOrigin) -> String? {
+    package static func displayText(for origin: CSSStyle.Origin) -> String? {
         switch origin {
         case .user:
             String(localized: "dom.element.styles.origin.user", bundle: .module)
@@ -99,7 +99,7 @@ final class DOMElementStyleSectionHeaderView: UICollectionViewListCell {
         bind(nil)
     }
 
-    func bind(_ section: CSSStyleSection?) {
+    func bind(_ section: CSSStyle.Section?) {
         model.section = section
     }
 }
@@ -107,7 +107,7 @@ final class DOMElementStyleSectionHeaderView: UICollectionViewListCell {
 @MainActor
 @Observable
 private final class DOMElementStyleSectionHeaderModel {
-    var section: CSSStyleSection?
+    var section: CSSStyle.Section?
 }
 
 private struct DOMElementStyleSectionHeaderContent: View {

@@ -1,15 +1,16 @@
 import Foundation
 import WebInspectorTransport
 
-@MainActor
-enum CSSStyleSectionBuilder {
+extension CSSStyle {
+    @MainActor
+    enum SectionBuilder {
     static func makeSections(
-        identity: CSSNodeStyleIdentity,
-        matched: CSSMatchedStylesPayload,
-        inline: CSSInlineStylesPayload,
+        identity: CSSNodeStyles.Identity,
+        matched: CSSStyle.MatchedStylesPayload,
+        inline: CSSStyle.InlineStylesPayload,
         styleSheetHeaders: CSSStyleSheetHeaderRegistry
-    ) -> [CSSStyleSection] {
-        var sections: [CSSStyleSection] = []
+    ) -> [CSSStyle.Section] {
+        var sections: [CSSStyle.Section] = []
         var ordinal = 0
 
         if let inlineStyle = inline.inlineStyle {
@@ -88,18 +89,18 @@ enum CSSStyleSectionBuilder {
     }
 
     static func normalizedStyle(
-        _ style: CSSStylePayload,
+        _ style: CSSStyle.Payload,
         isEditable: Bool,
-        ruleOrigin: CSSStyleOrigin?
+        ruleOrigin: CSSStyle.Origin?
     ) -> CSSStyle {
         let styleID = style.id
         let effectiveEditable = isEditable && styleID != nil && ruleOrigin != .userAgent
         let normalizedProperties = style.cssProperties.enumerated().map { index, property in
-            let propertyID = styleID.map { CSSPropertyIdentifier(styleID: $0, propertyIndex: index) }
+            let propertyID = styleID.map { CSSProperty.ID(styleID: $0, propertyIndex: index) }
             let isEditable = effectiveEditable
-                && CSSStyleTextRewriter.canSafelyRewriteStyleText(for: style, propertyIndex: index)
+                && CSSStyle.TextRewriter.canSafelyRewriteStyleText(for: style, propertyIndex: index)
                 && property.text != nil
-                && CSSStyleTextRewriter.canTogglePropertyText(property)
+                && CSSStyle.TextRewriter.canTogglePropertyText(property)
             return CSSProperty(payload: property, id: propertyID, isEditable: isEditable)
         }
         return CSSStyle(
@@ -115,11 +116,11 @@ enum CSSStyleSectionBuilder {
     }
 
     private static func appendRuleSection(
-        _ sections: inout [CSSStyleSection],
-        identity: CSSNodeStyleIdentity,
+        _ sections: inout [CSSStyle.Section],
+        identity: CSSNodeStyles.Identity,
         ordinal: inout Int,
-        match: CSSRuleMatchPayload,
-        kind: CSSStyleSectionKind,
+        match: CSSRule.MatchPayload,
+        kind: CSSStyle.Section.Kind,
         styleSheetHeaders: CSSStyleSheetHeaderRegistry
     ) {
         let isEditable = match.rule.origin != .userAgent && match.rule.style.id != nil
@@ -139,7 +140,7 @@ enum CSSStyleSectionBuilder {
             isImplicitlyNested: match.rule.isImplicitlyNested
         )
         sections.append(
-            CSSStyleSection(
+            CSSStyle.Section(
                 id: .init(nodeID: identity.nodeID, kind: kind, ordinal: ordinal),
                 kind: kind,
                 title: rule.selectorList.text,
@@ -152,16 +153,16 @@ enum CSSStyleSectionBuilder {
     }
 
     private static func appendSection(
-        _ sections: inout [CSSStyleSection],
-        identity: CSSNodeStyleIdentity,
+        _ sections: inout [CSSStyle.Section],
+        identity: CSSNodeStyles.Identity,
         ordinal: inout Int,
-        kind: CSSStyleSectionKind,
+        kind: CSSStyle.Section.Kind,
         title: String,
-        style: CSSStylePayload,
+        style: CSSStyle.Payload,
         isEditable: Bool
     ) {
         sections.append(
-            CSSStyleSection(
+            CSSStyle.Section(
                 id: .init(nodeID: identity.nodeID, kind: kind, ordinal: ordinal),
                 kind: kind,
                 title: title,
@@ -170,5 +171,6 @@ enum CSSStyleSectionBuilder {
             )
         )
         ordinal += 1
+    }
     }
 }

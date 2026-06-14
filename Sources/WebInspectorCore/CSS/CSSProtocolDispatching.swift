@@ -2,7 +2,7 @@ import Foundation
 import WebInspectorTransport
 
 package struct CSSProtocolCommands {
-    package func command(for intent: CSSCommandIntent) throws -> ProtocolCommand {
+    package func command(for intent: CSSCommand.Intent) throws -> ProtocolCommand {
         switch intent {
         case let .enable(targetID):
             return ProtocolCommand(
@@ -48,20 +48,20 @@ package struct CSSProtocolCommands {
         }
     }
 
-    package func matchedStyles(from result: ProtocolCommand.Result) throws -> CSSMatchedStylesPayload {
-        try TransportMessageParser.decode(CSSMatchedStylesPayload.self, from: result.resultData)
+    package func matchedStyles(from result: ProtocolCommand.Result) throws -> CSSStyle.MatchedStylesPayload {
+        try TransportMessageParser.decode(CSSStyle.MatchedStylesPayload.self, from: result.resultData)
     }
 
-    package func inlineStyles(from result: ProtocolCommand.Result) throws -> CSSInlineStylesPayload {
-        try TransportMessageParser.decode(CSSInlineStylesPayload.self, from: result.resultData)
+    package func inlineStyles(from result: ProtocolCommand.Result) throws -> CSSStyle.InlineStylesPayload {
+        try TransportMessageParser.decode(CSSStyle.InlineStylesPayload.self, from: result.resultData)
     }
 
-    package func computedStyles(from result: ProtocolCommand.Result) throws -> [CSSComputedStylePropertyPayload] {
+    package func computedStyles(from result: ProtocolCommand.Result) throws -> [CSSComputedStyleProperty.Payload] {
         let payload = try TransportMessageParser.decode(ComputedStyleResult.self, from: result.resultData)
         return payload.computedStyle
     }
 
-    package func setStyleTextResult(from result: ProtocolCommand.Result) throws -> CSSStylePayload {
+    package func setStyleTextResult(from result: ProtocolCommand.Result) throws -> CSSStyle.Payload {
         let payload = try TransportMessageParser.decode(SetStyleTextResult.self, from: result.resultData)
         return payload.style
     }
@@ -70,7 +70,7 @@ package struct CSSProtocolCommands {
         try JSONSerialization.data(withJSONObject: object, options: [])
     }
 
-    private func styleIDPayload(_ styleID: CSSStyleIdentifier) -> [String: Any] {
+    private func styleIDPayload(_ styleID: CSSStyle.ID) -> [String: Any] {
         [
             "styleSheetId": styleID.styleSheetID.rawValue,
             "ordinal": styleID.ordinal,
@@ -81,8 +81,8 @@ package struct CSSProtocolCommands {
 @MainActor
 package protocol CSSProtocolEventHandler: AnyObject {
     func cssStyleSheetChanged(targetID: ProtocolTarget.ID)
-    func cssStyleSheetRemoved(styleSheetID: CSSStyleSheetIdentifier, targetID: ProtocolTarget.ID)
-    func cssStyleSheetAdded(_ header: CSSStyleSheetHeaderPayload, targetID: ProtocolTarget.ID)
+    func cssStyleSheetRemoved(styleSheetID: CSSStyleSheet.ID, targetID: ProtocolTarget.ID)
+    func cssStyleSheetAdded(_ header: CSSStyleSheet.HeaderPayload, targetID: ProtocolTarget.ID)
     func cssMediaQueryResultChanged(targetID: ProtocolTarget.ID)
     func cssNodeLayoutFlagsChanged(targetID: ProtocolTarget.ID, nodeID: DOMNode.ProtocolID)
 }
@@ -129,12 +129,12 @@ extension CSSSession: CSSProtocolEventHandler {
         markNeedsRefresh(targetID: targetID)
     }
 
-    package func cssStyleSheetRemoved(styleSheetID: CSSStyleSheetIdentifier, targetID: ProtocolTarget.ID) {
+    package func cssStyleSheetRemoved(styleSheetID: CSSStyleSheet.ID, targetID: ProtocolTarget.ID) {
         removeStyleSheetHeader(styleSheetID: styleSheetID, targetID: targetID)
         markNeedsRefresh(targetID: targetID, styleSheetID: styleSheetID)
     }
 
-    package func cssStyleSheetAdded(_ header: CSSStyleSheetHeaderPayload, targetID: ProtocolTarget.ID) {
+    package func cssStyleSheetAdded(_ header: CSSStyleSheet.HeaderPayload, targetID: ProtocolTarget.ID) {
         registerStyleSheetHeader(header, targetID: targetID)
         markNeedsRefresh(targetID: targetID)
     }
@@ -154,12 +154,12 @@ extension DOMSession: CSSProtocolEventHandler {
         reconcileSelectedNodeStyleHydrationIfNeeded()
     }
 
-    package func cssStyleSheetRemoved(styleSheetID: CSSStyleSheetIdentifier, targetID: ProtocolTarget.ID) {
+    package func cssStyleSheetRemoved(styleSheetID: CSSStyleSheet.ID, targetID: ProtocolTarget.ID) {
         elementStyles.cssStyleSheetRemoved(styleSheetID: styleSheetID, targetID: targetID)
         reconcileSelectedNodeStyleHydrationIfNeeded()
     }
 
-    package func cssStyleSheetAdded(_ header: CSSStyleSheetHeaderPayload, targetID: ProtocolTarget.ID) {
+    package func cssStyleSheetAdded(_ header: CSSStyleSheet.HeaderPayload, targetID: ProtocolTarget.ID) {
         elementStyles.cssStyleSheetAdded(header, targetID: targetID)
         reconcileSelectedNodeStyleHydrationIfNeeded()
     }
@@ -176,19 +176,19 @@ extension DOMSession: CSSProtocolEventHandler {
 }
 
 private struct StyleSheetIdentifierParams: Decodable {
-    var styleSheetId: CSSStyleSheetIdentifier
+    var styleSheetId: CSSStyleSheet.ID
 }
 
 private struct StyleSheetAddedParams: Decodable {
-    var header: CSSStyleSheetHeaderPayload
+    var header: CSSStyleSheet.HeaderPayload
 }
 
 private struct ComputedStyleResult: Decodable {
-    var computedStyle: [CSSComputedStylePropertyPayload]
+    var computedStyle: [CSSComputedStyleProperty.Payload]
 }
 
 private struct SetStyleTextResult: Decodable {
-    var style: CSSStylePayload
+    var style: CSSStyle.Payload
 }
 
 private struct NodeLayoutFlagsChangedParams: Decodable {

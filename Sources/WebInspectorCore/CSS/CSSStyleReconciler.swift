@@ -1,20 +1,21 @@
 import Foundation
 
-@MainActor
-enum CSSStyleReconciler {
+extension CSSStyle {
+    @MainActor
+    enum Reconciler {
     private struct SectionMembership: Equatable {
-        var id: CSSStyleSectionIdentifier
+        var id: CSSStyle.Section.ID
         var propertyIDs: [PropertyMembership]
     }
 
     private enum PropertyMembership: Equatable {
-        case identified(CSSPropertyIdentifier)
+        case identified(CSSProperty.ID)
         case anonymous(index: Int)
     }
 
     static func updateSections(
         in nodeStyles: CSSNodeStyles,
-        with refreshedSections: [CSSStyleSection]
+        with refreshedSections: [CSSStyle.Section]
     ) {
         let oldMembership = sectionMembership(in: nodeStyles.sections)
         let existingSectionsByID = Dictionary(uniqueKeysWithValues: nodeStyles.sections.map { ($0.id, $0) })
@@ -61,7 +62,7 @@ enum CSSStyleReconciler {
         }
     }
 
-    private static func updateSection(_ section: CSSStyleSection, from refreshedSection: CSSStyleSection) {
+    private static func updateSection(_ section: CSSStyle.Section, from refreshedSection: CSSStyle.Section) {
         section.kind = refreshedSection.kind
         section.title = refreshedSection.title
         section.isEditable = refreshedSection.isEditable
@@ -136,7 +137,7 @@ enum CSSStyleReconciler {
         property.updateInspectorModificationState()
     }
 
-    private static func sectionMembership(in sections: [CSSStyleSection]) -> [SectionMembership] {
+    private static func sectionMembership(in sections: [CSSStyle.Section]) -> [SectionMembership] {
         sections.map { section in
             SectionMembership(
                 id: section.id,
@@ -152,5 +153,6 @@ enum CSSStyleReconciler {
             }
             return .anonymous(index: index)
         }
+    }
     }
 }

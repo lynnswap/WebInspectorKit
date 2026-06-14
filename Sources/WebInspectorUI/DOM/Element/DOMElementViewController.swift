@@ -7,11 +7,11 @@ import UIKit
 package final class DOMElementViewController: UICollectionViewController {
     private struct ItemIdentifier: Hashable {
         enum Kind: Hashable {
-            case property(propertyID: CSSPropertyIdentifier?, propertyIndex: Int)
+            case property(propertyID: CSSProperty.ID?, propertyIndex: Int)
             case hiddenUnusedVariables(count: Int)
         }
 
-        var sectionID: CSSStyleSectionIdentifier
+        var sectionID: CSSStyle.Section.ID
         var kind: Kind
     }
 
@@ -19,7 +19,7 @@ package final class DOMElementViewController: UICollectionViewController {
     private var elementStylesObservation: PortableObservationTracking.Token?
     private var selectedNodeStyleObservation: PortableObservationTracking.Token?
     private weak var observedNodeStyles: CSSNodeStyles?
-    private var expandedUnusedVariableSectionIDs = Set<CSSStyleSectionIdentifier>()
+    private var expandedUnusedVariableSectionIDs = Set<CSSStyle.Section.ID>()
     private var displayedNodeStyles: CSSNodeStyles?
 
 #if DEBUG
@@ -93,7 +93,7 @@ package final class DOMElementViewController: UICollectionViewController {
         collectionView.backgroundColor = backgroundColor
     }
 
-    private func makeDataSource() -> UICollectionViewDiffableDataSource<CSSStyleSectionIdentifier, ItemIdentifier> {
+    private func makeDataSource() -> UICollectionViewDiffableDataSource<CSSStyle.Section.ID, ItemIdentifier> {
         let propertyRegistration = UICollectionView.CellRegistration<DOMElementStylePropertyCollectionCell, ItemIdentifier> { [weak self] cell, _, item in
             guard let self,
                   let section = section(for: item.sectionID),
@@ -119,7 +119,7 @@ package final class DOMElementViewController: UICollectionViewController {
             }
         }
 
-        let dataSource = UICollectionViewDiffableDataSource<CSSStyleSectionIdentifier, ItemIdentifier>(
+        let dataSource = UICollectionViewDiffableDataSource<CSSStyle.Section.ID, ItemIdentifier>(
             collectionView: collectionView
         ) { collectionView, indexPath, item in
             switch item.kind {
@@ -183,7 +183,7 @@ package final class DOMElementViewController: UICollectionViewController {
         elementStylesObservation = token
     }
 
-    private func bindSelectedNodeStyles(_ nodeStyles: CSSNodeStyles?, unavailableState: CSSNodeStylesState) {
+    private func bindSelectedNodeStyles(_ nodeStyles: CSSNodeStyles?, unavailableState: CSSNodeStyles.State) {
         guard let nodeStyles else {
             observedNodeStyles = nil
             selectedNodeStyleObservation?.cancel()
@@ -225,7 +225,7 @@ package final class DOMElementViewController: UICollectionViewController {
         }
     }
 
-    private func render(_ state: CSSNodeStylesState) {
+    private func render(_ state: CSSNodeStyles.State) {
         switch state {
         case .loaded:
             return
@@ -269,12 +269,12 @@ package final class DOMElementViewController: UICollectionViewController {
 
     private func applyEmptySnapshot() {
         expandedUnusedVariableSectionIDs.removeAll()
-        let snapshot = NSDiffableDataSourceSnapshot<CSSStyleSectionIdentifier, ItemIdentifier>()
+        let snapshot = NSDiffableDataSourceSnapshot<CSSStyle.Section.ID, ItemIdentifier>()
         dataSource.apply(snapshot, animatingDifferences: false)
     }
 
     private func applySnapshot(for nodeStyles: CSSNodeStyles, animatingDifferences: Bool = false) {
-        var snapshot = NSDiffableDataSourceSnapshot<CSSStyleSectionIdentifier, ItemIdentifier>()
+        var snapshot = NSDiffableDataSourceSnapshot<CSSStyle.Section.ID, ItemIdentifier>()
         let usedCSSVariables = DOMElementStyleVariableVisibility.usedCSSVariableNames(in: nodeStyles)
         let currentSectionIDs = Set(nodeStyles.sections.map(\.id))
         expandedUnusedVariableSectionIDs.formIntersection(currentSectionIDs)
@@ -318,11 +318,11 @@ package final class DOMElementViewController: UICollectionViewController {
         dataSource.apply(snapshot, animatingDifferences: animatingDifferences)
     }
 
-    private func section(for sectionID: CSSStyleSectionIdentifier) -> CSSStyleSection? {
+    private func section(for sectionID: CSSStyle.Section.ID) -> CSSStyle.Section? {
         displayedNodeStyles?.sections.first { $0.id == sectionID }
     }
 
-    private func property(for item: ItemIdentifier, in section: CSSStyleSection) -> CSSProperty? {
+    private func property(for item: ItemIdentifier, in section: CSSStyle.Section) -> CSSProperty? {
         guard case let .property(propertyID, propertyIndex) = item.kind else {
             return nil
         }
@@ -335,7 +335,7 @@ package final class DOMElementViewController: UICollectionViewController {
         return section.style.cssProperties[propertyIndex]
     }
 
-    private func showHiddenUnusedVariables(in sectionID: CSSStyleSectionIdentifier) {
+    private func showHiddenUnusedVariables(in sectionID: CSSStyle.Section.ID) {
         guard let nodeStyles = displayedNodeStyles else {
             return
         }

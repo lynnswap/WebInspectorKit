@@ -4,7 +4,7 @@ import WebInspectorCore
 @MainActor
 package enum DOMElementStyleVariableVisibility {
     package static func hiddenUnusedVariableIndices(
-        in section: CSSStyleSection,
+        in section: CSSStyle.Section,
         usedCSSVariables: Set<String>
     ) -> Set<Int> {
         guard isInheritedStyleSection(section) else {
@@ -49,7 +49,7 @@ package enum DOMElementStyleVariableVisibility {
         return usedVariables
     }
 
-    private static func isInheritedStyleSection(_ section: CSSStyleSection) -> Bool {
+    private static func isInheritedStyleSection(_ section: CSSStyle.Section) -> Bool {
         switch section.kind {
         case .inheritedInlineStyle, .inheritedRule:
             true

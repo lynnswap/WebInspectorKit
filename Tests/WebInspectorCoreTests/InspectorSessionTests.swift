@@ -96,7 +96,7 @@ func connectBootstrapsWebPageTargetWithoutDomainMetadataAsCSSCapable() async thr
 
     let htmlID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(2))
     await session.attachment.dom.selectNode(htmlID)
-    let identity: CSSNodeStyleIdentity
+    let identity: CSSNodeStyles.Identity
     switch await session.attachment.dom.selectedCSSNodeStyleIdentity() {
     case let .success(resolvedIdentity):
         identity = resolvedIdentity
@@ -938,8 +938,8 @@ func cssPropertyToggleSendsSetStyleTextAndRefreshesStyles() async throws {
     )
     await refreshTask.value
 
-    let propertyID = CSSPropertyIdentifier(
-        styleID: CSSStyleIdentifier(styleSheetID: .init("sheet-body"), ordinal: 1),
+    let propertyID = CSSProperty.ID(
+        styleID: CSSStyle.ID(styleSheetID: .init("sheet-body"), ordinal: 1),
         propertyIndex: 0
     )
     let toggleSentCount = await backend.sentTargetMessages().count
@@ -5020,28 +5020,28 @@ private func cssMatchedStylesResult(
 @MainActor
 private func applySingleRuleStyles(
     to css: CSSSession,
-    identity: CSSNodeStyleIdentity,
-    token: CSSStyleRefreshToken? = nil,
+    identity: CSSNodeStyles.Identity,
+    token: CSSStyle.RefreshToken? = nil,
     selector: String,
     marginValue: String,
     marginText: String
 ) throws -> CSSNodeStyles {
     let token = try #require(token ?? css.beginRefresh(identity: identity))
-    let styleSheetID = CSSStyleSheetIdentifier("test-sheet")
-    let styleID = CSSStyleIdentifier(styleSheetID: styleSheetID, ordinal: 0)
+    let styleSheetID = CSSStyleSheet.ID("test-sheet")
+    let styleID = CSSStyle.ID(styleSheetID: styleSheetID, ordinal: 0)
     css.applyRefresh(
         token: token,
-        matched: CSSMatchedStylesPayload(matchedRules: [
-            CSSRuleMatchPayload(
-                rule: CSSRulePayload(
-                    id: CSSRuleIdentifier(styleSheetID: styleSheetID, ordinal: 0),
-                    selectorList: CSSSelectorList(selectors: [CSSSelector(text: selector)], text: selector),
+        matched: CSSStyle.MatchedStylesPayload(matchedRules: [
+            CSSRule.MatchPayload(
+                rule: CSSRule.Payload(
+                    id: CSSRule.ID(styleSheetID: styleSheetID, ordinal: 0),
+                    selectorList: CSSRule.SelectorList(selectors: [CSSRule.Selector(text: selector)], text: selector),
                     sourceLine: 0,
                     origin: .author,
-                    style: CSSStylePayload(
+                    style: CSSStyle.Payload(
                         id: styleID,
                         cssProperties: [
-                            CSSPropertyPayload(
+                            CSSProperty.Payload(
                                 name: "margin",
                                 value: marginValue,
                                 text: marginText

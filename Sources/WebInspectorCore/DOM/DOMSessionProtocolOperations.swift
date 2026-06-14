@@ -366,7 +366,7 @@ extension DOMSession {
     }
 
     @discardableResult
-    package func requestSetCSSProperty(_ propertyID: CSSPropertyIdentifier, enabled: Bool) -> Bool {
+    package func requestSetCSSProperty(_ propertyID: CSSProperty.ID, enabled: Bool) -> Bool {
         guard commandChannel != nil,
               elementStyles.setStyleTextIntent(for: propertyID, enabled: enabled) != nil else {
             return false
@@ -389,7 +389,7 @@ extension DOMSession {
         }
     }
 
-    package func setCSSProperty(_ propertyID: CSSPropertyIdentifier, enabled: Bool) async throws {
+    package func setCSSProperty(_ propertyID: CSSProperty.ID, enabled: Bool) async throws {
         guard let intent = elementStyles.setStyleTextIntent(for: propertyID, enabled: enabled) else {
             throw InspectorSession.Error("CSS property is not editable.")
         }
@@ -423,7 +423,7 @@ extension DOMSession {
         }
     }
 
-    private func reconcileSelectedNodeStyles(_ identity: CSSNodeStyleIdentity) {
+    private func reconcileSelectedNodeStyles(_ identity: CSSNodeStyles.Identity) {
         switch elementStyles.refreshState(forSelected: identity) {
         case nil, .needsRefresh:
             hydrateSelectedNodeStyles(identity)
@@ -432,7 +432,7 @@ extension DOMSession {
         }
     }
 
-    private func hydrateSelectedNodeStyles(_ identity: CSSNodeStyleIdentity) {
+    private func hydrateSelectedNodeStyles(_ identity: CSSNodeStyles.Identity) {
         guard styleHydration.isRefreshing(identity: identity) == false else {
             return
         }
@@ -473,7 +473,7 @@ extension DOMSession {
         }
     }
 
-    private func refreshStyles(for identity: CSSNodeStyleIdentity) async throws {
+    private func refreshStyles(for identity: CSSNodeStyles.Identity) async throws {
         let commandChannel = try requireCommandChannel()
         let targetExists = await commandChannel.snapshot().targetsByID[identity.targetID] != nil
         guard targetExists else {

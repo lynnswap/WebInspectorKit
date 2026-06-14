@@ -1,8 +1,9 @@
 import Foundation
 import WebInspectorTransport
 
-@MainActor
-final class CSSStyleRefreshCoordinator {
+extension CSSSession {
+    @MainActor
+    final class StyleRefreshCoordinator {
     private enum RefreshCommandResult: Sendable {
         case success(ProtocolCommand.Result)
         case failure(RefreshCommandFailure)
@@ -79,12 +80,12 @@ final class CSSStyleRefreshCoordinator {
     }
 
     @discardableResult
-    func perform(_ intent: CSSCommandIntent) async throws -> ProtocolCommand.Result {
+    func perform(_ intent: CSSCommand.Intent) async throws -> ProtocolCommand.Result {
         let commandChannel = try requireCommandChannel()
         return try await commandChannel.send(try protocolCommands.command(for: intent))
     }
 
-    func fetchRefreshResults(for identity: CSSNodeStyleIdentity) async throws -> CSSSession.RefreshResults {
+    func fetchRefreshResults(for identity: CSSNodeStyles.Identity) async throws -> CSSSession.RefreshResults {
         do {
             return try await fetchRefreshResultsWithoutCompatibilityRetry(for: identity)
         } catch {
@@ -96,12 +97,12 @@ final class CSSStyleRefreshCoordinator {
         }
     }
 
-    func setStyleTextResult(from result: ProtocolCommand.Result) throws -> CSSStylePayload {
+    func setStyleTextResult(from result: ProtocolCommand.Result) throws -> CSSStyle.Payload {
         try protocolCommands.setStyleTextResult(from: result)
     }
 
     private func fetchRefreshResultsWithoutCompatibilityRetry(
-        for identity: CSSNodeStyleIdentity
+        for identity: CSSNodeStyles.Identity
     ) async throws -> CSSSession.RefreshResults {
         async let matched = performRefreshCommand(.getMatchedStyles(identity: identity))
         async let inline = performRefreshCommand(.getInlineStyles(identity: identity))
@@ -127,7 +128,7 @@ final class CSSStyleRefreshCoordinator {
         )
     }
 
-    private func performRefreshCommand(_ intent: CSSCommandIntent) async -> RefreshCommandResult {
+    private func performRefreshCommand(_ intent: CSSCommand.Intent) async -> RefreshCommandResult {
         do {
             return .success(try await perform(intent))
         } catch {
@@ -165,5 +166,6 @@ final class CSSStyleRefreshCoordinator {
         }
         try commandChannel.requireAttached()
         return commandChannel
+    }
     }
 }

@@ -1,7 +1,8 @@
 import Foundation
 
-enum CSSStyleTextRewriter {
-    static func canSafelyRewriteStyleText(for style: CSSStylePayload, propertyIndex: Int) -> Bool {
+extension CSSStyle {
+    enum TextRewriter {
+    static func canSafelyRewriteStyleText(for style: CSSStyle.Payload, propertyIndex: Int) -> Bool {
         guard style.cssProperties.indices.contains(propertyIndex) else {
             return false
         }
@@ -63,7 +64,7 @@ enum CSSStyleTextRewriter {
         return texts.joined(separator: "\n")
     }
 
-    static func canTogglePropertyText(_ property: CSSPropertyPayload) -> Bool {
+    static func canTogglePropertyText(_ property: CSSProperty.Payload) -> Bool {
         guard property.status != .inactive else {
             return false
         }
@@ -103,7 +104,7 @@ enum CSSStyleTextRewriter {
 
     private static func authoredDeclarationRange(
         for propertyText: String,
-        sourceRange: CSSSourceRange?,
+        sourceRange: CSSStyle.SourceRange?,
         in cssText: String,
         previousPropertyTexts: [String?]
     ) -> NSRange? {
@@ -127,7 +128,7 @@ enum CSSStyleTextRewriter {
         return ranges[occurrence]
     }
 
-    private static func nsRange(in text: String, sourceRange: CSSSourceRange) -> NSRange? {
+    private static func nsRange(in text: String, sourceRange: CSSStyle.SourceRange) -> NSRange? {
         guard sourceRange.startLine >= 0,
               sourceRange.endLine >= sourceRange.startLine,
               sourceRange.startColumn >= 0,
@@ -372,7 +373,7 @@ enum CSSStyleTextRewriter {
         return "/* \(text) */"
     }
 
-    private static func toggledPropertyText(_ property: CSSPropertyPayload, enabled: Bool) -> String? {
+    private static func toggledPropertyText(_ property: CSSProperty.Payload, enabled: Bool) -> String? {
         guard let text = property.text?.trimmingCharacters(in: .whitespacesAndNewlines),
               !text.isEmpty,
               (property.status != .disabled) != enabled else {
@@ -408,4 +409,5 @@ enum CSSStyleTextRewriter {
     private static let backslash = unichar(92)
     private static let rightBrace = unichar(125)
     private static let slash = unichar(47)
+    }
 }

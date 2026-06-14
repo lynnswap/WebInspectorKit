@@ -551,7 +551,7 @@ package final class DOMSession {
         return false
     }
 
-    package func selectedCSSNodeStyleIdentity() -> Result<CSSNodeStyleIdentity, CSSNodeStylesUnavailableReason> {
+    package func selectedCSSNodeStyleIdentity() -> Result<CSSNodeStyles.Identity, CSSNodeStyles.UnavailableReason> {
         guard let selectedNodeID = selection.selectedNodeID else {
             return .failure(.noSelection)
         }
@@ -564,7 +564,7 @@ package final class DOMSession {
 
     package func cssNodeStyleIdentity(
         for nodeID: DOMNode.ID
-    ) -> Result<CSSNodeStyleIdentity, CSSNodeStylesUnavailableReason> {
+    ) -> Result<CSSNodeStyles.Identity, CSSNodeStyles.UnavailableReason> {
         guard let node = node(for: nodeID) else {
             return .failure(.staleNode(nodeID))
         }
@@ -577,7 +577,7 @@ package final class DOMSession {
             return .failure(.cssUnavailableForTarget(targetID))
         }
         return .success(
-            CSSNodeStyleIdentity(
+            CSSNodeStyles.Identity(
                 nodeID: nodeID,
                 targetID: targetID,
                 documentID: nodeID.documentID,
