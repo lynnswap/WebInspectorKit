@@ -3,7 +3,7 @@ import WebInspectorTransport
 
 private enum DOMInspectRoute {
     case remoteObject(targetID: ProtocolTarget.ID, objectID: String)
-    case protocolNode(targetID: ProtocolTarget.ID, nodeID: DOMProtocolNodeID)
+    case protocolNode(targetID: ProtocolTarget.ID, nodeID: DOMNode.ProtocolID)
 }
 
 private struct TargetDestroyedEventParams: Decodable {
@@ -64,18 +64,18 @@ extension DOMSession {
     }
 
     @discardableResult
-    package func perform(_ intent: DOMCommandIntent) async throws -> ProtocolCommand.Result {
+    package func perform(_ intent: DOMCommand.Intent) async throws -> ProtocolCommand.Result {
         try await perform(intent, requiresActiveConnection: true)
     }
 
     @discardableResult
-    package func performDuringBootstrap(_ intent: DOMCommandIntent) async throws -> ProtocolCommand.Result {
+    package func performDuringBootstrap(_ intent: DOMCommand.Intent) async throws -> ProtocolCommand.Result {
         try await perform(intent, requiresActiveConnection: false)
     }
 
     @discardableResult
     private func perform(
-        _ intent: DOMCommandIntent,
+        _ intent: DOMCommand.Intent,
         requiresActiveConnection: Bool
     ) async throws -> ProtocolCommand.Result {
         let result = try await send(intent, requiresActiveConnection: requiresActiveConnection)
@@ -116,7 +116,7 @@ extension DOMSession {
 
     @discardableResult
     private func send(
-        _ intent: DOMCommandIntent,
+        _ intent: DOMCommand.Intent,
         requiresActiveConnection: Bool = true
     ) async throws -> ProtocolCommand.Result {
         let commandChannel = try requireCommandChannel(requiresActiveConnection: requiresActiveConnection)
@@ -125,7 +125,7 @@ extension DOMSession {
     }
 
     @discardableResult
-    package func requestChildNodes(for nodeID: DOMNodeIdentifier, depth: Int = 3) async -> Bool {
+    package func requestChildNodes(for nodeID: DOMNode.ID, depth: Int = 3) async -> Bool {
         guard let intent = requestChildNodesIntent(
             for: nodeID,
             depth: depth,
@@ -142,7 +142,7 @@ extension DOMSession {
         }
     }
 
-    package func highlightNode(for nodeID: DOMNodeIdentifier) async {
+    package func highlightNode(for nodeID: DOMNode.ID) async {
         guard let intent = highlightNodeIntent(for: nodeID) else {
             return
         }
@@ -240,7 +240,7 @@ extension DOMSession {
         }
     }
 
-    package func copySelectedNodeText(_ kind: DOMNodeCopyTextKind) async throws -> String {
+    package func copySelectedNodeText(_ kind: DOMNode.CopyTextKind) async throws -> String {
         guard commandChannel != nil else {
             throw InspectorSession.Error("Inspector session is not attached.")
         }
@@ -250,7 +250,7 @@ extension DOMSession {
         return try await copyNodeText(kind, for: nodeID)
     }
 
-    package func copyNodeText(_ kind: DOMNodeCopyTextKind, for nodeID: DOMNode.ID) async throws -> String {
+    package func copyNodeText(_ kind: DOMNode.CopyTextKind, for nodeID: DOMNode.ID) async throws -> String {
         guard commandChannel != nil else {
             throw InspectorSession.Error("Inspector session is not attached.")
         }
@@ -690,7 +690,7 @@ extension DOMSession {
     }
 
     private func inspectTargetID(
-        for remoteObject: RemoteObject,
+        for remoteObject: DOMInspectEvent.RemoteObject,
         eventTargetID: ProtocolTarget.ID?,
         activeTargetID: ProtocolTarget.ID
     ) -> ProtocolTarget.ID {
@@ -821,7 +821,7 @@ extension DOMSession {
         styleHydration.cancelPropertyUpdates()
     }
 
-    private func clearOwnerHydrationTransaction(for intent: DOMCommandIntent) {
+    private func clearOwnerHydrationTransaction(for intent: DOMCommand.Intent) {
         guard case let .requestChildNodes(targetID, _, _) = intent else {
             return
         }

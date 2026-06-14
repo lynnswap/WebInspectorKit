@@ -31,12 +31,12 @@ func selectedCSSNodeStyleIdentityRequiresElementCurrentNodeAndCSSTarget() async 
         makeCurrentMainPage: true
     )
     let rootID = await session.replaceDocumentRoot(
-        DOMNodePayload(
+        DOMNode.Payload(
             nodeID: .init(1),
             nodeType: .document,
             nodeName: "#document",
             regularChildren: .loaded([
-                DOMNodePayload(nodeID: .init(2), nodeType: .element, nodeName: "BODY", localName: "body"),
+                DOMNode.Payload(nodeID: .init(2), nodeType: .element, nodeName: "BODY", localName: "body"),
             ])
         ),
         targetID: pageTargetID
@@ -54,22 +54,22 @@ func selectedCSSNodeStyleIdentityRequiresElementCurrentNodeAndCSSTarget() async 
 
     await session.applyTargetCreated(.init(id: .init("plain"), kind: .page, capabilities: [.dom]))
     let plainRootID = await session.replaceDocumentRoot(
-        DOMNodePayload(
+        DOMNode.Payload(
             nodeID: .init(1),
             nodeType: .document,
             nodeName: "#document",
             regularChildren: .loaded([
-                DOMNodePayload(nodeID: .init(2), nodeType: .element, nodeName: "BODY", localName: "body"),
+                DOMNode.Payload(nodeID: .init(2), nodeType: .element, nodeName: "BODY", localName: "body"),
             ])
         ),
         targetID: .init("plain")
     )
     let plainDocumentID = plainRootID.documentID
-    let plainBodyID = DOMNodeIdentifier(documentID: plainDocumentID, nodeID: .init(2))
+    let plainBodyID = DOMNode.ID(documentID: plainDocumentID, nodeID: .init(2))
     await session.selectNode(plainBodyID)
     #expect(await session.selectedCSSNodeStyleIdentity().failureValue == .cssUnavailableForTarget(.init("plain")))
 
-    let staleNodeID = DOMNodeIdentifier(documentID: plainDocumentID, nodeID: .init(999))
+    let staleNodeID = DOMNode.ID(documentID: plainDocumentID, nodeID: .init(999))
     #expect(await session.cssNodeStyleIdentity(for: staleNodeID).failureValue == .staleNode(staleNodeID))
 }
 
@@ -84,12 +84,12 @@ func selectedNodeStylesResolvesSelectedDOMNodeThroughCSSSession() throws {
         makeCurrentMainPage: true
     )
     let rootID = session.replaceDocumentRoot(
-        DOMNodePayload(
+        DOMNode.Payload(
             nodeID: .init(1),
             nodeType: .document,
             nodeName: "#document",
             regularChildren: .loaded([
-                DOMNodePayload(nodeID: .init(2), nodeType: .element, nodeName: "BODY", localName: "body"),
+                DOMNode.Payload(nodeID: .init(2), nodeType: .element, nodeName: "BODY", localName: "body"),
             ])
         ),
         targetID: pageTargetID
@@ -1273,9 +1273,9 @@ private func cssIdentity(
     targetID: ProtocolTarget.ID = ProtocolTarget.ID("page"),
     nodeRawID: Int = 2
 ) -> CSSNodeStyleIdentity {
-    let documentID = DOMDocumentIdentifier(targetID: targetID, localDocumentLifetimeID: .init(1))
+    let documentID = DOMDocument.ID(targetID: targetID, localDocumentLifetimeID: .init(1))
     return CSSNodeStyleIdentity(
-        nodeID: DOMNodeIdentifier(documentID: documentID, nodeID: .init(nodeRawID)),
+        nodeID: DOMNode.ID(documentID: documentID, nodeID: .init(nodeRawID)),
         targetID: targetID,
         documentID: documentID,
         protocolNodeID: .init(nodeRawID),

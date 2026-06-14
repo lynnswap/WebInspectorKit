@@ -82,7 +82,7 @@ enum NetworkPreviewFixtures {
         let key = network.applyRequestWillBeSent(
             targetID: targetID,
             requestID: requestID,
-            frameID: DOMFrameIdentifier("preview-frame"),
+            frameID: DOMFrame.ID("preview-frame"),
             loaderID: "preview-loader",
             documentURL: "https://example.com",
             request: NetworkRequestPayload(

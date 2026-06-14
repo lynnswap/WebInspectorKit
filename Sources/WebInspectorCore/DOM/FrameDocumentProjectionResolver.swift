@@ -3,7 +3,7 @@ import WebInspectorTransport
 
 package enum FrameDocumentProjectionResolution: Equatable, Sendable {
     case attach(ownerNodeID: DOMNode.ID)
-    case detach(state: FrameDocumentProjectionState)
+    case detach(state: FrameDocumentProjection.State)
 }
 
 /// Resolves which frame-owner node should project a frame-target document; index mutation stays in `DOMSession`.

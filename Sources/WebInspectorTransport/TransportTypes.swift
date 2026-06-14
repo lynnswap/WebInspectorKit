@@ -157,7 +157,7 @@ package extension TransportSession {
     struct Snapshot: Equatable, Sendable {
         package var currentMainPageTargetID: ProtocolTarget.ID?
         package var targetsByID: [ProtocolTarget.ID: ProtocolTarget.Record]
-        package var frameTargetIDsByFrameID: [DOMFrameIdentifier: ProtocolTarget.ID]
+        package var frameTargetIDsByFrameID: [ProtocolFrame.ID: ProtocolTarget.ID]
         package var executionContextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContextRecord]
         package var pendingRootReplyIDs: [UInt64]
         package var pendingTargetReplyKeys: [ReplyKey]
@@ -165,7 +165,7 @@ package extension TransportSession {
         package init(
             currentMainPageTargetID: ProtocolTarget.ID?,
             targetsByID: [ProtocolTarget.ID: ProtocolTarget.Record],
-            frameTargetIDsByFrameID: [DOMFrameIdentifier: ProtocolTarget.ID],
+            frameTargetIDsByFrameID: [ProtocolFrame.ID: ProtocolTarget.ID],
             executionContextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContextRecord],
             pendingRootReplyIDs: [UInt64],
             pendingTargetReplyKeys: [ReplyKey]

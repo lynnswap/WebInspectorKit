@@ -1,12 +1,13 @@
 import WebInspectorTransport
+
 package struct DOMTreeRow: Equatable, Sendable {
-    package var nodeID: DOMNodeIdentifier
+    package var nodeID: DOMNode.ID
     package var depth: Int
     package var nodeName: String
     package var hasVisibleChildren: Bool
 
     package init(
-        nodeID: DOMNodeIdentifier,
+        nodeID: DOMNode.ID,
         depth: Int,
         nodeName: String,
         hasVisibleChildren: Bool
@@ -19,28 +20,28 @@ package struct DOMTreeRow: Equatable, Sendable {
 }
 
 package struct DOMTreeProjectionEdges: Equatable, Sendable {
-    private var childrenByParentID: [DOMNodeIdentifier: [DOMNodeIdentifier]]
-    private var parentByChildID: [DOMNodeIdentifier: DOMNodeIdentifier]
+    private var childrenByParentID: [DOMNode.ID: [DOMNode.ID]]
+    private var parentByChildID: [DOMNode.ID: DOMNode.ID]
 
     package init(
-        childrenByNodeID: [DOMNodeIdentifier: [DOMNodeIdentifier]] = [:],
-        parentByNodeID: [DOMNodeIdentifier: DOMNodeIdentifier] = [:]
+        childrenByNodeID: [DOMNode.ID: [DOMNode.ID]] = [:],
+        parentByNodeID: [DOMNode.ID: DOMNode.ID] = [:]
     ) {
         self.childrenByParentID = childrenByNodeID
         self.parentByChildID = parentByNodeID
     }
 
-    package var childrenByNodeID: [DOMNodeIdentifier: [DOMNodeIdentifier]] {
+    package var childrenByNodeID: [DOMNode.ID: [DOMNode.ID]] {
         childrenByParentID
     }
 
-    package var parentByNodeID: [DOMNodeIdentifier: DOMNodeIdentifier] {
+    package var parentByNodeID: [DOMNode.ID: DOMNode.ID] {
         parentByChildID
     }
 
     package mutating func setChildren(
-        _ childIDs: [DOMNodeIdentifier],
-        of parentID: DOMNodeIdentifier
+        _ childIDs: [DOMNode.ID],
+        of parentID: DOMNode.ID
     ) {
         childrenByParentID[parentID] = childIDs
         for childID in childIDs {
@@ -48,17 +49,17 @@ package struct DOMTreeProjectionEdges: Equatable, Sendable {
         }
     }
 
-    package func children(of nodeID: DOMNodeIdentifier) -> [DOMNodeIdentifier] {
+    package func children(of nodeID: DOMNode.ID) -> [DOMNode.ID] {
         childrenByParentID[nodeID] ?? []
     }
 
-    package func parent(of nodeID: DOMNodeIdentifier) -> DOMNodeIdentifier? {
+    package func parent(of nodeID: DOMNode.ID) -> DOMNode.ID? {
         parentByChildID[nodeID]
     }
 
-    package func ancestorNodeIDs(of nodeID: DOMNodeIdentifier) -> [DOMNodeIdentifier] {
-        var ancestors: [DOMNodeIdentifier] = []
-        var visited = Set<DOMNodeIdentifier>()
+    package func ancestorNodeIDs(of nodeID: DOMNode.ID) -> [DOMNode.ID] {
+        var ancestors: [DOMNode.ID] = []
+        var visited = Set<DOMNode.ID>()
         var current = parentByChildID[nodeID]
         while let ancestorID = current,
               visited.insert(ancestorID).inserted {
@@ -71,22 +72,22 @@ package struct DOMTreeProjectionEdges: Equatable, Sendable {
 
 package struct DOMTreeProjection: Equatable, Sendable {
     package var rows: [DOMTreeRow]
-    package var rootNodeIDs: [DOMNodeIdentifier]
+    package var rootNodeIDs: [DOMNode.ID]
     private var edges: DOMTreeProjectionEdges
 
-    package var childrenByNodeID: [DOMNodeIdentifier: [DOMNodeIdentifier]] {
+    package var childrenByNodeID: [DOMNode.ID: [DOMNode.ID]] {
         edges.childrenByNodeID
     }
 
-    package var parentByNodeID: [DOMNodeIdentifier: DOMNodeIdentifier] {
+    package var parentByNodeID: [DOMNode.ID: DOMNode.ID] {
         edges.parentByNodeID
     }
 
     package init(
         rows: [DOMTreeRow] = [],
-        rootNodeIDs: [DOMNodeIdentifier] = [],
-        childrenByNodeID: [DOMNodeIdentifier: [DOMNodeIdentifier]] = [:],
-        parentByNodeID: [DOMNodeIdentifier: DOMNodeIdentifier] = [:]
+        rootNodeIDs: [DOMNode.ID] = [],
+        childrenByNodeID: [DOMNode.ID: [DOMNode.ID]] = [:],
+        parentByNodeID: [DOMNode.ID: DOMNode.ID] = [:]
     ) {
         self.init(
             rows: rows,
@@ -100,7 +101,7 @@ package struct DOMTreeProjection: Equatable, Sendable {
 
     package init(
         rows: [DOMTreeRow],
-        rootNodeIDs: [DOMNodeIdentifier],
+        rootNodeIDs: [DOMNode.ID],
         edges: DOMTreeProjectionEdges
     ) {
         self.rows = rows
@@ -108,31 +109,33 @@ package struct DOMTreeProjection: Equatable, Sendable {
         self.edges = edges
     }
 
-    package func children(of nodeID: DOMNodeIdentifier) -> [DOMNodeIdentifier] {
+    package func children(of nodeID: DOMNode.ID) -> [DOMNode.ID] {
         edges.children(of: nodeID)
     }
 
-    package func parent(of nodeID: DOMNodeIdentifier) -> DOMNodeIdentifier? {
+    package func parent(of nodeID: DOMNode.ID) -> DOMNode.ID? {
         edges.parent(of: nodeID)
     }
 
-    package func ancestorNodeIDs(of nodeID: DOMNodeIdentifier) -> [DOMNodeIdentifier] {
+    package func ancestorNodeIDs(of nodeID: DOMNode.ID) -> [DOMNode.ID] {
         edges.ancestorNodeIDs(of: nodeID)
     }
 }
 
-package struct ProtocolTargetSnapshot: Equatable, Sendable {
-    package var id: ProtocolTarget.ID
-    package var kind: ProtocolTarget.Kind
-    package var frameID: DOMFrameIdentifier?
-    package var parentFrameID: DOMFrameIdentifier?
-    package var capabilities: ProtocolTarget.Capabilities
-    package var isProvisional: Bool
-    package var isPaused: Bool
-    package var currentDocumentID: DOMDocumentIdentifier?
+package extension DOMTarget {
+    struct Snapshot: Equatable, Sendable {
+        package var id: ProtocolTarget.ID
+        package var kind: ProtocolTarget.Kind
+        package var frameID: DOMFrame.ID?
+        package var parentFrameID: DOMFrame.ID?
+        package var capabilities: ProtocolTarget.Capabilities
+        package var isProvisional: Bool
+        package var isPaused: Bool
+        package var currentDocumentID: DOMDocument.ID?
+    }
 }
 
-package extension ProtocolTargetSnapshot {
+package extension DOMTarget.Snapshot {
     var record: ProtocolTarget.Record {
         ProtocolTarget.Record(
             id: id,
@@ -146,137 +149,155 @@ package extension ProtocolTargetSnapshot {
     }
 }
 
-package struct DOMFrameSnapshot: Equatable, Sendable {
-    package var id: DOMFrameIdentifier
-    package var parentFrameID: DOMFrameIdentifier?
-    package var childFrameIDs: Set<DOMFrameIdentifier>
-    package var targetID: ProtocolTarget.ID?
-    package var currentDocumentID: DOMDocumentIdentifier?
+package extension DOMFrame {
+    struct Snapshot: Equatable, Sendable {
+        package var id: DOMFrame.ID
+        package var parentFrameID: DOMFrame.ID?
+        package var childFrameIDs: Set<DOMFrame.ID>
+        package var targetID: ProtocolTarget.ID?
+        package var currentDocumentID: DOMDocument.ID?
+    }
 }
 
-package enum DOMDocumentLifecycle: Equatable, Sendable {
-    case loading
-    case loaded
-    case invalidated
+package extension DOMDocument {
+    enum Lifecycle: Equatable, Sendable {
+        case loading
+        case loaded
+        case invalidated
+    }
+
+    struct Snapshot: Equatable, Sendable {
+        package var id: DOMDocument.ID
+        package var targetID: ProtocolTarget.ID
+        package var localDocumentLifetimeID: DOMDocument.LifetimeID
+        package var lifecycle: DOMDocument.Lifecycle
+        package var rootNodeID: DOMNode.ID
+    }
 }
 
-package struct DOMDocumentSnapshot: Equatable, Sendable {
-    package var id: DOMDocumentIdentifier
-    package var targetID: ProtocolTarget.ID
-    package var localDocumentLifetimeID: DOMDocumentLifetimeIdentifier
-    package var lifecycle: DOMDocumentLifecycle
-    package var rootNodeID: DOMNodeIdentifier
+package extension FrameDocumentProjection {
+    enum State: Equatable, Sendable {
+        case pending
+        case attached
+        case ambiguous
+    }
+
+    struct Snapshot: Equatable, Sendable {
+        package var ownerNodeID: DOMNode.ID?
+        package var frameTargetID: ProtocolTarget.ID
+        package var frameDocumentID: DOMDocument.ID
+        package var state: State
+    }
 }
 
-package enum FrameDocumentProjectionState: Equatable, Sendable {
-    case pending
-    case attached
-    case ambiguous
-}
+package extension DOMNode {
+    enum ChildrenSnapshot: Equatable, Sendable {
+        case unrequested(count: Int)
+        case loaded([DOMNode.ID])
 
-package struct FrameDocumentProjectionSnapshot: Equatable, Sendable {
-    package var ownerNodeID: DOMNodeIdentifier?
-    package var frameTargetID: ProtocolTarget.ID
-    package var frameDocumentID: DOMDocumentIdentifier
-    package var state: FrameDocumentProjectionState
-}
+        package var knownCount: Int {
+            switch self {
+            case let .unrequested(count):
+                max(0, count)
+            case let .loaded(children):
+                children.count
+            }
+        }
 
-package enum DOMRegularChildrenSnapshot: Equatable, Sendable {
-    case unrequested(count: Int)
-    case loaded([DOMNodeIdentifier])
-
-    package var knownCount: Int {
-        switch self {
-        case let .unrequested(count):
-            max(0, count)
-        case let .loaded(children):
-            children.count
+        package var loadedChildren: [DOMNode.ID] {
+            switch self {
+            case .unrequested:
+                []
+            case let .loaded(children):
+                children
+            }
         }
     }
 
-    package var loadedChildren: [DOMNodeIdentifier] {
-        switch self {
-        case .unrequested:
-            []
-        case let .loaded(children):
-            children
+    struct Snapshot: Equatable, Sendable {
+        package var id: DOMNode.ID
+        package var protocolNodeID: DOMNode.ProtocolID
+        package var nodeType: DOMNode.Kind
+        package var nodeName: String
+        package var localName: String
+        package var nodeValue: String
+        package var ownerFrameID: DOMFrame.ID?
+        package var documentURL: String?
+        package var baseURL: String?
+        package var attributes: [DOMNode.Attribute]
+        package var parentID: DOMNode.ID?
+        package var previousSiblingID: DOMNode.ID?
+        package var nextSiblingID: DOMNode.ID?
+        package var regularChildren: DOMNode.ChildrenSnapshot
+        package var contentDocumentID: DOMNode.ID?
+        package var shadowRootIDs: [DOMNode.ID]
+        package var templateContentID: DOMNode.ID?
+        package var beforePseudoElementID: DOMNode.ID?
+        package var otherPseudoElementIDs: [DOMNode.ID]
+        package var afterPseudoElementID: DOMNode.ID?
+        package var pseudoType: String?
+        package var shadowRootType: String?
+
+        package var regularChildIDs: [DOMNode.ID] {
+            regularChildren.loadedChildren
         }
     }
 }
 
-package struct DOMNodeSnapshot: Equatable, Sendable {
-    package var id: DOMNodeIdentifier
-    package var protocolNodeID: DOMProtocolNodeID
-    package var nodeType: DOMNodeType
-    package var nodeName: String
-    package var localName: String
-    package var nodeValue: String
-    package var ownerFrameID: DOMFrameIdentifier?
-    package var documentURL: String?
-    package var baseURL: String?
-    package var attributes: [DOMAttribute]
-    package var parentID: DOMNodeIdentifier?
-    package var previousSiblingID: DOMNodeIdentifier?
-    package var nextSiblingID: DOMNodeIdentifier?
-    package var regularChildren: DOMRegularChildrenSnapshot
-    package var contentDocumentID: DOMNodeIdentifier?
-    package var shadowRootIDs: [DOMNodeIdentifier]
-    package var templateContentID: DOMNodeIdentifier?
-    package var beforePseudoElementID: DOMNodeIdentifier?
-    package var otherPseudoElementIDs: [DOMNodeIdentifier]
-    package var afterPseudoElementID: DOMNodeIdentifier?
-    package var pseudoType: String?
-    package var shadowRootType: String?
-
-    package var regularChildIDs: [DOMNodeIdentifier] {
-        regularChildren.loadedChildren
+package extension DOMSelection.Request {
+    struct Snapshot: Equatable, Sendable {
+        package var id: DOMSelection.Request.ID
+        package var targetID: ProtocolTarget.ID
+        package var documentID: DOMDocument.ID
     }
 }
 
-package struct SelectionRequestSnapshot: Equatable, Sendable {
-    package var id: SelectionRequestIdentifier
-    package var targetID: ProtocolTarget.ID
-    package var documentID: DOMDocumentIdentifier
+package extension DOMTargetState {
+    struct Snapshot: Equatable, Sendable {
+        package var targetID: ProtocolTarget.ID
+        package var currentDocumentID: DOMDocument.ID?
+        package var transactionIDs: [DOMTransaction.ID]
+    }
 }
 
-package struct DOMTargetStateSnapshot: Equatable, Sendable {
-    package var targetID: ProtocolTarget.ID
-    package var currentDocumentID: DOMDocumentIdentifier?
-    package var transactionIDs: [DOMTransactionIdentifier]
+package extension DOMTransaction {
+    struct Snapshot: Equatable, Sendable {
+        package var id: DOMTransaction.ID
+        package var targetID: ProtocolTarget.ID
+        package var documentID: DOMDocument.ID
+        package var kind: DOMTransaction.Kind
+        package var issuedSequence: UInt64
+        package var requestedProtocolNodeID: DOMNode.ProtocolID?
+    }
 }
 
-package struct DOMTransactionSnapshot: Equatable, Sendable {
-    package var id: DOMTransactionIdentifier
-    package var targetID: ProtocolTarget.ID
-    package var documentID: DOMDocumentIdentifier
-    package var kind: DOMTransactionKind
-    package var issuedSequence: UInt64
-    package var requestedProtocolNodeID: DOMProtocolNodeID?
+package extension DOMSelection {
+    struct Snapshot: Equatable, Sendable {
+        package var selectedNodeID: DOMNode.ID?
+        package var pendingRequest: DOMSelection.Request.Snapshot?
+        package var failure: DOMSelection.Failure?
+    }
 }
 
-package struct DOMSelectionSnapshot: Equatable, Sendable {
-    package var selectedNodeID: DOMNodeIdentifier?
-    package var pendingRequest: SelectionRequestSnapshot?
-    package var failure: SelectionResolutionFailure?
+package extension DOMSession {
+    struct Snapshot: Equatable, Sendable {
+        package var currentPageTargetID: ProtocolTarget.ID?
+        package var mainFrameID: DOMFrame.ID?
+        package var targetsByID: [ProtocolTarget.ID: DOMTarget.Snapshot]
+        package var targetStatesByID: [ProtocolTarget.ID: DOMTargetState.Snapshot]
+        package var framesByID: [DOMFrame.ID: DOMFrame.Snapshot]
+        package var documentsByID: [DOMDocument.ID: DOMDocument.Snapshot]
+        package var nodesByID: [DOMNode.ID: DOMNode.Snapshot]
+        package var frameDocumentProjections: [ProtocolTarget.ID: FrameDocumentProjection.Snapshot]
+        package var transactions: [DOMTransaction.Snapshot]
+        package var currentNodeIDByKey: [DOMNode.CurrentKey: DOMNode.ID]
+        package var executionContextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContextRecord]
+        package var selection: DOMSelection.Snapshot
+    }
 }
 
-package struct DOMSessionSnapshot: Equatable, Sendable {
-    package var currentPageTargetID: ProtocolTarget.ID?
-    package var mainFrameID: DOMFrameIdentifier?
-    package var targetsByID: [ProtocolTarget.ID: ProtocolTargetSnapshot]
-    package var targetStatesByID: [ProtocolTarget.ID: DOMTargetStateSnapshot]
-    package var framesByID: [DOMFrameIdentifier: DOMFrameSnapshot]
-    package var documentsByID: [DOMDocumentIdentifier: DOMDocumentSnapshot]
-    package var nodesByID: [DOMNodeIdentifier: DOMNodeSnapshot]
-    package var frameDocumentProjections: [ProtocolTarget.ID: FrameDocumentProjectionSnapshot]
-    package var transactions: [DOMTransactionSnapshot]
-    package var currentNodeIDByKey: [DOMNodeCurrentKey: DOMNodeIdentifier]
-    package var executionContextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContextRecord]
-    package var selection: DOMSelectionSnapshot
-}
-
-package extension DOMSessionSnapshot {
-    var currentPageDocumentID: DOMDocumentIdentifier? {
+package extension DOMSession.Snapshot {
+    var currentPageDocumentID: DOMDocument.ID? {
         guard let currentPageTargetID else {
             return nil
         }

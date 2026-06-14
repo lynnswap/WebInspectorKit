@@ -207,7 +207,7 @@ private struct ResponseBodyResult: Decodable {
 
 private struct RequestWillBeSentParams: Decodable {
     var requestId: NetworkRequestIdentifier
-    var frameId: DOMFrameIdentifier?
+    var frameId: DOMFrame.ID?
     var loaderId: String?
     var documentURL: String?
     var request: RequestPayload
@@ -222,7 +222,7 @@ private struct RequestWillBeSentParams: Decodable {
 
 private struct ResponseReceivedParams: Decodable {
     var requestId: NetworkRequestIdentifier
-    var frameId: DOMFrameIdentifier?
+    var frameId: DOMFrame.ID?
     var loaderId: String?
     var type: String?
     var response: ResponsePayload
@@ -287,7 +287,7 @@ private struct WebSocketClosedParams: Decodable {
 
 private struct RequestServedFromMemoryCacheParams: Decodable {
     var requestId: NetworkRequestIdentifier
-    var frameId: DOMFrameIdentifier
+    var frameId: DOMFrame.ID
     var loaderId: String
     var documentURL: String
     var timestamp: Double
@@ -320,7 +320,7 @@ private struct InitiatorPayload: Decodable {
     var stackTrace: StackTracePayload?
     var url: String?
     var lineNumber: Double?
-    var nodeId: DOMProtocolNodeID?
+    var nodeId: DOMNode.ProtocolID?
 
     var payload: NetworkInitiatorPayload {
         NetworkInitiatorPayload(

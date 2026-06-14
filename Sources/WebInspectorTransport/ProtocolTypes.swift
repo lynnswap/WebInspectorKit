@@ -1,4 +1,5 @@
 package enum ProtocolTarget {}
+package enum ProtocolFrame {}
 
 package extension ProtocolTarget {
     struct ID: RawRepresentable, Hashable, Codable, Sendable, CustomStringConvertible {
@@ -18,19 +19,21 @@ package extension ProtocolTarget {
     }
 }
 
-package struct DOMFrameIdentifier: RawRepresentable, Hashable, Codable, Sendable, CustomStringConvertible {
-    package let rawValue: String
+package extension ProtocolFrame {
+    struct ID: RawRepresentable, Hashable, Codable, Sendable, CustomStringConvertible {
+        package let rawValue: String
 
-    package init(_ rawValue: String) {
-        self.rawValue = rawValue
-    }
+        package init(_ rawValue: String) {
+            self.rawValue = rawValue
+        }
 
-    package init(rawValue: String) {
-        self.rawValue = rawValue
-    }
+        package init(rawValue: String) {
+            self.rawValue = rawValue
+        }
 
-    package var description: String {
-        rawValue
+        package var description: String {
+            rawValue
+        }
     }
 }
 
@@ -150,8 +153,8 @@ package extension ProtocolTarget {
     struct Record: Equatable, Sendable {
         package var id: ID
         package var kind: Kind
-        package var frameID: DOMFrameIdentifier?
-        package var parentFrameID: DOMFrameIdentifier?
+        package var frameID: ProtocolFrame.ID?
+        package var parentFrameID: ProtocolFrame.ID?
         package var capabilities: Capabilities
         package var isProvisional: Bool
         package var isPaused: Bool
@@ -159,8 +162,8 @@ package extension ProtocolTarget {
         package init(
             id: ID,
             kind: Kind,
-            frameID: DOMFrameIdentifier? = nil,
-            parentFrameID: DOMFrameIdentifier? = nil,
+            frameID: ProtocolFrame.ID? = nil,
+            parentFrameID: ProtocolFrame.ID? = nil,
             capabilities: Capabilities? = nil,
             isProvisional: Bool = false,
             isPaused: Bool = false

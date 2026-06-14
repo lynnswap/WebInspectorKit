@@ -291,9 +291,9 @@ package final class TargetGraph {
 
     package func targetSnapshots(
         currentDocumentID: (ProtocolTarget.ID) -> DOMDocument.ID?
-    ) -> [ProtocolTarget.ID: ProtocolTargetSnapshot] {
+    ) -> [ProtocolTarget.ID: DOMTarget.Snapshot] {
         targetsByID.mapValues {
-            ProtocolTargetSnapshot(
+            DOMTarget.Snapshot(
                 id: $0.id,
                 kind: $0.kind,
                 frameID: $0.frameID,
@@ -306,9 +306,9 @@ package final class TargetGraph {
         }
     }
 
-    package func frameSnapshots() -> [DOMFrame.ID: DOMFrameSnapshot] {
+    package func frameSnapshots() -> [DOMFrame.ID: DOMFrame.Snapshot] {
         framesByID.mapValues {
-            DOMFrameSnapshot(
+            DOMFrame.Snapshot(
                 id: $0.id,
                 parentFrameID: $0.parentFrameID,
                 childFrameIDs: $0.childFrameIDs,

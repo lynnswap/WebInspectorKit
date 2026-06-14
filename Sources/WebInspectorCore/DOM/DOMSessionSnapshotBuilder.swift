@@ -3,23 +3,23 @@ import WebInspectorTransport
 @MainActor
 struct DOMSessionSnapshotBuilder {
     var currentPageTargetID: ProtocolTarget.ID?
-    var mainFrameID: DOMFrameIdentifier?
-    var targetSnapshots: [ProtocolTarget.ID: ProtocolTargetSnapshot]
-    var targetStateSnapshots: [ProtocolTarget.ID: DOMTargetStateSnapshot]
-    var frameSnapshots: [DOMFrameIdentifier: DOMFrameSnapshot]
+    var mainFrameID: DOMFrame.ID?
+    var targetSnapshots: [ProtocolTarget.ID: DOMTarget.Snapshot]
+    var targetStateSnapshots: [ProtocolTarget.ID: DOMTargetState.Snapshot]
+    var frameSnapshots: [DOMFrame.ID: DOMFrame.Snapshot]
     var documents: [DOMDocument]
-    var frameDocumentProjections: [ProtocolTarget.ID: FrameDocumentProjectionSnapshot]
+    var frameDocumentProjections: [ProtocolTarget.ID: FrameDocumentProjection.Snapshot]
     var transactions: [DOMTransaction]
-    var currentNodeIDByKey: [DOMNodeCurrentKey: DOMNodeIdentifier]
+    var currentNodeIDByKey: [DOMNode.CurrentKey: DOMNode.ID]
     var executionContextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContextRecord]
     var selection: DOMSelection
 
-    func build() -> DOMSessionSnapshot {
+    func build() -> DOMSession.Snapshot {
         let documentsByID = Dictionary(uniqueKeysWithValues: documents.map { ($0.id, $0) })
         let nodesByID = Dictionary(uniqueKeysWithValues: documents.flatMap { document in
             document.nodesByID.map { ($0.key, $0.value) }
         })
-        return DOMSessionSnapshot(
+        return DOMSession.Snapshot(
             currentPageTargetID: currentPageTargetID,
             mainFrameID: mainFrameID,
             targetsByID: targetSnapshots,
@@ -35,8 +35,8 @@ struct DOMSessionSnapshotBuilder {
         )
     }
 
-    private func documentSnapshot(_ document: DOMDocument) -> DOMDocumentSnapshot {
-        DOMDocumentSnapshot(
+    private func documentSnapshot(_ document: DOMDocument) -> DOMDocument.Snapshot {
+        DOMDocument.Snapshot(
             id: document.id,
             targetID: document.targetID,
             localDocumentLifetimeID: document.localDocumentLifetimeID,
@@ -45,8 +45,8 @@ struct DOMSessionSnapshotBuilder {
         )
     }
 
-    private func nodeSnapshot(_ node: DOMNode) -> DOMNodeSnapshot {
-        DOMNodeSnapshot(
+    private func nodeSnapshot(_ node: DOMNode) -> DOMNode.Snapshot {
+        DOMNode.Snapshot(
             id: node.id,
             protocolNodeID: node.protocolNodeID,
             nodeType: node.nodeType,
@@ -72,8 +72,8 @@ struct DOMSessionSnapshotBuilder {
         )
     }
 
-    private func transactionSnapshot(_ transaction: DOMTransaction) -> DOMTransactionSnapshot {
-        DOMTransactionSnapshot(
+    private func transactionSnapshot(_ transaction: DOMTransaction) -> DOMTransaction.Snapshot {
+        DOMTransaction.Snapshot(
             id: transaction.id,
             targetID: transaction.targetID,
             documentID: transaction.documentID,
@@ -83,17 +83,17 @@ struct DOMSessionSnapshotBuilder {
         )
     }
 
-    private func selectionSnapshot(_ selection: DOMSelection) -> DOMSelectionSnapshot {
-        DOMSelectionSnapshot(
+    private func selectionSnapshot(_ selection: DOMSelection) -> DOMSelection.Snapshot {
+        DOMSelection.Snapshot(
             selectedNodeID: selection.selectedNodeID,
             pendingRequest: selection.pendingRequest.map {
-                SelectionRequestSnapshot(id: $0.id, targetID: $0.targetID, documentID: $0.documentID)
+                DOMSelection.Request.Snapshot(id: $0.id, targetID: $0.targetID, documentID: $0.documentID)
             },
             failure: selection.failure
         )
     }
 
-    private func regularChildrenSnapshot(_ regularChildren: DOMRegularChildState) -> DOMRegularChildrenSnapshot {
+    private func regularChildrenSnapshot(_ regularChildren: DOMNode.ChildrenState) -> DOMNode.ChildrenSnapshot {
         switch regularChildren {
         case let .unrequested(count):
             return .unrequested(count: count)

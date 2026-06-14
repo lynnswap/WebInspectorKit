@@ -49,7 +49,7 @@ package struct CSSRuleIdentifier: Hashable, Codable, Sendable {
 
 package struct CSSStyleSheetHeaderPayload: Equatable, Codable, Sendable {
     package var styleSheetID: CSSStyleSheetIdentifier
-    package var frameID: DOMFrameIdentifier?
+    package var frameID: DOMFrame.ID?
     package var sourceURL: String?
     package var origin: CSSStyleOrigin?
     package var title: String?
@@ -60,7 +60,7 @@ package struct CSSStyleSheetHeaderPayload: Equatable, Codable, Sendable {
 
     package init(
         styleSheetID: CSSStyleSheetIdentifier,
-        frameID: DOMFrameIdentifier? = nil,
+        frameID: DOMFrame.ID? = nil,
         sourceURL: String? = nil,
         origin: CSSStyleOrigin? = nil,
         title: String? = nil,
@@ -95,7 +95,7 @@ package struct CSSStyleSheetHeaderPayload: Equatable, Codable, Sendable {
     package init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         styleSheetID = try container.decode(CSSStyleSheetIdentifier.self, forKey: .styleSheetID)
-        frameID = try container.decodeIfPresent(DOMFrameIdentifier.self, forKey: .frameID)
+        frameID = try container.decodeIfPresent(DOMFrame.ID.self, forKey: .frameID)
         sourceURL = try container.decodeIfPresent(String.self, forKey: .sourceURL)
         origin = try container.decodeIfPresent(CSSStyleOrigin.self, forKey: .origin)
         title = try container.decodeIfPresent(String.self, forKey: .title)
@@ -234,17 +234,17 @@ extension CSSPropertyStatus: Codable {
 }
 
 package struct CSSNodeStyleIdentity: Equatable, Hashable, Sendable {
-    package var nodeID: DOMNodeIdentifier
+    package var nodeID: DOMNode.ID
     package var targetID: ProtocolTarget.ID
-    package var documentID: DOMDocumentIdentifier
-    package var protocolNodeID: DOMProtocolNodeID
+    package var documentID: DOMDocument.ID
+    package var protocolNodeID: DOMNode.ProtocolID
     package var targetCapabilities: ProtocolTarget.Capabilities
 
     package init(
-        nodeID: DOMNodeIdentifier,
+        nodeID: DOMNode.ID,
         targetID: ProtocolTarget.ID,
-        documentID: DOMDocumentIdentifier,
-        protocolNodeID: DOMProtocolNodeID,
+        documentID: DOMDocument.ID,
+        protocolNodeID: DOMNode.ProtocolID,
         targetCapabilities: ProtocolTarget.Capabilities
     ) {
         self.nodeID = nodeID
@@ -257,8 +257,8 @@ package struct CSSNodeStyleIdentity: Equatable, Hashable, Sendable {
 
 package enum CSSNodeStylesUnavailableReason: Error, Equatable, Sendable {
     case noSelection
-    case nonElementNode(DOMNodeType)
-    case staleNode(DOMNodeIdentifier)
+    case nonElementNode(DOMNode.Kind)
+    case staleNode(DOMNode.ID)
     case cssUnavailableForTarget(ProtocolTarget.ID)
 }
 
@@ -670,11 +670,11 @@ package enum CSSStyleSectionKind: Equatable, Hashable, Sendable {
 }
 
 package struct CSSStyleSectionIdentifier: Hashable, Sendable {
-    package var nodeID: DOMNodeIdentifier
+    package var nodeID: DOMNode.ID
     package var kind: CSSStyleSectionKind
     package var ordinal: Int
 
-    package init(nodeID: DOMNodeIdentifier, kind: CSSStyleSectionKind, ordinal: Int) {
+    package init(nodeID: DOMNode.ID, kind: CSSStyleSectionKind, ordinal: Int) {
         self.nodeID = nodeID
         self.kind = kind
         self.ordinal = ordinal

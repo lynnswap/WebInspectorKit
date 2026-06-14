@@ -183,7 +183,7 @@ enum DOMTreeMarkupBuilder {
         }
     }
 
-    private static func inferredNodeType(for node: DOMNode) -> DOMNodeType {
+    private static func inferredNodeType(for node: DOMNode) -> DOMNode.Kind {
         let name = (node.localName.isEmpty ? node.nodeName : node.localName).lowercased()
         if node.nodeType != .element || name.isEmpty {
             return node.nodeType
@@ -271,7 +271,7 @@ enum DOMTreeMarkupBuilder {
         }
     }
 
-    private static func append(attribute: DOMAttribute, to markup: inout DOMTreeMarkup) {
+    private static func append(attribute: DOMNode.Attribute, to markup: inout DOMTreeMarkup) {
         let name = attribute.name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else {
             return
@@ -346,7 +346,7 @@ enum DOMTreeMarkupBuilder {
         return markup
     }
 
-    private static func isBooleanAttribute(_ attribute: DOMAttribute) -> Bool {
+    private static func isBooleanAttribute(_ attribute: DOMNode.Attribute) -> Bool {
         attribute.value.isEmpty && booleanAttributeNames.contains(attribute.name.lowercased())
     }
 

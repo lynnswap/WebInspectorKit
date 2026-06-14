@@ -423,7 +423,7 @@ struct ParentContainerTests {
         let key = network.applyRequestWillBeSent(
             targetID: targetID,
             requestID: requestID,
-            frameID: DOMFrameIdentifier("main"),
+            frameID: DOMFrame.ID("main"),
             loaderID: "loader",
             documentURL: "https://example.com",
             request: NetworkRequestPayload(

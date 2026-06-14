@@ -177,7 +177,7 @@ package actor TransportSession {
         runtimeContextRegistry.targetID(for: key)
     }
 
-    package func targetIdentifier(forFrameID frameID: DOMFrameIdentifier) -> ProtocolTarget.ID? {
+    package func targetIdentifier(forFrameID frameID: ProtocolFrame.ID) -> ProtocolTarget.ID? {
         targetRegistry.targetID(forFrameID: frameID)
     }
 
@@ -750,7 +750,7 @@ package actor TransportSession {
     }
 
     private func resolvePendingStyleSheets(
-        frameID: DOMFrameIdentifier,
+        frameID: ProtocolFrame.ID,
         targetID: ProtocolTarget.ID
     ) -> [ResolvedStyleSheetAddedEvent] {
         styleSheetRouting.resolvePending(frameID: frameID, targetID: targetID)
@@ -886,8 +886,8 @@ private struct TargetCreatedParams: Decodable {
 private struct TargetInfoPayload: Decodable {
     var targetId: ProtocolTarget.ID
     var type: String
-    var frameId: DOMFrameIdentifier?
-    var parentFrameId: DOMFrameIdentifier?
+    var frameId: ProtocolFrame.ID?
+    var parentFrameId: ProtocolFrame.ID?
     var domains: [String]?
     var isProvisional: Bool?
     var isPaused: Bool?
@@ -908,7 +908,7 @@ private struct RuntimeExecutionContextCreatedParams: Decodable {
         var id: ExecutionContextID
         var type: RuntimeExecutionContextType?
         var name: String?
-        var frameId: DOMFrameIdentifier?
+        var frameId: ProtocolFrame.ID?
     }
 
     var context: Context
@@ -923,7 +923,7 @@ private struct CSSStyleSheetAddedParams: Decodable {
 
     struct Header: Decodable {
         var styleSheetID: String
-        var frameID: DOMFrameIdentifier?
+        var frameID: ProtocolFrame.ID?
 
         private enum CodingKeys: String, CodingKey {
             case styleSheetID = "styleSheetId"

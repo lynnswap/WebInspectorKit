@@ -398,14 +398,14 @@ enum DOMTreeInvalidation: Equatable {
 }
 
 struct DOMTreeMarkupSignature: Hashable {
-    let nodeType: DOMNodeType
+    let nodeType: DOMNode.Kind
     let nodeName: String
     let localName: String
     let nodeValue: String
     let pseudoType: String?
     let shadowRootType: String?
     let isTemplateContent: Bool
-    let attributes: [DOMAttribute]
+    let attributes: [DOMNode.Attribute]
     let childCount: Int
     let hasDisclosure: Bool
     let isOpen: Bool

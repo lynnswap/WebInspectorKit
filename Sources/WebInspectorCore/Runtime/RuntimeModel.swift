@@ -9,7 +9,7 @@ package final class RuntimeExecutionContext {
     package var runtimeAgentTargetID: ProtocolTarget.ID
     package var type: RuntimeExecutionContextType
     package var name: String
-    package var frameID: DOMFrameIdentifier?
+    package var frameID: DOMFrame.ID?
 
     package init(
         id: ExecutionContextID,
@@ -17,7 +17,7 @@ package final class RuntimeExecutionContext {
         runtimeAgentTargetID: ProtocolTarget.ID? = nil,
         type: RuntimeExecutionContextType = .normal,
         name: String = "",
-        frameID: DOMFrameIdentifier? = nil
+        frameID: DOMFrame.ID? = nil
     ) {
         self.id = id
         self.targetID = targetID
@@ -134,12 +134,12 @@ package struct RuntimeStateSnapshot: Equatable, Sendable {
 @Observable
 package final class RuntimeTargetState {
     package let targetID: ProtocolTarget.ID
-    package var frameID: DOMFrameIdentifier?
+    package var frameID: DOMFrame.ID?
     package var normalContextKey: RuntimeExecutionContextKey?
 
     package init(
         targetID: ProtocolTarget.ID,
-        frameID: DOMFrameIdentifier? = nil,
+        frameID: DOMFrame.ID? = nil,
         normalContextKey: RuntimeExecutionContextKey? = nil
     ) {
         self.targetID = targetID

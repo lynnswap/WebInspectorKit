@@ -492,7 +492,7 @@ private struct CSSSelectedStyleCoordinator {
 
 @MainActor
 private struct CSSNodeStyleStore {
-    private var stylesByNodeID: [DOMNodeIdentifier: CSSNodeStyles] = [:]
+    private var stylesByNodeID: [DOMNode.ID: CSSNodeStyles] = [:]
 
     mutating func removeAll() {
         stylesByNodeID.removeAll()
@@ -522,7 +522,7 @@ private struct CSSNodeStyleStore {
         stylesByNodeID.values.filter { $0.identity.targetID == targetID }
     }
 
-    func nodeStyles(targetID: ProtocolTarget.ID, protocolNodeID: DOMProtocolNodeID) -> CSSNodeStyles? {
+    func nodeStyles(targetID: ProtocolTarget.ID, protocolNodeID: DOMNode.ProtocolID) -> CSSNodeStyles? {
         stylesByNodeID.values.first {
             $0.identity.targetID == targetID && $0.identity.protocolNodeID == protocolNodeID
         }
@@ -808,7 +808,7 @@ package final class CSSSession {
         }
     }
 
-    package func markNeedsRefresh(targetID: ProtocolTarget.ID, nodeID: DOMProtocolNodeID) {
+    package func markNeedsRefresh(targetID: ProtocolTarget.ID, nodeID: DOMNode.ProtocolID) {
         guard let current = nodeStyleStore.nodeStyles(targetID: targetID, protocolNodeID: nodeID) else {
             return
         }

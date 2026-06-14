@@ -50,7 +50,7 @@ struct DOMContainerTests {
             ProtocolTarget.Record(
                 id: targetID,
                 kind: .page,
-                frameID: DOMFrameIdentifier("main-frame"),
+                frameID: DOMFrame.ID("main-frame"),
                 capabilities: .pageDefault
             ),
             makeCurrentMainPage: true
@@ -906,7 +906,7 @@ struct DOMContainerTests {
             ProtocolTarget.Record(
                 id: targetID,
                 kind: .page,
-                frameID: DOMFrameIdentifier("main-frame"),
+                frameID: DOMFrame.ID("main-frame"),
                 capabilities: capabilities
             ),
             makeCurrentMainPage: true
@@ -1102,25 +1102,25 @@ struct DOMContainerTests {
         return nil
     }
 
-    private func documentNode() -> DOMNodePayload {
-        DOMNodePayload(
+    private func documentNode() -> DOMNode.Payload {
+        DOMNode.Payload(
             nodeID: .init(1),
             nodeType: .document,
             nodeName: "#document",
             regularChildren: .loaded([
-                DOMNodePayload(
+                DOMNode.Payload(
                     nodeID: .init(2),
                     nodeType: .element,
                     nodeName: "HTML",
                     localName: "html",
                     regularChildren: .loaded([
-                        DOMNodePayload(
+                        DOMNode.Payload(
                             nodeID: .init(3),
                             nodeType: .element,
                             nodeName: "BODY",
                             localName: "body",
                             regularChildren: .loaded([
-                                DOMNodePayload(
+                                DOMNode.Payload(
                                     nodeID: .init(4),
                                     nodeType: .element,
                                     nodeName: "INPUT",

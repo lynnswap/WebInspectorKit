@@ -158,13 +158,13 @@ package struct RuntimeExecutionContextPayload: Equatable, Sendable, Decodable {
     package var id: ExecutionContextID
     package var type: RuntimeExecutionContextType?
     package var name: String?
-    package var frameID: DOMFrameIdentifier?
+    package var frameID: DOMFrame.ID?
 
     package init(
         id: ExecutionContextID,
         type: RuntimeExecutionContextType? = nil,
         name: String? = nil,
-        frameID: DOMFrameIdentifier? = nil
+        frameID: DOMFrame.ID? = nil
     ) {
         self.id = id
         self.type = type

@@ -30,7 +30,7 @@ package struct RuntimeExecutionContextRecord: Equatable, Sendable {
     package var runtimeAgentTargetID: ProtocolTarget.ID
     package var type: RuntimeExecutionContextType
     package var name: String
-    package var frameID: DOMFrameIdentifier?
+    package var frameID: ProtocolFrame.ID?
 
     package init(
         id: ExecutionContextID,
@@ -38,7 +38,7 @@ package struct RuntimeExecutionContextRecord: Equatable, Sendable {
         runtimeAgentTargetID: ProtocolTarget.ID? = nil,
         type: RuntimeExecutionContextType = .normal,
         name: String = "",
-        frameID: DOMFrameIdentifier? = nil
+        frameID: ProtocolFrame.ID? = nil
     ) {
         self.id = id
         self.targetID = targetID

@@ -128,7 +128,7 @@ struct DOMTreeTextViewTests {
             ProtocolTarget.Record(
                 id: targetID,
                 kind: .page,
-                frameID: DOMFrameIdentifier("main-frame")
+                frameID: DOMFrame.ID("main-frame")
             ),
             makeCurrentMainPage: true
         )
@@ -165,11 +165,11 @@ struct DOMTreeTextViewTests {
     func selectingProjectedFrameNodeOpensComposedAncestors() async throws {
         let pageTargetID = ProtocolTarget.ID("page-main")
         let frameTargetID = ProtocolTarget.ID("frame-ad-target")
-        let frameID = DOMFrameIdentifier("frame-ad")
+        let frameID = DOMFrame.ID("frame-ad")
         let session = DOMSession()
 
         session.applyTargetCreated(
-            ProtocolTarget.Record(id: pageTargetID, kind: .page, frameID: DOMFrameIdentifier("main-frame")),
+            ProtocolTarget.Record(id: pageTargetID, kind: .page, frameID: DOMFrame.ID("main-frame")),
             makeCurrentMainPage: true
         )
         session.applyTargetCreated(
@@ -178,7 +178,7 @@ struct DOMTreeTextViewTests {
         _ = session.replaceDocumentRoot(projectedPageDocument(frameID: frameID), targetID: pageTargetID)
         let frameRootID = session.replaceDocumentRoot(projectedFrameDocument(), targetID: frameTargetID)
         let selectedNodeID = try #require(
-            session.snapshot().currentNodeIDByKey[DOMNodeCurrentKey(targetID: frameTargetID, nodeID: .init(8))]
+            session.snapshot().currentNodeIDByKey[DOMNode.CurrentKey(targetID: frameTargetID, nodeID: .init(8))]
         )
         let view = makeTreeView(session: session)
         let renderedState = await view.selectionObservationDeliveryForTesting.values {
@@ -230,7 +230,7 @@ private final class NodeRequestRecorder {
 }
 
 @MainActor
-private func makeTreeView(root: DOMNodePayload = documentNode()) -> DOMTreeTextView {
+private func makeTreeView(root: DOMNode.Payload = documentNode()) -> DOMTreeTextView {
     makeTreeView(session: makeDOMSession(root: root))
 }
 
@@ -243,14 +243,14 @@ private func makeTreeView(session: DOMSession) -> DOMTreeTextView {
 }
 
 @MainActor
-private func makeDOMSession(root: DOMNodePayload = documentNode()) -> DOMSession {
+private func makeDOMSession(root: DOMNode.Payload = documentNode()) -> DOMSession {
     let targetID = ProtocolTarget.ID("page-main")
     let session = DOMSession()
     session.applyTargetCreated(
         ProtocolTarget.Record(
             id: targetID,
             kind: .page,
-            frameID: DOMFrameIdentifier("main-frame")
+            frameID: DOMFrame.ID("main-frame")
         ),
         makeCurrentMainPage: true
     )
@@ -258,31 +258,31 @@ private func makeDOMSession(root: DOMNodePayload = documentNode()) -> DOMSession
     return session
 }
 
-private func documentNode() -> DOMNodePayload {
-    DOMNodePayload(
+private func documentNode() -> DOMNode.Payload {
+    DOMNode.Payload(
         nodeID: .init(1),
         nodeType: .document,
         nodeName: "#document",
         regularChildren: .loaded([
-            DOMNodePayload(
+            DOMNode.Payload(
                 nodeID: .init(2),
                 nodeType: .documentType,
                 nodeName: "html"
             ),
-            DOMNodePayload(
+            DOMNode.Payload(
                 nodeID: .init(3),
                 nodeType: .element,
                 nodeName: "HTML",
                 localName: "html",
-                attributes: [DOMAttribute(name: "lang", value: "en")],
+                attributes: [DOMNode.Attribute(name: "lang", value: "en")],
                 regularChildren: .loaded([
-                    DOMNodePayload(
+                    DOMNode.Payload(
                         nodeID: .init(4),
                         nodeType: .element,
                         nodeName: "HEAD",
                         localName: "head",
                         regularChildren: .loaded([
-                            DOMNodePayload(
+                            DOMNode.Payload(
                                 nodeID: .init(5),
                                 nodeType: .element,
                                 nodeName: "TITLE",
@@ -297,20 +297,20 @@ private func documentNode() -> DOMNodePayload {
     )
 }
 
-private func documentWithDeferredArticle() -> DOMNodePayload {
-    DOMNodePayload(
+private func documentWithDeferredArticle() -> DOMNode.Payload {
+    DOMNode.Payload(
         nodeID: .init(1),
         nodeType: .document,
         nodeName: "#document",
         regularChildren: .loaded([
-            DOMNodePayload(
+            DOMNode.Payload(
                 nodeID: .init(3),
                 nodeType: .element,
                 nodeName: "HTML",
                 localName: "html",
                 regularChildren: .loaded([
                     bodyNode(
-                        article: DOMNodePayload(
+                        article: DOMNode.Payload(
                             nodeID: .init(8),
                             nodeType: .element,
                             nodeName: "ARTICLE",
@@ -324,31 +324,31 @@ private func documentWithDeferredArticle() -> DOMNodePayload {
     )
 }
 
-private func projectedPageDocument(frameID: DOMFrame.ID) -> DOMNodePayload {
-    DOMNodePayload(
+private func projectedPageDocument(frameID: DOMFrame.ID) -> DOMNode.Payload {
+    DOMNode.Payload(
         nodeID: .init(1),
         nodeType: .document,
         nodeName: "#document",
         regularChildren: .loaded([
-            DOMNodePayload(
+            DOMNode.Payload(
                 nodeID: .init(2),
                 nodeType: .element,
                 nodeName: "HTML",
                 localName: "html",
                 regularChildren: .loaded([
-                    DOMNodePayload(
+                    DOMNode.Payload(
                         nodeID: .init(3),
                         nodeType: .element,
                         nodeName: "BODY",
                         localName: "body",
                         regularChildren: .loaded([
-                            DOMNodePayload(
+                            DOMNode.Payload(
                                 nodeID: .init(20),
                                 nodeType: .element,
                                 nodeName: "IFRAME",
                                 localName: "iframe",
                                 ownerFrameID: frameID,
-                                attributes: [DOMAttribute(name: "src", value: "https://frame.example/ad")]
+                                attributes: [DOMNode.Attribute(name: "src", value: "https://frame.example/ad")]
                             ),
                         ])
                     ),
@@ -358,31 +358,31 @@ private func projectedPageDocument(frameID: DOMFrame.ID) -> DOMNodePayload {
     )
 }
 
-private func projectedFrameDocument() -> DOMNodePayload {
-    DOMNodePayload(
+private func projectedFrameDocument() -> DOMNode.Payload {
+    DOMNode.Payload(
         nodeID: .init(101),
         nodeType: .document,
         nodeName: "#document",
         documentURL: "https://frame.example/ad",
         regularChildren: .loaded([
-            DOMNodePayload(
+            DOMNode.Payload(
                 nodeID: .init(2),
                 nodeType: .element,
                 nodeName: "HTML",
                 localName: "html",
                 regularChildren: .loaded([
-                    DOMNodePayload(
+                    DOMNode.Payload(
                         nodeID: .init(3),
                         nodeType: .element,
                         nodeName: "BODY",
                         localName: "body",
                         regularChildren: .loaded([
-                            DOMNodePayload(
+                            DOMNode.Payload(
                                 nodeID: .init(8),
                                 nodeType: .element,
                                 nodeName: "IMG",
                                 localName: "img",
-                                attributes: [DOMAttribute(name: "id", value: "ad-node")]
+                                attributes: [DOMNode.Attribute(name: "id", value: "ad-node")]
                             ),
                         ])
                     ),
@@ -392,39 +392,39 @@ private func projectedFrameDocument() -> DOMNodePayload {
     )
 }
 
-private func bodyNode(article: DOMNodePayload) -> DOMNodePayload {
-    DOMNodePayload(
+private func bodyNode(article: DOMNode.Payload) -> DOMNode.Payload {
+    DOMNode.Payload(
         nodeID: .init(6),
         nodeType: .element,
         nodeName: "BODY",
         localName: "body",
-        attributes: [DOMAttribute(name: "class", value: "logged-in env-production")],
+        attributes: [DOMNode.Attribute(name: "class", value: "logged-in env-production")],
         regularChildren: .loaded([
-            DOMNodePayload(
+            DOMNode.Payload(
                 nodeID: .init(7),
                 nodeType: .element,
                 nodeName: "DIV",
                 localName: "div",
                 attributes: [
-                    DOMAttribute(name: "id", value: "start-of-content"),
-                    DOMAttribute(name: "data-testid", value: "cellInnerDiv"),
+                    DOMNode.Attribute(name: "id", value: "start-of-content"),
+                    DOMNode.Attribute(name: "data-testid", value: "cellInnerDiv"),
                 ]
             ),
-            DOMNodePayload(
+            DOMNode.Payload(
                 nodeID: .init(12),
                 nodeType: .element,
                 nodeName: "INPUT",
                 localName: "input",
-                attributes: [DOMAttribute(name: "disabled", value: "")]
+                attributes: [DOMNode.Attribute(name: "disabled", value: "")]
             ),
             article,
-            DOMNodePayload(
+            DOMNode.Payload(
                 nodeID: .init(10),
                 nodeType: .text,
                 nodeName: "#text",
                 nodeValue: "Introducing luma for iOS 26"
             ),
-            DOMNodePayload(
+            DOMNode.Payload(
                 nodeID: .init(11),
                 nodeType: .comment,
                 nodeName: "#comment",
@@ -434,19 +434,19 @@ private func bodyNode(article: DOMNodePayload) -> DOMNodePayload {
     )
 }
 
-private func articleNode() -> DOMNodePayload {
-    DOMNodePayload(
+private func articleNode() -> DOMNode.Payload {
+    DOMNode.Payload(
         nodeID: .init(8),
         nodeType: .element,
         nodeName: "ARTICLE",
         localName: "article",
         regularChildren: .loaded([
-            DOMNodePayload(
+            DOMNode.Payload(
                 nodeID: .init(9),
                 nodeType: .element,
                 nodeName: "SPAN",
                 localName: "span",
-                attributes: [DOMAttribute(name: "id", value: "nested-child")]
+                attributes: [DOMNode.Attribute(name: "id", value: "nested-child")]
             ),
         ])
     )

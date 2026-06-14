@@ -337,14 +337,14 @@ package struct NetworkInitiatorPayload: Equatable, Sendable {
     package var stackTrace: ConsoleStackTracePayload?
     package var url: String?
     package var lineNumber: Double?
-    package var nodeID: DOMProtocolNodeID?
+    package var nodeID: DOMNode.ProtocolID?
 
     package init(
         type: NetworkInitiatorType,
         stackTrace: ConsoleStackTracePayload? = nil,
         url: String? = nil,
         lineNumber: Double? = nil,
-        nodeID: DOMProtocolNodeID? = nil
+        nodeID: DOMNode.ProtocolID? = nil
     ) {
         self.type = type
         self.stackTrace = stackTrace

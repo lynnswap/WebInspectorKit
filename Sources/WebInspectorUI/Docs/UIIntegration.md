@@ -48,7 +48,7 @@ flowchart TD
     NetworkPanel["NetworkPanelModel"]
     NetworkList["NetworkListViewController"]
     NetworkDetail["NetworkDetailViewController"]
-    DOMCommands["DOMCommandIntent"]
+    DOMCommands["DOMCommand.Intent"]
     NetworkCommands["NetworkCommandIntent"]
 
     PublicSession --> Runtime
@@ -166,7 +166,7 @@ target registries.
 
 1. Keep WebInspector UI code reading from `WebInspectorSession`.
 2. Keep DOM controllers reading from `DOMSession` projections and submitting
-   `DOMCommandIntent`.
+   `DOMCommand.Intent`.
 3. Keep Network controllers reading from `NetworkSession` through
    `NetworkPanelModel` and submitting `NetworkCommandIntent`.
 4. Move this documentation with the final UI target when the WebInspector target is

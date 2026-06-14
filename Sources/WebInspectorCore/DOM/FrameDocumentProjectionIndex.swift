@@ -5,13 +5,13 @@ package struct FrameDocumentProjection: Equatable, Sendable {
     package var ownerNodeID: DOMNode.ID?
     package var frameTargetID: ProtocolTarget.ID
     package var frameDocumentID: DOMDocument.ID
-    package var state: FrameDocumentProjectionState
+    package var state: FrameDocumentProjection.State
 
     package init(
         ownerNodeID: DOMNode.ID?,
         frameTargetID: ProtocolTarget.ID,
         frameDocumentID: DOMDocument.ID,
-        state: FrameDocumentProjectionState
+        state: FrameDocumentProjection.State
     ) {
         self.ownerNodeID = ownerNodeID
         self.frameTargetID = frameTargetID
@@ -93,7 +93,7 @@ package final class FrameDocumentProjectionIndex {
 
     package func detach(
         frameTargetID: ProtocolTarget.ID,
-        state: FrameDocumentProjectionState = .pending
+        state: FrameDocumentProjection.State = .pending
     ) {
         guard var projection = projectionsByFrameTargetID[frameTargetID] else {
             return
@@ -120,15 +120,15 @@ package final class FrameDocumentProjectionIndex {
     package func ownerKeys(
         inSubtree rootID: DOMNode.ID,
         nodeProvider: (DOMNode.ID) -> DOMNode?
-    ) -> [ProtocolTarget.ID: DOMNodeCurrentKey] {
-        var keys: [ProtocolTarget.ID: DOMNodeCurrentKey] = [:]
+    ) -> [ProtocolTarget.ID: DOMNode.CurrentKey] {
+        var keys: [ProtocolTarget.ID: DOMNode.CurrentKey] = [:]
         var stack = [rootID]
         while let nodeID = stack.popLast() {
             guard let node = nodeProvider(nodeID) else {
                 continue
             }
             for projection in projectionsByFrameTargetID.values where projection.ownerNodeID == nodeID {
-                keys[projection.frameTargetID] = DOMNodeCurrentKey(
+                keys[projection.frameTargetID] = DOMNode.CurrentKey(
                     targetID: nodeID.documentID.targetID,
                     nodeID: node.protocolNodeID
                 )
@@ -138,9 +138,9 @@ package final class FrameDocumentProjectionIndex {
         return keys
     }
 
-    package func snapshots() -> [ProtocolTarget.ID: FrameDocumentProjectionSnapshot] {
+    package func snapshots() -> [ProtocolTarget.ID: FrameDocumentProjection.Snapshot] {
         projectionsByFrameTargetID.mapValues { projection in
-            FrameDocumentProjectionSnapshot(
+            FrameDocumentProjection.Snapshot(
                 ownerNodeID: projection.ownerNodeID,
                 frameTargetID: projection.frameTargetID,
                 frameDocumentID: projection.frameDocumentID,

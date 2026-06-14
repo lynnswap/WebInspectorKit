@@ -50,7 +50,7 @@ package final class NetworkRequest {
     package typealias ID = NetworkRequestIdentifierKey
 
     package let id: ID
-    package var frameID: DOMFrameIdentifier?
+    package var frameID: DOMFrame.ID?
     package var loaderID: String?
     package var documentURL: String?
     package var resourceType: NetworkResourceType?
@@ -80,7 +80,7 @@ package final class NetworkRequest {
 
     package init(
         id: ID,
-        frameID: DOMFrameIdentifier?,
+        frameID: DOMFrame.ID?,
         loaderID: String?,
         documentURL: String?,
         request: NetworkRequestPayload,
@@ -153,7 +153,7 @@ package final class NetworkRequest {
     }
 
     package func applyRequestStart(
-        frameID: DOMFrameIdentifier?,
+        frameID: DOMFrame.ID?,
         loaderID: String?,
         documentURL: String?,
         request: NetworkRequestPayload,
@@ -279,7 +279,7 @@ package struct NetworkRedirectHopSnapshot: Equatable, Sendable {
 
 package struct NetworkRequestSnapshot: Equatable, Sendable {
     package var id: NetworkRequestIdentifierKey
-    package var frameID: DOMFrameIdentifier?
+    package var frameID: DOMFrame.ID?
     package var loaderID: String?
     package var documentURL: String?
     package var resourceType: NetworkResourceType?
@@ -511,7 +511,7 @@ package final class NetworkSession {
     package func applyRequestWillBeSent(
         targetID: ProtocolTarget.ID,
         requestID: NetworkRequestIdentifier,
-        frameID: DOMFrameIdentifier?,
+        frameID: DOMFrame.ID?,
         loaderID: String?,
         documentURL: String?,
         request: NetworkRequestPayload,
@@ -579,7 +579,7 @@ package final class NetworkSession {
     package func applyResponseReceived(
         targetID: ProtocolTarget.ID,
         requestID: NetworkRequestIdentifier,
-        frameID: DOMFrameIdentifier? = nil,
+        frameID: DOMFrame.ID? = nil,
         loaderID: String? = nil,
         resourceType: NetworkResourceType? = nil,
         response: NetworkResponsePayload,
@@ -656,7 +656,7 @@ package final class NetworkSession {
     package func applyRequestServedFromMemoryCache(
         targetID: ProtocolTarget.ID,
         requestID: NetworkRequestIdentifier,
-        frameID: DOMFrameIdentifier,
+        frameID: DOMFrame.ID,
         loaderID: String,
         documentURL: String,
         timestamp: Double,

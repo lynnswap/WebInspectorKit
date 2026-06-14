@@ -8,7 +8,7 @@ struct ResolvedStyleSheetAddedEvent: Sendable {
 struct TransportStyleSheetRouting: Sendable {
     private enum Route: Sendable {
         case resolved(ProtocolTarget.ID)
-        case unresolved(frameID: DOMFrameIdentifier, addedParamsData: Data)
+        case unresolved(frameID: ProtocolFrame.ID, addedParamsData: Data)
 
         var targetID: ProtocolTarget.ID? {
             guard case let .resolved(targetID) = self else {
@@ -17,7 +17,7 @@ struct TransportStyleSheetRouting: Sendable {
             return targetID
         }
 
-        var unresolvedFrameID: DOMFrameIdentifier? {
+        var unresolvedFrameID: ProtocolFrame.ID? {
             guard case let .unresolved(frameID, _) = self else {
                 return nil
             }
@@ -44,7 +44,7 @@ struct TransportStyleSheetRouting: Sendable {
 
     mutating func recordAdded(
         styleSheetID: String,
-        frameID: DOMFrameIdentifier?,
+        frameID: ProtocolFrame.ID?,
         paramsData: Data,
         resolvedTargetID: ProtocolTarget.ID?
     ) {
@@ -76,7 +76,7 @@ struct TransportStyleSheetRouting: Sendable {
     }
 
     mutating func resolvePending(
-        frameID: DOMFrameIdentifier,
+        frameID: ProtocolFrame.ID,
         targetID: ProtocolTarget.ID
     ) -> [ResolvedStyleSheetAddedEvent] {
         let styleSheetIDs = routesByStyleSheetID

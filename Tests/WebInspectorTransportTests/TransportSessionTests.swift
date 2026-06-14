@@ -416,7 +416,7 @@ func targetLifecycleUpdatesSnapshotWithoutPrefixGuessing() async throws {
     #expect(snapshot.targetsByID[ProtocolTarget.ID("worker-1")] == nil)
     #expect(snapshot.targetsByID[ProtocolTarget.ID("frame-committed")]?.kind == .frame)
     #expect(snapshot.targetsByID[ProtocolTarget.ID("frame-committed")]?.isProvisional == false)
-    #expect(snapshot.frameTargetIDsByFrameID[DOMFrameIdentifier("ad-frame")] == ProtocolTarget.ID("frame-committed"))
+    #expect(snapshot.frameTargetIDsByFrameID[ProtocolFrame.ID("ad-frame")] == ProtocolTarget.ID("frame-committed"))
 }
 
 @Test
@@ -429,7 +429,7 @@ func pageTargetWithParentFrameIsClassifiedAsFrame() async throws {
 
     #expect(snapshot.targetsByID[ProtocolTarget.ID("iframe-page")]?.kind == .frame)
     #expect(snapshot.currentMainPageTargetID == nil)
-    #expect(snapshot.frameTargetIDsByFrameID[DOMFrameIdentifier("child-frame")] == ProtocolTarget.ID("iframe-page"))
+    #expect(snapshot.frameTargetIDsByFrameID[ProtocolFrame.ID("child-frame")] == ProtocolTarget.ID("iframe-page"))
 }
 
 @Test
@@ -443,7 +443,7 @@ func pageTargetWithKnownNonMainFrameIsClassifiedAsFrame() async throws {
 
     #expect(snapshot.currentMainPageTargetID == ProtocolTarget.ID("page-main"))
     #expect(snapshot.targetsByID[ProtocolTarget.ID("iframe-page")]?.kind == .frame)
-    #expect(snapshot.frameTargetIDsByFrameID[DOMFrameIdentifier("child-frame")] == ProtocolTarget.ID("iframe-page"))
+    #expect(snapshot.frameTargetIDsByFrameID[ProtocolFrame.ID("child-frame")] == ProtocolTarget.ID("iframe-page"))
 }
 
 @Test
@@ -471,9 +471,9 @@ func targetCommitMergesFrameMetadataAndClearsOldFrameMapping() async throws {
     await session.receiveRootMessage(#"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"frame-provisional","newTargetId":"frame-committed"}}"#)
     let snapshot = await session.snapshot()
 
-    #expect(snapshot.targetsByID[ProtocolTarget.ID("frame-committed")]?.frameID == DOMFrameIdentifier("ad-frame"))
-    #expect(snapshot.targetsByID[ProtocolTarget.ID("frame-committed")]?.parentFrameID == DOMFrameIdentifier("main-frame"))
-    #expect(snapshot.frameTargetIDsByFrameID[DOMFrameIdentifier("ad-frame")] == ProtocolTarget.ID("frame-committed"))
+    #expect(snapshot.targetsByID[ProtocolTarget.ID("frame-committed")]?.frameID == ProtocolFrame.ID("ad-frame"))
+    #expect(snapshot.targetsByID[ProtocolTarget.ID("frame-committed")]?.parentFrameID == ProtocolFrame.ID("main-frame"))
+    #expect(snapshot.frameTargetIDsByFrameID[ProtocolFrame.ID("ad-frame")] == ProtocolTarget.ID("frame-committed"))
     #expect(snapshot.targetsByID[ProtocolTarget.ID("frame-provisional")] == nil)
 }
 
@@ -490,7 +490,7 @@ func subframeCommitDoesNotConsumeCurrentMainPageTarget() async throws {
     #expect(snapshot.currentMainPageTargetID == ProtocolTarget.ID("page-main"))
     #expect(snapshot.targetsByID[ProtocolTarget.ID("page-main")] != nil)
     #expect(snapshot.targetsByID[ProtocolTarget.ID("frame-committed")]?.isProvisional == false)
-    #expect(snapshot.frameTargetIDsByFrameID[DOMFrameIdentifier("ad-frame")] == ProtocolTarget.ID("frame-committed"))
+    #expect(snapshot.frameTargetIDsByFrameID[ProtocolFrame.ID("ad-frame")] == ProtocolTarget.ID("frame-committed"))
 }
 
 @Test
@@ -618,8 +618,8 @@ func oldlessTargetCommitInfersSoleProvisionalTarget() async throws {
 
     #expect(result.targetID == ProtocolTarget.ID("frame-committed"))
     #expect(snapshot.targetsByID[ProtocolTarget.ID("frame-provisional")] == nil)
-    #expect(snapshot.targetsByID[ProtocolTarget.ID("frame-committed")]?.frameID == DOMFrameIdentifier("ad-frame"))
-    #expect(snapshot.frameTargetIDsByFrameID[DOMFrameIdentifier("ad-frame")] == ProtocolTarget.ID("frame-committed"))
+    #expect(snapshot.targetsByID[ProtocolTarget.ID("frame-committed")]?.frameID == ProtocolFrame.ID("ad-frame"))
+    #expect(snapshot.frameTargetIDsByFrameID[ProtocolFrame.ID("ad-frame")] == ProtocolTarget.ID("frame-committed"))
 }
 
 @Test
@@ -713,7 +713,7 @@ func ambiguousTargetCommitPreservesExistingMetadataAndDoesNotInventTarget() asyn
     let snapshot = await session.snapshot()
 
     #expect(snapshot.targetsByID[ProtocolTarget.ID("frame-existing")]?.kind == .frame)
-    #expect(snapshot.targetsByID[ProtocolTarget.ID("frame-existing")]?.frameID == DOMFrameIdentifier("ad-frame"))
+    #expect(snapshot.targetsByID[ProtocolTarget.ID("frame-existing")]?.frameID == ProtocolFrame.ID("ad-frame"))
     #expect(snapshot.targetsByID[ProtocolTarget.ID("missing-target")] == nil)
 }
 
@@ -901,7 +901,7 @@ func runtimeExecutionContextRegistryPreservesContextMetadata() async throws {
     #expect(record.targetID == ProtocolTarget.ID("page-main"))
     #expect(record.type == .internal)
     #expect(record.name == "Isolated World")
-    #expect(record.frameID == DOMFrameIdentifier("main-frame"))
+    #expect(record.frameID == ProtocolFrame.ID("main-frame"))
 }
 
 @Test
@@ -1132,7 +1132,7 @@ func networkProtocolDispatchingPreservesInitiatorAndLoadingFinishedMetrics() asy
     let snapshot = try #require(await network.requestSnapshot(for: key))
 
     #expect(snapshot.initiator?.type == .parser)
-    #expect(snapshot.initiator?.nodeID == DOMProtocolNodeID(42))
+    #expect(snapshot.initiator?.nodeID == DOMNode.ProtocolID(42))
     #expect(snapshot.initiator?.stackTrace?.callFrames.first?.functionName == "load")
     #expect(snapshot.response?.url == "https://example.com/app.js")
     #expect(snapshot.sourceMapURL == "app.js.map")
@@ -1224,7 +1224,7 @@ func domProtocolDispatchingCompletesInspectSelectionThroughRequestNodeResult() a
         return
     }
 
-    #expect(selectedNodeID.nodeID == DOMProtocolNodeID(2))
+    #expect(selectedNodeID.nodeID == DOMNode.ProtocolID(2))
     let selectedNodeName = await dom.selectedNode?.nodeName
     #expect(selectedNodeName == "DIV")
 }
@@ -1322,7 +1322,7 @@ func domProtocolDispatchingAmbiguousTargetCommitDoesNotOverwriteExistingTargetMe
     let snapshot = await dom.snapshot()
 
     #expect(snapshot.targetsByID[ProtocolTarget.ID("frame-ad")]?.kind == .frame)
-    #expect(snapshot.targetsByID[ProtocolTarget.ID("frame-ad")]?.frameID == DOMFrameIdentifier("ad-frame"))
+    #expect(snapshot.targetsByID[ProtocolTarget.ID("frame-ad")]?.frameID == ProtocolFrame.ID("ad-frame"))
     #expect(snapshot.currentPageTargetID == nil)
 }
 
@@ -1343,7 +1343,7 @@ func domProtocolDispatchingPageTargetWithParentFrameIsClassifiedAsFrame() async 
 
     #expect(snapshot.targetsByID[ProtocolTarget.ID("iframe-page")]?.kind == .frame)
     #expect(snapshot.currentPageTargetID == nil)
-    #expect(snapshot.framesByID[DOMFrameIdentifier("child-frame")]?.targetID == ProtocolTarget.ID("iframe-page"))
+    #expect(snapshot.framesByID[ProtocolFrame.ID("child-frame")]?.targetID == ProtocolTarget.ID("iframe-page"))
 }
 
 @Test
@@ -1373,7 +1373,7 @@ func domProtocolDispatchingPageTargetWithKnownNonMainFrameIsClassifiedAsFrame() 
 
     #expect(snapshot.currentPageTargetID == ProtocolTarget.ID("page-main"))
     #expect(snapshot.targetsByID[ProtocolTarget.ID("iframe-page")]?.kind == .frame)
-    #expect(snapshot.framesByID[DOMFrameIdentifier("child-frame")]?.targetID == ProtocolTarget.ID("iframe-page"))
+    #expect(snapshot.framesByID[ProtocolFrame.ID("child-frame")]?.targetID == ProtocolTarget.ID("iframe-page"))
 }
 
 @Test
@@ -1455,7 +1455,7 @@ func domProtocolDispatchingCommittedTopLevelProvisionalPageBecomesCurrentPage() 
     let snapshot = await dom.snapshot()
 
     #expect(snapshot.currentPageTargetID == ProtocolTarget.ID("page-main"))
-    #expect(snapshot.mainFrameID == DOMFrameIdentifier("main-frame"))
+    #expect(snapshot.mainFrameID == ProtocolFrame.ID("main-frame"))
 }
 
 @Test
@@ -1519,7 +1519,7 @@ func domProtocolDispatchingOldlessCommitInfersSoleProvisionalFrameTarget() async
     #expect(snapshot.currentPageTargetID == nil)
     #expect(snapshot.targetsByID[ProtocolTarget.ID("page-provisional")] == nil)
     #expect(snapshot.targetsByID[ProtocolTarget.ID("page-main")]?.kind == .frame)
-    #expect(snapshot.targetsByID[ProtocolTarget.ID("page-main")]?.frameID == DOMFrameIdentifier("main-frame"))
+    #expect(snapshot.targetsByID[ProtocolTarget.ID("page-main")]?.frameID == ProtocolFrame.ID("main-frame"))
     #expect(snapshot.targetsByID[ProtocolTarget.ID("page-main")]?.isProvisional == false)
 }
 
@@ -1560,7 +1560,7 @@ func domProtocolDispatchingCommittedSecondaryPageDoesNotReplaceCurrentPage() asy
     let snapshot = await dom.snapshot()
 
     #expect(snapshot.currentPageTargetID == ProtocolTarget.ID("page-main"))
-    #expect(snapshot.targetsByID[ProtocolTarget.ID("page-popup")]?.frameID == DOMFrameIdentifier("popup-frame"))
+    #expect(snapshot.targetsByID[ProtocolTarget.ID("page-popup")]?.frameID == ProtocolFrame.ID("popup-frame"))
 }
 
 @Test
@@ -1666,7 +1666,7 @@ func domNavigationActionCommandsUseExpectedProtocolPayloads() throws {
     #expect(disableParameters["enabled"] as? Bool == false)
     #expect(disableParameters["highlightConfig"] == nil)
 
-    let identity = DOMActionIdentity(
+    let identity = DOMAction.Identity(
         documentTargetID: targetID,
         rawNodeID: .init(42),
         commandTargetID: targetID,
@@ -1687,7 +1687,7 @@ func domNavigationActionCommandsUseExpectedProtocolPayloads() throws {
 
 @Test
 func domActionCommandsEncodeScopedCommandNodeIDs() throws {
-    let identity = DOMActionIdentity(
+    let identity = DOMAction.Identity(
         documentTargetID: .init("frame-A"),
         rawNodeID: .init(42),
         commandTargetID: .init("page-main"),

@@ -15,7 +15,7 @@ func runtimeSessionTracksTargetOwnedExecutionContextsAndReplacesFrameNormalConte
             id: ExecutionContextID(1),
             type: .normal,
             name: "Frame A",
-            frameID: DOMFrameIdentifier("frame-a")
+            frameID: DOMFrame.ID("frame-a")
         ),
         targetID: frameTargetID
     )
@@ -24,7 +24,7 @@ func runtimeSessionTracksTargetOwnedExecutionContextsAndReplacesFrameNormalConte
             id: ExecutionContextID(2),
             type: .normal,
             name: "Frame B",
-            frameID: DOMFrameIdentifier("frame-b")
+            frameID: DOMFrame.ID("frame-b")
         ),
         targetID: frameTargetID
     )
@@ -39,7 +39,7 @@ func runtimeSessionTracksTargetOwnedExecutionContextsAndReplacesFrameNormalConte
             id: ExecutionContextID(3),
             type: .normal,
             name: "Frame A",
-            frameID: DOMFrameIdentifier("frame-a")
+            frameID: DOMFrame.ID("frame-a")
         ),
         targetID: frameTargetID
     )
@@ -47,9 +47,9 @@ func runtimeSessionTracksTargetOwnedExecutionContextsAndReplacesFrameNormalConte
     let snapshot = session.snapshot()
     #expect(snapshot.executionContextsByKey[contextKey(frameTargetID, 1)] == nil)
     #expect(snapshot.executionContextsByKey[contextKey(frameTargetID, 2)]?.targetID == frameTargetID)
-    #expect(snapshot.executionContextsByKey[contextKey(frameTargetID, 2)]?.frameID == DOMFrameIdentifier("frame-b"))
+    #expect(snapshot.executionContextsByKey[contextKey(frameTargetID, 2)]?.frameID == DOMFrame.ID("frame-b"))
     #expect(snapshot.executionContextsByKey[contextKey(frameTargetID, 3)]?.targetID == frameTargetID)
-    #expect(snapshot.executionContextsByKey[contextKey(frameTargetID, 3)]?.frameID == DOMFrameIdentifier("frame-a"))
+    #expect(snapshot.executionContextsByKey[contextKey(frameTargetID, 3)]?.frameID == DOMFrame.ID("frame-a"))
     #expect(snapshot.normalContextKeyByTargetID[frameTargetID] == contextKey(frameTargetID, 3))
     #expect(snapshot.selectedContextKey == contextKey(frameTargetID, 3))
     #expect(snapshot.remoteObjectsByID[.init(runtimeAgentTargetID: frameTargetID, objectID: RuntimeRemoteObjectIdentifier("frame-a-object"))] == nil)
@@ -71,7 +71,7 @@ func runtimeSessionKeepsSameFrameNormalContextsFromDifferentRuntimeAgents() {
             runtimeAgentTargetID: pageTargetID,
             type: .normal,
             name: "Frame",
-            frameID: DOMFrameIdentifier("frame-a")
+            frameID: DOMFrame.ID("frame-a")
         )
     )
     session.registerRemoteObject(
@@ -87,7 +87,7 @@ func runtimeSessionKeepsSameFrameNormalContextsFromDifferentRuntimeAgents() {
             runtimeAgentTargetID: frameTargetID,
             type: .normal,
             name: "Frame",
-            frameID: DOMFrameIdentifier("frame-a")
+            frameID: DOMFrame.ID("frame-a")
         )
     )
 
@@ -108,14 +108,14 @@ func runtimeExecutionContextStableOrderIncludesRuntimeAgentTarget() {
             targetID: frameTargetID,
             runtimeAgentTargetID: frameTargetID,
             name: "Frame",
-            frameID: DOMFrameIdentifier("frame")
+            frameID: DOMFrame.ID("frame")
         ),
         RuntimeExecutionContextRecord(
             id: ExecutionContextID(1),
             targetID: pageTargetID,
             runtimeAgentTargetID: pageTargetID,
             name: "Page",
-            frameID: DOMFrameIdentifier("page")
+            frameID: DOMFrame.ID("page")
         ),
     ]
 
@@ -134,7 +134,7 @@ func runtimeEvaluateIntentDoesNotUseActiveContextFromAnotherTarget() throws {
     let pageTargetID = ProtocolTarget.ID("page")
     let frameTargetID = ProtocolTarget.ID("frame")
     session.applyExecutionContextCreated(
-        RuntimeExecutionContextPayload(id: ExecutionContextID(1), type: .normal, frameID: DOMFrameIdentifier("main-frame")),
+        RuntimeExecutionContextPayload(id: ExecutionContextID(1), type: .normal, frameID: DOMFrame.ID("main-frame")),
         targetID: pageTargetID
     )
 
@@ -157,7 +157,7 @@ func runtimeEvaluateIntentRoutesSelectedContextToRuntimeAgentTarget() throws {
             id: ExecutionContextID(2),
             targetID: frameTargetID,
             runtimeAgentTargetID: pageTargetID,
-            frameID: DOMFrameIdentifier("frame")
+            frameID: DOMFrame.ID("frame")
         )
     )
 
@@ -179,7 +179,7 @@ func runtimeEvaluateIntentKeepsPageDefaultContextWhenFrameContextsShareTarget() 
         ProtocolTarget.Record(
             id: pageTargetID,
             kind: .page,
-            frameID: DOMFrameIdentifier("main-frame")
+            frameID: DOMFrame.ID("main-frame")
         )
     )
     session.applyExecutionContextCreated(
@@ -188,7 +188,7 @@ func runtimeEvaluateIntentKeepsPageDefaultContextWhenFrameContextsShareTarget() 
             targetID: pageTargetID,
             type: .normal,
             name: "Main",
-            frameID: DOMFrameIdentifier("main-frame")
+            frameID: DOMFrame.ID("main-frame")
         )
     )
     session.applyExecutionContextCreated(
@@ -197,7 +197,7 @@ func runtimeEvaluateIntentKeepsPageDefaultContextWhenFrameContextsShareTarget() 
             targetID: pageTargetID,
             type: .normal,
             name: "Subframe",
-            frameID: DOMFrameIdentifier("ad-frame")
+            frameID: DOMFrame.ID("ad-frame")
         )
     )
 
@@ -219,7 +219,7 @@ func runtimeEvaluateIntentPromotesTargetFrameContextWhenItArrivesAfterSubframeCo
         ProtocolTarget.Record(
             id: pageTargetID,
             kind: .page,
-            frameID: DOMFrameIdentifier("main-frame")
+            frameID: DOMFrame.ID("main-frame")
         )
     )
     session.applyExecutionContextCreated(
@@ -228,7 +228,7 @@ func runtimeEvaluateIntentPromotesTargetFrameContextWhenItArrivesAfterSubframeCo
             targetID: pageTargetID,
             type: .normal,
             name: "Subframe",
-            frameID: DOMFrameIdentifier("ad-frame")
+            frameID: DOMFrame.ID("ad-frame")
         )
     )
     session.applyExecutionContextCreated(
@@ -237,7 +237,7 @@ func runtimeEvaluateIntentPromotesTargetFrameContextWhenItArrivesAfterSubframeCo
             targetID: pageTargetID,
             type: .normal,
             name: "Main",
-            frameID: DOMFrameIdentifier("main-frame")
+            frameID: DOMFrame.ID("main-frame")
         )
     )
 
@@ -260,7 +260,7 @@ func runtimeEvaluateIntentDoesNotOverrideExplicitSelectedContextWhenTargetFrameC
         ProtocolTarget.Record(
             id: pageTargetID,
             kind: .page,
-            frameID: DOMFrameIdentifier("main-frame")
+            frameID: DOMFrame.ID("main-frame")
         )
     )
     session.applyExecutionContextCreated(
@@ -269,7 +269,7 @@ func runtimeEvaluateIntentDoesNotOverrideExplicitSelectedContextWhenTargetFrameC
             targetID: pageTargetID,
             type: .normal,
             name: "Subframe",
-            frameID: DOMFrameIdentifier("ad-frame")
+            frameID: DOMFrame.ID("ad-frame")
         )
     )
     session.selectExecutionContext(contextKey(pageTargetID, 1))
@@ -279,7 +279,7 @@ func runtimeEvaluateIntentDoesNotOverrideExplicitSelectedContextWhenTargetFrameC
             targetID: pageTargetID,
             type: .normal,
             name: "Main",
-            frameID: DOMFrameIdentifier("main-frame")
+            frameID: DOMFrame.ID("main-frame")
         )
     )
 
@@ -304,7 +304,7 @@ func runtimeTargetFrameMetadataPromotesExistingMatchingContext() throws {
             targetID: pageTargetID,
             type: .normal,
             name: "Subframe",
-            frameID: DOMFrameIdentifier("ad-frame")
+            frameID: DOMFrame.ID("ad-frame")
         )
     )
     session.applyExecutionContextCreated(
@@ -313,7 +313,7 @@ func runtimeTargetFrameMetadataPromotesExistingMatchingContext() throws {
             targetID: pageTargetID,
             type: .normal,
             name: "Main",
-            frameID: DOMFrameIdentifier("main-frame")
+            frameID: DOMFrame.ID("main-frame")
         )
     )
 
@@ -321,7 +321,7 @@ func runtimeTargetFrameMetadataPromotesExistingMatchingContext() throws {
         ProtocolTarget.Record(
             id: pageTargetID,
             kind: .page,
-            frameID: DOMFrameIdentifier("main-frame")
+            frameID: DOMFrame.ID("main-frame")
         )
     )
 
@@ -380,7 +380,7 @@ func runtimeSessionPreservesTransportSeededContextMetadata() {
             targetID: targetID,
             type: .internal,
             name: "Isolated World",
-            frameID: DOMFrameIdentifier("main-frame")
+            frameID: DOMFrame.ID("main-frame")
         )
     )
 
@@ -404,7 +404,7 @@ func runtimeSessionClearsExecutionContextsByRuntimeAgentTarget() {
             id: ExecutionContextID(1),
             targetID: frameTargetID,
             runtimeAgentTargetID: pageTargetID,
-            frameID: DOMFrameIdentifier("frame")
+            frameID: DOMFrame.ID("frame")
         )
     )
     session.applyExecutionContextCreated(
@@ -412,7 +412,7 @@ func runtimeSessionClearsExecutionContextsByRuntimeAgentTarget() {
             id: ExecutionContextID(2),
             targetID: otherFrameTargetID,
             runtimeAgentTargetID: otherFrameTargetID,
-            frameID: DOMFrameIdentifier("other-frame")
+            frameID: DOMFrame.ID("other-frame")
         )
     )
     session.registerRemoteObject(
@@ -457,7 +457,7 @@ func runtimeSessionTargetDestroyedClearsExecutionContextsByRuntimeAgentTarget() 
             id: ExecutionContextID(1),
             targetID: frameTargetID,
             runtimeAgentTargetID: pageTargetID,
-            frameID: DOMFrameIdentifier("frame")
+            frameID: DOMFrame.ID("frame")
         )
     )
     session.registerRemoteObject(

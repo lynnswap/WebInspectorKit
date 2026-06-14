@@ -35,7 +35,7 @@ package final class DOMTarget {
 @Observable
 package final class DOMTargetState {
     package let targetID: ProtocolTarget.ID
-    package var currentDocument: DOMDocumentState?
+    package var currentDocument: DOMDocument?
 
     package init(targetID: ProtocolTarget.ID) {
         self.targetID = targetID
@@ -46,7 +46,7 @@ package final class DOMTargetState {
 @MainActor
 @Observable
 package final class DOMFrame {
-    package typealias ID = DOMFrameIdentifier
+    package typealias ID = ProtocolFrame.ID
 
     package let id: ID
     package var parentFrameID: ID?
@@ -110,76 +110,76 @@ package struct DOMCurrentPage: Equatable, Sendable {
     }
 }
 
-@MainActor
-package struct DOMDocumentNodeIndex {
-    private var nodesByIdentifier: [DOMNode.ID: DOMNode]
-    private var currentNodeIDByRawNodeID: [DOMProtocolNodeID: DOMNode.ID]
+package extension DOMDocument {
+    @MainActor
+    struct NodeIndex {
+        private var nodesByIdentifier: [DOMNode.ID: DOMNode]
+        private var currentNodeIDByRawNodeID: [DOMNode.ProtocolID: DOMNode.ID]
 
-    package init(
-        nodesByID: [DOMNode.ID: DOMNode] = [:],
-        currentNodeIDByProtocolNodeID: [DOMProtocolNodeID: DOMNode.ID] = [:]
-    ) {
-        self.nodesByIdentifier = nodesByID
-        self.currentNodeIDByRawNodeID = currentNodeIDByProtocolNodeID
-    }
-
-    package var nodesByID: [DOMNode.ID: DOMNode] {
-        nodesByIdentifier
-    }
-
-    package var currentNodeIDByProtocolNodeID: [DOMProtocolNodeID: DOMNode.ID] {
-        currentNodeIDByRawNodeID
-    }
-
-    package func node(for nodeID: DOMNode.ID) -> DOMNode? {
-        nodesByIdentifier[nodeID]
-    }
-
-    package func currentNodeID(for rawNodeID: DOMProtocolNodeID) -> DOMNode.ID? {
-        currentNodeIDByRawNodeID[rawNodeID]
-    }
-
-    package mutating func store(_ node: DOMNode, rawNodeID: DOMProtocolNodeID) {
-        nodesByIdentifier[node.id] = node
-        currentNodeIDByRawNodeID[rawNodeID] = node.id
-    }
-
-    package mutating func removeNode(_ nodeID: DOMNode.ID, ifCurrentFor rawNodeID: DOMProtocolNodeID) {
-        if currentNodeIDByRawNodeID[rawNodeID] == nodeID {
-            currentNodeIDByRawNodeID.removeValue(forKey: rawNodeID)
+        package init(
+            nodesByID: [DOMNode.ID: DOMNode] = [:],
+            currentNodeIDByProtocolNodeID: [DOMNode.ProtocolID: DOMNode.ID] = [:]
+        ) {
+            self.nodesByIdentifier = nodesByID
+            self.currentNodeIDByRawNodeID = currentNodeIDByProtocolNodeID
         }
-        nodesByIdentifier.removeValue(forKey: nodeID)
+
+        package var nodesByID: [DOMNode.ID: DOMNode] {
+            nodesByIdentifier
+        }
+
+        package var currentNodeIDByProtocolNodeID: [DOMNode.ProtocolID: DOMNode.ID] {
+            currentNodeIDByRawNodeID
+        }
+
+        package func node(for nodeID: DOMNode.ID) -> DOMNode? {
+            nodesByIdentifier[nodeID]
+        }
+
+        package func currentNodeID(for rawNodeID: DOMNode.ProtocolID) -> DOMNode.ID? {
+            currentNodeIDByRawNodeID[rawNodeID]
+        }
+
+        package mutating func store(_ node: DOMNode, rawNodeID: DOMNode.ProtocolID) {
+            nodesByIdentifier[node.id] = node
+            currentNodeIDByRawNodeID[rawNodeID] = node.id
+        }
+
+        package mutating func removeNode(_ nodeID: DOMNode.ID, ifCurrentFor rawNodeID: DOMNode.ProtocolID) {
+            if currentNodeIDByRawNodeID[rawNodeID] == nodeID {
+                currentNodeIDByRawNodeID.removeValue(forKey: rawNodeID)
+            }
+            nodesByIdentifier.removeValue(forKey: nodeID)
+        }
     }
 }
 
 @MainActor
 @Observable
-package final class DOMDocumentState {
-    package typealias ID = DOMDocumentIdentifier
-
+package final class DOMDocument {
     package let id: ID
     package let targetID: ProtocolTarget.ID
-    package let localDocumentLifetimeID: DOMDocumentLifetimeIdentifier
-    package var lifecycle: DOMDocumentLifecycle
+    package let localDocumentLifetimeID: DOMDocument.LifetimeID
+    package var lifecycle: DOMDocument.Lifecycle
     package let rootNodeID: DOMNode.ID
-    private var nodeIndex: DOMDocumentNodeIndex
+    private var nodeIndex: DOMDocument.NodeIndex
     package var transactions: [DOMTransaction.ID: DOMTransaction]
     package var nextTransactionID: UInt64
 
     package init(
         id: ID,
         targetID: ProtocolTarget.ID,
-        lifecycle: DOMDocumentLifecycle,
+        lifecycle: DOMDocument.Lifecycle,
         rootNodeID: DOMNode.ID,
         nodesByID: [DOMNode.ID: DOMNode],
-        currentNodeIDByProtocolNodeID: [DOMProtocolNodeID: DOMNode.ID]
+        currentNodeIDByProtocolNodeID: [DOMNode.ProtocolID: DOMNode.ID]
     ) {
         self.id = id
         self.targetID = targetID
         self.localDocumentLifetimeID = id.localDocumentLifetimeID
         self.lifecycle = lifecycle
         self.rootNodeID = rootNodeID
-        nodeIndex = DOMDocumentNodeIndex(
+        nodeIndex = DOMDocument.NodeIndex(
             nodesByID: nodesByID,
             currentNodeIDByProtocolNodeID: currentNodeIDByProtocolNodeID
         )
@@ -191,15 +191,15 @@ package final class DOMDocumentState {
         nodeIndex.nodesByID
     }
 
-    package var currentNodeIDByProtocolNodeID: [DOMProtocolNodeID: DOMNode.ID] {
+    package var currentNodeIDByProtocolNodeID: [DOMNode.ProtocolID: DOMNode.ID] {
         nodeIndex.currentNodeIDByProtocolNodeID
     }
 
-    package var nodeIndexSnapshot: DOMDocumentNodeIndex {
+    package var nodeIndexSnapshot: DOMDocument.NodeIndex {
         nodeIndex
     }
 
-    package func replaceNodeIndex(_ newIndex: DOMDocumentNodeIndex) {
+    package func replaceNodeIndex(_ newIndex: DOMDocument.NodeIndex) {
         nodeIndex = newIndex
     }
 
@@ -207,7 +207,7 @@ package final class DOMDocumentState {
         nodeIndex.node(for: nodeID)
     }
 
-    package func currentNodeID(for rawNodeID: DOMProtocolNodeID) -> DOMNode.ID? {
+    package func currentNodeID(for rawNodeID: DOMNode.ProtocolID) -> DOMNode.ID? {
         nodeIndex.currentNodeID(for: rawNodeID)
     }
 
@@ -228,7 +228,7 @@ package final class DOMDocumentState {
         return false
     }
 
-    package func removeNode(_ nodeID: DOMNode.ID, ifCurrentFor rawNodeID: DOMProtocolNodeID) {
+    package func removeNode(_ nodeID: DOMNode.ID, ifCurrentFor rawNodeID: DOMNode.ProtocolID) {
         nodeIndex.removeNode(nodeID, ifCurrentFor: rawNodeID)
     }
 
@@ -238,7 +238,7 @@ package final class DOMDocumentState {
     }
 
     @discardableResult
-    package func startTransaction(kind: DOMTransactionKind, issuedSequence: UInt64) -> DOMTransaction.ID {
+    package func startTransaction(kind: DOMTransaction.Kind, issuedSequence: UInt64) -> DOMTransaction.ID {
         let transactionID = nextTransactionIdentifier()
         transactions[transactionID] = DOMTransaction(
             id: transactionID,
@@ -256,7 +256,7 @@ package final class DOMDocumentState {
         transactions.removeValue(forKey: transactionID)
     }
 
-    package func removeChildNodesTransactions(parentRawNodeID: DOMProtocolNodeID) {
+    package func removeChildNodesTransactions(parentRawNodeID: DOMNode.ProtocolID) {
         removeTransactions { transaction in
             transaction.kind == .requestChildNodes(parentRawNodeID: parentRawNodeID)
         }
@@ -281,8 +281,8 @@ package final class DOMDocumentState {
     }
 
     package func storePendingPathFragments(
-        parentRawNodeID: DOMProtocolNodeID,
-        payloads: [DOMNodePayload]
+        parentRawNodeID: DOMNode.ProtocolID,
+        payloads: [DOMNode.Payload]
     ) {
         for transactionID in Array(transactions.keys) {
             guard var transaction = transactions[transactionID] else {
@@ -303,7 +303,7 @@ package final class DOMDocumentState {
     }
 
     package func recordRequestedProtocolNodeID(
-        _ nodeID: DOMProtocolNodeID,
+        _ nodeID: DOMNode.ProtocolID,
         for transactionID: DOMTransaction.ID
     ) -> Bool {
         guard var transaction = transactions[transactionID],
@@ -326,39 +326,37 @@ package final class DOMDocumentState {
     }
 }
 
-package typealias DOMDocument = DOMDocumentState
-
 package struct DOMTransaction {
-    package typealias ID = DOMTransactionIdentifier
-
     package var id: ID
     package var targetID: ProtocolTarget.ID
     package var documentID: DOMDocument.ID
-    package var kind: DOMTransactionKind
+    package var kind: DOMTransaction.Kind
     package var issuedSequence: UInt64
-    package var requestedProtocolNodeID: DOMProtocolNodeID?
-    package var pathFragmentsByParentRawNodeID: [DOMProtocolNodeID: [DOMNodePayload]]
+    package var requestedProtocolNodeID: DOMNode.ProtocolID?
+    package var pathFragmentsByParentRawNodeID: [DOMNode.ProtocolID: [DOMNode.Payload]]
 }
 
-package enum DOMRegularChildState {
-    case unrequested(count: Int)
-    case loaded([DOMNode.ID])
+package extension DOMNode {
+    enum ChildrenState {
+        case unrequested(count: Int)
+        case loaded([DOMNode.ID])
 
-    package var knownCount: Int {
-        switch self {
-        case let .unrequested(count):
-            max(0, count)
-        case let .loaded(children):
-            children.count
+        package var knownCount: Int {
+            switch self {
+            case let .unrequested(count):
+                max(0, count)
+            case let .loaded(children):
+                children.count
+            }
         }
-    }
 
-    package var loadedChildren: [DOMNode.ID] {
-        switch self {
-        case .unrequested:
-            []
-        case let .loaded(children):
-            children
+        package var loadedChildren: [DOMNode.ID] {
+            switch self {
+            case .unrequested:
+                []
+            case let .loaded(children):
+                children
+            }
         }
     }
 }
@@ -366,22 +364,20 @@ package enum DOMRegularChildState {
 @MainActor
 @Observable
 package final class DOMNode {
-    package typealias ID = DOMNodeIdentifier
-
     package let id: ID
-    package let protocolNodeID: DOMProtocolNodeID
-    package var nodeType: DOMNodeType
+    package let protocolNodeID: DOMNode.ProtocolID
+    package var nodeType: DOMNode.Kind
     package var nodeName: String
     package var localName: String
     package var nodeValue: String
     package var ownerFrameID: DOMFrame.ID?
     package var documentURL: String?
     package var baseURL: String?
-    package var attributes: [DOMAttribute]
+    package var attributes: [DOMNode.Attribute]
     package var parentID: ID?
     package var previousSiblingID: ID?
     package var nextSiblingID: ID?
-    package var regularChildren: DOMRegularChildState
+    package var regularChildren: DOMNode.ChildrenState
     package var contentDocumentID: ID?
     package var shadowRootIDs: [ID]
     package var templateContentID: ID?
@@ -391,7 +387,7 @@ package final class DOMNode {
     package var pseudoType: String?
     package var shadowRootType: String?
 
-    package init(id: ID, payload: DOMNodePayload, parentID: ID?) {
+    package init(id: ID, payload: DOMNode.Payload, parentID: ID?) {
         self.id = id
         self.protocolNodeID = payload.nodeID
         self.nodeType = payload.nodeType
@@ -416,7 +412,7 @@ package final class DOMNode {
         self.shadowRootType = payload.shadowRootType
     }
 
-    package func update(from payload: DOMNodePayload, parentID: ID?) {
+    package func update(from payload: DOMNode.Payload, parentID: ID?) {
         nodeType = payload.nodeType
         nodeName = payload.nodeName
         localName = payload.localName
@@ -462,67 +458,62 @@ package final class DOMNode {
     }
 }
 
-package struct DOMSelectionRequest: Equatable, Sendable {
-    package var id: SelectionRequestIdentifier
-    package var targetID: ProtocolTarget.ID
-    package var documentID: DOMDocument.ID
-    package var transactionID: DOMTransaction.ID?
-}
+package extension DOMSelection {
+    enum ResolutionPhase: Equatable, Sendable {
+        case idle
+        case pending(DOMSelection.Request)
+        case failed(DOMSelection.Failure)
 
-package enum DOMSelectionResolutionPhase: Equatable, Sendable {
-    case idle
-    case pending(DOMSelectionRequest)
-    case failed(SelectionResolutionFailure)
-
-    package var pendingRequest: DOMSelectionRequest? {
-        guard case let .pending(request) = self else {
-            return nil
+        package var pendingRequest: DOMSelection.Request? {
+            guard case let .pending(request) = self else {
+                return nil
+            }
+            return request
         }
-        return request
-    }
 
-    package var failure: SelectionResolutionFailure? {
-        guard case let .failed(failure) = self else {
-            return nil
+        package var failure: DOMSelection.Failure? {
+            guard case let .failed(failure) = self else {
+                return nil
+            }
+            return failure
         }
-        return failure
-    }
 
-    package var isIdle: Bool {
-        if case .idle = self {
-            return true
+        package var isIdle: Bool {
+            if case .idle = self {
+                return true
+            }
+            return false
         }
-        return false
-    }
-}
-
-package struct DOMSelectionState: Equatable, Sendable {
-    package var selectedNodeID: DOMNode.ID?
-    package var resolution: DOMSelectionResolutionPhase
-
-    package init(
-        selectedNodeID: DOMNode.ID? = nil,
-        resolution: DOMSelectionResolutionPhase = .idle
-    ) {
-        self.selectedNodeID = selectedNodeID
-        self.resolution = resolution
     }
 
-    package var pendingRequest: DOMSelectionRequest? {
-        resolution.pendingRequest
-    }
+    struct State: Equatable, Sendable {
+        package var selectedNodeID: DOMNode.ID?
+        package var resolution: DOMSelection.ResolutionPhase
 
-    package var failure: SelectionResolutionFailure? {
-        resolution.failure
+        package init(
+            selectedNodeID: DOMNode.ID? = nil,
+            resolution: DOMSelection.ResolutionPhase = .idle
+        ) {
+            self.selectedNodeID = selectedNodeID
+            self.resolution = resolution
+        }
+
+        package var pendingRequest: DOMSelection.Request? {
+            resolution.pendingRequest
+        }
+
+        package var failure: DOMSelection.Failure? {
+            resolution.failure
+        }
     }
 }
 
 @MainActor
 @Observable
 package final class DOMSelection {
-    private var state: DOMSelectionState
+    private var state: DOMSelection.State
 
-    package init(state: DOMSelectionState = DOMSelectionState()) {
+    package init(state: DOMSelection.State = DOMSelection.State()) {
         self.state = state
     }
 
@@ -530,11 +521,11 @@ package final class DOMSelection {
         state.selectedNodeID
     }
 
-    package var pendingRequest: DOMSelectionRequest? {
+    package var pendingRequest: DOMSelection.Request? {
         state.pendingRequest
     }
 
-    package var failure: SelectionResolutionFailure? {
+    package var failure: DOMSelection.Failure? {
         state.failure
     }
 
@@ -543,7 +534,7 @@ package final class DOMSelection {
     }
 
     @discardableResult
-    package func select(_ nodeID: DOMNode.ID?) -> DOMSelectionRequest? {
+    package func select(_ nodeID: DOMNode.ID?) -> DOMSelection.Request? {
         let cancelledRequest = state.pendingRequest
         state.selectedNodeID = nodeID
         state.resolution = .idle
@@ -551,7 +542,7 @@ package final class DOMSelection {
     }
 
     @discardableResult
-    package func beginRequest(_ request: DOMSelectionRequest) -> DOMSelectionRequest? {
+    package func beginRequest(_ request: DOMSelection.Request) -> DOMSelection.Request? {
         let cancelledRequest = state.pendingRequest
         state.resolution = .pending(request)
         return cancelledRequest
@@ -588,8 +579,8 @@ package final class DOMSelection {
     @discardableResult
     package func complete(
         _ selectedNodeID: DOMNode.ID,
-        pendingRequest: DOMSelectionRequest
-    ) -> DOMSelectionRequest? {
+        pendingRequest: DOMSelection.Request
+    ) -> DOMSelection.Request? {
         guard state.pendingRequest == pendingRequest else {
             return nil
         }
@@ -600,9 +591,9 @@ package final class DOMSelection {
 
     @discardableResult
     package func fail(
-        _ failure: SelectionResolutionFailure,
+        _ failure: DOMSelection.Failure,
         clearSelected: Bool = true
-    ) -> DOMSelectionRequest? {
+    ) -> DOMSelection.Request? {
         let cancelledRequest = state.pendingRequest
         if clearSelected {
             state.selectedNodeID = nil
@@ -611,7 +602,7 @@ package final class DOMSelection {
         return cancelledRequest
     }
 
-    package func rejectStaleRequest(_ failure: SelectionResolutionFailure) {
+    package func rejectStaleRequest(_ failure: DOMSelection.Failure) {
         guard state.pendingRequest == nil else {
             return
         }

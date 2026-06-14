@@ -137,12 +137,12 @@ package final class FrameDocumentProjectionCoordinator {
     package func projectedFrameOwnerKeys(
         inSubtree rootID: DOMNode.ID,
         nodeProvider: (DOMNode.ID) -> DOMNode?
-    ) -> [ProtocolTarget.ID: DOMNodeCurrentKey] {
+    ) -> [ProtocolTarget.ID: DOMNode.CurrentKey] {
         index.ownerKeys(inSubtree: rootID, nodeProvider: nodeProvider)
     }
 
     package func reattachProjections(
-        using ownerKeys: [ProtocolTarget.ID: DOMNodeCurrentKey],
+        using ownerKeys: [ProtocolTarget.ID: DOMNode.CurrentKey],
         documentStore: DOMDocumentStore,
         nodeProvider: (DOMNode.ID) -> DOMNode?,
         canApplyDOMEvent: (DOMNode.ID) -> Bool
@@ -174,7 +174,7 @@ package final class FrameDocumentProjectionCoordinator {
         }
     }
 
-    package func snapshots() -> [ProtocolTarget.ID: FrameDocumentProjectionSnapshot] {
+    package func snapshots() -> [ProtocolTarget.ID: FrameDocumentProjection.Snapshot] {
         index.snapshots()
     }
 

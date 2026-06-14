@@ -361,7 +361,7 @@ final class DOMSessionDeleteUndoController {
 
     func stateIsCurrent(
         _ state: DOMSessionDeleteUndoState,
-        currentDocumentID: DOMDocumentIdentifier?,
+        currentDocumentID: DOMDocument.ID?,
         undoManager: UndoManager,
         undoTarget: AnyObject,
         operation: String,
@@ -377,7 +377,7 @@ final class DOMSessionDeleteUndoController {
 
     func updateDocumentID(
         for state: DOMSessionDeleteUndoState,
-        currentDocumentID: DOMDocumentIdentifier?,
+        currentDocumentID: DOMDocument.ID?,
         undoManager: UndoManager,
         undoTarget: AnyObject,
         recordError: (InspectorSession.Error?) -> Void
@@ -402,13 +402,13 @@ final class DOMSessionDeleteUndoController {
 final class DOMSessionDeleteUndoState {
     let documentTargetID: ProtocolTarget.ID
     let commandTargetID: ProtocolTarget.ID
-    var documentID: DOMDocumentIdentifier
+    var documentID: DOMDocument.ID
     var actionName: String
 
     init(
         documentTargetID: ProtocolTarget.ID,
         commandTargetID: ProtocolTarget.ID,
-        documentID: DOMDocumentIdentifier,
+        documentID: DOMDocument.ID,
         actionName: String = "Delete Node"
     ) {
         self.documentTargetID = documentTargetID

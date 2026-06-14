@@ -10,7 +10,7 @@ import UIKit
 @MainActor
 private enum DOMElementViewControllerPreview {
     private static let targetID = ProtocolTarget.ID("preview-page")
-    private static let frameID = DOMFrameIdentifier("preview-frame")
+    private static let frameID = DOMFrame.ID("preview-frame")
     private static let styleSheetID = CSSStyleSheetIdentifier("preview")
     private static let styleID = CSSStyleIdentifier(styleSheetID: styleSheetID, ordinal: 0)
     private static let ruleID = CSSRuleIdentifier(styleSheetID: styleSheetID, ordinal: 0)

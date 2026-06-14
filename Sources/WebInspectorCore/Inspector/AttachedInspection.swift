@@ -106,14 +106,14 @@ private final class InspectorTargetLifecycleState {
 private final class InspectorTarget {
     let id: ProtocolTarget.ID
     var kind: ProtocolTarget.Kind
-    var frameID: DOMFrameIdentifier?
-    var parentFrameID: DOMFrameIdentifier?
+    var frameID: DOMFrame.ID?
+    var parentFrameID: DOMFrame.ID?
     var capabilities: ProtocolTarget.Capabilities
     var isProvisional: Bool
     var isPaused: Bool
     private let lifecycle: InspectorTargetLifecycleState
 
-    init(snapshot: ProtocolTargetSnapshot) {
+    init(snapshot: DOMTarget.Snapshot) {
         id = snapshot.id
         kind = snapshot.kind
         frameID = snapshot.frameID
@@ -128,7 +128,7 @@ private final class InspectorTarget {
         lifecycle.isBootstrapped
     }
 
-    func update(from snapshot: ProtocolTargetSnapshot) {
+    func update(from snapshot: DOMTarget.Snapshot) {
         kind = snapshot.kind
         frameID = snapshot.frameID
         parentFrameID = snapshot.parentFrameID
@@ -193,7 +193,7 @@ private final class InspectorTarget {
 private final class InspectorTargetRegistry {
     private var targetsByID: [ProtocolTarget.ID: InspectorTarget] = [:]
 
-    func sync(from snapshot: DOMSessionSnapshot) {
+    func sync(from snapshot: DOMSession.Snapshot) {
         let currentTargetIDs = Set(snapshot.targetsByID.keys)
         for removedTargetID in Array(targetsByID.keys) where currentTargetIDs.contains(removedTargetID) == false {
             removeTarget(removedTargetID)
@@ -208,7 +208,7 @@ private final class InspectorTargetRegistry {
     }
 
     @discardableResult
-    func upsertTarget(from snapshot: ProtocolTargetSnapshot) -> InspectorTarget {
+    func upsertTarget(from snapshot: DOMTarget.Snapshot) -> InspectorTarget {
         if let target = targetsByID[snapshot.id] {
             target.update(from: snapshot)
             return target

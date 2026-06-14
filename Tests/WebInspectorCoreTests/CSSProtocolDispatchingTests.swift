@@ -216,9 +216,9 @@ func cssProtocolDispatchingRegistersStyleSheetHeaderOffsets() async throws {
 
 private func cssIdentity() -> CSSNodeStyleIdentity {
     let targetID = ProtocolTarget.ID("page")
-    let documentID = DOMDocumentIdentifier(targetID: targetID, localDocumentLifetimeID: .init(1))
+    let documentID = DOMDocument.ID(targetID: targetID, localDocumentLifetimeID: .init(1))
     return CSSNodeStyleIdentity(
-        nodeID: DOMNodeIdentifier(documentID: documentID, nodeID: .init(2)),
+        nodeID: DOMNode.ID(documentID: documentID, nodeID: .init(2)),
         targetID: targetID,
         documentID: documentID,
         protocolNodeID: .init(2),

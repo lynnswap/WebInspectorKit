@@ -9,13 +9,13 @@ package struct TargetProtocolCommitResolution: Equatable, Sendable {
 
 package struct TargetProtocolEventSnapshot: Sendable {
     package var currentPageTargetID: ProtocolTarget.ID?
-    package var mainFrameID: DOMFrameIdentifier?
-    package var targetsByID: [ProtocolTarget.ID: ProtocolTargetSnapshot]
+    package var mainFrameID: DOMFrame.ID?
+    package var targetsByID: [ProtocolTarget.ID: DOMTarget.Snapshot]
 
     package init(
         currentPageTargetID: ProtocolTarget.ID?,
-        mainFrameID: DOMFrameIdentifier?,
-        targetsByID: [ProtocolTarget.ID: ProtocolTargetSnapshot]
+        mainFrameID: DOMFrame.ID?,
+        targetsByID: [ProtocolTarget.ID: DOMTarget.Snapshot]
     ) {
         self.currentPageTargetID = currentPageTargetID
         self.mainFrameID = mainFrameID
@@ -160,7 +160,7 @@ package struct TargetProtocolEventDispatcher {
     }
 }
 
-extension DOMSessionSnapshot {
+extension DOMSession.Snapshot {
     package var targetProtocolEventSnapshot: TargetProtocolEventSnapshot {
         TargetProtocolEventSnapshot(
             currentPageTargetID: currentPageTargetID,
@@ -234,13 +234,13 @@ private struct TargetCreatedParams: Decodable {
 private struct TargetInfoPayload: Decodable {
     var targetId: ProtocolTarget.ID
     var type: String
-    var frameId: DOMFrameIdentifier?
-    var parentFrameId: DOMFrameIdentifier?
+    var frameId: DOMFrame.ID?
+    var parentFrameId: DOMFrame.ID?
     var domains: [String]?
     var isProvisional: Bool?
     var isPaused: Bool?
 
-    func record(currentMainFrameID: DOMFrameIdentifier?) -> ProtocolTarget.Record {
+    func record(currentMainFrameID: DOMFrame.ID?) -> ProtocolTarget.Record {
         let kind = targetKind(currentMainFrameID: currentMainFrameID)
         return ProtocolTarget.Record(
             id: targetId,
@@ -257,7 +257,7 @@ private struct TargetInfoPayload: Decodable {
         ProtocolTarget.Capabilities.resolved(for: kind, domainNames: domains)
     }
 
-    private func targetKind(currentMainFrameID: DOMFrameIdentifier?) -> ProtocolTarget.Kind {
+    private func targetKind(currentMainFrameID: DOMFrame.ID?) -> ProtocolTarget.Kind {
         let protocolKind = ProtocolTarget.Kind(protocolType: type)
         guard protocolKind == .page else {
             return protocolKind

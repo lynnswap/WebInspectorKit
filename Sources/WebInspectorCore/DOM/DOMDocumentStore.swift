@@ -16,7 +16,7 @@ package final class DOMDocumentStore {
             lastDocumentLifetimeID += 1
             return DOMDocument.ID(
                 targetID: targetID,
-                localDocumentLifetimeID: DOMDocumentLifetimeIdentifier(lastDocumentLifetimeID)
+                localDocumentLifetimeID: DOMDocument.LifetimeID(lastDocumentLifetimeID)
             )
         }
 
@@ -104,9 +104,9 @@ package final class DOMDocumentStore {
         slotsByTargetID.values.compactMap { $0.state?.currentDocument }
     }
 
-    package func currentNodeIDsByKey() -> [DOMNodeCurrentKey: DOMNode.ID] {
+    package func currentNodeIDsByKey() -> [DOMNode.CurrentKey: DOMNode.ID] {
         let states = slotsByTargetID.values.compactMap(\.state)
-        return Dictionary(uniqueKeysWithValues: states.compactMap { state -> [(DOMNodeCurrentKey, DOMNode.ID)]? in
+        return Dictionary(uniqueKeysWithValues: states.compactMap { state -> [(DOMNode.CurrentKey, DOMNode.ID)]? in
             guard let document = state.currentDocument else {
                 return nil
             }
@@ -114,7 +114,7 @@ package final class DOMDocumentStore {
                 return []
             }
             return document.currentNodeIDByProtocolNodeID.map {
-                (DOMNodeCurrentKey(targetID: state.targetID, nodeID: $0.key), $0.value)
+                (DOMNode.CurrentKey(targetID: state.targetID, nodeID: $0.key), $0.value)
             }
         }.flatMap { $0 })
     }
@@ -125,7 +125,7 @@ package final class DOMDocumentStore {
         }
     }
 
-    package func currentNodeID(targetID: ProtocolTarget.ID, rawNodeID: DOMProtocolNodeID) -> DOMNode.ID? {
+    package func currentNodeID(targetID: ProtocolTarget.ID, rawNodeID: DOMNode.ProtocolID) -> DOMNode.ID? {
         slotsByTargetID[targetID]?.state?.currentDocument?.currentNodeIDByProtocolNodeID[rawNodeID]
     }
 
@@ -145,14 +145,14 @@ package final class DOMDocumentStore {
 
     package func targetStateSnapshots(
         currentDocumentID: (ProtocolTarget.ID) -> DOMDocument.ID?
-    ) -> [ProtocolTarget.ID: DOMTargetStateSnapshot] {
+    ) -> [ProtocolTarget.ID: DOMTargetState.Snapshot] {
         Dictionary(uniqueKeysWithValues: slotsByTargetID.compactMap { targetID, slot in
             guard let state = slot.state else {
                 return nil
             }
             return (
                 targetID,
-                DOMTargetStateSnapshot(
+                DOMTargetState.Snapshot(
                     targetID: state.targetID,
                     currentDocumentID: currentDocumentID(state.targetID),
                     transactionIDs: state.currentDocument.map { Array($0.transactions.keys) } ?? []

@@ -4,7 +4,7 @@ import Observation
 import SwiftUI
 import UIKit
 
-typealias DOMTreeMenuCopyNodeTextAction = @MainActor (DOMNode.ID, DOMNodeCopyTextKind) async -> String?
+typealias DOMTreeMenuCopyNodeTextAction = @MainActor (DOMNode.ID, DOMNode.CopyTextKind) async -> String?
 typealias DOMTreeMenuDeleteNodesAction = @MainActor ([DOMNode.ID], UndoManager?) async -> Bool
 
 @MainActor
@@ -134,7 +134,7 @@ final class DOMTreeMenuModel {
         copyHTMLNodeIDs
     }
 
-    private func copy(_ kind: DOMNodeCopyTextKind, for nodeID: DOMNode.ID) {
+    private func copy(_ kind: DOMNode.CopyTextKind, for nodeID: DOMNode.ID) {
         Task { @MainActor in
             guard let text = await copyText(kind, for: nodeID),
                   !text.isEmpty else {
@@ -179,7 +179,7 @@ final class DOMTreeMenuModel {
         }
     }
 
-    func canCopyText(_ kind: DOMNodeCopyTextKind, for nodeID: DOMNode.ID) -> Bool {
+    func canCopyText(_ kind: DOMNode.CopyTextKind, for nodeID: DOMNode.ID) -> Bool {
         guard let node = dom.node(for: nodeID) else {
             return false
         }
@@ -193,7 +193,7 @@ final class DOMTreeMenuModel {
         }
     }
 
-    private func copyText(_ kind: DOMNodeCopyTextKind, for nodeID: DOMNode.ID) async -> String? {
+    private func copyText(_ kind: DOMNode.CopyTextKind, for nodeID: DOMNode.ID) async -> String? {
         if let copyNodeTextAction {
             return await copyNodeTextAction(nodeID, kind)
         }

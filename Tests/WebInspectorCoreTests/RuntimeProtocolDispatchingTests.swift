@@ -100,7 +100,7 @@ func runtimeProtocolDispatchingAppliesExecutionContextEventToRuntimeState() asyn
 
     let snapshot = session.snapshot()
     #expect(snapshot.executionContextsByKey[contextKey(targetID, 42)]?.targetID == targetID)
-    #expect(snapshot.executionContextsByKey[contextKey(targetID, 42)]?.frameID == DOMFrameIdentifier("frame-1"))
+    #expect(snapshot.executionContextsByKey[contextKey(targetID, 42)]?.frameID == DOMFrame.ID("frame-1"))
     #expect(snapshot.normalContextKeyByTargetID[targetID] == contextKey(targetID, 42))
 }
 

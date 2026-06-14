@@ -84,7 +84,7 @@ package protocol CSSProtocolEventHandler: AnyObject {
     func cssStyleSheetRemoved(styleSheetID: CSSStyleSheetIdentifier, targetID: ProtocolTarget.ID)
     func cssStyleSheetAdded(_ header: CSSStyleSheetHeaderPayload, targetID: ProtocolTarget.ID)
     func cssMediaQueryResultChanged(targetID: ProtocolTarget.ID)
-    func cssNodeLayoutFlagsChanged(targetID: ProtocolTarget.ID, nodeID: DOMProtocolNodeID)
+    func cssNodeLayoutFlagsChanged(targetID: ProtocolTarget.ID, nodeID: DOMNode.ProtocolID)
 }
 
 @MainActor
@@ -143,7 +143,7 @@ extension CSSSession: CSSProtocolEventHandler {
         markNeedsRefresh(targetID: targetID)
     }
 
-    package func cssNodeLayoutFlagsChanged(targetID: ProtocolTarget.ID, nodeID: DOMProtocolNodeID) {
+    package func cssNodeLayoutFlagsChanged(targetID: ProtocolTarget.ID, nodeID: DOMNode.ProtocolID) {
         markNeedsRefresh(targetID: targetID, nodeID: nodeID)
     }
 }
@@ -169,7 +169,7 @@ extension DOMSession: CSSProtocolEventHandler {
         reconcileSelectedNodeStyleHydrationIfNeeded()
     }
 
-    package func cssNodeLayoutFlagsChanged(targetID: ProtocolTarget.ID, nodeID: DOMProtocolNodeID) {
+    package func cssNodeLayoutFlagsChanged(targetID: ProtocolTarget.ID, nodeID: DOMNode.ProtocolID) {
         elementStyles.cssNodeLayoutFlagsChanged(targetID: targetID, nodeID: nodeID)
         reconcileSelectedNodeStyleHydrationIfNeeded()
     }
@@ -192,5 +192,5 @@ private struct SetStyleTextResult: Decodable {
 }
 
 private struct NodeLayoutFlagsChangedParams: Decodable {
-    var nodeId: DOMProtocolNodeID
+    var nodeId: DOMNode.ProtocolID
 }

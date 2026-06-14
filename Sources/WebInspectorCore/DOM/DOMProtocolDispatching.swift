@@ -2,7 +2,7 @@ import Foundation
 import WebInspectorTransport
 
 package struct DOMProtocolCommands {
-    package func command(for intent: DOMCommandIntent) throws -> ProtocolCommand {
+    package func command(for intent: DOMCommand.Intent) throws -> ProtocolCommand {
         switch intent {
         case let .getDocument(targetID):
             return ProtocolCommand(
@@ -89,7 +89,7 @@ package struct DOMProtocolCommands {
     package func applyGetDocumentResult(
         _ result: ProtocolCommand.Result,
         to session: DOMSession
-    ) throws -> DOMNodeIdentifier? {
+    ) throws -> DOMNode.ID? {
         guard let targetID = result.targetID else {
             return nil
         }
@@ -100,9 +100,9 @@ package struct DOMProtocolCommands {
     @MainActor
     package func applyRequestNodeResult(
         _ result: ProtocolCommand.Result,
-        selectionRequestID: SelectionRequestIdentifier,
+        selectionRequestID: DOMSelection.Request.ID,
         to session: DOMSession
-    ) throws -> DOMRequestNodeResolution {
+    ) throws -> DOMNode.RequestResolution {
         guard let targetID = result.targetID else {
             return .failed(.targetMismatch(expected: ProtocolTarget.ID(""), received: ProtocolTarget.ID("")))
         }
@@ -131,7 +131,7 @@ package struct DOMProtocolCommands {
             let payload = try TransportMessageParser.decode(InspectorInspectParams.self, from: event.paramsData)
             return .remoteObject(
                 targetID: event.targetID,
-                remoteObject: RemoteObject(
+                remoteObject: DOMInspectEvent.RemoteObject(
                     objectID: payload.object.objectId,
                     injectedScriptID: injectedScriptID(from: payload.object.objectId)
                 )
@@ -214,7 +214,7 @@ package struct DOMProtocolCommands {
         try JSONSerialization.data(withJSONObject: object, options: [])
     }
 
-    private func nodeIDValue(_ nodeID: DOMCommandNodeID) -> Any {
+    private func nodeIDValue(_ nodeID: DOMCommand.NodeID) -> Any {
         switch nodeID {
         case let .protocolNode(nodeID):
             return nodeID.rawValue
@@ -315,7 +315,7 @@ private struct GetDocumentResult: Decodable {
 }
 
 private struct RequestNodeResult: Decodable {
-    var nodeId: DOMProtocolNodeID
+    var nodeId: DOMNode.ProtocolID
 }
 
 private struct GetOuterHTMLResult: Decodable {
@@ -323,7 +323,7 @@ private struct GetOuterHTMLResult: Decodable {
 }
 
 private struct DOMInspectParams: Decodable {
-    var nodeId: DOMProtocolNodeID
+    var nodeId: DOMNode.ProtocolID
 }
 
 private struct InspectorInspectParams: Decodable {
@@ -335,43 +335,43 @@ private struct InspectorRemoteObject: Decodable {
 }
 
 private struct SetChildNodesParams: Decodable {
-    var parentId: DOMProtocolNodeID
+    var parentId: DOMNode.ProtocolID
     var nodes: [DOMNodeWirePayload]
 }
 
 private struct ChildNodeInsertedParams: Decodable {
-    var parentNodeId: DOMProtocolNodeID
-    var previousNodeId: DOMProtocolNodeID?
+    var parentNodeId: DOMNode.ProtocolID
+    var previousNodeId: DOMNode.ProtocolID?
     var node: DOMNodeWirePayload
 }
 
 private struct ChildNodeRemovedParams: Decodable {
-    var nodeId: DOMProtocolNodeID
+    var nodeId: DOMNode.ProtocolID
 }
 
 private struct ChildNodeCountUpdatedParams: Decodable {
-    var nodeId: DOMProtocolNodeID
+    var nodeId: DOMNode.ProtocolID
     var childNodeCount: Int
 }
 
 private struct AttributeModifiedParams: Decodable {
-    var nodeId: DOMProtocolNodeID
+    var nodeId: DOMNode.ProtocolID
     var name: String
     var value: String
 }
 
 private struct AttributeRemovedParams: Decodable {
-    var nodeId: DOMProtocolNodeID
+    var nodeId: DOMNode.ProtocolID
     var name: String
 }
 
 private final class DOMNodeWirePayload: Decodable {
-    var nodeId: DOMProtocolNodeID
+    var nodeId: DOMNode.ProtocolID
     var nodeType: Int
     var nodeName: String
     var localName: String?
     var nodeValue: String?
-    var frameId: DOMFrameIdentifier?
+    var frameId: DOMFrame.ID?
     var documentURL: String?
     var baseURL: String?
     var attributes: [String]?
@@ -384,22 +384,22 @@ private final class DOMNodeWirePayload: Decodable {
     var pseudoType: String?
     var shadowRootType: String?
 
-    var payload: DOMNodePayload {
+    var payload: DOMNode.Payload {
         let pseudoElements = pseudoElements ?? []
         let beforePseudoElement = pseudoElements.first { $0.pseudoType == "before" }?.payload
         let afterPseudoElement = pseudoElements.first { $0.pseudoType == "after" }?.payload
         let otherPseudoElements = pseudoElements
             .filter { $0.pseudoType != "before" && $0.pseudoType != "after" }
             .map(\.payload)
-        let regularChildren: DOMRegularChildrenPayload
+        let regularChildren: DOMNode.ChildrenPayload
         if let children {
             regularChildren = .loaded(children.map(\.payload))
         } else {
             regularChildren = .unrequested(count: childNodeCount ?? 0)
         }
-        return DOMNodePayload(
+        return DOMNode.Payload(
             nodeID: nodeId,
-            nodeType: DOMNodeType(rawValue: nodeType) ?? .element,
+            nodeType: DOMNode.Kind(rawValue: nodeType) ?? .element,
             nodeName: nodeName,
             localName: localName ?? "",
             nodeValue: nodeValue ?? "",
@@ -419,9 +419,9 @@ private final class DOMNodeWirePayload: Decodable {
         )
     }
 
-    private func attributePairs(_ values: [String]) -> [DOMAttribute] {
+    private func attributePairs(_ values: [String]) -> [DOMNode.Attribute] {
         stride(from: 0, to: values.count, by: 2).map { index in
-            DOMAttribute(
+            DOMNode.Attribute(
                 name: values[index],
                 value: values.indices.contains(index + 1) ? values[index + 1] : ""
             )

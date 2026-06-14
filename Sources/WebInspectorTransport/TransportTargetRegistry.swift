@@ -2,10 +2,10 @@ import Foundation
 
 struct TransportTargetRegistry: Sendable {
     private(set) var targetsByID: [ProtocolTarget.ID: ProtocolTarget.Record] = [:]
-    private(set) var frameTargetIDsByFrameID: [DOMFrameIdentifier: ProtocolTarget.ID] = [:]
+    private(set) var frameTargetIDsByFrameID: [ProtocolFrame.ID: ProtocolTarget.ID] = [:]
     private(set) var currentMainPageTargetID: ProtocolTarget.ID?
 
-    var currentMainFrameID: DOMFrameIdentifier? {
+    var currentMainFrameID: ProtocolFrame.ID? {
         currentMainPageTargetID.flatMap { targetsByID[$0]?.frameID }
     }
 
@@ -17,14 +17,14 @@ struct TransportTargetRegistry: Sendable {
         targetsByID[targetID] != nil
     }
 
-    func targetID(forFrameID frameID: DOMFrameIdentifier) -> ProtocolTarget.ID? {
+    func targetID(forFrameID frameID: ProtocolFrame.ID) -> ProtocolTarget.ID? {
         frameTargetIDsByFrameID[frameID]
     }
 
     func targetKind(
         protocolType: String,
-        frameID: DOMFrameIdentifier?,
-        parentFrameID: DOMFrameIdentifier?,
+        frameID: ProtocolFrame.ID?,
+        parentFrameID: ProtocolFrame.ID?,
         isProvisional: Bool?
     ) -> ProtocolTarget.Kind {
         let protocolKind = ProtocolTarget.Kind(protocolType: protocolType)
@@ -48,7 +48,7 @@ struct TransportTargetRegistry: Sendable {
 
     func resolvedTargetIDForRuntimeContext(
         deliveredTargetID: ProtocolTarget.ID,
-        frameID: DOMFrameIdentifier?
+        frameID: ProtocolFrame.ID?
     ) -> ProtocolTarget.ID {
         guard let frameID,
               let existingTargetID = frameTargetIDsByFrameID[frameID],
@@ -61,7 +61,7 @@ struct TransportTargetRegistry: Sendable {
 
     mutating func recordRuntimeContext(
         deliveredTargetID: ProtocolTarget.ID,
-        frameID: DOMFrameIdentifier?
+        frameID: ProtocolFrame.ID?
     ) -> ProtocolTarget.ID {
         let resolvedTargetID = resolvedTargetIDForRuntimeContext(
             deliveredTargetID: deliveredTargetID,
@@ -199,7 +199,7 @@ private extension ProtocolTarget.Record {
 }
 
 struct TransportFrameTargetResolution: Sendable {
-    var frameID: DOMFrameIdentifier
+    var frameID: ProtocolFrame.ID
     var targetID: ProtocolTarget.ID
 }
 

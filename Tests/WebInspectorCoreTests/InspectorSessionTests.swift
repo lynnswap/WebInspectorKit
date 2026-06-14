@@ -506,13 +506,13 @@ func selectedNodeStylesTracksNewSelectionWhileElementStylesLoad() async throws {
         makeCurrentMainPage: true
     )
     _ = dom.replaceDocumentRoot(
-        DOMNodePayload(
+        WebInspectorCore.DOMNode.Payload(
             nodeID: .init(1),
             nodeType: .document,
             nodeName: "#document",
             regularChildren: .loaded([
-                DOMNodePayload(nodeID: .init(2), nodeType: .element, nodeName: "BODY", localName: "body"),
-                DOMNodePayload(nodeID: .init(3), nodeType: .element, nodeName: "INPUT", localName: "input"),
+                WebInspectorCore.DOMNode.Payload(nodeID: .init(2), nodeType: .element, nodeName: "BODY", localName: "body"),
+                WebInspectorCore.DOMNode.Payload(nodeID: .init(3), nodeType: .element, nodeName: "INPUT", localName: "input"),
             ])
         ),
         targetID: targetID
@@ -2696,8 +2696,8 @@ func lazyIframeOwnerFrameIdIsNotTreatedAsChildFrameIdentity() async throws {
     let snapshot = await session.attachment.dom.snapshot()
     let projection = await session.attachment.dom.treeProjection(rootTargetID: .pageMain)
 
-    #expect(snapshot.framesByID[DOMFrameIdentifier("main-frame")]?.currentDocumentID == snapshot.currentPageDocumentID)
-    #expect(snapshot.framesByID[DOMFrameIdentifier("ad-frame")]?.currentDocumentID == firstFrameDocumentID)
+    #expect(snapshot.framesByID[DOMFrame.ID("main-frame")]?.currentDocumentID == snapshot.currentPageDocumentID)
+    #expect(snapshot.framesByID[DOMFrame.ID("ad-frame")]?.currentDocumentID == firstFrameDocumentID)
     #expect(snapshot.nodesByID[iframeNodeID] != nil)
     assertProjectionContainsFrameDocument(
         in: projection,
@@ -2869,7 +2869,7 @@ func requestNodeWaitsForPathPushBeforeSelectingNode() async throws {
     let nodeName = await selectedNode.nodeName
     let attributes = await selectedNode.attributes
     #expect(nodeName == "DIV")
-    #expect(attributes == [DOMAttribute(name: "id", value: "selected")])
+    #expect(attributes == [WebInspectorCore.DOMNode.Attribute(name: "id", value: "selected")])
 }
 
 @Test("Regression: backend setChildNodes without explicit hydration keeps requestNode selectable")
@@ -2914,7 +2914,7 @@ func backendSetChildNodesWithoutExplicitHydrationKeepsRequestNodeSelectable() as
 
     #expect(await session.attachment.dom.selectedNodeID == expectedNodeID)
     let selectedNode = try #require(await session.attachment.dom.selectedNode)
-    #expect(await selectedNode.attributes == [DOMAttribute(name: "id", value: "picked")])
+    #expect(await selectedNode.attributes == [WebInspectorCore.DOMNode.Attribute(name: "id", value: "picked")])
 }
 
 @Test("Regression: detached setChildNodes root keeps requestNode selectable")
@@ -2959,7 +2959,7 @@ func detachedSetChildNodesRootKeepsRequestNodeSelectable() async throws {
 
     let selectedNode = try #require(await session.attachment.dom.selectedNode)
     #expect(await selectedNode.nodeName == "IMG")
-    #expect(await selectedNode.attributes == [DOMAttribute(name: "src", value: "https://ads.example/detached.webp")])
+    #expect(await selectedNode.attributes == [WebInspectorCore.DOMNode.Attribute(name: "src", value: "https://ads.example/detached.webp")])
 }
 
 @Test("Regression: detached frame setChildNodes root keeps requestNode selectable")
@@ -3073,7 +3073,7 @@ func requestNodeReplyBeforePathPushKeepsSelectionPendingUntilParentArrives() asy
 
     let selectedNode = try #require(await session.attachment.dom.selectedNode)
     #expect(await selectedNode.nodeName == "DIV")
-    #expect(await selectedNode.attributes == [DOMAttribute(name: "id", value: "late-path")])
+    #expect(await selectedNode.attributes == [WebInspectorCore.DOMNode.Attribute(name: "id", value: "late-path")])
     let resolvedSnapshot = await session.attachment.dom.snapshot()
     #expect(resolvedSnapshot.selection.pendingRequest == nil)
     #expect(resolvedSnapshot.selection.failure == nil)
@@ -3586,7 +3586,7 @@ func inspectorInspectWaitsForPathPushEventsBeforeSelectingNode() async throws {
 
     await session.attachment.dom.waitUntilElementPickerIdle()
     let selectedNode = try #require(await session.attachment.dom.selectedNode)
-    #expect(await selectedNode.attributes == [DOMAttribute(name: "id", value: "selected-after-path-push")])
+    #expect(await selectedNode.attributes == [WebInspectorCore.DOMNode.Attribute(name: "id", value: "selected-after-path-push")])
     #expect(await session.attachment.dom.isSelectingElement == false)
 }
 
@@ -3603,12 +3603,12 @@ func inspectorInspectRecordedExecutionContextOverridesEventTargetHint() async th
     )
     #expect(await session.attachment.dom.snapshot().targetsByID[.frameAd] != nil)
     _ = await session.attachment.dom.replaceDocumentRoot(
-        DOMNodePayload(
+        WebInspectorCore.DOMNode.Payload(
             nodeID: .init(1),
             nodeType: .document,
             nodeName: "#document",
             regularChildren: .loaded([
-                DOMNodePayload(nodeID: .init(2), nodeType: .element, nodeName: "HTML", localName: "html"),
+                WebInspectorCore.DOMNode.Payload(nodeID: .init(2), nodeType: .element, nodeName: "HTML", localName: "html"),
             ])
         ),
         targetID: .frameAd
@@ -3725,12 +3725,12 @@ func targetScopedInspectorInspectUsesEventTargetAsFallback() async throws {
         in: session
     )
     _ = await session.attachment.dom.replaceDocumentRoot(
-        DOMNodePayload(
+        WebInspectorCore.DOMNode.Payload(
             nodeID: .init(1),
             nodeType: .document,
             nodeName: "#document",
             regularChildren: .loaded([
-                DOMNodePayload(nodeID: .init(2), nodeType: .element, nodeName: "HTML", localName: "html"),
+                WebInspectorCore.DOMNode.Payload(nodeID: .init(2), nodeType: .element, nodeName: "HTML", localName: "html"),
             ])
         ),
         targetID: .frameAd
@@ -3792,12 +3792,12 @@ func targetScopedInspectorInspectFallsBackToEventTargetWhenContextIsUnrecorded()
         in: session
     )
     _ = await session.attachment.dom.replaceDocumentRoot(
-        DOMNodePayload(
+        WebInspectorCore.DOMNode.Payload(
             nodeID: .init(1),
             nodeType: .document,
             nodeName: "#document",
             regularChildren: .loaded([
-                DOMNodePayload(nodeID: .init(2), nodeType: .element, nodeName: "HTML", localName: "html"),
+                WebInspectorCore.DOMNode.Payload(nodeID: .init(2), nodeType: .element, nodeName: "HTML", localName: "html"),
             ])
         ),
         targetID: .frameAd
@@ -4096,12 +4096,12 @@ func frameDOMNodeCopyDeleteRouteThroughPageTargetWithScopedNodeID() async throws
     )
     #expect(await session.attachment.dom.snapshot().targetsByID[.frameAd] != nil)
     _ = await session.attachment.dom.replaceDocumentRoot(
-        DOMNodePayload(
+        WebInspectorCore.DOMNode.Payload(
             nodeID: .init(101),
             nodeType: .document,
             nodeName: "#document",
             regularChildren: .loaded([
-                DOMNodePayload(nodeID: .init(102), nodeType: .element, nodeName: "HTML", localName: "html"),
+                WebInspectorCore.DOMNode.Payload(nodeID: .init(102), nodeType: .element, nodeName: "HTML", localName: "html"),
             ])
         ),
         targetID: .frameAd
@@ -4419,24 +4419,24 @@ func deleteUndoKeepsOlderUndoStatesCurrentAfterReload() async throws {
     let session = InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
     _ = session.attachment.dom.replaceDocumentRoot(
-        DOMNodePayload(
+        WebInspectorCore.DOMNode.Payload(
             nodeID: .init(1),
             nodeType: .document,
             nodeName: "#document",
             regularChildren: .loaded([
-                DOMNodePayload(
+                WebInspectorCore.DOMNode.Payload(
                     nodeID: .init(2),
                     nodeType: .element,
                     nodeName: "HTML",
                     localName: "html",
                     regularChildren: .loaded([
-                        DOMNodePayload(
+                        WebInspectorCore.DOMNode.Payload(
                             nodeID: .init(3),
                             nodeType: .element,
                             nodeName: "BODY",
                             localName: "body",
                             regularChildren: .loaded([
-                                DOMNodePayload(nodeID: .init(4), nodeType: .element, nodeName: "DIV", localName: "div"),
+                                WebInspectorCore.DOMNode.Payload(nodeID: .init(4), nodeType: .element, nodeName: "DIV", localName: "div"),
                             ])
                         ),
                     ])
@@ -4543,7 +4543,7 @@ func deleteUndoIsDiscardedWhenDocumentIdentityChanges() async throws {
     #expect(undoManager.canUndo)
 
     _ = session.attachment.dom.replaceDocumentRoot(
-        DOMNodePayload(nodeID: .init(1), nodeType: .document, nodeName: "#document"),
+        WebInspectorCore.DOMNode.Payload(nodeID: .init(1), nodeType: .document, nodeName: "#document"),
         targetID: .pageMain
     )
 
@@ -4937,7 +4937,7 @@ private func hydrateSelectedBodyStyles(
     session: InspectorSession,
     transport: TransportSession,
     backend: FakeTransportBackend
-) async throws -> DOMNodeIdentifier {
+) async throws -> WebInspectorCore.DOMNode.ID {
     try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
     let bodyID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(4))
     session.attachment.dom.selectNode(bodyID)
@@ -5062,8 +5062,8 @@ private func applySingleRuleStyles(
 private func waitForCurrentNode(
     in session: InspectorSession,
     targetID: ProtocolTarget.ID,
-    protocolNodeID: DOMProtocolNodeID
-) async throws -> DOMNodeIdentifier {
+    protocolNodeID: WebInspectorCore.DOMNode.ProtocolID
+) async throws -> WebInspectorCore.DOMNode.ID {
     await session.attachment.dom.waitUntilDocumentRequestsIdle(targetID: targetID)
     return try #require(
         await session.attachment.dom.snapshot().currentNodeIDByKey[
@@ -5074,8 +5074,8 @@ private func waitForCurrentNode(
 
 private func assertProjectionContainsFrameDocument(
     in projection: DOMTreeProjection,
-    iframeNodeID: DOMNodeIdentifier,
-    frameRootNodeID: DOMNodeIdentifier,
+    iframeNodeID: WebInspectorCore.DOMNode.ID,
+    frameRootNodeID: WebInspectorCore.DOMNode.ID,
     sourceLocation: SourceLocation = #_sourceLocation
 ) {
     let rowIDs = projection.rows.map(\.nodeID)
@@ -5273,8 +5273,8 @@ private extension InspectorSession.Configuration {
 private let testResponseTimeout: Duration = .milliseconds(750)
 private let testBootstrapTimeout: Duration = .milliseconds(750)
 
-private extension DOMSessionSnapshot {
-    var currentPageDocumentID: DOMDocumentIdentifier? {
+private extension DOMSession.Snapshot {
+    var currentPageDocumentID: WebInspectorCore.DOMDocument.ID? {
         guard let currentPageTargetID else {
             return nil
         }

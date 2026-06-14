@@ -308,7 +308,7 @@ func displayProjectionCacheInvalidatesSearchFields() async throws {
     let requestID = network.applyRequestWillBeSent(
         targetID: targetID,
         requestID: rawRequestID,
-        frameID: DOMFrameIdentifier("main"),
+        frameID: DOMFrame.ID("main"),
         loaderID: "loader",
         documentURL: "https://example.com",
         request: NetworkRequestPayload(url: "https://api.example.com/old", method: "POST"),
@@ -323,7 +323,7 @@ func displayProjectionCacheInvalidatesSearchFields() async throws {
     _ = network.applyRequestWillBeSent(
         targetID: targetID,
         requestID: rawRequestID,
-        frameID: DOMFrameIdentifier("main"),
+        frameID: DOMFrame.ID("main"),
         loaderID: "loader",
         documentURL: "https://example.com",
         request: NetworkRequestPayload(url: "https://api.example.com/new-endpoint", method: "PATCH"),
@@ -366,7 +366,7 @@ func displayProjectionCacheInvalidatesWhenRawMIMETypeAppears() async throws {
     let requestID = network.applyRequestWillBeSent(
         targetID: targetID,
         requestID: rawRequestID,
-        frameID: DOMFrameIdentifier("main"),
+        frameID: DOMFrame.ID("main"),
         loaderID: "loader",
         documentURL: "https://example.com",
         request: NetworkRequestPayload(url: "https://api.example.com/resource", method: "GET"),
@@ -558,7 +558,7 @@ private func applyRequest(
     let key = network.applyRequestWillBeSent(
         targetID: targetID,
         requestID: requestID,
-        frameID: DOMFrameIdentifier("main"),
+        frameID: DOMFrame.ID("main"),
         loaderID: "loader",
         documentURL: "https://example.com",
         request: NetworkRequestPayload(url: url),
@@ -598,7 +598,7 @@ private func applyPendingRequest(
     network.applyRequestWillBeSent(
         targetID: ProtocolTarget.ID("page"),
         requestID: NetworkRequestIdentifier(rawRequestID),
-        frameID: DOMFrameIdentifier("main"),
+        frameID: DOMFrame.ID("main"),
         loaderID: "loader",
         documentURL: "https://example.com",
         request: NetworkRequestPayload(url: url),
