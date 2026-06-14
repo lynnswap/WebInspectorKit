@@ -152,6 +152,47 @@ package final class NetworkRequest {
         state = .pending
     }
 
+    package func applyRequestStart(
+        frameID: DOMFrameIdentifier?,
+        loaderID: String?,
+        documentURL: String?,
+        request: NetworkRequestPayload,
+        resourceType: NetworkResourceType?,
+        originatingTargetID: ProtocolTargetIdentifier?,
+        backendResourceIdentifier: NetworkBackendResourceIdentifier?,
+        initiator: NetworkInitiatorPayload?,
+        timestamp: Double,
+        walltime: Double?
+    ) {
+        self.frameID = frameID
+        self.loaderID = loaderID
+        self.documentURL = documentURL
+        self.resourceType = resourceType
+        self.originatingTargetID = originatingTargetID
+        self.backendResourceIdentifier = backendResourceIdentifier
+        self.initiator = initiator
+        self.request = request
+        requestBody = NetworkBody.makeRequestBody(for: request)
+        response = nil
+        responseBody = nil
+        sourceMapURL = nil
+        metrics = nil
+        cachedResourceBodySize = nil
+        webSocketHandshakeRequest = nil
+        webSocketHandshakeResponse = nil
+        webSocketReadyState = nil
+        webSocketFrames = []
+        redirects = []
+        requestSentTimestamp = timestamp
+        requestSentWalltime = walltime
+        responseReceivedTimestamp = nil
+        lastDataReceivedTimestamp = nil
+        finishedOrFailedTimestamp = nil
+        encodedDataLength = 0
+        decodedDataLength = 0
+        state = .pending
+    }
+
     package func applyMetrics(_ metrics: NetworkLoadMetricsPayload) {
         self.metrics = metrics
         if let requestHeaders = metrics.requestHeaders {
@@ -320,10 +361,12 @@ private extension NetworkRequest {
 private struct NetworkRequestStore {
     private var orderedIDs: [NetworkRequest.ID]
     private var requestsByIdentifier: [NetworkRequest.ID: NetworkRequest]
+    private var activeRequestIDs: Set<NetworkRequest.ID>
 
     init() {
         orderedIDs = []
         requestsByIdentifier = [:]
+        activeRequestIDs = []
     }
 
     var orderedRequestIDs: [NetworkRequest.ID] {
@@ -341,6 +384,7 @@ private struct NetworkRequestStore {
     mutating func removeAll() {
         orderedIDs.removeAll()
         requestsByIdentifier.removeAll()
+        activeRequestIDs.removeAll()
     }
 
     @discardableResult
@@ -351,6 +395,22 @@ private struct NetworkRequestStore {
         requestsByIdentifier[request.id] = request
         orderedIDs.append(request.id)
         return request
+    }
+
+    mutating func markActive(_ id: NetworkRequest.ID) {
+        activeRequestIDs.insert(id)
+    }
+
+    mutating func closeActive(_ id: NetworkRequest.ID) {
+        activeRequestIDs.remove(id)
+    }
+
+    mutating func closeActiveRequests(targetID: ProtocolTargetIdentifier) {
+        activeRequestIDs = activeRequestIDs.filter { $0.targetID != targetID }
+    }
+
+    func isActive(_ id: NetworkRequest.ID) -> Bool {
+        activeRequestIDs.contains(id)
     }
 
     mutating func requestOrInsert(
@@ -466,7 +526,9 @@ package final class NetworkSession {
         let key = NetworkRequest.ID(targetID: targetID, requestID: requestID)
 
         if let existing = requestStore.request(for: key) {
-            if let redirectResponse {
+            let isActive = requestStore.isActive(key)
+            if let redirectResponse,
+               isActive {
                 existing.frameID = frameID ?? existing.frameID
                 existing.loaderID = loaderID ?? existing.loaderID
                 existing.documentURL = documentURL ?? existing.documentURL
@@ -475,9 +537,23 @@ package final class NetworkSession {
                 existing.backendResourceIdentifier = backendResourceIdentifier ?? existing.backendResourceIdentifier
                 existing.initiator = initiator ?? existing.initiator
                 existing.applyRedirect(to: request, redirectResponse: redirectResponse, timestamp: timestamp, walltime: walltime)
+            } else if !isActive {
+                existing.applyRequestStart(
+                    frameID: frameID,
+                    loaderID: loaderID,
+                    documentURL: documentURL,
+                    request: request,
+                    resourceType: resourceType,
+                    originatingTargetID: originatingTargetID,
+                    backendResourceIdentifier: backendResourceIdentifier,
+                    initiator: initiator,
+                    timestamp: timestamp,
+                    walltime: walltime
+                )
             } else {
                 existing.backendResourceIdentifier = backendResourceIdentifier ?? existing.backendResourceIdentifier
             }
+            requestStore.markActive(key)
             return key
         }
 
@@ -496,6 +572,7 @@ package final class NetworkSession {
                 walltime: walltime
             )
         )
+        requestStore.markActive(key)
         return key
     }
 
@@ -557,6 +634,7 @@ package final class NetworkSession {
         }
         request.finishedOrFailedTimestamp = timestamp
         request.state = .finished
+        requestStore.closeActive(.init(targetID: targetID, requestID: requestID))
     }
 
     package func applyLoadingFailed(
@@ -571,6 +649,7 @@ package final class NetworkSession {
         }
         request.finishedOrFailedTimestamp = timestamp
         request.state = .failed(errorText: errorText, canceled: canceled)
+        requestStore.closeActive(.init(targetID: targetID, requestID: requestID))
     }
 
     @discardableResult
@@ -651,6 +730,7 @@ package final class NetworkSession {
         )
         networkRequest.webSocketReadyState = .connecting
         requestStore.insert(networkRequest)
+        requestStore.markActive(key)
         return key
     }
 
@@ -738,6 +818,11 @@ package final class NetworkSession {
         request.webSocketReadyState = .closed
         request.finishedOrFailedTimestamp = timestamp
         request.state = .finished
+        requestStore.closeActive(.init(targetID: targetID, requestID: requestID))
+    }
+
+    package func applyTargetDestroyed(_ targetID: ProtocolTargetIdentifier) {
+        requestStore.closeActiveRequests(targetID: targetID)
     }
 
     package func requestSnapshot(for id: NetworkRequest.ID) -> NetworkRequestSnapshot? {

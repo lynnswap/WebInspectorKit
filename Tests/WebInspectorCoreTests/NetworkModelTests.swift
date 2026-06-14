@@ -481,6 +481,79 @@ func duplicateRequestWillBeSentWithoutRedirectKeepsExistingRequest() async throw
 }
 
 @Test
+func completedRequestDoesNotTreatLaterRequestWillBeSentAsRedirect() async throws {
+    let session = await NetworkSession()
+    let targetID = ProtocolTargetIdentifier("page")
+    let requestID = NetworkRequestIdentifier("0.100-complete")
+
+    let key = await session.applyRequestWillBeSent(
+        targetID: targetID,
+        requestID: requestID,
+        frameID: .init("main-frame"),
+        loaderID: "loader",
+        documentURL: "https://example.com",
+        request: .init(url: "https://example.com/first"),
+        timestamp: 1
+    )
+    await session.applyLoadingFinished(targetID: targetID, requestID: requestID, timestamp: 2)
+
+    let repeatedKey = await session.applyRequestWillBeSent(
+        targetID: targetID,
+        requestID: requestID,
+        frameID: .init("main-frame"),
+        loaderID: "loader-2",
+        documentURL: "https://example.com/next",
+        request: .init(url: "https://example.com/second"),
+        redirectResponse: .init(url: "https://example.com/first", status: 302),
+        timestamp: 3
+    )
+    let request = try #require(await session.requestSnapshot(for: key))
+
+    #expect(repeatedKey == key)
+    #expect(request.request.url == "https://example.com/second")
+    #expect(request.loaderID == "loader-2")
+    #expect(request.redirects.isEmpty)
+    #expect(request.state == .pending)
+}
+
+@Test
+func targetDestroyedRetainsNetworkHistoryButClosesActiveRequestIndex() async throws {
+    let session = await NetworkSession()
+    let targetID = ProtocolTargetIdentifier("page")
+    let requestID = NetworkRequestIdentifier("0.100-destroyed")
+
+    let key = await session.applyRequestWillBeSent(
+        targetID: targetID,
+        requestID: requestID,
+        frameID: .init("main-frame"),
+        loaderID: "loader",
+        documentURL: "https://example.com",
+        request: .init(url: "https://example.com/first"),
+        timestamp: 1
+    )
+    await session.applyTargetDestroyed(targetID)
+    let retainedSnapshot = await session.snapshot()
+
+    let repeatedKey = await session.applyRequestWillBeSent(
+        targetID: targetID,
+        requestID: requestID,
+        frameID: .init("main-frame"),
+        loaderID: "loader-2",
+        documentURL: "https://example.com/next",
+        request: .init(url: "https://example.com/second"),
+        redirectResponse: .init(url: "https://example.com/first", status: 302),
+        timestamp: 2
+    )
+    let request = try #require(await session.requestSnapshot(for: key))
+
+    #expect(retainedSnapshot.orderedRequestIDs == [key])
+    #expect(retainedSnapshot.requestsByID[key]?.request.url == "https://example.com/first")
+    #expect(repeatedKey == key)
+    #expect(request.request.url == "https://example.com/second")
+    #expect(request.redirects.isEmpty)
+}
+
+@Test
 func responseAndCompletionMutateRequestLifecycle() async throws {
     let session = await NetworkSession()
     let targetID = ProtocolTargetIdentifier("page")

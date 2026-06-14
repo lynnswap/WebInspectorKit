@@ -711,10 +711,7 @@ package final class InspectorSession {
             syncTargets(for: connection)
         }
         if let destroyedTargetID = result.destroyedTargetID {
-            cancelRuntimeConsoleEnableTask(targetID: destroyedTargetID)
-            runtime.applyTargetDestroyed(destroyedTargetID)
-            console.applyTargetDestroyed(destroyedTargetID)
-            discardConnectionTargetState(targetID: destroyedTargetID)
+            applyDestroyedTargetRemoval(targetID: destroyedTargetID)
         }
         if hasActiveConnection,
            let createdTarget = result.createdTarget {
@@ -746,6 +743,7 @@ package final class InspectorSession {
                 cancelRuntimeConsoleEnableTask(targetID: oldTargetID)
                 runtime.applyTargetCommitted(oldTargetID: oldTargetID, newTargetID: targetCommit.newTargetID)
                 console.applyTargetCommitted(oldTargetID: oldTargetID, newTargetID: targetCommit.newTargetID)
+                network.applyTargetDestroyed(oldTargetID)
                 discardConnectionTargetState(targetID: oldTargetID)
             }
             dom.startFrameTargetDocumentRequestIfNeeded(targetID: targetCommit.newTargetID, reason: "frameTargetCommit")
@@ -850,6 +848,14 @@ package final class InspectorSession {
             return
         }
         connection.targets.target(for: targetID)?.cancelRuntimeConsoleEnableTask()
+    }
+
+    private func applyDestroyedTargetRemoval(targetID: ProtocolTargetIdentifier) {
+        cancelRuntimeConsoleEnableTask(targetID: targetID)
+        runtime.applyTargetDestroyed(targetID)
+        console.applyTargetDestroyed(targetID)
+        network.applyTargetDestroyed(targetID)
+        discardConnectionTargetState(targetID: targetID)
     }
 
     private func cancelRuntimeConsoleEnableTasks(_ connection: InspectorConnection) {
