@@ -29,6 +29,17 @@ package actor FakeTransportBackend: TransportBackend {
         var continuation: CheckedContinuation<SentTargetMessage, Error>
     }
 
+    private struct MessageWaiterRegistration: Sendable {
+        var ordinal: Int
+        var after: Int
+    }
+
+    private struct TargetMessageWaiterRegistration: Sendable {
+        var method: String?
+        var ordinal: Int
+        var after: Int
+    }
+
     private struct MessageWaiterRegistrationWaiter {
         var ordinal: Int
         var after: Int
@@ -48,10 +59,12 @@ package actor FakeTransportBackend: TransportBackend {
     private var messageWaiters: [MessageWaiter]
     private var nextMessageWaiterID: UInt64
     private var cancelledMessageWaiterIDs: Set<UInt64>
+    private var messageWaiterRegistrations: [MessageWaiterRegistration]
     private var messageWaiterRegistrationWaiters: [MessageWaiterRegistrationWaiter]
     private var targetMessageWaiters: [TargetMessageWaiter]
     private var nextTargetMessageWaiterID: UInt64
     private var cancelledTargetMessageWaiterIDs: Set<UInt64>
+    private var targetMessageWaiterRegistrations: [TargetMessageWaiterRegistration]
     private var targetMessageWaiterRegistrationWaiters: [TargetMessageWaiterRegistrationWaiter]
 
     package init() {
@@ -60,10 +73,12 @@ package actor FakeTransportBackend: TransportBackend {
         messageWaiters = []
         nextMessageWaiterID = 0
         cancelledMessageWaiterIDs = []
+        messageWaiterRegistrations = []
         messageWaiterRegistrationWaiters = []
         targetMessageWaiters = []
         nextTargetMessageWaiterID = 0
         cancelledTargetMessageWaiterIDs = []
+        targetMessageWaiterRegistrations = []
         targetMessageWaiterRegistrationWaiters = []
     }
 
@@ -93,11 +108,11 @@ package actor FakeTransportBackend: TransportBackend {
     }
 
     package func waitUntilMessageWaiterRegistered(ordinal: Int = 0, after count: Int = 0) async {
-        guard hasMessageWaiter(ordinal: ordinal, after: count) == false else {
+        guard hasMessageWaiterRegistration(ordinal: ordinal, after: count) == false else {
             return
         }
         await withCheckedContinuation { continuation in
-            if hasMessageWaiter(ordinal: ordinal, after: count) {
+            if hasMessageWaiterRegistration(ordinal: ordinal, after: count) {
                 continuation.resume()
             } else {
                 messageWaiterRegistrationWaiters.append(
@@ -233,6 +248,7 @@ package actor FakeTransportBackend: TransportBackend {
             continuation.resume(returning: message)
             return
         }
+        messageWaiterRegistrations.append(MessageWaiterRegistration(ordinal: ordinal, after: count))
         messageWaiters.append(
             MessageWaiter(
                 id: id,
@@ -259,6 +275,11 @@ package actor FakeTransportBackend: TransportBackend {
             continuation.resume(returning: message)
             return
         }
+        targetMessageWaiterRegistrations.append(TargetMessageWaiterRegistration(
+            method: method,
+            ordinal: ordinal,
+            after: count
+        ))
         targetMessageWaiters.append(
             TargetMessageWaiter(
                 id: id,
@@ -276,11 +297,11 @@ package actor FakeTransportBackend: TransportBackend {
         ordinal: Int,
         after count: Int
     ) async {
-        guard hasTargetMessageWaiter(method: method, ordinal: ordinal, after: count) == false else {
+        guard hasTargetMessageWaiterRegistration(method: method, ordinal: ordinal, after: count) == false else {
             return
         }
         await withCheckedContinuation { continuation in
-            if hasTargetMessageWaiter(method: method, ordinal: ordinal, after: count) {
+            if hasTargetMessageWaiterRegistration(method: method, ordinal: ordinal, after: count) {
                 continuation.resume()
             } else {
                 targetMessageWaiterRegistrationWaiters.append(
@@ -298,7 +319,7 @@ package actor FakeTransportBackend: TransportBackend {
     private func resumeMessageWaiterRegistrationWaiters() {
         var remainingWaiters: [MessageWaiterRegistrationWaiter] = []
         for waiter in messageWaiterRegistrationWaiters {
-            if hasMessageWaiter(ordinal: waiter.ordinal, after: waiter.after) {
+            if hasMessageWaiterRegistration(ordinal: waiter.ordinal, after: waiter.after) {
                 waiter.continuation.resume()
             } else {
                 remainingWaiters.append(waiter)
@@ -310,7 +331,7 @@ package actor FakeTransportBackend: TransportBackend {
     private func resumeTargetMessageWaiterRegistrationWaiters() {
         var remainingWaiters: [TargetMessageWaiterRegistrationWaiter] = []
         for waiter in targetMessageWaiterRegistrationWaiters {
-            if hasTargetMessageWaiter(method: waiter.method, ordinal: waiter.ordinal, after: waiter.after) {
+            if hasTargetMessageWaiterRegistration(method: waiter.method, ordinal: waiter.ordinal, after: waiter.after) {
                 waiter.continuation.resume()
             } else {
                 remainingWaiters.append(waiter)
@@ -319,14 +340,14 @@ package actor FakeTransportBackend: TransportBackend {
         targetMessageWaiterRegistrationWaiters = remainingWaiters
     }
 
-    private func hasMessageWaiter(ordinal: Int, after count: Int) -> Bool {
-        messageWaiters.contains {
+    private func hasMessageWaiterRegistration(ordinal: Int, after count: Int) -> Bool {
+        messageWaiterRegistrations.contains {
             $0.ordinal == ordinal && $0.after == count
         }
     }
 
-    private func hasTargetMessageWaiter(method: String?, ordinal: Int, after count: Int) -> Bool {
-        targetMessageWaiters.contains {
+    private func hasTargetMessageWaiterRegistration(method: String?, ordinal: Int, after count: Int) -> Bool {
+        targetMessageWaiterRegistrations.contains {
             $0.method == method && $0.ordinal == ordinal && $0.after == count
         }
     }
