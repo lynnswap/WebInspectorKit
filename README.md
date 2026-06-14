@@ -9,11 +9,9 @@ UIKit Web Inspector for `WKWebView`.
 
 ## Features
 
-- DOM tree browsing with native UIKit/TextKit2 presentation
-- Network request logging with native list/detail presentation
+- DOM tree browsing
+- Network request logging
 - Built-in DOM and Network tabs
-- Explicit lifecycle via `WebInspectorSession` / `WebInspectorViewController` (`attach(to:)`, `detach()`)
-- Observation-backed WebInspector model state
 
 ## Requirements
 
