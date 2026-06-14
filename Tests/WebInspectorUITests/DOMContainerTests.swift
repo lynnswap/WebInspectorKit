@@ -847,6 +847,107 @@ struct DOMContainerTests {
     }
 
     @Test
+    func compactNavigationPickButtonEnablesWhenDOMCommandsBecomeActive() async throws {
+        let targetID = ProtocolTarget.ID("page-main")
+        let backend = RecordingTransportBackend()
+        let transport = TransportSession(backend: backend, responseTimeout: nil)
+        await transport.receiveRootMessage(pageTargetCreatedMessage(targetID: targetID))
+
+        let attachmentGate = CommandAttachmentGate()
+        let dom = makeDOMSessionWithoutDocument(targetID: targetID)
+        dom.bindProtocolChannel(
+            ProtocolCommandChannel(
+                transport: transport,
+                isCurrent: { true },
+                isAttached: { attachmentGate.isAttached },
+                appliedSequence: { 0 },
+                shouldEnableCompatibilityCSS: { _ in false },
+                markTargetDomainEnabled: { _, _ in }
+            ),
+            recordError: { _ in }
+        )
+        defer {
+            dom.unbindProtocolChannel()
+        }
+
+        let session = AttachedInspection(dom: dom)
+        let inspector = InspectorSession(attachment: session)
+        let treeViewController = DOMTreeViewController(inspection: session)
+        let navigationController = DOMCompactNavigationController(
+            rootViewController: treeViewController,
+            inspector: inspector
+        )
+        let navigationItems = try #require(navigationController.domNavigationItemsForTesting)
+        let observation = try #require(navigationItems.observationDeliveryForTesting)
+        let pickItem = navigationItems.pickItemForTesting
+        let pickItemIdentity = ObjectIdentifier(pickItem)
+
+        let renderedEnabledState = await observation.values {
+            pickItem.isEnabled
+        }
+        #expect(await renderedEnabledState.waitUntilValue(false))
+
+        attachmentGate.isAttached = true
+        dom.recordCommandAvailabilityMutation()
+
+        #expect(await renderedEnabledState.waitUntilValue(true))
+        #expect(ObjectIdentifier(navigationItems.pickItemForTesting) == pickItemIdentity)
+    }
+
+    @Test
+    func treeControllerRetriesDocumentLoadWhenDOMCommandsBecomeActive() async throws {
+        let targetID = ProtocolTarget.ID("page-main")
+        let backend = RecordingTransportBackend()
+        let transport = TransportSession(backend: backend, responseTimeout: nil)
+        await transport.receiveRootMessage(pageTargetCreatedMessage(targetID: targetID))
+
+        let attachmentGate = CommandAttachmentGate()
+        let dom = makeDOMSessionWithoutDocument(targetID: targetID)
+        dom.bindProtocolChannel(
+            ProtocolCommandChannel(
+                transport: transport,
+                isCurrent: { true },
+                isAttached: { attachmentGate.isAttached },
+                appliedSequence: { 0 },
+                shouldEnableCompatibilityCSS: { _ in false },
+                markTargetDomainEnabled: { _, _ in }
+            ),
+            recordError: { _ in }
+        )
+        defer {
+            dom.unbindProtocolChannel()
+        }
+
+        let session = AttachedInspection(dom: dom)
+        let treeViewController = DOMTreeViewController(inspection: session)
+        let window = showInWindow(treeViewController)
+        defer {
+            window.isHidden = true
+        }
+
+        let observation = try #require(treeViewController.domRootObservationDeliveryForTesting)
+        let renderedDocumentState = await observation.values {
+            dom.currentPageRootNode != nil
+        }
+        #expect(await renderedDocumentState.waitUntilValue(false))
+        #expect(await backend.sentTargetMessages().isEmpty)
+
+        attachmentGate.isAttached = true
+        dom.recordCommandAvailabilityMutation()
+
+        let documentRequest = try await waitForTargetMessage(backend, method: "DOM.getDocument")
+        await receiveTargetReply(
+            transport,
+            targetID: documentRequest.targetIdentifier,
+            messageID: try messageID(documentRequest.message),
+            result: loadedDocumentResult
+        )
+        await dom.waitUntilDocumentRequestsIdle(targetID: documentRequest.targetIdentifier)
+
+        #expect(await renderedDocumentState.waitUntilValue(true))
+    }
+
+    @Test
     func splitContainerInstallsTreeAndElementColumns() throws {
         let dom = makeDOMSession()
         let treeViewController = DOMTreeViewController(dom: dom)
@@ -912,6 +1013,23 @@ struct DOMContainerTests {
             makeCurrentMainPage: true
         )
         _ = session.replaceDocumentRoot(documentNode(), targetID: targetID)
+        return session
+    }
+
+    private func makeDOMSessionWithoutDocument(
+        targetID: ProtocolTarget.ID,
+        capabilities: ProtocolTarget.Capabilities = .pageDefault
+    ) -> DOMSession {
+        let session = DOMSession()
+        session.applyTargetCreated(
+            ProtocolTarget.Record(
+                id: targetID,
+                kind: .page,
+                frameID: DOMFrame.ID("main-frame"),
+                capabilities: capabilities
+            ),
+            makeCurrentMainPage: true
+        )
         return session
     }
 
@@ -1132,6 +1250,162 @@ struct DOMContainerTests {
                 ),
             ])
         )
+    }
+
+    private var loadedDocumentResult: String {
+        ##"{"root":{"nodeId":1,"nodeType":9,"nodeName":"#document","children":[{"nodeId":2,"nodeType":1,"nodeName":"HTML","localName":"html","children":[{"nodeId":3,"nodeType":1,"nodeName":"BODY","localName":"body"}]}]}}"##
+    }
+
+    private func pageTargetCreatedMessage(targetID: ProtocolTarget.ID) -> String {
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"\#(targetID.rawValue)","type":"page","frameId":"main-frame","domains":["DOM","Runtime","Target","Inspector","Network","CSS"],"isProvisional":false}}}"#
+    }
+
+    private func receiveTargetReply(
+        _ transport: TransportSession,
+        targetID: ProtocolTarget.ID,
+        messageID: UInt64,
+        result: String
+    ) async {
+        await transport.receiveRootMessage(
+            targetDispatchMessage(
+                targetID: targetID,
+                message: #"{"id":\#(messageID),"result":\#(result)}"#
+            )
+        )
+    }
+
+    private func targetDispatchMessage(
+        targetID: ProtocolTarget.ID,
+        message: String
+    ) -> String {
+        let escapedTargetID = jsonEscapedString(targetID.rawValue)
+        let escapedMessage = jsonEscapedString(message)
+        return #"{"method":"Target.dispatchMessageFromTarget","params":{"targetId":"\#(escapedTargetID)","message":"\#(escapedMessage)"}}"#
+    }
+
+    private func waitForTargetMessage(
+        _ backend: RecordingTransportBackend,
+        method: String,
+        timeout: Duration = .seconds(5)
+    ) async throws -> RecordedTargetMessage {
+        try await withThrowingTaskGroup(of: RecordedTargetMessage.self) { group in
+            defer {
+                group.cancelAll()
+            }
+
+            group.addTask {
+                await backend.waitForTargetMessage(method: method)
+            }
+            group.addTask {
+                try await Task.sleep(for: timeout)
+                throw TransportSession.Error.replyTimeout(method: method, targetID: nil)
+            }
+
+            guard let message = try await group.next() else {
+                throw TransportSession.Error.replyTimeout(method: method, targetID: nil)
+            }
+            return message
+        }
+    }
+
+    private func messageID(_ message: String) throws -> UInt64 {
+        let data = try #require(message.data(using: .utf8))
+        let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        if let number = object["id"] as? NSNumber {
+            return number.uint64Value
+        }
+        if let string = object["id"] as? String,
+           let id = UInt64(string) {
+            return id
+        }
+        throw TransportSession.Error.malformedMessage
+    }
+
+    private func jsonEscapedString(_ string: String) -> String {
+        string
+            .replacingOccurrences(of: #"\"#, with: #"\\"#)
+            .replacingOccurrences(of: #"""#, with: #"\""#)
+            .replacingOccurrences(of: "\n", with: #"\n"#)
+            .replacingOccurrences(of: "\r", with: #"\r"#)
+    }
+
+    private struct RecordedTargetMessage: Sendable {
+        var message: String
+        var targetIdentifier: ProtocolTarget.ID
+    }
+
+    private final class CommandAttachmentGate {
+        var isAttached = false
+    }
+
+    private actor RecordingTransportBackend: TransportBackend {
+        private struct TargetMessageWaiter {
+            var method: String
+            var continuation: CheckedContinuation<RecordedTargetMessage, Never>
+        }
+
+        private var messages: [String] = []
+        private var waiters: [TargetMessageWaiter] = []
+
+        func sendJSONString(_ message: String) async throws {
+            messages.append(message)
+            resumeWaiters()
+        }
+
+        func detach() async {}
+
+        func sentTargetMessages() -> [RecordedTargetMessage] {
+            messages.compactMap(Self.targetMessage)
+        }
+
+        func waitForTargetMessage(method: String) async -> RecordedTargetMessage {
+            if let message = sentTargetMessages().first(where: { messageMethod($0.message) == method }) {
+                return message
+            }
+
+            return await withCheckedContinuation { continuation in
+                waiters.append(TargetMessageWaiter(method: method, continuation: continuation))
+                resumeWaiters()
+            }
+        }
+
+        private func resumeWaiters() {
+            guard !waiters.isEmpty else {
+                return
+            }
+
+            var remainingWaiters: [TargetMessageWaiter] = []
+            for waiter in waiters {
+                if let message = sentTargetMessages().first(where: { messageMethod($0.message) == waiter.method }) {
+                    waiter.continuation.resume(returning: message)
+                } else {
+                    remainingWaiters.append(waiter)
+                }
+            }
+            waiters = remainingWaiters
+        }
+
+        private static func targetMessage(_ message: String) -> RecordedTargetMessage? {
+            guard let data = message.data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let params = object["params"] as? [String: Any],
+                  let targetID = params["targetId"] as? String,
+                  let innerMessage = params["message"] as? String else {
+                return nil
+            }
+            return RecordedTargetMessage(
+                message: innerMessage,
+                targetIdentifier: ProtocolTarget.ID(targetID)
+            )
+        }
+
+        private func messageMethod(_ message: String) -> String? {
+            guard let data = message.data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return nil
+            }
+            return object["method"] as? String
+        }
     }
 
     private func showInWindow(_ viewController: UIViewController) -> UIWindow {

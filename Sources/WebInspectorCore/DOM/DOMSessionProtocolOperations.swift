@@ -18,6 +18,7 @@ extension DOMSession {
         self.commandChannel = commandChannel
         self.recordError = recordError
         elementStyles.bindProtocolChannel(commandChannel)
+        recordCommandAvailabilityMutation()
         reconcileSelectedNodeStyleHydrationIfNeeded()
     }
 
@@ -31,6 +32,7 @@ extension DOMSession {
         highlightController.targetID = nil
         clearElementPickerState(invalidatePendingSelection: true)
         clearDeleteUndoHistory()
+        recordCommandAvailabilityMutation()
     }
 
     package func prepareForDocumentReload() async {

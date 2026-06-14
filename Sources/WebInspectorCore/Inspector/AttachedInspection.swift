@@ -554,6 +554,7 @@ package final class InspectorSession {
             try await bootstrap(mainTargetID: mainTarget.targetID, connection: nextConnection)
             try ensureCurrentConnection(nextConnection)
             connectionPhase = .active(nextConnection)
+            dom.recordCommandAvailabilityMutation()
             dom.startDocumentRequestsForAttachedFrameTargets()
             startRuntimeConsoleEnableForAttachedTargets()
             lastError = nil
@@ -564,6 +565,7 @@ package final class InspectorSession {
             nextConnection.receiver?.close()
             stopPumps(nextConnection)
             connectionPhase = .idle
+            dom.recordCommandAvailabilityMutation()
             await transport.detach()
             restoreInspectabilityIfNeeded(for: nextConnection)
             unbindProtocolChannel()
@@ -584,6 +586,7 @@ package final class InspectorSession {
 
         let previousConnections = connectionPhase.connectionsForDetach
         connectionPhase = .idle
+        dom.recordCommandAvailabilityMutation()
         unbindProtocolChannel()
 
         for previousConnection in previousConnections {

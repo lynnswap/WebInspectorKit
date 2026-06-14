@@ -20,6 +20,7 @@ extension DOMSession {
     }
 
     private var hasActiveCommandChannel: Bool {
-        commandChannel?.acceptsActiveCommands == true
+        _ = commandAvailabilityRevision
+        return commandChannel?.acceptsActiveCommands == true
     }
 }

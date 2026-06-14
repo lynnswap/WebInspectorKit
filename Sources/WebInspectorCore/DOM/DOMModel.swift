@@ -8,6 +8,7 @@ package final class DOMSession {
     package var isSelectingElement: Bool
     package private(set) var treeRevision: UInt64
     package private(set) var selectionRevision: UInt64
+    package private(set) var commandAvailabilityRevision: UInt64
 
     private let targetGraph: TargetGraph
     private var currentPage: DOMCurrentPage
@@ -32,6 +33,7 @@ package final class DOMSession {
         isSelectingElement = false
         treeRevision = 0
         selectionRevision = 0
+        commandAvailabilityRevision = 0
         self.targetGraph = targetGraph
         currentPage = DOMCurrentPage()
         documentStore = DOMDocumentStore()
@@ -95,6 +97,10 @@ package final class DOMSession {
         selectionRevision &+= 1
     }
 
+    package func recordCommandAvailabilityMutation() {
+        commandAvailabilityRevision &+= 1
+    }
+
     package func reset() {
         currentPage.clear()
         targetGraph.reset()
@@ -106,6 +112,7 @@ package final class DOMSession {
         isSelectingElement = false
         recordTreeMutation()
         recordSelectionMutation()
+        recordCommandAvailabilityMutation()
     }
 
     package func applyTargetCreated(

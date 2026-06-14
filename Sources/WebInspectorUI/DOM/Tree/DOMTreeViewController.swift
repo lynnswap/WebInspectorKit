@@ -98,7 +98,10 @@ package final class DOMTreeViewController: UIViewController {
                 return
             }
             _ = dom.treeRevision
-            guard event.kind == .initial || event.matches(\DOMSession.treeRevision) else {
+            _ = dom.commandAvailabilityRevision
+            guard event.kind == .initial
+                    || event.matches(\DOMSession.treeRevision)
+                    || event.matches(\DOMSession.commandAvailabilityRevision) else {
                 return
             }
             self?.ensureDOMDocumentLoadedIfNeeded()
@@ -112,7 +115,8 @@ package final class DOMTreeViewController: UIViewController {
         let currentPageRootNode = inspection.dom.currentPageRootNode
         guard viewIfLoaded?.window != nil,
               !isEnsuringDOMDocumentLoaded,
-              currentPageRootNode == nil else {
+              currentPageRootNode == nil,
+              inspection.dom.canReloadDocument else {
             return
         }
 
@@ -128,6 +132,10 @@ package final class DOMTreeViewController: UIViewController {
 
 #if DEBUG
 extension DOMTreeViewController {
+    var domRootObservationDeliveryForTesting: PortableObservationTracking.Token? {
+        domRootObservation
+    }
+
     var displayedDOMTreeTextViewForTesting: DOMTreeTextView {
         treeView
     }

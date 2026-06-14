@@ -1,4 +1,5 @@
 import Foundation
+import ObservationBridge
 import Testing
 import WebInspectorTestSupport
 import WebInspectorTransport
@@ -4703,6 +4704,87 @@ func domActionAvailabilityWaitsForActiveAttachment() async throws {
     #expect(await session.hasActiveConnection)
     #expect(await session.attachment.dom.canReloadDocument)
     #expect(await session.attachment.dom.canSelectElement)
+}
+
+@MainActor
+@Test
+func domActionAvailabilityObservationFiresWhenBootstrapAttaches() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = InspectorSession(configuration: .test)
+    await transport.receiveRootMessage(
+        cssCapablePageTargetCreatedMessage(targetID: "page-main", frameID: "main-frame", isProvisional: false)
+    )
+
+    let availabilityObservation = withPortableContinuousObservation { _ in
+        _ = session.attachment.dom.canBeginElementPicker
+    }
+    let rootObservation = withPortableContinuousObservation { _ in
+        _ = session.attachment.dom.treeRevision
+    }
+    defer {
+        availabilityObservation.cancel()
+        rootObservation.cancel()
+    }
+    let renderedAvailability = await availabilityObservation.values {
+        session.attachment.dom.canBeginElementPicker
+    }
+    let renderedRootState = await rootObservation.values {
+        session.attachment.dom.currentPageRootNode != nil
+    }
+    #expect(await renderedAvailability.waitUntilValue(false))
+    #expect(await renderedRootState.waitUntilValue(false))
+
+    let connectTask = Task {
+        try await session.connect(transport: transport)
+    }
+
+    var sentCount = 0
+    for method in ["Inspector.enable", "Inspector.initialized", "Runtime.enable"] {
+        let sent = try await waitForTargetMessage(backend, method: method, after: sentCount)
+        sentCount = await backend.sentTargetMessages().count
+        await receiveTargetReply(
+            transport,
+            targetID: sent.targetIdentifier,
+            messageID: try messageID(sent.message),
+            result: "{}"
+        )
+    }
+
+    let documentMessage = try await waitForTargetMessage(backend, method: "DOM.getDocument", after: sentCount)
+    sentCount = await backend.sentTargetMessages().count
+    await receiveTargetReply(
+        transport,
+        targetID: documentMessage.targetIdentifier,
+        messageID: try messageID(documentMessage.message),
+        result: mainDocumentResult
+    )
+
+    await session.attachment.dom.waitUntilDocumentRequestsIdle(targetID: documentMessage.targetIdentifier)
+    #expect(await renderedRootState.waitUntilValue(true))
+    #expect(session.hasActiveConnection == false)
+    #expect(session.attachment.dom.canBeginElementPicker == false)
+
+    let networkMessage = try await waitForTargetMessage(backend, method: "Network.enable", after: sentCount)
+    sentCount = await backend.sentTargetMessages().count
+    await receiveTargetReply(
+        transport,
+        targetID: networkMessage.targetIdentifier,
+        messageID: try messageID(networkMessage.message),
+        result: "{}"
+    )
+
+    let consoleMessage = try await waitForTargetMessage(backend, method: "Console.enable", after: sentCount)
+    await receiveTargetReply(
+        transport,
+        targetID: consoleMessage.targetIdentifier,
+        messageID: try messageID(consoleMessage.message),
+        result: "{}"
+    )
+
+    try await connectTask.value
+    #expect(session.hasActiveConnection)
+    #expect(await renderedAvailability.waitUntilValue(true))
 }
 
 @MainActor
