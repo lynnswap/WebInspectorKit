@@ -19,7 +19,6 @@ UIKit Web Inspector for `WKWebView`.
 
 - Swift 6.3+
 - iOS 18+
-- WKWebView with JavaScript enabled
 
 ## Platform Notes
 

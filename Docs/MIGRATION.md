@@ -1,12 +1,22 @@
-# Migration from v0.1.x
+# Migration from v0.1.5 to v0.2.0
 
-This guide lists only the source changes that matter when upgrading from `v0.1.x` to the current public API.
+This guide lists the source changes that are likely to affect app code when upgrading from `v0.1.5` to `v0.2.0`.
 
-Internal refactors, transport rewrites, module splits, and cache changes are intentionally omitted unless they require changes in app code.
+Fine-grained internal model types, transport rewrites, module splits, and cache changes are intentionally omitted unless they change how an app integrates the inspector.
 
-## 1. Replace the old inspector entry point
+## 1. Update the toolchain and UI expectation
 
-`WebInspectorView` was removed.
+- Swift 6.3+ is now required.
+- The app-facing inspector UI is UIKit-based on iOS.
+- The old SwiftUI `WebInspectorView` and AppKit inspector UI are no longer shipped.
+
+macOS runtime and native bridge targets remain in the package where they do not
+depend on the removed AppKit UI, but there is no current app-facing AppKit
+inspector view.
+
+## 2. Replace the old inspector entry point
+
+`WebInspectorView` and `WebInspectorModel` were removed.
 
 Use `WebInspectorViewController` or `WebInspectorSession`.
 
@@ -22,56 +32,53 @@ Use `WebInspectorViewController` or `WebInspectorSession`.
 
 If your app used the default inspector UI, this is the main migration.
 
-AppKit inspector UI is no longer shipped. macOS runtime and bridge support remains available
-where it does not depend on the removed AppKit UI.
+If your app presents the inspector from SwiftUI, host `WebInspectorViewController`
+with your own `UIViewControllerRepresentable`.
 
-## 2. Rename the model and lifecycle API
+## 3. Update lifecycle calls
 
-| `v0.1.x` | Current |
+| `v0.1.5` | `v0.2.0` |
 | --- | --- |
-| `WebInspectorModel` | `WebInspectorSession` / `WebInspectorViewController` on UIKit |
+| `WebInspectorModel` | `WebInspectorViewController` for the default UI, or `WebInspectorSession` for lifecycle ownership |
 | `WebInspectorConfiguration` | no current app-facing replacement |
 | `attach(webView:)` | `attach(to:)` |
-| `detach()` | `detach()` |
-
-The old `connect(to:)`, `suspend()`, and `disconnect()` lifecycle path was removed.
-The DOM tree now follows the WebKit DOM protocol directly. Snapshot depth, subtree depth,
-and DOM auto-update debounce are internal policies rather than public configuration.
+| `suspend()` | no app-facing replacement |
+| synchronous `detach()` | async `detach()` |
 
 Current:
 
 ```swift
 let inspector = WebInspectorViewController()
 
-try await inspector.attach(to: webView)
+Task { @MainActor in
+    try await inspector.attach(to: webView)
+}
 ```
 
-Remove any app-side DOM snapshot depth, subtree depth, or auto-update debounce tuning.
-Those values are now owned by the native DOM runtime.
+When you need to tear down the attachment explicitly:
 
-## 3. Remove old dependency injection code
+```swift
+Task { @MainActor in
+    await inspector.detach()
+}
+```
 
-The `v0.1.x` dependency injection and model configuration APIs are not part of the
-current public API.
+Snapshot depth, subtree depth, and DOM auto-update debounce are no longer public
+configuration. Remove app-side tuning for those values; the native DOM runtime
+owns those policies.
 
-Remove app-side configuration of transport timeouts, runtime factories, and DOM reload
-policies. Those boundaries are internal to the WebInspector runtime.
+## 4. Remove custom tab builders
 
-## 4. Remove `WebInspectorScripts` imports
+The `v0.1.5` SwiftUI tab builder API was removed.
 
-The `WebInspectorScripts` product and `@_exported import WebInspectorScripts`
-are gone.
+| `v0.1.5` | `v0.2.0` |
+| --- | --- |
+| `WITab.dom()` | `.dom` |
+| `WITab.element()` | included inside the DOM UI |
+| `WITab.network()` | `.network` |
+| custom `WITab(...)` content | no current app-facing replacement |
 
-Remove direct `WebInspectorScripts` imports and any custom DOM frontend client
-injection. The current DOM tree is provided by the built-in native DOM tab.
-
-## 5. Update tab definitions
-
-The important source-level changes are:
-
-- Use the built-in tabs exposed by `WebInspectorViewController`.
-- The old custom-tab builder API is gone.
-- Custom tabs are not part of the current public surface.
+Use the built-in tabs exposed by `WebInspectorViewController`:
 
 ```swift
 let controller = WebInspectorViewController(
@@ -79,12 +86,26 @@ let controller = WebInspectorViewController(
 )
 ```
 
-If you only use the built-in tabs, keep using `.dom` and `.network`.
+Custom tabs are not part of the current public surface.
 
-## 6. Remove old DOM model usage
+## 5. Remove old DOM and Network model usage
 
-The `v0.1.x` DOM model APIs are not part of the current public surface.
+The old SwiftUI views, view models, sessions, stores, and page-agent APIs are no
+longer app-facing integration points.
 
-Do not migrate app code from one removed DOM API to another removed DOM API. DOM
-and Network models are internal implementation details until their app-facing
-command surface is explicitly published.
+Do not migrate app code from one removed DOM or Network model API to another
+internal model API. DOM and Network command/model surfaces should be treated as
+internal until an app-facing API is explicitly published.
+
+## 6. Remove JavaScript-agent assumptions
+
+`v0.1.5` inspected pages by injecting bundled JavaScript agents into the target
+`WKWebView`. `v0.2.0` uses WebKit's native inspector runtime instead.
+
+For app integration, this means:
+
+- You no longer need to enable page JavaScript just for WebInspectorKit.
+- You can remove workarounds that existed only for injected inspector scripts,
+  such as script-injection ordering or content-script/CSP assumptions.
+- Page JavaScript being disabled still affects the page's own behavior, but it is
+  not a WebInspectorKit setup requirement.
