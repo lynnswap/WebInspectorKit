@@ -2,7 +2,7 @@ import Foundation
 import WebInspectorTransport
 
 package struct NetworkProtocolCommands {
-    package func command(for intent: NetworkCommandIntent) throws -> ProtocolCommand {
+    package func command(for intent: NetworkCommand.Intent) throws -> ProtocolCommand {
         switch intent {
         case let .getResponseBody(requestKey, backendResourceIdentifier):
             return ProtocolCommand(
@@ -31,7 +31,7 @@ package struct NetworkProtocolCommands {
     package func applyResponseBodyResult(_ result: ProtocolCommand.Result, to request: NetworkRequest) throws {
         let payload = try TransportMessageParser.decode(ResponseBodyResult.self, from: result.resultData)
         request.applyResponseBody(
-            NetworkBodyPayload(
+            NetworkBody.Payload(
                 body: payload.body,
                 base64Encoded: payload.base64Encoded
             )
@@ -39,8 +39,8 @@ package struct NetworkProtocolCommands {
     }
 
     private func parameters(
-        requestKey: NetworkRequestIdentifierKey,
-        backendResourceIdentifier: NetworkBackendResourceIdentifier?
+        requestKey: NetworkRequest.ID,
+        backendResourceIdentifier: NetworkRequest.BackendResourceID?
     ) throws -> Data {
         var object: [String: Any] = [
             "requestId": requestKey.requestID.rawValue,
@@ -85,7 +85,7 @@ package final class NetworkProtocolEventDispatcher: ProtocolDomainEventDispatche
                 loaderID: params.loaderId,
                 documentURL: params.documentURL,
                 request: params.request.payload,
-                resourceType: params.type.map { NetworkResourceType($0) },
+                resourceType: params.type.map { NetworkRequest.ResourceType($0) },
                 originatingTargetID: params.targetId,
                 backendResourceIdentifier: params.backendResourceIdentifier,
                 initiator: params.initiator?.payload,
@@ -100,7 +100,7 @@ package final class NetworkProtocolEventDispatcher: ProtocolDomainEventDispatche
                 requestID: params.requestId,
                 frameID: params.frameId,
                 loaderID: params.loaderId,
-                resourceType: params.type.map { NetworkResourceType($0) },
+                resourceType: params.type.map { NetworkRequest.ResourceType($0) },
                 response: params.response.payload(
                     fallbackURL: session.requestSnapshot(
                         for: .init(targetID: targetID, requestID: params.requestId)
@@ -206,14 +206,14 @@ private struct ResponseBodyResult: Decodable {
 }
 
 private struct RequestWillBeSentParams: Decodable {
-    var requestId: NetworkRequestIdentifier
+    var requestId: NetworkRequest.ProtocolID
     var frameId: DOMFrame.ID?
     var loaderId: String?
     var documentURL: String?
     var request: RequestPayload
     var type: String?
     var targetId: ProtocolTarget.ID?
-    var backendResourceIdentifier: NetworkBackendResourceIdentifier?
+    var backendResourceIdentifier: NetworkRequest.BackendResourceID?
     var initiator: InitiatorPayload?
     var redirectResponse: ResponsePayload?
     var timestamp: Double
@@ -221,7 +221,7 @@ private struct RequestWillBeSentParams: Decodable {
 }
 
 private struct ResponseReceivedParams: Decodable {
-    var requestId: NetworkRequestIdentifier
+    var requestId: NetworkRequest.ProtocolID
     var frameId: DOMFrame.ID?
     var loaderId: String?
     var type: String?
@@ -230,63 +230,63 @@ private struct ResponseReceivedParams: Decodable {
 }
 
 private struct DataReceivedParams: Decodable {
-    var requestId: NetworkRequestIdentifier
+    var requestId: NetworkRequest.ProtocolID
     var dataLength: Int
     var encodedDataLength: Int
     var timestamp: Double
 }
 
 private struct LoadingFinishedParams: Decodable {
-    var requestId: NetworkRequestIdentifier
+    var requestId: NetworkRequest.ProtocolID
     var timestamp: Double
     var sourceMapURL: String?
     var metrics: MetricsPayload?
 }
 
 private struct LoadingFailedParams: Decodable {
-    var requestId: NetworkRequestIdentifier
+    var requestId: NetworkRequest.ProtocolID
     var timestamp: Double
     var errorText: String
     var canceled: Bool?
 }
 
 private struct WebSocketCreatedParams: Decodable {
-    var requestId: NetworkRequestIdentifier
+    var requestId: NetworkRequest.ProtocolID
     var url: String
 }
 
 private struct WebSocketWillSendHandshakeRequestParams: Decodable {
-    var requestId: NetworkRequestIdentifier
+    var requestId: NetworkRequest.ProtocolID
     var timestamp: Double
     var walltime: Double?
     var request: WebSocketRequestPayload
 }
 
 private struct WebSocketHandshakeResponseReceivedParams: Decodable {
-    var requestId: NetworkRequestIdentifier
+    var requestId: NetworkRequest.ProtocolID
     var timestamp: Double
     var response: WebSocketResponsePayload
 }
 
 private struct WebSocketFrameParams: Decodable {
-    var requestId: NetworkRequestIdentifier
+    var requestId: NetworkRequest.ProtocolID
     var timestamp: Double
     var response: WebSocketFramePayload
 }
 
 private struct WebSocketFrameErrorParams: Decodable {
-    var requestId: NetworkRequestIdentifier
+    var requestId: NetworkRequest.ProtocolID
     var timestamp: Double
     var errorMessage: String
 }
 
 private struct WebSocketClosedParams: Decodable {
-    var requestId: NetworkRequestIdentifier
+    var requestId: NetworkRequest.ProtocolID
     var timestamp: Double
 }
 
 private struct RequestServedFromMemoryCacheParams: Decodable {
-    var requestId: NetworkRequestIdentifier
+    var requestId: NetworkRequest.ProtocolID
     var frameId: DOMFrame.ID
     var loaderId: String
     var documentURL: String
@@ -303,13 +303,13 @@ private struct RequestPayload: Decodable {
     var referrerPolicy: String?
     var integrity: String?
 
-    var payload: NetworkRequestPayload {
-        NetworkRequestPayload(
+    var payload: NetworkRequest.Payload {
+        NetworkRequest.Payload(
             url: url,
             method: method ?? "GET",
             headers: headers ?? [:],
             postData: postData,
-            referrerPolicy: referrerPolicy.map { NetworkReferrerPolicy($0) },
+            referrerPolicy: referrerPolicy.map { NetworkRequest.ReferrerPolicy($0) },
             integrity: integrity
         )
     }
@@ -322,9 +322,9 @@ private struct InitiatorPayload: Decodable {
     var lineNumber: Double?
     var nodeId: DOMNode.ProtocolID?
 
-    var payload: NetworkInitiatorPayload {
-        NetworkInitiatorPayload(
-            type: NetworkInitiatorType(type),
+    var payload: NetworkRequest.Initiator.Payload {
+        NetworkRequest.Initiator.Payload(
+            type: NetworkRequest.Initiator.Kind(type),
             stackTrace: stackTrace?.payload,
             url: url,
             lineNumber: lineNumber,
@@ -378,14 +378,14 @@ private struct ResponsePayload: Decodable {
     var timing: ResourceTimingPayload?
     var security: SecurityPayload?
 
-    func payload(fallbackURL: String) -> NetworkResponsePayload {
-        NetworkResponsePayload(
+    func payload(fallbackURL: String) -> NetworkRequest.Response.Payload {
+        NetworkRequest.Response.Payload(
             url: url ?? fallbackURL,
             status: status,
             statusText: statusText ?? "",
             headers: headers ?? [:],
             mimeType: mimeType,
-            source: source.map { NetworkResponseSource($0) },
+            source: source.map { NetworkRequest.Response.Source($0) },
             requestHeaders: requestHeaders,
             timing: timing?.payload,
             security: security?.payload
@@ -407,8 +407,8 @@ private struct ResourceTimingPayload: Decodable {
     var responseStart: Double
     var responseEnd: Double
 
-    var payload: NetworkResourceTimingPayload {
-        NetworkResourceTimingPayload(
+    var payload: NetworkRequest.Timing.Payload {
+        NetworkRequest.Timing.Payload(
             startTime: startTime,
             redirectStart: redirectStart,
             redirectEnd: redirectEnd,
@@ -429,8 +429,8 @@ private struct SecurityPayload: Decodable {
     var connection: SecurityConnectionPayload?
     var certificate: CertificatePayload?
 
-    var payload: NetworkSecurityPayload {
-        NetworkSecurityPayload(
+    var payload: NetworkRequest.Security.Payload {
+        NetworkRequest.Security.Payload(
             connection: connection?.payload,
             certificate: certificate?.payload
         )
@@ -444,8 +444,8 @@ private struct CertificatePayload: Decodable {
     var dnsNames: [String]?
     var ipAddresses: [String]?
 
-    var payload: NetworkCertificatePayload {
-        NetworkCertificatePayload(
+    var payload: NetworkRequest.Security.CertificatePayload {
+        NetworkRequest.Security.CertificatePayload(
             subject: subject,
             validFrom: validFrom,
             validUntil: validUntil,
@@ -484,10 +484,10 @@ private struct MetricsPayload: Decodable {
         case isProxyConnection
     }
 
-    var payload: NetworkLoadMetricsPayload {
-        NetworkLoadMetricsPayload(
+    var payload: NetworkRequest.Metrics.Payload {
+        NetworkRequest.Metrics.Payload(
             networkProtocol: networkProtocol,
-            priority: priority.map { NetworkPriority($0) },
+            priority: priority.map { NetworkRequest.Priority($0) },
             connectionIdentifier: connectionIdentifier,
             remoteAddress: remoteAddress,
             requestHeaders: requestHeaders,
@@ -511,8 +511,8 @@ private struct SecurityConnectionPayload: Decodable {
         case cipher
     }
 
-    var payload: NetworkSecurityConnectionPayload {
-        NetworkSecurityConnectionPayload(protocolName: protocolName, cipher: cipher)
+    var payload: NetworkRequest.Security.ConnectionPayload {
+        NetworkRequest.Security.ConnectionPayload(protocolName: protocolName, cipher: cipher)
     }
 }
 
@@ -523,10 +523,10 @@ private struct CachedResourcePayload: Decodable {
     var bodySize: Int
     var sourceMapURL: String?
 
-    var payload: NetworkCachedResourcePayload {
-        NetworkCachedResourcePayload(
+    var payload: NetworkRequest.CachedResource.Payload {
+        NetworkRequest.CachedResource.Payload(
             url: url,
-            type: NetworkResourceType(type),
+            type: NetworkRequest.ResourceType(type),
             response: response?.payload(fallbackURL: url),
             bodySize: bodySize,
             sourceMapURL: sourceMapURL
@@ -537,8 +537,8 @@ private struct CachedResourcePayload: Decodable {
 private struct WebSocketRequestPayload: Decodable {
     var headers: [String: String]?
 
-    var payload: NetworkWebSocketRequestPayload {
-        NetworkWebSocketRequestPayload(headers: headers ?? [:])
+    var payload: NetworkRequest.WebSocket.RequestPayload {
+        NetworkRequest.WebSocket.RequestPayload(headers: headers ?? [:])
     }
 }
 
@@ -547,8 +547,8 @@ private struct WebSocketResponsePayload: Decodable {
     var statusText: String?
     var headers: [String: String]?
 
-    var payload: NetworkWebSocketResponsePayload {
-        NetworkWebSocketResponsePayload(
+    var payload: NetworkRequest.WebSocket.ResponsePayload {
+        NetworkRequest.WebSocket.ResponsePayload(
             status: status,
             statusText: statusText ?? "",
             headers: headers ?? [:]
@@ -562,8 +562,8 @@ private struct WebSocketFramePayload: Decodable {
     var payloadData: String
     var payloadLength: Int
 
-    var payload: NetworkWebSocketFramePayload {
-        NetworkWebSocketFramePayload(
+    var payload: NetworkRequest.WebSocket.FramePayload {
+        NetworkRequest.WebSocket.FramePayload(
             opcode: opcode,
             mask: mask,
             payloadData: payloadData,

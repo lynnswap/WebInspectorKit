@@ -275,7 +275,7 @@ metadata, and a `networkRequestId`.
 `WebInspectorKit`, it should be related to the console event target:
 
 ```text
-Console event target + networkRequestId -> NetworkRequestIdentifierKey
+Console event target + networkRequestId -> NetworkRequest.ID
 ```
 
 This mirrors the existing Network invariant that raw `Network.RequestId` only

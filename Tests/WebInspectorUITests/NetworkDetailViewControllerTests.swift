@@ -12,11 +12,11 @@ extension WebInspectorUIRenderingTests {
 struct NetworkDetailViewControllerTests {
     @Test
     func resourceFilterSpecialistTitlesFollowWebInspectorLabels() {
-        #expect(NetworkResourceFilter.stylesheet.localizedTitle == "CSS")
-        #expect(NetworkResourceFilter.media.localizedTitle == String(localized: "network.filter.media", bundle: .module))
+        #expect(NetworkRequest.Display.ResourceFilter.stylesheet.localizedTitle == "CSS")
+        #expect(NetworkRequest.Display.ResourceFilter.media.localizedTitle == String(localized: "network.filter.media", bundle: .module))
         #expect(localizedResourceString("network.filter.media", locale: "en") == "Media")
-        #expect(NetworkResourceFilter.script.localizedTitle == "JS")
-        #expect(NetworkResourceFilter.xhrFetch.localizedTitle == "XHR / Fetch")
+        #expect(NetworkRequest.Display.ResourceFilter.script.localizedTitle == "JS")
+        #expect(NetworkRequest.Display.ResourceFilter.xhrFetch.localizedTitle == "XHR / Fetch")
     }
 
     @Test
@@ -224,7 +224,7 @@ struct NetworkDetailViewControllerTests {
             )
         )
         request.applyResponseBody(
-            NetworkBodyPayload(
+            NetworkBody.Payload(
                 body: "sample=true\nsource=preview",
                 base64Encoded: false
             )
@@ -259,14 +259,14 @@ struct NetworkDetailViewControllerTests {
     func detailUpdatesResponseHeadersAfterSelection() async throws {
         let network = NetworkSession()
         let targetID = ProtocolTarget.ID("page")
-        let requestID = NetworkRequestIdentifier("1")
+        let requestID = NetworkRequest.ProtocolID("1")
         let key = network.applyRequestWillBeSent(
             targetID: targetID,
             requestID: requestID,
             frameID: DOMFrame.ID("main"),
             loaderID: "loader",
             documentURL: "https://example.com",
-            request: NetworkRequestPayload(
+            request: NetworkRequest.Payload(
                 url: "https://example.com/api/data.json",
                 method: "GET"
             ),
@@ -290,7 +290,7 @@ struct NetworkDetailViewControllerTests {
             targetID: targetID,
             requestID: requestID,
             resourceType: .script,
-            response: NetworkResponsePayload(
+            response: NetworkRequest.Response.Payload(
                 url: "https://example.com/api/data.json",
                 status: 200,
                 statusText: "OK",
@@ -439,7 +439,7 @@ struct NetworkDetailViewControllerTests {
         #expect(didStartFetching)
 
         request.applyResponseBody(
-            NetworkBodyPayload(
+            NetworkBody.Payload(
                 body: #"{"ok":true}"#,
                 base64Encoded: false
             )
@@ -465,7 +465,7 @@ struct NetworkDetailViewControllerTests {
             )
         )
         request.applyResponseBody(
-            NetworkBodyPayload(
+            NetworkBody.Payload(
                 body: """
                 #EXTM3U
                 #EXT-X-STREAM-INF:BANDWIDTH=1280000
@@ -564,7 +564,7 @@ struct NetworkDetailViewControllerTests {
             )
         )
         request.applyResponseBody(
-            NetworkBodyPayload(
+            NetworkBody.Payload(
                 body: "not a real movie",
                 base64Encoded: false
             )
@@ -615,7 +615,7 @@ struct NetworkDetailViewControllerTests {
             )
         )
         request.applyResponseBody(
-            NetworkBodyPayload(
+            NetworkBody.Payload(
                 body: "not a real movie",
                 base64Encoded: false
             )
@@ -668,7 +668,7 @@ struct NetworkDetailViewControllerTests {
             )
         )
         request.applyResponseBody(
-            NetworkBodyPayload(
+            NetworkBody.Payload(
                 body: pngBase64String(size: imageSize),
                 base64Encoded: true
             )
@@ -729,7 +729,7 @@ struct NetworkDetailViewControllerTests {
             )
         )
         request.applyResponseBody(
-            NetworkBodyPayload(
+            NetworkBody.Payload(
                 body: pngBase64String(size: imageSize),
                 base64Encoded: true
             )
@@ -777,7 +777,7 @@ struct NetworkDetailViewControllerTests {
             )
         )
         request.applyResponseBody(
-            NetworkBodyPayload(
+            NetworkBody.Payload(
                 body: pngBase64String(size: imageSize),
                 base64Encoded: true
             )
@@ -1052,7 +1052,7 @@ struct NetworkDetailViewControllerTests {
             targetID: firstRequest.id.targetID,
             requestID: firstRequest.id.requestID,
             resourceType: .script,
-            response: NetworkResponsePayload(
+            response: NetworkRequest.Response.Payload(
                 url: "https://example.com/first.json",
                 status: 200,
                 statusText: "OK",
@@ -1068,7 +1068,7 @@ struct NetworkDetailViewControllerTests {
             targetID: secondRequest.id.targetID,
             requestID: secondRequest.id.requestID,
             resourceType: .script,
-            response: NetworkResponsePayload(
+            response: NetworkRequest.Response.Payload(
                 url: "https://example.com/second.json",
                 status: 200,
                 statusText: "OK",
@@ -1277,14 +1277,14 @@ struct NetworkDetailViewControllerTests {
         finishes: Bool = true
     ) -> NetworkRequest? {
         let targetID = ProtocolTarget.ID("page")
-        let requestID = NetworkRequestIdentifier(rawRequestID)
+        let requestID = NetworkRequest.ProtocolID(rawRequestID)
         let key = network.applyRequestWillBeSent(
             targetID: targetID,
             requestID: requestID,
             frameID: DOMFrame.ID("main"),
             loaderID: "loader",
             documentURL: "https://example.com",
-            request: NetworkRequestPayload(
+            request: NetworkRequest.Payload(
                 url: url,
                 method: postData == nil ? "GET" : "POST",
                 headers: requestHeaders,
@@ -1297,7 +1297,7 @@ struct NetworkDetailViewControllerTests {
             targetID: targetID,
             requestID: requestID,
             resourceType: .script,
-            response: NetworkResponsePayload(
+            response: NetworkRequest.Response.Payload(
                 url: url,
                 status: 200,
                 statusText: "OK",
@@ -1317,7 +1317,7 @@ struct NetworkDetailViewControllerTests {
     }
 
     private func selectMode(
-        _ mode: NetworkDetailMode,
+        _ mode: NetworkDetailViewController.Mode,
         on viewController: NetworkDetailViewController
     ) {
         #expect(viewController.isDetailModeEnabledForTesting(mode))

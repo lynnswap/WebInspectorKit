@@ -1049,11 +1049,11 @@ func networkProtocolDispatchingKeepsEnvelopeTargetAndPayloadTargetSeparate() asy
     )
 
     try await NetworkProtocolEventDispatcher(session: network).dispatch(event)
-    let key = NetworkRequestIdentifierKey(targetID: .init("page-proxy"), requestID: .init("request-1"))
+    let key = NetworkRequest.ID(targetID: .init("page-proxy"), requestID: .init("request-1"))
     let snapshot = try #require(await network.requestSnapshot(for: key))
 
     #expect(snapshot.originatingTargetID == ProtocolTarget.ID("frame-ad"))
-    #expect(snapshot.backendResourceIdentifier == NetworkBackendResourceIdentifier(sourceProcessID: "web-content-2", resourceID: "resource-1"))
+    #expect(snapshot.backendResourceIdentifier == NetworkRequest.BackendResourceID(sourceProcessID: "web-content-2", resourceID: "resource-1"))
 }
 
 @Test
@@ -1081,11 +1081,11 @@ func networkProtocolDispatchingBuildsRedirectChainFromRepeatedRequestWillBeSent(
 
     try await NetworkProtocolEventDispatcher(session: network).dispatch(first)
     try await NetworkProtocolEventDispatcher(session: network).dispatch(redirect)
-    let key = NetworkRequestIdentifierKey(targetID: targetID, requestID: .init("request-redirect"))
+    let key = NetworkRequest.ID(targetID: targetID, requestID: .init("request-redirect"))
     let snapshot = try #require(await network.requestSnapshot(for: key))
 
     #expect(snapshot.request.url == "https://example.com")
-    #expect(snapshot.redirects.first?.id == NetworkRedirectHopIdentifier(requestKey: key, redirectIndex: 0))
+    #expect(snapshot.redirects.first?.id == NetworkRequest.RedirectHop.ID(requestKey: key, redirectIndex: 0))
     #expect(snapshot.redirects.first?.response.url == "http://example.com")
 }
 
@@ -1093,7 +1093,7 @@ func networkProtocolDispatchingBuildsRedirectChainFromRepeatedRequestWillBeSent(
 func networkProtocolDispatchingPreservesInitiatorAndLoadingFinishedMetrics() async throws {
     let network = await NetworkSession()
     let targetID = ProtocolTarget.ID("page-proxy")
-    let requestID = NetworkRequestIdentifier("request-metrics")
+    let requestID = NetworkRequest.ProtocolID("request-metrics")
 
     try await NetworkProtocolEventDispatcher(session: network).dispatch(
         ProtocolEvent(
@@ -1128,7 +1128,7 @@ func networkProtocolDispatchingPreservesInitiatorAndLoadingFinishedMetrics() asy
             )
         )
     )
-    let key = NetworkRequestIdentifierKey(targetID: targetID, requestID: requestID)
+    let key = NetworkRequest.ID(targetID: targetID, requestID: requestID)
     let snapshot = try #require(await network.requestSnapshot(for: key))
 
     #expect(snapshot.initiator?.type == .parser)
@@ -1148,7 +1148,7 @@ func networkProtocolDispatchingPreservesInitiatorAndLoadingFinishedMetrics() asy
 func networkProtocolDispatchingHandlesWebSocketLifecycleEvents() async throws {
     let network = await NetworkSession()
     let targetID = ProtocolTarget.ID("page-proxy")
-    let requestID = NetworkRequestIdentifier("ws.1")
+    let requestID = NetworkRequest.ProtocolID("ws.1")
 
     for event in [
         ProtocolEvent(sequence: 1, domain: .network, method: "Network.webSocketCreated", targetID: targetID, paramsData: Data(#"{"requestId":"ws.1","url":"wss://example.com/socket"}"#.utf8)),
@@ -1161,7 +1161,7 @@ func networkProtocolDispatchingHandlesWebSocketLifecycleEvents() async throws {
     ] {
         try await NetworkProtocolEventDispatcher(session: network).dispatch(event)
     }
-    let key = NetworkRequestIdentifierKey(targetID: targetID, requestID: requestID)
+    let key = NetworkRequest.ID(targetID: targetID, requestID: requestID)
     let snapshot = try #require(await network.requestSnapshot(for: key))
 
     #expect(snapshot.webSocketHandshakeRequest?.headers["Upgrade"] == "websocket")
@@ -1606,7 +1606,7 @@ func domProtocolDispatchingSubframeCommitDoesNotConsumeCurrentMainPage() async t
 
 @Test
 func networkCommandIntentRoutesThroughRequestTarget() throws {
-    let requestKey = NetworkRequestIdentifierKey(
+    let requestKey = NetworkRequest.ID(
         targetID: .init("frame-ad"),
         requestID: .init("request-1")
     )

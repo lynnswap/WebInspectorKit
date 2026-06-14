@@ -5,9 +5,10 @@ import ObservationBridge
 import SyntaxEditorUI
 import UIKit
 
-struct NetworkBodyPreviewMetadata: Equatable {
-    var mimeType: String?
-    var url: String?
+extension NetworkBodyViewController {
+    struct PreviewMetadata: Equatable {        var mimeType: String?
+        var url: String?
+    }
 }
 
 @MainActor
@@ -48,7 +49,7 @@ final class NetworkBodyViewController: UIViewController {
     private var bodyObservation: PortableObservationTracking.Token?
     private weak var scrollEdgeSink: (any NetworkBodyScrollEdgeSink)?
     private weak var body: NetworkBody?
-    private var metadata: NetworkBodyPreviewMetadata?
+    private var metadata: NetworkBodyViewController.PreviewMetadata?
     private var hasDisplayedBody = false
     private var mediaPlayerViewController: AVPlayerViewController?
     private var mediaTemporaryFile: MediaTemporaryFile?
@@ -95,7 +96,7 @@ final class NetworkBodyViewController: UIViewController {
         display(body: body, metadata: nil)
     }
 
-    func display(body: NetworkBody?, metadata: NetworkBodyPreviewMetadata?) {
+    func display(body: NetworkBody?, metadata: NetworkBodyViewController.PreviewMetadata?) {
         guard hasDisplayedBody == false || self.body !== body else {
             guard self.metadata != metadata else {
                 return
@@ -203,7 +204,7 @@ final class NetworkBodyViewController: UIViewController {
 
     private func renderBody(_ body: NetworkBody?) {
         let displayText: String
-        let syntaxKind: NetworkBodySyntaxKind
+        let syntaxKind: NetworkBody.SyntaxKind
         guard let body else {
             hideMediaPreview()
             applyBodyDisplay(
@@ -238,7 +239,7 @@ final class NetworkBodyViewController: UIViewController {
         applyBodyDisplay(text: displayText, syntaxKind: syntaxKind)
     }
 
-    private func localizedDescription(for error: NetworkBodyFetchError) -> String {
+    private func localizedDescription(for error: NetworkBody.FetchError) -> String {
         switch error {
         case .unavailable:
             String(localized: "network.body.fetch.error.unavailable", bundle: .module)
@@ -251,7 +252,7 @@ final class NetworkBodyViewController: UIViewController {
 
     private func applyBodyDisplay(
         text: String,
-        syntaxKind: NetworkBodySyntaxKind
+        syntaxKind: NetworkBody.SyntaxKind
     ) {
         let language = syntaxKind.language
         if syntaxModel.language != language {
@@ -281,8 +282,8 @@ final class NetworkBodyViewController: UIViewController {
         return true
     }
 
-    private func mediaPayload(for body: NetworkBody) -> NetworkBodyMediaPayload? {
-        guard let previewKind = NetworkMediaPreviewSupport.previewKind(
+    private func mediaPayload(for body: NetworkBody) -> NetworkBodyViewController.MediaPayload? {
+        guard let previewKind = NetworkRequest.Display.MediaPreviewSupport.previewKind(
             mimeType: metadata?.mimeType,
             url: metadata?.url
         ) else {
@@ -546,9 +547,10 @@ extension NetworkBodyViewController: UIScrollViewDelegate {
     }
 }
 
-private enum NetworkBodyMediaPayload {
-    case image(UIImage)
-    case movie(URL)
+extension NetworkBodyViewController {
+    private enum MediaPayload {        case image(UIImage)
+        case movie(URL)
+    }
 }
 
 private struct ImagePreviewLayoutState {
@@ -597,7 +599,7 @@ private func playableRemoteMediaURL(_ url: String?) -> URL? {
 }
 
 private func mediaFileExtension(mimeType: String?, url: String?) -> String {
-    NetworkMediaPreviewSupport.temporaryFileExtension(mimeType: mimeType, url: url)
+    NetworkRequest.Display.MediaPreviewSupport.temporaryFileExtension(mimeType: mimeType, url: url)
 }
 
 private func removeTemporaryMediaFile(at url: URL?) {
@@ -607,7 +609,7 @@ private func removeTemporaryMediaFile(at url: URL?) {
     try? FileManager.default.removeItem(at: url)
 }
 
-private extension NetworkBodySyntaxKind {
+private extension NetworkBody.SyntaxKind {
     var language: SyntaxLanguage {
         switch self {
         case .plainText:

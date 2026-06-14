@@ -69,7 +69,7 @@ package final class NetworkDetailViewController: UIViewController {
         }
         return controller
     }()
-    private var previewRoles: [NetworkBodyRole] = []
+    private var previewRoles: [NetworkBody.Role] = []
     private var hasBoundSelectedRequest = false
     private weak var observedRequest: NetworkRequest?
     private var bodyTopToPreviewContainerConstraint: NSLayoutConstraint?
@@ -91,12 +91,12 @@ package final class NetworkDetailViewController: UIViewController {
         view.isHidden = true
         return view
     }()
-    fileprivate var mode: NetworkDetailMode = .headers
-    fileprivate var previewRole: NetworkBodyRole = .response
+    fileprivate var mode: NetworkDetailViewController.Mode = .headers
+    fileprivate var previewRole: NetworkBody.Role = .response
 
     package init(
         model: NetworkPanelModel,
-        initialMode: NetworkDetailMode = .headers
+        initialMode: NetworkDetailViewController.Mode = .headers
     ) {
         self.model = model
         mode = initialMode
@@ -283,7 +283,7 @@ package final class NetworkDetailViewController: UIViewController {
         headersTextView.render(request: request)
     }
 
-    private func setMode(_ nextMode: NetworkDetailMode) {
+    private func setMode(_ nextMode: NetworkDetailViewController.Mode) {
         guard mode != nextMode else {
             renderModeControl()
             return
@@ -293,7 +293,7 @@ package final class NetworkDetailViewController: UIViewController {
         rebindSelectedRequestRendering()
     }
 
-    private func setPreviewRole(_ nextRole: NetworkBodyRole) {
+    private func setPreviewRole(_ nextRole: NetworkBody.Role) {
         guard previewRole != nextRole else {
             renderPreviewRoleControl(
                 roles: previewRoles,
@@ -361,8 +361,8 @@ package final class NetworkDetailViewController: UIViewController {
         bindResponseBodyFetchObservationIfNeeded(for: request, role: role)
     }
 
-    private func availablePreviewRoles(in request: NetworkRequest) -> [NetworkBodyRole] {
-        var roles: [NetworkBodyRole] = []
+    private func availablePreviewRoles(in request: NetworkRequest) -> [NetworkBody.Role] {
+        var roles: [NetworkBody.Role] = []
         if request.requestBody != nil {
             roles.append(.request)
         }
@@ -372,17 +372,17 @@ package final class NetworkDetailViewController: UIViewController {
         return roles
     }
 
-    private func preferredPreviewRole(from roles: [NetworkBodyRole]) -> NetworkBodyRole? {
+    private func preferredPreviewRole(from roles: [NetworkBody.Role]) -> NetworkBody.Role? {
         roles.contains(.response) ? .response : roles.first
     }
 
-    private func selectedPreviewRole(from roles: [NetworkBodyRole]) -> NetworkBodyRole? {
+    private func selectedPreviewRole(from roles: [NetworkBody.Role]) -> NetworkBody.Role? {
         roles.contains(previewRole) ? previewRole : preferredPreviewRole(from: roles)
     }
 
     private func renderPreviewRoleControl(
-        roles: [NetworkBodyRole],
-        selectedRole: NetworkBodyRole?
+        roles: [NetworkBody.Role],
+        selectedRole: NetworkBody.Role?
     ) {
         previewRoles = roles
         let isControlVisible = roles.count >= 2
@@ -398,7 +398,7 @@ package final class NetworkDetailViewController: UIViewController {
 
     private func bindResponseBodyFetchObservationIfNeeded(
         for request: NetworkRequest,
-        role: NetworkBodyRole
+        role: NetworkBody.Role
     ) {
         guard role == .response else {
             unbindResponseBodyFetchObservation()
@@ -423,7 +423,7 @@ package final class NetworkDetailViewController: UIViewController {
         model.fetchResponseBodyIfNeeded(for: request)
     }
 
-    private func body(in request: NetworkRequest, for role: NetworkBodyRole) -> NetworkBody? {
+    private func body(in request: NetworkRequest, for role: NetworkBody.Role) -> NetworkBody? {
         switch role {
         case .request:
             request.requestBody
@@ -434,16 +434,16 @@ package final class NetworkDetailViewController: UIViewController {
 
     private func previewMetadata(
         in request: NetworkRequest,
-        for role: NetworkBodyRole
-    ) -> NetworkBodyPreviewMetadata {
+        for role: NetworkBody.Role
+    ) -> NetworkBodyViewController.PreviewMetadata {
         switch role {
         case .request:
-            return NetworkBodyPreviewMetadata(
+            return NetworkBodyViewController.PreviewMetadata(
                 mimeType: mimeType(from: nil, headers: request.request.headers),
                 url: request.request.url
             )
         case .response:
-            return NetworkBodyPreviewMetadata(
+            return NetworkBodyViewController.PreviewMetadata(
                 mimeType: mimeType(from: request.response?.mimeType, headers: request.response?.headers ?? [:]),
                 url: request.response?.url ?? request.request.url
             )
@@ -490,11 +490,11 @@ extension NetworkDetailViewController {
         bodyViewController
     }
 
-    var currentModeForTesting: NetworkDetailMode {
+    var currentModeForTesting: NetworkDetailViewController.Mode {
         mode
     }
 
-    var currentPreviewRoleForTesting: NetworkBodyRole {
+    var currentPreviewRoleForTesting: NetworkBody.Role {
         previewRole
     }
 
@@ -523,19 +523,19 @@ extension NetworkDetailViewController {
         responseBodyFetchObservationBinding.observationDelivery
     }
 
-    func isDetailModeEnabledForTesting(_ mode: NetworkDetailMode) -> Bool {
+    func isDetailModeEnabledForTesting(_ mode: NetworkDetailViewController.Mode) -> Bool {
         modeControlController.isModeEnabledForTesting(mode)
     }
 
-    func selectModeForTesting(_ mode: NetworkDetailMode) {
+    func selectModeForTesting(_ mode: NetworkDetailViewController.Mode) {
         modeControlController.selectModeForTesting(mode)
     }
 
-    func setModeForTesting(_ mode: NetworkDetailMode) {
+    func setModeForTesting(_ mode: NetworkDetailViewController.Mode) {
         setMode(mode)
     }
 
-    func selectPreviewRoleForTesting(_ role: NetworkBodyRole) {
+    func selectPreviewRoleForTesting(_ role: NetworkBody.Role) {
         previewRoleControlController.selectRoleForTesting(role)
     }
 }

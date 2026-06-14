@@ -114,7 +114,7 @@ private final class NetworkListColumnNavigationController: UINavigationControlle
 
 @MainActor
 private func makeNetworkSplitPreviewController(
-    initialMode: NetworkDetailMode = .headers,
+    initialMode: NetworkDetailViewController.Mode = .headers,
     selectedDisplayName: String? = nil
 ) -> NetworkCompactNavigationController {
     let model = NetworkPreviewFixtures.makePanelModel(mode: .detail)

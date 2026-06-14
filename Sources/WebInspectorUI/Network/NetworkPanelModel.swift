@@ -34,38 +34,38 @@ package final class NetworkPanelModel {
     package let network: NetworkSession
     package var selectedRequestID: NetworkRequest.ID?
     package var searchText: String = ""
-    package var activeResourceFilters: Set<NetworkResourceFilter> = [] {
+    package var activeResourceFilters: Set<NetworkRequest.Display.ResourceFilter> = [] {
         didSet {
-            let normalized = NetworkResourceFilter.normalizedSelection(activeResourceFilters)
+            let normalized = NetworkRequest.Display.ResourceFilter.normalizedSelection(activeResourceFilters)
             if effectiveResourceFilters != normalized {
                 effectiveResourceFilters = normalized
             }
         }
     }
-    package private(set) var effectiveResourceFilters: Set<NetworkResourceFilter> = []
+    package private(set) var effectiveResourceFilters: Set<NetworkRequest.Display.ResourceFilter> = []
     @ObservationIgnored private let responseBodyFetchCoordinator: NetworkResponseBodyFetchCoordinator
-    @ObservationIgnored private let displayProjectionCache: NetworkRequestDisplayProjectionCache
+    @ObservationIgnored private let displayProjectionCache: NetworkRequest.Display.ProjectionCache
 
     package init(
         network: NetworkSession,
         responseBodyFetchAction: ResponseBodyFetchAction? = nil,
-        mediaPreviewClassifier: @escaping NetworkMediaPreviewClassifier = { mimeType, url in
-            NetworkMediaPreviewSupport.classification(mimeType: mimeType, url: url)
+        mediaPreviewClassifier: @escaping NetworkRequest.Display.MediaPreviewClassifier = { mimeType, url in
+            NetworkRequest.Display.MediaPreviewSupport.classification(mimeType: mimeType, url: url)
         }
     ) {
         self.network = network
         self.responseBodyFetchCoordinator = NetworkResponseBodyFetchCoordinator(action: responseBodyFetchAction)
-        self.displayProjectionCache = NetworkRequestDisplayProjectionCache(
+        self.displayProjectionCache = NetworkRequest.Display.ProjectionCache(
             mediaPreviewClassifier: mediaPreviewClassifier
         )
     }
 
-    package var displayRows: [NetworkRequestDisplayProjection] {
+    package var displayRows: [NetworkRequest.Display.Projection] {
         let trimmedQuery = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let requests = network.requests
         let effectiveResourceFilters = effectiveResourceFilters
         displayProjectionCache.prune(keeping: Set(requests.map(\.id)))
-        let rows = requests.compactMap { request -> NetworkRequestDisplayProjection? in
+        let rows = requests.compactMap { request -> NetworkRequest.Display.Projection? in
             if effectiveResourceFilters.isEmpty == false {
                 let resourceFilter = displayProjectionCache.resourceFilter(for: request)
                 guard effectiveResourceFilters.contains(resourceFilter) else {
@@ -104,7 +104,7 @@ package final class NetworkPanelModel {
         network.request(for: id)
     }
 
-    package func displayProjection(for id: NetworkRequest.ID) -> NetworkRequestDisplayProjection? {
+    package func displayProjection(for id: NetworkRequest.ID) -> NetworkRequest.Display.Projection? {
         guard let request = network.request(for: id) else {
             return nil
         }
@@ -122,14 +122,14 @@ package final class NetworkPanelModel {
         searchText = text
     }
 
-    package func setResourceFilter(_ filter: NetworkResourceFilter, enabled: Bool) {
+    package func setResourceFilter(_ filter: NetworkRequest.Display.ResourceFilter, enabled: Bool) {
         var nextFilters = activeResourceFilters
         if enabled {
             nextFilters.insert(filter)
         } else {
             nextFilters.remove(filter)
         }
-        nextFilters = NetworkResourceFilter.normalizedSelection(nextFilters)
+        nextFilters = NetworkRequest.Display.ResourceFilter.normalizedSelection(nextFilters)
         guard nextFilters != activeResourceFilters else {
             return
         }

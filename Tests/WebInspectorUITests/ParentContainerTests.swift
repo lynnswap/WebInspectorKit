@@ -419,14 +419,14 @@ struct ParentContainerTests {
         url: String
     ) -> NetworkRequest? {
         let targetID = ProtocolTarget.ID("page")
-        let requestID = NetworkRequestIdentifier(rawRequestID)
+        let requestID = NetworkRequest.ProtocolID(rawRequestID)
         let key = network.applyRequestWillBeSent(
             targetID: targetID,
             requestID: requestID,
             frameID: DOMFrame.ID("main"),
             loaderID: "loader",
             documentURL: "https://example.com",
-            request: NetworkRequestPayload(
+            request: NetworkRequest.Payload(
                 url: url,
                 method: "GET"
             ),
@@ -437,7 +437,7 @@ struct ParentContainerTests {
             targetID: targetID,
             requestID: requestID,
             resourceType: .script,
-            response: NetworkResponsePayload(
+            response: NetworkRequest.Response.Payload(
                 url: url,
                 status: 200,
                 statusText: "OK",

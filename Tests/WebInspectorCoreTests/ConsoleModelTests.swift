@@ -17,7 +17,7 @@ func consoleSessionAppendsMessagesUpdatesTargetScopedRepeatsAndClearsByTarget() 
             level: .warning,
             text: "Repeated warning",
             type: .log,
-            networkRequestID: NetworkRequestIdentifier("request-1")
+            networkRequestID: NetworkRequest.ProtocolID("request-1")
         ),
         targetID: pageTargetID
     )
@@ -31,7 +31,7 @@ func consoleSessionAppendsMessagesUpdatesTargetScopedRepeatsAndClearsByTarget() 
     let pageMessage = try #require(snapshot.messagesByID[pageMessageID])
     #expect(pageMessage.repeatCount == 3)
     #expect(pageMessage.timestamp == 42)
-    #expect(pageMessage.networkRequestKey == NetworkRequestIdentifierKey(targetID: pageTargetID, requestID: .init("request-1")))
+    #expect(pageMessage.networkRequestKey == NetworkRequest.ID(targetID: pageTargetID, requestID: .init("request-1")))
     #expect(snapshot.warningCount == 3)
     #expect(snapshot.errorCount == 1)
     #expect(snapshot.warningCountByTargetID[pageTargetID] == 3)

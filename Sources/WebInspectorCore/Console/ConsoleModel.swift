@@ -34,7 +34,7 @@ package final class ConsoleMessage {
     package var repeatCount: Int
     package var parameters: [RuntimeRemoteObject]
     package var stackTrace: ConsoleStackTracePayload?
-    package var networkRequestKey: NetworkRequestIdentifierKey?
+    package var networkRequestKey: NetworkRequest.ID?
     package var timestamp: Double?
 
     package init(
@@ -55,7 +55,7 @@ package final class ConsoleMessage {
         self.parameters = parameters ?? Self.parameterObjects(from: payload.parameters, targetID: targetID)
         self.stackTrace = payload.stackTrace
         self.networkRequestKey = payload.networkRequestID.map {
-            NetworkRequestIdentifierKey(targetID: targetID, requestID: $0)
+            NetworkRequest.ID(targetID: targetID, requestID: $0)
         }
         self.timestamp = payload.timestamp
     }
@@ -90,7 +90,7 @@ package struct ConsoleMessageSnapshot: Equatable, Sendable {
     package var repeatCount: Int
     package var parameters: [RuntimeRemoteObjectPayload]
     package var stackTrace: ConsoleStackTracePayload?
-    package var networkRequestKey: NetworkRequestIdentifierKey?
+    package var networkRequestKey: NetworkRequest.ID?
     package var timestamp: Double?
 }
 

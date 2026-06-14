@@ -205,28 +205,28 @@ func mediaFilterIncludesPreviewableMediaResponses() async throws {
 
 @Test
 func mediaPreviewSupportClassifiesAVIFAndExcludesSVG() {
-    #expect(NetworkMediaPreviewSupport.previewKind(mimeType: "image/avif", url: nil) == .image)
-    #expect(NetworkMediaPreviewSupport.previewKind(mimeType: nil, url: "https://cdn.example.com/photo.avif") == .image)
-    #expect(NetworkMediaPreviewSupport.previewKind(mimeType: "image/apng", url: nil) == .image)
-    #expect(NetworkMediaPreviewSupport.previewKind(mimeType: nil, url: "https://cdn.example.com/animated.apng") == .image)
-    #expect(NetworkMediaPreviewSupport.previewKind(mimeType: "application/octet-stream", url: "https://cdn.example.com/animated.apng") == .image)
-    #expect(NetworkMediaPreviewSupport.previewKind(mimeType: "image/x-png", url: nil) == .image)
-    #expect(NetworkMediaPreviewSupport.previewKind(mimeType: "image/pjpeg", url: nil) == .image)
-    #expect(NetworkMediaPreviewSupport.previewKind(mimeType: "image/x-unknown", url: "https://cdn.example.com/photo.png") == .image)
-    #expect(NetworkMediaPreviewSupport.previewKind(mimeType: "image/svg+xml", url: "https://cdn.example.com/icon.svg") == nil)
-    #expect(NetworkMediaPreviewSupport.classification(mimeType: "image/svg+xml", url: "https://cdn.example.com/icon.svg") == .notPreviewable)
-    #expect(NetworkMediaPreviewSupport.previewKind(mimeType: "text/javascript", url: "https://cdn.example.com/player.mp4") == nil)
-    #expect(NetworkMediaPreviewSupport.previewKind(mimeType: "text/css", url: "https://cdn.example.com/theme.png") == nil)
-    #expect(NetworkMediaPreviewSupport.previewKind(mimeType: "application/octet-stream", url: "https://api.example.com/download") == nil)
-    #expect(NetworkMediaPreviewSupport.temporaryFileExtension(
+    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: "image/avif", url: nil) == .image)
+    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: nil, url: "https://cdn.example.com/photo.avif") == .image)
+    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: "image/apng", url: nil) == .image)
+    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: nil, url: "https://cdn.example.com/animated.apng") == .image)
+    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: "application/octet-stream", url: "https://cdn.example.com/animated.apng") == .image)
+    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: "image/x-png", url: nil) == .image)
+    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: "image/pjpeg", url: nil) == .image)
+    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: "image/x-unknown", url: "https://cdn.example.com/photo.png") == .image)
+    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: "image/svg+xml", url: "https://cdn.example.com/icon.svg") == nil)
+    #expect(NetworkRequest.Display.MediaPreviewSupport.classification(mimeType: "image/svg+xml", url: "https://cdn.example.com/icon.svg") == .notPreviewable)
+    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: "text/javascript", url: "https://cdn.example.com/player.mp4") == nil)
+    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: "text/css", url: "https://cdn.example.com/theme.png") == nil)
+    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: "application/octet-stream", url: "https://api.example.com/download") == nil)
+    #expect(NetworkRequest.Display.MediaPreviewSupport.temporaryFileExtension(
         mimeType: "video/mp4",
         url: "https://api.example.com/download.php"
     ) == "mp4")
-    #expect(NetworkMediaPreviewSupport.temporaryFileExtension(
+    #expect(NetworkRequest.Display.MediaPreviewSupport.temporaryFileExtension(
         mimeType: "application/vnd.apple.mpegurl",
         url: "https://api.example.com/download.php"
     ) == "m3u8")
-    #expect(NetworkMediaPreviewSupport.temporaryFileExtension(
+    #expect(NetworkRequest.Display.MediaPreviewSupport.temporaryFileExtension(
         mimeType: "application/octet-stream",
         url: "https://cdn.example.com/player.mp4"
     ) == "mp4")
@@ -252,7 +252,7 @@ func displayProjectionCacheInvalidatesWhenResponseMIMEBecomesPreviewable() async
         targetID: requestID.targetID,
         requestID: requestID.requestID,
         resourceType: .xhr,
-        response: NetworkResponsePayload(
+        response: NetworkRequest.Response.Payload(
             url: "https://api.example.com/avatar",
             status: 200,
             statusText: "OK",
@@ -287,7 +287,7 @@ func displayProjectionCacheInvalidatesStatusSeverity() async throws {
         targetID: requestID.targetID,
         requestID: requestID.requestID,
         resourceType: .xhr,
-        response: NetworkResponsePayload(
+        response: NetworkRequest.Response.Payload(
             url: "https://api.example.com/data.json",
             status: 204,
             statusText: "No Content",
@@ -304,14 +304,14 @@ func displayProjectionCacheInvalidatesStatusSeverity() async throws {
 func displayProjectionCacheInvalidatesSearchFields() async throws {
     let network = NetworkSession()
     let targetID = ProtocolTarget.ID("page")
-    let rawRequestID = NetworkRequestIdentifier("1")
+    let rawRequestID = NetworkRequest.ProtocolID("1")
     let requestID = network.applyRequestWillBeSent(
         targetID: targetID,
         requestID: rawRequestID,
         frameID: DOMFrame.ID("main"),
         loaderID: "loader",
         documentURL: "https://example.com",
-        request: NetworkRequestPayload(url: "https://api.example.com/old", method: "POST"),
+        request: NetworkRequest.Payload(url: "https://api.example.com/old", method: "POST"),
         resourceType: .xhr,
         timestamp: 1
     )
@@ -326,9 +326,9 @@ func displayProjectionCacheInvalidatesSearchFields() async throws {
         frameID: DOMFrame.ID("main"),
         loaderID: "loader",
         documentURL: "https://example.com",
-        request: NetworkRequestPayload(url: "https://api.example.com/new-endpoint", method: "PATCH"),
+        request: NetworkRequest.Payload(url: "https://api.example.com/new-endpoint", method: "PATCH"),
         resourceType: .xhr,
-        redirectResponse: NetworkResponsePayload(url: "https://api.example.com/old", status: 302),
+        redirectResponse: NetworkRequest.Response.Payload(url: "https://api.example.com/old", status: 302),
         timestamp: 2
     )
 
@@ -343,7 +343,7 @@ func displayProjectionCacheInvalidatesSearchFields() async throws {
         targetID: targetID,
         requestID: rawRequestID,
         resourceType: .xhr,
-        response: NetworkResponsePayload(
+        response: NetworkRequest.Response.Payload(
             url: "https://api.example.com/new-endpoint",
             status: 201,
             statusText: "Created",
@@ -362,14 +362,14 @@ func displayProjectionCacheInvalidatesSearchFields() async throws {
 func displayProjectionCacheInvalidatesWhenRawMIMETypeAppears() async throws {
     let network = NetworkSession()
     let targetID = ProtocolTarget.ID("page")
-    let rawRequestID = NetworkRequestIdentifier("1")
+    let rawRequestID = NetworkRequest.ProtocolID("1")
     let requestID = network.applyRequestWillBeSent(
         targetID: targetID,
         requestID: rawRequestID,
         frameID: DOMFrame.ID("main"),
         loaderID: "loader",
         documentURL: "https://example.com",
-        request: NetworkRequestPayload(url: "https://api.example.com/resource", method: "GET"),
+        request: NetworkRequest.Payload(url: "https://api.example.com/resource", method: "GET"),
         resourceType: .xhr,
         timestamp: 1
     )
@@ -377,7 +377,7 @@ func displayProjectionCacheInvalidatesWhenRawMIMETypeAppears() async throws {
         targetID: targetID,
         requestID: rawRequestID,
         resourceType: .xhr,
-        response: NetworkResponsePayload(
+        response: NetworkRequest.Response.Payload(
             url: "https://api.example.com/resource",
             status: 200,
             statusText: "OK",
@@ -396,7 +396,7 @@ func displayProjectionCacheInvalidatesWhenRawMIMETypeAppears() async throws {
         targetID: targetID,
         requestID: rawRequestID,
         resourceType: .xhr,
-        response: NetworkResponsePayload(
+        response: NetworkRequest.Response.Payload(
             url: "https://api.example.com/resource",
             status: 200,
             statusText: "OK",
@@ -427,7 +427,7 @@ func displayProjectionCacheReusesMediaClassificationForUnchangedRequests() async
         network: network,
         mediaPreviewClassifier: { mimeType, url in
             classificationCount += 1
-            return NetworkMediaPreviewSupport.classification(mimeType: mimeType, url: url)
+            return NetworkRequest.Display.MediaPreviewSupport.classification(mimeType: mimeType, url: url)
         }
     )
     model.setResourceFilter(.media, enabled: true)
@@ -468,7 +468,7 @@ func displayProjectionCacheSkipsMediaClassificationWhenUnfiltered() async throws
         network: network,
         mediaPreviewClassifier: { mimeType, url in
             classificationCount += 1
-            return NetworkMediaPreviewSupport.classification(mimeType: mimeType, url: url)
+            return NetworkRequest.Display.MediaPreviewSupport.classification(mimeType: mimeType, url: url)
         }
     )
 
@@ -546,7 +546,7 @@ private func applyRequest(
     to network: NetworkSession,
     requestID rawRequestID: String,
     url: String,
-    resourceType: NetworkResourceType,
+    resourceType: NetworkRequest.ResourceType,
     mimeType: String?,
     responseHeaders: [String: String] = [:],
     status: Int = 200,
@@ -554,14 +554,14 @@ private func applyRequest(
     timestamp: Double
 ) -> NetworkRequest.ID {
     let targetID = ProtocolTarget.ID("page")
-    let requestID = NetworkRequestIdentifier(rawRequestID)
+    let requestID = NetworkRequest.ProtocolID(rawRequestID)
     let key = network.applyRequestWillBeSent(
         targetID: targetID,
         requestID: requestID,
         frameID: DOMFrame.ID("main"),
         loaderID: "loader",
         documentURL: "https://example.com",
-        request: NetworkRequestPayload(url: url),
+        request: NetworkRequest.Payload(url: url),
         resourceType: resourceType,
         timestamp: timestamp
     )
@@ -569,7 +569,7 @@ private func applyRequest(
         targetID: targetID,
         requestID: requestID,
         resourceType: resourceType,
-        response: NetworkResponsePayload(
+        response: NetworkRequest.Response.Payload(
             url: url,
             status: status,
             statusText: statusText,
@@ -592,16 +592,16 @@ private func applyPendingRequest(
     to network: NetworkSession,
     requestID rawRequestID: String,
     url: String,
-    resourceType: NetworkResourceType,
+    resourceType: NetworkRequest.ResourceType,
     timestamp: Double
 ) -> NetworkRequest.ID {
     network.applyRequestWillBeSent(
         targetID: ProtocolTarget.ID("page"),
-        requestID: NetworkRequestIdentifier(rawRequestID),
+        requestID: NetworkRequest.ProtocolID(rawRequestID),
         frameID: DOMFrame.ID("main"),
         loaderID: "loader",
         documentURL: "https://example.com",
-        request: NetworkRequestPayload(url: url),
+        request: NetworkRequest.Payload(url: url),
         resourceType: resourceType,
         timestamp: timestamp
     )

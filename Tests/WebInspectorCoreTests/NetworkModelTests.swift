@@ -5,7 +5,7 @@ import WebInspectorTransport
 @Test
 func networkRequestIdentityIsScopedByTargetAndRequestID() async throws {
     let session = await NetworkSession()
-    let requestID = NetworkRequestIdentifier("0.42")
+    let requestID = NetworkRequest.ProtocolID("0.42")
     let pageTargetID = ProtocolTarget.ID("page")
     let frameTargetID = ProtocolTarget.ID("frame")
 
@@ -39,7 +39,7 @@ func networkRequestIdentityIsScopedByTargetAndRequestID() async throws {
 func networkRequestIdentityDoesNotIncludeRedirectIndex() async throws {
     let session = await NetworkSession()
     let targetID = ProtocolTarget.ID("page")
-    let requestID = NetworkRequestIdentifier("0.43")
+    let requestID = NetworkRequest.ProtocolID("0.43")
 
     let key = await session.applyRequestWillBeSent(
         targetID: targetID,
@@ -72,8 +72,8 @@ func requestKeepsEnvelopeTargetOriginatingTargetAndBackendResourceIdentitySepara
     let session = await NetworkSession()
     let pageProxyTargetID = ProtocolTarget.ID("page-proxy")
     let frameOriginTargetID = ProtocolTarget.ID("frame-ad")
-    let requestID = NetworkRequestIdentifier("0.44")
-    let backendResourceIdentifier = NetworkBackendResourceIdentifier(
+    let requestID = NetworkRequest.ProtocolID("0.44")
+    let backendResourceIdentifier = NetworkRequest.BackendResourceID(
         sourceProcessID: "web-content-2",
         resourceID: "resource-44"
     )
@@ -100,8 +100,8 @@ func requestKeepsEnvelopeTargetOriginatingTargetAndBackendResourceIdentitySepara
 func backendResourceIdentifierPropagatesToLazyCommandIntents() async throws {
     let session = await NetworkSession()
     let targetID = ProtocolTarget.ID("page-proxy")
-    let requestID = NetworkRequestIdentifier("0.45")
-    let backendResourceIdentifier = NetworkBackendResourceIdentifier(
+    let requestID = NetworkRequest.ProtocolID("0.45")
+    let backendResourceIdentifier = NetworkRequest.BackendResourceID(
         sourceProcessID: "web-content-3",
         resourceID: "resource-45"
     )
@@ -138,7 +138,7 @@ func backendResourceIdentifierPropagatesToLazyCommandIntents() async throws {
 func requestPostDataCreatesObservableRequestBody() throws {
     let session = NetworkSession()
     let targetID = ProtocolTarget.ID("page")
-    let requestID = NetworkRequestIdentifier("0.body")
+    let requestID = NetworkRequest.ProtocolID("0.body")
 
     let key = session.applyRequestWillBeSent(
         targetID: targetID,
@@ -166,7 +166,7 @@ func requestPostDataCreatesObservableRequestBody() throws {
 func responseReceivedCreatesFetchableResponseBodyAndAppliesFetchedContent() async throws {
     let session = NetworkSession()
     let targetID = ProtocolTarget.ID("page")
-    let requestID = NetworkRequestIdentifier("0.response-body")
+    let requestID = NetworkRequest.ProtocolID("0.response-body")
 
     let key = session.applyRequestWillBeSent(
         targetID: targetID,
@@ -195,7 +195,7 @@ func responseReceivedCreatesFetchableResponseBodyAndAppliesFetchedContent() asyn
     #expect(body.needsFetch)
 
     request.applyResponseBody(
-        NetworkBodyPayload(
+        NetworkBody.Payload(
             body: #"{"name":"codex","value":42}"#,
             base64Encoded: false
         )
@@ -231,7 +231,7 @@ func preparedResponseBodyTextInvalidatesWhenFetchedContentChanges() async throws
     #expect(body.textRepresentation?.contains(#""first""#) == true)
 
     body.apply(
-        NetworkBodyPayload(
+        NetworkBody.Payload(
             body: #"{"second":true}"#,
             base64Encoded: false
         )
@@ -275,7 +275,7 @@ func invalidJSONLookingPlainTextKeepsPlainTextSyntax() async {
 func responseBodyFetchFailureIsTerminal() throws {
     let session = NetworkSession()
     let targetID = ProtocolTarget.ID("page")
-    let requestID = NetworkRequestIdentifier("0.response-body-failure")
+    let requestID = NetworkRequest.ProtocolID("0.response-body-failure")
 
     let key = session.applyRequestWillBeSent(
         targetID: targetID,
@@ -310,7 +310,7 @@ func responseBodyFetchFailureIsTerminal() throws {
 func failedNetworkRequestCannotFetchResponseBody() throws {
     let session = NetworkSession()
     let targetID = ProtocolTarget.ID("page")
-    let requestID = NetworkRequestIdentifier("0.failed-response-body")
+    let requestID = NetworkRequest.ProtocolID("0.failed-response-body")
 
     let key = session.applyRequestWillBeSent(
         targetID: targetID,
@@ -345,9 +345,9 @@ func failedNetworkRequestCannotFetchResponseBody() throws {
 func backendResourceIdentifierDoesNotChangeRequestGrouping() async throws {
     let session = await NetworkSession()
     let targetID = ProtocolTarget.ID("page-proxy")
-    let requestID = NetworkRequestIdentifier("0.46")
-    let firstBackendIdentifier = NetworkBackendResourceIdentifier(sourceProcessID: "process-a", resourceID: "resource-a")
-    let secondBackendIdentifier = NetworkBackendResourceIdentifier(sourceProcessID: "process-b", resourceID: "resource-b")
+    let requestID = NetworkRequest.ProtocolID("0.46")
+    let firstBackendIdentifier = NetworkRequest.BackendResourceID(sourceProcessID: "process-a", resourceID: "resource-a")
+    let secondBackendIdentifier = NetworkRequest.BackendResourceID(sourceProcessID: "process-b", resourceID: "resource-b")
 
     let key = await session.applyRequestWillBeSent(
         targetID: targetID,
@@ -381,7 +381,7 @@ func backendResourceIdentifierDoesNotChangeRequestGrouping() async throws {
 func redirectUpdatesSameRequestAndCreatesDerivedHopIdentity() async throws {
     let session = await NetworkSession()
     let targetID = ProtocolTarget.ID("page")
-    let requestID = NetworkRequestIdentifier("0.99")
+    let requestID = NetworkRequest.ProtocolID("0.99")
 
     let key = await session.applyRequestWillBeSent(
         targetID: targetID,
@@ -408,7 +408,7 @@ func redirectUpdatesSameRequestAndCreatesDerivedHopIdentity() async throws {
     #expect(redirectKey == key)
     #expect(request.request.url == "https://example.com")
     #expect(request.redirects.count == 1)
-    #expect(redirect.id == NetworkRedirectHopIdentifier(requestKey: key, redirectIndex: 0))
+    #expect(redirect.id == NetworkRequest.RedirectHop.ID(requestKey: key, redirectIndex: 0))
     #expect(redirect.request.url == "http://example.com")
     #expect(redirect.response.status == 301)
 }
@@ -417,7 +417,7 @@ func redirectUpdatesSameRequestAndCreatesDerivedHopIdentity() async throws {
 func redirectPreservesExistingMetadataWhenOptionalFieldsAreAbsent() async throws {
     let session = await NetworkSession()
     let targetID = ProtocolTarget.ID("page")
-    let requestID = NetworkRequestIdentifier("0.101")
+    let requestID = NetworkRequest.ProtocolID("0.101")
 
     let key = await session.applyRequestWillBeSent(
         targetID: targetID,
@@ -453,7 +453,7 @@ func redirectPreservesExistingMetadataWhenOptionalFieldsAreAbsent() async throws
 func duplicateRequestWillBeSentWithoutRedirectKeepsExistingRequest() async throws {
     let session = await NetworkSession()
     let targetID = ProtocolTarget.ID("page")
-    let requestID = NetworkRequestIdentifier("0.100")
+    let requestID = NetworkRequest.ProtocolID("0.100")
 
     let key = await session.applyRequestWillBeSent(
         targetID: targetID,
@@ -484,7 +484,7 @@ func duplicateRequestWillBeSentWithoutRedirectKeepsExistingRequest() async throw
 func completedRequestDoesNotTreatLaterRequestWillBeSentAsRedirect() async throws {
     let session = await NetworkSession()
     let targetID = ProtocolTarget.ID("page")
-    let requestID = NetworkRequestIdentifier("0.100-complete")
+    let requestID = NetworkRequest.ProtocolID("0.100-complete")
 
     let key = await session.applyRequestWillBeSent(
         targetID: targetID,
@@ -520,7 +520,7 @@ func completedRequestDoesNotTreatLaterRequestWillBeSentAsRedirect() async throws
 func targetDestroyedRetainsNetworkHistoryButClosesActiveRequestIndex() async throws {
     let session = await NetworkSession()
     let targetID = ProtocolTarget.ID("page")
-    let requestID = NetworkRequestIdentifier("0.100-destroyed")
+    let requestID = NetworkRequest.ProtocolID("0.100-destroyed")
 
     let key = await session.applyRequestWillBeSent(
         targetID: targetID,
@@ -557,7 +557,7 @@ func targetDestroyedRetainsNetworkHistoryButClosesActiveRequestIndex() async thr
 func responseAndCompletionMutateRequestLifecycle() async throws {
     let session = await NetworkSession()
     let targetID = ProtocolTarget.ID("page")
-    let requestID = NetworkRequestIdentifier("0.7")
+    let requestID = NetworkRequest.ProtocolID("0.7")
 
     let key = await session.applyRequestWillBeSent(
         targetID: targetID,
@@ -590,7 +590,7 @@ func responseAndCompletionMutateRequestLifecycle() async throws {
 func responseReceivedUpdatesResourceTypeFromProtocolEvent() async throws {
     let session = await NetworkSession()
     let targetID = ProtocolTarget.ID("page")
-    let requestID = NetworkRequestIdentifier("0.71")
+    let requestID = NetworkRequest.ProtocolID("0.71")
 
     let key = await session.applyRequestWillBeSent(
         targetID: targetID,
@@ -626,7 +626,7 @@ func responseReceivedUpdatesResourceTypeFromProtocolEvent() async throws {
 func loadingFinishedPreservesSourceMapAndNetworkMetrics() async throws {
     let session = await NetworkSession()
     let targetID = ProtocolTarget.ID("page")
-    let requestID = NetworkRequestIdentifier("0.72")
+    let requestID = NetworkRequest.ProtocolID("0.72")
 
     let key = await session.applyRequestWillBeSent(
         targetID: targetID,
@@ -687,7 +687,7 @@ func loadingFinishedPreservesSourceMapAndNetworkMetrics() async throws {
 func memoryCacheEventCreatesFinishedCachedRequest() async throws {
     let session = await NetworkSession()
     let targetID = ProtocolTarget.ID("page")
-    let requestID = NetworkRequestIdentifier("0.73")
+    let requestID = NetworkRequest.ProtocolID("0.73")
 
     let key = await session.applyRequestServedFromMemoryCache(
         targetID: targetID,
@@ -721,7 +721,7 @@ func memoryCacheEventCreatesFinishedCachedRequest() async throws {
 func webSocketLifecycleKeepsHandshakeAndFrameHistory() async throws {
     let session = await NetworkSession()
     let targetID = ProtocolTarget.ID("page")
-    let requestID = NetworkRequestIdentifier("ws.1")
+    let requestID = NetworkRequest.ProtocolID("ws.1")
 
     let key = await session.applyWebSocketCreated(
         targetID: targetID,
@@ -768,7 +768,7 @@ func webSocketLifecycleKeepsHandshakeAndFrameHistory() async throws {
 @Test
 func loadingFailureOnlyUpdatesMatchingTargetScopedRequest() async throws {
     let session = await NetworkSession()
-    let requestID = NetworkRequestIdentifier("0.8")
+    let requestID = NetworkRequest.ProtocolID("0.8")
     let pageTargetID = ProtocolTarget.ID("page")
     let frameTargetID = ProtocolTarget.ID("frame")
 

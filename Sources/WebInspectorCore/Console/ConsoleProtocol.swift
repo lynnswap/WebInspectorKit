@@ -127,7 +127,7 @@ package struct ConsoleMessagePayload: Equatable, Sendable, Codable {
     package var repeatCount: Int?
     package var parameters: [RuntimeRemoteObjectPayload]
     package var stackTrace: ConsoleStackTracePayload?
-    package var networkRequestID: NetworkRequestIdentifier?
+    package var networkRequestID: NetworkRequest.ProtocolID?
     package var timestamp: Double?
 
     package init(
@@ -141,7 +141,7 @@ package struct ConsoleMessagePayload: Equatable, Sendable, Codable {
         repeatCount: Int? = nil,
         parameters: [RuntimeRemoteObjectPayload] = [],
         stackTrace: ConsoleStackTracePayload? = nil,
-        networkRequestID: NetworkRequestIdentifier? = nil,
+        networkRequestID: NetworkRequest.ProtocolID? = nil,
         timestamp: Double? = nil
     ) {
         self.source = source
@@ -185,7 +185,7 @@ package struct ConsoleMessagePayload: Equatable, Sendable, Codable {
         repeatCount = try container.decodeIfPresent(Int.self, forKey: .repeatCount)
         parameters = try container.decodeIfPresent([RuntimeRemoteObjectPayload].self, forKey: .parameters) ?? []
         stackTrace = try container.decodeIfPresent(ConsoleStackTracePayload.self, forKey: .stackTrace)
-        networkRequestID = try container.decodeIfPresent(NetworkRequestIdentifier.self, forKey: .networkRequestID)
+        networkRequestID = try container.decodeIfPresent(NetworkRequest.ProtocolID.self, forKey: .networkRequestID)
         timestamp = try container.decodeIfPresent(Double.self, forKey: .timestamp)
     }
 }

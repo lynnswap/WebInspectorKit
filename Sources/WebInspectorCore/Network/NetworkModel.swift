@@ -1,74 +1,75 @@
 import Observation
 import WebInspectorTransport
 
-package struct NetworkRedirectHop: Equatable, Sendable {
-    package var id: NetworkRedirectHopIdentifier
-    package var request: NetworkRequestPayload
-    package var response: NetworkResponsePayload
-    package var timestamp: Double
+extension NetworkRequest {
+    package struct RedirectHop: Equatable, Sendable {        package var id: NetworkRequest.RedirectHop.ID
+        package var request: NetworkRequest.Payload
+        package var response: NetworkRequest.Response.Payload
+        package var timestamp: Double
 
-    package init(
-        id: NetworkRedirectHopIdentifier,
-        request: NetworkRequestPayload,
-        response: NetworkResponsePayload,
-        timestamp: Double
-    ) {
-        self.id = id
-        self.request = request
-        self.response = response
-        self.timestamp = timestamp
+        package init(
+            id: NetworkRequest.RedirectHop.ID,
+            request: NetworkRequest.Payload,
+            response: NetworkRequest.Response.Payload,
+            timestamp: Double
+        ) {
+            self.id = id
+            self.request = request
+            self.response = response
+            self.timestamp = timestamp
+        }
     }
 }
 
-package enum NetworkWebSocketReadyState: Equatable, Sendable {
-    case connecting
-    case open
-    case closed
+extension NetworkRequest.WebSocket {
+    package enum ReadyState: Equatable, Sendable {        case connecting
+        case open
+        case closed
+    }
 }
 
-package struct NetworkWebSocketFrameEntry: Equatable, Sendable {
-    package enum Direction: Equatable, Sendable {
-        case incoming
-        case outgoing
-        case error(String)
-    }
+extension NetworkRequest.WebSocket {
+    package struct FrameEntry: Equatable, Sendable {        package enum Direction: Equatable, Sendable {
+            case incoming
+            case outgoing
+            case error(String)
+        }
 
-    package var payload: NetworkWebSocketFramePayload?
-    package var direction: Direction
-    package var timestamp: Double
+        package var payload: NetworkRequest.WebSocket.FramePayload?
+        package var direction: Direction
+        package var timestamp: Double
 
-    package init(payload: NetworkWebSocketFramePayload?, direction: Direction, timestamp: Double) {
-        self.payload = payload
-        self.direction = direction
-        self.timestamp = timestamp
+        package init(payload: NetworkRequest.WebSocket.FramePayload?, direction: Direction, timestamp: Double) {
+            self.payload = payload
+            self.direction = direction
+            self.timestamp = timestamp
+        }
     }
 }
 
 @MainActor
 @Observable
 package final class NetworkRequest {
-    package typealias ID = NetworkRequestIdentifierKey
-
     package let id: ID
     package var frameID: DOMFrame.ID?
     package var loaderID: String?
     package var documentURL: String?
-    package var resourceType: NetworkResourceType?
+    package var resourceType: NetworkRequest.ResourceType?
     package var originatingTargetID: ProtocolTarget.ID?
-    package var backendResourceIdentifier: NetworkBackendResourceIdentifier?
-    package var initiator: NetworkInitiatorPayload?
-    package var request: NetworkRequestPayload
+    package var backendResourceIdentifier: NetworkRequest.BackendResourceID?
+    package var initiator: NetworkRequest.Initiator.Payload?
+    package var request: NetworkRequest.Payload
     package var requestBody: NetworkBody?
-    package var response: NetworkResponsePayload?
+    package var response: NetworkRequest.Response.Payload?
     package var responseBody: NetworkBody?
     package var sourceMapURL: String?
-    package var metrics: NetworkLoadMetricsPayload?
+    package var metrics: NetworkRequest.Metrics.Payload?
     package var cachedResourceBodySize: Int?
-    package var webSocketHandshakeRequest: NetworkWebSocketRequestPayload?
-    package var webSocketHandshakeResponse: NetworkWebSocketResponsePayload?
-    package var webSocketReadyState: NetworkWebSocketReadyState?
-    package var webSocketFrames: [NetworkWebSocketFrameEntry]
-    package var redirects: [NetworkRedirectHop]
+    package var webSocketHandshakeRequest: NetworkRequest.WebSocket.RequestPayload?
+    package var webSocketHandshakeResponse: NetworkRequest.WebSocket.ResponsePayload?
+    package var webSocketReadyState: NetworkRequest.WebSocket.ReadyState?
+    package var webSocketFrames: [NetworkRequest.WebSocket.FrameEntry]
+    package var redirects: [NetworkRequest.RedirectHop]
     package var requestSentTimestamp: Double
     package var requestSentWalltime: Double?
     package var responseReceivedTimestamp: Double?
@@ -76,18 +77,18 @@ package final class NetworkRequest {
     package var finishedOrFailedTimestamp: Double?
     package var encodedDataLength: Int
     package var decodedDataLength: Int
-    package var state: NetworkRequestState
+    package var state: NetworkRequest.State
 
     package init(
         id: ID,
         frameID: DOMFrame.ID?,
         loaderID: String?,
         documentURL: String?,
-        request: NetworkRequestPayload,
-        resourceType: NetworkResourceType?,
+        request: NetworkRequest.Payload,
+        resourceType: NetworkRequest.ResourceType?,
         originatingTargetID: ProtocolTarget.ID?,
-        backendResourceIdentifier: NetworkBackendResourceIdentifier?,
-        initiator: NetworkInitiatorPayload?,
+        backendResourceIdentifier: NetworkRequest.BackendResourceID?,
+        initiator: NetworkRequest.Initiator.Payload?,
         timestamp: Double,
         walltime: Double?
     ) {
@@ -121,10 +122,10 @@ package final class NetworkRequest {
         self.state = .pending
     }
 
-    package func applyRedirect(to nextRequest: NetworkRequestPayload, redirectResponse: NetworkResponsePayload, timestamp: Double, walltime: Double?) {
-        let hopID = NetworkRedirectHopIdentifier(requestKey: id, redirectIndex: redirects.count)
+    package func applyRedirect(to nextRequest: NetworkRequest.Payload, redirectResponse: NetworkRequest.Response.Payload, timestamp: Double, walltime: Double?) {
+        let hopID = NetworkRequest.RedirectHop.ID(requestKey: id, redirectIndex: redirects.count)
         redirects.append(
-            NetworkRedirectHop(
+            NetworkRequest.RedirectHop(
                 id: hopID,
                 request: request,
                 response: redirectResponse,
@@ -156,11 +157,11 @@ package final class NetworkRequest {
         frameID: DOMFrame.ID?,
         loaderID: String?,
         documentURL: String?,
-        request: NetworkRequestPayload,
-        resourceType: NetworkResourceType?,
+        request: NetworkRequest.Payload,
+        resourceType: NetworkRequest.ResourceType?,
         originatingTargetID: ProtocolTarget.ID?,
-        backendResourceIdentifier: NetworkBackendResourceIdentifier?,
-        initiator: NetworkInitiatorPayload?,
+        backendResourceIdentifier: NetworkRequest.BackendResourceID?,
+        initiator: NetworkRequest.Initiator.Payload?,
         timestamp: Double,
         walltime: Double?
     ) {
@@ -193,7 +194,7 @@ package final class NetworkRequest {
         state = .pending
     }
 
-    package func applyMetrics(_ metrics: NetworkLoadMetricsPayload) {
+    package func applyMetrics(_ metrics: NetworkRequest.Metrics.Payload) {
         self.metrics = metrics
         if let requestHeaders = metrics.requestHeaders {
             request.headers = requestHeaders
@@ -206,13 +207,13 @@ package final class NetworkRequest {
             decodedDataLength = max(0, responseBodyDecodedSize)
         }
         if let securityConnection = metrics.securityConnection {
-            var responseSecurity = response?.security ?? NetworkSecurityPayload()
+            var responseSecurity = response?.security ?? NetworkRequest.Security.Payload()
             responseSecurity.connection = securityConnection
             response?.security = responseSecurity
         }
     }
 
-    package func applyResponseBody(_ payload: NetworkBodyPayload) {
+    package func applyResponseBody(_ payload: NetworkBody.Payload) {
         ensureResponseBody()
         responseBody?.apply(payload)
     }
@@ -229,7 +230,7 @@ package final class NetworkRequest {
         responseBody?.markFetching()
     }
 
-    package func markResponseBodyFailed(_ error: NetworkBodyFetchError) {
+    package func markResponseBodyFailed(_ error: NetworkBody.FetchError) {
         ensureResponseBody()
         responseBody?.markFailed(error)
     }
@@ -270,51 +271,54 @@ package final class NetworkRequest {
     }
 }
 
-package struct NetworkRedirectHopSnapshot: Equatable, Sendable {
-    package var id: NetworkRedirectHopIdentifier
-    package var request: NetworkRequestPayload
-    package var response: NetworkResponsePayload
-    package var timestamp: Double
+extension NetworkRequest.RedirectHop {
+    package struct Snapshot: Equatable, Sendable {        package var id: NetworkRequest.RedirectHop.ID
+        package var request: NetworkRequest.Payload
+        package var response: NetworkRequest.Response.Payload
+        package var timestamp: Double
+    }
 }
 
-package struct NetworkRequestSnapshot: Equatable, Sendable {
-    package var id: NetworkRequestIdentifierKey
-    package var frameID: DOMFrame.ID?
-    package var loaderID: String?
-    package var documentURL: String?
-    package var resourceType: NetworkResourceType?
-    package var originatingTargetID: ProtocolTarget.ID?
-    package var backendResourceIdentifier: NetworkBackendResourceIdentifier?
-    package var initiator: NetworkInitiatorPayload?
-    package var request: NetworkRequestPayload
-    package var response: NetworkResponsePayload?
-    package var sourceMapURL: String?
-    package var metrics: NetworkLoadMetricsPayload?
-    package var cachedResourceBodySize: Int?
-    package var webSocketHandshakeRequest: NetworkWebSocketRequestPayload?
-    package var webSocketHandshakeResponse: NetworkWebSocketResponsePayload?
-    package var webSocketReadyState: NetworkWebSocketReadyState?
-    package var webSocketFrames: [NetworkWebSocketFrameEntry]
-    package var redirects: [NetworkRedirectHopSnapshot]
-    package var requestSentTimestamp: Double
-    package var requestSentWalltime: Double?
-    package var responseReceivedTimestamp: Double?
-    package var lastDataReceivedTimestamp: Double?
-    package var finishedOrFailedTimestamp: Double?
-    package var encodedDataLength: Int
-    package var decodedDataLength: Int
-    package var state: NetworkRequestState
+extension NetworkRequest {
+    package struct Snapshot: Equatable, Sendable {        package var id: NetworkRequest.ID
+        package var frameID: DOMFrame.ID?
+        package var loaderID: String?
+        package var documentURL: String?
+        package var resourceType: NetworkRequest.ResourceType?
+        package var originatingTargetID: ProtocolTarget.ID?
+        package var backendResourceIdentifier: NetworkRequest.BackendResourceID?
+        package var initiator: NetworkRequest.Initiator.Payload?
+        package var request: NetworkRequest.Payload
+        package var response: NetworkRequest.Response.Payload?
+        package var sourceMapURL: String?
+        package var metrics: NetworkRequest.Metrics.Payload?
+        package var cachedResourceBodySize: Int?
+        package var webSocketHandshakeRequest: NetworkRequest.WebSocket.RequestPayload?
+        package var webSocketHandshakeResponse: NetworkRequest.WebSocket.ResponsePayload?
+        package var webSocketReadyState: NetworkRequest.WebSocket.ReadyState?
+        package var webSocketFrames: [NetworkRequest.WebSocket.FrameEntry]
+        package var redirects: [NetworkRequest.RedirectHop.Snapshot]
+        package var requestSentTimestamp: Double
+        package var requestSentWalltime: Double?
+        package var responseReceivedTimestamp: Double?
+        package var lastDataReceivedTimestamp: Double?
+        package var finishedOrFailedTimestamp: Double?
+        package var encodedDataLength: Int
+        package var decodedDataLength: Int
+        package var state: NetworkRequest.State
+    }
 }
 
-package struct NetworkSessionSnapshot: Equatable, Sendable {
-    package var orderedRequestIDs: [NetworkRequestIdentifierKey]
-    package var requestsByID: [NetworkRequestIdentifierKey: NetworkRequestSnapshot]
+extension NetworkSession {
+    package struct Snapshot: Equatable, Sendable {        package var orderedRequestIDs: [NetworkRequest.ID]
+        package var requestsByID: [NetworkRequest.ID: NetworkRequest.Snapshot]
+    }
 }
 
 @MainActor
-private extension NetworkRedirectHop {
-    var snapshot: NetworkRedirectHopSnapshot {
-        NetworkRedirectHopSnapshot(
+private extension NetworkRequest.RedirectHop {
+    var snapshot: NetworkRequest.RedirectHop.Snapshot {
+        NetworkRequest.RedirectHop.Snapshot(
             id: id,
             request: request,
             response: response,
@@ -325,8 +329,8 @@ private extension NetworkRedirectHop {
 
 @MainActor
 private extension NetworkRequest {
-    var snapshot: NetworkRequestSnapshot {
-        NetworkRequestSnapshot(
+    var snapshot: NetworkRequest.Snapshot {
+        NetworkRequest.Snapshot(
             id: id,
             frameID: frameID,
             loaderID: loaderID,
@@ -427,8 +431,8 @@ private struct NetworkRequestStore {
         return request
     }
 
-    func snapshot() -> NetworkSessionSnapshot {
-        NetworkSessionSnapshot(
+    func snapshot() -> NetworkSession.Snapshot {
+        NetworkSession.Snapshot(
             orderedRequestIDs: orderedIDs,
             requestsByID: Dictionary(
                 uniqueKeysWithValues: orderedIDs.compactMap { id in
@@ -480,7 +484,7 @@ package final class NetworkSession {
     }
 
     @discardableResult
-    package func perform(_ intent: NetworkCommandIntent) async throws -> ProtocolCommand.Result {
+    package func perform(_ intent: NetworkCommand.Intent) async throws -> ProtocolCommand.Result {
         let commandChannel = try requireCommandChannel()
         return try await commandChannel.send(protocolCommands.command(for: intent))
     }
@@ -510,16 +514,16 @@ package final class NetworkSession {
     @discardableResult
     package func applyRequestWillBeSent(
         targetID: ProtocolTarget.ID,
-        requestID: NetworkRequestIdentifier,
+        requestID: NetworkRequest.ProtocolID,
         frameID: DOMFrame.ID?,
         loaderID: String?,
         documentURL: String?,
-        request: NetworkRequestPayload,
-        resourceType: NetworkResourceType? = nil,
+        request: NetworkRequest.Payload,
+        resourceType: NetworkRequest.ResourceType? = nil,
         originatingTargetID: ProtocolTarget.ID? = nil,
-        backendResourceIdentifier: NetworkBackendResourceIdentifier? = nil,
-        initiator: NetworkInitiatorPayload? = nil,
-        redirectResponse: NetworkResponsePayload? = nil,
+        backendResourceIdentifier: NetworkRequest.BackendResourceID? = nil,
+        initiator: NetworkRequest.Initiator.Payload? = nil,
+        redirectResponse: NetworkRequest.Response.Payload? = nil,
         timestamp: Double,
         walltime: Double? = nil
     ) -> NetworkRequest.ID {
@@ -578,11 +582,11 @@ package final class NetworkSession {
 
     package func applyResponseReceived(
         targetID: ProtocolTarget.ID,
-        requestID: NetworkRequestIdentifier,
+        requestID: NetworkRequest.ProtocolID,
         frameID: DOMFrame.ID? = nil,
         loaderID: String? = nil,
-        resourceType: NetworkResourceType? = nil,
-        response: NetworkResponsePayload,
+        resourceType: NetworkRequest.ResourceType? = nil,
+        response: NetworkRequest.Response.Payload,
         timestamp: Double
     ) {
         guard let request = requestStore.request(for: .init(targetID: targetID, requestID: requestID)) else {
@@ -603,7 +607,7 @@ package final class NetworkSession {
 
     package func applyDataReceived(
         targetID: ProtocolTarget.ID,
-        requestID: NetworkRequestIdentifier,
+        requestID: NetworkRequest.ProtocolID,
         dataLength: Int,
         encodedDataLength: Int,
         timestamp: Double
@@ -618,10 +622,10 @@ package final class NetworkSession {
 
     package func applyLoadingFinished(
         targetID: ProtocolTarget.ID,
-        requestID: NetworkRequestIdentifier,
+        requestID: NetworkRequest.ProtocolID,
         timestamp: Double,
         sourceMapURL: String? = nil,
-        metrics: NetworkLoadMetricsPayload? = nil
+        metrics: NetworkRequest.Metrics.Payload? = nil
     ) {
         guard let request = requestStore.request(for: .init(targetID: targetID, requestID: requestID)) else {
             return
@@ -639,7 +643,7 @@ package final class NetworkSession {
 
     package func applyLoadingFailed(
         targetID: ProtocolTarget.ID,
-        requestID: NetworkRequestIdentifier,
+        requestID: NetworkRequest.ProtocolID,
         timestamp: Double,
         errorText: String,
         canceled: Bool = false
@@ -655,13 +659,13 @@ package final class NetworkSession {
     @discardableResult
     package func applyRequestServedFromMemoryCache(
         targetID: ProtocolTarget.ID,
-        requestID: NetworkRequestIdentifier,
+        requestID: NetworkRequest.ProtocolID,
         frameID: DOMFrame.ID,
         loaderID: String,
         documentURL: String,
         timestamp: Double,
-        initiator: NetworkInitiatorPayload?,
-        resource: NetworkCachedResourcePayload
+        initiator: NetworkRequest.Initiator.Payload?,
+        resource: NetworkRequest.CachedResource.Payload
     ) -> NetworkRequest.ID {
         let key = NetworkRequest.ID(targetID: targetID, requestID: requestID)
         let networkRequest = requestStore.requestOrInsert(id: key) {
@@ -704,7 +708,7 @@ package final class NetworkSession {
     @discardableResult
     package func applyWebSocketCreated(
         targetID: ProtocolTarget.ID,
-        requestID: NetworkRequestIdentifier,
+        requestID: NetworkRequest.ProtocolID,
         url: String
     ) -> NetworkRequest.ID {
         let key = NetworkRequest.ID(targetID: targetID, requestID: requestID)
@@ -736,10 +740,10 @@ package final class NetworkSession {
 
     package func applyWebSocketWillSendHandshakeRequest(
         targetID: ProtocolTarget.ID,
-        requestID: NetworkRequestIdentifier,
+        requestID: NetworkRequest.ProtocolID,
         timestamp: Double,
         walltime: Double,
-        request: NetworkWebSocketRequestPayload
+        request: NetworkRequest.WebSocket.RequestPayload
     ) {
         let key = NetworkRequest.ID(targetID: targetID, requestID: requestID)
         guard let networkRequest = requestStore.request(for: key) else {
@@ -755,16 +759,16 @@ package final class NetworkSession {
 
     package func applyWebSocketHandshakeResponseReceived(
         targetID: ProtocolTarget.ID,
-        requestID: NetworkRequestIdentifier,
+        requestID: NetworkRequest.ProtocolID,
         timestamp: Double,
-        response: NetworkWebSocketResponsePayload
+        response: NetworkRequest.WebSocket.ResponsePayload
     ) {
         let key = NetworkRequest.ID(targetID: targetID, requestID: requestID)
         guard let networkRequest = requestStore.request(for: key) else {
             return
         }
         networkRequest.webSocketHandshakeResponse = response
-        networkRequest.response = NetworkResponsePayload(
+        networkRequest.response = NetworkRequest.Response.Payload(
             url: networkRequest.request.url,
             status: response.status,
             statusText: response.statusText,
@@ -778,25 +782,25 @@ package final class NetworkSession {
 
     package func applyWebSocketFrameReceived(
         targetID: ProtocolTarget.ID,
-        requestID: NetworkRequestIdentifier,
+        requestID: NetworkRequest.ProtocolID,
         timestamp: Double,
-        response: NetworkWebSocketFramePayload
+        response: NetworkRequest.WebSocket.FramePayload
     ) {
         applyWebSocketFrame(targetID: targetID, requestID: requestID, timestamp: timestamp, response: response, direction: .incoming)
     }
 
     package func applyWebSocketFrameSent(
         targetID: ProtocolTarget.ID,
-        requestID: NetworkRequestIdentifier,
+        requestID: NetworkRequest.ProtocolID,
         timestamp: Double,
-        response: NetworkWebSocketFramePayload
+        response: NetworkRequest.WebSocket.FramePayload
     ) {
         applyWebSocketFrame(targetID: targetID, requestID: requestID, timestamp: timestamp, response: response, direction: .outgoing)
     }
 
     package func applyWebSocketFrameError(
         targetID: ProtocolTarget.ID,
-        requestID: NetworkRequestIdentifier,
+        requestID: NetworkRequest.ProtocolID,
         timestamp: Double,
         errorMessage: String
     ) {
@@ -809,7 +813,7 @@ package final class NetworkSession {
 
     package func applyWebSocketClosed(
         targetID: ProtocolTarget.ID,
-        requestID: NetworkRequestIdentifier,
+        requestID: NetworkRequest.ProtocolID,
         timestamp: Double
     ) {
         guard let request = requestStore.request(for: .init(targetID: targetID, requestID: requestID)) else {
@@ -825,11 +829,11 @@ package final class NetworkSession {
         requestStore.closeActiveRequests(targetID: targetID)
     }
 
-    package func requestSnapshot(for id: NetworkRequest.ID) -> NetworkRequestSnapshot? {
+    package func requestSnapshot(for id: NetworkRequest.ID) -> NetworkRequest.Snapshot? {
         requestStore.request(for: id)?.snapshot
     }
 
-    package func responseBodyCommandIntent(for id: NetworkRequest.ID) -> NetworkCommandIntent? {
+    package func responseBodyCommandIntent(for id: NetworkRequest.ID) -> NetworkCommand.Intent? {
         guard let request = requestStore.request(for: id),
               request.canFetchResponseBody else {
             return nil
@@ -840,22 +844,22 @@ package final class NetworkSession {
         )
     }
 
-    package func serializedCertificateCommandIntent(for id: NetworkRequest.ID) -> NetworkCommandIntent? {
+    package func serializedCertificateCommandIntent(for id: NetworkRequest.ID) -> NetworkCommand.Intent? {
         requestStore.request(for: id).map {
             .getSerializedCertificate(requestKey: id, backendResourceIdentifier: $0.backendResourceIdentifier)
         }
     }
 
-    package func snapshot() -> NetworkSessionSnapshot {
+    package func snapshot() -> NetworkSession.Snapshot {
         requestStore.snapshot()
     }
 
     private func applyWebSocketFrame(
         targetID: ProtocolTarget.ID,
-        requestID: NetworkRequestIdentifier,
+        requestID: NetworkRequest.ProtocolID,
         timestamp: Double,
-        response: NetworkWebSocketFramePayload,
-        direction: NetworkWebSocketFrameEntry.Direction
+        response: NetworkRequest.WebSocket.FramePayload,
+        direction: NetworkRequest.WebSocket.FrameEntry.Direction
     ) {
         guard let request = requestStore.request(for: .init(targetID: targetID, requestID: requestID)) else {
             return

@@ -146,7 +146,7 @@ func domainPumpsApplyConsoleEventsToConsoleSession() async throws {
 
     let snapshot = await session.attachment.console.snapshot()
     let messageID = try #require(snapshot.orderedMessageIDs.first)
-    #expect(snapshot.messagesByID[messageID]?.networkRequestKey == NetworkRequestIdentifierKey(targetID: .pageMain, requestID: .init("request-1")))
+    #expect(snapshot.messagesByID[messageID]?.networkRequestKey == NetworkRequest.ID(targetID: .pageMain, requestID: .init("request-1")))
     #expect(snapshot.warningCount == 1)
 }
 
@@ -210,7 +210,7 @@ func domainPumpsApplyRootScopedConsoleEventsToMainPageConsoleSession() async thr
 
     let snapshot = await session.attachment.console.snapshot()
     let messageID = try #require(snapshot.orderedMessageIDs.first)
-    #expect(snapshot.messagesByID[messageID]?.networkRequestKey == NetworkRequestIdentifierKey(targetID: .pageMain, requestID: .init("request-root")))
+    #expect(snapshot.messagesByID[messageID]?.networkRequestKey == NetworkRequest.ID(targetID: .pageMain, requestID: .init("request-root")))
     #expect(snapshot.errorCount == 1)
 }
 
