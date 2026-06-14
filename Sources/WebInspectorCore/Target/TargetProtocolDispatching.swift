@@ -2,20 +2,20 @@ import Foundation
 import WebInspectorTransport
 
 package struct TargetProtocolCommitResolution: Equatable, Sendable {
-    package var oldTargetID: ProtocolTargetIdentifier?
-    package var newTargetID: ProtocolTargetIdentifier
-    package var consumedOldTargetID: ProtocolTargetIdentifier?
+    package var oldTargetID: ProtocolTarget.ID?
+    package var newTargetID: ProtocolTarget.ID
+    package var consumedOldTargetID: ProtocolTarget.ID?
 }
 
 package struct TargetProtocolEventSnapshot: Sendable {
-    package var currentPageTargetID: ProtocolTargetIdentifier?
-    package var mainFrameID: DOMFrameIdentifier?
-    package var targetsByID: [ProtocolTargetIdentifier: ProtocolTargetSnapshot]
+    package var currentPageTargetID: ProtocolTarget.ID?
+    package var mainFrameID: DOMFrame.ID?
+    package var targetsByID: [ProtocolTarget.ID: DOMTarget.Snapshot]
 
     package init(
-        currentPageTargetID: ProtocolTargetIdentifier?,
-        mainFrameID: DOMFrameIdentifier?,
-        targetsByID: [ProtocolTargetIdentifier: ProtocolTargetSnapshot]
+        currentPageTargetID: ProtocolTarget.ID?,
+        mainFrameID: DOMFrame.ID?,
+        targetsByID: [ProtocolTarget.ID: DOMTarget.Snapshot]
     ) {
         self.currentPageTargetID = currentPageTargetID
         self.mainFrameID = mainFrameID
@@ -24,16 +24,16 @@ package struct TargetProtocolEventSnapshot: Sendable {
 }
 
 package struct TargetProtocolEventResult: Sendable {
-    package var destroyedTargetID: ProtocolTargetIdentifier?
+    package var destroyedTargetID: ProtocolTarget.ID?
     package var targetCommit: TargetProtocolCommitResolution?
-    package var createdTarget: ProtocolTargetRecord?
+    package var createdTarget: ProtocolTarget.Record?
 }
 
 @MainActor
 package protocol TargetProtocolEventHandler: AnyObject {
     func targetProtocolSnapshot() -> TargetProtocolEventSnapshot
-    func targetProtocolDidCreate(_ record: ProtocolTargetRecord, makeCurrentMainPage: Bool)
-    func targetProtocolDidDestroy(_ targetID: ProtocolTargetIdentifier)
+    func targetProtocolDidCreate(_ record: ProtocolTarget.Record, makeCurrentMainPage: Bool)
+    func targetProtocolDidDestroy(_ targetID: ProtocolTarget.ID)
     func targetProtocolDidCommit(_ resolution: TargetProtocolCommitResolution, snapshotBeforeCommit: TargetProtocolEventSnapshot)
 }
 
@@ -43,7 +43,7 @@ package struct TargetProtocolEventDispatcher {
     @MainActor
     @discardableResult
     package func dispatch(
-        _ event: ProtocolEventEnvelope,
+        _ event: ProtocolEvent,
         to handler: any TargetProtocolEventHandler
     ) throws -> TargetProtocolEventResult {
         let snapshotBeforeEvent = handler.targetProtocolSnapshot()
@@ -60,11 +60,11 @@ package struct TargetProtocolEventDispatcher {
     @MainActor
     @discardableResult
     private func apply(
-        _ event: ProtocolEventEnvelope,
+        _ event: ProtocolEvent,
         to handler: any TargetProtocolEventHandler,
         snapshotBeforeEvent: TargetProtocolEventSnapshot,
         targetCommit: TargetProtocolCommitResolution?
-    ) throws -> ProtocolTargetRecord? {
+    ) throws -> ProtocolTarget.Record? {
         switch event.method {
         case "Target.targetCreated":
             let params = try TransportMessageParser.decode(TargetCreatedParams.self, from: event.paramsData)
@@ -91,7 +91,7 @@ package struct TargetProtocolEventDispatcher {
     }
 
     package func targetCommitResolution(
-        from event: ProtocolEventEnvelope,
+        from event: ProtocolEvent,
         snapshot: TargetProtocolEventSnapshot
     ) throws -> TargetProtocolCommitResolution? {
         guard event.method == "Target.didCommitProvisionalTarget" else {
@@ -108,7 +108,7 @@ package struct TargetProtocolEventDispatcher {
         )
     }
 
-    private func targetDestroyedID(from event: ProtocolEventEnvelope) throws -> ProtocolTargetIdentifier? {
+    private func targetDestroyedID(from event: ProtocolEvent) throws -> ProtocolTarget.ID? {
         guard event.method == "Target.targetDestroyed" else {
             return nil
         }
@@ -119,7 +119,7 @@ package struct TargetProtocolEventDispatcher {
     private func inferredOldTargetIDForOldlessCommit(
         _ params: TargetCommittedParams,
         snapshot: TargetProtocolEventSnapshot
-    ) -> ProtocolTargetIdentifier? {
+    ) -> ProtocolTarget.ID? {
         guard params.oldTargetId == nil else {
             return nil
         }
@@ -144,8 +144,8 @@ package struct TargetProtocolEventDispatcher {
     }
 
     private func targetCommitConsumesOldTarget(
-        oldTargetID: ProtocolTargetIdentifier,
-        newTargetID: ProtocolTargetIdentifier,
+        oldTargetID: ProtocolTarget.ID,
+        newTargetID: ProtocolTarget.ID,
         snapshot: TargetProtocolEventSnapshot
     ) -> Bool {
         guard oldTargetID != newTargetID else {
@@ -160,7 +160,7 @@ package struct TargetProtocolEventDispatcher {
     }
 }
 
-extension DOMSessionSnapshot {
+extension DOMSession.Snapshot {
     package var targetProtocolEventSnapshot: TargetProtocolEventSnapshot {
         TargetProtocolEventSnapshot(
             currentPageTargetID: currentPageTargetID,
@@ -175,11 +175,11 @@ extension DOMSession: TargetProtocolEventHandler {
         snapshot().targetProtocolEventSnapshot
     }
 
-    package func targetProtocolDidCreate(_ record: ProtocolTargetRecord, makeCurrentMainPage: Bool) {
+    package func targetProtocolDidCreate(_ record: ProtocolTarget.Record, makeCurrentMainPage: Bool) {
         applyTargetCreated(record, makeCurrentMainPage: makeCurrentMainPage)
     }
 
-    package func targetProtocolDidDestroy(_ targetID: ProtocolTargetIdentifier) {
+    package func targetProtocolDidDestroy(_ targetID: ProtocolTarget.ID) {
         applyTargetDestroyed(targetID)
     }
 
@@ -206,11 +206,11 @@ extension DOMSession: TargetProtocolEventHandler {
 @MainActor
 package final class TargetProtocolDomainEventDispatcher: ProtocolDomainEventDispatcher {
     private weak var dom: DOMSession?
-    private let targetEventApplied: @MainActor (ProtocolEventEnvelope, TargetProtocolEventResult) async -> Void
+    private let targetEventApplied: @MainActor (ProtocolEvent, TargetProtocolEventResult) async -> Void
 
     package init(
         dom: DOMSession,
-        targetEventApplied: @escaping @MainActor (ProtocolEventEnvelope, TargetProtocolEventResult) async -> Void
+        targetEventApplied: @escaping @MainActor (ProtocolEvent, TargetProtocolEventResult) async -> Void
     ) {
         self.dom = dom
         self.targetEventApplied = targetEventApplied
@@ -218,7 +218,7 @@ package final class TargetProtocolDomainEventDispatcher: ProtocolDomainEventDisp
 
     package var domain: ProtocolDomain { .target }
 
-    package func dispatch(_ event: ProtocolEventEnvelope) async throws {
+    package func dispatch(_ event: ProtocolEvent) async throws {
         guard let dom else {
             return
         }
@@ -232,17 +232,17 @@ private struct TargetCreatedParams: Decodable {
 }
 
 private struct TargetInfoPayload: Decodable {
-    var targetId: ProtocolTargetIdentifier
+    var targetId: ProtocolTarget.ID
     var type: String
-    var frameId: DOMFrameIdentifier?
-    var parentFrameId: DOMFrameIdentifier?
+    var frameId: DOMFrame.ID?
+    var parentFrameId: DOMFrame.ID?
     var domains: [String]?
     var isProvisional: Bool?
     var isPaused: Bool?
 
-    func record(currentMainFrameID: DOMFrameIdentifier?) -> ProtocolTargetRecord {
+    func record(currentMainFrameID: DOMFrame.ID?) -> ProtocolTarget.Record {
         let kind = targetKind(currentMainFrameID: currentMainFrameID)
-        return ProtocolTargetRecord(
+        return ProtocolTarget.Record(
             id: targetId,
             kind: kind,
             frameID: frameId,
@@ -253,12 +253,12 @@ private struct TargetInfoPayload: Decodable {
         )
     }
 
-    private func capabilities(for kind: ProtocolTargetKind) -> ProtocolTargetCapabilities {
-        ProtocolTargetCapabilities.resolved(for: kind, domainNames: domains)
+    private func capabilities(for kind: ProtocolTarget.Kind) -> ProtocolTarget.Capabilities {
+        ProtocolTarget.Capabilities.resolved(for: kind, domainNames: domains)
     }
 
-    private func targetKind(currentMainFrameID: DOMFrameIdentifier?) -> ProtocolTargetKind {
-        let protocolKind = ProtocolTargetKind(protocolType: type)
+    private func targetKind(currentMainFrameID: DOMFrame.ID?) -> ProtocolTarget.Kind {
+        let protocolKind = ProtocolTarget.Kind(protocolType: type)
         guard protocolKind == .page else {
             return protocolKind
         }
@@ -279,10 +279,10 @@ private struct TargetInfoPayload: Decodable {
 }
 
 private struct TargetDestroyedParams: Decodable {
-    var targetId: ProtocolTargetIdentifier
+    var targetId: ProtocolTarget.ID
 }
 
 private struct TargetCommittedParams: Decodable {
-    var oldTargetId: ProtocolTargetIdentifier?
-    var newTargetId: ProtocolTargetIdentifier
+    var oldTargetId: ProtocolTarget.ID?
+    var newTargetId: ProtocolTarget.ID
 }

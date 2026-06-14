@@ -7,25 +7,25 @@ import UIKit
 package final class DOMElementViewController: UICollectionViewController {
     private struct ItemIdentifier: Hashable {
         enum Kind: Hashable {
-            case property(propertyID: CSSPropertyIdentifier?, propertyIndex: Int)
+            case property(propertyID: CSSProperty.ID?, propertyIndex: Int)
             case hiddenUnusedVariables(count: Int)
         }
 
-        var sectionID: CSSStyleSectionIdentifier
+        var sectionID: CSSStyle.Section.ID
         var kind: Kind
     }
 
     private let inspection: AttachedInspection
-    private let observationScope = ObservationScope()
-    private let selectedNodeStyleObservationScope = ObservationScope()
+    private var elementStylesObservation: PortableObservationTracking.Token?
+    private var selectedNodeStyleObservation: PortableObservationTracking.Token?
     private weak var observedNodeStyles: CSSNodeStyles?
-    private var expandedUnusedVariableSectionIDs = Set<CSSStyleSectionIdentifier>()
+    private var expandedUnusedVariableSectionIDs = Set<CSSStyle.Section.ID>()
     private var displayedNodeStyles: CSSNodeStyles?
 
 #if DEBUG
     package private(set) var lastSnapshotAnimatedForTesting = false
-    private var elementStylesObservationDelivery: ObservationDelivery?
-    private var selectedNodeStyleObservationDelivery: ObservationDelivery?
+    private var elementStylesObservationDelivery: PortableObservationTracking.Token?
+    private var selectedNodeStyleObservationDelivery: PortableObservationTracking.Token?
 #endif
 
     private lazy var dataSource = makeDataSource()
@@ -42,8 +42,8 @@ package final class DOMElementViewController: UICollectionViewController {
 
     isolated deinit {
         inspection.dom.setSelectedNodeStyleHydrationActive(false)
-        observationScope.cancelAll()
-        selectedNodeStyleObservationScope.cancelAll()
+        elementStylesObservation?.cancel()
+        selectedNodeStyleObservation?.cancel()
     }
 
     override package func viewDidLoad() {
@@ -93,7 +93,7 @@ package final class DOMElementViewController: UICollectionViewController {
         collectionView.backgroundColor = backgroundColor
     }
 
-    private func makeDataSource() -> UICollectionViewDiffableDataSource<CSSStyleSectionIdentifier, ItemIdentifier> {
+    private func makeDataSource() -> UICollectionViewDiffableDataSource<CSSStyle.Section.ID, ItemIdentifier> {
         let propertyRegistration = UICollectionView.CellRegistration<DOMElementStylePropertyCollectionCell, ItemIdentifier> { [weak self] cell, _, item in
             guard let self,
                   let section = section(for: item.sectionID),
@@ -119,7 +119,7 @@ package final class DOMElementViewController: UICollectionViewController {
             }
         }
 
-        let dataSource = UICollectionViewDiffableDataSource<CSSStyleSectionIdentifier, ItemIdentifier>(
+        let dataSource = UICollectionViewDiffableDataSource<CSSStyle.Section.ID, ItemIdentifier>(
             collectionView: collectionView
         ) { collectionView, indexPath, item in
             switch item.kind {
@@ -168,23 +168,26 @@ package final class DOMElementViewController: UICollectionViewController {
     }
 
     private func startObservingState() {
-        let delivery = observationScope.observe(inspection.dom.elementStyles, tracking: { elementStyles in
-            _ = elementStyles.selectedNodeStyles
-        }) { [weak self] _, elementStyles in
+        let elementStyles = inspection.dom.elementStyles
+        let token = withPortableContinuousObservation { [weak self, elementStyles] _ in
+            let selectedNodeStyles = elementStyles.selectedNodeStyles
+            let selectedState = elementStyles.selectedState
             self?.bindSelectedNodeStyles(
-                elementStyles.selectedNodeStyles,
-                unavailableState: elementStyles.selectedState
+                selectedNodeStyles,
+                unavailableState: selectedState
             )
         }
 #if DEBUG
-        elementStylesObservationDelivery = delivery
+        elementStylesObservationDelivery = token
 #endif
+        elementStylesObservation = token
     }
 
-    private func bindSelectedNodeStyles(_ nodeStyles: CSSNodeStyles?, unavailableState: CSSNodeStylesState) {
+    private func bindSelectedNodeStyles(_ nodeStyles: CSSNodeStyles?, unavailableState: CSSNodeStyles.State) {
         guard let nodeStyles else {
             observedNodeStyles = nil
-            selectedNodeStyleObservationScope.cancelAll()
+            selectedNodeStyleObservation?.cancel()
+            selectedNodeStyleObservation = nil
 #if DEBUG
             selectedNodeStyleObservationDelivery = nil
 #endif
@@ -196,15 +199,17 @@ package final class DOMElementViewController: UICollectionViewController {
             return
         }
         observedNodeStyles = nodeStyles
-        selectedNodeStyleObservationScope.cancelAll()
-        let delivery = selectedNodeStyleObservationScope.observe(nodeStyles) { [weak self] _, nodeStyles in
-            guard self?.observedNodeStyles === nodeStyles else {
+        selectedNodeStyleObservation?.cancel()
+        let token = withPortableContinuousObservation { [weak self, weak nodeStyles] _ in
+            guard let nodeStyles,
+                  self?.observedNodeStyles === nodeStyles else {
                 return
             }
             self?.render(nodeStyles)
         }
+        selectedNodeStyleObservation = token
 #if DEBUG
-        selectedNodeStyleObservationDelivery = delivery
+        selectedNodeStyleObservationDelivery = token
 #endif
     }
 
@@ -220,7 +225,7 @@ package final class DOMElementViewController: UICollectionViewController {
         }
     }
 
-    private func render(_ state: CSSNodeStylesState) {
+    private func render(_ state: CSSNodeStyles.State) {
         switch state {
         case .loaded:
             return
@@ -264,12 +269,12 @@ package final class DOMElementViewController: UICollectionViewController {
 
     private func applyEmptySnapshot() {
         expandedUnusedVariableSectionIDs.removeAll()
-        let snapshot = NSDiffableDataSourceSnapshot<CSSStyleSectionIdentifier, ItemIdentifier>()
+        let snapshot = NSDiffableDataSourceSnapshot<CSSStyle.Section.ID, ItemIdentifier>()
         dataSource.apply(snapshot, animatingDifferences: false)
     }
 
     private func applySnapshot(for nodeStyles: CSSNodeStyles, animatingDifferences: Bool = false) {
-        var snapshot = NSDiffableDataSourceSnapshot<CSSStyleSectionIdentifier, ItemIdentifier>()
+        var snapshot = NSDiffableDataSourceSnapshot<CSSStyle.Section.ID, ItemIdentifier>()
         let usedCSSVariables = DOMElementStyleVariableVisibility.usedCSSVariableNames(in: nodeStyles)
         let currentSectionIDs = Set(nodeStyles.sections.map(\.id))
         expandedUnusedVariableSectionIDs.formIntersection(currentSectionIDs)
@@ -313,11 +318,11 @@ package final class DOMElementViewController: UICollectionViewController {
         dataSource.apply(snapshot, animatingDifferences: animatingDifferences)
     }
 
-    private func section(for sectionID: CSSStyleSectionIdentifier) -> CSSStyleSection? {
+    private func section(for sectionID: CSSStyle.Section.ID) -> CSSStyle.Section? {
         displayedNodeStyles?.sections.first { $0.id == sectionID }
     }
 
-    private func property(for item: ItemIdentifier, in section: CSSStyleSection) -> CSSProperty? {
+    private func property(for item: ItemIdentifier, in section: CSSStyle.Section) -> CSSProperty? {
         guard case let .property(propertyID, propertyIndex) = item.kind else {
             return nil
         }
@@ -330,7 +335,7 @@ package final class DOMElementViewController: UICollectionViewController {
         return section.style.cssProperties[propertyIndex]
     }
 
-    private func showHiddenUnusedVariables(in sectionID: CSSStyleSectionIdentifier) {
+    private func showHiddenUnusedVariables(in sectionID: CSSStyle.Section.ID) {
         guard let nodeStyles = displayedNodeStyles else {
             return
         }
@@ -345,11 +350,11 @@ package final class DOMElementViewController: UICollectionViewController {
     }
 
 #if DEBUG
-    package var elementStylesObservationDeliveryForTesting: ObservationDelivery? {
+    package var elementStylesObservationDeliveryForTesting: PortableObservationTracking.Token? {
         elementStylesObservationDelivery
     }
 
-    package var selectedNodeStyleObservationDeliveryForTesting: ObservationDelivery? {
+    package var selectedNodeStyleObservationDeliveryForTesting: PortableObservationTracking.Token? {
         selectedNodeStyleObservationDelivery
     }
 #endif

@@ -1,6 +1,6 @@
 import WebKit
 import WebInspectorNativeSymbols
-@unsafe @preconcurrency import WebInspectorNativeBridge
+import WebInspectorNativeBridge
 
 package enum NativeInspectorBackendFactory {
     @MainActor

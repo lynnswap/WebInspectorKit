@@ -5,15 +5,15 @@ import WebInspectorTransport
 
 @Test
 func runtimeProtocolDispatchingBuildsEvaluateCommandAndDecodesResult() throws {
-    let targetID = ProtocolTargetIdentifier("page")
-    let intent = RuntimeCommandIntent.evaluate(
-        RuntimeEvaluationRequest(
+    let targetID = ProtocolTarget.ID("page")
+    let intent = RuntimeCommand.Intent.evaluate(
+        RuntimeEvaluation.Request(
             runtimeAgentTargetID: targetID,
             expression: "document.title",
-            objectGroup: RuntimeObjectGroup("console"),
+            objectGroup: RuntimeRemoteObject.Group("console"),
             includeCommandLineAPI: true,
             doNotPauseOnExceptionsAndMuteConsole: false,
-            contextID: ExecutionContextID(7),
+            contextID: RuntimeContext.ID(7),
             returnByValue: false,
             generatePreview: true,
             saveResult: true,
@@ -31,7 +31,7 @@ func runtimeProtocolDispatchingBuildsEvaluateCommandAndDecodesResult() throws {
     #expect(parameters["contextId"] as? Int == 7)
     #expect(parameters["generatePreview"] as? Bool == true)
 
-    let result = ProtocolCommandResult(
+    let result = ProtocolCommand.Result(
         domain: .runtime,
         method: "Runtime.evaluate",
         targetID: targetID,
@@ -46,9 +46,9 @@ func runtimeProtocolDispatchingBuildsEvaluateCommandAndDecodesResult() throws {
 
 @Test
 func runtimeProtocolDispatchingBuildsObjectCommandsAndDecodesPropertiesAndCollections() throws {
-    let key = RuntimeRemoteObjectIdentifierKey(
-        runtimeAgentTargetID: ProtocolTargetIdentifier("frame"),
-        objectID: RuntimeRemoteObjectIdentifier("object-1")
+    let key = RuntimeRemoteObject.ID(
+        runtimeAgentTargetID: ProtocolTarget.ID("frame"),
+        objectID: RuntimeRemoteObject.ProtocolID("object-1")
     )
 
     let propertiesCommand = try RuntimeProtocolCommands().command(
@@ -60,7 +60,7 @@ func runtimeProtocolDispatchingBuildsObjectCommandsAndDecodesPropertiesAndCollec
     #expect(propertiesParameters["fetchStart"] as? Int == 10)
     #expect(propertiesParameters["fetchCount"] as? Int == 20)
 
-    let propertiesResult = ProtocolCommandResult(
+    let propertiesResult = ProtocolCommand.Result(
         domain: .runtime,
         method: "Runtime.getProperties",
         targetID: key.runtimeAgentTargetID,
@@ -69,9 +69,9 @@ func runtimeProtocolDispatchingBuildsObjectCommandsAndDecodesPropertiesAndCollec
     let properties = try RuntimeProtocolCommands().propertiesResult(from: propertiesResult)
     #expect(properties.properties.first?.name == "length")
     #expect(properties.properties.first?.value?.value == .number(3))
-    #expect(properties.internalProperties.first?.value?.objectID == RuntimeRemoteObjectIdentifier("proto"))
+    #expect(properties.internalProperties.first?.value?.objectID == RuntimeRemoteObject.ProtocolID("proto"))
 
-    let entriesResult = ProtocolCommandResult(
+    let entriesResult = ProtocolCommand.Result(
         domain: .runtime,
         method: "Runtime.getCollectionEntries",
         targetID: key.runtimeAgentTargetID,
@@ -87,8 +87,8 @@ func runtimeProtocolDispatchingBuildsObjectCommandsAndDecodesPropertiesAndCollec
 func runtimeProtocolDispatchingAppliesExecutionContextEventToRuntimeState() async throws {
     let session = RuntimeState()
     let dispatcher = RuntimeProtocolEventDispatcher(handlers: [session])
-    let targetID = ProtocolTargetIdentifier("frame")
-    let event = ProtocolEventEnvelope(
+    let targetID = ProtocolTarget.ID("frame")
+    let event = ProtocolEvent(
         sequence: 1,
         domain: .runtime,
         method: "Runtime.executionContextCreated",
@@ -100,7 +100,7 @@ func runtimeProtocolDispatchingAppliesExecutionContextEventToRuntimeState() asyn
 
     let snapshot = session.snapshot()
     #expect(snapshot.executionContextsByKey[contextKey(targetID, 42)]?.targetID == targetID)
-    #expect(snapshot.executionContextsByKey[contextKey(targetID, 42)]?.frameID == DOMFrameIdentifier("frame-1"))
+    #expect(snapshot.executionContextsByKey[contextKey(targetID, 42)]?.frameID == DOMFrame.ID("frame-1"))
     #expect(snapshot.normalContextKeyByTargetID[targetID] == contextKey(targetID, 42))
 }
 
@@ -109,10 +109,10 @@ func runtimeProtocolDispatchingAppliesExecutionContextEventToRuntimeState() asyn
 func runtimeProtocolDispatchingAppliesExecutionContextTeardownEvents() async throws {
     let session = RuntimeState()
     let dispatcher = RuntimeProtocolEventDispatcher(handlers: [session])
-    let targetID = ProtocolTargetIdentifier("frame")
+    let targetID = ProtocolTarget.ID("frame")
 
     try await dispatcher.dispatch(
-        ProtocolEventEnvelope(
+        ProtocolEvent(
             sequence: 1,
             domain: .runtime,
             method: "Runtime.executionContextCreated",
@@ -121,7 +121,7 @@ func runtimeProtocolDispatchingAppliesExecutionContextTeardownEvents() async thr
         )
     )
     try await dispatcher.dispatch(
-        ProtocolEventEnvelope(
+        ProtocolEvent(
             sequence: 2,
             domain: .runtime,
             method: "Runtime.executionContextDestroyed",
@@ -133,7 +133,7 @@ func runtimeProtocolDispatchingAppliesExecutionContextTeardownEvents() async thr
     #expect(session.snapshot().normalContextKeyByTargetID[targetID] == nil)
 
     try await dispatcher.dispatch(
-        ProtocolEventEnvelope(
+        ProtocolEvent(
             sequence: 3,
             domain: .runtime,
             method: "Runtime.executionContextCreated",
@@ -142,7 +142,7 @@ func runtimeProtocolDispatchingAppliesExecutionContextTeardownEvents() async thr
         )
     )
     try await dispatcher.dispatch(
-        ProtocolEventEnvelope(
+        ProtocolEvent(
             sequence: 4,
             domain: .runtime,
             method: "Runtime.executionContextsCleared",
@@ -158,8 +158,8 @@ func runtimeProtocolDispatchingAppliesExecutionContextTeardownEvents() async thr
 @MainActor
 func runtimeSessionTracksUnsupportedOptionalCommandsPerTarget() {
     let session = RuntimeState()
-    let pageTargetID = ProtocolTargetIdentifier("page")
-    let frameTargetID = ProtocolTargetIdentifier("frame")
+    let pageTargetID = ProtocolTarget.ID("page")
+    let frameTargetID = ProtocolTarget.ID("frame")
 
     #expect(session.supportsCommand("Runtime.getDisplayableProperties", targetID: pageTargetID))
     session.markCommandUnsupported("Runtime.getDisplayableProperties", targetID: pageTargetID)
@@ -171,6 +171,6 @@ private func parametersObject(_ data: Data) throws -> [String: Any] {
     try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
 }
 
-private func contextKey(_ runtimeAgentTargetID: ProtocolTargetIdentifier, _ contextID: Int) -> RuntimeExecutionContextKey {
-    RuntimeExecutionContextKey(runtimeAgentTargetID: runtimeAgentTargetID, contextID: ExecutionContextID(contextID))
+private func contextKey(_ runtimeAgentTargetID: ProtocolTarget.ID, _ contextID: Int) -> RuntimeContext.Key {
+    RuntimeContext.Key(runtimeAgentTargetID: runtimeAgentTargetID, contextID: RuntimeContext.ID(contextID))
 }

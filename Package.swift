@@ -1,4 +1,4 @@
-// swift-tools-version: 6.2
+// swift-tools-version: 6.3
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 
 import PackageDescription
@@ -44,7 +44,7 @@ let package = Package(
     dependencies: [
         .package(
             url: "https://github.com/lynnswap/ObservationBridge.git",
-            exact: "0.11.1"
+            exact: "0.12.0"
         ),
         .package(
             url: "https://github.com/lynnswap/UIHostingMenu.git",
@@ -52,7 +52,7 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/lynnswap/SyntaxEditorUI.git",
-            exact: "0.12.0"
+            exact: "0.13.0"
         ),
         .package(
             url: "https://github.com/p-x9/MachOKit.git",
@@ -122,7 +122,8 @@ let package = Package(
             name: "WebInspectorCoreTests",
             dependencies: [
                 "WebInspectorCore",
-                "WebInspectorTransport"
+                "WebInspectorTransport",
+                "WebInspectorTestSupport"
             ],
             path: "Tests/WebInspectorCoreTests",
             swiftSettings: strictSwiftSettings
@@ -131,9 +132,18 @@ let package = Package(
             name: "WebInspectorTransportTests",
             dependencies: [
                 "WebInspectorCore",
-                "WebInspectorTransport"
+                "WebInspectorTransport",
+                "WebInspectorTestSupport"
             ],
             path: "Tests/WebInspectorTransportTests",
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
+            name: "WebInspectorTestSupport",
+            dependencies: [
+                "WebInspectorTransport"
+            ],
+            path: "Tests/WebInspectorTestSupport",
             swiftSettings: strictSwiftSettings
         ),
         .target(

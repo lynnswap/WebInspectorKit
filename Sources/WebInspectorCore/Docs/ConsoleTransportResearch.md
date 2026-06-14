@@ -28,7 +28,7 @@ This note records the WebKit Console and Runtime transport behavior that
   Console events are applied to Core yet.
 - `InspectorSession` owns `dom`, `css`, and `network`, but has no
   `ConsoleSession`.
-- `ProtocolTargetCapabilities` has `.dom`, `.runtime`, `.target`,
+- `ProtocolTarget.Capabilities` has `.dom`, `.runtime`, `.target`,
   `.inspector`, `.network`, and `.css`, but no `.console`.
 - Page default capabilities currently omit Console. If `Target.targetCreated`
   does not advertise a `domains` array, Console would not be discoverable from
@@ -44,7 +44,7 @@ This note records the WebKit Console and Runtime transport behavior that
   replay buffered messages. In `WebInspectorKit`, `Console.enable` should be
   appended after the existing bootstrap commands so backlog events do not race
   ahead of initial DOM/Network setup.
-- `ConsoleCallFramePayload` and `ConsoleStackTracePayload` already exist, but
+- `ConsoleMessage.CallFramePayload` and `ConsoleMessage.StackTracePayload` already exist, but
   they currently live in `NetworkProtocol.swift` because Network initiators use
   stack traces. Console should either reuse them from a shared protocol file or
   move them out of Network-specific ownership before adding a first-class
@@ -275,7 +275,7 @@ metadata, and a `networkRequestId`.
 `WebInspectorKit`, it should be related to the console event target:
 
 ```text
-Console event target + networkRequestId -> NetworkRequestIdentifierKey
+Console event target + networkRequestId -> NetworkRequest.ID
 ```
 
 This mirrors the existing Network invariant that raw `Network.RequestId` only
@@ -296,7 +296,7 @@ becomes unique with its protocol event target.
   observed fields when present. Console must follow the same rule as DOM/CSS:
   use advertised capabilities when available, and conservative defaults when
   they are absent.
-- Current `ProtocolTargetCapabilities.frameDefault` is empty. For frame Console
+- Current `ProtocolTarget.Capabilities.frameDefault` is empty. For frame Console
   support, do not default-enable frame Console unless `domains` advertises it or
   a verified target metadata path proves it for the running backend.
 - Page targets should default to Console support for legacy metadata-free
@@ -397,9 +397,9 @@ when probing is acceptable, and conservative defaults otherwise.
   Runtime agent so a later frame agent does not discard still-valid contexts
   from the page agent. Execution context IDs are only unique inside one Runtime
   agent, so Core, DOM compatibility storage, and Transport registries use
-  `RuntimeExecutionContextKey(runtimeAgentTargetID, contextID)` for context
+  `RuntimeContext.Key(runtimeAgentTargetID, contextID)` for context
   identity. Core exposes `RuntimeExecutionContext` as the observable live model
-  for UI/event integration, while `RuntimeExecutionContextRecord` is the
+  for UI/event integration, while `RuntimeContext.Record` is the
   Sendable value used by snapshots, DOM compatibility storage, and Transport.
 - Site Isolation frame Console means `ConsoleSession` must merge page, frame,
   worker, and service-worker message streams without dropping the target
@@ -419,17 +419,17 @@ Add first-class Runtime and Console domains beside DOM/CSS/Network:
   - command intents
 - `Sources/WebInspectorCore/Runtime/RuntimeModel.swift`
   - `@MainActor @Observable RuntimeState`
-  - `@MainActor @Observable RuntimeTargetState` for target-owned default
+  - `@MainActor @Observable RuntimeState.TargetState` for target-owned default
     execution context selection
-  - `@MainActor @Observable RuntimeAgentState` for agent-scoped execution
+  - `@MainActor @Observable RuntimeState.AgentState` for agent-scoped execution
     contexts, remote objects, and unsupported optional commands
   - `@MainActor @Observable RuntimeExecutionContext` for context selector and
     event-routing identity without replacing UI row identity
   - `@MainActor @Observable RuntimeRemoteObject` for future Console object
     previews/properties without replacing UI row identity
-  - `RuntimeExecutionContextRecord` for snapshots and actor/transport
+  - `RuntimeContext.Record` for snapshots and actor/transport
     handoff
-  - execution contexts keyed by `RuntimeExecutionContextKey`
+  - execution contexts keyed by `RuntimeContext.Key`
   - `RuntimeExecutionContext.targetID` for semantic ownership
   - `RuntimeExecutionContext.runtimeAgentTargetID` for agent-scoped clears
   - Runtime-agent-scoped remote object records, object group index, and
@@ -437,11 +437,11 @@ Add first-class Runtime and Console domains beside DOM/CSS/Network:
 - `Sources/WebInspectorCore/Console/ConsoleProtocol.swift`
   - identifiers
   - message/source/level/type/clear reason enums or raw wrappers
-  - `ConsoleMessagePayload`
+  - `ConsoleMessage.Payload`
   - command intents
 - `Sources/WebInspectorCore/Console/ConsoleModel.swift`
   - `@MainActor @Observable ConsoleSession`
-  - `@MainActor @Observable ConsoleTargetState` for target-owned message list,
+  - `@MainActor @Observable ConsoleSession.TargetState` for target-owned message list,
     repeat state, clear reason, warning count, error count, and unsupported
     optional commands
   - `@MainActor @Observable ConsoleMessage`
@@ -465,7 +465,7 @@ Add `ConsoleProtocolDispatching.swift`:
 - decode `Console.messageAdded`
 - decode `Console.messageRepeatCountUpdated`
 - decode `Console.messagesCleared`
-- preserve target id from `ProtocolEventEnvelope.targetID`
+- preserve target id from `ProtocolEvent.targetID`
 
 Add `RuntimeProtocolDispatching.swift`:
 
@@ -477,7 +477,7 @@ Add `RuntimeProtocolDispatching.swift`:
 - decode Runtime command results.
 - decode `Runtime.executionContextCreated`,
   `Runtime.executionContextDestroyed`, and `Runtime.executionContextsCleared`.
-- preserve `ProtocolEventEnvelope.sourceTargetID` as the Runtime agent source
+- preserve `ProtocolEvent.sourceTargetID` as the Runtime agent source
   when recording contexts and applying clear events.
 
 ### Runtime State
@@ -507,7 +507,7 @@ Observation-backed Core boundary.
 
 ### Capability Changes
 
-`ProtocolTargetCapabilities` should add:
+`ProtocolTarget.Capabilities` should add:
 
 ```swift
 package static let console = Self(rawValue: 1 << 6)
@@ -523,7 +523,7 @@ Check the `UInt8` capacity before adding further domains; bit 6 still fits.
 
 Useful tests before UI work:
 
-- `ProtocolTargetCapabilities` decodes `domains: ["Console", "Runtime"]`.
+- `ProtocolTarget.Capabilities` decodes `domains: ["Console", "Runtime"]`.
 - Metadata-free page target has Console capability.
 - Metadata-free frame target does not assume Console capability.
 - `ConsoleProtocolCommands` builds `Console.enable` as a target command.

@@ -1,346 +1,19 @@
 import Foundation
 import WebInspectorTransport
 
-@MainActor
-final class DOMSessionHighlightController {
-    var targetID: ProtocolTargetIdentifier?
-}
-
-@MainActor
-final class DOMSessionElementPickerController {
-    final class Session {
-        let targetID: ProtocolTargetIdentifier
-        fileprivate var acceptsInspectEvents = false
-
-        init(targetID: ProtocolTargetIdentifier) {
-            self.targetID = targetID
-        }
-    }
-
-    private var activeSession: Session?
-
-    var targetID: ProtocolTargetIdentifier? {
-        activeSession?.targetID
-    }
-
-    func begin(targetID: ProtocolTargetIdentifier) -> Session {
-        let session = Session(targetID: targetID)
-        activeSession = session
-        return session
-    }
-
-    @discardableResult
-    func beginAcceptingInspectEvents(for session: Session) -> Bool {
-        guard activeSession === session else {
-            return false
-        }
-        session.acceptsInspectEvents = true
-        return true
-    }
-
-    func currentAcceptingSession() -> Session? {
-        guard let activeSession,
-              activeSession.acceptsInspectEvents else {
-            return nil
-        }
-        return activeSession
-    }
-
-    func isCurrentAcceptingSession(_ session: Session) -> Bool {
-        activeSession === session && session.acceptsInspectEvents
-    }
-
-    @discardableResult
-    func clear() -> ProtocolTargetIdentifier? {
-        let targetID = activeSession?.targetID
-        activeSession = nil
-        return targetID
-    }
-}
-
-@MainActor
-final class DOMSessionDocumentRequestController {
-    private var handlesByTargetID: [ProtocolTargetIdentifier: DOMSessionDocumentRequestHandle] = [:]
-
-    func activeHandle(for targetID: ProtocolTargetIdentifier) -> DOMSessionDocumentRequestHandle? {
-        handlesByTargetID[targetID]
-    }
-
-    func register(_ handle: DOMSessionDocumentRequestHandle) {
-        handlesByTargetID[handle.targetID] = handle
-    }
-
-    func isActive(_ handle: DOMSessionDocumentRequestHandle) -> Bool {
-        handlesByTargetID[handle.targetID] === handle
-    }
-
-    func finish(_ handle: DOMSessionDocumentRequestHandle) {
-        guard isActive(handle) else {
-            return
-        }
-        handlesByTargetID.removeValue(forKey: handle.targetID)
-    }
-
-    func cancel(targetID: ProtocolTargetIdentifier) {
-        let handle = handlesByTargetID.removeValue(forKey: targetID)
-        handle?.cancel()
-    }
-
-    func cancelAll() {
-        let handles = Array(handlesByTargetID.values)
-        handlesByTargetID.removeAll()
-        for handle in handles {
-            handle.cancel()
-        }
-    }
-}
-
-@MainActor
-final class DOMSessionElementStyleHydrationController {
-    private final class Refresh {
-        let identity: CSSNodeStyleIdentity
-        fileprivate var task: Task<Void, Never>?
-
-        init(identity: CSSNodeStyleIdentity) {
-            self.identity = identity
-        }
-
-        func cancel() {
-            task?.cancel()
-            task = nil
-        }
-    }
-
-    private final class PropertyUpdateRequest {
-        let propertyID: CSSPropertyIdentifier
-        fileprivate var task: Task<Void, Never>?
-
-        init(propertyID: CSSPropertyIdentifier) {
-            self.propertyID = propertyID
-        }
-
-        func cancel() {
-            task?.cancel()
-            task = nil
-        }
-    }
-
-    private(set) var isActive = false
-    private var activeRefresh: Refresh?
-    private var propertyUpdateRequests: [CSSPropertyIdentifier: PropertyUpdateRequest] = [:]
-
-    @discardableResult
-    func setActive(_ isActive: Bool) -> Bool {
-        guard self.isActive != isActive else {
-            return false
-        }
-        self.isActive = isActive
-        return true
-    }
-
-    func isRefreshing(identity: CSSNodeStyleIdentity) -> Bool {
-        activeRefresh?.identity == identity
-    }
-
-    @discardableResult
-    func startRefresh(
-        identity: CSSNodeStyleIdentity,
-        operation: @escaping @MainActor (CSSNodeStyleIdentity) async -> Void
-    ) -> CSSNodeStyleIdentity? {
-        let cancelledIdentity = cancelRefresh()
-        let refresh = Refresh(identity: identity)
-        activeRefresh = refresh
-        refresh.task = Task { @MainActor [weak self, weak refresh] in
-            guard let refresh else {
-                return
-            }
-            defer {
-                self?.finishRefresh(refresh)
-            }
-            await operation(refresh.identity)
-        }
-        return cancelledIdentity
-    }
-
-    @discardableResult
-    func cancelRefresh() -> CSSNodeStyleIdentity? {
-        guard let refresh = activeRefresh else {
-            return nil
-        }
-        activeRefresh = nil
-        refresh.cancel()
-        return refresh.identity
-    }
-
-    @discardableResult
-    func startPropertyUpdate(
-        propertyID: CSSPropertyIdentifier,
-        operation: @escaping @MainActor (CSSPropertyIdentifier) async -> Void
-    ) -> Bool {
-        guard propertyUpdateRequests[propertyID] == nil else {
-            return false
-        }
-        let request = PropertyUpdateRequest(propertyID: propertyID)
-        propertyUpdateRequests[propertyID] = request
-        request.task = Task { @MainActor [weak self, weak request] in
-            guard let request else {
-                return
-            }
-            defer {
-                self?.finishPropertyUpdate(request)
-            }
-            await operation(request.propertyID)
-        }
-        return true
-    }
-
-    func cancelPropertyUpdates() {
-        let requests = Array(propertyUpdateRequests.values)
-        propertyUpdateRequests.removeAll()
-        for request in requests {
-            request.cancel()
-        }
-    }
-
-    private func finishRefresh(_ refresh: Refresh) {
-        guard activeRefresh === refresh else {
-            return
-        }
-        activeRefresh = nil
-    }
-
-    private func finishPropertyUpdate(_ request: PropertyUpdateRequest) {
-        guard propertyUpdateRequests[request.propertyID] === request else {
-            return
-        }
-        propertyUpdateRequests.removeValue(forKey: request.propertyID)
-    }
-}
-
-@MainActor
-final class DOMSessionDeleteUndoController {
-    weak var undoManager: UndoManager?
-    var states: [DOMSessionDeleteUndoState] = []
-    let operationQueue = DOMSessionDeleteUndoOperationQueue()
-}
-
-@MainActor
-final class DOMSessionDeleteUndoState {
-    let documentTargetID: ProtocolTargetIdentifier
-    let commandTargetID: ProtocolTargetIdentifier
-    var documentID: DOMDocumentIdentifier
-    var actionName: String
-
-    init(
-        documentTargetID: ProtocolTargetIdentifier,
-        commandTargetID: ProtocolTargetIdentifier,
-        documentID: DOMDocumentIdentifier,
-        actionName: String = "Delete Node"
-    ) {
-        self.documentTargetID = documentTargetID
-        self.commandTargetID = commandTargetID
-        self.documentID = documentID
-        self.actionName = actionName
-    }
-}
-
-@MainActor
-final class DOMSessionDeleteUndoOperationQueue {
-    private var generation: UInt64 = 0
-    private var tail: Task<Void, Never>?
-    private var tasksByID: [UInt64: Task<Void, Never>] = [:]
-    private var nextTaskID: UInt64 = 0
-
-    func enqueue(_ operation: @escaping @MainActor (UInt64) async -> Void) {
-        let previousOperation = tail
-        let operationGeneration = generation
-        nextTaskID &+= 1
-        let taskID = nextTaskID
-        let task = Task { @MainActor [weak self] in
-            await previousOperation?.value
-            guard let self else {
-                return
-            }
-            defer {
-                tasksByID[taskID] = nil
-            }
-            guard isCurrent(operationGeneration) else {
-                return
-            }
-            await operation(operationGeneration)
-        }
-        tail = task
-        tasksByID[taskID] = task
-    }
-
-    func invalidate() {
-        generation &+= 1
-        for task in tasksByID.values {
-            task.cancel()
-        }
-        tasksByID.removeAll()
-        tail = nil
-    }
-
-    func isCurrent(_ operationGeneration: UInt64) -> Bool {
-        Task.isCancelled == false && generation == operationGeneration
-    }
-}
-
-@MainActor
-final class DOMSessionDocumentRequestHandle {
-    let targetID: ProtocolTargetIdentifier
-    let targetKind: ProtocolTargetKind?
-    var task: Task<Void, Error>?
-
-    init(targetID: ProtocolTargetIdentifier, targetKind: ProtocolTargetKind?) {
-        self.targetID = targetID
-        self.targetKind = targetKind
-    }
-
-    func cancel() {
-        task?.cancel()
-        task = nil
-    }
-}
-
 private enum DOMInspectRoute {
-    case remoteObject(targetID: ProtocolTargetIdentifier, objectID: String)
-    case protocolNode(targetID: ProtocolTargetIdentifier, nodeID: DOMProtocolNodeID)
+    case remoteObject(targetID: ProtocolTarget.ID, objectID: String)
+    case protocolNode(targetID: ProtocolTarget.ID, nodeID: DOMNode.ProtocolID)
 }
 
 private struct TargetDestroyedEventParams: Decodable {
-    var targetId: ProtocolTargetIdentifier
+    var targetId: ProtocolTarget.ID
 }
 
 extension DOMSession {
-    package var canReloadDocument: Bool {
-        hasActiveCommandChannel && currentPageTargetID != nil
-    }
-
-    package var canBeginElementPicker: Bool {
-        hasActiveCommandChannel && currentPageTargetID != nil
-    }
-
-    package var canSelectElement: Bool {
-        hasActiveCommandChannel && currentPageRootNode != nil
-    }
-
-    package var canCopySelectedNodeText: Bool {
-        hasActiveCommandChannel && selectedNodeID != nil
-    }
-
-    package var canDeleteSelectedNode: Bool {
-        hasActiveCommandChannel && selectedNodeID != nil
-    }
-
-    private var hasActiveCommandChannel: Bool {
-        commandChannel?.acceptsActiveCommands == true
-    }
-
     package func bindProtocolChannel(
         _ commandChannel: ProtocolCommandChannel,
-        recordError: @escaping (InspectorSessionError?) -> Void
+        recordError: @escaping (InspectorSession.Error?) -> Void
     ) {
         self.commandChannel = commandChannel
         self.recordError = recordError
@@ -374,21 +47,37 @@ extension DOMSession {
         cancelCSSActionRequests()
     }
 
+    package func waitUntilDocumentRequestsIdle(targetID: ProtocolTarget.ID? = nil) async {
+        await documentRequests.waitUntilIdle(targetID: targetID)
+    }
+
+    package func waitUntilSelectedStyleRefreshIdle() async {
+        await styleHydration.waitUntilIdle()
+    }
+
+    package func waitUntilElementPickerIdle() async {
+        await elementPicker.waitUntilIdle()
+    }
+
+    package func waitUntilDeleteUndoOperationsIdle() async {
+        await deleteUndoController.operationQueue.waitUntilIdle()
+    }
+
     @discardableResult
-    package func perform(_ intent: DOMCommandIntent) async throws -> ProtocolCommandResult {
+    package func perform(_ intent: DOMCommand.Intent) async throws -> ProtocolCommand.Result {
         try await perform(intent, requiresActiveConnection: true)
     }
 
     @discardableResult
-    package func performDuringBootstrap(_ intent: DOMCommandIntent) async throws -> ProtocolCommandResult {
+    package func performDuringBootstrap(_ intent: DOMCommand.Intent) async throws -> ProtocolCommand.Result {
         try await perform(intent, requiresActiveConnection: false)
     }
 
     @discardableResult
     private func perform(
-        _ intent: DOMCommandIntent,
+        _ intent: DOMCommand.Intent,
         requiresActiveConnection: Bool
-    ) async throws -> ProtocolCommandResult {
+    ) async throws -> ProtocolCommand.Result {
         let result = try await send(intent, requiresActiveConnection: requiresActiveConnection)
 
         switch intent {
@@ -405,7 +94,7 @@ extension DOMSession {
                 break
             case let .failed(failure):
                 InspectorRuntimeLog.warning("requestNode.selectFailure target=\(targetID.rawValue) failure=\(failure)")
-                recordError?(InspectorSessionError(String(describing: failure)))
+                recordError?(InspectorSession.Error(String(describing: failure)))
             }
         case .requestChildNodes:
             break
@@ -427,16 +116,16 @@ extension DOMSession {
 
     @discardableResult
     private func send(
-        _ intent: DOMCommandIntent,
+        _ intent: DOMCommand.Intent,
         requiresActiveConnection: Bool = true
-    ) async throws -> ProtocolCommandResult {
+    ) async throws -> ProtocolCommand.Result {
         let commandChannel = try requireCommandChannel(requiresActiveConnection: requiresActiveConnection)
         let command = try protocolCommands.command(for: intent)
         return try await commandChannel.send(command)
     }
 
     @discardableResult
-    package func requestChildNodes(for nodeID: DOMNodeIdentifier, depth: Int = 3) async -> Bool {
+    package func requestChildNodes(for nodeID: DOMNode.ID, depth: Int = 3) async -> Bool {
         guard let intent = requestChildNodesIntent(
             for: nodeID,
             depth: depth,
@@ -448,19 +137,19 @@ extension DOMSession {
             try await perform(intent)
             return true
         } catch {
-            recordError?(InspectorSessionError(String(describing: error)))
+            recordError?(InspectorSession.Error(String(describing: error)))
             return false
         }
     }
 
-    package func highlightNode(for nodeID: DOMNodeIdentifier) async {
+    package func highlightNode(for nodeID: DOMNode.ID) async {
         guard let intent = highlightNodeIntent(for: nodeID) else {
             return
         }
         do {
             try await perform(intent)
         } catch {
-            recordError?(InspectorSessionError(String(describing: error)))
+            recordError?(InspectorSession.Error(String(describing: error)))
         }
     }
 
@@ -471,7 +160,7 @@ extension DOMSession {
         do {
             try await perform(intent)
         } catch {
-            recordError?(InspectorSessionError(String(describing: error)))
+            recordError?(InspectorSession.Error(String(describing: error)))
         }
     }
 
@@ -483,7 +172,7 @@ extension DOMSession {
         do {
             try await beginElementPicker()
         } catch {
-            recordError?(InspectorSessionError(String(describing: error)))
+            recordError?(InspectorSession.Error(String(describing: error)))
         }
     }
 
@@ -497,7 +186,7 @@ extension DOMSession {
                     targetID: targetID,
                     details: "current=\(currentPageTargetID?.rawValue ?? "nil") root=false"
                 )
-                throw InspectorSessionError("DOM is not ready for element selection.")
+                throw InspectorSession.Error("DOM is not ready for element selection.")
             }
             targetID = try currentPageTargetForDOMAction()
         }
@@ -507,19 +196,19 @@ extension DOMSession {
                 targetID: targetID,
                 details: "current=\(currentPageTargetID?.rawValue ?? "nil") root=\(currentPageRootNode != nil) connected=\(commandChannel != nil)"
             )
-            throw InspectorSessionError("DOM is not ready for element selection.")
+            throw InspectorSession.Error("DOM is not ready for element selection.")
         }
         if isSelectingElement {
             await cancelElementPicker()
         }
 
         let pickerSession = elementPicker.begin(targetID: targetID)
-        isSelectingElement = true
+        syncElementPickerSelectionState()
 
         do {
             guard let intent = setInspectModeEnabledIntent(targetID: targetID, enabled: true) else {
                 recordElementPickerFailure(reason: "inspectModeUnavailable", targetID: targetID)
-                throw InspectorSessionError("DOM inspect mode is not available.")
+                throw InspectorSession.Error("DOM inspect mode is not available.")
             }
             try await perform(intent)
             guard elementPicker.beginAcceptingInspectEvents(for: pickerSession) else {
@@ -547,40 +236,40 @@ extension DOMSession {
         do {
             try await perform(intent)
         } catch {
-            recordError?(InspectorSessionError(String(describing: error)))
+            recordError?(InspectorSession.Error(String(describing: error)))
         }
     }
 
-    package func copySelectedNodeText(_ kind: DOMNodeCopyTextKind) async throws -> String {
+    package func copySelectedNodeText(_ kind: DOMNode.CopyTextKind) async throws -> String {
         guard commandChannel != nil else {
-            throw InspectorSessionError("Inspector session is not attached.")
+            throw InspectorSession.Error("Inspector session is not attached.")
         }
         guard let nodeID = selectedNodeID else {
-            throw InspectorSessionError("No DOM node is selected.")
+            throw InspectorSession.Error("No DOM node is selected.")
         }
         return try await copyNodeText(kind, for: nodeID)
     }
 
-    package func copyNodeText(_ kind: DOMNodeCopyTextKind, for nodeID: DOMNode.ID) async throws -> String {
+    package func copyNodeText(_ kind: DOMNode.CopyTextKind, for nodeID: DOMNode.ID) async throws -> String {
         guard commandChannel != nil else {
-            throw InspectorSessionError("Inspector session is not attached.")
+            throw InspectorSession.Error("Inspector session is not attached.")
         }
         switch kind {
         case .html:
             let commandTargetID = try currentPageTargetForDOMAction()
             guard let intent = outerHTMLIntent(for: nodeID, commandTargetID: commandTargetID) else {
-                throw InspectorSessionError("DOM node is no longer available.")
+                throw InspectorSession.Error("DOM node is no longer available.")
             }
             let result = try await perform(intent)
             return try protocolCommands.outerHTML(from: result)
         case .selectorPath:
             guard let node = node(for: nodeID) else {
-                throw InspectorSessionError("DOM node is no longer available.")
+                throw InspectorSession.Error("DOM node is no longer available.")
             }
             return selectorPath(for: node)
         case .xPath:
             guard let node = node(for: nodeID) else {
-                throw InspectorSessionError("DOM node is no longer available.")
+                throw InspectorSession.Error("DOM node is no longer available.")
             }
             return xPath(for: node)
         }
@@ -588,10 +277,10 @@ extension DOMSession {
 
     package func deleteSelectedNode(undoManager: UndoManager?) async throws {
         guard commandChannel != nil else {
-            throw InspectorSessionError("Inspector session is not attached.")
+            throw InspectorSession.Error("Inspector session is not attached.")
         }
         guard let nodeID = selectedNodeID else {
-            throw InspectorSessionError("No DOM node is selected.")
+            throw InspectorSession.Error("No DOM node is selected.")
         }
         try await deleteNode(nodeID, undoManager: undoManager)
     }
@@ -647,11 +336,11 @@ extension DOMSession {
                 try await reloadDocument(targetID: targetID)
                 return currentPageRootNode != nil
             } catch {
-                recordError?(InspectorSessionError(String(describing: error)))
+                recordError?(InspectorSession.Error(String(describing: error)))
                 return false
             }
         } catch {
-            recordError?(InspectorSessionError(String(describing: error)))
+            recordError?(InspectorSession.Error(String(describing: error)))
             return false
         }
     }
@@ -661,7 +350,7 @@ extension DOMSession {
             try await refreshSelectedNodeStyles()
             recordError?(nil)
         } catch {
-            recordError?(InspectorSessionError(String(describing: error)))
+            recordError?(InspectorSession.Error(String(describing: error)))
         }
     }
 
@@ -677,7 +366,7 @@ extension DOMSession {
     }
 
     @discardableResult
-    package func requestSetCSSProperty(_ propertyID: CSSPropertyIdentifier, enabled: Bool) -> Bool {
+    package func requestSetCSSProperty(_ propertyID: CSSProperty.ID, enabled: Bool) -> Bool {
         guard commandChannel != nil,
               elementStyles.setStyleTextIntent(for: propertyID, enabled: enabled) != nil else {
             return false
@@ -694,19 +383,19 @@ extension DOMSession {
             do {
                 try await setCSSProperty(propertyID, enabled: enabled)
             } catch {
-                recordError?(InspectorSessionError(String(describing: error)))
+                recordError?(InspectorSession.Error(String(describing: error)))
                 try? await refreshSelectedNodeStyles()
             }
         }
     }
 
-    package func setCSSProperty(_ propertyID: CSSPropertyIdentifier, enabled: Bool) async throws {
+    package func setCSSProperty(_ propertyID: CSSProperty.ID, enabled: Bool) async throws {
         guard let intent = elementStyles.setStyleTextIntent(for: propertyID, enabled: enabled) else {
-            throw InspectorSessionError("CSS property is not editable.")
+            throw InspectorSession.Error("CSS property is not editable.")
         }
         let result = try await elementStyles.perform(intent)
         guard case let .setStyleText(targetID, _, _) = intent else {
-            throw InspectorSessionError("Unexpected CSS command intent.")
+            throw InspectorSession.Error("Unexpected CSS command intent.")
         }
         let style = try elementStyles.setStyleTextResult(from: result)
         elementStyles.applySetStyleTextResult(style, propertyID: propertyID, targetID: targetID)
@@ -734,7 +423,7 @@ extension DOMSession {
         }
     }
 
-    private func reconcileSelectedNodeStyles(_ identity: CSSNodeStyleIdentity) {
+    private func reconcileSelectedNodeStyles(_ identity: CSSNodeStyles.Identity) {
         switch elementStyles.refreshState(forSelected: identity) {
         case nil, .needsRefresh:
             hydrateSelectedNodeStyles(identity)
@@ -743,7 +432,7 @@ extension DOMSession {
         }
     }
 
-    private func hydrateSelectedNodeStyles(_ identity: CSSNodeStyleIdentity) {
+    private func hydrateSelectedNodeStyles(_ identity: CSSNodeStyles.Identity) {
         guard styleHydration.isRefreshing(identity: identity) == false else {
             return
         }
@@ -762,7 +451,7 @@ extension DOMSession {
             } catch is CancellationError {
                 return
             } catch {
-                self.recordError?(InspectorSessionError(String(describing: error)))
+                self.recordError?(InspectorSession.Error(String(describing: error)))
             }
         }) {
             elementStyles.cancelRefresh(identity: cancelledIdentity)
@@ -784,7 +473,7 @@ extension DOMSession {
         }
     }
 
-    private func refreshStyles(for identity: CSSNodeStyleIdentity) async throws {
+    private func refreshStyles(for identity: CSSNodeStyles.Identity) async throws {
         let commandChannel = try requireCommandChannel()
         let targetExists = await commandChannel.snapshot().targetsByID[identity.targetID] != nil
         guard targetExists else {
@@ -817,11 +506,11 @@ extension DOMSession {
         }
     }
 
-    package func inspectEvent(from event: ProtocolEventEnvelope) throws -> DOMInspectEvent? {
+    package func inspectEvent(from event: ProtocolEvent) throws -> DOMInspectEvent? {
         try protocolCommands.inspectEvent(from: event)
     }
 
-    package func applyTargetProtocolEvent(_ event: ProtocolEventEnvelope) throws -> TargetProtocolEventResult {
+    package func applyTargetProtocolEvent(_ event: ProtocolEvent) throws -> TargetProtocolEventResult {
         let result = try TargetProtocolEventDispatcher().dispatch(event, to: self)
         let destroyedTargetID = result.destroyedTargetID
         let targetCommit = result.targetCommit
@@ -837,7 +526,7 @@ extension DOMSession {
         return result
     }
 
-    package func handleDOMProtocolEvent(_ event: ProtocolEventEnvelope) async throws {
+    package func handleDOMProtocolEvent(_ event: ProtocolEvent) async throws {
         if let inspectEvent = try protocolCommands.inspectEvent(from: event) {
             await handleInspectEvent(inspectEvent)
             return
@@ -876,7 +565,7 @@ extension DOMSession {
         }
     }
 
-    package func startFrameTargetDocumentRequestIfNeeded(targetID: ProtocolTargetIdentifier, reason: String) {
+    package func startFrameTargetDocumentRequestIfNeeded(targetID: ProtocolTarget.ID, reason: String) {
         guard commandChannel != nil,
               let target = snapshot().targetsByID[targetID],
               target.kind == .frame,
@@ -888,7 +577,7 @@ extension DOMSession {
     }
 
     package func startPageTargetDocumentRequestAfterCommit(
-        targetID: ProtocolTargetIdentifier,
+        targetID: ProtocolTarget.ID,
         isBootstrapped: Bool,
         bootstrap: @escaping @MainActor () async throws -> Void
     ) {
@@ -904,7 +593,7 @@ extension DOMSession {
             do {
                 try await bootstrap()
             } catch {
-                recordError?(InspectorSessionError(String(describing: error)))
+                recordError?(InspectorSession.Error(String(describing: error)))
             }
         }
     }
@@ -922,6 +611,12 @@ extension DOMSession {
             )
             return
         }
+        guard elementPicker.beginCompletion(for: pickerSession) else {
+            return
+        }
+        defer {
+            elementPicker.finishCompletion(for: pickerSession)
+        }
         let activeTargetID = pickerSession.targetID
         do {
             try await resolvePickerSelection(event, activeTargetID: activeTargetID)
@@ -934,7 +629,7 @@ extension DOMSession {
                 targetID: activeTargetID,
                 details: "error=\(error)"
             )
-            recordError?(InspectorSessionError(String(describing: error)))
+            recordError?(InspectorSession.Error(String(describing: error)))
         }
 
         await completeElementPicker(pickerSession)
@@ -942,7 +637,7 @@ extension DOMSession {
 
     private func resolvePickerSelection(
         _ event: DOMInspectEvent,
-        activeTargetID: ProtocolTargetIdentifier
+        activeTargetID: ProtocolTarget.ID
     ) async throws {
         switch inspectRoute(for: event, activeTargetID: activeTargetID) {
         case let .remoteObject(targetID, objectID):
@@ -958,21 +653,21 @@ extension DOMSession {
             case let .success(intent):
                 try await perform(intent)
                 if let failure = snapshot().selection.failure {
-                    throw InspectorSessionError("DOM.requestNode failed: \(failure)")
+                    throw InspectorSession.Error("DOM.requestNode failed: \(failure)")
                 }
             case let .failure(failure):
-                throw InspectorSessionError("DOM.requestNode could not be issued: \(failure)")
+                throw InspectorSession.Error("DOM.requestNode could not be issued: \(failure)")
             }
         case let .protocolNode(targetID, nodeID):
             let result = selectProtocolNode(targetID: targetID, nodeID: nodeID)
             if case let .failure(failure) = result {
                 guard case .unresolvedNode = failure else {
-                    throw InspectorSessionError("DOM protocol-node selection failed: \(failure)")
+                    throw InspectorSession.Error("DOM protocol-node selection failed: \(failure)")
                 }
                 try await reloadDocument(targetID: targetID)
                 let retryResult = selectProtocolNode(targetID: targetID, nodeID: nodeID)
                 if case let .failure(retryFailure) = retryResult {
-                    throw InspectorSessionError("DOM protocol-node selection failed after reload: \(retryFailure)")
+                    throw InspectorSession.Error("DOM protocol-node selection failed after reload: \(retryFailure)")
                 }
             }
         }
@@ -980,7 +675,7 @@ extension DOMSession {
 
     private func inspectRoute(
         for event: DOMInspectEvent,
-        activeTargetID: ProtocolTargetIdentifier
+        activeTargetID: ProtocolTarget.ID
     ) -> DOMInspectRoute {
         switch event {
         case let .remoteObject(eventTargetID, remoteObject):
@@ -995,10 +690,10 @@ extension DOMSession {
     }
 
     private func inspectTargetID(
-        for remoteObject: RemoteObject,
-        eventTargetID: ProtocolTargetIdentifier?,
-        activeTargetID: ProtocolTargetIdentifier
-    ) -> ProtocolTargetIdentifier {
+        for remoteObject: DOMInspectEvent.RemoteObject,
+        eventTargetID: ProtocolTarget.ID?,
+        activeTargetID: ProtocolTarget.ID
+    ) -> ProtocolTarget.ID {
         if let executionContextID = remoteObject.injectedScriptID {
             let snapshot = snapshot()
             if let targetID = snapshot.executionContext(
@@ -1015,7 +710,7 @@ extension DOMSession {
     }
 
     private func reloadDocument(
-        targetID: ProtocolTargetIdentifier,
+        targetID: ProtocolTarget.ID,
         force: Bool = false
     ) async throws {
         guard let handle = startDocumentRequest(targetID: targetID, force: force, reason: "explicit") else {
@@ -1027,7 +722,7 @@ extension DOMSession {
 
     @discardableResult
     private func startDocumentRequest(
-        targetID: ProtocolTargetIdentifier,
+        targetID: ProtocolTarget.ID,
         force: Bool = false,
         reason: String
     ) -> DOMSessionDocumentRequestHandle? {
@@ -1064,7 +759,7 @@ extension DOMSession {
                     return
                 }
                 InspectorRuntimeLog.error("getDocument.failed target=\(targetID.rawValue) reason=\(reason) error=\(error)")
-                recordError?(InspectorSessionError(String(describing: error)))
+                recordError?(InspectorSession.Error(String(describing: error)))
                 throw error
             }
         }
@@ -1073,7 +768,7 @@ extension DOMSession {
         return handle
     }
 
-    private func refreshDocumentAfterBackendUpdate(_ event: ProtocolEventEnvelope) {
+    private func refreshDocumentAfterBackendUpdate(_ event: ProtocolEvent) {
         guard let targetID = event.targetID ?? currentPageTargetID else {
             return
         }
@@ -1108,12 +803,12 @@ extension DOMSession {
             } catch {
                 InspectorRuntimeLog.warning("frameOwnerHydration.failed intent=\(intent) error=\(error)")
                 clearOwnerHydrationTransaction(for: intent)
-                recordError?(InspectorSessionError(String(describing: error)))
+                recordError?(InspectorSession.Error(String(describing: error)))
             }
         }
     }
 
-    private func cancelDocumentRequest(targetID: ProtocolTargetIdentifier, reason _: String) {
+    private func cancelDocumentRequest(targetID: ProtocolTarget.ID, reason _: String) {
         documentRequests.cancel(targetID: targetID)
     }
 
@@ -1126,7 +821,7 @@ extension DOMSession {
         styleHydration.cancelPropertyUpdates()
     }
 
-    private func clearOwnerHydrationTransaction(for intent: DOMCommandIntent) {
+    private func clearOwnerHydrationTransaction(for intent: DOMCommand.Intent) {
         guard case let .requestChildNodes(targetID, _, _) = intent else {
             return
         }
@@ -1137,7 +832,7 @@ extension DOMSession {
         switch error {
         case is CancellationError:
             return true
-        case let error as TransportError:
+        case let error as TransportSession.Error:
             switch error {
             case .missingTarget, .replyTimeout:
                 return true
@@ -1149,7 +844,7 @@ extension DOMSession {
         }
     }
 
-    private func applyGetDocumentResult(_ result: ProtocolCommandResult) throws {
+    private func applyGetDocumentResult(_ result: ProtocolCommand.Result) throws {
         guard let targetID = result.targetID else {
             return
         }
@@ -1162,7 +857,7 @@ extension DOMSession {
         recordError?(nil)
     }
 
-    private func removeElementStyles(targetID: ProtocolTargetIdentifier) {
+    private func removeElementStyles(targetID: ProtocolTarget.ID) {
         elementStyles.removeStyles(targetID: targetID)
         syncSelectedElementStyles()
     }
@@ -1172,7 +867,7 @@ extension DOMSession {
     }
 
     private func applyElementPickerTargetLifecycle(
-        _ event: ProtocolEventEnvelope,
+        _ event: ProtocolEvent,
         targetCommit: TargetProtocolCommitResolution?
     ) {
         guard let activeTargetID = elementPicker.targetID else {
@@ -1206,7 +901,7 @@ extension DOMSession {
         }
     }
 
-    private func selectedStylesShouldRefresh(after event: ProtocolEventEnvelope) -> Bool {
+    private func selectedStylesShouldRefresh(after event: ProtocolEvent) -> Bool {
         switch event.method {
         case "DOM.attributeModified",
              "DOM.attributeRemoved",
@@ -1219,25 +914,29 @@ extension DOMSession {
         }
     }
 
-    private func currentPageTargetForDOMAction() throws -> ProtocolTargetIdentifier {
+    private func currentPageTargetForDOMAction() throws -> ProtocolTarget.ID {
         guard commandChannel != nil,
               let targetID = currentPageTargetID else {
-            throw InspectorSessionError("Inspector session is not attached to a DOM page.")
+            throw InspectorSession.Error("Inspector session is not attached to a DOM page.")
         }
         return targetID
     }
 
     private func clearElementPickerState(invalidatePendingSelection: Bool = false) {
         elementPicker.clear()
-        isSelectingElement = false
+        syncElementPickerSelectionState()
         if invalidatePendingSelection {
             selectNode(selectedNodeID)
         }
     }
 
+    private func syncElementPickerSelectionState() {
+        isSelectingElement = elementPicker.isSelecting
+    }
+
     private func recordElementPickerFailure(
         reason: String,
-        targetID: ProtocolTargetIdentifier? = nil,
+        targetID: ProtocolTarget.ID? = nil,
         details: String = ""
     ) {
         let resolvedTargetID = targetID ?? elementPicker.targetID
@@ -1264,13 +963,13 @@ extension DOMSession {
         do {
             try await perform(intent)
         } catch {
-            recordError?(InspectorSessionError(String(describing: error)))
+            recordError?(InspectorSession.Error(String(describing: error)))
         }
     }
 
     private func requireCommandChannel(requiresActiveConnection: Bool = true) throws -> ProtocolCommandChannel {
         guard let commandChannel else {
-            throw InspectorSessionError("Inspector session is not attached.")
+            throw InspectorSession.Error("Inspector session is not attached.")
         }
         if requiresActiveConnection {
             try commandChannel.requireAttached()
@@ -1280,12 +979,12 @@ extension DOMSession {
 
     private func performDeleteNode(_ nodeID: DOMNode.ID) async throws -> DOMSessionDeleteUndoState {
         guard commandChannel != nil else {
-            throw InspectorSessionError("Inspector session is not attached.")
+            throw InspectorSession.Error("Inspector session is not attached.")
         }
         let commandTargetID = try currentPageTargetForDOMAction()
         guard let identity = actionIdentity(for: nodeID, commandTargetID: commandTargetID),
               let intent = removeNodeIntent(for: nodeID, commandTargetID: identity.commandTargetID) else {
-            throw InspectorSessionError("DOM node is no longer available.")
+            throw InspectorSession.Error("DOM node is no longer available.")
         }
         let documentID = nodeID.documentID
 
@@ -1314,8 +1013,8 @@ extension DOMSession {
     }
 
     private func registerUndoDelete(_ state: DOMSessionDeleteUndoState, undoManager: UndoManager) {
-        rememberDeleteUndoManager(undoManager)
-        trackDeleteUndoState(state)
+        deleteUndoController.remember(undoManager)
+        deleteUndoController.track(state)
         undoManager.registerUndo(withTarget: self) { target in
             target.registerRedoDelete(state, undoManager: undoManager)
             target.enqueueDeleteUndoOperation { [weak target] generation in
@@ -1326,8 +1025,8 @@ extension DOMSession {
     }
 
     private func registerRedoDelete(_ state: DOMSessionDeleteUndoState, undoManager: UndoManager) {
-        rememberDeleteUndoManager(undoManager)
-        trackDeleteUndoState(state)
+        deleteUndoController.remember(undoManager)
+        deleteUndoController.track(state)
         undoManager.registerUndo(withTarget: self) { target in
             target.registerUndoDelete(state, undoManager: undoManager)
             target.enqueueDeleteUndoOperation { [weak target] generation in
@@ -1435,7 +1134,7 @@ extension DOMSession {
             return
         }
         clearDeleteUndoHistory(using: undoManager)
-        recordError?(InspectorSessionError(String(describing: error)))
+        recordError?(InspectorSession.Error(String(describing: error)))
     }
 
     private func deleteUndoStateIsCurrent(
@@ -1443,48 +1142,27 @@ extension DOMSession {
         undoManager: UndoManager,
         operation: String
     ) -> Bool {
-        guard currentDocumentID(for: state.documentTargetID) == state.documentID else {
-            clearDeleteUndoHistory(using: undoManager)
-            recordError?(InspectorSessionError("DOM document changed before \(operation)."))
-            return false
-        }
-        return true
+        deleteUndoController.stateIsCurrent(
+            state,
+            currentDocumentID: currentDocumentID(for: state.documentTargetID),
+            undoManager: undoManager,
+            undoTarget: self,
+            operation: operation,
+            recordError: { [weak self] error in self?.recordError?(error) }
+        )
     }
 
     private func updateDeleteUndoDocumentID(_ state: DOMSessionDeleteUndoState, undoManager: UndoManager) {
-        guard let documentID = currentDocumentID(for: state.documentTargetID) else {
-            clearDeleteUndoHistory(using: undoManager)
-            recordError?(InspectorSessionError("DOM document is unavailable after delete undo operation."))
-            return
-        }
-        var updatedTrackedState = false
-        for trackedState in deleteUndoController.states where trackedState.documentTargetID == state.documentTargetID {
-            trackedState.documentID = documentID
-            updatedTrackedState = true
-        }
-        if updatedTrackedState == false {
-            state.documentID = documentID
-        }
-    }
-
-    private func rememberDeleteUndoManager(_ undoManager: UndoManager) {
-        deleteUndoController.undoManager = undoManager
-    }
-
-    private func trackDeleteUndoState(_ state: DOMSessionDeleteUndoState) {
-        guard deleteUndoController.states.contains(where: { $0 === state }) == false else {
-            return
-        }
-        deleteUndoController.states.append(state)
+        deleteUndoController.updateDocumentID(
+            for: state,
+            currentDocumentID: currentDocumentID(for: state.documentTargetID),
+            undoManager: undoManager,
+            undoTarget: self,
+            recordError: { [weak self] error in self?.recordError?(error) }
+        )
     }
 
     private func clearDeleteUndoHistory(using undoManager: UndoManager? = nil) {
-        let manager = undoManager ?? deleteUndoController.undoManager
-        manager?.removeAllActions(withTarget: self)
-        if let manager, manager === deleteUndoController.undoManager {
-            deleteUndoController.undoManager = nil
-        }
-        deleteUndoController.states.removeAll()
-        deleteUndoController.operationQueue.invalidate()
+        deleteUndoController.clear(using: undoManager, undoTarget: self)
     }
 }

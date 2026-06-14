@@ -86,10 +86,10 @@ func targetCommitPreservesCommittedExecutionContextWhenIDsCollide() async throws
     await session.applyTargetCreated(.init(id: oldTargetID, kind: .page, isProvisional: true), makeCurrentMainPage: true)
     await session.applyTargetCreated(.init(id: newTargetID, kind: .page))
     await session.applyExecutionContextCreated(
-        RuntimeExecutionContextRecord(id: ExecutionContextID(7), targetID: oldTargetID, name: "old")
+        RuntimeContext.Record(id: RuntimeContext.ID(7), targetID: oldTargetID, name: "old")
     )
     await session.applyExecutionContextCreated(
-        RuntimeExecutionContextRecord(id: ExecutionContextID(7), targetID: newTargetID, name: "new")
+        RuntimeContext.Record(id: RuntimeContext.ID(7), targetID: newTargetID, name: "new")
     )
 
     await session.applyTargetCommitted(oldTargetID: oldTargetID, newTargetID: newTargetID)
@@ -165,8 +165,8 @@ func targetDestroyedRemovesExecutionContextsOwnedByRuntimeAgentTarget() async th
     await session.applyTargetCreated(.init(id: pageTargetID, kind: .page, frameID: mainFrameID), makeCurrentMainPage: true)
     await session.applyTargetCreated(.init(id: frameTargetID, kind: .frame, frameID: frameID, parentFrameID: mainFrameID))
     await session.applyExecutionContextCreated(
-        RuntimeExecutionContextRecord(
-            id: ExecutionContextID(7),
+        RuntimeContext.Record(
+            id: RuntimeContext.ID(7),
             targetID: frameTargetID,
             runtimeAgentTargetID: pageTargetID,
             frameID: frameID
@@ -340,7 +340,7 @@ func iframeOwnerProjectsFrameDocumentWithoutStoringItAsRegularChild() async thro
     let iframe = try #require(snapshot.nodesByID[iframeID])
     let projectionState = try #require(snapshot.frameDocumentProjections[frameTargetID])
 
-    #expect(iframe.ownerFrameID == DOMFrameIdentifier("main-frame"))
+    #expect(iframe.ownerFrameID == DOMFrame.ID("main-frame"))
     #expect(iframe.regularChildIDs.isEmpty)
     #expect(snapshot.nodesByID[frameRootID]?.parentID == nil)
     #expect(projectionState.ownerNodeID == iframeID)
@@ -796,9 +796,9 @@ func detachedRootCannotOverwriteConnectedPageDocumentNodes() async throws {
     _ = await session.replaceDocumentRoot(pageDocumentWithoutIframe(), targetID: pageTargetID)
     let before = await session.snapshot()
 
-    let htmlKey = DOMNodeCurrentKey(targetID: pageTargetID, nodeID: .init(2))
-    let headKey = DOMNodeCurrentKey(targetID: pageTargetID, nodeID: .init(3))
-    let bodyKey = DOMNodeCurrentKey(targetID: pageTargetID, nodeID: .init(4))
+    let htmlKey = DOMNode.CurrentKey(targetID: pageTargetID, nodeID: .init(2))
+    let headKey = DOMNode.CurrentKey(targetID: pageTargetID, nodeID: .init(3))
+    let bodyKey = DOMNode.CurrentKey(targetID: pageTargetID, nodeID: .init(4))
     let htmlID = try #require(before.currentNodeIDByKey[htmlKey])
     let headID = try #require(before.currentNodeIDByKey[headKey])
     let bodyID = try #require(before.currentNodeIDByKey[bodyKey])
@@ -889,7 +889,7 @@ func setChildNodesPrunesOmittedDescendantsWhenReusingChildNode() throws {
     session.applySetChildNodes(
         parent: bodyID,
         children: [
-            DOMNodePayload(
+            DOMNode.Payload(
                 nodeID: .init(5),
                 nodeType: .element,
                 nodeName: "div",
@@ -979,7 +979,7 @@ func clearingNodeSelectionCancelsPendingInspectSelection() async throws {
         targetID: pageTargetID,
         objectID: "page-object"
     )
-    let requestID: SelectionRequestIdentifier
+    let requestID: DOMSelection.Request.ID
     guard case let .success(.requestNode(id, _, _)) = command else {
         Issue.record("Expected pending requestNode selection")
         return
@@ -1001,6 +1001,82 @@ func clearingNodeSelectionCancelsPendingInspectSelection() async throws {
     #expect(expected == nil)
     #expect(received == requestID)
     #expect(await session.selectedNodeID == nil)
+}
+
+@Test
+func replacingInspectSelectionRequestCancelsPreviousTransactionAndIgnoresOldReply() async throws {
+    let pageTargetID = ProtocolTarget.ID("page-main")
+    let session = await DOMSession()
+
+    await session.applyTargetCreated(.init(id: pageTargetID, kind: .page), makeCurrentMainPage: true)
+    _ = await session.replaceDocumentRoot(pageDocumentWithoutIframe(), targetID: pageTargetID)
+
+    let firstCommand = await session.beginInspectSelectionRequest(
+        targetID: pageTargetID,
+        objectID: "first-object"
+    )
+    let firstRequestID: DOMSelection.Request.ID
+    guard case let .success(.requestNode(id, _, _)) = firstCommand else {
+        Issue.record("Expected first pending requestNode selection")
+        return
+    }
+    firstRequestID = id
+
+    let secondCommand = await session.beginInspectSelectionRequest(
+        targetID: pageTargetID,
+        objectID: "second-object"
+    )
+    let secondRequestID: DOMSelection.Request.ID
+    guard case let .success(.requestNode(id, _, _)) = secondCommand else {
+        Issue.record("Expected second pending requestNode selection")
+        return
+    }
+    secondRequestID = id
+
+    var snapshot = await session.snapshot()
+    #expect(snapshot.selection.pendingRequest?.id == secondRequestID)
+    var requestNodeTransactions = snapshot.transactions.filter { transaction in
+        if case .requestNode = transaction.kind {
+            return true
+        }
+        return false
+    }
+    #expect(requestNodeTransactions.map(\.kind) == [
+        .requestNode(selectionRequestID: secondRequestID, objectID: "second-object")
+    ])
+
+    let staleResult = await session.applyRequestNodeResult(
+        selectionRequestID: firstRequestID,
+        targetID: pageTargetID,
+        nodeID: .init(2)
+    )
+    guard case let .failed(.staleSelectionRequest(expected, received)) = staleResult else {
+        Issue.record("Expected stale first request to be rejected")
+        return
+    }
+    #expect(expected == secondRequestID)
+    #expect(received == firstRequestID)
+
+    snapshot = await session.snapshot()
+    #expect(snapshot.selection.pendingRequest?.id == secondRequestID)
+    #expect(snapshot.selection.failure == nil)
+    requestNodeTransactions = snapshot.transactions.filter { transaction in
+        if case .requestNode = transaction.kind {
+            return true
+        }
+        return false
+    }
+    #expect(requestNodeTransactions.map(\.kind) == [
+        .requestNode(selectionRequestID: secondRequestID, objectID: "second-object")
+    ])
+
+    let selectedNodeID = try await session.applyRequestNodeResult(
+        selectionRequestID: secondRequestID,
+        targetID: pageTargetID,
+        nodeID: .init(2)
+    ).get()
+    #expect(await session.selectedNodeID == selectedNodeID)
+    #expect((await session.snapshot()).selection.pendingRequest == nil)
 }
 
 @Test
@@ -1036,7 +1112,7 @@ func unknownProtocolNodeSelectionRecordsFailure() async throws {
         Issue.record("Expected unresolved protocol node failure")
         return
     }
-    #expect(key == DOMNodeCurrentKey(targetID: pageTargetID, nodeID: .init(999)))
+    #expect(key == DOMNode.CurrentKey(targetID: pageTargetID, nodeID: .init(999)))
     #expect((await session.snapshot()).selection.selectedNodeID == htmlID)
 }
 
@@ -1098,7 +1174,7 @@ func selectedNodeActionIntentsUseCommandIdentity() async throws {
     _ = await session.replaceDocumentRoot(pageDocumentWithoutIframe(), targetID: pageTargetID)
     let htmlID = try #require((await session.snapshot()).currentNodeIDByKey[.init(targetID: pageTargetID, nodeID: .init(2))])
 
-    let identity = DOMActionIdentity(
+    let identity = DOMAction.Identity(
         documentTargetID: pageTargetID,
         rawNodeID: .init(2),
         commandTargetID: pageTargetID,
@@ -1131,7 +1207,7 @@ func frameDocumentActionIdentityUsesMainTargetScopedCommandNode() async throws {
     #expect(await session.outerHTMLIntent(for: frameHTMLID, commandTargetID: pageTargetID) == .getOuterHTML(identity: identity))
     #expect(await session.removeNodeIntent(for: frameHTMLID, commandTargetID: pageTargetID) == .removeNode(identity: identity))
 
-    let highlightIdentity = DOMActionIdentity(
+    let highlightIdentity = DOMAction.Identity(
         documentTargetID: frameTargetID,
         rawNodeID: .init(2),
         commandTargetID: frameTargetID,
@@ -1147,7 +1223,7 @@ func requestChildNodesIntentUsesNodeOwningTargetAndDepth() async throws {
 
     await session.applyTargetCreated(.init(id: pageTargetID, kind: .page), makeCurrentMainPage: true)
     _ = await session.replaceDocumentRoot(
-        DOMNodePayload(
+        DOMNode.Payload(
             nodeID: .init(1),
             nodeType: .element,
             nodeName: "article",
@@ -1173,7 +1249,7 @@ func setChildNodesAppliesToCurrentDocumentWithoutTransaction() async throws {
         document(
             nodeID: 1,
             children: [
-                DOMNodePayload(
+                DOMNode.Payload(
                     nodeID: .init(4),
                     nodeType: .element,
                     nodeName: "BODY",
@@ -1281,7 +1357,7 @@ func iframeAdRefreshSelectionUsesNewFrameDocumentGenerationAndSelectedProjection
         targetID: frameTargetID,
         objectID: "frame-object"
     )
-    let requestID: SelectionRequestIdentifier
+    let requestID: DOMSelection.Request.ID
     guard case let .success(.requestNode(id, targetID, objectID)) = command else {
         Issue.record("Expected frame-target requestNode")
         return
@@ -1324,7 +1400,7 @@ func staleSelectionRequestIsRejectedAfterFrameDocumentRefresh() async throws {
         targetID: frameTargetID,
         objectID: "frame-object"
     )
-    let requestID: SelectionRequestIdentifier
+    let requestID: DOMSelection.Request.ID
     guard case let .success(.requestNode(id, _, _)) = command else {
         Issue.record("Expected frame-target requestNode")
         return
@@ -1360,7 +1436,7 @@ func requestNodeReplyAfterDocumentInvalidationIsRejected() async throws {
         targetID: pageTargetID,
         objectID: "page-object"
     )
-    let requestID: SelectionRequestIdentifier
+    let requestID: DOMSelection.Request.ID
     guard case let .success(.requestNode(id, _, _)) = command else {
         Issue.record("Expected pending requestNode selection")
         return
@@ -1437,9 +1513,9 @@ private func document(
     nodeID: Int,
     documentURL: String? = nil,
     baseURL: String? = nil,
-    children: [DOMNodePayload] = []
-) -> DOMNodePayload {
-    DOMNodePayload(
+    children: [DOMNode.Payload] = []
+) -> DOMNode.Payload {
+    DOMNode.Payload(
         nodeID: .init(nodeID),
         nodeType: .document,
         nodeName: "#document",
@@ -1452,8 +1528,8 @@ private func document(
 private func pageDocument(
     iframeFrameID _: DOMFrame.ID,
     ownerFrameID: DOMFrame.ID = .init("main-frame"),
-    iframeAttributes: [DOMAttribute] = [.init(name: "src", value: "https://frame.example/ad")]
-) -> DOMNodePayload {
+    iframeAttributes: [DOMNode.Attribute] = [.init(name: "src", value: "https://frame.example/ad")]
+) -> DOMNode.Payload {
     document(
         nodeID: 1,
         documentURL: "https://page.example/",
@@ -1482,7 +1558,7 @@ private func pageDocument(
     )
 }
 
-private func pageDocumentWithDuplicateIframeURLs() -> DOMNodePayload {
+private func pageDocumentWithDuplicateIframeURLs() -> DOMNode.Payload {
     document(
         nodeID: 1,
         documentURL: "https://page.example/",
@@ -1516,7 +1592,7 @@ private func pageDocumentWithDuplicateIframeURLs() -> DOMNodePayload {
     )
 }
 
-private func pageDocumentWithDuplicateIframeURLsAndFrameIDs() -> DOMNodePayload {
+private func pageDocumentWithDuplicateIframeURLsAndFrameIDs() -> DOMNode.Payload {
     document(
         nodeID: 1,
         documentURL: "https://page.example/",
@@ -1550,7 +1626,7 @@ private func pageDocumentWithDuplicateIframeURLsAndFrameIDs() -> DOMNodePayload 
     )
 }
 
-private func pageDocumentWithoutIframe() -> DOMNodePayload {
+private func pageDocumentWithoutIframe() -> DOMNode.Payload {
     document(
         nodeID: 1,
         children: [
@@ -1570,7 +1646,7 @@ private func nestedOwnerFrameDocument(
     documentURL: String,
     nestedFrameURL: String,
     ownerFrameID: DOMFrame.ID
-) -> DOMNodePayload {
+) -> DOMNode.Payload {
     document(
         nodeID: 1,
         documentURL: documentURL,
@@ -1599,7 +1675,7 @@ private func nestedOwnerFrameDocument(
     )
 }
 
-private func pageDocumentWithNestedUnloadedOwner() -> DOMNodePayload {
+private func pageDocumentWithNestedUnloadedOwner() -> DOMNode.Payload {
     document(
         nodeID: 1,
         documentURL: "https://page.example/",
@@ -1614,7 +1690,7 @@ private func pageDocumentWithNestedUnloadedOwner() -> DOMNodePayload {
                         nodeID: 4,
                         name: "body",
                         children: [
-                            DOMNodePayload(
+                            DOMNode.Payload(
                                 nodeID: .init(30),
                                 nodeType: .element,
                                 nodeName: "div",
@@ -1633,7 +1709,7 @@ private func frameDocument(
     rootNodeID: Int,
     documentURL: String = "https://frame.example/ad",
     selectedNodeName: String = "img"
-) -> DOMNodePayload {
+) -> DOMNode.Payload {
     document(
         nodeID: rootNodeID,
         documentURL: documentURL,
@@ -1659,27 +1735,27 @@ private func frameDocument(
     )
 }
 
-private func contextKey(_ runtimeAgentTargetID: ProtocolTargetIdentifier, _ contextID: Int) -> RuntimeExecutionContextKey {
-    RuntimeExecutionContextKey(runtimeAgentTargetID: runtimeAgentTargetID, contextID: ExecutionContextID(contextID))
+private func contextKey(_ runtimeAgentTargetID: ProtocolTarget.ID, _ contextID: Int) -> RuntimeContext.Key {
+    RuntimeContext.Key(runtimeAgentTargetID: runtimeAgentTargetID, contextID: RuntimeContext.ID(contextID))
 }
 
-private extension DOMNodePayload {
+private extension DOMNode.Payload {
     static func element(
         nodeID: Int,
         name: String,
         ownerFrameID: DOMFrame.ID? = nil,
         documentURL: String? = nil,
         baseURL: String? = nil,
-        attributes: [DOMAttribute] = [],
-        children: [DOMNodePayload] = [],
-        shadowRoots: [DOMNodePayload] = [],
-        templateContent: DOMNodePayload? = nil,
-        beforePseudoElement: DOMNodePayload? = nil,
-        otherPseudoElements: [DOMNodePayload] = [],
-        afterPseudoElement: DOMNodePayload? = nil,
+        attributes: [DOMNode.Attribute] = [],
+        children: [DOMNode.Payload] = [],
+        shadowRoots: [DOMNode.Payload] = [],
+        templateContent: DOMNode.Payload? = nil,
+        beforePseudoElement: DOMNode.Payload? = nil,
+        otherPseudoElements: [DOMNode.Payload] = [],
+        afterPseudoElement: DOMNode.Payload? = nil,
         pseudoType: String? = nil
-    ) -> DOMNodePayload {
-        DOMNodePayload(
+    ) -> DOMNode.Payload {
+        DOMNode.Payload(
             nodeID: .init(nodeID),
             nodeType: .element,
             nodeName: name,

@@ -5,9 +5,10 @@ import ObservationBridge
 import SyntaxEditorUI
 import UIKit
 
-struct NetworkBodyPreviewMetadata: Equatable {
-    var mimeType: String?
-    var url: String?
+extension NetworkBodyViewController {
+    struct PreviewMetadata: Equatable {        var mimeType: String?
+        var url: String?
+    }
 }
 
 @MainActor
@@ -45,10 +46,10 @@ final class NetworkBodyViewController: UIViewController {
         scrollView.addSubview(imageView)
         return scrollView
     }()
-    private let observationScope = ObservationScope()
-    private let scrollEdgeState: NetworkDetailScrollEdgeState?
+    private var bodyObservation: PortableObservationTracking.Token?
+    private weak var scrollEdgeSink: (any NetworkBodyScrollEdgeSink)?
     private weak var body: NetworkBody?
-    private var metadata: NetworkBodyPreviewMetadata?
+    private var metadata: NetworkBodyViewController.PreviewMetadata?
     private var hasDisplayedBody = false
     private var mediaPlayerViewController: AVPlayerViewController?
     private var mediaTemporaryFile: MediaTemporaryFile?
@@ -57,11 +58,11 @@ final class NetworkBodyViewController: UIViewController {
     private var shouldResetImageZoomOnNextLayout = false
     private var imagePreviewLayoutState: ImagePreviewLayoutState?
 #if DEBUG
-    private var bodyObservationDelivery: ObservationDelivery?
+    private var bodyObservationDelivery: PortableObservationTracking.Token?
 #endif
 
-    init(scrollEdgeState: NetworkDetailScrollEdgeState? = nil) {
-        self.scrollEdgeState = scrollEdgeState
+    init(scrollEdgeSink: (any NetworkBodyScrollEdgeSink)? = nil) {
+        self.scrollEdgeSink = scrollEdgeSink
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -87,7 +88,7 @@ final class NetworkBodyViewController: UIViewController {
     }
 
     isolated deinit {
-        observationScope.cancelAll()
+        bodyObservation?.cancel()
         removeTemporaryMediaFile(at: mediaTemporaryFile?.fileURL)
     }
 
@@ -95,7 +96,7 @@ final class NetworkBodyViewController: UIViewController {
         display(body: body, metadata: nil)
     }
 
-    func display(body: NetworkBody?, metadata: NetworkBodyPreviewMetadata?) {
+    func display(body: NetworkBody?, metadata: NetworkBodyViewController.PreviewMetadata?) {
         guard hasDisplayedBody == false || self.body !== body else {
             guard self.metadata != metadata else {
                 return
@@ -117,7 +118,7 @@ final class NetworkBodyViewController: UIViewController {
         metadata = nil
         startObserving(body: nil)
         hideMediaPreview()
-        scrollEdgeState?.contentScrollView = nil
+        scrollEdgeSink?.contentScrollView = nil
     }
 
     private func configureSyntaxView() {
@@ -129,6 +130,7 @@ final class NetworkBodyViewController: UIViewController {
         syntaxView.contentInsetAdjustmentBehavior = .automatic
         syntaxView.keyboardDismissMode = .onDrag
         syntaxView.accessibilityIdentifier = "WebInspector.Network.BodyView"
+        applyScrollEdgeObservedBackgrounds()
         view.addSubview(syntaxView)
         view.addSubview(imageScrollView)
 
@@ -156,31 +158,53 @@ final class NetworkBodyViewController: UIViewController {
     }
 
     private func applyBackgroundFromTraits() {
-        view.backgroundColor = webInspectorBackgroundPolicy.backgroundColor
+        let backgroundColor = webInspectorBackgroundPolicy.backgroundColor
+        view.backgroundColor = backgroundColor
+        applyScrollEdgeObservedBackgrounds(backgroundColor: backgroundColor)
+    }
+
+    private func applyScrollEdgeObservedBackgrounds(
+        backgroundColor: UIColor? = nil
+    ) {
+        let backgroundColor = backgroundColor ?? webInspectorBackgroundPolicy.backgroundColor
+        webInspectorConfigureScrollEdgeObservedScrollView(
+            syntaxView,
+            backgroundColor: backgroundColor,
+            traitCollection: traitCollection
+        )
+        webInspectorConfigureScrollEdgeObservedScrollView(
+            imageScrollView,
+            backgroundColor: backgroundColor,
+            traitCollection: traitCollection
+        )
     }
 
     private func startObserving(body: NetworkBody?) {
-        observationScope.cancelAll()
+        bodyObservation?.cancel()
+        bodyObservation = nil
 #if DEBUG
         bodyObservationDelivery = nil
 #endif
         guard let body else {
             return
         }
-        let delivery = observationScope.observe(body) { [weak self] _, body in
-            guard let self, body === self.body else {
+        let token = withPortableContinuousObservation { [weak self, weak body] _ in
+            guard let self,
+                  let body,
+                  body === self.body else {
                 return
             }
             self.renderBody(body)
         }
+        bodyObservation = token
 #if DEBUG
-        bodyObservationDelivery = delivery
+        bodyObservationDelivery = token
 #endif
     }
 
     private func renderBody(_ body: NetworkBody?) {
         let displayText: String
-        let syntaxKind: NetworkBodySyntaxKind
+        let syntaxKind: NetworkBody.SyntaxKind
         guard let body else {
             hideMediaPreview()
             applyBodyDisplay(
@@ -215,7 +239,7 @@ final class NetworkBodyViewController: UIViewController {
         applyBodyDisplay(text: displayText, syntaxKind: syntaxKind)
     }
 
-    private func localizedDescription(for error: NetworkBodyFetchError) -> String {
+    private func localizedDescription(for error: NetworkBody.FetchError) -> String {
         switch error {
         case .unavailable:
             String(localized: "network.body.fetch.error.unavailable", bundle: .module)
@@ -228,7 +252,7 @@ final class NetworkBodyViewController: UIViewController {
 
     private func applyBodyDisplay(
         text: String,
-        syntaxKind: NetworkBodySyntaxKind
+        syntaxKind: NetworkBody.SyntaxKind
     ) {
         let language = syntaxKind.language
         if syntaxModel.language != language {
@@ -258,8 +282,8 @@ final class NetworkBodyViewController: UIViewController {
         return true
     }
 
-    private func mediaPayload(for body: NetworkBody) -> NetworkBodyMediaPayload? {
-        guard let previewKind = NetworkMediaPreviewSupport.previewKind(
+    private func mediaPayload(for body: NetworkBody) -> NetworkBodyViewController.MediaPayload? {
+        guard let previewKind = NetworkRequest.Display.MediaPreviewSupport.previewKind(
             mimeType: metadata?.mimeType,
             url: metadata?.url
         ) else {
@@ -312,7 +336,8 @@ final class NetworkBodyViewController: UIViewController {
         hideImagePreview()
         removeMediaPlayerViewController()
         syntaxView.isHidden = false
-        scrollEdgeState?.contentScrollView = syntaxView
+        applyScrollEdgeObservedBackgrounds()
+        scrollEdgeSink?.contentScrollView = syntaxView
     }
 
     private func showImagePreview(_ image: UIImage) {
@@ -320,7 +345,8 @@ final class NetworkBodyViewController: UIViewController {
         removeCachedTemporaryMediaFile()
         syntaxView.isHidden = true
         imageScrollView.isHidden = false
-        scrollEdgeState?.contentScrollView = imageScrollView
+        applyScrollEdgeObservedBackgrounds()
+        scrollEdgeSink?.contentScrollView = imageScrollView
         shouldResetImageZoomOnNextLayout = true
         imagePreviewLayoutState = nil
         imageView.image = image
@@ -334,7 +360,7 @@ final class NetworkBodyViewController: UIViewController {
     private func showMoviePreview(_ url: URL) {
         hideImagePreview()
         syntaxView.isHidden = true
-        scrollEdgeState?.contentScrollView = nil
+        scrollEdgeSink?.contentScrollView = nil
         if let temporaryFileURL = mediaTemporaryFile?.fileURL, temporaryFileURL != url {
             removeCachedTemporaryMediaFile()
         }
@@ -521,9 +547,10 @@ extension NetworkBodyViewController: UIScrollViewDelegate {
     }
 }
 
-private enum NetworkBodyMediaPayload {
-    case image(UIImage)
-    case movie(URL)
+extension NetworkBodyViewController {
+    private enum MediaPayload {        case image(UIImage)
+        case movie(URL)
+    }
 }
 
 private struct ImagePreviewLayoutState {
@@ -572,7 +599,7 @@ private func playableRemoteMediaURL(_ url: String?) -> URL? {
 }
 
 private func mediaFileExtension(mimeType: String?, url: String?) -> String {
-    NetworkMediaPreviewSupport.temporaryFileExtension(mimeType: mimeType, url: url)
+    NetworkRequest.Display.MediaPreviewSupport.temporaryFileExtension(mimeType: mimeType, url: url)
 }
 
 private func removeTemporaryMediaFile(at url: URL?) {
@@ -582,7 +609,7 @@ private func removeTemporaryMediaFile(at url: URL?) {
     try? FileManager.default.removeItem(at: url)
 }
 
-private extension NetworkBodySyntaxKind {
+private extension NetworkBody.SyntaxKind {
     var language: SyntaxLanguage {
         switch self {
         case .plainText:
@@ -639,7 +666,7 @@ extension NetworkBodyViewController {
         return ObjectIdentifier(player)
     }
 
-    var bodyObservationDeliveryForTesting: ObservationDelivery? {
+    var bodyObservationDeliveryForTesting: PortableObservationTracking.Token? {
         bodyObservationDelivery
     }
 }

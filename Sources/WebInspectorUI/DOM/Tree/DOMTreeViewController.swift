@@ -7,7 +7,7 @@ import UIKit
 package final class DOMTreeViewController: UIViewController {
     private let treeView: DOMTreeTextView
     private weak var inspection: AttachedInspection?
-    private let observationScope = ObservationScope()
+    private var domRootObservation: PortableObservationTracking.Token?
     private var isEnsuringDOMDocumentLoaded = false
 
     package var domTreeUndoManager: UndoManager? {
@@ -60,7 +60,7 @@ package final class DOMTreeViewController: UIViewController {
     }
 
     isolated deinit {
-        observationScope.cancelAll()
+        domRootObservation?.cancel()
     }
 
     override package func loadView() {
@@ -92,8 +92,15 @@ package final class DOMTreeViewController: UIViewController {
     }
 
     private func startObservingDOMRoot(inspection: AttachedInspection) {
-        observationScope.cancelAll()
-        observationScope.observe(inspection.dom) { [weak self] _, _ in
+        domRootObservation?.cancel()
+        domRootObservation = withPortableContinuousObservation { [weak self, weak inspection] event in
+            guard let dom = inspection?.dom else {
+                return
+            }
+            _ = dom.treeRevision
+            guard event.kind == .initial || event.matches(\DOMSession.treeRevision) else {
+                return
+            }
             self?.ensureDOMDocumentLoadedIfNeeded()
         }
     }

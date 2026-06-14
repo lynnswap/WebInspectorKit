@@ -70,22 +70,22 @@ enum NetworkPreviewFixtures {
         requestID: String,
         url: String,
         method: String = "GET",
-        resourceType: NetworkResourceType,
+        resourceType: NetworkRequest.ResourceType,
         responseMimeType: String,
         status: Int,
         statusText: String,
         timestamp: Double,
         encodedBodyLength: Int
     ) -> NetworkRequest.ID {
-        let targetID = ProtocolTargetIdentifier("preview-page")
-        let requestID = NetworkRequestIdentifier(requestID)
+        let targetID = ProtocolTarget.ID("preview-page")
+        let requestID = NetworkRequest.ProtocolID(requestID)
         let key = network.applyRequestWillBeSent(
             targetID: targetID,
             requestID: requestID,
-            frameID: DOMFrameIdentifier("preview-frame"),
+            frameID: DOMFrame.ID("preview-frame"),
             loaderID: "preview-loader",
             documentURL: "https://example.com",
-            request: NetworkRequestPayload(
+            request: NetworkRequest.Payload(
                 url: url,
                 method: method,
                 headers: method == "POST" ? ["content-type": "application/x-www-form-urlencoded"] : [:],
@@ -99,7 +99,7 @@ enum NetworkPreviewFixtures {
             targetID: targetID,
             requestID: requestID,
             resourceType: resourceType,
-            response: NetworkResponsePayload(
+            response: NetworkRequest.Response.Payload(
                 url: url,
                 status: status,
                 statusText: statusText,
@@ -125,7 +125,7 @@ enum NetworkPreviewFixtures {
         )
         if responseMimeType == "application/json" {
             network.request(for: key)?.applyResponseBody(
-                NetworkBodyPayload(
+                NetworkBody.Payload(
                     body: #"{"result":"ok","items":[1,2,3],"source":"preview"}"#,
                     base64Encoded: false
                 )

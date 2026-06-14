@@ -1,45 +1,42 @@
 #if canImport(UIKit)
-import Observation
-import ObservationBridge
 import UIKit
 
 @MainActor
-@Observable
-final class NetworkDetailScrollEdgeState {
-    var isPreviewRoleControlVisible = false
-    var contentScrollView: UIScrollView?
+protocol NetworkBodyScrollEdgeSink: AnyObject {
+    var contentScrollView: UIScrollView? { get set }
 }
 
 @MainActor
-final class NetworkDetailScrollEdgeController {
-    let scrollEdgeState = NetworkDetailScrollEdgeState()
-    private let observationScope = ObservationScope()
+final class NetworkDetailScrollEdgeController: NetworkBodyScrollEdgeSink {
     private var interaction: UIInteraction?
     private weak var registeredInteractionScrollView: UIScrollView?
-#if DEBUG
-    private var observationDelivery: ObservationDelivery?
-#endif
+    private var previewRoleControlIsVisible = false
+    private weak var visibleContentScrollView: UIScrollView?
 
     var isPreviewRoleControlVisible: Bool {
         get {
-            scrollEdgeState.isPreviewRoleControlVisible
+            previewRoleControlIsVisible
         }
         set {
-            scrollEdgeState.isPreviewRoleControlVisible = newValue
+            guard previewRoleControlIsVisible != newValue else {
+                return
+            }
+            previewRoleControlIsVisible = newValue
+            apply()
         }
     }
 
     var contentScrollView: UIScrollView? {
         get {
-            scrollEdgeState.contentScrollView
+            visibleContentScrollView
         }
         set {
-            scrollEdgeState.contentScrollView = newValue
+            guard visibleContentScrollView !== newValue else {
+                return
+            }
+            visibleContentScrollView = newValue
+            apply()
         }
-    }
-
-    isolated deinit {
-        observationScope.cancelAll()
     }
 
     func install(previewRoleControlContainerView: UIView) {
@@ -51,23 +48,16 @@ final class NetworkDetailScrollEdgeController {
             interaction.edge = .top
             previewRoleControlContainerView.addInteraction(interaction)
             self.interaction = interaction
-            let delivery = observationScope.observe(scrollEdgeState) { [weak self] _, state in
-                self?.render(state)
-            }
-            render(scrollEdgeState)
-#if DEBUG
-            observationDelivery = delivery
-#endif
+            apply()
         }
     }
 
-    private func render(_ state: NetworkDetailScrollEdgeState) {
+    private func apply() {
         if #available(iOS 26.0, *) {
-            let contentScrollView = state.contentScrollView
             guard let interaction = interaction as? UIScrollEdgeElementContainerInteraction else {
                 return
             }
-            let interactionScrollView = state.isPreviewRoleControlVisible ? contentScrollView : nil
+            let interactionScrollView = previewRoleControlIsVisible ? visibleContentScrollView : nil
             guard registeredInteractionScrollView !== interactionScrollView else {
                 return
             }
@@ -82,10 +72,6 @@ extension NetworkDetailScrollEdgeController {
     @available(iOS 26.0, *)
     var interactionForTesting: UIScrollEdgeElementContainerInteraction? {
         interaction as? UIScrollEdgeElementContainerInteraction
-    }
-
-    var observationDeliveryForTesting: ObservationDelivery? {
-        observationDelivery
     }
 }
 #endif

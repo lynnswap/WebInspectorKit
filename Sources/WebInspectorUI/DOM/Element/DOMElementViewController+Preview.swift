@@ -9,17 +9,17 @@ import UIKit
 
 @MainActor
 private enum DOMElementViewControllerPreview {
-    private static let targetID = ProtocolTargetIdentifier("preview-page")
-    private static let frameID = DOMFrameIdentifier("preview-frame")
-    private static let styleSheetID = CSSStyleSheetIdentifier("preview")
-    private static let styleID = CSSStyleIdentifier(styleSheetID: styleSheetID, ordinal: 0)
-    private static let ruleID = CSSRuleIdentifier(styleSheetID: styleSheetID, ordinal: 0)
+    private static let targetID = ProtocolTarget.ID("preview-page")
+    private static let frameID = DOMFrame.ID("preview-frame")
+    private static let styleSheetID = CSSStyleSheet.ID("preview")
+    private static let styleID = CSSStyle.ID(styleSheetID: styleSheetID, ordinal: 0)
+    private static let ruleID = CSSRule.ID(styleSheetID: styleSheetID, ordinal: 0)
     private static let previewCSSText = "margin: 0;\nbox-sizing: border-box;\nfont-size: 12px;"
 
     static func makeViewController() -> UINavigationController {
         let dom = DOMPreviewFixtures.makeDOMSession()
         dom.applyTargetCreated(
-            ProtocolTargetRecord(
+            ProtocolTarget.Record(
                 id: targetID,
                 kind: .page,
                 frameID: frameID,
@@ -36,8 +36,8 @@ private enum DOMElementViewControllerPreview {
            let token = css.beginRefresh(identity: identity) {
             let style = previewStylePayload(styleID: styleID, cssText: previewCSSText)
             let matched = previewMatchedStyles(ruleID: ruleID, style: style)
-            let inline = CSSInlineStylesPayload()
-            let computed: [CSSComputedStylePropertyPayload] = []
+            let inline = CSSStyle.InlineStylesPayload()
+            let computed: [CSSComputedStyleProperty.Payload] = []
             css.applyRefresh(
                 token: token,
                 matched: matched,
@@ -52,13 +52,19 @@ private enum DOMElementViewControllerPreview {
     }
 
     private static func installPreviewTransport(on dom: DOMSession) {
+        let replies = AsyncStream<String>.makeStream(bufferingPolicy: .unbounded)
         let backend = DOMElementViewControllerPreviewTransportBackend(
             styleID: styleID,
             ruleID: ruleID,
-            cssText: previewCSSText
+            cssText: previewCSSText,
+            replyContinuation: replies.continuation
         )
         let transport = TransportSession(backend: backend, responseTimeout: nil)
-        backend.transport = transport
+        Task {
+            for await message in replies.stream {
+                await transport.receiveRootMessage(message)
+            }
+        }
         seedPreviewTarget(in: transport)
         let channel = ProtocolCommandChannel(
             transport: transport,
@@ -78,7 +84,7 @@ private enum DOMElementViewControllerPreview {
         }
     }
 
-    nonisolated private static func previewProperties(from styleText: String) -> [CSSPropertyPayload] {
+    nonisolated private static func previewProperties(from styleText: String) -> [CSSProperty.Payload] {
         styleText
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -87,11 +93,11 @@ private enum DOMElementViewControllerPreview {
     }
 
     nonisolated private static func previewStylePayload(
-        styleID: CSSStyleIdentifier,
+        styleID: CSSStyle.ID,
         cssText: String
-    ) -> CSSStylePayload {
+    ) -> CSSStyle.Payload {
         let properties = previewProperties(from: cssText)
-        return CSSStylePayload(
+        return CSSStyle.Payload(
             id: styleID,
             cssProperties: properties,
             cssText: cssText
@@ -99,12 +105,12 @@ private enum DOMElementViewControllerPreview {
     }
 
     nonisolated private static func previewMatchedStyles(
-        ruleID: CSSRuleIdentifier,
-        style: CSSStylePayload
-    ) -> CSSMatchedStylesPayload {
-        let selector = CSSSelector(text: "body")
-        let selectorList = CSSSelectorList(selectors: [selector], text: "body")
-        let rule = CSSRulePayload(
+        ruleID: CSSRule.ID,
+        style: CSSStyle.Payload
+    ) -> CSSStyle.MatchedStylesPayload {
+        let selector = CSSRule.Selector(text: "body")
+        let selectorList = CSSRule.SelectorList(selectors: [selector], text: "body")
+        let rule = CSSRule.Payload(
             id: ruleID,
             selectorList: selectorList,
             sourceURL: "preview.css",
@@ -113,12 +119,12 @@ private enum DOMElementViewControllerPreview {
             style: style
         )
         let matchedRules = [
-            CSSRuleMatchPayload(rule: rule, matchingSelectors: [0]),
+            CSSRule.MatchPayload(rule: rule, matchingSelectors: [0]),
         ]
-        return CSSMatchedStylesPayload(matchedRules: matchedRules)
+        return CSSStyle.MatchedStylesPayload(matchedRules: matchedRules)
     }
 
-    nonisolated private static func previewProperty(from declarationText: String) -> CSSPropertyPayload? {
+    nonisolated private static func previewProperty(from declarationText: String) -> CSSProperty.Payload? {
         let disabled = declarationText.hasPrefix("/*") && declarationText.hasSuffix("*/")
         let sourceText = disabled
             ? String(declarationText.dropFirst(2).dropLast(2)).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -131,7 +137,7 @@ private enum DOMElementViewControllerPreview {
         if value.hasSuffix(";") {
             value.removeLast()
         }
-        let status: CSSPropertyStatus
+        let status: CSSProperty.Status
         if disabled {
             status = .disabled
         } else if name == "font-size" {
@@ -139,7 +145,7 @@ private enum DOMElementViewControllerPreview {
         } else {
             status = .active
         }
-        return CSSPropertyPayload(
+        return CSSProperty.Payload(
             name: name,
             value: value,
             text: declarationText,
@@ -165,9 +171,9 @@ private enum DOMElementViewControllerPreview {
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"\#(targetID.rawValue)","type":"page","frameId":"\#(frameID.rawValue)","domains":["DOM","Runtime","Target","Inspector","Network","CSS"],"isProvisional":false}}}"#
     }
 
-    private final class DOMElementViewControllerPreviewTransportBackend: TransportBackend, @unchecked Sendable {
+    private actor DOMElementViewControllerPreviewTransportBackend: TransportBackend {
         private struct TargetCommand {
-            var targetID: ProtocolTargetIdentifier
+            var targetID: ProtocolTarget.ID
             var commandID: UInt64
             var method: String
             var message: String
@@ -207,23 +213,28 @@ private enum DOMElementViewControllerPreview {
         }
 
         private struct SetStyleTextResult: Encodable {
-            var style: CSSStylePayload
+            var style: CSSStyle.Payload
         }
 
         private struct ComputedStyleResult: Encodable {
-            var computedStyle: [CSSComputedStylePropertyPayload]
+            var computedStyle: [CSSComputedStyleProperty.Payload]
         }
 
-        private let lock = NSLock()
-        private let styleID: CSSStyleIdentifier
-        private let ruleID: CSSRuleIdentifier
+        private let styleID: CSSStyle.ID
+        private let ruleID: CSSRule.ID
+        private let replyContinuation: AsyncStream<String>.Continuation
         private var cssText: String
-        private var properties: [CSSPropertyPayload]
-        weak var transport: TransportSession?
+        private var properties: [CSSProperty.Payload]
 
-        init(styleID: CSSStyleIdentifier, ruleID: CSSRuleIdentifier, cssText: String) {
+        init(
+            styleID: CSSStyle.ID,
+            ruleID: CSSRule.ID,
+            cssText: String,
+            replyContinuation: AsyncStream<String>.Continuation
+        ) {
             self.styleID = styleID
             self.ruleID = ruleID
+            self.replyContinuation = replyContinuation
             self.cssText = cssText
             self.properties = DOMElementViewControllerPreview.previewProperties(from: cssText)
         }
@@ -245,14 +256,14 @@ private enum DOMElementViewControllerPreview {
             case "CSS.getMatchedStylesForNode":
                 resultJSON = try Self.jsonString(matchedStyles())
             case "CSS.getInlineStylesForNode":
-                resultJSON = try Self.jsonString(CSSInlineStylesPayload())
+                resultJSON = try Self.jsonString(CSSStyle.InlineStylesPayload())
             case "CSS.getComputedStyleForNode":
                 resultJSON = try Self.jsonString(ComputedStyleResult(computedStyle: []))
             default:
                 resultJSON = "{}"
             }
 
-            await sendTargetReply(
+            sendTargetReply(
                 targetID: command.targetID,
                 commandID: command.commandID,
                 resultJSON: resultJSON
@@ -260,46 +271,35 @@ private enum DOMElementViewControllerPreview {
         }
 
         func detach() async {
+            replyContinuation.finish()
         }
 
-        private func updateStyleText(_ text: String) -> CSSStylePayload {
-            withLockedState {
-                cssText = text
-                properties = DOMElementViewControllerPreview.previewProperties(from: text)
-                return currentStylePayload()
-            }
+        private func updateStyleText(_ text: String) -> CSSStyle.Payload {
+            cssText = text
+            properties = DOMElementViewControllerPreview.previewProperties(from: text)
+            return currentStylePayload()
         }
 
-        private func matchedStyles() -> CSSMatchedStylesPayload {
-            withLockedState {
-                DOMElementViewControllerPreview.previewMatchedStyles(
-                    ruleID: ruleID,
-                    style: currentStylePayload()
-                )
-            }
+        private func matchedStyles() -> CSSStyle.MatchedStylesPayload {
+            DOMElementViewControllerPreview.previewMatchedStyles(
+                ruleID: ruleID,
+                style: currentStylePayload()
+            )
         }
 
-        private func currentStylePayload() -> CSSStylePayload {
-            CSSStylePayload(
+        private func currentStylePayload() -> CSSStyle.Payload {
+            CSSStyle.Payload(
                 id: styleID,
                 cssProperties: properties,
                 cssText: cssText
             )
         }
 
-        private func withLockedState<T>(_ body: () throws -> T) rethrows -> T {
-            lock.lock()
-            defer {
-                lock.unlock()
-            }
-            return try body()
-        }
-
         private func sendTargetReply(
-            targetID: ProtocolTargetIdentifier,
+            targetID: ProtocolTarget.ID,
             commandID: UInt64,
             resultJSON: String
-        ) async {
+        ) {
             let targetMessage = #"{"id":\#(commandID),"result":\#(resultJSON)}"#
             let rootMessage = TargetDispatchMessage(
                 params: TargetDispatchParameters(
@@ -311,7 +311,7 @@ private enum DOMElementViewControllerPreview {
                   let message = String(data: data, encoding: .utf8) else {
                 return
             }
-            await transport?.receiveRootMessage(message)
+            replyContinuation.yield(message)
         }
 
         private static func targetCommand(from message: String) -> TargetCommand? {
@@ -323,7 +323,7 @@ private enum DOMElementViewControllerPreview {
                 return nil
             }
             return TargetCommand(
-                targetID: ProtocolTargetIdentifier(envelope.params.targetId),
+                targetID: ProtocolTarget.ID(envelope.params.targetId),
                 commandID: inner.id,
                 method: inner.method,
                 message: envelope.params.message

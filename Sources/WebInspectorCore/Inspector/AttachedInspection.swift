@@ -1,100 +1,68 @@
 import Foundation
 import Observation
-import Synchronization
 import WebKit
 import WebInspectorTransport
 
-package struct InspectorSessionError: Error, Equatable, Sendable, CustomStringConvertible {
-    package var message: String
+package extension InspectorSession {
+    struct Error: Swift.Error, Equatable, Sendable, CustomStringConvertible {
+        package var message: String
 
-    package init(_ message: String) {
-        self.message = message
+        package init(_ message: String) {
+            self.message = message
+        }
+
+        package var description: String {
+            message
+        }
     }
 
-    package var description: String {
-        message
-    }
-}
+    struct Configuration: Equatable, Sendable {
+        package var responseTimeout: Duration
+        package var bootstrapTimeout: Duration
 
-package struct InspectorSessionConfiguration: Equatable, Sendable {
-    package var responseTimeout: Duration
-    package var bootstrapTimeout: Duration
-
-    package init(
-        responseTimeout: Duration = .seconds(5),
-        bootstrapTimeout: Duration = .seconds(5)
-    ) {
-        self.responseTimeout = responseTimeout
-        self.bootstrapTimeout = bootstrapTimeout
+        package init(
+            responseTimeout: Duration = .seconds(5),
+            bootstrapTimeout: Duration = .seconds(5)
+        ) {
+            self.responseTimeout = responseTimeout
+            self.bootstrapTimeout = bootstrapTimeout
+        }
     }
 }
 
 @MainActor
-private final class InspectorTarget {
-    let id: ProtocolTargetIdentifier
-    var kind: ProtocolTargetKind
-    var frameID: DOMFrameIdentifier?
-    var parentFrameID: DOMFrameIdentifier?
-    var capabilities: ProtocolTargetCapabilities
-    var isProvisional: Bool
-    var isPaused: Bool
-    var isBootstrapped: Bool
-    private var enabledDomains: ProtocolTargetCapabilities
+private final class InspectorTargetLifecycleState {
+    private(set) var isBootstrapped = false
+    private var enabledDomains: ProtocolTarget.Capabilities
     private var runtimeConsoleEnableTask: Task<Void, Never>?
     private var runtimeConsoleEnableTaskWaiters: [CheckedContinuation<Void, Never>]
 
-    init(snapshot: ProtocolTargetSnapshot) {
-        id = snapshot.id
-        kind = snapshot.kind
-        frameID = snapshot.frameID
-        parentFrameID = snapshot.parentFrameID
-        capabilities = snapshot.capabilities
-        isProvisional = snapshot.isProvisional
-        isPaused = snapshot.isPaused
-        isBootstrapped = false
+    init() {
         enabledDomains = []
         runtimeConsoleEnableTask = nil
         runtimeConsoleEnableTaskWaiters = []
     }
 
-    func update(from snapshot: ProtocolTargetSnapshot) {
-        kind = snapshot.kind
-        frameID = snapshot.frameID
-        parentFrameID = snapshot.parentFrameID
-        capabilities = snapshot.capabilities
-        isProvisional = snapshot.isProvisional
-        isPaused = snapshot.isPaused
+    func markBootstrapped() {
+        isBootstrapped = true
     }
 
-    func hasDomain(_ domain: ProtocolTargetCapabilities) -> Bool {
-        capabilities.contains(domain)
-    }
-
-    func markEnabled(_ domain: ProtocolTargetCapabilities) {
+    func markEnabled(_ domain: ProtocolTarget.Capabilities) {
         enabledDomains.insert(domain)
     }
 
-    func shouldEnableCompatibilityCSS() -> Bool {
-        hasDomain(.css) && enabledDomains.contains(.css) == false
+    func hasEnabled(_ domain: ProtocolTarget.Capabilities) -> Bool {
+        enabledDomains.contains(domain)
     }
 
-    func shouldEnableRuntime(using runtime: RuntimeState) -> Bool {
-        isProvisional == false
-            && hasDomain(.runtime)
-            && enabledDomains.contains(.runtime) == false
-            && runtime.supportsCommand("Runtime.enable", targetID: id)
+    func shouldEnable(_ domain: ProtocolTarget.Capabilities, capabilities: ProtocolTarget.Capabilities, force: Bool = false) -> Bool {
+        capabilities.contains(domain)
+            && (force || hasEnabled(domain) == false)
     }
 
-    func shouldEnableConsole(using console: ConsoleSession, force: Bool = false) -> Bool {
-        isProvisional == false
-            && hasDomain(.console)
-            && (force || enabledDomains.contains(.console) == false)
-            && console.supportsCommand("Console.enable", targetID: id)
-    }
-
-    func canStartRuntimeConsoleEnable(using runtime: RuntimeState, console: ConsoleSession) -> Bool {
+    func canStartRuntimeConsoleEnable(needsRuntime: Bool, needsConsole: Bool) -> Bool {
         runtimeConsoleEnableTask == nil
-            && (shouldEnableRuntime(using: runtime) || shouldEnableConsole(using: console))
+            && (needsRuntime || needsConsole)
     }
 
     func startRuntimeConsoleEnableTask(_ task: Task<Void, Never>) {
@@ -135,10 +103,97 @@ private final class InspectorTarget {
 }
 
 @MainActor
-private final class InspectorTargetRegistry {
-    private var targetsByID: [ProtocolTargetIdentifier: InspectorTarget] = [:]
+private final class InspectorTarget {
+    let id: ProtocolTarget.ID
+    var kind: ProtocolTarget.Kind
+    var frameID: DOMFrame.ID?
+    var parentFrameID: DOMFrame.ID?
+    var capabilities: ProtocolTarget.Capabilities
+    var isProvisional: Bool
+    var isPaused: Bool
+    private let lifecycle: InspectorTargetLifecycleState
 
-    func sync(from snapshot: DOMSessionSnapshot) {
+    init(snapshot: DOMTarget.Snapshot) {
+        id = snapshot.id
+        kind = snapshot.kind
+        frameID = snapshot.frameID
+        parentFrameID = snapshot.parentFrameID
+        capabilities = snapshot.capabilities
+        isProvisional = snapshot.isProvisional
+        isPaused = snapshot.isPaused
+        lifecycle = InspectorTargetLifecycleState()
+    }
+
+    var isBootstrapped: Bool {
+        lifecycle.isBootstrapped
+    }
+
+    func update(from snapshot: DOMTarget.Snapshot) {
+        kind = snapshot.kind
+        frameID = snapshot.frameID
+        parentFrameID = snapshot.parentFrameID
+        capabilities = snapshot.capabilities
+        isProvisional = snapshot.isProvisional
+        isPaused = snapshot.isPaused
+    }
+
+    func hasDomain(_ domain: ProtocolTarget.Capabilities) -> Bool {
+        capabilities.contains(domain)
+    }
+
+    func markBootstrapped() {
+        lifecycle.markBootstrapped()
+    }
+
+    func markEnabled(_ domain: ProtocolTarget.Capabilities) {
+        lifecycle.markEnabled(domain)
+    }
+
+    func shouldEnableCompatibilityCSS() -> Bool {
+        hasDomain(.css) && lifecycle.hasEnabled(.css) == false
+    }
+
+    func shouldEnableRuntime(using runtime: RuntimeState) -> Bool {
+        isProvisional == false
+            && lifecycle.shouldEnable(.runtime, capabilities: capabilities)
+            && runtime.supportsCommand("Runtime.enable", targetID: id)
+    }
+
+    func shouldEnableConsole(using console: ConsoleSession, force: Bool = false) -> Bool {
+        isProvisional == false
+            && lifecycle.shouldEnable(.console, capabilities: capabilities, force: force)
+            && console.supportsCommand("Console.enable", targetID: id)
+    }
+
+    func canStartRuntimeConsoleEnable(using runtime: RuntimeState, console: ConsoleSession) -> Bool {
+        lifecycle.canStartRuntimeConsoleEnable(
+            needsRuntime: shouldEnableRuntime(using: runtime),
+            needsConsole: shouldEnableConsole(using: console)
+        )
+    }
+
+    func startRuntimeConsoleEnableTask(_ task: Task<Void, Never>) {
+        lifecycle.startRuntimeConsoleEnableTask(task)
+    }
+
+    func finishRuntimeConsoleEnableTask() {
+        lifecycle.finishRuntimeConsoleEnableTask()
+    }
+
+    func cancelRuntimeConsoleEnableTask() {
+        lifecycle.cancelRuntimeConsoleEnableTask()
+    }
+
+    func waitUntilRuntimeConsoleEnableTaskFinished() async {
+        await lifecycle.waitUntilRuntimeConsoleEnableTaskFinished()
+    }
+}
+
+@MainActor
+private final class InspectorTargetRegistry {
+    private var targetsByID: [ProtocolTarget.ID: InspectorTarget] = [:]
+
+    func sync(from snapshot: DOMSession.Snapshot) {
         let currentTargetIDs = Set(snapshot.targetsByID.keys)
         for removedTargetID in Array(targetsByID.keys) where currentTargetIDs.contains(removedTargetID) == false {
             removeTarget(removedTargetID)
@@ -148,12 +203,12 @@ private final class InspectorTargetRegistry {
         }
     }
 
-    func target(for targetID: ProtocolTargetIdentifier) -> InspectorTarget? {
+    func target(for targetID: ProtocolTarget.ID) -> InspectorTarget? {
         targetsByID[targetID]
     }
 
     @discardableResult
-    func upsertTarget(from snapshot: ProtocolTargetSnapshot) -> InspectorTarget {
+    func upsertTarget(from snapshot: DOMTarget.Snapshot) -> InspectorTarget {
         if let target = targetsByID[snapshot.id] {
             target.update(from: snapshot)
             return target
@@ -163,7 +218,7 @@ private final class InspectorTargetRegistry {
         return target
     }
 
-    func removeTarget(_ targetID: ProtocolTargetIdentifier) {
+    func removeTarget(_ targetID: ProtocolTarget.ID) {
         targetsByID.removeValue(forKey: targetID)?.cancelRuntimeConsoleEnableTask()
     }
 
@@ -173,7 +228,7 @@ private final class InspectorTargetRegistry {
         }
     }
 
-    func waitUntilRuntimeConsoleEnableTaskFinished(targetID: ProtocolTargetIdentifier) async -> Bool {
+    func waitUntilRuntimeConsoleEnableTaskFinished(targetID: ProtocolTarget.ID) async -> Bool {
         guard let target = targetsByID[targetID] else {
             return false
         }
@@ -182,16 +237,19 @@ private final class InspectorTargetRegistry {
     }
 }
 
-@MainActor
-package protocol InspectorInspectableWebView: AnyObject {
-    var isInspectable: Bool { get set }
+package extension InspectorSession {
+    @MainActor
+    protocol InspectableWebView: AnyObject {
+        var isInspectable: Bool { get set }
+    }
 }
 
-extension WKWebView: InspectorInspectableWebView {}
+extension WKWebView: InspectorSession.InspectableWebView {}
 
 @MainActor
 private final class InspectorConnection {
     let transport: TransportSession
+    let receiver: TransportReceiver?
     weak var webView: WKWebView?
     let originalInspectability: Bool?
     var eventPump: DomainEventPump?
@@ -199,14 +257,66 @@ private final class InspectorConnection {
 
     init(
         transport: TransportSession,
+        receiver: TransportReceiver? = nil,
         webView: WKWebView? = nil,
         originalInspectability: Bool? = nil
     ) {
         self.transport = transport
+        self.receiver = receiver
         self.webView = webView
         self.originalInspectability = originalInspectability
         eventPump = nil
         targets = InspectorTargetRegistry()
+    }
+}
+
+@MainActor
+private enum InspectorConnectionPhase {
+    case idle
+    case pending(InspectorConnection)
+    case active(InspectorConnection)
+
+    var activeConnection: InspectorConnection? {
+        guard case let .active(connection) = self else {
+            return nil
+        }
+        return connection
+    }
+
+    var pendingConnection: InspectorConnection? {
+        guard case let .pending(connection) = self else {
+            return nil
+        }
+        return connection
+    }
+
+    var connectionsForDetach: [InspectorConnection] {
+        switch self {
+        case .idle:
+            []
+        case let .pending(connection), let .active(connection):
+            [connection]
+        }
+    }
+
+    var hasAnyConnection: Bool {
+        connectionsForDetach.isEmpty == false
+    }
+
+    func isCurrent(_ candidate: InspectorConnection) -> Bool {
+        switch self {
+        case .idle:
+            false
+        case let .pending(connection), let .active(connection):
+            connection === candidate
+        }
+    }
+
+    func isAttached(_ candidate: InspectorConnection) -> Bool {
+        guard case let .active(connection) = self else {
+            return false
+        }
+        return connection === candidate
     }
 }
 
@@ -260,14 +370,21 @@ package final class AttachedInspection {
 package final class InspectorSession {
     package let attachment: AttachedInspection
     package var hasActiveConnection: Bool {
-        connection != nil
+        connectionPhase.activeConnection != nil
     }
-    package private(set) var lastError: InspectorSessionError?
+    package private(set) var lastError: InspectorSession.Error?
 
-    @ObservationIgnored private let configuration: InspectorSessionConfiguration
-    @ObservationIgnored private var connection: InspectorConnection?
-    @ObservationIgnored private var pendingConnection: InspectorConnection?
+    @ObservationIgnored private let configuration: InspectorSession.Configuration
+    @ObservationIgnored private var connectionPhase: InspectorConnectionPhase
     @ObservationIgnored private var protocolEventDispatchers: ProtocolDomainEventDispatcherRegistry
+
+    private var connection: InspectorConnection? {
+        connectionPhase.activeConnection
+    }
+
+    private var pendingConnection: InspectorConnection? {
+        connectionPhase.pendingConnection
+    }
 
     private var targetGraph: TargetGraph {
         attachment.targetGraph
@@ -290,7 +407,7 @@ package final class InspectorSession {
     }
 
     package init(
-        configuration: InspectorSessionConfiguration = .init(),
+        configuration: InspectorSession.Configuration = .init(),
         attachment: AttachedInspection? = nil
     ) {
         self.configuration = configuration
@@ -298,13 +415,12 @@ package final class InspectorSession {
         self.attachment = resolvedAttachment
         protocolEventDispatchers = ProtocolDomainEventDispatcherRegistry()
         lastError = nil
-        connection = nil
-        pendingConnection = nil
+        connectionPhase = .idle
         configureProtocolEventDispatchers()
     }
 
     package init(
-        configuration: InspectorSessionConfiguration = .init(),
+        configuration: InspectorSession.Configuration = .init(),
         targetGraph: TargetGraph = TargetGraph(),
         elementStyles: CSSSession = CSSSession(),
         network: NetworkSession = NetworkSession(),
@@ -322,13 +438,12 @@ package final class InspectorSession {
         self.attachment = attachment
         protocolEventDispatchers = ProtocolDomainEventDispatcherRegistry()
         lastError = nil
-        connection = nil
-        pendingConnection = nil
+        connectionPhase = .idle
         configureProtocolEventDispatchers()
     }
 
     package init(
-        configuration: InspectorSessionConfiguration = .init(),
+        configuration: InspectorSession.Configuration = .init(),
         targetGraph: TargetGraph = TargetGraph(),
         dom: DOMSession,
         network: NetworkSession = NetworkSession(),
@@ -346,8 +461,7 @@ package final class InspectorSession {
         self.attachment = attachment
         protocolEventDispatchers = ProtocolDomainEventDispatcherRegistry()
         lastError = nil
-        connection = nil
-        pendingConnection = nil
+        connectionPhase = .idle
         configureProtocolEventDispatchers()
     }
 
@@ -379,7 +493,7 @@ package final class InspectorSession {
                 },
                 fatalFailureHandler: { [weak self] message in
                     Task { @MainActor in
-                        self?.lastError = InspectorSessionError(message)
+                        self?.lastError = InspectorSession.Error(message)
                     }
                 }
             )
@@ -393,10 +507,12 @@ package final class InspectorSession {
             try backend.attach()
             try await connect(
                 transport: createdTransport,
+                receiver: receiver,
                 webView: webView,
                 originalInspectability: originalInspectability
             )
         } catch {
+            receiver.close()
             Self.restoreInspectabilityIfNeeded(on: webView, originalValue: originalInspectability)
             await transport?.detach()
             throw error
@@ -409,16 +525,18 @@ package final class InspectorSession {
 
     private func connect(
         transport: TransportSession,
+        receiver: TransportReceiver? = nil,
         webView: WKWebView?,
         originalInspectability: Bool?
     ) async throws {
         await detach()
         let nextConnection = InspectorConnection(
             transport: transport,
+            receiver: receiver,
             webView: webView,
             originalInspectability: originalInspectability
         )
-        pendingConnection = nextConnection
+        connectionPhase = .pending(nextConnection)
         bindProtocolChannel(for: nextConnection)
         lastError = nil
         await startPumps(connection: nextConnection)
@@ -435,22 +553,17 @@ package final class InspectorSession {
             syncTargets(for: nextConnection)
             try await bootstrap(mainTargetID: mainTarget.targetID, connection: nextConnection)
             try ensureCurrentConnection(nextConnection)
-            pendingConnection = nil
-            connection = nextConnection
+            connectionPhase = .active(nextConnection)
             dom.startDocumentRequestsForAttachedFrameTargets()
             startRuntimeConsoleEnableForAttachedTargets()
             lastError = nil
         } catch {
-            guard connection === nextConnection || pendingConnection === nextConnection else {
+            guard connectionPhase.isCurrent(nextConnection) else {
                 throw error
             }
+            nextConnection.receiver?.close()
             stopPumps(nextConnection)
-            if pendingConnection === nextConnection {
-                pendingConnection = nil
-            }
-            if connection === nextConnection {
-                connection = nil
-            }
+            connectionPhase = .idle
             await transport.detach()
             restoreInspectabilityIfNeeded(for: nextConnection)
             unbindProtocolChannel()
@@ -458,34 +571,27 @@ package final class InspectorSession {
             network.reset()
             runtime.reset()
             console.reset()
-            let sessionError = InspectorSessionError(String(describing: error))
+            let sessionError = InspectorSession.Error(String(describing: error))
             lastError = sessionError
             throw error
         }
     }
 
     package func detach() async {
-        guard connection != nil || pendingConnection != nil else {
+        guard connectionPhase.hasAnyConnection else {
             return
         }
 
-        let previousConnection = connection
-        let previousPendingConnection = pendingConnection
-        connection = nil
-        pendingConnection = nil
+        let previousConnections = connectionPhase.connectionsForDetach
+        connectionPhase = .idle
         unbindProtocolChannel()
 
-        if let previousConnection {
+        for previousConnection in previousConnections {
             cancelRuntimeConsoleEnableTasks(previousConnection)
+            previousConnection.receiver?.close()
             stopPumps(previousConnection)
             await previousConnection.transport.detach()
             restoreInspectabilityIfNeeded(for: previousConnection)
-        }
-        if let previousPendingConnection {
-            cancelRuntimeConsoleEnableTasks(previousPendingConnection)
-            stopPumps(previousPendingConnection)
-            await previousPendingConnection.transport.detach()
-            restoreInspectabilityIfNeeded(for: previousPendingConnection)
         }
         dom.reset()
         network.reset()
@@ -520,14 +626,14 @@ package final class InspectorSession {
         return await eventPump.waitUntilApplied(sequence)
     }
 
-    package func waitUntilRuntimeConsoleEnableFinished(targetID: ProtocolTargetIdentifier) async -> Bool {
+    package func waitUntilRuntimeConsoleEnableFinished(targetID: ProtocolTarget.ID) async -> Bool {
         guard let connection else {
             return false
         }
         return await connection.targets.waitUntilRuntimeConsoleEnableTaskFinished(targetID: targetID)
     }
 
-    private func bootstrap(mainTargetID: ProtocolTargetIdentifier, connection: InspectorConnection) async throws {
+    private func bootstrap(mainTargetID: ProtocolTarget.ID, connection: InspectorConnection) async throws {
         _ = try await sendTargetCommand(domain: ProtocolDomain.inspector, method: "Inspector.enable", targetID: mainTargetID, connection: connection)
         try ensureCurrentConnection(connection)
         _ = try await sendTargetCommand(domain: ProtocolDomain.inspector, method: "Inspector.initialized", targetID: mainTargetID, connection: connection)
@@ -546,7 +652,7 @@ package final class InspectorSession {
             domain: ProtocolDomain.network,
             method: "Network.enable",
             targetID: mainTargetID,
-            routing: ProtocolCommandRouting.octopus(pageTarget: mainTargetID),
+            routing: ProtocolCommand.Routing.octopus(pageTarget: mainTargetID),
             connection: connection
         )
         try ensureCurrentConnection(connection)
@@ -556,21 +662,21 @@ package final class InspectorSession {
             force: true,
             requiresActiveConnection: false
         )
-        connection.targets.target(for: mainTargetID)?.isBootstrapped = true
+        connection.targets.target(for: mainTargetID)?.markBootstrapped()
     }
 
     private func sendTargetCommand(
         domain: ProtocolDomain,
         method: String,
-        targetID: ProtocolTargetIdentifier,
-        routing: ProtocolCommandRouting? = nil,
+        targetID: ProtocolTarget.ID,
+        routing: ProtocolCommand.Routing? = nil,
         connection: InspectorConnection
-    ) async throws -> ProtocolCommandResult {
+    ) async throws -> ProtocolCommand.Result {
         try await connection.transport.send(
             ProtocolCommand(
                 domain: domain,
                 method: method,
-                routing: routing ?? ProtocolCommandRouting.target(targetID)
+                routing: routing ?? ProtocolCommand.Routing.target(targetID)
             )
         )
     }
@@ -590,16 +696,16 @@ package final class InspectorSession {
         connection.eventPump = nil
     }
 
-    private func handleProtocolEvent(_ event: ProtocolEventEnvelope) async {
+    private func handleProtocolEvent(_ event: ProtocolEvent) async {
         do {
             _ = try await protocolEventDispatchers.dispatch(event)
         } catch {
-            lastError = InspectorSessionError("\(event.method): \(error)")
+            lastError = InspectorSession.Error("\(event.method): \(error)")
         }
     }
 
     private func handleAppliedTargetEvent(
-        _ event: ProtocolEventEnvelope,
+        _ event: ProtocolEvent,
         result: TargetProtocolEventResult
     ) async {
         if let createdTarget = result.createdTarget {
@@ -609,15 +715,12 @@ package final class InspectorSession {
             syncTargets(for: connection)
         }
         if let destroyedTargetID = result.destroyedTargetID {
-            cancelRuntimeConsoleEnableTask(targetID: destroyedTargetID)
-            runtime.applyTargetDestroyed(destroyedTargetID)
-            console.applyTargetDestroyed(destroyedTargetID)
-            discardConnectionTargetState(targetID: destroyedTargetID)
+            applyDestroyedTargetRemoval(targetID: destroyedTargetID)
         }
         if hasActiveConnection,
            let createdTarget = result.createdTarget {
             if createdTarget.kind == .frame,
-               createdTarget.capabilities.contains(ProtocolTargetCapabilities.dom) {
+               createdTarget.capabilities.contains(ProtocolTarget.Capabilities.dom) {
                 dom.startFrameTargetDocumentRequestIfNeeded(targetID: createdTarget.id, reason: "frameTargetCreated")
             }
             startRuntimeConsoleEnableIfNeeded(targetID: createdTarget.id, reason: "targetCreated")
@@ -644,6 +747,7 @@ package final class InspectorSession {
                 cancelRuntimeConsoleEnableTask(targetID: oldTargetID)
                 runtime.applyTargetCommitted(oldTargetID: oldTargetID, newTargetID: targetCommit.newTargetID)
                 console.applyTargetCommitted(oldTargetID: oldTargetID, newTargetID: targetCommit.newTargetID)
+                network.applyTargetDestroyed(oldTargetID)
                 discardConnectionTargetState(targetID: oldTargetID)
             }
             dom.startFrameTargetDocumentRequestIfNeeded(targetID: targetCommit.newTargetID, reason: "frameTargetCommit")
@@ -657,7 +761,7 @@ package final class InspectorSession {
         }
     }
 
-    private func startRuntimeConsoleEnableIfNeeded(targetID: ProtocolTargetIdentifier, reason: String) {
+    private func startRuntimeConsoleEnableIfNeeded(targetID: ProtocolTarget.ID, reason: String) {
         guard hasActiveConnection,
               let connection else {
             return
@@ -680,14 +784,14 @@ package final class InspectorSession {
             } catch is CancellationError {
             } catch {
                 InspectorRuntimeLog.warning("runtimeConsoleEnable.failed target=\(targetID.rawValue) reason=\(reason) error=\(error)")
-                lastError = InspectorSessionError(String(describing: error))
+                lastError = InspectorSession.Error(String(describing: error))
             }
         }
         target.startRuntimeConsoleEnableTask(task)
     }
 
     private func enableRuntimeConsoleIfNeeded(
-        targetID: ProtocolTargetIdentifier,
+        targetID: ProtocolTarget.ID,
         connection: InspectorConnection
     ) async throws {
         try Task.checkCancellation()
@@ -717,7 +821,7 @@ package final class InspectorSession {
     }
 
     private func enableConsoleAgentIfSupported(
-        targetID: ProtocolTargetIdentifier,
+        targetID: ProtocolTarget.ID,
         connection: InspectorConnection,
         force: Bool = false,
         requiresActiveConnection: Bool = true
@@ -743,18 +847,26 @@ package final class InspectorSession {
         }
     }
 
-    private func cancelRuntimeConsoleEnableTask(targetID: ProtocolTargetIdentifier) {
+    private func cancelRuntimeConsoleEnableTask(targetID: ProtocolTarget.ID) {
         guard let connection else {
             return
         }
         connection.targets.target(for: targetID)?.cancelRuntimeConsoleEnableTask()
     }
 
+    private func applyDestroyedTargetRemoval(targetID: ProtocolTarget.ID) {
+        cancelRuntimeConsoleEnableTask(targetID: targetID)
+        runtime.applyTargetDestroyed(targetID)
+        console.applyTargetDestroyed(targetID)
+        network.applyTargetDestroyed(targetID)
+        discardConnectionTargetState(targetID: targetID)
+    }
+
     private func cancelRuntimeConsoleEnableTasks(_ connection: InspectorConnection) {
         connection.targets.cancelRuntimeConsoleEnableTasks()
     }
 
-    private func discardConnectionTargetState(targetID: ProtocolTargetIdentifier) {
+    private func discardConnectionTargetState(targetID: ProtocolTarget.ID) {
         guard let connection else {
             return
         }
@@ -763,12 +875,12 @@ package final class InspectorSession {
 
     private func requireInspectableWebView() throws -> WKWebView {
         guard let webView = connection?.webView else {
-            throw InspectorSessionError("Inspector session is not attached to a WKWebView.")
+            throw InspectorSession.Error("Inspector session is not attached to a WKWebView.")
         }
         return webView
     }
 
-    private func seedDOMSession(from snapshot: TransportSnapshot) {
+    private func seedDOMSession(from snapshot: TransportSession.Snapshot) {
         for record in snapshot.targetsByID.values.sorted(by: { $0.id.rawValue < $1.id.rawValue }) {
             dom.applyTargetCreated(
                 record,
@@ -777,16 +889,16 @@ package final class InspectorSession {
                     && record.parentFrameID == nil
             )
         }
-        for record in snapshot.executionContextsByKey.values.sorted(by: RuntimeExecutionContextRecord.stableOrder) {
+        for record in snapshot.executionContextsByKey.values.sorted(by: RuntimeContext.Record.stableOrder) {
             dom.applyExecutionContextCreated(record)
         }
     }
 
-    private func seedRuntimeState(from snapshot: TransportSnapshot) {
+    private func seedRuntimeState(from snapshot: TransportSession.Snapshot) {
         for record in snapshot.targetsByID.values.sorted(by: { $0.id.rawValue < $1.id.rawValue }) {
             runtime.applyTargetCreated(record)
         }
-        for record in snapshot.executionContextsByKey.values.sorted(by: RuntimeExecutionContextRecord.stableOrder) {
+        for record in snapshot.executionContextsByKey.values.sorted(by: RuntimeContext.Record.stableOrder) {
             runtime.applyExecutionContextCreated(record)
         }
     }
@@ -808,7 +920,7 @@ package final class InspectorSession {
                 guard let self, let connection else {
                     return false
                 }
-                return self.connection === connection
+                return self.connectionPhase.isAttached(connection)
             },
             appliedSequence: { [weak connection] in
                 connection?.eventPump?.appliedSequence ?? 0
@@ -824,7 +936,7 @@ package final class InspectorSession {
                 connection?.targets.target(for: targetID)?.markEnabled(domain)
             }
         )
-        let recordError: (InspectorSessionError?) -> Void = { [weak self] error in
+        let recordError: (InspectorSession.Error?) -> Void = { [weak self] error in
             self?.lastError = error
         }
         dom.bindProtocolChannel(channel, recordError: recordError)
@@ -842,21 +954,21 @@ package final class InspectorSession {
 
     private func ensureCurrentConnection(_ candidate: InspectorConnection) throws {
         guard isCurrentConnection(candidate) else {
-            throw TransportError.transportClosed
+            throw TransportSession.Error.transportClosed
         }
     }
 
     private func isCurrentConnection(_ candidate: InspectorConnection) -> Bool {
-        connection === candidate || pendingConnection === candidate
+        connectionPhase.isCurrent(candidate)
     }
 
-    package static func prepareInspectability<WebView: InspectorInspectableWebView>(for webView: WebView) -> Bool {
+    package static func prepareInspectability<WebView: InspectorSession.InspectableWebView>(for webView: WebView) -> Bool {
         let originalValue = webView.isInspectable
         webView.isInspectable = true
         return originalValue
     }
 
-    package static func restoreInspectabilityIfNeeded<WebView: InspectorInspectableWebView>(
+    package static func restoreInspectabilityIfNeeded<WebView: InspectorSession.InspectableWebView>(
         on webView: WebView,
         originalValue: Bool?
     ) {
@@ -871,72 +983,5 @@ package final class InspectorSession {
             return
         }
         Self.restoreInspectabilityIfNeeded(on: webView, originalValue: connection.originalInspectability)
-    }
-}
-
-private final class TransportReceiver: @unchecked Sendable {
-    private struct State: Sendable {
-        var transport: TransportSession?
-        var messages: [String] = []
-        var messageStartIndex = 0
-        var isDraining = false
-    }
-
-    private let state = Mutex(State())
-
-    func setTransport(_ transport: TransportSession) {
-        state.withLock {
-            $0.transport = transport
-        }
-    }
-
-    func receive(_ message: String) {
-        let shouldStartDraining = state.withLock {
-            $0.messages.append(message)
-            guard !$0.isDraining else {
-                return false
-            }
-            $0.isDraining = true
-            return true
-        }
-
-        guard shouldStartDraining else {
-            return
-        }
-        Task {
-            await drain()
-        }
-    }
-
-    private func drain() async {
-        while let next = nextMessage() {
-            await next.transport?.receiveRootMessage(next.message)
-        }
-    }
-
-    private func nextMessage() -> (transport: TransportSession?, message: String)? {
-        state.withLock {
-            guard $0.messageStartIndex < $0.messages.count else {
-                $0.messages.removeAll(keepingCapacity: true)
-                $0.messageStartIndex = 0
-                $0.isDraining = false
-                return nil
-            }
-
-            let message = $0.messages[$0.messageStartIndex]
-            $0.messageStartIndex += 1
-            compactMessagesIfNeeded(in: &$0)
-            return ($0.transport, message)
-        }
-    }
-
-    private func compactMessagesIfNeeded(in state: inout State) {
-        if state.messageStartIndex == state.messages.count {
-            state.messages.removeAll(keepingCapacity: true)
-            state.messageStartIndex = 0
-        } else if state.messageStartIndex >= 64 && state.messageStartIndex * 2 >= state.messages.count {
-            state.messages.removeFirst(state.messageStartIndex)
-            state.messageStartIndex = 0
-        }
     }
 }

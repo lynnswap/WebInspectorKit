@@ -26,7 +26,7 @@ func cssProtocolDispatchingBuildsReadCommands() throws {
 
 @Test
 func cssProtocolDispatchingBuildsSetStyleTextCommand() throws {
-    let styleID = CSSStyleIdentifier(styleSheetID: .init("sheet-1"), ordinal: 7)
+    let styleID = CSSStyle.ID(styleSheetID: .init("sheet-1"), ordinal: 7)
     let command = try CSSProtocolCommands().command(for: .setStyleText(
         targetID: .init("page"),
         styleID: styleID,
@@ -44,7 +44,7 @@ func cssProtocolDispatchingBuildsSetStyleTextCommand() throws {
 
 @Test
 func cssProtocolDispatchingDecodesReadAndSetStyleTextResults() throws {
-    let matched = try CSSProtocolCommands().matchedStyles(from: ProtocolCommandResult(
+    let matched = try CSSProtocolCommands().matchedStyles(from: ProtocolCommand.Result(
         domain: .css,
         method: "CSS.getMatchedStylesForNode",
         targetID: .init("page"),
@@ -70,7 +70,7 @@ func cssProtocolDispatchingDecodesReadAndSetStyleTextResults() throws {
     #expect(matched.matchedRules.first?.rule.selectorList.text == "body")
     #expect(matched.matchedRules.first?.rule.style.cssProperties.first?.status == .style)
 
-    let inline = try CSSProtocolCommands().inlineStyles(from: ProtocolCommandResult(
+    let inline = try CSSProtocolCommands().inlineStyles(from: ProtocolCommand.Result(
         domain: .css,
         method: "CSS.getInlineStylesForNode",
         targetID: .init("page"),
@@ -85,15 +85,15 @@ func cssProtocolDispatchingDecodesReadAndSetStyleTextResults() throws {
     ))
     #expect(inline.inlineStyle?.cssProperties.first?.name == "padding")
 
-    let computed = try CSSProtocolCommands().computedStyles(from: ProtocolCommandResult(
+    let computed = try CSSProtocolCommands().computedStyles(from: ProtocolCommand.Result(
         domain: .css,
         method: "CSS.getComputedStyleForNode",
         targetID: .init("page"),
         resultData: Data(#"{"computedStyle":[{"name":"display","value":"block"}]}"#.utf8)
     ))
-    #expect(computed == [CSSComputedStylePropertyPayload(name: "display", value: "block")])
+    #expect(computed == [CSSComputedStyleProperty.Payload(name: "display", value: "block")])
 
-    let setStyle = try CSSProtocolCommands().setStyleTextResult(from: ProtocolCommandResult(
+    let setStyle = try CSSProtocolCommands().setStyleTextResult(from: ProtocolCommand.Result(
         domain: .css,
         method: "CSS.setStyleText",
         targetID: .init("page"),
@@ -122,7 +122,7 @@ func cssProtocolDispatchingAppliesTargetScopedInvalidationEvents() async throws 
     )
 
     try await CSSProtocolEventDispatcher(handler: css).dispatch(
-        ProtocolEventEnvelope(
+        ProtocolEvent(
             sequence: 1,
             domain: .css,
             method: "CSS.styleSheetChanged",
@@ -135,10 +135,10 @@ func cssProtocolDispatchingAppliesTargetScopedInvalidationEvents() async throws 
     let refreshToken = try #require(await css.beginRefresh(identity: identity))
     await css.applyRefresh(
         token: refreshToken,
-        matched: CSSMatchedStylesPayload(matchedRules: [
-            CSSRuleMatchPayload(
+        matched: CSSStyle.MatchedStylesPayload(matchedRules: [
+            CSSRule.MatchPayload(
                 rule: cssRule(selector: "body", styleID: .init(styleSheetID: .init("sheet"), ordinal: 0), properties: [
-                    CSSPropertyPayload(name: "margin", value: "0", text: "margin: 0;"),
+                    CSSProperty.Payload(name: "margin", value: "0", text: "margin: 0;"),
                 ]),
                 matchingSelectors: [0]
             ),
@@ -148,7 +148,7 @@ func cssProtocolDispatchingAppliesTargetScopedInvalidationEvents() async throws 
     )
 
     try await CSSProtocolEventDispatcher(handler: css).dispatch(
-        ProtocolEventEnvelope(
+        ProtocolEvent(
             sequence: 2,
             domain: .css,
             method: "CSS.styleSheetChanged",
@@ -166,7 +166,7 @@ func cssProtocolDispatchingRegistersStyleSheetHeaderOffsets() async throws {
     let identity = cssIdentity()
 
     try await CSSProtocolEventDispatcher(handler: css).dispatch(
-        ProtocolEventEnvelope(
+        ProtocolEvent(
             sequence: 1,
             domain: .css,
             method: "CSS.styleSheetAdded",
@@ -189,14 +189,14 @@ func cssProtocolDispatchingRegistersStyleSheetHeaderOffsets() async throws {
     let token = try #require(css.beginRefresh(identity: identity))
     css.applyRefresh(
         token: token,
-        matched: CSSMatchedStylesPayload(matchedRules: [
-            CSSRuleMatchPayload(
+        matched: CSSStyle.MatchedStylesPayload(matchedRules: [
+            CSSRule.MatchPayload(
                 rule: cssRule(
                     selector: ".card",
                     styleID: .init(styleSheetID: .init("sheet"), ordinal: 0),
-                    selectorRange: CSSSourceRange(startLine: 0, startColumn: 3, endLine: 0, endColumn: 8),
+                    selectorRange: CSSStyle.SourceRange(startLine: 0, startColumn: 3, endLine: 0, endColumn: 8),
                     properties: [
-                        CSSPropertyPayload(name: "display", value: "grid", text: "display: grid;"),
+                        CSSProperty.Payload(name: "display", value: "grid", text: "display: grid;"),
                     ]
                 ),
                 matchingSelectors: [0]
@@ -207,18 +207,18 @@ func cssProtocolDispatchingRegistersStyleSheetHeaderOffsets() async throws {
     )
 
     let sourceLocation = try #require(css.selectedNodeStyles?.sections.first?.rule?.sourceLocation)
-    #expect(sourceLocation == CSSRuleSourceLocation(
+    #expect(sourceLocation == CSSRule.SourceLocation(
         sourceURL: "https://example.com/document.html",
         line: 12,
         column: 10
     ))
 }
 
-private func cssIdentity() -> CSSNodeStyleIdentity {
-    let targetID = ProtocolTargetIdentifier("page")
-    let documentID = DOMDocumentIdentifier(targetID: targetID, localDocumentLifetimeID: .init(1))
-    return CSSNodeStyleIdentity(
-        nodeID: DOMNodeIdentifier(documentID: documentID, nodeID: .init(2)),
+private func cssIdentity() -> CSSNodeStyles.Identity {
+    let targetID = ProtocolTarget.ID("page")
+    let documentID = DOMDocument.ID(targetID: targetID, localDocumentLifetimeID: .init(1))
+    return CSSNodeStyles.Identity(
+        nodeID: DOMNode.ID(documentID: documentID, nodeID: .init(2)),
         targetID: targetID,
         documentID: documentID,
         protocolNodeID: .init(2),
@@ -228,19 +228,19 @@ private func cssIdentity() -> CSSNodeStyleIdentity {
 
 private func cssRule(
     selector: String,
-    styleID: CSSStyleIdentifier,
+    styleID: CSSStyle.ID,
     sourceURL: String? = nil,
     sourceLine: Int = 1,
-    selectorRange: CSSSourceRange? = nil,
-    properties: [CSSPropertyPayload]
-) -> CSSRulePayload {
-    CSSRulePayload(
-        id: CSSRuleIdentifier(styleSheetID: styleID.styleSheetID, ordinal: styleID.ordinal),
-        selectorList: CSSSelectorList(selectors: [CSSSelector(text: selector)], text: selector, range: selectorRange),
+    selectorRange: CSSStyle.SourceRange? = nil,
+    properties: [CSSProperty.Payload]
+) -> CSSRule.Payload {
+    CSSRule.Payload(
+        id: CSSRule.ID(styleSheetID: styleID.styleSheetID, ordinal: styleID.ordinal),
+        selectorList: CSSRule.SelectorList(selectors: [CSSRule.Selector(text: selector)], text: selector, range: selectorRange),
         sourceURL: sourceURL,
         sourceLine: sourceLine,
         origin: .author,
-        style: CSSStylePayload(id: styleID, cssProperties: properties)
+        style: CSSStyle.Payload(id: styleID, cssProperties: properties)
     )
 }
 

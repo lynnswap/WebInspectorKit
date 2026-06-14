@@ -6,16 +6,17 @@ import UIKit
 @testable import WebInspectorCore
 @testable import WebInspectorUI
 
+extension WebInspectorUIRenderingTests {
 @MainActor
-@Suite(.serialized)
+@Suite
 struct NetworkDetailViewControllerTests {
     @Test
     func resourceFilterSpecialistTitlesFollowWebInspectorLabels() {
-        #expect(NetworkResourceFilter.stylesheet.localizedTitle == "CSS")
-        #expect(NetworkResourceFilter.media.localizedTitle == String(localized: "network.filter.media", bundle: .module))
+        #expect(NetworkRequest.Display.ResourceFilter.stylesheet.localizedTitle == "CSS")
+        #expect(NetworkRequest.Display.ResourceFilter.media.localizedTitle == String(localized: "network.filter.media", bundle: .module))
         #expect(localizedResourceString("network.filter.media", locale: "en") == "Media")
-        #expect(NetworkResourceFilter.script.localizedTitle == "JS")
-        #expect(NetworkResourceFilter.xhrFetch.localizedTitle == "XHR / Fetch")
+        #expect(NetworkRequest.Display.ResourceFilter.script.localizedTitle == "JS")
+        #expect(NetworkRequest.Display.ResourceFilter.xhrFetch.localizedTitle == "XHR / Fetch")
     }
 
     @Test
@@ -223,7 +224,7 @@ struct NetworkDetailViewControllerTests {
             )
         )
         request.applyResponseBody(
-            NetworkBodyPayload(
+            NetworkBody.Payload(
                 body: "sample=true\nsource=preview",
                 base64Encoded: false
             )
@@ -257,15 +258,15 @@ struct NetworkDetailViewControllerTests {
     @Test
     func detailUpdatesResponseHeadersAfterSelection() async throws {
         let network = NetworkSession()
-        let targetID = ProtocolTargetIdentifier("page")
-        let requestID = NetworkRequestIdentifier("1")
+        let targetID = ProtocolTarget.ID("page")
+        let requestID = NetworkRequest.ProtocolID("1")
         let key = network.applyRequestWillBeSent(
             targetID: targetID,
             requestID: requestID,
-            frameID: DOMFrameIdentifier("main"),
+            frameID: DOMFrame.ID("main"),
             loaderID: "loader",
             documentURL: "https://example.com",
-            request: NetworkRequestPayload(
+            request: NetworkRequest.Payload(
                 url: "https://example.com/api/data.json",
                 method: "GET"
             ),
@@ -289,7 +290,7 @@ struct NetworkDetailViewControllerTests {
             targetID: targetID,
             requestID: requestID,
             resourceType: .script,
-            response: NetworkResponsePayload(
+            response: NetworkRequest.Response.Payload(
                 url: "https://example.com/api/data.json",
                 status: 200,
                 statusText: "OK",
@@ -438,7 +439,7 @@ struct NetworkDetailViewControllerTests {
         #expect(didStartFetching)
 
         request.applyResponseBody(
-            NetworkBodyPayload(
+            NetworkBody.Payload(
                 body: #"{"ok":true}"#,
                 base64Encoded: false
             )
@@ -464,7 +465,7 @@ struct NetworkDetailViewControllerTests {
             )
         )
         request.applyResponseBody(
-            NetworkBodyPayload(
+            NetworkBody.Payload(
                 body: """
                 #EXTM3U
                 #EXT-X-STREAM-INF:BANDWIDTH=1280000
@@ -563,7 +564,7 @@ struct NetworkDetailViewControllerTests {
             )
         )
         request.applyResponseBody(
-            NetworkBodyPayload(
+            NetworkBody.Payload(
                 body: "not a real movie",
                 base64Encoded: false
             )
@@ -614,7 +615,7 @@ struct NetworkDetailViewControllerTests {
             )
         )
         request.applyResponseBody(
-            NetworkBodyPayload(
+            NetworkBody.Payload(
                 body: "not a real movie",
                 base64Encoded: false
             )
@@ -667,7 +668,7 @@ struct NetworkDetailViewControllerTests {
             )
         )
         request.applyResponseBody(
-            NetworkBodyPayload(
+            NetworkBody.Payload(
                 body: pngBase64String(size: imageSize),
                 base64Encoded: true
             )
@@ -728,7 +729,7 @@ struct NetworkDetailViewControllerTests {
             )
         )
         request.applyResponseBody(
-            NetworkBodyPayload(
+            NetworkBody.Payload(
                 body: pngBase64String(size: imageSize),
                 base64Encoded: true
             )
@@ -736,7 +737,7 @@ struct NetworkDetailViewControllerTests {
         let model = NetworkPanelModel(network: network)
         model.selectRequest(request)
         let viewController = NetworkDetailViewController(model: model)
-        let window = showInWindow(viewController)
+        let window = showInWindow(viewController, makeVisible: true)
         defer { window.isHidden = true }
         viewController.setModeForTesting(.preview)
 
@@ -776,7 +777,7 @@ struct NetworkDetailViewControllerTests {
             )
         )
         request.applyResponseBody(
-            NetworkBodyPayload(
+            NetworkBody.Payload(
                 body: pngBase64String(size: imageSize),
                 base64Encoded: true
             )
@@ -1051,7 +1052,7 @@ struct NetworkDetailViewControllerTests {
             targetID: firstRequest.id.targetID,
             requestID: firstRequest.id.requestID,
             resourceType: .script,
-            response: NetworkResponsePayload(
+            response: NetworkRequest.Response.Payload(
                 url: "https://example.com/first.json",
                 status: 200,
                 statusText: "OK",
@@ -1061,14 +1062,13 @@ struct NetworkDetailViewControllerTests {
             timestamp: 4
         )
 
-        await Task.yield()
         #expect(viewController.headersTextViewForTesting.renderedTextForTesting.contains("x-old-request: stale") == false)
 
         network.applyResponseReceived(
             targetID: secondRequest.id.targetID,
             requestID: secondRequest.id.requestID,
             resourceType: .script,
-            response: NetworkResponsePayload(
+            response: NetworkRequest.Response.Payload(
                 url: "https://example.com/second.json",
                 status: 200,
                 statusText: "OK",
@@ -1144,11 +1144,11 @@ struct NetworkDetailViewControllerTests {
             listViewController: listViewController,
             detailViewController: detailViewController
         )
-        let window = showInWindow(navigationController)
+        let window = showInWindow(navigationController, makeVisible: true)
         defer { window.isHidden = true }
 
         model.selectRequest(request)
-        let didPush = await waitUntil {
+        let didPush = await waitUntilNavigationStackSynced(in: navigationController) {
             navigationController.viewControllers.last === detailViewController
         }
         #expect(didPush)
@@ -1157,7 +1157,7 @@ struct NetworkDetailViewControllerTests {
         withUIKitAnimationsDisabled {
             model.selectRequest(nil)
         }
-        let didPop = await waitUntil {
+        let didPop = await waitUntilNavigationStackSynced(in: navigationController) {
             navigationController.viewControllers == [listViewController]
         }
         #expect(didPop)
@@ -1175,16 +1175,21 @@ struct NetworkDetailViewControllerTests {
             listViewController: listViewController,
             detailViewController: detailViewController
         )
-        let window = showInWindow(navigationController)
+        let window = showInWindow(navigationController, makeVisible: true)
         defer { window.isHidden = true }
 
-        let didRenderList = await waitUntil {
-            listViewController.collectionViewForTesting.numberOfItems(inSection: 0) == 1
-        }
+        let didRenderList = await waitForObservedCondition(
+            deliveries: {
+                [listViewController.displayRowsObservationDeliveryForTesting].compactMap { $0 }
+            },
+            sample: {
+                listViewController.collectionViewForTesting.numberOfItems(inSection: 0) == 1
+            }
+        )
         #expect(didRenderList)
 
         selectListItem(at: IndexPath(item: 0, section: 0), in: listViewController)
-        let didPush = await waitUntil {
+        let didPush = await waitUntilNavigationStackSynced(in: navigationController) {
             navigationController.viewControllers.last === detailViewController
         }
         #expect(didPush)
@@ -1193,7 +1198,7 @@ struct NetworkDetailViewControllerTests {
         _ = withUIKitAnimationsDisabled {
             navigationController.popViewController(animated: false)
         }
-        let didReturnToList = await waitUntil {
+        let didReturnToList = await waitUntilNavigationStackSynced(in: navigationController) {
             navigationController.viewControllers == [listViewController]
                 && model.selectedRequest == nil
                 && (listViewController.collectionViewForTesting.indexPathsForSelectedItems ?? []).isEmpty
@@ -1201,7 +1206,7 @@ struct NetworkDetailViewControllerTests {
         #expect(didReturnToList)
 
         selectListItem(at: IndexPath(item: 0, section: 0), in: listViewController)
-        let didPushAgain = await waitUntil {
+        let didPushAgain = await waitUntilNavigationStackSynced(in: navigationController) {
             navigationController.viewControllers.last === detailViewController
         }
         #expect(didPushAgain)
@@ -1219,11 +1224,11 @@ struct NetworkDetailViewControllerTests {
             listViewController: listViewController,
             detailViewController: detailViewController
         )
-        let window = showInWindow(navigationController)
+        let window = showInWindow(navigationController, makeVisible: true)
         defer { window.isHidden = true }
 
         model.selectRequest(request)
-        let didPush = await waitUntil {
+        let didPush = await waitUntilNavigationStackSynced(in: navigationController) {
             navigationController.viewControllers.last === detailViewController
         }
         #expect(didPush)
@@ -1235,7 +1240,7 @@ struct NetworkDetailViewControllerTests {
         #expect(model.selectedRequestID == request.id)
         #expect(model.selectedRequest == nil)
 
-        let didPop = await waitUntil {
+        let didPop = await waitUntilNavigationStackSynced(in: navigationController) {
             navigationController.viewControllers == [listViewController]
         }
         #expect(didPop)
@@ -1244,18 +1249,21 @@ struct NetworkDetailViewControllerTests {
     @Test
     func listControllerDeallocatesWhileDisplayRequestObservationIsActive() async throws {
         let model = NetworkPanelModel(network: NetworkSession())
+        let deinitProbe = UITestDeinitProbe()
         weak var weakViewController: NetworkListViewController?
 
         do {
             let viewController = NetworkListViewController(model: model)
             viewController.loadViewIfNeeded()
+            viewController.setDeinitHandlerForTesting {
+                deinitProbe.signalDeinit()
+            }
             weakViewController = viewController
         }
 
-        let didDeallocate = await waitUntil {
-            weakViewController == nil
-        }
+        let didDeallocate = await deinitProbe.wait()
         #expect(didDeallocate)
+        #expect(weakViewController == nil)
     }
 
     private func applyRequest(
@@ -1268,15 +1276,15 @@ struct NetworkDetailViewControllerTests {
         responseMimeType: String = "text/javascript",
         finishes: Bool = true
     ) -> NetworkRequest? {
-        let targetID = ProtocolTargetIdentifier("page")
-        let requestID = NetworkRequestIdentifier(rawRequestID)
+        let targetID = ProtocolTarget.ID("page")
+        let requestID = NetworkRequest.ProtocolID(rawRequestID)
         let key = network.applyRequestWillBeSent(
             targetID: targetID,
             requestID: requestID,
-            frameID: DOMFrameIdentifier("main"),
+            frameID: DOMFrame.ID("main"),
             loaderID: "loader",
             documentURL: "https://example.com",
-            request: NetworkRequestPayload(
+            request: NetworkRequest.Payload(
                 url: url,
                 method: postData == nil ? "GET" : "POST",
                 headers: requestHeaders,
@@ -1289,7 +1297,7 @@ struct NetworkDetailViewControllerTests {
             targetID: targetID,
             requestID: requestID,
             resourceType: .script,
-            response: NetworkResponsePayload(
+            response: NetworkRequest.Response.Payload(
                 url: url,
                 status: 200,
                 statusText: "OK",
@@ -1309,7 +1317,7 @@ struct NetworkDetailViewControllerTests {
     }
 
     private func selectMode(
-        _ mode: NetworkDetailMode,
+        _ mode: NetworkDetailViewController.Mode,
         on viewController: NetworkDetailViewController
     ) {
         #expect(viewController.isDetailModeEnabledForTesting(mode))
@@ -1325,10 +1333,15 @@ struct NetworkDetailViewControllerTests {
         viewController.collectionView(collectionView, didSelectItemAt: indexPath)
     }
 
-    private func showInWindow(_ viewController: UIViewController) -> UIWindow {
+    private func showInWindow(
+        _ viewController: UIViewController,
+        makeVisible: Bool = false
+    ) -> UIWindow {
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         window.rootViewController = viewController
-        window.makeKeyAndVisible()
+        if makeVisible {
+            window.makeKeyAndVisible()
+        }
         viewController.loadViewIfNeeded()
         window.layoutIfNeeded()
         return window
@@ -1363,42 +1376,47 @@ struct NetworkDetailViewControllerTests {
 
     private func waitUntilRendered(
         in viewController: NetworkDetailViewController,
-        maxTicks: Int = 256,
         _ condition: @escaping @MainActor @Sendable () -> Bool
     ) async -> Bool {
-        if sampleRenderedCondition(in: viewController, condition: condition) {
-            return true
-        }
-
-        for _ in 0..<maxTicks {
-            let deliveries = observationDeliveries(in: viewController)
-            if deliveries.isEmpty == false {
-                var renderedValues: [ObservedValues<Bool>] = []
-                for delivery in deliveries {
-                    renderedValues.append(
-                        await delivery.values {
-                            sampleRenderedCondition(in: viewController, condition: condition)
-                        }
-                    )
-                }
-                if renderedValues.contains(where: { $0.latestValue == true }) {
-                    return true
-                }
+        await waitForObservedCondition(
+            deliveries: {
+                observationDeliveries(in: viewController)
+            },
+            sample: {
+                sampleRenderedCondition(in: viewController, condition: condition)
             }
-            if sampleRenderedCondition(in: viewController, condition: condition) {
-                return true
-            }
-            await Task.yield()
-        }
-        return sampleRenderedCondition(in: viewController, condition: condition)
+        )
     }
 
-    private func observationDeliveries(in viewController: NetworkDetailViewController) -> [ObservationDelivery] {
+    private func waitUntilNavigationStackSynced(
+        in navigationController: NetworkCompactNavigationController,
+        _ condition: @escaping @MainActor @Sendable () -> Bool
+    ) async -> Bool {
+        await waitForObservedCondition(
+            deliveries: {
+                [navigationController.selectionObservationDeliveryForTesting].compactMap { $0 }
+            },
+            sample: {
+                condition()
+            }
+        )
+    }
+
+    private func waitUntilNavigationStackSynced(
+        in navigationController: UINavigationController,
+        _ condition: @escaping @MainActor @Sendable () -> Bool
+    ) async -> Bool {
+        guard let compactNavigationController = navigationController as? NetworkCompactNavigationController else {
+            return condition()
+        }
+        return await waitUntilNavigationStackSynced(in: compactNavigationController, condition)
+    }
+
+    private func observationDeliveries(in viewController: NetworkDetailViewController) -> [PortableObservationTracking.Token] {
         [
             viewController.modelObservationDeliveryForTesting,
             viewController.selectedRequestRenderObservationDeliveryForTesting,
             viewController.responseBodyFetchObservationDeliveryForTesting,
-            viewController.previewRoleScrollEdgeObservationDeliveryForTesting,
             viewController.bodyViewControllerForTesting.bodyObservationDeliveryForTesting,
         ].compactMap { $0 }
     }
@@ -1409,19 +1427,6 @@ struct NetworkDetailViewControllerTests {
     ) -> Bool {
         viewController.view.layoutIfNeeded()
         return condition()
-    }
-
-    private func waitUntil(
-        maxTicks: Int = 256,
-        _ condition: @MainActor () -> Bool
-    ) async -> Bool {
-        for _ in 0..<maxTicks {
-            if condition() {
-                return true
-            }
-            await Task.yield()
-        }
-        return false
     }
 
     private func waitForNavigationTransitionToFinish(in navigationController: UINavigationController) async {
@@ -1452,5 +1457,6 @@ struct NetworkDetailViewControllerTests {
         }
         return bundle.localizedString(forKey: key, value: nil, table: nil)
     }
+}
 }
 #endif

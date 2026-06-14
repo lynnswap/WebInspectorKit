@@ -156,61 +156,61 @@ private struct DOMTreeMenuModelFixture {
 
 @MainActor
 private func makeMenuFixture() throws -> DOMTreeMenuModelFixture {
-    let targetID = ProtocolTargetIdentifier("page-main")
+    let targetID = ProtocolTarget.ID("page-main")
     let session = DOMSession()
     session.applyTargetCreated(
-        ProtocolTargetRecord(
+        ProtocolTarget.Record(
             id: targetID,
             kind: .page,
-            frameID: DOMFrameIdentifier("main-frame")
+            frameID: DOMFrame.ID("main-frame")
         ),
         makeCurrentMainPage: true
     )
     _ = session.replaceDocumentRoot(menuFixtureDocument(), targetID: targetID)
 
     let divID = try #require(
-        session.snapshot().currentNodeIDByKey[DOMNodeCurrentKey(targetID: targetID, nodeID: .init(7))]
+        session.snapshot().currentNodeIDByKey[DOMNode.CurrentKey(targetID: targetID, nodeID: .init(7))]
     )
     let inputID = try #require(
-        session.snapshot().currentNodeIDByKey[DOMNodeCurrentKey(targetID: targetID, nodeID: .init(12))]
+        session.snapshot().currentNodeIDByKey[DOMNode.CurrentKey(targetID: targetID, nodeID: .init(12))]
     )
     return DOMTreeMenuModelFixture(session: session, divID: divID, inputID: inputID)
 }
 
-private func menuFixtureDocument() -> DOMNodePayload {
-    DOMNodePayload(
+private func menuFixtureDocument() -> DOMNode.Payload {
+    DOMNode.Payload(
         nodeID: .init(1),
         nodeType: .document,
         nodeName: "#document",
         regularChildren: .loaded([
-            DOMNodePayload(
+            DOMNode.Payload(
                 nodeID: .init(3),
                 nodeType: .element,
                 nodeName: "HTML",
                 localName: "html",
                 regularChildren: .loaded([
-                    DOMNodePayload(
+                    DOMNode.Payload(
                         nodeID: .init(6),
                         nodeType: .element,
                         nodeName: "BODY",
                         localName: "body",
                         regularChildren: .loaded([
-                            DOMNodePayload(
+                            DOMNode.Payload(
                                 nodeID: .init(7),
                                 nodeType: .element,
                                 nodeName: "DIV",
                                 localName: "div",
                                 attributes: [
-                                    DOMAttribute(name: "id", value: "start-of-content"),
-                                    DOMAttribute(name: "data-testid", value: "cellInnerDiv"),
+                                    DOMNode.Attribute(name: "id", value: "start-of-content"),
+                                    DOMNode.Attribute(name: "data-testid", value: "cellInnerDiv"),
                                 ]
                             ),
-                            DOMNodePayload(
+                            DOMNode.Payload(
                                 nodeID: .init(12),
                                 nodeType: .element,
                                 nodeName: "INPUT",
                                 localName: "input",
-                                attributes: [DOMAttribute(name: "disabled", value: "")]
+                                attributes: [DOMNode.Attribute(name: "disabled", value: "")]
                             ),
                         ])
                     ),

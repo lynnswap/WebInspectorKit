@@ -1,5 +1,5 @@
 {
-  "originHash" : "143d458cc772b9444a9fccb5535aa7edf6f651950463850242201f6b7872d3fa",
+  "originHash" : "0330638e1efa496cd1e463fe685e44f9c11842411669aea4c17315c7235d1974",
   "pins" : [
     {
       "identity" : "machokit",
@@ -24,8 +24,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/ObservationBridge.git",
       "state" : {
-        "revision" : "859e630ec6633fa3cb632df308eec6c041207888",
-        "version" : "0.11.1"
+        "revision" : "4f046ab5862e5d98687b03f9e522e6de48b7efca",
+        "version" : "0.12.0"
       }
     },
     {
@@ -38,30 +38,12 @@
       }
     },
     {
-      "identity" : "swift-async-algorithms",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/apple/swift-async-algorithms",
-      "state" : {
-        "revision" : "9d349bcc328ac3c31ce40e746b5882742a0d1272",
-        "version" : "1.1.3"
-      }
-    },
-    {
       "identity" : "swift-binary-parse-support",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/p-x9/swift-binary-parse-support.git",
       "state" : {
         "revision" : "5fb96b503672ea4752eded6b4e301fd87214b03b",
         "version" : "0.2.1"
-      }
-    },
-    {
-      "identity" : "swift-collections",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/apple/swift-collections.git",
-      "state" : {
-        "revision" : "6675bc0ff86e61436e615df6fc5174e043e57924",
-        "version" : "1.4.1"
       }
     },
     {
@@ -105,8 +87,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/SyntaxEditorUI.git",
       "state" : {
-        "revision" : "0230895781b2889948e93ce8502af4aa8e194362",
-        "version" : "0.12.0"
+        "revision" : "2cbdfac2da3d31592682336a6fab67ed46079ec1",
+        "version" : "0.13.0"
       }
     },
     {

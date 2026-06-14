@@ -5,9 +5,9 @@ import UIKit
 @MainActor
 package final class RegularTabContentViewController: UINavigationController {
     private let session: WebInspectorSession
-    private var segmentDisplayItemIDs: [TabDisplayItem.ID] = []
-    private var displayedDisplayItemID: TabDisplayItem.ID?
-    private let observationScope = ObservationScope()
+    private var segmentDisplayItemIDs: [WebInspectorTab.DisplayItem.ID] = []
+    private var displayedDisplayItemID: WebInspectorTab.DisplayItem.ID?
+    private var interfaceObservation: PortableObservationTracking.Token?
 
     private lazy var segmentBarButtonItem: UIBarButtonItem = {
         let item = UIBarButtonItem(customView: segmentedControl)
@@ -43,7 +43,7 @@ package final class RegularTabContentViewController: UINavigationController {
     }
 
     isolated deinit {
-        observationScope.cancelAll()
+        interfaceObservation?.cancel()
     }
 
     override package func viewDidLoad() {
@@ -73,8 +73,9 @@ package final class RegularTabContentViewController: UINavigationController {
     }
 
     private func bindInterface() {
-        observationScope.observe(session.interface) { [weak self] _, interface in
-            self?.renderInterface(interface)
+        interfaceObservation = withPortableContinuousObservation { [weak self] _ in
+            guard let self else { return }
+            renderInterface(session.interface)
         }
     }
 
@@ -94,7 +95,7 @@ package final class RegularTabContentViewController: UINavigationController {
         renderSelection(selectedDisplayItem)
     }
 
-    private func setSegments(for displayItems: [TabDisplayItem]) {
+    private func setSegments(for displayItems: [WebInspectorTab.DisplayItem]) {
         let nextItemIDs = displayItems.map(\.id)
         guard segmentDisplayItemIDs != nextItemIDs else {
             return
@@ -111,7 +112,7 @@ package final class RegularTabContentViewController: UINavigationController {
         }
     }
 
-    private func renderSelection(_ selectedDisplayItem: TabDisplayItem?) {
+    private func renderSelection(_ selectedDisplayItem: WebInspectorTab.DisplayItem?) {
         let selectedSegmentIndex = selectedDisplayItem.flatMap {
             segmentDisplayItemIDs.firstIndex(of: $0.id)
         } ?? UISegmentedControl.noSegment
@@ -139,8 +140,8 @@ package final class RegularTabContentViewController: UINavigationController {
         displayedDisplayItemID = selectedDisplayItem.id
     }
 
-    private func rootViewController(for displayItem: TabDisplayItem) -> UIViewController {
-        let viewController = TabContentFactory.makeViewController(
+    private func rootViewController(for displayItem: WebInspectorTab.DisplayItem) -> UIViewController {
+        let viewController = WebInspectorTab.ContentFactory.makeViewController(
             for: displayItem,
             session: session,
             hostLayout: .regular,

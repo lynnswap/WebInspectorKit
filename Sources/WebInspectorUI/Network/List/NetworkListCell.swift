@@ -1,4 +1,5 @@
 #if canImport(UIKit)
+import WebInspectorCore
 import UIKit
 
 @MainActor
@@ -16,7 +17,7 @@ package final class NetworkListCell: UICollectionViewListCell {
         nil
     }
 
-    package func bind(projection: NetworkRequestDisplayProjection) {
+    package func bind(projection: NetworkRequest.Display.Projection) {
         render(displayName: projection.displayName)
         renderAccessories(projection: projection)
     }
@@ -61,7 +62,7 @@ package final class NetworkListCell: UICollectionViewListCell {
         contentConfiguration = content
     }
 
-    private func renderAccessories(projection: NetworkRequestDisplayProjection) {
+    private func renderAccessories(projection: NetworkRequest.Display.Projection) {
         let color = projection.statusSeverity.color
         if statusIndicatorView.backgroundColor?.isEqual(color) != true {
             statusIndicatorView.backgroundColor = color

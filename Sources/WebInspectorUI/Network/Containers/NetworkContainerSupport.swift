@@ -88,6 +88,41 @@ func webInspectorApplyNavigationControllerBackground(to navigationController: UI
 }
 
 @MainActor
+func webInspectorConfigureScrollEdgeObservedScrollView(
+    _ scrollView: UIScrollView,
+    backgroundColor: UIColor,
+    traitCollection: UITraitCollection
+) {
+    let resolvedBackgroundColor: UIColor
+    if #available(iOS 26.0, *) {
+        resolvedBackgroundColor = backgroundColor.resolvedColor(with: traitCollection)
+    } else {
+        resolvedBackgroundColor = backgroundColor
+    }
+    if scrollView.backgroundColor != resolvedBackgroundColor {
+        scrollView.backgroundColor = resolvedBackgroundColor
+    }
+
+    if #available(iOS 26.0, *) {
+        // WebInspector paints these scroll view backgrounds directly; automatic
+        // edge capture can otherwise form UIKit observation/layout feedback loops.
+        let hardStyle = UIScrollEdgeEffect.Style.hard
+        if scrollView.topEdgeEffect.style !== hardStyle {
+            scrollView.topEdgeEffect.style = hardStyle
+        }
+        if scrollView.bottomEdgeEffect.style !== hardStyle {
+            scrollView.bottomEdgeEffect.style = hardStyle
+        }
+        if scrollView.topEdgeEffect.isHidden == false {
+            scrollView.topEdgeEffect.isHidden = true
+        }
+        if scrollView.bottomEdgeEffect.isHidden == false {
+            scrollView.bottomEdgeEffect.isHidden = true
+        }
+    }
+}
+
+@MainActor
 final class RegularSplitColumnNavigationController: UINavigationController {
     private let hidesNavigationBar: Bool
 

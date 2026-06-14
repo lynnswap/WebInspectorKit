@@ -55,7 +55,7 @@ extension NetworkRequest {
         return "-"
     }
 
-    package var statusSeverity: NetworkStatusSeverity {
+    package var statusSeverity: NetworkRequest.Display.StatusSeverity {
         if case .failed = state {
             return .error
         }
@@ -105,7 +105,7 @@ extension NetworkRequest {
     }
 }
 
-extension NetworkResourceType {
+extension NetworkRequest.ResourceType {
     fileprivate var displayLabel: String {
         switch self {
         case .document:

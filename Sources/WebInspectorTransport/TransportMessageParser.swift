@@ -22,9 +22,29 @@ package struct ParsedProtocolMessage: Equatable, Sendable {
     }
 }
 
+package struct TransportMessageParsePolicy: Equatable, Sendable {
+    package static let `default` = TransportMessageParsePolicy(detachedParsingThresholdBytes: 64 * 1024)
+
+    package var detachedParsingThresholdBytes: Int
+
+    package init(detachedParsingThresholdBytes: Int) {
+        self.detachedParsingThresholdBytes = max(0, detachedParsingThresholdBytes)
+    }
+
+    package func shouldParseDetached(_ message: String) -> Bool {
+        message.utf8.count >= detachedParsingThresholdBytes
+    }
+}
+
 package enum TransportMessageParser {
-    package static func parse(_ message: String) async throws -> ParsedProtocolMessage {
-        try await Task.detached(priority: .userInitiated) {
+    package static func parse(
+        _ message: String,
+        policy: TransportMessageParsePolicy = .default
+    ) async throws -> ParsedProtocolMessage {
+        guard policy.shouldParseDetached(message) else {
+            return try parseSync(message)
+        }
+        return try await Task.detached(priority: .userInitiated) {
             try parseSync(message)
         }.value
     }
@@ -37,7 +57,7 @@ package enum TransportMessageParser {
         object["params"] = try jsonObject(from: parametersData)
         let data = try JSONSerialization.data(withJSONObject: object, options: [])
         guard let string = String(data: data, encoding: .utf8) else {
-            throw TransportError.malformedMessage
+            throw TransportSession.Error.malformedMessage
         }
         return string
     }
@@ -57,7 +77,7 @@ package enum TransportMessageParser {
         ]
         let data = try JSONSerialization.data(withJSONObject: object, options: [])
         guard let string = String(data: data, encoding: .utf8) else {
-            throw TransportError.malformedMessage
+            throw TransportSession.Error.malformedMessage
         }
         return string
     }
@@ -90,7 +110,7 @@ package enum TransportMessageParser {
     private static func parseSync(_ message: String) throws -> ParsedProtocolMessage {
         guard let data = message.data(using: .utf8),
               let object = try JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] else {
-            throw TransportError.malformedMessage
+            throw TransportSession.Error.malformedMessage
         }
 
         return ParsedProtocolMessage(

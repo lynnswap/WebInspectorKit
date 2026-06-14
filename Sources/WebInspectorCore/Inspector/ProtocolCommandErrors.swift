@@ -4,7 +4,7 @@ package func isUnsupportedProtocolCommandError(
     _ method: String,
     error: any Error
 ) -> Bool {
-    guard case let TransportError.remoteError(errorMethod, _, message) = error,
+    guard case let TransportSession.Error.remoteError(errorMethod, _, message) = error,
           errorMethod == method else {
         return false
     }

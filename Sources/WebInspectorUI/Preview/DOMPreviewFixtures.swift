@@ -5,12 +5,12 @@ import WebInspectorTransport
 enum DOMPreviewFixtures {
     static func makeDOMSession() -> DOMSession {
         let session = DOMSession()
-        let targetID = ProtocolTargetIdentifier("preview-page")
+        let targetID = ProtocolTarget.ID("preview-page")
         session.applyTargetCreated(
-            ProtocolTargetRecord(
+            ProtocolTarget.Record(
                 id: targetID,
                 kind: .page,
-                frameID: DOMFrameIdentifier("preview-frame")
+                frameID: DOMFrame.ID("preview-frame")
             ),
             makeCurrentMainPage: true
         )
@@ -18,31 +18,31 @@ enum DOMPreviewFixtures {
         return session
     }
 
-    private static func previewDocument() -> DOMNodePayload {
-        DOMNodePayload(
+    private static func previewDocument() -> DOMNode.Payload {
+        DOMNode.Payload(
             nodeID: .init(1),
             nodeType: .document,
             nodeName: "#document",
             regularChildren: .loaded([
-                DOMNodePayload(
+                DOMNode.Payload(
                     nodeID: .init(2),
                     nodeType: .documentType,
                     nodeName: "html"
                 ),
-                DOMNodePayload(
+                DOMNode.Payload(
                     nodeID: .init(3),
                     nodeType: .element,
                     nodeName: "HTML",
                     localName: "html",
-                    attributes: [DOMAttribute(name: "lang", value: "en")],
+                    attributes: [DOMNode.Attribute(name: "lang", value: "en")],
                     regularChildren: .loaded([
-                        DOMNodePayload(
+                        DOMNode.Payload(
                             nodeID: .init(4),
                             nodeType: .element,
                             nodeName: "HEAD",
                             localName: "head",
                             regularChildren: .loaded([
-                                DOMNodePayload(
+                                DOMNode.Payload(
                                     nodeID: .init(5),
                                     nodeType: .element,
                                     nodeName: "TITLE",
@@ -50,45 +50,45 @@ enum DOMPreviewFixtures {
                                 ),
                             ])
                         ),
-                        DOMNodePayload(
+                        DOMNode.Payload(
                             nodeID: .init(6),
                             nodeType: .element,
                             nodeName: "BODY",
                             localName: "body",
-                            attributes: [DOMAttribute(name: "class", value: "logged-in env-production")],
+                            attributes: [DOMNode.Attribute(name: "class", value: "logged-in env-production")],
                             regularChildren: .loaded([
-                                DOMNodePayload(
+                                DOMNode.Payload(
                                     nodeID: .init(7),
                                     nodeType: .element,
                                     nodeName: "DIV",
                                     localName: "div",
                                     attributes: [
-                                        DOMAttribute(name: "id", value: "start-of-content"),
-                                        DOMAttribute(name: "data-testid", value: "cellInnerDiv"),
+                                        DOMNode.Attribute(name: "id", value: "start-of-content"),
+                                        DOMNode.Attribute(name: "data-testid", value: "cellInnerDiv"),
                                     ]
                                 ),
-                                DOMNodePayload(
+                                DOMNode.Payload(
                                     nodeID: .init(8),
                                     nodeType: .element,
                                     nodeName: "ARTICLE",
                                     localName: "article",
                                     regularChildren: .loaded([
-                                        DOMNodePayload(
+                                        DOMNode.Payload(
                                             nodeID: .init(9),
                                             nodeType: .element,
                                             nodeName: "SPAN",
                                             localName: "span",
-                                            attributes: [DOMAttribute(name: "id", value: "nested-child")]
+                                            attributes: [DOMNode.Attribute(name: "id", value: "nested-child")]
                                         ),
                                     ])
                                 ),
-                                DOMNodePayload(
+                                DOMNode.Payload(
                                     nodeID: .init(10),
                                     nodeType: .text,
                                     nodeName: "#text",
                                     nodeValue: "Introducing luma for iOS 26"
                                 ),
-                                DOMNodePayload(
+                                DOMNode.Payload(
                                     nodeID: .init(11),
                                     nodeType: .comment,
                                     nodeName: "#comment",

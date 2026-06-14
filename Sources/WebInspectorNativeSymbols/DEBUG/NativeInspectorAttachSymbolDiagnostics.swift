@@ -2,6 +2,7 @@
 import Foundation
 import MachO
 import MachOKit
+import Synchronization
 
 private enum NativeInspectorSymbolDiagnostics {
     private static let similarAttachSymbolLogState = NativeInspectorSimilarAttachSymbolLogState()
@@ -11,19 +12,17 @@ private enum NativeInspectorSymbolDiagnostics {
     }
 }
 
-private final class NativeInspectorSimilarAttachSymbolLogState: @unchecked Sendable {
-    private let lock = NSLock()
-    private var didLog = false
+private final class NativeInspectorSimilarAttachSymbolLogState: Sendable {
+    private let didLog = Mutex(false)
 
     func reserve() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-
-        guard !didLog else {
-            return false
+        didLog.withLock { didLog in
+            guard !didLog else {
+                return false
+            }
+            didLog = true
+            return true
         }
-        didLog = true
-        return true
     }
 }
 

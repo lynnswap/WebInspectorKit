@@ -1,4 +1,5 @@
 #if canImport(UIKit)
+import Synchronization
 import UIKit
 import WebKit
 
@@ -39,6 +40,7 @@ package final class WebInspectorPageUserInterfaceStyleObserver {
     private let apply: @MainActor (UIUserInterfaceStyle) -> Void
     private var backgroundObservation: NSKeyValueObservation?
     private var traitRegistration: (any UITraitChangeRegistration)?
+    private let generation = WebInspectorPageUserInterfaceStyleObserverGeneration()
 
     package init(
         webView: WKWebView,
@@ -58,23 +60,34 @@ package final class WebInspectorPageUserInterfaceStyleObserver {
             return
         }
 
+        publishCurrentStyle()
+
+        let generation = self.generation
         backgroundObservation = webView.observe(
             \.underPageBackgroundColor,
-            options: [.initial, .new]
-        ) { [weak self] _, _ in
-            Task { @MainActor [weak self] in
-                self?.publishCurrentStyle()
+            options: [.new]
+        ) { [weak self, generation] _, _ in
+            guard let self else {
+                return
+            }
+            let scheduledGeneration = generation.current()
+            Task { @MainActor [weak self, scheduledGeneration] in
+                self?.publishCurrentStyle(ifGeneration: scheduledGeneration)
             }
         }
 
         traitRegistration = webView.registerForTraitChanges(
             UITraitCollection.systemTraitsAffectingColorAppearance
-        ) { [weak self] (_: WKWebView, _: UITraitCollection) in
-            self?.publishCurrentStyle()
+        ) { [weak self, generation] (_: WKWebView, _: UITraitCollection) in
+            guard let self else {
+                return
+            }
+            publishCurrentStyle(ifGeneration: generation.current())
         }
     }
 
     package func invalidate() {
+        generation.advance()
         backgroundObservation?.invalidate()
         backgroundObservation = nil
 
@@ -83,6 +96,13 @@ package final class WebInspectorPageUserInterfaceStyleObserver {
             webView.unregisterForTraitChanges(traitRegistration)
         }
         traitRegistration = nil
+    }
+
+    private func publishCurrentStyle(ifGeneration generation: UInt64) {
+        guard self.generation.isCurrent(generation) else {
+            return
+        }
+        publishCurrentStyle()
     }
 
     private func publishCurrentStyle() {
@@ -97,6 +117,26 @@ package final class WebInspectorPageUserInterfaceStyleObserver {
                 in: webView.traitCollection
             )
         )
+    }
+}
+
+private final class WebInspectorPageUserInterfaceStyleObserverGeneration: Sendable {
+    private let storage = Mutex<UInt64>(0)
+
+    func current() -> UInt64 {
+        storage.withLock { $0 }
+    }
+
+    func advance() {
+        storage.withLock { generation in
+            generation &+= 1
+        }
+    }
+
+    func isCurrent(_ generation: UInt64) -> Bool {
+        storage.withLock { current in
+            current == generation
+        }
     }
 }
 #endif

@@ -520,7 +520,7 @@ the parent page tree.
 - Target capabilities are known before target-scoped DOM commands are sent.
   A target kind of `frame` is insufficient.
 - `DOMNode.ID` is `targetID + documentGeneration + nodeID`, so the same protocol `nodeID` in different targets or document generations cannot collide.
-- `DOMNodeCurrentKey` is only a current mirror lookup key: `targetID + nodeID`.
+- `DOMNode.CurrentKey` is only a current mirror lookup key: `targetID + nodeID`.
 - `DOMNode.ownerFrameID` is the containing frame id from protocol
   `DOM.Node.frameId`, not the iframe owner node's child frame id.
 - `DOM.documentUpdated` advances or invalidates the target's document
@@ -569,7 +569,7 @@ flowchart TD
   `TargetInfo` exposes this directly.
 - `DOMDocument.ID`: `targetID + documentGeneration`.
 - `DOMNode.ID`: `documentID + nodeID`.
-- `DOMNodeCurrentKey`: `targetID + nodeID` for resolving the current node mirror within one target.
+- `DOMNode.CurrentKey`: `targetID + nodeID` for resolving the current node mirror within one target.
 
 `backendNodeId`, URL strings, raw node ids, and `page-*` naming are not global
 DOM identity. Frame target-id shape is implementation/version evidence only;

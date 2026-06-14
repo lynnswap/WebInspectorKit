@@ -9,36 +9,36 @@ import WebKit
 import UIKit
 typealias BrowserPlatformColor = UIColor
 
-enum BrowserViewportChromeGeometry {
-    static func topEdgeOverlapHeight(hostFrame: CGRect, chromeFrame: CGRect) -> CGFloat {
-        let overlap = hostFrame.intersection(chromeFrame)
-        guard overlap.isNull == false else {
-            return 0
-        }
-        guard chromeFrame.minY <= hostFrame.minY else {
-            return 0
-        }
-        return max(0, overlap.maxY - hostFrame.minY)
-    }
-
-    static func bottomEdgeOverlapHeight(hostFrame: CGRect, chromeFrame: CGRect) -> CGFloat {
-        let overlap = hostFrame.intersection(chromeFrame)
-        guard overlap.isNull == false else {
-            return 0
-        }
-        guard chromeFrame.maxY >= hostFrame.maxY else {
-            return 0
-        }
-        return max(0, hostFrame.maxY - overlap.minY)
-    }
-}
-
 #if os(iOS)
 import WKViewportCoordinator
 typealias BrowserViewportCoordinator = ViewportCoordinator
 #else
 @MainActor
 final class BrowserViewportCoordinator {
+    enum ChromeGeometry {
+        static func topEdgeOverlapHeight(hostFrame: CGRect, chromeFrame: CGRect) -> CGFloat {
+            let overlap = hostFrame.intersection(chromeFrame)
+            guard overlap.isNull == false else {
+                return 0
+            }
+            guard chromeFrame.minY <= hostFrame.minY else {
+                return 0
+            }
+            return max(0, overlap.maxY - hostFrame.minY)
+        }
+
+        static func bottomEdgeOverlapHeight(hostFrame: CGRect, chromeFrame: CGRect) -> CGFloat {
+            let overlap = hostFrame.intersection(chromeFrame)
+            guard overlap.isNull == false else {
+                return 0
+            }
+            guard chromeFrame.maxY >= hostFrame.maxY else {
+                return 0
+            }
+            return max(0, hostFrame.maxY - overlap.minY)
+        }
+    }
+
     weak var hostViewController: UIViewController?
     private weak var webView: WKWebView?
     private var lastAppliedInsets: UIEdgeInsets?
@@ -185,7 +185,7 @@ final class BrowserViewportCoordinator {
 
         let hostFrameInWindow = hostView.convert(hostView.bounds, to: window)
         let chromeFrameInWindow = chromeView.convert(chromeView.bounds, to: window)
-        return BrowserViewportChromeGeometry.topEdgeOverlapHeight(
+        return BrowserViewportCoordinator.ChromeGeometry.topEdgeOverlapHeight(
             hostFrame: hostFrameInWindow,
             chromeFrame: chromeFrameInWindow
         )
@@ -204,7 +204,7 @@ final class BrowserViewportCoordinator {
 
         let hostFrameInWindow = hostView.convert(hostView.bounds, to: window)
         let chromeFrameInWindow = chromeView.convert(chromeView.bounds, to: window)
-        return BrowserViewportChromeGeometry.bottomEdgeOverlapHeight(
+        return BrowserViewportCoordinator.ChromeGeometry.bottomEdgeOverlapHeight(
             hostFrame: hostFrameInWindow,
             chromeFrame: chromeFrameInWindow
         )
@@ -272,44 +272,50 @@ private let logger = Logger(
     category: "BrowserTabStore"
 )
 
-enum BrowserHistoryDirection {
-    case back
-    case forward
-}
-
-struct BrowserHistoryMenuItem {
-    let backForwardListItem: WKBackForwardListItem
-    let title: String
-    let subtitle: String
-    let direction: BrowserHistoryDirection
-}
-
-private enum BrowserTabStoreSPI {
-    private static func deobfuscate(_ reverseTokens: [String]) -> String {
-        reverseTokens.reversed().joined()
+extension BrowserTabStore {
+    enum HistoryDirection {
+        case back
+        case forward
     }
+}
 
-    // browsingContextController
-    static let browsingContextControllerSelector = NSSelectorFromString(
-        deobfuscate(["Controller", "Context", "browsing"])
-    )
-    // backForwardList
-    static let backForwardListSelector = NSSelectorFromString(
-        deobfuscate(["List", "Forward", "back"])
-    )
-    // goToBackForwardListItem:
-    static let goToBackForwardListItemSelector = NSSelectorFromString(
-        deobfuscate([":", "Item", "List", "Forward", "Back", "To", "go"])
-    )
-    // _setHistoryDelegate:
-    static let setHistoryDelegateSelector = NSSelectorFromString(
-        deobfuscate([":", "Delegate", "History", "_set"])
-    )
-    // _webView:navigation:didSameDocumentNavigation:
-    static let sameDocumentNavigationSelector = NSSelectorFromString(
-        deobfuscate([":", "Navigation", "Document", "Same", "did", ":", "navigation", ":", "webView", "_"])
-    )
-    static let maximumHistoryMenuItemCount = 20
+extension BrowserTabStore {
+    struct HistoryMenuItem {
+        let backForwardListItem: WKBackForwardListItem
+        let title: String
+        let subtitle: String
+        let direction: BrowserTabStore.HistoryDirection
+    }
+}
+
+extension BrowserTabStore {
+    private enum SPI {
+        private static func deobfuscate(_ reverseTokens: [String]) -> String {
+            reverseTokens.reversed().joined()
+        }
+
+        // browsingContextController
+        static let browsingContextControllerSelector = NSSelectorFromString(
+            deobfuscate(["Controller", "Context", "browsing"])
+        )
+        // backForwardList
+        static let backForwardListSelector = NSSelectorFromString(
+            deobfuscate(["List", "Forward", "back"])
+        )
+        // goToBackForwardListItem:
+        static let goToBackForwardListItemSelector = NSSelectorFromString(
+            deobfuscate([":", "Item", "List", "Forward", "Back", "To", "go"])
+        )
+        // _setHistoryDelegate:
+        static let setHistoryDelegateSelector = NSSelectorFromString(
+            deobfuscate([":", "Delegate", "History", "_set"])
+        )
+        // _webView:navigation:didSameDocumentNavigation:
+        static let sameDocumentNavigationSelector = NSSelectorFromString(
+            deobfuscate([":", "Navigation", "Document", "Same", "did", ":", "navigation", ":", "webView", "_"])
+        )
+        static let maximumHistoryMenuItemCount = 20
+    }
 }
 
 @MainActor
@@ -345,6 +351,8 @@ private enum BrowserTabStoreSPI {
     @ObservationIgnored private var restoredInteractionState: Data?
     @ObservationIgnored private var canSaveWebViewInteractionState = true
     @ObservationIgnored var onStateChanged: (() -> Void)?
+    @ObservationIgnored private var titleObservationAppliedCount = 0
+    @ObservationIgnored private var titleObservationWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
     @ObservationIgnored private static var didInstallSameDocumentNavigationDelegateMethod = false
 
     var isShowingProgress: Bool {
@@ -487,11 +495,11 @@ private enum BrowserTabStoreSPI {
         notifyStateChanged()
     }
 
-    func backHistoryItems(limit: Int = BrowserTabStoreSPI.maximumHistoryMenuItemCount) -> [BrowserHistoryMenuItem] {
+    func backHistoryItems(limit: Int = BrowserTabStore.SPI.maximumHistoryMenuItemCount) -> [BrowserTabStore.HistoryMenuItem] {
         historyItems(direction: .back, limit: limit)
     }
 
-    func forwardHistoryItems(limit: Int = BrowserTabStoreSPI.maximumHistoryMenuItemCount) -> [BrowserHistoryMenuItem] {
+    func forwardHistoryItems(limit: Int = BrowserTabStore.SPI.maximumHistoryMenuItemCount) -> [BrowserTabStore.HistoryMenuItem] {
         historyItems(direction: .forward, limit: limit)
     }
 
@@ -521,8 +529,8 @@ private enum BrowserTabStoreSPI {
         notifyStateChanged()
     }
 
-    func snapshot(stateFileName: String) -> BrowserTabSnapshot {
-        BrowserTabSnapshot(
+    func snapshot(stateFileName: String) -> BrowserTabStore.Snapshot {
+        BrowserTabStore.Snapshot(
             id: id,
             url: persistedURL,
             title: pageTitle,
@@ -530,6 +538,15 @@ private enum BrowserTabStoreSPI {
             lastUsedAt: lastUsedAt,
             stateFileName: stateFileName
         )
+    }
+
+    func waitUntilTitleObservationApplied(atLeast count: Int = 1) async {
+        guard titleObservationAppliedCount < count else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            titleObservationWaiters.append((count, continuation))
+        }
     }
 
     private func setObservers() {
@@ -563,16 +580,18 @@ private enum BrowserTabStoreSPI {
                 guard let self else {
                     return
                 }
-                guard let title else {
+                guard let title, title.isEmpty == false else {
                     if self.isHoldingRestoredTitle == false {
                         self.pageTitle = nil
                     }
                     self.notifyStateChanged()
+                    self.noteTitleObservationApplied()
                     return
                 }
                 self.pageTitle = title
                 self.isHoldingRestoredTitle = false
                 self.notifyStateChanged()
+                self.noteTitleObservationApplied()
             }
             .store(in: &cancellables)
 
@@ -663,9 +682,22 @@ private enum BrowserTabStoreSPI {
         onStateChanged?()
     }
 
-    private func historyItems(direction: BrowserHistoryDirection, limit: Int) -> [BrowserHistoryMenuItem] {
+    private func noteTitleObservationApplied() {
+        titleObservationAppliedCount += 1
+        var remainingWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
+        for (count, continuation) in titleObservationWaiters {
+            if titleObservationAppliedCount >= count {
+                continuation.resume()
+            } else {
+                remainingWaiters.append((count, continuation))
+            }
+        }
+        titleObservationWaiters = remainingWaiters
+    }
+
+    private func historyItems(direction: BrowserTabStore.HistoryDirection, limit: Int) -> [BrowserTabStore.HistoryMenuItem] {
         spiHistoryItems(direction: direction, limit: limit).map { item in
-            BrowserHistoryMenuItem(
+            BrowserTabStore.HistoryMenuItem(
                 backForwardListItem: item,
                 title: historyTitle(for: item),
                 subtitle: item.url.absoluteString,
@@ -684,8 +716,8 @@ private enum BrowserTabStoreSPI {
         return item.url.absoluteString
     }
 
-    private func spiHistoryItems(direction: BrowserHistoryDirection, limit: Int) -> [WKBackForwardListItem] {
-        let clampedLimit = max(0, min(limit, BrowserTabStoreSPI.maximumHistoryMenuItemCount))
+    private func spiHistoryItems(direction: BrowserTabStore.HistoryDirection, limit: Int) -> [WKBackForwardListItem] {
+        let clampedLimit = max(0, min(limit, BrowserTabStore.SPI.maximumHistoryMenuItemCount))
         guard clampedLimit > 0 else {
             return []
         }
@@ -703,8 +735,8 @@ private enum BrowserTabStoreSPI {
     }
 
     private func spiBrowsingContextController() -> NSObject? {
-        guard webView.responds(to: BrowserTabStoreSPI.browsingContextControllerSelector),
-              let browsingContextController = webView.perform(BrowserTabStoreSPI.browsingContextControllerSelector)?
+        guard webView.responds(to: BrowserTabStore.SPI.browsingContextControllerSelector),
+              let browsingContextController = webView.perform(BrowserTabStore.SPI.browsingContextControllerSelector)?
                 .takeUnretainedValue() as? NSObject else {
             return nil
         }
@@ -713,8 +745,8 @@ private enum BrowserTabStoreSPI {
 
     private func spiBackForwardList() -> WKBackForwardList? {
         guard let browsingContextController = spiBrowsingContextController(),
-              browsingContextController.responds(to: BrowserTabStoreSPI.backForwardListSelector),
-              let backForwardList = browsingContextController.perform(BrowserTabStoreSPI.backForwardListSelector)?
+              browsingContextController.responds(to: BrowserTabStore.SPI.backForwardListSelector),
+              let backForwardList = browsingContextController.perform(BrowserTabStore.SPI.backForwardListSelector)?
                 .takeUnretainedValue() as? WKBackForwardList else {
             return nil
         }
@@ -723,18 +755,18 @@ private enum BrowserTabStoreSPI {
 
     private func spiGoToHistoryItem(_ item: WKBackForwardListItem) -> Bool {
         guard let browsingContextController = spiBrowsingContextController(),
-              browsingContextController.responds(to: BrowserTabStoreSPI.goToBackForwardListItemSelector) else {
+              browsingContextController.responds(to: BrowserTabStore.SPI.goToBackForwardListItemSelector) else {
             return false
         }
-        browsingContextController.perform(BrowserTabStoreSPI.goToBackForwardListItemSelector, with: item)
+        browsingContextController.perform(BrowserTabStore.SPI.goToBackForwardListItemSelector, with: item)
         return true
     }
 
     private func configureHistoryDelegateIfAvailable() {
-        guard webView.responds(to: BrowserTabStoreSPI.setHistoryDelegateSelector) else {
+        guard webView.responds(to: BrowserTabStore.SPI.setHistoryDelegateSelector) else {
             return
         }
-        webView.perform(BrowserTabStoreSPI.setHistoryDelegateSelector, with: self)
+        webView.perform(BrowserTabStore.SPI.setHistoryDelegateSelector, with: self)
     }
 
     private static func installSameDocumentNavigationDelegateMethodIfNeeded() {
@@ -750,7 +782,7 @@ private enum BrowserTabStoreSPI {
 
         class_addMethod(
             Self.self,
-            BrowserTabStoreSPI.sameDocumentNavigationSelector,
+            BrowserTabStore.SPI.sameDocumentNavigationSelector,
             method_getImplementation(method),
             method_getTypeEncoding(method)
         )

@@ -205,28 +205,28 @@ func mediaFilterIncludesPreviewableMediaResponses() async throws {
 
 @Test
 func mediaPreviewSupportClassifiesAVIFAndExcludesSVG() {
-    #expect(NetworkMediaPreviewSupport.previewKind(mimeType: "image/avif", url: nil) == .image)
-    #expect(NetworkMediaPreviewSupport.previewKind(mimeType: nil, url: "https://cdn.example.com/photo.avif") == .image)
-    #expect(NetworkMediaPreviewSupport.previewKind(mimeType: "image/apng", url: nil) == .image)
-    #expect(NetworkMediaPreviewSupport.previewKind(mimeType: nil, url: "https://cdn.example.com/animated.apng") == .image)
-    #expect(NetworkMediaPreviewSupport.previewKind(mimeType: "application/octet-stream", url: "https://cdn.example.com/animated.apng") == .image)
-    #expect(NetworkMediaPreviewSupport.previewKind(mimeType: "image/x-png", url: nil) == .image)
-    #expect(NetworkMediaPreviewSupport.previewKind(mimeType: "image/pjpeg", url: nil) == .image)
-    #expect(NetworkMediaPreviewSupport.previewKind(mimeType: "image/x-unknown", url: "https://cdn.example.com/photo.png") == .image)
-    #expect(NetworkMediaPreviewSupport.previewKind(mimeType: "image/svg+xml", url: "https://cdn.example.com/icon.svg") == nil)
-    #expect(NetworkMediaPreviewSupport.classification(mimeType: "image/svg+xml", url: "https://cdn.example.com/icon.svg") == .notPreviewable)
-    #expect(NetworkMediaPreviewSupport.previewKind(mimeType: "text/javascript", url: "https://cdn.example.com/player.mp4") == nil)
-    #expect(NetworkMediaPreviewSupport.previewKind(mimeType: "text/css", url: "https://cdn.example.com/theme.png") == nil)
-    #expect(NetworkMediaPreviewSupport.previewKind(mimeType: "application/octet-stream", url: "https://api.example.com/download") == nil)
-    #expect(NetworkMediaPreviewSupport.temporaryFileExtension(
+    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: "image/avif", url: nil) == .image)
+    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: nil, url: "https://cdn.example.com/photo.avif") == .image)
+    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: "image/apng", url: nil) == .image)
+    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: nil, url: "https://cdn.example.com/animated.apng") == .image)
+    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: "application/octet-stream", url: "https://cdn.example.com/animated.apng") == .image)
+    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: "image/x-png", url: nil) == .image)
+    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: "image/pjpeg", url: nil) == .image)
+    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: "image/x-unknown", url: "https://cdn.example.com/photo.png") == .image)
+    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: "image/svg+xml", url: "https://cdn.example.com/icon.svg") == nil)
+    #expect(NetworkRequest.Display.MediaPreviewSupport.classification(mimeType: "image/svg+xml", url: "https://cdn.example.com/icon.svg") == .notPreviewable)
+    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: "text/javascript", url: "https://cdn.example.com/player.mp4") == nil)
+    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: "text/css", url: "https://cdn.example.com/theme.png") == nil)
+    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: "application/octet-stream", url: "https://api.example.com/download") == nil)
+    #expect(NetworkRequest.Display.MediaPreviewSupport.temporaryFileExtension(
         mimeType: "video/mp4",
         url: "https://api.example.com/download.php"
     ) == "mp4")
-    #expect(NetworkMediaPreviewSupport.temporaryFileExtension(
+    #expect(NetworkRequest.Display.MediaPreviewSupport.temporaryFileExtension(
         mimeType: "application/vnd.apple.mpegurl",
         url: "https://api.example.com/download.php"
     ) == "m3u8")
-    #expect(NetworkMediaPreviewSupport.temporaryFileExtension(
+    #expect(NetworkRequest.Display.MediaPreviewSupport.temporaryFileExtension(
         mimeType: "application/octet-stream",
         url: "https://cdn.example.com/player.mp4"
     ) == "mp4")
@@ -252,7 +252,7 @@ func displayProjectionCacheInvalidatesWhenResponseMIMEBecomesPreviewable() async
         targetID: requestID.targetID,
         requestID: requestID.requestID,
         resourceType: .xhr,
-        response: NetworkResponsePayload(
+        response: NetworkRequest.Response.Payload(
             url: "https://api.example.com/avatar",
             status: 200,
             statusText: "OK",
@@ -287,7 +287,7 @@ func displayProjectionCacheInvalidatesStatusSeverity() async throws {
         targetID: requestID.targetID,
         requestID: requestID.requestID,
         resourceType: .xhr,
-        response: NetworkResponsePayload(
+        response: NetworkRequest.Response.Payload(
             url: "https://api.example.com/data.json",
             status: 204,
             statusText: "No Content",
@@ -303,15 +303,15 @@ func displayProjectionCacheInvalidatesStatusSeverity() async throws {
 @MainActor
 func displayProjectionCacheInvalidatesSearchFields() async throws {
     let network = NetworkSession()
-    let targetID = ProtocolTargetIdentifier("page")
-    let rawRequestID = NetworkRequestIdentifier("1")
+    let targetID = ProtocolTarget.ID("page")
+    let rawRequestID = NetworkRequest.ProtocolID("1")
     let requestID = network.applyRequestWillBeSent(
         targetID: targetID,
         requestID: rawRequestID,
-        frameID: DOMFrameIdentifier("main"),
+        frameID: DOMFrame.ID("main"),
         loaderID: "loader",
         documentURL: "https://example.com",
-        request: NetworkRequestPayload(url: "https://api.example.com/old", method: "POST"),
+        request: NetworkRequest.Payload(url: "https://api.example.com/old", method: "POST"),
         resourceType: .xhr,
         timestamp: 1
     )
@@ -323,12 +323,12 @@ func displayProjectionCacheInvalidatesSearchFields() async throws {
     _ = network.applyRequestWillBeSent(
         targetID: targetID,
         requestID: rawRequestID,
-        frameID: DOMFrameIdentifier("main"),
+        frameID: DOMFrame.ID("main"),
         loaderID: "loader",
         documentURL: "https://example.com",
-        request: NetworkRequestPayload(url: "https://api.example.com/new-endpoint", method: "PATCH"),
+        request: NetworkRequest.Payload(url: "https://api.example.com/new-endpoint", method: "PATCH"),
         resourceType: .xhr,
-        redirectResponse: NetworkResponsePayload(url: "https://api.example.com/old", status: 302),
+        redirectResponse: NetworkRequest.Response.Payload(url: "https://api.example.com/old", status: 302),
         timestamp: 2
     )
 
@@ -343,7 +343,7 @@ func displayProjectionCacheInvalidatesSearchFields() async throws {
         targetID: targetID,
         requestID: rawRequestID,
         resourceType: .xhr,
-        response: NetworkResponsePayload(
+        response: NetworkRequest.Response.Payload(
             url: "https://api.example.com/new-endpoint",
             status: 201,
             statusText: "Created",
@@ -361,15 +361,15 @@ func displayProjectionCacheInvalidatesSearchFields() async throws {
 @MainActor
 func displayProjectionCacheInvalidatesWhenRawMIMETypeAppears() async throws {
     let network = NetworkSession()
-    let targetID = ProtocolTargetIdentifier("page")
-    let rawRequestID = NetworkRequestIdentifier("1")
+    let targetID = ProtocolTarget.ID("page")
+    let rawRequestID = NetworkRequest.ProtocolID("1")
     let requestID = network.applyRequestWillBeSent(
         targetID: targetID,
         requestID: rawRequestID,
-        frameID: DOMFrameIdentifier("main"),
+        frameID: DOMFrame.ID("main"),
         loaderID: "loader",
         documentURL: "https://example.com",
-        request: NetworkRequestPayload(url: "https://api.example.com/resource", method: "GET"),
+        request: NetworkRequest.Payload(url: "https://api.example.com/resource", method: "GET"),
         resourceType: .xhr,
         timestamp: 1
     )
@@ -377,7 +377,7 @@ func displayProjectionCacheInvalidatesWhenRawMIMETypeAppears() async throws {
         targetID: targetID,
         requestID: rawRequestID,
         resourceType: .xhr,
-        response: NetworkResponsePayload(
+        response: NetworkRequest.Response.Payload(
             url: "https://api.example.com/resource",
             status: 200,
             statusText: "OK",
@@ -396,7 +396,7 @@ func displayProjectionCacheInvalidatesWhenRawMIMETypeAppears() async throws {
         targetID: targetID,
         requestID: rawRequestID,
         resourceType: .xhr,
-        response: NetworkResponsePayload(
+        response: NetworkRequest.Response.Payload(
             url: "https://api.example.com/resource",
             status: 200,
             statusText: "OK",
@@ -427,7 +427,7 @@ func displayProjectionCacheReusesMediaClassificationForUnchangedRequests() async
         network: network,
         mediaPreviewClassifier: { mimeType, url in
             classificationCount += 1
-            return NetworkMediaPreviewSupport.classification(mimeType: mimeType, url: url)
+            return NetworkRequest.Display.MediaPreviewSupport.classification(mimeType: mimeType, url: url)
         }
     )
     model.setResourceFilter(.media, enabled: true)
@@ -468,7 +468,7 @@ func displayProjectionCacheSkipsMediaClassificationWhenUnfiltered() async throws
         network: network,
         mediaPreviewClassifier: { mimeType, url in
             classificationCount += 1
-            return NetworkMediaPreviewSupport.classification(mimeType: mimeType, url: url)
+            return NetworkRequest.Display.MediaPreviewSupport.classification(mimeType: mimeType, url: url)
         }
     )
 
@@ -511,28 +511,57 @@ func clearRequestsClearsSelectionButPreservesDisplayCriteria() async throws {
     #expect(model.displayProjection(for: requestID) == nil)
 }
 
+@Test
+@MainActor
+func responseBodyFetchesAreDeduplicatedWhileInFlight() async throws {
+    let network = NetworkSession()
+    let requestID = applyRequest(
+        to: network,
+        requestID: "1",
+        url: "https://api.example.com/data.json",
+        resourceType: .xhr,
+        mimeType: "application/json",
+        timestamp: 1
+    )
+    let request = try #require(network.request(for: requestID))
+    let probe = ResponseBodyFetchProbe()
+    let model = NetworkPanelModel(network: network) { id in
+        await probe.fetch(id)
+    }
+
+    #expect(request.canFetchResponseBody)
+
+    model.fetchResponseBodyIfNeeded(for: request)
+    await probe.waitForFetchCount(1)
+    model.fetchResponseBodyIfNeeded(for: request)
+
+    #expect(probe.fetchedIDs == [requestID])
+
+    probe.finishCurrentFetch()
+}
+
 @MainActor
 @discardableResult
 private func applyRequest(
     to network: NetworkSession,
     requestID rawRequestID: String,
     url: String,
-    resourceType: NetworkResourceType,
+    resourceType: NetworkRequest.ResourceType,
     mimeType: String?,
     responseHeaders: [String: String] = [:],
     status: Int = 200,
     statusText: String = "OK",
     timestamp: Double
 ) -> NetworkRequest.ID {
-    let targetID = ProtocolTargetIdentifier("page")
-    let requestID = NetworkRequestIdentifier(rawRequestID)
+    let targetID = ProtocolTarget.ID("page")
+    let requestID = NetworkRequest.ProtocolID(rawRequestID)
     let key = network.applyRequestWillBeSent(
         targetID: targetID,
         requestID: requestID,
-        frameID: DOMFrameIdentifier("main"),
+        frameID: DOMFrame.ID("main"),
         loaderID: "loader",
         documentURL: "https://example.com",
-        request: NetworkRequestPayload(url: url),
+        request: NetworkRequest.Payload(url: url),
         resourceType: resourceType,
         timestamp: timestamp
     )
@@ -540,7 +569,7 @@ private func applyRequest(
         targetID: targetID,
         requestID: requestID,
         resourceType: resourceType,
-        response: NetworkResponsePayload(
+        response: NetworkRequest.Response.Payload(
             url: url,
             status: status,
             statusText: statusText,
@@ -563,17 +592,63 @@ private func applyPendingRequest(
     to network: NetworkSession,
     requestID rawRequestID: String,
     url: String,
-    resourceType: NetworkResourceType,
+    resourceType: NetworkRequest.ResourceType,
     timestamp: Double
 ) -> NetworkRequest.ID {
     network.applyRequestWillBeSent(
-        targetID: ProtocolTargetIdentifier("page"),
-        requestID: NetworkRequestIdentifier(rawRequestID),
-        frameID: DOMFrameIdentifier("main"),
+        targetID: ProtocolTarget.ID("page"),
+        requestID: NetworkRequest.ProtocolID(rawRequestID),
+        frameID: DOMFrame.ID("main"),
         loaderID: "loader",
         documentURL: "https://example.com",
-        request: NetworkRequestPayload(url: url),
+        request: NetworkRequest.Payload(url: url),
         resourceType: resourceType,
         timestamp: timestamp
     )
+}
+
+@MainActor
+private final class ResponseBodyFetchProbe {
+    private struct Waiter {
+        var count: Int
+        var continuation: CheckedContinuation<Void, Never>
+    }
+
+    private(set) var fetchedIDs: [NetworkRequest.ID] = []
+    private var waiters: [Waiter] = []
+    private var finishContinuation: CheckedContinuation<Void, Never>?
+
+    func fetch(_ id: NetworkRequest.ID) async {
+        fetchedIDs.append(id)
+        resumeSatisfiedWaiters()
+        await withCheckedContinuation { continuation in
+            finishContinuation = continuation
+        }
+    }
+
+    func waitForFetchCount(_ count: Int) async {
+        guard fetchedIDs.count < count else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            waiters.append(Waiter(count: count, continuation: continuation))
+        }
+    }
+
+    func finishCurrentFetch() {
+        finishContinuation?.resume()
+        finishContinuation = nil
+    }
+
+    private func resumeSatisfiedWaiters() {
+        var remaining: [Waiter] = []
+        for waiter in waiters {
+            if fetchedIDs.count >= waiter.count {
+                waiter.continuation.resume()
+            } else {
+                remaining.append(waiter)
+            }
+        }
+        waiters = remaining
+    }
 }

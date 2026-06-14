@@ -5,22 +5,20 @@ import WebInspectorKit
 
 @MainActor
 final class BrowserRootViewController: UINavigationController {
-    private enum InspectorSessionAttachment {
-        case attached
-        case detached
-    }
-
     let store: BrowserStore
     let inspectorSession: WebInspectorSession
     let launchConfiguration: BrowserLaunchConfiguration
-    private var desiredInspectorSessionAttachment: InspectorSessionAttachment = .detached
-    private var resolvedInspectorSessionAttachment: InspectorSessionAttachment = .detached
-    private var pendingInspectorSessionAttachment: InspectorSessionAttachment?
-    private var inspectorLifecycleTask: Task<Void, Never>?
-    private var isFinalizingInspectorSession = false
+    private let inspectorSessionAttachmentLifecycle: BrowserInspectorSessionAttachmentLifecycle
     private var isPreservingInspectorSessionForSceneDisconnection = false
-    private weak var attachedWebView: WKWebView?
-    var onAttachInspectorSessionForTesting: ((WKWebView) -> Void)?
+    var onSelectedWebViewInstalledForTesting: ((WKWebView) -> Void)?
+    var onAttachInspectorSessionForTesting: ((WKWebView) -> Void)? {
+        get {
+            inspectorSessionAttachmentLifecycle.onAttachForTesting
+        }
+        set {
+            inspectorSessionAttachmentLifecycle.onAttachForTesting = newValue
+        }
+    }
 
     init(
         store: BrowserStore? = nil,
@@ -36,6 +34,10 @@ final class BrowserRootViewController: UINavigationController {
         self.store = resolvedStore
         self.inspectorSession = resolvedInspectorSession
         self.launchConfiguration = launchConfiguration
+        self.inspectorSessionAttachmentLifecycle = BrowserInspectorSessionAttachmentLifecycle(
+            store: resolvedStore,
+            inspectorSession: resolvedInspectorSession
+        )
 
         let pageViewController = BrowserPageViewController(
             store: resolvedStore,
@@ -46,6 +48,7 @@ final class BrowserRootViewController: UINavigationController {
         super.init(rootViewController: pageViewController)
 
         pageViewController.onSelectedWebViewInstalled = { [weak self] webView in
+            self?.onSelectedWebViewInstalledForTesting?(webView)
             self?.selectedWebViewDidChange(to: webView)
         }
     }
@@ -70,7 +73,7 @@ final class BrowserRootViewController: UINavigationController {
     override func viewIsAppearing(_ animated: Bool) {
         super.viewIsAppearing(animated)
         isPreservingInspectorSessionForSceneDisconnection = false
-        requestInspectorSessionAttachment(.attached)
+        inspectorSessionAttachmentLifecycle.request(.attached)
     }
 
     override func viewDidDisappear(_ animated: Bool) {
@@ -81,20 +84,18 @@ final class BrowserRootViewController: UINavigationController {
         if isPreservingInspectorSessionForSceneDisconnection {
             return
         }
-        requestInspectorSessionAttachment(.detached)
+        inspectorSessionAttachmentLifecycle.request(.detached)
     }
 
     isolated deinit {
-        inspectorLifecycleTask?.cancel()
+        inspectorSessionAttachmentLifecycle.cancel()
     }
 
     func finalizeInspectorSession() {
-        guard isFinalizingInspectorSession == false else {
+        guard inspectorSessionAttachmentLifecycle.finalize() else {
             return
         }
-        isFinalizingInspectorSession = true
         isPreservingInspectorSessionForSceneDisconnection = false
-        requestInspectorSessionAttachment(.detached)
     }
 
     func prepareForSceneDisconnectionPreservingInspectorSession() {
@@ -102,12 +103,7 @@ final class BrowserRootViewController: UINavigationController {
     }
 
     func waitForInspectorSessionTransitions() async {
-        while let inspectorLifecycleTask {
-            await inspectorLifecycleTask.value
-            if self.inspectorLifecycleTask == nil {
-                break
-            }
-        }
+        await inspectorSessionAttachmentLifecycle.waitForTransitions()
     }
 
     private var pageViewController: BrowserPageViewController? {
@@ -115,86 +111,14 @@ final class BrowserRootViewController: UINavigationController {
     }
 
     func setInspectorSessionAttachedForTesting(to webView: WKWebView) {
-        desiredInspectorSessionAttachment = .attached
-        resolvedInspectorSessionAttachment = .attached
-        attachedWebView = webView
+        inspectorSessionAttachmentLifecycle.setAttachedForTesting(to: webView)
     }
 
 }
 
 private extension BrowserRootViewController {
     private func selectedWebViewDidChange(to webView: WKWebView) {
-        guard desiredInspectorSessionAttachment == .attached else {
-            return
-        }
-        guard attachedWebView !== webView || inspectorLifecycleTask != nil else {
-            return
-        }
-        requestInspectorSessionAttachment(.attached)
-    }
-
-    private func requestInspectorSessionAttachment(_ attachment: InspectorSessionAttachment) {
-        if isFinalizingInspectorSession, attachment != .detached {
-            return
-        }
-        desiredInspectorSessionAttachment = attachment
-
-        let attachmentIsResolved = switch attachment {
-        case .attached:
-            resolvedInspectorSessionAttachment == .attached && attachedWebView === store.webView
-        case .detached:
-            resolvedInspectorSessionAttachment == .detached
-        }
-        guard attachmentIsResolved == false
-            || pendingInspectorSessionAttachment != nil
-            || inspectorLifecycleTask != nil else {
-            return
-        }
-        pendingInspectorSessionAttachment = attachment
-        guard inspectorLifecycleTask == nil else {
-            return
-        }
-
-        let inspectorSession = inspectorSession
-        let store = store
-        inspectorLifecycleTask = Task { [weak self, inspectorSession, store] in
-            guard let self else {
-                return
-            }
-            defer {
-                self.inspectorLifecycleTask = nil
-            }
-
-            while let desiredAttachment = self.pendingInspectorSessionAttachment {
-                self.pendingInspectorSessionAttachment = nil
-
-                switch desiredAttachment {
-                case .attached:
-                    let webView = store.webView
-                    guard self.resolvedInspectorSessionAttachment != .attached
-                        || self.attachedWebView !== webView else {
-                        continue
-                    }
-                    do {
-                        self.onAttachInspectorSessionForTesting?(webView)
-                        try await inspectorSession.attach(to: webView)
-                        self.resolvedInspectorSessionAttachment = .attached
-                        self.attachedWebView = webView
-                    } catch {
-                        self.resolvedInspectorSessionAttachment = .detached
-                        self.attachedWebView = nil
-                        continue
-                    }
-                case .detached:
-                    guard self.resolvedInspectorSessionAttachment != .detached else {
-                        continue
-                    }
-                    await inspectorSession.detach()
-                    self.resolvedInspectorSessionAttachment = .detached
-                    self.attachedWebView = nil
-                }
-            }
-        }
+        inspectorSessionAttachmentLifecycle.selectedWebViewDidChange(to: webView)
     }
 }
 #endif

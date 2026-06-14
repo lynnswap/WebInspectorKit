@@ -5,49 +5,49 @@ import UIKit
 @MainActor
 final class NetworkDetailModeControlController {
     let view: UISegmentedControl
-    var selectionHandler: ((NetworkDetailMode) -> Void)?
-    private var mode: NetworkDetailMode
+    var selectionHandler: ((NetworkDetailViewController.Mode) -> Void)?
+    private var mode: NetworkDetailViewController.Mode
     private var isEnabled = false
 
-    init(initialMode: NetworkDetailMode) {
+    init(initialMode: NetworkDetailViewController.Mode) {
         mode = initialMode
-        view = UISegmentedControl(items: NetworkDetailMode.allCases.map(\.title))
+        view = UISegmentedControl(items: NetworkDetailViewController.Mode.allCases.map(\.title))
         view.selectedSegmentIndex = Self.index(for: initialMode)
         view.accessibilityIdentifier = "WebInspector.Network.DetailModeSegmentedControl"
         view.addTarget(self, action: #selector(valueChanged(_:)), for: .valueChanged)
     }
 
-    func render(mode: NetworkDetailMode, isEnabled: Bool) {
+    func render(mode: NetworkDetailViewController.Mode, isEnabled: Bool) {
         self.mode = mode
         self.isEnabled = isEnabled
         view.isEnabled = isEnabled
         view.selectedSegmentIndex = Self.index(for: mode)
         view.accessibilityLabel = mode.title
-        for index in NetworkDetailMode.allCases.indices {
+        for index in NetworkDetailViewController.Mode.allCases.indices {
             view.setEnabled(isEnabled, forSegmentAt: index)
         }
     }
 
     @objc private func valueChanged(_ sender: UISegmentedControl) {
-        guard NetworkDetailMode.allCases.indices.contains(sender.selectedSegmentIndex) else {
+        guard NetworkDetailViewController.Mode.allCases.indices.contains(sender.selectedSegmentIndex) else {
             render(mode: mode, isEnabled: isEnabled)
             return
         }
-        selectionHandler?(NetworkDetailMode.allCases[sender.selectedSegmentIndex])
+        selectionHandler?(NetworkDetailViewController.Mode.allCases[sender.selectedSegmentIndex])
     }
 
-    private static func index(for mode: NetworkDetailMode) -> Int {
-        NetworkDetailMode.allCases.firstIndex(of: mode) ?? UISegmentedControl.noSegment
+    private static func index(for mode: NetworkDetailViewController.Mode) -> Int {
+        NetworkDetailViewController.Mode.allCases.firstIndex(of: mode) ?? UISegmentedControl.noSegment
     }
 }
 
 @MainActor
 final class NetworkPreviewRoleControlController {
     let containerView: NetworkDetailSegmentedControlContentView
-    var selectionHandler: ((NetworkBodyRole) -> Void)?
+    var selectionHandler: ((NetworkBody.Role) -> Void)?
     private let segmentedControl: UISegmentedControl
-    private var roles: [NetworkBodyRole] = []
-    private var selectedRole: NetworkBodyRole?
+    private var roles: [NetworkBody.Role] = []
+    private var selectedRole: NetworkBody.Role?
     private var isVisible = false
 
     init() {
@@ -61,8 +61,8 @@ final class NetworkPreviewRoleControlController {
 
     @discardableResult
     func render(
-        roles: [NetworkBodyRole],
-        selectedRole: NetworkBodyRole?,
+        roles: [NetworkBody.Role],
+        selectedRole: NetworkBody.Role?,
         isVisible: Bool
     ) -> Bool {
         self.selectedRole = selectedRole
@@ -93,7 +93,7 @@ final class NetworkPreviewRoleControlController {
         selectionHandler?(roles[sender.selectedSegmentIndex])
     }
 
-    private static func title(for role: NetworkBodyRole) -> String {
+    private static func title(for role: NetworkBody.Role) -> String {
         switch role {
         case .request:
             String(localized: "network.section.request", bundle: .module)
@@ -164,11 +164,11 @@ extension NetworkDetailModeControlController {
         view.isEnabled
     }
 
-    func isModeEnabledForTesting(_ mode: NetworkDetailMode) -> Bool {
+    func isModeEnabledForTesting(_ mode: NetworkDetailViewController.Mode) -> Bool {
         view.isEnabledForSegment(at: Self.index(for: mode))
     }
 
-    func selectModeForTesting(_ mode: NetworkDetailMode) {
+    func selectModeForTesting(_ mode: NetworkDetailViewController.Mode) {
         view.selectedSegmentIndex = Self.index(for: mode)
         valueChanged(view)
     }
@@ -179,7 +179,7 @@ extension NetworkPreviewRoleControlController {
         containerView.isHidden
     }
 
-    func selectRoleForTesting(_ role: NetworkBodyRole) {
+    func selectRoleForTesting(_ role: NetworkBody.Role) {
         segmentedControl.selectedSegmentIndex = roles.firstIndex(of: role)
             ?? UISegmentedControl.noSegment
         valueChanged(segmentedControl)

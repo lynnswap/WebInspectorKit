@@ -224,12 +224,12 @@ in-flight target initialization work behind a target-owned model. Domain models
 such as Runtime and Console can still own their semantic data, but target
 lifecycle code should not grow pass-through accessors over parallel
 dictionaries. UI-facing domain state should stay as observable live models
-with stable identity (`RuntimeTargetState`, `RuntimeAgentState`,
-`RuntimeExecutionContext`, `RuntimeRemoteObject`, `ConsoleTargetState`, and
+with stable identity (`RuntimeState.TargetState`, `RuntimeState.AgentState`,
+`RuntimeExecutionContext`, `RuntimeRemoteObject`, `ConsoleSession.TargetState`, and
 `ConsoleMessage`). Console message parameters should also reference
 `RuntimeRemoteObject` live objects; payload records should be reserved for
 protocol decode, transport handoff, and snapshots, such as
-`RuntimeExecutionContextRecord`.
+`RuntimeContext.Record`.
 
 ## Contradicted Interpretations
 

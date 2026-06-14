@@ -5,7 +5,7 @@ import WebInspectorTransport
 
 @Test
 func consoleProtocolDispatchingBuildsCommandsAndDecodesLoggingChannels() throws {
-    let targetID = ProtocolTargetIdentifier("page")
+    let targetID = ProtocolTarget.ID("page")
     let enableCommand = try ConsoleProtocolCommands().command(for: .enable(targetID: targetID))
     #expect(enableCommand.domain == .console)
     #expect(enableCommand.method == "Console.enable")
@@ -19,14 +19,14 @@ func consoleProtocolDispatchingBuildsCommandsAndDecodesLoggingChannels() throws 
     #expect(channelParameters["source"] as? String == "network")
     #expect(channelParameters["level"] as? String == "verbose")
 
-    let result = ProtocolCommandResult(
+    let result = ProtocolCommand.Result(
         domain: .console,
         method: "Console.getLoggingChannels",
         targetID: targetID,
         resultData: Data(#"{"channels":[{"source":"network","level":"verbose"}]}"#.utf8)
     )
     #expect(try ConsoleProtocolCommands().loggingChannels(from: result) == [
-        ConsoleLoggingChannelPayload(source: .network, level: .verbose),
+        ConsoleLoggingChannel.Payload(source: .network, level: .verbose),
     ])
 }
 
@@ -36,10 +36,10 @@ func consoleProtocolDispatchingAppliesTargetScopedConsoleEvents() async throws {
     let session = ConsoleSession()
     let runtime = RuntimeState()
     let dispatcher = ConsoleProtocolEventDispatcher(handler: session, runtime: runtime)
-    let targetID = ProtocolTargetIdentifier("frame")
+    let targetID = ProtocolTarget.ID("frame")
 
     try await dispatcher.dispatch(
-        ProtocolEventEnvelope(
+        ProtocolEvent(
             sequence: 1,
             domain: .console,
             method: "Console.messageAdded",
@@ -48,7 +48,7 @@ func consoleProtocolDispatchingAppliesTargetScopedConsoleEvents() async throws {
         )
     )
     try await dispatcher.dispatch(
-        ProtocolEventEnvelope(
+        ProtocolEvent(
             sequence: 2,
             domain: .console,
             method: "Console.messageRepeatCountUpdated",
@@ -63,12 +63,12 @@ func consoleProtocolDispatchingAppliesTargetScopedConsoleEvents() async throws {
     #expect(messageID.targetID == targetID)
     #expect(message.level == .error)
     #expect(message.repeatCount == 4)
-    #expect(message.parameters.first?.objectID == RuntimeRemoteObjectIdentifier("object-1"))
-    #expect(message.networkRequestKey == NetworkRequestIdentifierKey(targetID: targetID, requestID: .init("request-1")))
+    #expect(message.parameters.first?.objectID == RuntimeRemoteObject.ProtocolID("object-1"))
+    #expect(message.networkRequestKey == NetworkRequest.ID(targetID: targetID, requestID: .init("request-1")))
     #expect(snapshot.errorCount == 4)
 
     try await dispatcher.dispatch(
-        ProtocolEventEnvelope(
+        ProtocolEvent(
             sequence: 3,
             domain: .console,
             method: "Console.messagesCleared",
@@ -85,8 +85,8 @@ func consoleProtocolDispatchingAppliesTargetScopedConsoleEvents() async throws {
 @MainActor
 func consoleSessionTracksUnsupportedOptionalCommandsPerTarget() {
     let session = ConsoleSession()
-    let pageTargetID = ProtocolTargetIdentifier("page")
-    let frameTargetID = ProtocolTargetIdentifier("frame")
+    let pageTargetID = ProtocolTarget.ID("page")
+    let frameTargetID = ProtocolTarget.ID("frame")
 
     #expect(session.supportsCommand("Console.getLoggingChannels", targetID: pageTargetID))
     session.markCommandUnsupported("Console.getLoggingChannels", targetID: pageTargetID)

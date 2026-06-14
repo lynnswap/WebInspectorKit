@@ -31,7 +31,7 @@ final class BrowserPageViewController: UIViewController {
     private let inspectorSession: WebInspectorSession
     private let launchConfiguration: BrowserLaunchConfiguration
     private let inspectorCoordinator = BrowserInspectorCoordinator()
-    private let observationScope = ObservationScope()
+    private var storeObservation: PortableObservationTracking.Token?
 
     private let progressView = UIProgressView(progressViewStyle: .bar)
 
@@ -65,18 +65,21 @@ final class BrowserPageViewController: UIViewController {
     private var inspectorWindowObserverID: UUID?
     private var didAutoPresentInspector = false
     private var progressHeightConstraint: NSLayoutConstraint?
-    private var progressHideTask: Task<Void, Never>?
+    private let progressHideScheduler: MainActorDelayScheduling
+    private var isProgressHideAnimationInFlight = false
     private var currentChromePlacement: ChromePlacement?
     var onSelectedWebViewInstalled: ((WKWebView) -> Void)?
 
     init(
         store: BrowserStore,
         inspectorSession: WebInspectorSession,
-        launchConfiguration: BrowserLaunchConfiguration
+        launchConfiguration: BrowserLaunchConfiguration,
+        progressHideScheduler: MainActorDelayScheduling = MainActorDelayScheduler()
     ) {
         self.store = store
         self.inspectorSession = inspectorSession
         self.launchConfiguration = launchConfiguration
+        self.progressHideScheduler = progressHideScheduler
         super.init(nibName: nil, bundle: nil)
         inspectorCoordinator.onPresentationStateChange = { [weak self] in
             self?.refreshChromeControls()
@@ -89,9 +92,9 @@ final class BrowserPageViewController: UIViewController {
     }
 
     isolated deinit {
-        progressHideTask?.cancel()
+        progressHideScheduler.cancel()
         viewportCoordinator?.invalidate()
-        observationScope.cancelAll()
+        storeObservation?.cancel()
         if let inspectorWindowObserverID {
             BrowserInspectorCoordinator.removeInspectorWindowObservation(inspectorWindowObserverID)
         }
@@ -130,9 +133,13 @@ final class BrowserPageViewController: UIViewController {
     }
 
     private func startObservingStore() {
-        observationScope.observe(store) { [weak self] _, store in
-            self?.renderState(from: store)
-            self?.maybeAutoPresentInspectorIfNeeded()
+        storeObservation?.cancel()
+        storeObservation = withPortableContinuousObservation { [weak self] _ in
+            guard let self else {
+                return
+            }
+            renderState(from: store)
+            maybeAutoPresentInspectorIfNeeded()
         }
     }
 
@@ -244,7 +251,7 @@ final class BrowserPageViewController: UIViewController {
 
     private func configureNavigationHistoryButtonItem(
         _ item: UIBarButtonItem,
-        direction: BrowserHistoryDirection,
+        direction: BrowserTabStore.HistoryDirection,
         action: UIAction
     ) {
         item.target = nil
@@ -275,7 +282,7 @@ final class BrowserPageViewController: UIViewController {
         inspectorButtonItem.accessibilityIdentifier = "Monocly.openInspectorButton.\(suffix)"
     }
 
-    private func makeDeferredHistoryMenu(direction: BrowserHistoryDirection) -> UIMenu {
+    private func makeDeferredHistoryMenu(direction: BrowserTabStore.HistoryDirection) -> UIMenu {
         UIMenu(
             title: "",
             children: [
@@ -291,7 +298,7 @@ final class BrowserPageViewController: UIViewController {
         )
     }
 
-    private func makeHistoryMenu(direction: BrowserHistoryDirection, placement: ChromePlacement) -> UIMenu {
+    private func makeHistoryMenu(direction: BrowserTabStore.HistoryDirection, placement: ChromePlacement) -> UIMenu {
         let historyItems = displayedHistoryMenuItems(direction: direction, placement: placement)
 
         let actions = historyItems.map { historyItem in
@@ -305,7 +312,7 @@ final class BrowserPageViewController: UIViewController {
         return UIMenu(title: "", children: actions)
     }
 
-    private func historyMenuItems(direction: BrowserHistoryDirection) -> [BrowserHistoryMenuItem] {
+    private func historyMenuItems(direction: BrowserTabStore.HistoryDirection) -> [BrowserTabStore.HistoryMenuItem] {
         switch direction {
         case .back:
             store.backHistoryItems()
@@ -315,9 +322,9 @@ final class BrowserPageViewController: UIViewController {
     }
 
     private func displayedHistoryMenuItems(
-        direction: BrowserHistoryDirection,
+        direction: BrowserTabStore.HistoryDirection,
         placement: ChromePlacement
-    ) -> [BrowserHistoryMenuItem] {
+    ) -> [BrowserTabStore.HistoryMenuItem] {
         let historyItems = historyMenuItems(direction: direction)
         return switch placement {
         case .compactToolbar:
@@ -493,8 +500,8 @@ final class BrowserPageViewController: UIViewController {
     }
 
     private func showProgressIndicator() {
-        progressHideTask?.cancel()
-        progressHideTask = nil
+        progressHideScheduler.cancel()
+        isProgressHideAnimationInFlight = false
         progressView.layer.removeAllAnimations()
 
         let wasHidden = progressView.isHidden
@@ -521,20 +528,17 @@ final class BrowserPageViewController: UIViewController {
         guard progressView.isHidden == false || progressView.alpha > 0 else {
             return
         }
-        guard progressHideTask == nil else {
+        guard progressHideScheduler.hasScheduledDelay == false,
+              isProgressHideAnimationInFlight == false else {
             return
         }
 
-        progressHideTask = Task { @MainActor [weak self] in
-            do {
-                try await Task.sleep(nanoseconds: ProgressIndicator.completionHoldDuration)
-            } catch {
-                return
-            }
-            guard let self, Task.isCancelled == false, self.store.isShowingProgress == false else {
+        progressHideScheduler.schedule(nanoseconds: ProgressIndicator.completionHoldDuration) { [weak self] in
+            guard let self, self.store.isShowingProgress == false else {
                 return
             }
 
+            self.isProgressHideAnimationInFlight = true
             UIView.animate(
                 withDuration: ProgressIndicator.hideAnimationDuration,
                 delay: 0,
@@ -542,14 +546,17 @@ final class BrowserPageViewController: UIViewController {
             ) {
                 self.progressView.alpha = 0
             } completion: { [weak self] finished in
-                guard let self, finished, self.store.isShowingProgress == false else {
+                guard let self else {
+                    return
+                }
+                self.isProgressHideAnimationInFlight = false
+                guard finished, self.store.isShowingProgress == false else {
                     return
                 }
 
                 self.progressView.isHidden = true
                 self.progressHeightConstraint?.constant = 0
                 self.progressView.setProgress(0, animated: false)
-                self.progressHideTask = nil
             }
         }
     }

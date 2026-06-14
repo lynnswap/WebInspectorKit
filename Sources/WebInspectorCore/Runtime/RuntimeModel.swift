@@ -4,20 +4,20 @@ import WebInspectorTransport
 @MainActor
 @Observable
 package final class RuntimeExecutionContext {
-    package let id: ExecutionContextID
-    package var targetID: ProtocolTargetIdentifier
-    package var runtimeAgentTargetID: ProtocolTargetIdentifier
-    package var type: RuntimeExecutionContextType
+    package let id: RuntimeContext.ID
+    package var targetID: ProtocolTarget.ID
+    package var runtimeAgentTargetID: ProtocolTarget.ID
+    package var type: RuntimeContext.Kind
     package var name: String
-    package var frameID: DOMFrameIdentifier?
+    package var frameID: DOMFrame.ID?
 
     package init(
-        id: ExecutionContextID,
-        targetID: ProtocolTargetIdentifier,
-        runtimeAgentTargetID: ProtocolTargetIdentifier? = nil,
-        type: RuntimeExecutionContextType = .normal,
+        id: RuntimeContext.ID,
+        targetID: ProtocolTarget.ID,
+        runtimeAgentTargetID: ProtocolTarget.ID? = nil,
+        type: RuntimeContext.Kind = .normal,
         name: String = "",
-        frameID: DOMFrameIdentifier? = nil
+        frameID: DOMFrame.ID? = nil
     ) {
         self.id = id
         self.targetID = targetID
@@ -27,7 +27,7 @@ package final class RuntimeExecutionContext {
         self.frameID = frameID
     }
 
-    package convenience init(record: RuntimeExecutionContextRecord) {
+    package convenience init(record: RuntimeContext.Record) {
         self.init(
             id: record.id,
             targetID: record.targetID,
@@ -38,12 +38,12 @@ package final class RuntimeExecutionContext {
         )
     }
 
-    package var key: RuntimeExecutionContextKey {
-        RuntimeExecutionContextKey(runtimeAgentTargetID: runtimeAgentTargetID, contextID: id)
+    package var key: RuntimeContext.Key {
+        RuntimeContext.Key(runtimeAgentTargetID: runtimeAgentTargetID, contextID: id)
     }
 
-    package var snapshotRecord: RuntimeExecutionContextRecord {
-        RuntimeExecutionContextRecord(
+    package var snapshotRecord: RuntimeContext.Record {
+        RuntimeContext.Record(
             id: id,
             targetID: targetID,
             runtimeAgentTargetID: runtimeAgentTargetID,
@@ -53,7 +53,7 @@ package final class RuntimeExecutionContext {
         )
     }
 
-    func update(from record: RuntimeExecutionContextRecord) {
+    func update(from record: RuntimeContext.Record) {
         targetID = record.targetID
         runtimeAgentTargetID = record.runtimeAgentTargetID
         type = record.type
@@ -62,35 +62,36 @@ package final class RuntimeExecutionContext {
     }
 }
 
-package struct RuntimeRemoteObjectRecord: Equatable, Sendable {
-    package var payload: RuntimeRemoteObjectPayload
-    package var objectGroup: RuntimeObjectGroup?
-    package var executionContextKey: RuntimeExecutionContextKey?
+extension RuntimeRemoteObject {
+    package struct Record: Equatable, Sendable {        package var payload: RuntimeRemoteObject.Payload
+        package var objectGroup: RuntimeRemoteObject.Group?
+        package var executionContextKey: RuntimeContext.Key?
 
-    package init(
-        payload: RuntimeRemoteObjectPayload,
-        objectGroup: RuntimeObjectGroup? = nil,
-        executionContextKey: RuntimeExecutionContextKey? = nil
-    ) {
-        self.payload = payload
-        self.objectGroup = objectGroup
-        self.executionContextKey = executionContextKey
+        package init(
+            payload: RuntimeRemoteObject.Payload,
+            objectGroup: RuntimeRemoteObject.Group? = nil,
+            executionContextKey: RuntimeContext.Key? = nil
+        ) {
+            self.payload = payload
+            self.objectGroup = objectGroup
+            self.executionContextKey = executionContextKey
+        }
     }
 }
 
 @MainActor
 @Observable
 package final class RuntimeRemoteObject {
-    package let remoteObjectKey: RuntimeRemoteObjectIdentifierKey?
-    package var payload: RuntimeRemoteObjectPayload
-    package var objectGroup: RuntimeObjectGroup?
-    package var executionContextKey: RuntimeExecutionContextKey?
+    package let remoteObjectKey: RuntimeRemoteObject.ID?
+    package var payload: RuntimeRemoteObject.Payload
+    package var objectGroup: RuntimeRemoteObject.Group?
+    package var executionContextKey: RuntimeContext.Key?
 
     package init(
-        remoteObjectKey: RuntimeRemoteObjectIdentifierKey? = nil,
-        payload: RuntimeRemoteObjectPayload,
-        objectGroup: RuntimeObjectGroup? = nil,
-        executionContextKey: RuntimeExecutionContextKey? = nil
+        remoteObjectKey: RuntimeRemoteObject.ID? = nil,
+        payload: RuntimeRemoteObject.Payload,
+        objectGroup: RuntimeRemoteObject.Group? = nil,
+        executionContextKey: RuntimeContext.Key? = nil
     ) {
         self.remoteObjectKey = remoteObjectKey
         self.payload = payload
@@ -98,8 +99,8 @@ package final class RuntimeRemoteObject {
         self.executionContextKey = executionContextKey
     }
 
-    package var snapshotRecord: RuntimeRemoteObjectRecord {
-        RuntimeRemoteObjectRecord(
+    package var snapshotRecord: RuntimeRemoteObject.Record {
+        RuntimeRemoteObject.Record(
             payload: payload,
             objectGroup: objectGroup,
             executionContextKey: executionContextKey
@@ -107,202 +108,296 @@ package final class RuntimeRemoteObject {
     }
 }
 
-package struct RuntimeStateSnapshot: Equatable, Sendable {
-    package var executionContextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContextRecord]
-    package var selectedContextKey: RuntimeExecutionContextKey?
-    package var normalContextKeyByTargetID: [ProtocolTargetIdentifier: RuntimeExecutionContextKey]
-    package var remoteObjectsByID: [RuntimeRemoteObjectIdentifierKey: RuntimeRemoteObjectRecord]
-    package var objectGroupRuntimeAgentTargetsByGroup: [RuntimeObjectGroup: Set<ProtocolTargetIdentifier>]
-    package var unsupportedCommandsByTargetID: [ProtocolTargetIdentifier: Set<String>]
+extension RuntimeState {
+    package struct Snapshot: Equatable, Sendable {        package var executionContextsByKey: [RuntimeContext.Key: RuntimeContext.Record]
+        package var selectedContextKey: RuntimeContext.Key?
+        package var normalContextKeyByTargetID: [ProtocolTarget.ID: RuntimeContext.Key]
+        package var remoteObjectsByID: [RuntimeRemoteObject.ID: RuntimeRemoteObject.Record]
+        package var objectGroupRuntimeAgentTargetsByGroup: [RuntimeRemoteObject.Group: Set<ProtocolTarget.ID>]
+        package var unsupportedCommandsByTargetID: [ProtocolTarget.ID: Set<String>]
 
-    package func executionContext(
-        runtimeAgentTargetID: ProtocolTargetIdentifier,
-        contextID: ExecutionContextID
-    ) -> RuntimeExecutionContextRecord? {
-        executionContextsByKey[
-            RuntimeExecutionContextKey(runtimeAgentTargetID: runtimeAgentTargetID, contextID: contextID)
-        ]
-    }
+        package func executionContext(
+            runtimeAgentTargetID: ProtocolTarget.ID,
+            contextID: RuntimeContext.ID
+        ) -> RuntimeContext.Record? {
+            executionContextsByKey[
+                RuntimeContext.Key(runtimeAgentTargetID: runtimeAgentTargetID, contextID: contextID)
+            ]
+        }
 
-    package func uniqueExecutionContext(contextID: ExecutionContextID) -> RuntimeExecutionContextRecord? {
-        let matches = executionContextsByKey.values.filter { $0.id == contextID }
-        return matches.count == 1 ? matches[0] : nil
-    }
-}
-
-@MainActor
-@Observable
-package final class RuntimeTargetState {
-    package let targetID: ProtocolTargetIdentifier
-    package var frameID: DOMFrameIdentifier?
-    package var normalContextKey: RuntimeExecutionContextKey?
-
-    package init(
-        targetID: ProtocolTargetIdentifier,
-        frameID: DOMFrameIdentifier? = nil,
-        normalContextKey: RuntimeExecutionContextKey? = nil
-    ) {
-        self.targetID = targetID
-        self.frameID = frameID
-        self.normalContextKey = normalContextKey
+        package func uniqueExecutionContext(contextID: RuntimeContext.ID) -> RuntimeContext.Record? {
+            let matches = executionContextsByKey.values.filter { $0.id == contextID }
+            return matches.count == 1 ? matches[0] : nil
+        }
     }
 }
 
-@MainActor
-@Observable
-package final class RuntimeAgentState {
-    package let targetID: ProtocolTargetIdentifier
-    package private(set) var executionContextsByID: [ExecutionContextID: RuntimeExecutionContext]
-    private var remoteObjectsByID: [RuntimeRemoteObjectIdentifier: RuntimeRemoteObject]
-    private var unsupportedCommands: Set<String>
+extension RuntimeState {
+    @MainActor
+    @Observable
+    package final class TargetState {        package let targetID: ProtocolTarget.ID
+        package var frameID: DOMFrame.ID?
+        package var normalContextKey: RuntimeContext.Key?
 
-    init(targetID: ProtocolTargetIdentifier) {
-        self.targetID = targetID
-        executionContextsByID = [:]
-        remoteObjectsByID = [:]
-        unsupportedCommands = []
+        package init(
+            targetID: ProtocolTarget.ID,
+            frameID: DOMFrame.ID? = nil,
+            normalContextKey: RuntimeContext.Key? = nil
+        ) {
+            self.targetID = targetID
+            self.frameID = frameID
+            self.normalContextKey = normalContextKey
+        }
     }
+}
 
-    package var executionContexts: [RuntimeExecutionContext] {
-        executionContextsByID.values.sorted {
-            if $0.id == $1.id {
-                return $0.targetID.rawValue < $1.targetID.rawValue
+extension RuntimeState {
+    @MainActor
+    @Observable
+    package final class AgentState {        package let targetID: ProtocolTarget.ID
+        package private(set) var executionContextsByID: [RuntimeContext.ID: RuntimeExecutionContext]
+        private var remoteObjectsByID: [RuntimeRemoteObject.ProtocolID: RuntimeRemoteObject]
+        private var unsupportedCommands: Set<String>
+
+        init(targetID: ProtocolTarget.ID) {
+            self.targetID = targetID
+            executionContextsByID = [:]
+            remoteObjectsByID = [:]
+            unsupportedCommands = []
+        }
+
+        package var executionContexts: [RuntimeExecutionContext] {
+            executionContextsByID.values.sorted {
+                if $0.id == $1.id {
+                    return $0.targetID.rawValue < $1.targetID.rawValue
+                }
+                return $0.id.rawValue < $1.id.rawValue
             }
-            return $0.id.rawValue < $1.id.rawValue
         }
-    }
 
-    package var remoteObjects: [RuntimeRemoteObject] {
-        remoteObjectsByID.values.sorted {
-            ($0.remoteObjectKey?.objectID.rawValue ?? "") < ($1.remoteObjectKey?.objectID.rawValue ?? "")
+        package var remoteObjects: [RuntimeRemoteObject] {
+            remoteObjectsByID.values.sorted {
+                ($0.remoteObjectKey?.objectID.rawValue ?? "") < ($1.remoteObjectKey?.objectID.rawValue ?? "")
+            }
         }
-    }
 
-    package var remoteObjectRecords: [RuntimeRemoteObjectIdentifierKey: RuntimeRemoteObjectRecord] {
-        remoteObjectsByKey
-    }
+        package var remoteObjectRecords: [RuntimeRemoteObject.ID: RuntimeRemoteObject.Record] {
+            remoteObjectsByKey
+        }
 
-    var executionContextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContext] {
-        Dictionary(uniqueKeysWithValues: executionContextsByID.values.map { ($0.key, $0) })
-    }
+        var executionContextsByKey: [RuntimeContext.Key: RuntimeExecutionContext] {
+            Dictionary(uniqueKeysWithValues: executionContextsByID.values.map { ($0.key, $0) })
+        }
 
-    var executionContextRecordsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContextRecord] {
-        Dictionary(uniqueKeysWithValues: executionContextsByID.values.map { ($0.key, $0.snapshotRecord) })
-    }
+        var executionContextRecordsByKey: [RuntimeContext.Key: RuntimeContext.Record] {
+            Dictionary(uniqueKeysWithValues: executionContextsByID.values.map { ($0.key, $0.snapshotRecord) })
+        }
 
-    var remoteObjectsByKey: [RuntimeRemoteObjectIdentifierKey: RuntimeRemoteObjectRecord] {
-        Dictionary(
-            uniqueKeysWithValues: remoteObjectsByID.map { objectID, remoteObject in
-                (
-                    RuntimeRemoteObjectIdentifierKey(runtimeAgentTargetID: targetID, objectID: objectID),
-                    remoteObject.snapshotRecord
+        var remoteObjectsByKey: [RuntimeRemoteObject.ID: RuntimeRemoteObject.Record] {
+            Dictionary(
+                uniqueKeysWithValues: remoteObjectsByID.map { objectID, remoteObject in
+                    (
+                        RuntimeRemoteObject.ID(runtimeAgentTargetID: targetID, objectID: objectID),
+                        remoteObject.snapshotRecord
+                    )
+                }
+            )
+        }
+
+        func executionContext(contextID: RuntimeContext.ID) -> RuntimeExecutionContext? {
+            executionContextsByID[contextID]
+        }
+
+        func recordExecutionContext(_ record: RuntimeContext.Record) {
+            if let context = executionContextsByID[record.id] {
+                context.update(from: record)
+            } else {
+                executionContextsByID[record.id] = RuntimeExecutionContext(record: record)
+            }
+        }
+
+        func insertExecutionContext(_ context: RuntimeExecutionContext) {
+            executionContextsByID[context.id] = context
+        }
+
+        func removeExecutionContext(contextID: RuntimeContext.ID) -> RuntimeExecutionContext? {
+            executionContextsByID.removeValue(forKey: contextID)
+        }
+
+        @discardableResult
+        func registerRemoteObject(
+            _ object: RuntimeRemoteObject.Payload,
+            objectGroup: RuntimeRemoteObject.Group?,
+            executionContextID: RuntimeContext.ID?
+        ) -> RuntimeRemoteObject {
+            let executionContextKey = executionContextID.map {
+                RuntimeContext.Key(runtimeAgentTargetID: targetID, contextID: $0)
+            }
+            guard let objectID = object.objectID else {
+                return RuntimeRemoteObject(
+                    payload: object,
+                    objectGroup: objectGroup,
+                    executionContextKey: executionContextKey
                 )
             }
-        )
-    }
+            let objectKey = RuntimeRemoteObject.ID(runtimeAgentTargetID: targetID, objectID: objectID)
+            if let remoteObject = remoteObjectsByID[objectID] {
+                remoteObject.payload = object
+                remoteObject.objectGroup = objectGroup
+                remoteObject.executionContextKey = executionContextKey
+                return remoteObject
+            } else {
+                let remoteObject = RuntimeRemoteObject(
+                    remoteObjectKey: objectKey,
+                    payload: object,
+                    objectGroup: objectGroup,
+                    executionContextKey: executionContextKey
+                )
+                remoteObjectsByID[objectID] = remoteObject
+                return remoteObject
+            }
+        }
 
-    func executionContext(contextID: ExecutionContextID) -> RuntimeExecutionContext? {
-        executionContextsByID[contextID]
-    }
+        func releaseRemoteObjects(executionContextKey: RuntimeContext.Key) {
+            releaseRemoteObjects { _, record in
+                record.executionContextKey == executionContextKey
+            }
+        }
 
-    func recordExecutionContext(_ record: RuntimeExecutionContextRecord) {
-        if let context = executionContextsByID[record.id] {
-            context.update(from: record)
-        } else {
-            executionContextsByID[record.id] = RuntimeExecutionContext(record: record)
+        func releaseRemoteObjects(objectGroup: RuntimeRemoteObject.Group) {
+            releaseRemoteObjects { _, record in
+                record.objectGroup == objectGroup
+            }
+        }
+
+        func releaseRemoteObject(_ objectID: RuntimeRemoteObject.ProtocolID) {
+            remoteObjectsByID.removeValue(forKey: objectID)
+        }
+
+        func clearExecutionContexts() {
+            executionContextsByID.removeAll()
+        }
+
+        func clearRemoteObjects() {
+            remoteObjectsByID.removeAll()
+        }
+
+        func markCommandUnsupported(_ method: String) {
+            unsupportedCommands.insert(method)
+        }
+
+        func mergeUnsupportedCommands(_ methods: Set<String>) {
+            unsupportedCommands.formUnion(methods)
+        }
+
+        func supportsCommand(_ method: String) -> Bool {
+            unsupportedCommands.contains(method) == false
+        }
+
+        fileprivate var unsupportedCommandSnapshot: Set<String> {
+            unsupportedCommands
+        }
+
+        private func releaseRemoteObjects(
+            matching shouldRelease: (RuntimeRemoteObject.ProtocolID, RuntimeRemoteObject.Record) -> Bool
+        ) {
+            let releasedObjectIDs = remoteObjectsByID
+                .filter { shouldRelease($0.key, $0.value.snapshotRecord) }
+                .map(\.key)
+            for objectID in releasedObjectIDs {
+                remoteObjectsByID.removeValue(forKey: objectID)
+            }
         }
     }
+}
 
-    func insertExecutionContext(_ context: RuntimeExecutionContext) {
-        executionContextsByID[context.id] = context
+private struct RuntimeTargetSlot {
+    // Target projection and runtime-agent state share the target id namespace but keep independent lifetimes.
+    var targetState: RuntimeState.TargetState?
+    var agentState: RuntimeState.AgentState?
+
+    var isEmpty: Bool {
+        targetState == nil && agentState == nil
+    }
+}
+
+@MainActor
+private struct RuntimeTargetRegistry {
+    private var slotsByTargetID: [ProtocolTarget.ID: RuntimeTargetSlot] = [:]
+
+    var targetStates: [RuntimeState.TargetState] {
+        slotsByTargetID.values.compactMap(\.targetState).sorted { $0.targetID.rawValue < $1.targetID.rawValue }
     }
 
-    func removeExecutionContext(contextID: ExecutionContextID) -> RuntimeExecutionContext? {
-        executionContextsByID.removeValue(forKey: contextID)
+    var runtimeAgentStates: [RuntimeState.AgentState] {
+        slotsByTargetID.values.compactMap(\.agentState).sorted { $0.targetID.rawValue < $1.targetID.rawValue }
+    }
+
+    var targetIDs: [ProtocolTarget.ID] {
+        Array(slotsByTargetID.keys)
+    }
+
+    mutating func removeAll() {
+        slotsByTargetID.removeAll()
+    }
+
+    func targetState(for targetID: ProtocolTarget.ID) -> RuntimeState.TargetState? {
+        slotsByTargetID[targetID]?.targetState
+    }
+
+    func runtimeAgentState(for targetID: ProtocolTarget.ID) -> RuntimeState.AgentState? {
+        slotsByTargetID[targetID]?.agentState
+    }
+
+    mutating func ensureTargetState(for targetID: ProtocolTarget.ID) -> RuntimeState.TargetState {
+        if let state = targetState(for: targetID) {
+            return state
+        }
+        let state = RuntimeState.TargetState(targetID: targetID)
+        var slot = slotsByTargetID[targetID] ?? RuntimeTargetSlot()
+        slot.targetState = state
+        slotsByTargetID[targetID] = slot
+        return state
+    }
+
+    mutating func ensureRuntimeAgentState(for targetID: ProtocolTarget.ID) -> RuntimeState.AgentState {
+        if let state = runtimeAgentState(for: targetID) {
+            return state
+        }
+        let state = RuntimeState.AgentState(targetID: targetID)
+        var slot = slotsByTargetID[targetID] ?? RuntimeTargetSlot()
+        slot.agentState = state
+        slotsByTargetID[targetID] = slot
+        return state
     }
 
     @discardableResult
-    func registerRemoteObject(
-        _ object: RuntimeRemoteObjectPayload,
-        objectGroup: RuntimeObjectGroup?,
-        executionContextID: ExecutionContextID?
-    ) -> RuntimeRemoteObject {
-        let executionContextKey = executionContextID.map {
-            RuntimeExecutionContextKey(runtimeAgentTargetID: targetID, contextID: $0)
+    mutating func removeTargetState(for targetID: ProtocolTarget.ID) -> RuntimeState.TargetState? {
+        guard var slot = slotsByTargetID[targetID],
+              let state = slot.targetState else {
+            return nil
         }
-        guard let objectID = object.objectID else {
-            return RuntimeRemoteObject(
-                payload: object,
-                objectGroup: objectGroup,
-                executionContextKey: executionContextKey
-            )
+        slot.targetState = nil
+        storeSlot(slot, for: targetID)
+        return state
+    }
+
+    @discardableResult
+    mutating func removeRuntimeAgentState(for targetID: ProtocolTarget.ID) -> RuntimeState.AgentState? {
+        guard var slot = slotsByTargetID[targetID],
+              let state = slot.agentState else {
+            return nil
         }
-        let objectKey = RuntimeRemoteObjectIdentifierKey(runtimeAgentTargetID: targetID, objectID: objectID)
-        if let remoteObject = remoteObjectsByID[objectID] {
-            remoteObject.payload = object
-            remoteObject.objectGroup = objectGroup
-            remoteObject.executionContextKey = executionContextKey
-            return remoteObject
+        slot.agentState = nil
+        storeSlot(slot, for: targetID)
+        return state
+    }
+
+    private mutating func storeSlot(_ slot: RuntimeTargetSlot, for targetID: ProtocolTarget.ID) {
+        if slot.isEmpty {
+            slotsByTargetID.removeValue(forKey: targetID)
         } else {
-            let remoteObject = RuntimeRemoteObject(
-                remoteObjectKey: objectKey,
-                payload: object,
-                objectGroup: objectGroup,
-                executionContextKey: executionContextKey
-            )
-            remoteObjectsByID[objectID] = remoteObject
-            return remoteObject
-        }
-    }
-
-    func releaseRemoteObjects(executionContextKey: RuntimeExecutionContextKey) {
-        releaseRemoteObjects { _, record in
-            record.executionContextKey == executionContextKey
-        }
-    }
-
-    func releaseRemoteObjects(objectGroup: RuntimeObjectGroup) {
-        releaseRemoteObjects { _, record in
-            record.objectGroup == objectGroup
-        }
-    }
-
-    func releaseRemoteObject(_ objectID: RuntimeRemoteObjectIdentifier) {
-        remoteObjectsByID.removeValue(forKey: objectID)
-    }
-
-    func clearExecutionContexts() {
-        executionContextsByID.removeAll()
-    }
-
-    func clearRemoteObjects() {
-        remoteObjectsByID.removeAll()
-    }
-
-    func markCommandUnsupported(_ method: String) {
-        unsupportedCommands.insert(method)
-    }
-
-    func mergeUnsupportedCommands(_ methods: Set<String>) {
-        unsupportedCommands.formUnion(methods)
-    }
-
-    func supportsCommand(_ method: String) -> Bool {
-        unsupportedCommands.contains(method) == false
-    }
-
-    fileprivate var unsupportedCommandSnapshot: Set<String> {
-        unsupportedCommands
-    }
-
-    private func releaseRemoteObjects(
-        matching shouldRelease: (RuntimeRemoteObjectIdentifier, RuntimeRemoteObjectRecord) -> Bool
-    ) {
-        let releasedObjectIDs = remoteObjectsByID
-            .filter { shouldRelease($0.key, $0.value.snapshotRecord) }
-            .map(\.key)
-        for objectID in releasedObjectIDs {
-            remoteObjectsByID.removeValue(forKey: objectID)
+            slotsByTargetID[targetID] = slot
         }
     }
 }
@@ -310,19 +405,17 @@ package final class RuntimeAgentState {
 @MainActor
 @Observable
 package final class RuntimeState {
-    package private(set) var selectedContextKey: RuntimeExecutionContextKey?
+    package private(set) var selectedContextKey: RuntimeContext.Key?
 
-    private var targetStatesByID: [ProtocolTargetIdentifier: RuntimeTargetState]
-    private var runtimeAgentStatesByID: [ProtocolTargetIdentifier: RuntimeAgentState]
+    private var targetRegistry: RuntimeTargetRegistry
     @ObservationIgnored private var selectedContextIsExplicit: Bool
     @ObservationIgnored private var commandChannel: ProtocolCommandChannel?
     @ObservationIgnored private let protocolCommands: RuntimeProtocolCommands
-    @ObservationIgnored private var recordError: ((InspectorSessionError?) -> Void)?
+    @ObservationIgnored private var recordError: ((InspectorSession.Error?) -> Void)?
 
     package init() {
         selectedContextKey = nil
-        targetStatesByID = [:]
-        runtimeAgentStatesByID = [:]
+        targetRegistry = RuntimeTargetRegistry()
         selectedContextIsExplicit = false
         commandChannel = nil
         protocolCommands = RuntimeProtocolCommands()
@@ -331,14 +424,13 @@ package final class RuntimeState {
 
     package func reset() {
         selectedContextKey = nil
-        targetStatesByID.removeAll()
-        runtimeAgentStatesByID.removeAll()
+        targetRegistry.removeAll()
         selectedContextIsExplicit = false
     }
 
     package func bindProtocolChannel(
         _ commandChannel: ProtocolCommandChannel,
-        recordError: @escaping (InspectorSessionError?) -> Void
+        recordError: @escaping (InspectorSession.Error?) -> Void
     ) {
         self.commandChannel = commandChannel
         self.recordError = recordError
@@ -350,18 +442,18 @@ package final class RuntimeState {
     }
 
     @discardableResult
-    package func perform(_ intent: RuntimeCommandIntent) async throws -> ProtocolCommandResult {
+    package func perform(_ intent: RuntimeCommand.Intent) async throws -> ProtocolCommand.Result {
         try await perform(intent, requiresActiveConnection: true)
     }
 
     @discardableResult
     private func perform(
-        _ intent: RuntimeCommandIntent,
+        _ intent: RuntimeCommand.Intent,
         requiresActiveConnection: Bool
-    ) async throws -> ProtocolCommandResult {
+    ) async throws -> ProtocolCommand.Result {
         let commandChannel = try requireCommandChannel(requiresActiveConnection: requiresActiveConnection)
         let command = try protocolCommands.command(for: intent)
-        let result: ProtocolCommandResult
+        let result: ProtocolCommand.Result
         do {
             result = try await commandChannel.send(command)
         } catch {
@@ -387,17 +479,17 @@ package final class RuntimeState {
         return result
     }
 
-    package func enable(targetID: ProtocolTargetIdentifier) async throws {
+    package func enable(targetID: ProtocolTarget.ID) async throws {
         _ = try await perform(.enable(targetID: targetID))
     }
 
-    package func enableDuringBootstrap(targetID: ProtocolTargetIdentifier) async throws {
+    package func enableDuringBootstrap(targetID: ProtocolTarget.ID) async throws {
         _ = try await perform(.enable(targetID: targetID), requiresActiveConnection: false)
     }
 
-    package func snapshot() -> RuntimeStateSnapshot {
+    package func snapshot() -> RuntimeState.Snapshot {
         let remoteObjectsByID = remoteObjectsByID
-        return RuntimeStateSnapshot(
+        return RuntimeState.Snapshot(
             executionContextsByKey: executionContextRecordsByKey,
             selectedContextKey: selectedContextKey,
             normalContextKeyByTargetID: normalContextKeyByTargetID,
@@ -407,27 +499,27 @@ package final class RuntimeState {
         )
     }
 
-    package func executionContext(for key: RuntimeExecutionContextKey) -> RuntimeExecutionContext? {
-        runtimeAgentStatesByID[key.runtimeAgentTargetID]?.executionContext(contextID: key.contextID)
+    package func executionContext(for key: RuntimeContext.Key) -> RuntimeExecutionContext? {
+        runtimeAgentState(for: key.runtimeAgentTargetID)?.executionContext(contextID: key.contextID)
     }
 
-    package var targetStates: [RuntimeTargetState] {
-        targetStatesByID.values.sorted { $0.targetID.rawValue < $1.targetID.rawValue }
+    package var targetStates: [RuntimeState.TargetState] {
+        targetRegistry.targetStates
     }
 
-    package var runtimeAgentStates: [RuntimeAgentState] {
-        runtimeAgentStatesByID.values.sorted { $0.targetID.rawValue < $1.targetID.rawValue }
+    package var runtimeAgentStates: [RuntimeState.AgentState] {
+        targetRegistry.runtimeAgentStates
     }
 
-    package func targetState(for targetID: ProtocolTargetIdentifier) -> RuntimeTargetState? {
-        targetStatesByID[targetID]
+    package func targetState(for targetID: ProtocolTarget.ID) -> RuntimeState.TargetState? {
+        targetRegistry.targetState(for: targetID)
     }
 
-    package func runtimeAgentState(for targetID: ProtocolTargetIdentifier) -> RuntimeAgentState? {
-        runtimeAgentStatesByID[targetID]
+    package func runtimeAgentState(for targetID: ProtocolTarget.ID) -> RuntimeState.AgentState? {
+        targetRegistry.runtimeAgentState(for: targetID)
     }
 
-    package func selectedContext(targetID: ProtocolTargetIdentifier? = nil) -> RuntimeExecutionContext? {
+    package func selectedContext(targetID: ProtocolTarget.ID? = nil) -> RuntimeExecutionContext? {
         guard let selectedContextKey,
               let context = executionContext(for: selectedContextKey) else {
             return nil
@@ -438,16 +530,16 @@ package final class RuntimeState {
         return context
     }
 
-    package func defaultContext(targetID: ProtocolTargetIdentifier) -> RuntimeExecutionContext? {
-        guard let contextKey = targetStatesByID[targetID]?.normalContextKey else {
+    package func defaultContext(targetID: ProtocolTarget.ID) -> RuntimeExecutionContext? {
+        guard let contextKey = targetState(for: targetID)?.normalContextKey else {
             return nil
         }
         return executionContext(for: contextKey)
     }
 
-    package func applyExecutionContextCreated(_ payload: RuntimeExecutionContextPayload, targetID: ProtocolTargetIdentifier) {
+    package func applyExecutionContextCreated(_ payload: RuntimeExecutionContext.Payload, targetID: ProtocolTarget.ID) {
         let type = payload.type ?? .normal
-        let record = RuntimeExecutionContextRecord(
+        let record = RuntimeContext.Record(
             id: payload.id,
             targetID: targetID,
             type: type,
@@ -457,7 +549,7 @@ package final class RuntimeState {
         applyExecutionContextCreated(record)
     }
 
-    package func applyExecutionContextCreated(_ record: RuntimeExecutionContextRecord) {
+    package func applyExecutionContextCreated(_ record: RuntimeContext.Record) {
         let oldContextKeys = record.type == .normal ? normalContextKeysToReplace(with: record) : []
         if oldContextKeys.isEmpty == false {
             for oldContextKey in oldContextKeys {
@@ -491,12 +583,12 @@ package final class RuntimeState {
         }
     }
 
-    package func applyExecutionContextDestroyed(_ contextKey: RuntimeExecutionContextKey) {
+    package func applyExecutionContextDestroyed(_ contextKey: RuntimeContext.Key) {
         guard let context = removeExecutionContext(contextKey, releaseRemoteObjects: true) else {
             return
         }
-        if targetStatesByID[context.targetID]?.normalContextKey == contextKey {
-            targetStatesByID[context.targetID]?.normalContextKey = nil
+        if targetState(for: context.targetID)?.normalContextKey == contextKey {
+            targetState(for: context.targetID)?.normalContextKey = nil
         }
         if selectedContextKey == contextKey {
             selectedContextKey = nil
@@ -504,8 +596,8 @@ package final class RuntimeState {
         }
     }
 
-    package func applyExecutionContextsCleared(runtimeAgentTargetID: ProtocolTargetIdentifier) {
-        guard let agentState = runtimeAgentStatesByID[runtimeAgentTargetID] else {
+    package func applyExecutionContextsCleared(runtimeAgentTargetID: ProtocolTarget.ID) {
+        guard let agentState = runtimeAgentState(for: runtimeAgentTargetID) else {
             return
         }
         let removedContexts = Array(agentState.executionContextsByID.values)
@@ -514,9 +606,9 @@ package final class RuntimeState {
         agentState.clearExecutionContexts()
         agentState.clearRemoteObjects()
         for targetID in removedTargetIDs {
-            if let normalContextKey = targetStatesByID[targetID]?.normalContextKey,
+            if let normalContextKey = targetState(for: targetID)?.normalContextKey,
                removedContextKeys.contains(normalContextKey) {
-                targetStatesByID[targetID]?.normalContextKey = nil
+                targetState(for: targetID)?.normalContextKey = nil
             }
         }
         if let selectedContextKey,
@@ -526,7 +618,7 @@ package final class RuntimeState {
         }
     }
 
-    package func selectExecutionContext(_ contextKey: RuntimeExecutionContextKey?) {
+    package func selectExecutionContext(_ contextKey: RuntimeContext.Key?) {
         guard let contextKey else {
             selectedContextKey = nil
             selectedContextIsExplicit = false
@@ -539,13 +631,13 @@ package final class RuntimeState {
         selectedContextIsExplicit = true
     }
 
-    package func applyTargetDestroyed(_ targetID: ProtocolTargetIdentifier) {
+    package func applyTargetDestroyed(_ targetID: ProtocolTarget.ID) {
         var removedContexts: [RuntimeExecutionContext] = []
-        if let removedAgent = runtimeAgentStatesByID.removeValue(forKey: targetID) {
+        if let removedAgent = removeRuntimeAgentState(for: targetID) {
             removedContexts.append(contentsOf: removedAgent.executionContextsByID.values)
         }
-        for agentID in Array(runtimeAgentStatesByID.keys) {
-            guard let agentState = runtimeAgentStatesByID[agentID] else {
+        for agentID in targetRegistry.targetIDs {
+            guard let agentState = runtimeAgentState(for: agentID) else {
                 continue
             }
             let contextIDs = agentState.executionContextsByID.values
@@ -564,12 +656,12 @@ package final class RuntimeState {
         let removedContextKeys = Set(removedContexts.map(\.key))
         let removedTargetIDs = Set(removedContexts.map(\.targetID))
         for removedTargetID in removedTargetIDs {
-            if let normalContextKey = targetStatesByID[removedTargetID]?.normalContextKey,
+            if let normalContextKey = targetState(for: removedTargetID)?.normalContextKey,
                removedContextKeys.contains(normalContextKey) {
-                targetStatesByID[removedTargetID]?.normalContextKey = nil
+                targetState(for: removedTargetID)?.normalContextKey = nil
             }
         }
-        targetStatesByID.removeValue(forKey: targetID)
+        removeTargetState(for: targetID)
         if let selectedContextKey,
            removedContextKeys.contains(selectedContextKey) {
             self.selectedContextKey = nil
@@ -577,23 +669,23 @@ package final class RuntimeState {
         }
     }
 
-    package func applyTargetCreated(_ record: ProtocolTargetRecord) {
+    package func applyTargetCreated(_ record: ProtocolTarget.Record) {
         let targetState = ensureTargetState(for: record.id)
         targetState.frameID = record.frameID
         promotePreferredNormalContextIfNeeded(for: targetState)
     }
 
-    package func applyTargetCommitted(oldTargetID: ProtocolTargetIdentifier?, newTargetID: ProtocolTargetIdentifier) {
+    package func applyTargetCommitted(oldTargetID: ProtocolTarget.ID?, newTargetID: ProtocolTarget.ID) {
         if let oldTargetID {
             let movedContextKeys = retargetExecutionContexts(from: oldTargetID, to: newTargetID)
-            for targetState in targetStatesByID.values {
+            for targetState in targetStates {
                 guard let normalContextKey = targetState.normalContextKey,
                       let movedKey = movedContextKeys[normalContextKey] else {
                     continue
                 }
                 targetState.normalContextKey = movedKey
             }
-            if let oldTargetState = targetStatesByID.removeValue(forKey: oldTargetID) {
+            if let oldTargetState = removeTargetState(for: oldTargetID) {
                 let newTargetState = ensureTargetState(for: newTargetID)
                 if newTargetState.frameID == nil {
                     newTargetState.frameID = oldTargetState.frameID
@@ -607,7 +699,7 @@ package final class RuntimeState {
                let movedKey = movedContextKeys[selectedContextKey] {
                 self.selectedContextKey = movedKey
             }
-            if let oldAgentState = runtimeAgentStatesByID.removeValue(forKey: oldTargetID),
+            if let oldAgentState = removeRuntimeAgentState(for: oldTargetID),
                oldAgentState.unsupportedCommandSnapshot.isEmpty == false {
                 let newAgentState = ensureRuntimeAgentState(for: newTargetID)
                 newAgentState.mergeUnsupportedCommands(oldAgentState.unsupportedCommandSnapshot)
@@ -617,10 +709,10 @@ package final class RuntimeState {
 
     @discardableResult
     package func registerRemoteObject(
-        _ object: RuntimeRemoteObjectPayload,
-        runtimeAgentTargetID: ProtocolTargetIdentifier,
-        objectGroup: RuntimeObjectGroup? = nil,
-        executionContextID: ExecutionContextID? = nil
+        _ object: RuntimeRemoteObject.Payload,
+        runtimeAgentTargetID: ProtocolTarget.ID,
+        objectGroup: RuntimeRemoteObject.Group? = nil,
+        executionContextID: RuntimeContext.ID? = nil
     ) -> RuntimeRemoteObject {
         let agentState = ensureRuntimeAgentState(for: runtimeAgentTargetID)
         let remoteObject = agentState.registerRemoteObject(
@@ -632,9 +724,9 @@ package final class RuntimeState {
     }
 
     package func applyEvaluationResult(
-        _ result: RuntimeEvaluationResultPayload,
-        request: RuntimeEvaluationRequest,
-        runtimeAgentTargetID: ProtocolTargetIdentifier? = nil
+        _ result: RuntimeEvaluation.ResultPayload,
+        request: RuntimeEvaluation.Request,
+        runtimeAgentTargetID: ProtocolTarget.ID? = nil
     ) {
         registerRemoteObject(
             result.result,
@@ -644,90 +736,90 @@ package final class RuntimeState {
         )
     }
 
-    package func releaseObject(_ key: RuntimeRemoteObjectIdentifierKey) {
-        guard let agentState = runtimeAgentStatesByID[key.runtimeAgentTargetID] else {
+    package func releaseObject(_ key: RuntimeRemoteObject.ID) {
+        guard let agentState = runtimeAgentState(for: key.runtimeAgentTargetID) else {
             return
         }
         agentState.releaseRemoteObject(key.objectID)
     }
 
-    package func releaseObjectGroup(_ objectGroup: RuntimeObjectGroup, runtimeAgentTargetID: ProtocolTargetIdentifier) {
-        guard let agentState = runtimeAgentStatesByID[runtimeAgentTargetID] else {
+    package func releaseObjectGroup(_ objectGroup: RuntimeRemoteObject.Group, runtimeAgentTargetID: ProtocolTarget.ID) {
+        guard let agentState = runtimeAgentState(for: runtimeAgentTargetID) else {
             return
         }
         agentState.releaseRemoteObjects(objectGroup: objectGroup)
     }
 
-    package func markCommandUnsupported(_ method: String, targetID: ProtocolTargetIdentifier) {
+    package func markCommandUnsupported(_ method: String, targetID: ProtocolTarget.ID) {
         let agentState = ensureRuntimeAgentState(for: targetID)
         agentState.markCommandUnsupported(method)
     }
 
-    package func supportsCommand(_ method: String, targetID: ProtocolTargetIdentifier) -> Bool {
-        runtimeAgentStatesByID[targetID]?.supportsCommand(method) ?? true
+    package func supportsCommand(_ method: String, targetID: ProtocolTarget.ID) -> Bool {
+        runtimeAgentState(for: targetID)?.supportsCommand(method) ?? true
     }
 
-    private var executionContextsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContext] {
+    private var executionContextsByKey: [RuntimeContext.Key: RuntimeExecutionContext] {
         Dictionary(
-            uniqueKeysWithValues: runtimeAgentStatesByID.values.flatMap { state in
+            uniqueKeysWithValues: runtimeAgentStates.flatMap { state in
                 state.executionContextsByKey.map { ($0.key, $0.value) }
             }
         )
     }
 
-    private var executionContextRecordsByKey: [RuntimeExecutionContextKey: RuntimeExecutionContextRecord] {
+    private var executionContextRecordsByKey: [RuntimeContext.Key: RuntimeContext.Record] {
         Dictionary(
-            uniqueKeysWithValues: runtimeAgentStatesByID.values.flatMap { state in
+            uniqueKeysWithValues: runtimeAgentStates.flatMap { state in
                 state.executionContextRecordsByKey.map { ($0.key, $0.value) }
             }
         )
     }
 
-    private var normalContextKeyByTargetID: [ProtocolTargetIdentifier: RuntimeExecutionContextKey] {
+    private var normalContextKeyByTargetID: [ProtocolTarget.ID: RuntimeContext.Key] {
         Dictionary(
-            uniqueKeysWithValues: targetStatesByID.values.compactMap { state in
+            uniqueKeysWithValues: targetStates.compactMap { state in
                 state.normalContextKey.map { (state.targetID, $0) }
             }
         )
     }
 
-    private var remoteObjectsByID: [RuntimeRemoteObjectIdentifierKey: RuntimeRemoteObjectRecord] {
+    private var remoteObjectsByID: [RuntimeRemoteObject.ID: RuntimeRemoteObject.Record] {
         Dictionary(
-            uniqueKeysWithValues: runtimeAgentStatesByID.values.flatMap { state in
+            uniqueKeysWithValues: runtimeAgentStates.flatMap { state in
                 state.remoteObjectsByKey.map { ($0.key, $0.value) }
             }
         )
     }
 
-    private var unsupportedCommandsByTargetID: [ProtocolTargetIdentifier: Set<String>] {
+    private var unsupportedCommandsByTargetID: [ProtocolTarget.ID: Set<String>] {
         Dictionary(
-            uniqueKeysWithValues: runtimeAgentStatesByID.values
+            uniqueKeysWithValues: runtimeAgentStates
                 .filter { $0.unsupportedCommandSnapshot.isEmpty == false }
                 .map { ($0.targetID, $0.unsupportedCommandSnapshot) }
         )
     }
 
-    private func ensureTargetState(for targetID: ProtocolTargetIdentifier) -> RuntimeTargetState {
-        if let state = targetStatesByID[targetID] {
-            return state
-        }
-        let state = RuntimeTargetState(targetID: targetID)
-        targetStatesByID[targetID] = state
-        return state
+    private func ensureTargetState(for targetID: ProtocolTarget.ID) -> RuntimeState.TargetState {
+        targetRegistry.ensureTargetState(for: targetID)
     }
 
-    private func ensureRuntimeAgentState(for targetID: ProtocolTargetIdentifier) -> RuntimeAgentState {
-        if let state = runtimeAgentStatesByID[targetID] {
-            return state
-        }
-        let state = RuntimeAgentState(targetID: targetID)
-        runtimeAgentStatesByID[targetID] = state
-        return state
+    private func ensureRuntimeAgentState(for targetID: ProtocolTarget.ID) -> RuntimeState.AgentState {
+        targetRegistry.ensureRuntimeAgentState(for: targetID)
+    }
+
+    @discardableResult
+    private func removeTargetState(for targetID: ProtocolTarget.ID) -> RuntimeState.TargetState? {
+        targetRegistry.removeTargetState(for: targetID)
+    }
+
+    @discardableResult
+    private func removeRuntimeAgentState(for targetID: ProtocolTarget.ID) -> RuntimeState.AgentState? {
+        targetRegistry.removeRuntimeAgentState(for: targetID)
     }
 
     private func shouldUseAsDefaultNormalContext(
-        _ record: RuntimeExecutionContextRecord,
-        replacing currentKey: RuntimeExecutionContextKey?
+        _ record: RuntimeContext.Record,
+        replacing currentKey: RuntimeContext.Key?
     ) -> Bool {
         guard let currentKey else {
             return true
@@ -735,7 +827,7 @@ package final class RuntimeState {
         guard let currentContext = executionContext(for: currentKey) else {
             return true
         }
-        guard let targetFrameID = targetStatesByID[record.targetID]?.frameID else {
+        guard let targetFrameID = targetState(for: record.targetID)?.frameID else {
             return false
         }
         guard currentContext.frameID != targetFrameID else {
@@ -744,7 +836,7 @@ package final class RuntimeState {
         return record.frameID == targetFrameID
     }
 
-    private func promotePreferredNormalContextIfNeeded(for targetState: RuntimeTargetState) {
+    private func promotePreferredNormalContextIfNeeded(for targetState: RuntimeState.TargetState) {
         guard let targetFrameID = targetState.frameID else {
             return
         }
@@ -761,7 +853,7 @@ package final class RuntimeState {
                     && $0.frameID == targetFrameID
             })
             .sorted(by: {
-                RuntimeExecutionContextRecord.stableOrder($0.snapshotRecord, $1.snapshotRecord)
+                RuntimeContext.Record.stableOrder($0.snapshotRecord, $1.snapshotRecord)
             })
             .first else {
             return
@@ -777,10 +869,10 @@ package final class RuntimeState {
 
     @discardableResult
     private func removeExecutionContext(
-        _ contextKey: RuntimeExecutionContextKey,
+        _ contextKey: RuntimeContext.Key,
         releaseRemoteObjects: Bool
     ) -> RuntimeExecutionContext? {
-        guard let agentState = runtimeAgentStatesByID[contextKey.runtimeAgentTargetID],
+        guard let agentState = runtimeAgentState(for: contextKey.runtimeAgentTargetID),
               let context = agentState.removeExecutionContext(contextID: contextKey.contextID) else {
             return nil
         }
@@ -791,16 +883,16 @@ package final class RuntimeState {
     }
 
     private func retargetExecutionContexts(
-        from oldTargetID: ProtocolTargetIdentifier,
-        to newTargetID: ProtocolTargetIdentifier
-    ) -> [RuntimeExecutionContextKey: RuntimeExecutionContextKey] {
-        var movedContextKeys: [RuntimeExecutionContextKey: RuntimeExecutionContextKey] = [:]
-        let currentContexts = runtimeAgentStatesByID.values.flatMap { state in
+        from oldTargetID: ProtocolTarget.ID,
+        to newTargetID: ProtocolTarget.ID
+    ) -> [RuntimeContext.Key: RuntimeContext.Key] {
+        var movedContextKeys: [RuntimeContext.Key: RuntimeContext.Key] = [:]
+        let currentContexts = runtimeAgentStates.flatMap { state in
             state.executionContexts.map { (runtimeAgentTargetID: state.targetID, context: $0) }
         }
 
         for entry in currentContexts {
-            guard let sourceAgentState = runtimeAgentStatesByID[entry.runtimeAgentTargetID],
+            guard let sourceAgentState = runtimeAgentState(for: entry.runtimeAgentTargetID),
                   sourceAgentState.executionContext(contextID: entry.context.id) === entry.context else {
                 continue
             }
@@ -819,7 +911,7 @@ package final class RuntimeState {
                 continue
             }
 
-            let nextKey = RuntimeExecutionContextKey(
+            let nextKey = RuntimeContext.Key(
                 runtimeAgentTargetID: nextRuntimeAgentTargetID,
                 contextID: entry.context.id
             )
@@ -828,7 +920,7 @@ package final class RuntimeState {
             }
             movedContextKeys[oldKey] = nextKey
 
-            if let destinationAgentState = runtimeAgentStatesByID[nextRuntimeAgentTargetID],
+            if let destinationAgentState = runtimeAgentState(for: nextRuntimeAgentTargetID),
                destinationAgentState.executionContext(contextID: entry.context.id) != nil {
                 continue
             }
@@ -843,9 +935,9 @@ package final class RuntimeState {
     }
 
     private static func objectGroupRuntimeAgentTargets(
-        from remoteObjectsByID: [RuntimeRemoteObjectIdentifierKey: RuntimeRemoteObjectRecord]
-    ) -> [RuntimeObjectGroup: Set<ProtocolTargetIdentifier>] {
-        var targetsByGroup: [RuntimeObjectGroup: Set<ProtocolTargetIdentifier>] = [:]
+        from remoteObjectsByID: [RuntimeRemoteObject.ID: RuntimeRemoteObject.Record]
+    ) -> [RuntimeRemoteObject.Group: Set<ProtocolTarget.ID>] {
+        var targetsByGroup: [RuntimeRemoteObject.Group: Set<ProtocolTarget.ID>] = [:]
         for (key, record) in remoteObjectsByID {
             if let objectGroup = record.objectGroup {
                 targetsByGroup[objectGroup, default: []].insert(key.runtimeAgentTargetID)
@@ -854,8 +946,8 @@ package final class RuntimeState {
         return targetsByGroup
     }
 
-    private func normalContextKeysToReplace(with record: RuntimeExecutionContextRecord) -> Set<RuntimeExecutionContextKey> {
-        guard let agentState = runtimeAgentStatesByID[record.runtimeAgentTargetID] else {
+    private func normalContextKeysToReplace(with record: RuntimeContext.Record) -> Set<RuntimeContext.Key> {
+        guard let agentState = runtimeAgentState(for: record.runtimeAgentTargetID) else {
             return []
         }
         let replacementKeys = agentState.executionContextsByID.values
@@ -871,19 +963,19 @@ package final class RuntimeState {
         return Set(replacementKeys)
     }
 
-    package func enableIntent(targetID: ProtocolTargetIdentifier) -> RuntimeCommandIntent {
+    package func enableIntent(targetID: ProtocolTarget.ID) -> RuntimeCommand.Intent {
         .enable(targetID: targetID)
     }
 
     package func evaluateIntent(
         expression: String,
-        targetID: ProtocolTargetIdentifier,
-        contextKey: RuntimeExecutionContextKey? = nil,
-        objectGroup: RuntimeObjectGroup? = .console
-    ) -> RuntimeCommandIntent {
+        targetID: ProtocolTarget.ID,
+        contextKey: RuntimeContext.Key? = nil,
+        objectGroup: RuntimeRemoteObject.Group? = .console
+    ) -> RuntimeCommand.Intent {
         let context = evaluationContext(targetID: targetID, contextKey: contextKey)
         return .evaluate(
-            RuntimeEvaluationRequest(
+            RuntimeEvaluation.Request(
                 runtimeAgentTargetID: context?.runtimeAgentTargetID ?? targetID,
                 expression: expression,
                 objectGroup: objectGroup,
@@ -899,8 +991,8 @@ package final class RuntimeState {
     }
 
     private func evaluationContext(
-        targetID: ProtocolTargetIdentifier,
-        contextKey: RuntimeExecutionContextKey?
+        targetID: ProtocolTarget.ID,
+        contextKey: RuntimeContext.Key?
     ) -> RuntimeExecutionContext? {
         if let contextKey {
             return executionContextsByKey[contextKey]
@@ -910,7 +1002,7 @@ package final class RuntimeState {
 
     private func markCommandUnsupportedIfNeeded(
         _ method: String,
-        targetID: ProtocolTargetIdentifier,
+        targetID: ProtocolTarget.ID,
         error: any Error
     ) {
         guard isUnsupportedProtocolCommandError(method, error: error) else {
@@ -921,7 +1013,7 @@ package final class RuntimeState {
 
     private func requireCommandChannel(requiresActiveConnection: Bool = true) throws -> ProtocolCommandChannel {
         guard let commandChannel else {
-            throw InspectorSessionError("Inspector session is not attached.")
+            throw InspectorSession.Error("Inspector session is not attached.")
         }
         if requiresActiveConnection {
             try commandChannel.requireAttached()

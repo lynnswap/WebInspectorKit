@@ -1,17 +1,20 @@
+import WebInspectorCore
+
 #if canImport(UIKit)
 import UIKit
 #endif
 
-package enum NetworkStatusSeverity: Equatable, Sendable {
-    case success
-    case notice
-    case warning
-    case error
-    case neutral
+extension NetworkRequest.Display {
+    package enum StatusSeverity: Equatable, Sendable {        case success
+        case notice
+        case warning
+        case error
+        case neutral
+    }
 }
 
 #if canImport(UIKit)
-extension NetworkStatusSeverity {
+extension NetworkRequest.Display.StatusSeverity {
     var color: UIColor {
         switch self {
         case .success:

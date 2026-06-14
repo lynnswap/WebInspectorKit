@@ -4,14 +4,56 @@ import ObservationBridge
 import UIKit
 
 @MainActor
+private final class NetworkResponseBodyFetchObservationBinding {
+    private var observation: PortableObservationTracking.Token?
+    private weak var request: NetworkRequest?
+#if DEBUG
+    private(set) var observationDelivery: PortableObservationTracking.Token?
+#endif
+
+    func bindIfNeeded(
+        to request: NetworkRequest,
+        handler: @escaping @MainActor (NetworkRequest) -> Void
+    ) {
+        guard self.request !== request else {
+            return
+        }
+
+        cancel()
+        self.request = request
+        let token = withPortableContinuousObservation { [weak self, weak request] _ in
+            guard let self,
+                  let request,
+                  self.request === request else {
+                return
+            }
+            handler(request)
+        }
+        observation = token
+#if DEBUG
+        observationDelivery = token
+#endif
+    }
+
+    func cancel() {
+        observation?.cancel()
+        observation = nil
+        request = nil
+#if DEBUG
+        observationDelivery = nil
+#endif
+    }
+}
+
+@MainActor
 package final class NetworkDetailViewController: UIViewController {
     private let model: NetworkPanelModel
-    private let modelObservationScope = ObservationScope()
-    private let selectedRequestRenderObservationScope = ObservationScope()
-    private let responseBodyFetchObservationScope = ObservationScope()
+    private var modelObservation: PortableObservationTracking.Token?
+    private var selectedRequestRenderObservation: PortableObservationTracking.Token?
+    private let responseBodyFetchObservationBinding = NetworkResponseBodyFetchObservationBinding()
     private let scrollEdgeController = NetworkDetailScrollEdgeController()
     private lazy var bodyViewController = NetworkBodyViewController(
-        scrollEdgeState: scrollEdgeController.scrollEdgeState
+        scrollEdgeSink: scrollEdgeController
     )
     private lazy var modeControlController: NetworkDetailModeControlController = {
         let controller = NetworkDetailModeControlController(initialMode: mode)
@@ -27,16 +69,14 @@ package final class NetworkDetailViewController: UIViewController {
         }
         return controller
     }()
-    private var previewRoles: [NetworkBodyRole] = []
+    private var previewRoles: [NetworkBody.Role] = []
     private var hasBoundSelectedRequest = false
     private weak var observedRequest: NetworkRequest?
-    private weak var responseBodyFetchRequest: NetworkRequest?
     private var bodyTopToPreviewContainerConstraint: NSLayoutConstraint?
     private var bodyTopToPreviewRoleControlConstraint: NSLayoutConstraint?
 #if DEBUG
-    private var modelObservationDelivery: ObservationDelivery?
-    private var selectedRequestRenderObservationDelivery: ObservationDelivery?
-    private var responseBodyFetchObservationDelivery: ObservationDelivery?
+    private var modelObservationDelivery: PortableObservationTracking.Token?
+    private var selectedRequestRenderObservationDelivery: PortableObservationTracking.Token?
 #endif
     private lazy var previewContainerView: UIView = {
         let view = UIView()
@@ -51,12 +91,12 @@ package final class NetworkDetailViewController: UIViewController {
         view.isHidden = true
         return view
     }()
-    fileprivate var mode: NetworkDetailMode = .headers
-    fileprivate var previewRole: NetworkBodyRole = .response
+    fileprivate var mode: NetworkDetailViewController.Mode = .headers
+    fileprivate var previewRole: NetworkBody.Role = .response
 
     package init(
         model: NetworkPanelModel,
-        initialMode: NetworkDetailMode = .headers
+        initialMode: NetworkDetailViewController.Mode = .headers
     ) {
         self.model = model
         mode = initialMode
@@ -69,9 +109,9 @@ package final class NetworkDetailViewController: UIViewController {
     }
 
     isolated deinit {
-        modelObservationScope.cancelAll()
-        selectedRequestRenderObservationScope.cancelAll()
-        responseBodyFetchObservationScope.cancelAll()
+        modelObservation?.cancel()
+        selectedRequestRenderObservation?.cancel()
+        responseBodyFetchObservationBinding.cancel()
     }
 
     override package func viewDidLoad() {
@@ -96,11 +136,13 @@ package final class NetworkDetailViewController: UIViewController {
     }
 
     private func startObservingModel() {
-        let delivery = modelObservationScope.observe(model) { [weak self] _, model in
-            self?.bindSelectedRequest(model.selectedRequest)
+        let token = withPortableContinuousObservation { [weak self] _ in
+            guard let self else { return }
+            bindSelectedRequest(model.selectedRequest)
         }
+        modelObservation = token
 #if DEBUG
-        modelObservationDelivery = delivery
+        modelObservationDelivery = token
 #endif
     }
 
@@ -171,7 +213,8 @@ package final class NetworkDetailViewController: UIViewController {
         }
 
         hasBoundSelectedRequest = true
-        selectedRequestRenderObservationScope.cancelAll()
+        selectedRequestRenderObservation?.cancel()
+        selectedRequestRenderObservation = nil
         unbindResponseBodyFetchObservation()
         observedRequest = request
 #if DEBUG
@@ -193,7 +236,8 @@ package final class NetworkDetailViewController: UIViewController {
     }
 
     private func rebindSelectedRequestRendering() {
-        selectedRequestRenderObservationScope.cancelAll()
+        selectedRequestRenderObservation?.cancel()
+        selectedRequestRenderObservation = nil
         unbindResponseBodyFetchObservation()
 #if DEBUG
         selectedRequestRenderObservationDelivery = nil
@@ -205,14 +249,16 @@ package final class NetworkDetailViewController: UIViewController {
     }
 
     private func bindSelectedRequestRendering(_ request: NetworkRequest) {
-        let delivery = selectedRequestRenderObservationScope.observe(request) { [weak self] _, request in
-            guard self?.observedRequest === request else {
+        let token = withPortableContinuousObservation { [weak self, weak request] _ in
+            guard let request,
+                  self?.observedRequest === request else {
                 return
             }
             self?.renderSelectedRequest(request)
         }
+        selectedRequestRenderObservation = token
 #if DEBUG
-        selectedRequestRenderObservationDelivery = delivery
+        selectedRequestRenderObservationDelivery = token
 #endif
     }
 
@@ -237,7 +283,7 @@ package final class NetworkDetailViewController: UIViewController {
         headersTextView.render(request: request)
     }
 
-    private func setMode(_ nextMode: NetworkDetailMode) {
+    private func setMode(_ nextMode: NetworkDetailViewController.Mode) {
         guard mode != nextMode else {
             renderModeControl()
             return
@@ -247,7 +293,7 @@ package final class NetworkDetailViewController: UIViewController {
         rebindSelectedRequestRendering()
     }
 
-    private func setPreviewRole(_ nextRole: NetworkBodyRole) {
+    private func setPreviewRole(_ nextRole: NetworkBody.Role) {
         guard previewRole != nextRole else {
             renderPreviewRoleControl(
                 roles: previewRoles,
@@ -315,8 +361,8 @@ package final class NetworkDetailViewController: UIViewController {
         bindResponseBodyFetchObservationIfNeeded(for: request, role: role)
     }
 
-    private func availablePreviewRoles(in request: NetworkRequest) -> [NetworkBodyRole] {
-        var roles: [NetworkBodyRole] = []
+    private func availablePreviewRoles(in request: NetworkRequest) -> [NetworkBody.Role] {
+        var roles: [NetworkBody.Role] = []
         if request.requestBody != nil {
             roles.append(.request)
         }
@@ -326,17 +372,17 @@ package final class NetworkDetailViewController: UIViewController {
         return roles
     }
 
-    private func preferredPreviewRole(from roles: [NetworkBodyRole]) -> NetworkBodyRole? {
+    private func preferredPreviewRole(from roles: [NetworkBody.Role]) -> NetworkBody.Role? {
         roles.contains(.response) ? .response : roles.first
     }
 
-    private func selectedPreviewRole(from roles: [NetworkBodyRole]) -> NetworkBodyRole? {
+    private func selectedPreviewRole(from roles: [NetworkBody.Role]) -> NetworkBody.Role? {
         roles.contains(previewRole) ? previewRole : preferredPreviewRole(from: roles)
     }
 
     private func renderPreviewRoleControl(
-        roles: [NetworkBodyRole],
-        selectedRole: NetworkBodyRole?
+        roles: [NetworkBody.Role],
+        selectedRole: NetworkBody.Role?
     ) {
         previewRoles = roles
         let isControlVisible = roles.count >= 2
@@ -352,35 +398,19 @@ package final class NetworkDetailViewController: UIViewController {
 
     private func bindResponseBodyFetchObservationIfNeeded(
         for request: NetworkRequest,
-        role: NetworkBodyRole
+        role: NetworkBody.Role
     ) {
         guard role == .response else {
             unbindResponseBodyFetchObservation()
             return
         }
-        guard responseBodyFetchRequest !== request else {
-            return
-        }
-
-        responseBodyFetchObservationScope.cancelAll()
-        responseBodyFetchRequest = request
-        let delivery = responseBodyFetchObservationScope.observe(request) { [weak self] _, request in
-            guard self?.responseBodyFetchRequest === request else {
-                return
-            }
+        responseBodyFetchObservationBinding.bindIfNeeded(to: request) { [weak self] request in
             self?.fetchResponseBodyIfNeededForVisibleResponse(request)
         }
-#if DEBUG
-        responseBodyFetchObservationDelivery = delivery
-#endif
     }
 
     private func unbindResponseBodyFetchObservation() {
-        responseBodyFetchObservationScope.cancelAll()
-        responseBodyFetchRequest = nil
-#if DEBUG
-        responseBodyFetchObservationDelivery = nil
-#endif
+        responseBodyFetchObservationBinding.cancel()
     }
 
     private func fetchResponseBodyIfNeededForVisibleResponse(_ request: NetworkRequest) {
@@ -393,7 +423,7 @@ package final class NetworkDetailViewController: UIViewController {
         model.fetchResponseBodyIfNeeded(for: request)
     }
 
-    private func body(in request: NetworkRequest, for role: NetworkBodyRole) -> NetworkBody? {
+    private func body(in request: NetworkRequest, for role: NetworkBody.Role) -> NetworkBody? {
         switch role {
         case .request:
             request.requestBody
@@ -404,16 +434,16 @@ package final class NetworkDetailViewController: UIViewController {
 
     private func previewMetadata(
         in request: NetworkRequest,
-        for role: NetworkBodyRole
-    ) -> NetworkBodyPreviewMetadata {
+        for role: NetworkBody.Role
+    ) -> NetworkBodyViewController.PreviewMetadata {
         switch role {
         case .request:
-            return NetworkBodyPreviewMetadata(
+            return NetworkBodyViewController.PreviewMetadata(
                 mimeType: mimeType(from: nil, headers: request.request.headers),
                 url: request.request.url
             )
         case .response:
-            return NetworkBodyPreviewMetadata(
+            return NetworkBodyViewController.PreviewMetadata(
                 mimeType: mimeType(from: request.response?.mimeType, headers: request.response?.headers ?? [:]),
                 url: request.response?.url ?? request.request.url
             )
@@ -460,11 +490,11 @@ extension NetworkDetailViewController {
         bodyViewController
     }
 
-    var currentModeForTesting: NetworkDetailMode {
+    var currentModeForTesting: NetworkDetailViewController.Mode {
         mode
     }
 
-    var currentPreviewRoleForTesting: NetworkBodyRole {
+    var currentPreviewRoleForTesting: NetworkBody.Role {
         previewRole
     }
 
@@ -481,35 +511,31 @@ extension NetworkDetailViewController {
         scrollEdgeController.interactionForTesting
     }
 
-    var previewRoleScrollEdgeObservationDeliveryForTesting: ObservationDelivery? {
-        scrollEdgeController.observationDeliveryForTesting
-    }
-
-    var modelObservationDeliveryForTesting: ObservationDelivery? {
+    var modelObservationDeliveryForTesting: PortableObservationTracking.Token? {
         modelObservationDelivery
     }
 
-    var selectedRequestRenderObservationDeliveryForTesting: ObservationDelivery? {
+    var selectedRequestRenderObservationDeliveryForTesting: PortableObservationTracking.Token? {
         selectedRequestRenderObservationDelivery
     }
 
-    var responseBodyFetchObservationDeliveryForTesting: ObservationDelivery? {
-        responseBodyFetchObservationDelivery
+    var responseBodyFetchObservationDeliveryForTesting: PortableObservationTracking.Token? {
+        responseBodyFetchObservationBinding.observationDelivery
     }
 
-    func isDetailModeEnabledForTesting(_ mode: NetworkDetailMode) -> Bool {
+    func isDetailModeEnabledForTesting(_ mode: NetworkDetailViewController.Mode) -> Bool {
         modeControlController.isModeEnabledForTesting(mode)
     }
 
-    func selectModeForTesting(_ mode: NetworkDetailMode) {
+    func selectModeForTesting(_ mode: NetworkDetailViewController.Mode) {
         modeControlController.selectModeForTesting(mode)
     }
 
-    func setModeForTesting(_ mode: NetworkDetailMode) {
+    func setModeForTesting(_ mode: NetworkDetailViewController.Mode) {
         setMode(mode)
     }
 
-    func selectPreviewRoleForTesting(_ role: NetworkBodyRole) {
+    func selectPreviewRoleForTesting(_ role: NetworkBody.Role) {
         previewRoleControlController.selectRoleForTesting(role)
     }
 }

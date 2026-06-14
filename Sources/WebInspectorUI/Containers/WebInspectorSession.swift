@@ -84,13 +84,21 @@ public final class WebInspectorSession {
     }
 }
 
+#if DEBUG
+extension WebInspectorSession {
+    package var hasPageUserInterfaceStyleObserverForTesting: Bool {
+        pageUserInterfaceStyleObserver != nil
+    }
+}
+#endif
+
 @MainActor
 @Observable
 package final class InterfaceModel {
     package private(set) var tabs: [WebInspectorTab]
-    package private(set) var selectedItemID: TabDisplayItem.ID?
-    @ObservationIgnored private let projection = TabDisplayProjection()
-    @ObservationIgnored private let contentCache = TabContentCache()
+    package private(set) var selectedItemID: WebInspectorTab.DisplayItem.ID?
+    @ObservationIgnored private let projection = WebInspectorTab.DisplayProjection()
+    @ObservationIgnored private let contentCache = WebInspectorTab.ContentCache()
     @ObservationIgnored private var networkPanelModel: NetworkPanelModel?
 
     package init(tabs: [WebInspectorTab] = [.dom, .network]) {
@@ -99,11 +107,11 @@ package final class InterfaceModel {
         selectedItemID = uniqueTabs.first?.id
     }
 
-    package func displayItems(for hostLayout: WebInspectorTabHostLayout) -> [TabDisplayItem] {
+    package func displayItems(for hostLayout: WebInspectorTab.HostLayout) -> [WebInspectorTab.DisplayItem] {
         projection.displayItems(for: hostLayout, tabs: tabs)
     }
 
-    package func resolvedSelection(for hostLayout: WebInspectorTabHostLayout) -> TabDisplayItem? {
+    package func resolvedSelection(for hostLayout: WebInspectorTab.HostLayout) -> WebInspectorTab.DisplayItem? {
         projection.resolvedSelection(
             for: hostLayout,
             tabs: tabs,
@@ -111,7 +119,7 @@ package final class InterfaceModel {
         )
     }
 
-    package func descriptor(for displayItem: TabDisplayItem) -> TabDisplayDescriptor? {
+    package func descriptor(for displayItem: WebInspectorTab.DisplayItem) -> WebInspectorTab.DisplayDescriptor? {
         projection.descriptor(for: displayItem, tabs: tabs)
     }
 
@@ -126,7 +134,7 @@ package final class InterfaceModel {
         selectItem(.tab(tabID))
     }
 
-    package func selectItem(_ displayItem: TabDisplayItem) {
+    package func selectItem(_ displayItem: WebInspectorTab.DisplayItem) {
         guard isValidItemID(displayItem.id),
               selectedItemID != displayItem.id else {
             return
@@ -134,7 +142,7 @@ package final class InterfaceModel {
         selectedItemID = displayItem.id
     }
 
-    package func selectItem(withID displayItemID: TabDisplayItem.ID) {
+    package func selectItem(withID displayItemID: WebInspectorTab.DisplayItem.ID) {
         guard isValidItemID(displayItemID),
               selectedItemID != displayItemID else {
             return
@@ -154,7 +162,7 @@ package final class InterfaceModel {
     }
 
     package func viewController<Content: UIViewController>(
-        for key: TabContentKey,
+        for key: WebInspectorTab.ContentKey,
         make: () -> Content
     ) -> Content {
         contentCache.viewController(for: key, make: make)
@@ -173,7 +181,7 @@ package final class InterfaceModel {
         return model
     }
 
-    package func pruneContentCache(retaining keys: Set<TabContentKey>) {
+    package func pruneContentCache(retaining keys: Set<WebInspectorTab.ContentKey>) {
         contentCache.prune(retaining: keys)
     }
 
@@ -185,21 +193,21 @@ package final class InterfaceModel {
         guard let selectedItemID else {
             return nil
         }
-        let selectedSourceTabID = selectedItemID == TabDisplayItem.domElementID
+        let selectedSourceTabID = selectedItemID == WebInspectorTab.DisplayItem.domElementID
             ? WebInspectorTab.dom.id
             : selectedItemID
         return tabs.first { $0.id == selectedSourceTabID }
     }
 
-    private func isValidItemID(_ displayItemID: TabDisplayItem.ID) -> Bool {
+    private func isValidItemID(_ displayItemID: WebInspectorTab.DisplayItem.ID) -> Bool {
         if tabs.contains(where: { $0.id == displayItemID }) {
             return true
         }
-        return displayItemID == TabDisplayItem.domElementID
+        return displayItemID == WebInspectorTab.DisplayItem.domElementID
             && tabs.contains(where: { $0.builtIn == .dom })
     }
 
-    private func reachableContentKeys(for tabs: [WebInspectorTab]) -> Set<TabContentKey> {
+    private func reachableContentKeys(for tabs: [WebInspectorTab]) -> Set<WebInspectorTab.ContentKey> {
         projection.contentKeys(for: .compact, tabs: tabs)
             .union(projection.contentKeys(for: .regular, tabs: tabs))
     }
