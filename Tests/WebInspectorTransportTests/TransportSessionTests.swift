@@ -288,7 +288,7 @@ func fakeBackendTargetMessageWaiterResumesFutureOrdinalMatch() async throws {
     let waitTask = Task {
         try await backend.waitForTargetMessage(method: "DOM.getDocument", ordinal: 1)
     }
-    await Task.yield()
+    await backend.waitUntilTargetMessageWaiterRegistered(method: "DOM.getDocument", ordinal: 1)
 
     try await backend.sendJSONString(targetCommandWrapperMessage(outerID: 1, innerID: 1, method: "DOM.getDocument"))
     try await backend.sendJSONString(targetCommandWrapperMessage(outerID: 2, innerID: 2, method: "CSS.getMatchedStylesForNode"))
@@ -304,7 +304,7 @@ func fakeBackendTargetMessageWaiterCancellationDoesNotResumeWithLaterMessage() a
     let waitTask = Task {
         try await backend.waitForTargetMessage(method: "DOM.getDocument")
     }
-    await Task.yield()
+    await backend.waitUntilTargetMessageWaiterRegistered(method: "DOM.getDocument")
 
     waitTask.cancel()
     try await backend.sendJSONString(targetCommandWrapperMessage(outerID: 1, innerID: 1, method: "DOM.getDocument"))

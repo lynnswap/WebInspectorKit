@@ -29,15 +29,30 @@ package actor FakeTransportBackend: TransportBackend {
         var continuation: CheckedContinuation<SentTargetMessage, Error>
     }
 
+    private struct MessageWaiterRegistrationWaiter {
+        var ordinal: Int
+        var after: Int
+        var continuation: CheckedContinuation<Void, Never>
+    }
+
+    private struct TargetMessageWaiterRegistrationWaiter {
+        var method: String?
+        var ordinal: Int
+        var after: Int
+        var continuation: CheckedContinuation<Void, Never>
+    }
+
     private var messages: [String]
     private var sendError: (any Error)?
     private var detached: Bool
     private var messageWaiters: [MessageWaiter]
     private var nextMessageWaiterID: UInt64
     private var cancelledMessageWaiterIDs: Set<UInt64>
+    private var messageWaiterRegistrationWaiters: [MessageWaiterRegistrationWaiter]
     private var targetMessageWaiters: [TargetMessageWaiter]
     private var nextTargetMessageWaiterID: UInt64
     private var cancelledTargetMessageWaiterIDs: Set<UInt64>
+    private var targetMessageWaiterRegistrationWaiters: [TargetMessageWaiterRegistrationWaiter]
 
     package init() {
         messages = []
@@ -45,9 +60,11 @@ package actor FakeTransportBackend: TransportBackend {
         messageWaiters = []
         nextMessageWaiterID = 0
         cancelledMessageWaiterIDs = []
+        messageWaiterRegistrationWaiters = []
         targetMessageWaiters = []
         nextTargetMessageWaiterID = 0
         cancelledTargetMessageWaiterIDs = []
+        targetMessageWaiterRegistrationWaiters = []
     }
 
     package func sendJSONString(_ message: String) async throws {
@@ -73,6 +90,40 @@ package actor FakeTransportBackend: TransportBackend {
 
     package func sentTargetMessages() -> [SentTargetMessage] {
         messages.compactMap { Self.sentTargetMessage(from: $0) }
+    }
+
+    package func waitUntilMessageWaiterRegistered(ordinal: Int = 0, after count: Int = 0) async {
+        guard hasMessageWaiter(ordinal: ordinal, after: count) == false else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            if hasMessageWaiter(ordinal: ordinal, after: count) {
+                continuation.resume()
+            } else {
+                messageWaiterRegistrationWaiters.append(
+                    MessageWaiterRegistrationWaiter(
+                        ordinal: ordinal,
+                        after: count,
+                        continuation: continuation
+                    )
+                )
+            }
+        }
+    }
+
+    package func waitUntilTargetMessageWaiterRegistered(
+        method: String,
+        ordinal: Int = 0,
+        after count: Int = 0
+    ) async {
+        await waitUntilTargetMessageWaiterRegistered(method: method as String?, ordinal: ordinal, after: count)
+    }
+
+    package func waitUntilTargetMessageWaiterRegistered(
+        ordinal: Int = 0,
+        after count: Int = 0
+    ) async {
+        await waitUntilTargetMessageWaiterRegistered(method: nil, ordinal: ordinal, after: count)
     }
 
     package func waitForMessage(ordinal: Int = 0, after count: Int = 0) async throws -> String {
@@ -190,6 +241,7 @@ package actor FakeTransportBackend: TransportBackend {
                 continuation: continuation
             )
         )
+        resumeMessageWaiterRegistrationWaiters()
     }
 
     private func registerTargetMessageWaiter(
@@ -216,6 +268,67 @@ package actor FakeTransportBackend: TransportBackend {
                 continuation: continuation
             )
         )
+        resumeTargetMessageWaiterRegistrationWaiters()
+    }
+
+    private func waitUntilTargetMessageWaiterRegistered(
+        method: String?,
+        ordinal: Int,
+        after count: Int
+    ) async {
+        guard hasTargetMessageWaiter(method: method, ordinal: ordinal, after: count) == false else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            if hasTargetMessageWaiter(method: method, ordinal: ordinal, after: count) {
+                continuation.resume()
+            } else {
+                targetMessageWaiterRegistrationWaiters.append(
+                    TargetMessageWaiterRegistrationWaiter(
+                        method: method,
+                        ordinal: ordinal,
+                        after: count,
+                        continuation: continuation
+                    )
+                )
+            }
+        }
+    }
+
+    private func resumeMessageWaiterRegistrationWaiters() {
+        var remainingWaiters: [MessageWaiterRegistrationWaiter] = []
+        for waiter in messageWaiterRegistrationWaiters {
+            if hasMessageWaiter(ordinal: waiter.ordinal, after: waiter.after) {
+                waiter.continuation.resume()
+            } else {
+                remainingWaiters.append(waiter)
+            }
+        }
+        messageWaiterRegistrationWaiters = remainingWaiters
+    }
+
+    private func resumeTargetMessageWaiterRegistrationWaiters() {
+        var remainingWaiters: [TargetMessageWaiterRegistrationWaiter] = []
+        for waiter in targetMessageWaiterRegistrationWaiters {
+            if hasTargetMessageWaiter(method: waiter.method, ordinal: waiter.ordinal, after: waiter.after) {
+                waiter.continuation.resume()
+            } else {
+                remainingWaiters.append(waiter)
+            }
+        }
+        targetMessageWaiterRegistrationWaiters = remainingWaiters
+    }
+
+    private func hasMessageWaiter(ordinal: Int, after count: Int) -> Bool {
+        messageWaiters.contains {
+            $0.ordinal == ordinal && $0.after == count
+        }
+    }
+
+    private func hasTargetMessageWaiter(method: String?, ordinal: Int, after count: Int) -> Bool {
+        targetMessageWaiters.contains {
+            $0.method == method && $0.ordinal == ordinal && $0.after == count
+        }
     }
 
     private func cancelMessageWaiter(_ id: UInt64) {
