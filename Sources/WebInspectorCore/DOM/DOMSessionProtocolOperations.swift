@@ -347,6 +347,16 @@ extension DOMSession {
         recordError?(InspectorSession.Error(String(describing: error)))
     }
 
+    private func restoreSelectedNodeHighlightAfterPickerInterruption() async {
+        guard selectedNodeID != nil else {
+            return
+        }
+        let restoreTask = Task { @MainActor [weak self] in
+            await self?.restoreSelectedNodeHighlightOrHide()
+        }
+        await restoreTask.value
+    }
+
     package func toggleElementPicker() async {
         if isSelectingElement {
             await cancelElementPicker()
@@ -394,8 +404,9 @@ extension DOMSession {
                 preserving: nil,
                 includeCurrentPageFallback: false
             )
-            guard !Task.isCancelled else {
+            if Task.isCancelled {
                 clearElementPickerState(invalidatePendingSelection: true)
+                await restoreSelectedNodeHighlightAfterPickerInterruption()
                 return
             }
             guard elementPicker.isCurrentEnablingSession(pickerSession) else {
