@@ -178,13 +178,20 @@ extension DOMSession {
             return
         }
 
-        guard let intent = hideHighlightIntent(targetID: preferredHideTargetID ?? highlightController.targetID) else {
-            return
+        var targetIDs: [ProtocolTarget.ID] = []
+        for targetID in [preferredHideTargetID, highlightController.targetID, currentPageTargetID].compactMap(\.self)
+        where !targetIDs.contains(targetID) {
+            targetIDs.append(targetID)
         }
-        do {
-            try await perform(intent)
-        } catch {
-            recordError?(InspectorSession.Error(String(describing: error)))
+        for targetID in targetIDs {
+            guard let intent = hideHighlightIntent(targetID: targetID) else {
+                continue
+            }
+            do {
+                try await perform(intent)
+            } catch {
+                recordError?(InspectorSession.Error(String(describing: error)))
+            }
         }
     }
 

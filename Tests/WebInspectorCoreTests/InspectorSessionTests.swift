@@ -3754,6 +3754,107 @@ func pendingPickerSelectionDoesNotRestorePreviousNodeHighlight() async throws {
 }
 
 @Test
+func pendingPickerSelectionHidesPreviousFrameHighlight() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    await receiveAndApplyRootMessage(
+        transport,
+        message: #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","isProvisional":false}}}"#,
+        in: session
+    )
+    _ = await session.attachment.dom.replaceDocumentRoot(
+        WebInspectorCore.DOMNode.Payload(
+            nodeID: .init(101),
+            nodeType: .document,
+            nodeName: "#document",
+            regularChildren: .loaded([
+                WebInspectorCore.DOMNode.Payload(nodeID: .init(102), nodeType: .element, nodeName: "HTML", localName: "html"),
+            ])
+        ),
+        targetID: .frameAd
+    )
+    let frameHTMLID = try #require(await session.attachment.dom.snapshot().currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(102))])
+    await session.attachment.dom.selectNode(frameHTMLID)
+    let countBeforePreviousHighlight = await backend.sentTargetMessages().count
+    let previousHighlightTask = Task {
+        await session.attachment.dom.highlightNode(for: frameHTMLID)
+    }
+    let previousHighlight = try await waitForTargetMessage(
+        backend,
+        method: "DOM.highlightNode",
+        after: countBeforePreviousHighlight
+    )
+    #expect(previousHighlight.targetIdentifier == ProtocolTarget.ID.frameAd)
+    await receiveTargetReply(
+        transport,
+        targetID: previousHighlight.targetIdentifier,
+        messageID: try messageID(previousHighlight.message),
+        result: "{}"
+    )
+    await previousHighlightTask.value
+
+    try await beginPicker(session: session, transport: transport, backend: backend)
+    let sentCountBeforeInspect = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(#"{"method":"Inspector.inspect","params":{"object":{"objectId":"pending-node-object"},"hints":{}}}"#)
+    let requestNode = try await waitForTargetMessage(
+        backend,
+        method: "DOM.requestNode",
+        after: sentCountBeforeInspect
+    )
+    let sentCountBeforeRequestReply = await backend.sentTargetMessages().count
+    await receiveTargetReply(
+        transport,
+        targetID: requestNode.targetIdentifier,
+        messageID: try messageID(requestNode.message),
+        result: #"{"nodeId":999}"#
+    )
+    let disable = try await waitForTargetMessage(
+        backend,
+        method: "DOM.setInspectModeEnabled",
+        after: sentCountBeforeRequestReply
+    )
+    let sentCountBeforeDisableReply = await backend.sentTargetMessages().count
+    await receiveTargetReply(
+        transport,
+        targetID: disable.targetIdentifier,
+        messageID: try messageID(disable.message),
+        result: "{}"
+    )
+    let pageHide = try await waitForTargetMessage(
+        backend,
+        method: "DOM.hideHighlight",
+        after: sentCountBeforeDisableReply
+    )
+    #expect(pageHide.targetIdentifier == ProtocolTarget.ID.pageMain)
+    let sentCountBeforePageHideReply = await backend.sentTargetMessages().count
+    await receiveTargetReply(
+        transport,
+        targetID: pageHide.targetIdentifier,
+        messageID: try messageID(pageHide.message),
+        result: "{}"
+    )
+    let frameHide = try await waitForTargetMessage(
+        backend,
+        method: "DOM.hideHighlight",
+        after: sentCountBeforePageHideReply
+    )
+    #expect(frameHide.targetIdentifier == ProtocolTarget.ID.frameAd)
+    await receiveTargetReply(
+        transport,
+        targetID: frameHide.targetIdentifier,
+        messageID: try messageID(frameHide.message),
+        result: "{}"
+    )
+    await session.attachment.dom.waitUntilElementPickerIdle()
+
+    let pendingSnapshot = await session.attachment.dom.snapshot()
+    #expect(pendingSnapshot.selection.selectedNodeID == frameHTMLID)
+    #expect(pendingSnapshot.selection.pendingRequest != nil)
+}
+
+@Test
 func inspectorInspectWaitsForPathPushEventsBeforeSelectingNode() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
