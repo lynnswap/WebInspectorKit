@@ -40,6 +40,69 @@ func displayRequestsApplySearchFilterAndNewestFirstOrder() async throws {
     #expect(requests.map(\.id.requestID.rawValue) == ["2"])
 }
 
+@Test(
+    "Network display names use URL path segments with authority fallback",
+    arguments: [
+        ("https://www.google.com/", "www.google.com"),
+        ("https://www.google.com", "www.google.com"),
+        ("https://example.com/foo/", "foo"),
+        ("https://example.com/a%20b", "a b"),
+        ("https://example.com/a%2Fb", "a/b"),
+        ("https://example.com/画像.png", "画像.png"),
+        ("https://cdn.example.com/photo 1.png", "photo 1.png"),
+        ("https://cdn.example.com/photo%ZZ.png", "photo%ZZ.png"),
+        ("https://example.com:8443/", "example.com:8443"),
+        ("about:blank", "blank"),
+        ("data:text/plain,hello", "data:text/plain,hello"),
+    ]
+)
+@MainActor
+func displayProjectionUsesReadableURLDisplayName(url: String, expectedDisplayName: String) async throws {
+    let network = NetworkSession()
+    let requestID = applyRequest(
+        to: network,
+        requestID: "1",
+        url: url,
+        resourceType: .document,
+        mimeType: "text/html",
+        timestamp: 1
+    )
+    let model = NetworkPanelModel(network: network)
+
+    #expect(model.displayProjection(for: requestID)?.displayName == expectedDisplayName)
+}
+
+@Test
+@MainActor
+func displayProjectionUsesEncodingFallbackForURLDerivedLabelsAndFilters() async throws {
+    let network = NetworkSession()
+    let spacedURLRequestID = applyRequest(
+        to: network,
+        requestID: "1",
+        url: "https://cdn.example.com/photo 1.png",
+        resourceType: .fetch,
+        mimeType: nil,
+        timestamp: 1
+    )
+    let invalidEscapeRequestID = applyRequest(
+        to: network,
+        requestID: "2",
+        url: "https://cdn.example.com/photo%ZZ.png",
+        resourceType: .fetch,
+        mimeType: nil,
+        timestamp: 2
+    )
+    let model = NetworkPanelModel(network: network)
+
+    #expect(model.displayProjection(for: spacedURLRequestID)?.displayName == "photo 1.png")
+    #expect(model.displayProjection(for: spacedURLRequestID)?.fileTypeLabel == "png")
+    #expect(model.displayProjection(for: invalidEscapeRequestID)?.displayName == "photo%ZZ.png")
+    #expect(model.displayProjection(for: invalidEscapeRequestID)?.fileTypeLabel == "png")
+
+    model.setResourceFilter(.media, enabled: true)
+    #expect(model.displayRequestIDs == [invalidEscapeRequestID, spacedURLRequestID])
+}
+
 @Test
 @MainActor
 func mediaFilterIncludesPreviewableMediaResponses() async throws {
@@ -213,6 +276,7 @@ func mediaPreviewSupportClassifiesAVIFAndExcludesSVG() {
     #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: "image/x-png", url: nil) == .image)
     #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: "image/pjpeg", url: nil) == .image)
     #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: "image/x-unknown", url: "https://cdn.example.com/photo.png") == .image)
+    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: nil, url: "https://cdn.example.com/画像.png") == .image)
     #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: "image/svg+xml", url: "https://cdn.example.com/icon.svg") == nil)
     #expect(NetworkRequest.Display.MediaPreviewSupport.classification(mimeType: "image/svg+xml", url: "https://cdn.example.com/icon.svg") == .notPreviewable)
     #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: "text/javascript", url: "https://cdn.example.com/player.mp4") == nil)

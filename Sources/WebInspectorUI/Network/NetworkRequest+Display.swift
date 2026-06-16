@@ -3,20 +3,7 @@ import Foundation
 
 extension NetworkRequest {
     package var displayName: String {
-        if let url = URL(string: request.url) {
-            let last = url.lastPathComponent
-            if !last.isEmpty {
-                return last
-            }
-            if let host = url.host {
-                return host
-            }
-        }
-        return request.url
-    }
-
-    package var host: String? {
-        URL(string: request.url)?.host
+        NetworkRequest.Display.URLSummary(url: request.url).displayName
     }
 
     package var statusLabel: String {
@@ -36,23 +23,11 @@ extension NetworkRequest {
     }
 
     package var fileTypeLabel: String {
-        if let mimeType = response?.mimeType,
-           let subtype = mimeType
-            .split(separator: ";", maxSplits: 1, omittingEmptySubsequences: true)
-            .first?
-            .split(separator: "/")
-            .last,
-           subtype.isEmpty == false {
-            return subtype.lowercased()
-        }
-        if let pathExtension = URL(string: request.url)?.pathExtension,
-           pathExtension.isEmpty == false {
-            return pathExtension.lowercased()
-        }
-        if let resourceType {
-            return resourceType.displayLabel
-        }
-        return "-"
+        NetworkRequest.Display.fileTypeLabel(
+            mimeType: response?.mimeType,
+            resourceType: resourceType,
+            urlSummary: NetworkRequest.Display.URLSummary(url: request.url)
+        )
     }
 
     package var statusSeverity: NetworkRequest.Display.StatusSeverity {
@@ -102,6 +77,32 @@ extension NetworkRequest {
         let formatter = ByteCountFormatter()
         formatter.countStyle = .binary
         return formatter.string(fromByteCount: Int64(length))
+    }
+}
+
+extension NetworkRequest.Display {
+    package static func fileTypeLabel(
+        mimeType: String?,
+        resourceType: NetworkRequest.ResourceType?,
+        urlSummary: NetworkRequest.Display.URLSummary
+    ) -> String {
+        if let mimeType,
+           let subtype = mimeType
+            .split(separator: ";", maxSplits: 1, omittingEmptySubsequences: true)
+            .first?
+            .split(separator: "/")
+            .last,
+           subtype.isEmpty == false {
+            return subtype.lowercased()
+        }
+        if let pathExtension = urlSummary.pathExtension,
+           pathExtension.isEmpty == false {
+            return pathExtension
+        }
+        if let resourceType {
+            return resourceType.displayLabel
+        }
+        return "-"
     }
 }
 
