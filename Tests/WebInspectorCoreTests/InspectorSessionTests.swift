@@ -1,4 +1,5 @@
 import Foundation
+import ObservationBridge
 import Testing
 import WebInspectorTestSupport
 import WebInspectorTransport
@@ -811,6 +812,72 @@ func selectedElementStyleHydrationClearsAfterSelectedTargetDestroyed() async thr
     #expect(session.attachment.dom.selectedNodeID == nil)
     #expect(session.attachment.dom.elementStyles.selectedState == .unavailable(.noSelection))
     #expect(session.lastError == nil)
+}
+
+@Test
+@MainActor
+func selectedElementStyleHydrationMarksStaleWhenTransportTargetDisappearsBeforeDOMEvent() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let css = CSSSession()
+    let dom = DOMSession(elementStyles: css)
+    var recordedError: InspectorSession.Error?
+    let channel = ProtocolCommandChannel(
+        transport: transport,
+        isCurrent: { true },
+        isAttached: { true },
+        appliedSequence: { 0 },
+        shouldEnableCompatibilityCSS: { _ in false },
+        markTargetDomainEnabled: { _, _ in }
+    )
+    dom.bindProtocolChannel(channel) { error in
+        recordedError = error
+    }
+
+    dom.applyTargetCreated(
+        .init(
+            id: .pageMain,
+            kind: .page,
+            frameID: .init("main-frame"),
+            capabilities: .pageDefault
+        ),
+        makeCurrentMainPage: true
+    )
+    _ = dom.replaceDocumentRoot(
+        WebInspectorCore.DOMNode.Payload(
+            nodeID: .init(1),
+            nodeType: .document,
+            nodeName: "#document",
+            regularChildren: .loaded([
+                WebInspectorCore.DOMNode.Payload(
+                    nodeID: .init(2),
+                    nodeType: .element,
+                    nodeName: "HTML",
+                    localName: "html",
+                    regularChildren: .loaded([
+                        WebInspectorCore.DOMNode.Payload(
+                            nodeID: .init(4),
+                            nodeType: .element,
+                            nodeName: "BODY",
+                            localName: "body"
+                        ),
+                    ])
+                ),
+            ])
+        ),
+        targetID: .pageMain
+    )
+    let bodyID = try #require(dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(4))])
+    dom.selectNode(bodyID)
+
+    let sentCount = await backend.sentTargetMessages().count
+    dom.setSelectedNodeStyleHydrationActive(true)
+    await dom.waitUntilSelectedStyleRefreshIdle()
+
+    #expect(await backend.sentTargetMessages().count == sentCount)
+    #expect(css.selectedState == .unavailable(.staleNode(bodyID)))
+    #expect(css.selectedNodeStyles == nil)
+    #expect(recordedError == nil)
 }
 
 @Test
@@ -4703,6 +4770,165 @@ func domActionAvailabilityWaitsForActiveAttachment() async throws {
     #expect(await session.hasActiveConnection)
     #expect(await session.attachment.dom.canReloadDocument)
     #expect(await session.attachment.dom.canSelectElement)
+}
+
+@Test
+@MainActor
+func selectedElementStyleHydrationWaitsForActiveAttachmentDuringBootstrap() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = InspectorSession(configuration: .test)
+    await transport.receiveRootMessage(
+        cssCapablePageTargetCreatedMessage(targetID: "page-main", frameID: "main-frame", isProvisional: false)
+    )
+
+    let connectTask = Task {
+        try await session.connect(transport: transport)
+    }
+
+    var sentCount = 0
+    for method in ["Inspector.enable", "Inspector.initialized", "Runtime.enable"] {
+        let sent = try await waitForTargetMessage(backend, method: method, after: sentCount)
+        sentCount = await backend.sentTargetMessages().count
+        await receiveTargetReply(
+            transport,
+            targetID: sent.targetIdentifier,
+            messageID: try messageID(sent.message),
+            result: "{}"
+        )
+    }
+
+    let documentMessage = try await waitForTargetMessage(backend, method: "DOM.getDocument", after: sentCount)
+    sentCount = await backend.sentTargetMessages().count
+    await receiveTargetReply(
+        transport,
+        targetID: documentMessage.targetIdentifier,
+        messageID: try messageID(documentMessage.message),
+        result: mainDocumentResult
+    )
+
+    await session.attachment.dom.waitUntilDocumentRequestsIdle(targetID: documentMessage.targetIdentifier)
+    let htmlID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(2))
+    session.attachment.dom.selectNode(htmlID)
+
+    let networkMessage = try await waitForTargetMessage(backend, method: "Network.enable", after: sentCount)
+    sentCount = await backend.sentTargetMessages().count
+    #expect(session.hasActiveConnection == false)
+
+    session.attachment.dom.setSelectedNodeStyleHydrationActive(true)
+    #expect(session.attachment.dom.elementStyles.selectedState == .needsRefresh)
+    #expect(await backend.sentTargetMessages().count == sentCount)
+
+    await receiveTargetReply(
+        transport,
+        targetID: networkMessage.targetIdentifier,
+        messageID: try messageID(networkMessage.message),
+        result: "{}"
+    )
+
+    let consoleMessage = try await waitForTargetMessage(backend, method: "Console.enable", after: sentCount)
+    sentCount = await backend.sentTargetMessages().count
+    await receiveTargetReply(
+        transport,
+        targetID: consoleMessage.targetIdentifier,
+        messageID: try messageID(consoleMessage.message),
+        result: "{}"
+    )
+
+    try await connectTask.value
+    #expect(session.hasActiveConnection)
+
+    let messages = try await waitForCSSRefreshMessages(backend, after: sentCount)
+    try await replyCSSRefresh(
+        transport: transport,
+        messages: messages,
+        selector: "html",
+        styleSheetID: "sheet-html"
+    )
+
+    await session.attachment.dom.waitUntilSelectedStyleRefreshIdle()
+    #expect(session.attachment.dom.elementStyles.selectedState == .loaded)
+}
+
+@MainActor
+@Test
+func domActionAvailabilityObservationFiresWhenBootstrapAttaches() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = InspectorSession(configuration: .test)
+    await transport.receiveRootMessage(
+        cssCapablePageTargetCreatedMessage(targetID: "page-main", frameID: "main-frame", isProvisional: false)
+    )
+
+    let availabilityObservation = withPortableContinuousObservation { _ in
+        _ = session.attachment.dom.canBeginElementPicker
+    }
+    let rootObservation = withPortableContinuousObservation { _ in
+        _ = session.attachment.dom.treeRevision
+    }
+    defer {
+        availabilityObservation.cancel()
+        rootObservation.cancel()
+    }
+    let renderedAvailability = await availabilityObservation.values {
+        session.attachment.dom.canBeginElementPicker
+    }
+    let renderedRootState = await rootObservation.values {
+        session.attachment.dom.currentPageRootNode != nil
+    }
+    #expect(await renderedAvailability.waitUntilValue(false))
+    #expect(await renderedRootState.waitUntilValue(false))
+
+    let connectTask = Task {
+        try await session.connect(transport: transport)
+    }
+
+    var sentCount = 0
+    for method in ["Inspector.enable", "Inspector.initialized", "Runtime.enable"] {
+        let sent = try await waitForTargetMessage(backend, method: method, after: sentCount)
+        sentCount = await backend.sentTargetMessages().count
+        await receiveTargetReply(
+            transport,
+            targetID: sent.targetIdentifier,
+            messageID: try messageID(sent.message),
+            result: "{}"
+        )
+    }
+
+    let documentMessage = try await waitForTargetMessage(backend, method: "DOM.getDocument", after: sentCount)
+    sentCount = await backend.sentTargetMessages().count
+    await receiveTargetReply(
+        transport,
+        targetID: documentMessage.targetIdentifier,
+        messageID: try messageID(documentMessage.message),
+        result: mainDocumentResult
+    )
+
+    await session.attachment.dom.waitUntilDocumentRequestsIdle(targetID: documentMessage.targetIdentifier)
+    #expect(await renderedRootState.waitUntilValue(true))
+    #expect(session.hasActiveConnection == false)
+    #expect(session.attachment.dom.canBeginElementPicker == false)
+
+    let networkMessage = try await waitForTargetMessage(backend, method: "Network.enable", after: sentCount)
+    sentCount = await backend.sentTargetMessages().count
+    await receiveTargetReply(
+        transport,
+        targetID: networkMessage.targetIdentifier,
+        messageID: try messageID(networkMessage.message),
+        result: "{}"
+    )
+
+    let consoleMessage = try await waitForTargetMessage(backend, method: "Console.enable", after: sentCount)
+    await receiveTargetReply(
+        transport,
+        targetID: consoleMessage.targetIdentifier,
+        messageID: try messageID(consoleMessage.message),
+        result: "{}"
+    )
+
+    try await connectTask.value
+    #expect(session.hasActiveConnection)
+    #expect(await renderedAvailability.waitUntilValue(true))
 }
 
 @MainActor

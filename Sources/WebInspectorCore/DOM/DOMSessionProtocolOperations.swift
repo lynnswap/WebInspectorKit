@@ -18,6 +18,7 @@ extension DOMSession {
         self.commandChannel = commandChannel
         self.recordError = recordError
         elementStyles.bindProtocolChannel(commandChannel)
+        recordCommandAvailabilityMutation()
         reconcileSelectedNodeStyleHydrationIfNeeded()
     }
 
@@ -31,6 +32,7 @@ extension DOMSession {
         highlightController.targetID = nil
         clearElementPickerState(invalidatePendingSelection: true)
         clearDeleteUndoHistory()
+        recordCommandAvailabilityMutation()
     }
 
     package func prepareForDocumentReload() async {
@@ -407,7 +409,7 @@ extension DOMSession {
         guard styleHydration.isActive else {
             return
         }
-        guard commandChannel != nil else {
+        guard commandChannel?.acceptsActiveCommands == true else {
             return
         }
         guard currentPageRootNode != nil else {
@@ -436,8 +438,11 @@ extension DOMSession {
         guard styleHydration.isRefreshing(identity: identity) == false else {
             return
         }
+        guard let token = elementStyles.beginRefresh(identity: identity) else {
+            return
+        }
 
-        if let cancelledIdentity = styleHydration.startRefresh(identity: identity, operation: { [weak self] identity in
+        if let cancelledToken = styleHydration.startRefresh(token: token, operation: { [weak self] token in
             guard let self else {
                 return
             }
@@ -446,7 +451,7 @@ extension DOMSession {
             }
 
             do {
-                try await self.refreshStyles(for: identity)
+                try await self.refreshStyles(for: token)
                 self.recordError?(nil)
             } catch is CancellationError {
                 return
@@ -454,13 +459,13 @@ extension DOMSession {
                 self.recordError?(InspectorSession.Error(String(describing: error)))
             }
         }) {
-            elementStyles.cancelRefresh(identity: cancelledIdentity)
+            elementStyles.cancelRefresh(cancelledToken)
         }
     }
 
     private func cancelSelectedNodeStyleHydrationRefresh() {
-        if let cancelledIdentity = styleHydration.cancelRefresh() {
-            elementStyles.cancelRefresh(identity: cancelledIdentity)
+        if let cancelledToken = styleHydration.cancelRefresh() {
+            elementStyles.cancelRefresh(cancelledToken)
         }
     }
 
@@ -474,16 +479,20 @@ extension DOMSession {
     }
 
     private func refreshStyles(for identity: CSSNodeStyles.Identity) async throws {
-        let commandChannel = try requireCommandChannel()
-        let targetExists = await commandChannel.snapshot().targetsByID[identity.targetID] != nil
-        guard targetExists else {
-            elementStyles.markSelectedNodeStylesUnavailable(identity: identity, reason: .staleNode(identity.nodeID))
+        guard try await selectedStyleRefreshTargetIsLive(identity) else {
             return
         }
         guard let token = elementStyles.beginRefresh(identity: identity) else {
             return
         }
+        try await refreshStyles(for: token)
+    }
 
+    private func refreshStyles(for token: CSSStyle.RefreshToken) async throws {
+        let identity = token.identity
+        guard try await selectedStyleRefreshTargetIsLive(identity) else {
+            return
+        }
         do {
             let results = try await elementStyles.fetchRefreshResults(for: identity)
             guard case let .success(currentIdentity) = selectedCSSNodeStyleIdentity(),
@@ -504,6 +513,16 @@ extension DOMSession {
             elementStyles.markRefreshFailed(token, message: String(describing: error))
             throw error
         }
+    }
+
+    private func selectedStyleRefreshTargetIsLive(_ identity: CSSNodeStyles.Identity) async throws -> Bool {
+        let commandChannel = try requireCommandChannel()
+        let targetExists = await commandChannel.snapshot().targetsByID[identity.targetID] != nil
+        guard targetExists else {
+            elementStyles.markSelectedNodeStylesUnavailable(identity: identity, reason: .staleNode(identity.nodeID))
+            return false
+        }
+        return true
     }
 
     package func inspectEvent(from event: ProtocolEvent) throws -> DOMInspectEvent? {

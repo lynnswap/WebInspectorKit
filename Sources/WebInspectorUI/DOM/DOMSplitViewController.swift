@@ -95,6 +95,14 @@ package final class DOMSplitViewController: UISplitViewController {
     }
 }
 
+#if DEBUG
+extension DOMSplitViewController {
+    var domNavigationItemsForTesting: DOMNavigationItems? {
+        domNavigationItems
+    }
+}
+#endif
+
 #Preview("DOM Split") {
     DOMSplitViewControllerPreview.makeViewController()
 }

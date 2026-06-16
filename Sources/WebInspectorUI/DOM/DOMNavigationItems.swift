@@ -49,9 +49,11 @@ package final class DOMNavigationItems: NSObject {
 
     private func startObservingInspection() {
         domObservation = withPortableContinuousObservation { [weak self, inspector] _ in
-            _ = inspector.attachment.dom.canBeginElementPicker
-            _ = inspector.attachment.dom.isSelectingElement
-            self?.renderPickItem()
+            let dom = inspector.attachment.dom
+            self?.renderPickItem(
+                isEnabled: dom.canBeginElementPicker,
+                isSelectingElement: dom.isSelectingElement
+            )
         }
     }
 
@@ -151,20 +153,34 @@ package final class DOMNavigationItems: NSObject {
     }
 
     private func updatePickItemAppearance() {
-        renderPickItem()
+        let dom = inspector.attachment.dom
+        renderPickItem(
+            isEnabled: dom.canBeginElementPicker,
+            isSelectingElement: dom.isSelectingElement
+        )
     }
 
-    private func renderPickItem() {
-        let dom = inspector.attachment.dom
-        let isEnabled = dom.canBeginElementPicker
+    private func renderPickItem(isEnabled: Bool, isSelectingElement: Bool) {
         if pickItem.isEnabled != isEnabled {
             pickItem.isEnabled = isEnabled
         }
-        let tintColor: UIColor = dom.isSelectingElement ? .tintColor : .label
+        let tintColor: UIColor = isSelectingElement ? .tintColor : .label
         if pickItem.tintColor != tintColor {
             pickItem.tintColor = tintColor
         }
     }
 }
+
+#if DEBUG
+extension DOMNavigationItems {
+    var observationDeliveryForTesting: PortableObservationTracking.Token? {
+        domObservation
+    }
+
+    var pickItemForTesting: UIBarButtonItem {
+        pickItem
+    }
+}
+#endif
 
 #endif

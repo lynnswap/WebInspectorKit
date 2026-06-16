@@ -51,6 +51,14 @@ package final class DOMCompactNavigationController: UINavigationController {
     }
 }
 
+#if DEBUG
+extension DOMCompactNavigationController {
+    var domNavigationItemsForTesting: DOMNavigationItems? {
+        domNavigationItems
+    }
+}
+#endif
+
 #Preview("DOM Compact Tree") {
     DOMCompactNavigationController(
         rootViewController: DOMTreeViewController(dom: DOMPreviewFixtures.makeDOMSession())

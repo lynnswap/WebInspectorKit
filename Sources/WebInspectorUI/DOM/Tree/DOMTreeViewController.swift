@@ -93,26 +93,41 @@ package final class DOMTreeViewController: UIViewController {
 
     private func startObservingDOMRoot(inspection: AttachedInspection) {
         domRootObservation?.cancel()
-        domRootObservation = withPortableContinuousObservation { [weak self, weak inspection] event in
-            guard let dom = inspection?.dom else {
+        domRootObservation = withPortableContinuousObservation { [weak self, weak inspection] _ in
+            guard let self, let dom = inspection?.dom else {
                 return
             }
             _ = dom.treeRevision
-            guard event.kind == .initial || event.matches(\DOMSession.treeRevision) else {
-                return
-            }
-            self?.ensureDOMDocumentLoadedIfNeeded()
+            let hasRoot = dom.currentPageRootNode != nil
+            let canReloadDocument = dom.canReloadDocument
+            ensureDOMDocumentLoadedIfNeeded(
+                hasRoot: hasRoot,
+                canReloadDocument: canReloadDocument
+            )
         }
     }
 
     private func ensureDOMDocumentLoadedIfNeeded() {
+        guard let dom = inspection?.dom else {
+            return
+        }
+        ensureDOMDocumentLoadedIfNeeded(
+            hasRoot: dom.currentPageRootNode != nil,
+            canReloadDocument: dom.canReloadDocument
+        )
+    }
+
+    private func ensureDOMDocumentLoadedIfNeeded(
+        hasRoot: Bool,
+        canReloadDocument: Bool
+    ) {
         guard let inspection else {
             return
         }
-        let currentPageRootNode = inspection.dom.currentPageRootNode
         guard viewIfLoaded?.window != nil,
               !isEnsuringDOMDocumentLoaded,
-              currentPageRootNode == nil else {
+              !hasRoot,
+              canReloadDocument else {
             return
         }
 
@@ -128,6 +143,10 @@ package final class DOMTreeViewController: UIViewController {
 
 #if DEBUG
 extension DOMTreeViewController {
+    var domRootObservationDeliveryForTesting: PortableObservationTracking.Token? {
+        domRootObservation
+    }
+
     var displayedDOMTreeTextViewForTesting: DOMTreeTextView {
         treeView
     }

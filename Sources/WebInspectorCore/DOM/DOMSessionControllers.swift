@@ -181,11 +181,11 @@ final class DOMSessionDocumentRequestController {
 final class DOMSessionElementStyleHydrationController {
     @MainActor
     private final class Refresh {
-        let identity: CSSNodeStyles.Identity
+        let token: CSSStyle.RefreshToken
         fileprivate var task: Task<Void, Never>?
 
-        init(identity: CSSNodeStyles.Identity) {
-            self.identity = identity
+        init(token: CSSStyle.RefreshToken) {
+            self.token = token
         }
 
         func wait() async {
@@ -231,16 +231,16 @@ final class DOMSessionElementStyleHydrationController {
     }
 
     func isRefreshing(identity: CSSNodeStyles.Identity) -> Bool {
-        activeRefresh?.identity == identity
+        activeRefresh?.token.identity == identity
     }
 
     @discardableResult
     func startRefresh(
-        identity: CSSNodeStyles.Identity,
-        operation: @escaping @MainActor (CSSNodeStyles.Identity) async -> Void
-    ) -> CSSNodeStyles.Identity? {
-        let cancelledIdentity = cancelRefresh()
-        let refresh = Refresh(identity: identity)
+        token: CSSStyle.RefreshToken,
+        operation: @escaping @MainActor (CSSStyle.RefreshToken) async -> Void
+    ) -> CSSStyle.RefreshToken? {
+        let cancelledToken = cancelRefresh()
+        let refresh = Refresh(token: token)
         activeRefresh = refresh
         refresh.task = Task { @MainActor [weak self, weak refresh] in
             guard let refresh else {
@@ -249,19 +249,19 @@ final class DOMSessionElementStyleHydrationController {
             defer {
                 self?.finishRefresh(refresh)
             }
-            await operation(refresh.identity)
+            await operation(refresh.token)
         }
-        return cancelledIdentity
+        return cancelledToken
     }
 
     @discardableResult
-    func cancelRefresh() -> CSSNodeStyles.Identity? {
+    func cancelRefresh() -> CSSStyle.RefreshToken? {
         guard let refresh = activeRefresh else {
             return nil
         }
         activeRefresh = nil
         refresh.cancel()
-        return refresh.identity
+        return refresh.token
     }
 
     @discardableResult
