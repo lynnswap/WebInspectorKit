@@ -148,6 +148,8 @@ jobs:
 
       - name: Run iOS tests
         run: |
+          set -o pipefail
+
           if [ "${SKIP_IOS_TESTS:-false}" = "true" ]; then
             echo "Skipping ${TEST_SCHEME}: selected Xcode cannot resolve this Swift tools version."
             exit 0
@@ -159,4 +161,17 @@ jobs:
             -destination "${DESTINATION}" \
             -enableCodeCoverage NO \
             -parallel-testing-enabled NO \
-            -maximum-concurrent-test-simulator-destinations 1
+            -maximum-concurrent-test-simulator-destinations 1 \
+            -showBuildTimingSummary \
+            -resultBundlePath "${RUNNER_TEMP}/${TEST_SCHEME}.xcresult" \
+            | tee "${RUNNER_TEMP}/xcodebuild-${TEST_SCHEME}.log"
+
+      - name: Upload iOS test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-test-diagnostics-${{ matrix.name }}
+          path: |
+            ${{ runner.temp }}/xcodebuild-${{ env.TEST_SCHEME }}.log
+            ${{ runner.temp }}/${{ env.TEST_SCHEME }}.xcresult
+          if-no-files-found: ignore
