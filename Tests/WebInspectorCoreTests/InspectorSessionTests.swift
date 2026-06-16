@@ -4608,10 +4608,12 @@ func beginElementPickerRestoresSelectedHighlightWhenEnableFails() async throws {
         messageID: try messageID(enable.message),
         message: "Cannot enable inspect mode"
     )
-    let restoredHighlight = try await waitForTargetMessage(
+    let restoredHighlight = try await waitForBackendTargetMessage(
         backend,
         method: "DOM.highlightNode",
-        after: countBeforeEnableError
+        ordinal: 0,
+        after: countBeforeEnableError,
+        timeout: .seconds(15)
     )
     #expect(restoredHighlight.targetIdentifier == ProtocolTarget.ID.pageMain)
     #expect(try integerParameter("nodeId", in: restoredHighlight.message) == 2)
