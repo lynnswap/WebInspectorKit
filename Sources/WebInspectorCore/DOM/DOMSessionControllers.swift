@@ -3,14 +3,20 @@ import WebInspectorTransport
 
 @MainActor
 final class DOMSessionHighlightController {
+    private struct PossibleVisibleTarget: Equatable {
+        var targetID: ProtocolTarget.ID
+        var generation: UInt64
+    }
+
     // WebKit does not expose the current overlay state, and a task can be
     // cancelled after a highlight command has reached the backend. Track
     // targets that may still need an explicit hide instead of tying ownership
     // to command replies.
-    private var possibleVisibleTargetIDs: [ProtocolTarget.ID] = []
+    private var possibleVisibleTargets: [PossibleVisibleTarget] = []
+    private var nextGeneration: UInt64 = 0
 
     var hasPossibleVisibleHighlight: Bool {
-        !possibleVisibleTargetIDs.isEmpty
+        !possibleVisibleTargets.isEmpty
     }
 
     func possibleVisibleTargets(
@@ -19,7 +25,7 @@ final class DOMSessionHighlightController {
         preserving preservedTargetID: ProtocolTarget.ID?
     ) -> [ProtocolTarget.ID] {
         var targetIDs: [ProtocolTarget.ID] = []
-        let candidates = [preferredTargetID] + possibleVisibleTargetIDs.map(Optional.some)
+        let candidates = [preferredTargetID] + possibleVisibleTargets.map { Optional.some($0.targetID) }
         for targetID in candidates.compactMap(\.self)
         where targetID != preservedTargetID && !targetIDs.contains(targetID) {
             targetIDs.append(targetID)
@@ -32,17 +38,29 @@ final class DOMSessionHighlightController {
         return targetIDs
     }
 
+    func possibleVisibleGeneration(targetID: ProtocolTarget.ID) -> UInt64? {
+        possibleVisibleTargets.first { $0.targetID == targetID }?.generation
+    }
+
     func markHighlightMayBeVisible(targetID: ProtocolTarget.ID) {
+        nextGeneration &+= 1
         clearHighlight(targetID: targetID)
-        possibleVisibleTargetIDs.append(targetID)
+        possibleVisibleTargets.append(PossibleVisibleTarget(targetID: targetID, generation: nextGeneration))
     }
 
     func clearHighlight(targetID: ProtocolTarget.ID) {
-        possibleVisibleTargetIDs.removeAll { $0 == targetID }
+        possibleVisibleTargets.removeAll { $0.targetID == targetID }
+    }
+
+    func clearHighlight(targetID: ProtocolTarget.ID, matchingGeneration generation: UInt64?) {
+        guard let generation else {
+            return
+        }
+        possibleVisibleTargets.removeAll { $0.targetID == targetID && $0.generation == generation }
     }
 
     func clearAll() {
-        possibleVisibleTargetIDs.removeAll()
+        possibleVisibleTargets.removeAll()
     }
 }
 

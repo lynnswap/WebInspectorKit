@@ -83,6 +83,11 @@ extension DOMSession {
         if case let .highlightNode(target) = intent {
             highlightController.markHighlightMayBeVisible(targetID: target.commandTargetID)
         }
+        let hideGeneration: UInt64? = if case let .hideHighlight(targetID) = intent {
+            highlightController.possibleVisibleGeneration(targetID: targetID)
+        } else {
+            nil
+        }
         let result: ProtocolCommand.Result
         do {
             result = try await send(intent, requiresActiveConnection: requiresActiveConnection)
@@ -114,7 +119,7 @@ extension DOMSession {
         case .highlightNode:
             break
         case let .hideHighlight(targetID):
-            highlightController.clearHighlight(targetID: targetID)
+            highlightController.clearHighlight(targetID: targetID, matchingGeneration: hideGeneration)
         case .setInspectModeEnabled,
              .getOuterHTML,
              .removeNode,

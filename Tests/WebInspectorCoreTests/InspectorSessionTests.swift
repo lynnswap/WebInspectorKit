@@ -3965,6 +3965,119 @@ func directHighlightHidesPreviousTargetBeforeHighlightingNewTarget() async throw
 }
 
 @Test
+func staleHideReplyDoesNotForgetNewerHighlightOnSameTarget() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    let pageHTMLID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(2))
+    await receiveAndApplyRootMessage(
+        transport,
+        message: #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","isProvisional":false}}}"#,
+        in: session
+    )
+    _ = await session.attachment.dom.replaceDocumentRoot(
+        WebInspectorCore.DOMNode.Payload(
+            nodeID: .init(101),
+            nodeType: .document,
+            nodeName: "#document",
+            regularChildren: .loaded([
+                WebInspectorCore.DOMNode.Payload(nodeID: .init(102), nodeType: .element, nodeName: "HTML", localName: "html"),
+            ])
+        ),
+        targetID: .frameAd
+    )
+    let frameHTMLID = try #require(await session.attachment.dom.snapshot().currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(102))])
+
+    let countBeforeInitialHighlight = await backend.sentTargetMessages().count
+    let initialHighlightTask = Task {
+        await session.attachment.dom.highlightNode(for: pageHTMLID)
+    }
+    let initialHighlight = try await waitForTargetMessage(
+        backend,
+        method: "DOM.highlightNode",
+        after: countBeforeInitialHighlight
+    )
+    #expect(initialHighlight.targetIdentifier == ProtocolTarget.ID.pageMain)
+    await receiveTargetReply(
+        transport,
+        targetID: initialHighlight.targetIdentifier,
+        messageID: try messageID(initialHighlight.message),
+        result: "{}"
+    )
+    await initialHighlightTask.value
+
+    let countBeforeHide = await backend.sentTargetMessages().count
+    let hideTask = Task {
+        await session.attachment.dom.hideNodeHighlight()
+    }
+    let staleHide = try await waitForTargetMessage(
+        backend,
+        method: "DOM.hideHighlight",
+        after: countBeforeHide
+    )
+    #expect(staleHide.targetIdentifier == ProtocolTarget.ID.pageMain)
+
+    let countBeforeReplacementHighlight = await backend.sentTargetMessages().count
+    let replacementHighlightTask = Task {
+        await session.attachment.dom.highlightNode(for: pageHTMLID)
+    }
+    let replacementHighlight = try await waitForTargetMessage(
+        backend,
+        method: "DOM.highlightNode",
+        after: countBeforeReplacementHighlight
+    )
+    #expect(replacementHighlight.targetIdentifier == ProtocolTarget.ID.pageMain)
+    await receiveTargetReply(
+        transport,
+        targetID: replacementHighlight.targetIdentifier,
+        messageID: try messageID(replacementHighlight.message),
+        result: "{}"
+    )
+    await replacementHighlightTask.value
+
+    await receiveTargetReply(
+        transport,
+        targetID: staleHide.targetIdentifier,
+        messageID: try messageID(staleHide.message),
+        result: "{}"
+    )
+    await hideTask.value
+
+    let countBeforeFrameHighlight = await backend.sentTargetMessages().count
+    let frameHighlightTask = Task {
+        await session.attachment.dom.highlightNode(for: frameHTMLID)
+    }
+    let pageHide = try await waitForTargetMessage(
+        backend,
+        method: "DOM.hideHighlight",
+        after: countBeforeFrameHighlight
+    )
+    #expect(pageHide.targetIdentifier == ProtocolTarget.ID.pageMain)
+    let countBeforePageHideReply = await backend.sentTargetMessages().count
+    await receiveTargetReply(
+        transport,
+        targetID: pageHide.targetIdentifier,
+        messageID: try messageID(pageHide.message),
+        result: "{}"
+    )
+    let frameHighlight = try await waitForTargetMessage(
+        backend,
+        method: "DOM.highlightNode",
+        after: countBeforePageHideReply
+    )
+    #expect(frameHighlight.targetIdentifier == ProtocolTarget.ID.frameAd)
+    #expect(try integerParameter("nodeId", in: frameHighlight.message) == 102)
+    await receiveTargetReply(
+        transport,
+        targetID: frameHighlight.targetIdentifier,
+        messageID: try messageID(frameHighlight.message),
+        result: "{}"
+    )
+    await frameHighlightTask.value
+}
+
+@Test
 func documentInvalidationHidesSelectedNodeHighlight() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
