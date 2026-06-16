@@ -255,14 +255,11 @@ final class NetworkBodyViewController: UIViewController {
         syntaxKind: NetworkBody.SyntaxKind
     ) {
         let language = syntaxKind.language
-        if syntaxModel.language != language {
-            syntaxModel.language = language
-        }
         if syntaxModel.theme != .default {
             syntaxModel.theme = .default
         }
-        if syntaxModel.text != text {
-            syntaxModel.replaceText(text)
+        if syntaxModel.text != text || syntaxModel.language != language {
+            syntaxModel.replaceContents(text: text, language: language)
         }
         showSyntaxPreview()
     }
