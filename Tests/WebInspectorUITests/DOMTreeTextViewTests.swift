@@ -92,6 +92,31 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func repeatedHoverEndCancelsPendingRestoreHighlight() async throws {
+        let session = makeDOMSession()
+        let restoreRecorder = VoidActionRecorder()
+        let view = DOMTreeTextView(
+            dom: session,
+            highlightNodeAction: { _ in },
+            restoreHighlightAction: {
+                restoreRecorder.record()
+            }
+        )
+        view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
+        view.layoutIfNeeded()
+
+        view.primaryClickRowForTesting(containing: "<input disabled>")
+        view.hoverRowForTesting(containing: "<article")
+        view.endHoverForTesting()
+        view.endHoverForTesting()
+        await restoreRecorder.next()
+        await Task.yield()
+
+        #expect(session.selectedNode?.localName == "input")
+        #expect(restoreRecorder.recordCount == 1)
+    }
+
+    @Test
     func hoverHighlightCancelsPendingRestoreHighlight() async throws {
         let session = makeDOMSession()
         let highlightRecorder = NodeActionRecorder()
