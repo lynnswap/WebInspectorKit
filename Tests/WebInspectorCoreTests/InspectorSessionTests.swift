@@ -4014,6 +4014,50 @@ func documentInvalidationHidesSelectedNodeHighlight() async throws {
 }
 
 @Test
+func selectionClearHidesInFlightSelectedNodeHighlight() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    let htmlID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(2))
+    await session.attachment.dom.selectNode(htmlID)
+
+    let countBeforeHighlight = await backend.sentTargetMessages().count
+    let highlightTask = Task {
+        await session.attachment.dom.highlightNode(for: htmlID)
+    }
+    let highlight = try await waitForTargetMessage(
+        backend,
+        method: "DOM.highlightNode",
+        after: countBeforeHighlight
+    )
+    #expect(highlight.targetIdentifier == ProtocolTarget.ID.pageMain)
+
+    let countBeforeSelectionClear = await backend.sentTargetMessages().count
+    await session.attachment.dom.selectNode(nil)
+    await receiveTargetReply(
+        transport,
+        targetID: highlight.targetIdentifier,
+        messageID: try messageID(highlight.message),
+        result: "{}"
+    )
+    await highlightTask.value
+    let hideHighlight = try await waitForTargetMessage(
+        backend,
+        method: "DOM.hideHighlight",
+        after: countBeforeSelectionClear
+    )
+    #expect(hideHighlight.targetIdentifier == ProtocolTarget.ID.pageMain)
+    await receiveTargetReply(
+        transport,
+        targetID: hideHighlight.targetIdentifier,
+        messageID: try messageID(hideHighlight.message),
+        result: "{}"
+    )
+    #expect(await session.attachment.dom.selectedNodeID == nil)
+}
+
+@Test
 func directHighlightStopsWhenCancelledDuringStaleHide() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)

@@ -29,7 +29,7 @@ extension DOMSession {
         commandChannel = nil
         recordError = nil
         elementStyles.unbindProtocolChannel()
-        highlightController.targetID = nil
+        highlightController.clearAll()
         clearElementPickerState(invalidatePendingSelection: true)
         clearDeleteUndoHistory()
         recordCommandAvailabilityMutation()
@@ -80,7 +80,20 @@ extension DOMSession {
         _ intent: DOMCommand.Intent,
         requiresActiveConnection: Bool
     ) async throws -> ProtocolCommand.Result {
-        let result = try await send(intent, requiresActiveConnection: requiresActiveConnection)
+        let highlightRequest: DOMSessionHighlightController.Request? = if case let .highlightNode(target) = intent {
+            highlightController.beginHighlight(targetID: target.commandTargetID)
+        } else {
+            nil
+        }
+        let result: ProtocolCommand.Result
+        do {
+            result = try await send(intent, requiresActiveConnection: requiresActiveConnection)
+        } catch {
+            if let highlightRequest {
+                highlightController.cancelHighlight(highlightRequest)
+            }
+            throw error
+        }
 
         switch intent {
         case .getDocument:
@@ -100,12 +113,12 @@ extension DOMSession {
             }
         case .requestChildNodes:
             break
-        case let .highlightNode(target):
-            highlightController.targetID = target.commandTargetID
-        case let .hideHighlight(targetID):
-            if highlightController.targetID == targetID {
-                highlightController.targetID = nil
+        case .highlightNode:
+            if let highlightRequest {
+                highlightController.completeHighlight(highlightRequest)
             }
+        case let .hideHighlight(targetID):
+            highlightController.clearHighlight(targetID: targetID)
         case .setInspectModeEnabled,
              .getOuterHTML,
              .removeNode,
@@ -233,15 +246,18 @@ extension DOMSession {
     ) async {
         var targetIDs: [ProtocolTarget.ID] = []
         let fallbackTargetID = includeCurrentPageFallback ? currentPageTargetID : nil
-        for targetID in [preferredHideTargetID, highlightController.targetID, fallbackTargetID].compactMap(\.self)
+        for targetID in [
+            preferredHideTargetID,
+            highlightController.targetID,
+            highlightController.pendingTargetID,
+            fallbackTargetID,
+        ].compactMap(\.self)
         where targetID != preservedTargetID && !targetIDs.contains(targetID) {
             targetIDs.append(targetID)
         }
         for targetID in targetIDs {
             guard containsTarget(targetID) else {
-                if highlightController.targetID == targetID {
-                    highlightController.targetID = nil
-                }
+                highlightController.clearHighlight(targetID: targetID)
                 continue
             }
             guard let intent = hideHighlightIntent(targetID: targetID) else {

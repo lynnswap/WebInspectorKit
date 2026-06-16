@@ -3,7 +3,58 @@ import WebInspectorTransport
 
 @MainActor
 final class DOMSessionHighlightController {
+    struct Request: Equatable {
+        var id: UInt64
+        var targetID: ProtocolTarget.ID
+    }
+
     var targetID: ProtocolTarget.ID?
+    private var nextRequestRawID: UInt64 = 0
+    private var pendingRequest: Request?
+
+    var pendingTargetID: ProtocolTarget.ID? {
+        pendingRequest?.targetID
+    }
+
+    var hasActiveOrPendingHighlight: Bool {
+        targetID != nil || pendingRequest != nil
+    }
+
+    func beginHighlight(targetID: ProtocolTarget.ID) -> Request {
+        nextRequestRawID &+= 1
+        let request = Request(id: nextRequestRawID, targetID: targetID)
+        pendingRequest = request
+        return request
+    }
+
+    func completeHighlight(_ request: Request) {
+        guard pendingRequest == request else {
+            return
+        }
+        targetID = request.targetID
+        pendingRequest = nil
+    }
+
+    func cancelHighlight(_ request: Request) {
+        guard pendingRequest == request else {
+            return
+        }
+        pendingRequest = nil
+    }
+
+    func clearHighlight(targetID: ProtocolTarget.ID) {
+        if self.targetID == targetID {
+            self.targetID = nil
+        }
+        if pendingRequest?.targetID == targetID {
+            pendingRequest = nil
+        }
+    }
+
+    func clearAll() {
+        targetID = nil
+        pendingRequest = nil
+    }
 }
 
 @MainActor
