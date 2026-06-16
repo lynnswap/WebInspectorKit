@@ -173,6 +173,7 @@ extension DOMSession {
         if !hasPendingSelectionRequest,
            let selectedNodeID,
            let intent = highlightNodeIntent(for: selectedNodeID) {
+            let selectionRevisionBeforeRestore = selectionRevision
             let selectedHighlightTargetID: ProtocolTarget.ID? = if case let .highlightNode(target) = intent {
                 target.commandTargetID
             } else {
@@ -183,6 +184,13 @@ extension DOMSession {
                 preserving: selectedHighlightTargetID,
                 includeCurrentPageFallback: false
             )
+            guard !isSelectingElement,
+                  !hasPendingSelectionRequest,
+                  self.selectedNodeID == selectedNodeID,
+                  selectionRevision == selectionRevisionBeforeRestore,
+                  let intent = highlightNodeIntent(for: selectedNodeID) else {
+                return
+            }
             do {
                 try await perform(intent)
             } catch {
