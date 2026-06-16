@@ -3,6 +3,11 @@ import WebInspectorTransport
 
 @MainActor
 final class DOMSessionHighlightController {
+    struct PossibleVisibleHighlight: Equatable {
+        var targetID: ProtocolTarget.ID
+        var generation: UInt64?
+    }
+
     private struct PossibleVisibleTarget: Equatable {
         var targetID: ProtocolTarget.ID
         var generation: UInt64
@@ -19,23 +24,28 @@ final class DOMSessionHighlightController {
         !possibleVisibleTargets.isEmpty
     }
 
-    func possibleVisibleTargets(
+    func possibleVisibleHighlights(
         preferredFirst preferredTargetID: ProtocolTarget.ID?,
         fallbackTargetID: ProtocolTarget.ID?,
         preserving preservedTargetID: ProtocolTarget.ID?
-    ) -> [ProtocolTarget.ID] {
-        var targetIDs: [ProtocolTarget.ID] = []
+    ) -> [PossibleVisibleHighlight] {
+        var highlights: [PossibleVisibleHighlight] = []
         let candidates = [preferredTargetID] + possibleVisibleTargets.map { Optional.some($0.targetID) }
         for targetID in candidates.compactMap(\.self)
-        where targetID != preservedTargetID && !targetIDs.contains(targetID) {
-            targetIDs.append(targetID)
+        where targetID != preservedTargetID && !highlights.contains(where: { $0.targetID == targetID }) {
+            highlights.append(
+                PossibleVisibleHighlight(
+                    targetID: targetID,
+                    generation: possibleVisibleGeneration(targetID: targetID)
+                )
+            )
         }
-        if targetIDs.isEmpty,
+        if highlights.isEmpty,
            let fallbackTargetID,
            fallbackTargetID != preservedTargetID {
-            targetIDs.append(fallbackTargetID)
+            highlights.append(PossibleVisibleHighlight(targetID: fallbackTargetID, generation: nil))
         }
-        return targetIDs
+        return highlights
     }
 
     func possibleVisibleGeneration(targetID: ProtocolTarget.ID) -> UInt64? {

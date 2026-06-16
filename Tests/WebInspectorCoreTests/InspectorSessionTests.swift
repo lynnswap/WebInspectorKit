@@ -4526,6 +4526,50 @@ func cancelledStaleHideStopsBeforeClearingNextTarget() async throws {
 }
 
 @Test
+func staleHideSnapshotDoesNotHideNewerLaterTargetHighlight() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    await receiveAndApplyRootMessage(
+        transport,
+        message: #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","isProvisional":false}}}"#,
+        in: session
+    )
+
+    await session.attachment.dom.highlightController.markHighlightMayBeVisible(targetID: .frameAd)
+    await session.attachment.dom.highlightController.markHighlightMayBeVisible(targetID: .pageMain)
+    let stalePageGeneration = try #require(await session.attachment.dom.highlightController.possibleVisibleGeneration(targetID: .pageMain))
+
+    let countBeforeHideAll = await backend.sentTargetMessages().count
+    let hideTask = Task {
+        await session.attachment.dom.hideNodeHighlight()
+    }
+    let frameHide = try await waitForTargetMessage(
+        backend,
+        method: "DOM.hideHighlight",
+        after: countBeforeHideAll
+    )
+    #expect(frameHide.targetIdentifier == ProtocolTarget.ID.frameAd)
+
+    await session.attachment.dom.highlightController.markHighlightMayBeVisible(targetID: .pageMain)
+    let newerPageGeneration = try #require(await session.attachment.dom.highlightController.possibleVisibleGeneration(targetID: .pageMain))
+    #expect(newerPageGeneration != stalePageGeneration)
+
+    let countBeforeFrameHideReply = await backend.sentTargetMessages().count
+    await receiveTargetReply(
+        transport,
+        targetID: frameHide.targetIdentifier,
+        messageID: try messageID(frameHide.message),
+        result: "{}"
+    )
+    await hideTask.value
+
+    #expect(await backend.sentTargetMessages().count == countBeforeFrameHideReply)
+    #expect(await session.attachment.dom.highlightController.possibleVisibleGeneration(targetID: .pageMain) == newerPageGeneration)
+}
+
+@Test
 func directHighlightStopsWhenPickerStartsDuringStaleHide() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)

@@ -302,7 +302,7 @@ extension DOMSession {
         includeCurrentPageFallback: Bool
     ) async {
         let fallbackTargetID = includeCurrentPageFallback ? currentPageTargetID : nil
-        for targetID in highlightController.possibleVisibleTargets(
+        for highlight in highlightController.possibleVisibleHighlights(
             preferredFirst: preferredHideTargetID,
             fallbackTargetID: fallbackTargetID,
             preserving: preservedTargetID
@@ -310,8 +310,13 @@ extension DOMSession {
             guard !Task.isCancelled else {
                 return
             }
+            let targetID = highlight.targetID
+            if let generation = highlight.generation,
+               highlightController.possibleVisibleGeneration(targetID: targetID) != generation {
+                continue
+            }
             guard containsTarget(targetID) else {
-                highlightController.clearHighlight(targetID: targetID)
+                highlightController.clearHighlight(targetID: targetID, matchingGeneration: highlight.generation)
                 continue
             }
             guard let intent = hideHighlightIntent(targetID: targetID) else {
