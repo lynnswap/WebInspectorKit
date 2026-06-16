@@ -80,17 +80,15 @@ extension DOMSession {
         _ intent: DOMCommand.Intent,
         requiresActiveConnection: Bool
     ) async throws -> ProtocolCommand.Result {
-        let highlightRequest: DOMSessionHighlightController.Request? = if case let .highlightNode(target) = intent {
-            highlightController.beginHighlight(targetID: target.commandTargetID)
-        } else {
-            nil
+        if case let .highlightNode(target) = intent {
+            highlightController.markHighlightMayBeVisible(targetID: target.commandTargetID)
         }
         let result: ProtocolCommand.Result
         do {
             result = try await send(intent, requiresActiveConnection: requiresActiveConnection)
         } catch {
-            if let highlightRequest {
-                highlightController.cancelHighlight(highlightRequest)
+            if let missingTargetID = missingTargetID(from: error) {
+                clearHighlightOwnershipIfMissingTarget(missingTargetID, for: intent)
             }
             throw error
         }
@@ -114,9 +112,7 @@ extension DOMSession {
         case .requestChildNodes:
             break
         case .highlightNode:
-            if let highlightRequest {
-                highlightController.completeHighlight(highlightRequest)
-            }
+            break
         case let .hideHighlight(targetID):
             highlightController.clearHighlight(targetID: targetID)
         case .setInspectModeEnabled,
@@ -127,6 +123,28 @@ extension DOMSession {
             break
         }
         return result
+    }
+
+    private func missingTargetID(from error: any Error) -> ProtocolTarget.ID? {
+        guard let transportError = error as? TransportSession.Error,
+              case let .missingTarget(targetID) = transportError else {
+            return nil
+        }
+        return targetID
+    }
+
+    private func clearHighlightOwnershipIfMissingTarget(
+        _ missingTargetID: ProtocolTarget.ID,
+        for intent: DOMCommand.Intent
+    ) {
+        switch intent {
+        case let .highlightNode(target) where target.commandTargetID == missingTargetID:
+            highlightController.clearHighlight(targetID: missingTargetID)
+        case let .hideHighlight(targetID) where targetID == missingTargetID:
+            highlightController.clearHighlight(targetID: missingTargetID)
+        default:
+            break
+        }
     }
 
     @discardableResult
@@ -183,14 +201,11 @@ extension DOMSession {
     }
 
     package func hideNodeHighlight() async {
-        guard let intent = hideHighlightIntent(targetID: highlightController.targetID) else {
-            return
-        }
-        do {
-            try await perform(intent)
-        } catch {
-            recordError?(InspectorSession.Error(String(describing: error)))
-        }
+        await hideStaleHighlights(
+            preferredHideTargetID: nil,
+            preserving: nil,
+            includeCurrentPageFallback: true
+        )
     }
 
     package func restoreSelectedNodeHighlightOrHide(preferredHideTargetID: ProtocolTarget.ID? = nil) async {
@@ -244,18 +259,12 @@ extension DOMSession {
         preserving preservedTargetID: ProtocolTarget.ID?,
         includeCurrentPageFallback: Bool
     ) async {
-        var targetIDs: [ProtocolTarget.ID] = []
         let fallbackTargetID = includeCurrentPageFallback ? currentPageTargetID : nil
-        for targetID in [
-            preferredHideTargetID,
-            highlightController.targetID,
-            highlightController.pendingTargetID,
-            fallbackTargetID,
-        ].compactMap(\.self)
-        where targetID != preservedTargetID && !targetIDs.contains(targetID) {
-            targetIDs.append(targetID)
-        }
-        for targetID in targetIDs {
+        for targetID in highlightController.possibleVisibleTargets(
+            preferredFirst: preferredHideTargetID,
+            fallbackTargetID: fallbackTargetID,
+            preserving: preservedTargetID
+        ) {
             guard containsTarget(targetID) else {
                 highlightController.clearHighlight(targetID: targetID)
                 continue

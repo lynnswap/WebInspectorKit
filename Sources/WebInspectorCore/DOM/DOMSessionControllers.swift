@@ -3,57 +3,46 @@ import WebInspectorTransport
 
 @MainActor
 final class DOMSessionHighlightController {
-    struct Request: Equatable {
-        var id: UInt64
-        var targetID: ProtocolTarget.ID
+    // WebKit does not expose the current overlay state, and a task can be
+    // cancelled after a highlight command has reached the backend. Track
+    // targets that may still need an explicit hide instead of tying ownership
+    // to command replies.
+    private var possibleVisibleTargetIDs: [ProtocolTarget.ID] = []
+
+    var hasPossibleVisibleHighlight: Bool {
+        !possibleVisibleTargetIDs.isEmpty
     }
 
-    var targetID: ProtocolTarget.ID?
-    private var nextRequestRawID: UInt64 = 0
-    private var pendingRequest: Request?
-
-    var pendingTargetID: ProtocolTarget.ID? {
-        pendingRequest?.targetID
-    }
-
-    var hasActiveOrPendingHighlight: Bool {
-        targetID != nil || pendingRequest != nil
-    }
-
-    func beginHighlight(targetID: ProtocolTarget.ID) -> Request {
-        nextRequestRawID &+= 1
-        let request = Request(id: nextRequestRawID, targetID: targetID)
-        pendingRequest = request
-        return request
-    }
-
-    func completeHighlight(_ request: Request) {
-        guard pendingRequest == request else {
-            return
+    func possibleVisibleTargets(
+        preferredFirst preferredTargetID: ProtocolTarget.ID?,
+        fallbackTargetID: ProtocolTarget.ID?,
+        preserving preservedTargetID: ProtocolTarget.ID?
+    ) -> [ProtocolTarget.ID] {
+        var targetIDs: [ProtocolTarget.ID] = []
+        let candidates = [preferredTargetID] + possibleVisibleTargetIDs.map(Optional.some)
+        for targetID in candidates.compactMap(\.self)
+        where targetID != preservedTargetID && !targetIDs.contains(targetID) {
+            targetIDs.append(targetID)
         }
-        targetID = request.targetID
-        pendingRequest = nil
+        if targetIDs.isEmpty,
+           let fallbackTargetID,
+           fallbackTargetID != preservedTargetID {
+            targetIDs.append(fallbackTargetID)
+        }
+        return targetIDs
     }
 
-    func cancelHighlight(_ request: Request) {
-        guard pendingRequest == request else {
-            return
-        }
-        pendingRequest = nil
+    func markHighlightMayBeVisible(targetID: ProtocolTarget.ID) {
+        clearHighlight(targetID: targetID)
+        possibleVisibleTargetIDs.append(targetID)
     }
 
     func clearHighlight(targetID: ProtocolTarget.ID) {
-        if self.targetID == targetID {
-            self.targetID = nil
-        }
-        if pendingRequest?.targetID == targetID {
-            pendingRequest = nil
-        }
+        possibleVisibleTargetIDs.removeAll { $0 == targetID }
     }
 
     func clearAll() {
-        targetID = nil
-        pendingRequest = nil
+        possibleVisibleTargetIDs.removeAll()
     }
 }
 

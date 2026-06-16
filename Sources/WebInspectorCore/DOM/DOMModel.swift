@@ -1522,7 +1522,7 @@ package final class DOMSession {
     private func scheduleHighlightClearAfterSelectionCleared(previousSelectedNodeID: DOMNode.ID?) {
         guard let previousSelectedNodeID,
               selection.selectedNodeID == nil,
-              highlightController.hasActiveOrPendingHighlight else {
+              highlightController.hasPossibleVisibleHighlight else {
             return
         }
         scheduleSelectedNodeHighlightRestoreOrHide(preferredHideTargetID: previousSelectedNodeID.documentID.targetID)
