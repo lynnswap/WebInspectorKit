@@ -321,9 +321,13 @@ package final class DOMElementViewController: UICollectionViewController {
 #endif
         guard currentSnapshot.sectionIdentifiers != snapshot.sectionIdentifiers
             || currentSnapshot.itemIdentifiers != snapshot.itemIdentifiers else {
+            var reconfiguredSnapshot = snapshot
+            reconfiguredSnapshot.reconfigureItems(snapshot.itemIdentifiers)
+            dataSource.apply(reconfiguredSnapshot, animatingDifferences: false) { [weak self] in
 #if DEBUG
-            finishStyleRenderForTesting()
+                self?.finishStyleRenderForTesting()
 #endif
+            }
             return
         }
 #if DEBUG

@@ -1520,15 +1520,25 @@ struct DOMContainerTests {
 
     private func waitUntilRendered(
         in viewController: DOMElementViewController,
+        timeout: Duration = .seconds(1),
         condition: @escaping @MainActor @Sendable () -> Bool
     ) async -> Bool {
-        let generation = viewController.styleRenderGenerationForTesting
-        if sampleRenderedCondition(in: viewController, condition: condition) {
-            return true
-        }
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        var generation = viewController.styleRenderGenerationForTesting
+        while clock.now < deadline {
+            if sampleRenderedCondition(in: viewController, condition: condition) {
+                return true
+            }
 
-        guard await viewController.waitForStyleRenderForTesting(after: generation) else {
-            return sampleRenderedCondition(in: viewController, condition: condition)
+            let remainingTimeout = clock.now.duration(to: deadline)
+            guard await viewController.waitForStyleRenderForTesting(
+                after: generation,
+                timeout: remainingTimeout
+            ) else {
+                return sampleRenderedCondition(in: viewController, condition: condition)
+            }
+            generation = viewController.styleRenderGenerationForTesting
         }
         return sampleRenderedCondition(in: viewController, condition: condition)
     }
