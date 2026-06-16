@@ -9,7 +9,7 @@ import UIKit
 final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegate {
     typealias RequestChildrenAction = @MainActor (DOMNode.ID) async -> Bool
     typealias HighlightNodeAction = @MainActor (DOMNode.ID) async -> Void
-    typealias HideHighlightAction = @MainActor () async -> Void
+    typealias RestoreHighlightAction = @MainActor () async -> Void
     typealias CopyNodeTextAction = DOMTreeMenuCopyNodeTextAction
     typealias DeleteNodesAction = DOMTreeMenuDeleteNodesAction
 
@@ -93,7 +93,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     private var markedTextStyleStorage: [NSAttributedString.Key: Any]?
     private let requestChildrenAction: RequestChildrenAction?
     private let highlightNodeAction: HighlightNodeAction?
-    private let hideHighlightAction: HideHighlightAction?
+    private let restoreHighlightAction: RestoreHighlightAction?
     weak var inputDelegate: UITextInputDelegate?
 #if DEBUG
     private let performanceCounters = DOMTreeTextView.PerformanceCounters()
@@ -114,18 +114,23 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         Self.paragraphLineHeight
     }
 
+    private enum PageHighlightReason {
+        case selection
+        case hover
+    }
+
     init(
         dom: DOMSession,
         requestChildrenAction: RequestChildrenAction? = nil,
         highlightNodeAction: HighlightNodeAction? = nil,
-        hideHighlightAction: HideHighlightAction? = nil,
+        restoreHighlightAction: RestoreHighlightAction? = nil,
         copyNodeTextAction: CopyNodeTextAction? = nil,
         deleteNodesAction: DeleteNodesAction? = nil
     ) {
         self.dom = dom
         self.requestChildrenAction = requestChildrenAction
         self.highlightNodeAction = highlightNodeAction
-        self.hideHighlightAction = hideHighlightAction
+        self.restoreHighlightAction = restoreHighlightAction
         self.menuModel = DOMTreeMenuModel(
             dom: dom,
             copyNodeTextAction: copyNodeTextAction,
@@ -300,20 +305,12 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         switch recognizer.state {
         case .began, .changed:
             guard let row = row(at: recognizer.location(in: textContentView)) else {
-                clearHoveredRow()
-                Task { @MainActor [hideHighlightAction] in await hideHighlightAction?() }
+                clearHoveredRowAndRestoreSelectionHighlight()
                 return
             }
-            if hoveredNodeID != row.node.id {
-                hoveredNodeID = row.node.id
-                updateContentDecorations()
-            }
-            Task { @MainActor [highlightNodeAction, nodeID = row.node.id] in
-                await highlightNodeAction?(nodeID)
-            }
+            hover(row: row)
         case .ended, .cancelled, .failed:
-            clearHoveredRow()
-            Task { @MainActor [hideHighlightAction] in await hideHighlightAction?() }
+            clearHoveredRowAndRestoreSelectionHighlight()
         default:
             break
         }
@@ -789,6 +786,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     private func select(_ node: DOMNode) {
         multiSelection.notePrimarySelection(node.id)
         dom.selectNode(node.id)
+        highlightPageNode(node.id, reason: .selection)
     }
 
     private func toggleMultiSelection(row: DOMTreeTextView.Line) {
@@ -896,6 +894,46 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         }
         hoveredNodeID = nil
         updateContentDecorations()
+    }
+
+    private func hover(row: DOMTreeTextView.Line) {
+        if hoveredNodeID != row.node.id {
+            hoveredNodeID = row.node.id
+            updateContentDecorations()
+        }
+        highlightPageNode(row.node.id, reason: .hover)
+    }
+
+    private func highlightPageNode(_ nodeID: DOMNode.ID, reason: PageHighlightReason) {
+        Task { @MainActor [weak self, highlightNodeAction] in
+            await Task.yield()
+            guard let self else {
+                return
+            }
+            switch reason {
+            case .selection:
+                guard self.dom.selectedNodeID == nodeID else {
+                    return
+                }
+            case .hover:
+                guard self.hoveredNodeID == nodeID else {
+                    return
+                }
+            }
+            await highlightNodeAction?(nodeID)
+        }
+    }
+
+    private func clearHoveredRowAndRestoreSelectionHighlight() {
+        clearHoveredRow()
+        Task { @MainActor [weak self, restoreHighlightAction] in
+            await Task.yield()
+            guard let self,
+                  self.hoveredNodeID == nil else {
+                return
+            }
+            await restoreHighlightAction?()
+        }
     }
 
     private func presentDOMMenu(for nodes: [DOMNode], at location: CGPoint) {
@@ -2113,6 +2151,17 @@ extension DOMTreeTextView {
             clearMultiSelection(keepingLast: row.node.id)
             select(row.node)
         }
+    }
+
+    func hoverRowForTesting(containing text: String) {
+        guard let row = rows.first(where: { $0.text.contains(text) }) else {
+            return
+        }
+        hover(row: row)
+    }
+
+    func endHoverForTesting() {
+        clearHoveredRowAndRestoreSelectionHighlight()
     }
 
     func decorateFindTextForTesting(query: String) {

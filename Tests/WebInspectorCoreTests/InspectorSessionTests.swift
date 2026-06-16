@@ -2751,11 +2751,12 @@ func lazyIframeOwnerFrameIdIsNotTreatedAsChildFrameIdentity() async throws {
         method: "DOM.setInspectModeEnabled",
         after: sentCountBeforeInspect
     )
-    await receiveTargetReply(
-        transport,
-        targetID: disable.targetIdentifier,
-        messageID: try messageID(disable.message),
-        result: "{}"
+    try await replyToPickerDisableAndRestoredHighlight(
+        disable,
+        transport: transport,
+        backend: backend,
+        expectedTargetID: .frameAd,
+        expectedNodeID: 104
     )
     await session.attachment.dom.waitUntilElementPickerIdle()
     let selectedNode = try #require(await session.attachment.dom.selectedNode)
@@ -3131,12 +3132,26 @@ func requestNodeReplyBeforePathPushKeepsSelectionPendingUntilParentArrives() asy
     })
     #expect(await session.lastError == nil)
 
-    await receiveAndApplyTargetDispatch(
+    let sentCountBeforePathPush = await backend.sentTargetMessages().count
+    let setChildNodesSequence = await receiveTargetDispatch(
         transport,
         targetID: .pageMain,
-        message: #"{"method":"DOM.setChildNodes","params":{"parentId":2,"nodes":[{"nodeId":999,"nodeType":1,"nodeName":"DIV","localName":"div","attributes":["id","late-path"]}]}}"#,
-        in: session
+        message: #"{"method":"DOM.setChildNodes","params":{"parentId":2,"nodes":[{"nodeId":999,"nodeType":1,"nodeName":"DIV","localName":"div","attributes":["id","late-path"]}]}}"#
     )
+    let restoredHighlight = try await waitForTargetMessage(
+        backend,
+        method: "DOM.highlightNode",
+        after: sentCountBeforePathPush
+    )
+    #expect(restoredHighlight.targetIdentifier == ProtocolTarget.ID.pageMain)
+    #expect(try integerParameter("nodeId", in: restoredHighlight.message) == 999)
+    await receiveTargetReply(
+        transport,
+        targetID: restoredHighlight.targetIdentifier,
+        messageID: try messageID(restoredHighlight.message),
+        result: "{}"
+    )
+    await expectProtocolEventApplied(setChildNodesSequence, in: session)
 
     let selectedNode = try #require(await session.attachment.dom.selectedNode)
     #expect(await selectedNode.nodeName == "DIV")
@@ -3178,15 +3193,74 @@ func elementPickerBeginAndCancelToggleInspectMode() async throws {
         after: sentCountBeforeCancel
     )
     #expect(try boolParameter("enabled", in: disableMessage.message) == false)
-    await receiveTargetReply(
-        transport,
-        targetID: disableMessage.targetIdentifier,
-        messageID: try messageID(disableMessage.message),
-        result: "{}"
+    try await replyToPickerDisableAndHiddenHighlight(
+        disableMessage,
+        transport: transport,
+        backend: backend,
+        expectedTargetID: .pageMain
     )
     await cancelTask.value
 
     #expect(await session.attachment.dom.isSelectingElement == false)
+}
+
+@Test
+func elementPickerCancelRestoresExistingSelectedNodeHighlight() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    let htmlID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(2))
+    await session.attachment.dom.selectNode(htmlID)
+    try await beginPicker(session: session, transport: transport, backend: backend)
+
+    let sentCountBeforeCancel = await backend.sentTargetMessages().count
+    let cancelTask = Task {
+        await session.attachment.dom.cancelElementPicker()
+    }
+    let disableMessage = try await waitForTargetMessage(
+        backend,
+        method: "DOM.setInspectModeEnabled",
+        after: sentCountBeforeCancel
+    )
+    #expect(try boolParameter("enabled", in: disableMessage.message) == false)
+    try await replyToPickerDisableAndRestoredHighlight(
+        disableMessage,
+        transport: transport,
+        backend: backend,
+        expectedTargetID: .pageMain,
+        expectedNodeID: 2
+    )
+    await cancelTask.value
+
+    #expect(await session.attachment.dom.selectedNodeID == htmlID)
+    #expect(await session.attachment.dom.isSelectingElement == false)
+}
+
+@Test
+func restoreSelectedNodeHighlightHidesWhenSelectionIsMissing() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    let sentCount = await backend.sentTargetMessages().count
+    let restoreTask = Task {
+        await session.attachment.dom.restoreSelectedNodeHighlightOrHide()
+    }
+    let hideHighlight = try await waitForTargetMessage(
+        backend,
+        method: "DOM.hideHighlight",
+        after: sentCount
+    )
+    #expect(hideHighlight.targetIdentifier == ProtocolTarget.ID.pageMain)
+    await receiveTargetReply(
+        transport,
+        targetID: hideHighlight.targetIdentifier,
+        messageID: try messageID(hideHighlight.message),
+        result: "{}"
+    )
+    await restoreTask.value
 }
 
 @Test
@@ -3364,11 +3438,12 @@ func elementPickerIgnoresInspectEventBeforeInspectModeReply() async throws {
         after: sentCountBeforeRequestReply
     )
     #expect(try boolParameter("enabled", in: disableMessage.message) == false)
-    await receiveTargetReply(
-        transport,
-        targetID: disableMessage.targetIdentifier,
-        messageID: try messageID(disableMessage.message),
-        result: "{}"
+    try await replyToPickerDisableAndRestoredHighlight(
+        disableMessage,
+        transport: transport,
+        backend: backend,
+        expectedTargetID: .pageMain,
+        expectedNodeID: 3
     )
 
     await session.attachment.dom.waitUntilElementPickerIdle()
@@ -3406,11 +3481,11 @@ func restartedElementPickerIgnoresStaleInspectEventBeforeInspectModeReply() asyn
         after: sentCountBeforeCancel
     )
     #expect(try boolParameter("enabled", in: cancelDisable.message) == false)
-    await receiveTargetReply(
-        transport,
-        targetID: cancelDisable.targetIdentifier,
-        messageID: try messageID(cancelDisable.message),
-        result: "{}"
+    try await replyToPickerDisableAndHiddenHighlight(
+        cancelDisable,
+        transport: transport,
+        backend: backend,
+        expectedTargetID: .pageMain
     )
     await cancelTask.value
 
@@ -3477,11 +3552,12 @@ func restartedElementPickerIgnoresStaleInspectEventBeforeInspectModeReply() asyn
         after: sentCountBeforeRequestReply
     )
     #expect(try boolParameter("enabled", in: disable.message) == false)
-    await receiveTargetReply(
-        transport,
-        targetID: disable.targetIdentifier,
-        messageID: try messageID(disable.message),
-        result: "{}"
+    try await replyToPickerDisableAndRestoredHighlight(
+        disable,
+        transport: transport,
+        backend: backend,
+        expectedTargetID: .pageMain,
+        expectedNodeID: 3
     )
 
     await session.attachment.dom.waitUntilElementPickerIdle()
@@ -3517,11 +3593,11 @@ func staleInspectEventCompletionDoesNotCancelRestartedPicker() async throws {
         after: sentCountBeforeCancel
     )
     #expect(try boolParameter("enabled", in: cancelDisable.message) == false)
-    await receiveTargetReply(
-        transport,
-        targetID: cancelDisable.targetIdentifier,
-        messageID: try messageID(cancelDisable.message),
-        result: "{}"
+    try await replyToPickerDisableAndHiddenHighlight(
+        cancelDisable,
+        transport: transport,
+        backend: backend,
+        expectedTargetID: .pageMain
     )
     await cancelTask.value
 
@@ -3597,17 +3673,84 @@ func inspectorInspectSelectsRequestedNodeAndDisablesPicker() async throws {
         method: "DOM.setInspectModeEnabled",
         after: sentCountBeforeRequestReply
     )
-    await receiveTargetReply(
-        transport,
-        targetID: disable.targetIdentifier,
-        messageID: try messageID(disable.message),
-        result: "{}"
+    try await replyToPickerDisableAndRestoredHighlight(
+        disable,
+        transport: transport,
+        backend: backend,
+        expectedTargetID: .pageMain,
+        expectedNodeID: 3
     )
 
     await session.attachment.dom.waitUntilElementPickerIdle()
     let selectedNode = try #require(await session.attachment.dom.selectedNode)
     #expect(await selectedNode.nodeName == "DIV")
     #expect(await session.attachment.dom.isSelectingElement == false)
+}
+
+@Test
+func pendingPickerSelectionDoesNotRestorePreviousNodeHighlight() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    let previousNodeID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(2))
+    await session.attachment.dom.selectNode(previousNodeID)
+    try await beginPicker(session: session, transport: transport, backend: backend)
+    let sentCountBeforeInspect = await backend.sentTargetMessages().count
+
+    await transport.receiveRootMessage(#"{"method":"Inspector.inspect","params":{"object":{"objectId":"pending-node-object"},"hints":{}}}"#)
+    let requestNode = try await waitForTargetMessage(
+        backend,
+        method: "DOM.requestNode",
+        after: sentCountBeforeInspect
+    )
+    let sentCountBeforeRequestReply = await backend.sentTargetMessages().count
+    await receiveTargetReply(
+        transport,
+        targetID: requestNode.targetIdentifier,
+        messageID: try messageID(requestNode.message),
+        result: #"{"nodeId":999}"#
+    )
+    let disable = try await waitForTargetMessage(
+        backend,
+        method: "DOM.setInspectModeEnabled",
+        after: sentCountBeforeRequestReply
+    )
+    try await replyToPickerDisableAndHiddenHighlight(
+        disable,
+        transport: transport,
+        backend: backend,
+        expectedTargetID: .pageMain
+    )
+    await session.attachment.dom.waitUntilElementPickerIdle()
+
+    let pendingSnapshot = await session.attachment.dom.snapshot()
+    #expect(pendingSnapshot.selection.selectedNodeID == previousNodeID)
+    #expect(pendingSnapshot.selection.pendingRequest != nil)
+
+    let sentCountBeforePathPush = await backend.sentTargetMessages().count
+    let setChildNodesSequence = await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"DOM.setChildNodes","params":{"parentId":2,"nodes":[{"nodeId":999,"nodeType":1,"nodeName":"DIV","localName":"div","attributes":["id","late-picked"]}]}}"#
+    )
+    let restoredHighlight = try await waitForTargetMessage(
+        backend,
+        method: "DOM.highlightNode",
+        after: sentCountBeforePathPush
+    )
+    #expect(restoredHighlight.targetIdentifier == ProtocolTarget.ID.pageMain)
+    #expect(try integerParameter("nodeId", in: restoredHighlight.message) == 999)
+    await receiveTargetReply(
+        transport,
+        targetID: restoredHighlight.targetIdentifier,
+        messageID: try messageID(restoredHighlight.message),
+        result: "{}"
+    )
+    await expectProtocolEventApplied(setChildNodesSequence, in: session)
+
+    let selectedNode = try #require(await session.attachment.dom.selectedNode)
+    #expect(await selectedNode.attributes == [WebInspectorCore.DOMNode.Attribute(name: "id", value: "late-picked")])
 }
 
 @Test
@@ -3644,11 +3787,12 @@ func inspectorInspectWaitsForPathPushEventsBeforeSelectingNode() async throws {
         method: "DOM.setInspectModeEnabled",
         after: sentCountBeforeRequestReply
     )
-    await receiveTargetReply(
-        transport,
-        targetID: disable.targetIdentifier,
-        messageID: try messageID(disable.message),
-        result: "{}"
+    try await replyToPickerDisableAndRestoredHighlight(
+        disable,
+        transport: transport,
+        backend: backend,
+        expectedTargetID: .pageMain,
+        expectedNodeID: 3
     )
 
     await session.attachment.dom.waitUntilElementPickerIdle()
@@ -3719,11 +3863,12 @@ func inspectorInspectRecordedExecutionContextOverridesEventTargetHint() async th
         method: "DOM.setInspectModeEnabled",
         after: sentCountBeforeRequestReply
     )
-    await receiveTargetReply(
-        transport,
-        targetID: disable.targetIdentifier,
-        messageID: try messageID(disable.message),
-        result: "{}"
+    try await replyToPickerDisableAndRestoredHighlight(
+        disable,
+        transport: transport,
+        backend: backend,
+        expectedTargetID: .frameAd,
+        expectedNodeID: 3
     )
 
     await session.attachment.dom.waitUntilElementPickerIdle()
@@ -3767,11 +3912,12 @@ func inspectorInspectOpaqueObjectIDFallsBackToPickerTarget() async throws {
         method: "DOM.setInspectModeEnabled",
         after: sentCountBeforeRequestReply
     )
-    await receiveTargetReply(
-        transport,
-        targetID: disable.targetIdentifier,
-        messageID: try messageID(disable.message),
-        result: "{}"
+    try await replyToPickerDisableAndRestoredHighlight(
+        disable,
+        transport: transport,
+        backend: backend,
+        expectedTargetID: .pageMain,
+        expectedNodeID: 3
     )
 
     await session.attachment.dom.waitUntilElementPickerIdle()
@@ -3834,11 +3980,12 @@ func targetScopedInspectorInspectUsesEventTargetAsFallback() async throws {
         method: "DOM.setInspectModeEnabled",
         after: sentCountBeforeRequestReply
     )
-    await receiveTargetReply(
-        transport,
-        targetID: disable.targetIdentifier,
-        messageID: try messageID(disable.message),
-        result: "{}"
+    try await replyToPickerDisableAndRestoredHighlight(
+        disable,
+        transport: transport,
+        backend: backend,
+        expectedTargetID: .frameAd,
+        expectedNodeID: 3
     )
 
     await session.attachment.dom.waitUntilElementPickerIdle()
@@ -3902,11 +4049,12 @@ func targetScopedInspectorInspectFallsBackToEventTargetWhenContextIsUnrecorded()
         method: "DOM.setInspectModeEnabled",
         after: sentCountBeforeRequestReply
     )
-    await receiveTargetReply(
-        transport,
-        targetID: disable.targetIdentifier,
-        messageID: try messageID(disable.message),
-        result: "{}"
+    try await replyToPickerDisableAndRestoredHighlight(
+        disable,
+        transport: transport,
+        backend: backend,
+        expectedTargetID: .frameAd,
+        expectedNodeID: 3
     )
 
     await session.attachment.dom.waitUntilElementPickerIdle()
@@ -3934,11 +4082,12 @@ func domInspectSelectsKnownProtocolNodeWithoutRequestNode() async throws {
         method: "DOM.setInspectModeEnabled",
         after: sentCountBeforeInspect
     )
-    await receiveTargetReply(
-        transport,
-        targetID: disable.targetIdentifier,
-        messageID: try messageID(disable.message),
-        result: "{}"
+    try await replyToPickerDisableAndRestoredHighlight(
+        disable,
+        transport: transport,
+        backend: backend,
+        expectedTargetID: .pageMain,
+        expectedNodeID: 2
     )
 
     let selectedNode = try #require(await session.attachment.dom.selectedNode)
@@ -3978,11 +4127,12 @@ func domInspectReloadsDocumentBeforeFailingUnknownProtocolNode() async throws {
         method: "DOM.setInspectModeEnabled",
         after: sentCountBeforeInspect
     )
-    await receiveTargetReply(
-        transport,
-        targetID: disable.targetIdentifier,
-        messageID: try messageID(disable.message),
-        result: "{}"
+    try await replyToPickerDisableAndRestoredHighlight(
+        disable,
+        transport: transport,
+        backend: backend,
+        expectedTargetID: .pageMain,
+        expectedNodeID: 4
     )
 
     await session.attachment.dom.waitUntilElementPickerIdle()
@@ -4461,11 +4611,11 @@ func reloadDOMDocumentCancelsActiveElementPickerBeforeReplacingDocument() async 
         after: countBeforeReload
     )
     #expect(try boolParameter("enabled", in: disablePicker.message) == false)
-    await receiveTargetReply(
-        transport,
-        targetID: disablePicker.targetIdentifier,
-        messageID: try messageID(disablePicker.message),
-        result: "{}"
+    try await replyToPickerDisableAndHiddenHighlight(
+        disablePicker,
+        transport: transport,
+        backend: backend,
+        expectedTargetID: .pageMain
     )
     let getDocument = try await waitForTargetMessage(backend, method: "DOM.getDocument", after: countBeforeReload)
     await receiveTargetReply(
@@ -5052,6 +5202,115 @@ private func beginPicker(
     try await beginTask.value
 }
 
+@discardableResult
+private func replyToPickerDisableAndRestoredHighlight(
+    _ disableMessage: SentTargetMessage,
+    transport: TransportSession,
+    backend: FakeTransportBackend,
+    expectedTargetID: ProtocolTarget.ID? = nil,
+    expectedNodeID: Int? = nil
+) async throws -> SentTargetMessage {
+    let sentCountBeforeDisableReply = await backend.sentTargetMessages().count
+    await receiveTargetReply(
+        transport,
+        targetID: disableMessage.targetIdentifier,
+        messageID: try messageID(disableMessage.message),
+        result: "{}"
+    )
+    let firstMessage = try await waitForNextTargetMessage(
+        backend,
+        after: sentCountBeforeDisableReply
+    )
+    switch try messageMethod(firstMessage.message) {
+    case "DOM.highlightNode":
+        let highlight = firstMessage
+        if let expectedTargetID {
+            #expect(highlight.targetIdentifier == expectedTargetID)
+        }
+        if let expectedNodeID {
+            #expect(try integerParameter("nodeId", in: highlight.message) == expectedNodeID)
+        }
+        await receiveTargetReply(
+            transport,
+            targetID: highlight.targetIdentifier,
+            messageID: try messageID(highlight.message),
+            result: "{}"
+        )
+        return highlight
+    case "DOM.hideHighlight":
+        let sentCountBeforeHideReply = await backend.sentTargetMessages().count
+        await receiveTargetReply(
+            transport,
+            targetID: firstMessage.targetIdentifier,
+            messageID: try messageID(firstMessage.message),
+            result: "{}"
+        )
+        let highlight = try await waitForTargetMessage(
+            backend,
+            method: "DOM.highlightNode",
+            after: sentCountBeforeHideReply
+        )
+        if let expectedTargetID {
+            #expect(highlight.targetIdentifier == expectedTargetID)
+        }
+        if let expectedNodeID {
+            #expect(try integerParameter("nodeId", in: highlight.message) == expectedNodeID)
+        }
+        await receiveTargetReply(
+            transport,
+            targetID: highlight.targetIdentifier,
+            messageID: try messageID(highlight.message),
+            result: "{}"
+        )
+        return highlight
+    default:
+        throw InspectorSession.Error("Expected DOM.highlightNode or DOM.hideHighlight after disabling inspect mode.")
+    }
+}
+
+private func waitForNextTargetMessage(
+    _ backend: FakeTransportBackend,
+    after count: Int = 0
+) async throws -> SentTargetMessage {
+    try await waitForBackendTargetMessage(
+        backend,
+        method: nil,
+        ordinal: 0,
+        after: count
+    )
+}
+
+@discardableResult
+private func replyToPickerDisableAndHiddenHighlight(
+    _ disableMessage: SentTargetMessage,
+    transport: TransportSession,
+    backend: FakeTransportBackend,
+    expectedTargetID: ProtocolTarget.ID? = nil
+) async throws -> SentTargetMessage {
+    let sentCountBeforeDisableReply = await backend.sentTargetMessages().count
+    await receiveTargetReply(
+        transport,
+        targetID: disableMessage.targetIdentifier,
+        messageID: try messageID(disableMessage.message),
+        result: "{}"
+    )
+    let hideHighlight = try await waitForTargetMessage(
+        backend,
+        method: "DOM.hideHighlight",
+        after: sentCountBeforeDisableReply
+    )
+    if let expectedTargetID {
+        #expect(hideHighlight.targetIdentifier == expectedTargetID)
+    }
+    await receiveTargetReply(
+        transport,
+        targetID: hideHighlight.targetIdentifier,
+        messageID: try messageID(hideHighlight.message),
+        result: "{}"
+    )
+    return hideHighlight
+}
+
 private func hydratePageHTMLChildren(
     session: InspectorSession,
     transport: TransportSession,
@@ -5133,7 +5392,7 @@ private func waitForTargetMessage(
 
 private func waitForBackendTargetMessage(
     _ backend: FakeTransportBackend,
-    method: String,
+    method: String?,
     ordinal: Int,
     after count: Int,
     timeout: Duration = .seconds(5)
@@ -5144,15 +5403,19 @@ private func waitForBackendTargetMessage(
         }
 
         group.addTask {
-            try await backend.waitForTargetMessage(method: method, ordinal: ordinal, after: count)
+            if let method {
+                try await backend.waitForTargetMessage(method: method, ordinal: ordinal, after: count)
+            } else {
+                try await backend.waitForTargetMessage(ordinal: ordinal, after: count)
+            }
         }
         group.addTask {
             try await Task.sleep(for: timeout)
-            throw TransportSession.Error.replyTimeout(method: method, targetID: nil)
+            throw TransportSession.Error.replyTimeout(method: method ?? "target message", targetID: nil)
         }
 
         guard let message = try await group.next() else {
-            throw TransportSession.Error.replyTimeout(method: method, targetID: nil)
+            throw TransportSession.Error.replyTimeout(method: method ?? "target message", targetID: nil)
         }
         return message
     }

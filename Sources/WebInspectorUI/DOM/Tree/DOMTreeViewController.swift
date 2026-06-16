@@ -24,8 +24,8 @@ package final class DOMTreeViewController: UIViewController {
             highlightNodeAction: { [weak inspection] nodeID in
                 await inspection?.dom.highlightNode(for: nodeID)
             },
-            hideHighlightAction: { [weak inspection] in
-                await inspection?.dom.hideNodeHighlight()
+            restoreHighlightAction: { [weak inspection] in
+                await inspection?.dom.restoreSelectedNodeHighlightOrHide()
             },
             copyNodeTextAction: { [weak inspection] nodeID, kind in
                 guard let inspection else {

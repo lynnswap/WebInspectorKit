@@ -166,6 +166,28 @@ extension DOMSession {
         }
     }
 
+    package func restoreSelectedNodeHighlightOrHide(preferredHideTargetID: ProtocolTarget.ID? = nil) async {
+        if !hasPendingSelectionRequest,
+           let selectedNodeID,
+           let intent = highlightNodeIntent(for: selectedNodeID) {
+            do {
+                try await perform(intent)
+            } catch {
+                recordError?(InspectorSession.Error(String(describing: error)))
+            }
+            return
+        }
+
+        guard let intent = hideHighlightIntent(targetID: preferredHideTargetID ?? highlightController.targetID) else {
+            return
+        }
+        do {
+            try await perform(intent)
+        } catch {
+            recordError?(InspectorSession.Error(String(describing: error)))
+        }
+    }
+
     package func toggleElementPicker() async {
         if isSelectingElement {
             await cancelElementPicker()
@@ -233,6 +255,7 @@ extension DOMSession {
         clearElementPickerState(invalidatePendingSelection: true)
         guard let targetID,
               let intent = setInspectModeEnabledIntent(targetID: targetID, enabled: false) else {
+            await restoreSelectedNodeHighlightOrHide(preferredHideTargetID: targetID)
             return
         }
         do {
@@ -240,6 +263,7 @@ extension DOMSession {
         } catch {
             recordError?(InspectorSession.Error(String(describing: error)))
         }
+        await restoreSelectedNodeHighlightOrHide(preferredHideTargetID: targetID)
     }
 
     package func copySelectedNodeText(_ kind: DOMNode.CopyTextKind) async throws -> String {
@@ -555,6 +579,8 @@ extension DOMSession {
             return
         }
         let selectedStyleID = try? selectedCSSNodeStylesID().get()
+        let selectionRevisionBeforeEvent = selectionRevision
+        let hadPendingSelectionRequest = hasPendingSelectionRequest
         try protocolCommands.applyDOMEvent(event, to: self)
         if let selectedStyleID,
            let targetID = event.targetID,
@@ -568,6 +594,12 @@ extension DOMSession {
         }
         if event.method == "DOM.setChildNodes" {
             startPendingFrameOwnerHydration()
+        }
+        if hadPendingSelectionRequest,
+           !hasPendingSelectionRequest,
+           selectionRevision != selectionRevisionBeforeEvent,
+           !isSelectingElement {
+            await restoreSelectedNodeHighlightOrHide()
         }
     }
 
@@ -973,6 +1005,7 @@ extension DOMSession {
         let targetID = session.targetID
         clearElementPickerState()
         guard let intent = setInspectModeEnabledIntent(targetID: targetID, enabled: false) else {
+            await restoreSelectedNodeHighlightOrHide(preferredHideTargetID: targetID)
             return
         }
         do {
@@ -980,6 +1013,7 @@ extension DOMSession {
         } catch {
             recordError?(InspectorSession.Error(String(describing: error)))
         }
+        await restoreSelectedNodeHighlightOrHide(preferredHideTargetID: targetID)
     }
 
     private func requireCommandChannel(requiresActiveConnection: Bool = true) throws -> ProtocolCommandChannel {

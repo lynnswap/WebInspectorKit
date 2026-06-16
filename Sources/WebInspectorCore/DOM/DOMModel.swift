@@ -536,6 +536,10 @@ package final class DOMSession {
         selection.selectedNodeID
     }
 
+    package var hasPendingSelectionRequest: Bool {
+        selection.pendingRequest != nil
+    }
+
     package var selectedNode: DOMNode? {
         guard let selectedNodeID = selection.selectedNodeID else {
             return nil
