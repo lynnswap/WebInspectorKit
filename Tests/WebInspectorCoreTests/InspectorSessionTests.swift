@@ -815,6 +815,72 @@ func selectedElementStyleHydrationClearsAfterSelectedTargetDestroyed() async thr
 }
 
 @Test
+@MainActor
+func selectedElementStyleHydrationMarksStaleWhenTransportTargetDisappearsBeforeDOMEvent() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let css = CSSSession()
+    let dom = DOMSession(elementStyles: css)
+    var recordedError: InspectorSession.Error?
+    let channel = ProtocolCommandChannel(
+        transport: transport,
+        isCurrent: { true },
+        isAttached: { true },
+        appliedSequence: { 0 },
+        shouldEnableCompatibilityCSS: { _ in false },
+        markTargetDomainEnabled: { _, _ in }
+    )
+    dom.bindProtocolChannel(channel) { error in
+        recordedError = error
+    }
+
+    dom.applyTargetCreated(
+        .init(
+            id: .pageMain,
+            kind: .page,
+            frameID: .init("main-frame"),
+            capabilities: .pageDefault
+        ),
+        makeCurrentMainPage: true
+    )
+    _ = dom.replaceDocumentRoot(
+        WebInspectorCore.DOMNode.Payload(
+            nodeID: .init(1),
+            nodeType: .document,
+            nodeName: "#document",
+            regularChildren: .loaded([
+                WebInspectorCore.DOMNode.Payload(
+                    nodeID: .init(2),
+                    nodeType: .element,
+                    nodeName: "HTML",
+                    localName: "html",
+                    regularChildren: .loaded([
+                        WebInspectorCore.DOMNode.Payload(
+                            nodeID: .init(4),
+                            nodeType: .element,
+                            nodeName: "BODY",
+                            localName: "body"
+                        ),
+                    ])
+                ),
+            ])
+        ),
+        targetID: .pageMain
+    )
+    let bodyID = try #require(dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(4))])
+    dom.selectNode(bodyID)
+
+    let sentCount = await backend.sentTargetMessages().count
+    dom.setSelectedNodeStyleHydrationActive(true)
+    await dom.waitUntilSelectedStyleRefreshIdle()
+
+    #expect(await backend.sentTargetMessages().count == sentCount)
+    #expect(css.selectedState == .unavailable(.staleNode(bodyID)))
+    #expect(css.selectedNodeStyles == nil)
+    #expect(recordedError == nil)
+}
+
+@Test
 func selectedElementStyleRefreshEnablesCSSAgentOnlyAfterBackendRequiresIt() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)

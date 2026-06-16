@@ -479,10 +479,7 @@ extension DOMSession {
     }
 
     private func refreshStyles(for identity: CSSNodeStyles.Identity) async throws {
-        let commandChannel = try requireCommandChannel()
-        let targetExists = await commandChannel.snapshot().targetsByID[identity.targetID] != nil
-        guard targetExists else {
-            elementStyles.markSelectedNodeStylesUnavailable(identity: identity, reason: .staleNode(identity.nodeID))
+        guard try await selectedStyleRefreshTargetIsLive(identity) else {
             return
         }
         guard let token = elementStyles.beginRefresh(identity: identity) else {
@@ -493,6 +490,9 @@ extension DOMSession {
 
     private func refreshStyles(for token: CSSStyle.RefreshToken) async throws {
         let identity = token.identity
+        guard try await selectedStyleRefreshTargetIsLive(identity) else {
+            return
+        }
         do {
             let results = try await elementStyles.fetchRefreshResults(for: identity)
             guard case let .success(currentIdentity) = selectedCSSNodeStyleIdentity(),
@@ -513,6 +513,16 @@ extension DOMSession {
             elementStyles.markRefreshFailed(token, message: String(describing: error))
             throw error
         }
+    }
+
+    private func selectedStyleRefreshTargetIsLive(_ identity: CSSNodeStyles.Identity) async throws -> Bool {
+        let commandChannel = try requireCommandChannel()
+        let targetExists = await commandChannel.snapshot().targetsByID[identity.targetID] != nil
+        guard targetExists else {
+            elementStyles.markSelectedNodeStylesUnavailable(identity: identity, reason: .staleNode(identity.nodeID))
+            return false
+        }
+        return true
     }
 
     package func inspectEvent(from event: ProtocolEvent) throws -> DOMInspectEvent? {
