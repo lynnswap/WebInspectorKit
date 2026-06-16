@@ -937,7 +937,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     private func clearHoveredRowAndRestoreSelectionHighlight() {
         pageHighlightTask?.cancel()
         clearHoveredRow()
-        Task { @MainActor [weak self, restoreHighlightAction] in
+        pageHighlightTask = Task { @MainActor [weak self, restoreHighlightAction] in
             await Task.yield()
             guard let self,
                   self.hoveredNodeID == nil,

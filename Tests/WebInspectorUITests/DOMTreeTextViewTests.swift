@@ -92,6 +92,36 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func hoverHighlightCancelsPendingRestoreHighlight() async throws {
+        let session = makeDOMSession()
+        let highlightRecorder = NodeActionRecorder()
+        let restoreRecorder = CancellableVoidActionRecorder()
+        let view = DOMTreeTextView(
+            dom: session,
+            highlightNodeAction: { nodeID in
+                highlightRecorder.record(nodeID)
+            },
+            restoreHighlightAction: {
+                await restoreRecorder.run()
+            }
+        )
+        view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
+        view.layoutIfNeeded()
+
+        view.primaryClickRowForTesting(containing: "<input disabled>")
+        view.hoverRowForTesting(containing: "<article")
+        view.endHoverForTesting()
+        await restoreRecorder.nextStart()
+        highlightRecorder.removeAll()
+
+        view.hoverRowForTesting(containing: "<input disabled>")
+        await restoreRecorder.nextCancellation()
+        let highlightedNodeID = await highlightRecorder.nextNodeID()
+
+        #expect(session.node(for: highlightedNodeID)?.localName == "input")
+    }
+
+    @Test
     func pageHighlightActionsAreSuppressedWhileElementPickerIsActive() async throws {
         let session = makeDOMSession()
         session.isSelectingElement = true
@@ -333,6 +363,10 @@ private final class NodeActionRecorder {
     var recordedNodeIDs: [DOMNode.ID] {
         nodeIDs
     }
+
+    func removeAll() {
+        nodeIDs.removeAll(keepingCapacity: true)
+    }
 }
 
 @MainActor
@@ -352,6 +386,44 @@ private final class VoidActionRecorder {
         }
         await withCheckedContinuation { continuation in
             self.continuation = continuation
+        }
+    }
+}
+
+@MainActor
+private final class CancellableVoidActionRecorder {
+    private(set) var startedCount = 0
+    private(set) var cancellationCount = 0
+    private var startContinuation: CheckedContinuation<Void, Never>?
+    private var cancellationContinuation: CheckedContinuation<Void, Never>?
+
+    func run() async {
+        startedCount += 1
+        startContinuation?.resume()
+        startContinuation = nil
+        while !Task.isCancelled {
+            await Task.yield()
+        }
+        cancellationCount += 1
+        cancellationContinuation?.resume()
+        cancellationContinuation = nil
+    }
+
+    func nextStart() async {
+        if startedCount > 0 {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            self.startContinuation = continuation
+        }
+    }
+
+    func nextCancellation() async {
+        if cancellationCount > 0 {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            self.cancellationContinuation = continuation
         }
     }
 }

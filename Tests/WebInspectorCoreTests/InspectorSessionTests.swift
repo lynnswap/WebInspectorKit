@@ -4078,6 +4078,31 @@ func staleHideReplyDoesNotForgetNewerHighlightOnSameTarget() async throws {
 }
 
 @Test
+func cancelledDirectHighlightDoesNotRecordError() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    let htmlID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(2))
+
+    let countBeforeHighlight = await backend.sentTargetMessages().count
+    let highlightTask = Task {
+        await session.attachment.dom.highlightNode(for: htmlID)
+    }
+    let highlight = try await waitForTargetMessage(
+        backend,
+        method: "DOM.highlightNode",
+        after: countBeforeHighlight
+    )
+    #expect(highlight.targetIdentifier == ProtocolTarget.ID.pageMain)
+
+    highlightTask.cancel()
+    await highlightTask.value
+
+    #expect(await session.lastError == nil)
+}
+
+@Test
 func documentInvalidationHidesSelectedNodeHighlight() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)

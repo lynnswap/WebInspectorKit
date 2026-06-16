@@ -201,7 +201,7 @@ extension DOMSession {
         do {
             try await perform(intent)
         } catch {
-            recordError?(InspectorSession.Error(String(describing: error)))
+            recordPageHighlightErrorUnlessCancelled(error)
         }
     }
 
@@ -231,7 +231,8 @@ extension DOMSession {
                 preserving: selectedHighlightTargetID,
                 includeCurrentPageFallback: false
             )
-            guard !isSelectingElement,
+            guard !Task.isCancelled,
+                  !isSelectingElement,
                   !hasPendingSelectionRequest,
                   self.selectedNodeID == selectedNodeID,
                   selectionRevision == selectionRevisionBeforeRestore,
@@ -241,7 +242,7 @@ extension DOMSession {
             do {
                 try await perform(intent)
             } catch {
-                recordError?(InspectorSession.Error(String(describing: error)))
+                recordPageHighlightErrorUnlessCancelled(error)
             }
             return
         }
@@ -279,10 +280,19 @@ extension DOMSession {
             }
             do {
                 try await perform(intent)
+            } catch is CancellationError {
+                return
             } catch {
                 recordError?(InspectorSession.Error(String(describing: error)))
             }
         }
+    }
+
+    private func recordPageHighlightErrorUnlessCancelled(_ error: any Error) {
+        guard !(error is CancellationError) else {
+            return
+        }
+        recordError?(InspectorSession.Error(String(describing: error)))
     }
 
     package func toggleElementPicker() async {
