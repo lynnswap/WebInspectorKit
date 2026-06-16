@@ -173,11 +173,11 @@ package actor TransportSession {
         )
     }
 
-    package func targetIdentifier(forExecutionContext key: RuntimeContext.Key) -> ProtocolTarget.ID? {
+    package func targetID(forExecutionContext key: RuntimeContext.Key) -> ProtocolTarget.ID? {
         runtimeContextRegistry.targetID(for: key)
     }
 
-    package func targetIdentifier(forFrameID frameID: ProtocolFrame.ID) -> ProtocolTarget.ID? {
+    package func targetID(forFrameID frameID: ProtocolFrame.ID) -> ProtocolTarget.ID? {
         targetRegistry.targetID(forFrameID: frameID)
     }
 

@@ -128,7 +128,7 @@ Transitional or incomplete upstream areas:
   `InspectorDOMAgent` and has upstream FIXME notes to extract shared
   tree-building/binding logic and avoid traversing child frames that have their
   own frame agent;
-- frame target identity threading: current `TargetInfo` does not carry
+- frame target routing context: current `TargetInfo` does not carry
   `frameId`, `parentFrameId`, or owner node id even though the model relation
   exists conceptually;
 - ad iframe refresh and provisional frame commit behavior: upstream has target
@@ -684,9 +684,9 @@ The DOM-side contract is only the boundary:
   projection.
 - CSS owns style refresh, cascade ordering, computed properties, stylesheet
   invalidation, and style-specific protocol events.
-- The handoff from DOM to CSS is the selected live DOM node plus its command
-  identity: owning target, active document generation, and raw protocol node id
-  for that target.
+- The handoff from DOM to CSS is the selected live DOM node plus its node styles
+  ID: owning target, active document generation, and raw protocol node id for
+  that target.
 - CSS does not repair DOM selection or mutate DOM projection. If the selected
   node is not an element, is stale, or belongs to a target without CSS support,
   CSS reports an unavailable state.

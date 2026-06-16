@@ -218,7 +218,7 @@ final class NetworkBodyViewController: UIViewController {
             return
         }
 
-        switch body.fetchState {
+        switch body.phase {
         case .available, .fetching:
             hideMediaPreview()
             displayText = ""

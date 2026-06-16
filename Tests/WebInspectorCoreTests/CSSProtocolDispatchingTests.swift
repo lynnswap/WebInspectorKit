@@ -7,7 +7,7 @@ import WebInspectorTransport
 func cssProtocolDispatchingBuildsReadCommands() throws {
     let identity = cssIdentity()
 
-    let matched = try CSSProtocolCommands().command(for: .getMatchedStyles(identity: identity))
+    let matched = try CSSProtocolCommands().command(for: .getMatchedStyles(id: identity))
     #expect(matched.method == "CSS.getMatchedStylesForNode")
     #expect(matched.routing == .target(identity.targetID))
     let matchedParams = try JSONObject(matched.parametersData)
@@ -15,11 +15,11 @@ func cssProtocolDispatchingBuildsReadCommands() throws {
     #expect(matchedParams["includePseudo"] as? Bool == true)
     #expect(matchedParams["includeInherited"] as? Bool == true)
 
-    let inline = try CSSProtocolCommands().command(for: .getInlineStyles(identity: identity))
+    let inline = try CSSProtocolCommands().command(for: .getInlineStyles(id: identity))
     #expect(inline.method == "CSS.getInlineStylesForNode")
     #expect(try JSONObject(inline.parametersData)["nodeId"] as? Int == 2)
 
-    let computed = try CSSProtocolCommands().command(for: .getComputedStyle(identity: identity))
+    let computed = try CSSProtocolCommands().command(for: .getComputedStyle(id: identity))
     #expect(computed.method == "CSS.getComputedStyleForNode")
     #expect(try JSONObject(computed.parametersData)["nodeId"] as? Int == 2)
 }
@@ -113,7 +113,7 @@ func cssProtocolDispatchingDecodesReadAndSetStyleTextResults() throws {
 func cssProtocolDispatchingAppliesTargetScopedInvalidationEvents() async throws {
     let css = await CSSSession()
     let identity = cssIdentity()
-    let token = try #require(await css.beginRefresh(identity: identity))
+    let token = await css.beginRefresh(id: identity)
     await css.applyRefresh(
         token: token,
         matched: .init(),
@@ -130,9 +130,9 @@ func cssProtocolDispatchingAppliesTargetScopedInvalidationEvents() async throws 
             paramsData: Data(#"{"styleSheetId":"untracked"}"#.utf8)
         )
     )
-    #expect(await css.selectedState == .needsRefresh)
+    #expect(await css.selectedPhase == .needsRefresh)
 
-    let refreshToken = try #require(await css.beginRefresh(identity: identity))
+    let refreshToken = await css.beginRefresh(id: identity)
     await css.applyRefresh(
         token: refreshToken,
         matched: CSSStyle.MatchedStylesPayload(matchedRules: [
@@ -156,7 +156,7 @@ func cssProtocolDispatchingAppliesTargetScopedInvalidationEvents() async throws 
             paramsData: Data(#"{"styleSheetId":"sheet"}"#.utf8)
         )
     )
-    #expect(await css.selectedState == .needsRefresh)
+    #expect(await css.selectedPhase == .needsRefresh)
 }
 
 @Test
@@ -186,7 +186,7 @@ func cssProtocolDispatchingRegistersStyleSheetHeaderOffsets() async throws {
         )
     )
 
-    let token = try #require(css.beginRefresh(identity: identity))
+    let token = css.beginRefresh(id: identity)
     css.applyRefresh(
         token: token,
         matched: CSSStyle.MatchedStylesPayload(matchedRules: [
@@ -214,15 +214,14 @@ func cssProtocolDispatchingRegistersStyleSheetHeaderOffsets() async throws {
     ))
 }
 
-private func cssIdentity() -> CSSNodeStyles.Identity {
+private func cssIdentity() -> CSSNodeStyles.ID {
     let targetID = ProtocolTarget.ID("page")
     let documentID = DOMDocument.ID(targetID: targetID, localDocumentLifetimeID: .init(1))
-    return CSSNodeStyles.Identity(
+    return CSSNodeStyles.ID(
         nodeID: DOMNode.ID(documentID: documentID, nodeID: .init(2)),
         targetID: targetID,
         documentID: documentID,
-        protocolNodeID: .init(2),
-        targetCapabilities: [.css, .dom]
+        protocolNodeID: .init(2)
     )
 }
 

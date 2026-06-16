@@ -20,7 +20,7 @@ CSS is node-scoped, but it is not DOM-owned state.
   stylesheet invalidation, and style-specific protocol events.
 - The DOM/CSS handoff is the currently selected live DOM node plus a CSS
   node-styles object.
-- CSS commands use the selected node's command identity: owning target, active
+- CSS commands use the selected node styles ID: owning target, active
   document generation, and raw protocol node id for that target.
 - If the selected node is non-element, stale, or owned by a target that does
   not expose CSS, CSS reports an unavailable state instead of mutating DOM
@@ -30,7 +30,7 @@ The high-level dependency is:
 
 ```text
 DOM selection -> selected DOMNode.ID
-  -> CSSSession stylesForNode(selected node command identity)
+  -> CSSSession stylesForNode(selected node styles ID)
     -> matched rules + inline styles + computed styles
     -> observable DOMNodeStyles-like object
       -> style rules list and computed list render directly

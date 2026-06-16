@@ -85,15 +85,15 @@ extension CSSSession {
         return try await commandChannel.send(try protocolCommands.command(for: intent))
     }
 
-    func fetchRefreshResults(for identity: CSSNodeStyles.Identity) async throws -> CSSSession.RefreshResults {
+    func fetchRefreshResults(for id: CSSNodeStyles.ID) async throws -> CSSSession.RefreshResults {
         do {
-            return try await fetchRefreshResultsWithoutCompatibilityRetry(for: identity)
+            return try await fetchRefreshResultsWithoutCompatibilityRetry(for: id)
         } catch {
             guard shouldRetryAfterEnablingCSSAgent(error) else {
                 throw error
             }
-            try await enableAgentForCompatibility(targetID: identity.targetID)
-            return try await fetchRefreshResultsWithoutCompatibilityRetry(for: identity)
+            try await enableAgentForCompatibility(targetID: id.targetID)
+            return try await fetchRefreshResultsWithoutCompatibilityRetry(for: id)
         }
     }
 
@@ -102,11 +102,11 @@ extension CSSSession {
     }
 
     private func fetchRefreshResultsWithoutCompatibilityRetry(
-        for identity: CSSNodeStyles.Identity
+        for id: CSSNodeStyles.ID
     ) async throws -> CSSSession.RefreshResults {
-        async let matched = performRefreshCommand(.getMatchedStyles(identity: identity))
-        async let inline = performRefreshCommand(.getInlineStyles(identity: identity))
-        async let computed = performRefreshCommand(.getComputedStyle(identity: identity))
+        async let matched = performRefreshCommand(.getMatchedStyles(id: id))
+        async let inline = performRefreshCommand(.getInlineStyles(id: id))
+        async let computed = performRefreshCommand(.getComputedStyle(id: id))
         let results = await (matched, inline, computed)
         let failures = [results.0, results.1, results.2].compactMap(\.failure)
         if failures.contains(where: \.isCancellation) {

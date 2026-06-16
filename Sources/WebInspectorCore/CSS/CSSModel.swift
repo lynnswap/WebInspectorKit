@@ -293,7 +293,7 @@ package final class CSSRule: Equatable {
 }
 
 @Observable
-package final class CSSComputedStyleProperty: Equatable {
+package final class CSSComputedStyleProperty: Equatable, Identifiable {
     /// Computed-style rows are keyed by CSS property name in the computed list.
     package var id: String {
         name
@@ -319,7 +319,7 @@ package final class CSSComputedStyleProperty: Equatable {
 
 package extension CSSStyle {
     @Observable
-    final class Section: Equatable {
+    final class Section: Equatable, Identifiable {
         package var id: CSSStyle.Section.ID
         package var kind: CSSStyle.Section.Kind
         package var title: String
@@ -351,7 +351,7 @@ package extension CSSStyle {
 
 @MainActor
 @Observable
-package final class CSSNodeStyles {
+package final class CSSNodeStyles: Identifiable {
     private enum RefreshPhase: Equatable {
         case idle
         case refreshing(sequence: UInt64)
@@ -370,20 +370,20 @@ package final class CSSNodeStyles {
         }
     }
 
-    package let identity: CSSNodeStyles.Identity
-    package var state: CSSNodeStyles.State
+    package let id: CSSNodeStyles.ID
+    package var phase: CSSNodeStyles.Phase
     package var sections: [CSSStyle.Section]
     package var computedProperties: [CSSComputedStyleProperty]
     @ObservationIgnored private var refreshPhase: RefreshPhase
 
     package init(
-        identity: CSSNodeStyles.Identity,
-        state: CSSNodeStyles.State = .loading,
+        id: CSSNodeStyles.ID,
+        phase: CSSNodeStyles.Phase = .loading,
         sections: [CSSStyle.Section] = [],
         computedProperties: [CSSComputedStyleProperty] = []
     ) {
-        self.identity = identity
-        self.state = state
+        self.id = id
+        self.phase = phase
         self.sections = sections
         self.computedProperties = computedProperties
         refreshPhase = .idle
@@ -394,12 +394,12 @@ package final class CSSNodeStyles {
     }
 
     fileprivate func beginRefresh(sequence: UInt64) {
-        state = .loading
+        phase = .loading
         refreshPhase = .refreshing(sequence: sequence)
     }
 
     fileprivate func isActiveRefresh(_ token: CSSStyle.RefreshToken) -> Bool {
-        identity == token.identity && refreshPhase.sequence == token.sequence
+        id == token.id && refreshPhase.sequence == token.sequence
     }
 
     fileprivate func clearRefresh(_ token: CSSStyle.RefreshToken) {
@@ -416,11 +416,11 @@ package final class CSSNodeStyles {
     fileprivate func cancelRefresh(sequence: UInt64?) -> Bool {
         guard let activeSequence = refreshPhase.sequence,
               sequence.map({ $0 == activeSequence }) ?? true,
-              state == .loading else {
+              phase == .loading else {
             return false
         }
         refreshPhase = .idle
-        state = .needsRefresh
+        phase = .needsRefresh
         return true
     }
 }
@@ -432,35 +432,35 @@ private struct CSSStyleSheetHeaderKey: Equatable, Hashable {
 
 @MainActor
 private struct CSSSelectedStyleCoordinator {
-    private(set) var identity: CSSNodeStyles.Identity?
+    private(set) var id: CSSNodeStyles.ID?
     private var unavailableReason: CSSNodeStyles.UnavailableReason
 
     init() {
-        identity = nil
+        id = nil
         unavailableReason = .noSelection
     }
 
-    func state(displayedNodeStyles: CSSNodeStyles?) -> CSSNodeStyles.State {
-        displayedNodeStyles?.state ?? .unavailable(unavailableReason)
+    func phase(displayedNodeStyles: CSSNodeStyles?) -> CSSNodeStyles.Phase {
+        displayedNodeStyles?.phase ?? .unavailable(unavailableReason)
     }
 
-    mutating func select(_ identity: CSSNodeStyles.Identity) {
-        self.identity = identity
+    mutating func select(_ id: CSSNodeStyles.ID) {
+        self.id = id
         unavailableReason = .noSelection
     }
 
     mutating func markUnavailable(_ reason: CSSNodeStyles.UnavailableReason) {
-        identity = nil
+        id = nil
         unavailableReason = reason
     }
 
     mutating func markSelectedStylesUnavailable(
-        identity: CSSNodeStyles.Identity,
+        id: CSSNodeStyles.ID,
         displayedNodeStyles: CSSNodeStyles?,
         unavailableNodeStyles: CSSNodeStyles,
         reason: CSSNodeStyles.UnavailableReason
     ) -> Bool {
-        if self.identity == identity {
+        if self.id == id {
             unavailableReason = reason
             return true
         }
@@ -472,10 +472,10 @@ private struct CSSSelectedStyleCoordinator {
     }
 
     mutating func markRefreshFailed(_ token: CSSStyle.RefreshToken) -> Bool {
-        guard identity == token.identity else {
+        guard id == token.id else {
             return false
         }
-        unavailableReason = .staleNode(token.identity.nodeID)
+        unavailableReason = .staleNode(token.id.nodeID)
         return true
     }
 
@@ -485,12 +485,12 @@ private struct CSSSelectedStyleCoordinator {
     ) -> Bool {
         var didClearDisplayedNodeStyles = false
         if let displayedNodeStyles,
-           displayedNodeStyles.identity.targetID == targetID {
-            unavailableReason = .staleNode(displayedNodeStyles.identity.nodeID)
+           displayedNodeStyles.id.targetID == targetID {
+            unavailableReason = .staleNode(displayedNodeStyles.id.nodeID)
             didClearDisplayedNodeStyles = true
         }
-        if identity?.targetID == targetID {
-            identity = nil
+        if id?.targetID == targetID {
+            id = nil
         }
         return didClearDisplayedNodeStyles
     }
@@ -504,33 +504,33 @@ private struct CSSNodeStyleStore {
         stylesByNodeID.removeAll()
     }
 
-    func nodeStyles(for identity: CSSNodeStyles.Identity) -> CSSNodeStyles? {
-        guard let nodeStyles = stylesByNodeID[identity.nodeID],
-              nodeStyles.identity == identity else {
+    func nodeStyles(for id: CSSNodeStyles.ID) -> CSSNodeStyles? {
+        guard let nodeStyles = stylesByNodeID[id.nodeID],
+              nodeStyles.id == id else {
             return nil
         }
         return nodeStyles
     }
 
     mutating func ensureNodeStyles(
-        for identity: CSSNodeStyles.Identity,
-        initialState: CSSNodeStyles.State = .loading
+        for id: CSSNodeStyles.ID,
+        initialPhase: CSSNodeStyles.Phase = .loading
     ) -> CSSNodeStyles {
-        if let nodeStyles = nodeStyles(for: identity) {
+        if let nodeStyles = nodeStyles(for: id) {
             return nodeStyles
         }
-        let nodeStyles = CSSNodeStyles(identity: identity, state: initialState)
-        stylesByNodeID[identity.nodeID] = nodeStyles
+        let nodeStyles = CSSNodeStyles(id: id, phase: initialPhase)
+        stylesByNodeID[id.nodeID] = nodeStyles
         return nodeStyles
     }
 
     func nodeStyles(targetID: ProtocolTarget.ID) -> [CSSNodeStyles] {
-        stylesByNodeID.values.filter { $0.identity.targetID == targetID }
+        stylesByNodeID.values.filter { $0.id.targetID == targetID }
     }
 
     func nodeStyles(targetID: ProtocolTarget.ID, protocolNodeID: DOMNode.ProtocolID) -> CSSNodeStyles? {
         stylesByNodeID.values.first {
-            $0.identity.targetID == targetID && $0.identity.protocolNodeID == protocolNodeID
+            $0.id.targetID == targetID && $0.id.protocolNodeID == protocolNodeID
         }
     }
 
@@ -539,18 +539,18 @@ private struct CSSNodeStyleStore {
         including shouldMark: (CSSNodeStyles) -> Bool
     ) {
         for nodeStyles in stylesByNodeID.values
-        where nodeStyles.identity.targetID == targetID && shouldMark(nodeStyles) {
-            guard !(nodeStyles.state == .loading && nodeStyles.isRefreshing) else {
+        where nodeStyles.id.targetID == targetID && shouldMark(nodeStyles) {
+            guard !(nodeStyles.phase == .loading && nodeStyles.isRefreshing) else {
                 continue
             }
-            nodeStyles.state = .needsRefresh
+            nodeStyles.phase = .needsRefresh
             nodeStyles.clearRefresh()
         }
     }
 
     mutating func removeStyles(targetID: ProtocolTarget.ID) -> Bool {
         let removedIDs = stylesByNodeID
-            .filter { $0.value.identity.targetID == targetID }
+            .filter { $0.value.id.targetID == targetID }
             .map(\.key)
         guard !removedIDs.isEmpty else {
             return false
@@ -613,12 +613,12 @@ package final class CSSSession {
     }
 
     package private(set) var selectedNodeStyles: CSSNodeStyles?
-    package var selectedState: CSSNodeStyles.State {
-        selection.state(displayedNodeStyles: selectedNodeStyles)
+    package var selectedPhase: CSSNodeStyles.Phase {
+        selection.phase(displayedNodeStyles: selectedNodeStyles)
     }
 
-    package func nodeStyles(for identity: CSSNodeStyles.Identity) -> CSSNodeStyles? {
-        nodeStyleStore.nodeStyles(for: identity)
+    package func nodeStyles(for id: CSSNodeStyles.ID) -> CSSNodeStyles? {
+        nodeStyleStore.nodeStyles(for: id)
     }
 
     private var selection: CSSSelectedStyleCoordinator
@@ -657,37 +657,37 @@ package final class CSSSession {
         try await refreshCoordinator.perform(intent)
     }
 
-    package func fetchRefreshResults(for identity: CSSNodeStyles.Identity) async throws -> RefreshResults {
-        try await refreshCoordinator.fetchRefreshResults(for: identity)
+    package func fetchRefreshResults(for id: CSSNodeStyles.ID) async throws -> RefreshResults {
+        try await refreshCoordinator.fetchRefreshResults(for: id)
     }
 
     package func setStyleTextResult(from result: ProtocolCommand.Result) throws -> CSSStyle.Payload {
         try refreshCoordinator.setStyleTextResult(from: result)
     }
 
-    package func selectNodeStyles(identity: CSSNodeStyles.Identity) {
-        selection.select(identity)
-        let nodeStyles = ensureNodeStyles(for: identity, initialState: .needsRefresh)
+    package func selectNodeStyles(id: CSSNodeStyles.ID) {
+        selection.select(id)
+        let nodeStyles = ensureNodeStyles(for: id, initialPhase: .needsRefresh)
         selectCurrentNodeStyles(nodeStyles)
     }
 
     package func markSelectedNodeUnavailable(_ reason: CSSNodeStyles.UnavailableReason) {
         selection.markUnavailable(reason)
-        guard selectedNodeStyles != nil || selectedState != .unavailable(reason) else {
+        guard selectedNodeStyles != nil || selectedPhase != .unavailable(reason) else {
             return
         }
         selectedNodeStyles = nil
     }
 
     package func markSelectedNodeStylesUnavailable(
-        identity: CSSNodeStyles.Identity,
+        id: CSSNodeStyles.ID,
         reason: CSSNodeStyles.UnavailableReason
     ) {
-        let nodeStyles = ensureNodeStyles(for: identity)
-        nodeStyles.state = .unavailable(reason)
+        let nodeStyles = ensureNodeStyles(for: id)
+        nodeStyles.phase = .unavailable(reason)
         nodeStyles.clearRefresh()
         guard selection.markSelectedStylesUnavailable(
-            identity: identity,
+            id: id,
             displayedNodeStyles: selectedNodeStyles,
             unavailableNodeStyles: nodeStyles,
             reason: reason
@@ -697,22 +697,17 @@ package final class CSSSession {
         selectedNodeStyles = nil
     }
 
-    package func refreshState(forSelected identity: CSSNodeStyles.Identity) -> CSSNodeStyles.State? {
-        nodeStyles(for: identity)?.state
+    package func refreshPhase(forSelected id: CSSNodeStyles.ID) -> CSSNodeStyles.Phase? {
+        nodeStyles(for: id)?.phase
     }
 
-    package func beginRefresh(identity: CSSNodeStyles.Identity) -> CSSStyle.RefreshToken? {
-        guard identity.targetCapabilities.contains(.css) else {
-            markSelectedNodeUnavailable(.cssUnavailableForTarget(identity.targetID))
-            return nil
-        }
-
+    package func beginRefresh(id: CSSNodeStyles.ID) -> CSSStyle.RefreshToken {
         nextRefreshSequence &+= 1
-        let nodeStyles = ensureNodeStyles(for: identity)
+        let nodeStyles = ensureNodeStyles(for: id)
         nodeStyles.beginRefresh(sequence: nextRefreshSequence)
-        selection.select(identity)
+        selection.select(id)
         selectCurrentNodeStyles(nodeStyles)
-        return CSSStyle.RefreshToken(identity: identity, sequence: nextRefreshSequence)
+        return CSSStyle.RefreshToken(id: id, sequence: nextRefreshSequence)
     }
 
     package func applyRefresh(
@@ -721,7 +716,7 @@ package final class CSSSession {
         inline: CSSStyle.InlineStylesPayload,
         computed: [CSSComputedStyleProperty.Payload]
     ) {
-        guard let nodeStyles = nodeStyleStore.nodeStyles(for: token.identity),
+        guard let nodeStyles = nodeStyleStore.nodeStyles(for: token.id),
               nodeStyles.isActiveRefresh(token) else {
             return
         }
@@ -729,7 +724,7 @@ package final class CSSSession {
         CSSStyle.Reconciler.updateSections(
             in: nodeStyles,
             with: CSSStyle.SectionBuilder.makeSections(
-                identity: token.identity,
+                id: token.id,
                 matched: matched,
                 inline: inline,
                 styleSheetHeaders: styleSheetHeaders
@@ -739,9 +734,9 @@ package final class CSSSession {
             in: nodeStyles,
             with: computed.map(CSSComputedStyleProperty.init(payload:))
         )
-        nodeStyles.state = .loaded
+        nodeStyles.phase = .loaded
         nodeStyles.clearRefresh(token)
-        if selection.identity == token.identity {
+        if selection.id == token.id {
             selectCurrentNodeStyles(nodeStyles)
         }
     }
@@ -755,31 +750,31 @@ package final class CSSSession {
     }
 
     package func markRefreshFailed(_ token: CSSStyle.RefreshToken, message: String) {
-        guard let nodeStyles = nodeStyleStore.nodeStyles(for: token.identity),
+        guard let nodeStyles = nodeStyleStore.nodeStyles(for: token.id),
               nodeStyles.isActiveRefresh(token) else {
             return
         }
-        nodeStyles.state = .failed(message)
+        nodeStyles.phase = .failed(message)
         nodeStyles.clearRefresh(token)
         if selection.markRefreshFailed(token) {
             selectedNodeStyles = nil
         }
     }
 
-    package func cancelRefresh(identity: CSSNodeStyles.Identity) {
-        cancelRefresh(identity: identity, sequence: nil)
+    package func cancelRefresh(id: CSSNodeStyles.ID) {
+        cancelRefresh(id: id, sequence: nil)
     }
 
     package func cancelRefresh(_ token: CSSStyle.RefreshToken) {
-        cancelRefresh(identity: token.identity, sequence: token.sequence)
+        cancelRefresh(id: token.id, sequence: token.sequence)
     }
 
-    private func cancelRefresh(identity: CSSNodeStyles.Identity, sequence: UInt64?) {
-        guard let nodeStyles = nodeStyles(for: identity),
+    private func cancelRefresh(id: CSSNodeStyles.ID, sequence: UInt64?) {
+        guard let nodeStyles = nodeStyles(for: id),
               nodeStyles.cancelRefresh(sequence: sequence) else {
             return
         }
-        if selection.identity == identity {
+        if selection.id == id {
             selectCurrentNodeStyles(nodeStyles)
         }
     }
@@ -818,10 +813,10 @@ package final class CSSSession {
         guard let current = nodeStyleStore.nodeStyles(targetID: targetID, protocolNodeID: nodeID) else {
             return
         }
-        guard !(current.state == .loading && current.isRefreshing) else {
+        guard !(current.phase == .loading && current.isRefreshing) else {
             return
         }
-        current.state = .needsRefresh
+        current.phase = .needsRefresh
         current.clearRefresh()
     }
 
@@ -837,9 +832,9 @@ package final class CSSSession {
 
     package func setStyleTextIntent(for propertyID: CSSProperty.ID, enabled: Bool) -> CSSCommand.Intent? {
         guard let nodeStyles = selectedNodeStyles,
-              selection.identity == nodeStyles.identity,
-              case .loaded = selectedState,
-              case .loaded = nodeStyles.state,
+              selection.id == nodeStyles.id,
+              case .loaded = selectedPhase,
+              case .loaded = nodeStyles.phase,
               let (sectionIndex, propertyIndex) = Self.locateProperty(propertyID, in: nodeStyles.sections),
               nodeStyles.sections[sectionIndex].isEditable else {
             return nil
@@ -857,18 +852,18 @@ package final class CSSSession {
               let text = CSSStyle.TextRewriter.rewrittenStyleText(style: style, propertyIndex: propertyIndex, enabled: enabled) else {
             return nil
         }
-        return .setStyleText(targetID: nodeStyles.identity.targetID, styleID: propertyID.styleID, text: text)
+        return .setStyleText(targetID: nodeStyles.id.targetID, styleID: propertyID.styleID, text: text)
     }
 
     private func selectCurrentNodeStyles(_ nodeStyles: CSSNodeStyles) {
-        switch nodeStyles.state {
+        switch nodeStyles.phase {
         case .unavailable, .failed:
             guard selectedNodeStyles != nil else {
                 return
             }
             selectedNodeStyles = nil
         case .loading, .loaded, .needsRefresh:
-            selection.select(nodeStyles.identity)
+            selection.select(nodeStyles.id)
             guard selectedNodeStyles !== nodeStyles else {
                 return
             }
@@ -877,10 +872,10 @@ package final class CSSSession {
     }
 
     private func ensureNodeStyles(
-        for identity: CSSNodeStyles.Identity,
-        initialState: CSSNodeStyles.State = .loading
+        for id: CSSNodeStyles.ID,
+        initialPhase: CSSNodeStyles.Phase = .loading
     ) -> CSSNodeStyles {
-        nodeStyleStore.ensureNodeStyles(for: identity, initialState: initialState)
+        nodeStyleStore.ensureNodeStyles(for: id, initialPhase: initialPhase)
     }
 
     package func applySetStyleTextResult(
@@ -908,7 +903,7 @@ package final class CSSSession {
                 if let rule = section.rule {
                     rule.style = section.style
                 }
-                nodeStyles.state = .needsRefresh
+                nodeStyles.phase = .needsRefresh
             }
         }
     }

@@ -171,10 +171,10 @@ package final class DOMElementViewController: UICollectionViewController {
         let elementStyles = inspection.dom.elementStyles
         let token = withPortableContinuousObservation { [weak self, elementStyles] _ in
             let selectedNodeStyles = elementStyles.selectedNodeStyles
-            let selectedState = elementStyles.selectedState
+            let selectedPhase = elementStyles.selectedPhase
             self?.bindSelectedNodeStyles(
                 selectedNodeStyles,
-                unavailableState: selectedState
+                unavailableState: selectedPhase
             )
         }
 #if DEBUG
@@ -183,7 +183,7 @@ package final class DOMElementViewController: UICollectionViewController {
         elementStylesObservation = token
     }
 
-    private func bindSelectedNodeStyles(_ nodeStyles: CSSNodeStyles?, unavailableState: CSSNodeStyles.State) {
+    private func bindSelectedNodeStyles(_ nodeStyles: CSSNodeStyles?, unavailableState: CSSNodeStyles.Phase) {
         guard let nodeStyles else {
             observedNodeStyles = nil
             selectedNodeStyleObservation?.cancel()
@@ -214,18 +214,18 @@ package final class DOMElementViewController: UICollectionViewController {
     }
 
     private func render(_ nodeStyles: CSSNodeStyles) {
-        switch nodeStyles.state {
+        switch nodeStyles.phase {
         case .loaded:
             displayedNodeStyles = nodeStyles
             renderStyles(nodeStyles)
         case .loading, .needsRefresh:
             renderPendingStyles()
         case .unavailable, .failed:
-            render(nodeStyles.state)
+            render(nodeStyles.phase)
         }
     }
 
-    private func render(_ state: CSSNodeStyles.State) {
+    private func render(_ state: CSSNodeStyles.Phase) {
         switch state {
         case .loaded:
             return

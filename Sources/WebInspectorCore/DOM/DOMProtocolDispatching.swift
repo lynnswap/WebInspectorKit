@@ -27,13 +27,13 @@ package struct DOMProtocolCommands {
                 routing: .target(targetID),
                 parametersData: try data(["objectId": objectID])
             )
-        case let .highlightNode(identity):
+        case let .highlightNode(target):
             return ProtocolCommand(
                 domain: .dom,
                 method: "DOM.highlightNode",
-                routing: .target(identity.commandTargetID),
+                routing: .target(target.commandTargetID),
                 parametersData: try data([
-                    "nodeId": nodeIDValue(identity.commandNodeID),
+                    "nodeId": nodeIDValue(target.commandNodeID),
                     "reveal": false,
                     "highlightConfig": highlightConfig(),
                 ])
@@ -55,19 +55,19 @@ package struct DOMProtocolCommands {
                 routing: .target(targetID),
                 parametersData: try data(parameters)
             )
-        case let .getOuterHTML(identity):
+        case let .getOuterHTML(target):
             return ProtocolCommand(
                 domain: .dom,
                 method: "DOM.getOuterHTML",
-                routing: .target(identity.commandTargetID),
-                parametersData: try data(["nodeId": nodeIDValue(identity.commandNodeID)])
+                routing: .target(target.commandTargetID),
+                parametersData: try data(["nodeId": nodeIDValue(target.commandNodeID)])
             )
-        case let .removeNode(identity):
+        case let .removeNode(target):
             return ProtocolCommand(
                 domain: .dom,
                 method: "DOM.removeNode",
-                routing: .target(identity.commandTargetID),
-                parametersData: try data(["nodeId": nodeIDValue(identity.commandNodeID)])
+                routing: .target(target.commandTargetID),
+                parametersData: try data(["nodeId": nodeIDValue(target.commandNodeID)])
             )
         case let .undo(targetID):
             return ProtocolCommand(

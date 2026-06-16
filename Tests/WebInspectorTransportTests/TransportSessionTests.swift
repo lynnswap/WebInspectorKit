@@ -785,7 +785,7 @@ func runtimeExecutionContextMapsToDeliveringTarget() async throws {
     let snapshot = await session.snapshot()
 
     #expect(snapshot.executionContextsByKey[contextKey("frame-A", 7)]?.targetID == ProtocolTarget.ID("frame-A"))
-    #expect(await session.targetIdentifier(forFrameID: .init("frame-A")) == ProtocolTarget.ID("frame-A"))
+    #expect(await session.targetID(forFrameID: .init("frame-A")) == ProtocolTarget.ID("frame-A"))
 }
 
 @Test
@@ -803,7 +803,7 @@ func runtimeContextOnPagePreservesExistingFrameTargetRoute() async throws {
     let snapshot = await session.snapshot()
 
     #expect(snapshot.executionContextsByKey[contextKey("page-main", 7)]?.targetID == ProtocolTarget.ID("frame-A"))
-    #expect(await session.targetIdentifier(forFrameID: .init("frame-A")) == ProtocolTarget.ID("frame-A"))
+    #expect(await session.targetID(forFrameID: .init("frame-A")) == ProtocolTarget.ID("frame-A"))
 }
 
 @Test
@@ -1628,7 +1628,7 @@ func networkCommandIntentRoutesThroughRequestTarget() throws {
 func domHighlightCommandUsesNonRevealingVisibleHighlightConfig() throws {
     let command = try DOMProtocolCommands().command(
         for: .highlightNode(
-            identity: .init(
+            target: .init(
                 documentTargetID: .init("page-A"),
                 rawNodeID: .init(42),
                 commandTargetID: .init("page-A"),
@@ -1666,18 +1666,18 @@ func domNavigationActionCommandsUseExpectedProtocolPayloads() throws {
     #expect(disableParameters["enabled"] as? Bool == false)
     #expect(disableParameters["highlightConfig"] == nil)
 
-    let identity = DOMAction.Identity(
+    let identity = DOMAction.Target(
         documentTargetID: targetID,
         rawNodeID: .init(42),
         commandTargetID: targetID,
         commandNodeID: .protocolNode(.init(42))
     )
 
-    let outerHTML = try DOMProtocolCommands().command(for: .getOuterHTML(identity: identity))
+    let outerHTML = try DOMProtocolCommands().command(for: .getOuterHTML(target: identity))
     #expect(outerHTML.method == "DOM.getOuterHTML")
     #expect(integerValue(try jsonObject(from: outerHTML.parametersData)["nodeId"]) == 42)
 
-    let removeNode = try DOMProtocolCommands().command(for: .removeNode(identity: identity))
+    let removeNode = try DOMProtocolCommands().command(for: .removeNode(target: identity))
     #expect(removeNode.method == "DOM.removeNode")
     #expect(integerValue(try jsonObject(from: removeNode.parametersData)["nodeId"]) == 42)
 
@@ -1687,19 +1687,19 @@ func domNavigationActionCommandsUseExpectedProtocolPayloads() throws {
 
 @Test
 func domActionCommandsEncodeScopedCommandNodeIDs() throws {
-    let identity = DOMAction.Identity(
+    let identity = DOMAction.Target(
         documentTargetID: .init("frame-A"),
         rawNodeID: .init(42),
         commandTargetID: .init("page-main"),
         commandNodeID: .scoped(targetID: .init("frame-A"), nodeID: .init(42))
     )
 
-    let outerHTML = try DOMProtocolCommands().command(for: .getOuterHTML(identity: identity))
+    let outerHTML = try DOMProtocolCommands().command(for: .getOuterHTML(target: identity))
     let outerHTMLParameters = try jsonObject(from: outerHTML.parametersData)
     #expect(outerHTML.routing == .target(.init("page-main")))
     #expect(outerHTMLParameters["nodeId"] as? String == "frame-A:42")
 
-    let removeNode = try DOMProtocolCommands().command(for: .removeNode(identity: identity))
+    let removeNode = try DOMProtocolCommands().command(for: .removeNode(target: identity))
     let removeNodeParameters = try jsonObject(from: removeNode.parametersData)
     #expect(removeNode.routing == .target(.init("page-main")))
     #expect(removeNodeParameters["nodeId"] as? String == "frame-A:42")

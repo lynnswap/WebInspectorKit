@@ -32,8 +32,8 @@ private enum DOMElementViewControllerPreview {
         }
 
         let css = dom.elementStyles
-        if case let .success(identity) = dom.selectedCSSNodeStyleIdentity(),
-           let token = css.beginRefresh(identity: identity) {
+        if case let .success(id) = dom.selectedCSSNodeStylesID() {
+            let token = css.beginRefresh(id: id)
             let style = previewStylePayload(styleID: styleID, cssText: previewCSSText)
             let matched = previewMatchedStyles(ruleID: ruleID, style: style)
             let inline = CSSStyle.InlineStylesPayload()

@@ -3,7 +3,7 @@ import WebInspectorTransport
 
 @MainActor
 @Observable
-package final class DOMTarget {
+package final class DOMTarget: Identifiable {
     package let id: ProtocolTarget.ID
     package var kind: ProtocolTarget.Kind
     package var frameID: DOMFrame.ID?
@@ -45,7 +45,7 @@ package final class DOMTargetState {
 
 @MainActor
 @Observable
-package final class DOMFrame {
+package final class DOMFrame: Identifiable {
     package typealias ID = ProtocolFrame.ID
 
     package let id: ID
@@ -156,7 +156,7 @@ package extension DOMDocument {
 
 @MainActor
 @Observable
-package final class DOMDocument {
+package final class DOMDocument: Identifiable {
     package let id: ID
     package let targetID: ProtocolTarget.ID
     package let localDocumentLifetimeID: DOMDocument.LifetimeID
@@ -164,7 +164,7 @@ package final class DOMDocument {
     package let rootNodeID: DOMNode.ID
     private var nodeIndex: DOMDocument.NodeIndex
     package var transactions: [DOMTransaction.ID: DOMTransaction]
-    package var nextTransactionID: UInt64
+    package var nextTransactionRawID: UInt64
 
     package init(
         id: ID,
@@ -184,7 +184,7 @@ package final class DOMDocument {
             currentNodeIDByProtocolNodeID: currentNodeIDByProtocolNodeID
         )
         transactions = [:]
-        nextTransactionID = 0
+        nextTransactionRawID = 0
     }
 
     package var nodesByID: [DOMNode.ID: DOMNode] {
@@ -232,14 +232,14 @@ package final class DOMDocument {
         nodeIndex.removeNode(nodeID, ifCurrentFor: rawNodeID)
     }
 
-    package func nextTransactionIdentifier() -> DOMTransaction.ID {
-        nextTransactionID &+= 1
-        return DOMTransaction.ID(nextTransactionID)
+    package func nextTransactionID() -> DOMTransaction.ID {
+        nextTransactionRawID &+= 1
+        return DOMTransaction.ID(nextTransactionRawID)
     }
 
     @discardableResult
     package func startTransaction(kind: DOMTransaction.Kind, issuedSequence: UInt64) -> DOMTransaction.ID {
-        let transactionID = nextTransactionIdentifier()
+        let transactionID = nextTransactionID()
         transactions[transactionID] = DOMTransaction(
             id: transactionID,
             targetID: targetID,
@@ -363,7 +363,7 @@ package extension DOMNode {
 
 @MainActor
 @Observable
-package final class DOMNode {
+package final class DOMNode: Identifiable {
     package let id: ID
     package let protocolNodeID: DOMNode.ProtocolID
     package var nodeType: DOMNode.Kind
