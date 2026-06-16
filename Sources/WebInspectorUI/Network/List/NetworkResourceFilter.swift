@@ -2,7 +2,8 @@ import WebInspectorCore
 import Foundation
 
 extension NetworkRequest.Display {
-    package enum ResourceFilter: String, CaseIterable, Hashable, Sendable, Identifiable {        case all
+    package enum ResourceFilter: String, CaseIterable, Hashable, Sendable, Identifiable {
+        case all
         case document
         case stylesheet
         case media
@@ -86,24 +87,40 @@ extension NetworkRequest.Display {
         }
 
         init(mimeType: String?, url: String) {
+            let urlSummary = NetworkRequest.Display.URLSummary(url: url)
+            self = Self.inferred(
+                mimeType: mimeType,
+                pathExtension: urlSummary.pathExtension,
+                mediaPreviewClassification: NetworkRequest.Display.MediaPreviewSupport.classification(
+                    mimeType: mimeType,
+                    url: url
+                )
+            )
+        }
+
+        package static func inferred(
+            mimeType: String?,
+            pathExtension: String?,
+            mediaPreviewClassification: NetworkRequest.Display.MediaPreviewClassification
+        ) -> NetworkRequest.Display.ResourceFilter {
             let normalizedMimeType = mimeType?
                 .split(separator: ";", maxSplits: 1, omittingEmptySubsequences: true)
                 .first?
                 .lowercased() ?? ""
-            let pathExtension = URL(string: url)?.pathExtension.lowercased() ?? ""
+            let pathExtension = pathExtension ?? ""
 
-            if case .previewable = NetworkRequest.Display.MediaPreviewSupport.classification(mimeType: mimeType, url: url) {
-                self = .media
+            if case .previewable = mediaPreviewClassification {
+                return .media
             } else if normalizedMimeType == "text/css" || pathExtension == "css" {
-                self = .stylesheet
+                return .stylesheet
             } else if normalizedMimeType.hasPrefix("font/") || ["woff", "woff2", "ttf", "otf"].contains(pathExtension) {
-                self = .font
+                return .font
             } else if normalizedMimeType.contains("javascript") || ["js", "mjs"].contains(pathExtension) {
-                self = .script
+                return .script
             } else if normalizedMimeType.contains("html") {
-                self = .document
+                return .document
             } else {
-                self = .other
+                return .other
             }
         }
     }

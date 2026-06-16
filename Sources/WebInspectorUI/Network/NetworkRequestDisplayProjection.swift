@@ -10,7 +10,8 @@ extension NetworkRequest.Display {
 }
 
 extension NetworkRequest.Display {
-    package struct Projection: Equatable, Identifiable {        package var id: NetworkRequest.ID
+    package struct Projection: Equatable, Identifiable {
+        package var id: NetworkRequest.ID
         package var displayName: String
         package var fileTypeLabel: String
         package var statusSeverity: NetworkRequest.Display.StatusSeverity
@@ -27,7 +28,8 @@ extension NetworkRequest.Display {
 }
 
 extension NetworkRequest.Display {
-    package struct Fingerprint: Equatable {        package var requestURL: String
+    package struct Fingerprint: Equatable {
+        package var requestURL: String
         package var requestMethod: String
         package var resourceType: NetworkRequest.ResourceType?
         package var responseURL: String?
@@ -58,8 +60,32 @@ extension NetworkRequest.Display {
 }
 
 extension NetworkRequest.Display {
+    private struct ProjectionInputs {
+        var requestURLSummary: NetworkRequest.Display.URLSummary
+        var responseURLSummary: NetworkRequest.Display.URLSummary?
+        var responseDisplayMIMEType: String?
+        var fileTypeLabel: String
+
+        @MainActor
+        init(request: NetworkRequest) {
+            requestURLSummary = NetworkRequest.Display.URLSummary(url: request.request.url)
+            responseURLSummary = request.response.map { NetworkRequest.Display.URLSummary(url: $0.url) }
+            if let response = request.response {
+                responseDisplayMIMEType = networkDisplayMIMEType(from: response)
+            } else {
+                responseDisplayMIMEType = nil
+            }
+            fileTypeLabel = NetworkRequest.Display.fileTypeLabel(
+                mimeType: request.response?.mimeType,
+                resourceType: request.resourceType,
+                urlSummary: requestURLSummary
+            )
+        }
+    }
+
     @MainActor
-    package final class ProjectionCache {        private struct Entry {
+    package final class ProjectionCache {
+        private struct Entry {
             var fingerprint: NetworkRequest.Display.Fingerprint
             var projection: NetworkRequest.Display.Projection
             var resourceFilter: NetworkRequest.Display.ResourceFilter?
@@ -78,14 +104,8 @@ extension NetworkRequest.Display {
                 return entry.projection
             }
 
-            let projection = NetworkRequest.Display.Projection(
-                id: request.id,
-                displayName: request.displayName,
-                fileTypeLabel: request.fileTypeLabel,
-                statusSeverity: request.statusSeverity,
-                resourceFilter: nil,
-                searchTokens: Self.searchTokens(for: request)
-            )
+            let inputs = NetworkRequest.Display.ProjectionInputs(request: request)
+            let projection = Self.projection(for: request, inputs: inputs)
             entries[request.id] = Entry(fingerprint: fingerprint, projection: projection, resourceFilter: nil)
             return projection
         }
@@ -98,19 +118,13 @@ extension NetworkRequest.Display {
                 return resourceFilter
             }
 
-            let resourceFilter = Self.resourceFilter(for: request, classifier: mediaPreviewClassifier)
+            let inputs = NetworkRequest.Display.ProjectionInputs(request: request)
+            let resourceFilter = Self.resourceFilter(for: request, inputs: inputs, classifier: mediaPreviewClassifier)
             var projection: NetworkRequest.Display.Projection
             if let entry = entries[request.id], entry.fingerprint == fingerprint {
                 projection = entry.projection
             } else {
-                projection = NetworkRequest.Display.Projection(
-                    id: request.id,
-                    displayName: request.displayName,
-                    fileTypeLabel: request.fileTypeLabel,
-                    statusSeverity: request.statusSeverity,
-                    resourceFilter: nil,
-                    searchTokens: Self.searchTokens(for: request)
-                )
+                projection = Self.projection(for: request, inputs: inputs)
             }
             projection.resourceFilter = resourceFilter
             entries[request.id] = Entry(
@@ -129,29 +143,50 @@ extension NetworkRequest.Display {
             entries.removeAll()
         }
 
-        private static func searchTokens(for request: NetworkRequest) -> [String] {
+        private static func projection(
+            for request: NetworkRequest,
+            inputs: NetworkRequest.Display.ProjectionInputs
+        ) -> NetworkRequest.Display.Projection {
+            NetworkRequest.Display.Projection(
+                id: request.id,
+                displayName: inputs.requestURLSummary.displayName,
+                fileTypeLabel: inputs.fileTypeLabel,
+                statusSeverity: request.statusSeverity,
+                resourceFilter: nil,
+                searchTokens: Self.searchTokens(for: request, inputs: inputs)
+            )
+        }
+
+        private static func searchTokens(
+            for request: NetworkRequest,
+            inputs: NetworkRequest.Display.ProjectionInputs
+        ) -> [String] {
             let statusCodeLabel = request.response.map { String($0.status) } ?? ""
-            return [
-                request.request.url,
-                request.request.method,
-                statusCodeLabel,
-                request.response?.statusText ?? "",
-                request.fileTypeLabel,
-            ]
+            return uniqueNonEmpty(
+                inputs.requestURLSummary.searchTokens
+                + (inputs.responseURLSummary?.searchTokens ?? [])
+                + [
+                    request.request.method,
+                    statusCodeLabel,
+                    request.response?.statusText ?? "",
+                    inputs.fileTypeLabel,
+                ]
+            )
         }
 
         private static func resourceFilter(
             for request: NetworkRequest,
+            inputs: NetworkRequest.Display.ProjectionInputs,
             classifier: NetworkRequest.Display.MediaPreviewClassifier
         ) -> NetworkRequest.Display.ResourceFilter {
             guard let response = request.response else {
                 if let resourceType = request.resourceType {
                     return NetworkRequest.Display.ResourceFilter(resourceType: resourceType)
                 }
-                return Self.resourceFilter(mimeType: nil, url: request.request.url, classifier: classifier)
+                return Self.resourceFilter(mimeType: nil, urlSummary: inputs.requestURLSummary, classifier: classifier)
             }
 
-            let responseMimeType = networkDisplayMIMEType(from: response)
+            let responseMimeType = inputs.responseDisplayMIMEType
             if let resourceType = request.resourceType,
                shouldKeepResourceTypeForURLInferredMedia(resourceType) {
                 if case .previewable = classifier(responseMimeType, nil) {
@@ -160,51 +195,43 @@ extension NetworkRequest.Display {
                 return NetworkRequest.Display.ResourceFilter(resourceType: resourceType)
             }
 
-            let responseURL = response.url
-            switch classifier(responseMimeType, responseURL) {
+            let responseURLSummary = inputs.responseURLSummary ?? NetworkRequest.Display.URLSummary(url: response.url)
+            switch classifier(responseMimeType, responseURLSummary.rawURL) {
             case .previewable:
                 return .media
             case .notPreviewable:
                 if request.resourceType == .image || request.resourceType == .media {
                     return .media
                 }
-                return Self.resourceFilter(mimeType: responseMimeType, url: responseURL, classifier: classifier)
+                return Self.resourceFilter(mimeType: responseMimeType, urlSummary: responseURLSummary, classifier: classifier)
             case .unknown:
                 break
             }
             if let resourceType = request.resourceType {
                 return NetworkRequest.Display.ResourceFilter(resourceType: resourceType)
             }
-            return Self.resourceFilter(mimeType: responseMimeType, url: responseURL, classifier: classifier)
+            return Self.resourceFilter(mimeType: responseMimeType, urlSummary: responseURLSummary, classifier: classifier)
         }
 
         private static func resourceFilter(
             mimeType: String?,
-            url: String,
+            urlSummary: NetworkRequest.Display.URLSummary,
             classifier: NetworkRequest.Display.MediaPreviewClassifier
         ) -> NetworkRequest.Display.ResourceFilter {
-            let normalizedMimeType = mimeType?
-                .split(separator: ";", maxSplits: 1, omittingEmptySubsequences: true)
-                .first?
-                .lowercased() ?? ""
-            let pathExtension = URL(string: url)?.pathExtension.lowercased() ?? ""
+            NetworkRequest.Display.ResourceFilter.inferred(
+                mimeType: mimeType,
+                pathExtension: urlSummary.pathExtension,
+                mediaPreviewClassification: classifier(mimeType, urlSummary.rawURL)
+            )
+        }
 
-            if case .previewable = classifier(mimeType, url) {
-                return .media
+        private static func uniqueNonEmpty(_ values: [String]) -> [String] {
+            var seen: Set<String> = []
+            var result: [String] = []
+            for value in values where value.isEmpty == false && seen.insert(value).inserted {
+                result.append(value)
             }
-            if normalizedMimeType == "text/css" || pathExtension == "css" {
-                return .stylesheet
-            }
-            if normalizedMimeType.hasPrefix("font/") || ["woff", "woff2", "ttf", "otf"].contains(pathExtension) {
-                return .font
-            }
-            if normalizedMimeType.contains("javascript") || ["js", "mjs"].contains(pathExtension) {
-                return .script
-            }
-            if normalizedMimeType.contains("html") {
-                return .document
-            }
-            return .other
+            return result
         }
     }
 }

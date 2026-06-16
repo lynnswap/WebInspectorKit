@@ -40,6 +40,36 @@ func displayRequestsApplySearchFilterAndNewestFirstOrder() async throws {
     #expect(requests.map(\.id.requestID.rawValue) == ["2"])
 }
 
+@Test(
+    "Network display names use URL path segments with authority fallback",
+    arguments: [
+        ("https://www.google.com/", "www.google.com"),
+        ("https://www.google.com", "www.google.com"),
+        ("https://example.com/foo/", "foo"),
+        ("https://example.com/a%20b", "a b"),
+        ("https://example.com/a%2Fb", "a/b"),
+        ("https://example.com/画像.png", "画像.png"),
+        ("https://example.com:8443/", "example.com:8443"),
+        ("about:blank", "blank"),
+        ("data:text/plain,hello", "data:text/plain,hello"),
+    ]
+)
+@MainActor
+func displayProjectionUsesReadableURLDisplayName(url: String, expectedDisplayName: String) async throws {
+    let network = NetworkSession()
+    let requestID = applyRequest(
+        to: network,
+        requestID: "1",
+        url: url,
+        resourceType: .document,
+        mimeType: "text/html",
+        timestamp: 1
+    )
+    let model = NetworkPanelModel(network: network)
+
+    #expect(model.displayProjection(for: requestID)?.displayName == expectedDisplayName)
+}
+
 @Test
 @MainActor
 func mediaFilterIncludesPreviewableMediaResponses() async throws {
@@ -213,6 +243,7 @@ func mediaPreviewSupportClassifiesAVIFAndExcludesSVG() {
     #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: "image/x-png", url: nil) == .image)
     #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: "image/pjpeg", url: nil) == .image)
     #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: "image/x-unknown", url: "https://cdn.example.com/photo.png") == .image)
+    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: nil, url: "https://cdn.example.com/画像.png") == .image)
     #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: "image/svg+xml", url: "https://cdn.example.com/icon.svg") == nil)
     #expect(NetworkRequest.Display.MediaPreviewSupport.classification(mimeType: "image/svg+xml", url: "https://cdn.example.com/icon.svg") == .notPreviewable)
     #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: "text/javascript", url: "https://cdn.example.com/player.mp4") == nil)

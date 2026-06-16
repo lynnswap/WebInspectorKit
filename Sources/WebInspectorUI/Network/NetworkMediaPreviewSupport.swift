@@ -240,7 +240,7 @@ extension NetworkRequest.Display {
             guard let url else {
                 return nil
             }
-            return URL(string: url)?.pathExtension.lowercased()
+            return NetworkRequest.Display.URLSummary(url: url).pathExtension
         }
 
         private static func shouldInferFromURL(mimeType: String?) -> Bool {
