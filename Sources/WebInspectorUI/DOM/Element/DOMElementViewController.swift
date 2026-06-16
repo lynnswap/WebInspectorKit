@@ -23,9 +23,16 @@ package final class DOMElementViewController: UICollectionViewController {
     private var displayedNodeStyles: CSSNodeStyles?
 
 #if DEBUG
+    private struct StyleRenderWaiter {
+        var continuation: CheckedContinuation<Bool, Never>
+        var timeoutTask: Task<Void, Never>
+    }
+
+    package var disablesSnapshotAnimationsForTesting = false
     package private(set) var lastSnapshotAnimatedForTesting = false
-    private var elementStylesObservationDelivery: PortableObservationTracking.Token?
-    private var selectedNodeStyleObservationDelivery: PortableObservationTracking.Token?
+    private var styleRenderGeneration = 0
+    private var nextStyleRenderWaiterID: UInt64 = 0
+    private var styleRenderWaiters: [UInt64: StyleRenderWaiter] = [:]
 #endif
 
     private lazy var dataSource = makeDataSource()
@@ -41,6 +48,9 @@ package final class DOMElementViewController: UICollectionViewController {
     }
 
     isolated deinit {
+#if DEBUG
+        resolveStyleRenderWaitersForTesting(result: false)
+#endif
         inspection.dom.setSelectedNodeStyleHydrationActive(false)
         elementStylesObservation?.cancel()
         selectedNodeStyleObservation?.cancel()
@@ -177,9 +187,6 @@ package final class DOMElementViewController: UICollectionViewController {
                 unavailableState: selectedState
             )
         }
-#if DEBUG
-        elementStylesObservationDelivery = token
-#endif
         elementStylesObservation = token
     }
 
@@ -188,9 +195,6 @@ package final class DOMElementViewController: UICollectionViewController {
             observedNodeStyles = nil
             selectedNodeStyleObservation?.cancel()
             selectedNodeStyleObservation = nil
-#if DEBUG
-            selectedNodeStyleObservationDelivery = nil
-#endif
             render(unavailableState)
             return
         }
@@ -208,9 +212,6 @@ package final class DOMElementViewController: UICollectionViewController {
             self?.render(nodeStyles)
         }
         selectedNodeStyleObservation = token
-#if DEBUG
-        selectedNodeStyleObservationDelivery = token
-#endif
     }
 
     private func render(_ nodeStyles: CSSNodeStyles) {
@@ -258,6 +259,9 @@ package final class DOMElementViewController: UICollectionViewController {
         if contentUnavailableConfiguration != nil {
             contentUnavailableConfiguration = nil
         }
+#if DEBUG
+        finishStyleRenderForTesting()
+#endif
     }
 
     private func renderStyles(_ nodeStyles: CSSNodeStyles) {
@@ -270,7 +274,11 @@ package final class DOMElementViewController: UICollectionViewController {
     private func applyEmptySnapshot() {
         expandedUnusedVariableSectionIDs.removeAll()
         let snapshot = NSDiffableDataSourceSnapshot<CSSStyle.Section.ID, ItemIdentifier>()
-        dataSource.apply(snapshot, animatingDifferences: false)
+        dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
+#if DEBUG
+            self?.finishStyleRenderForTesting()
+#endif
+        }
     }
 
     private func applySnapshot(for nodeStyles: CSSNodeStyles, animatingDifferences: Bool = false) {
@@ -308,14 +316,26 @@ package final class DOMElementViewController: UICollectionViewController {
             }
         }
         let currentSnapshot = dataSource.snapshot()
-        guard currentSnapshot.sectionIdentifiers != snapshot.sectionIdentifiers
-            || currentSnapshot.itemIdentifiers != snapshot.itemIdentifiers else {
-            return
-        }
 #if DEBUG
         lastSnapshotAnimatedForTesting = animatingDifferences
 #endif
-        dataSource.apply(snapshot, animatingDifferences: animatingDifferences)
+        guard currentSnapshot.sectionIdentifiers != snapshot.sectionIdentifiers
+            || currentSnapshot.itemIdentifiers != snapshot.itemIdentifiers else {
+#if DEBUG
+            finishStyleRenderForTesting()
+#endif
+            return
+        }
+#if DEBUG
+        let shouldAnimateSnapshot = animatingDifferences && !disablesSnapshotAnimationsForTesting
+#else
+        let shouldAnimateSnapshot = animatingDifferences
+#endif
+        dataSource.apply(snapshot, animatingDifferences: shouldAnimateSnapshot) { [weak self] in
+#if DEBUG
+            self?.finishStyleRenderForTesting()
+#endif
+        }
     }
 
     private func section(for sectionID: CSSStyle.Section.ID) -> CSSStyle.Section? {
@@ -350,12 +370,57 @@ package final class DOMElementViewController: UICollectionViewController {
     }
 
 #if DEBUG
-    package var elementStylesObservationDeliveryForTesting: PortableObservationTracking.Token? {
-        elementStylesObservationDelivery
+    package var styleRenderGenerationForTesting: Int {
+        styleRenderGeneration
     }
 
-    package var selectedNodeStyleObservationDeliveryForTesting: PortableObservationTracking.Token? {
-        selectedNodeStyleObservationDelivery
+    package func waitForStyleRenderForTesting(
+        after generation: Int,
+        timeout: Duration = .seconds(1)
+    ) async -> Bool {
+        if styleRenderGeneration > generation {
+            return true
+        }
+
+        return await withCheckedContinuation { continuation in
+            nextStyleRenderWaiterID &+= 1
+            let waiterID = nextStyleRenderWaiterID
+            let timeoutTask = Task { [weak self] in
+                do {
+                    try await Task.sleep(for: timeout)
+                } catch {
+                    return
+                }
+                self?.resolveStyleRenderWaiterForTesting(id: waiterID, result: false)
+            }
+            styleRenderWaiters[waiterID] = StyleRenderWaiter(
+                continuation: continuation,
+                timeoutTask: timeoutTask
+            )
+
+            if styleRenderGeneration > generation {
+                resolveStyleRenderWaiterForTesting(id: waiterID, result: true)
+            }
+        }
+    }
+
+    private func finishStyleRenderForTesting() {
+        styleRenderGeneration += 1
+        resolveStyleRenderWaitersForTesting(result: true)
+    }
+
+    private func resolveStyleRenderWaitersForTesting(result: Bool) {
+        for waiterID in Array(styleRenderWaiters.keys) {
+            resolveStyleRenderWaiterForTesting(id: waiterID, result: result)
+        }
+    }
+
+    private func resolveStyleRenderWaiterForTesting(id: UInt64, result: Bool) {
+        guard let waiter = styleRenderWaiters.removeValue(forKey: id) else {
+            return
+        }
+        waiter.timeoutTask.cancel()
+        waiter.continuation.resume(returning: result)
     }
 #endif
 }

@@ -1049,7 +1049,9 @@ struct DOMContainerTests {
     }
 
     private func makeElementViewController(dom: DOMSession) -> DOMElementViewController {
-        DOMElementViewController(inspection: AttachedInspection(dom: dom))
+        let viewController = DOMElementViewController(inspection: AttachedInspection(dom: dom))
+        viewController.disablesSnapshotAnimationsForTesting = true
+        return viewController
     }
 
     @discardableResult
@@ -1520,17 +1522,15 @@ struct DOMContainerTests {
         in viewController: DOMElementViewController,
         condition: @escaping @MainActor @Sendable () -> Bool
     ) async -> Bool {
-        await waitForObservedCondition(
-            deliveries: {
-                [
-                    viewController.selectedNodeStyleObservationDeliveryForTesting,
-                    viewController.elementStylesObservationDeliveryForTesting,
-                ].compactMap { $0 }
-            },
-            sample: {
-                sampleRenderedCondition(in: viewController, condition: condition)
-            }
-        )
+        let generation = viewController.styleRenderGenerationForTesting
+        if sampleRenderedCondition(in: viewController, condition: condition) {
+            return true
+        }
+
+        guard await viewController.waitForStyleRenderForTesting(after: generation) else {
+            return sampleRenderedCondition(in: viewController, condition: condition)
+        }
+        return sampleRenderedCondition(in: viewController, condition: condition)
     }
 
     private func sampleRenderedCondition(
