@@ -148,6 +148,19 @@ extension DOMSession {
         guard let intent = highlightNodeIntent(for: nodeID) else {
             return
         }
+        let highlightedTargetID: ProtocolTarget.ID? = if case let .highlightNode(target) = intent {
+            target.commandTargetID
+        } else {
+            nil
+        }
+        await hideStaleHighlights(
+            preferredHideTargetID: nil,
+            preserving: highlightedTargetID,
+            includeCurrentPageFallback: false
+        )
+        guard let intent = highlightNodeIntent(for: nodeID) else {
+            return
+        }
         do {
             try await perform(intent)
         } catch {
