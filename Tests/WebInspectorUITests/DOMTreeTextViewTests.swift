@@ -92,6 +92,35 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func pageHighlightActionsAreSuppressedWhileElementPickerIsActive() async throws {
+        let session = makeDOMSession()
+        session.isSelectingElement = true
+        let highlightRecorder = NodeActionRecorder()
+        let restoreRecorder = VoidActionRecorder()
+        let view = DOMTreeTextView(
+            dom: session,
+            highlightNodeAction: { nodeID in
+                highlightRecorder.record(nodeID)
+            },
+            restoreHighlightAction: {
+                restoreRecorder.record()
+            }
+        )
+        view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
+        view.layoutIfNeeded()
+
+        view.primaryClickRowForTesting(containing: "<input disabled>")
+        view.hoverRowForTesting(containing: "<article")
+        view.endHoverForTesting()
+        await Task.yield()
+        await Task.yield()
+
+        #expect(session.selectedNode?.localName == "input")
+        #expect(highlightRecorder.recordedNodeIDs.isEmpty)
+        #expect(restoreRecorder.recordCount == 0)
+    }
+
+    @Test
     func expandedElementRendersChildrenAndClosingTag() throws {
         let view = makeTreeView()
 
@@ -283,38 +312,42 @@ private final class NodeRequestRecorder {
 
 @MainActor
 private final class NodeActionRecorder {
-    private var nodeID: DOMNode.ID?
+    private var nodeIDs: [DOMNode.ID] = []
     private var continuation: CheckedContinuation<DOMNode.ID, Never>?
 
     func record(_ nodeID: DOMNode.ID) {
-        self.nodeID = nodeID
+        nodeIDs.append(nodeID)
         continuation?.resume(returning: nodeID)
         continuation = nil
     }
 
     func nextNodeID() async -> DOMNode.ID {
-        if let nodeID {
+        if let nodeID = nodeIDs.first {
             return nodeID
         }
         return await withCheckedContinuation { continuation in
             self.continuation = continuation
         }
     }
+
+    var recordedNodeIDs: [DOMNode.ID] {
+        nodeIDs
+    }
 }
 
 @MainActor
 private final class VoidActionRecorder {
-    private var didRecord = false
+    private(set) var recordCount = 0
     private var continuation: CheckedContinuation<Void, Never>?
 
     func record() {
-        didRecord = true
+        recordCount += 1
         continuation?.resume()
         continuation = nil
     }
 
     func next() async {
-        if didRecord {
+        if recordCount > 0 {
             return
         }
         await withCheckedContinuation { continuation in

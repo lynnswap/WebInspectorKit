@@ -910,6 +910,9 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
             guard let self else {
                 return
             }
+            guard !self.dom.isSelectingElement else {
+                return
+            }
             switch reason {
             case .selection:
                 guard self.dom.selectedNodeID == nodeID else {
@@ -929,7 +932,8 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         Task { @MainActor [weak self, restoreHighlightAction] in
             await Task.yield()
             guard let self,
-                  self.hoveredNodeID == nil else {
+                  self.hoveredNodeID == nil,
+                  !self.dom.isSelectingElement else {
                 return
             }
             await restoreHighlightAction?()
