@@ -170,6 +170,16 @@ extension DOMSession {
         if !hasPendingSelectionRequest,
            let selectedNodeID,
            let intent = highlightNodeIntent(for: selectedNodeID) {
+            let selectedHighlightTargetID: ProtocolTarget.ID? = if case let .highlightNode(target) = intent {
+                target.commandTargetID
+            } else {
+                nil
+            }
+            await hideStaleHighlights(
+                preferredHideTargetID: preferredHideTargetID,
+                preserving: selectedHighlightTargetID,
+                includeCurrentPageFallback: false
+            )
             do {
                 try await perform(intent)
             } catch {
@@ -178,9 +188,22 @@ extension DOMSession {
             return
         }
 
+        await hideStaleHighlights(
+            preferredHideTargetID: preferredHideTargetID,
+            preserving: nil,
+            includeCurrentPageFallback: true
+        )
+    }
+
+    private func hideStaleHighlights(
+        preferredHideTargetID: ProtocolTarget.ID?,
+        preserving preservedTargetID: ProtocolTarget.ID?,
+        includeCurrentPageFallback: Bool
+    ) async {
         var targetIDs: [ProtocolTarget.ID] = []
-        for targetID in [preferredHideTargetID, highlightController.targetID, currentPageTargetID].compactMap(\.self)
-        where !targetIDs.contains(targetID) {
+        let fallbackTargetID = includeCurrentPageFallback ? currentPageTargetID : nil
+        for targetID in [preferredHideTargetID, highlightController.targetID, fallbackTargetID].compactMap(\.self)
+        where targetID != preservedTargetID && !targetIDs.contains(targetID) {
             targetIDs.append(targetID)
         }
         for targetID in targetIDs {
