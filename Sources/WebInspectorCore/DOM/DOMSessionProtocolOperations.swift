@@ -305,6 +305,9 @@ extension DOMSession {
             fallbackTargetID: fallbackTargetID,
             preserving: preservedTargetID
         ) {
+            guard !Task.isCancelled else {
+                return
+            }
             guard containsTarget(targetID) else {
                 highlightController.clearHighlight(targetID: targetID)
                 continue

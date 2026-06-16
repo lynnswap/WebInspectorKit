@@ -4377,6 +4377,102 @@ func directHighlightStopsWhenCancelledDuringStaleHide() async throws {
 }
 
 @Test
+func cancelledStaleHideStopsBeforeClearingNextTarget() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    let pageHTMLID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(2))
+    await receiveAndApplyRootMessage(
+        transport,
+        message: #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","isProvisional":false}}}"#,
+        in: session
+    )
+    _ = await session.attachment.dom.replaceDocumentRoot(
+        WebInspectorCore.DOMNode.Payload(
+            nodeID: .init(101),
+            nodeType: .document,
+            nodeName: "#document",
+            regularChildren: .loaded([
+                WebInspectorCore.DOMNode.Payload(nodeID: .init(102), nodeType: .element, nodeName: "HTML", localName: "html"),
+            ])
+        ),
+        targetID: .frameAd
+    )
+    let frameHTMLID = try #require(await session.attachment.dom.snapshot().currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(102))])
+
+    let countBeforeFrameHighlight = await backend.sentTargetMessages().count
+    let frameHighlightTask = Task {
+        await session.attachment.dom.highlightNode(for: frameHTMLID)
+    }
+    let frameHighlight = try await waitForTargetMessage(
+        backend,
+        method: "DOM.highlightNode",
+        after: countBeforeFrameHighlight
+    )
+    await receiveTargetReply(
+        transport,
+        targetID: frameHighlight.targetIdentifier,
+        messageID: try messageID(frameHighlight.message),
+        result: "{}"
+    )
+    await frameHighlightTask.value
+
+    let countBeforePageHighlight = await backend.sentTargetMessages().count
+    let pageHighlightTask = Task {
+        await session.attachment.dom.highlightNode(for: pageHTMLID)
+    }
+    let failedFrameHide = try await waitForTargetMessage(
+        backend,
+        method: "DOM.hideHighlight",
+        after: countBeforePageHighlight
+    )
+    #expect(failedFrameHide.targetIdentifier == ProtocolTarget.ID.frameAd)
+    let countBeforeFailedFrameHideReply = await backend.sentTargetMessages().count
+    await receiveTargetErrorReply(
+        transport,
+        targetID: failedFrameHide.targetIdentifier,
+        messageID: try messageID(failedFrameHide.message),
+        message: "Cannot hide frame highlight"
+    )
+    let pageHighlight = try await waitForTargetMessage(
+        backend,
+        method: "DOM.highlightNode",
+        after: countBeforeFailedFrameHideReply
+    )
+    #expect(pageHighlight.targetIdentifier == ProtocolTarget.ID.pageMain)
+    await receiveTargetReply(
+        transport,
+        targetID: pageHighlight.targetIdentifier,
+        messageID: try messageID(pageHighlight.message),
+        result: "{}"
+    )
+    await pageHighlightTask.value
+
+    let countBeforeHideAll = await backend.sentTargetMessages().count
+    let hideTask = Task {
+        await session.attachment.dom.hideNodeHighlight()
+    }
+    let frameHide = try await waitForTargetMessage(
+        backend,
+        method: "DOM.hideHighlight",
+        after: countBeforeHideAll
+    )
+    #expect(frameHide.targetIdentifier == ProtocolTarget.ID.frameAd)
+
+    hideTask.cancel()
+    let countBeforeFrameHideReply = await backend.sentTargetMessages().count
+    await receiveTargetReply(
+        transport,
+        targetID: frameHide.targetIdentifier,
+        messageID: try messageID(frameHide.message),
+        result: "{}"
+    )
+    await hideTask.value
+    #expect(await backend.sentTargetMessages().count == countBeforeFrameHideReply)
+}
+
+@Test
 func directHighlightStopsWhenPickerStartsDuringStaleHide() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
