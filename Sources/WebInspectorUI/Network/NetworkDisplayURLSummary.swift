@@ -64,9 +64,6 @@ extension NetworkRequest.Display {
             if let components = URLComponents(string: rawURL, encodingInvalidCharacters: false) {
                 return components
             }
-            guard rawURL.unicodeScalars.contains(where: { $0.value > 0x7f }) else {
-                return nil
-            }
             return URLComponents(string: rawURL, encodingInvalidCharacters: true)
         }
 
