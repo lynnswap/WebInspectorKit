@@ -230,8 +230,8 @@ final class DOMSessionElementStyleHydrationController {
         return true
     }
 
-    func isRefreshing(identity: CSSNodeStyles.Identity) -> Bool {
-        activeRefresh?.token.identity == identity
+    func isRefreshing(id: CSSNodeStyles.ID) -> Bool {
+        activeRefresh?.token.id == id
     }
 
     @discardableResult

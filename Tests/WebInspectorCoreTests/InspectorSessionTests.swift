@@ -97,17 +97,17 @@ func connectBootstrapsWebPageTargetWithoutDomainMetadataAsCSSCapable() async thr
 
     let htmlID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(2))
     await session.attachment.dom.selectNode(htmlID)
-    let identity: CSSNodeStyles.Identity
-    switch await session.attachment.dom.selectedCSSNodeStyleIdentity() {
-    case let .success(resolvedIdentity):
-        identity = resolvedIdentity
+    let stylesID: CSSNodeStyles.ID
+    switch await session.attachment.dom.selectedCSSNodeStylesID() {
+    case let .success(resolvedID):
+        stylesID = resolvedID
     case let .failure(reason):
-        Issue.record("Expected CSS identity for web-page target, got \(reason)")
+        Issue.record("Expected CSS node styles ID for web-page target, got \(reason)")
         return
     }
 
     #expect(bootstrapMessages.compactMap { try? messageMethod($0.message) }.contains("CSS.enable") == false)
-    #expect(identity.targetID == ProtocolTarget.ID.pageMain)
+    #expect(stylesID.targetID == ProtocolTarget.ID.pageMain)
 }
 
 @Test
@@ -379,7 +379,7 @@ func networkResponseBodyFetchAppliesResultToCoreRequest() async throws {
     )
     let responseBody = await request.responseBody
     let body = try #require(responseBody)
-    #expect(await body.fetchState == .available)
+    #expect(await body.phase == .available)
 
     let sentCountBeforeFinish = await backend.sentTargetMessages().count
     await session.attachment.network.fetchResponseBody(for: request.id)
@@ -405,7 +405,7 @@ func networkResponseBodyFetchAppliesResultToCoreRequest() async throws {
     )
     await fetchTask.value
 
-    #expect(await body.fetchState == .loaded)
+    #expect(await body.phase == .loaded)
     #expect(await body.textRepresentation == #"{"ok":true}"#)
     let preparation = try #require(await body.prepareTextRepresentation())
     await preparation.wait()
@@ -439,7 +439,7 @@ func networkResponseBodyFetchErrorDoesNotRetry() async throws {
     let request = try #require(await session.attachment.network.request(for: .init(targetID: .pageMain, requestID: .init("request-error"))))
     let responseBody = await request.responseBody
     let body = try #require(responseBody)
-    #expect(await body.fetchState == .available)
+    #expect(await body.phase == .available)
 
     let sentCount = await backend.sentTargetMessages().count
     let fetchTask = Task {
@@ -454,7 +454,7 @@ func networkResponseBodyFetchErrorDoesNotRetry() async throws {
     )
     await fetchTask.value
 
-    guard case .failed = await body.fetchState else {
+    guard case .failed = await body.phase else {
         Issue.record("Expected response body fetch to fail")
         return
     }
@@ -489,8 +489,8 @@ func selectedElementStyleRefreshLoadsCSSSession() async throws {
     await refreshTask.value
 
     let styles = try #require(session.attachment.dom.elementStyles.selectedNodeStyles)
-    #expect(session.attachment.dom.elementStyles.selectedState == .loaded)
-    #expect(styles.identity.nodeID == bodyID)
+    #expect(session.attachment.dom.elementStyles.selectedPhase == .loaded)
+    #expect(styles.id.nodeID == bodyID)
     #expect(styles.sections.map(\.title) == ["element.style", "body"])
     #expect(styles.sections[1].style.cssProperties.first?.name == "margin")
     #expect(styles.computedProperties == [CSSComputedStyleProperty(name: "display", value: "block")])
@@ -524,10 +524,10 @@ func selectedNodeStylesTracksNewSelectionWhileElementStylesLoad() async throws {
     let session = InspectorSession(dom: dom)
 
     dom.selectNode(bodyID)
-    let bodyIdentity = try #require(dom.selectedCSSNodeStyleIdentity().successValue)
+    let bodyStylesID = try #require(dom.selectedCSSNodeStylesID().successValue)
     let bodyStyles = try applySingleRuleStyles(
         to: css,
-        identity: bodyIdentity,
+        id: bodyStylesID,
         selector: "body",
         marginValue: "0",
         marginText: "margin: 0;"
@@ -535,19 +535,19 @@ func selectedNodeStylesTracksNewSelectionWhileElementStylesLoad() async throws {
     #expect(session.attachment.dom.selectedNodeStyles === bodyStyles)
 
     dom.selectNode(inputID)
-    let inputIdentity = try #require(dom.selectedCSSNodeStyleIdentity().successValue)
+    let inputStylesID = try #require(dom.selectedCSSNodeStylesID().successValue)
     let pendingInputStyles = try #require(session.attachment.dom.selectedNodeStyles)
-    #expect(pendingInputStyles.identity == inputIdentity)
-    #expect(pendingInputStyles.state == .needsRefresh)
-    let inputToken = try #require(css.beginRefresh(identity: inputIdentity))
+    #expect(pendingInputStyles.id == inputStylesID)
+    #expect(pendingInputStyles.phase == .needsRefresh)
+    let inputToken = css.beginRefresh(id: inputStylesID)
     let loadingInputStyles = try #require(session.attachment.dom.selectedNodeStyles)
-    #expect(loadingInputStyles.identity == inputIdentity)
-    #expect(loadingInputStyles.state == .loading)
+    #expect(loadingInputStyles.id == inputStylesID)
+    #expect(loadingInputStyles.phase == .loading)
     #expect(loadingInputStyles.sections.isEmpty)
 
     let inputStyles = try applySingleRuleStyles(
         to: css,
-        identity: inputIdentity,
+        id: inputStylesID,
         token: inputToken,
         selector: "input",
         marginValue: "8px",
@@ -581,9 +581,9 @@ func selectedElementStyleHydrationLoadsCSSSessionWhenActive() async throws {
     )
 
     await session.attachment.dom.waitUntilSelectedStyleRefreshIdle()
-    #expect(session.attachment.dom.elementStyles.selectedState == .loaded)
+    #expect(session.attachment.dom.elementStyles.selectedPhase == .loaded)
     let styles = try #require(session.attachment.dom.elementStyles.selectedNodeStyles)
-    #expect(styles.identity.nodeID == bodyID)
+    #expect(styles.id.nodeID == bodyID)
     #expect(styles.sections.map(\.title) == ["element.style", "body"])
 }
 
@@ -614,8 +614,8 @@ func selectedElementStyleHydrationCancellationDoesNotPublishFailure() async thro
     )
 
     await session.attachment.dom.waitUntilSelectedStyleRefreshIdle()
-    #expect(session.attachment.dom.elementStyles.selectedNodeStyles?.identity.nodeID == htmlID)
-    #expect(session.attachment.dom.elementStyles.selectedState == .loaded)
+    #expect(session.attachment.dom.elementStyles.selectedNodeStyles?.id.nodeID == htmlID)
+    #expect(session.attachment.dom.elementStyles.selectedPhase == .loaded)
     #expect(session.lastError == nil)
 }
 
@@ -633,10 +633,10 @@ func selectedElementStyleHydrationCancellationResetsLoadingForFutureRefresh() as
     let firstSentCount = await backend.sentTargetMessages().count
     session.attachment.dom.setSelectedNodeStyleHydrationActive(true)
     _ = try await waitForCSSRefreshMessages(backend, after: firstSentCount)
-    #expect(session.attachment.dom.elementStyles.selectedState == .loading)
+    #expect(session.attachment.dom.elementStyles.selectedPhase == .loading)
 
     session.attachment.dom.setSelectedNodeStyleHydrationActive(false)
-    #expect(session.attachment.dom.elementStyles.selectedState == .needsRefresh)
+    #expect(session.attachment.dom.elementStyles.selectedPhase == .needsRefresh)
 
     let secondSentCount = await backend.sentTargetMessages().count
     session.attachment.dom.setSelectedNodeStyleHydrationActive(true)
@@ -649,7 +649,7 @@ func selectedElementStyleHydrationCancellationResetsLoadingForFutureRefresh() as
     )
 
     await session.attachment.dom.waitUntilSelectedStyleRefreshIdle()
-    #expect(session.attachment.dom.elementStyles.selectedState == .loaded)
+    #expect(session.attachment.dom.elementStyles.selectedPhase == .loaded)
     #expect(session.lastError == nil)
 }
 
@@ -669,14 +669,14 @@ func selectedElementStyleHydrationSelectionChangeStartsReplacementRefresh() asyn
 
     let firstMessages = try await waitForCSSRefreshMessages(backend, after: firstSentCount)
     #expect(try messageParameters(firstMessages.matched.message)["nodeId"] as? Int == 4)
-    #expect(session.attachment.dom.elementStyles.selectedState == .loading)
+    #expect(session.attachment.dom.elementStyles.selectedPhase == .loading)
 
     let secondSentCount = await backend.sentTargetMessages().count
     session.attachment.dom.selectNode(htmlID)
     let secondMessages = try await waitForCSSRefreshMessages(backend, after: secondSentCount)
     #expect(try messageParameters(secondMessages.matched.message)["nodeId"] as? Int == 2)
-    #expect(session.attachment.dom.elementStyles.selectedNodeStyles?.identity.nodeID == htmlID)
-    #expect(session.attachment.dom.elementStyles.selectedState == .loading)
+    #expect(session.attachment.dom.elementStyles.selectedNodeStyles?.id.nodeID == htmlID)
+    #expect(session.attachment.dom.elementStyles.selectedPhase == .loading)
     #expect(session.lastError == nil)
 }
 
@@ -741,8 +741,8 @@ func selectedElementStyleHydrationRefreshesAfterCSSEvents() async throws {
         styleSheetID: "sheet-body-refresh"
     )
     await session.attachment.dom.waitUntilSelectedStyleRefreshIdle()
-    #expect(session.attachment.dom.elementStyles.selectedNodeStyles?.identity.nodeID == bodyID)
-    #expect(session.attachment.dom.elementStyles.selectedState == .loaded)
+    #expect(session.attachment.dom.elementStyles.selectedNodeStyles?.id.nodeID == bodyID)
+    #expect(session.attachment.dom.elementStyles.selectedPhase == .loaded)
 
     let layoutChangedCount = await backend.sentTargetMessages().count
     await receiveTargetDispatch(
@@ -759,8 +759,8 @@ func selectedElementStyleHydrationRefreshesAfterCSSEvents() async throws {
         styleSheetID: "sheet-body-layout"
     )
     await session.attachment.dom.waitUntilSelectedStyleRefreshIdle()
-    #expect(session.attachment.dom.elementStyles.selectedNodeStyles?.identity.nodeID == bodyID)
-    #expect(session.attachment.dom.elementStyles.selectedState == .loaded)
+    #expect(session.attachment.dom.elementStyles.selectedNodeStyles?.id.nodeID == bodyID)
+    #expect(session.attachment.dom.elementStyles.selectedPhase == .loaded)
     #expect(session.lastError == nil)
 }
 
@@ -786,7 +786,7 @@ func selectedElementStyleHydrationCancelsAfterDocumentUpdateInvalidatesRoot() as
     )
 
     #expect(session.attachment.dom.currentPageRootNode == nil)
-    #expect(session.attachment.dom.elementStyles.selectedState == .unavailable(.noSelection))
+    #expect(session.attachment.dom.elementStyles.selectedPhase == .unavailable(.noSelection))
     #expect(await backend.sentTargetMessages().count == sentCount)
 }
 
@@ -810,7 +810,7 @@ func selectedElementStyleHydrationClearsAfterSelectedTargetDestroyed() async thr
     )
 
     #expect(session.attachment.dom.selectedNodeID == nil)
-    #expect(session.attachment.dom.elementStyles.selectedState == .unavailable(.noSelection))
+    #expect(session.attachment.dom.elementStyles.selectedPhase == .unavailable(.noSelection))
     #expect(session.lastError == nil)
 }
 
@@ -875,7 +875,7 @@ func selectedElementStyleHydrationMarksStaleWhenTransportTargetDisappearsBeforeD
     await dom.waitUntilSelectedStyleRefreshIdle()
 
     #expect(await backend.sentTargetMessages().count == sentCount)
-    #expect(css.selectedState == .unavailable(.staleNode(bodyID)))
+    #expect(css.selectedPhase == .unavailable(.staleNode(bodyID)))
     #expect(css.selectedNodeStyles == nil)
     #expect(recordedError == nil)
 }
@@ -932,8 +932,8 @@ func selectedElementStyleRefreshEnablesCSSAgentOnlyAfterBackendRequiresIt() asyn
     await refreshTask.value
 
     let styles = try #require(await session.attachment.dom.elementStyles.selectedNodeStyles)
-    #expect(await session.attachment.dom.elementStyles.selectedState == .loaded)
-    #expect(await styles.identity.nodeID == bodyID)
+    #expect(await session.attachment.dom.elementStyles.selectedPhase == .loaded)
+    #expect(await styles.id.nodeID == bodyID)
 }
 
 @Test
@@ -977,7 +977,7 @@ func selectedElementStyleRefreshDropsResultsWhenSelectionChanges() async throws 
     await secondRefresh.value
 
     let styles = try #require(session.attachment.dom.elementStyles.selectedNodeStyles)
-    #expect(styles.identity.nodeID == htmlID)
+    #expect(styles.id.nodeID == htmlID)
     #expect(styles.sections.map(\.title) == ["element.style", "html"])
 }
 
@@ -1040,7 +1040,7 @@ func cssPropertyToggleSendsSetStyleTextAndRefreshesStyles() async throws {
     await session.attachment.dom.waitUntilSelectedStyleRefreshIdle()
 
     let styles = try #require(session.attachment.dom.elementStyles.selectedNodeStyles)
-    #expect(session.attachment.dom.elementStyles.selectedState == .loaded)
+    #expect(session.attachment.dom.elementStyles.selectedPhase == .loaded)
     #expect(styles.sections[1].style.cssProperties[0].isEnabled == false)
 }
 
@@ -1064,14 +1064,14 @@ func cssAndDOMStyleInvalidationsMarkSelectedNodeStylesNeedsRefresh() async throw
     let messages = try await waitForCSSRefreshMessages(backend, after: sentCount)
     try await replyCSSRefresh(transport: transport, messages: messages, selector: "body", styleSheetID: "sheet-body")
     await refreshTask.value
-    #expect(await session.attachment.dom.elementStyles.selectedState == .loaded)
+    #expect(await session.attachment.dom.elementStyles.selectedPhase == .loaded)
 
     await receiveAndApplyRootMessage(
         transport,
         message: #"{"method":"CSS.styleSheetChanged","params":{"styleSheetId":"sheet-body"}}"#,
         in: session
     )
-    #expect(await session.attachment.dom.elementStyles.selectedState == .needsRefresh)
+    #expect(await session.attachment.dom.elementStyles.selectedPhase == .needsRefresh)
 
     let refreshAgainCount = await backend.sentTargetMessages().count
     let refreshAgain = Task {
@@ -1080,7 +1080,7 @@ func cssAndDOMStyleInvalidationsMarkSelectedNodeStylesNeedsRefresh() async throw
     let messagesAgain = try await waitForCSSRefreshMessages(backend, after: refreshAgainCount)
     try await replyCSSRefresh(transport: transport, messages: messagesAgain, selector: "body", styleSheetID: "sheet-body")
     await refreshAgain.value
-    #expect(await session.attachment.dom.elementStyles.selectedState == .loaded)
+    #expect(await session.attachment.dom.elementStyles.selectedPhase == .loaded)
 
     await receiveAndApplyTargetDispatch(
         transport,
@@ -1088,7 +1088,7 @@ func cssAndDOMStyleInvalidationsMarkSelectedNodeStylesNeedsRefresh() async throw
         message: #"{"method":"DOM.attributeModified","params":{"nodeId":4,"name":"class","value":"featured"}}"#,
         in: session
     )
-    #expect(await session.attachment.dom.elementStyles.selectedState == .needsRefresh)
+    #expect(await session.attachment.dom.elementStyles.selectedPhase == .needsRefresh)
 
     let refreshAfterAttributeCount = await backend.sentTargetMessages().count
     let refreshAfterAttribute = Task {
@@ -1097,7 +1097,7 @@ func cssAndDOMStyleInvalidationsMarkSelectedNodeStylesNeedsRefresh() async throw
     let messagesAfterAttribute = try await waitForCSSRefreshMessages(backend, after: refreshAfterAttributeCount)
     try await replyCSSRefresh(transport: transport, messages: messagesAfterAttribute, selector: "body", styleSheetID: "sheet-body")
     await refreshAfterAttribute.value
-    #expect(await session.attachment.dom.elementStyles.selectedState == .loaded)
+    #expect(await session.attachment.dom.elementStyles.selectedPhase == .loaded)
 
     await receiveAndApplyTargetDispatch(
         transport,
@@ -1105,7 +1105,7 @@ func cssAndDOMStyleInvalidationsMarkSelectedNodeStylesNeedsRefresh() async throw
         message: #"{"method":"DOM.attributeModified","params":{"nodeId":5,"name":"class","value":"child-only"}}"#,
         in: session
     )
-    #expect(await session.attachment.dom.elementStyles.selectedState == .needsRefresh)
+    #expect(await session.attachment.dom.elementStyles.selectedPhase == .needsRefresh)
 
     let refreshAfterRelatedAttributeCount = await backend.sentTargetMessages().count
     let refreshAfterRelatedAttribute = Task {
@@ -1122,7 +1122,7 @@ func cssAndDOMStyleInvalidationsMarkSelectedNodeStylesNeedsRefresh() async throw
         styleSheetID: "sheet-body"
     )
     await refreshAfterRelatedAttribute.value
-    #expect(await session.attachment.dom.elementStyles.selectedState == .loaded)
+    #expect(await session.attachment.dom.elementStyles.selectedPhase == .loaded)
 
     await receiveAndApplyTargetDispatch(
         transport,
@@ -1130,7 +1130,7 @@ func cssAndDOMStyleInvalidationsMarkSelectedNodeStylesNeedsRefresh() async throw
         message: #"{"method":"DOM.childNodeInserted","params":{"parentNodeId":4,"previousNodeId":5,"node":{"nodeId":6,"nodeType":1,"nodeName":"ASIDE","localName":"aside"}}}"#,
         in: session
     )
-    #expect(await session.attachment.dom.elementStyles.selectedState == .needsRefresh)
+    #expect(await session.attachment.dom.elementStyles.selectedPhase == .needsRefresh)
 
     let refreshAfterChildInsertCount = await backend.sentTargetMessages().count
     let refreshAfterChildInsert = Task {
@@ -1144,7 +1144,7 @@ func cssAndDOMStyleInvalidationsMarkSelectedNodeStylesNeedsRefresh() async throw
         styleSheetID: "sheet-body"
     )
     await refreshAfterChildInsert.value
-    #expect(await session.attachment.dom.elementStyles.selectedState == .loaded)
+    #expect(await session.attachment.dom.elementStyles.selectedPhase == .loaded)
 
     await receiveAndApplyTargetDispatch(
         transport,
@@ -1152,7 +1152,7 @@ func cssAndDOMStyleInvalidationsMarkSelectedNodeStylesNeedsRefresh() async throw
         message: #"{"method":"DOM.childNodeCountUpdated","params":{"nodeId":4,"childNodeCount":3}}"#,
         in: session
     )
-    #expect(await session.attachment.dom.elementStyles.selectedState == .needsRefresh)
+    #expect(await session.attachment.dom.elementStyles.selectedPhase == .needsRefresh)
 }
 
 @Test
@@ -1235,7 +1235,7 @@ func domMutationRemovingSelectedNodeClearsSelectedCSSNodeStyles() async throws {
     let messages = try await waitForCSSRefreshMessages(backend, after: sentCount)
     try await replyCSSRefresh(transport: transport, messages: messages, selector: "body", styleSheetID: "sheet-body")
     await refreshTask.value
-    #expect(await session.attachment.dom.elementStyles.selectedState == .loaded)
+    #expect(await session.attachment.dom.elementStyles.selectedPhase == .loaded)
 
     await receiveAndApplyTargetDispatch(
         transport,
@@ -1264,7 +1264,7 @@ func localDOMDeleteClearsSelectedCSSNodeStylesWithoutBackendMutationEvent() asyn
     let messages = try await waitForCSSRefreshMessages(backend, after: sentCount)
     try await replyCSSRefresh(transport: transport, messages: messages, selector: "body", styleSheetID: "sheet-body")
     await refreshTask.value
-    #expect(await session.attachment.dom.elementStyles.selectedState == .loaded)
+    #expect(await session.attachment.dom.elementStyles.selectedPhase == .loaded)
 
     let countBeforeDelete = await backend.sentTargetMessages().count
     let deleteTask = Task {
@@ -4816,7 +4816,7 @@ func selectedElementStyleHydrationWaitsForActiveAttachmentDuringBootstrap() asyn
     #expect(session.hasActiveConnection == false)
 
     session.attachment.dom.setSelectedNodeStyleHydrationActive(true)
-    #expect(session.attachment.dom.elementStyles.selectedState == .needsRefresh)
+    #expect(session.attachment.dom.elementStyles.selectedPhase == .needsRefresh)
     #expect(await backend.sentTargetMessages().count == sentCount)
 
     await receiveTargetReply(
@@ -4847,7 +4847,7 @@ func selectedElementStyleHydrationWaitsForActiveAttachmentDuringBootstrap() asyn
     )
 
     await session.attachment.dom.waitUntilSelectedStyleRefreshIdle()
-    #expect(session.attachment.dom.elementStyles.selectedState == .loaded)
+    #expect(session.attachment.dom.elementStyles.selectedPhase == .loaded)
 }
 
 @MainActor
@@ -5178,7 +5178,7 @@ private func hydrateSelectedBodyStyles(
         styleSheetID: "sheet-body"
     )
     await session.attachment.dom.waitUntilSelectedStyleRefreshIdle()
-    #expect(session.attachment.dom.elementStyles.selectedState == .loaded)
+    #expect(session.attachment.dom.elementStyles.selectedPhase == .loaded)
     return bodyID
 }
 
@@ -5246,13 +5246,13 @@ private func cssMatchedStylesResult(
 @MainActor
 private func applySingleRuleStyles(
     to css: CSSSession,
-    identity: CSSNodeStyles.Identity,
+    id: CSSNodeStyles.ID,
     token: CSSStyle.RefreshToken? = nil,
     selector: String,
     marginValue: String,
     marginText: String
 ) throws -> CSSNodeStyles {
-    let token = try #require(token ?? css.beginRefresh(identity: identity))
+    let token = token ?? css.beginRefresh(id: id)
     let styleSheetID = CSSStyleSheet.ID("test-sheet")
     let styleID = CSSStyle.ID(styleSheetID: styleSheetID, ordinal: 0)
     css.applyRefresh(
@@ -5282,7 +5282,7 @@ private func applySingleRuleStyles(
         inline: .init(),
         computed: []
     )
-    return try #require(css.nodeStyles(for: identity))
+    return try #require(css.nodeStyles(for: id))
 }
 
 private func waitForCurrentNode(

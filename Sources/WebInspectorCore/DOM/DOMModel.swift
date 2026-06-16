@@ -558,20 +558,20 @@ package final class DOMSession {
         return false
     }
 
-    package func selectedCSSNodeStyleIdentity() -> Result<CSSNodeStyles.Identity, CSSNodeStyles.UnavailableReason> {
+    package func selectedCSSNodeStylesID() -> Result<CSSNodeStyles.ID, CSSNodeStyles.UnavailableReason> {
         guard let selectedNodeID = selection.selectedNodeID else {
             return .failure(.noSelection)
         }
-        return cssNodeStyleIdentity(for: selectedNodeID)
+        return cssNodeStylesID(for: selectedNodeID)
     }
 
     package var selectedNodeStyles: CSSNodeStyles? {
         elementStyles.selectedNodeStyles
     }
 
-    package func cssNodeStyleIdentity(
+    package func cssNodeStylesID(
         for nodeID: DOMNode.ID
-    ) -> Result<CSSNodeStyles.Identity, CSSNodeStyles.UnavailableReason> {
+    ) -> Result<CSSNodeStyles.ID, CSSNodeStyles.UnavailableReason> {
         guard let node = node(for: nodeID) else {
             return .failure(.staleNode(nodeID))
         }
@@ -584,12 +584,11 @@ package final class DOMSession {
             return .failure(.cssUnavailableForTarget(targetID))
         }
         return .success(
-            CSSNodeStyles.Identity(
+            CSSNodeStyles.ID(
                 nodeID: nodeID,
                 targetID: targetID,
                 documentID: nodeID.documentID,
-                protocolNodeID: node.protocolNodeID,
-                targetCapabilities: capabilities
+                protocolNodeID: node.protocolNodeID
             )
         )
     }
@@ -708,10 +707,10 @@ package final class DOMSession {
         documentStore.clearOwnerHydrationTransactions(targetID: targetID)
     }
 
-    package func actionIdentity(
+    package func actionTarget(
         for nodeID: DOMNode.ID,
         commandTargetID: ProtocolTarget.ID? = nil
-    ) -> DOMAction.Identity? {
+    ) -> DOMAction.Target? {
         guard let node = node(for: nodeID),
               let resolvedCommandTargetID = commandTargetID ?? currentPageTargetID,
               targetGraph.containsTarget(resolvedCommandTargetID) else {
@@ -725,7 +724,7 @@ package final class DOMSession {
             .scoped(targetID: documentTargetID, nodeID: node.protocolNodeID)
         }
 
-        return DOMAction.Identity(
+        return DOMAction.Target(
             documentTargetID: documentTargetID,
             rawNodeID: node.protocolNodeID,
             commandTargetID: resolvedCommandTargetID,
@@ -738,10 +737,10 @@ package final class DOMSession {
         commandTargetID: ProtocolTarget.ID? = nil
     ) -> DOMCommand.Intent? {
         let resolvedCommandTargetID = commandTargetID ?? nodeID.documentID.targetID
-        guard let identity = actionIdentity(for: nodeID, commandTargetID: resolvedCommandTargetID) else {
+        guard let target = actionTarget(for: nodeID, commandTargetID: resolvedCommandTargetID) else {
             return nil
         }
-        return .highlightNode(identity: identity)
+        return .highlightNode(target: target)
     }
 
     package func hideHighlightIntent(targetID: ProtocolTarget.ID? = nil) -> DOMCommand.Intent? {
@@ -766,20 +765,20 @@ package final class DOMSession {
         for nodeID: DOMNode.ID,
         commandTargetID: ProtocolTarget.ID? = nil
     ) -> DOMCommand.Intent? {
-        guard let identity = actionIdentity(for: nodeID, commandTargetID: commandTargetID) else {
+        guard let target = actionTarget(for: nodeID, commandTargetID: commandTargetID) else {
             return nil
         }
-        return .getOuterHTML(identity: identity)
+        return .getOuterHTML(target: target)
     }
 
     package func removeNodeIntent(
         for nodeID: DOMNode.ID,
         commandTargetID: ProtocolTarget.ID? = nil
     ) -> DOMCommand.Intent? {
-        guard let identity = actionIdentity(for: nodeID, commandTargetID: commandTargetID) else {
+        guard let target = actionTarget(for: nodeID, commandTargetID: commandTargetID) else {
             return nil
         }
-        return .removeNode(identity: identity)
+        return .removeNode(target: target)
     }
 
     package func selectedNodeCopyText(_ kind: DOMNode.CopyTextKind) -> String? {
@@ -1502,9 +1501,9 @@ package final class DOMSession {
     }
 
     package func syncSelectedElementStyles() {
-        switch selectedCSSNodeStyleIdentity() {
-        case let .success(identity):
-            elementStyles.selectNodeStyles(identity: identity)
+        switch selectedCSSNodeStylesID() {
+        case let .success(id):
+            elementStyles.selectNodeStyles(id: id)
         case let .failure(reason):
             elementStyles.markSelectedNodeUnavailable(reason)
         }

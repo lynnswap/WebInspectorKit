@@ -228,18 +228,18 @@ package extension DOMCommand {
         case getDocument(targetID: ProtocolTarget.ID)
         case requestChildNodes(targetID: ProtocolTarget.ID, nodeID: DOMNode.ProtocolID, depth: Int)
         case requestNode(selectionRequestID: DOMSelection.Request.ID, targetID: ProtocolTarget.ID, objectID: String)
-        case highlightNode(identity: DOMAction.Identity)
+        case highlightNode(target: DOMAction.Target)
         case hideHighlight(targetID: ProtocolTarget.ID)
         case setInspectModeEnabled(targetID: ProtocolTarget.ID, enabled: Bool)
-        case getOuterHTML(identity: DOMAction.Identity)
-        case removeNode(identity: DOMAction.Identity)
+        case getOuterHTML(target: DOMAction.Target)
+        case removeNode(target: DOMAction.Target)
         case undo(targetID: ProtocolTarget.ID)
         case redo(targetID: ProtocolTarget.ID)
     }
 }
 
 package extension DOMAction {
-    struct Identity: Equatable, Hashable, Sendable {
+    struct Target: Equatable, Hashable, Sendable {
         package var documentTargetID: ProtocolTarget.ID
         package var rawNodeID: DOMNode.ProtocolID
         package var commandTargetID: ProtocolTarget.ID

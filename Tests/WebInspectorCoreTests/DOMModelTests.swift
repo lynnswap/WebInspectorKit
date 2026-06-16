@@ -1174,15 +1174,15 @@ func selectedNodeActionIntentsUseCommandIdentity() async throws {
     _ = await session.replaceDocumentRoot(pageDocumentWithoutIframe(), targetID: pageTargetID)
     let htmlID = try #require((await session.snapshot()).currentNodeIDByKey[.init(targetID: pageTargetID, nodeID: .init(2))])
 
-    let identity = DOMAction.Identity(
+    let identity = DOMAction.Target(
         documentTargetID: pageTargetID,
         rawNodeID: .init(2),
         commandTargetID: pageTargetID,
         commandNodeID: .protocolNode(.init(2))
     )
-    #expect(await session.actionIdentity(for: htmlID) == identity)
-    #expect(await session.outerHTMLIntent(for: htmlID) == .getOuterHTML(identity: identity))
-    #expect(await session.removeNodeIntent(for: htmlID) == .removeNode(identity: identity))
+    #expect(await session.actionTarget(for: htmlID) == identity)
+    #expect(await session.outerHTMLIntent(for: htmlID) == .getOuterHTML(target: identity))
+    #expect(await session.removeNodeIntent(for: htmlID) == .removeNode(target: identity))
 }
 
 @Test
@@ -1198,22 +1198,22 @@ func frameDocumentActionIdentityUsesMainTargetScopedCommandNode() async throws {
     _ = await session.replaceDocumentRoot(frameDocument(rootNodeID: 101), targetID: frameTargetID)
     let frameHTMLID = try #require((await session.snapshot()).currentNodeIDByKey[.init(targetID: frameTargetID, nodeID: .init(2))])
 
-    let identity = try #require(await session.actionIdentity(for: frameHTMLID, commandTargetID: pageTargetID))
+    let identity = try #require(await session.actionTarget(for: frameHTMLID, commandTargetID: pageTargetID))
 
     #expect(identity.documentTargetID == frameTargetID)
     #expect(identity.rawNodeID == .init(2))
     #expect(identity.commandTargetID == pageTargetID)
     #expect(identity.commandNodeID == .scoped(targetID: frameTargetID, nodeID: .init(2)))
-    #expect(await session.outerHTMLIntent(for: frameHTMLID, commandTargetID: pageTargetID) == .getOuterHTML(identity: identity))
-    #expect(await session.removeNodeIntent(for: frameHTMLID, commandTargetID: pageTargetID) == .removeNode(identity: identity))
+    #expect(await session.outerHTMLIntent(for: frameHTMLID, commandTargetID: pageTargetID) == .getOuterHTML(target: identity))
+    #expect(await session.removeNodeIntent(for: frameHTMLID, commandTargetID: pageTargetID) == .removeNode(target: identity))
 
-    let highlightIdentity = DOMAction.Identity(
+    let highlightIdentity = DOMAction.Target(
         documentTargetID: frameTargetID,
         rawNodeID: .init(2),
         commandTargetID: frameTargetID,
         commandNodeID: .protocolNode(.init(2))
     )
-    #expect(await session.highlightNodeIntent(for: frameHTMLID) == .highlightNode(identity: highlightIdentity))
+    #expect(await session.highlightNodeIntent(for: frameHTMLID) == .highlightNode(target: highlightIdentity))
 }
 
 @Test

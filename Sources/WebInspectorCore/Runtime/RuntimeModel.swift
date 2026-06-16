@@ -3,7 +3,7 @@ import WebInspectorTransport
 
 @MainActor
 @Observable
-package final class RuntimeExecutionContext {
+package final class RuntimeExecutionContext: Identifiable {
     package let id: RuntimeContext.ID
     package var targetID: ProtocolTarget.ID
     package var runtimeAgentTargetID: ProtocolTarget.ID

@@ -5,7 +5,7 @@ extension CSSStyle {
     @MainActor
     enum SectionBuilder {
     static func makeSections(
-        identity: CSSNodeStyles.Identity,
+        id: CSSNodeStyles.ID,
         matched: CSSStyle.MatchedStylesPayload,
         inline: CSSStyle.InlineStylesPayload,
         styleSheetHeaders: CSSStyleSheetHeaderRegistry
@@ -16,7 +16,7 @@ extension CSSStyle {
         if let inlineStyle = inline.inlineStyle {
             appendSection(
                 &sections,
-                identity: identity,
+                id: id,
                 ordinal: &ordinal,
                 kind: .inlineStyle,
                 title: "element.style",
@@ -28,7 +28,7 @@ extension CSSStyle {
         for match in matched.matchedRules.reversed() {
             appendRuleSection(
                 &sections,
-                identity: identity,
+                id: id,
                 ordinal: &ordinal,
                 match: match,
                 kind: .rule,
@@ -39,7 +39,7 @@ extension CSSStyle {
         if let attributesStyle = inline.attributesStyle {
             appendSection(
                 &sections,
-                identity: identity,
+                id: id,
                 ordinal: &ordinal,
                 kind: .attributesStyle,
                 title: "Attributes",
@@ -52,7 +52,7 @@ extension CSSStyle {
             for match in pseudo.matches.reversed() {
                 appendRuleSection(
                     &sections,
-                    identity: identity,
+                    id: id,
                     ordinal: &ordinal,
                     match: match,
                     kind: .pseudoElement(pseudo.pseudoID),
@@ -65,7 +65,7 @@ extension CSSStyle {
             if let inlineStyle = inherited.inlineStyle {
                 appendSection(
                     &sections,
-                    identity: identity,
+                    id: id,
                     ordinal: &ordinal,
                     kind: .inheritedInlineStyle(ancestorIndex: ancestorIndex),
                     title: "Inherited element.style",
@@ -76,7 +76,7 @@ extension CSSStyle {
             for match in inherited.matchedRules.reversed() {
                 appendRuleSection(
                     &sections,
-                    identity: identity,
+                    id: id,
                     ordinal: &ordinal,
                     match: match,
                     kind: .inheritedRule(ancestorIndex: ancestorIndex),
@@ -117,7 +117,7 @@ extension CSSStyle {
 
     private static func appendRuleSection(
         _ sections: inout [CSSStyle.Section],
-        identity: CSSNodeStyles.Identity,
+        id: CSSNodeStyles.ID,
         ordinal: inout Int,
         match: CSSRule.MatchPayload,
         kind: CSSStyle.Section.Kind,
@@ -132,7 +132,7 @@ extension CSSStyle {
             sourceLine: match.rule.sourceLine,
             styleSheetSourceLocation: styleSheetHeaders.sourceLocation(
                 for: match.rule,
-                targetID: identity.targetID
+                targetID: id.targetID
             ),
             origin: match.rule.origin,
             style: ruleStyle,
@@ -141,7 +141,7 @@ extension CSSStyle {
         )
         sections.append(
             CSSStyle.Section(
-                id: .init(nodeID: identity.nodeID, kind: kind, ordinal: ordinal),
+                id: .init(nodeID: id.nodeID, kind: kind, ordinal: ordinal),
                 kind: kind,
                 title: rule.selectorList.text,
                 rule: rule,
@@ -154,7 +154,7 @@ extension CSSStyle {
 
     private static func appendSection(
         _ sections: inout [CSSStyle.Section],
-        identity: CSSNodeStyles.Identity,
+        id: CSSNodeStyles.ID,
         ordinal: inout Int,
         kind: CSSStyle.Section.Kind,
         title: String,
@@ -163,7 +163,7 @@ extension CSSStyle {
     ) {
         sections.append(
             CSSStyle.Section(
-                id: .init(nodeID: identity.nodeID, kind: kind, ordinal: ordinal),
+                id: .init(nodeID: id.nodeID, kind: kind, ordinal: ordinal),
                 kind: kind,
                 title: title,
                 style: normalizedStyle(style, isEditable: isEditable, ruleOrigin: nil),

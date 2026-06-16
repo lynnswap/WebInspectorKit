@@ -297,11 +297,11 @@ package extension CSSStyle {
     }
 
     struct RefreshToken: Equatable, Sendable {
-        package var identity: CSSNodeStyles.Identity
+        package var id: CSSNodeStyles.ID
         package var sequence: UInt64
 
-        package init(identity: CSSNodeStyles.Identity, sequence: UInt64) {
-            self.identity = identity
+        package init(id: CSSNodeStyles.ID, sequence: UInt64) {
+            self.id = id
             self.sequence = sequence
         }
     }
@@ -639,25 +639,22 @@ package extension CSSComputedStyleProperty {
 }
 
 package extension CSSNodeStyles {
-    struct Identity: Equatable, Hashable, Sendable {
+    struct ID: Equatable, Hashable, Sendable {
         package var nodeID: DOMNode.ID
         package var targetID: ProtocolTarget.ID
         package var documentID: DOMDocument.ID
         package var protocolNodeID: DOMNode.ProtocolID
-        package var targetCapabilities: ProtocolTarget.Capabilities
 
         package init(
             nodeID: DOMNode.ID,
             targetID: ProtocolTarget.ID,
             documentID: DOMDocument.ID,
-            protocolNodeID: DOMNode.ProtocolID,
-            targetCapabilities: ProtocolTarget.Capabilities
+            protocolNodeID: DOMNode.ProtocolID
         ) {
             self.nodeID = nodeID
             self.targetID = targetID
             self.documentID = documentID
             self.protocolNodeID = protocolNodeID
-            self.targetCapabilities = targetCapabilities
         }
     }
 
@@ -668,7 +665,7 @@ package extension CSSNodeStyles {
         case cssUnavailableForTarget(ProtocolTarget.ID)
     }
 
-    enum State: Equatable, Sendable {
+    enum Phase: Equatable, Sendable {
         case loading
         case loaded
         case unavailable(UnavailableReason)
@@ -703,9 +700,9 @@ package extension CSSStyle.Section {
 package extension CSSCommand {
     enum Intent: Equatable, Sendable {
         case enable(targetID: ProtocolTarget.ID)
-        case getMatchedStyles(identity: CSSNodeStyles.Identity, includePseudo: Bool = true, includeInherited: Bool = true)
-        case getInlineStyles(identity: CSSNodeStyles.Identity)
-        case getComputedStyle(identity: CSSNodeStyles.Identity)
+        case getMatchedStyles(id: CSSNodeStyles.ID, includePseudo: Bool = true, includeInherited: Bool = true)
+        case getInlineStyles(id: CSSNodeStyles.ID)
+        case getComputedStyle(id: CSSNodeStyles.ID)
         case setStyleText(targetID: ProtocolTarget.ID, styleID: CSSStyle.ID, text: String)
     }
 }

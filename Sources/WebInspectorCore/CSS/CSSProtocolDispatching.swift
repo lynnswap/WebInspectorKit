@@ -10,30 +10,30 @@ package struct CSSProtocolCommands {
                 method: "CSS.enable",
                 routing: .target(targetID)
             )
-        case let .getMatchedStyles(identity, includePseudo, includeInherited):
+        case let .getMatchedStyles(id, includePseudo, includeInherited):
             return ProtocolCommand(
                 domain: .css,
                 method: "CSS.getMatchedStylesForNode",
-                routing: .target(identity.targetID),
+                routing: .target(id.targetID),
                 parametersData: try data([
-                    "nodeId": identity.protocolNodeID.rawValue,
+                    "nodeId": id.protocolNodeID.rawValue,
                     "includePseudo": includePseudo,
                     "includeInherited": includeInherited,
                 ])
             )
-        case let .getInlineStyles(identity):
+        case let .getInlineStyles(id):
             return ProtocolCommand(
                 domain: .css,
                 method: "CSS.getInlineStylesForNode",
-                routing: .target(identity.targetID),
-                parametersData: try data(["nodeId": identity.protocolNodeID.rawValue])
+                routing: .target(id.targetID),
+                parametersData: try data(["nodeId": id.protocolNodeID.rawValue])
             )
-        case let .getComputedStyle(identity):
+        case let .getComputedStyle(id):
             return ProtocolCommand(
                 domain: .css,
                 method: "CSS.getComputedStyleForNode",
-                routing: .target(identity.targetID),
-                parametersData: try data(["nodeId": identity.protocolNodeID.rawValue])
+                routing: .target(id.targetID),
+                parametersData: try data(["nodeId": id.protocolNodeID.rawValue])
             )
         case let .setStyleText(targetID, styleID, text):
             return ProtocolCommand(

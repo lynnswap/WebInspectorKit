@@ -123,7 +123,7 @@ package struct DOMTreeProjection: Equatable, Sendable {
 }
 
 package extension DOMTarget {
-    struct Snapshot: Equatable, Sendable {
+    struct Snapshot: Equatable, Sendable, Identifiable {
         package var id: ProtocolTarget.ID
         package var kind: ProtocolTarget.Kind
         package var frameID: DOMFrame.ID?
@@ -150,7 +150,7 @@ package extension DOMTarget.Snapshot {
 }
 
 package extension DOMFrame {
-    struct Snapshot: Equatable, Sendable {
+    struct Snapshot: Equatable, Sendable, Identifiable {
         package var id: DOMFrame.ID
         package var parentFrameID: DOMFrame.ID?
         package var childFrameIDs: Set<DOMFrame.ID>
@@ -166,7 +166,7 @@ package extension DOMDocument {
         case invalidated
     }
 
-    struct Snapshot: Equatable, Sendable {
+    struct Snapshot: Equatable, Sendable, Identifiable {
         package var id: DOMDocument.ID
         package var targetID: ProtocolTarget.ID
         package var localDocumentLifetimeID: DOMDocument.LifetimeID
@@ -214,7 +214,7 @@ package extension DOMNode {
         }
     }
 
-    struct Snapshot: Equatable, Sendable {
+    struct Snapshot: Equatable, Sendable, Identifiable {
         package var id: DOMNode.ID
         package var protocolNodeID: DOMNode.ProtocolID
         package var nodeType: DOMNode.Kind
@@ -245,7 +245,7 @@ package extension DOMNode {
 }
 
 package extension DOMSelection.Request {
-    struct Snapshot: Equatable, Sendable {
+    struct Snapshot: Equatable, Sendable, Identifiable {
         package var id: DOMSelection.Request.ID
         package var targetID: ProtocolTarget.ID
         package var documentID: DOMDocument.ID
@@ -261,7 +261,7 @@ package extension DOMTargetState {
 }
 
 package extension DOMTransaction {
-    struct Snapshot: Equatable, Sendable {
+    struct Snapshot: Equatable, Sendable, Identifiable {
         package var id: DOMTransaction.ID
         package var targetID: ProtocolTarget.ID
         package var documentID: DOMDocument.ID

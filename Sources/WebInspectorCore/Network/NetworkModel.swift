@@ -2,7 +2,7 @@ import Observation
 import WebInspectorTransport
 
 extension NetworkRequest {
-    package struct RedirectHop: Equatable, Sendable {        package var id: NetworkRequest.RedirectHop.ID
+    package struct RedirectHop: Equatable, Sendable, Identifiable {        package var id: NetworkRequest.RedirectHop.ID
         package var request: NetworkRequest.Payload
         package var response: NetworkRequest.Response.Payload
         package var timestamp: Double
@@ -49,7 +49,7 @@ extension NetworkRequest.WebSocket {
 
 @MainActor
 @Observable
-package final class NetworkRequest {
+package final class NetworkRequest: Identifiable {
     package let id: ID
     package var frameID: DOMFrame.ID?
     package var loaderID: String?

@@ -21,7 +21,7 @@ extension ConsoleMessage {
 
 @MainActor
 @Observable
-package final class ConsoleMessage {
+package final class ConsoleMessage: Identifiable {
     package let id: ID
     package var source: ConsoleMessage.Source
     package var level: ConsoleMessage.Level

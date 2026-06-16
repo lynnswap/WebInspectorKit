@@ -10,7 +10,7 @@ extension NetworkRequest.Display {
 }
 
 extension NetworkRequest.Display {
-    package struct Projection: Equatable {        package var id: NetworkRequest.ID
+    package struct Projection: Equatable, Identifiable {        package var id: NetworkRequest.ID
         package var displayName: String
         package var fileTypeLabel: String
         package var statusSeverity: NetworkRequest.Display.StatusSeverity

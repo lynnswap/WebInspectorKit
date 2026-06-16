@@ -152,8 +152,8 @@ struct DOMContainerTests {
         #expect(didRenderRows)
         let cellIDsBeforeUpdate = visibleCellIDs(in: viewController)
 
-        let identity = try dom.selectedCSSNodeStyleIdentity().get()
-        let refreshToken = try #require(css.beginRefresh(identity: identity))
+        let identity = try dom.selectedCSSNodeStylesID().get()
+        let refreshToken = css.beginRefresh(id: identity)
         window.layoutIfNeeded()
         #expect(viewController.collectionView.isHidden == false)
         #expect(visibleCellIDs(in: viewController) == cellIDsBeforeUpdate)
@@ -200,8 +200,8 @@ struct DOMContainerTests {
         let headerBeforeUpdate = try #require(styleSectionHeaderViews(in: viewController).first)
         let headerIDBeforeUpdate = ObjectIdentifier(headerBeforeUpdate)
 
-        let identity = try dom.selectedCSSNodeStyleIdentity().get()
-        let refreshToken = try #require(css.beginRefresh(identity: identity))
+        let identity = try dom.selectedCSSNodeStylesID().get()
+        let refreshToken = css.beginRefresh(id: identity)
         try applyBodyStyles(
             to: css,
             in: dom,
@@ -245,16 +245,16 @@ struct DOMContainerTests {
         #expect(didRenderBodyRows)
 
         let input = try #require(firstElement(named: "input", in: dom))
-        let bodyIdentity = try dom.selectedCSSNodeStyleIdentity().get()
+        let bodyIdentity = try dom.selectedCSSNodeStylesID().get()
         dom.selectNode(input.id)
-        let inputIdentity = try dom.selectedCSSNodeStyleIdentity().get()
-        let inputRefreshToken = try #require(css.beginRefresh(identity: inputIdentity))
+        let inputIdentity = try dom.selectedCSSNodeStylesID().get()
+        let inputRefreshToken = css.beginRefresh(id: inputIdentity)
         window.layoutIfNeeded()
 
         #expect(bodyIdentity != inputIdentity)
-        #expect(css.selectedNodeStyles?.identity == inputIdentity)
-        #expect(css.selectedState == .loading)
-        #expect(css.refreshState(forSelected: inputIdentity) == .loading)
+        #expect(css.selectedNodeStyles?.id == inputIdentity)
+        #expect(css.selectedPhase == .loading)
+        #expect(css.refreshPhase(forSelected: inputIdentity) == .loading)
         let didKeepBodyRowsWhileInputLoads = await waitUntilRendered(in: viewController) {
             viewController.contentUnavailableConfiguration == nil
                 && viewController.collectionView.isHidden == false
@@ -294,8 +294,8 @@ struct DOMContainerTests {
 
         let body = try #require(firstElement(named: "body", in: dom))
         dom.selectNode(body.id)
-        let identity = try dom.selectedCSSNodeStyleIdentity().get()
-        #expect(css.beginRefresh(identity: identity) != nil)
+        let identity = try dom.selectedCSSNodeStylesID().get()
+        _ = css.beginRefresh(id: identity)
 
         let didRenderPlaceholder = await waitUntilRendered(in: viewController) {
             viewController.contentUnavailableConfiguration != nil
@@ -328,8 +328,8 @@ struct DOMContainerTests {
 
         let input = try #require(firstElement(named: "input", in: dom))
         dom.selectNode(input.id)
-        let inputIdentity = try dom.selectedCSSNodeStyleIdentity().get()
-        #expect(css.beginRefresh(identity: inputIdentity) != nil)
+        let inputIdentity = try dom.selectedCSSNodeStylesID().get()
+        _ = css.beginRefresh(id: inputIdentity)
         #expect(stylePropertyViews(in: viewController).map(\.declarationTextForTesting).contains("margin: 0;"))
 
         dom.selectNode(nil)
@@ -394,8 +394,8 @@ struct DOMContainerTests {
         }
         #expect(didRenderBodyRows)
 
-        let identity = try dom.selectedCSSNodeStyleIdentity().get()
-        css.markSelectedNodeStylesUnavailable(identity: identity, reason: .staleNode(body.id))
+        let identity = try dom.selectedCSSNodeStylesID().get()
+        css.markSelectedNodeStylesUnavailable(id: identity, reason: .staleNode(body.id))
 
         let didClearRows = await waitUntilRendered(in: viewController) {
             viewController.contentUnavailableConfiguration != nil
@@ -1063,8 +1063,8 @@ struct DOMContainerTests {
         marginValue: String = "0",
         marginText: String = "margin: 0;"
     ) throws -> BodyStyleIDs {
-        let identity = try dom.selectedCSSNodeStyleIdentity().get()
-        let token = try #require(token ?? css.beginRefresh(identity: identity))
+        let identity = try dom.selectedCSSNodeStylesID().get()
+        let token = token ?? css.beginRefresh(id: identity)
         let styleSheetID = CSSStyleSheet.ID("test-sheet")
         let styleID = CSSStyle.ID(styleSheetID: styleSheetID, ordinal: 0)
         css.applyRefresh(
@@ -1128,8 +1128,8 @@ struct DOMContainerTests {
         additionalBodyProperties: [CSSProperty.Payload] = [],
         additionalRootProperties: [CSSProperty.Payload] = []
     ) throws {
-        let identity = try dom.selectedCSSNodeStyleIdentity().get()
-        let token = try #require(css.beginRefresh(identity: identity))
+        let identity = try dom.selectedCSSNodeStylesID().get()
+        let token = css.beginRefresh(id: identity)
         let styleSheetID = CSSStyleSheet.ID("variables")
         let bodyStyleID = CSSStyle.ID(styleSheetID: styleSheetID, ordinal: 0)
         let rootStyleID = CSSStyle.ID(styleSheetID: styleSheetID, ordinal: 1)

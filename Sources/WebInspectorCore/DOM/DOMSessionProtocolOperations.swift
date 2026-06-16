@@ -100,8 +100,8 @@ extension DOMSession {
             }
         case .requestChildNodes:
             break
-        case let .highlightNode(identity):
-            highlightController.targetID = identity.commandTargetID
+        case let .highlightNode(target):
+            highlightController.targetID = target.commandTargetID
         case let .hideHighlight(targetID):
             if highlightController.targetID == targetID {
                 highlightController.targetID = nil
@@ -416,31 +416,29 @@ extension DOMSession {
             return
         }
 
-        switch selectedCSSNodeStyleIdentity() {
-        case let .success(identity):
-            reconcileSelectedNodeStyles(identity)
+        switch selectedCSSNodeStylesID() {
+        case let .success(id):
+            reconcileSelectedNodeStyles(id)
         case let .failure(reason):
             cancelSelectedNodeStyleHydrationRefresh()
             elementStyles.markSelectedNodeUnavailable(reason)
         }
     }
 
-    private func reconcileSelectedNodeStyles(_ identity: CSSNodeStyles.Identity) {
-        switch elementStyles.refreshState(forSelected: identity) {
+    private func reconcileSelectedNodeStyles(_ id: CSSNodeStyles.ID) {
+        switch elementStyles.refreshPhase(forSelected: id) {
         case nil, .needsRefresh:
-            hydrateSelectedNodeStyles(identity)
+            hydrateSelectedNodeStyles(id)
         case .loading, .loaded, .failed(_), .unavailable(_):
             return
         }
     }
 
-    private func hydrateSelectedNodeStyles(_ identity: CSSNodeStyles.Identity) {
-        guard styleHydration.isRefreshing(identity: identity) == false else {
+    private func hydrateSelectedNodeStyles(_ id: CSSNodeStyles.ID) {
+        guard styleHydration.isRefreshing(id: id) == false else {
             return
         }
-        guard let token = elementStyles.beginRefresh(identity: identity) else {
-            return
-        }
+        let token = elementStyles.beginRefresh(id: id)
 
         if let cancelledToken = styleHydration.startRefresh(token: token, operation: { [weak self] token in
             guard let self else {
@@ -470,33 +468,31 @@ extension DOMSession {
     }
 
     private func refreshSelectedNodeStyles() async throws {
-        switch selectedCSSNodeStyleIdentity() {
-        case let .success(identity):
-            try await refreshStyles(for: identity)
+        switch selectedCSSNodeStylesID() {
+        case let .success(id):
+            try await refreshStyles(for: id)
         case let .failure(reason):
             elementStyles.markSelectedNodeUnavailable(reason)
         }
     }
 
-    private func refreshStyles(for identity: CSSNodeStyles.Identity) async throws {
-        guard try await selectedStyleRefreshTargetIsLive(identity) else {
+    private func refreshStyles(for id: CSSNodeStyles.ID) async throws {
+        guard try await selectedStyleRefreshTargetIsLive(id) else {
             return
         }
-        guard let token = elementStyles.beginRefresh(identity: identity) else {
-            return
-        }
+        let token = elementStyles.beginRefresh(id: id)
         try await refreshStyles(for: token)
     }
 
     private func refreshStyles(for token: CSSStyle.RefreshToken) async throws {
-        let identity = token.identity
-        guard try await selectedStyleRefreshTargetIsLive(identity) else {
+        let id = token.id
+        guard try await selectedStyleRefreshTargetIsLive(id) else {
             return
         }
         do {
-            let results = try await elementStyles.fetchRefreshResults(for: identity)
-            guard case let .success(currentIdentity) = selectedCSSNodeStyleIdentity(),
-                  currentIdentity == identity else {
+            let results = try await elementStyles.fetchRefreshResults(for: id)
+            guard case let .success(currentID) = selectedCSSNodeStylesID(),
+                  currentID == id else {
                 return
             }
 
@@ -515,11 +511,11 @@ extension DOMSession {
         }
     }
 
-    private func selectedStyleRefreshTargetIsLive(_ identity: CSSNodeStyles.Identity) async throws -> Bool {
+    private func selectedStyleRefreshTargetIsLive(_ id: CSSNodeStyles.ID) async throws -> Bool {
         let commandChannel = try requireCommandChannel()
-        let targetExists = await commandChannel.snapshot().targetsByID[identity.targetID] != nil
+        let targetExists = await commandChannel.snapshot().targetsByID[id.targetID] != nil
         guard targetExists else {
-            elementStyles.markSelectedNodeStylesUnavailable(identity: identity, reason: .staleNode(identity.nodeID))
+            elementStyles.markSelectedNodeStylesUnavailable(id: id, reason: .staleNode(id.nodeID))
             return false
         }
         return true
@@ -558,15 +554,15 @@ extension DOMSession {
             syncSelectedElementStyles()
             return
         }
-        let selectedStyleIdentity = try? selectedCSSNodeStyleIdentity().get()
+        let selectedStyleID = try? selectedCSSNodeStylesID().get()
         try protocolCommands.applyDOMEvent(event, to: self)
-        if let selectedStyleIdentity,
+        if let selectedStyleID,
            let targetID = event.targetID,
-           selectedStyleIdentity.targetID == targetID {
-            if selectedNodeID != selectedStyleIdentity.nodeID {
+           selectedStyleID.targetID == targetID {
+            if selectedNodeID != selectedStyleID.nodeID {
                 removeElementStyles(targetID: targetID)
             } else if selectedStylesShouldRefresh(after: event) {
-                elementStyles.markNeedsRefresh(targetID: targetID, nodeID: selectedStyleIdentity.protocolNodeID)
+                elementStyles.markNeedsRefresh(targetID: targetID, nodeID: selectedStyleID.protocolNodeID)
                 reconcileSelectedNodeStyleHydrationIfNeeded()
             }
         }
@@ -1001,8 +997,8 @@ extension DOMSession {
             throw InspectorSession.Error("Inspector session is not attached.")
         }
         let commandTargetID = try currentPageTargetForDOMAction()
-        guard let identity = actionIdentity(for: nodeID, commandTargetID: commandTargetID),
-              let intent = removeNodeIntent(for: nodeID, commandTargetID: identity.commandTargetID) else {
+        guard let target = actionTarget(for: nodeID, commandTargetID: commandTargetID),
+              let intent = removeNodeIntent(for: nodeID, commandTargetID: target.commandTargetID) else {
             throw InspectorSession.Error("DOM node is no longer available.")
         }
         let documentID = nodeID.documentID
@@ -1014,8 +1010,8 @@ extension DOMSession {
         recordError?(nil)
 
         return DOMSessionDeleteUndoState(
-            documentTargetID: identity.documentTargetID,
-            commandTargetID: identity.commandTargetID,
+            documentTargetID: target.documentTargetID,
+            commandTargetID: target.commandTargetID,
             documentID: documentID
         )
     }

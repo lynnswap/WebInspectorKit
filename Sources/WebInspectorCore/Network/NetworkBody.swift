@@ -33,7 +33,7 @@ extension NetworkBody {
 }
 
 extension NetworkBody {
-    package enum FetchState: Equatable, Sendable {        case available
+    package enum Phase: Equatable, Sendable {        case available
         case fetching
         case loaded
         case failed(NetworkBody.FetchError)
@@ -160,7 +160,7 @@ package final class NetworkBody {
         }
     }
     package private(set) var isTruncated: Bool
-    package var fetchState: NetworkBody.FetchState
+    package var phase: NetworkBody.Phase
     package private(set) var sourceSyntaxKind: NetworkBody.SyntaxKind {
         didSet {
             invalidatePreparedTextRepresentation()
@@ -178,7 +178,7 @@ package final class NetworkBody {
         isBase64Encoded: Bool = false,
         isTruncated: Bool = false,
         sourceSyntaxKind: NetworkBody.SyntaxKind = .plainText,
-        fetchState: NetworkBody.FetchState? = nil
+        phase: NetworkBody.Phase? = nil
     ) {
         self.role = role
         self.kind = kind
@@ -186,7 +186,7 @@ package final class NetworkBody {
         self.size = size ?? full?.utf8.count
         self.isBase64Encoded = isBase64Encoded
         self.isTruncated = isTruncated
-        self.fetchState = fetchState ?? (full == nil ? .available : .loaded)
+        self.phase = phase ?? (full == nil ? .available : .loaded)
         self.sourceSyntaxKind = sourceSyntaxKind
         self.textRepresentation = nil
         self.textRepresentationSyntaxKind = .plainText
@@ -198,7 +198,7 @@ package final class NetworkBody {
     }
 
     package var needsFetch: Bool {
-        switch fetchState {
+        switch phase {
         case .available:
             full == nil
         case .fetching, .loaded, .failed:
@@ -214,11 +214,11 @@ package final class NetworkBody {
     }
 
     package func markFetching() {
-        fetchState = .fetching
+        phase = .fetching
     }
 
     package func markFailed(_ error: NetworkBody.FetchError) {
-        fetchState = .failed(error)
+        phase = .failed(error)
     }
 
     package func apply(_ payload: NetworkBody.Payload) {
@@ -228,12 +228,12 @@ package final class NetworkBody {
             isTruncated = payload.isTruncated
         }
         size = payload.size ?? payload.body.utf8.count
-        fetchState = .loaded
+        phase = .loaded
     }
 
     @discardableResult
     package func prepareTextRepresentation() -> NetworkBody.TextPreparation? {
-        guard case .loaded = fetchState else {
+        guard case .loaded = phase else {
             return nil
         }
         guard textRepresentationPreparation.needsPreparation else {
@@ -282,7 +282,7 @@ package final class NetworkBody {
             full: postData,
             size: postData.utf8.count,
             sourceSyntaxKind: hints.syntaxKind,
-            fetchState: .loaded
+            phase: .loaded
         )
     }
 
@@ -297,7 +297,7 @@ package final class NetworkBody {
             role: .response,
             kind: hints.kind,
             sourceSyntaxKind: hints.syntaxKind,
-            fetchState: .available
+            phase: .available
         )
     }
 

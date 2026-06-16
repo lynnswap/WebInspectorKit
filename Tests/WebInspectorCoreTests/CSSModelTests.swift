@@ -23,7 +23,7 @@ func protocolTargetCapabilitiesTreatPageTargetsAsCSSCapable() {
 }
 
 @Test
-func selectedCSSNodeStyleIdentityRequiresElementCurrentNodeAndCSSTarget() async throws {
+func selectedCSSNodeStylesIDRequiresElementCurrentNodeAndCSSTarget() async throws {
     let pageTargetID = ProtocolTarget.ID("page")
     let session = await DOMSession()
     await session.applyTargetCreated(
@@ -45,12 +45,12 @@ func selectedCSSNodeStyleIdentityRequiresElementCurrentNodeAndCSSTarget() async 
     let bodyID = try #require(snapshot.currentNodeIDByKey[.init(targetID: pageTargetID, nodeID: .init(2))])
 
     await session.selectNode(bodyID)
-    let identity = try #require(await session.selectedCSSNodeStyleIdentity().successValue)
+    let identity = try #require(await session.selectedCSSNodeStylesID().successValue)
     #expect(identity.targetID == pageTargetID)
     #expect(identity.protocolNodeID == .init(2))
 
     await session.selectNode(rootID)
-    #expect(await session.selectedCSSNodeStyleIdentity().failureValue == .nonElementNode(.document))
+    #expect(await session.selectedCSSNodeStylesID().failureValue == .nonElementNode(.document))
 
     await session.applyTargetCreated(.init(id: .init("plain"), kind: .page, capabilities: [.dom]))
     let plainRootID = await session.replaceDocumentRoot(
@@ -67,10 +67,10 @@ func selectedCSSNodeStyleIdentityRequiresElementCurrentNodeAndCSSTarget() async 
     let plainDocumentID = plainRootID.documentID
     let plainBodyID = DOMNode.ID(documentID: plainDocumentID, nodeID: .init(2))
     await session.selectNode(plainBodyID)
-    #expect(await session.selectedCSSNodeStyleIdentity().failureValue == .cssUnavailableForTarget(.init("plain")))
+    #expect(await session.selectedCSSNodeStylesID().failureValue == .cssUnavailableForTarget(.init("plain")))
 
     let staleNodeID = DOMNode.ID(documentID: plainDocumentID, nodeID: .init(999))
-    #expect(await session.cssNodeStyleIdentity(for: staleNodeID).failureValue == .staleNode(staleNodeID))
+    #expect(await session.cssNodeStylesID(for: staleNodeID).failureValue == .staleNode(staleNodeID))
 }
 
 @Test
@@ -98,17 +98,17 @@ func selectedNodeStylesResolvesSelectedDOMNodeThroughCSSSession() throws {
     let bodyID = try #require(snapshot.currentNodeIDByKey[.init(targetID: pageTargetID, nodeID: .init(2))])
 
     session.selectNode(bodyID)
-    let identity = try #require(session.selectedCSSNodeStyleIdentity().successValue)
+    let identity = try #require(session.selectedCSSNodeStylesID().successValue)
 
     let pendingStyles = try #require(session.selectedNodeStyles)
-    #expect(pendingStyles.identity == identity)
-    #expect(pendingStyles.state == .needsRefresh)
+    #expect(pendingStyles.id == identity)
+    #expect(pendingStyles.phase == .needsRefresh)
     #expect(pendingStyles.sections.isEmpty)
 
-    let token = try #require(css.beginRefresh(identity: identity))
+    let token = css.beginRefresh(id: identity)
     let loadingStyles = try #require(session.selectedNodeStyles)
-    #expect(loadingStyles.identity == identity)
-    #expect(loadingStyles.state == .loading)
+    #expect(loadingStyles.id == identity)
+    #expect(loadingStyles.phase == .loading)
     #expect(loadingStyles.sections.isEmpty)
 
     css.applyRefresh(
@@ -129,8 +129,8 @@ func selectedNodeStylesResolvesSelectedDOMNodeThroughCSSSession() throws {
     )
 
     let loadedStyles = try #require(session.selectedNodeStyles)
-    #expect(loadedStyles.identity == identity)
-    #expect(loadedStyles.state == .loaded)
+    #expect(loadedStyles.id == identity)
+    #expect(loadedStyles.phase == .loaded)
     #expect(loadedStyles.sections.map(\.title) == ["body"])
 
     session.selectNode(rootID)
@@ -142,7 +142,7 @@ func selectedNodeStylesResolvesSelectedDOMNodeThroughCSSSession() throws {
 func cssSessionBuildsOrderedSectionsAndPropertyRowState() throws {
     let css = CSSSession()
     let identity = cssIdentity()
-    let token = try #require(css.beginRefresh(identity: identity))
+    let token = css.beginRefresh(id: identity)
 
     css.applyRefresh(
         token: token,
@@ -185,7 +185,7 @@ func cssSessionBuildsOrderedSectionsAndPropertyRowState() throws {
     )
 
     let selected = try #require(css.selectedNodeStyles)
-    #expect(css.selectedState == .loaded)
+    #expect(css.selectedPhase == .loaded)
     #expect(selected.sections.map(\.kind) == [.inlineStyle, .rule, .attributesStyle])
     #expect(selected.sections[0].title == "element.style")
     #expect(selected.sections[1].title == "body")
@@ -208,7 +208,7 @@ func cssSessionBuildsOrderedSectionsAndPropertyRowState() throws {
 func cssRuleSourceLocationPrefersSelectorRangeOverSourceLine() throws {
     let css = CSSSession()
     let identity = cssIdentity()
-    let token = try #require(css.beginRefresh(identity: identity))
+    let token = css.beginRefresh(id: identity)
 
     css.applyRefresh(
         token: token,
@@ -246,7 +246,7 @@ func cssRuleSourceLocationPrefersSelectorRangeOverSourceLine() throws {
 func cssRuleSourceLocationFallsBackToSourceLineWhenSelectorRangeIsMissing() throws {
     let css = CSSSession()
     let identity = cssIdentity()
-    let token = try #require(css.beginRefresh(identity: identity))
+    let token = css.beginRefresh(id: identity)
 
     css.applyRefresh(
         token: token,
@@ -287,7 +287,7 @@ func cssRuleSourceLocationAppliesStyleSheetHeaderOffset() throws {
         ),
         targetID: identity.targetID
     )
-    let token = try #require(css.beginRefresh(identity: identity))
+    let token = css.beginRefresh(id: identity)
 
     css.applyRefresh(
         token: token,
@@ -332,7 +332,7 @@ func cssRuleSourceLocationKeepsSubsequentLineColumnsRelativeToLineStart() throws
         ),
         targetID: identity.targetID
     )
-    let token = try #require(css.beginRefresh(identity: identity))
+    let token = css.beginRefresh(id: identity)
 
     css.applyRefresh(
         token: token,
@@ -390,7 +390,7 @@ func cssRuleSourceLocationScopesStyleSheetHeadersByTarget() throws {
     )
     css.removeStyleSheetHeader(styleSheetID: .init("sheet"), targetID: frameIdentity.targetID)
 
-    let token = try #require(css.beginRefresh(identity: pageIdentity))
+    let token = css.beginRefresh(id: pageIdentity)
     css.applyRefresh(
         token: token,
         matched: CSSStyle.MatchedStylesPayload(matchedRules: [
@@ -435,7 +435,7 @@ func cssSessionRemovesStyleSheetHeadersEvenWhenTargetHasNoCachedStyles() throws 
     )
     css.removeStyles(targetID: identity.targetID)
 
-    let token = try #require(css.beginRefresh(identity: identity))
+    let token = css.beginRefresh(id: identity)
     css.applyRefresh(
         token: token,
         matched: CSSStyle.MatchedStylesPayload(matchedRules: [
@@ -464,7 +464,7 @@ func cssSessionPreservesObservableStyleObjectsWhenRefreshingSameRows() throws {
     let css = CSSSession()
     let identity = cssIdentity()
     let styleID = CSSStyle.ID(styleSheetID: .init("sheet"), ordinal: 0)
-    let token = try #require(css.beginRefresh(identity: identity))
+    let token = css.beginRefresh(id: identity)
 
     css.applyRefresh(
         token: token,
@@ -494,7 +494,7 @@ func cssSessionPreservesObservableStyleObjectsWhenRefreshingSameRows() throws {
     let boxSizing = style.cssProperties[1]
     let computedDisplay = styles.computedProperties[0]
 
-    let refreshToken = try #require(css.beginRefresh(identity: identity))
+    let refreshToken = css.beginRefresh(id: identity)
     css.applyRefresh(
         token: refreshToken,
         matched: CSSStyle.MatchedStylesPayload(matchedRules: [
@@ -531,7 +531,7 @@ func cssSessionPreservesObservableStyleObjectsWhenRefreshingSameRows() throws {
 func cssSessionRendersMatchedRulesInCascadeOrder() throws {
     let css = CSSSession()
     let identity = cssIdentity()
-    let token = try #require(css.beginRefresh(identity: identity))
+    let token = css.beginRefresh(id: identity)
     css.applyRefresh(
         token: token,
         matched: CSSStyle.MatchedStylesPayload(
@@ -584,7 +584,7 @@ func cssSessionBuildsSetStyleTextIntentByCommentingAndUncommentingPropertyText()
     let css = await CSSSession()
     let identity = cssIdentity()
     let styleID = CSSStyle.ID(styleSheetID: .init("inline"), ordinal: 0)
-    let token = try #require(await css.beginRefresh(identity: identity))
+    let token = await css.beginRefresh(id: identity)
     await css.applyRefresh(
         token: token,
         matched: .init(),
@@ -611,7 +611,7 @@ func cssSessionBuildsSetStyleTextIntentByCommentingAndUncommentingPropertyText()
     ))
 
     let disabledStyleID = CSSStyle.ID(styleSheetID: .init("rule"), ordinal: 0)
-    let disabledToken = try #require(await css.beginRefresh(identity: identity))
+    let disabledToken = await css.beginRefresh(id: identity)
     await css.applyRefresh(
         token: disabledToken,
         matched: CSSStyle.MatchedStylesPayload(matchedRules: [
@@ -642,7 +642,7 @@ func cssSessionRewritesAuthoredStyleTextWithoutSerializingInactiveRows() async t
     let css = await CSSSession()
     let identity = cssIdentity()
     let styleID = CSSStyle.ID(styleSheetID: .init("sheet"), ordinal: 0)
-    let token = try #require(await css.beginRefresh(identity: identity))
+    let token = await css.beginRefresh(id: identity)
     await css.applyRefresh(
         token: token,
         matched: CSSStyle.MatchedStylesPayload(matchedRules: [
@@ -695,7 +695,7 @@ func cssSessionRewritesOnlyDeclarationMatchesOutsideStrings() async throws {
     let css = await CSSSession()
     let identity = cssIdentity()
     let styleID = CSSStyle.ID(styleSheetID: .init("sheet"), ordinal: 0)
-    let token = try #require(await css.beginRefresh(identity: identity))
+    let token = await css.beginRefresh(id: identity)
     await css.applyRefresh(
         token: token,
         matched: CSSStyle.MatchedStylesPayload(matchedRules: [
@@ -749,7 +749,7 @@ func cssSessionTreatsCommentsAsDeclarationBoundaries() async throws {
     let identity = cssIdentity()
     let beforeCommentStyleID = CSSStyle.ID(styleSheetID: .init("sheet"), ordinal: 0)
     let afterCommentStyleID = CSSStyle.ID(styleSheetID: .init("sheet"), ordinal: 1)
-    let token = try #require(await css.beginRefresh(identity: identity))
+    let token = await css.beginRefresh(id: identity)
     await css.applyRefresh(
         token: token,
         matched: CSSStyle.MatchedStylesPayload(matchedRules: [
@@ -822,7 +822,7 @@ func cssSessionRejectsNonEditableToggleTargets() async throws {
     let css = await CSSSession()
     let identity = cssIdentity()
     let styleID = CSSStyle.ID(styleSheetID: .init("ua"), ordinal: 0)
-    let token = try #require(await css.beginRefresh(identity: identity))
+    let token = await css.beginRefresh(id: identity)
     await css.applyRefresh(
         token: token,
         matched: CSSStyle.MatchedStylesPayload(matchedRules: [
@@ -856,7 +856,7 @@ func cssSessionDoesNotSynthesizeStyleTextWhenOtherPropertiesHaveNoAuthoredText()
     let css = CSSSession()
     let identity = cssIdentity()
     let styleID = CSSStyle.ID(styleSheetID: .init("sheet"), ordinal: 0)
-    let token = try #require(css.beginRefresh(identity: identity))
+    let token = css.beginRefresh(id: identity)
     css.applyRefresh(
         token: token,
         matched: CSSStyle.MatchedStylesPayload(matchedRules: [
@@ -889,7 +889,7 @@ func cssSessionDoesNotSynthesizeStyleTextWhenOtherPropertiesHaveNoAuthoredText()
 func cssSessionInFlightRefreshWinsOverInvalidation() throws {
     let css = CSSSession()
     let identity = cssIdentity()
-    let token = try #require(css.beginRefresh(identity: identity))
+    let token = css.beginRefresh(id: identity)
 
     css.markNeedsRefresh(targetID: identity.targetID)
     css.applyRefresh(
@@ -909,7 +909,7 @@ func cssSessionInFlightRefreshWinsOverInvalidation() throws {
         computed: []
     )
 
-    #expect(css.selectedState == .loaded)
+    #expect(css.selectedPhase == .loaded)
     #expect(css.selectedNodeStyles?.sections.map(\.title) == ["body"])
 }
 
@@ -917,7 +917,7 @@ func cssSessionInFlightRefreshWinsOverInvalidation() throws {
 func cssSessionInvalidatesOnlyNodeStylesThatReferenceChangedStyleSheet() async throws {
     let css = await CSSSession()
     let identity = cssIdentity()
-    let token = try #require(await css.beginRefresh(identity: identity))
+    let token = await css.beginRefresh(id: identity)
     await css.applyRefresh(
         token: token,
         matched: CSSStyle.MatchedStylesPayload(matchedRules: [
@@ -937,10 +937,10 @@ func cssSessionInvalidatesOnlyNodeStylesThatReferenceChangedStyleSheet() async t
     )
 
     await css.markNeedsRefresh(targetID: identity.targetID, styleSheetID: .init("untracked"))
-    #expect(await css.selectedState == .loaded)
+    #expect(await css.selectedPhase == .loaded)
 
     await css.markNeedsRefresh(targetID: identity.targetID, styleSheetID: .init("tracked"))
-    #expect(await css.selectedState == .needsRefresh)
+    #expect(await css.selectedPhase == .needsRefresh)
 }
 
 @Test
@@ -948,7 +948,7 @@ func cssSessionRejectsEditIntentWhenSelectedStylesNeedRefresh() async throws {
     let css = await CSSSession()
     let identity = cssIdentity()
     let styleID = CSSStyle.ID(styleSheetID: .init("sheet"), ordinal: 0)
-    let token = try #require(await css.beginRefresh(identity: identity))
+    let token = await css.beginRefresh(id: identity)
     await css.applyRefresh(
         token: token,
         matched: CSSStyle.MatchedStylesPayload(matchedRules: [
@@ -986,7 +986,7 @@ func cssSessionMarksSetStyleTextPropertyAsModifiedByInspector() throws {
     let identity = cssIdentity()
     let styleID = CSSStyle.ID(styleSheetID: .init("sheet"), ordinal: 0)
     let propertyID = CSSProperty.ID(styleID: styleID, propertyIndex: 0)
-    let token = try #require(css.beginRefresh(identity: identity))
+    let token = css.beginRefresh(id: identity)
     css.applyRefresh(
         token: token,
         matched: CSSStyle.MatchedStylesPayload(matchedRules: [
@@ -1019,7 +1019,7 @@ func cssSessionMarksSetStyleTextPropertyAsModifiedByInspector() throws {
     #expect(property.status == .disabled)
     #expect(property.isModifiedByInspector)
 
-    let refreshToken = try #require(css.beginRefresh(identity: identity))
+    let refreshToken = css.beginRefresh(id: identity)
     css.applyRefresh(
         token: refreshToken,
         matched: CSSStyle.MatchedStylesPayload(matchedRules: [
@@ -1038,7 +1038,7 @@ func cssSessionMarksSetStyleTextPropertyAsModifiedByInspector() throws {
         computed: []
     )
 
-    #expect(css.selectedState == .loaded)
+    #expect(css.selectedPhase == .loaded)
     #expect(property.isModifiedByInspector)
 
     css.applySetStyleTextResult(
@@ -1061,7 +1061,7 @@ func cssSessionAppliesSetStyleTextResultOnlyToEditedTarget() throws {
     let pageIdentity = cssIdentity(targetID: .init("page"), nodeRawID: 2)
     let frameIdentity = cssIdentity(targetID: .init("frame"), nodeRawID: 2)
 
-    let pageToken = try #require(css.beginRefresh(identity: pageIdentity))
+    let pageToken = css.beginRefresh(id: pageIdentity)
     css.applyRefresh(
         token: pageToken,
         matched: CSSStyle.MatchedStylesPayload(matchedRules: [
@@ -1080,7 +1080,7 @@ func cssSessionAppliesSetStyleTextResultOnlyToEditedTarget() throws {
         computed: []
     )
 
-    let frameToken = try #require(css.beginRefresh(identity: frameIdentity))
+    let frameToken = css.beginRefresh(id: frameIdentity)
     css.applyRefresh(
         token: frameToken,
         matched: CSSStyle.MatchedStylesPayload(matchedRules: [
@@ -1108,8 +1108,8 @@ func cssSessionAppliesSetStyleTextResultOnlyToEditedTarget() throws {
     )
 
     let selectedFrameStyles = try #require(css.selectedNodeStyles)
-    #expect(css.selectedState == .loaded)
-    #expect(selectedFrameStyles.identity.targetID == frameIdentity.targetID)
+    #expect(css.selectedPhase == .loaded)
+    #expect(selectedFrameStyles.id.targetID == frameIdentity.targetID)
     #expect(selectedFrameStyles.sections[0].style.cssProperties[0].value == "10px")
 }
 
@@ -1118,7 +1118,7 @@ func cssSessionAppliesSetStyleTextResultOnlyToEditedTarget() throws {
 func cssSessionClearsSelectedStylesWhenTargetBecomesStale() throws {
     let css = CSSSession()
     let identity = cssIdentity()
-    let token = try #require(css.beginRefresh(identity: identity))
+    let token = css.beginRefresh(id: identity)
     css.applyRefresh(
         token: token,
         matched: CSSStyle.MatchedStylesPayload(matchedRules: [
@@ -1140,9 +1140,9 @@ func cssSessionClearsSelectedStylesWhenTargetBecomesStale() throws {
     css.removeStyles(targetID: identity.targetID)
 
     #expect(css.selectedNodeStyles == nil)
-    #expect(css.selectedState == .unavailable(.staleNode(identity.nodeID)))
-    #expect(selectedStyles.state == .loaded)
-    #expect(css.refreshState(forSelected: identity) == nil)
+    #expect(css.selectedPhase == .unavailable(.staleNode(identity.nodeID)))
+    #expect(selectedStyles.phase == .loaded)
+    #expect(css.refreshPhase(forSelected: identity) == nil)
 }
 
 @Test
@@ -1150,7 +1150,7 @@ func cssSessionClearsSelectedStylesWhenTargetBecomesStale() throws {
 func cssSessionClearsSelectedStylesWhenCurrentStylesBecomeUnavailable() throws {
     let css = CSSSession()
     let identity = cssIdentity()
-    let token = try #require(css.beginRefresh(identity: identity))
+    let token = css.beginRefresh(id: identity)
     css.applyRefresh(
         token: token,
         matched: CSSStyle.MatchedStylesPayload(matchedRules: [
@@ -1169,12 +1169,12 @@ func cssSessionClearsSelectedStylesWhenCurrentStylesBecomeUnavailable() throws {
     )
     let selectedStyles = try #require(css.selectedNodeStyles)
 
-    css.markSelectedNodeStylesUnavailable(identity: identity, reason: .staleNode(identity.nodeID))
+    css.markSelectedNodeStylesUnavailable(id: identity, reason: .staleNode(identity.nodeID))
 
     #expect(css.selectedNodeStyles == nil)
-    #expect(css.selectedState == .unavailable(.staleNode(identity.nodeID)))
-    #expect(selectedStyles.state == .unavailable(.staleNode(identity.nodeID)))
-    #expect(css.refreshState(forSelected: identity) == .unavailable(.staleNode(identity.nodeID)))
+    #expect(css.selectedPhase == .unavailable(.staleNode(identity.nodeID)))
+    #expect(selectedStyles.phase == .unavailable(.staleNode(identity.nodeID)))
+    #expect(css.refreshPhase(forSelected: identity) == .unavailable(.staleNode(identity.nodeID)))
 }
 
 @Test
@@ -1182,13 +1182,13 @@ func cssSessionClearsSelectedStylesWhenCurrentStylesBecomeUnavailable() throws {
 func cssSessionDoesNotDisplayUnavailableStylesForUnselectedIdentity() throws {
     let css = CSSSession()
     let identity = cssIdentity()
-    css.markSelectedNodeStylesUnavailable(identity: identity, reason: .staleNode(identity.nodeID))
+    css.markSelectedNodeStylesUnavailable(id: identity, reason: .staleNode(identity.nodeID))
 
     css.markSelectedNodeUnavailable(.noSelection)
 
     #expect(css.selectedNodeStyles == nil)
-    #expect(css.selectedState == .unavailable(.noSelection))
-    #expect(css.refreshState(forSelected: identity) == .unavailable(.staleNode(identity.nodeID)))
+    #expect(css.selectedPhase == .unavailable(.noSelection))
+    #expect(css.refreshPhase(forSelected: identity) == .unavailable(.staleNode(identity.nodeID)))
 }
 
 @Test
@@ -1197,13 +1197,13 @@ func cssSessionCancelsActiveRefreshBackToNeedsRefresh() throws {
     let css = CSSSession()
     let identity = cssIdentity()
 
-    _ = try #require(css.beginRefresh(identity: identity))
-    #expect(css.selectedState == .loading)
+    _ = css.beginRefresh(id: identity)
+    #expect(css.selectedPhase == .loading)
 
-    css.cancelRefresh(identity: identity)
+    css.cancelRefresh(id: identity)
 
-    #expect(css.selectedState == .needsRefresh)
-    #expect(css.refreshState(forSelected: identity) == .needsRefresh)
+    #expect(css.selectedPhase == .needsRefresh)
+    #expect(css.refreshPhase(forSelected: identity) == .needsRefresh)
 }
 
 @Test
@@ -1212,18 +1212,18 @@ func cssSessionIgnoresStaleRefreshCancellationAfterNewRefreshBegins() throws {
     let css = CSSSession()
     let identity = cssIdentity()
 
-    let staleToken = try #require(css.beginRefresh(identity: identity))
-    let currentToken = try #require(css.beginRefresh(identity: identity))
+    let staleToken = css.beginRefresh(id: identity)
+    let currentToken = css.beginRefresh(id: identity)
 
     css.cancelRefresh(staleToken)
 
-    #expect(css.selectedState == .loading)
-    #expect(css.refreshState(forSelected: identity) == .loading)
+    #expect(css.selectedPhase == .loading)
+    #expect(css.refreshPhase(forSelected: identity) == .loading)
 
     css.cancelRefresh(currentToken)
 
-    #expect(css.selectedState == .needsRefresh)
-    #expect(css.refreshState(forSelected: identity) == .needsRefresh)
+    #expect(css.selectedPhase == .needsRefresh)
+    #expect(css.refreshPhase(forSelected: identity) == .needsRefresh)
 }
 
 @Test
@@ -1231,7 +1231,7 @@ func cssSessionIgnoresStaleRefreshCancellationAfterNewRefreshBegins() throws {
 func cssSessionRefreshDoesNotRepublishCurrentSelectedNodeStyles() throws {
     let css = CSSSession()
     let identity = cssIdentity()
-    css.selectNodeStyles(identity: identity)
+    css.selectNodeStyles(id: identity)
     let selectedStyles = try #require(css.selectedNodeStyles)
 
     let selectedNodeStylesInvalidations = Mutex(0)
@@ -1241,10 +1241,10 @@ func cssSessionRefreshDoesNotRepublishCurrentSelectedNodeStyles() throws {
         selectedNodeStylesInvalidations.withLock { $0 += 1 }
     }
 
-    let token = try #require(css.beginRefresh(identity: identity))
+    let token = css.beginRefresh(id: identity)
 
     #expect(css.selectedNodeStyles === selectedStyles)
-    #expect(css.selectedState == .loading)
+    #expect(css.selectedPhase == .loading)
     #expect(selectedNodeStylesInvalidations.withLock { $0 } == 0)
 
     css.applyRefresh(
@@ -1265,21 +1265,20 @@ func cssSessionRefreshDoesNotRepublishCurrentSelectedNodeStyles() throws {
     )
 
     #expect(css.selectedNodeStyles === selectedStyles)
-    #expect(css.selectedState == .loaded)
+    #expect(css.selectedPhase == .loaded)
     #expect(selectedNodeStylesInvalidations.withLock { $0 } == 0)
 }
 
 private func cssIdentity(
     targetID: ProtocolTarget.ID = ProtocolTarget.ID("page"),
     nodeRawID: Int = 2
-) -> CSSNodeStyles.Identity {
+) -> CSSNodeStyles.ID {
     let documentID = DOMDocument.ID(targetID: targetID, localDocumentLifetimeID: .init(1))
-    return CSSNodeStyles.Identity(
+    return CSSNodeStyles.ID(
         nodeID: DOMNode.ID(documentID: documentID, nodeID: .init(nodeRawID)),
         targetID: targetID,
         documentID: documentID,
-        protocolNodeID: .init(nodeRawID),
-        targetCapabilities: [.css, .dom]
+        protocolNodeID: .init(nodeRawID)
     )
 }
 

@@ -156,7 +156,7 @@ func requestPostDataCreatesObservableRequestBody() throws {
     )
     let body = try #require(session.request(for: key)?.requestBody)
 
-    #expect(body.fetchState == .loaded)
+    #expect(body.phase == .loaded)
     #expect(body.textRepresentation == "name=Jane Doe\ncity=Tokyo East")
     #expect(body.textRepresentationSyntaxKind == .plainText)
 }
@@ -191,7 +191,7 @@ func responseReceivedCreatesFetchableResponseBodyAndAppliesFetchedContent() asyn
     let request = try #require(session.request(for: key))
     let body = try #require(request.responseBody)
 
-    #expect(body.fetchState == .available)
+    #expect(body.phase == .available)
     #expect(body.needsFetch)
 
     request.applyResponseBody(
@@ -201,7 +201,7 @@ func responseReceivedCreatesFetchableResponseBodyAndAppliesFetchedContent() asyn
         )
     )
 
-    #expect(body.fetchState == .loaded)
+    #expect(body.phase == .loaded)
     #expect(body.textRepresentation == #"{"name":"codex","value":42}"#)
     #expect(body.textRepresentationSyntaxKind == .json)
 
@@ -221,7 +221,7 @@ func preparedResponseBodyTextInvalidatesWhenFetchedContentChanges() async throws
         kind: .text,
         full: #"{"first":true}"#,
         sourceSyntaxKind: .json,
-        fetchState: .loaded
+        phase: .loaded
     )
 
     let firstPreparation = try #require(body.prepareTextRepresentation())
@@ -256,7 +256,7 @@ func invalidJSONLookingPlainTextKeepsPlainTextSyntax() async {
         kind: .text,
         full: "[INFO] started",
         sourceSyntaxKind: .plainText,
-        fetchState: .loaded
+        phase: .loaded
     )
 
     #expect(body.textRepresentation == "[INFO] started")
