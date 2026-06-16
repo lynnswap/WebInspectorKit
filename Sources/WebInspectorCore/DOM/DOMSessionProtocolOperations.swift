@@ -195,6 +195,7 @@ extension DOMSession {
             includeCurrentPageFallback: false
         )
         guard !Task.isCancelled,
+              !isSelectingElement,
               let intent = highlightNodeIntent(for: nodeID) else {
             return
         }
@@ -337,6 +338,18 @@ extension DOMSession {
         syncElementPickerSelectionState()
 
         do {
+            await hideStaleHighlights(
+                preferredHideTargetID: nil,
+                preserving: nil,
+                includeCurrentPageFallback: false
+            )
+            guard !Task.isCancelled else {
+                clearElementPickerState(invalidatePendingSelection: true)
+                return
+            }
+            guard elementPicker.isCurrentEnablingSession(pickerSession) else {
+                return
+            }
             guard let intent = setInspectModeEnabledIntent(targetID: targetID, enabled: true) else {
                 recordElementPickerFailure(reason: "inspectModeUnavailable", targetID: targetID)
                 throw InspectorSession.Error("DOM inspect mode is not available.")

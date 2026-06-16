@@ -124,6 +124,13 @@ final class DOMSessionElementPickerController {
         return true
     }
 
+    func isCurrentEnablingSession(_ session: Session) -> Bool {
+        guard case let .enabling(currentSession) = phase else {
+            return false
+        }
+        return currentSession === session
+    }
+
     func currentAcceptingSession() -> Session? {
         phase.acceptingSession()
     }
