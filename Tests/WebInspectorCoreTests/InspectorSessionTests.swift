@@ -4959,6 +4959,79 @@ func cancelledBeginElementPickerRestoresSelectedHighlightAfterStaleHide() async 
 }
 
 @Test
+func cancelledBeginElementPickerRestoresSelectedHighlightAfterEnableCancellation() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    let pageHTMLID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(2))
+    await session.attachment.dom.selectNode(pageHTMLID)
+
+    let countBeforeHighlight = await backend.sentTargetMessages().count
+    let highlightTask = Task {
+        await session.attachment.dom.highlightNode(for: pageHTMLID)
+    }
+    let highlight = try await waitForTargetMessage(
+        backend,
+        method: "DOM.highlightNode",
+        after: countBeforeHighlight
+    )
+    await receiveTargetReply(
+        transport,
+        targetID: highlight.targetIdentifier,
+        messageID: try messageID(highlight.message),
+        result: "{}"
+    )
+    await highlightTask.value
+
+    let countBeforeBeginPicker = await backend.sentTargetMessages().count
+    let beginPickerTask = Task {
+        try await session.attachment.dom.beginElementPicker()
+    }
+    let beginHide = try await waitForTargetMessage(
+        backend,
+        method: "DOM.hideHighlight",
+        after: countBeforeBeginPicker
+    )
+    #expect(beginHide.targetIdentifier == ProtocolTarget.ID.pageMain)
+    let countBeforeBeginHideReply = await backend.sentTargetMessages().count
+    await receiveTargetReply(
+        transport,
+        targetID: beginHide.targetIdentifier,
+        messageID: try messageID(beginHide.message),
+        result: "{}"
+    )
+    let enable = try await waitForTargetMessage(
+        backend,
+        method: "DOM.setInspectModeEnabled",
+        after: countBeforeBeginHideReply
+    )
+    #expect(try boolParameter("enabled", in: enable.message) == true)
+
+    let countBeforeCancel = await backend.sentTargetMessages().count
+    beginPickerTask.cancel()
+    let restoredHighlight = try await waitForTargetMessage(
+        backend,
+        method: "DOM.highlightNode",
+        after: countBeforeCancel
+    )
+    #expect(restoredHighlight.targetIdentifier == ProtocolTarget.ID.pageMain)
+    #expect(try integerParameter("nodeId", in: restoredHighlight.message) == 2)
+    await receiveTargetReply(
+        transport,
+        targetID: restoredHighlight.targetIdentifier,
+        messageID: try messageID(restoredHighlight.message),
+        result: "{}"
+    )
+    do {
+        try await beginPickerTask.value
+        Issue.record("Expected beginElementPicker to fail")
+    } catch {
+    }
+    #expect(await session.attachment.dom.isSelectingElement == false)
+}
+
+@Test
 func cancelledDirectHighlightIsHiddenBeforeRestoringSelection() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)

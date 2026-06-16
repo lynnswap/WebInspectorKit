@@ -347,12 +347,12 @@ extension DOMSession {
         recordError?(InspectorSession.Error(String(describing: error)))
     }
 
-    private func restoreSelectedNodeHighlightAfterPickerInterruption() async {
+    private func restoreSelectedNodeHighlightAfterPickerInterruption(preferredHideTargetID: ProtocolTarget.ID? = nil) async {
         guard selectedNodeID != nil else {
             return
         }
         let restoreTask = Task { @MainActor [weak self] in
-            await self?.restoreSelectedNodeHighlightOrHide()
+            await self?.restoreSelectedNodeHighlightOrHide(preferredHideTargetID: preferredHideTargetID)
         }
         await restoreTask.value
     }
@@ -428,7 +428,7 @@ extension DOMSession {
                 details: "error=\(error)"
             )
             clearElementPickerState(invalidatePendingSelection: true)
-            await restoreSelectedNodeHighlightOrHide(preferredHideTargetID: targetID)
+            await restoreSelectedNodeHighlightAfterPickerInterruption(preferredHideTargetID: targetID)
             throw error
         }
     }
