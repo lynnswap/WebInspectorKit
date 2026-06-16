@@ -1153,7 +1153,7 @@ extension DOMSession {
                 return
             }
             recordElementPickerFailure(reason: "targetDestroyedBeforeInspectEvent", targetID: activeTargetID)
-            clearElementPickerState(invalidatePendingSelection: true)
+            clearElementPickerStateAfterTargetLifecycleInterruption(activeTargetID: activeTargetID)
         case "Target.didCommitProvisionalTarget":
             guard let targetCommit,
                   targetCommit.consumedOldTargetID == activeTargetID else {
@@ -1164,10 +1164,15 @@ extension DOMSession {
                 targetID: activeTargetID,
                 details: "newTarget=\(targetCommit.newTargetID.rawValue)"
             )
-            clearElementPickerState(invalidatePendingSelection: true)
+            clearElementPickerStateAfterTargetLifecycleInterruption(activeTargetID: activeTargetID)
         default:
             return
         }
+    }
+
+    private func clearElementPickerStateAfterTargetLifecycleInterruption(activeTargetID: ProtocolTarget.ID) {
+        clearElementPickerState(invalidatePendingSelection: true)
+        scheduleSelectedNodeHighlightRestoreOrHide(preferredHideTargetID: activeTargetID)
     }
 
     private func selectedStylesShouldRefresh(after event: ProtocolEvent) -> Bool {
