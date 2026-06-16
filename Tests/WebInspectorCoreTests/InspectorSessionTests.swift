@@ -3138,6 +3138,7 @@ func requestNodeReplyBeforePathPushKeepsSelectionPendingUntilParentArrives() asy
         targetID: .pageMain,
         message: #"{"method":"DOM.setChildNodes","params":{"parentId":2,"nodes":[{"nodeId":999,"nodeType":1,"nodeName":"DIV","localName":"div","attributes":["id","late-path"]}]}}"#
     )
+    await expectProtocolEventApplied(setChildNodesSequence, in: session)
     let restoredHighlight = try await waitForTargetMessage(
         backend,
         method: "DOM.highlightNode",
@@ -3151,7 +3152,6 @@ func requestNodeReplyBeforePathPushKeepsSelectionPendingUntilParentArrives() asy
         messageID: try messageID(restoredHighlight.message),
         result: "{}"
     )
-    await expectProtocolEventApplied(setChildNodesSequence, in: session)
 
     let selectedNode = try #require(await session.attachment.dom.selectedNode)
     #expect(await selectedNode.nodeName == "DIV")
@@ -3261,6 +3261,40 @@ func restoreSelectedNodeHighlightHidesWhenSelectionIsMissing() async throws {
         result: "{}"
     )
     await restoreTask.value
+}
+
+@Test
+func restoreSelectedNodeHighlightNoOpsWhileElementPickerIsActive() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    let htmlID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(2))
+    await session.attachment.dom.selectNode(htmlID)
+    try await beginPicker(session: session, transport: transport, backend: backend)
+    #expect(await session.attachment.dom.isSelectingElement)
+
+    let sentCount = await backend.sentTargetMessages().count
+    await session.attachment.dom.restoreSelectedNodeHighlightOrHide()
+    #expect(await backend.sentTargetMessages().count == sentCount)
+
+    let sentCountBeforeCancel = await backend.sentTargetMessages().count
+    let cancelTask = Task {
+        await session.attachment.dom.cancelElementPicker()
+    }
+    let disableMessage = try await waitForTargetMessage(
+        backend,
+        method: "DOM.setInspectModeEnabled",
+        after: sentCountBeforeCancel
+    )
+    try await replyToPickerDisableAndRestoredHighlight(
+        disableMessage,
+        transport: transport,
+        backend: backend,
+        expectedTargetID: .pageMain,
+        expectedNodeID: 2
+    )
+    await cancelTask.value
 }
 
 @Test
@@ -3734,6 +3768,7 @@ func pendingPickerSelectionDoesNotRestorePreviousNodeHighlight() async throws {
         targetID: .pageMain,
         message: #"{"method":"DOM.setChildNodes","params":{"parentId":2,"nodes":[{"nodeId":999,"nodeType":1,"nodeName":"DIV","localName":"div","attributes":["id","late-picked"]}]}}"#
     )
+    await expectProtocolEventApplied(setChildNodesSequence, in: session)
     let restoredHighlight = try await waitForTargetMessage(
         backend,
         method: "DOM.highlightNode",
@@ -3747,7 +3782,6 @@ func pendingPickerSelectionDoesNotRestorePreviousNodeHighlight() async throws {
         messageID: try messageID(restoredHighlight.message),
         result: "{}"
     )
-    await expectProtocolEventApplied(setChildNodesSequence, in: session)
 
     let selectedNode = try #require(await session.attachment.dom.selectedNode)
     #expect(await selectedNode.attributes == [WebInspectorCore.DOMNode.Attribute(name: "id", value: "late-picked")])

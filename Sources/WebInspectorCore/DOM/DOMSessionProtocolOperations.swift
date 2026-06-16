@@ -167,6 +167,9 @@ extension DOMSession {
     }
 
     package func restoreSelectedNodeHighlightOrHide(preferredHideTargetID: ProtocolTarget.ID? = nil) async {
+        guard !isSelectingElement else {
+            return
+        }
         if !hasPendingSelectionRequest,
            let selectedNodeID,
            let intent = highlightNodeIntent(for: selectedNodeID) {
@@ -193,6 +196,12 @@ extension DOMSession {
             preserving: nil,
             includeCurrentPageFallback: true
         )
+    }
+
+    private func scheduleSelectedNodeHighlightRestoreOrHide(preferredHideTargetID: ProtocolTarget.ID? = nil) {
+        Task { @MainActor [weak self] in
+            await self?.restoreSelectedNodeHighlightOrHide(preferredHideTargetID: preferredHideTargetID)
+        }
     }
 
     private func hideStaleHighlights(
@@ -629,7 +638,7 @@ extension DOMSession {
            !hasPendingSelectionRequest,
            selectionRevision != selectionRevisionBeforeEvent,
            !isSelectingElement {
-            await restoreSelectedNodeHighlightOrHide()
+            scheduleSelectedNodeHighlightRestoreOrHide()
         }
     }
 
