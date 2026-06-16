@@ -4311,6 +4311,59 @@ func staleSelectionClearRestoresCurrentSelectionHighlight() async throws {
 }
 
 @Test
+func staleSelectionClearDoesNotRestoreSelectionOverNewerHighlight() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
+    let htmlID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(2))
+    let bodyID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(4))
+
+    await session.attachment.dom.selectNode(htmlID)
+    let countBeforeInitialHighlight = await backend.sentTargetMessages().count
+    let initialHighlightTask = Task {
+        await session.attachment.dom.highlightNode(for: htmlID)
+    }
+    let initialHighlight = try await waitForTargetMessage(
+        backend,
+        method: "DOM.highlightNode",
+        after: countBeforeInitialHighlight
+    )
+    await receiveTargetReply(
+        transport,
+        targetID: initialHighlight.targetIdentifier,
+        messageID: try messageID(initialHighlight.message),
+        result: "{}"
+    )
+    await initialHighlightTask.value
+    let staleGeneration = try #require(await session.attachment.dom.highlightController.possibleVisibleGeneration(targetID: .pageMain))
+
+    await session.attachment.dom.selectNode(bodyID)
+    let countBeforeNewerHighlight = await backend.sentTargetMessages().count
+    let newerHighlightTask = Task {
+        await session.attachment.dom.highlightNode(for: htmlID)
+    }
+    let newerHighlight = try await waitForTargetMessage(
+        backend,
+        method: "DOM.highlightNode",
+        after: countBeforeNewerHighlight
+    )
+
+    let countBeforeStaleClear = await backend.sentTargetMessages().count
+    await session.attachment.dom.hideNodeHighlightIfCurrent(targetID: .pageMain, generation: staleGeneration)
+    #expect(await backend.sentTargetMessages().count == countBeforeStaleClear)
+
+    await receiveTargetReply(
+        transport,
+        targetID: newerHighlight.targetIdentifier,
+        messageID: try messageID(newerHighlight.message),
+        result: "{}"
+    )
+    await newerHighlightTask.value
+}
+
+@Test
 func directHighlightStopsWhenCancelledDuringStaleHide() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)

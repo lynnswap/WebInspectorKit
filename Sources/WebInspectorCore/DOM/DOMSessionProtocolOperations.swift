@@ -272,12 +272,14 @@ extension DOMSession {
               !isSelectingElement else {
             return
         }
+        guard highlightController.possibleVisibleGeneration(targetID: targetID) == generation else {
+            return
+        }
         if selectedNodeID != nil {
             await restoreSelectedNodeHighlightOrHide(preferredHideTargetID: targetID)
             return
         }
-        guard !hasPendingSelectionRequest,
-              highlightController.possibleVisibleGeneration(targetID: targetID) == generation else {
+        guard !hasPendingSelectionRequest else {
             return
         }
         guard containsTarget(targetID) else {
