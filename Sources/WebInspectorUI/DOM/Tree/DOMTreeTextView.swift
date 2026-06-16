@@ -70,6 +70,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     private let expansionState = DOMTreeTextView.ExpansionState()
     private lazy var renderedRowsBuilder = DOMTreeTextView.RenderedRowsBuilder(dom: dom, expansionState: expansionState)
     private var hoveredNodeID: DOMNode.ID?
+    private var pageHighlightTask: Task<Void, Never>?
     private var requestedChildNodeIDs: Set<DOMNode.ID> = []
     private let findDecorationState = DOMTreeTextView.FindDecorationState()
     private var hoverRowRects: [CGRect] = []
@@ -148,6 +149,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     isolated deinit {
+        pageHighlightTask?.cancel()
         reloadScheduler.cancel()
         documentObservation?.cancel()
         selectionObservation?.cancel()
@@ -905,9 +907,11 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func highlightPageNode(_ nodeID: DOMNode.ID, reason: PageHighlightReason) {
-        Task { @MainActor [weak self, highlightNodeAction] in
+        pageHighlightTask?.cancel()
+        pageHighlightTask = Task { @MainActor [weak self, highlightNodeAction] in
             await Task.yield()
-            guard let self else {
+            guard !Task.isCancelled,
+                  let self else {
                 return
             }
             guard !self.dom.isSelectingElement else {
@@ -923,11 +927,15 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
                     return
                 }
             }
+            guard !Task.isCancelled else {
+                return
+            }
             await highlightNodeAction?(nodeID)
         }
     }
 
     private func clearHoveredRowAndRestoreSelectionHighlight() {
+        pageHighlightTask?.cancel()
         clearHoveredRow()
         Task { @MainActor [weak self, restoreHighlightAction] in
             await Task.yield()

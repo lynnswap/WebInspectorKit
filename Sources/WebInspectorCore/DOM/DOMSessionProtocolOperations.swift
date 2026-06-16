@@ -158,7 +158,8 @@ extension DOMSession {
             preserving: highlightedTargetID,
             includeCurrentPageFallback: false
         )
-        guard let intent = highlightNodeIntent(for: nodeID) else {
+        guard !Task.isCancelled,
+              let intent = highlightNodeIntent(for: nodeID) else {
             return
         }
         do {
@@ -219,7 +220,7 @@ extension DOMSession {
         )
     }
 
-    private func scheduleSelectedNodeHighlightRestoreOrHide(preferredHideTargetID: ProtocolTarget.ID? = nil) {
+    package func scheduleSelectedNodeHighlightRestoreOrHide(preferredHideTargetID: ProtocolTarget.ID? = nil) {
         Task { @MainActor [weak self] in
             await self?.restoreSelectedNodeHighlightOrHide(preferredHideTargetID: preferredHideTargetID)
         }
@@ -237,6 +238,12 @@ extension DOMSession {
             targetIDs.append(targetID)
         }
         for targetID in targetIDs {
+            guard containsTarget(targetID) else {
+                if highlightController.targetID == targetID {
+                    highlightController.targetID = nil
+                }
+                continue
+            }
             guard let intent = hideHighlightIntent(targetID: targetID) else {
                 continue
             }

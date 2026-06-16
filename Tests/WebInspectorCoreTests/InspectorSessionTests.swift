@@ -3965,6 +3965,194 @@ func directHighlightHidesPreviousTargetBeforeHighlightingNewTarget() async throw
 }
 
 @Test
+func documentInvalidationHidesSelectedNodeHighlight() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    let htmlID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(2))
+    await session.attachment.dom.selectNode(htmlID)
+
+    let countBeforeHighlight = await backend.sentTargetMessages().count
+    let highlightTask = Task {
+        await session.attachment.dom.highlightNode(for: htmlID)
+    }
+    let highlight = try await waitForTargetMessage(
+        backend,
+        method: "DOM.highlightNode",
+        after: countBeforeHighlight
+    )
+    #expect(highlight.targetIdentifier == ProtocolTarget.ID.pageMain)
+    await receiveTargetReply(
+        transport,
+        targetID: highlight.targetIdentifier,
+        messageID: try messageID(highlight.message),
+        result: "{}"
+    )
+    await highlightTask.value
+
+    let countBeforeInvalidation = await backend.sentTargetMessages().count
+    await receiveAndApplyTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"DOM.documentUpdated","params":{}}"#,
+        in: session
+    )
+    let hideHighlight = try await waitForTargetMessage(
+        backend,
+        method: "DOM.hideHighlight",
+        after: countBeforeInvalidation
+    )
+    #expect(hideHighlight.targetIdentifier == ProtocolTarget.ID.pageMain)
+    await receiveTargetReply(
+        transport,
+        targetID: hideHighlight.targetIdentifier,
+        messageID: try messageID(hideHighlight.message),
+        result: "{}"
+    )
+    #expect(await session.attachment.dom.selectedNodeID == nil)
+}
+
+@Test
+func directHighlightStopsWhenCancelledDuringStaleHide() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    let pageHTMLID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(2))
+    await receiveAndApplyRootMessage(
+        transport,
+        message: #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","isProvisional":false}}}"#,
+        in: session
+    )
+    _ = await session.attachment.dom.replaceDocumentRoot(
+        WebInspectorCore.DOMNode.Payload(
+            nodeID: .init(101),
+            nodeType: .document,
+            nodeName: "#document",
+            regularChildren: .loaded([
+                WebInspectorCore.DOMNode.Payload(nodeID: .init(102), nodeType: .element, nodeName: "HTML", localName: "html"),
+            ])
+        ),
+        targetID: .frameAd
+    )
+    let frameHTMLID = try #require(await session.attachment.dom.snapshot().currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(102))])
+
+    let countBeforeFrameHighlight = await backend.sentTargetMessages().count
+    let frameHighlightTask = Task {
+        await session.attachment.dom.highlightNode(for: frameHTMLID)
+    }
+    let frameHighlight = try await waitForTargetMessage(
+        backend,
+        method: "DOM.highlightNode",
+        after: countBeforeFrameHighlight
+    )
+    #expect(frameHighlight.targetIdentifier == ProtocolTarget.ID.frameAd)
+    await receiveTargetReply(
+        transport,
+        targetID: frameHighlight.targetIdentifier,
+        messageID: try messageID(frameHighlight.message),
+        result: "{}"
+    )
+    await frameHighlightTask.value
+
+    let countBeforePageHighlight = await backend.sentTargetMessages().count
+    let pageHighlightTask = Task {
+        await session.attachment.dom.highlightNode(for: pageHTMLID)
+    }
+    let frameHide = try await waitForTargetMessage(
+        backend,
+        method: "DOM.hideHighlight",
+        after: countBeforePageHighlight
+    )
+    #expect(frameHide.targetIdentifier == ProtocolTarget.ID.frameAd)
+
+    pageHighlightTask.cancel()
+    let countBeforeHideReply = await backend.sentTargetMessages().count
+    await receiveTargetReply(
+        transport,
+        targetID: frameHide.targetIdentifier,
+        messageID: try messageID(frameHide.message),
+        result: "{}"
+    )
+    await pageHighlightTask.value
+    #expect(await backend.sentTargetMessages().count == countBeforeHideReply)
+}
+
+@Test
+func directHighlightSkipsDestroyedPreviousTarget() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    let pageHTMLID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(2))
+    await receiveAndApplyRootMessage(
+        transport,
+        message: #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","isProvisional":false}}}"#,
+        in: session
+    )
+    _ = await session.attachment.dom.replaceDocumentRoot(
+        WebInspectorCore.DOMNode.Payload(
+            nodeID: .init(101),
+            nodeType: .document,
+            nodeName: "#document",
+            regularChildren: .loaded([
+                WebInspectorCore.DOMNode.Payload(nodeID: .init(102), nodeType: .element, nodeName: "HTML", localName: "html"),
+            ])
+        ),
+        targetID: .frameAd
+    )
+    let frameHTMLID = try #require(await session.attachment.dom.snapshot().currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(102))])
+
+    let countBeforeFrameHighlight = await backend.sentTargetMessages().count
+    let frameHighlightTask = Task {
+        await session.attachment.dom.highlightNode(for: frameHTMLID)
+    }
+    let frameHighlight = try await waitForTargetMessage(
+        backend,
+        method: "DOM.highlightNode",
+        after: countBeforeFrameHighlight
+    )
+    #expect(frameHighlight.targetIdentifier == ProtocolTarget.ID.frameAd)
+    await receiveTargetReply(
+        transport,
+        targetID: frameHighlight.targetIdentifier,
+        messageID: try messageID(frameHighlight.message),
+        result: "{}"
+    )
+    await frameHighlightTask.value
+    await receiveAndApplyRootMessage(
+        transport,
+        message: #"{"method":"Target.targetDestroyed","params":{"targetId":"frame-ad"}}"#,
+        in: session
+    )
+
+    let countBeforePageHighlight = await backend.sentTargetMessages().count
+    let pageHighlightTask = Task {
+        await session.attachment.dom.highlightNode(for: pageHTMLID)
+    }
+    let pageHighlight = try await waitForTargetMessage(
+        backend,
+        method: "DOM.highlightNode",
+        after: countBeforePageHighlight
+    )
+    #expect(pageHighlight.targetIdentifier == ProtocolTarget.ID.pageMain)
+    #expect(try integerParameter("nodeId", in: pageHighlight.message) == 2)
+    let newMethods = await backend.sentTargetMessages()
+        .dropFirst(countBeforePageHighlight)
+        .compactMap { try? messageMethod($0.message) }
+    #expect(newMethods == ["DOM.highlightNode"])
+    await receiveTargetReply(
+        transport,
+        targetID: pageHighlight.targetIdentifier,
+        messageID: try messageID(pageHighlight.message),
+        result: "{}"
+    )
+    await pageHighlightTask.value
+    #expect(await session.lastError == nil)
+}
+
+@Test
 func restoreSelectedFrameHighlightHidesPageHoverHighlight() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
