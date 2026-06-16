@@ -399,6 +399,7 @@ extension DOMSession {
                 details: "error=\(error)"
             )
             clearElementPickerState(invalidatePendingSelection: true)
+            await restoreSelectedNodeHighlightOrHide(preferredHideTargetID: targetID)
             throw error
         }
     }
