@@ -1521,11 +1521,14 @@ package final class DOMSession {
 
     private func scheduleHighlightClearAfterSelectionCleared(previousSelectedNodeID: DOMNode.ID?) {
         guard let previousSelectedNodeID,
-              selection.selectedNodeID == nil,
-              highlightController.hasPossibleVisibleHighlight else {
+              selection.selectedNodeID == nil else {
             return
         }
-        scheduleSelectedNodeHighlightRestoreOrHide(preferredHideTargetID: previousSelectedNodeID.documentID.targetID)
+        let targetID = previousSelectedNodeID.documentID.targetID
+        guard let generation = highlightController.possibleVisibleGeneration(targetID: targetID) else {
+            return
+        }
+        scheduleNodeHighlightHideIfCurrent(targetID: targetID, generation: generation)
     }
 
     package func syncSelectedElementStyles() {

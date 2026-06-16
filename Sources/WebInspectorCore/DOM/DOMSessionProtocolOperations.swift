@@ -261,6 +261,39 @@ extension DOMSession {
         }
     }
 
+    package func scheduleNodeHighlightHideIfCurrent(targetID: ProtocolTarget.ID, generation: UInt64) {
+        Task { @MainActor [weak self] in
+            await self?.hideNodeHighlightIfCurrent(targetID: targetID, generation: generation)
+        }
+    }
+
+    package func hideNodeHighlightIfCurrent(targetID: ProtocolTarget.ID, generation: UInt64) async {
+        guard !Task.isCancelled,
+              !isSelectingElement else {
+            return
+        }
+        if selectedNodeID != nil {
+            await restoreSelectedNodeHighlightOrHide(preferredHideTargetID: targetID)
+            return
+        }
+        guard !hasPendingSelectionRequest,
+              highlightController.possibleVisibleGeneration(targetID: targetID) == generation else {
+            return
+        }
+        guard containsTarget(targetID) else {
+            highlightController.clearHighlight(targetID: targetID, matchingGeneration: generation)
+            return
+        }
+        guard let intent = hideHighlightIntent(targetID: targetID) else {
+            return
+        }
+        do {
+            try await perform(intent)
+        } catch {
+            recordPageHighlightErrorUnlessCancelled(error)
+        }
+    }
+
     private func hideStaleHighlights(
         preferredHideTargetID: ProtocolTarget.ID?,
         preserving preservedTargetID: ProtocolTarget.ID?,
