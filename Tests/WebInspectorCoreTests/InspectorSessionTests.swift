@@ -4570,6 +4570,29 @@ func staleHideSnapshotDoesNotHideNewerLaterTargetHighlight() async throws {
 }
 
 @Test
+func directHighlightDoesNotHideStaleHighlightWhilePickerIsActive() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    let pageHTMLID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(2))
+    await receiveAndApplyRootMessage(
+        transport,
+        message: #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","isProvisional":false}}}"#,
+        in: session
+    )
+    await session.attachment.dom.highlightController.markHighlightMayBeVisible(targetID: .frameAd)
+    await MainActor.run {
+        session.attachment.dom.isSelectingElement = true
+    }
+
+    let countBeforeHighlight = await backend.sentTargetMessages().count
+    await session.attachment.dom.highlightNode(for: pageHTMLID)
+
+    #expect(await backend.sentTargetMessages().count == countBeforeHighlight)
+}
+
+@Test
 func directHighlightStopsWhenPickerStartsDuringStaleHide() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)

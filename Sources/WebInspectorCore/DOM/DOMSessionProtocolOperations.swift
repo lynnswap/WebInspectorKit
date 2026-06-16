@@ -181,7 +181,8 @@ extension DOMSession {
     }
 
     package func highlightNode(for nodeID: DOMNode.ID) async {
-        guard let intent = highlightNodeIntent(for: nodeID) else {
+        guard !isSelectingElement,
+              let intent = highlightNodeIntent(for: nodeID) else {
             return
         }
         let highlightedTargetID: ProtocolTarget.ID? = if case let .highlightNode(target) = intent {
@@ -192,7 +193,8 @@ extension DOMSession {
         await hideStaleHighlights(
             preferredHideTargetID: nil,
             preserving: highlightedTargetID,
-            includeCurrentPageFallback: false
+            includeCurrentPageFallback: false,
+            abortIfSelectingElement: true
         )
         guard !Task.isCancelled,
               !isSelectingElement,
@@ -230,7 +232,8 @@ extension DOMSession {
             await hideStaleHighlights(
                 preferredHideTargetID: preferredHideTargetID,
                 preserving: selectedHighlightTargetID,
-                includeCurrentPageFallback: false
+                includeCurrentPageFallback: false,
+                abortIfSelectingElement: true
             )
             guard !Task.isCancelled,
                   !isSelectingElement,
@@ -251,7 +254,8 @@ extension DOMSession {
         await hideStaleHighlights(
             preferredHideTargetID: preferredHideTargetID,
             preserving: nil,
-            includeCurrentPageFallback: true
+            includeCurrentPageFallback: true,
+            abortIfSelectingElement: true
         )
     }
 
@@ -299,7 +303,8 @@ extension DOMSession {
     private func hideStaleHighlights(
         preferredHideTargetID: ProtocolTarget.ID?,
         preserving preservedTargetID: ProtocolTarget.ID?,
-        includeCurrentPageFallback: Bool
+        includeCurrentPageFallback: Bool,
+        abortIfSelectingElement: Bool = false
     ) async {
         let fallbackTargetID = includeCurrentPageFallback ? currentPageTargetID : nil
         for highlight in highlightController.possibleVisibleHighlights(
@@ -308,6 +313,9 @@ extension DOMSession {
             preserving: preservedTargetID
         ) {
             guard !Task.isCancelled else {
+                return
+            }
+            guard !abortIfSelectingElement || !isSelectingElement else {
                 return
             }
             let targetID = highlight.targetID
