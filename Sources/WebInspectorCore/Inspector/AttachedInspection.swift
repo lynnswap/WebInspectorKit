@@ -555,6 +555,7 @@ package final class InspectorSession {
             try ensureCurrentConnection(nextConnection)
             connectionPhase = .active(nextConnection)
             dom.recordCommandAvailabilityMutation()
+            dom.reconcileSelectedNodeStyleHydrationIfNeeded()
             dom.startDocumentRequestsForAttachedFrameTargets()
             startRuntimeConsoleEnableForAttachedTargets()
             lastError = nil

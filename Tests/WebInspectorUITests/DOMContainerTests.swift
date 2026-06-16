@@ -954,6 +954,15 @@ struct DOMContainerTests {
     }
 
     @Test
+    func testBackendTargetMessageWaiterTimesOutWhenMethodIsMissing() async throws {
+        let backend = RecordingTransportBackend()
+
+        await #expect(throws: TransportSession.Error.replyTimeout(method: "DOM.getDocument", targetID: nil)) {
+            try await waitForTargetMessage(backend, method: "DOM.getDocument", timeout: .milliseconds(20))
+        }
+    }
+
+    @Test
     func splitContainerInstallsTreeAndElementColumns() throws {
         let dom = makeDOMSession()
         let treeViewController = DOMTreeViewController(dom: dom)
@@ -1300,7 +1309,7 @@ struct DOMContainerTests {
             }
 
             group.addTask {
-                await backend.waitForTargetMessage(method: method)
+                try await backend.waitForTargetMessage(method: method)
             }
             group.addTask {
                 try await Task.sleep(for: timeout)
@@ -1346,12 +1355,15 @@ struct DOMContainerTests {
 
     private actor RecordingTransportBackend: TransportBackend {
         private struct TargetMessageWaiter {
+            var id: UInt64
             var method: String
-            var continuation: CheckedContinuation<RecordedTargetMessage, Never>
+            var continuation: CheckedContinuation<RecordedTargetMessage, Error>
         }
 
         private var messages: [String] = []
         private var waiters: [TargetMessageWaiter] = []
+        private var nextWaiterID: UInt64 = 0
+        private var cancelledWaiterIDs: Set<UInt64> = []
 
         func sendJSONString(_ message: String) async throws {
             messages.append(message)
@@ -1364,15 +1376,25 @@ struct DOMContainerTests {
             messages.compactMap(Self.targetMessage)
         }
 
-        func waitForTargetMessage(method: String) async -> RecordedTargetMessage {
+        func waitForTargetMessage(method: String) async throws -> RecordedTargetMessage {
+            try Task.checkCancellation()
             if let message = sentTargetMessages().first(where: { messageMethod($0.message) == method }) {
                 return message
             }
 
-            return await withCheckedContinuation { continuation in
-                waiters.append(TargetMessageWaiter(method: method, continuation: continuation))
-                resumeWaiters()
+            nextWaiterID &+= 1
+            let waiterID = nextWaiterID
+            let message = try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { continuation in
+                    registerWaiter(id: waiterID, method: method, continuation: continuation)
+                }
+            } onCancel: {
+                Task {
+                    await self.cancelWaiter(waiterID)
+                }
             }
+            try Task.checkCancellation()
+            return message
         }
 
         private func resumeWaiters() {
@@ -1382,13 +1404,41 @@ struct DOMContainerTests {
 
             var remainingWaiters: [TargetMessageWaiter] = []
             for waiter in waiters {
-                if let message = sentTargetMessages().first(where: { messageMethod($0.message) == waiter.method }) {
+                if cancelledWaiterIDs.remove(waiter.id) != nil {
+                    waiter.continuation.resume(throwing: CancellationError())
+                } else if let message = sentTargetMessages().first(where: { messageMethod($0.message) == waiter.method }) {
                     waiter.continuation.resume(returning: message)
                 } else {
                     remainingWaiters.append(waiter)
                 }
             }
             waiters = remainingWaiters
+        }
+
+        private func registerWaiter(
+            id: UInt64,
+            method: String,
+            continuation: CheckedContinuation<RecordedTargetMessage, Error>
+        ) {
+            guard cancelledWaiterIDs.remove(id) == nil else {
+                continuation.resume(throwing: CancellationError())
+                return
+            }
+            if let message = sentTargetMessages().first(where: { messageMethod($0.message) == method }) {
+                continuation.resume(returning: message)
+                return
+            }
+            waiters.append(TargetMessageWaiter(id: id, method: method, continuation: continuation))
+            resumeWaiters()
+        }
+
+        private func cancelWaiter(_ id: UInt64) {
+            guard let index = waiters.firstIndex(where: { $0.id == id }) else {
+                cancelledWaiterIDs.insert(id)
+                return
+            }
+            let waiter = waiters.remove(at: index)
+            waiter.continuation.resume(throwing: CancellationError())
         }
 
         private static func targetMessage(_ message: String) -> RecordedTargetMessage? {

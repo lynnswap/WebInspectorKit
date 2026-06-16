@@ -4706,6 +4706,84 @@ func domActionAvailabilityWaitsForActiveAttachment() async throws {
     #expect(await session.attachment.dom.canSelectElement)
 }
 
+@Test
+@MainActor
+func selectedElementStyleHydrationWaitsForActiveAttachmentDuringBootstrap() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = InspectorSession(configuration: .test)
+    await transport.receiveRootMessage(
+        cssCapablePageTargetCreatedMessage(targetID: "page-main", frameID: "main-frame", isProvisional: false)
+    )
+
+    let connectTask = Task {
+        try await session.connect(transport: transport)
+    }
+
+    var sentCount = 0
+    for method in ["Inspector.enable", "Inspector.initialized", "Runtime.enable"] {
+        let sent = try await waitForTargetMessage(backend, method: method, after: sentCount)
+        sentCount = await backend.sentTargetMessages().count
+        await receiveTargetReply(
+            transport,
+            targetID: sent.targetIdentifier,
+            messageID: try messageID(sent.message),
+            result: "{}"
+        )
+    }
+
+    let documentMessage = try await waitForTargetMessage(backend, method: "DOM.getDocument", after: sentCount)
+    sentCount = await backend.sentTargetMessages().count
+    await receiveTargetReply(
+        transport,
+        targetID: documentMessage.targetIdentifier,
+        messageID: try messageID(documentMessage.message),
+        result: mainDocumentResult
+    )
+
+    await session.attachment.dom.waitUntilDocumentRequestsIdle(targetID: documentMessage.targetIdentifier)
+    let htmlID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(2))
+    session.attachment.dom.selectNode(htmlID)
+
+    let networkMessage = try await waitForTargetMessage(backend, method: "Network.enable", after: sentCount)
+    sentCount = await backend.sentTargetMessages().count
+    #expect(session.hasActiveConnection == false)
+
+    session.attachment.dom.setSelectedNodeStyleHydrationActive(true)
+    #expect(session.attachment.dom.elementStyles.selectedState == .needsRefresh)
+    #expect(await backend.sentTargetMessages().count == sentCount)
+
+    await receiveTargetReply(
+        transport,
+        targetID: networkMessage.targetIdentifier,
+        messageID: try messageID(networkMessage.message),
+        result: "{}"
+    )
+
+    let consoleMessage = try await waitForTargetMessage(backend, method: "Console.enable", after: sentCount)
+    sentCount = await backend.sentTargetMessages().count
+    await receiveTargetReply(
+        transport,
+        targetID: consoleMessage.targetIdentifier,
+        messageID: try messageID(consoleMessage.message),
+        result: "{}"
+    )
+
+    try await connectTask.value
+    #expect(session.hasActiveConnection)
+
+    let messages = try await waitForCSSRefreshMessages(backend, after: sentCount)
+    try await replyCSSRefresh(
+        transport: transport,
+        messages: messages,
+        selector: "html",
+        styleSheetID: "sheet-html"
+    )
+
+    await session.attachment.dom.waitUntilSelectedStyleRefreshIdle()
+    #expect(session.attachment.dom.elementStyles.selectedState == .loaded)
+}
+
 @MainActor
 @Test
 func domActionAvailabilityObservationFiresWhenBootstrapAttaches() async throws {

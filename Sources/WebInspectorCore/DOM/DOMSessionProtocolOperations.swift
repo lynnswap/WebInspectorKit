@@ -409,7 +409,7 @@ extension DOMSession {
         guard styleHydration.isActive else {
             return
         }
-        guard commandChannel != nil else {
+        guard commandChannel?.acceptsActiveCommands == true else {
             return
         }
         guard currentPageRootNode != nil else {
@@ -479,6 +479,12 @@ extension DOMSession {
     }
 
     private func refreshStyles(for identity: CSSNodeStyles.Identity) async throws {
+        let commandChannel = try requireCommandChannel()
+        let targetExists = await commandChannel.snapshot().targetsByID[identity.targetID] != nil
+        guard targetExists else {
+            elementStyles.markSelectedNodeStylesUnavailable(identity: identity, reason: .staleNode(identity.nodeID))
+            return
+        }
         guard let token = elementStyles.beginRefresh(identity: identity) else {
             return
         }
@@ -488,13 +494,6 @@ extension DOMSession {
     private func refreshStyles(for token: CSSStyle.RefreshToken) async throws {
         let identity = token.identity
         do {
-            let commandChannel = try requireCommandChannel()
-            let targetExists = await commandChannel.snapshot().targetsByID[identity.targetID] != nil
-            guard targetExists else {
-                elementStyles.markSelectedNodeStylesUnavailable(identity: identity, reason: .staleNode(identity.nodeID))
-                return
-            }
-
             let results = try await elementStyles.fetchRefreshResults(for: identity)
             guard case let .success(currentIdentity) = selectedCSSNodeStyleIdentity(),
                   currentIdentity == identity else {
