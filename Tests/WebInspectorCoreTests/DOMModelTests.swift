@@ -1175,6 +1175,7 @@ func selectedNodeActionIntentsUseCommandIdentity() async throws {
     let htmlID = try #require((await session.snapshot()).currentNodeIDByKey[.init(targetID: pageTargetID, nodeID: .init(2))])
 
     let identity = DOMAction.Target(
+        nodeID: htmlID,
         documentTargetID: pageTargetID,
         rawNodeID: .init(2),
         commandTargetID: pageTargetID,
@@ -1208,6 +1209,7 @@ func frameDocumentActionIdentityUsesMainTargetScopedCommandNode() async throws {
     #expect(await session.removeNodeIntent(for: frameHTMLID, commandTargetID: pageTargetID) == .removeNode(target: identity))
 
     let highlightIdentity = DOMAction.Target(
+        nodeID: frameHTMLID,
         documentTargetID: frameTargetID,
         rawNodeID: .init(2),
         commandTargetID: frameTargetID,

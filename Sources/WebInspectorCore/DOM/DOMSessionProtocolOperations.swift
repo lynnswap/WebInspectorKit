@@ -78,10 +78,15 @@ extension DOMSession {
     @discardableResult
     private func perform(
         _ intent: DOMCommand.Intent,
-        requiresActiveConnection: Bool
+        requiresActiveConnection: Bool,
+        highlightOwner: DOMPageHighlightOwner? = nil
     ) async throws -> ProtocolCommand.Result {
         if case let .highlightNode(target) = intent {
-            highlightController.markHighlightMayBeVisible(targetID: target.commandTargetID)
+            highlightController.markHighlightMayBeVisible(
+                targetID: target.commandTargetID,
+                nodeID: target.nodeID,
+                owner: highlightOwner
+            )
         }
         let hideGeneration: UInt64? = if case let .hideHighlight(targetID) = intent {
             highlightController.possibleVisibleGeneration(targetID: targetID)
@@ -180,8 +185,12 @@ extension DOMSession {
         }
     }
 
-    package func highlightNode(for nodeID: DOMNode.ID) async {
+    package func highlightNode(
+        for nodeID: DOMNode.ID,
+        owner: DOMPageHighlightOwner = .transient
+    ) async {
         guard !isSelectingElement,
+              canHighlightNode(nodeID, owner: owner),
               let intent = highlightNodeIntent(for: nodeID) else {
             return
         }
@@ -198,13 +207,23 @@ extension DOMSession {
         )
         guard !Task.isCancelled,
               !isSelectingElement,
+              canHighlightNode(nodeID, owner: owner),
               let intent = highlightNodeIntent(for: nodeID) else {
             return
         }
         do {
-            try await perform(intent)
+            try await perform(intent, requiresActiveConnection: true, highlightOwner: owner)
         } catch {
             recordPageHighlightErrorUnlessCancelled(error)
+        }
+    }
+
+    private func canHighlightNode(_ nodeID: DOMNode.ID, owner: DOMPageHighlightOwner) -> Bool {
+        switch owner {
+        case .selection:
+            !hasPendingSelectionRequest && selectedNodeID == nodeID
+        case .transient:
+            true
         }
     }
 
@@ -244,7 +263,7 @@ extension DOMSession {
                 return
             }
             do {
-                try await perform(intent)
+                try await perform(intent, requiresActiveConnection: true, highlightOwner: .selection)
             } catch {
                 recordPageHighlightErrorUnlessCancelled(error)
             }
@@ -265,18 +284,38 @@ extension DOMSession {
         }
     }
 
-    package func scheduleNodeHighlightHideIfCurrent(targetID: ProtocolTarget.ID, generation: UInt64) {
+    package func scheduleNodeHighlightHideIfCurrent(
+        targetID: ProtocolTarget.ID,
+        generation: UInt64,
+        nodeID: DOMNode.ID? = nil,
+        owner: DOMPageHighlightOwner? = nil
+    ) {
         Task { @MainActor [weak self] in
-            await self?.hideNodeHighlightIfCurrent(targetID: targetID, generation: generation)
+            await self?.hideNodeHighlightIfCurrent(
+                targetID: targetID,
+                generation: generation,
+                nodeID: nodeID,
+                owner: owner
+            )
         }
     }
 
-    package func hideNodeHighlightIfCurrent(targetID: ProtocolTarget.ID, generation: UInt64) async {
+    package func hideNodeHighlightIfCurrent(
+        targetID: ProtocolTarget.ID,
+        generation: UInt64,
+        nodeID: DOMNode.ID? = nil,
+        owner: DOMPageHighlightOwner? = nil
+    ) async {
         guard !Task.isCancelled,
               !isSelectingElement else {
             return
         }
-        guard highlightController.possibleVisibleGeneration(targetID: targetID) == generation else {
+        guard highlightController.isPossibleVisibleHighlight(
+            targetID: targetID,
+            generation: generation,
+            nodeID: nodeID,
+            owner: owner
+        ) else {
             return
         }
         if selectedNodeID != nil {

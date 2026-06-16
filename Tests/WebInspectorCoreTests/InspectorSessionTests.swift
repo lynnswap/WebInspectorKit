@@ -4129,7 +4129,7 @@ func documentInvalidationHidesSelectedNodeHighlight() async throws {
 
     let countBeforeHighlight = await backend.sentTargetMessages().count
     let highlightTask = Task {
-        await session.attachment.dom.highlightNode(for: htmlID)
+        await session.attachment.dom.highlightNode(for: htmlID, owner: .selection)
     }
     let highlight = try await waitForTargetMessage(
         backend,
@@ -4178,7 +4178,7 @@ func selectionClearHidesInFlightSelectedNodeHighlight() async throws {
 
     let countBeforeHighlight = await backend.sentTargetMessages().count
     let highlightTask = Task {
-        await session.attachment.dom.highlightNode(for: htmlID)
+        await session.attachment.dom.highlightNode(for: htmlID, owner: .selection)
     }
     let highlight = try await waitForTargetMessage(
         backend,
@@ -4258,6 +4258,62 @@ func staleSelectionClearDoesNotHideNewerSameTargetHighlight() async throws {
         result: "{}"
     )
     await newerHighlightTask.value
+}
+
+@Test
+func selectionClearDoesNotHideNewerTransientHighlightOnSameTarget() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
+    let htmlID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(2))
+    let bodyID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(4))
+
+    await session.attachment.dom.selectNode(htmlID)
+    let countBeforeSelectionHighlight = await backend.sentTargetMessages().count
+    let selectionHighlightTask = Task {
+        await session.attachment.dom.highlightNode(for: htmlID, owner: .selection)
+    }
+    let selectionHighlight = try await waitForTargetMessage(
+        backend,
+        method: "DOM.highlightNode",
+        after: countBeforeSelectionHighlight
+    )
+    await receiveTargetReply(
+        transport,
+        targetID: selectionHighlight.targetIdentifier,
+        messageID: try messageID(selectionHighlight.message),
+        result: "{}"
+    )
+    await selectionHighlightTask.value
+
+    let countBeforeTransientHighlight = await backend.sentTargetMessages().count
+    let transientHighlightTask = Task {
+        await session.attachment.dom.highlightNode(for: bodyID, owner: .transient)
+    }
+    let transientHighlight = try await waitForTargetMessage(
+        backend,
+        method: "DOM.highlightNode",
+        after: countBeforeTransientHighlight
+    )
+    #expect(try integerParameter("nodeId", in: transientHighlight.message) == 4)
+
+    let countBeforeSelectionClear = await backend.sentTargetMessages().count
+    await session.attachment.dom.selectNode(nil)
+    await Task.yield()
+
+    #expect(await backend.sentTargetMessages().count == countBeforeSelectionClear)
+    #expect(await session.attachment.dom.highlightController.possibleVisibleNodeID(targetID: .pageMain) == bodyID)
+    #expect(await session.attachment.dom.highlightController.possibleVisibleOwner(targetID: .pageMain) == .transient)
+
+    await receiveTargetReply(
+        transport,
+        targetID: transientHighlight.targetIdentifier,
+        messageID: try messageID(transientHighlight.message),
+        result: "{}"
+    )
+    await transientHighlightTask.value
 }
 
 @Test

@@ -55,8 +55,8 @@ struct DOMTreeTextViewTests {
         let recorder = NodeActionRecorder()
         let view = DOMTreeTextView(
             dom: session,
-            highlightNodeAction: { nodeID in
-                recorder.record(nodeID)
+            highlightNodeAction: { nodeID, owner in
+                recorder.record(nodeID, owner: owner)
             }
         )
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
@@ -67,6 +67,7 @@ struct DOMTreeTextViewTests {
 
         #expect(session.selectedNode?.id == highlightedNodeID)
         #expect(session.node(for: highlightedNodeID)?.localName == "input")
+        #expect(recorder.recordedOwners == [.selection])
     }
 
     @Test
@@ -75,7 +76,7 @@ struct DOMTreeTextViewTests {
         let restoreRecorder = VoidActionRecorder()
         let view = DOMTreeTextView(
             dom: session,
-            highlightNodeAction: { _ in },
+            highlightNodeAction: { _, _ in },
             restoreHighlightAction: {
                 restoreRecorder.record()
             }
@@ -97,7 +98,7 @@ struct DOMTreeTextViewTests {
         let restoreRecorder = VoidActionRecorder()
         let view = DOMTreeTextView(
             dom: session,
-            highlightNodeAction: { _ in },
+            highlightNodeAction: { _, _ in },
             restoreHighlightAction: {
                 restoreRecorder.record()
             }
@@ -123,8 +124,8 @@ struct DOMTreeTextViewTests {
         let restoreRecorder = CancellableVoidActionRecorder()
         let view = DOMTreeTextView(
             dom: session,
-            highlightNodeAction: { nodeID in
-                highlightRecorder.record(nodeID)
+            highlightNodeAction: { nodeID, owner in
+                highlightRecorder.record(nodeID, owner: owner)
             },
             restoreHighlightAction: {
                 await restoreRecorder.run()
@@ -144,6 +145,7 @@ struct DOMTreeTextViewTests {
         let highlightedNodeID = await highlightRecorder.nextNodeID()
 
         #expect(session.node(for: highlightedNodeID)?.localName == "input")
+        #expect(highlightRecorder.recordedOwners == [.transient])
     }
 
     @Test
@@ -154,8 +156,8 @@ struct DOMTreeTextViewTests {
         let restoreRecorder = VoidActionRecorder()
         let view = DOMTreeTextView(
             dom: session,
-            highlightNodeAction: { nodeID in
-                highlightRecorder.record(nodeID)
+            highlightNodeAction: { nodeID, owner in
+                highlightRecorder.record(nodeID, owner: owner)
             },
             restoreHighlightAction: {
                 restoreRecorder.record()
@@ -368,10 +370,12 @@ private final class NodeRequestRecorder {
 @MainActor
 private final class NodeActionRecorder {
     private var nodeIDs: [DOMNode.ID] = []
+    private var owners: [DOMPageHighlightOwner] = []
     private var continuation: CheckedContinuation<DOMNode.ID, Never>?
 
-    func record(_ nodeID: DOMNode.ID) {
+    func record(_ nodeID: DOMNode.ID, owner: DOMPageHighlightOwner) {
         nodeIDs.append(nodeID)
+        owners.append(owner)
         continuation?.resume(returning: nodeID)
         continuation = nil
     }
@@ -389,8 +393,13 @@ private final class NodeActionRecorder {
         nodeIDs
     }
 
+    var recordedOwners: [DOMPageHighlightOwner] {
+        owners
+    }
+
     func removeAll() {
         nodeIDs.removeAll(keepingCapacity: true)
+        owners.removeAll(keepingCapacity: true)
     }
 }
 

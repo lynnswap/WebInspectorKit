@@ -739,6 +739,7 @@ package final class DOMSession {
         }
 
         return DOMAction.Target(
+            nodeID: nodeID,
             documentTargetID: documentTargetID,
             rawNodeID: node.protocolNodeID,
             commandTargetID: resolvedCommandTargetID,
@@ -1524,11 +1525,16 @@ package final class DOMSession {
               selection.selectedNodeID == nil else {
             return
         }
-        let targetID = previousSelectedNodeID.documentID.targetID
-        guard let generation = highlightController.possibleVisibleGeneration(targetID: targetID) else {
+        guard let highlight = highlightController.possibleVisibleSelectionHighlight(for: previousSelectedNodeID),
+              let generation = highlight.generation else {
             return
         }
-        scheduleNodeHighlightHideIfCurrent(targetID: targetID, generation: generation)
+        scheduleNodeHighlightHideIfCurrent(
+            targetID: highlight.targetID,
+            generation: generation,
+            nodeID: previousSelectedNodeID,
+            owner: .selection
+        )
     }
 
     package func syncSelectedElementStyles() {

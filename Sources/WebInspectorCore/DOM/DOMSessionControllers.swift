@@ -6,11 +6,15 @@ final class DOMSessionHighlightController {
     struct PossibleVisibleHighlight: Equatable {
         var targetID: ProtocolTarget.ID
         var generation: UInt64?
+        var nodeID: DOMNode.ID?
+        var owner: DOMPageHighlightOwner?
     }
 
     private struct PossibleVisibleTarget: Equatable {
         var targetID: ProtocolTarget.ID
         var generation: UInt64
+        var nodeID: DOMNode.ID?
+        var owner: DOMPageHighlightOwner?
     }
 
     // WebKit does not expose the current overlay state, and a task can be
@@ -36,14 +40,23 @@ final class DOMSessionHighlightController {
             highlights.append(
                 PossibleVisibleHighlight(
                     targetID: targetID,
-                    generation: possibleVisibleGeneration(targetID: targetID)
+                    generation: possibleVisibleGeneration(targetID: targetID),
+                    nodeID: possibleVisibleNodeID(targetID: targetID),
+                    owner: possibleVisibleOwner(targetID: targetID)
                 )
             )
         }
         if highlights.isEmpty,
            let fallbackTargetID,
            fallbackTargetID != preservedTargetID {
-            highlights.append(PossibleVisibleHighlight(targetID: fallbackTargetID, generation: nil))
+            highlights.append(
+                PossibleVisibleHighlight(
+                    targetID: fallbackTargetID,
+                    generation: nil,
+                    nodeID: nil,
+                    owner: nil
+                )
+            )
         }
         return highlights
     }
@@ -52,10 +65,57 @@ final class DOMSessionHighlightController {
         possibleVisibleTargets.first { $0.targetID == targetID }?.generation
     }
 
-    func markHighlightMayBeVisible(targetID: ProtocolTarget.ID) {
+    func possibleVisibleNodeID(targetID: ProtocolTarget.ID) -> DOMNode.ID? {
+        possibleVisibleTargets.first { $0.targetID == targetID }?.nodeID
+    }
+
+    func possibleVisibleOwner(targetID: ProtocolTarget.ID) -> DOMPageHighlightOwner? {
+        possibleVisibleTargets.first { $0.targetID == targetID }?.owner
+    }
+
+    func possibleVisibleSelectionHighlight(for nodeID: DOMNode.ID) -> PossibleVisibleHighlight? {
+        possibleVisibleTargets.lazy
+            .filter { $0.nodeID == nodeID && $0.owner == .selection }
+            .map {
+                PossibleVisibleHighlight(
+                    targetID: $0.targetID,
+                    generation: $0.generation,
+                    nodeID: $0.nodeID,
+                    owner: $0.owner
+                )
+            }
+            .first
+    }
+
+    func isPossibleVisibleHighlight(
+        targetID: ProtocolTarget.ID,
+        generation: UInt64,
+        nodeID: DOMNode.ID?,
+        owner: DOMPageHighlightOwner?
+    ) -> Bool {
+        possibleVisibleTargets.contains {
+            $0.targetID == targetID
+                && $0.generation == generation
+                && (nodeID == nil || $0.nodeID == nodeID)
+                && (owner == nil || $0.owner == owner)
+        }
+    }
+
+    func markHighlightMayBeVisible(
+        targetID: ProtocolTarget.ID,
+        nodeID: DOMNode.ID? = nil,
+        owner: DOMPageHighlightOwner? = nil
+    ) {
         nextGeneration &+= 1
         clearHighlight(targetID: targetID)
-        possibleVisibleTargets.append(PossibleVisibleTarget(targetID: targetID, generation: nextGeneration))
+        possibleVisibleTargets.append(
+            PossibleVisibleTarget(
+                targetID: targetID,
+                generation: nextGeneration,
+                nodeID: nodeID,
+                owner: owner
+            )
+        )
     }
 
     func clearHighlight(targetID: ProtocolTarget.ID) {

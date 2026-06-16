@@ -3,6 +3,11 @@ import WebInspectorTransport
 package enum DOMAction {}
 package enum DOMCommand {}
 
+package enum DOMPageHighlightOwner: Equatable, Sendable {
+    case selection
+    case transient
+}
+
 package extension DOMDocument {
     struct LifetimeID: RawRepresentable, Hashable, Comparable, Codable, Sendable {
         package let rawValue: UInt64
@@ -240,17 +245,20 @@ package extension DOMCommand {
 
 package extension DOMAction {
     struct Target: Equatable, Hashable, Sendable {
+        package var nodeID: DOMNode.ID
         package var documentTargetID: ProtocolTarget.ID
         package var rawNodeID: DOMNode.ProtocolID
         package var commandTargetID: ProtocolTarget.ID
         package var commandNodeID: DOMCommand.NodeID
 
         package init(
+            nodeID: DOMNode.ID,
             documentTargetID: ProtocolTarget.ID,
             rawNodeID: DOMNode.ProtocolID,
             commandTargetID: ProtocolTarget.ID,
             commandNodeID: DOMCommand.NodeID
         ) {
+            self.nodeID = nodeID
             self.documentTargetID = documentTargetID
             self.rawNodeID = rawNodeID
             self.commandTargetID = commandTargetID

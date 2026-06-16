@@ -8,7 +8,7 @@ import UIKit
 @MainActor
 final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegate {
     typealias RequestChildrenAction = @MainActor (DOMNode.ID) async -> Bool
-    typealias HighlightNodeAction = @MainActor (DOMNode.ID) async -> Void
+    typealias HighlightNodeAction = @MainActor (DOMNode.ID, DOMPageHighlightOwner) async -> Void
     typealias RestoreHighlightAction = @MainActor () async -> Void
     typealias CopyNodeTextAction = DOMTreeMenuCopyNodeTextAction
     typealias DeleteNodesAction = DOMTreeMenuDeleteNodesAction
@@ -118,6 +118,15 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     private enum PageHighlightReason {
         case selection
         case hover
+
+        var owner: DOMPageHighlightOwner {
+            switch self {
+            case .selection:
+                .selection
+            case .hover:
+                .transient
+            }
+        }
     }
 
     init(
@@ -930,7 +939,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
             guard !Task.isCancelled else {
                 return
             }
-            await highlightNodeAction?(nodeID)
+            await highlightNodeAction?(nodeID, reason.owner)
         }
     }
 

@@ -1629,6 +1629,10 @@ func domHighlightCommandUsesNonRevealingVisibleHighlightConfig() throws {
     let command = try DOMProtocolCommands().command(
         for: .highlightNode(
             target: .init(
+                nodeID: DOMNode.ID(
+                    documentID: DOMDocument.ID(targetID: .init("page-A"), localDocumentLifetimeID: .init(1)),
+                    nodeID: .init(42)
+                ),
                 documentTargetID: .init("page-A"),
                 rawNodeID: .init(42),
                 commandTargetID: .init("page-A"),
@@ -1667,6 +1671,10 @@ func domNavigationActionCommandsUseExpectedProtocolPayloads() throws {
     #expect(disableParameters["highlightConfig"] == nil)
 
     let identity = DOMAction.Target(
+        nodeID: DOMNode.ID(
+            documentID: DOMDocument.ID(targetID: targetID, localDocumentLifetimeID: .init(1)),
+            nodeID: .init(42)
+        ),
         documentTargetID: targetID,
         rawNodeID: .init(42),
         commandTargetID: targetID,
@@ -1688,6 +1696,10 @@ func domNavigationActionCommandsUseExpectedProtocolPayloads() throws {
 @Test
 func domActionCommandsEncodeScopedCommandNodeIDs() throws {
     let identity = DOMAction.Target(
+        nodeID: DOMNode.ID(
+            documentID: DOMDocument.ID(targetID: .init("frame-A"), localDocumentLifetimeID: .init(1)),
+            nodeID: .init(42)
+        ),
         documentTargetID: .init("frame-A"),
         rawNodeID: .init(42),
         commandTargetID: .init("page-main"),
