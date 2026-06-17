@@ -1,6 +1,7 @@
 #if canImport(UIKit)
 import AVKit
 import WebInspectorCore
+import Observation
 import ObservationBridge
 import SyntaxEditorUI
 import UIKit
@@ -51,12 +52,14 @@ final class NetworkBodyViewController: UIViewController {
     private var hasDisplayedBody = false
     private var mediaPlayerViewController: AVPlayerViewController?
     private var mediaPreviewCoordinator = NetworkMediaPreviewCoordinator()
+    private let previewRenderState = NetworkBodyPreviewRenderState()
     private var imageWidthConstraint: NSLayoutConstraint?
     private var imageHeightConstraint: NSLayoutConstraint?
     private var shouldResetImageZoomOnNextLayout = false
     private var imagePreviewLayoutState: ImagePreviewLayoutState?
 #if DEBUG
     private var bodyObservationDelivery: PortableObservationTracking.Token?
+    private var previewRenderObservationDelivery: PortableObservationTracking.Token?
 #endif
 
     init(scrollEdgeSink: (any NetworkBodyScrollEdgeSink)? = nil) {
@@ -78,6 +81,9 @@ final class NetworkBodyViewController: UIViewController {
             }
         }
         configureSyntaxView()
+#if DEBUG
+        startObservingPreviewRenderStateForTesting()
+#endif
     }
 
     override func viewDidLayoutSubviews() {
@@ -87,6 +93,9 @@ final class NetworkBodyViewController: UIViewController {
 
     isolated deinit {
         bodyObservation?.cancel()
+#if DEBUG
+        previewRenderObservationDelivery?.cancel()
+#endif
         mediaPreviewCoordinator.cancel()
     }
 
@@ -200,6 +209,18 @@ final class NetworkBodyViewController: UIViewController {
 #endif
     }
 
+#if DEBUG
+    private func startObservingPreviewRenderStateForTesting() {
+        previewRenderObservationDelivery?.cancel()
+        previewRenderObservationDelivery = withPortableContinuousObservation { [weak self] _ in
+            guard let self else {
+                return
+            }
+            _ = previewRenderState.revision
+        }
+    }
+#endif
+
     private func renderBody(_ body: NetworkBody?) {
         let displayText: String
         let syntaxKind: NetworkBody.SyntaxKind
@@ -311,6 +332,7 @@ final class NetworkBodyViewController: UIViewController {
         syntaxView.isHidden = false
         applyScrollEdgeObservedBackgrounds()
         scrollEdgeSink?.contentScrollView = syntaxView
+        previewRenderState.showLoading()
     }
 
     private func showSyntaxPreview() {
@@ -320,6 +342,7 @@ final class NetworkBodyViewController: UIViewController {
         syntaxView.isHidden = false
         applyScrollEdgeObservedBackgrounds()
         scrollEdgeSink?.contentScrollView = syntaxView
+        previewRenderState.showSyntax()
     }
 
     private func showImagePreview(_ image: UIImage) {
@@ -336,6 +359,7 @@ final class NetworkBodyViewController: UIViewController {
         view.setNeedsLayout()
         view.layoutIfNeeded()
         updateImagePreviewLayoutIfNeeded()
+        previewRenderState.showImage(size: image.size)
     }
 
     private func showMoviePreview(_ url: URL) {
@@ -364,6 +388,7 @@ final class NetworkBodyViewController: UIViewController {
             return
         }
         playerViewController.player = AVPlayer(url: url)
+        previewRenderState.showMovie(url)
     }
 
     private func hideMediaPreview() {
@@ -371,6 +396,7 @@ final class NetworkBodyViewController: UIViewController {
         hideImagePreview()
         removeMediaPlayerViewController()
         syntaxView.isHidden = false
+        previewRenderState.showSyntax()
     }
 
     private func hideImagePreview() {
@@ -436,6 +462,12 @@ final class NetworkBodyViewController: UIViewController {
             visibleBoundsSize: visibleBoundsSize,
             minimumZoomScale: minimumZoomScale
         )
+        previewRenderState.updateImageLayout(
+            imageSize: imageSize,
+            visibleBoundsSize: visibleBoundsSize,
+            minimumZoomScale: minimumZoomScale,
+            zoomScale: targetZoomScale
+        )
         return true
     }
 
@@ -484,6 +516,79 @@ private struct ImagePreviewLayoutState {
     var imageSize: CGSize
     var visibleBoundsSize: CGSize
     var minimumZoomScale: CGFloat
+}
+
+@MainActor
+@Observable
+private final class NetworkBodyPreviewRenderState {
+    private(set) var revision: UInt64 = 0
+    private(set) var surface: NetworkBodyPreviewSurface = .syntax
+    private(set) var imageLayout: NetworkBodyImagePreviewLayout?
+
+    func showSyntax() {
+        updateSurface(.syntax, imageLayout: nil)
+    }
+
+    func showLoading() {
+        updateSurface(.loading, imageLayout: nil)
+    }
+
+    func showImage(size: CGSize) {
+        updateSurface(.image(size: size), imageLayout: imageLayout)
+    }
+
+    func showMovie(_ url: URL) {
+        updateSurface(.movie(url), imageLayout: nil)
+    }
+
+    func updateImageLayout(
+        imageSize: CGSize,
+        visibleBoundsSize: CGSize,
+        minimumZoomScale: CGFloat,
+        zoomScale: CGFloat
+    ) {
+        let layout = NetworkBodyImagePreviewLayout(
+            imageSize: imageSize,
+            visibleBoundsSize: visibleBoundsSize,
+            minimumZoomScale: minimumZoomScale,
+            zoomScale: zoomScale
+        )
+        guard imageLayout != layout else {
+            return
+        }
+        imageLayout = layout
+        incrementRevision()
+    }
+
+    private func updateSurface(
+        _ nextSurface: NetworkBodyPreviewSurface,
+        imageLayout nextImageLayout: NetworkBodyImagePreviewLayout?
+    ) {
+        guard surface != nextSurface || imageLayout != nextImageLayout else {
+            return
+        }
+        surface = nextSurface
+        imageLayout = nextImageLayout
+        incrementRevision()
+    }
+
+    private func incrementRevision() {
+        revision &+= 1
+    }
+}
+
+private enum NetworkBodyPreviewSurface: Equatable {
+    case syntax
+    case loading
+    case image(size: CGSize)
+    case movie(URL)
+}
+
+private struct NetworkBodyImagePreviewLayout: Equatable {
+    var imageSize: CGSize
+    var visibleBoundsSize: CGSize
+    var minimumZoomScale: CGFloat
+    var zoomScale: CGFloat
 }
 
 private extension NetworkBodyViewController {
@@ -549,6 +654,11 @@ extension NetworkBodyViewController {
 
     var bodyObservationDeliveryForTesting: PortableObservationTracking.Token? {
         bodyObservationDelivery
+    }
+
+    var previewRenderObservationDeliveryForTesting: PortableObservationTracking.Token? {
+        loadViewIfNeeded()
+        return previewRenderObservationDelivery
     }
 }
 #endif
