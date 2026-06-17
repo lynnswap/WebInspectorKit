@@ -9,8 +9,8 @@ import UIKit
 @Suite(.serialized)
 struct DOMTreeTextViewTests {
     @Test
-    func rendersDOMMarkupFromDOMSession() throws {
-        let view = makeTreeView()
+    func rendersDOMMarkupFromDOMSession() async throws {
+        let view = await makeTreeView()
         let text = view.renderedTextForTesting
 
         #expect(!text.contains("#document"))
@@ -26,9 +26,9 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
-    func selectingNodeUpdatesCoreSelectionAndRowDecoration() throws {
+    func selectingNodeUpdatesCoreSelectionAndRowDecoration() async throws {
         let session = makeDOMSession()
-        let view = makeTreeView(session: session)
+        let view = await makeTreeView(session: session)
 
         view.selectRowForTesting(containing: "<input disabled>")
         view.layoutIfNeeded()
@@ -38,9 +38,9 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
-    func primaryClickingRowUpdatesCoreSelection() throws {
+    func primaryClickingRowUpdatesCoreSelection() async throws {
         let session = makeDOMSession()
-        let view = makeTreeView(session: session)
+        let view = await makeTreeView(session: session)
 
         view.primaryClickRowForTesting(containing: "<input disabled>")
         view.layoutIfNeeded()
@@ -61,6 +61,7 @@ struct DOMTreeTextViewTests {
         )
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
+        await view.waitForRenderedRowsForTesting()
 
         view.primaryClickRowForTesting(containing: "<input disabled>")
         let highlightedNodeID = await recorder.nextNodeID()
@@ -83,6 +84,7 @@ struct DOMTreeTextViewTests {
         )
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
+        await view.waitForRenderedRowsForTesting()
 
         view.primaryClickRowForTesting(containing: "<input disabled>")
         view.hoverRowForTesting(containing: "<article")
@@ -105,6 +107,7 @@ struct DOMTreeTextViewTests {
         )
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
+        await view.waitForRenderedRowsForTesting()
 
         view.primaryClickRowForTesting(containing: "<input disabled>")
         view.hoverRowForTesting(containing: "<article")
@@ -133,6 +136,7 @@ struct DOMTreeTextViewTests {
         )
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
+        await view.waitForRenderedRowsForTesting()
 
         view.primaryClickRowForTesting(containing: "<input disabled>")
         view.hoverRowForTesting(containing: "<article")
@@ -165,6 +169,7 @@ struct DOMTreeTextViewTests {
         )
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
+        await view.waitForRenderedRowsForTesting()
 
         view.primaryClickRowForTesting(containing: "<input disabled>")
         view.hoverRowForTesting(containing: "<article")
@@ -178,10 +183,11 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
-    func expandedElementRendersChildrenAndClosingTag() throws {
-        let view = makeTreeView()
+    func expandedElementRendersChildrenAndClosingTag() async throws {
+        let view = await makeTreeView()
 
         view.toggleRowForTesting(containing: "<article")
+        await view.waitForRenderedRowsForTesting()
 
         let text = view.renderedTextForTesting
         #expect(text.contains("<article>"))
@@ -193,16 +199,12 @@ struct DOMTreeTextViewTests {
     @Test
     func expandedDescendantMutationRerendersAfterExpansionDependencyRefresh() async throws {
         let session = makeDOMSession()
-        let view = makeTreeView(session: session)
-        let renderedText = await view.documentObservationDeliveryForTesting.values {
-            view.renderedTextForTesting
-        }
+        let view = await makeTreeView(session: session)
 
         view.toggleRowForTesting(containing: "<article")
-        let didRenderExpandedChild = await renderedText.waitUntil { text in
-            text.contains("<span id=\"nested-child\"></span>")
-        } != nil
-        #expect(didRenderExpandedChild)
+        await Task.yield()
+        await view.waitForRenderedRowsForTesting()
+        #expect(view.renderedTextForTesting.contains("<span id=\"nested-child\"></span>"))
 
         let nestedChildID = try #require(
             session.snapshot().nodesByID.first { entry in
@@ -213,16 +215,15 @@ struct DOMTreeTextViewTests {
         )
 
         session.applyAttributeModified(nestedChildID, name: "data-state", value: "ready")
-        let didRenderMutation = await renderedText.waitUntil { text in
-            text.contains("<span id=\"nested-child\" data-state=\"ready\"></span>")
-        } != nil
-        #expect(didRenderMutation)
+        await Task.yield()
+        await view.waitForRenderedRowsForTesting()
+        #expect(view.renderedTextForTesting.contains("<span id=\"nested-child\" data-state=\"ready\"></span>"))
     }
 
     @Test
     func selectionChangeUpdatesDecorationsWithoutRebuildingRenderedRows() async throws {
         let session = makeDOMSession()
-        let view = makeTreeView(session: session)
+        let view = await makeTreeView(session: session)
         let selectedRowCounts = await view.selectionObservationDeliveryForTesting.values {
             view.selectedRowRectsForTesting().count
         }
@@ -243,12 +244,11 @@ struct DOMTreeTextViewTests {
     @Test
     func documentResetClearsLocalExpansionStateEvenWhenNodeIDsRepeat() async throws {
         let session = makeDOMSession()
-        let view = makeTreeView(session: session)
-        let renderedText = await view.documentObservationDeliveryForTesting.values {
-            view.renderedTextForTesting
-        }
+        let view = await makeTreeView(session: session)
 
         view.toggleRowForTesting(containing: "<article")
+        await Task.yield()
+        await view.waitForRenderedRowsForTesting()
         #expect(view.renderedTextForTesting.contains("<span id=\"nested-child\"></span>"))
 
         let targetID = ProtocolTarget.ID("page-main")
@@ -262,12 +262,11 @@ struct DOMTreeTextViewTests {
             makeCurrentMainPage: true
         )
         _ = session.replaceDocumentRoot(documentNode(), targetID: targetID)
+        await Task.yield()
+        await view.waitForRenderedRowsForTesting()
 
-        let didRenderReset = await renderedText.waitUntil { text in
-            text.contains("<article>…</article>")
-                && !text.contains("<span id=\"nested-child\"></span>")
-        } != nil
-        #expect(didRenderReset)
+        #expect(view.renderedTextForTesting.contains("<article>…</article>"))
+        #expect(!view.renderedTextForTesting.contains("<span id=\"nested-child\"></span>"))
     }
 
     @Test
@@ -283,6 +282,7 @@ struct DOMTreeTextViewTests {
         )
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
+        await view.waitForRenderedRowsForTesting()
 
         view.toggleRowForTesting(containing: "<article")
         let requestedNodeID = await recorder.next()
@@ -291,11 +291,11 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
-    func initialSelectionOpensProjectedFrameAncestors() throws {
+    func initialSelectionOpensProjectedFrameAncestors() async throws {
         let fixture = try makeProjectedFrameSession()
         fixture.session.selectNode(fixture.selectedNodeID)
 
-        let view = makeTreeView(session: fixture.session)
+        let view = await makeTreeView(session: fixture.session)
 
         let projection = fixture.session.treeProjection(rootTargetID: fixture.pageTargetID)
         #expect(fixture.session.snapshot().nodesByID[fixture.frameRootID]?.parentID == nil)
@@ -308,7 +308,7 @@ struct DOMTreeTextViewTests {
     @Test
     func selectingProjectedFrameNodeOpensComposedAncestors() async throws {
         let fixture = try makeProjectedFrameSession()
-        let view = makeTreeView(session: fixture.session)
+        let view = await makeTreeView(session: fixture.session)
 
         let sampleRenderedState: @MainActor @Sendable () -> RenderedDOMTreeState = {
             view.layoutIfNeeded()
@@ -317,16 +317,10 @@ struct DOMTreeTextViewTests {
                 selectedRowCount: view.selectedRowRectsForTesting().count
             )
         }
-        let renderedState = await view.selectionObservationDeliveryForTesting.values(sampleRenderedState)
-        defer { renderedState.cancel() }
-
         fixture.session.selectNode(fixture.selectedNodeID)
-        var didRenderSelection = renderedState.latestValue?.hasProjectedFrameSelection == true
-            || sampleRenderedState().hasProjectedFrameSelection
-        if !didRenderSelection {
-            didRenderSelection = await renderedState.waitUntil { $0.hasProjectedFrameSelection } != nil
-                || sampleRenderedState().hasProjectedFrameSelection
-        }
+        await Task.yield()
+        await view.waitForRenderedRowsForTesting()
+        let didRenderSelection = sampleRenderedState().hasProjectedFrameSelection
 
         let projection = fixture.session.treeProjection(rootTargetID: fixture.pageTargetID)
         #expect(fixture.session.snapshot().nodesByID[fixture.frameRootID]?.parentID == nil)
@@ -463,15 +457,16 @@ private final class CancellableVoidActionRecorder {
 }
 
 @MainActor
-private func makeTreeView(root: DOMNode.Payload = documentNode()) -> DOMTreeTextView {
-    makeTreeView(session: makeDOMSession(root: root))
+private func makeTreeView(root: DOMNode.Payload = documentNode()) async -> DOMTreeTextView {
+    await makeTreeView(session: makeDOMSession(root: root))
 }
 
 @MainActor
-private func makeTreeView(session: DOMSession) -> DOMTreeTextView {
+private func makeTreeView(session: DOMSession) async -> DOMTreeTextView {
     let view = DOMTreeTextView(dom: session)
     view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
     view.layoutIfNeeded()
+    await view.waitForRenderedRowsForTesting()
     return view
 }
 
