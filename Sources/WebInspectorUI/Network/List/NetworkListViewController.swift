@@ -147,14 +147,18 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         displayRowsObservation?.cancel()
         displayRowsObservation = withPortableContinuousObservation { [weak self] event in
             guard let self else { return }
+            let projectionInput = model.displayRowsProjectionInput()
             let displayRows = model.displayRows
             guard isViewLoaded else {
+                model.scheduleDisplayRowsProjection(input: projectionInput)
                 needsSnapshotReloadOnNextAppearance = true
                 return
             }
             if event.kind == .initial {
+                model.scheduleDisplayRowsProjection(input: projectionInput)
                 reloadDataFromModel(displayRows: displayRows)
             } else {
+                model.scheduleDisplayRowsProjection(input: projectionInput)
                 scheduleThrottledDisplayRowsReload(displayRows)
             }
         }
@@ -315,8 +319,8 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private func makeDataSource() -> UICollectionViewDiffableDataSource<SectionIdentifier, NetworkRequest.ID> {
-        let listCellRegistration = UICollectionView.CellRegistration<NetworkListCell, NetworkRequest.ID> { [weak model] cell, _, id in
-            guard let projection = model?.displayProjection(for: id) else {
+        let listCellRegistration = UICollectionView.CellRegistration<NetworkListCell, NetworkRequest.ID> { [weak self] cell, _, id in
+            guard let projection = self?.projectionForVisibleRow(id) else {
                 return
             }
             cell.bind(projection: projection)
@@ -330,6 +334,10 @@ package final class NetworkListViewController: UICollectionViewController, UISea
                 item: item
             )
         }
+    }
+
+    private func projectionForVisibleRow(_ id: NetworkRequest.ID) -> NetworkRequest.Display.Projection? {
+        snapshotState.projection(for: id) ?? model.displayProjection(for: id)
     }
 
     private func makeSnapshot(

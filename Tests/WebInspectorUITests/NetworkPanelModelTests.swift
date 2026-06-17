@@ -1,4 +1,5 @@
 import Testing
+import Synchronization
 import WebInspectorTransport
 @testable import WebInspectorCore
 @testable import WebInspectorUI
@@ -35,6 +36,7 @@ func displayRequestsApplySearchFilterAndNewestFirstOrder() async throws {
     let model = NetworkPanelModel(network: network)
     model.setSearchText("cdn")
     model.setResourceFilter(.script, enabled: true)
+    await model.refreshDisplayRows()
 
     let requests = model.displayRequests
     #expect(requests.map(\.id.requestID.rawValue) == ["2"])
@@ -68,6 +70,7 @@ func displayProjectionUsesReadableURLDisplayName(url: String, expectedDisplayNam
         timestamp: 1
     )
     let model = NetworkPanelModel(network: network)
+    await model.refreshDisplayRows()
 
     #expect(model.displayProjection(for: requestID)?.displayName == expectedDisplayName)
 }
@@ -93,6 +96,7 @@ func displayProjectionUsesEncodingFallbackForURLDerivedLabelsAndFilters() async 
         timestamp: 2
     )
     let model = NetworkPanelModel(network: network)
+    await model.refreshDisplayRows()
 
     #expect(model.displayProjection(for: spacedURLRequestID)?.displayName == "photo 1.png")
     #expect(model.displayProjection(for: spacedURLRequestID)?.fileTypeLabel == "png")
@@ -100,6 +104,7 @@ func displayProjectionUsesEncodingFallbackForURLDerivedLabelsAndFilters() async 
     #expect(model.displayProjection(for: invalidEscapeRequestID)?.fileTypeLabel == "png")
 
     model.setResourceFilter(.media, enabled: true)
+    await model.refreshDisplayRows()
     #expect(model.displayRequestIDs == [invalidEscapeRequestID, spacedURLRequestID])
 }
 
@@ -262,6 +267,7 @@ func mediaFilterIncludesPreviewableMediaResponses() async throws {
 
     let model = NetworkPanelModel(network: network)
     model.setResourceFilter(.media, enabled: true)
+    await model.refreshDisplayRows()
 
     #expect(model.displayRequests.map(\.id.requestID.rawValue) == ["19", "16", "9", "8", "7", "6", "5", "4", "3", "2", "1"])
 }
@@ -309,6 +315,7 @@ func displayProjectionCacheInvalidatesWhenResponseMIMEBecomesPreviewable() async
     )
     let model = NetworkPanelModel(network: network)
     model.setResourceFilter(.media, enabled: true)
+    await model.refreshDisplayRows()
 
     #expect(model.displayRequestIDs.isEmpty)
 
@@ -325,6 +332,7 @@ func displayProjectionCacheInvalidatesWhenResponseMIMEBecomesPreviewable() async
         timestamp: 1.1
     )
 
+    await model.refreshDisplayRows()
     #expect(model.displayRequestIDs == [requestID])
     #expect(model.displayProjection(for: requestID)?.resourceFilter == .media)
 }
@@ -344,6 +352,7 @@ func displayProjectionCacheInvalidatesStatusSeverity() async throws {
         timestamp: 1
     )
     let model = NetworkPanelModel(network: network)
+    await model.refreshDisplayRows()
 
     #expect(model.displayProjection(for: requestID)?.statusSeverity == .error)
 
@@ -360,6 +369,7 @@ func displayProjectionCacheInvalidatesStatusSeverity() async throws {
         timestamp: 2
     )
 
+    await model.refreshDisplayRows()
     #expect(model.displayProjection(for: requestID)?.statusSeverity == .success)
 }
 
@@ -382,6 +392,7 @@ func displayProjectionCacheInvalidatesSearchFields() async throws {
     let model = NetworkPanelModel(network: network)
 
     model.setSearchText("new-endpoint")
+    await model.refreshDisplayRows()
     #expect(model.displayRequestIDs.isEmpty)
 
     _ = network.applyRequestWillBeSent(
@@ -396,11 +407,14 @@ func displayProjectionCacheInvalidatesSearchFields() async throws {
         timestamp: 2
     )
 
+    await model.refreshDisplayRows()
     #expect(model.displayRequestIDs == [requestID])
     model.setSearchText("PATCH")
+    await model.refreshDisplayRows()
     #expect(model.displayRequestIDs == [requestID])
 
     model.setSearchText("json")
+    await model.refreshDisplayRows()
     #expect(model.displayRequestIDs.isEmpty)
 
     network.applyResponseReceived(
@@ -416,8 +430,10 @@ func displayProjectionCacheInvalidatesSearchFields() async throws {
         timestamp: 2.1
     )
 
+    await model.refreshDisplayRows()
     #expect(model.displayRequestIDs == [requestID])
     model.setSearchText("Created")
+    await model.refreshDisplayRows()
     #expect(model.displayRequestIDs == [requestID])
 }
 
@@ -451,9 +467,11 @@ func displayProjectionCacheInvalidatesWhenRawMIMETypeAppears() async throws {
         timestamp: 1.1
     )
     let model = NetworkPanelModel(network: network)
+    await model.refreshDisplayRows()
 
     #expect(model.displayProjection(for: requestID)?.fileTypeLabel == "xhr")
     model.setSearchText("json")
+    await model.refreshDisplayRows()
     #expect(model.displayRequestIDs.isEmpty)
 
     network.applyResponseReceived(
@@ -470,6 +488,7 @@ func displayProjectionCacheInvalidatesWhenRawMIMETypeAppears() async throws {
         timestamp: 1.2
     )
 
+    await model.refreshDisplayRows()
     #expect(model.displayProjection(for: requestID)?.fileTypeLabel == "json")
     #expect(model.displayRequestIDs == [requestID])
 }
@@ -486,22 +505,23 @@ func displayProjectionCacheReusesMediaClassificationForUnchangedRequests() async
         mimeType: "application/octet-stream",
         timestamp: 1
     )
-    var classificationCount = 0
+    let classificationCount = Mutex(0)
     let model = NetworkPanelModel(
         network: network,
         mediaPreviewClassifier: { mimeType, url in
-            classificationCount += 1
+            classificationCount.withLock { $0 += 1 }
             return NetworkRequest.Display.MediaPreviewSupport.classification(mimeType: mimeType, url: url)
         }
     )
     model.setResourceFilter(.media, enabled: true)
+    await model.refreshDisplayRows()
 
     #expect(model.displayRequestIDs == [requestID])
-    #expect(classificationCount == 1)
+    #expect(classificationCount.withLock { $0 } == 1)
 
     #expect(model.displayRequestIDs == [requestID])
     #expect(model.displayRequests.map(\.id) == [requestID])
-    #expect(classificationCount == 1)
+    #expect(classificationCount.withLock { $0 } == 1)
 
     network.applyDataReceived(
         targetID: requestID.targetID,
@@ -511,8 +531,9 @@ func displayProjectionCacheReusesMediaClassificationForUnchangedRequests() async
         timestamp: 2
     )
 
+    await model.refreshDisplayRows()
     #expect(model.displayRequestIDs == [requestID])
-    #expect(classificationCount == 1)
+    #expect(classificationCount.withLock { $0 } == 1)
 }
 
 @Test
@@ -527,26 +548,29 @@ func displayProjectionCacheSkipsMediaClassificationWhenUnfiltered() async throws
         mimeType: "application/octet-stream",
         timestamp: 1
     )
-    var classificationCount = 0
+    let classificationCount = Mutex(0)
     let model = NetworkPanelModel(
         network: network,
         mediaPreviewClassifier: { mimeType, url in
-            classificationCount += 1
+            classificationCount.withLock { $0 += 1 }
             return NetworkRequest.Display.MediaPreviewSupport.classification(mimeType: mimeType, url: url)
         }
     )
+    await model.refreshDisplayRows()
 
     #expect(model.displayRequestIDs == [requestID])
     #expect(model.displayProjection(for: requestID)?.displayName == "clip.mp4")
-    #expect(classificationCount == 0)
+    #expect(classificationCount.withLock { $0 } == 0)
 
     model.setSearchText("clip")
+    await model.refreshDisplayRows()
     #expect(model.displayRequestIDs == [requestID])
-    #expect(classificationCount == 0)
+    #expect(classificationCount.withLock { $0 } == 0)
 
     model.setResourceFilter(.media, enabled: true)
+    await model.refreshDisplayRows()
     #expect(model.displayRequestIDs == [requestID])
-    #expect(classificationCount == 1)
+    #expect(classificationCount.withLock { $0 } == 1)
 }
 
 @Test
@@ -566,6 +590,7 @@ func clearRequestsClearsSelectionButPreservesDisplayCriteria() async throws {
     model.setSearchText("cdn")
     model.setResourceFilter(.script, enabled: true)
     model.selectRequest(network.request(for: requestID))
+    await model.refreshDisplayRows()
     model.clearRequests()
 
     #expect(model.selectedRequestID == nil)
