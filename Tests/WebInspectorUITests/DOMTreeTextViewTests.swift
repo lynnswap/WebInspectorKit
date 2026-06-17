@@ -43,6 +43,61 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func findWordMatchMethodsRespectIdentifierBoundaries() {
+        let source = "foo fooBar barfoo _foo foo_bar foo2 foo-bar"
+
+        let containsRanges = DOMTreeTextView.FindCoordinator.searchRanges(
+            in: source,
+            queryString: "foo",
+            wordMatchMethod: .contains
+        )
+        let startsWithRanges = DOMTreeTextView.FindCoordinator.searchRanges(
+            in: source,
+            queryString: "foo",
+            wordMatchMethod: .startsWith
+        )
+        let fullWordRanges = DOMTreeTextView.FindCoordinator.searchRanges(
+            in: source,
+            queryString: "foo",
+            wordMatchMethod: .fullWord
+        )
+
+        #expect(containsRanges.map(\.location) == [0, 4, 14, 19, 23, 31, 36])
+        #expect(startsWithRanges.map(\.location) == [0, 4, 23, 31, 36])
+        #expect(fullWordRanges.map(\.location) == [0, 36])
+    }
+
+    @Test
+    func findWordBoundaryChecksUseComposedCharacters() {
+        let source = "e\u{301} e\u{301}x xe\u{301} e\u{301}-x"
+
+        let containsRanges = DOMTreeTextView.FindCoordinator.searchRanges(
+            in: source,
+            queryString: "\u{301}",
+            wordMatchMethod: .contains
+        )
+        let startsWithRanges = DOMTreeTextView.FindCoordinator.searchRanges(
+            in: source,
+            queryString: "\u{301}",
+            wordMatchMethod: .startsWith
+        )
+        let fullWordRanges = DOMTreeTextView.FindCoordinator.searchRanges(
+            in: source,
+            queryString: "\u{301}",
+            wordMatchMethod: .fullWord
+        )
+
+        #expect(containsRanges == [
+            NSRange(location: 0, length: 2),
+            NSRange(location: 3, length: 2),
+            NSRange(location: 8, length: 2),
+            NSRange(location: 11, length: 2),
+        ])
+        #expect(startsWithRanges.map(\.location) == [0, 3, 11])
+        #expect(fullWordRanges.map(\.location) == [0, 11])
+    }
+
+    @Test
     func selectingNodeUpdatesCoreSelectionAndRowDecoration() async throws {
         let session = makeDOMSession()
         let view = await makeTreeView(session: session)
