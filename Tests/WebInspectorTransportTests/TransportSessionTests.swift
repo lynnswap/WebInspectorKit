@@ -7,6 +7,10 @@ import WebInspectorTestSupport
 private let testResponseTimeout: Duration = .milliseconds(750)
 private let testWaitTimeout: Duration = .milliseconds(750)
 
+private struct TestDecodedPayload: Decodable, Equatable, Sendable {
+    var value: String
+}
+
 @Test
 func transportMessageParserUsesPolicyForInlineAndDetachedParsing() async throws {
     let message = #"{"id":42,"method":"Runtime.consoleAPICalled","params":{"type":"log"},"result":{"ok":true}}"#
@@ -22,6 +26,24 @@ func transportMessageParserUsesPolicyForInlineAndDetachedParsing() async throws 
     #expect(inline == detached)
     #expect(inline.id == 42)
     #expect(inline.method == "Runtime.consoleAPICalled")
+}
+
+@Test
+func transportMessageParserUsesPolicyForInlineAndDetachedDecoding() async throws {
+    let data = Data(#"{"value":"decoded"}"#.utf8)
+    let inline = try await TransportMessageParser.decodeAsync(
+        TestDecodedPayload.self,
+        from: data,
+        policy: TransportMessageParsePolicy(detachedParsingThresholdBytes: .max)
+    )
+    let detached = try await TransportMessageParser.decodeAsync(
+        TestDecodedPayload.self,
+        from: data,
+        policy: TransportMessageParsePolicy(detachedParsingThresholdBytes: 0)
+    )
+
+    #expect(inline == detached)
+    #expect(detached.value == "decoded")
 }
 
 @Test

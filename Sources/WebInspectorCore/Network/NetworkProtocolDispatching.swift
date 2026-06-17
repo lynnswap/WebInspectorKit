@@ -27,15 +27,24 @@ package struct NetworkProtocolCommands {
         }
     }
 
-    @MainActor
-    package func applyResponseBodyResult(_ result: ProtocolCommand.Result, to request: NetworkRequest) throws {
-        let payload = try TransportMessageParser.decode(ResponseBodyResult.self, from: result.resultData)
-        request.applyResponseBody(
-            NetworkBody.Payload(
-                body: payload.body,
-                base64Encoded: payload.base64Encoded
-            )
+    package func responseBodyPayload(
+        from result: ProtocolCommand.Result,
+        policy: TransportMessageParsePolicy = .default
+    ) async throws -> NetworkBody.Payload {
+        let payload = try await TransportMessageParser.decodeAsync(
+            ResponseBodyResult.self,
+            from: result.resultData,
+            policy: policy
         )
+        return NetworkBody.Payload(
+            body: payload.body,
+            base64Encoded: payload.base64Encoded
+        )
+    }
+
+    @MainActor
+    package func applyResponseBodyPayload(_ payload: NetworkBody.Payload, to request: NetworkRequest) {
+        request.applyResponseBody(payload)
     }
 
     private func parameters(
@@ -200,7 +209,7 @@ package final class NetworkProtocolEventDispatcher: ProtocolDomainEventDispatche
     }
 }
 
-private struct ResponseBodyResult: Decodable {
+private struct ResponseBodyResult: Decodable, Sendable {
     var body: String
     var base64Encoded: Bool
 }
