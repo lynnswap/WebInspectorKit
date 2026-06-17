@@ -454,103 +454,94 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func hlsResponsePreviewUsesOriginalPlaylistURLForPlayer() async throws {
-        let network = NetworkSession()
+    func hlsResponsePreviewCoordinatorUsesOriginalPlaylistURL() throws {
         let playlistURL = "https://media.example.com/live/master.m3u8"
-        let request = try #require(
-            applyRequest(
-                to: network,
-                requestID: "1",
-                url: playlistURL,
-                responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
-                responseMimeType: "application/vnd.apple.mpegurl"
-            )
+        let body = NetworkBody(
+            role: .response,
+            kind: .binary,
+            full: """
+            #EXTM3U
+            #EXT-X-STREAM-INF:BANDWIDTH=1280000
+            media/playlist.m3u8
+            """,
+            sourceSyntaxKind: .plainText,
+            phase: .loaded
         )
-        request.applyResponseBody(
-            NetworkBody.Payload(
-                body: """
-                #EXTM3U
-                #EXT-X-STREAM-INF:BANDWIDTH=1280000
-                media/playlist.m3u8
-                """,
-                base64Encoded: false
-            )
-        )
-        let model = NetworkPanelModel(network: network)
-        model.selectRequest(request)
-        let viewController = NetworkDetailViewController(model: model)
-        let window = showInWindow(viewController)
-        defer { window.isHidden = true }
-        viewController.setModeForTesting(.preview)
+        let coordinator = NetworkMediaPreviewCoordinator()
 
-        let didRenderHLSPreview = await waitUntilRendered(in: viewController) {
-            viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting?.absoluteString == playlistURL
+        let action = coordinator.preparePreview(
+            for: body,
+            metadata: NetworkMediaPreviewMetadata(
+                mimeType: "application/vnd.apple.mpegurl",
+                url: playlistURL
+            )
+        ) { _ in
+            Issue.record("HLS response preview should not require body payload preparation")
         }
-        #expect(didRenderHLSPreview)
+
+        guard case .remoteMovie(let url) = action else {
+            Issue.record("Expected HLS response preview to use the remote playlist URL")
+            return
+        }
+        #expect(url.absoluteString == playlistURL)
     }
 
     @Test
-    func hlsResponsePreviewUsesPlaylistURLBeforeBodyLoads() async throws {
-        let network = NetworkSession()
+    func hlsResponsePreviewCoordinatorUsesPlaylistURLBeforeBodyLoads() throws {
         let playlistURL = "https://media.example.com/live/master.m3u8"
-        let request = try #require(
-            applyRequest(
-                to: network,
-                requestID: "1",
-                url: playlistURL,
-                responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
-                responseMimeType: "application/vnd.apple.mpegurl"
-            )
+        let body = NetworkBody(
+            role: .response,
+            kind: .binary,
+            sourceSyntaxKind: .plainText,
+            phase: .available
         )
-        let model = NetworkPanelModel(network: network)
-        model.selectRequest(request)
-        let viewController = NetworkDetailViewController(model: model)
-        let window = showInWindow(viewController)
-        defer { window.isHidden = true }
-        viewController.setModeForTesting(.preview)
+        let coordinator = NetworkMediaPreviewCoordinator()
 
-        let didRenderHLSPreview = await waitUntilRendered(in: viewController) {
-            viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting?.absoluteString == playlistURL
+        let action = coordinator.preparePreview(
+            for: body,
+            metadata: NetworkMediaPreviewMetadata(
+                mimeType: "application/vnd.apple.mpegurl",
+                url: playlistURL
+            )
+        ) { _ in
+            Issue.record("HLS response preview should not fetch or prepare body payloads")
         }
-        #expect(didRenderHLSPreview)
+
+        guard case .remoteMovie(let url) = action else {
+            Issue.record("Expected HLS response preview to use the remote playlist URL before the body loads")
+            return
+        }
+        #expect(url.absoluteString == playlistURL)
     }
 
     @Test
-    func hlsRequestBodyRendersSubmittedTextInsteadOfRemotePlaylist() async throws {
-        let network = NetworkSession()
-        let request = try #require(
-            applyRequest(
-                to: network,
-                requestID: "1",
-                url: "https://media.example.com/upload.m3u8",
-                postData: """
-                #EXTM3U
-                #EXT-X-VERSION:3
-                """,
-                responseHeaders: ["content-type": "application/json"],
-                responseMimeType: "application/json"
-            )
+    func hlsRequestBodyPreviewCoordinatorDoesNotUseRemotePlaylist() throws {
+        let body = NetworkBody(
+            role: .request,
+            kind: .text,
+            full: """
+            #EXTM3U
+            #EXT-X-VERSION:3
+            """,
+            sourceSyntaxKind: .plainText,
+            phase: .loaded
         )
-        let model = NetworkPanelModel(network: network)
-        model.selectRequest(request)
-        let viewController = NetworkDetailViewController(model: model)
-        let window = showInWindow(viewController)
-        defer { window.isHidden = true }
-        viewController.setModeForTesting(.preview)
+        let coordinator = NetworkMediaPreviewCoordinator()
 
-        let didRenderPreviewRoles = await waitUntilRendered(in: viewController) {
-            viewController.isPreviewRoleControlHiddenForTesting == false
+        let action = coordinator.preparePreview(
+            for: body,
+            metadata: NetworkMediaPreviewMetadata(
+                mimeType: nil,
+                url: "https://media.example.com/upload.m3u8"
+            )
+        ) { _ in
+            Issue.record("HLS request bodies should stay on the syntax preview path")
         }
-        #expect(didRenderPreviewRoles)
 
-        viewController.selectPreviewRoleForTesting(.request)
-
-        let didRenderRequestBody = await waitUntilRendered(in: viewController) {
-            viewController.currentPreviewRoleForTesting == .request
-                && viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting == nil
-                && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text.contains("#EXTM3U")
+        guard case .unavailable = action else {
+            Issue.record("Expected HLS request bodies to avoid remote movie preview")
+            return
         }
-        #expect(didRenderRequestBody)
     }
 
     @Test

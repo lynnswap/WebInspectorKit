@@ -303,6 +303,30 @@ func mediaPreviewSupportClassifiesAVIFAndExcludesSVG() {
 }
 
 @Test
+func mediaPreviewSupportClassifiesHLSPlaylists() {
+    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(
+        mimeType: "application/vnd.apple.mpegurl",
+        url: nil
+    ) == .hlsPlaylist)
+    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(
+        mimeType: "application/x-mpegurl; charset=utf-8",
+        url: nil
+    ) == .hlsPlaylist)
+    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(
+        mimeType: "audio/mpegurl",
+        url: nil
+    ) == .hlsPlaylist)
+    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(
+        mimeType: nil,
+        url: "https://media.example.com/live/master.m3u8?token=abc"
+    ) == .hlsPlaylist)
+    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(
+        mimeType: "application/octet-stream",
+        url: "https://media.example.com/live/master.m3u8"
+    ) == .hlsPlaylist)
+}
+
+@Test
 @MainActor
 func displayProjectionCacheInvalidatesWhenResponseMIMEBecomesPreviewable() async throws {
     let network = NetworkSession()
