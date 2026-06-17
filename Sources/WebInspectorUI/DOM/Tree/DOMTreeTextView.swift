@@ -493,7 +493,6 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         performanceCounters.buildRenderedRowsCallCount += 1
 #endif
         resetLocalDocumentStateIfNeeded()
-        renderedRowsBuildCoordinator.removeCachedMarkup(keepingCapacity: true)
         prepareSelectionForRendering()
         startRenderedRowsBuild(
             resetFragments: true,
@@ -530,17 +529,6 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         revealPendingSelectedNodeIfPossible()
     }
 
-    private func reloadTree(for invalidation: DOMTreeTextView.Invalidation?) {
-#if DEBUG
-        performanceCounters.reloadTreeCallCount += 1
-#endif
-        startRenderedRowsReload(
-            resetFragments: invalidation?.requiresTextFragmentReset == true,
-            affectedKeys: invalidation?.contentAffectedKeys,
-            countsCall: false
-        )
-    }
-
     private func reloadTree(resetFragments: Bool, countsCall: Bool = true) {
 #if DEBUG
         if countsCall {
@@ -552,7 +540,6 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
 
     private func startRenderedRowsReload(
         resetFragments: Bool,
-        affectedKeys: Set<DOMNode.ID>? = nil,
         countsCall: Bool = true
     ) {
 #if DEBUG
@@ -572,7 +559,6 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
 #endif
         startRenderedRowsBuild(
             resetFragments: resetFragments,
-            affectedKeys: affectedKeys,
             previousRows: previousRows,
             previousText: previousText
         )
@@ -580,7 +566,6 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
 
     private func startRenderedRowsBuild(
         resetFragments: Bool,
-        affectedKeys: Set<DOMNode.ID>? = nil,
         previousRows: [DOMTreeTextView.Line],
         previousText: String,
         shouldApply: (@MainActor (DOMTreeTextView.RenderedRowsBuildResult) -> Bool)? = nil
@@ -603,7 +588,6 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
                 applyRenderedRowsBuildResult(
                     buildResult,
                     resetFragments: resetFragments,
-                    affectedKeys: affectedKeys,
                     previousRows: previousRows,
                     previousText: previousText
                 )
@@ -614,19 +598,9 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     private func applyRenderedRowsBuildResult(
         _ buildResult: DOMTreeTextView.RenderedRowsBuildResult,
         resetFragments: Bool,
-        affectedKeys: Set<DOMNode.ID>?,
         previousRows: [DOMTreeTextView.Line],
         previousText: String
     ) {
-        if let affectedKeys,
-           applyContentInvalidation(
-            affectedKeys: affectedKeys,
-            buildResult: buildResult,
-            previousRows: previousRows
-           ) {
-            return
-        }
-
         rows = buildResult.rows
         lastObservedTreeContent = buildResult.observedContent
         renderedRowsBuildCoordinator.pruneCachedMarkup(keeping: renderedRows.visibleNodeIDs)
@@ -677,77 +651,6 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         multiSelection.reset()
         dismissDOMMenuAnchor()
         clearTextSelection()
-    }
-
-    private func applyContentInvalidation(
-        affectedKeys: Set<DOMNode.ID>,
-        buildResult: DOMTreeTextView.RenderedRowsBuildResult,
-        previousRows: [DOMTreeTextView.Line]
-    ) -> Bool {
-        guard !previousRows.isEmpty,
-              previousRows.count == buildResult.rows.count else {
-            return false
-        }
-
-        let affectedRowIndices = affectedKeys.compactMap { renderedRows.rowIndex(for: $0) }
-        guard !affectedRowIndices.isEmpty else {
-            return true
-        }
-        guard affectedRowIndices.count <= max(8, rows.count / 4) else {
-            return false
-        }
-
-        var nextRows = buildResult.rows
-        var replacements: [(range: NSRange, text: String)] = []
-        var changedRowIndices = Set<Int>()
-
-        for rowIndex in affectedRowIndices.sorted(by: >) {
-            let previousRow = previousRows[rowIndex]
-            let nextRow = nextRows[rowIndex]
-            guard !previousRow.hasSameRenderedContent(as: nextRow) else {
-                continue
-            }
-
-            replacements.append((previousRow.textRange, nextRow.text))
-            changedRowIndices.insert(rowIndex)
-        }
-
-        guard !replacements.isEmpty else {
-            requestChildrenForOpenRowsIfNeeded()
-            updateContentDecorations()
-            revealPendingSelectedNodeIfPossible()
-            return true
-        }
-
-        rows = nextRows
-        lastObservedTreeContent = buildResult.observedContent
-        renderedRowsBuildCoordinator.pruneCachedMarkup(keeping: renderedRows.visibleNodeIDs)
-        renderedText = buildResult.text
-        clampTextSelectionAfterTextChange()
-        maxLineDisplayColumnCount = buildResult.maxLineDisplayColumnCount
-        updateMeasuredTextWidth()
-        pruneChildRequestState()
-        requestChildrenForOpenRowsIfNeeded()
-
-        textContentStorage.performEditingTransaction {
-            for replacement in replacements {
-                textStorage.replaceCharacters(in: replacement.range, with: replacement.text)
-            }
-        }
-#if DEBUG
-        performanceCounters.incrementalTextStorageEditCallCount += 1
-#endif
-
-        let changedRows = changedRowIndices.sorted().map { rows[$0] }
-        applyTextAttributes(to: changedRows)
-        setNeedsDisplayForTextRanges(changedRows.map(\.textRange))
-        clearFindDecorations()
-        findCoordinator.invalidateResultsAfterTextChange()
-        updateTextLayoutGeometry()
-        updateContentDecorations()
-        setNeedsLayout()
-        revealPendingSelectedNodeIfPossible()
-        return true
     }
 
     private func prepareSelectionForRendering(clearsMultiSelectionForDocumentSelection: Bool = false) {

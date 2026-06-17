@@ -371,22 +371,6 @@ extension DOMTreeTextView {
                 && isOpen == other.isOpen
                 && isClosingTag == other.isClosingTag
         }
-
-        func offsettingTextRange(by delta: Int) -> DOMTreeTextView.Line {
-            DOMTreeTextView.Line(
-                nodeID: nodeID,
-                depth: depth,
-                rowIndex: rowIndex,
-                text: text,
-                textRange: NSRange(location: textRange.location + delta, length: textRange.length),
-                markupRange: markupRange,
-                tokens: tokens,
-                displayColumnCount: displayColumnCount,
-                hasDisclosure: hasDisclosure,
-                isOpen: isOpen,
-                isClosingTag: isClosingTag
-            )
-        }
     }
 }
 
@@ -403,14 +387,6 @@ extension DOMTreeTextView {
         let previousEnd: Int
         let nextStart: Int
         let nextEnd: Int
-    }
-}
-
-extension DOMTreeTextView {
-    enum Invalidation: Equatable, Sendable {
-        case documentReset
-        case structural(affectedKeys: Set<DOMNode.ID>)
-        case content(affectedKeys: Set<DOMNode.ID>)
     }
 }
 
@@ -534,42 +510,6 @@ extension DOMTreeTextView {
             findBackground: .domTreeDynamic(light: 0xFFC947, dark: 0xFFDB73, lightAlpha: 0.42, darkAlpha: 0.35),
             currentFindBackground: .domTreeDynamic(light: 0xFFC947, dark: 0xFFDB73, lightAlpha: 0.62, darkAlpha: 0.52)
         )
-    }
-}
-
-extension DOMTreeTextView.Invalidation {
-    var contentAffectedKeys: Set<DOMNode.ID>? {
-        if case let .content(affectedKeys) = self {
-            return affectedKeys
-        }
-        return nil
-    }
-
-    var requiresImmediateReload: Bool {
-        if case .documentReset = self {
-            return true
-        }
-        return false
-    }
-
-    var requiresTextFragmentReset: Bool {
-        if case .documentReset = self {
-            return true
-        }
-        return false
-    }
-
-    func merged(with other: DOMTreeTextView.Invalidation) -> DOMTreeTextView.Invalidation {
-        switch (self, other) {
-        case (.documentReset, _), (_, .documentReset):
-            return .documentReset
-        case let (.structural(lhs), .structural(rhs)),
-             let (.structural(lhs), .content(rhs)),
-             let (.content(lhs), .structural(rhs)):
-            return .structural(affectedKeys: lhs.union(rhs))
-        case let (.content(lhs), .content(rhs)):
-            return .content(affectedKeys: lhs.union(rhs))
-        }
     }
 }
 
