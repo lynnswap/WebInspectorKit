@@ -75,7 +75,7 @@ final class UITestDeinitProbe {
         return await withCheckedContinuation { continuation in
             let timeoutTask = Task { [weak self] in
                 try? await Task.sleep(for: timeout)
-                await self?.resolveWaiter(false)
+                self?.resolveWaiter(false)
             }
             waiter = Waiter(continuation: continuation, timeoutTask: timeoutTask)
         }
