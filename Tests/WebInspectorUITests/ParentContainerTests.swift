@@ -521,6 +521,7 @@ struct ParentContainerTests {
                     viewController.selectedRequestRenderObservationDeliveryForTesting,
                     viewController.responseBodyFetchObservationDeliveryForTesting,
                     viewController.bodyViewControllerForTesting.bodyObservationDeliveryForTesting,
+                    viewController.bodyViewControllerForTesting.previewRenderObservationDeliveryForTesting,
                 ].compactMap { $0 }
             },
             sample: {
