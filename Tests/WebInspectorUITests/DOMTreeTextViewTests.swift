@@ -26,6 +26,23 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func textStorageKeepsTokenForegroundAsBaseAttributes() async throws {
+        let view = await makeTreeView()
+
+        let baseForeground = try #require(view.textStorageBaseForegroundColorForTesting)
+        let tagNameStorageForeground = try #require(view.textStorageForegroundColorForTesting(containing: "input"))
+        let attributeNameStorageForeground = try #require(view.textStorageForegroundColorForTesting(containing: "disabled"))
+        let tagNameTokenForeground = try #require(view.tokenForegroundColorForTesting(kind: "tagName"))
+        let attributeNameTokenForeground = try #require(view.tokenForegroundColorForTesting(kind: "attributeName"))
+
+        #expect(colorsEqual(tagNameStorageForeground, baseForeground))
+        #expect(colorsEqual(attributeNameStorageForeground, baseForeground))
+        #expect(!colorsEqual(tagNameStorageForeground, tagNameTokenForeground))
+        #expect(!colorsEqual(attributeNameStorageForeground, attributeNameTokenForeground))
+        #expect(view.disclosureAttachmentSnapshotsForTesting.contains { $0.hasAttachment })
+    }
+
+    @Test
     func selectingNodeUpdatesCoreSelectionAndRowDecoration() async throws {
         let session = makeDOMSession()
         let view = await makeTreeView(session: session)
@@ -386,6 +403,10 @@ private struct RenderedDOMTreeState: Equatable, Sendable {
             && text.contains("<img id=\"ad-node\">")
             && selectedRowCount == 1
     }
+}
+
+private func colorsEqual(_ lhs: UIColor, _ rhs: UIColor) -> Bool {
+    CFEqual(lhs.cgColor, rhs.cgColor)
 }
 
 @MainActor

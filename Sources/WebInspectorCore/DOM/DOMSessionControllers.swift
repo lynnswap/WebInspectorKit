@@ -329,7 +329,6 @@ final class DOMSessionElementStyleHydrationController {
 
         func cancel() {
             task?.cancel()
-            task = nil
         }
     }
 
@@ -354,6 +353,7 @@ final class DOMSessionElementStyleHydrationController {
 
     private(set) var isActive = false
     private var activeRefresh: Refresh?
+    private var cancelledRefreshes: [Refresh] = []
     private var propertyUpdateRequests: [CSSProperty.ID: PropertyUpdateRequest] = [:]
 
     @discardableResult
@@ -396,6 +396,7 @@ final class DOMSessionElementStyleHydrationController {
         }
         activeRefresh = nil
         refresh.cancel()
+        cancelledRefreshes.append(refresh)
         return refresh.token
     }
 
@@ -430,17 +431,25 @@ final class DOMSessionElementStyleHydrationController {
     }
 
     func waitUntilRefreshIdle() async {
-        while let refresh = activeRefresh {
-            await refresh.wait()
+        while activeRefresh != nil || cancelledRefreshes.isEmpty == false {
+            if let refresh = activeRefresh {
+                await refresh.wait()
+            }
+            if let refresh = cancelledRefreshes.first {
+                await refresh.wait()
+            }
         }
     }
 
     func waitUntilIdle() async {
-        while activeRefresh != nil || propertyUpdateRequests.isEmpty == false {
+        while activeRefresh != nil || cancelledRefreshes.isEmpty == false || propertyUpdateRequests.isEmpty == false {
             if let request = propertyUpdateRequests.values.first {
                 await request.wait()
             }
             if let refresh = activeRefresh {
+                await refresh.wait()
+            }
+            if let refresh = cancelledRefreshes.first {
                 await refresh.wait()
             }
         }
@@ -454,6 +463,7 @@ final class DOMSessionElementStyleHydrationController {
 
     private func finishRefresh(_ refresh: Refresh) {
         guard activeRefresh === refresh else {
+            cancelledRefreshes.removeAll { $0 === refresh }
             return
         }
         activeRefresh = nil

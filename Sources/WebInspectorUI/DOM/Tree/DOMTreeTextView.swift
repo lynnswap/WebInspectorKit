@@ -440,6 +440,14 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         textContainer.lineFragmentPadding = 0
         textContainer.lineBreakMode = .byClipping
         layoutManager.textContainer = textContainer
+        layoutManager.renderingAttributesValidator = { [weak self] textLayoutManager, textLayoutFragment in
+            MainActor.assumeIsolated {
+                self?.validateTokenRenderingAttributes(
+                    in: textLayoutFragment,
+                    using: textLayoutManager
+                )
+            }
+        }
         layoutManager.textViewportLayoutController.delegate = viewportLayoutDelegate
         textContentStorage.addTextLayoutManager(layoutManager)
         textContentStorage.primaryTextLayoutManager = layoutManager
@@ -1045,12 +1053,6 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         )
     }
 
-    private func applyRowAttributes(to attributedText: NSMutableAttributedString) {
-        for row in rows {
-            applySyntaxAttributes(for: row, to: attributedText)
-        }
-    }
-
     private func baseTextAttributes() -> [NSAttributedString.Key: Any] {
         resolvedTextAttributes().base
     }
@@ -1066,17 +1068,111 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         return resolved
     }
 
+    private func validateTokenRenderingAttributes(
+        in textLayoutFragment: NSTextLayoutFragment,
+        using textLayoutManager: NSTextLayoutManager
+    ) {
+        let fragmentRange = textRange(for: textLayoutFragment)
+        guard fragmentRange.length > 0 else {
+            return
+        }
+
+        let resolvedAttributes = resolvedTextAttributes()
+        let fallbackColor = resolvedAttributes.tokenColors[.fallback]
+            ?? DOMTreeTextView.HighlightTheme.webInspector.textSecondary.resolvedColor(with: traitCollection)
+        let disclosureColor = DOMTreeTextView.HighlightTheme.webInspector.disclosure.resolvedColor(with: traitCollection)
+        for row in rowsIntersectingTextRange(fragmentRange) {
+            addRenderingAttribute(
+                .foregroundColor,
+                value: fallbackColor,
+                range: NSIntersectionRange(row.textRange, fragmentRange),
+                using: textLayoutManager
+            )
+            if row.hasDisclosure {
+                addRenderingAttribute(
+                    .foregroundColor,
+                    value: disclosureColor,
+                    range: NSIntersectionRange(disclosureAttachmentRange(for: row), fragmentRange),
+                    using: textLayoutManager
+                )
+            }
+            for token in row.tokens {
+                let tokenRange = NSRange(
+                    location: row.textRange.location + token.range.location,
+                    length: token.range.length
+                )
+                let color = resolvedAttributes.tokenColors[token.kind] ?? fallbackColor
+                addRenderingAttribute(
+                    .foregroundColor,
+                    value: color,
+                    range: NSIntersectionRange(tokenRange, fragmentRange),
+                    using: textLayoutManager
+                )
+            }
+        }
+    }
+
+    private func addRenderingAttribute(
+        _ attributeName: NSAttributedString.Key,
+        value: Any,
+        range: NSRange,
+        using textLayoutManager: NSTextLayoutManager
+    ) {
+        guard range.length > 0,
+              let textRange = textRange(for: range)
+        else {
+            return
+        }
+        textLayoutManager.addRenderingAttribute(attributeName, value: value, for: textRange)
+    }
+
+    private func invalidateTokenRenderingAttributes(for ranges: [NSRange]) {
+        guard !ranges.isEmpty else {
+            setNeedsDisplayForVisibleTextFragments()
+            return
+        }
+
+        var invalidatedRanges: [NSRange] = []
+        invalidatedRanges.reserveCapacity(ranges.count)
+        for range in ranges {
+            let clampedRange = clampedTextRange(range)
+            guard clampedRange.length > 0,
+                  let textRange = textRange(for: clampedRange)
+            else {
+                continue
+            }
+            layoutManager.invalidateRenderingAttributes(for: textRange)
+            invalidatedRanges.append(clampedRange)
+        }
+
+        guard !invalidatedRanges.isEmpty else {
+            setNeedsDisplayForVisibleTextFragments()
+            return
+        }
+
+        var didInvalidateFragment = false
+        for case let fragmentView as DOMTreeTextLayoutFragmentView in textContentView.subviews {
+            let fragmentRange = textRange(for: fragmentView.layoutFragment)
+            guard !Self.ranges(invalidatedRanges, intersecting: fragmentRange).isEmpty else {
+                continue
+            }
+            validateTokenRenderingAttributes(in: fragmentView.layoutFragment, using: layoutManager)
+            fragmentView.setNeedsDisplay()
+            didInvalidateFragment = true
+        }
+        if !didInvalidateFragment {
+            setNeedsDisplayForVisibleTextFragments()
+        }
+    }
+
     private func reapplyTextAttributes() {
         let fullRange = NSRange(location: 0, length: textStorage.length)
         guard fullRange.length > 0 else {
             return
         }
         textStorage.addAttributes(baseTextAttributes(), range: fullRange)
-        applyRowAttributes(to: textStorage)
         applyDisclosureAttachments(to: textStorage, rows: rows)
-        for case let fragmentView as DOMTreeTextLayoutFragmentView in textContentView.subviews {
-            fragmentView.setNeedsDisplay()
-        }
+        invalidateTokenRenderingAttributes(for: [fullRange])
     }
 
     private func rebuildTextStorage() {
@@ -1084,7 +1180,6 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
             string: renderedText.isEmpty ? "\n" : renderedText,
             attributes: baseTextAttributes()
         )
-        applyRowAttributes(to: attributedText)
         applyDisclosureAttachments(to: attributedText, rows: rows)
 #if DEBUG
         performanceCounters.rebuildTextStorageCallCount += 1
@@ -1093,6 +1188,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
             textStorage.setAttributedString(attributedText)
         }
         invalidateTextLayout()
+        invalidateTokenRenderingAttributes(for: rows.map(\.textRange))
     }
 
     private func updateTextStorageIncrementally(
@@ -1124,6 +1220,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
 
         let changedRows = Array(nextRows[diff.nextStart..<diff.nextEnd])
         applyTextAttributes(to: changedRows)
+        invalidateTokenRenderingAttributes(for: changedRows.map(\.textRange))
         if edit.range.length > 0 || !edit.replacement.isEmpty {
             setNeedsDisplayForTextRanges(changedRows.map(\.textRange))
         }
@@ -1207,25 +1304,8 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
                 continue
             }
             textStorage.addAttributes(baseTextAttributes(), range: row.textRange)
-            applySyntaxAttributes(for: row, to: textStorage)
         }
         applyDisclosureAttachments(to: textStorage, rows: rows)
-    }
-
-    private func applySyntaxAttributes(for row: DOMTreeTextView.Line, to attributedText: NSMutableAttributedString) {
-        let colors = resolvedTextAttributes().tokenColors
-        attributedText.addAttribute(
-            .foregroundColor,
-            value: colors[.fallback] ?? DOMTreeTextView.HighlightTheme.webInspector.textSecondary.resolvedColor(with: traitCollection),
-            range: row.textRange
-        )
-        for token in row.tokens {
-            attributedText.addAttribute(
-                .foregroundColor,
-                value: colors[token.kind] ?? DOMTreeTextView.HighlightTheme.webInspector.textSecondary.resolvedColor(with: traitCollection),
-                range: NSRange(location: row.textRange.location + token.range.location, length: token.range.length)
-            )
-        }
     }
 
     private func applyDisclosureAttachments(to attributedText: NSMutableAttributedString, rows: [DOMTreeTextView.Line]) {
@@ -2033,6 +2113,27 @@ extension DOMTreeTextView {
 
     var renderedTextForTesting: String {
         renderedText
+    }
+
+    var textStorageBaseForegroundColorForTesting: UIColor? {
+        baseTextAttributes()[.foregroundColor] as? UIColor
+    }
+
+    func textStorageForegroundColorForTesting(containing text: String) -> UIColor? {
+        let range = (textStorage.string as NSString).range(of: text)
+        guard range.location != NSNotFound,
+              range.location < textStorage.length
+        else {
+            return nil
+        }
+        return unsafe textStorage.attribute(.foregroundColor, at: range.location, effectiveRange: nil) as? UIColor
+    }
+
+    func tokenForegroundColorForTesting(kind: String) -> UIColor? {
+        guard let tokenKind = DOMTreeTextView.Token.Kind(rawValue: kind) else {
+            return nil
+        }
+        return resolvedTextAttributes().tokenColors[tokenKind]
     }
 
     var documentObservationDeliveryForTesting: PortableObservationTracking.Token {
