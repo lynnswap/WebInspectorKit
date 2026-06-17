@@ -1,30 +1,110 @@
 import Foundation
+#if DEBUG
+import Synchronization
+#endif
 
 extension CSSStyle {
     enum TextRewriter {
-    static func canSafelyRewriteStyleText(for style: CSSStyle.Payload, propertyIndex: Int) -> Bool {
-        guard style.cssProperties.indices.contains(propertyIndex) else {
-            return false
+    struct RewriteContext {
+        private var styleTextIndex: StyleTextIndex?
+        private let properties: [RewriteProperty]
+        private let previousPropertyTextOccurrences: [Int]
+        private let canSerializeStyleText: Bool
+
+        init(style: CSSStyle.Payload) {
+            self.init(
+                properties: style.cssProperties.map(RewriteProperty.init),
+                cssText: style.cssText
+            )
         }
-        if let cssText = style.cssText,
-           !cssText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let property = style.cssProperties[propertyIndex]
-            guard let propertyText = property.text?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !propertyText.isEmpty else {
+
+        init(style: CSSStyle) {
+            self.init(
+                properties: style.cssProperties.map(RewriteProperty.init),
+                cssText: style.cssText
+            )
+        }
+
+        private init(properties: [RewriteProperty], cssText: String?) {
+            self.styleTextIndex = cssText.flatMap(StyleTextIndex.init(cssText:))
+            self.properties = properties
+            self.previousPropertyTextOccurrences = Self.previousPropertyTextOccurrences(for: properties)
+            self.canSerializeStyleText = properties.allSatisfy(\.canSerializeStyleText)
+        }
+
+        mutating func canSafelyRewriteStyleText(propertyIndex: Int) -> Bool {
+            guard properties.indices.contains(propertyIndex) else {
                 return false
             }
-            return authoredDeclarationRange(
+            guard styleTextIndex != nil else {
+                return canSerializeStyleText
+            }
+            return authoredDeclarationRange(propertyIndex: propertyIndex) != nil
+        }
+
+        var hasAuthoredStyleText: Bool {
+            styleTextIndex != nil
+        }
+
+        mutating func rewriteAuthoredStyleText(propertyIndex: Int, with replacementText: String) -> String? {
+            guard let range = authoredDeclarationRange(propertyIndex: propertyIndex),
+                  let styleTextIndex else {
+                return nil
+            }
+            return styleTextIndex.replacingCharacters(in: range, with: replacementText)
+        }
+
+        func serializedStyleText(replacingPropertyAt propertyIndex: Int, with replacementText: String) -> String? {
+            guard properties.indices.contains(propertyIndex) else {
+                return nil
+            }
+            var texts: [String] = []
+            for index in properties.indices {
+                if index == propertyIndex {
+                    texts.append(replacementText)
+                    continue
+                }
+                let property = properties[index]
+                guard property.canSerializeStyleText,
+                      let text = property.text else {
+                    return nil
+                }
+                texts.append(text)
+            }
+            return texts.joined(separator: "\n")
+        }
+
+        private mutating func authoredDeclarationRange(propertyIndex: Int) -> NSRange? {
+            guard properties.indices.contains(propertyIndex),
+                  let propertyText = properties[propertyIndex].trimmedText,
+                  !propertyText.isEmpty,
+                  styleTextIndex != nil else {
+                return nil
+            }
+            return styleTextIndex!.authoredDeclarationRange(
                 for: propertyText,
-                sourceRange: property.range,
-                in: cssText,
-                previousPropertyTexts: style.cssProperties[..<propertyIndex].map(\.text)
-            ) != nil
+                sourceRange: properties[propertyIndex].sourceRange,
+                previousOccurrence: previousPropertyTextOccurrences[propertyIndex]
+            )
         }
-        return style.cssProperties.allSatisfy { property in
-            property.text != nil
-                && !property.implicit
-                && property.status != .inactive
+
+        private static func previousPropertyTextOccurrences(for properties: [RewriteProperty]) -> [Int] {
+            var seenOccurrencesByText: [String: Int] = [:]
+            return properties.map { property in
+                guard let propertyText = property.trimmedText,
+                      !propertyText.isEmpty else {
+                    return 0
+                }
+                let occurrence = seenOccurrencesByText[propertyText, default: 0]
+                seenOccurrencesByText[propertyText] = occurrence + 1
+                return occurrence
+            }
         }
+    }
+
+    static func canSafelyRewriteStyleText(for style: CSSStyle.Payload, propertyIndex: Int) -> Bool {
+        var context = RewriteContext(style: style)
+        return context.canSafelyRewriteStyleText(propertyIndex: propertyIndex)
     }
 
     static func rewrittenStyleText(style: CSSStyle, propertyIndex: Int, enabled: Bool) -> String? {
@@ -36,32 +116,12 @@ extension CSSStyle {
               let toggledText = toggledPropertyText(property, enabled: enabled) else {
             return nil
         }
-        if let cssText = style.cssText,
-           !cssText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return rewriteAuthoredStyleText(
-                cssText,
-                replacing: property,
-                in: style,
-                propertyIndex: propertyIndex,
-                with: toggledText
-            )
+        var context = RewriteContext(style: style)
+        if context.hasAuthoredStyleText {
+            return context.rewriteAuthoredStyleText(propertyIndex: propertyIndex, with: toggledText)
         }
 
-        var texts: [String] = []
-        for index in style.cssProperties.indices {
-            if index == propertyIndex {
-                texts.append(toggledText)
-                continue
-            }
-            let property = style.cssProperties[index]
-            guard let text = property.text,
-                  !property.implicit,
-                  property.status != .inactive else {
-                return nil
-            }
-            texts.append(text)
-        }
-        return texts.joined(separator: "\n")
+        return context.serializedStyleText(replacingPropertyAt: propertyIndex, with: toggledText)
     }
 
     static func canTogglePropertyText(_ property: CSSProperty.Payload) -> Bool {
@@ -78,79 +138,168 @@ extension CSSStyle {
         return toggledPropertyText(property, enabled: !property.isEnabled) != nil
     }
 
-    private static func rewriteAuthoredStyleText(
-        _ cssText: String,
-        replacing property: CSSProperty,
-        in style: CSSStyle,
-        propertyIndex: Int,
-        with toggledText: String
-    ) -> String? {
-        guard let propertyText = property.text?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !propertyText.isEmpty else {
-            return nil
-        }
-        let nsText = cssText as NSString
-        if let range = authoredDeclarationRange(
-            for: propertyText,
-            sourceRange: property.range,
-            in: cssText,
-            previousPropertyTexts: style.cssProperties[..<propertyIndex].map(\.text)
-        ) {
-            return nsText.replacingCharacters(in: range, with: toggledText)
+    private struct StyleTextIndex {
+        private let nsText: NSString
+        private let lineStartOffsets: [Int]
+        private var declarationRangesByText: [String: [NSRange]] = [:]
+
+        init?(cssText: String) {
+            guard !cssText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return nil
+            }
+            self.nsText = cssText as NSString
+            self.lineStartOffsets = CSSStyle.TextRewriter.lineStartUTF16Offsets(in: cssText)
         }
 
-        return nil
+        mutating func authoredDeclarationRange(
+            for propertyText: String,
+            sourceRange: CSSStyle.SourceRange?,
+            previousOccurrence: Int
+        ) -> NSRange? {
+            if let range = sourceRange.flatMap(nsRange(sourceRange:)),
+               NSMaxRange(range) <= nsText.length,
+               nsText.substring(with: range).trimmingCharacters(in: .whitespacesAndNewlines) == propertyText {
+                return range
+            }
+
+            let ranges = declarationRanges(for: propertyText)
+            if ranges.count == 1 {
+                return ranges[0]
+            }
+            guard ranges.indices.contains(previousOccurrence) else {
+                return nil
+            }
+            return ranges[previousOccurrence]
+        }
+
+        func replacingCharacters(in range: NSRange, with replacementText: String) -> String {
+            nsText.replacingCharacters(in: range, with: replacementText)
+        }
+
+        private func nsRange(sourceRange: CSSStyle.SourceRange) -> NSRange? {
+            guard sourceRange.startLine >= 0,
+                  sourceRange.endLine >= sourceRange.startLine,
+                  sourceRange.startColumn >= 0,
+                  sourceRange.endColumn >= 0 else {
+                return nil
+            }
+
+            guard sourceRange.startLine < lineStartOffsets.count,
+                  sourceRange.endLine < lineStartOffsets.count else {
+                return nil
+            }
+            let startOffset = lineStartOffsets[sourceRange.startLine] + sourceRange.startColumn
+            let endOffset = lineStartOffsets[sourceRange.endLine] + sourceRange.endColumn
+            guard endOffset >= startOffset,
+                  endOffset <= nsText.length else {
+                return nil
+            }
+            return NSRange(location: startOffset, length: endOffset - startOffset)
+        }
+
+        private mutating func declarationRanges(for propertyText: String) -> [NSRange] {
+            if let ranges = declarationRangesByText[propertyText] {
+                return ranges
+            }
+            let ranges = CSSStyle.TextRewriter.declarationRanges(of: propertyText, in: nsText)
+            declarationRangesByText[propertyText] = ranges
+            return ranges
+        }
     }
 
-    private static func authoredDeclarationRange(
-        for propertyText: String,
-        sourceRange: CSSStyle.SourceRange?,
-        in cssText: String,
-        previousPropertyTexts: [String?]
-    ) -> NSRange? {
-        let nsText = cssText as NSString
-        if let range = sourceRange.flatMap({ nsRange(in: cssText, sourceRange: $0) }),
-           NSMaxRange(range) <= nsText.length,
-           nsText.substring(with: range).trimmingCharacters(in: .whitespacesAndNewlines) == propertyText {
-            return range
+    private struct RewriteProperty {
+        var text: String?
+        var trimmedText: String?
+        var sourceRange: CSSStyle.SourceRange?
+        var implicit: Bool
+        var status: CSSProperty.Status
+
+        init(_ property: CSSProperty.Payload) {
+            text = property.text
+            trimmedText = property.text?.trimmingCharacters(in: .whitespacesAndNewlines)
+            sourceRange = property.range
+            implicit = property.implicit
+            status = property.status
         }
 
-        let ranges = declarationRanges(of: propertyText, in: cssText)
-        if ranges.count == 1 {
-            return ranges[0]
+        init(_ property: CSSProperty) {
+            text = property.text
+            trimmedText = property.text?.trimmingCharacters(in: .whitespacesAndNewlines)
+            sourceRange = property.range
+            implicit = property.implicit
+            status = property.status
         }
-        let occurrence = previousPropertyTexts.filter { previousText in
-            previousText?.trimmingCharacters(in: .whitespacesAndNewlines) == propertyText
-        }.count
-        guard ranges.indices.contains(occurrence) else {
-            return nil
+
+        var canSerializeStyleText: Bool {
+            text != nil
+                && !implicit
+                && status != .inactive
         }
-        return ranges[occurrence]
     }
 
-    private static func nsRange(in text: String, sourceRange: CSSStyle.SourceRange) -> NSRange? {
-        guard sourceRange.startLine >= 0,
-              sourceRange.endLine >= sourceRange.startLine,
-              sourceRange.startColumn >= 0,
-              sourceRange.endColumn >= 0 else {
-            return nil
+#if DEBUG
+    struct RewriteInstrumentationSnapshot: Equatable, Sendable {
+        var lineStartUTF16OffsetScans: Int
+        var declarationRangeScans: Int
+    }
+
+    private struct RewriteInstrumentationState: Sendable {
+        var lineStartUTF16OffsetScans = 0
+        var declarationRangeScans = 0
+    }
+
+    private final class RewriteInstrumentationRecorder: @unchecked Sendable {
+        private let state = Mutex(RewriteInstrumentationState())
+
+        func recordLineStartUTF16OffsetScan() {
+            state.withLock { state in
+                state.lineStartUTF16OffsetScans += 1
+            }
         }
 
-        let lineStartOffsets = lineStartUTF16Offsets(in: text)
-        guard sourceRange.startLine < lineStartOffsets.count,
-              sourceRange.endLine < lineStartOffsets.count else {
-            return nil
+        func recordDeclarationRangeScan() {
+            state.withLock { state in
+                state.declarationRangeScans += 1
+            }
         }
-        let startOffset = lineStartOffsets[sourceRange.startLine] + sourceRange.startColumn
-        let endOffset = lineStartOffsets[sourceRange.endLine] + sourceRange.endColumn
-        guard endOffset >= startOffset,
-              endOffset <= (text as NSString).length else {
-            return nil
+
+        func snapshot() -> RewriteInstrumentationSnapshot {
+            state.withLock { state in
+                RewriteInstrumentationSnapshot(
+                    lineStartUTF16OffsetScans: state.lineStartUTF16OffsetScans,
+                    declarationRangeScans: state.declarationRangeScans
+                )
+            }
         }
-        return NSRange(location: startOffset, length: endOffset - startOffset)
     }
+
+    @TaskLocal private static var rewriteInstrumentationRecorder: RewriteInstrumentationRecorder?
+
+    static func withInstrumentationCounters<Result>(
+        _ operation: () throws -> Result
+    ) rethrows -> (result: Result, snapshot: RewriteInstrumentationSnapshot) {
+        let recorder = RewriteInstrumentationRecorder()
+        let result = try $rewriteInstrumentationRecorder.withValue(recorder) {
+            try operation()
+        }
+        return (result, recorder.snapshot())
+    }
+
+    private static func recordLineStartUTF16OffsetScan() {
+        rewriteInstrumentationRecorder?.recordLineStartUTF16OffsetScan()
+    }
+
+    private static func recordDeclarationRangeScan() {
+        rewriteInstrumentationRecorder?.recordDeclarationRangeScan()
+    }
+#else
+    private static func recordLineStartUTF16OffsetScan() {}
+
+    private static func recordDeclarationRangeScan() {}
+#endif
 
     private static func lineStartUTF16Offsets(in text: String) -> [Int] {
+        recordLineStartUTF16OffsetScan()
         var offsets = [0]
         var offset = 0
         for scalar in text.unicodeScalars {
@@ -162,8 +311,9 @@ extension CSSStyle {
         return offsets
     }
 
-    private static func declarationRanges(of needle: String, in haystack: String) -> [NSRange] {
-        let nsHaystack = haystack as NSString
+    private static func declarationRanges(of needle: String, in haystack: NSString) -> [NSRange] {
+        recordDeclarationRangeScan()
+        let nsHaystack = haystack
         var searchRange = NSRange(location: 0, length: nsHaystack.length)
         var ranges: [NSRange] = []
         while searchRange.length > 0 {
