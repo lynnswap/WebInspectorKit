@@ -9,6 +9,9 @@ package final class DOMSession {
     package private(set) var treeRevision: UInt64
     package private(set) var selectionRevision: UInt64
     package private(set) var commandAvailabilityRevision: UInt64
+    #if DEBUG
+    @ObservationIgnored package private(set) var snapshotBuildCountForTesting: UInt64 = 0
+    #endif
 
     private let targetGraph: TargetGraph
     private var currentPage: DOMCurrentPage
@@ -87,6 +90,10 @@ package final class DOMSession {
 
     private func document(for nodeID: DOMNode.ID) -> DOMDocument? {
         currentDocument(for: nodeID.documentID)
+    }
+
+    package func currentNodeID(targetID: ProtocolTarget.ID, rawNodeID: DOMNode.ProtocolID) -> DOMNode.ID? {
+        documentStore.currentNodeID(targetID: targetID, rawNodeID: rawNodeID)
     }
 
     private func attachKnownFrameTargets() {
@@ -923,7 +930,10 @@ package final class DOMSession {
     }
 
     package func snapshot() -> DOMSession.Snapshot {
-        DOMSessionSnapshotBuilder(
+        #if DEBUG
+        snapshotBuildCountForTesting &+= 1
+        #endif
+        return DOMSessionSnapshotBuilder(
             currentPageTargetID: currentPageTargetID,
             mainFrameID: mainFrameID,
             targetSnapshots: targetGraph.targetSnapshots(currentDocumentID: currentDocumentID(for:)),
