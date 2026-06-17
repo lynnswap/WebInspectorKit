@@ -95,10 +95,11 @@ extension CSSStyle {
     ) -> CSSStyle {
         let styleID = style.id
         let effectiveEditable = isEditable && styleID != nil && ruleOrigin != .userAgent
+        var rewriteContext = effectiveEditable ? CSSStyle.TextRewriter.RewriteContext(style: style) : nil
         let normalizedProperties = style.cssProperties.enumerated().map { index, property in
             let propertyID = styleID.map { CSSProperty.ID(styleID: $0, propertyIndex: index) }
             let isEditable = effectiveEditable
-                && CSSStyle.TextRewriter.canSafelyRewriteStyleText(for: style, propertyIndex: index)
+                && (rewriteContext?.canSafelyRewriteStyleText(propertyIndex: index) == true)
                 && property.text != nil
                 && CSSStyle.TextRewriter.canTogglePropertyText(property)
             return CSSProperty(payload: property, id: propertyID, isEditable: isEditable)

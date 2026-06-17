@@ -691,6 +691,142 @@ func cssSessionRewritesAuthoredStyleTextWithoutSerializingInactiveRows() async t
 }
 
 @Test
+func cssSessionRewritesRepeatedAuthoredDeclarationByPropertyOccurrence() async throws {
+    let css = await CSSSession()
+    let identity = cssIdentity()
+    let styleID = CSSStyle.ID(styleSheetID: .init("sheet"), ordinal: 0)
+    let token = await css.beginRefresh(id: identity)
+    await css.applyRefresh(
+        token: token,
+        matched: CSSStyle.MatchedStylesPayload(matchedRules: [
+            CSSRule.MatchPayload(
+                rule: rule(
+                    selector: "body",
+                    styleID: styleID,
+                    properties: [
+                        CSSProperty.Payload(
+                            name: "color",
+                            value: "red",
+                            text: "color: red;",
+                            status: .active
+                        ),
+                        CSSProperty.Payload(
+                            name: "color",
+                            value: "red",
+                            text: "color: red;",
+                            status: .active
+                        ),
+                    ],
+                    cssText: """
+                    color: red;
+                    color: red;
+                    """
+                ),
+                matchingSelectors: [0]
+            ),
+        ]),
+        inline: .init(),
+        computed: []
+    )
+
+    let intent = try #require(await css.setStyleTextIntent(
+        for: CSSProperty.ID(styleID: styleID, propertyIndex: 1),
+        enabled: false
+    ))
+    #expect(intent == .setStyleText(
+        targetID: identity.targetID,
+        styleID: styleID,
+        text: """
+        color: red;
+        /* color: red; */
+        """
+    ))
+}
+
+#if DEBUG
+@Test
+@MainActor
+func cssStyleRewriteContextReusesStyleTextScansDuringNormalization() throws {
+    let rangedStyleID = CSSStyle.ID(styleSheetID: .init("sheet"), ordinal: 0)
+    let rangedStyle = CSSStyle.Payload(
+        id: rangedStyleID,
+        cssProperties: [
+            CSSProperty.Payload(
+                name: "color",
+                value: "red",
+                text: "color: red;",
+                status: .active,
+                range: CSSStyle.SourceRange(startLine: 0, startColumn: 0, endLine: 0, endColumn: 11)
+            ),
+            CSSProperty.Payload(
+                name: "background",
+                value: "blue",
+                text: "background: blue;",
+                status: .active,
+                range: CSSStyle.SourceRange(startLine: 1, startColumn: 0, endLine: 1, endColumn: 17)
+            ),
+            CSSProperty.Payload(
+                name: "color",
+                value: "red",
+                text: "color: red;",
+                status: .active,
+                range: CSSStyle.SourceRange(startLine: 2, startColumn: 0, endLine: 2, endColumn: 11)
+            ),
+        ],
+        cssText: """
+        color: red;
+        background: blue;
+        color: red;
+        """
+    )
+
+    let (rangedNormalizedStyle, rangedSnapshot) = CSSStyle.TextRewriter.withInstrumentationCounters {
+        CSSStyle.SectionBuilder.normalizedStyle(
+            rangedStyle,
+            isEditable: true,
+            ruleOrigin: .author
+        )
+    }
+    #expect(rangedNormalizedStyle.cssProperties.map(\.isEditable) == [true, true, true])
+    #expect(rangedSnapshot.lineStartUTF16OffsetScans == 1)
+    #expect(rangedSnapshot.declarationRangeScans == 0)
+
+    let duplicateStyle = CSSStyle.Payload(
+        id: CSSStyle.ID(styleSheetID: .init("sheet"), ordinal: 1),
+        cssProperties: [
+            CSSProperty.Payload(
+                name: "color",
+                value: "red",
+                text: "color: red;",
+                status: .active
+            ),
+            CSSProperty.Payload(
+                name: "color",
+                value: "red",
+                text: "color: red;",
+                status: .active
+            ),
+        ],
+        cssText: """
+        color: red;
+        color: red;
+        """
+    )
+
+    let (duplicateNormalizedStyle, duplicateSnapshot) = CSSStyle.TextRewriter.withInstrumentationCounters {
+        CSSStyle.SectionBuilder.normalizedStyle(
+            duplicateStyle,
+            isEditable: true,
+            ruleOrigin: .author
+        )
+    }
+    #expect(duplicateNormalizedStyle.cssProperties.map(\.isEditable) == [true, true])
+    #expect(duplicateSnapshot.lineStartUTF16OffsetScans == 1)
+    #expect(duplicateSnapshot.declarationRangeScans == 1)
+}
+#endif
+
+@Test
 func cssSessionRewritesOnlyDeclarationMatchesOutsideStrings() async throws {
     let css = await CSSSession()
     let identity = cssIdentity()
