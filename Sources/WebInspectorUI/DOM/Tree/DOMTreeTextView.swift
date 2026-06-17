@@ -67,8 +67,8 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         }
     }
     private var renderedText = ""
-    private let expansionState = DOMTreeTextView.ExpansionState()
-    private lazy var renderedRowsBuilder = DOMTreeTextView.RenderedRowsBuilder(dom: dom, expansionState: expansionState)
+    private let expansionState: DOMTreeTextView.ExpansionState
+    private let renderedRowsBuildCoordinator: DOMTreeTextView.RenderedRowsBuildCoordinator
     private var hoveredNodeID: DOMNode.ID?
     private var pageHighlightTask: Task<Void, Never>?
     private var requestedChildNodeIDs: Set<DOMNode.ID> = []
@@ -83,7 +83,6 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     private var lastObservedTreeContent: DOMTreeTextView.ObservedContent?
     private var lastRoutedSelectedNodeID: DOMNode.ID?
     private let selectionRevealState = DOMTreeTextView.SelectionRevealState()
-    private let reloadScheduler = DOMTreeTextView.ReloadScheduler()
     private var resolvedTextAttributesCache: DOMTreeTextView.ResolvedTextAttributes?
     private var disclosureSymbolImageCache: [DisclosureSymbolImageCacheKey: UIImage] = [:]
     private var maxLineDisplayColumnCount = 0
@@ -141,6 +140,11 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         self.requestChildrenAction = requestChildrenAction
         self.highlightNodeAction = highlightNodeAction
         self.restoreHighlightAction = restoreHighlightAction
+        let expansionState = DOMTreeTextView.ExpansionState()
+        self.expansionState = expansionState
+        self.renderedRowsBuildCoordinator = DOMTreeTextView.RenderedRowsBuildCoordinator(
+            builder: DOMTreeTextView.RenderedRowsBuilder(dom: dom, expansionState: expansionState)
+        )
         self.menuModel = DOMTreeMenuModel(
             dom: dom,
             copyNodeTextAction: copyNodeTextAction,
@@ -159,7 +163,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
 
     isolated deinit {
         pageHighlightTask?.cancel()
-        reloadScheduler.cancel()
+        renderedRowsBuildCoordinator.cancel()
         documentObservation?.cancel()
         selectionObservation?.cancel()
     }
@@ -272,8 +276,8 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         } else if recognizer.modifierFlags.contains(.command) || recognizer.modifierFlags.contains(.control) {
             toggleMultiSelection(row: row)
         } else {
-            clearMultiSelection(keepingLast: row.node.id)
-            select(row.node)
+            clearMultiSelection(keepingLast: row.nodeID)
+            select(row.nodeID)
         }
     }
 
@@ -285,12 +289,12 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         }
 
         let nodes: [DOMNode]
-        if multiSelection.selectedCount > 1, multiSelection.contains(row.node.id) {
+        if multiSelection.selectedCount > 1, multiSelection.contains(row.nodeID) {
             nodes = multiSelectedNodesInDisplayOrder()
         } else {
-            clearMultiSelection(keepingLast: row.node.id)
-            nodes = [row.node]
-            select(row.node)
+            clearMultiSelection(keepingLast: row.nodeID)
+            nodes = dom.node(for: row.nodeID).map { [$0] } ?? []
+            select(row.nodeID)
         }
         presentDOMMenu(for: nodes, at: recognizer.location(in: self))
     }
@@ -488,17 +492,22 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
 #if DEBUG
         performanceCounters.buildRenderedRowsCallCount += 1
 #endif
-        let buildResult = renderedRowsBuilder.build(
-            previousRowCapacity: rows.count,
-            previousTextCapacity: renderedText.count
+        resetLocalDocumentStateIfNeeded()
+        prepareSelectionForRendering()
+        startRenderedRowsBuild(
+            resetFragments: true,
+            previousRows: rows,
+            previousText: renderedText,
+            shouldApply: { [weak self] result in
+                guard let self else {
+                    return false
+                }
+                let nextTreeContent = result.observedContent
+                let treeChanged = isInitial || self.lastObservedTreeContent != nextTreeContent
+                self.lastObservedTreeContent = nextTreeContent
+                return treeChanged
+            }
         )
-        let nextTreeContent = DOMTreeTextView.ObservedContent(buildResult)
-        let treeChanged = isInitial || lastObservedTreeContent != nextTreeContent
-        lastObservedTreeContent = nextTreeContent
-
-        if treeChanged {
-            scheduleTreeReload(for: .documentReset)
-        }
     }
 
     private func routeSelectionInvalidation(from dom: DOMSession) {
@@ -520,24 +529,19 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         revealPendingSelectedNodeIfPossible()
     }
 
-    private func scheduleTreeReload(for invalidation: DOMTreeTextView.Invalidation) {
-        reloadScheduler.schedule(for: invalidation) { [weak self] invalidation in
-            self?.reloadTree(for: invalidation)
-        }
-    }
-
-    private func reloadTree(for invalidation: DOMTreeTextView.Invalidation?) {
-#if DEBUG
-        performanceCounters.reloadTreeCallCount += 1
-#endif
-        if case let .content(affectedKeys) = invalidation,
-           applyContentInvalidation(affectedKeys: affectedKeys) {
-            return
-        }
-        reloadTree(resetFragments: invalidation?.requiresTextFragmentReset == true, countsCall: false)
-    }
-
     private func reloadTree(resetFragments: Bool, countsCall: Bool = true) {
+#if DEBUG
+        if countsCall {
+            performanceCounters.reloadTreeCallCount += 1
+        }
+#endif
+        startRenderedRowsReload(resetFragments: resetFragments, countsCall: false)
+    }
+
+    private func startRenderedRowsReload(
+        resetFragments: Bool,
+        countsCall: Bool = true
+    ) {
 #if DEBUG
         if countsCall {
             performanceCounters.reloadTreeCallCount += 1
@@ -547,19 +551,59 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         let previousRows = rows
         let previousText = renderedText
         if resetFragments {
-            renderedRowsBuilder.removeCachedMarkup(keepingCapacity: true)
+            renderedRowsBuildCoordinator.removeCachedMarkup(keepingCapacity: true)
         }
         prepareSelectionForRendering()
 #if DEBUG
         performanceCounters.buildRenderedRowsCallCount += 1
 #endif
-        let buildResult = renderedRowsBuilder.build(
-            previousRowCapacity: rows.count,
-            previousTextCapacity: renderedText.count
+        startRenderedRowsBuild(
+            resetFragments: resetFragments,
+            previousRows: previousRows,
+            previousText: previousText
         )
+    }
+
+    private func startRenderedRowsBuild(
+        resetFragments: Bool,
+        previousRows: [DOMTreeTextView.Line],
+        previousText: String,
+        shouldApply: (@MainActor (DOMTreeTextView.RenderedRowsBuildResult) -> Bool)? = nil
+    ) {
+        renderedRowsBuildCoordinator.startBuild(
+            previousRowCapacity: rows.count,
+            previousTextCapacity: renderedText.count,
+            isCurrentBuild: { [weak self] request in
+                guard let self else {
+                    return false
+                }
+                return dom.treeRevision == request.treeRevision
+                    && expansionState.snapshot == request.expansionState
+            },
+            shouldApply: shouldApply,
+            apply: { [weak self] buildResult in
+                guard let self else {
+                    return
+                }
+                applyRenderedRowsBuildResult(
+                    buildResult,
+                    resetFragments: resetFragments,
+                    previousRows: previousRows,
+                    previousText: previousText
+                )
+            }
+        )
+    }
+
+    private func applyRenderedRowsBuildResult(
+        _ buildResult: DOMTreeTextView.RenderedRowsBuildResult,
+        resetFragments: Bool,
+        previousRows: [DOMTreeTextView.Line],
+        previousText: String
+    ) {
         rows = buildResult.rows
-        lastObservedTreeContent = DOMTreeTextView.ObservedContent(buildResult)
-        renderedRowsBuilder.pruneCachedMarkup(keeping: renderedRows.visibleNodeIDs)
+        lastObservedTreeContent = buildResult.observedContent
+        renderedRowsBuildCoordinator.pruneCachedMarkup(keeping: renderedRows.visibleNodeIDs)
         reconcileMultiSelectionAfterReload()
         renderedText = buildResult.text
         clampTextSelectionAfterTextChange()
@@ -607,91 +651,6 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         multiSelection.reset()
         dismissDOMMenuAnchor()
         clearTextSelection()
-    }
-
-    private func applyContentInvalidation(affectedKeys: Set<DOMNode.ID>) -> Bool {
-        guard !rows.isEmpty else {
-            return false
-        }
-
-        let affectedRowIndices = affectedKeys.compactMap { renderedRows.rowIndex(for: $0) }
-        guard !affectedRowIndices.isEmpty else {
-            return true
-        }
-        guard affectedRowIndices.count <= max(8, rows.count / 4) else {
-            return false
-        }
-
-        var nextRows = rows
-        let mutableText = NSMutableString(string: renderedText)
-        var replacements: [(range: NSRange, text: String)] = []
-        var changedRowIndices = Set<Int>()
-        var nextMaxLineDisplayColumnCount = maxLineDisplayColumnCount
-        var needsMaxLineDisplayColumnCountRebuild = false
-
-        for rowIndex in affectedRowIndices.sorted(by: >) {
-            let previousRow = nextRows[rowIndex]
-            let nextRow = renderedRowsBuilder.rebuildRow(previousRow, rowIndex: rowIndex)
-            guard !previousRow.hasSameRenderedContent(as: nextRow) else {
-                continue
-            }
-
-            replacements.append((previousRow.textRange, nextRow.text))
-            mutableText.replaceCharacters(in: previousRow.textRange, with: nextRow.text)
-            nextRows[rowIndex] = nextRow
-            changedRowIndices.insert(rowIndex)
-            if nextRow.displayColumnCount > nextMaxLineDisplayColumnCount {
-                nextMaxLineDisplayColumnCount = nextRow.displayColumnCount
-            } else if previousRow.displayColumnCount == maxLineDisplayColumnCount,
-                      nextRow.displayColumnCount < previousRow.displayColumnCount {
-                needsMaxLineDisplayColumnCountRebuild = true
-            }
-
-            let delta = nextRow.textRange.length - previousRow.textRange.length
-            guard delta != 0, rowIndex + 1 < nextRows.count else {
-                continue
-            }
-            for shiftedIndex in (rowIndex + 1)..<nextRows.count {
-                nextRows[shiftedIndex] = nextRows[shiftedIndex].offsettingTextRange(by: delta)
-            }
-        }
-
-        guard !replacements.isEmpty else {
-            requestChildrenForOpenRowsIfNeeded()
-            updateContentDecorations()
-            revealPendingSelectedNodeIfPossible()
-            return true
-        }
-
-        rows = nextRows
-        renderedText = mutableText as String
-        clampTextSelectionAfterTextChange()
-        maxLineDisplayColumnCount = needsMaxLineDisplayColumnCountRebuild
-            ? recomputeMaxLineDisplayColumnCount()
-            : nextMaxLineDisplayColumnCount
-        updateMeasuredTextWidth()
-        pruneChildRequestState()
-        requestChildrenForOpenRowsIfNeeded()
-
-        textContentStorage.performEditingTransaction {
-            for replacement in replacements {
-                textStorage.replaceCharacters(in: replacement.range, with: replacement.text)
-            }
-        }
-#if DEBUG
-        performanceCounters.incrementalTextStorageEditCallCount += 1
-#endif
-
-        let changedRows = changedRowIndices.sorted().map { rows[$0] }
-        applyTextAttributes(to: changedRows)
-        setNeedsDisplayForTextRanges(changedRows.map(\.textRange))
-        clearFindDecorations()
-        findCoordinator.invalidateResultsAfterTextChange()
-        updateTextLayoutGeometry()
-        updateContentDecorations()
-        setNeedsLayout()
-        revealPendingSelectedNodeIfPossible()
-        return true
     }
 
     private func prepareSelectionForRendering(clearsMultiSelectionForDocumentSelection: Bool = false) {
@@ -742,14 +701,6 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         }
     }
 
-    private func recomputeMaxLineDisplayColumnCount() -> Int {
-        var maxColumnCount = 0
-        for row in rows where row.displayColumnCount > maxColumnCount {
-            maxColumnCount = row.displayColumnCount
-        }
-        return maxColumnCount
-    }
-
     private func updateMeasuredTextWidth() {
         measuredTextWidth = CGFloat(maxLineDisplayColumnCount) * Self.characterWidth
     }
@@ -768,7 +719,10 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
             return
         }
         for row in rows where row.hasDisclosure && row.isOpen {
-            requestChildrenIfNeeded(for: row.node)
+            guard let node = dom.node(for: row.nodeID) else {
+                continue
+            }
+            requestChildrenIfNeeded(for: node)
         }
     }
 
@@ -790,14 +744,14 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func toggle(row: DOMTreeTextView.Line) {
-        expansionState.setIsOpen(!row.isOpen, for: row.node.id)
+        expansionState.setIsOpen(!row.isOpen, for: row.nodeID)
         reloadTree(resetFragments: false)
     }
 
-    private func select(_ node: DOMNode) {
-        multiSelection.notePrimarySelection(node.id)
-        dom.selectNode(node.id)
-        highlightPageNode(node.id, reason: .selection)
+    private func select(_ nodeID: DOMNode.ID) {
+        multiSelection.notePrimarySelection(nodeID)
+        dom.selectNode(nodeID)
+        highlightPageNode(nodeID, reason: .selection)
     }
 
     private func toggleMultiSelection(row: DOMTreeTextView.Line) {
@@ -826,7 +780,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
 
         let focusedNodeID = multiSelection.focusedNodeID(
             selectedNodeID: dom.selectedNodeID,
-            fallbackNodeID: rows.first?.node.id
+            fallbackNodeID: rows.first?.nodeID
         )
         guard let focusedNodeID,
               let focusedIndex = renderedRows.rowIndex(for: focusedNodeID)
@@ -853,7 +807,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func multiSelectedNodesInDisplayOrder() -> [DOMNode] {
-        multiSelection.selectedNodesInDisplayOrder(rows: rows)
+        multiSelection.selectedNodeIDsInDisplayOrder(rows: rows).compactMap { dom.node(for: $0) }
     }
 
     private func scrollRowToVisible(_ row: DOMTreeTextView.Line) {
@@ -908,11 +862,11 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func hover(row: DOMTreeTextView.Line) {
-        if hoveredNodeID != row.node.id {
-            hoveredNodeID = row.node.id
+        if hoveredNodeID != row.nodeID {
+            hoveredNodeID = row.nodeID
             updateContentDecorations()
         }
-        highlightPageNode(row.node.id, reason: .hover)
+        highlightPageNode(row.nodeID, reason: .hover)
     }
 
     private func highlightPageNode(_ nodeID: DOMNode.ID, reason: PageHighlightReason) {
@@ -1021,7 +975,10 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     private func uniqueNodesInDisplayOrder(for rows: [DOMTreeTextView.Line]) -> [DOMNode] {
         var seenNodeIDs: Set<DOMNode.ID> = []
         return rows.compactMap { row in
-            seenNodeIDs.insert(row.node.id).inserted ? row.node : nil
+            guard seenNodeIDs.insert(row.nodeID).inserted else {
+                return nil
+            }
+            return dom.node(for: row.nodeID)
         }
     }
 
@@ -1040,7 +997,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func localMarkupText(for nodeID: DOMNode.ID) -> String? {
-        rows.first { !$0.isClosingTag && $0.node.id == nodeID }?.text
+        rows.first { !$0.isClosingTag && $0.nodeID == nodeID }?.text
     }
 
     private func uniqueNodeIDsInDisplayOrder(for nodes: [DOMNode]) -> [DOMNode.ID] {
@@ -1438,7 +1395,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
 
     private func multiSelectionContentRowRects() -> [CGRect] {
         rows.flatMap { row in
-            !row.isClosingTag && multiSelection.contains(row.node.id) ? contentRowRects(for: row) : []
+            !row.isClosingTag && multiSelection.contains(row.nodeID) ? contentRowRects(for: row) : []
         }
     }
 
@@ -2084,7 +2041,7 @@ extension DOMTreeTextView {
         guard let row = rows.first(where: { $0.text.contains(text) }) else {
             return
         }
-        renderedRows.removeRowIndex(for: row.node.id)
+        renderedRows.removeRowIndex(for: row.nodeID)
     }
 
     var disclosureAttachmentSnapshotsForTesting: [DisclosureAttachmentSnapshot] {
@@ -2149,7 +2106,7 @@ extension DOMTreeTextView {
         guard let row = rows.first(where: { $0.text.contains(text) }) else {
             return
         }
-        select(row.node)
+        select(row.nodeID)
     }
 
     func toggleRowForTesting(containing text: String) {
@@ -2170,8 +2127,8 @@ extension DOMTreeTextView {
         } else if modifiers.contains(.command) || modifiers.contains(.control) {
             toggleMultiSelection(row: row)
         } else {
-            clearMultiSelection(keepingLast: row.node.id)
-            select(row.node)
+            clearMultiSelection(keepingLast: row.nodeID)
+            select(row.nodeID)
         }
     }
 
@@ -2200,8 +2157,13 @@ extension DOMTreeTextView {
         findCoordinator.decorateStaleFoundTextForTesting(queryString: query)
     }
 
-    func synchronizeDocumentForTesting() {
+    func synchronizeDocumentForTesting() async {
         reloadTree(resetFragments: true)
+        await waitForRenderedRowsForTesting()
+    }
+
+    func waitForRenderedRowsForTesting() async {
+        await renderedRowsBuildCoordinator.waitForCurrentBuild()
     }
 
     func selectedRowRectsForTesting() -> [CGRect] {

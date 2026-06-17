@@ -38,7 +38,7 @@ extension DOMTreeTextView {
 }
 
 extension DOMTreeTextView {
-    struct ObservedLine: Equatable {
+    struct ObservedLine: Equatable, Sendable {
         var nodeID: DOMNode.ID
         var depth: Int
         var text: String
@@ -48,9 +48,8 @@ extension DOMTreeTextView {
         var isOpen: Bool
         var isClosingTag: Bool
 
-        @MainActor
         init(_ line: DOMTreeTextView.Line) {
-            nodeID = line.node.id
+            nodeID = line.nodeID
             depth = line.depth
             text = line.text
             tokens = line.tokens
@@ -63,12 +62,11 @@ extension DOMTreeTextView {
 }
 
 extension DOMTreeTextView {
-    struct ObservedContent: Equatable {
+    struct ObservedContent: Equatable, Sendable {
         var lines: [DOMTreeTextView.ObservedLine]
         var text: String
         var maxLineDisplayColumnCount: Int
 
-        @MainActor
         init(_ buildResult: (rows: [DOMTreeTextView.Line], text: String, maxLineDisplayColumnCount: Int)) {
             lines = buildResult.rows.map(DOMTreeTextView.ObservedLine.init)
             text = buildResult.text
@@ -135,10 +133,10 @@ extension DOMTreeTextView {
             var nextVisibleNodeIDs = Set<DOMNode.ID>()
             nextVisibleNodeIDs.reserveCapacity(rows.count)
             for row in rows {
-                if !row.isClosingTag, nextRowIndexByNodeID[row.node.id] == nil {
-                    nextRowIndexByNodeID[row.node.id] = row.rowIndex
+                if !row.isClosingTag, nextRowIndexByNodeID[row.nodeID] == nil {
+                    nextRowIndexByNodeID[row.nodeID] = row.rowIndex
                 }
-                nextVisibleNodeIDs.insert(row.node.id)
+                nextVisibleNodeIDs.insert(row.nodeID)
             }
             rowIndexByNodeID = nextRowIndexByNodeID
             visibleNodeIDs = nextVisibleNodeIDs
@@ -193,9 +191,9 @@ extension DOMTreeTextView {
                 clear(keepingLast: nil)
                 return
             }
-            selectedNodeIDs = Set(rows.map(\.node.id))
-            lastNodeID = rows.last?.node.id
-            shiftAnchorNodeID = rows.first?.node.id
+            selectedNodeIDs = Set(rows.map(\.nodeID))
+            lastNodeID = rows.last?.nodeID
+            shiftAnchorNodeID = rows.first?.nodeID
             shiftRangeNodeIDs = selectedNodeIDs
         }
 
@@ -213,17 +211,17 @@ extension DOMTreeTextView {
                 }
             }
 
-            if nextSelectedNodeIDs.contains(row.node.id) {
-                nextSelectedNodeIDs.remove(row.node.id)
+            if nextSelectedNodeIDs.contains(row.nodeID) {
+                nextSelectedNodeIDs.remove(row.nodeID)
             } else {
-                nextSelectedNodeIDs.insert(row.node.id)
+                nextSelectedNodeIDs.insert(row.nodeID)
             }
             if nextSelectedNodeIDs.isEmpty {
-                nextSelectedNodeIDs.insert(row.node.id)
+                nextSelectedNodeIDs.insert(row.nodeID)
             }
 
             selectedNodeIDs = nextSelectedNodeIDs
-            lastNodeID = row.node.id
+            lastNodeID = row.nodeID
             shiftAnchorNodeID = nil
             shiftRangeNodeIDs.removeAll(keepingCapacity: true)
         }
@@ -239,8 +237,8 @@ extension DOMTreeTextView {
             ) else {
                 return false
             }
-            let rangeRows = renderedRows.rowsBetween(anchorNodeID, row.node.id)
-            let rangeNodeIDs = Set(rangeRows.map(\.node.id))
+            let rangeRows = renderedRows.rowsBetween(anchorNodeID, row.nodeID)
+            let rangeNodeIDs = Set(rangeRows.map(\.nodeID))
             guard !rangeNodeIDs.isEmpty else {
                 return false
             }
@@ -257,7 +255,7 @@ extension DOMTreeTextView {
             selectedNodeIDs = nextSelectedNodeIDs
             shiftAnchorNodeID = anchorNodeID
             shiftRangeNodeIDs = rangeNodeIDs
-            lastNodeID = row.node.id
+            lastNodeID = row.nodeID
             return true
         }
 
@@ -315,9 +313,9 @@ extension DOMTreeTextView {
             return false
         }
 
-        func selectedNodesInDisplayOrder(rows: [DOMTreeTextView.Line]) -> [DOMNode] {
+        func selectedNodeIDsInDisplayOrder(rows: [DOMTreeTextView.Line]) -> [DOMNode.ID] {
             rows.compactMap { row in
-                !row.isClosingTag && selectedNodeIDs.contains(row.node.id) ? row.node : nil
+                !row.isClosingTag && selectedNodeIDs.contains(row.nodeID) ? row.nodeID : nil
             }
         }
 
@@ -337,7 +335,7 @@ extension DOMTreeTextView {
                renderedRows.contains(nodeID: selectedNodeID) {
                 return selectedNodeID
             }
-            return renderedRows.rows.first?.node.id
+            return renderedRows.rows.first?.nodeID
         }
 
         private func hasStateForClearing(keepingLast nodeID: DOMNode.ID) -> Bool {
@@ -350,9 +348,8 @@ extension DOMTreeTextView {
 }
 
 extension DOMTreeTextView {
-    @MainActor
-    struct Line {
-        let node: DOMNode
+    struct Line: Sendable {
+        let nodeID: DOMNode.ID
         let depth: Int
         let rowIndex: Int
         let text: String
@@ -365,7 +362,7 @@ extension DOMTreeTextView {
         let isClosingTag: Bool
 
         func hasSameRenderedContent(as other: DOMTreeTextView.Line) -> Bool {
-            node.id == other.node.id
+            nodeID == other.nodeID
                 && depth == other.depth
                 && text == other.text
                 && tokens == other.tokens
@@ -374,34 +371,18 @@ extension DOMTreeTextView {
                 && isOpen == other.isOpen
                 && isClosingTag == other.isClosingTag
         }
-
-        func offsettingTextRange(by delta: Int) -> DOMTreeTextView.Line {
-            DOMTreeTextView.Line(
-                node: node,
-                depth: depth,
-                rowIndex: rowIndex,
-                text: text,
-                textRange: NSRange(location: textRange.location + delta, length: textRange.length),
-                markupRange: markupRange,
-                tokens: tokens,
-                displayColumnCount: displayColumnCount,
-                hasDisclosure: hasDisclosure,
-                isOpen: isOpen,
-                isClosingTag: isClosingTag
-            )
-        }
     }
 }
 
 extension DOMTreeTextView {
-    struct Token: Equatable {
+    struct Token: Equatable, Sendable {
         let kind: DOMTreeTextView.Token.Kind
         let range: NSRange
     }
 }
 
 extension DOMTreeTextView {
-    struct RowDiff {
+    struct RowDiff: Sendable {
         let previousStart: Int
         let previousEnd: Int
         let nextStart: Int
@@ -410,15 +391,7 @@ extension DOMTreeTextView {
 }
 
 extension DOMTreeTextView {
-    enum Invalidation: Equatable {
-        case documentReset
-        case structural(affectedKeys: Set<DOMNode.ID>)
-        case content(affectedKeys: Set<DOMNode.ID>)
-    }
-}
-
-extension DOMTreeTextView {
-    struct MarkupSignature: Hashable {
+    struct MarkupSignature: Hashable, Sendable {
         let nodeType: DOMNode.Kind
         let nodeName: String
         let localName: String
@@ -435,14 +408,14 @@ extension DOMTreeTextView {
 }
 
 extension DOMTreeTextView {
-    struct CachedMarkup {
+    struct CachedMarkup: Sendable {
         let signature: DOMTreeTextView.MarkupSignature
         let markup: DOMTreeTextView.Markup
     }
 }
 
 extension DOMTreeTextView.Token {
-    enum Kind: String {
+    enum Kind: String, Sendable {
         case punctuation
         case tagName
         case attributeName
@@ -537,35 +510,6 @@ extension DOMTreeTextView {
             findBackground: .domTreeDynamic(light: 0xFFC947, dark: 0xFFDB73, lightAlpha: 0.42, darkAlpha: 0.35),
             currentFindBackground: .domTreeDynamic(light: 0xFFC947, dark: 0xFFDB73, lightAlpha: 0.62, darkAlpha: 0.52)
         )
-    }
-}
-
-extension DOMTreeTextView.Invalidation {
-    var requiresImmediateReload: Bool {
-        if case .documentReset = self {
-            return true
-        }
-        return false
-    }
-
-    var requiresTextFragmentReset: Bool {
-        if case .documentReset = self {
-            return true
-        }
-        return false
-    }
-
-    func merged(with other: DOMTreeTextView.Invalidation) -> DOMTreeTextView.Invalidation {
-        switch (self, other) {
-        case (.documentReset, _), (_, .documentReset):
-            return .documentReset
-        case let (.structural(lhs), .structural(rhs)),
-             let (.structural(lhs), .content(rhs)),
-             let (.content(lhs), .structural(rhs)):
-            return .structural(affectedKeys: lhs.union(rhs))
-        case let (.content(lhs), .content(rhs)):
-            return .content(affectedKeys: lhs.union(rhs))
-        }
     }
 }
 
