@@ -1,5 +1,6 @@
 #if canImport(UIKit)
 import WebInspectorCore
+import Observation
 import UIKit
 
 @MainActor
@@ -14,66 +15,18 @@ package struct DOMElementStylePresentationItemIdentifier: Hashable {
 }
 
 @MainActor
-package struct DOMElementStylePresentationSnapshot {
-    package struct Section {
-        package var source: CSSStyle.Section
-        package var items: [DOMElementStylePresentationItemIdentifier]
-    }
-
-    fileprivate var sourceSections: [CSSStyle.Section]
-    private var visibleSections: [Section]
-
-    package init(
-        sourceSections: [CSSStyle.Section],
-        visibleSections: [Section]
-    ) {
-        self.sourceSections = sourceSections
-        self.visibleSections = visibleSections
-    }
-
-    package func diffableSnapshot() -> NSDiffableDataSourceSnapshot<
-        CSSStyle.Section.ID,
-        DOMElementStylePresentationItemIdentifier
-    > {
-        var snapshot = NSDiffableDataSourceSnapshot<
-            CSSStyle.Section.ID,
-            DOMElementStylePresentationItemIdentifier
-        >()
-        for section in visibleSections {
-            snapshot.appendSections([section.source.id])
-            snapshot.appendItems(section.items, toSection: section.source.id)
-        }
-        return snapshot
-    }
-
-    package func section(for sectionID: CSSStyle.Section.ID) -> CSSStyle.Section? {
-        sourceSections.first { $0.id == sectionID }
-    }
-
-    package func property(
-        for item: DOMElementStylePresentationItemIdentifier,
-        in section: CSSStyle.Section
-    ) -> CSSProperty? {
-        guard case let .property(propertyID, propertyIndex) = item.kind else {
-            return nil
-        }
-        if let propertyID {
-            return section.style.cssProperties.first { $0.id == propertyID }
-        }
-        guard section.style.cssProperties.indices.contains(propertyIndex) else {
-            return nil
-        }
-        return section.style.cssProperties[propertyIndex]
-    }
+package struct DOMElementStylePresentationSection {
+    package var id: CSSStyle.Section.ID
+    package var items: [DOMElementStylePresentationItemIdentifier]
 }
 
 @MainActor
-package struct DOMElementStyleSnapshotBuilder {
-    package static func makeSnapshot(
+package enum DOMElementStyleDiffableSnapshotBuilder {
+    package static func visibleSections(
         sections: [CSSStyle.Section],
         expandedUnusedVariableSectionIDs: Set<CSSStyle.Section.ID>
-    ) -> DOMElementStylePresentationSnapshot {
-        var visibleSections: [DOMElementStylePresentationSnapshot.Section] = []
+    ) -> [DOMElementStylePresentationSection] {
+        var visibleSections: [DOMElementStylePresentationSection] = []
         let usedCSSVariables = DOMElementStyleVariableVisibility.usedCSSVariableNames(in: sections)
 
         for section in sections where !section.style.cssProperties.isEmpty {
@@ -107,46 +60,64 @@ package struct DOMElementStyleSnapshotBuilder {
                 )
             }
             visibleSections.append(
-                DOMElementStylePresentationSnapshot.Section(
-                    source: section,
+                DOMElementStylePresentationSection(
+                    id: section.id,
                     items: items
                 )
             )
         }
 
-        return DOMElementStylePresentationSnapshot(
-            sourceSections: sections,
-            visibleSections: visibleSections
-        )
+        return visibleSections
+    }
+
+    package static func makeSnapshot(
+        visibleSections: [DOMElementStylePresentationSection]
+    ) -> NSDiffableDataSourceSnapshot<
+        CSSStyle.Section.ID,
+        DOMElementStylePresentationItemIdentifier
+    > {
+        var snapshot = NSDiffableDataSourceSnapshot<
+            CSSStyle.Section.ID,
+            DOMElementStylePresentationItemIdentifier
+        >()
+        for section in visibleSections {
+            snapshot.appendSections([section.id])
+            snapshot.appendItems(section.items, toSection: section.id)
+        }
+        return snapshot
     }
 }
 
 @MainActor
-package struct DOMElementStylePresentationModel {
+@Observable
+package final class DOMElementStylePresentationState {
     package enum RenderResult {
-        case loaded(DOMElementStylePresentationSnapshot)
+        case loaded(
+            NSDiffableDataSourceSnapshot<
+                CSSStyle.Section.ID,
+                DOMElementStylePresentationItemIdentifier
+            >
+        )
         case pending
         case unavailable
     }
 
-    private var expandedUnusedVariableSectionIDs = Set<CSSStyle.Section.ID>()
-    private var displayedSnapshot: DOMElementStylePresentationSnapshot?
+    @ObservationIgnored private var expandedUnusedVariableSectionIDs = Set<CSSStyle.Section.ID>()
+    @ObservationIgnored private var displayedNodeStyles: CSSNodeStyles?
+    @ObservationIgnored private var visibleSections: [DOMElementStylePresentationSection] = []
 
-    package var snapshot: DOMElementStylePresentationSnapshot? {
-        displayedSnapshot
+    package init() {}
+
+    package var visibleSectionIDs: [CSSStyle.Section.ID] {
+        visibleSections.map(\.id)
     }
 
-    package mutating func render(_ nodeStyles: CSSNodeStyles) -> RenderResult {
+    package func render(_ nodeStyles: CSSNodeStyles) -> RenderResult {
         switch nodeStyles.phase {
         case .loaded:
-            let currentSectionIDs = Set(nodeStyles.sections.map(\.id))
-            expandedUnusedVariableSectionIDs.formIntersection(currentSectionIDs)
-            let snapshot = DOMElementStyleSnapshotBuilder.makeSnapshot(
-                sections: nodeStyles.sections,
-                expandedUnusedVariableSectionIDs: expandedUnusedVariableSectionIDs
-            )
-            displayedSnapshot = snapshot
-            return .loaded(snapshot)
+            displayedNodeStyles = nodeStyles
+            rebuildVisibleSections()
+            return .loaded(diffableSnapshot())
         case .loading, .needsRefresh:
             return renderPending()
         case .unavailable, .failed:
@@ -154,11 +125,12 @@ package struct DOMElementStylePresentationModel {
         }
     }
 
-    package mutating func render(_ phase: CSSNodeStyles.Phase) -> RenderResult {
+    package func render(_ phase: CSSNodeStyles.Phase) -> RenderResult {
         switch phase {
         case .loaded:
-            if let displayedSnapshot {
-                return .loaded(displayedSnapshot)
+            if displayedNodeStyles != nil {
+                rebuildVisibleSections()
+                return .loaded(diffableSnapshot())
             }
             return renderUnavailable()
         case .loading, .needsRefresh:
@@ -168,32 +140,79 @@ package struct DOMElementStylePresentationModel {
         }
     }
 
-    package mutating func showHiddenUnusedVariables(
+    package func showHiddenUnusedVariables(
         in sectionID: CSSStyle.Section.ID
-    ) -> DOMElementStylePresentationSnapshot? {
-        guard let displayedSnapshot else {
+    ) -> NSDiffableDataSourceSnapshot<
+        CSSStyle.Section.ID,
+        DOMElementStylePresentationItemIdentifier
+    >? {
+        guard let displayedNodeStyles else {
+            return nil
+        }
+        let currentSectionIDs = Set(displayedNodeStyles.sections.map(\.id))
+        expandedUnusedVariableSectionIDs.formIntersection(currentSectionIDs)
+        guard currentSectionIDs.contains(sectionID) else {
             return nil
         }
         expandedUnusedVariableSectionIDs.insert(sectionID)
-        let snapshot = DOMElementStyleSnapshotBuilder.makeSnapshot(
-            sections: displayedSnapshot.sourceSections,
-            expandedUnusedVariableSectionIDs: expandedUnusedVariableSectionIDs
-        )
-        self.displayedSnapshot = snapshot
-        return snapshot
+        rebuildVisibleSections()
+        return diffableSnapshot()
     }
 
-    private mutating func renderPending() -> RenderResult {
-        guard displayedSnapshot != nil else {
+    package func section(for sectionID: CSSStyle.Section.ID) -> CSSStyle.Section? {
+        displayedNodeStyles?.sections.first { $0.id == sectionID }
+    }
+
+    package func property(
+        for item: DOMElementStylePresentationItemIdentifier,
+        in section: CSSStyle.Section
+    ) -> CSSProperty? {
+        guard case let .property(propertyID, propertyIndex) = item.kind else {
+            return nil
+        }
+        if let propertyID {
+            return section.style.cssProperties.first { $0.id == propertyID }
+        }
+        guard section.style.cssProperties.indices.contains(propertyIndex) else {
+            return nil
+        }
+        return section.style.cssProperties[propertyIndex]
+    }
+
+    private func renderPending() -> RenderResult {
+        guard displayedNodeStyles != nil else {
             return renderUnavailable()
         }
         return .pending
     }
 
-    private mutating func renderUnavailable() -> RenderResult {
+    private func renderUnavailable() -> RenderResult {
         expandedUnusedVariableSectionIDs.removeAll()
-        displayedSnapshot = nil
+        displayedNodeStyles = nil
+        visibleSections = []
         return .unavailable
+    }
+
+    private func rebuildVisibleSections() {
+        guard let displayedNodeStyles else {
+            visibleSections = []
+            return
+        }
+        let currentSectionIDs = Set(displayedNodeStyles.sections.map(\.id))
+        expandedUnusedVariableSectionIDs.formIntersection(currentSectionIDs)
+        visibleSections = DOMElementStyleDiffableSnapshotBuilder.visibleSections(
+            sections: displayedNodeStyles.sections,
+            expandedUnusedVariableSectionIDs: expandedUnusedVariableSectionIDs
+        )
+    }
+
+    private func diffableSnapshot() -> NSDiffableDataSourceSnapshot<
+        CSSStyle.Section.ID,
+        DOMElementStylePresentationItemIdentifier
+    > {
+        DOMElementStyleDiffableSnapshotBuilder.makeSnapshot(
+            visibleSections: visibleSections
+        )
     }
 }
 #endif

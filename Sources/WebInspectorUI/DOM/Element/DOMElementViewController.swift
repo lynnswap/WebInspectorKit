@@ -9,7 +9,7 @@ package final class DOMElementViewController: UICollectionViewController {
     private var elementStylesObservation: PortableObservationTracking.Token?
     private var selectedNodeStyleObservation: PortableObservationTracking.Token?
     private var observedNodeStylesID: ObjectIdentifier?
-    private var stylePresentationModel = DOMElementStylePresentationModel()
+    private let stylePresentationState = DOMElementStylePresentationState()
 
 #if DEBUG
     private struct StyleRenderWaiter {
@@ -218,14 +218,14 @@ package final class DOMElementViewController: UICollectionViewController {
     }
 
     private func render(_ nodeStyles: CSSNodeStyles) {
-        render(stylePresentationModel.render(nodeStyles))
+        render(stylePresentationState.render(nodeStyles))
     }
 
     private func render(_ state: CSSNodeStyles.Phase) {
-        render(stylePresentationModel.render(state))
+        render(stylePresentationState.render(state))
     }
 
-    private func render(_ result: DOMElementStylePresentationModel.RenderResult) {
+    private func render(_ result: DOMElementStylePresentationState.RenderResult) {
         switch result {
         case let .loaded(snapshot):
             renderStyles(snapshot)
@@ -258,7 +258,12 @@ package final class DOMElementViewController: UICollectionViewController {
 #endif
     }
 
-    private func renderStyles(_ snapshot: DOMElementStylePresentationSnapshot) {
+    private func renderStyles(
+        _ snapshot: NSDiffableDataSourceSnapshot<
+            CSSStyle.Section.ID,
+            DOMElementStylePresentationItemIdentifier
+        >
+    ) {
         if contentUnavailableConfiguration != nil {
             contentUnavailableConfiguration = nil
         }
@@ -278,10 +283,12 @@ package final class DOMElementViewController: UICollectionViewController {
     }
 
     private func applySnapshot(
-        _ presentationSnapshot: DOMElementStylePresentationSnapshot,
+        _ snapshot: NSDiffableDataSourceSnapshot<
+            CSSStyle.Section.ID,
+            DOMElementStylePresentationItemIdentifier
+        >,
         animatingDifferences: Bool = false
     ) {
-        let snapshot = presentationSnapshot.diffableSnapshot()
         let currentSnapshot = dataSource.snapshot()
 #if DEBUG
         lastSnapshotAnimatedForTesting = animatingDifferences
@@ -310,18 +317,18 @@ package final class DOMElementViewController: UICollectionViewController {
     }
 
     private func section(for sectionID: CSSStyle.Section.ID) -> CSSStyle.Section? {
-        stylePresentationModel.snapshot?.section(for: sectionID)
+        stylePresentationState.section(for: sectionID)
     }
 
     private func property(
         for item: DOMElementStylePresentationItemIdentifier,
         in section: CSSStyle.Section
     ) -> CSSProperty? {
-        stylePresentationModel.snapshot?.property(for: item, in: section)
+        stylePresentationState.property(for: item, in: section)
     }
 
     private func showHiddenUnusedVariables(in sectionID: CSSStyle.Section.ID) {
-        guard let snapshot = stylePresentationModel.showHiddenUnusedVariables(in: sectionID) else {
+        guard let snapshot = stylePresentationState.showHiddenUnusedVariables(in: sectionID) else {
             return
         }
         applySnapshot(snapshot, animatingDifferences: true)
