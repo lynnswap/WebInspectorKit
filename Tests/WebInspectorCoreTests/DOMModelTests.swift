@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import WebInspectorTransport
 @testable import WebInspectorCore
@@ -950,6 +951,119 @@ func childNodeInsertedUsesWebKitPreviousSiblingSemantics() async throws {
     #expect(snapshot.nodesByID[cID]?.nextSiblingID == nil)
 }
 
+#if DEBUG
+@Test
+@MainActor
+func domProtocolMutationEventsResolveRawNodeIDsWithoutBuildingSnapshots() throws {
+    let pageTargetID = ProtocolTarget.ID("page-main")
+    let session = DOMSession()
+
+    session.applyTargetCreated(.init(id: pageTargetID, kind: .page), makeCurrentMainPage: true)
+    _ = session.replaceDocumentRoot(
+        document(
+            nodeID: 1,
+            children: [
+                DOMNode.Payload(
+                    nodeID: .init(2),
+                    nodeType: .element,
+                    nodeName: "BODY",
+                    localName: "body",
+                    regularChildren: .unrequested(count: 3)
+                ),
+            ]
+        ),
+        targetID: pageTargetID
+    )
+
+    let baselineSnapshotBuildCount = session.snapshotBuildCountForTesting
+
+    try session.protocolCommands.applyDOMEvent(
+        domProtocolEvent(
+            "DOM.setChildNodes",
+            targetID: pageTargetID,
+            sequence: 1,
+            params: """
+            {
+              "parentId": 2,
+              "nodes": [
+                {"nodeId": 3, "nodeType": 1, "nodeName": "A", "localName": "a"},
+                {"nodeId": 4, "nodeType": 1, "nodeName": "SECTION", "localName": "section", "childNodeCount": 0},
+                {"nodeId": 6, "nodeType": 1, "nodeName": "ASIDE", "localName": "aside"}
+              ]
+            }
+            """
+        ),
+        to: session
+    )
+    try session.protocolCommands.applyDOMEvent(
+        domProtocolEvent(
+            "DOM.childNodeInserted",
+            targetID: pageTargetID,
+            sequence: 2,
+            params: """
+            {
+              "parentNodeId": 2,
+              "previousNodeId": 3,
+              "node": {"nodeId": 5, "nodeType": 1, "nodeName": "SPAN", "localName": "span"}
+            }
+            """
+        ),
+        to: session
+    )
+    try session.protocolCommands.applyDOMEvent(
+        domProtocolEvent(
+            "DOM.childNodeCountUpdated",
+            targetID: pageTargetID,
+            sequence: 3,
+            params: #"{"nodeId": 4, "childNodeCount": 2}"#
+        ),
+        to: session
+    )
+    try session.protocolCommands.applyDOMEvent(
+        domProtocolEvent(
+            "DOM.attributeModified",
+            targetID: pageTargetID,
+            sequence: 4,
+            params: #"{"nodeId": 5, "name": "class", "value": "inserted"}"#
+        ),
+        to: session
+    )
+    try session.protocolCommands.applyDOMEvent(
+        domProtocolEvent(
+            "DOM.attributeRemoved",
+            targetID: pageTargetID,
+            sequence: 5,
+            params: #"{"nodeId": 5, "name": "class"}"#
+        ),
+        to: session
+    )
+    try session.protocolCommands.applyDOMEvent(
+        domProtocolEvent(
+            "DOM.childNodeRemoved",
+            targetID: pageTargetID,
+            sequence: 6,
+            params: #"{"nodeId": 6}"#
+        ),
+        to: session
+    )
+
+    #expect(session.snapshotBuildCountForTesting == baselineSnapshotBuildCount)
+
+    let snapshot = session.snapshot()
+    let bodyID = try #require(snapshot.currentNodeIDByKey[.init(targetID: pageTargetID, nodeID: .init(2))])
+    let aID = try #require(snapshot.currentNodeIDByKey[.init(targetID: pageTargetID, nodeID: .init(3))])
+    let sectionID = try #require(snapshot.currentNodeIDByKey[.init(targetID: pageTargetID, nodeID: .init(4))])
+    let spanID = try #require(snapshot.currentNodeIDByKey[.init(targetID: pageTargetID, nodeID: .init(5))])
+
+    #expect(snapshot.currentNodeIDByKey[.init(targetID: pageTargetID, nodeID: .init(6))] == nil)
+    #expect(snapshot.nodesByID[bodyID]?.regularChildren.loadedChildren == [aID, spanID, sectionID])
+    #expect(snapshot.nodesByID[spanID]?.previousSiblingID == aID)
+    #expect(snapshot.nodesByID[spanID]?.nextSiblingID == sectionID)
+    #expect(snapshot.nodesByID[sectionID]?.regularChildren.knownCount == 2)
+    #expect(snapshot.nodesByID[spanID]?.attributes.isEmpty == true)
+}
+#endif
+
 @Test
 func directNodeSelectionUpdatesProjectionWithoutSnapshotModel() async throws {
     let pageTargetID = ProtocolTarget.ID("page-main")
@@ -1509,6 +1623,21 @@ func selectionFailureDoesNotMutateTreeFrameOrDocumentModel() async throws {
 
 private func iframeDepth(in projection: DOMTreeProjection, iframeID: DOMNode.ID) -> Int {
     projection.rows.first(where: { $0.nodeID == iframeID })?.depth ?? -1
+}
+
+private func domProtocolEvent(
+    _ method: String,
+    targetID: ProtocolTarget.ID,
+    sequence: UInt64,
+    params: String
+) -> ProtocolEvent {
+    ProtocolEvent(
+        sequence: sequence,
+        domain: .dom,
+        method: method,
+        targetID: targetID,
+        paramsData: Data(params.utf8)
+    )
 }
 
 private func document(

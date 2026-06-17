@@ -149,7 +149,6 @@ package struct DOMProtocolCommands {
         switch event.method {
         case "DOM.setChildNodes":
             let params = try TransportMessageParser.decode(SetChildNodesParams.self, from: event.paramsData)
-            let snapshot = session.snapshot()
             if params.parentId.rawValue == 0 {
                 guard let detachedRoot = params.nodes.first?.payload else {
                     return
@@ -157,7 +156,7 @@ package struct DOMProtocolCommands {
                 session.applyDetachedRoot(targetID: targetID, payload: detachedRoot, eventSequence: event.sequence)
                 return
             }
-            if let parentID = snapshot.currentNodeIDByKey[.init(targetID: targetID, nodeID: params.parentId)] {
+            if let parentID = session.currentNodeID(targetID: targetID, rawNodeID: params.parentId) {
                 session.applySetChildNodes(parent: parentID, children: params.nodes.map(\.payload), eventSequence: event.sequence)
             } else {
                 session.applySetChildNodes(
@@ -169,39 +168,34 @@ package struct DOMProtocolCommands {
             }
         case "DOM.childNodeInserted":
             let params = try TransportMessageParser.decode(ChildNodeInsertedParams.self, from: event.paramsData)
-            let snapshot = session.snapshot()
-            guard let parentID = snapshot.currentNodeIDByKey[.init(targetID: targetID, nodeID: params.parentNodeId)] else {
+            guard let parentID = session.currentNodeID(targetID: targetID, rawNodeID: params.parentNodeId) else {
                 return
             }
             let previousSiblingID = params.previousNodeId.flatMap {
-                snapshot.currentNodeIDByKey[.init(targetID: targetID, nodeID: $0)]
+                session.currentNodeID(targetID: targetID, rawNodeID: $0)
             }
             _ = session.applyChildInserted(parent: parentID, previousSibling: previousSiblingID, child: params.node.payload)
         case "DOM.childNodeRemoved":
             let params = try TransportMessageParser.decode(ChildNodeRemovedParams.self, from: event.paramsData)
-            let snapshot = session.snapshot()
-            guard let nodeID = snapshot.currentNodeIDByKey[.init(targetID: targetID, nodeID: params.nodeId)] else {
+            guard let nodeID = session.currentNodeID(targetID: targetID, rawNodeID: params.nodeId) else {
                 return
             }
             session.applyNodeRemoved(nodeID)
         case "DOM.childNodeCountUpdated":
             let params = try TransportMessageParser.decode(ChildNodeCountUpdatedParams.self, from: event.paramsData)
-            let snapshot = session.snapshot()
-            guard let nodeID = snapshot.currentNodeIDByKey[.init(targetID: targetID, nodeID: params.nodeId)] else {
+            guard let nodeID = session.currentNodeID(targetID: targetID, rawNodeID: params.nodeId) else {
                 return
             }
             session.applyChildNodeCountUpdated(nodeID, count: params.childNodeCount)
         case "DOM.attributeModified":
             let params = try TransportMessageParser.decode(AttributeModifiedParams.self, from: event.paramsData)
-            let snapshot = session.snapshot()
-            guard let nodeID = snapshot.currentNodeIDByKey[.init(targetID: targetID, nodeID: params.nodeId)] else {
+            guard let nodeID = session.currentNodeID(targetID: targetID, rawNodeID: params.nodeId) else {
                 return
             }
             session.applyAttributeModified(nodeID, name: params.name, value: params.value)
         case "DOM.attributeRemoved":
             let params = try TransportMessageParser.decode(AttributeRemovedParams.self, from: event.paramsData)
-            let snapshot = session.snapshot()
-            guard let nodeID = snapshot.currentNodeIDByKey[.init(targetID: targetID, nodeID: params.nodeId)] else {
+            guard let nodeID = session.currentNodeID(targetID: targetID, rawNodeID: params.nodeId) else {
                 return
             }
             session.applyAttributeRemoved(nodeID, name: params.name)
