@@ -21,8 +21,12 @@ package enum DOMElementStyleVariableVisibility {
     }
 
     package static func usedCSSVariableNames(in nodeStyles: CSSNodeStyles) -> Set<String> {
+        usedCSSVariableNames(in: nodeStyles.sections)
+    }
+
+    package static func usedCSSVariableNames(in sections: [CSSStyle.Section]) -> Set<String> {
         var usedVariables = Set<String>()
-        for section in nodeStyles.sections {
+        for section in sections {
             for property in section.style.cssProperties where contributesCSSVariableUsage(property) {
                 if isCSSVariable(property.name) {
                     continue
@@ -34,7 +38,7 @@ package enum DOMElementStyleVariableVisibility {
         var addedReferences = true
         while addedReferences {
             addedReferences = false
-            for section in nodeStyles.sections {
+            for section in sections {
                 for property in section.style.cssProperties
                 where contributesCSSVariableUsage(property)
                     && isCSSVariable(property.name)
