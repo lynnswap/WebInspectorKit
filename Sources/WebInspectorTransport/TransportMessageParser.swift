@@ -34,6 +34,10 @@ package struct TransportMessageParsePolicy: Equatable, Sendable {
     package func shouldParseDetached(_ message: String) -> Bool {
         message.utf8.count >= detachedParsingThresholdBytes
     }
+
+    package func shouldParseDetached(_ data: Data) -> Bool {
+        data.count >= detachedParsingThresholdBytes
+    }
 }
 
 package enum TransportMessageParser {
@@ -84,6 +88,19 @@ package enum TransportMessageParser {
 
     package static func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
         try JSONDecoder().decode(type, from: data)
+    }
+
+    package static func decodeAsync<T: Decodable & Sendable>(
+        _ type: T.Type,
+        from data: Data,
+        policy: TransportMessageParsePolicy = .default
+    ) async throws -> T {
+        guard policy.shouldParseDetached(data) else {
+            return try decode(type, from: data)
+        }
+        return try await Task.detached(priority: .userInitiated) {
+            try decode(type, from: data)
+        }.value
     }
 
     package static func jsonObject(from data: Data) throws -> Any {

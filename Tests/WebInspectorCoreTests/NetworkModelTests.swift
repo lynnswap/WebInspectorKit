@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import WebInspectorTransport
 @testable import WebInspectorCore
@@ -211,6 +212,27 @@ func responseReceivedCreatesFetchableResponseBodyAndAppliesFetchedContent() asyn
     #expect(body.textRepresentation?.contains("\n") == true)
     #expect(body.textRepresentation?.contains(#""name""#) == true)
     #expect(body.textRepresentationSyntaxKind == .json)
+}
+
+@Test
+func networkResponseBodyResultDecodesLargePlainAndBase64Payloads() async throws {
+    let commands = NetworkProtocolCommands()
+    let plainBody = String(repeating: "plain-body-", count: 8_192)
+    let plainPayload = try await commands.responseBodyPayload(
+        from: responseBodyResult(body: plainBody, base64Encoded: false)
+    )
+
+    #expect(plainPayload.body == plainBody)
+    #expect(plainPayload.base64Encoded == false)
+
+    let base64Body = Data(String(repeating: "base64-body-", count: 8_192).utf8)
+        .base64EncodedString()
+    let base64Payload = try await commands.responseBodyPayload(
+        from: responseBodyResult(body: base64Body, base64Encoded: true)
+    )
+
+    #expect(base64Payload.body == base64Body)
+    #expect(base64Payload.base64Encoded == true)
 }
 
 @Test
@@ -797,4 +819,23 @@ func loadingFailureOnlyUpdatesMatchingTargetScopedRequest() async throws {
 
     #expect(page.state == .pending)
     #expect(frame.state == .failed(errorText: "cancelled", canceled: true))
+}
+
+private func responseBodyResult(
+    body: String,
+    base64Encoded: Bool
+) throws -> ProtocolCommand.Result {
+    let data = try JSONSerialization.data(
+        withJSONObject: [
+            "body": body,
+            "base64Encoded": base64Encoded,
+        ],
+        options: []
+    )
+    return ProtocolCommand.Result(
+        domain: .network,
+        method: "Network.getResponseBody",
+        targetID: .init("page"),
+        resultData: data
+    )
 }

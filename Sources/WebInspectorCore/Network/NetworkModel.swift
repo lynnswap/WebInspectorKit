@@ -500,13 +500,26 @@ package final class NetworkSession {
             request.markResponseBodyFailed(.unavailable)
             return
         }
+        guard let expectedBody = request.responseBody else {
+            request.markResponseBodyFailed(.unavailable)
+            return
+        }
 
         request.markResponseBodyFetching()
         do {
             let result = try await perform(intent)
-            try protocolCommands.applyResponseBodyResult(result, to: request)
+            let payload = try await protocolCommands.responseBodyPayload(from: result)
+            guard let currentRequest = self.request(for: id),
+                  currentRequest.responseBody === expectedBody else {
+                return
+            }
+            protocolCommands.applyResponseBodyPayload(payload, to: currentRequest)
         } catch {
-            request.markResponseBodyFailed(.unknown(String(describing: error)))
+            guard let currentRequest = self.request(for: id),
+                  currentRequest.responseBody === expectedBody else {
+                return
+            }
+            currentRequest.markResponseBodyFailed(.unknown(String(describing: error)))
             recordError?(InspectorSession.Error(String(describing: error)))
         }
     }

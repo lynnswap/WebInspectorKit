@@ -414,6 +414,50 @@ func networkResponseBodyFetchAppliesResultToCoreRequest() async throws {
 }
 
 @Test
+func networkResponseBodyFetchNoOpsWhenRequestDisappearsBeforeResultApply() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    await receiveTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-stale","frameId":"main-frame","request":{"url":"https://example.com/large.txt"},"timestamp":1}}"#
+    )
+    await receiveAndApplyTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"Network.responseReceived","params":{"requestId":"request-stale","timestamp":2,"type":"Document","response":{"url":"https://example.com/large.txt","status":200,"mimeType":"text/plain","headers":{"content-type":"text/plain"}}}}"#,
+        in: session
+    )
+    await receiveAndApplyTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"Network.loadingFinished","params":{"requestId":"request-stale","timestamp":3}}"#,
+        in: session
+    )
+    let requestID = NetworkRequest.ID(targetID: .pageMain, requestID: .init("request-stale"))
+
+    let sentCount = await backend.sentTargetMessages().count
+    let fetchTask = Task {
+        await session.attachment.network.fetchResponseBody(for: requestID)
+    }
+    let sent = try await waitForTargetMessage(backend, method: "Network.getResponseBody", after: sentCount)
+    await session.attachment.network.reset()
+
+    await receiveTargetReply(
+        transport,
+        targetID: sent.targetIdentifier,
+        messageID: try messageID(sent.message),
+        result: #"{"body":"stale body","base64Encoded":false}"#
+    )
+    await fetchTask.value
+
+    #expect(await session.attachment.network.requestSnapshot(for: requestID) == nil)
+}
+
+@Test
 func networkResponseBodyFetchErrorDoesNotRetry() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
