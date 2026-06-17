@@ -8,7 +8,6 @@ package final class DOMTreeViewController: UIViewController {
     private let treeView: DOMTreeTextView
     private weak var inspection: AttachedInspection?
     private var domRootObservation: PortableObservationTracking.Token?
-    private var isEnsuringDOMDocumentLoaded = false
 
     package var domTreeUndoManager: UndoManager? {
         treeView.undoManager
@@ -125,17 +124,12 @@ package final class DOMTreeViewController: UIViewController {
             return
         }
         guard viewIfLoaded?.window != nil,
-              !isEnsuringDOMDocumentLoaded,
               !hasRoot,
               canReloadDocument else {
             return
         }
 
-        isEnsuringDOMDocumentLoaded = true
-        Task { @MainActor [weak self, weak inspection] in
-            defer {
-                self?.isEnsuringDOMDocumentLoaded = false
-            }
+        Task { @MainActor [weak inspection] in
             _ = await inspection?.dom.ensureDocumentLoaded()
         }
     }

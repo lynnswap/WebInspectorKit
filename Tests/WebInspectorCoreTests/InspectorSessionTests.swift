@@ -2152,6 +2152,57 @@ func ensureDOMDocumentLoadedReloadsInvalidatedPageDocument() async throws {
     #expect(finalSnapshot.currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(40))] != nil)
 }
 
+@Test("Regression: ensureDocumentLoaded coalesces pending page document requests")
+func ensureDOMDocumentLoadedCoalescesPendingPageDocumentRequest() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+
+    await receiveAndApplyTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"DOM.documentUpdated","params":{}}"#,
+        in: session
+    )
+    #expect(await session.attachment.dom.snapshot().currentPageDocumentID == nil)
+
+    let sentCount = await backend.sentTargetMessages().count
+    let firstEnsure = Task {
+        await session.attachment.dom.ensureDocumentLoaded()
+    }
+    let documentRequest = try await waitForTargetMessage(
+        backend,
+        method: "DOM.getDocument",
+        after: sentCount
+    )
+
+    let secondEnsure = Task {
+        await session.attachment.dom.ensureDocumentLoaded()
+    }
+    await Task.yield()
+
+    #expect(
+        await backend.sentTargetMessages().dropFirst(sentCount).compactMap { try? messageMethod($0.message) } == [
+            "DOM.getDocument",
+        ]
+    )
+
+    await receiveTargetReply(
+        transport,
+        targetID: documentRequest.targetIdentifier,
+        messageID: try messageID(documentRequest.message),
+        result: manualReloadDocumentResult
+    )
+
+    #expect(await firstEnsure.value)
+    #expect(await secondEnsure.value)
+
+    let finalSnapshot = await session.attachment.dom.snapshot()
+    #expect(finalSnapshot.currentPageDocumentID?.localDocumentLifetimeID == .init(2))
+    #expect(finalSnapshot.currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(40))] != nil)
+}
+
 @Test("Regression: documentUpdated reopens document request gate while previous getDocument is pending")
 func documentUpdatedAllowsNewDocumentRequestWhilePreviousRequestIsPending() async throws {
     let backend = FakeTransportBackend()
