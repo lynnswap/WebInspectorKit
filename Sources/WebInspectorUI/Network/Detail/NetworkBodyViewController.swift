@@ -52,12 +52,7 @@ final class NetworkBodyViewController: UIViewController {
     private var metadata: NetworkBodyViewController.PreviewMetadata?
     private var hasDisplayedBody = false
     private var mediaPlayerViewController: AVPlayerViewController?
-    private var mediaTemporaryFile: MediaTemporaryFile?
-    private var mediaPreviewGeneration = 0
-    private var mediaPreviewTask: Task<Void, Never>?
-    private var pendingMediaPreviewInput: MediaPreviewInput?
-    private var displayedMediaPreviewIdentity: MediaPreviewIdentity?
-    private var failedMediaPreviewInput: MediaPreviewInput?
+    private var mediaPreviewCoordinator = MediaPreviewCoordinator()
     private var imageWidthConstraint: NSLayoutConstraint?
     private var imageHeightConstraint: NSLayoutConstraint?
     private var shouldResetImageZoomOnNextLayout = false
@@ -94,8 +89,7 @@ final class NetworkBodyViewController: UIViewController {
 
     isolated deinit {
         bodyObservation?.cancel()
-        mediaPreviewTask?.cancel()
-        removeTemporaryMediaFile(at: mediaTemporaryFile?.fileURL)
+        mediaPreviewCoordinator.cancel()
     }
 
     func display(body: NetworkBody?) {
@@ -319,60 +313,27 @@ final class NetworkBodyViewController: UIViewController {
     }
 
     private func renderMediaPreview(for input: MediaPreviewInput) -> Bool {
-        guard failedMediaPreviewInput != input else {
+        let action = mediaPreviewCoordinator.preparePreview(for: input) { [weak self] result, input, generation in
+            self?.applyMediaPreviewResult(result, input: input, generation: generation)
+        }
+        switch action {
+        case .failed:
             hideMediaPreview()
             return false
-        }
-
-        if displayedMediaPreviewIdentity == .body(input) {
+        case .active:
             return true
-        }
-        if pendingMediaPreviewInput == input {
-            return true
-        }
-        if let fileURL = cachedTemporaryMediaFileURL(for: input) {
-            cancelMediaPreviewTask()
-            failedMediaPreviewInput = nil
-            displayedMediaPreviewIdentity = .body(input)
+        case .cachedMovie(let fileURL):
             showMoviePreview(fileURL)
             return true
+        case .startedLoading:
+            showMediaPreviewLoadingState()
+            return true
         }
-
-        startMediaPreviewTask(for: input)
-        return true
     }
 
     private func showRemoteMoviePreview(_ url: URL) {
-        cancelMediaPreviewTask()
-        failedMediaPreviewInput = nil
-        displayedMediaPreviewIdentity = .remoteMovie(url)
+        mediaPreviewCoordinator.prepareRemoteMovie(url)
         showMoviePreview(url)
-    }
-
-    private func startMediaPreviewTask(for input: MediaPreviewInput) {
-        cancelMediaPreviewTask()
-        failedMediaPreviewInput = nil
-        pendingMediaPreviewInput = input
-        mediaPreviewGeneration += 1
-        let generation = mediaPreviewGeneration
-        showMediaPreviewLoadingState(for: input)
-
-        let worker = Task.detached(priority: .utility) {
-            await NetworkBodyViewController.makeMediaPayload(from: input)
-        }
-        let task = Task { @MainActor [weak self, worker] in
-            let result = await withTaskCancellationHandler {
-                await worker.value
-            } onCancel: {
-                worker.cancel()
-            }
-            guard Task.isCancelled == false else {
-                result?.removeTemporaryFile()
-                return
-            }
-            self?.applyMediaPreviewResult(result, input: input, generation: generation)
-        }
-        mediaPreviewTask = task
     }
 
     private func applyMediaPreviewResult(
@@ -380,39 +341,21 @@ final class NetworkBodyViewController: UIViewController {
         input: MediaPreviewInput,
         generation: Int
     ) {
-        guard generation == mediaPreviewGeneration,
-              pendingMediaPreviewInput == input else {
-            result?.removeTemporaryFile()
+        switch mediaPreviewCoordinator.consume(result: result, input: input, generation: generation) {
+        case .ignore:
             return
-        }
-        mediaPreviewTask = nil
-        pendingMediaPreviewInput = nil
-
-        guard let result else {
-            failedMediaPreviewInput = input
-            displayedMediaPreviewIdentity = nil
+        case .fallback:
             renderBody(body)
-            return
-        }
-
-        failedMediaPreviewInput = nil
-        displayedMediaPreviewIdentity = .body(input)
-        switch result {
-        case .image(let image):
+        case .showImage(let image):
             showImagePreview(image)
-        case .movie(let temporaryFile):
-            replaceCachedTemporaryMediaFile(with: temporaryFile)
-            showMoviePreview(temporaryFile.fileURL)
+        case .showMovie(let fileURL):
+            showMoviePreview(fileURL)
         }
     }
 
-    private func showMediaPreviewLoadingState(for input: MediaPreviewInput) {
-        displayedMediaPreviewIdentity = nil
+    private func showMediaPreviewLoadingState() {
         hideImagePreview()
         removeMediaPlayerViewController()
-        if mediaTemporaryFile?.matches(input: input) != true {
-            removeCachedTemporaryMediaFile()
-        }
         if syntaxModel.text.isEmpty == false || syntaxModel.language != .plainText {
             syntaxModel.replaceContents(text: "", language: .plainText)
         }
@@ -421,34 +364,14 @@ final class NetworkBodyViewController: UIViewController {
         scrollEdgeSink?.contentScrollView = syntaxView
     }
 
-    private func cancelMediaPreviewTask() {
-        mediaPreviewGeneration += 1
-        mediaPreviewTask?.cancel()
-        mediaPreviewTask = nil
-        pendingMediaPreviewInput = nil
-    }
-
-    private func cachedTemporaryMediaFileURL(for input: MediaPreviewInput) -> URL? {
-        guard input.previewKind == .movie || input.previewKind == .hlsPlaylist,
-              let mediaTemporaryFile,
-              mediaTemporaryFile.matches(input: input),
-              FileManager.default.fileExists(atPath: mediaTemporaryFile.fileURL.path) else {
-            return nil
-        }
-        return mediaTemporaryFile.fileURL
-    }
-
-    nonisolated private static func makeMediaPayload(from input: MediaPreviewInput) async -> MediaPayload? {
+    nonisolated fileprivate static func makeMediaPayload(from input: MediaPreviewInput) async -> MediaPayload? {
         guard let data = input.data(), data.isEmpty == false else {
             return nil
         }
 
         switch input.previewKind {
         case .image:
-            var configuration = UIImageReader.Configuration()
-            configuration.preparesImagesForDisplay = true
-            let reader = UIImageReader(configuration: configuration)
-            guard let image = await reader.image(data: data) else {
+            guard let image = await makeImagePayload(data: data) else {
                 return nil
             }
             return .image(image)
@@ -457,7 +380,14 @@ final class NetworkBodyViewController: UIViewController {
         }
     }
 
-    nonisolated private static func makeTemporaryMediaPayload(
+    nonisolated fileprivate static func makeImagePayload(data: Data) async -> UIImage? {
+        var configuration = UIImageReader.Configuration()
+        configuration.preparesImagesForDisplay = true
+        let reader = UIImageReader(configuration: configuration)
+        return await reader.image(data: data)
+    }
+
+    nonisolated fileprivate static func makeTemporaryMediaPayload(
         from input: MediaPreviewInput,
         data: Data
     ) -> MediaPayload? {
@@ -479,8 +409,7 @@ final class NetworkBodyViewController: UIViewController {
     }
 
     private func showSyntaxPreview() {
-        cancelMediaPreviewTask()
-        displayedMediaPreviewIdentity = nil
+        mediaPreviewCoordinator.prepareSyntaxPreview()
         hideImagePreview()
         removeMediaPlayerViewController()
         syntaxView.isHidden = false
@@ -490,7 +419,6 @@ final class NetworkBodyViewController: UIViewController {
 
     private func showImagePreview(_ image: UIImage) {
         removeMediaPlayerViewController()
-        removeCachedTemporaryMediaFile()
         syntaxView.isHidden = true
         imageScrollView.isHidden = false
         applyScrollEdgeObservedBackgrounds()
@@ -509,9 +437,6 @@ final class NetworkBodyViewController: UIViewController {
         hideImagePreview()
         syntaxView.isHidden = true
         scrollEdgeSink?.contentScrollView = nil
-        if let temporaryFileURL = mediaTemporaryFile?.fileURL, temporaryFileURL != url {
-            removeCachedTemporaryMediaFile()
-        }
 
         let playerViewController: AVPlayerViewController
         if let current = mediaPlayerViewController {
@@ -537,11 +462,9 @@ final class NetworkBodyViewController: UIViewController {
     }
 
     private func hideMediaPreview() {
-        cancelMediaPreviewTask()
-        displayedMediaPreviewIdentity = nil
+        mediaPreviewCoordinator.hideMediaPreview()
         hideImagePreview()
         removeMediaPlayerViewController()
-        removeCachedTemporaryMediaFile()
         syntaxView.isHidden = false
     }
 
@@ -630,20 +553,6 @@ final class NetworkBodyViewController: UIViewController {
         self.mediaPlayerViewController = nil
     }
 
-    private func replaceCachedTemporaryMediaFile(with temporaryFile: MediaTemporaryFile) {
-        if mediaTemporaryFile?.fileURL == temporaryFile.fileURL {
-            mediaTemporaryFile = temporaryFile
-            return
-        }
-        removeCachedTemporaryMediaFile()
-        mediaTemporaryFile = temporaryFile
-    }
-
-    private func removeCachedTemporaryMediaFile() {
-        removeTemporaryMediaFile(at: mediaTemporaryFile?.fileURL)
-        mediaTemporaryFile = nil
-    }
-
     private func currentMediaURL(in playerViewController: AVPlayerViewController) -> URL? {
         (playerViewController.player?.currentItem?.asset as? AVURLAsset)?.url
     }
@@ -675,6 +584,20 @@ extension NetworkBodyViewController {
     fileprivate enum MediaPreviewIdentity: Equatable {
         case remoteMovie(URL)
         case body(MediaPreviewInput)
+    }
+
+    fileprivate enum MediaPreviewPreparationAction {
+        case failed
+        case active
+        case cachedMovie(URL)
+        case startedLoading
+    }
+
+    fileprivate enum MediaPreviewResultAction {
+        case ignore
+        case fallback
+        case showImage(UIImage)
+        case showMovie(URL)
     }
 
     fileprivate struct MediaPreviewInput: Equatable, Sendable {
@@ -710,6 +633,159 @@ private struct ImagePreviewLayoutState {
     var imageSize: CGSize
     var visibleBoundsSize: CGSize
     var minimumZoomScale: CGFloat
+}
+
+@MainActor
+private final class MediaPreviewCoordinator {
+    private var generation = 0
+    private var task: Task<Void, Never>?
+    private var pendingInput: NetworkBodyViewController.MediaPreviewInput?
+    private var displayedIdentity: NetworkBodyViewController.MediaPreviewIdentity?
+    private var failedInput: NetworkBodyViewController.MediaPreviewInput?
+    private var temporaryFile: MediaTemporaryFile?
+
+    func preparePreview(
+        for input: NetworkBodyViewController.MediaPreviewInput,
+        completion: @escaping @MainActor (
+            NetworkBodyViewController.MediaPayload?,
+            NetworkBodyViewController.MediaPreviewInput,
+            Int
+        ) -> Void
+    ) -> NetworkBodyViewController.MediaPreviewPreparationAction {
+        guard failedInput != input else {
+            return .failed
+        }
+        if displayedIdentity == .body(input) || pendingInput == input {
+            return .active
+        }
+        if let fileURL = cachedTemporaryFileURL(for: input) {
+            cancelPending()
+            failedInput = nil
+            displayedIdentity = .body(input)
+            return .cachedMovie(fileURL)
+        }
+
+        startPreparation(for: input, completion: completion)
+        return .startedLoading
+    }
+
+    func prepareRemoteMovie(_ url: URL) {
+        cancelPending()
+        failedInput = nil
+        displayedIdentity = .remoteMovie(url)
+        removeCachedTemporaryFile()
+    }
+
+    func prepareSyntaxPreview() {
+        cancelPending()
+        displayedIdentity = nil
+    }
+
+    func hideMediaPreview() {
+        cancelPending()
+        displayedIdentity = nil
+        removeCachedTemporaryFile()
+    }
+
+    func cancel() {
+        cancelPending()
+        displayedIdentity = nil
+        removeCachedTemporaryFile()
+    }
+
+    func consume(
+        result: NetworkBodyViewController.MediaPayload?,
+        input: NetworkBodyViewController.MediaPreviewInput,
+        generation: Int
+    ) -> NetworkBodyViewController.MediaPreviewResultAction {
+        guard generation == self.generation,
+              pendingInput == input else {
+            result?.removeTemporaryFile()
+            return .ignore
+        }
+        task = nil
+        pendingInput = nil
+
+        guard let result else {
+            failedInput = input
+            displayedIdentity = nil
+            return .fallback
+        }
+
+        failedInput = nil
+        displayedIdentity = .body(input)
+        switch result {
+        case .image(let image):
+            removeCachedTemporaryFile()
+            return .showImage(image)
+        case .movie(let temporaryFile):
+            replaceCachedTemporaryFile(with: temporaryFile)
+            return .showMovie(temporaryFile.fileURL)
+        }
+    }
+
+    private func startPreparation(
+        for input: NetworkBodyViewController.MediaPreviewInput,
+        completion: @escaping @MainActor (
+            NetworkBodyViewController.MediaPayload?,
+            NetworkBodyViewController.MediaPreviewInput,
+            Int
+        ) -> Void
+    ) {
+        cancelPending()
+        failedInput = nil
+        displayedIdentity = nil
+        pendingInput = input
+        generation += 1
+        let generation = generation
+
+        let worker = Task.detached(priority: .utility) {
+            await NetworkBodyViewController.makeMediaPayload(from: input)
+        }
+        task = Task { @MainActor [worker, completion] in
+            let result = await withTaskCancellationHandler {
+                await worker.value
+            } onCancel: {
+                worker.cancel()
+            }
+            guard Task.isCancelled == false else {
+                result?.removeTemporaryFile()
+                return
+            }
+            completion(result, input, generation)
+        }
+    }
+
+    private func cancelPending() {
+        generation += 1
+        task?.cancel()
+        task = nil
+        pendingInput = nil
+    }
+
+    private func cachedTemporaryFileURL(for input: NetworkBodyViewController.MediaPreviewInput) -> URL? {
+        guard input.previewKind == .movie || input.previewKind == .hlsPlaylist,
+              let temporaryFile,
+              temporaryFile.matches(input: input),
+              FileManager.default.fileExists(atPath: temporaryFile.fileURL.path) else {
+            return nil
+        }
+        return temporaryFile.fileURL
+    }
+
+    private func replaceCachedTemporaryFile(with newTemporaryFile: MediaTemporaryFile) {
+        if temporaryFile?.fileURL == newTemporaryFile.fileURL {
+            temporaryFile = newTemporaryFile
+            return
+        }
+        removeCachedTemporaryFile()
+        temporaryFile = newTemporaryFile
+    }
+
+    private func removeCachedTemporaryFile() {
+        removeTemporaryMediaFile(at: temporaryFile?.fileURL)
+        temporaryFile = nil
+    }
 }
 
 private struct MediaTemporaryFile {
