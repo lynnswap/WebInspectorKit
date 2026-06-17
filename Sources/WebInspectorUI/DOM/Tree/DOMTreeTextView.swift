@@ -209,6 +209,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         super.layoutSubviews()
         guard lastBoundsSize != bounds.size || textContentView.frame.isEmpty else {
             layoutManager.textViewportLayoutController.layoutViewport()
+            revealPendingSelectedNodeIfPossible()
             return
         }
         lastBoundsSize = bounds.size
@@ -591,6 +592,9 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
                     previousRows: previousRows,
                     previousText: previousText
                 )
+            },
+            didFinish: { [weak self] in
+                self?.revealPendingSelectedNodeIfPossible()
             }
         )
     }
@@ -628,7 +632,6 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         updateTextLayoutGeometry()
         updateContentDecorations()
         setNeedsLayout()
-        revealPendingSelectedNodeIfPossible()
     }
 
     private func resetLocalDocumentStateIfNeeded() {
@@ -811,10 +814,8 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func scrollRowToVisible(_ row: DOMTreeTextView.Line) {
-        guard let rowRect = contentRowRects(for: row).first else {
-            return
-        }
-        let headRect = rowHeadRect(for: row) ?? rowRect
+        let rowRect = modelContentRowRect(for: row)
+        let headRect = modelRowHeadRect(for: row)
         let targetRect = CGRect(
             x: Self.textInsets.left + headRect.minX,
             y: Self.textInsets.top + rowRect.minY,
@@ -822,6 +823,35 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
             height: rowRect.height
         )
         scrollRectToVisible(targetRect.insetBy(dx: 0, dy: -rowRect.height), animated: true)
+    }
+
+    private func modelContentRowRect(for row: DOMTreeTextView.Line) -> CGRect {
+        // DOM tree rows are fixed-height; reveal must not depend on TextKit fragment rects while layout catches up.
+        CGRect(
+            x: 0,
+            y: CGFloat(row.rowIndex) * rowHeight,
+            width: max(textContentView.bounds.width, contentSize.width - Self.textInsets.left - Self.textInsets.right),
+            height: rowHeight
+        )
+    }
+
+    private func modelRowHeadRect(for row: DOMTreeTextView.Line) -> CGRect {
+        let column: Int
+        let widthInColumns: Int
+        if row.hasDisclosure {
+            column = row.depth * DOMTreeTextView.IndentMetrics.indentSpacesPerDepth
+            widthInColumns = DOMTreeTextView.IndentMetrics.disclosureSlotSpaces
+        } else {
+            column = row.depth * DOMTreeTextView.IndentMetrics.indentSpacesPerDepth
+                + DOMTreeTextView.IndentMetrics.disclosureSlotSpaces
+            widthInColumns = 1
+        }
+        return CGRect(
+            x: CGFloat(column) * Self.characterWidth,
+            y: CGFloat(row.rowIndex) * rowHeight,
+            width: CGFloat(widthInColumns) * Self.characterWidth,
+            height: rowHeight
+        )
     }
 
     private func row(at location: CGPoint) -> DOMTreeTextView.Line? {
@@ -1685,6 +1715,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
 
     private func revealPendingSelectedNodeIfPossible() {
         guard let selectedNodeID = selectionRevealState.pendingSelectedNodeID,
+              !renderedRowsBuildCoordinator.hasCurrentBuild,
               let row = renderedRows.row(for: selectedNodeID),
               bounds.width > 0,
               bounds.height > 0
@@ -1692,10 +1723,8 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
             return
         }
 
-        guard let rowRect = contentRowRects(for: row).first else {
-            return
-        }
-        let headRect = rowHeadRect(for: row) ?? rowRect
+        let rowRect = modelContentRowRect(for: row)
+        let headRect = modelRowHeadRect(for: row)
         let targetRect = CGRect(
             x: max(0, Self.textInsets.left + headRect.minX - 12),
             y: Self.textInsets.top + rowRect.minY,
@@ -2164,6 +2193,18 @@ extension DOMTreeTextView {
 
     func waitForRenderedRowsForTesting() async {
         await renderedRowsBuildCoordinator.waitForCurrentBuild()
+    }
+
+    func suspendNextRenderedRowsBuildForTesting() {
+        renderedRowsBuildCoordinator.suspendNextBuildForTesting()
+    }
+
+    func waitForRenderedRowsBuildSuspensionForTesting() async {
+        await renderedRowsBuildCoordinator.waitForBuildSuspensionForTesting()
+    }
+
+    func resumeRenderedRowsBuildForTesting() {
+        renderedRowsBuildCoordinator.resumeSuspendedBuildForTesting()
     }
 
     func selectedRowRectsForTesting() -> [CGRect] {

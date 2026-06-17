@@ -242,6 +242,54 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func selectionRevealWaitsForInFlightRenderedRowsBuild() async throws {
+        let session = makeDOMSession(root: selectionRevealRaceDocument())
+        let view = await makeTreeView(session: session)
+        view.frame = CGRect(x: 0, y: 0, width: 360, height: 96)
+        view.layoutIfNeeded()
+
+        let initialSnapshot = session.snapshot()
+        let bodyID = try #require(
+            initialSnapshot.nodesByID.first { entry in
+                entry.value.localName == "body"
+            }?.key
+        )
+        let targetID = try #require(
+            initialSnapshot.nodesByID.first { entry in
+                entry.value.attributes.contains { attribute in
+                    attribute.name == "id" && attribute.value == "selected-target"
+                }
+            }?.key
+        )
+
+        view.suspendNextRenderedRowsBuildForTesting()
+        session.applySetChildNodes(
+            parent: bodyID,
+            children: selectionRevealRaceBodyChildren(prefixCount: 80)
+        )
+        await view.waitForRenderedRowsBuildSuspensionForTesting()
+
+        session.selectNode(targetID)
+        await Task.yield()
+
+        view.resumeRenderedRowsBuildForTesting()
+        await view.waitForRenderedRowsForTesting()
+
+        let selectedLine = try #require(
+            view.renderedLineSnapshotsForTesting.first { snapshot in
+                snapshot.text.contains("id=\"selected-target\"")
+            }
+        )
+        let selectedRowY = CGFloat(selectedLine.rowIndex) * view.rowHeightForTesting
+        let visibleMinY = view.contentOffset.y
+        let visibleMaxY = view.contentOffset.y + view.bounds.height
+
+        #expect(view.contentOffset.y > view.bounds.height)
+        #expect(selectedRowY >= visibleMinY - view.rowHeightForTesting)
+        #expect(selectedRowY + view.rowHeightForTesting <= visibleMaxY + view.rowHeightForTesting)
+    }
+
+    @Test
     func documentResetClearsLocalExpansionStateEvenWhenNodeIDsRepeat() async throws {
         let session = makeDOMSession()
         let view = await makeTreeView(session: session)
@@ -577,6 +625,55 @@ private func documentWithDeferredArticle() -> DOMNode.Payload {
                 ])
             ),
         ])
+    )
+}
+
+private func selectionRevealRaceDocument() -> DOMNode.Payload {
+    DOMNode.Payload(
+        nodeID: .init(1),
+        nodeType: .document,
+        nodeName: "#document",
+        regularChildren: .loaded([
+            DOMNode.Payload(
+                nodeID: .init(2),
+                nodeType: .element,
+                nodeName: "HTML",
+                localName: "html",
+                regularChildren: .loaded([
+                    DOMNode.Payload(
+                        nodeID: .init(3),
+                        nodeType: .element,
+                        nodeName: "BODY",
+                        localName: "body",
+                        regularChildren: .loaded([
+                            selectionRevealRaceTargetNode(),
+                        ])
+                    ),
+                ])
+            ),
+        ])
+    )
+}
+
+private func selectionRevealRaceBodyChildren(prefixCount: Int) -> [DOMNode.Payload] {
+    (0..<prefixCount).map { index in
+        DOMNode.Payload(
+            nodeID: .init(1_000 + index),
+            nodeType: .element,
+            nodeName: "DIV",
+            localName: "div",
+            attributes: [DOMNode.Attribute(name: "id", value: "prefix-\(index)")]
+        )
+    } + [selectionRevealRaceTargetNode()]
+}
+
+private func selectionRevealRaceTargetNode() -> DOMNode.Payload {
+    DOMNode.Payload(
+        nodeID: .init(4),
+        nodeType: .element,
+        nodeName: "DIV",
+        localName: "div",
+        attributes: [DOMNode.Attribute(name: "id", value: "selected-target")]
     )
 }
 
