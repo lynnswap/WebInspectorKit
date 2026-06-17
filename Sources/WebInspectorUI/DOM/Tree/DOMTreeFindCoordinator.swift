@@ -421,28 +421,64 @@ extension DOMTreeTextView {
             guard offset > 0, offset < source.length else {
                 return true
             }
-            let source = source as String
-            guard let index = stringIndex(forUTF16Offset: offset, in: source) else {
-                return false
-            }
 
-            let previousIndex = source.index(before: index)
-            return !isIdentifierCharacter(source[previousIndex])
-                || !isIdentifierCharacter(source[index])
+            return !isIdentifierCharacter(containingUTF16Offset: offset - 1, in: source)
+                || !isIdentifierCharacter(containingUTF16Offset: offset, in: source)
         }
 
-        private nonisolated static func stringIndex(forUTF16Offset offset: Int, in source: String) -> String.Index? {
-            let utf16Index = source.utf16.index(source.utf16.startIndex, offsetBy: offset)
-            return String.Index(utf16Index, within: source)
-        }
-
-        private nonisolated static func isIdentifierCharacter(_ character: Character) -> Bool {
-            if character == "_" {
+        private nonisolated static func isIdentifierCharacter(
+            containingUTF16Offset offset: Int,
+            in source: NSString
+        ) -> Bool {
+            let range = source.rangeOfComposedCharacterSequence(at: offset)
+            if range.length == 1, source.character(at: range.location) == 0x5F {
                 return true
             }
-            return character.unicodeScalars.contains { scalar in
-                CharacterSet.alphanumerics.contains(scalar)
+
+            let upperBound = range.location + range.length
+            var location = range.location
+            while location < upperBound {
+                guard let scalarInfo = unicodeScalar(startingAtUTF16Offset: location, in: source, upperBound: upperBound) else {
+                    location += 1
+                    continue
+                }
+                if CharacterSet.alphanumerics.contains(scalarInfo.scalar) {
+                    return true
+                }
+                location += scalarInfo.length
             }
+
+            return false
+        }
+
+        private nonisolated static func unicodeScalar(
+            startingAtUTF16Offset offset: Int,
+            in source: NSString,
+            upperBound: Int
+        ) -> (scalar: Unicode.Scalar, length: Int)? {
+            let first = UInt32(source.character(at: offset))
+            if (0xD800...0xDBFF).contains(first) {
+                let secondOffset = offset + 1
+                guard secondOffset < upperBound else {
+                    return nil
+                }
+                let second = UInt32(source.character(at: secondOffset))
+                guard (0xDC00...0xDFFF).contains(second) else {
+                    return nil
+                }
+                let scalarValue = 0x10000 + ((first - 0xD800) << 10) + (second - 0xDC00)
+                guard let scalar = Unicode.Scalar(scalarValue) else {
+                    return nil
+                }
+                return (scalar: scalar, length: 2)
+            }
+
+            guard !(0xDC00...0xDFFF).contains(first),
+                  let scalar = Unicode.Scalar(first)
+            else {
+                return nil
+            }
+            return (scalar: scalar, length: 1)
         }
     }
 }
