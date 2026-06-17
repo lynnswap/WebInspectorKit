@@ -24,9 +24,11 @@ package struct FrameDocumentProjection: Equatable, Sendable {
 @Observable
 package final class FrameDocumentProjectionIndex {
     private var projectionsByFrameTargetID: [ProtocolTarget.ID: FrameDocumentProjection]
+    private var frameTargetIDByOwnerNodeID: [DOMNode.ID: ProtocolTarget.ID]
 
     package init() {
         projectionsByFrameTargetID = [:]
+        frameTargetIDByOwnerNodeID = [:]
     }
 
     package var values: Dictionary<ProtocolTarget.ID, FrameDocumentProjection>.Values {
@@ -43,11 +45,16 @@ package final class FrameDocumentProjectionIndex {
 
     package func removeAll() {
         projectionsByFrameTargetID.removeAll()
+        frameTargetIDByOwnerNodeID.removeAll()
     }
 
     @discardableResult
     package func removeValue(forKey frameTargetID: ProtocolTarget.ID) -> FrameDocumentProjection? {
-        projectionsByFrameTargetID.removeValue(forKey: frameTargetID)
+        guard let projection = projectionsByFrameTargetID.removeValue(forKey: frameTargetID) else {
+            return nil
+        }
+        removeAttachedOwnerIndex(for: projection)
+        return projection
     }
 
     @discardableResult
@@ -58,8 +65,13 @@ package final class FrameDocumentProjectionIndex {
         guard var projection = projectionsByFrameTargetID.removeValue(forKey: oldTargetID) else {
             return nil
         }
+        removeAttachedOwnerIndex(for: projection)
+        if let replacedProjection = projectionsByFrameTargetID.removeValue(forKey: newTargetID) {
+            removeAttachedOwnerIndex(for: replacedProjection)
+        }
         projection.frameTargetID = newTargetID
         projectionsByFrameTargetID[newTargetID] = projection
+        insertAttachedOwnerIndex(for: projection)
         return projection
     }
 
@@ -74,6 +86,7 @@ package final class FrameDocumentProjectionIndex {
             frameDocumentID: frameDocumentID,
             state: .pending
         )
+        removeAttachedOwnerIndex(for: projection)
         projection.frameTargetID = frameTargetID
         projection.frameDocumentID = frameDocumentID
         projection.ownerNodeID = nil
@@ -86,9 +99,11 @@ package final class FrameDocumentProjectionIndex {
         guard var projection = projectionsByFrameTargetID[frameTargetID] else {
             return
         }
+        removeAttachedOwnerIndex(for: projection)
         projection.ownerNodeID = ownerNodeID
         projection.state = .attached
         projectionsByFrameTargetID[frameTargetID] = projection
+        insertAttachedOwnerIndex(for: projection)
     }
 
     package func detach(
@@ -98,6 +113,7 @@ package final class FrameDocumentProjectionIndex {
         guard var projection = projectionsByFrameTargetID[frameTargetID] else {
             return
         }
+        removeAttachedOwnerIndex(for: projection)
         projection.ownerNodeID = nil
         projection.state = state
         projectionsByFrameTargetID[frameTargetID] = projection
@@ -107,14 +123,14 @@ package final class FrameDocumentProjectionIndex {
         forOwnerNodeID ownerNodeID: DOMNode.ID,
         documentProvider: (DOMDocument.ID) -> DOMDocument?
     ) -> DOMNode.ID? {
-        for projection in projectionsByFrameTargetID.values
-            where projection.ownerNodeID == ownerNodeID && projection.state == .attached {
-            guard let document = documentProvider(projection.frameDocumentID) else {
-                continue
-            }
-            return document.rootNodeID
+        guard let frameTargetID = frameTargetIDByOwnerNodeID[ownerNodeID],
+              let projection = projectionsByFrameTargetID[frameTargetID],
+              projection.ownerNodeID == ownerNodeID,
+              projection.state == .attached,
+              let document = documentProvider(projection.frameDocumentID) else {
+            return nil
         }
-        return nil
+        return document.rootNodeID
     }
 
     package func ownerKeys(
@@ -136,6 +152,23 @@ package final class FrameDocumentProjectionIndex {
             stack.append(contentsOf: node.protocolOwnedChildren)
         }
         return keys
+    }
+
+    private func removeAttachedOwnerIndex(for projection: FrameDocumentProjection) {
+        guard projection.state == .attached,
+              let ownerNodeID = projection.ownerNodeID,
+              frameTargetIDByOwnerNodeID[ownerNodeID] == projection.frameTargetID else {
+            return
+        }
+        frameTargetIDByOwnerNodeID.removeValue(forKey: ownerNodeID)
+    }
+
+    private func insertAttachedOwnerIndex(for projection: FrameDocumentProjection) {
+        guard projection.state == .attached,
+              let ownerNodeID = projection.ownerNodeID else {
+            return
+        }
+        frameTargetIDByOwnerNodeID[ownerNodeID] = projection.frameTargetID
     }
 
     package func snapshots() -> [ProtocolTarget.ID: FrameDocumentProjection.Snapshot] {
