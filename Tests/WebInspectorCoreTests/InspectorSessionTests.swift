@@ -642,14 +642,23 @@ func selectedElementStyleHydrationCancellationDoesNotPublishFailure() async thro
     let htmlID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(2))
     let bodyID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(4))
     session.attachment.dom.setSelectedNodeStyleHydrationActive(true)
-    session.attachment.dom.selectNode(bodyID)
-
     let firstSentCount = await backend.sentTargetMessages().count
-    _ = try await waitForCSSRefreshMessages(backend, after: firstSentCount)
+    session.attachment.dom.selectNode(bodyID)
+    let firstMessages = try await waitForCSSRefreshMessages(
+        backend,
+        after: firstSentCount,
+        protocolNodeID: .init(4)
+    )
+    #expect(try messageParameters(firstMessages.matched.message)["nodeId"] as? Int == 4)
 
     let secondSentCount = await backend.sentTargetMessages().count
     session.attachment.dom.selectNode(htmlID)
-    let secondMessages = try await waitForCSSRefreshMessages(backend, after: secondSentCount)
+    let secondMessages = try await waitForCSSRefreshMessages(
+        backend,
+        after: secondSentCount,
+        protocolNodeID: .init(2)
+    )
+    #expect(try messageParameters(secondMessages.matched.message)["nodeId"] as? Int == 2)
     try await replyCSSRefresh(
         transport: transport,
         messages: secondMessages,
