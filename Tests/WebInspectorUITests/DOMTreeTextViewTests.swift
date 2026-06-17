@@ -50,6 +50,134 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func primaryClickingRowHighlightsSelectedPageNode() async throws {
+        let session = makeDOMSession()
+        let recorder = NodeActionRecorder()
+        let view = DOMTreeTextView(
+            dom: session,
+            highlightNodeAction: { nodeID, owner in
+                recorder.record(nodeID, owner: owner)
+            }
+        )
+        view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
+        view.layoutIfNeeded()
+
+        view.primaryClickRowForTesting(containing: "<input disabled>")
+        let highlightedNodeID = await recorder.nextNodeID()
+
+        #expect(session.selectedNode?.id == highlightedNodeID)
+        #expect(session.node(for: highlightedNodeID)?.localName == "input")
+        #expect(recorder.recordedOwners == [.selection])
+    }
+
+    @Test
+    func hoverEndRestoresSelectedPageHighlight() async throws {
+        let session = makeDOMSession()
+        let restoreRecorder = VoidActionRecorder()
+        let view = DOMTreeTextView(
+            dom: session,
+            highlightNodeAction: { _, _ in },
+            restoreHighlightAction: {
+                restoreRecorder.record()
+            }
+        )
+        view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
+        view.layoutIfNeeded()
+
+        view.primaryClickRowForTesting(containing: "<input disabled>")
+        view.hoverRowForTesting(containing: "<article")
+        view.endHoverForTesting()
+        await restoreRecorder.next()
+
+        #expect(session.selectedNode?.localName == "input")
+    }
+
+    @Test
+    func repeatedHoverEndCancelsPendingRestoreHighlight() async throws {
+        let session = makeDOMSession()
+        let restoreRecorder = VoidActionRecorder()
+        let view = DOMTreeTextView(
+            dom: session,
+            highlightNodeAction: { _, _ in },
+            restoreHighlightAction: {
+                restoreRecorder.record()
+            }
+        )
+        view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
+        view.layoutIfNeeded()
+
+        view.primaryClickRowForTesting(containing: "<input disabled>")
+        view.hoverRowForTesting(containing: "<article")
+        view.endHoverForTesting()
+        view.endHoverForTesting()
+        await restoreRecorder.next()
+        await Task.yield()
+
+        #expect(session.selectedNode?.localName == "input")
+        #expect(restoreRecorder.recordCount == 1)
+    }
+
+    @Test
+    func hoverHighlightCancelsPendingRestoreHighlight() async throws {
+        let session = makeDOMSession()
+        let highlightRecorder = NodeActionRecorder()
+        let restoreRecorder = CancellableVoidActionRecorder()
+        let view = DOMTreeTextView(
+            dom: session,
+            highlightNodeAction: { nodeID, owner in
+                highlightRecorder.record(nodeID, owner: owner)
+            },
+            restoreHighlightAction: {
+                await restoreRecorder.run()
+            }
+        )
+        view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
+        view.layoutIfNeeded()
+
+        view.primaryClickRowForTesting(containing: "<input disabled>")
+        view.hoverRowForTesting(containing: "<article")
+        view.endHoverForTesting()
+        await restoreRecorder.nextStart()
+        highlightRecorder.removeAll()
+
+        view.hoverRowForTesting(containing: "<input disabled>")
+        await restoreRecorder.nextCancellation()
+        let highlightedNodeID = await highlightRecorder.nextNodeID()
+
+        #expect(session.node(for: highlightedNodeID)?.localName == "input")
+        #expect(highlightRecorder.recordedOwners == [.transient])
+    }
+
+    @Test
+    func pageHighlightActionsAreSuppressedWhileElementPickerIsActive() async throws {
+        let session = makeDOMSession()
+        session.isSelectingElement = true
+        let highlightRecorder = NodeActionRecorder()
+        let restoreRecorder = VoidActionRecorder()
+        let view = DOMTreeTextView(
+            dom: session,
+            highlightNodeAction: { nodeID, owner in
+                highlightRecorder.record(nodeID, owner: owner)
+            },
+            restoreHighlightAction: {
+                restoreRecorder.record()
+            }
+        )
+        view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
+        view.layoutIfNeeded()
+
+        view.primaryClickRowForTesting(containing: "<input disabled>")
+        view.hoverRowForTesting(containing: "<article")
+        view.endHoverForTesting()
+        await Task.yield()
+        await Task.yield()
+
+        #expect(session.selectedNode?.localName == "input")
+        #expect(highlightRecorder.recordedNodeIDs.isEmpty)
+        #expect(restoreRecorder.recordCount == 0)
+    }
+
+    @Test
     func expandedElementRendersChildrenAndClosingTag() throws {
         let view = makeTreeView()
 
@@ -235,6 +363,101 @@ private final class NodeRequestRecorder {
         }
         return await withCheckedContinuation { continuation in
             self.continuation = continuation
+        }
+    }
+}
+
+@MainActor
+private final class NodeActionRecorder {
+    private var nodeIDs: [DOMNode.ID] = []
+    private var owners: [DOMPageHighlightOwner] = []
+    private var continuation: CheckedContinuation<DOMNode.ID, Never>?
+
+    func record(_ nodeID: DOMNode.ID, owner: DOMPageHighlightOwner) {
+        nodeIDs.append(nodeID)
+        owners.append(owner)
+        continuation?.resume(returning: nodeID)
+        continuation = nil
+    }
+
+    func nextNodeID() async -> DOMNode.ID {
+        if let nodeID = nodeIDs.first {
+            return nodeID
+        }
+        return await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    var recordedNodeIDs: [DOMNode.ID] {
+        nodeIDs
+    }
+
+    var recordedOwners: [DOMPageHighlightOwner] {
+        owners
+    }
+
+    func removeAll() {
+        nodeIDs.removeAll(keepingCapacity: true)
+        owners.removeAll(keepingCapacity: true)
+    }
+}
+
+@MainActor
+private final class VoidActionRecorder {
+    private(set) var recordCount = 0
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func record() {
+        recordCount += 1
+        continuation?.resume()
+        continuation = nil
+    }
+
+    func next() async {
+        if recordCount > 0 {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+}
+
+@MainActor
+private final class CancellableVoidActionRecorder {
+    private(set) var startedCount = 0
+    private(set) var cancellationCount = 0
+    private var startContinuation: CheckedContinuation<Void, Never>?
+    private var cancellationContinuation: CheckedContinuation<Void, Never>?
+
+    func run() async {
+        startedCount += 1
+        startContinuation?.resume()
+        startContinuation = nil
+        while !Task.isCancelled {
+            await Task.yield()
+        }
+        cancellationCount += 1
+        cancellationContinuation?.resume()
+        cancellationContinuation = nil
+    }
+
+    func nextStart() async {
+        if startedCount > 0 {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            self.startContinuation = continuation
+        }
+    }
+
+    func nextCancellation() async {
+        if cancellationCount > 0 {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            self.cancellationContinuation = continuation
         }
     }
 }

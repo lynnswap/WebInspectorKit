@@ -29,7 +29,7 @@ extension DOMSession {
         commandChannel = nil
         recordError = nil
         elementStyles.unbindProtocolChannel()
-        highlightController.targetID = nil
+        highlightController.clearAll()
         clearElementPickerState(invalidatePendingSelection: true)
         clearDeleteUndoHistory()
         recordCommandAvailabilityMutation()
@@ -78,9 +78,30 @@ extension DOMSession {
     @discardableResult
     private func perform(
         _ intent: DOMCommand.Intent,
-        requiresActiveConnection: Bool
+        requiresActiveConnection: Bool,
+        highlightOwner: DOMPageHighlightOwner? = nil
     ) async throws -> ProtocolCommand.Result {
-        let result = try await send(intent, requiresActiveConnection: requiresActiveConnection)
+        if case let .highlightNode(target) = intent {
+            highlightController.markHighlightMayBeVisible(
+                targetID: target.commandTargetID,
+                nodeID: target.nodeID,
+                owner: highlightOwner
+            )
+        }
+        let hideGeneration: UInt64? = if case let .hideHighlight(targetID) = intent {
+            highlightController.possibleVisibleGeneration(targetID: targetID)
+        } else {
+            nil
+        }
+        let result: ProtocolCommand.Result
+        do {
+            result = try await send(intent, requiresActiveConnection: requiresActiveConnection)
+        } catch {
+            if let missingTargetID = missingTargetID(from: error) {
+                clearHighlightOwnershipIfMissingTarget(missingTargetID, for: intent)
+            }
+            throw error
+        }
 
         switch intent {
         case .getDocument:
@@ -100,12 +121,10 @@ extension DOMSession {
             }
         case .requestChildNodes:
             break
-        case let .highlightNode(target):
-            highlightController.targetID = target.commandTargetID
+        case .highlightNode:
+            break
         case let .hideHighlight(targetID):
-            if highlightController.targetID == targetID {
-                highlightController.targetID = nil
-            }
+            highlightController.clearHighlight(targetID: targetID, matchingGeneration: hideGeneration)
         case .setInspectModeEnabled,
              .getOuterHTML,
              .removeNode,
@@ -114,6 +133,28 @@ extension DOMSession {
             break
         }
         return result
+    }
+
+    private func missingTargetID(from error: any Error) -> ProtocolTarget.ID? {
+        guard let transportError = error as? TransportSession.Error,
+              case let .missingTarget(targetID) = transportError else {
+            return nil
+        }
+        return targetID
+    }
+
+    private func clearHighlightOwnershipIfMissingTarget(
+        _ missingTargetID: ProtocolTarget.ID,
+        for intent: DOMCommand.Intent
+    ) {
+        switch intent {
+        case let .highlightNode(target) where target.commandTargetID == missingTargetID:
+            highlightController.clearHighlight(targetID: missingTargetID)
+        case let .hideHighlight(targetID) where targetID == missingTargetID:
+            highlightController.clearHighlight(targetID: missingTargetID)
+        default:
+            break
+        }
     }
 
     @discardableResult
@@ -144,26 +185,215 @@ extension DOMSession {
         }
     }
 
-    package func highlightNode(for nodeID: DOMNode.ID) async {
-        guard let intent = highlightNodeIntent(for: nodeID) else {
+    package func highlightNode(
+        for nodeID: DOMNode.ID,
+        owner: DOMPageHighlightOwner = .transient
+    ) async {
+        guard !isSelectingElement,
+              canHighlightNode(nodeID, owner: owner),
+              let intent = highlightNodeIntent(for: nodeID) else {
+            return
+        }
+        let highlightedTargetID: ProtocolTarget.ID? = if case let .highlightNode(target) = intent {
+            target.commandTargetID
+        } else {
+            nil
+        }
+        await hideStaleHighlights(
+            preferredHideTargetID: nil,
+            preserving: highlightedTargetID,
+            includeCurrentPageFallback: false,
+            abortIfSelectingElement: true
+        )
+        guard !Task.isCancelled,
+              !isSelectingElement,
+              canHighlightNode(nodeID, owner: owner),
+              let intent = highlightNodeIntent(for: nodeID) else {
             return
         }
         do {
-            try await perform(intent)
+            try await perform(intent, requiresActiveConnection: true, highlightOwner: owner)
         } catch {
-            recordError?(InspectorSession.Error(String(describing: error)))
+            recordPageHighlightErrorUnlessCancelled(error)
+        }
+    }
+
+    private func canHighlightNode(_ nodeID: DOMNode.ID, owner: DOMPageHighlightOwner) -> Bool {
+        switch owner {
+        case .selection:
+            !hasPendingSelectionRequest && selectedNodeID == nodeID
+        case .transient:
+            true
         }
     }
 
     package func hideNodeHighlight() async {
-        guard let intent = hideHighlightIntent(targetID: highlightController.targetID) else {
+        await hideStaleHighlights(
+            preferredHideTargetID: nil,
+            preserving: nil,
+            includeCurrentPageFallback: true
+        )
+    }
+
+    package func restoreSelectedNodeHighlightOrHide(preferredHideTargetID: ProtocolTarget.ID? = nil) async {
+        guard !isSelectingElement else {
+            return
+        }
+        if !hasPendingSelectionRequest,
+           let selectedNodeID,
+           let intent = highlightNodeIntent(for: selectedNodeID) {
+            let selectionRevisionBeforeRestore = selectionRevision
+            let selectedHighlightTargetID: ProtocolTarget.ID? = if case let .highlightNode(target) = intent {
+                target.commandTargetID
+            } else {
+                nil
+            }
+            await hideStaleHighlights(
+                preferredHideTargetID: preferredHideTargetID,
+                preserving: selectedHighlightTargetID,
+                includeCurrentPageFallback: false,
+                abortIfSelectingElement: true
+            )
+            guard !Task.isCancelled,
+                  !isSelectingElement,
+                  !hasPendingSelectionRequest,
+                  self.selectedNodeID == selectedNodeID,
+                  selectionRevision == selectionRevisionBeforeRestore,
+                  let intent = highlightNodeIntent(for: selectedNodeID) else {
+                return
+            }
+            do {
+                try await perform(intent, requiresActiveConnection: true, highlightOwner: .selection)
+            } catch {
+                recordPageHighlightErrorUnlessCancelled(error)
+            }
+            return
+        }
+
+        await hideStaleHighlights(
+            preferredHideTargetID: preferredHideTargetID,
+            preserving: nil,
+            includeCurrentPageFallback: true,
+            abortIfSelectingElement: true
+        )
+    }
+
+    package func scheduleSelectedNodeHighlightRestoreOrHide(preferredHideTargetID: ProtocolTarget.ID? = nil) {
+        Task { @MainActor [weak self] in
+            await self?.restoreSelectedNodeHighlightOrHide(preferredHideTargetID: preferredHideTargetID)
+        }
+    }
+
+    package func scheduleNodeHighlightHideIfCurrent(
+        targetID: ProtocolTarget.ID,
+        generation: UInt64,
+        nodeID: DOMNode.ID? = nil,
+        owner: DOMPageHighlightOwner? = nil
+    ) {
+        Task { @MainActor [weak self] in
+            await self?.hideNodeHighlightIfCurrent(
+                targetID: targetID,
+                generation: generation,
+                nodeID: nodeID,
+                owner: owner
+            )
+        }
+    }
+
+    package func hideNodeHighlightIfCurrent(
+        targetID: ProtocolTarget.ID,
+        generation: UInt64,
+        nodeID: DOMNode.ID? = nil,
+        owner: DOMPageHighlightOwner? = nil
+    ) async {
+        guard !Task.isCancelled,
+              !isSelectingElement else {
+            return
+        }
+        guard highlightController.isPossibleVisibleHighlight(
+            targetID: targetID,
+            generation: generation,
+            nodeID: nodeID,
+            owner: owner
+        ) else {
+            return
+        }
+        if selectedNodeID != nil {
+            await restoreSelectedNodeHighlightOrHide(preferredHideTargetID: targetID)
+            return
+        }
+        guard !hasPendingSelectionRequest else {
+            return
+        }
+        guard containsTarget(targetID) else {
+            highlightController.clearHighlight(targetID: targetID, matchingGeneration: generation)
+            return
+        }
+        guard let intent = hideHighlightIntent(targetID: targetID) else {
             return
         }
         do {
             try await perform(intent)
         } catch {
-            recordError?(InspectorSession.Error(String(describing: error)))
+            recordPageHighlightErrorUnlessCancelled(error)
         }
+    }
+
+    private func hideStaleHighlights(
+        preferredHideTargetID: ProtocolTarget.ID?,
+        preserving preservedTargetID: ProtocolTarget.ID?,
+        includeCurrentPageFallback: Bool,
+        abortIfSelectingElement: Bool = false
+    ) async {
+        let fallbackTargetID = includeCurrentPageFallback ? currentPageTargetID : nil
+        for highlight in highlightController.possibleVisibleHighlights(
+            preferredFirst: preferredHideTargetID,
+            fallbackTargetID: fallbackTargetID,
+            preserving: preservedTargetID
+        ) {
+            guard !Task.isCancelled else {
+                return
+            }
+            guard !abortIfSelectingElement || !isSelectingElement else {
+                return
+            }
+            let targetID = highlight.targetID
+            if let generation = highlight.generation,
+               highlightController.possibleVisibleGeneration(targetID: targetID) != generation {
+                continue
+            }
+            guard containsTarget(targetID) else {
+                highlightController.clearHighlight(targetID: targetID, matchingGeneration: highlight.generation)
+                continue
+            }
+            guard let intent = hideHighlightIntent(targetID: targetID) else {
+                continue
+            }
+            do {
+                try await perform(intent)
+            } catch is CancellationError {
+                return
+            } catch {
+                recordError?(InspectorSession.Error(String(describing: error)))
+            }
+        }
+    }
+
+    private func recordPageHighlightErrorUnlessCancelled(_ error: any Error) {
+        guard !(error is CancellationError) else {
+            return
+        }
+        recordError?(InspectorSession.Error(String(describing: error)))
+    }
+
+    private func restoreSelectedNodeHighlightAfterPickerInterruption(preferredHideTargetID: ProtocolTarget.ID? = nil) async {
+        guard selectedNodeID != nil else {
+            return
+        }
+        let restoreTask = Task { @MainActor [weak self] in
+            await self?.restoreSelectedNodeHighlightOrHide(preferredHideTargetID: preferredHideTargetID)
+        }
+        await restoreTask.value
     }
 
     package func toggleElementPicker() async {
@@ -208,6 +438,19 @@ extension DOMSession {
         syncElementPickerSelectionState()
 
         do {
+            await hideStaleHighlights(
+                preferredHideTargetID: nil,
+                preserving: nil,
+                includeCurrentPageFallback: false
+            )
+            if Task.isCancelled {
+                clearElementPickerState(invalidatePendingSelection: true)
+                await restoreSelectedNodeHighlightAfterPickerInterruption()
+                return
+            }
+            guard elementPicker.isCurrentEnablingSession(pickerSession) else {
+                return
+            }
             guard let intent = setInspectModeEnabledIntent(targetID: targetID, enabled: true) else {
                 recordElementPickerFailure(reason: "inspectModeUnavailable", targetID: targetID)
                 throw InspectorSession.Error("DOM inspect mode is not available.")
@@ -224,6 +467,7 @@ extension DOMSession {
                 details: "error=\(error)"
             )
             clearElementPickerState(invalidatePendingSelection: true)
+            await restoreSelectedNodeHighlightAfterPickerInterruption(preferredHideTargetID: targetID)
             throw error
         }
     }
@@ -233,6 +477,7 @@ extension DOMSession {
         clearElementPickerState(invalidatePendingSelection: true)
         guard let targetID,
               let intent = setInspectModeEnabledIntent(targetID: targetID, enabled: false) else {
+            await restoreSelectedNodeHighlightOrHide(preferredHideTargetID: targetID)
             return
         }
         do {
@@ -240,6 +485,7 @@ extension DOMSession {
         } catch {
             recordError?(InspectorSession.Error(String(describing: error)))
         }
+        await restoreSelectedNodeHighlightOrHide(preferredHideTargetID: targetID)
     }
 
     package func copySelectedNodeText(_ kind: DOMNode.CopyTextKind) async throws -> String {
@@ -555,6 +801,8 @@ extension DOMSession {
             return
         }
         let selectedStyleID = try? selectedCSSNodeStylesID().get()
+        let selectionRevisionBeforeEvent = selectionRevision
+        let hadPendingSelectionRequest = hasPendingSelectionRequest
         try protocolCommands.applyDOMEvent(event, to: self)
         if let selectedStyleID,
            let targetID = event.targetID,
@@ -568,6 +816,12 @@ extension DOMSession {
         }
         if event.method == "DOM.setChildNodes" {
             startPendingFrameOwnerHydration()
+        }
+        if hadPendingSelectionRequest,
+           !hasPendingSelectionRequest,
+           selectionRevision != selectionRevisionBeforeEvent,
+           !isSelectingElement {
+            scheduleSelectedNodeHighlightRestoreOrHide()
         }
     }
 
@@ -899,7 +1153,7 @@ extension DOMSession {
                 return
             }
             recordElementPickerFailure(reason: "targetDestroyedBeforeInspectEvent", targetID: activeTargetID)
-            clearElementPickerState(invalidatePendingSelection: true)
+            clearElementPickerStateAfterTargetLifecycleInterruption(activeTargetID: activeTargetID)
         case "Target.didCommitProvisionalTarget":
             guard let targetCommit,
                   targetCommit.consumedOldTargetID == activeTargetID else {
@@ -910,10 +1164,15 @@ extension DOMSession {
                 targetID: activeTargetID,
                 details: "newTarget=\(targetCommit.newTargetID.rawValue)"
             )
-            clearElementPickerState(invalidatePendingSelection: true)
+            clearElementPickerStateAfterTargetLifecycleInterruption(activeTargetID: activeTargetID)
         default:
             return
         }
+    }
+
+    private func clearElementPickerStateAfterTargetLifecycleInterruption(activeTargetID: ProtocolTarget.ID) {
+        clearElementPickerState(invalidatePendingSelection: true)
+        scheduleSelectedNodeHighlightRestoreOrHide(preferredHideTargetID: activeTargetID)
     }
 
     private func selectedStylesShouldRefresh(after event: ProtocolEvent) -> Bool {
@@ -973,6 +1232,7 @@ extension DOMSession {
         let targetID = session.targetID
         clearElementPickerState()
         guard let intent = setInspectModeEnabledIntent(targetID: targetID, enabled: false) else {
+            await restoreSelectedNodeHighlightOrHide(preferredHideTargetID: targetID)
             return
         }
         do {
@@ -980,6 +1240,7 @@ extension DOMSession {
         } catch {
             recordError?(InspectorSession.Error(String(describing: error)))
         }
+        await restoreSelectedNodeHighlightOrHide(preferredHideTargetID: targetID)
     }
 
     private func requireCommandChannel(requiresActiveConnection: Bool = true) throws -> ProtocolCommandChannel {

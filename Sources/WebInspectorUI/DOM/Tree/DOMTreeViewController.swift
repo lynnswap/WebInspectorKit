@@ -21,11 +21,11 @@ package final class DOMTreeViewController: UIViewController {
             requestChildrenAction: { [weak inspection] nodeID in
                 await inspection?.dom.requestChildNodes(for: nodeID) ?? false
             },
-            highlightNodeAction: { [weak inspection] nodeID in
-                await inspection?.dom.highlightNode(for: nodeID)
+            highlightNodeAction: { [weak inspection] nodeID, owner in
+                await inspection?.dom.highlightNode(for: nodeID, owner: owner)
             },
-            hideHighlightAction: { [weak inspection] in
-                await inspection?.dom.hideNodeHighlight()
+            restoreHighlightAction: { [weak inspection] in
+                await inspection?.dom.restoreSelectedNodeHighlightOrHide()
             },
             copyNodeTextAction: { [weak inspection] nodeID, kind in
                 guard let inspection else {

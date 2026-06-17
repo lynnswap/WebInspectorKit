@@ -66,6 +66,10 @@ package final class DOMSession {
         )
     }
 
+    package func containsTarget(_ targetID: ProtocolTarget.ID) -> Bool {
+        targetGraph.containsTarget(targetID)
+    }
+
     private func state(for targetID: ProtocolTarget.ID) -> DOMTargetState {
         documentStore.state(for: targetID)
     }
@@ -139,10 +143,12 @@ package final class DOMSession {
             return
         }
 
+        let previousSelectedNodeID = selection.selectedNodeID
         let resolvedMainFrameID = targetGraph.targetFrameID(for: targetID) ?? DOMFrame.ID("main:\(targetID.rawValue)")
         if currentPage.promote(targetID: targetID, mainFrameID: resolvedMainFrameID) {
             selection = DOMSelection()
             recordSelectionMutation()
+            scheduleHighlightClearAfterSelectionCleared(previousSelectedNodeID: previousSelectedNodeID)
         }
         _ = state(for: targetID)
         targetGraph.assignMainFrame(resolvedMainFrameID, to: targetID)
@@ -223,8 +229,10 @@ package final class DOMSession {
             targetGraph.setFrameCurrentDocumentID(nil, for: frameID)
         }
         if currentPage.clear(ifTarget: targetID) {
+            let previousSelectedNodeID = selection.selectedNodeID
             selection = DOMSelection()
             recordSelectionMutation()
+            scheduleHighlightClearAfterSelectionCleared(previousSelectedNodeID: previousSelectedNodeID)
         }
         documentStore.removeState(for: targetID)
         recordTreeMutation()
@@ -536,6 +544,10 @@ package final class DOMSession {
         selection.selectedNodeID
     }
 
+    package var hasPendingSelectionRequest: Bool {
+        selection.pendingRequest != nil
+    }
+
     package var selectedNode: DOMNode? {
         guard let selectedNodeID = selection.selectedNodeID else {
             return nil
@@ -645,8 +657,10 @@ package final class DOMSession {
         guard selection.hasStateChange(selecting: nodeID) else {
             return
         }
+        let previousSelectedNodeID = selection.selectedNodeID
         cancelSelectionTransaction(for: selection.select(nodeID))
         recordSelectionMutation()
+        scheduleHighlightClearAfterSelectionCleared(previousSelectedNodeID: previousSelectedNodeID)
         syncSelectedElementStyles()
     }
 
@@ -725,6 +739,7 @@ package final class DOMSession {
         }
 
         return DOMAction.Target(
+            nodeID: nodeID,
             documentTargetID: documentTargetID,
             rawNodeID: node.protocolNodeID,
             commandTargetID: resolvedCommandTargetID,
@@ -1038,8 +1053,10 @@ package final class DOMSession {
         document.transactions.removeAll()
         clearCurrentDocumentReference(documentID, targetID: document.targetID)
         updateAllFrameDocumentProjectionStates()
+        let previousSelectedNodeID = selection.selectedNodeID
         if selection.clearSelected(ifDocument: documentID) {
             recordSelectionMutation()
+            scheduleHighlightClearAfterSelectionCleared(previousSelectedNodeID: previousSelectedNodeID)
             syncSelectedElementStyles()
         }
     }
@@ -1441,11 +1458,13 @@ package final class DOMSession {
     }
 
     private func reconcileSelection() {
+        let previousSelectedNodeID = selection.selectedNodeID
         let didClearSelection = selection.clearSelectedIfStale(nodeExists: { nodeID in
             node(for: nodeID) != nil
         })
         if didClearSelection {
             recordSelectionMutation()
+            scheduleHighlightClearAfterSelectionCleared(previousSelectedNodeID: previousSelectedNodeID)
         }
         syncSelectedElementStyles()
     }
@@ -1497,7 +1516,25 @@ package final class DOMSession {
         cancelSelectionTransaction(for: selection.fail(failure, clearSelected: clearSelected))
         if selection.selectedNodeID != previousSelectedNodeID {
             recordSelectionMutation()
+            scheduleHighlightClearAfterSelectionCleared(previousSelectedNodeID: previousSelectedNodeID)
         }
+    }
+
+    private func scheduleHighlightClearAfterSelectionCleared(previousSelectedNodeID: DOMNode.ID?) {
+        guard let previousSelectedNodeID,
+              selection.selectedNodeID == nil else {
+            return
+        }
+        guard let highlight = highlightController.possibleVisibleSelectionHighlight(for: previousSelectedNodeID),
+              let generation = highlight.generation else {
+            return
+        }
+        scheduleNodeHighlightHideIfCurrent(
+            targetID: highlight.targetID,
+            generation: generation,
+            nodeID: previousSelectedNodeID,
+            owner: .selection
+        )
     }
 
     package func syncSelectedElementStyles() {
