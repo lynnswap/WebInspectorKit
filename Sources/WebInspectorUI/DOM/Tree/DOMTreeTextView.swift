@@ -2120,7 +2120,7 @@ extension DOMTreeTextView {
     }
 
     func textStorageForegroundColorForTesting(containing text: String) -> UIColor? {
-        let range = (unsafe textStorage.string as NSString).range(of: text)
+        let range = (textStorage.string as NSString).range(of: text)
         guard range.location != NSNotFound,
               range.location < textStorage.length
         else {
