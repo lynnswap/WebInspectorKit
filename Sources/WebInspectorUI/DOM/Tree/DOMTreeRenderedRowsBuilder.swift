@@ -8,13 +8,23 @@ extension DOMTreeTextView {
         typealias IsCurrentBuild = @MainActor (DOMTreeTextView.RenderedRowsBuildRequest) -> Bool
         typealias ShouldApplyBuild = @MainActor (DOMTreeTextView.RenderedRowsBuildResult) -> Bool
         typealias ApplyBuild = @MainActor (DOMTreeTextView.RenderedRowsBuildResult) -> Void
+        typealias FinishBuild = @MainActor () -> Void
 
         private let builder: DOMTreeTextView.RenderedRowsBuilder
         private var task: Task<Void, Never>?
         private var generation: UInt64 = 0
+#if DEBUG
+        private var shouldSuspendNextBuildForTesting = false
+        private var suspendedBuildContinuationForTesting: CheckedContinuation<Void, Never>?
+        private var buildSuspensionWaitersForTesting: [CheckedContinuation<Void, Never>] = []
+#endif
 
         init(builder: DOMTreeTextView.RenderedRowsBuilder) {
             self.builder = builder
+        }
+
+        var hasCurrentBuild: Bool {
+            task != nil
         }
 
         func removeCachedMarkup(keepingCapacity: Bool) {
@@ -28,6 +38,9 @@ extension DOMTreeTextView {
         func cancel() {
             task?.cancel()
             task = nil
+#if DEBUG
+            resumeSuspendedBuildForTesting()
+#endif
         }
 
         func waitForCurrentBuild() async {
@@ -45,7 +58,8 @@ extension DOMTreeTextView {
             previousTextCapacity: Int,
             isCurrentBuild: @escaping IsCurrentBuild,
             shouldApply: ShouldApplyBuild? = nil,
-            apply: @escaping ApplyBuild
+            apply: @escaping ApplyBuild,
+            didFinish: FinishBuild? = nil
         ) {
             let request = builder.makeBuildRequest(
                 previousRowCapacity: previousRowCapacity,
@@ -54,14 +68,27 @@ extension DOMTreeTextView {
             generation &+= 1
             let buildGeneration = generation
             task?.cancel()
+#if DEBUG
+            resumeSuspendedBuildForTesting()
+#endif
             task = Task { @MainActor [weak self] in
                 guard let self else {
                     return
                 }
+                var shouldNotifyFinish = false
                 defer {
                     if generation == buildGeneration {
                         task = nil
+                        if shouldNotifyFinish {
+                            didFinish?()
+                        }
                     }
+                }
+#if DEBUG
+                await suspendBuildIfNeededForTesting()
+#endif
+                guard !Task.isCancelled else {
+                    return
                 }
                 let buildResult: DOMTreeTextView.RenderedRowsBuildResult
                 do {
@@ -70,18 +97,61 @@ extension DOMTreeTextView {
                     return
                 } catch {
                     assertionFailure("DOM tree row rendering failed: \(error)")
+                    shouldNotifyFinish = true
                     return
                 }
                 guard !Task.isCancelled,
                       generation == buildGeneration,
-                      isCurrentBuild(request),
-                      shouldApply?(buildResult) ?? true else {
+                      isCurrentBuild(request) else {
+                    return
+                }
+                guard shouldApply?(buildResult) ?? true else {
+                    shouldNotifyFinish = true
                     return
                 }
                 builder.acceptCompletedBuild(buildResult)
                 apply(buildResult)
+                shouldNotifyFinish = true
             }
         }
+
+#if DEBUG
+        func suspendNextBuildForTesting() {
+            shouldSuspendNextBuildForTesting = true
+        }
+
+        func waitForBuildSuspensionForTesting() async {
+            if suspendedBuildContinuationForTesting != nil {
+                return
+            }
+            await withCheckedContinuation { continuation in
+                buildSuspensionWaitersForTesting.append(continuation)
+            }
+        }
+
+        func resumeSuspendedBuildForTesting() {
+            guard let continuation = suspendedBuildContinuationForTesting else {
+                return
+            }
+            suspendedBuildContinuationForTesting = nil
+            continuation.resume()
+        }
+
+        private func suspendBuildIfNeededForTesting() async {
+            guard shouldSuspendNextBuildForTesting else {
+                return
+            }
+            shouldSuspendNextBuildForTesting = false
+            await withCheckedContinuation { continuation in
+                suspendedBuildContinuationForTesting = continuation
+                let waiters = buildSuspensionWaitersForTesting
+                buildSuspensionWaitersForTesting.removeAll(keepingCapacity: true)
+                for waiter in waiters {
+                    waiter.resume()
+                }
+            }
+        }
+#endif
     }
 }
 
