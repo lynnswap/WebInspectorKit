@@ -110,6 +110,18 @@ extension DOMTreeTextView {
             return rows[rowIndex]
         }
 
+        func rowsInDisplayOrder(for nodeIDs: Set<DOMNode.ID>) -> [DOMTreeTextView.Line] {
+            var rowIndexes = IndexSet()
+            for nodeID in nodeIDs {
+                guard let rowIndex = rowIndexByNodeID[nodeID],
+                      rows.indices.contains(rowIndex) else {
+                    continue
+                }
+                rowIndexes.insert(rowIndex)
+            }
+            return rowIndexes.map { rows[$0] }
+        }
+
         func rowsBetween(_ firstNodeID: DOMNode.ID, _ secondNodeID: DOMNode.ID) -> ArraySlice<DOMTreeTextView.Line> {
             guard let firstIndex = rowIndexByNodeID[firstNodeID],
                   let secondIndex = rowIndexByNodeID[secondNodeID]
@@ -313,10 +325,12 @@ extension DOMTreeTextView {
             return false
         }
 
-        func selectedNodeIDsInDisplayOrder(rows: [DOMTreeTextView.Line]) -> [DOMNode.ID] {
-            rows.compactMap { row in
-                !row.isClosingTag && selectedNodeIDs.contains(row.nodeID) ? row.nodeID : nil
-            }
+        func selectedRowsInDisplayOrder(renderedRows: DOMTreeTextView.RenderedRows) -> [DOMTreeTextView.Line] {
+            renderedRows.rowsInDisplayOrder(for: selectedNodeIDs)
+        }
+
+        func selectedNodeIDsInDisplayOrder(renderedRows: DOMTreeTextView.RenderedRows) -> [DOMNode.ID] {
+            selectedRowsInDisplayOrder(renderedRows: renderedRows).map(\.nodeID)
         }
 
         private func anchorNodeID(

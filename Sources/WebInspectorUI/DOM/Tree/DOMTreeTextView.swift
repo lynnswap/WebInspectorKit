@@ -818,7 +818,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func multiSelectedNodesInDisplayOrder() -> [DOMNode] {
-        multiSelection.selectedNodeIDsInDisplayOrder(rows: rows).compactMap { dom.node(for: $0) }
+        multiSelection.selectedNodeIDsInDisplayOrder(renderedRows: renderedRows).compactMap { dom.node(for: $0) }
     }
 
     private func scrollRowToVisible(_ row: DOMTreeTextView.Line) {
@@ -1035,7 +1035,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func localMarkupText(for nodeID: DOMNode.ID) -> String? {
-        rows.first { !$0.isClosingTag && $0.nodeID == nodeID }?.text
+        renderedRows.row(for: nodeID)?.text
     }
 
     private func uniqueNodeIDsInDisplayOrder(for nodes: [DOMNode]) -> [DOMNode.ID] {
@@ -1504,9 +1504,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func multiSelectionContentRowRects() -> [CGRect] {
-        rows.flatMap { row in
-            !row.isClosingTag && multiSelection.contains(row.nodeID) ? contentRowRects(for: row) : []
-        }
+        multiSelection.selectedRowsInDisplayOrder(renderedRows: renderedRows).flatMap(contentRowRects(for:))
     }
 
     private func hoverContentRowRects() -> [CGRect] {
@@ -2149,22 +2147,11 @@ extension DOMTreeTextView {
     }
 
     var renderedLineSnapshotsForTesting: [LineSnapshot] {
-        rows.map { row in
-            let line = row.text as NSString
-            return LineSnapshot(
-                text: row.text,
-                depth: row.depth,
-                rowIndex: row.rowIndex,
-                textRange: row.textRange,
-                markupRange: row.markupRange,
-                markupStartX: markupStartRect(for: row)?.minX ?? 0,
-                hasDisclosure: row.hasDisclosure,
-                isOpen: row.isOpen,
-                isClosingTag: row.isClosingTag,
-                tokenKinds: row.tokens.map(\.kind.rawValue),
-                tokenTexts: row.tokens.map { line.substring(with: $0.range) }
-            )
-        }
+        rows.map { lineSnapshot(for: $0) }
+    }
+
+    var multiSelectedLineSnapshotsInDisplayOrderForTesting: [LineSnapshot] {
+        multiSelection.selectedRowsInDisplayOrder(renderedRows: renderedRows).map { lineSnapshot(for: $0) }
     }
 
     func removeRowIndexForTesting(containing text: String) {
@@ -2172,6 +2159,27 @@ extension DOMTreeTextView {
             return
         }
         renderedRows.removeRowIndex(for: row.nodeID)
+    }
+
+    func localMarkupTextByNodeIDForTesting(_ nodeIDs: [DOMNode.ID]) -> [DOMNode.ID: String] {
+        localMarkupTextByNodeID(for: nodeIDs)
+    }
+
+    private func lineSnapshot(for row: DOMTreeTextView.Line) -> LineSnapshot {
+        let line = row.text as NSString
+        return LineSnapshot(
+            text: row.text,
+            depth: row.depth,
+            rowIndex: row.rowIndex,
+            textRange: row.textRange,
+            markupRange: row.markupRange,
+            markupStartX: markupStartRect(for: row)?.minX ?? 0,
+            hasDisclosure: row.hasDisclosure,
+            isOpen: row.isOpen,
+            isClosingTag: row.isClosingTag,
+            tokenKinds: row.tokens.map(\.kind.rawValue),
+            tokenTexts: row.tokens.map { line.substring(with: $0.range) }
+        )
     }
 
     var disclosureAttachmentSnapshotsForTesting: [DisclosureAttachmentSnapshot] {

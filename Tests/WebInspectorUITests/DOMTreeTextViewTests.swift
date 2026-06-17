@@ -269,6 +269,45 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func localMarkupLookupUsesIndexedOpeningRow() async throws {
+        let session = makeDOMSession()
+        let view = await makeTreeView(session: session)
+
+        view.toggleRowForTesting(containing: "<article")
+        await view.waitForRenderedRowsForTesting()
+
+        let articleID = try #require(
+            session.snapshot().nodesByID.first { entry in
+                entry.value.localName == "article"
+            }?.key
+        )
+
+        let markupByNodeID = view.localMarkupTextByNodeIDForTesting([articleID])
+        #expect(markupByNodeID[articleID] == "      <article>")
+        #expect(view.renderedTextForTesting.contains("</article>"))
+
+        view.removeRowIndexForTesting(containing: "<article>")
+        #expect(view.localMarkupTextByNodeIDForTesting([articleID]).isEmpty)
+    }
+
+    @Test
+    func multiSelectionDisplayOrderUsesRenderedRowIndexes() async throws {
+        let view = await makeTreeView()
+
+        view.primaryClickRowForTesting(containing: "<article", modifiers: .command)
+        view.primaryClickRowForTesting(containing: "<div id=\"start-of-content\"", modifiers: .command)
+        view.primaryClickRowForTesting(containing: "<input disabled>", modifiers: .command)
+
+        let selectedRows = view.multiSelectedLineSnapshotsInDisplayOrderForTesting
+        #expect(selectedRows.map(\.text) == [
+            "      <div id=\"start-of-content\" data-testid=\"cellInnerDiv\"></div>",
+            "      <input disabled>",
+            "      <article>…</article>",
+        ])
+        #expect(selectedRows.map(\.rowIndex) == selectedRows.map(\.rowIndex).sorted())
+    }
+
+    @Test
     func expandedDescendantMutationRerendersAfterExpansionDependencyRefresh() async throws {
         let session = makeDOMSession()
         let view = await makeTreeView(session: session)
