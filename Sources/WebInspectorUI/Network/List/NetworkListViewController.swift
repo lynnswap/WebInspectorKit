@@ -23,11 +23,6 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         var mode: SnapshotApplyMode
     }
 
-    private struct PendingDisplayRowsReload {
-        var rows: [NetworkRequest.Display.Projection]
-        var projectionInput: NetworkRequest.Display.RowsProjectionInput
-    }
-
     private static let snapshotThrottleInterval: Duration = .milliseconds(80)
 
     private let model: NetworkPanelModel
@@ -37,7 +32,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     private var resourceFilterObservation: PortableObservationTracking.Token?
     private var selectedRequestObservation: PortableObservationTracking.Token?
     private let displayRowsReloadScheduler = MainActorDelayScheduler()
-    private var pendingThrottledDisplayRowsReload: PendingDisplayRowsReload?
+    private var pendingThrottledDisplayRows: [NetworkRequest.Display.Projection]?
 
     private var needsSnapshotReloadOnNextAppearance = false
     private var pendingSnapshotUpdate: PendingSnapshotUpdate?
@@ -152,21 +147,18 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         displayRowsObservation?.cancel()
         displayRowsObservation = withPortableContinuousObservation { [weak self] event in
             guard let self else { return }
-            let projectionInput = model.displayRowsProjectionInput()
+            _ = model.displayRowsProjectionInput()
             let displayRows = model.displayRows
             guard isViewLoaded else {
-                model.scheduleDisplayRowsProjection(input: projectionInput)
+                model.scheduleDisplayRowsProjection()
                 needsSnapshotReloadOnNextAppearance = true
                 return
             }
             if event.kind == .initial {
-                model.scheduleDisplayRowsProjection(input: projectionInput)
+                model.scheduleDisplayRowsProjection()
                 reloadDataFromModel(displayRows: displayRows)
             } else {
-                scheduleThrottledDisplayRowsReload(
-                    displayRows: displayRows,
-                    projectionInput: projectionInput
-                )
+                scheduleThrottledDisplayRowsReload(displayRows)
             }
         }
 
@@ -189,14 +181,8 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         }
     }
 
-    private func scheduleThrottledDisplayRowsReload(
-        displayRows: [NetworkRequest.Display.Projection],
-        projectionInput: NetworkRequest.Display.RowsProjectionInput
-    ) {
-        pendingThrottledDisplayRowsReload = PendingDisplayRowsReload(
-            rows: displayRows,
-            projectionInput: projectionInput
-        )
+    private func scheduleThrottledDisplayRowsReload(_ displayRows: [NetworkRequest.Display.Projection]) {
+        pendingThrottledDisplayRows = displayRows
         guard displayRowsReloadScheduler.hasScheduledDelay == false else {
             return
         }
@@ -207,12 +193,12 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private func flushThrottledDisplayRowsReload() {
-        guard let reload = pendingThrottledDisplayRowsReload else {
+        guard let displayRows = pendingThrottledDisplayRows else {
             return
         }
-        pendingThrottledDisplayRowsReload = nil
-        model.scheduleDisplayRowsProjection(input: reload.projectionInput)
-        reloadDataFromModel(displayRows: reload.rows)
+        pendingThrottledDisplayRows = nil
+        model.scheduleDisplayRowsProjection()
+        reloadDataFromModel(displayRows: displayRows)
     }
 
     private func configureNavigationItem() {
