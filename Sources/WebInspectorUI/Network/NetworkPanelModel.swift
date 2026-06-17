@@ -43,8 +43,14 @@ package final class NetworkPanelModel {
         }
     }
     package private(set) var effectiveResourceFilters: Set<NetworkRequest.Display.ResourceFilter> = []
+    package private(set) var displayRows: [NetworkRequest.Display.Projection] = []
     @ObservationIgnored private let responseBodyFetchCoordinator: NetworkResponseBodyFetchCoordinator
-    @ObservationIgnored private let displayProjectionCache: NetworkRequest.Display.ProjectionCache
+    @ObservationIgnored private let displayRowsProjector: NetworkRequest.Display.RowsProjector
+    @ObservationIgnored private let synchronousDisplayProjectionCache: NetworkRequest.Display.ProjectionCache
+    @ObservationIgnored private var displayProjectionByID: [NetworkRequest.ID: NetworkRequest.Display.Projection] = [:]
+    @ObservationIgnored private var displayRowsProjectionTask: Task<Void, Never>?
+    @ObservationIgnored private var displayRowsProjectionGeneration = 0
+    @ObservationIgnored private var lastRequestedRowsProjectionInput: NetworkRequest.Display.RowsProjectionInput?
 
     package init(
         network: NetworkSession,
@@ -55,30 +61,12 @@ package final class NetworkPanelModel {
     ) {
         self.network = network
         self.responseBodyFetchCoordinator = NetworkResponseBodyFetchCoordinator(action: responseBodyFetchAction)
-        self.displayProjectionCache = NetworkRequest.Display.ProjectionCache(
-            mediaPreviewClassifier: mediaPreviewClassifier
-        )
+        self.displayRowsProjector = NetworkRequest.Display.RowsProjector(mediaPreviewClassifier: mediaPreviewClassifier)
+        self.synchronousDisplayProjectionCache = NetworkRequest.Display.ProjectionCache(mediaPreviewClassifier: mediaPreviewClassifier)
     }
 
-    package var displayRows: [NetworkRequest.Display.Projection] {
-        let trimmedQuery = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let requests = network.requests
-        let effectiveResourceFilters = effectiveResourceFilters
-        displayProjectionCache.prune(keeping: Set(requests.map(\.id)))
-        let rows = requests.compactMap { request -> NetworkRequest.Display.Projection? in
-            if effectiveResourceFilters.isEmpty == false {
-                let resourceFilter = displayProjectionCache.resourceFilter(for: request)
-                guard effectiveResourceFilters.contains(resourceFilter) else {
-                    return nil
-                }
-            }
-            let projection = displayProjectionCache.projection(for: request)
-            guard projection.matchesSearchText(trimmedQuery) else {
-                return nil
-            }
-            return projection
-        }
-        return Array(rows.reversed())
+    isolated deinit {
+        displayRowsProjectionTask?.cancel()
     }
 
     package var displayRequestIDs: [NetworkRequest.ID] {
@@ -105,10 +93,7 @@ package final class NetworkPanelModel {
     }
 
     package func displayProjection(for id: NetworkRequest.ID) -> NetworkRequest.Display.Projection? {
-        guard let request = network.request(for: id) else {
-            return nil
-        }
-        return displayProjectionCache.projection(for: request)
+        displayProjectionByID[id]
     }
 
     package func selectRequest(_ request: NetworkRequest?) {
@@ -146,10 +131,99 @@ package final class NetworkPanelModel {
     package func clearRequests() {
         selectedRequestID = nil
         network.reset()
-        displayProjectionCache.removeAll()
+        cancelPendingDisplayRowsProjection()
+        applyDisplayRows([], generation: displayRowsProjectionGeneration)
+        lastRequestedRowsProjectionInput = nil
+        Task { [displayRowsProjector] in
+            await displayRowsProjector.removeAll()
+        }
+        synchronousDisplayProjectionCache.removeAll()
     }
 
     package func fetchResponseBodyIfNeeded(for request: NetworkRequest) {
         responseBodyFetchCoordinator.fetchIfNeeded(for: request)
+    }
+
+    package func displayRowsProjectionInput() -> NetworkRequest.Display.RowsProjectionInput {
+        NetworkRequest.Display.RowsProjectionInput(
+            requestSnapshots: network.requests.map(NetworkRequest.Display.RequestSnapshot.init),
+            searchText: searchText,
+            resourceFilters: effectiveResourceFilters
+        )
+    }
+
+    package func scheduleDisplayRowsProjection(
+        input: NetworkRequest.Display.RowsProjectionInput? = nil
+    ) {
+        let input = input ?? displayRowsProjectionInput()
+        guard input != lastRequestedRowsProjectionInput else {
+            return
+        }
+        lastRequestedRowsProjectionInput = input
+        cancelPendingDisplayRowsProjection()
+        let generation = displayRowsProjectionGeneration
+        let projector = displayRowsProjector
+        displayRowsProjectionTask = Task { [input, generation, projector, weak self] in
+            do {
+                let rows = try await projector.rows(for: input)
+                try Task.checkCancellation()
+                await MainActor.run {
+                    self?.applyDisplayRows(rows, generation: generation)
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                return
+            }
+        }
+    }
+
+    @discardableResult
+    package func refreshDisplayRows() async -> [NetworkRequest.Display.Projection] {
+        let input = displayRowsProjectionInput()
+        lastRequestedRowsProjectionInput = input
+        cancelPendingDisplayRowsProjection()
+        let generation = displayRowsProjectionGeneration
+        do {
+            let rows = try await displayRowsProjector.rows(for: input)
+            try Task.checkCancellation()
+            applyDisplayRows(rows, generation: generation)
+        } catch is CancellationError {
+        } catch {
+        }
+        return displayRows
+    }
+
+    @discardableResult
+    package func refreshDisplayRowsSynchronously() -> [NetworkRequest.Display.Projection] {
+        let input = displayRowsProjectionInput()
+        lastRequestedRowsProjectionInput = input
+        cancelPendingDisplayRowsProjection()
+        let generation = displayRowsProjectionGeneration
+        do {
+            let rows = try synchronousDisplayProjectionCache.rows(for: input)
+            applyDisplayRows(rows, generation: generation)
+        } catch is CancellationError {
+        } catch {
+        }
+        return displayRows
+    }
+
+    private func cancelPendingDisplayRowsProjection() {
+        displayRowsProjectionGeneration += 1
+        displayRowsProjectionTask?.cancel()
+        displayRowsProjectionTask = nil
+    }
+
+    private func applyDisplayRows(
+        _ rows: [NetworkRequest.Display.Projection],
+        generation: Int
+    ) {
+        guard generation == displayRowsProjectionGeneration else {
+            return
+        }
+        displayRows = rows
+        displayProjectionByID = Dictionary(uniqueKeysWithValues: rows.map { ($0.id, $0) })
+        displayRowsProjectionTask = nil
     }
 }

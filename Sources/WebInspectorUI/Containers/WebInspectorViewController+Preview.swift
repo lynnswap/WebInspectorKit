@@ -5,7 +5,7 @@ import UIKit
 @MainActor
 enum WebInspectorViewControllerPreviewFixtures {
     static func makeSession() -> WebInspectorSession {
-        WebInspectorSession(
+        let session = WebInspectorSession(
             inspector: InspectorSession(
                 attachment: AttachedInspection(
                     dom: DOMPreviewFixtures.makeDOMSession(),
@@ -13,6 +13,8 @@ enum WebInspectorViewControllerPreviewFixtures {
                 )
             )
         )
+        session.interface.networkPanelModel(for: session.attachment).refreshDisplayRowsSynchronously()
+        return session
     }
 }
 

@@ -23,6 +23,11 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         var mode: SnapshotApplyMode
     }
 
+    private struct PendingDisplayRowsReload {
+        var rows: [NetworkRequest.Display.Projection]
+        var projectionInput: NetworkRequest.Display.RowsProjectionInput
+    }
+
     private static let snapshotThrottleInterval: Duration = .milliseconds(80)
 
     private let model: NetworkPanelModel
@@ -32,7 +37,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     private var resourceFilterObservation: PortableObservationTracking.Token?
     private var selectedRequestObservation: PortableObservationTracking.Token?
     private let displayRowsReloadScheduler = MainActorDelayScheduler()
-    private var pendingThrottledDisplayRows: [NetworkRequest.Display.Projection]?
+    private var pendingThrottledDisplayRowsReload: PendingDisplayRowsReload?
 
     private var needsSnapshotReloadOnNextAppearance = false
     private var pendingSnapshotUpdate: PendingSnapshotUpdate?
@@ -147,15 +152,21 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         displayRowsObservation?.cancel()
         displayRowsObservation = withPortableContinuousObservation { [weak self] event in
             guard let self else { return }
+            let projectionInput = model.displayRowsProjectionInput()
             let displayRows = model.displayRows
             guard isViewLoaded else {
+                model.scheduleDisplayRowsProjection(input: projectionInput)
                 needsSnapshotReloadOnNextAppearance = true
                 return
             }
             if event.kind == .initial {
+                model.scheduleDisplayRowsProjection(input: projectionInput)
                 reloadDataFromModel(displayRows: displayRows)
             } else {
-                scheduleThrottledDisplayRowsReload(displayRows)
+                scheduleThrottledDisplayRowsReload(
+                    displayRows: displayRows,
+                    projectionInput: projectionInput
+                )
             }
         }
 
@@ -178,8 +189,14 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         }
     }
 
-    private func scheduleThrottledDisplayRowsReload(_ displayRows: [NetworkRequest.Display.Projection]) {
-        pendingThrottledDisplayRows = displayRows
+    private func scheduleThrottledDisplayRowsReload(
+        displayRows: [NetworkRequest.Display.Projection],
+        projectionInput: NetworkRequest.Display.RowsProjectionInput
+    ) {
+        pendingThrottledDisplayRowsReload = PendingDisplayRowsReload(
+            rows: displayRows,
+            projectionInput: projectionInput
+        )
         guard displayRowsReloadScheduler.hasScheduledDelay == false else {
             return
         }
@@ -190,11 +207,12 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private func flushThrottledDisplayRowsReload() {
-        guard let displayRows = pendingThrottledDisplayRows else {
+        guard let reload = pendingThrottledDisplayRowsReload else {
             return
         }
-        pendingThrottledDisplayRows = nil
-        reloadDataFromModel(displayRows: displayRows)
+        pendingThrottledDisplayRowsReload = nil
+        model.scheduleDisplayRowsProjection(input: reload.projectionInput)
+        reloadDataFromModel(displayRows: reload.rows)
     }
 
     private func configureNavigationItem() {
@@ -315,8 +333,8 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private func makeDataSource() -> UICollectionViewDiffableDataSource<SectionIdentifier, NetworkRequest.ID> {
-        let listCellRegistration = UICollectionView.CellRegistration<NetworkListCell, NetworkRequest.ID> { [weak model] cell, _, id in
-            guard let projection = model?.displayProjection(for: id) else {
+        let listCellRegistration = UICollectionView.CellRegistration<NetworkListCell, NetworkRequest.ID> { [weak self] cell, _, id in
+            guard let projection = self?.projectionForVisibleRow(id) else {
                 return
             }
             cell.bind(projection: projection)
@@ -330,6 +348,10 @@ package final class NetworkListViewController: UICollectionViewController, UISea
                 item: item
             )
         }
+    }
+
+    private func projectionForVisibleRow(_ id: NetworkRequest.ID) -> NetworkRequest.Display.Projection? {
+        snapshotState.projection(for: id) ?? model.displayProjection(for: id)
     }
 
     private func makeSnapshot(

@@ -46,6 +46,10 @@ extension NetworkListViewController {
             applyingRows != nil
         }
 
+        func projection(for id: NetworkRequest.ID) -> NetworkRequest.Display.Projection? {
+            applyingRows?.projectionByID[id] ?? displayedProjectionByID[id]
+        }
+
         func reconfiguredIDs(comparedTo rows: NetworkListViewController.SnapshotRows) -> Set<NetworkRequest.ID> {
             Set(rows.requestIDs.filter { id in
                 guard let previous = displayedProjectionByID[id],
