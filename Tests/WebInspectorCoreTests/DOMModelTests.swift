@@ -719,6 +719,74 @@ func iframeOwnerRemovalDropsProjectionButKeepsFrameTargetMirror() async throws {
 }
 
 @Test
+@MainActor
+func frameDocumentProjectionOwnerIndexDropsStaleEntries() throws {
+    let index = FrameDocumentProjectionIndex()
+    let frameTargetID = ProtocolTarget.ID("frame-ad-target")
+    let movedFrameTargetID = ProtocolTarget.ID("frame-ad-target-committed")
+    let otherFrameTargetID = ProtocolTarget.ID("frame-other-target")
+    let pageDocumentID = DOMDocument.ID(
+        targetID: ProtocolTarget.ID("page-main"),
+        localDocumentLifetimeID: .init(1)
+    )
+    let firstFrameDocumentID = DOMDocument.ID(
+        targetID: frameTargetID,
+        localDocumentLifetimeID: .init(1)
+    )
+    let secondFrameDocumentID = DOMDocument.ID(
+        targetID: frameTargetID,
+        localDocumentLifetimeID: .init(2)
+    )
+    let ownerNodeID = DOMNode.ID(documentID: pageDocumentID, nodeID: .init(20))
+    let replacementOwnerNodeID = DOMNode.ID(documentID: pageDocumentID, nodeID: .init(21))
+    let firstRootID = DOMNode.ID(documentID: firstFrameDocumentID, nodeID: .init(101))
+    let secondRootID = DOMNode.ID(documentID: secondFrameDocumentID, nodeID: .init(201))
+    let documents = [
+        firstFrameDocumentID: projectionIndexTestDocument(id: firstFrameDocumentID, rootNodeID: firstRootID),
+        secondFrameDocumentID: projectionIndexTestDocument(id: secondFrameDocumentID, rootNodeID: secondRootID),
+    ]
+
+    func projectedRoot(for ownerNodeID: DOMNode.ID) -> DOMNode.ID? {
+        index.projectedFrameDocumentRootID(forOwnerNodeID: ownerNodeID) { documents[$0] }
+    }
+
+    index.setFrameDocument(frameTargetID: frameTargetID, frameDocumentID: firstFrameDocumentID)
+    index.attach(frameTargetID: frameTargetID, to: ownerNodeID)
+    #expect(projectedRoot(for: ownerNodeID) == firstRootID)
+
+    index.attach(frameTargetID: frameTargetID, to: replacementOwnerNodeID)
+    #expect(projectedRoot(for: ownerNodeID) == nil)
+    #expect(projectedRoot(for: replacementOwnerNodeID) == firstRootID)
+
+    index.detach(frameTargetID: frameTargetID)
+    #expect(projectedRoot(for: replacementOwnerNodeID) == nil)
+
+    index.attach(frameTargetID: frameTargetID, to: ownerNodeID)
+    index.setFrameDocument(frameTargetID: frameTargetID, frameDocumentID: secondFrameDocumentID)
+    #expect(projectedRoot(for: ownerNodeID) == nil)
+
+    index.attach(frameTargetID: frameTargetID, to: ownerNodeID)
+    #expect(projectedRoot(for: ownerNodeID) == secondRootID)
+
+    index.moveProjection(from: frameTargetID, to: movedFrameTargetID)
+    #expect(projectedRoot(for: ownerNodeID) == secondRootID)
+
+    index.setFrameDocument(frameTargetID: otherFrameTargetID, frameDocumentID: firstFrameDocumentID)
+    index.attach(frameTargetID: otherFrameTargetID, to: replacementOwnerNodeID)
+    #expect(projectedRoot(for: replacementOwnerNodeID) == firstRootID)
+
+    index.removeValue(forKey: movedFrameTargetID)
+    #expect(projectedRoot(for: ownerNodeID) == nil)
+
+    index.detach(frameTargetID: otherFrameTargetID, state: .ambiguous)
+    #expect(projectedRoot(for: replacementOwnerNodeID) == nil)
+
+    index.attach(frameTargetID: otherFrameTargetID, to: replacementOwnerNodeID)
+    index.removeAll()
+    #expect(projectedRoot(for: replacementOwnerNodeID) == nil)
+}
+
+@Test
 func visibleOrderMatchesWebKitDOMTreeOrder() async throws {
     let pageTargetID = ProtocolTarget.ID("page-main")
     let session = await DOMSession()
@@ -1734,6 +1802,18 @@ private func frameDocument(
                 ]
             ),
         ]
+    )
+}
+
+@MainActor
+private func projectionIndexTestDocument(id: DOMDocument.ID, rootNodeID: DOMNode.ID) -> DOMDocument {
+    DOMDocument(
+        id: id,
+        targetID: id.targetID,
+        lifecycle: .loaded,
+        rootNodeID: rootNodeID,
+        nodesByID: [:],
+        currentNodeIDByProtocolNodeID: [:]
     )
 }
 

@@ -217,6 +217,42 @@ extension DOMTreeTextView {
         let previousRowCapacity: Int
         let previousTextCapacity: Int
         let markupCache: [DOMNode.ID: DOMTreeTextView.CachedMarkup]
+        let frameDocumentRootIDByOwnerNodeID: [DOMNode.ID: DOMNode.ID]
+
+        init(
+            domSnapshot: DOMSession.Snapshot,
+            treeRevision: UInt64,
+            expansionState: [DOMNode.ID: Bool],
+            previousRowCapacity: Int,
+            previousTextCapacity: Int,
+            markupCache: [DOMNode.ID: DOMTreeTextView.CachedMarkup]
+        ) {
+            self.domSnapshot = domSnapshot
+            self.treeRevision = treeRevision
+            self.expansionState = expansionState
+            self.previousRowCapacity = previousRowCapacity
+            self.previousTextCapacity = previousTextCapacity
+            self.markupCache = markupCache
+            self.frameDocumentRootIDByOwnerNodeID = Self.frameDocumentRootIDsByOwnerNodeID(
+                in: domSnapshot
+            )
+        }
+
+        private static func frameDocumentRootIDsByOwnerNodeID(
+            in snapshot: DOMSession.Snapshot
+        ) -> [DOMNode.ID: DOMNode.ID] {
+            var rootsByOwnerNodeID: [DOMNode.ID: DOMNode.ID] = [:]
+            for projection in snapshot.frameDocumentProjections.values
+                where projection.state == .attached {
+                guard let ownerNodeID = projection.ownerNodeID,
+                      let document = snapshot.documentsByID[projection.frameDocumentID],
+                      document.lifecycle == .loaded else {
+                    continue
+                }
+                rootsByOwnerNodeID[ownerNodeID] = document.rootNodeID
+            }
+            return rootsByOwnerNodeID
+        }
     }
 
     struct RenderedRowsBuildResult: Sendable {
@@ -459,15 +495,7 @@ extension DOMTreeTextView {
         }
 
         private func projectedFrameDocumentRootID(forOwnerNodeID ownerNodeID: DOMNode.ID) -> DOMNode.ID? {
-            for projection in request.domSnapshot.frameDocumentProjections.values
-                where projection.ownerNodeID == ownerNodeID && projection.state == .attached {
-                guard let document = request.domSnapshot.documentsByID[projection.frameDocumentID],
-                      document.lifecycle == .loaded else {
-                    continue
-                }
-                return document.rootNodeID
-            }
-            return nil
+            request.frameDocumentRootIDByOwnerNodeID[ownerNodeID]
         }
 
         private func nodeHasDisclosure(_ node: DOMNode.Snapshot) -> Bool {
