@@ -401,6 +401,82 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func selectionRevealSkipsStaleSelectedNodeDuringPendingInspectSelection() async throws {
+        let protocolTargetID = ProtocolTarget.ID("page-main")
+        let session = makeDOMSession(root: selectionRevealRaceDocument())
+        let view = await makeTreeView(session: session)
+        view.frame = CGRect(x: 0, y: 0, width: 360, height: 96)
+        view.layoutIfNeeded()
+
+        let initialSnapshot = session.snapshot()
+        let bodyID = try #require(
+            initialSnapshot.nodesByID.first { entry in
+                entry.value.localName == "body"
+            }?.key
+        )
+        let oldSelectedNodeID = try #require(
+            initialSnapshot.nodesByID.first { entry in
+                entry.value.attributes.contains { attribute in
+                    attribute.name == "id" && attribute.value == "selected-target"
+                }
+            }?.key
+        )
+
+        view.suspendNextRenderedRowsBuildForTesting()
+        session.applySetChildNodes(
+            parent: bodyID,
+            children: selectionRevealRaceBodyChildren(prefixCount: 80)
+        )
+        await view.waitForRenderedRowsBuildSuspensionForTesting()
+
+        session.selectNode(oldSelectedNodeID)
+        await Task.yield()
+
+        let command = session.beginInspectSelectionRequest(
+            targetID: protocolTargetID,
+            objectID: "next-selection"
+        )
+        let selectionRequestID: DOMSelection.Request.ID
+        guard case let .success(.requestNode(id, _, _)) = command else {
+            Issue.record("Expected pending DOM.requestNode selection")
+            return
+        }
+        selectionRequestID = id
+
+        view.resumeRenderedRowsBuildForTesting()
+        await view.waitForRenderedRowsForTesting()
+
+        #expect(session.hasPendingSelectionRequest)
+        #expect(view.contentOffset.y < view.bounds.height)
+
+        let result = session.applyRequestNodeResult(
+            selectionRequestID: selectionRequestID,
+            targetID: protocolTargetID,
+            nodeID: .init(4)
+        )
+        guard case let .resolved(resolvedNodeID) = result else {
+            Issue.record("Expected pending DOM.requestNode selection to resolve")
+            return
+        }
+        await Task.yield()
+
+        let selectedLine = try #require(
+            view.renderedLineSnapshotsForTesting.first { snapshot in
+                snapshot.text.contains("id=\"selected-target\"")
+            }
+        )
+        let selectedRowY = CGFloat(selectedLine.rowIndex) * view.rowHeightForTesting
+        let visibleMinY = view.contentOffset.y
+        let visibleMaxY = view.contentOffset.y + view.bounds.height
+
+        #expect(resolvedNodeID == oldSelectedNodeID)
+        #expect(!session.hasPendingSelectionRequest)
+        #expect(view.contentOffset.y > view.bounds.height)
+        #expect(selectedRowY >= visibleMinY - view.rowHeightForTesting)
+        #expect(selectedRowY + view.rowHeightForTesting <= visibleMaxY + view.rowHeightForTesting)
+    }
+
+    @Test
     func documentResetClearsLocalExpansionStateEvenWhenNodeIDsRepeat() async throws {
         let session = makeDOMSession()
         let view = await makeTreeView(session: session)

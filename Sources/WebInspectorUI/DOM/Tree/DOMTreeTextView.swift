@@ -522,6 +522,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     private func routeSelectionInvalidation(from dom: DOMSession) {
         let nextSelectedNodeID = dom.selectedNodeID
         guard lastRoutedSelectedNodeID != nextSelectedNodeID else {
+            revealPendingSelectedNodeIfPossible()
             return
         }
         handleSelectedNodeChange()
@@ -1793,6 +1794,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
 
     private func revealPendingSelectedNodeIfPossible() {
         guard let selectedNodeID = selectionRevealState.pendingSelectedNodeID,
+              !dom.hasPendingSelectionRequest,
               !renderedRowsBuildCoordinator.hasCurrentBuild,
               let row = renderedRows.row(for: selectedNodeID),
               bounds.width > 0,
