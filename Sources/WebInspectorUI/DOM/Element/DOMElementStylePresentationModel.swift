@@ -184,7 +184,7 @@ package struct DOMElementStylePresentationModel {
     }
 
     private mutating func renderPending() -> RenderResult {
-        guard let displayedSnapshot else {
+        guard displayedSnapshot != nil else {
             return renderUnavailable()
         }
         return .pending
