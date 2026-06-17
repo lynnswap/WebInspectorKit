@@ -147,17 +147,18 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         displayRowsObservation?.cancel()
         displayRowsObservation = withPortableContinuousObservation { [weak self] event in
             guard let self else { return }
-            _ = model.displayRowsProjectionInput()
+            let projectionInput = model.displayRowsProjectionInput()
             let displayRows = model.displayRows
             guard isViewLoaded else {
-                model.scheduleDisplayRowsProjection()
+                model.scheduleDisplayRowsProjection(input: projectionInput)
                 needsSnapshotReloadOnNextAppearance = true
                 return
             }
             if event.kind == .initial {
-                model.scheduleDisplayRowsProjection()
+                model.scheduleDisplayRowsProjection(input: projectionInput)
                 reloadDataFromModel(displayRows: displayRows)
             } else {
+                model.scheduleDisplayRowsProjection(input: projectionInput)
                 scheduleThrottledDisplayRowsReload(displayRows)
             }
         }
@@ -197,7 +198,6 @@ package final class NetworkListViewController: UICollectionViewController, UISea
             return
         }
         pendingThrottledDisplayRows = nil
-        model.scheduleDisplayRowsProjection()
         reloadDataFromModel(displayRows: displayRows)
     }
 

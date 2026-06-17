@@ -1,5 +1,7 @@
 #if canImport(UIKit)
+import Dispatch
 import ObservationBridge
+import Synchronization
 import Testing
 import WebInspectorTransport
 import UIKit
@@ -1247,6 +1249,49 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func listCancelsStaleDisplayProjectionBeforeThrottledReload() async throws {
+        let network = NetworkSession()
+        let request = try #require(applyRequest(
+            to: network,
+            requestID: "1",
+            url: "https://media.example.com/clip.mp4",
+            responseHeaders: ["content-type": "video/mp4"],
+            responseMimeType: "video/mp4"
+        ))
+        let requestID = request.id
+        let classifier = BlockingMediaPreviewClassifier()
+        let model = NetworkPanelModel(network: network, mediaPreviewClassifier: classifier.classify)
+        model.setResourceFilter(.media, enabled: true)
+        let listViewController = NetworkListViewController(model: model)
+        defer {
+            classifier.unblock()
+        }
+
+        #expect(await classifier.waitUntilBlocked())
+
+        let window = showInWindow(listViewController)
+        defer { window.isHidden = true }
+
+        let observation = try #require(listViewController.displayRowsObservationDeliveryForTesting)
+        let observedSearchText = await observation.values {
+            model.searchText
+        }
+        let observedDisplayRequestIDs = await observation.values {
+            model.displayRequestIDs
+        }
+
+        model.setSearchText("does-not-match")
+        #expect(await observedSearchText.waitUntilValue("does-not-match"))
+
+        classifier.unblock()
+
+        let staleDisplayRequestIDs = await observedDisplayRequestIDs.waitUntil(timeout: .milliseconds(250)) { ids in
+            ids == [requestID]
+        }
+        #expect(staleDisplayRequestIDs == nil)
+    }
+
+    @Test
     func listControllerDeallocatesWhileDisplayRequestObservationIsActive() async throws {
         let model = NetworkPanelModel(network: NetworkSession())
         let deinitProbe = UITestDeinitProbe()
@@ -1456,6 +1501,50 @@ struct NetworkDetailViewControllerTests {
             return nil
         }
         return bundle.localizedString(forKey: key, value: nil, table: nil)
+    }
+
+    private final class BlockingMediaPreviewClassifier: @unchecked Sendable {
+        private struct State: Sendable {
+            var shouldBlockNextCall = true
+            var isBlocked = false
+        }
+
+        private let state = Mutex(State())
+        private let unblockSemaphore = DispatchSemaphore(value: 0)
+
+        func classify(
+            mimeType: String?,
+            url: String?
+        ) -> NetworkRequest.Display.MediaPreviewClassification {
+            let shouldBlock = state.withLock { state in
+                guard state.shouldBlockNextCall else {
+                    return false
+                }
+                state.shouldBlockNextCall = false
+                return true
+            }
+            if shouldBlock {
+                state.withLock { state in
+                    state.isBlocked = true
+                }
+                unblockSemaphore.wait()
+            }
+            return NetworkRequest.Display.MediaPreviewSupport.classification(mimeType: mimeType, url: url)
+        }
+
+        func waitUntilBlocked() async -> Bool {
+            for _ in 0..<100 {
+                if state.withLock({ $0.isBlocked }) {
+                    return true
+                }
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+            return false
+        }
+
+        func unblock() {
+            unblockSemaphore.signal()
+        }
     }
 }
 }
