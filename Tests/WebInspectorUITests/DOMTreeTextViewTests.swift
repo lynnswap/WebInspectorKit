@@ -1,4 +1,5 @@
 #if canImport(UIKit)
+import ObservationBridge
 import Testing
 import WebInspectorTransport
 import UIKit
@@ -313,7 +314,6 @@ struct DOMTreeTextViewTests {
         let view = await makeTreeView(session: session)
 
         view.toggleRowForTesting(containing: "<article")
-        await Task.yield()
         await view.waitForRenderedRowsForTesting()
         #expect(view.renderedTextForTesting.contains("<span id=\"nested-child\"></span>"))
 
@@ -325,9 +325,17 @@ struct DOMTreeTextViewTests {
             }?.key
         )
 
-        session.applyAttributeModified(nestedChildID, name: "data-state", value: "ready")
-        await Task.yield()
-        await view.waitForRenderedRowsForTesting()
+        let didRenderAttribute = await waitForRenderedDocumentTreeUpdate(
+            in: view,
+            session: session,
+            update: {
+                session.applyAttributeModified(nestedChildID, name: "data-state", value: "ready")
+            },
+            until: {
+                view.renderedTextForTesting.contains("<span id=\"nested-child\" data-state=\"ready\"></span>")
+            }
+        )
+        #expect(didRenderAttribute)
         #expect(view.renderedTextForTesting.contains("<span id=\"nested-child\" data-state=\"ready\"></span>"))
     }
 
@@ -482,23 +490,32 @@ struct DOMTreeTextViewTests {
         let view = await makeTreeView(session: session)
 
         view.toggleRowForTesting(containing: "<article")
-        await Task.yield()
         await view.waitForRenderedRowsForTesting()
         #expect(view.renderedTextForTesting.contains("<span id=\"nested-child\"></span>"))
 
         let targetID = ProtocolTarget.ID("page-main")
-        session.reset()
-        session.applyTargetCreated(
-            ProtocolTarget.Record(
-                id: targetID,
-                kind: .page,
-                frameID: DOMFrame.ID("main-frame")
-            ),
-            makeCurrentMainPage: true
+        let didRenderResetDocument = await waitForRenderedDocumentTreeUpdate(
+            in: view,
+            session: session,
+            update: {
+                session.reset()
+                session.applyTargetCreated(
+                    ProtocolTarget.Record(
+                        id: targetID,
+                        kind: .page,
+                        frameID: DOMFrame.ID("main-frame")
+                    ),
+                    makeCurrentMainPage: true
+                )
+                _ = session.replaceDocumentRoot(documentNode(), targetID: targetID)
+            },
+            until: {
+                let text = view.renderedTextForTesting
+                return text.contains("<article>…</article>")
+                    && !text.contains("<span id=\"nested-child\"></span>")
+            }
         )
-        _ = session.replaceDocumentRoot(documentNode(), targetID: targetID)
-        await Task.yield()
-        await view.waitForRenderedRowsForTesting()
+        #expect(didRenderResetDocument)
 
         #expect(view.renderedTextForTesting.contains("<article>…</article>"))
         #expect(!view.renderedTextForTesting.contains("<span id=\"nested-child\"></span>"))
@@ -552,10 +569,16 @@ struct DOMTreeTextViewTests {
                 selectedRowCount: view.selectedRowRectsForTesting().count
             )
         }
-        fixture.session.selectNode(fixture.selectedNodeID)
-        await Task.yield()
-        await view.waitForRenderedRowsForTesting()
-        let didRenderSelection = sampleRenderedState().hasProjectedFrameSelection
+        let didRenderSelection = await waitForRenderedSelectionTreeUpdate(
+            in: view,
+            session: fixture.session,
+            update: {
+                fixture.session.selectNode(fixture.selectedNodeID)
+            },
+            until: {
+                sampleRenderedState().hasProjectedFrameSelection
+            }
+        )
 
         let projection = fixture.session.treeProjection(rootTargetID: fixture.pageTargetID)
         #expect(fixture.session.snapshot().nodesByID[fixture.frameRootID]?.parentID == nil)
@@ -707,6 +730,94 @@ private func makeTreeView(session: DOMSession) async -> DOMTreeTextView {
     view.layoutIfNeeded()
     await view.waitForRenderedRowsForTesting()
     return view
+}
+
+@MainActor
+private func waitForRenderedDocumentTreeUpdate(
+    in view: DOMTreeTextView,
+    session: DOMSession,
+    timeout: Duration = .seconds(1),
+    update: @MainActor () -> Void,
+    until condition: @escaping @MainActor @Sendable () -> Bool
+) async -> Bool {
+    await waitForRenderedTreeUpdate(
+        in: view,
+        observing: view.documentObservationDeliveryForTesting,
+        revision: { session.treeRevision },
+        timeout: timeout,
+        update: update,
+        until: condition
+    )
+}
+
+@MainActor
+private func waitForRenderedSelectionTreeUpdate(
+    in view: DOMTreeTextView,
+    session: DOMSession,
+    timeout: Duration = .seconds(1),
+    update: @MainActor () -> Void,
+    until condition: @escaping @MainActor @Sendable () -> Bool
+) async -> Bool {
+    await waitForRenderedTreeUpdate(
+        in: view,
+        observing: view.selectionObservationDeliveryForTesting,
+        revision: { session.selectionRevision },
+        timeout: timeout,
+        update: update,
+        until: condition
+    )
+}
+
+@MainActor
+private func waitForRenderedTreeUpdate(
+    in view: DOMTreeTextView,
+    observing observation: PortableObservationTracking.Token,
+    revision: @escaping @MainActor @Sendable () -> UInt64,
+    timeout: Duration,
+    update: @MainActor () -> Void,
+    until condition: @escaping @MainActor @Sendable () -> Bool
+) async -> Bool {
+    let observedRevisions = await observation.values {
+        revision()
+    }
+    defer {
+        observedRevisions.cancel()
+    }
+
+    update()
+    return await waitForRenderedTreeUpdate(
+        in: view,
+        observedRevisions: observedRevisions,
+        expectedRevision: revision(),
+        timeout: timeout,
+        until: condition
+    )
+}
+
+@MainActor
+private func waitForRenderedTreeUpdate(
+    in view: DOMTreeTextView,
+    observedRevisions: ObservedValues<UInt64>,
+    expectedRevision: UInt64,
+    timeout: Duration,
+    until condition: @escaping @MainActor @Sendable () -> Bool
+) async -> Bool {
+    let didAlreadyObserveRevision = observedRevisions.latestValue.map { $0 >= expectedRevision } ?? false
+    let didObserveRevision: Bool
+    if didAlreadyObserveRevision {
+        didObserveRevision = true
+    } else {
+        didObserveRevision = await observedRevisions.waitUntil(timeout: timeout) { $0 >= expectedRevision } != nil
+    }
+    guard didObserveRevision else {
+        await view.waitForRenderedRowsForTesting()
+        view.layoutIfNeeded()
+        return condition()
+    }
+
+    await view.waitForRenderedRowsForTesting()
+    view.layoutIfNeeded()
+    return condition()
 }
 
 @MainActor
