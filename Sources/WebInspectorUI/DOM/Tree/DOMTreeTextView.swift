@@ -82,6 +82,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     private var lastRoutedTreeRevision: UInt64?
     private var pendingDOMTreeRenderInvalidation: DOMTreeRenderInvalidation?
     private var pendingDOMTreeRenderInvalidationIsInitial = false
+    private var pendingDOMTreeRenderInvalidationRequiresRoute = false
     private var domTreeRenderInvalidationTask: Task<Void, Never>?
     private var lastObservedTreeContent: DOMTreeTextView.ObservedContent?
     private var lastRoutedSelectedNodeID: DOMNode.ID?
@@ -526,6 +527,14 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     ) {
         pendingDOMTreeRenderInvalidation = pendingDOMTreeRenderInvalidation?.merging(with: invalidation) ?? invalidation
         pendingDOMTreeRenderInvalidationIsInitial = pendingDOMTreeRenderInvalidationIsInitial || isInitial
+        pendingDOMTreeRenderInvalidationRequiresRoute = pendingDOMTreeRenderInvalidationRequiresRoute
+            || shouldRouteDOMInvalidation(
+                invalidation,
+                isInitial: isInitial,
+                includesNode: { [renderedRowsBuildCoordinator] nodeID in
+                    renderedRowsBuildCoordinator.currentBuildRenders(nodeID: nodeID)
+                }
+            )
         guard domTreeRenderInvalidationTask == nil else {
             return
         }
@@ -536,21 +545,28 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
             }
             let pendingInvalidation = pendingDOMTreeRenderInvalidation
             let pendingIsInitial = pendingDOMTreeRenderInvalidationIsInitial
+            let pendingRequiresRoute = pendingDOMTreeRenderInvalidationRequiresRoute
             pendingDOMTreeRenderInvalidation = nil
             pendingDOMTreeRenderInvalidationIsInitial = false
+            pendingDOMTreeRenderInvalidationRequiresRoute = false
             domTreeRenderInvalidationTask = nil
             guard let pendingInvalidation else {
                 return
             }
-            routeDOMInvalidation(pendingInvalidation, isInitial: pendingIsInitial)
+            routeDOMInvalidation(
+                pendingInvalidation,
+                isInitial: pendingIsInitial,
+                forceRoute: pendingRequiresRoute
+            )
         }
     }
 
     private func routeDOMInvalidation(
         _ invalidation: DOMTreeRenderInvalidation,
-        isInitial: Bool
+        isInitial: Bool,
+        forceRoute: Bool = false
     ) {
-        guard shouldRouteDOMInvalidation(invalidation, isInitial: isInitial) else {
+        guard forceRoute || shouldRouteDOMInvalidation(invalidation, isInitial: isInitial) else {
             return
         }
 #if DEBUG
@@ -576,10 +592,15 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
 
     private func shouldRouteDOMInvalidation(
         _ invalidation: DOMTreeRenderInvalidation,
-        isInitial: Bool
+        isInitial: Bool,
+        includesNode: ((DOMNode.ID) -> Bool)? = nil
     ) -> Bool {
         guard !isInitial, !invalidation.requiresFragmentReset else {
             return true
+        }
+
+        func isVisible(_ nodeID: DOMNode.ID) -> Bool {
+            renderedRows.contains(nodeID: nodeID) || includesNode?(nodeID) == true
         }
 
         switch invalidation.kind {
@@ -589,7 +610,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
             guard let affectedNodeID = invalidation.affectedNodeID else {
                 return true
             }
-            return renderedRows.contains(nodeID: affectedNodeID)
+            return isVisible(affectedNodeID)
         case .structure:
             let renderRootNodeID = dom.currentDOMTreeRenderRootNodeID
             if invalidation.affectedNodeID == renderRootNodeID
@@ -597,11 +618,11 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
                 return true
             }
             if let affectedNodeID = invalidation.affectedNodeID,
-               renderedRows.contains(nodeID: affectedNodeID) {
+               isVisible(affectedNodeID) {
                 return true
             }
             if let parentNodeID = invalidation.parentNodeID,
-               renderedRows.contains(nodeID: parentNodeID) {
+               isVisible(parentNodeID) {
                 return true
             }
             return invalidation.affectedNodeID == nil && invalidation.parentNodeID == nil
@@ -679,7 +700,13 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
                 }
                 let currentInvalidation = dom.treeRenderInvalidation(since: request.treeRevision)
                 let isCurrentTreeRevision = currentInvalidation.revision == request.treeRevision
-                    || !shouldRouteDOMInvalidation(currentInvalidation, isInitial: false)
+                    || !shouldRouteDOMInvalidation(
+                        currentInvalidation,
+                        isInitial: false,
+                        includesNode: { nodeID in
+                            request.rendersNode(nodeID)
+                        }
+                    )
                 return isCurrentTreeRevision
                     && expansionState.snapshot == request.expansionState
             },

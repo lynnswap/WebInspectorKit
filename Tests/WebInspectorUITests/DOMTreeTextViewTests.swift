@@ -515,6 +515,37 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func inFlightExpansionMutationRebuildsAgainstNewSnapshot() async throws {
+        let session = makeDOMSession()
+        let view = await makeTreeView(session: session)
+        let nestedChildID = try #require(
+            session.snapshot().nodesByID.first { entry in
+                entry.value.attributes.contains { attribute in
+                    attribute.name == "id" && attribute.value == "nested-child"
+                }
+            }?.key
+        )
+
+        view.suspendNextRenderedRowsBuildForTesting()
+        view.toggleRowForTesting(containing: "<article")
+        await view.waitForRenderedRowsBuildSuspensionForTesting()
+
+        let didRenderAttribute = await waitForRenderedDocumentTreeUpdate(
+            in: view,
+            session: session,
+            update: {
+                session.applyAttributeModified(nestedChildID, name: "data-state", value: "ready")
+            },
+            until: {
+                view.renderedTextForTesting.contains("<span id=\"nested-child\" data-state=\"ready\"></span>")
+            }
+        )
+
+        #expect(didRenderAttribute)
+        #expect(view.renderedTextForTesting.contains("<span id=\"nested-child\" data-state=\"ready\"></span>"))
+    }
+
+    @Test
     func selectionChangeUpdatesDecorationsWithoutRebuildingRenderedRows() async throws {
         let session = makeDOMSession()
         let view = await makeTreeView(session: session)

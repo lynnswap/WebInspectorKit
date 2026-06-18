@@ -12,6 +12,7 @@ extension DOMTreeTextView {
 
         private let builder: DOMTreeTextView.RenderedRowsBuilder
         private var task: Task<Void, Never>?
+        private var currentRequest: DOMTreeTextView.RenderedRowsBuildRequest?
         private var generation: UInt64 = 0
 #if DEBUG
         private var shouldSuspendNextBuildForTesting = false
@@ -38,9 +39,14 @@ extension DOMTreeTextView {
         func cancel() {
             task?.cancel()
             task = nil
+            currentRequest = nil
 #if DEBUG
             resumeSuspendedBuildForTesting()
 #endif
+        }
+
+        func currentBuildRenders(nodeID: DOMNode.ID) -> Bool {
+            currentRequest?.rendersNode(nodeID) ?? false
         }
 
         func waitForCurrentBuild() async {
@@ -68,6 +74,7 @@ extension DOMTreeTextView {
             generation &+= 1
             let buildGeneration = generation
             task?.cancel()
+            currentRequest = request
 #if DEBUG
             resumeSuspendedBuildForTesting()
 #endif
@@ -79,6 +86,7 @@ extension DOMTreeTextView {
                 defer {
                     if generation == buildGeneration {
                         task = nil
+                        currentRequest = nil
                         if shouldNotifyFinish {
                             didFinish?()
                         }
@@ -293,6 +301,45 @@ extension DOMTreeTextView {
         var treeRevision: UInt64 {
             snapshot.treeRevision
         }
+
+        func rendersNode(_ targetNodeID: DOMNode.ID) -> Bool {
+            var visitedNodeIDs = Set<DOMNode.ID>()
+
+            func renders(_ nodeID: DOMNode.ID) -> Bool {
+                guard visitedNodeIDs.insert(nodeID).inserted,
+                      let node = snapshot.node(for: nodeID) else {
+                    return false
+                }
+                if nodeID == targetNodeID {
+                    return true
+                }
+                let visibleChildren = snapshot.visibleChildrenProjection(of: nodeID)
+                guard visibleChildren.hasRenderableChildren,
+                      isNodeOpen(nodeID: node.id, displayName: node.displayName) else {
+                    return false
+                }
+                for childID in visibleChildren.children where renders(childID) {
+                    return true
+                }
+                return false
+            }
+
+            for rootNodeID in snapshot.displayRootIDs() where renders(rootNodeID) {
+                return true
+            }
+            return false
+        }
+
+        func isNodeOpen(nodeID: DOMNode.ID, displayName: String) -> Bool {
+            if let explicitState = expansionState[nodeID] {
+                return explicitState
+            }
+            let name = displayName.lowercased()
+            if name == "head" {
+                return false
+            }
+            return name == "html" || name == "body"
+        }
     }
 
     struct RenderedRowsBuildResult: Sendable {
@@ -409,7 +456,7 @@ extension DOMTreeTextView {
                     isTemplateContent: request.snapshot.isTemplateContent(nodeID)
                 )
                 let hasDisclosure = visibleChildren.hasRenderableChildren
-                let isOpen = Self.isNodeOpen(renderNode, expansionState: request.expansionState)
+                let isOpen = request.isNodeOpen(nodeID: renderNode.id, displayName: renderNode.displayName)
                 rows.append(
                     DOMTreeTextView.RenderedRowsBuildRow(
                         node: renderNode,
@@ -448,20 +495,6 @@ extension DOMTreeTextView {
                 try collect(nodeID, depth: 0)
             }
             return (rows, visitedNodeIDsForTesting)
-        }
-
-        private static func isNodeOpen(
-            _ node: DOMTreeTextView.RenderedRowsBuildNode,
-            expansionState: [DOMNode.ID: Bool]
-        ) -> Bool {
-            if let explicitState = expansionState[node.id] {
-                return explicitState
-            }
-            let name = node.displayName.lowercased()
-            if name == "head" {
-                return false
-            }
-            return name == "html" || name == "body"
         }
 
         private mutating func renderedRow(
