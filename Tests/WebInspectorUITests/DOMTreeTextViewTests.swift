@@ -507,31 +507,37 @@ struct DOMTreeTextViewTests {
         #expect(session.hasPendingSelectionRequest)
         #expect(view.contentOffset.y < view.bounds.height)
 
-        let result = session.applyRequestNodeResult(
-            selectionRequestID: selectionRequestID,
-            targetID: protocolTargetID,
-            nodeID: .init(4)
+        var requestNodeResult: DOMNode.RequestResolution?
+        let revealedSelectionState = await waitForSelectionRenderedState(
+            in: view,
+            update: {
+                requestNodeResult = session.applyRequestNodeResult(
+                    selectionRequestID: selectionRequestID,
+                    targetID: protocolTargetID,
+                    nodeID: .init(4)
+                )
+            },
+            sample: {
+                renderedSelectionRevealState(
+                    in: view,
+                    containing: "id=\"selected-target\""
+                )
+            },
+            until: {
+                $0.isSelectedRowRevealed
+            }
         )
+        let result = try #require(requestNodeResult)
         guard case let .resolved(resolvedNodeID) = result else {
             Issue.record("Expected pending DOM.requestNode selection to resolve")
             return
         }
-        await Task.yield()
-
-        let selectedLine = try #require(
-            view.renderedLineSnapshotsForTesting.first { snapshot in
-                snapshot.text.contains("id=\"selected-target\"")
-            }
-        )
-        let selectedRowY = CGFloat(selectedLine.rowIndex) * view.rowHeightForTesting
-        let visibleMinY = view.contentOffset.y
-        let visibleMaxY = view.contentOffset.y + view.bounds.height
+        let revealState = try #require(revealedSelectionState)
 
         #expect(resolvedNodeID == oldSelectedNodeID)
         #expect(!session.hasPendingSelectionRequest)
-        #expect(view.contentOffset.y > view.bounds.height)
-        #expect(selectedRowY >= visibleMinY - view.rowHeightForTesting)
-        #expect(selectedRowY + view.rowHeightForTesting <= visibleMaxY + view.rowHeightForTesting)
+        #expect(revealState.contentOffsetY > revealState.boundsHeight)
+        #expect(revealState.isSelectedRowVisible)
     }
 
     @Test
@@ -645,6 +651,27 @@ private struct RenderedDOMTreeState: Equatable, Sendable {
         text.contains("#document")
             && text.contains("<img id=\"ad-node\">")
             && selectedRowCount == 1
+    }
+}
+
+private struct RenderedSelectionRevealState: Equatable, Sendable {
+    var contentOffsetY: Double
+    var boundsHeight: Double
+    var selectedRowY: Double?
+    var rowHeight: Double
+
+    var isSelectedRowRevealed: Bool {
+        contentOffsetY > boundsHeight && isSelectedRowVisible
+    }
+
+    var isSelectedRowVisible: Bool {
+        guard let selectedRowY else {
+            return false
+        }
+        let visibleMinY = contentOffsetY
+        let visibleMaxY = contentOffsetY + boundsHeight
+        return selectedRowY >= visibleMinY - rowHeight
+            && selectedRowY + rowHeight <= visibleMaxY + rowHeight
     }
 }
 
@@ -833,6 +860,49 @@ private func waitForSelectionObservationRender(
     await view.waitForRenderedRowsForTesting()
     view.layoutIfNeeded()
     return condition()
+}
+
+@MainActor
+private func waitForSelectionRenderedState<State: Sendable>(
+    in view: DOMTreeTextView,
+    timeout: Duration = .seconds(1),
+    update: @MainActor () -> Void,
+    sample: @escaping @MainActor @Sendable () -> State,
+    until condition: @escaping @Sendable (State) -> Bool
+) async -> State? {
+    let observedStates = await view.selectionObservationDeliveryForTesting.values {
+        sample()
+    }
+    defer {
+        observedStates.cancel()
+    }
+
+    update()
+    if let latestState = observedStates.latestValue, condition(latestState) {
+        return latestState
+    }
+    if let renderedState = await observedStates.waitUntil(timeout: timeout, condition) {
+        return renderedState
+    }
+    let fallbackState = sample()
+    return condition(fallbackState) ? fallbackState : nil
+}
+
+@MainActor
+private func renderedSelectionRevealState(
+    in view: DOMTreeTextView,
+    containing selectedText: String
+) -> RenderedSelectionRevealState {
+    view.layoutIfNeeded()
+    let selectedLine = view.renderedLineSnapshotsForTesting.first { snapshot in
+        snapshot.text.contains(selectedText)
+    }
+    return RenderedSelectionRevealState(
+        contentOffsetY: Double(view.contentOffset.y),
+        boundsHeight: Double(view.bounds.height),
+        selectedRowY: selectedLine.map { Double(CGFloat($0.rowIndex) * view.rowHeightForTesting) },
+        rowHeight: Double(view.rowHeightForTesting)
+    )
 }
 
 @MainActor
