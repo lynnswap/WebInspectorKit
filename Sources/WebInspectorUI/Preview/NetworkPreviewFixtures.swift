@@ -12,7 +12,6 @@ enum NetworkPreviewFixtures {
     static func makePanelModel(mode: Mode) -> NetworkPanelModel {
         let network = makeNetworkSession(mode: mode)
         let model = NetworkPanelModel(network: network)
-        model.refreshDisplayRowsSynchronously()
         if mode == .detail {
             model.selectRequest(model.displayRequests.first)
         }

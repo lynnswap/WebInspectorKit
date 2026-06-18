@@ -13,7 +13,6 @@ enum WebInspectorViewControllerPreviewFixtures {
                 )
             )
         )
-        session.interface.networkPanelModel(for: session.attachment).refreshDisplayRowsSynchronously()
         return session
     }
 }

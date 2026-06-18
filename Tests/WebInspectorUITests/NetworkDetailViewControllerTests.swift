@@ -1209,7 +1209,7 @@ struct NetworkDetailViewControllerTests {
                 [listViewController.displayRowsObservationDeliveryForTesting].compactMap { $0 }
             },
             sample: {
-                listViewController.collectionViewForTesting.numberOfItems(inSection: 0) == 1
+                listViewController.displayedRequestIDsForTesting.count == 1
             }
         )
         #expect(didRenderList)
@@ -1273,26 +1273,25 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func listCancelsStaleDisplayProjectionBeforeThrottledReload() async throws {
+    func listDefersDisplayRequestEvaluationUntilThrottledReload() async throws {
         let network = NetworkSession()
-        let request = try #require(applyRequest(
+        _ = try #require(applyRequest(
             to: network,
             requestID: "1",
             url: "https://media.example.com/clip.mp4",
             responseHeaders: ["content-type": "video/mp4"],
             responseMimeType: "video/mp4"
         ))
-        let requestID = request.id
         let model = NetworkPanelModel(network: network)
         model.setResourceFilter(.media, enabled: true)
-        model.suspendNextDisplayRowsProjectionApplyForTesting()
         let listViewController = NetworkListViewController(model: model)
-
-        let staleGeneration = await model.waitForDisplayRowsProjectionApplySuspensionForTesting()
-
-        let window = showInWindow(listViewController)
+        let window = showInWindow(listViewController, makeVisible: true)
         defer { window.isHidden = true }
 
+        await listViewController.flushPendingSnapshotUpdateForTesting()
+        #expect(listViewController.displayedRequestIDsForTesting.count == 1)
+
+        let evaluationCountBeforeUpdate = listViewController.displayRequestIDsEvaluationCountForTesting
         let observation = try #require(listViewController.displayRowsObservationDeliveryForTesting)
         let observedSearchText = await observation.values {
             model.searchText
@@ -1300,17 +1299,13 @@ struct NetworkDetailViewControllerTests {
 
         model.setSearchText("does-not-match")
         #expect(await observedSearchText.waitUntilValue("does-not-match"))
+        #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeUpdate)
 
-        await model.waitForDisplayRowsProjectionDiscardForTesting(generation: staleGeneration)
-        let appliedGeneration = await model.waitForDisplayRowsProjectionApplyForTesting(after: staleGeneration)
-        #expect(appliedGeneration > staleGeneration)
         await listViewController.flushThrottledDisplayRowsReloadForTesting()
 
-        let collectionView = listViewController.collectionViewForTesting
-        let renderedItemCount = collectionView.numberOfSections == 0 ? 0 : collectionView.numberOfItems(inSection: 0)
         #expect(model.displayRequestIDs.isEmpty)
-        #expect(renderedItemCount == 0)
-        #expect(model.displayProjection(for: requestID) == nil)
+        #expect(listViewController.displayedRequestIDsForTesting.isEmpty)
+        #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeUpdate + 1)
     }
 
     @Test

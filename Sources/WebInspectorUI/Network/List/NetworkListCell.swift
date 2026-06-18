@@ -1,11 +1,14 @@
 #if canImport(UIKit)
 import WebInspectorCore
+import ObservationBridge
 import UIKit
 
 @MainActor
 package final class NetworkListCell: UICollectionViewListCell {
     private let statusIndicatorView = UIView(frame: CGRect(origin: .zero, size: CGSize(width: 8, height: 8)))
     private let fileTypeLabel = UILabel()
+    private var requestObservation: PortableObservationTracking.Token?
+    private weak var observedRequest: NetworkRequest?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -17,9 +20,38 @@ package final class NetworkListCell: UICollectionViewListCell {
         nil
     }
 
-    package func bind(projection: NetworkRequest.Display.Projection) {
-        render(displayName: projection.displayName)
-        renderAccessories(projection: projection)
+    isolated deinit {
+        requestObservation?.cancel()
+    }
+
+    override package func prepareForReuse() {
+        super.prepareForReuse()
+        cancelRequestObservation()
+    }
+
+    package func bind(request: NetworkRequest) {
+        guard observedRequest !== request else {
+            return
+        }
+        cancelRequestObservation()
+        observedRequest = request
+        requestObservation = withPortableContinuousObservation { [weak self, weak request] _ in
+            guard let self,
+                  let request,
+                  self.observedRequest === request else {
+                return
+            }
+            render(
+                displayName: request.displayName,
+                statusSeverity: request.statusSeverity,
+                fileTypeLabel: request.fileTypeLabel
+            )
+        }
+    }
+
+    package func unbind() {
+        cancelRequestObservation()
+        render(displayName: "", statusSeverity: .neutral, fileTypeLabel: "")
     }
 
     private func configureStaticViews() {
@@ -53,6 +85,15 @@ package final class NetworkListCell: UICollectionViewListCell {
         ]
     }
 
+    private func render(
+        displayName: String,
+        statusSeverity: NetworkRequest.Display.StatusSeverity,
+        fileTypeLabel: String
+    ) {
+        render(displayName: displayName)
+        renderAccessories(statusSeverity: statusSeverity, fileTypeLabel: fileTypeLabel)
+    }
+
     private func render(displayName: String) {
         var content = (contentConfiguration as? UIListContentConfiguration) ?? Self.makeContentConfiguration()
         guard content.text != displayName else {
@@ -62,15 +103,23 @@ package final class NetworkListCell: UICollectionViewListCell {
         contentConfiguration = content
     }
 
-    private func renderAccessories(projection: NetworkRequest.Display.Projection) {
-        let color = projection.statusSeverity.color
+    private func renderAccessories(
+        statusSeverity: NetworkRequest.Display.StatusSeverity,
+        fileTypeLabel: String
+    ) {
+        let color = statusSeverity.color
         if statusIndicatorView.backgroundColor?.isEqual(color) != true {
             statusIndicatorView.backgroundColor = color
         }
-        let fileTypeLabelText = projection.fileTypeLabel
-        if fileTypeLabel.text != fileTypeLabelText {
-            fileTypeLabel.text = fileTypeLabelText
+        if self.fileTypeLabel.text != fileTypeLabel {
+            self.fileTypeLabel.text = fileTypeLabel
         }
+    }
+
+    private func cancelRequestObservation() {
+        requestObservation?.cancel()
+        requestObservation = nil
+        observedRequest = nil
     }
 
     private static func makeContentConfiguration() -> UIListContentConfiguration {
