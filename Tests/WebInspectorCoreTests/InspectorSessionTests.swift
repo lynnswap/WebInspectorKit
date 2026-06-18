@@ -3933,12 +3933,19 @@ func pendingPickerSelectionDoesNotRestorePreviousNodeHighlight() async throws {
     try await beginPicker(session: session, transport: transport, backend: backend)
     let sentCountBeforeInspect = await backend.sentTargetMessages().count
 
-    await transport.receiveRootMessage(#"{"method":"Inspector.inspect","params":{"object":{"objectId":"pending-node-object"},"hints":{}}}"#)
-    let requestNode = try await waitForTargetMessage(
-        backend,
+    let requestNodeTask = Task {
+        try await waitForTargetMessage(
+            backend,
+            method: "DOM.requestNode",
+            after: sentCountBeforeInspect
+        )
+    }
+    await backend.waitUntilTargetMessageWaiterRegistered(
         method: "DOM.requestNode",
         after: sentCountBeforeInspect
     )
+    let inspectSequence = await transport.receiveRootMessage(#"{"method":"Inspector.inspect","params":{"object":{"objectId":"pending-node-object"},"hints":{}}}"#)
+    let requestNode = try await requestNodeTask.value
     let sentCountBeforeRequestReply = await backend.sentTargetMessages().count
     await receiveTargetReply(
         transport,
@@ -3957,6 +3964,7 @@ func pendingPickerSelectionDoesNotRestorePreviousNodeHighlight() async throws {
         backend: backend,
         expectedTargetID: .pageMain
     )
+    await expectProtocolEventApplied(inspectSequence, in: session)
     await session.attachment.dom.waitUntilElementPickerIdle()
 
     let pendingSnapshot = await session.attachment.dom.snapshot()

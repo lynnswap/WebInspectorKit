@@ -615,6 +615,13 @@ private extension NetworkBody.SyntaxKind {
 }
 
 #if DEBUG
+struct NetworkBodyImagePreviewRenderSnapshot: Equatable {
+    var imageSize: CGSize
+    var visibleBoundsSize: CGSize
+    var minimumZoomScale: CGFloat
+    var zoomScale: CGFloat
+}
+
 extension NetworkBodyViewController {
     var syntaxViewForTesting: SyntaxEditorView {
         loadViewIfNeeded()
@@ -634,6 +641,21 @@ extension NetworkBodyViewController {
     var isImagePreviewVisibleForTesting: Bool {
         loadViewIfNeeded()
         return imageScrollView.isHidden == false && imageView.image != nil
+    }
+
+    var imagePreviewRenderSnapshotForTesting: NetworkBodyImagePreviewRenderSnapshot? {
+        loadViewIfNeeded()
+        guard case let .image(imageSize) = previewRenderState.surface,
+              let imageLayout = previewRenderState.imageLayout,
+              imageLayout.imageSize == imageSize else {
+            return nil
+        }
+        return NetworkBodyImagePreviewRenderSnapshot(
+            imageSize: imageLayout.imageSize,
+            visibleBoundsSize: imageLayout.visibleBoundsSize,
+            minimumZoomScale: imageLayout.minimumZoomScale,
+            zoomScale: imageLayout.zoomScale
+        )
     }
 
     var mediaPlayerURLForTesting: URL? {

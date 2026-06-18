@@ -680,9 +680,21 @@ struct NetworkDetailViewControllerTests {
         let didRenderImage = await waitUntilRendered(in: viewController) {
             let bodyViewController = viewController.bodyViewControllerForTesting
             let imageScrollView = bodyViewController.imageScrollViewForTesting
+            let imageLayout = bodyViewController.imagePreviewRenderSnapshotForTesting
+            let didCompleteImageLayout = imageLayout.map { layout in
+                let fitScale = min(
+                    layout.visibleBoundsSize.width / layout.imageSize.width,
+                    layout.visibleBoundsSize.height / layout.imageSize.height
+                )
+                let expectedMinimumZoomScale = min(1, fitScale)
+                return layout.imageSize == imageSize
+                    && abs(layout.minimumZoomScale - expectedMinimumZoomScale) < 0.001
+                    && abs(layout.zoomScale - expectedMinimumZoomScale) < 0.001
+            } ?? false
             let didRenderImage = bodyViewController.isImagePreviewVisibleForTesting
                 && bodyViewController.syntaxViewForTesting.isHidden
                 && bodyViewController.imageViewForTesting.image?.size == imageSize
+                && didCompleteImageLayout
             if #available(iOS 26.0, *) {
                 return didRenderImage
                     && viewController.previewRoleScrollEdgeInteractionForTesting?.edge == .top
