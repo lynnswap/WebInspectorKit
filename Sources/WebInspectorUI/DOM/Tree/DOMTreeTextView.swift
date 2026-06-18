@@ -97,6 +97,9 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     weak var inputDelegate: UITextInputDelegate?
 #if DEBUG
     private let performanceCounters = DOMTreeTextView.PerformanceCounters()
+    private var renderedRowsAppliedTreeRevisionForTestingStorage: UInt64 = 0
+    private var renderedRowsAppliedTreeRevisionWaitersForTesting: [UInt64: RenderedRowsAppliedTreeRevisionWaiter] = [:]
+    private var nextRenderedRowsAppliedTreeRevisionWaiterIDForTesting: UInt64 = 0
 #endif
 
     private var textStorage: NSTextStorage {
@@ -127,6 +130,14 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
             }
         }
     }
+
+#if DEBUG
+    private struct RenderedRowsAppliedTreeRevisionWaiter {
+        var minimumRevision: UInt64
+        var continuation: CheckedContinuation<Bool, Never>
+        var timeoutTask: Task<Void, Never>
+    }
+#endif
 
     init(
         dom: DOMSession,
@@ -166,6 +177,9 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         renderedRowsBuildCoordinator.cancel()
         documentObservation?.cancel()
         selectionObservation?.cancel()
+#if DEBUG
+        cancelRenderedRowsAppliedTreeRevisionWaitersForTesting()
+#endif
     }
 
     override var canBecomeFirstResponder: Bool {
@@ -641,6 +655,9 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         updateTextLayoutGeometry()
         updateContentDecorations()
         setNeedsLayout()
+#if DEBUG
+        recordRenderedRowsAppliedTreeRevisionForTesting(dom.treeRevision)
+#endif
     }
 
     private func resetLocalDocumentStateIfNeeded() {
@@ -2230,8 +2247,66 @@ extension DOMTreeTextView {
         performanceCounters.resetTextFragmentViewsCallCount
     }
 
+    var renderedRowsAppliedTreeRevisionForTesting: UInt64 {
+        renderedRowsAppliedTreeRevisionForTestingStorage
+    }
+
     func resetPerformanceCountersForTesting() {
         performanceCounters.reset()
+    }
+
+    func waitForRenderedRowsAppliedTreeRevisionForTesting(
+        _ minimumRevision: UInt64,
+        timeout: Duration = .seconds(1)
+    ) async -> Bool {
+        if renderedRowsAppliedTreeRevisionForTestingStorage >= minimumRevision {
+            return true
+        }
+
+        return await withCheckedContinuation { continuation in
+            let waiterID = nextRenderedRowsAppliedTreeRevisionWaiterIDForTesting
+            nextRenderedRowsAppliedTreeRevisionWaiterIDForTesting &+= 1
+            let timeoutTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: timeout)
+                self?.resolveRenderedRowsAppliedTreeRevisionWaiterForTesting(
+                    id: waiterID,
+                    result: false
+                )
+            }
+            renderedRowsAppliedTreeRevisionWaitersForTesting[waiterID] = RenderedRowsAppliedTreeRevisionWaiter(
+                minimumRevision: minimumRevision,
+                continuation: continuation,
+                timeoutTask: timeoutTask
+            )
+        }
+    }
+
+    private func recordRenderedRowsAppliedTreeRevisionForTesting(_ revision: UInt64) {
+        renderedRowsAppliedTreeRevisionForTestingStorage = revision
+        let completedWaiterIDs = renderedRowsAppliedTreeRevisionWaitersForTesting.compactMap { id, waiter in
+            waiter.minimumRevision <= revision ? id : nil
+        }
+        for waiterID in completedWaiterIDs {
+            resolveRenderedRowsAppliedTreeRevisionWaiterForTesting(id: waiterID, result: true)
+        }
+    }
+
+    private func resolveRenderedRowsAppliedTreeRevisionWaiterForTesting(
+        id: UInt64,
+        result: Bool
+    ) {
+        guard let waiter = renderedRowsAppliedTreeRevisionWaitersForTesting.removeValue(forKey: id) else {
+            return
+        }
+        waiter.timeoutTask.cancel()
+        waiter.continuation.resume(returning: result)
+    }
+
+    private func cancelRenderedRowsAppliedTreeRevisionWaitersForTesting() {
+        let waiterIDs = Array(renderedRowsAppliedTreeRevisionWaitersForTesting.keys)
+        for waiterID in waiterIDs {
+            resolveRenderedRowsAppliedTreeRevisionWaiterForTesting(id: waiterID, result: false)
+        }
     }
 
     var findFoundRangesForTesting: [NSRange] {

@@ -569,7 +569,7 @@ struct DOMTreeTextViewTests {
                 selectedRowCount: view.selectedRowRectsForTesting().count
             )
         }
-        let didRenderSelection = await waitForRenderedSelectionTreeUpdate(
+        let didRenderSelection = await waitForSelectionObservationRender(
             in: view,
             session: fixture.session,
             update: {
@@ -740,79 +740,44 @@ private func waitForRenderedDocumentTreeUpdate(
     update: @MainActor () -> Void,
     until condition: @escaping @MainActor @Sendable () -> Bool
 ) async -> Bool {
-    await waitForRenderedTreeUpdate(
-        in: view,
-        observing: view.documentObservationDeliveryForTesting,
-        revision: { session.treeRevision },
-        timeout: timeout,
-        update: update,
-        until: condition
+    update()
+    let expectedTreeRevision = session.treeRevision
+    let didApplyTreeRevision = await view.waitForRenderedRowsAppliedTreeRevisionForTesting(
+        expectedTreeRevision,
+        timeout: timeout
     )
+    view.layoutIfNeeded()
+    return didApplyTreeRevision && condition()
 }
 
 @MainActor
-private func waitForRenderedSelectionTreeUpdate(
+private func waitForSelectionObservationRender(
     in view: DOMTreeTextView,
     session: DOMSession,
     timeout: Duration = .seconds(1),
     update: @MainActor () -> Void,
     until condition: @escaping @MainActor @Sendable () -> Bool
 ) async -> Bool {
-    await waitForRenderedTreeUpdate(
-        in: view,
-        observing: view.selectionObservationDeliveryForTesting,
-        revision: { session.selectionRevision },
-        timeout: timeout,
-        update: update,
-        until: condition
-    )
-}
-
-@MainActor
-private func waitForRenderedTreeUpdate(
-    in view: DOMTreeTextView,
-    observing observation: PortableObservationTracking.Token,
-    revision: @escaping @MainActor @Sendable () -> UInt64,
-    timeout: Duration,
-    update: @MainActor () -> Void,
-    until condition: @escaping @MainActor @Sendable () -> Bool
-) async -> Bool {
-    let observedRevisions = await observation.values {
-        revision()
+    let observedSelectionRevisions = await view.selectionObservationDeliveryForTesting.values {
+        session.selectionRevision
     }
     defer {
-        observedRevisions.cancel()
+        observedSelectionRevisions.cancel()
     }
 
     update()
-    return await waitForRenderedTreeUpdate(
-        in: view,
-        observedRevisions: observedRevisions,
-        expectedRevision: revision(),
-        timeout: timeout,
-        until: condition
-    )
-}
-
-@MainActor
-private func waitForRenderedTreeUpdate(
-    in view: DOMTreeTextView,
-    observedRevisions: ObservedValues<UInt64>,
-    expectedRevision: UInt64,
-    timeout: Duration,
-    until condition: @escaping @MainActor @Sendable () -> Bool
-) async -> Bool {
-    let didAlreadyObserveRevision = observedRevisions.latestValue.map { $0 >= expectedRevision } ?? false
-    let didObserveRevision: Bool
-    if didAlreadyObserveRevision {
-        didObserveRevision = true
-    } else {
-        didObserveRevision = await observedRevisions.waitUntil(timeout: timeout) { $0 >= expectedRevision } != nil
-    }
-    guard didObserveRevision else {
-        await view.waitForRenderedRowsForTesting()
-        view.layoutIfNeeded()
-        return condition()
+    let expectedSelectionRevision = session.selectionRevision
+    let didAlreadyObserveRevision = observedSelectionRevisions.latestValue.map {
+        $0 >= expectedSelectionRevision
+    } ?? false
+    if !didAlreadyObserveRevision {
+        let didObserveSelectionRevision = await observedSelectionRevisions.waitUntil(timeout: timeout) {
+            $0 >= expectedSelectionRevision
+        } != nil
+        guard didObserveSelectionRevision else {
+            view.layoutIfNeeded()
+            return condition()
+        }
     }
 
     await view.waitForRenderedRowsForTesting()
