@@ -1,5 +1,8 @@
 #if canImport(UIKit)
+import AVFoundation
+import Dispatch
 import ObservationBridge
+import Synchronization
 import Testing
 import WebInspectorTransport
 import UIKit
@@ -563,6 +566,10 @@ struct NetworkDetailViewControllerTests {
         let model = NetworkPanelModel(network: network)
         model.selectRequest(request)
         let viewController = NetworkDetailViewController(model: model)
+        let playerFactory = MoviePreviewPlayerFactorySpy()
+        viewController.bodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
+            playerFactory.makePlayer(for:)
+        )
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
         viewController.setModeForTesting(.preview)
@@ -572,6 +579,7 @@ struct NetworkDetailViewControllerTests {
         }
         #expect(didRenderMediaPreview)
         let temporaryFileURL = try #require(viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting)
+        #expect(playerFactory.requestedURLs == [temporaryFileURL])
         #expect(FileManager.default.fileExists(atPath: temporaryFileURL.path))
 
         viewController.setModeForTesting(.headers)
@@ -582,6 +590,7 @@ struct NetworkDetailViewControllerTests {
                 && FileManager.default.fileExists(atPath: temporaryFileURL.path) == false
         }
         #expect(didReleaseMediaPreview)
+        #expect(playerFactory.requestedURLs == [temporaryFileURL])
 
         viewController.setModeForTesting(.preview)
 
@@ -590,6 +599,8 @@ struct NetworkDetailViewControllerTests {
                 && viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting?.pathExtension == "mp4"
         }
         #expect(didRestoreMediaPreview)
+        #expect(playerFactory.requestedURLs.count == 2)
+        #expect(playerFactory.requestedURLs.allSatisfy { $0.pathExtension == "mp4" })
     }
 
     @Test
@@ -614,6 +625,10 @@ struct NetworkDetailViewControllerTests {
         let model = NetworkPanelModel(network: network)
         model.selectRequest(request)
         let viewController = NetworkDetailViewController(model: model)
+        let playerFactory = MoviePreviewPlayerFactorySpy()
+        viewController.bodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
+            playerFactory.makePlayer(for:)
+        )
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
         viewController.setModeForTesting(.preview)
@@ -626,6 +641,7 @@ struct NetworkDetailViewControllerTests {
         let temporaryFileURL = try #require(viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting)
         let playerIdentity = try #require(viewController.bodyViewControllerForTesting.mediaPlayerIdentityForTesting)
         let delivery = try #require(viewController.selectedRequestRenderObservationDeliveryForTesting)
+        #expect(playerFactory.requestedURLs == [temporaryFileURL])
 
         network.applyDataReceived(
             targetID: request.id.targetID,
@@ -642,6 +658,7 @@ struct NetworkDetailViewControllerTests {
                 && FileManager.default.fileExists(atPath: temporaryFileURL.path)
         }
         #expect(observedValues.latestValue == true)
+        #expect(playerFactory.requestedURLs == [temporaryFileURL])
     }
 
     @Test
@@ -1503,6 +1520,61 @@ struct NetworkDetailViewControllerTests {
         return bundle.localizedString(forKey: key, value: nil, table: nil)
     }
 
+    private final class BlockingMediaPreviewClassifier: @unchecked Sendable {
+        private struct State: Sendable {
+            var shouldBlockNextCall = true
+            var isBlocked = false
+        }
+
+        private let state = Mutex(State())
+        private let unblockSemaphore = DispatchSemaphore(value: 0)
+
+        func classify(
+            mimeType: String?,
+            url: String?
+        ) -> NetworkRequest.Display.MediaPreviewClassification {
+            let shouldBlock = state.withLock { state in
+                guard state.shouldBlockNextCall else {
+                    return false
+                }
+                state.shouldBlockNextCall = false
+                return true
+            }
+            if shouldBlock {
+                state.withLock { state in
+                    state.isBlocked = true
+                }
+                unblockSemaphore.wait()
+            }
+            return NetworkRequest.Display.MediaPreviewSupport.classification(mimeType: mimeType, url: url)
+        }
+
+        func waitUntilBlocked() async -> Bool {
+            for _ in 0..<100 {
+                if state.withLock({ $0.isBlocked }) {
+                    return true
+                }
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+            return false
+        }
+
+        func unblock() {
+            unblockSemaphore.signal()
+        }
+    }
+
+    @MainActor
+    private final class MoviePreviewPlayerFactorySpy {
+        private(set) var requestedURLs: [URL] = []
+
+        func makePlayer(for url: URL) -> AVPlayer {
+            requestedURLs.append(url)
+            return StubMoviePreviewPlayer()
+        }
+    }
+
+    private final class StubMoviePreviewPlayer: AVPlayer {}
 }
 }
 #endif
