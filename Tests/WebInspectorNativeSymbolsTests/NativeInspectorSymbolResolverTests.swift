@@ -6,6 +6,12 @@ import WebKit
 import WebInspectorNativeSymbolFixtures
 @testable import WebInspectorNativeSymbols
 
+private let nativeRuntimeSmokeOptInEnvironmentKey = "WEBINSPECTORKIT_RUN_NATIVE_RUNTIME_SMOKE"
+private let shouldRunNativeRuntimeSmokeTests =
+    ProcessInfo.processInfo.environment[nativeRuntimeSmokeOptInEnvironmentKey] == "1"
+private let nativeRuntimeSmokeDisabledReason: Comment =
+    "Native WebKit runtime smoke tests depend on the host WebKit dyld image and shared cache state; set WEBINSPECTORKIT_RUN_NATIVE_RUNTIME_SMOKE=1 to run them."
+
 struct NativeInspectorSymbolResolverTests {
     @Test
     func fixtureImageResolvesCompleteAddressSet() throws {
@@ -19,20 +25,16 @@ struct NativeInspectorSymbolResolverTests {
         #expect(!resolution.usedConnectDisconnectFallback)
     }
 
-    @Test
+    @Test(.disabled(if: !shouldRunNativeRuntimeSmokeTests, nativeRuntimeSmokeDisabledReason))
     @MainActor
     func resolveCurrentReturnsCompleteAddressSetOnSupportedPlatforms() throws {
         let resolution = withWebKitLoaded {
             NativeInspectorSymbolResolver.resolveCurrent()
         }
 
-        #if os(iOS) && !targetEnvironment(simulator)
-        throw Skip("The runtime smoke test is covered separately on device-backed flows.")
-        #else
         #expect(resolution.failureReason == nil)
         #expect(resolution.addresses.isComplete)
         #expect(resolution.isSupported)
-        #endif
     }
 
     @Test
@@ -118,12 +120,9 @@ struct NativeInspectorSymbolResolverTests {
         ])
     }
 
-    @Test
+    @Test(.disabled(if: !shouldRunNativeRuntimeSmokeTests, nativeRuntimeSmokeDisabledReason))
     @MainActor
     func resolvedAddressHeaderValidationAcceptsMatchingImageAndRejectsUnexpectedImage() throws {
-        #if os(iOS) && !targetEnvironment(simulator)
-        throw Skip("The runtime smoke test is covered separately on device-backed flows.")
-        #else
         let (resolution, headers) = try withWebKitLoaded {
             (
                 NativeInspectorSymbolResolver.resolveCurrent(),
@@ -143,7 +142,6 @@ struct NativeInspectorSymbolResolverTests {
                 expectedHeaderAddresses: [headers.javaScriptCore]
             )
         )
-        #endif
     }
 
     @Test
