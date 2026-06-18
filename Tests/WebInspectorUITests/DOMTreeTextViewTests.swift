@@ -108,6 +108,47 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func documentRootStructureMutationRoutesHiddenRenderRoot() async throws {
+        let session = makeDOMSession(
+            root: DOMNode.Payload(
+                nodeID: .init(1),
+                nodeType: .document,
+                nodeName: "#document",
+                regularChildren: .unrequested(count: 1)
+            )
+        )
+        let view = await makeTreeView(session: session)
+        let rootID = try #require(session.currentPageRootNode?.id)
+
+        #expect(view.renderedTextForTesting.isEmpty)
+
+        let didRenderDocumentElement = await waitForRenderedDocumentTreeUpdate(
+            in: view,
+            session: session,
+            update: {
+                session.applySetChildNodes(
+                    parent: rootID,
+                    children: [
+                        DOMNode.Payload(
+                            nodeID: .init(2),
+                            nodeType: .element,
+                            nodeName: "HTML",
+                            localName: "html"
+                        ),
+                    ],
+                    eventSequence: 1
+                )
+            },
+            until: {
+                view.renderedTextForTesting.contains("<html")
+            }
+        )
+
+        #expect(didRenderDocumentElement)
+        #expect(view.renderedTextForTesting.contains("<html"))
+    }
+
+    @Test
     func textStorageKeepsTokenForegroundAsBaseAttributes() async throws {
         let view = await makeTreeView()
 

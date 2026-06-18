@@ -591,6 +591,11 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
             }
             return renderedRows.contains(nodeID: affectedNodeID)
         case .structure:
+            let renderRootNodeID = dom.currentDOMTreeRenderRootNodeID
+            if invalidation.affectedNodeID == renderRootNodeID
+                || invalidation.parentNodeID == renderRootNodeID {
+                return true
+            }
             if let affectedNodeID = invalidation.affectedNodeID,
                renderedRows.contains(nodeID: affectedNodeID) {
                 return true
