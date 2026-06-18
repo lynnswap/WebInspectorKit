@@ -7,8 +7,10 @@ package final class DOMSession {
     package private(set) var elementStyles: CSSSession
     package var isSelectingElement: Bool
     package private(set) var treeRevision: UInt64
+    package private(set) var treeRenderInvalidation: DOMTreeRenderInvalidation
     package private(set) var selectionRevision: UInt64
     package private(set) var commandAvailabilityRevision: UInt64
+    @ObservationIgnored private var treeRenderInvalidationHistory: [DOMTreeRenderInvalidation]
     #if DEBUG
     @ObservationIgnored package private(set) var snapshotBuildCountForTesting: UInt64 = 0
     #endif
@@ -40,6 +42,9 @@ package final class DOMSession {
         self.elementStyles = elementStyles
         isSelectingElement = false
         treeRevision = 0
+        let initialTreeRenderInvalidation = DOMTreeRenderInvalidation(revision: 0, kind: .root)
+        treeRenderInvalidation = initialTreeRenderInvalidation
+        treeRenderInvalidationHistory = [initialTreeRenderInvalidation]
         selectionRevision = 0
         commandAvailabilityRevision = 0
         self.targetGraph = targetGraph
@@ -110,8 +115,42 @@ package final class DOMSession {
         targetGraph.attachKnownFrameTargets(mainFrameID: currentPage.mainFrameID)
     }
 
-    private func recordTreeMutation() {
+    private func recordTreeMutation(
+        kind: DOMTreeRenderInvalidation.Kind = .structure,
+        affectedNodeID: DOMNode.ID? = nil,
+        parentNodeID: DOMNode.ID? = nil
+    ) {
         treeRevision &+= 1
+        let invalidation = DOMTreeRenderInvalidation(
+            revision: treeRevision,
+            kind: kind,
+            affectedNodeID: affectedNodeID,
+            parentNodeID: parentNodeID
+        )
+        treeRenderInvalidation = invalidation
+        treeRenderInvalidationHistory.append(invalidation)
+        if treeRenderInvalidationHistory.count > 512 {
+            treeRenderInvalidationHistory.removeFirst(treeRenderInvalidationHistory.count - 512)
+        }
+    }
+
+    package func treeRenderInvalidation(since routedRevision: UInt64?) -> DOMTreeRenderInvalidation {
+        guard let routedRevision,
+              routedRevision < treeRevision else {
+            return treeRenderInvalidation
+        }
+
+        let pendingInvalidations = treeRenderInvalidationHistory.filter { $0.revision > routedRevision }
+        guard var mergedInvalidation = pendingInvalidations.first else {
+            return DOMTreeRenderInvalidation(revision: treeRevision, kind: .root)
+        }
+        guard mergedInvalidation.revision == routedRevision &+ 1 else {
+            return DOMTreeRenderInvalidation(revision: treeRevision, kind: .root)
+        }
+        for invalidation in pendingInvalidations.dropFirst() {
+            mergedInvalidation = mergedInvalidation.merging(with: invalidation)
+        }
+        return mergedInvalidation
     }
 
     private func recordSelectionMutation() {
@@ -131,7 +170,7 @@ package final class DOMSession {
         elementStyles.reset()
         nextSelectionRequestRawID = 0
         isSelectingElement = false
-        recordTreeMutation()
+        recordTreeMutation(kind: .root)
         recordSelectionMutation()
         recordCommandAvailabilityMutation()
     }
@@ -146,7 +185,7 @@ package final class DOMSession {
         if record.kind == .frame {
             targetGraph.attachFrameTarget(record.id)
         }
-        recordTreeMutation()
+        recordTreeMutation(kind: .root)
 
         guard makeCurrentMainPage, record.kind == .page else {
             return
@@ -170,12 +209,12 @@ package final class DOMSession {
         _ = state(for: targetID)
         targetGraph.assignMainFrame(resolvedMainFrameID, to: targetID)
         attachKnownFrameTargets()
-        recordTreeMutation()
+        recordTreeMutation(kind: .root)
     }
 
     package func applyTargetCommitted(targetID: ProtocolTarget.ID) {
         if targetGraph.markTargetCommitted(targetID) {
-            recordTreeMutation()
+            recordTreeMutation(kind: .root)
         }
     }
 
@@ -226,7 +265,7 @@ package final class DOMSession {
             }
         }
 
-        recordTreeMutation()
+        recordTreeMutation(kind: .root)
         reconcileSelection()
     }
 
@@ -252,7 +291,7 @@ package final class DOMSession {
             scheduleHighlightClearAfterSelectionCleared(previousSelectedNodeID: previousSelectedNodeID)
         }
         documentStore.removeState(for: targetID)
-        recordTreeMutation()
+        recordTreeMutation(kind: .root)
         reconcileSelection()
     }
 
@@ -317,7 +356,7 @@ package final class DOMSession {
         }
         updateAllFrameDocumentProjectionStates()
 
-        recordTreeMutation()
+        recordTreeMutation(kind: .root, affectedNodeID: rootNodeID)
         reconcileSelection()
         return rootNodeID
     }
@@ -342,7 +381,7 @@ package final class DOMSession {
             frameTargetID: targetID,
             documentID: documentID
         )
-        recordTreeMutation()
+        recordTreeMutation(kind: .root, affectedNodeID: document.rootNodeID)
         reconcileSelection()
     }
 
@@ -383,8 +422,8 @@ package final class DOMSession {
         if document.nodesByID[nodeID] != nil {
             removeNodeSubtree(nodeID, detachFromParent: true)
         }
-        buildSubtree(payload, document: document, parentID: nil)
-        recordTreeMutation()
+        let detachedRootID = buildSubtree(payload, document: document, parentID: nil)
+        recordTreeMutation(kind: .structure, affectedNodeID: detachedRootID)
         completePendingSelectionIfPossible(in: document)
     }
 
@@ -425,7 +464,7 @@ package final class DOMSession {
         document.removeOwnerHydrationTransactions()
         splicePendingTransactionFragments(parentRawNodeID: parent.protocolNodeID, into: document)
         if affectsVisibleTree {
-            recordTreeMutation()
+            recordTreeMutation(kind: .structure, affectedNodeID: nodeID)
             updateAllFrameDocumentProjectionStates()
             reconcileSelection()
         } else {
@@ -460,7 +499,7 @@ package final class DOMSession {
         parent.regularChildren = .loaded(children)
         relinkProtocolEffectiveChildren(of: parent)
         if affectsVisibleTree {
-            recordTreeMutation()
+            recordTreeMutation(kind: .structure, affectedNodeID: childID, parentNodeID: parentID)
             reattachFrameDocumentProjections(using: replacementOwnerKeys)
             updateAllFrameDocumentProjectionStates()
             reconcileSelection()
@@ -475,10 +514,11 @@ package final class DOMSession {
               canApplyDOMEvent(to: nodeID) else {
             return
         }
+        let parentID = document.nodesByID[nodeID]?.parentID
         let affectsVisibleTree = document.containsConnectedNode(nodeID)
         removeNodeSubtree(nodeID, detachFromParent: true)
         if affectsVisibleTree {
-            recordTreeMutation()
+            recordTreeMutation(kind: .structure, affectedNodeID: nodeID, parentNodeID: parentID)
             updateAllFrameDocumentProjectionStates()
             reconcileSelection()
         }
@@ -497,7 +537,7 @@ package final class DOMSession {
             }
             node.regularChildren = .unrequested(count: nextCount)
             if document.containsConnectedNode(nodeID) {
-                recordTreeMutation()
+                recordTreeMutation(kind: .structure, affectedNodeID: nodeID, parentNodeID: node.parentID)
             }
         }
     }
@@ -516,9 +556,13 @@ package final class DOMSession {
         } else {
             node.attributes.append(.init(name: name, value: value))
         }
-        recordTreeMutation()
-        if node.isFrameOwner,
-           name.caseInsensitiveCompare("src") == .orderedSame {
+        let changesFrameProjection = node.isFrameOwner && name.caseInsensitiveCompare("src") == .orderedSame
+        recordTreeMutation(
+            kind: changesFrameProjection ? .structure : .content,
+            affectedNodeID: nodeID,
+            parentNodeID: node.parentID
+        )
+        if changesFrameProjection {
             updateAllFrameDocumentProjectionStates()
         }
     }
@@ -531,9 +575,13 @@ package final class DOMSession {
             return
         }
         node.attributes.remove(at: index)
-        recordTreeMutation()
-        if node.isFrameOwner,
-           name.caseInsensitiveCompare("src") == .orderedSame {
+        let changesFrameProjection = node.isFrameOwner && name.caseInsensitiveCompare("src") == .orderedSame
+        recordTreeMutation(
+            kind: changesFrameProjection ? .structure : .content,
+            affectedNodeID: nodeID,
+            parentNodeID: node.parentID
+        )
+        if changesFrameProjection {
             updateAllFrameDocumentProjectionStates()
         }
     }
@@ -632,6 +680,48 @@ package final class DOMSession {
         return document.nodesByID[document.rootNodeID]
     }
 
+    package var currentDOMTreeRenderRootNodeID: DOMNode.ID? {
+        guard let targetID = currentPageTargetID,
+              let document = documentStore.currentDocument(forTargetID: targetID),
+              document.lifecycle == .loaded
+        else {
+            return nil
+        }
+        return document.rootNodeID
+    }
+
+    package func domTreeRenderSnapshot() -> DOMTreeRenderSnapshot {
+        guard currentPageTargetID != nil else {
+            return DOMTreeRenderSnapshot(
+                treeRevision: treeRevision,
+                rootNodeID: nil,
+                nodesByID: [:],
+                projectedFrameDocumentRootIDByOwnerNodeID: [:],
+                invalidation: treeRenderInvalidation
+            )
+        }
+
+        var nodesByID: [DOMNode.ID: DOMTreeRenderNodeSnapshot] = [:]
+        var projectedFrameDocumentRootIDByOwnerNodeID: [DOMNode.ID: DOMNode.ID] = [:]
+        for document in documentStore.currentDocuments where document.lifecycle == .loaded {
+            for node in document.nodesByID.values {
+                let snapshot = node.domTreeRenderSnapshot
+                nodesByID[snapshot.id] = snapshot
+                if snapshot.isFrameOwner,
+                   let projectedRootID = projectedFrameDocumentRootID(for: snapshot.id) {
+                    projectedFrameDocumentRootIDByOwnerNodeID[snapshot.id] = projectedRootID
+                }
+            }
+        }
+        return DOMTreeRenderSnapshot(
+            treeRevision: treeRevision,
+            rootNodeID: currentDOMTreeRenderRootNodeID,
+            nodesByID: nodesByID,
+            projectedFrameDocumentRootIDByOwnerNodeID: projectedFrameDocumentRootIDByOwnerNodeID,
+            invalidation: treeRenderInvalidation
+        )
+    }
+
     package func node(for id: DOMNode.ID) -> DOMNode? {
         documentStore.node(for: id)
     }
@@ -698,7 +788,7 @@ package final class DOMSession {
         return .success(resolvedNodeID)
     }
 
-    package func requestChildNodesIntent(for nodeID: DOMNode.ID, depth: Int = 3, issuedSequence: UInt64 = 0) -> DOMCommand.Intent? {
+    package func requestChildNodesIntent(for nodeID: DOMNode.ID, depth: Int = 1, issuedSequence: UInt64 = 0) -> DOMCommand.Intent? {
         guard let document = currentDocument(for: nodeID.documentID),
               let node = document.nodesByID[nodeID],
               hasUnloadedRegularChildren(node),

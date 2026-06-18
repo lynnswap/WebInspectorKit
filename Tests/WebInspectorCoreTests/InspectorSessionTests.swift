@@ -2073,10 +2073,11 @@ func frameDocumentRequestDoesNotBlockPageDOMEvents() async throws {
     )
     #expect(frameDocumentRequest.targetIdentifier == ProtocolTarget.ID.frameAd)
 
-    await receiveTargetDispatch(
+    await receiveAndApplyTargetDispatch(
         transport,
         targetID: .pageMain,
-        message: pageHTMLChildrenSetChildNodesMessage
+        message: pageHTMLChildrenSetChildNodesMessage,
+        in: session
     )
     let bodyID = try await waitForCurrentNode(
         in: session,
@@ -7202,10 +7203,11 @@ private func hydratePageHTMLChildren(
         await session.attachment.dom.requestChildNodes(for: htmlID)
     }
     let request = try await waitForTargetMessage(backend, method: "DOM.requestChildNodes", after: sentCount)
-    await receiveTargetDispatch(
+    await receiveAndApplyTargetDispatch(
         transport,
         targetID: .pageMain,
-        message: pageHTMLChildrenSetChildNodesMessage
+        message: pageHTMLChildrenSetChildNodesMessage,
+        in: session
     )
     await receiveTargetReply(
         transport,

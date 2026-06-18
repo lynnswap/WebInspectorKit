@@ -366,26 +366,57 @@ package extension DOMNode {
 package final class DOMNode: Identifiable {
     package let id: ID
     package let protocolNodeID: DOMNode.ProtocolID
-    package var nodeType: DOMNode.Kind
-    package var nodeName: String
-    package var localName: String
-    package var nodeValue: String
+    package var nodeType: DOMNode.Kind {
+        didSet { refreshDOMTreeRenderSnapshot() }
+    }
+    package var nodeName: String {
+        didSet { refreshDOMTreeRenderSnapshot() }
+    }
+    package var localName: String {
+        didSet { refreshDOMTreeRenderSnapshot() }
+    }
+    package var nodeValue: String {
+        didSet { refreshDOMTreeRenderSnapshot() }
+    }
     package var ownerFrameID: DOMFrame.ID?
     package var documentURL: String?
     package var baseURL: String?
-    package var attributes: [DOMNode.Attribute]
-    package var parentID: ID?
+    package var attributes: [DOMNode.Attribute] {
+        didSet { refreshDOMTreeRenderSnapshot() }
+    }
+    package var parentID: ID? {
+        didSet { refreshDOMTreeRenderSnapshot() }
+    }
     package var previousSiblingID: ID?
     package var nextSiblingID: ID?
-    package var regularChildren: DOMNode.ChildrenState
-    package var contentDocumentID: ID?
-    package var shadowRootIDs: [ID]
-    package var templateContentID: ID?
-    package var beforePseudoElementID: ID?
-    package var otherPseudoElementIDs: [ID]
-    package var afterPseudoElementID: ID?
-    package var pseudoType: String?
-    package var shadowRootType: String?
+    package var regularChildren: DOMNode.ChildrenState {
+        didSet { refreshDOMTreeRenderSnapshot() }
+    }
+    package var contentDocumentID: ID? {
+        didSet { refreshDOMTreeRenderSnapshot() }
+    }
+    package var shadowRootIDs: [ID] {
+        didSet { refreshDOMTreeRenderSnapshot() }
+    }
+    package var templateContentID: ID? {
+        didSet { refreshDOMTreeRenderSnapshot() }
+    }
+    package var beforePseudoElementID: ID? {
+        didSet { refreshDOMTreeRenderSnapshot() }
+    }
+    package var otherPseudoElementIDs: [ID] {
+        didSet { refreshDOMTreeRenderSnapshot() }
+    }
+    package var afterPseudoElementID: ID? {
+        didSet { refreshDOMTreeRenderSnapshot() }
+    }
+    package var pseudoType: String? {
+        didSet { refreshDOMTreeRenderSnapshot() }
+    }
+    package var shadowRootType: String? {
+        didSet { refreshDOMTreeRenderSnapshot() }
+    }
+    @ObservationIgnored package private(set) var domTreeRenderSnapshot: DOMTreeRenderNodeSnapshot
 
     package init(id: ID, payload: DOMNode.Payload, parentID: ID?) {
         self.id = id
@@ -410,6 +441,25 @@ package final class DOMNode: Identifiable {
         self.afterPseudoElementID = nil
         self.pseudoType = payload.pseudoType
         self.shadowRootType = payload.shadowRootType
+        self.domTreeRenderSnapshot = DOMTreeRenderNodeSnapshot(
+            id: id,
+            protocolNodeID: payload.nodeID,
+            nodeType: payload.nodeType,
+            nodeName: payload.nodeName,
+            localName: payload.localName,
+            nodeValue: payload.nodeValue,
+            attributes: payload.attributes,
+            parentID: parentID,
+            regularChildren: .unrequested(count: 0),
+            contentDocumentID: nil,
+            shadowRootIDs: [],
+            templateContentID: nil,
+            beforePseudoElementID: nil,
+            otherPseudoElementIDs: [],
+            afterPseudoElementID: nil,
+            pseudoType: payload.pseudoType,
+            shadowRootType: payload.shadowRootType
+        )
     }
 
     package func update(from payload: DOMNode.Payload, parentID: ID?) {
@@ -424,6 +474,28 @@ package final class DOMNode: Identifiable {
         self.parentID = parentID
         pseudoType = payload.pseudoType
         shadowRootType = payload.shadowRootType
+    }
+
+    private func refreshDOMTreeRenderSnapshot() {
+        domTreeRenderSnapshot = DOMTreeRenderNodeSnapshot(
+            id: id,
+            protocolNodeID: protocolNodeID,
+            nodeType: nodeType,
+            nodeName: nodeName,
+            localName: localName,
+            nodeValue: nodeValue,
+            attributes: attributes,
+            parentID: parentID,
+            regularChildren: regularChildren.snapshot,
+            contentDocumentID: contentDocumentID,
+            shadowRootIDs: shadowRootIDs,
+            templateContentID: templateContentID,
+            beforePseudoElementID: beforePseudoElementID,
+            otherPseudoElementIDs: otherPseudoElementIDs,
+            afterPseudoElementID: afterPseudoElementID,
+            pseudoType: pseudoType,
+            shadowRootType: shadowRootType
+        )
     }
 
     package var isFrameOwner: Bool {
@@ -455,6 +527,17 @@ package final class DOMNode: Identifiable {
             children.append(afterPseudoElementID)
         }
         return children
+    }
+}
+
+private extension DOMNode.ChildrenState {
+    var snapshot: DOMNode.ChildrenSnapshot {
+        switch self {
+        case let .unrequested(count):
+            return .unrequested(count: count)
+        case let .loaded(children):
+            return .loaded(children)
+        }
     }
 }
 

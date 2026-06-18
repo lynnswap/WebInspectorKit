@@ -122,6 +122,233 @@ package struct DOMTreeProjection: Equatable, Sendable {
     }
 }
 
+package struct DOMTreeRenderInvalidation: Equatable, Sendable {
+    package enum Kind: Equatable, Sendable {
+        case root
+        case structure
+        case content
+    }
+
+    package var revision: UInt64
+    package var kind: Kind
+    package var affectedNodeID: DOMNode.ID?
+    package var parentNodeID: DOMNode.ID?
+
+    package init(
+        revision: UInt64,
+        kind: Kind,
+        affectedNodeID: DOMNode.ID? = nil,
+        parentNodeID: DOMNode.ID? = nil
+    ) {
+        self.revision = revision
+        self.kind = kind
+        self.affectedNodeID = affectedNodeID
+        self.parentNodeID = parentNodeID
+    }
+
+    package var requiresFragmentReset: Bool {
+        kind == .root
+    }
+
+    package func merging(with newer: DOMTreeRenderInvalidation) -> DOMTreeRenderInvalidation {
+        let mergedKind: Kind
+        if kind == .root || newer.kind == .root {
+            mergedKind = .root
+        } else if kind == .structure || newer.kind == .structure {
+            mergedKind = .structure
+        } else {
+            mergedKind = .content
+        }
+        return DOMTreeRenderInvalidation(
+            revision: newer.revision,
+            kind: mergedKind,
+            affectedNodeID: affectedNodeID == newer.affectedNodeID ? affectedNodeID : nil,
+            parentNodeID: parentNodeID == newer.parentNodeID ? parentNodeID : nil
+        )
+    }
+}
+
+package struct DOMVisibleChildrenProjection: Equatable, Sendable {
+    package var children: [DOMNode.ID]
+    package var hasUnloadedChildren: Bool
+    package var hasRenderableChildren: Bool
+
+    package init(
+        children: [DOMNode.ID] = [],
+        hasUnloadedChildren: Bool = false,
+        hasRenderableChildren: Bool = false
+    ) {
+        self.children = children
+        self.hasUnloadedChildren = hasUnloadedChildren
+        self.hasRenderableChildren = hasRenderableChildren
+    }
+}
+
+package struct DOMTreeRenderNodeSnapshot: Equatable, Sendable, Identifiable {
+    package var id: DOMNode.ID
+    package var protocolNodeID: DOMNode.ProtocolID
+    package var nodeType: DOMNode.Kind
+    package var nodeName: String
+    package var localName: String
+    package var nodeValue: String
+    package var attributes: [DOMNode.Attribute]
+    package var parentID: DOMNode.ID?
+    package var regularChildren: DOMNode.ChildrenSnapshot
+    package var contentDocumentID: DOMNode.ID?
+    package var shadowRootIDs: [DOMNode.ID]
+    package var templateContentID: DOMNode.ID?
+    package var beforePseudoElementID: DOMNode.ID?
+    package var otherPseudoElementIDs: [DOMNode.ID]
+    package var afterPseudoElementID: DOMNode.ID?
+    package var pseudoType: String?
+    package var shadowRootType: String?
+
+    package init(
+        id: DOMNode.ID,
+        protocolNodeID: DOMNode.ProtocolID,
+        nodeType: DOMNode.Kind,
+        nodeName: String,
+        localName: String,
+        nodeValue: String,
+        attributes: [DOMNode.Attribute],
+        parentID: DOMNode.ID?,
+        regularChildren: DOMNode.ChildrenSnapshot,
+        contentDocumentID: DOMNode.ID?,
+        shadowRootIDs: [DOMNode.ID],
+        templateContentID: DOMNode.ID?,
+        beforePseudoElementID: DOMNode.ID?,
+        otherPseudoElementIDs: [DOMNode.ID],
+        afterPseudoElementID: DOMNode.ID?,
+        pseudoType: String?,
+        shadowRootType: String?
+    ) {
+        self.id = id
+        self.protocolNodeID = protocolNodeID
+        self.nodeType = nodeType
+        self.nodeName = nodeName
+        self.localName = localName
+        self.nodeValue = nodeValue
+        self.attributes = attributes
+        self.parentID = parentID
+        self.regularChildren = regularChildren
+        self.contentDocumentID = contentDocumentID
+        self.shadowRootIDs = shadowRootIDs
+        self.templateContentID = templateContentID
+        self.beforePseudoElementID = beforePseudoElementID
+        self.otherPseudoElementIDs = otherPseudoElementIDs
+        self.afterPseudoElementID = afterPseudoElementID
+        self.pseudoType = pseudoType
+        self.shadowRootType = shadowRootType
+    }
+
+    package var regularChildKnownCount: Int {
+        regularChildren.knownCount
+    }
+
+    package var hasUnloadedRegularChildren: Bool {
+        if case let .unrequested(count) = regularChildren {
+            return count > 0
+        }
+        return false
+    }
+
+    package var isFrameOwner: Bool {
+        let lowercasedName = nodeName.lowercased()
+        return lowercasedName == "iframe" || lowercasedName == "frame"
+    }
+
+    package var displayName: String {
+        if !localName.isEmpty {
+            return localName
+        }
+        if !nodeName.isEmpty {
+            return nodeName
+        }
+        return nodeValue.isEmpty ? nodeName : nodeValue
+    }
+}
+
+package struct DOMTreeRenderSnapshot: Equatable, Sendable {
+    package var treeRevision: UInt64
+    package var rootNodeID: DOMNode.ID?
+    package var nodesByID: [DOMNode.ID: DOMTreeRenderNodeSnapshot]
+    package var projectedFrameDocumentRootIDByOwnerNodeID: [DOMNode.ID: DOMNode.ID]
+    package var invalidation: DOMTreeRenderInvalidation
+
+    package init(
+        treeRevision: UInt64,
+        rootNodeID: DOMNode.ID?,
+        nodesByID: [DOMNode.ID: DOMTreeRenderNodeSnapshot],
+        projectedFrameDocumentRootIDByOwnerNodeID: [DOMNode.ID: DOMNode.ID],
+        invalidation: DOMTreeRenderInvalidation
+    ) {
+        self.treeRevision = treeRevision
+        self.rootNodeID = rootNodeID
+        self.nodesByID = nodesByID
+        self.projectedFrameDocumentRootIDByOwnerNodeID = projectedFrameDocumentRootIDByOwnerNodeID
+        self.invalidation = invalidation
+    }
+
+    package func node(for nodeID: DOMNode.ID) -> DOMTreeRenderNodeSnapshot? {
+        nodesByID[nodeID]
+    }
+
+    package func isTemplateContent(_ nodeID: DOMNode.ID) -> Bool {
+        guard let parentID = nodesByID[nodeID]?.parentID,
+              let parent = nodesByID[parentID] else {
+            return false
+        }
+        return parent.templateContentID == nodeID
+    }
+
+    package func displayRootIDs() -> [DOMNode.ID] {
+        guard let rootNodeID,
+              let rootNode = nodesByID[rootNodeID] else {
+            return []
+        }
+        if rootNode.nodeType == .document {
+            return visibleChildrenProjection(of: rootNodeID).children
+        }
+        return [rootNodeID]
+    }
+
+    package func visibleChildrenProjection(of nodeID: DOMNode.ID) -> DOMVisibleChildrenProjection {
+        guard let node = nodesByID[nodeID] else {
+            return DOMVisibleChildrenProjection()
+        }
+
+        var children: [DOMNode.ID] = []
+        if let templateContentID = node.templateContentID {
+            children.append(templateContentID)
+        }
+        if let beforePseudoElementID = node.beforePseudoElementID {
+            children.append(beforePseudoElementID)
+        }
+        children.append(contentsOf: node.otherPseudoElementIDs)
+        children.append(contentsOf: effectiveChildIDs(of: node))
+        if let afterPseudoElementID = node.afterPseudoElementID {
+            children.append(afterPseudoElementID)
+        }
+
+        return DOMVisibleChildrenProjection(
+            children: children,
+            hasUnloadedChildren: node.hasUnloadedRegularChildren,
+            hasRenderableChildren: !children.isEmpty || node.regularChildKnownCount > 0
+        )
+    }
+
+    private func effectiveChildIDs(of node: DOMTreeRenderNodeSnapshot) -> [DOMNode.ID] {
+        if node.isFrameOwner,
+           let projectedRootID = projectedFrameDocumentRootIDByOwnerNodeID[node.id] {
+            return [projectedRootID]
+        }
+        if let contentDocumentID = node.contentDocumentID {
+            return [contentDocumentID]
+        }
+        return node.shadowRootIDs + node.regularChildren.loadedChildren
+    }
+}
+
 package extension DOMTarget {
     struct Snapshot: Equatable, Sendable, Identifiable {
         package var id: ProtocolTarget.ID

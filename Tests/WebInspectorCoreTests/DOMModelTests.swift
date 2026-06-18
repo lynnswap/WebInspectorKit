@@ -856,6 +856,197 @@ func setChildNodesPreservesProtocolChildOrderAndSiblingLinks() async throws {
     #expect(snapshot.nodesByID[childIDs[2]]?.nextSiblingID == nil)
 }
 
+@Test
+func domTreeRenderSnapshotPreservesVisibleChildProjectionOrdering() async throws {
+    let pageTargetID = ProtocolTarget.ID("page-main")
+    let session = await DOMSession()
+
+    await session.applyTargetCreated(.init(id: pageTargetID, kind: .page), makeCurrentMainPage: true)
+    _ = await session.replaceDocumentRoot(
+        document(
+            nodeID: 1,
+            children: [
+                DOMNode.Payload(
+                    nodeID: .init(2),
+                    nodeType: .element,
+                    nodeName: "host",
+                    localName: "host",
+                    regularChildren: .loaded([
+                        .element(nodeID: 6, name: "regular"),
+                    ]),
+                    shadowRoots: [
+                        DOMNode.Payload(
+                            nodeID: .init(5),
+                            nodeType: .documentFragment,
+                            nodeName: "#shadow-root",
+                            shadowRootType: "open"
+                        ),
+                    ],
+                    templateContent: DOMNode.Payload(
+                        nodeID: .init(3),
+                        nodeType: .documentFragment,
+                        nodeName: "#document-fragment"
+                    ),
+                    beforePseudoElement: .element(nodeID: 4, name: "::before", pseudoType: "before"),
+                    otherPseudoElements: [
+                        .element(nodeID: 7, name: "::marker", pseudoType: "marker"),
+                    ],
+                    afterPseudoElement: .element(nodeID: 8, name: "::after", pseudoType: "after")
+                ),
+                DOMNode.Payload(
+                    nodeID: .init(20),
+                    nodeType: .element,
+                    nodeName: "iframe",
+                    localName: "iframe",
+                    contentDocument: document(nodeID: 21)
+                ),
+            ]
+        ),
+        targetID: pageTargetID
+    )
+
+    let snapshot = await session.domTreeRenderSnapshot()
+    let hostID = try #require(await session.currentNodeID(targetID: pageTargetID, rawNodeID: .init(2)))
+    let iframeID = try #require(await session.currentNodeID(targetID: pageTargetID, rawNodeID: .init(20)))
+    var expectedHostChildren: [DOMNode.ID] = []
+    for rawNodeID in [3, 4, 7, 5, 6, 8] {
+        let nodeID = try #require(await session.currentNodeID(targetID: pageTargetID, rawNodeID: .init(rawNodeID)))
+        expectedHostChildren.append(nodeID)
+    }
+    let iframeDocumentID = try #require(await session.currentNodeID(targetID: pageTargetID, rawNodeID: .init(21)))
+
+    #expect(snapshot.visibleChildrenProjection(of: hostID).children == expectedHostChildren)
+    #expect(snapshot.visibleChildrenProjection(of: hostID).hasRenderableChildren)
+    #expect(snapshot.visibleChildrenProjection(of: iframeID).children == [iframeDocumentID])
+}
+
+@Test
+func domTreeRenderInvalidationRecordsContentAndStructureMutations() async throws {
+    let pageTargetID = ProtocolTarget.ID("page-main")
+    let session = await DOMSession()
+
+    await session.applyTargetCreated(.init(id: pageTargetID, kind: .page), makeCurrentMainPage: true)
+    _ = await session.replaceDocumentRoot(
+        document(
+            nodeID: 1,
+            children: [
+                .element(
+                    nodeID: 2,
+                    name: "body",
+                    children: [
+                        .element(nodeID: 3, name: "span"),
+                    ]
+                ),
+            ]
+        ),
+        targetID: pageTargetID
+    )
+    let bodyID = try #require(await session.currentNodeID(targetID: pageTargetID, rawNodeID: .init(2)))
+    let spanID = try #require(await session.currentNodeID(targetID: pageTargetID, rawNodeID: .init(3)))
+
+    await session.applyAttributeModified(spanID, name: "data-state", value: "ready")
+    var invalidation = await session.treeRenderInvalidation
+    #expect(invalidation.kind == .content)
+    #expect(invalidation.affectedNodeID == spanID)
+    #expect(invalidation.parentNodeID == bodyID)
+
+    let insertedID = try #require(await session.applyChildInserted(
+        parent: bodyID,
+        previousSibling: spanID,
+        child: .element(nodeID: 4, name: "em")
+    ))
+    invalidation = await session.treeRenderInvalidation
+    #expect(invalidation.kind == .structure)
+    #expect(invalidation.affectedNodeID == insertedID)
+    #expect(invalidation.parentNodeID == bodyID)
+}
+
+@Test
+func domTreeRenderInvalidationMergesConservatively() {
+    let documentID = DOMDocument.ID(
+        targetID: ProtocolTarget.ID("page-main"),
+        localDocumentLifetimeID: .init(1)
+    )
+    let parentID = DOMNode.ID(documentID: documentID, nodeID: .init(1))
+    let firstNodeID = DOMNode.ID(documentID: documentID, nodeID: .init(2))
+    let secondNodeID = DOMNode.ID(documentID: documentID, nodeID: .init(3))
+
+    let first = DOMTreeRenderInvalidation(
+        revision: 1,
+        kind: .content,
+        affectedNodeID: firstNodeID,
+        parentNodeID: parentID
+    )
+    let second = DOMTreeRenderInvalidation(
+        revision: 2,
+        kind: .content,
+        affectedNodeID: secondNodeID,
+        parentNodeID: parentID
+    )
+    let mergedContent = first.merging(with: second)
+    #expect(mergedContent.revision == 2)
+    #expect(mergedContent.kind == .content)
+    #expect(mergedContent.affectedNodeID == nil)
+    #expect(mergedContent.parentNodeID == parentID)
+
+    let mergedStructure = first.merging(
+        with: DOMTreeRenderInvalidation(
+            revision: 3,
+            kind: .structure,
+            affectedNodeID: secondNodeID,
+            parentNodeID: parentID
+        )
+    )
+    #expect(mergedStructure.revision == 3)
+    #expect(mergedStructure.kind == .structure)
+    #expect(mergedStructure.affectedNodeID == nil)
+    #expect(mergedStructure.parentNodeID == parentID)
+}
+
+@Test
+func domTreeRenderInvalidationSinceRevisionMergesRecordedMutations() async throws {
+    let pageTargetID = ProtocolTarget.ID("page-main")
+    let session = await DOMSession()
+
+    await session.applyTargetCreated(.init(id: pageTargetID, kind: .page), makeCurrentMainPage: true)
+    _ = await session.replaceDocumentRoot(
+        document(
+            nodeID: 1,
+            children: [
+                .element(
+                    nodeID: 2,
+                    name: "body",
+                    children: [
+                        .element(nodeID: 3, name: "div"),
+                        .element(
+                            nodeID: 4,
+                            name: "article",
+                            children: [
+                                .element(nodeID: 5, name: "span"),
+                            ]
+                        ),
+                    ]
+                ),
+            ]
+        ),
+        targetID: pageTargetID
+    )
+    let routedRevision = await session.treeRevision
+    let divID = try #require(await session.currentNodeID(targetID: pageTargetID, rawNodeID: .init(3)))
+    let spanID = try #require(await session.currentNodeID(targetID: pageTargetID, rawNodeID: .init(5)))
+
+    await session.applyAttributeModified(divID, name: "data-visible", value: "ready")
+    await session.applyAttributeModified(spanID, name: "data-hidden", value: "ready")
+
+    let latestInvalidation = await session.treeRenderInvalidation
+    let mergedInvalidation = await session.treeRenderInvalidation(since: routedRevision)
+    #expect(latestInvalidation.affectedNodeID == spanID)
+    #expect(mergedInvalidation.revision == latestInvalidation.revision)
+    #expect(mergedInvalidation.kind == .content)
+    #expect(mergedInvalidation.affectedNodeID == nil)
+    #expect(mergedInvalidation.parentNodeID == nil)
+}
+
 @Test("Regression: detached root cannot overwrite connected page document nodes")
 func detachedRootCannotOverwriteConnectedPageDocumentNodes() async throws {
     let pageTargetID = ProtocolTarget.ID("page-main")

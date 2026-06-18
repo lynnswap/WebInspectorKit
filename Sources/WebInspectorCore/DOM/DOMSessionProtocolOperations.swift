@@ -193,7 +193,7 @@ extension DOMSession {
     }
 
     @discardableResult
-    package func requestChildNodes(for nodeID: DOMNode.ID, depth: Int = 3) async -> Bool {
+    package func requestChildNodes(for nodeID: DOMNode.ID, depth: Int = 1) async -> Bool {
         guard let intent = requestChildNodesIntent(
             for: nodeID,
             depth: depth,

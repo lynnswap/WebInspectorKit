@@ -80,6 +80,10 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     private var lastBoundsSize: CGSize = .zero
     private var lastRenderedDocumentRootID: DOMNode.ID?
     private var lastRoutedTreeRevision: UInt64?
+    private var pendingDOMTreeRenderInvalidation: DOMTreeRenderInvalidation?
+    private var pendingDOMTreeRenderInvalidationIsInitial = false
+    private var pendingDOMTreeRenderInvalidationRequiresRoute = false
+    private var domTreeRenderInvalidationTask: Task<Void, Never>?
     private var lastObservedTreeContent: DOMTreeTextView.ObservedContent?
     private var lastRoutedSelectedNodeID: DOMNode.ID?
     private let selectionRevealState = DOMTreeTextView.SelectionRevealState()
@@ -174,6 +178,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
 
     isolated deinit {
         pageHighlightTask?.cancel()
+        domTreeRenderInvalidationTask?.cancel()
         renderedRowsBuildCoordinator.cancel()
         documentObservation?.cancel()
         selectionObservation?.cancel()
@@ -496,13 +501,18 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     private func startObservingDocument() {
         documentObservation = withPortableContinuousObservation { [weak self] event in
             guard let self else { return }
-            let treeRevision = dom.treeRevision
-            let shouldRouteDOMInvalidation = event.kind == .initial || lastRoutedTreeRevision != treeRevision
+            let latestInvalidation = dom.treeRenderInvalidation
+            let treeRevision = latestInvalidation.revision
+            let previousRoutedTreeRevision = lastRoutedTreeRevision
+            let shouldRouteDOMInvalidation = event.kind == .initial || previousRoutedTreeRevision != treeRevision
             lastRoutedTreeRevision = treeRevision
             guard shouldRouteDOMInvalidation else {
                 return
             }
-            routeDOMInvalidation(from: dom, isInitial: event.kind == .initial)
+            let invalidation = event.kind == .initial
+                ? latestInvalidation
+                : dom.treeRenderInvalidation(since: previousRoutedTreeRevision)
+            scheduleDOMInvalidation(invalidation, isInitial: event.kind == .initial)
         }
         selectionObservation = withPortableContinuousObservation { [weak self] _ in
             guard let self else { return }
@@ -511,14 +521,61 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         }
     }
 
-    private func routeDOMInvalidation(from dom: DOMSession, isInitial: Bool) {
+    private func scheduleDOMInvalidation(
+        _ invalidation: DOMTreeRenderInvalidation,
+        isInitial: Bool
+    ) {
+        pendingDOMTreeRenderInvalidation = pendingDOMTreeRenderInvalidation?.merging(with: invalidation) ?? invalidation
+        pendingDOMTreeRenderInvalidationIsInitial = pendingDOMTreeRenderInvalidationIsInitial || isInitial
+        pendingDOMTreeRenderInvalidationRequiresRoute = pendingDOMTreeRenderInvalidationRequiresRoute
+            || shouldRouteDOMInvalidation(
+                invalidation,
+                isInitial: isInitial,
+                includesNode: { [renderedRowsBuildCoordinator] nodeID in
+                    renderedRowsBuildCoordinator.currentBuildRenders(nodeID: nodeID)
+                }
+            )
+        guard domTreeRenderInvalidationTask == nil else {
+            return
+        }
+        domTreeRenderInvalidationTask = Task { @MainActor [weak self] in
+            await Task.yield()
+            guard let self else {
+                return
+            }
+            let pendingInvalidation = pendingDOMTreeRenderInvalidation
+            let pendingIsInitial = pendingDOMTreeRenderInvalidationIsInitial
+            let pendingRequiresRoute = pendingDOMTreeRenderInvalidationRequiresRoute
+            pendingDOMTreeRenderInvalidation = nil
+            pendingDOMTreeRenderInvalidationIsInitial = false
+            pendingDOMTreeRenderInvalidationRequiresRoute = false
+            domTreeRenderInvalidationTask = nil
+            guard let pendingInvalidation else {
+                return
+            }
+            routeDOMInvalidation(
+                pendingInvalidation,
+                isInitial: pendingIsInitial,
+                forceRoute: pendingRequiresRoute
+            )
+        }
+    }
+
+    private func routeDOMInvalidation(
+        _ invalidation: DOMTreeRenderInvalidation,
+        isInitial: Bool,
+        forceRoute: Bool = false
+    ) {
+        guard forceRoute || shouldRouteDOMInvalidation(invalidation, isInitial: isInitial) else {
+            return
+        }
 #if DEBUG
         performanceCounters.buildRenderedRowsCallCount += 1
 #endif
-        resetLocalDocumentStateIfNeeded()
+        let didResetLocalDocumentState = resetLocalDocumentStateIfNeeded(rootID: dom.currentDOMTreeRenderRootNodeID)
         prepareSelectionForRendering()
         startRenderedRowsBuild(
-            resetFragments: true,
+            resetFragments: isInitial || invalidation.requiresFragmentReset || didResetLocalDocumentState,
             previousRows: rows,
             previousText: renderedText,
             shouldApply: { [weak self] result in
@@ -531,6 +588,45 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
                 return treeChanged
             }
         )
+    }
+
+    private func shouldRouteDOMInvalidation(
+        _ invalidation: DOMTreeRenderInvalidation,
+        isInitial: Bool,
+        includesNode: ((DOMNode.ID) -> Bool)? = nil
+    ) -> Bool {
+        guard !isInitial, !invalidation.requiresFragmentReset else {
+            return true
+        }
+
+        func isVisible(_ nodeID: DOMNode.ID) -> Bool {
+            renderedRows.contains(nodeID: nodeID) || includesNode?(nodeID) == true
+        }
+
+        switch invalidation.kind {
+        case .root:
+            return true
+        case .content:
+            guard let affectedNodeID = invalidation.affectedNodeID else {
+                return true
+            }
+            return isVisible(affectedNodeID)
+        case .structure:
+            let renderRootNodeID = dom.currentDOMTreeRenderRootNodeID
+            if invalidation.affectedNodeID == renderRootNodeID
+                || invalidation.parentNodeID == renderRootNodeID {
+                return true
+            }
+            if let affectedNodeID = invalidation.affectedNodeID,
+               isVisible(affectedNodeID) {
+                return true
+            }
+            if let parentNodeID = invalidation.parentNodeID,
+               isVisible(parentNodeID) {
+                return true
+            }
+            return invalidation.affectedNodeID == nil && invalidation.parentNodeID == nil
+        }
     }
 
     private func routeSelectionInvalidation(from dom: DOMSession) {
@@ -571,10 +667,11 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
             performanceCounters.reloadTreeCallCount += 1
         }
 #endif
-        resetLocalDocumentStateIfNeeded()
+        let didResetLocalDocumentState = resetLocalDocumentStateIfNeeded()
         let previousRows = rows
         let previousText = renderedText
-        if resetFragments {
+        let shouldResetFragments = resetFragments || didResetLocalDocumentState
+        if shouldResetFragments {
             renderedRowsBuildCoordinator.removeCachedMarkup(keepingCapacity: true)
         }
         prepareSelectionForRendering()
@@ -582,7 +679,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         performanceCounters.buildRenderedRowsCallCount += 1
 #endif
         startRenderedRowsBuild(
-            resetFragments: resetFragments,
+            resetFragments: shouldResetFragments,
             previousRows: previousRows,
             previousText: previousText
         )
@@ -601,7 +698,16 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
                 guard let self else {
                     return false
                 }
-                return dom.treeRevision == request.treeRevision
+                let currentInvalidation = dom.treeRenderInvalidation(since: request.treeRevision)
+                let isCurrentTreeRevision = currentInvalidation.revision == request.treeRevision
+                    || !shouldRouteDOMInvalidation(
+                        currentInvalidation,
+                        isInitial: false,
+                        includesNode: { nodeID in
+                            request.rendersNode(nodeID)
+                        }
+                    )
+                return isCurrentTreeRevision
                     && expansionState.snapshot == request.expansionState
             },
             shouldApply: shouldApply,
@@ -660,14 +766,15 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
 #endif
     }
 
-    private func resetLocalDocumentStateIfNeeded() {
-        let rootID = dom.currentPageRootNode?.id
+    @discardableResult
+    private func resetLocalDocumentStateIfNeeded(rootID: DOMNode.ID? = nil) -> Bool {
+        let rootID = rootID ?? dom.currentDOMTreeRenderRootNodeID
         defer {
             lastRenderedDocumentRootID = rootID
         }
         guard rootID == nil
                 || (lastRenderedDocumentRootID != nil && lastRenderedDocumentRootID != rootID) else {
-            return
+            return false
         }
 
         expansionState.removeAll()
@@ -680,6 +787,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         multiSelection.reset()
         dismissDOMMenuAnchor()
         clearTextSelection()
+        return true
     }
 
     private func prepareSelectionForRendering(clearsMultiSelectionForDocumentSelection: Bool = false) {
@@ -1236,6 +1344,8 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         performanceCounters.incrementalTextStorageEditCallCount += 1
 #endif
 
+        let editedLength = max(edit.range.length, (edit.replacement as NSString).length)
+        invalidateTextLayout(for: NSRange(location: edit.range.location, length: editedLength))
         let changedRows = Array(nextRows[diff.nextStart..<diff.nextEnd])
         applyTextAttributes(to: changedRows)
         invalidateTokenRenderingAttributes(for: changedRows.map(\.textRange))
@@ -1445,6 +1555,15 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
 
     private func invalidateTextLayout() {
         layoutManager.invalidateLayout(for: textContentStorage.documentRange)
+        layoutManager.textSelectionNavigation.flushLayoutCache()
+    }
+
+    private func invalidateTextLayout(for range: NSRange) {
+        guard range.length > 0,
+              let textRange = textRange(for: range) else {
+            return
+        }
+        layoutManager.invalidateLayout(for: textRange)
         layoutManager.textSelectionNavigation.flushLayoutCache()
     }
 
@@ -2247,6 +2366,10 @@ extension DOMTreeTextView {
         performanceCounters.resetTextFragmentViewsCallCount
     }
 
+    var cachedMarkupKeysForTesting: Set<DOMTreeTextView.MarkupCacheKey> {
+        renderedRowsBuildCoordinator.cachedMarkupKeysForTesting()
+    }
+
     var renderedRowsAppliedTreeRevisionForTesting: UInt64 {
         renderedRowsAppliedTreeRevisionForTestingStorage
     }
@@ -2378,7 +2501,16 @@ extension DOMTreeTextView {
     }
 
     func waitForRenderedRowsForTesting() async {
-        await renderedRowsBuildCoordinator.waitForCurrentBuild()
+        while true {
+            if let domTreeRenderInvalidationTask {
+                await domTreeRenderInvalidationTask.value
+                continue
+            }
+            await renderedRowsBuildCoordinator.waitForCurrentBuild()
+            if domTreeRenderInvalidationTask == nil {
+                return
+            }
+        }
     }
 
     func suspendNextRenderedRowsBuildForTesting() {
