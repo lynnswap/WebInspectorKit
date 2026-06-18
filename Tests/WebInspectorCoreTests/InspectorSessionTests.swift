@@ -939,20 +939,26 @@ func selectedElementStyleHydrationMarksStaleWhenTransportTargetDisappearsBeforeD
 }
 
 @Test
+@MainActor
 func selectedElementStyleRefreshEnablesCSSAgentOnlyAfterBackendRequiresIt() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
-    let session = await InspectorSession(configuration: .test)
+    let session = InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
     try await hydratePageHTMLChildren(session: session, transport: transport, backend: backend)
     let bodyID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(4))
-    await session.attachment.dom.selectNode(bodyID)
+    #expect(session.attachment.dom.snapshot().targetsByID[.pageMain]?.capabilities.contains(.css) == true)
+    session.attachment.dom.selectNode(bodyID)
 
     let sentCount = await backend.sentTargetMessages().count
     let refreshTask = Task {
         await session.attachment.dom.refreshStylesForSelectedNode()
     }
     let firstMessages = try await waitForCSSRefreshMessages(backend, after: sentCount)
+    let cssEnableTask = Task {
+        try await waitForTargetMessage(backend, method: "CSS.enable", after: sentCount)
+    }
+    await backend.waitUntilTargetMessageWaiterRegistered(method: "CSS.enable", after: sentCount)
     await receiveTargetErrorReply(
         transport,
         targetID: firstMessages.matched.targetIdentifier,
@@ -972,7 +978,7 @@ func selectedElementStyleRefreshEnablesCSSAgentOnlyAfterBackendRequiresIt() asyn
         message: "CSS agent is not enabled"
     )
 
-    let cssEnable = try await waitForTargetMessage(backend, method: "CSS.enable", after: sentCount)
+    let cssEnable = try await cssEnableTask.value
     let retrySentCount = await backend.sentTargetMessages().count
     await receiveTargetReply(
         transport,
@@ -989,9 +995,9 @@ func selectedElementStyleRefreshEnablesCSSAgentOnlyAfterBackendRequiresIt() asyn
     )
     await refreshTask.value
 
-    let styles = try #require(await session.attachment.dom.elementStyles.selectedNodeStyles)
-    #expect(await session.attachment.dom.elementStyles.selectedPhase == .loaded)
-    #expect(await styles.id.nodeID == bodyID)
+    let styles = try #require(session.attachment.dom.elementStyles.selectedNodeStyles)
+    #expect(session.attachment.dom.elementStyles.selectedPhase == .loaded)
+    #expect(styles.id.nodeID == bodyID)
 }
 
 @Test
