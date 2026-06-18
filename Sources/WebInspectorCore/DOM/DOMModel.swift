@@ -10,6 +10,7 @@ package final class DOMSession {
     package private(set) var treeRenderInvalidation: DOMTreeRenderInvalidation
     package private(set) var selectionRevision: UInt64
     package private(set) var commandAvailabilityRevision: UInt64
+    @ObservationIgnored private var treeRenderInvalidationHistory: [DOMTreeRenderInvalidation]
     #if DEBUG
     @ObservationIgnored package private(set) var snapshotBuildCountForTesting: UInt64 = 0
     #endif
@@ -41,7 +42,9 @@ package final class DOMSession {
         self.elementStyles = elementStyles
         isSelectingElement = false
         treeRevision = 0
-        treeRenderInvalidation = DOMTreeRenderInvalidation(revision: 0, kind: .root)
+        let initialTreeRenderInvalidation = DOMTreeRenderInvalidation(revision: 0, kind: .root)
+        treeRenderInvalidation = initialTreeRenderInvalidation
+        treeRenderInvalidationHistory = [initialTreeRenderInvalidation]
         selectionRevision = 0
         commandAvailabilityRevision = 0
         self.targetGraph = targetGraph
@@ -118,12 +121,36 @@ package final class DOMSession {
         parentNodeID: DOMNode.ID? = nil
     ) {
         treeRevision &+= 1
-        treeRenderInvalidation = DOMTreeRenderInvalidation(
+        let invalidation = DOMTreeRenderInvalidation(
             revision: treeRevision,
             kind: kind,
             affectedNodeID: affectedNodeID,
             parentNodeID: parentNodeID
         )
+        treeRenderInvalidation = invalidation
+        treeRenderInvalidationHistory.append(invalidation)
+        if treeRenderInvalidationHistory.count > 512 {
+            treeRenderInvalidationHistory.removeFirst(treeRenderInvalidationHistory.count - 512)
+        }
+    }
+
+    package func treeRenderInvalidation(since routedRevision: UInt64?) -> DOMTreeRenderInvalidation {
+        guard let routedRevision,
+              routedRevision < treeRevision else {
+            return treeRenderInvalidation
+        }
+
+        let pendingInvalidations = treeRenderInvalidationHistory.filter { $0.revision > routedRevision }
+        guard var mergedInvalidation = pendingInvalidations.first else {
+            return DOMTreeRenderInvalidation(revision: treeRevision, kind: .root)
+        }
+        guard mergedInvalidation.revision == routedRevision &+ 1 else {
+            return DOMTreeRenderInvalidation(revision: treeRevision, kind: .root)
+        }
+        for invalidation in pendingInvalidations.dropFirst() {
+            mergedInvalidation = mergedInvalidation.merging(with: invalidation)
+        }
+        return mergedInvalidation
     }
 
     private func recordSelectionMutation() {

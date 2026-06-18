@@ -500,13 +500,17 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     private func startObservingDocument() {
         documentObservation = withPortableContinuousObservation { [weak self] event in
             guard let self else { return }
-            let invalidation = dom.treeRenderInvalidation
-            let treeRevision = invalidation.revision
-            let shouldRouteDOMInvalidation = event.kind == .initial || lastRoutedTreeRevision != treeRevision
+            let latestInvalidation = dom.treeRenderInvalidation
+            let treeRevision = latestInvalidation.revision
+            let previousRoutedTreeRevision = lastRoutedTreeRevision
+            let shouldRouteDOMInvalidation = event.kind == .initial || previousRoutedTreeRevision != treeRevision
             lastRoutedTreeRevision = treeRevision
             guard shouldRouteDOMInvalidation else {
                 return
             }
+            let invalidation = event.kind == .initial
+                ? latestInvalidation
+                : dom.treeRenderInvalidation(since: previousRoutedTreeRevision)
             scheduleDOMInvalidation(invalidation, isInitial: event.kind == .initial)
         }
         selectionObservation = withPortableContinuousObservation { [weak self] _ in
@@ -668,7 +672,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
                 guard let self else {
                     return false
                 }
-                let currentInvalidation = dom.treeRenderInvalidation
+                let currentInvalidation = dom.treeRenderInvalidation(since: request.treeRevision)
                 let isCurrentTreeRevision = currentInvalidation.revision == request.treeRevision
                     || !shouldRouteDOMInvalidation(currentInvalidation, isInitial: false)
                 return isCurrentTreeRevision

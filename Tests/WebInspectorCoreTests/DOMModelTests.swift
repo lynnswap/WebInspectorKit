@@ -1003,6 +1003,50 @@ func domTreeRenderInvalidationMergesConservatively() {
     #expect(mergedStructure.parentNodeID == parentID)
 }
 
+@Test
+func domTreeRenderInvalidationSinceRevisionMergesRecordedMutations() async throws {
+    let pageTargetID = ProtocolTarget.ID("page-main")
+    let session = await DOMSession()
+
+    await session.applyTargetCreated(.init(id: pageTargetID, kind: .page), makeCurrentMainPage: true)
+    _ = await session.replaceDocumentRoot(
+        document(
+            nodeID: 1,
+            children: [
+                .element(
+                    nodeID: 2,
+                    name: "body",
+                    children: [
+                        .element(nodeID: 3, name: "div"),
+                        .element(
+                            nodeID: 4,
+                            name: "article",
+                            children: [
+                                .element(nodeID: 5, name: "span"),
+                            ]
+                        ),
+                    ]
+                ),
+            ]
+        ),
+        targetID: pageTargetID
+    )
+    let routedRevision = await session.treeRevision
+    let divID = try #require(await session.currentNodeID(targetID: pageTargetID, rawNodeID: .init(3)))
+    let spanID = try #require(await session.currentNodeID(targetID: pageTargetID, rawNodeID: .init(5)))
+
+    await session.applyAttributeModified(divID, name: "data-visible", value: "ready")
+    await session.applyAttributeModified(spanID, name: "data-hidden", value: "ready")
+
+    let latestInvalidation = await session.treeRenderInvalidation
+    let mergedInvalidation = await session.treeRenderInvalidation(since: routedRevision)
+    #expect(latestInvalidation.affectedNodeID == spanID)
+    #expect(mergedInvalidation.revision == latestInvalidation.revision)
+    #expect(mergedInvalidation.kind == .content)
+    #expect(mergedInvalidation.affectedNodeID == nil)
+    #expect(mergedInvalidation.parentNodeID == nil)
+}
+
 @Test("Regression: detached root cannot overwrite connected page document nodes")
 func detachedRootCannotOverwriteConnectedPageDocumentNodes() async throws {
     let pageTargetID = ProtocolTarget.ID("page-main")

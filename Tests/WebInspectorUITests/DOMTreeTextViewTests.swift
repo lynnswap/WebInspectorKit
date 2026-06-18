@@ -79,6 +79,35 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func coalescedVisibleThenCollapsedMutationStillRoutesVisibleUpdate() async throws {
+        let session = makeDOMSession()
+        let view = await makeTreeView(session: session)
+        let documentID = try #require(session.currentPageRootNode?.id.documentID)
+        let visibleDivID = DOMNode.ID(documentID: documentID, nodeID: .init(7))
+        let nestedChildID = DOMNode.ID(documentID: documentID, nodeID: .init(9))
+
+        #expect(view.renderedTextForTesting.contains("<div id=\"start-of-content\" data-testid=\"cellInnerDiv\"></div>"))
+        #expect(view.renderedTextForTesting.contains("<article>…</article>"))
+        #expect(!view.renderedTextForTesting.contains("data-hidden=\"ready\""))
+
+        let didRenderVisibleAttribute = await waitForRenderedDocumentTreeUpdate(
+            in: view,
+            session: session,
+            update: {
+                session.applyAttributeModified(visibleDivID, name: "data-visible", value: "ready")
+                session.applyAttributeModified(nestedChildID, name: "data-hidden", value: "ready")
+            },
+            until: {
+                view.renderedTextForTesting.contains("data-visible=\"ready\"")
+            }
+        )
+
+        #expect(didRenderVisibleAttribute)
+        #expect(view.renderedTextForTesting.contains("data-visible=\"ready\""))
+        #expect(!view.renderedTextForTesting.contains("data-hidden=\"ready\""))
+    }
+
+    @Test
     func textStorageKeepsTokenForegroundAsBaseAttributes() async throws {
         let view = await makeTreeView()
 
