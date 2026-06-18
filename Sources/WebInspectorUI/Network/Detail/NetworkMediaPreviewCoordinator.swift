@@ -68,6 +68,14 @@ final class NetworkMediaPreviewCoordinator {
         removeCachedTemporaryFile()
     }
 
+#if DEBUG
+    func waitUntilPreparationFinishedForTesting() async {
+        while let task {
+            await task.value
+        }
+    }
+#endif
+
     private func mediaPreviewSource(
         for body: NetworkBody,
         metadata: NetworkMediaPreviewMetadata?

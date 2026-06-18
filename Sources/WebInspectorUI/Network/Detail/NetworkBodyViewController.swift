@@ -688,6 +688,10 @@ extension NetworkBodyViewController {
         moviePreviewPlayerFactory = factory
     }
 
+    func waitUntilMediaPreviewPreparationFinishedForTesting() async {
+        await mediaPreviewCoordinator.waitUntilPreparationFinishedForTesting()
+    }
+
     var bodyObservationDeliveryForTesting: PortableObservationTracking.Token? {
         bodyObservationDelivery
     }

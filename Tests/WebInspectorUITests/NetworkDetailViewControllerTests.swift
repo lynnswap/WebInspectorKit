@@ -573,6 +573,7 @@ struct NetworkDetailViewControllerTests {
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
         viewController.setModeForTesting(.preview)
+        await waitUntilMediaPreviewPrepared(in: viewController)
 
         let didRenderMediaPreview = await waitUntilRendered(in: viewController) {
             viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting?.pathExtension == "mp4"
@@ -593,6 +594,7 @@ struct NetworkDetailViewControllerTests {
         #expect(playerFactory.requestedURLs == [temporaryFileURL])
 
         viewController.setModeForTesting(.preview)
+        await waitUntilMediaPreviewPrepared(in: viewController)
 
         let didRestoreMediaPreview = await waitUntilRendered(in: viewController) {
             viewController.currentModeForTesting == .preview
@@ -632,6 +634,7 @@ struct NetworkDetailViewControllerTests {
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
         viewController.setModeForTesting(.preview)
+        await waitUntilMediaPreviewPrepared(in: viewController)
 
         let didRenderMediaPreview = await waitUntilRendered(in: viewController) {
             viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting?.pathExtension == "mp4"
@@ -693,6 +696,7 @@ struct NetworkDetailViewControllerTests {
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
         viewController.setModeForTesting(.preview)
+        await waitUntilMediaPreviewPrepared(in: viewController)
 
         let didRenderImage = await waitUntilRendered(in: viewController) {
             let bodyViewController = viewController.bodyViewControllerForTesting
@@ -760,6 +764,7 @@ struct NetworkDetailViewControllerTests {
         let window = showInWindow(viewController, makeVisible: true)
         defer { window.isHidden = true }
         viewController.setModeForTesting(.preview)
+        await waitUntilMediaPreviewPrepared(in: viewController)
 
         let didRenderImage = await waitUntilRendered(in: viewController) {
             viewController.bodyViewControllerForTesting.isImagePreviewVisibleForTesting
@@ -808,6 +813,7 @@ struct NetworkDetailViewControllerTests {
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
         viewController.setModeForTesting(.preview)
+        await waitUntilMediaPreviewPrepared(in: viewController)
 
         let didRenderImage = await waitUntilRendered(in: viewController) {
             viewController.bodyViewControllerForTesting.isImagePreviewVisibleForTesting
@@ -1447,6 +1453,13 @@ struct NetworkDetailViewControllerTests {
                 sampleRenderedCondition(in: viewController, condition: condition)
             }
         )
+    }
+
+    private func waitUntilMediaPreviewPrepared(
+        in viewController: NetworkDetailViewController
+    ) async {
+        await viewController.bodyViewControllerForTesting.waitUntilMediaPreviewPreparationFinishedForTesting()
+        viewController.view.layoutIfNeeded()
     }
 
     private func waitUntilNavigationStackSynced(
