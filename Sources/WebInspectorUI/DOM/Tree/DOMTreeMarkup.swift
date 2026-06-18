@@ -121,6 +121,7 @@ private func domTreeDisplayColumnCount(for scalar: Unicode.Scalar) -> Int {
 }
 
 extension DOMTreeTextView {
+    @MainActor
     enum MarkupBuilder {
         private static let voidElementNames: Set<String> = [
             "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"
@@ -132,7 +133,7 @@ extension DOMTreeTextView {
         ]
 
         static func markup(
-            for node: DOMNode.Snapshot,
+            for node: DOMNode,
             hasDisclosure: Bool,
             isOpen: Bool,
             isClosingTag: Bool,
@@ -164,7 +165,7 @@ extension DOMTreeTextView {
             }
         }
 
-        static func rendersClosingTagRow(for node: DOMNode.Snapshot) -> Bool {
+        static func rendersClosingTagRow(for node: DOMNode) -> Bool {
             guard inferredNodeType(for: node) == .element else {
                 return false
             }
@@ -174,7 +175,7 @@ extension DOMTreeTextView {
             return !voidElementNames.contains(elementName(for: node))
         }
 
-        static func canContainChildNodes(_ node: DOMNode.Snapshot) -> Bool {
+        static func canContainChildNodes(_ node: DOMNode) -> Bool {
             switch inferredNodeType(for: node) {
             case .document, .documentFragment:
                 return true
@@ -185,7 +186,7 @@ extension DOMTreeTextView {
             }
         }
 
-        private static func inferredNodeType(for node: DOMNode.Snapshot) -> DOMNode.Kind {
+        private static func inferredNodeType(for node: DOMNode) -> DOMNode.Kind {
             let name = (node.localName.isEmpty ? node.nodeName : node.localName).lowercased()
             if node.nodeType != .element || name.isEmpty {
                 return node.nodeType
@@ -211,7 +212,7 @@ extension DOMTreeTextView {
             }
         }
 
-        private static func elementMarkup(for node: DOMNode.Snapshot, hasDisclosure: Bool, isOpen: Bool) -> DOMTreeTextView.Markup {
+        private static func elementMarkup(for node: DOMNode, hasDisclosure: Bool, isOpen: Bool) -> DOMTreeTextView.Markup {
             if let pseudoType = node.pseudoType {
                 return fallbackMarkup("::\(pseudoType)")
             }
@@ -241,7 +242,7 @@ extension DOMTreeTextView {
             return markup
         }
 
-        private static func closingElementMarkup(for node: DOMNode.Snapshot) -> DOMTreeTextView.Markup {
+        private static func closingElementMarkup(for node: DOMNode) -> DOMTreeTextView.Markup {
             let name = elementName(for: node)
             var markup = DOMTreeTextView.Markup()
             markup.append("</", kind: .punctuation)
@@ -250,7 +251,7 @@ extension DOMTreeTextView {
             return markup
         }
 
-        private static func documentFragmentMarkup(for node: DOMNode.Snapshot, isTemplateContent: Bool) -> DOMTreeTextView.Markup {
+        private static func documentFragmentMarkup(for node: DOMNode, isTemplateContent: Bool) -> DOMTreeTextView.Markup {
             if let shadowRootType = node.shadowRootType {
                 return fallbackMarkup("Shadow Content (\(shadowRootTypeDisplayName(shadowRootType)))")
             }
@@ -287,7 +288,7 @@ extension DOMTreeTextView {
             markup.appendQuotedAttributeValue(escapedAttributeValue(attribute.value))
         }
 
-        private static func textMarkup(for node: DOMNode.Snapshot) -> DOMTreeTextView.Markup {
+        private static func textMarkup(for node: DOMNode) -> DOMTreeTextView.Markup {
             let text = escapedTextValue(normalizedValue(for: node))
             guard !text.isEmpty else {
                 return fallbackMarkup("#text")
@@ -297,7 +298,7 @@ extension DOMTreeTextView {
             return markup
         }
 
-        private static func commentMarkup(for node: DOMNode.Snapshot) -> DOMTreeTextView.Markup {
+        private static func commentMarkup(for node: DOMNode) -> DOMTreeTextView.Markup {
             var markup = DOMTreeTextView.Markup()
             markup.append("<!--", kind: .punctuation)
             let text = escapedCommentValue(normalizedValue(for: node))
@@ -310,7 +311,7 @@ extension DOMTreeTextView {
             return markup
         }
 
-        private static func documentTypeMarkup(for node: DOMNode.Snapshot) -> DOMTreeTextView.Markup {
+        private static func documentTypeMarkup(for node: DOMNode) -> DOMTreeTextView.Markup {
             var markup = DOMTreeTextView.Markup()
             let name = elementName(for: node, fallback: "html")
             markup.append("<!", kind: .punctuation)
@@ -321,7 +322,7 @@ extension DOMTreeTextView {
             return markup
         }
 
-        private static func cdataMarkup(for node: DOMNode.Snapshot) -> DOMTreeTextView.Markup {
+        private static func cdataMarkup(for node: DOMNode) -> DOMTreeTextView.Markup {
             var markup = DOMTreeTextView.Markup()
             markup.append("<![CDATA[", kind: .punctuation)
             markup.append(lineSafeValue(normalizedValue(for: node)), kind: .text)
@@ -329,7 +330,7 @@ extension DOMTreeTextView {
             return markup
         }
 
-        private static func processingInstructionMarkup(for node: DOMNode.Snapshot) -> DOMTreeTextView.Markup {
+        private static func processingInstructionMarkup(for node: DOMNode) -> DOMTreeTextView.Markup {
             var markup = DOMTreeTextView.Markup()
             markup.append("<?", kind: .punctuation)
             markup.append(elementName(for: node, fallback: "instruction"), kind: .tagName)
@@ -352,7 +353,7 @@ extension DOMTreeTextView {
             attribute.value.isEmpty && booleanAttributeNames.contains(attribute.name.lowercased())
         }
 
-        private static func elementName(for node: DOMNode.Snapshot, fallback: String = "element") -> String {
+        private static func elementName(for node: DOMNode, fallback: String = "element") -> String {
             let rawName: String
             if !node.localName.isEmpty {
                 rawName = node.localName
@@ -365,7 +366,7 @@ extension DOMTreeTextView {
             return (name.isEmpty ? fallback : name).lowercased()
         }
 
-        private static func fallbackPreview(for node: DOMNode.Snapshot) -> String {
+        private static func fallbackPreview(for node: DOMNode) -> String {
             if !node.nodeValue.isEmpty {
                 return node.nodeValue
             }
@@ -375,7 +376,7 @@ extension DOMTreeTextView {
             return node.nodeName
         }
 
-        private static func normalizedValue(for node: DOMNode.Snapshot) -> String {
+        private static func normalizedValue(for node: DOMNode) -> String {
             let source = node.nodeValue.isEmpty ? node.nodeName : node.nodeValue
             return source
                 .split(whereSeparator: \.isWhitespace)

@@ -27,6 +27,56 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func renderedRowsBuildDoesNotSnapshotDOMSession() async throws {
+        let session = makeDOMSession()
+        let baselineSnapshotBuildCount = session.snapshotBuildCountForTesting
+
+        let view = await makeTreeView(session: session)
+        #expect(view.renderedTextForTesting.contains("<html lang=\"en\">"))
+        #expect(session.snapshotBuildCountForTesting == baselineSnapshotBuildCount)
+
+        view.toggleRowForTesting(containing: "<article")
+        await view.waitForRenderedRowsForTesting()
+
+        #expect(view.renderedTextForTesting.contains("<span id=\"nested-child\"></span>"))
+        #expect(session.snapshotBuildCountForTesting == baselineSnapshotBuildCount)
+    }
+
+    @Test
+    func collapsedDescendantMutationDoesNotTraverseOrApplyCollapsedSubtree() async throws {
+        let session = makeDOMSession()
+        let view = await makeTreeView(session: session)
+        let documentID = try #require(session.currentPageRootNode?.id.documentID)
+        let articleID = DOMNode.ID(documentID: documentID, nodeID: .init(8))
+        let nestedChildID = DOMNode.ID(documentID: documentID, nodeID: .init(9))
+        let observedBuildCounts = await view.documentObservationDeliveryForTesting.values {
+            view.buildRenderedRowsCallCountForTesting
+        }
+        defer {
+            observedBuildCounts.cancel()
+        }
+        let baselineSnapshotBuildCount = session.snapshotBuildCountForTesting
+        let baselineAppliedTreeRevision = view.renderedRowsAppliedTreeRevisionForTesting
+        let baselineBuildCount = view.buildRenderedRowsCallCountForTesting
+
+        #expect(view.renderedTextForTesting.contains("<article>…</article>"))
+        #expect(!view.renderedTextForTesting.contains("data-state=\"ready\""))
+
+        session.applyAttributeModified(nestedChildID, name: "data-state", value: "ready")
+        let didRouteBuild = await observedBuildCounts.waitUntil {
+            $0 > baselineBuildCount
+        } != nil
+        await view.waitForRenderedRowsForTesting()
+
+        #expect(didRouteBuild)
+        #expect(DOMTreeTextView.RenderedRowsWorker.lastVisitedNodeIDsForTesting.contains(articleID))
+        #expect(!DOMTreeTextView.RenderedRowsWorker.lastVisitedNodeIDsForTesting.contains(nestedChildID))
+        #expect(session.snapshotBuildCountForTesting == baselineSnapshotBuildCount)
+        #expect(view.renderedRowsAppliedTreeRevisionForTesting == baselineAppliedTreeRevision)
+        #expect(!view.renderedTextForTesting.contains("data-state=\"ready\""))
+    }
+
+    @Test
     func textStorageKeepsTokenForegroundAsBaseAttributes() async throws {
         let view = await makeTreeView()
 
