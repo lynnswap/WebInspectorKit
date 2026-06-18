@@ -2166,6 +2166,7 @@ func ensureDOMDocumentLoadedReloadsInvalidatedPageDocument() async throws {
     #expect(finalSnapshot.currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(40))] != nil)
 }
 
+#if DEBUG
 @Test("Regression: ensureDocumentLoaded coalesces pending page document requests")
 func ensureDOMDocumentLoadedCoalescesPendingPageDocumentRequest() async throws {
     let backend = FakeTransportBackend()
@@ -2219,6 +2220,7 @@ func ensureDOMDocumentLoadedCoalescesPendingPageDocumentRequest() async throws {
     #expect(finalSnapshot.currentPageDocumentID?.localDocumentLifetimeID == .init(2))
     #expect(finalSnapshot.currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(40))] != nil)
 }
+#endif
 
 @Test("Regression: documentUpdated reopens document request gate while previous getDocument is pending")
 func documentUpdatedAllowsNewDocumentRequestWhilePreviousRequestIsPending() async throws {
@@ -4464,6 +4466,7 @@ func staleSelectionClearDoesNotHideNewerSameTargetHighlight() async throws {
     await newerHighlightTask.value
 }
 
+#if DEBUG
 @Test
 func selectionClearDoesNotHideNewerTransientHighlightOnSameTarget() async throws {
     let backend = FakeTransportBackend()
@@ -4519,6 +4522,7 @@ func selectionClearDoesNotHideNewerTransientHighlightOnSameTarget() async throws
     )
     await transientHighlightTask.value
 }
+#endif
 
 @Test
 func staleSelectionClearRestoresCurrentSelectionHighlight() async throws {
