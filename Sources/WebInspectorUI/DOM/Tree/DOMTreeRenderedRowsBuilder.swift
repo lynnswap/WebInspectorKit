@@ -129,6 +129,10 @@ extension DOMTreeTextView {
             }
         }
 
+        func cachedMarkupKeysForTesting() -> Set<DOMTreeTextView.MarkupCacheKey> {
+            builder.cachedMarkupKeysForTesting
+        }
+
         func resumeSuspendedBuildForTesting() {
             guard let continuation = suspendedBuildContinuationForTesting else {
                 return
@@ -160,7 +164,7 @@ extension DOMTreeTextView {
     final class RenderedRowsBuilder {
         private let dom: DOMSession
         private let expansionState: DOMTreeTextView.ExpansionState
-        private var markupCache: [DOMNode.ID: DOMTreeTextView.CachedMarkup] = [:]
+        private var markupCache: [DOMTreeTextView.MarkupCacheKey: DOMTreeTextView.CachedMarkup] = [:]
 
         init(dom: DOMSession, expansionState: DOMTreeTextView.ExpansionState) {
             self.dom = dom
@@ -172,7 +176,7 @@ extension DOMTreeTextView {
         }
 
         func pruneCachedMarkup(keeping nodeIDs: Set<DOMNode.ID>) {
-            markupCache = markupCache.filter { nodeIDs.contains($0.key) }
+            markupCache = markupCache.filter { nodeIDs.contains($0.key.nodeID) }
         }
 
         func makeBuildRequest(
@@ -181,9 +185,8 @@ extension DOMTreeTextView {
         ) -> DOMTreeTextView.RenderedRowsBuildRequest {
             let expansionSnapshot = expansionState.snapshot
             return DOMTreeTextView.RenderedRowsBuildRequest(
-                treeRevision: dom.treeRevision,
+                snapshot: dom.domTreeRenderSnapshot(),
                 expansionState: expansionSnapshot,
-                rows: collectVisibleRows(expansionState: expansionSnapshot),
                 previousRowCapacity: previousRowCapacity,
                 previousTextCapacity: previousTextCapacity,
                 markupCache: markupCache
@@ -206,94 +209,17 @@ extension DOMTreeTextView {
 
         func acceptCompletedBuild(_ result: DOMTreeTextView.RenderedRowsBuildResult) {
             markupCache = result.markupCache
-        }
-
-        private func collectVisibleRows(
-            expansionState: [DOMNode.ID: Bool]
-        ) -> [DOMTreeTextView.RenderedRowsBuildRow] {
-            guard let rootNode = dom.currentPageRootNode else {
 #if DEBUG
-                Self.lastCollectedNodeIDsForTesting = []
+            Self.lastCollectedNodeIDsForTesting = result.collectedNodeIDsForTesting
 #endif
-                return []
-            }
-
-            var rows: [DOMTreeTextView.RenderedRowsBuildRow] = []
-            rows.reserveCapacity(markupCache.count)
-            var visitedNodeIDs = Set<DOMNode.ID>()
-#if DEBUG
-            var visitedNodeIDsForTesting: [DOMNode.ID] = []
-#endif
-
-            func collect(_ node: DOMNode, depth: Int) {
-                guard visitedNodeIDs.insert(node.id).inserted else {
-                    return
-                }
-                let renderNode = DOMTreeTextView.RenderedRowsBuildNode(
-                    node: node,
-                    isTemplateContent: dom.isTemplateContent(node)
-                )
-                let hasDisclosure = dom.hasVisibleDOMTreeChildren(node)
-                let isOpen = Self.isNodeOpen(renderNode, expansionState: expansionState)
-                rows.append(
-                    DOMTreeTextView.RenderedRowsBuildRow(
-                        node: renderNode,
-                        depth: depth,
-                        hasDisclosure: hasDisclosure,
-                        isOpen: isOpen,
-                        isClosingTag: false
-                    )
-                )
-#if DEBUG
-                visitedNodeIDsForTesting.append(node.id)
-#endif
-
-                guard hasDisclosure, isOpen else {
-                    return
-                }
-                for child in dom.visibleDOMTreeChildren(of: node) {
-                    collect(child, depth: depth + 1)
-                }
-                guard DOMTreeTextView.MarkupBuilder.rendersClosingTagRow(for: renderNode) else {
-                    return
-                }
-                rows.append(
-                    DOMTreeTextView.RenderedRowsBuildRow(
-                        node: renderNode,
-                        depth: depth,
-                        hasDisclosure: false,
-                        isOpen: false,
-                        isClosingTag: true
-                    )
-                )
-            }
-
-            let displayRoots = rootNode.nodeType == .document ? dom.visibleDOMTreeChildren(of: rootNode) : [rootNode]
-            for node in displayRoots {
-                collect(node, depth: 0)
-            }
-#if DEBUG
-            Self.lastCollectedNodeIDsForTesting = visitedNodeIDsForTesting
-#endif
-            return rows
-        }
-
-        private static func isNodeOpen(
-            _ node: DOMTreeTextView.RenderedRowsBuildNode,
-            expansionState: [DOMNode.ID: Bool]
-        ) -> Bool {
-            if let explicitState = expansionState[node.id] {
-                return explicitState
-            }
-            let name = node.displayName.lowercased()
-            if name == "head" {
-                return false
-            }
-            return name == "html" || name == "body"
         }
 
 #if DEBUG
         private(set) static var lastCollectedNodeIDsForTesting: [DOMNode.ID] = []
+
+        var cachedMarkupKeysForTesting: Set<DOMTreeTextView.MarkupCacheKey> {
+            Set(markupCache.keys)
+        }
 #endif
     }
 }
@@ -311,8 +237,7 @@ extension DOMTreeTextView {
         let regularChildKnownCount: Int
         let isTemplateContent: Bool
 
-        @MainActor
-        init(node: DOMNode, isTemplateContent: Bool) {
+        init(node: DOMTreeRenderNodeSnapshot, isTemplateContent: Bool) {
             id = node.id
             nodeType = node.nodeType
             nodeName = node.nodeName
@@ -321,7 +246,7 @@ extension DOMTreeTextView {
             attributes = node.attributes
             pseudoType = node.pseudoType
             shadowRootType = node.shadowRootType
-            regularChildKnownCount = node.regularChildren.knownCount
+            regularChildKnownCount = node.regularChildKnownCount
             self.isTemplateContent = isTemplateContent
         }
 
@@ -345,27 +270,28 @@ extension DOMTreeTextView {
     }
 
     struct RenderedRowsBuildRequest: Sendable {
-        let treeRevision: UInt64
+        let snapshot: DOMTreeRenderSnapshot
         let expansionState: [DOMNode.ID: Bool]
-        let rows: [DOMTreeTextView.RenderedRowsBuildRow]
         let previousRowCapacity: Int
         let previousTextCapacity: Int
-        let markupCache: [DOMNode.ID: DOMTreeTextView.CachedMarkup]
+        let markupCache: [DOMTreeTextView.MarkupCacheKey: DOMTreeTextView.CachedMarkup]
 
         init(
-            treeRevision: UInt64,
+            snapshot: DOMTreeRenderSnapshot,
             expansionState: [DOMNode.ID: Bool],
-            rows: [DOMTreeTextView.RenderedRowsBuildRow],
             previousRowCapacity: Int,
             previousTextCapacity: Int,
-            markupCache: [DOMNode.ID: DOMTreeTextView.CachedMarkup]
+            markupCache: [DOMTreeTextView.MarkupCacheKey: DOMTreeTextView.CachedMarkup]
         ) {
-            self.treeRevision = treeRevision
+            self.snapshot = snapshot
             self.expansionState = expansionState
-            self.rows = rows
             self.previousRowCapacity = previousRowCapacity
             self.previousTextCapacity = previousTextCapacity
             self.markupCache = markupCache
+        }
+
+        var treeRevision: UInt64 {
+            snapshot.treeRevision
         }
     }
 
@@ -373,7 +299,10 @@ extension DOMTreeTextView {
         let rows: [DOMTreeTextView.Line]
         let text: String
         let maxLineDisplayColumnCount: Int
-        let markupCache: [DOMNode.ID: DOMTreeTextView.CachedMarkup]
+        let markupCache: [DOMTreeTextView.MarkupCacheKey: DOMTreeTextView.CachedMarkup]
+#if DEBUG
+        let collectedNodeIDsForTesting: [DOMNode.ID]
+#endif
 
         var observedContent: DOMTreeTextView.ObservedContent {
             DOMTreeTextView.ObservedContent((
@@ -389,7 +318,7 @@ extension DOMTreeTextView {
     struct RenderedRowsWorker: Sendable {
         private let request: DOMTreeTextView.RenderedRowsBuildRequest
         private var renderedLinePrefixCache: [Int: String] = [:]
-        private var markupCache: [DOMNode.ID: DOMTreeTextView.CachedMarkup]
+        private var markupCache: [DOMTreeTextView.MarkupCacheKey: DOMTreeTextView.CachedMarkup]
 
         init(request: DOMTreeTextView.RenderedRowsBuildRequest) {
             self.request = request
@@ -404,6 +333,7 @@ extension DOMTreeTextView {
         private mutating func buildRows() async throws -> DOMTreeTextView.RenderedRowsBuildResult {
             try Task.checkCancellation()
 
+            let buildRows = try await collectVisibleRows()
             var nextRows: [DOMTreeTextView.Line] = []
             nextRows.reserveCapacity(request.previousRowCapacity)
             var nextText = ""
@@ -436,16 +366,102 @@ extension DOMTreeTextView {
                 return row
             }
 
-            for rowInput in request.rows {
+            for rowInput in buildRows.rows {
                 _ = try await appendLine(rowInput)
             }
 
+#if DEBUG
+            return DOMTreeTextView.RenderedRowsBuildResult(
+                rows: nextRows,
+                text: nextText,
+                maxLineDisplayColumnCount: maxLineDisplayColumnCount,
+                markupCache: markupCache,
+                collectedNodeIDsForTesting: buildRows.collectedNodeIDsForTesting
+            )
+#else
             return DOMTreeTextView.RenderedRowsBuildResult(
                 rows: nextRows,
                 text: nextText,
                 maxLineDisplayColumnCount: maxLineDisplayColumnCount,
                 markupCache: markupCache
             )
+#endif
+        }
+
+        private func collectVisibleRows() async throws -> (
+            rows: [DOMTreeTextView.RenderedRowsBuildRow],
+            collectedNodeIDsForTesting: [DOMNode.ID]
+        ) {
+            var rows: [DOMTreeTextView.RenderedRowsBuildRow] = []
+            rows.reserveCapacity(request.previousRowCapacity)
+            var visitedNodeIDs = Set<DOMNode.ID>()
+            var visitedNodeIDsForTesting: [DOMNode.ID] = []
+
+            func collect(_ nodeID: DOMNode.ID, depth: Int) throws {
+                try Task.checkCancellation()
+                guard visitedNodeIDs.insert(nodeID).inserted,
+                      let node = request.snapshot.node(for: nodeID) else {
+                    return
+                }
+                let visibleChildren = request.snapshot.visibleChildrenProjection(of: nodeID)
+                let renderNode = DOMTreeTextView.RenderedRowsBuildNode(
+                    node: node,
+                    isTemplateContent: request.snapshot.isTemplateContent(nodeID)
+                )
+                let hasDisclosure = visibleChildren.hasRenderableChildren
+                let isOpen = Self.isNodeOpen(renderNode, expansionState: request.expansionState)
+                rows.append(
+                    DOMTreeTextView.RenderedRowsBuildRow(
+                        node: renderNode,
+                        depth: depth,
+                        hasDisclosure: hasDisclosure,
+                        isOpen: isOpen,
+                        isClosingTag: false
+                    )
+                )
+                visitedNodeIDsForTesting.append(nodeID)
+
+                guard hasDisclosure, isOpen else {
+                    return
+                }
+                for childID in visibleChildren.children {
+                    try collect(childID, depth: depth + 1)
+                }
+                guard DOMTreeTextView.MarkupBuilder.rendersClosingTagRow(for: renderNode) else {
+                    return
+                }
+                rows.append(
+                    DOMTreeTextView.RenderedRowsBuildRow(
+                        node: renderNode,
+                        depth: depth,
+                        hasDisclosure: false,
+                        isOpen: false,
+                        isClosingTag: true
+                    )
+                )
+            }
+
+            for nodeID in request.snapshot.displayRootIDs() {
+                if rows.count > 0, rows.count.isMultiple(of: 128) {
+                    await Task.yield()
+                }
+                try collect(nodeID, depth: 0)
+            }
+            return (rows, visitedNodeIDsForTesting)
+        }
+
+        private static func isNodeOpen(
+            _ node: DOMTreeTextView.RenderedRowsBuildNode,
+            expansionState: [DOMNode.ID: Bool]
+        ) -> Bool {
+            if let explicitState = expansionState[node.id] {
+                return explicitState
+            }
+            let name = node.displayName.lowercased()
+            if name == "head" {
+                return false
+            }
+            return name == "html" || name == "body"
         }
 
         private mutating func renderedRow(
@@ -509,7 +525,11 @@ extension DOMTreeTextView {
                 isOpen: isOpen,
                 isClosingTag: isClosingTag
             )
-            if let cached = markupCache[node.id],
+            let cacheKey = DOMTreeTextView.MarkupCacheKey(
+                nodeID: node.id,
+                isClosingTag: isClosingTag
+            )
+            if let cached = markupCache[cacheKey],
                cached.signature == signature {
                 return cached.markup
             }
@@ -520,7 +540,7 @@ extension DOMTreeTextView {
                 isClosingTag: isClosingTag,
                 isTemplateContent: node.isTemplateContent
             )
-            markupCache[node.id] = DOMTreeTextView.CachedMarkup(signature: signature, markup: markup)
+            markupCache[cacheKey] = DOMTreeTextView.CachedMarkup(signature: signature, markup: markup)
             return markup
         }
 

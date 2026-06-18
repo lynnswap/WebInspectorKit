@@ -422,6 +422,13 @@ extension DOMTreeTextView {
 }
 
 extension DOMTreeTextView {
+    struct MarkupCacheKey: Hashable, Sendable {
+        let nodeID: DOMNode.ID
+        let isClosingTag: Bool
+    }
+}
+
+extension DOMTreeTextView {
     struct CachedMarkup: Sendable {
         let signature: DOMTreeTextView.MarkupSignature
         let markup: DOMTreeTextView.Markup
