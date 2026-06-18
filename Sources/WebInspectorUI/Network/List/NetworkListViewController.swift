@@ -41,6 +41,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     private var activeSearchController: UISearchController?
 #if DEBUG
     private var deinitHandlerForTesting: (@MainActor () -> Void)?
+    private var snapshotUpdateCompletionWaitersForTesting: [CheckedContinuation<Void, Never>] = []
 #endif
     private lazy var filterHostingMenu = UIHostingMenu(
         rootView: NetworkListFilterMenuView(model: model)
@@ -469,6 +470,9 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         snapshotState.finishApplying(appliedRows)
         renderSelectedRequestID(model.selectedRequestID)
         applyPendingSnapshotUpdateIfNeeded()
+#if DEBUG
+        resumeSnapshotUpdateCompletionWaitersForTesting()
+#endif
     }
 
     private func reloadDataFromModel(displayRows: [NetworkRequest.Display.Projection]? = nil) {
@@ -552,6 +556,32 @@ extension NetworkListViewController {
 
     package var selectedRequestObservationDeliveryForTesting: PortableObservationTracking.Token? {
         selectedRequestObservation
+    }
+
+    package func flushThrottledDisplayRowsReloadForTesting() async {
+        displayRowsReloadScheduler.cancel()
+        flushThrottledDisplayRowsReload()
+        await waitForSnapshotUpdateCompletionForTesting()
+    }
+
+    private func waitForSnapshotUpdateCompletionForTesting() async {
+        guard snapshotState.isApplying || pendingSnapshotUpdate != nil else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            snapshotUpdateCompletionWaitersForTesting.append(continuation)
+        }
+    }
+
+    private func resumeSnapshotUpdateCompletionWaitersForTesting() {
+        guard snapshotState.isApplying == false, pendingSnapshotUpdate == nil else {
+            return
+        }
+        let waiters = snapshotUpdateCompletionWaitersForTesting
+        snapshotUpdateCompletionWaitersForTesting.removeAll(keepingCapacity: true)
+        for waiter in waiters {
+            waiter.resume()
+        }
     }
 
     package func setDeinitHandlerForTesting(_ handler: @escaping @MainActor () -> Void) {

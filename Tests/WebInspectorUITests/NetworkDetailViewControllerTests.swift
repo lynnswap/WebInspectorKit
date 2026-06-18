@@ -697,9 +697,21 @@ struct NetworkDetailViewControllerTests {
         let didRenderImage = await waitUntilRendered(in: viewController) {
             let bodyViewController = viewController.bodyViewControllerForTesting
             let imageScrollView = bodyViewController.imageScrollViewForTesting
+            let imageLayout = bodyViewController.imagePreviewRenderSnapshotForTesting
+            let didCompleteImageLayout = imageLayout.map { layout in
+                let fitScale = min(
+                    layout.visibleBoundsSize.width / layout.imageSize.width,
+                    layout.visibleBoundsSize.height / layout.imageSize.height
+                )
+                let expectedMinimumZoomScale = min(1, fitScale)
+                return layout.imageSize == imageSize
+                    && abs(layout.minimumZoomScale - expectedMinimumZoomScale) < 0.001
+                    && abs(layout.zoomScale - expectedMinimumZoomScale) < 0.001
+            } ?? false
             let didRenderImage = bodyViewController.isImagePreviewVisibleForTesting
                 && bodyViewController.syntaxViewForTesting.isHidden
                 && bodyViewController.imageViewForTesting.image?.size == imageSize
+                && didCompleteImageLayout
             if #available(iOS 26.0, *) {
                 return didRenderImage
                     && viewController.previewRoleScrollEdgeInteractionForTesting?.edge == .top
@@ -1265,15 +1277,12 @@ struct NetworkDetailViewControllerTests {
             responseMimeType: "video/mp4"
         ))
         let requestID = request.id
-        let classifier = BlockingMediaPreviewClassifier()
-        let model = NetworkPanelModel(network: network, mediaPreviewClassifier: classifier.classify)
+        let model = NetworkPanelModel(network: network)
         model.setResourceFilter(.media, enabled: true)
+        model.suspendNextDisplayRowsProjectionApplyForTesting()
         let listViewController = NetworkListViewController(model: model)
-        defer {
-            classifier.unblock()
-        }
 
-        #expect(await classifier.waitUntilBlocked())
+        let staleGeneration = await model.waitForDisplayRowsProjectionApplySuspensionForTesting()
 
         let window = showInWindow(listViewController)
         defer { window.isHidden = true }
@@ -1282,19 +1291,20 @@ struct NetworkDetailViewControllerTests {
         let observedSearchText = await observation.values {
             model.searchText
         }
-        let observedDisplayRequestIDs = await observation.values {
-            model.displayRequestIDs
-        }
 
         model.setSearchText("does-not-match")
         #expect(await observedSearchText.waitUntilValue("does-not-match"))
 
-        classifier.unblock()
+        await model.waitForDisplayRowsProjectionDiscardForTesting(generation: staleGeneration)
+        let appliedGeneration = await model.waitForDisplayRowsProjectionApplyForTesting(after: staleGeneration)
+        #expect(appliedGeneration > staleGeneration)
+        await listViewController.flushThrottledDisplayRowsReloadForTesting()
 
-        let staleDisplayRequestIDs = await observedDisplayRequestIDs.waitUntil(timeout: .milliseconds(250)) { ids in
-            ids == [requestID]
-        }
-        #expect(staleDisplayRequestIDs == nil)
+        let collectionView = listViewController.collectionViewForTesting
+        let renderedItemCount = collectionView.numberOfSections == 0 ? 0 : collectionView.numberOfItems(inSection: 0)
+        #expect(model.displayRequestIDs.isEmpty)
+        #expect(renderedItemCount == 0)
+        #expect(model.displayProjection(for: requestID) == nil)
     }
 
     @Test
