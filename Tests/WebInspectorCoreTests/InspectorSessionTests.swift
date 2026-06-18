@@ -2194,7 +2194,10 @@ func ensureDOMDocumentLoadedCoalescesPendingPageDocumentRequest() async throws {
     let secondEnsure = Task {
         await session.attachment.dom.ensureDocumentLoaded()
     }
-    await Task.yield()
+    await session.attachment.dom.waitUntilDocumentRequestCoalescedWaiterCountForTesting(
+        targetID: documentRequest.targetIdentifier,
+        minimumCount: 1
+    )
 
     #expect(
         await backend.sentTargetMessages().dropFirst(sentCount).compactMap { try? messageMethod($0.message) } == [
@@ -4502,7 +4505,7 @@ func selectionClearDoesNotHideNewerTransientHighlightOnSameTarget() async throws
 
     let countBeforeSelectionClear = await backend.sentTargetMessages().count
     await session.attachment.dom.selectNode(nil)
-    await Task.yield()
+    await session.attachment.dom.waitUntilScheduledHighlightOperationsIdleForTesting()
 
     #expect(await backend.sentTargetMessages().count == countBeforeSelectionClear)
     #expect(await session.attachment.dom.highlightController.possibleVisibleNodeID(targetID: .pageMain) == bodyID)
@@ -6667,7 +6670,14 @@ func detachDuringConnectKeepsSessionDetached() async throws {
 @Test
 func bootstrapFailureClearsSeededModelState() async throws {
     let backend = FakeTransportBackend()
-    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(20))
+    let responseTimeout = ManualResponseTimeout()
+    let transport = TransportSession(
+        backend: backend,
+        responseTimeout: .milliseconds(20),
+        timeoutSleep: { duration in
+            try await responseTimeout.sleep(for: duration)
+        }
+    )
     let session = await InspectorSession(
         configuration: .init(
             responseTimeout: .milliseconds(20),
@@ -6678,8 +6688,15 @@ func bootstrapFailureClearsSeededModelState() async throws {
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#
     )
 
-    await #expect(throws: TransportSession.Error.replyTimeout(method: "Inspector.enable", targetID: .pageMain)) {
+    let connectTask = Task {
         try await session.connect(transport: transport)
+    }
+    _ = try await waitForTargetMessage(backend, method: "Inspector.enable")
+    await responseTimeout.waitUntilSuspended()
+    await responseTimeout.fireNext()
+
+    await #expect(throws: TransportSession.Error.replyTimeout(method: "Inspector.enable", targetID: .pageMain)) {
+        try await connectTask.value
     }
 
     #expect(await session.attachment.dom.snapshot().currentPageTargetID == nil)

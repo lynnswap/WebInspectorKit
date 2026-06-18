@@ -53,6 +53,29 @@ extension DOMSession {
         await documentRequests.waitUntilIdle(targetID: targetID)
     }
 
+    package func waitUntilDocumentRequestCoalescedWaiterCountForTesting(
+        targetID: ProtocolTarget.ID,
+        minimumCount: Int
+    ) async {
+        await documentRequests.waitUntilCoalescedWaiterCount(
+            targetID: targetID,
+            minimumCount: minimumCount
+        )
+    }
+
+    package func waitUntilScheduledHighlightOperationsIdleForTesting() async {
+        guard !scheduledHighlightOperationIDsForTesting.isEmpty else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            if scheduledHighlightOperationIDsForTesting.isEmpty {
+                continuation.resume()
+            } else {
+                scheduledHighlightOperationIdleWaitersForTesting.append(continuation)
+            }
+        }
+    }
+
     package func waitUntilSelectedStyleRefreshIdle() async {
         await styleHydration.waitUntilIdle()
     }
@@ -279,7 +302,11 @@ extension DOMSession {
     }
 
     package func scheduleSelectedNodeHighlightRestoreOrHide(preferredHideTargetID: ProtocolTarget.ID? = nil) {
+        let operationID = startScheduledHighlightOperationForTesting()
         Task { @MainActor [weak self] in
+            defer {
+                self?.finishScheduledHighlightOperationForTesting(operationID)
+            }
             await self?.restoreSelectedNodeHighlightOrHide(preferredHideTargetID: preferredHideTargetID)
         }
     }
@@ -290,13 +317,36 @@ extension DOMSession {
         nodeID: DOMNode.ID? = nil,
         owner: DOMPageHighlightOwner? = nil
     ) {
+        let operationID = startScheduledHighlightOperationForTesting()
         Task { @MainActor [weak self] in
+            defer {
+                self?.finishScheduledHighlightOperationForTesting(operationID)
+            }
             await self?.hideNodeHighlightIfCurrent(
                 targetID: targetID,
                 generation: generation,
                 nodeID: nodeID,
                 owner: owner
             )
+        }
+    }
+
+    private func startScheduledHighlightOperationForTesting() -> UInt64 {
+        nextScheduledHighlightOperationIDForTesting &+= 1
+        let operationID = nextScheduledHighlightOperationIDForTesting
+        scheduledHighlightOperationIDsForTesting.insert(operationID)
+        return operationID
+    }
+
+    private func finishScheduledHighlightOperationForTesting(_ operationID: UInt64) {
+        scheduledHighlightOperationIDsForTesting.remove(operationID)
+        guard scheduledHighlightOperationIDsForTesting.isEmpty else {
+            return
+        }
+        let waiters = scheduledHighlightOperationIdleWaitersForTesting
+        scheduledHighlightOperationIdleWaitersForTesting.removeAll()
+        for waiter in waiters {
+            waiter.resume()
         }
     }
 
@@ -998,6 +1048,7 @@ extension DOMSession {
         if force {
             cancelDocumentRequest(targetID: targetID, reason: "force-\(reason)")
         } else if let activeHandle = documentRequests.activeHandle(for: targetID) {
+            documentRequests.recordCoalescedWaiter(for: activeHandle)
             return activeHandle
         }
         guard let intent = getDocumentIntent(targetID: targetID) else {
