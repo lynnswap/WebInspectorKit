@@ -69,8 +69,8 @@ struct DOMTreeTextViewTests {
         await view.waitForRenderedRowsForTesting()
 
         #expect(didRouteBuild)
-        #expect(DOMTreeTextView.RenderedRowsWorker.lastVisitedNodeIDsForTesting.contains(articleID))
-        #expect(!DOMTreeTextView.RenderedRowsWorker.lastVisitedNodeIDsForTesting.contains(nestedChildID))
+        #expect(DOMTreeTextView.RenderedRowsBuilder.lastCollectedNodeIDsForTesting.contains(articleID))
+        #expect(!DOMTreeTextView.RenderedRowsBuilder.lastCollectedNodeIDsForTesting.contains(nestedChildID))
         #expect(session.snapshotBuildCountForTesting == baselineSnapshotBuildCount)
         #expect(view.renderedRowsAppliedTreeRevisionForTesting == baselineAppliedTreeRevision)
         #expect(!view.renderedTextForTesting.contains("data-state=\"ready\""))
