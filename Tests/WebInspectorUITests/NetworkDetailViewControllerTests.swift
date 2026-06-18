@@ -1,7 +1,5 @@
 #if canImport(UIKit)
-import Dispatch
 import ObservationBridge
-import Synchronization
 import Testing
 import WebInspectorTransport
 import UIKit
@@ -1250,15 +1248,12 @@ struct NetworkDetailViewControllerTests {
             responseMimeType: "video/mp4"
         ))
         let requestID = request.id
-        let classifier = BlockingMediaPreviewClassifier()
-        let model = NetworkPanelModel(network: network, mediaPreviewClassifier: classifier.classify)
+        let model = NetworkPanelModel(network: network)
         model.setResourceFilter(.media, enabled: true)
+        model.suspendNextDisplayRowsProjectionApplyForTesting()
         let listViewController = NetworkListViewController(model: model)
-        defer {
-            classifier.unblock()
-        }
 
-        #expect(await classifier.waitUntilBlocked())
+        let staleGeneration = await model.waitForDisplayRowsProjectionApplySuspensionForTesting()
 
         let window = showInWindow(listViewController)
         defer { window.isHidden = true }
@@ -1267,19 +1262,20 @@ struct NetworkDetailViewControllerTests {
         let observedSearchText = await observation.values {
             model.searchText
         }
-        let observedDisplayRequestIDs = await observation.values {
-            model.displayRequestIDs
-        }
 
         model.setSearchText("does-not-match")
         #expect(await observedSearchText.waitUntilValue("does-not-match"))
 
-        classifier.unblock()
+        await model.waitForDisplayRowsProjectionDiscardForTesting(generation: staleGeneration)
+        let appliedGeneration = await model.waitForDisplayRowsProjectionApplyForTesting(after: staleGeneration)
+        #expect(appliedGeneration > staleGeneration)
+        await listViewController.flushThrottledDisplayRowsReloadForTesting()
 
-        let staleDisplayRequestIDs = await observedDisplayRequestIDs.waitUntil(timeout: .milliseconds(250)) { ids in
-            ids == [requestID]
-        }
-        #expect(staleDisplayRequestIDs == nil)
+        let collectionView = listViewController.collectionViewForTesting
+        let renderedItemCount = collectionView.numberOfSections == 0 ? 0 : collectionView.numberOfItems(inSection: 0)
+        #expect(model.displayRequestIDs.isEmpty)
+        #expect(renderedItemCount == 0)
+        #expect(model.displayProjection(for: requestID) == nil)
     }
 
     @Test
@@ -1495,49 +1491,6 @@ struct NetworkDetailViewControllerTests {
         return bundle.localizedString(forKey: key, value: nil, table: nil)
     }
 
-    private final class BlockingMediaPreviewClassifier: @unchecked Sendable {
-        private struct State: Sendable {
-            var shouldBlockNextCall = true
-            var isBlocked = false
-        }
-
-        private let state = Mutex(State())
-        private let unblockSemaphore = DispatchSemaphore(value: 0)
-
-        func classify(
-            mimeType: String?,
-            url: String?
-        ) -> NetworkRequest.Display.MediaPreviewClassification {
-            let shouldBlock = state.withLock { state in
-                guard state.shouldBlockNextCall else {
-                    return false
-                }
-                state.shouldBlockNextCall = false
-                return true
-            }
-            if shouldBlock {
-                state.withLock { state in
-                    state.isBlocked = true
-                }
-                unblockSemaphore.wait()
-            }
-            return NetworkRequest.Display.MediaPreviewSupport.classification(mimeType: mimeType, url: url)
-        }
-
-        func waitUntilBlocked() async -> Bool {
-            for _ in 0..<100 {
-                if state.withLock({ $0.isBlocked }) {
-                    return true
-                }
-                try? await Task.sleep(for: .milliseconds(10))
-            }
-            return false
-        }
-
-        func unblock() {
-            unblockSemaphore.signal()
-        }
-    }
 }
 }
 #endif
