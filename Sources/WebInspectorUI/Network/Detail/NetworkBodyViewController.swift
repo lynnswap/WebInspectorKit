@@ -12,6 +12,8 @@ extension NetworkBodyViewController {
 
 @MainActor
 final class NetworkBodyViewController: UIViewController {
+    typealias MoviePreviewPlayerFactory = @MainActor (URL) -> AVPlayer
+
     private let syntaxModel = SyntaxEditorModel(
         text: "",
         language: .json,
@@ -51,6 +53,8 @@ final class NetworkBodyViewController: UIViewController {
     private var metadata: NetworkBodyViewController.PreviewMetadata?
     private var hasDisplayedBody = false
     private var mediaPlayerViewController: AVPlayerViewController?
+    private var mediaPlayerURL: URL?
+    private var moviePreviewPlayerFactory: MoviePreviewPlayerFactory
     private var mediaPreviewCoordinator = NetworkMediaPreviewCoordinator()
     private let previewRenderState = NetworkBodyPreviewRenderState()
     private var imageWidthConstraint: NSLayoutConstraint?
@@ -62,8 +66,14 @@ final class NetworkBodyViewController: UIViewController {
     private var previewRenderObservationDelivery: PortableObservationTracking.Token?
 #endif
 
-    init(scrollEdgeSink: (any NetworkBodyScrollEdgeSink)? = nil) {
+    init(
+        scrollEdgeSink: (any NetworkBodyScrollEdgeSink)? = nil,
+        moviePreviewPlayerFactory: @escaping MoviePreviewPlayerFactory = { url in
+            AVPlayer(url: url)
+        }
+    ) {
         self.scrollEdgeSink = scrollEdgeSink
+        self.moviePreviewPlayerFactory = moviePreviewPlayerFactory
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -384,10 +394,11 @@ final class NetworkBodyViewController: UIViewController {
             playerViewController.didMove(toParent: self)
             mediaPlayerViewController = playerViewController
         }
-        if currentMediaURL(in: playerViewController) == url {
+        if mediaPlayerURL == url {
             return
         }
-        playerViewController.player = AVPlayer(url: url)
+        playerViewController.player = moviePreviewPlayerFactory(url)
+        mediaPlayerURL = url
         previewRenderState.showMovie(url)
     }
 
@@ -480,6 +491,7 @@ final class NetworkBodyViewController: UIViewController {
     }
 
     private func removeMediaPlayerViewController() {
+        mediaPlayerURL = nil
         guard let mediaPlayerViewController else {
             return
         }
@@ -488,10 +500,6 @@ final class NetworkBodyViewController: UIViewController {
         mediaPlayerViewController.removeFromParent()
         mediaPlayerViewController.player = nil
         self.mediaPlayerViewController = nil
-    }
-
-    private func currentMediaURL(in playerViewController: AVPlayerViewController) -> URL? {
-        (playerViewController.player?.currentItem?.asset as? AVURLAsset)?.url
     }
 }
 
@@ -638,10 +646,10 @@ extension NetworkBodyViewController {
 
     var mediaPlayerURLForTesting: URL? {
         loadViewIfNeeded()
-        guard let mediaPlayerViewController else {
+        guard mediaPlayerViewController != nil else {
             return nil
         }
-        return currentMediaURL(in: mediaPlayerViewController)
+        return mediaPlayerURL
     }
 
     var mediaPlayerIdentityForTesting: ObjectIdentifier? {
@@ -650,6 +658,12 @@ extension NetworkBodyViewController {
             return nil
         }
         return ObjectIdentifier(player)
+    }
+
+    func setMoviePreviewPlayerFactoryForTesting(
+        _ factory: @escaping MoviePreviewPlayerFactory
+    ) {
+        moviePreviewPlayerFactory = factory
     }
 
     var bodyObservationDeliveryForTesting: PortableObservationTracking.Token? {
