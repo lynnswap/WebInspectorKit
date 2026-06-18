@@ -7,22 +7,23 @@ extension CSSSession {
     private enum RefreshCommandResult: Sendable {
         case success(ProtocolCommand.Result)
         case failure(RefreshCommandFailure)
+    }
 
-        var failure: RefreshCommandFailure? {
-            guard case let .failure(failure) = self else {
-                return nil
-            }
-            return failure
-        }
+    private enum RefreshCommandKind: Sendable {
+        case matched
+        case inline
+        case computed
+    }
 
-        func requireSuccess() throws -> ProtocolCommand.Result {
-            switch self {
-            case let .success(result):
-                return result
-            case let .failure(failure):
-                throw failure.error
-            }
-        }
+    private struct RefreshCommandOutput: Sendable {
+        var kind: RefreshCommandKind
+        var result: RefreshCommandResult
+    }
+
+    private struct RefreshCommandResults: Sendable {
+        var matched: ProtocolCommand.Result?
+        var inline: ProtocolCommand.Result?
+        var computed: ProtocolCommand.Result?
     }
 
     private enum RefreshCommandFailure: Error, Sendable {
@@ -104,28 +105,79 @@ extension CSSSession {
     private func fetchRefreshResultsWithoutCompatibilityRetry(
         for id: CSSNodeStyles.ID
     ) async throws -> CSSSession.RefreshResults {
-        async let matched = performRefreshCommand(.getMatchedStyles(id: id))
-        async let inline = performRefreshCommand(.getInlineStyles(id: id))
-        async let computed = performRefreshCommand(.getComputedStyle(id: id))
-        let results = await (matched, inline, computed)
-        let failures = [results.0, results.1, results.2].compactMap(\.failure)
-        if failures.contains(where: \.isCancellation) {
-            throw CancellationError()
+        let results = try await collectRefreshCommandResults(for: id)
+        guard let matchedResult = results.matched,
+              let inlineResult = results.inline,
+              let computedResult = results.computed else {
+            throw InspectorSession.Error("CSS style refresh did not produce all required results.")
         }
-        if let retryFailure = failures.first(where: { shouldRetryAfterEnablingCSSAgent($0.error) }) {
-            throw retryFailure.error
-        }
-        if let failure = failures.first {
-            throw failure.error
-        }
-        let matchedResult = try results.0.requireSuccess()
-        let inlineResult = try results.1.requireSuccess()
-        let computedResult = try results.2.requireSuccess()
         return CSSSession.RefreshResults(
             matched: try protocolCommands.matchedStyles(from: matchedResult),
             inline: try protocolCommands.inlineStyles(from: inlineResult),
             computed: try protocolCommands.computedStyles(from: computedResult)
         )
+    }
+
+    private func collectRefreshCommandResults(
+        for id: CSSNodeStyles.ID
+    ) async throws -> RefreshCommandResults {
+        try await withThrowingTaskGroup(of: RefreshCommandOutput.self) { group in
+            group.addTask {
+                await RefreshCommandOutput(
+                    kind: .matched,
+                    result: self.performRefreshCommand(.getMatchedStyles(id: id))
+                )
+            }
+            group.addTask {
+                await RefreshCommandOutput(
+                    kind: .inline,
+                    result: self.performRefreshCommand(.getInlineStyles(id: id))
+                )
+            }
+            group.addTask {
+                await RefreshCommandOutput(
+                    kind: .computed,
+                    result: self.performRefreshCommand(.getComputedStyle(id: id))
+                )
+            }
+
+            var collected = RefreshCommandResults()
+            var firstNonRetryFailure: RefreshCommandFailure?
+            while let output = try await group.next() {
+                if Task.isCancelled {
+                    group.cancelAll()
+                    throw CancellationError()
+                }
+                switch output.result {
+                case let .success(result):
+                    switch output.kind {
+                    case .matched:
+                        collected.matched = result
+                    case .inline:
+                        collected.inline = result
+                    case .computed:
+                        collected.computed = result
+                    }
+                case let .failure(failure):
+                    if failure.isCancellation {
+                        group.cancelAll()
+                        throw CancellationError()
+                    }
+                    if shouldRetryAfterEnablingCSSAgent(failure.error) {
+                        group.cancelAll()
+                        throw failure.error
+                    }
+                    if firstNonRetryFailure == nil {
+                        firstNonRetryFailure = failure
+                    }
+                }
+            }
+
+            if let firstNonRetryFailure {
+                throw firstNonRetryFailure.error
+            }
+            return collected
+        }
     }
 
     private func performRefreshCommand(_ intent: CSSCommand.Intent) async -> RefreshCommandResult {

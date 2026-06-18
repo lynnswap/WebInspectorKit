@@ -955,6 +955,7 @@ func selectedElementStyleRefreshEnablesCSSAgentOnlyAfterBackendRequiresIt() asyn
         await session.attachment.dom.refreshStylesForSelectedNode()
     }
     let firstMessages = try await waitForCSSRefreshMessages(backend, after: sentCount)
+    #expect(await targetMessageMethods(backend).dropFirst(sentCount).contains("CSS.enable") == false)
     let cssEnableTask = Task {
         try await waitForTargetMessage(backend, method: "CSS.enable", after: sentCount)
     }
@@ -963,18 +964,6 @@ func selectedElementStyleRefreshEnablesCSSAgentOnlyAfterBackendRequiresIt() asyn
         transport,
         targetID: firstMessages.matched.targetIdentifier,
         messageID: try messageID(firstMessages.matched.message),
-        message: "CSS agent is not enabled"
-    )
-    await receiveTargetErrorReply(
-        transport,
-        targetID: firstMessages.inline.targetIdentifier,
-        messageID: try messageID(firstMessages.inline.message),
-        message: "CSS agent is not enabled"
-    )
-    await receiveTargetErrorReply(
-        transport,
-        targetID: firstMessages.computed.targetIdentifier,
-        messageID: try messageID(firstMessages.computed.message),
         message: "CSS agent is not enabled"
     )
 
@@ -7332,7 +7321,7 @@ private func hydrateSelectedBodyStyles(
     return bodyID
 }
 
-private struct CSSRefreshMessages {
+private struct CSSRefreshMessages: Sendable {
     var matched: SentTargetMessage
     var inline: SentTargetMessage
     var computed: SentTargetMessage
@@ -7343,49 +7332,92 @@ private func waitForCSSRefreshMessages(
     after count: Int,
     protocolNodeID: DOMNode.ProtocolID? = nil
 ) async throws -> CSSRefreshMessages {
-    let matched = try await waitForTargetMessage(
-        backend,
+    try await withThrowingTaskGroup(of: CSSRefreshMessages.self) { group in
+        defer {
+            group.cancelAll()
+        }
+
+        group.addTask {
+            try await waitForCSSRefreshMessageBatch(
+                backend,
+                after: count,
+                protocolNodeID: protocolNodeID
+            )
+        }
+        group.addTask {
+            try await Task.sleep(for: .seconds(5))
+            throw TransportSession.Error.replyTimeout(method: "CSS refresh messages", targetID: nil)
+        }
+
+        guard let messages = try await group.next() else {
+            throw TransportSession.Error.replyTimeout(method: "CSS refresh messages", targetID: nil)
+        }
+        return messages
+    }
+}
+
+private func waitForCSSRefreshMessageBatch(
+    _ backend: FakeTransportBackend,
+    after count: Int,
+    protocolNodeID: DOMNode.ProtocolID?
+) async throws -> CSSRefreshMessages {
+    var observedTargetMessageCount = 0
+    while true {
+        let messages = await backend.sentTargetMessages()
+        let messagesAfterCursor = Array(messages.dropFirst(count))
+        if let refreshMessages = try cssRefreshMessages(
+            in: messagesAfterCursor,
+            protocolNodeID: protocolNodeID
+        ) {
+            return refreshMessages
+        }
+
+        observedTargetMessageCount = messagesAfterCursor.count
+        _ = try await waitForBackendTargetMessage(
+            backend,
+            method: nil,
+            ordinal: observedTargetMessageCount,
+            after: count
+        )
+    }
+}
+
+private func cssRefreshMessages(
+    in messages: [SentTargetMessage],
+    protocolNodeID: DOMNode.ProtocolID?
+) throws -> CSSRefreshMessages? {
+    guard let matched = try cssRefreshMessage(
+        in: messages,
         method: "CSS.getMatchedStylesForNode",
-        after: count,
         protocolNodeID: protocolNodeID
-    )
-    let inline = try await waitForTargetMessage(
-        backend,
+    ), let inline = try cssRefreshMessage(
+        in: messages,
         method: "CSS.getInlineStylesForNode",
-        after: count,
         protocolNodeID: protocolNodeID
-    )
-    let computed = try await waitForTargetMessage(
-        backend,
+    ), let computed = try cssRefreshMessage(
+        in: messages,
         method: "CSS.getComputedStyleForNode",
-        after: count,
         protocolNodeID: protocolNodeID
-    )
+    ) else {
+        return nil
+    }
+
     return CSSRefreshMessages(matched: matched, inline: inline, computed: computed)
 }
 
-private func waitForTargetMessage(
-    _ backend: FakeTransportBackend,
+private func cssRefreshMessage(
+    in messages: [SentTargetMessage],
     method: String,
-    after count: Int,
     protocolNodeID: DOMNode.ProtocolID?
-) async throws -> SentTargetMessage {
-    guard let protocolNodeID else {
-        return try await waitForTargetMessage(backend, method: method, after: count)
-    }
-
-    var ordinal = 0
-    while true {
-        let message = try await waitForTargetMessage(
-            backend,
-            method: method,
-            ordinal: ordinal,
-            after: count
-        )
-        if try messageParameters(message.message)["nodeId"] as? Int == protocolNodeID.rawValue {
-            return message
+) throws -> SentTargetMessage? {
+    try messages.first { message in
+        guard try messageMethod(message.message) == method else {
+            return false
         }
-        ordinal += 1
+        guard let protocolNodeID else {
+            return true
+        }
+        return try messageParameters(message.message)["nodeId"] as? Int == protocolNodeID.rawValue
     }
 }
 
