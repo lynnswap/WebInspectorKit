@@ -278,12 +278,14 @@ final class DOMSessionDocumentRequestController {
         handlesByTargetID[handle.targetID] === handle
     }
 
+    #if DEBUG
     func recordCoalescedWaiter(for handle: DOMSessionDocumentRequestHandle) {
         guard isActive(handle) else {
             return
         }
         handle.recordCoalescedWaiter()
     }
+    #endif
 
     func finish(_ handle: DOMSessionDocumentRequestHandle) {
         guard isActive(handle) else {
@@ -311,6 +313,7 @@ final class DOMSessionDocumentRequestController {
         }
     }
 
+    #if DEBUG
     func waitUntilCoalescedWaiterCount(
         targetID: ProtocolTarget.ID,
         minimumCount: Int
@@ -321,6 +324,7 @@ final class DOMSessionDocumentRequestController {
         }
         await handle.waitUntilCoalescedWaiterCount(minimumCount)
     }
+    #endif
 
     private func activeHandle(matching targetID: ProtocolTarget.ID?) -> DOMSessionDocumentRequestHandle? {
         if let targetID {
@@ -667,16 +671,20 @@ final class DOMSessionDeleteUndoOperationQueue {
 
 @MainActor
 final class DOMSessionDocumentRequestHandle {
+    #if DEBUG
     private struct CoalescedWaiterContinuation {
         var minimumCount: Int
         var continuation: CheckedContinuation<Void, Never>
     }
+    #endif
 
     let targetID: ProtocolTarget.ID
     let targetKind: ProtocolTarget.Kind?
     var task: Task<Void, Error>?
+    #if DEBUG
     private var coalescedWaiterCount = 0
     private var coalescedWaiterContinuations: [CoalescedWaiterContinuation] = []
+    #endif
 
     init(targetID: ProtocolTarget.ID, targetKind: ProtocolTarget.Kind?) {
         self.targetID = targetID
@@ -692,6 +700,7 @@ final class DOMSessionDocumentRequestHandle {
         task = nil
     }
 
+    #if DEBUG
     func recordCoalescedWaiter() {
         coalescedWaiterCount += 1
         resumeCoalescedWaiterContinuationsIfNeeded()
@@ -729,4 +738,5 @@ final class DOMSessionDocumentRequestHandle {
             readyContinuation.continuation.resume()
         }
     }
+    #endif
 }

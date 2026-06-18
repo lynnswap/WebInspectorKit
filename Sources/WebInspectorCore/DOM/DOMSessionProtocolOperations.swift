@@ -53,6 +53,7 @@ extension DOMSession {
         await documentRequests.waitUntilIdle(targetID: targetID)
     }
 
+    #if DEBUG
     package func waitUntilDocumentRequestCoalescedWaiterCountForTesting(
         targetID: ProtocolTarget.ID,
         minimumCount: Int
@@ -75,6 +76,7 @@ extension DOMSession {
             }
         }
     }
+    #endif
 
     package func waitUntilSelectedStyleRefreshIdle() async {
         await styleHydration.waitUntilIdle()
@@ -302,6 +304,7 @@ extension DOMSession {
     }
 
     package func scheduleSelectedNodeHighlightRestoreOrHide(preferredHideTargetID: ProtocolTarget.ID? = nil) {
+        #if DEBUG
         let operationID = startScheduledHighlightOperationForTesting()
         Task { @MainActor [weak self] in
             defer {
@@ -309,6 +312,11 @@ extension DOMSession {
             }
             await self?.restoreSelectedNodeHighlightOrHide(preferredHideTargetID: preferredHideTargetID)
         }
+        #else
+        Task { @MainActor [weak self] in
+            await self?.restoreSelectedNodeHighlightOrHide(preferredHideTargetID: preferredHideTargetID)
+        }
+        #endif
     }
 
     package func scheduleNodeHighlightHideIfCurrent(
@@ -317,6 +325,7 @@ extension DOMSession {
         nodeID: DOMNode.ID? = nil,
         owner: DOMPageHighlightOwner? = nil
     ) {
+        #if DEBUG
         let operationID = startScheduledHighlightOperationForTesting()
         Task { @MainActor [weak self] in
             defer {
@@ -329,8 +338,19 @@ extension DOMSession {
                 owner: owner
             )
         }
+        #else
+        Task { @MainActor [weak self] in
+            await self?.hideNodeHighlightIfCurrent(
+                targetID: targetID,
+                generation: generation,
+                nodeID: nodeID,
+                owner: owner
+            )
+        }
+        #endif
     }
 
+    #if DEBUG
     private func startScheduledHighlightOperationForTesting() -> UInt64 {
         nextScheduledHighlightOperationIDForTesting &+= 1
         let operationID = nextScheduledHighlightOperationIDForTesting
@@ -349,6 +369,7 @@ extension DOMSession {
             waiter.resume()
         }
     }
+    #endif
 
     package func hideNodeHighlightIfCurrent(
         targetID: ProtocolTarget.ID,
@@ -1048,7 +1069,9 @@ extension DOMSession {
         if force {
             cancelDocumentRequest(targetID: targetID, reason: "force-\(reason)")
         } else if let activeHandle = documentRequests.activeHandle(for: targetID) {
+            #if DEBUG
             documentRequests.recordCoalescedWaiter(for: activeHandle)
+            #endif
             return activeHandle
         }
         guard let intent = getDocumentIntent(targetID: targetID) else {

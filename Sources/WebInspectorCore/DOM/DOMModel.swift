@@ -27,9 +27,11 @@ package final class DOMSession {
     @ObservationIgnored let documentRequests: DOMSessionDocumentRequestController
     @ObservationIgnored let styleHydration: DOMSessionElementStyleHydrationController
     @ObservationIgnored let deleteUndoController: DOMSessionDeleteUndoController
+    #if DEBUG
     @ObservationIgnored var nextScheduledHighlightOperationIDForTesting: UInt64
     @ObservationIgnored var scheduledHighlightOperationIDsForTesting: Set<UInt64>
     @ObservationIgnored var scheduledHighlightOperationIdleWaitersForTesting: [CheckedContinuation<Void, Never>]
+    #endif
 
     package init(
         targetGraph: TargetGraph = TargetGraph(),
@@ -54,9 +56,11 @@ package final class DOMSession {
         documentRequests = DOMSessionDocumentRequestController()
         styleHydration = DOMSessionElementStyleHydrationController()
         deleteUndoController = DOMSessionDeleteUndoController()
+        #if DEBUG
         nextScheduledHighlightOperationIDForTesting = 0
         scheduledHighlightOperationIDsForTesting = []
         scheduledHighlightOperationIdleWaitersForTesting = []
+        #endif
     }
 
     package var currentPageTargetID: ProtocolTarget.ID? {
