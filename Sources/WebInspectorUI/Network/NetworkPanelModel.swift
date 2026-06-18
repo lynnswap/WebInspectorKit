@@ -1,4 +1,5 @@
 import WebInspectorCore
+import Foundation
 import Observation
 
 @MainActor
@@ -27,260 +28,6 @@ private final class NetworkResponseBodyFetchCoordinator {
 }
 
 @MainActor
-private final class NetworkDisplayRowsProjectionCoordinator {
-    typealias ApplyAction = @MainActor @Sendable ([NetworkRequest.Display.Projection]) -> Void
-
-    private let projector: NetworkRequest.Display.RowsProjector
-    private let synchronousCache: NetworkRequest.Display.ProjectionCache
-    private var task: Task<Void, Never>?
-    private var generation = 0
-    private var lastRequestedInput: NetworkRequest.Display.RowsProjectionInput?
-#if DEBUG
-    private let testProbe = NetworkDisplayRowsProjectionTestProbe()
-#endif
-
-    init(mediaPreviewClassifier: @escaping NetworkRequest.Display.MediaPreviewClassifier) {
-        projector = NetworkRequest.Display.RowsProjector(mediaPreviewClassifier: mediaPreviewClassifier)
-        synchronousCache = NetworkRequest.Display.ProjectionCache(mediaPreviewClassifier: mediaPreviewClassifier)
-    }
-
-    isolated deinit {
-        task?.cancel()
-    }
-
-    func schedule(
-        input: NetworkRequest.Display.RowsProjectionInput,
-        apply: @escaping ApplyAction
-    ) {
-        guard input != lastRequestedInput else {
-            return
-        }
-        lastRequestedInput = input
-        cancelPending()
-        let generation = generation
-        let projector = projector
-        task = Task.detached { [input, generation, projector, weak self] in
-            do {
-                let rows = try await projector.rows(for: input)
-#if DEBUG
-                await self?.suspendApplyIfNeededForTesting(generation: generation)
-#endif
-                try Task.checkCancellation()
-                await self?.applyIfCurrent(rows, generation: generation, apply: apply)
-            } catch is CancellationError {
-#if DEBUG
-                await self?.recordDiscardForTesting(generation: generation)
-#endif
-                return
-            } catch {
-                return
-            }
-        }
-    }
-
-    func refresh(
-        input: NetworkRequest.Display.RowsProjectionInput,
-        apply: ApplyAction
-    ) async {
-        lastRequestedInput = input
-        cancelPending()
-        let generation = generation
-        do {
-            let rows = try await projector.rows(for: input)
-#if DEBUG
-            await suspendApplyIfNeededForTesting(generation: generation)
-#endif
-            try Task.checkCancellation()
-            applyIfCurrent(rows, generation: generation, apply: apply)
-        } catch is CancellationError {
-#if DEBUG
-            recordDiscardForTesting(generation: generation)
-#endif
-        } catch {
-        }
-    }
-
-    func refreshSynchronously(
-        input: NetworkRequest.Display.RowsProjectionInput,
-        apply: ApplyAction
-    ) {
-        lastRequestedInput = input
-        cancelPending()
-        let generation = generation
-        do {
-            let rows = try synchronousCache.rows(for: input)
-            applyIfCurrent(rows, generation: generation, apply: apply)
-        } catch is CancellationError {
-        } catch {
-        }
-    }
-
-    func removeAll(apply: ApplyAction) {
-        cancelPending()
-        lastRequestedInput = nil
-        applyIfCurrent([], generation: generation, apply: apply)
-        Task { [projector] in
-            await projector.removeAll()
-        }
-        synchronousCache.removeAll()
-    }
-
-    func cancel() {
-        cancelPending()
-    }
-
-    private func cancelPending() {
-        generation += 1
-        task?.cancel()
-        task = nil
-#if DEBUG
-        testProbe.resumeSuspendedApply()
-#endif
-    }
-
-    private func applyIfCurrent(
-        _ rows: [NetworkRequest.Display.Projection],
-        generation: Int,
-        apply: ApplyAction
-    ) {
-        guard generation == self.generation else {
-#if DEBUG
-            recordDiscardForTesting(generation: generation)
-#endif
-            return
-        }
-        apply(rows)
-#if DEBUG
-        recordApplyForTesting(generation: generation)
-#endif
-        task = nil
-    }
-
-#if DEBUG
-    func suspendNextApplyForTesting() {
-        testProbe.suspendNextApply()
-    }
-
-    func waitForApplySuspensionForTesting() async -> Int {
-        await testProbe.waitForApplySuspension()
-    }
-
-    func waitForDiscardForTesting(generation: Int) async {
-        await testProbe.waitForDiscard(generation: generation)
-    }
-
-    func waitForApplyForTesting(after generation: Int) async -> Int {
-        await testProbe.waitForApply(after: generation)
-    }
-
-    private func suspendApplyIfNeededForTesting(generation: Int) async {
-        await testProbe.suspendApplyIfNeeded(generation: generation)
-    }
-
-    private func recordDiscardForTesting(generation: Int) {
-        testProbe.recordDiscard(generation: generation)
-    }
-
-    private func recordApplyForTesting(generation: Int) {
-        testProbe.recordApply(generation: generation)
-    }
-#endif
-}
-
-#if DEBUG
-@MainActor
-private final class NetworkDisplayRowsProjectionTestProbe {
-    private var shouldSuspendNextApply = false
-    private var suspendedApplyGeneration: Int?
-    private var suspendedApplyContinuation: CheckedContinuation<Void, Never>?
-    private var applySuspensionWaiters: [CheckedContinuation<Int, Never>] = []
-    private var discardedGenerations: Set<Int> = []
-    private var discardWaiters: [Int: [CheckedContinuation<Void, Never>]] = [:]
-    private var appliedGenerations: [Int] = []
-    private var applyWaiters: [(after: Int, continuation: CheckedContinuation<Int, Never>)] = []
-
-    func suspendNextApply() {
-        shouldSuspendNextApply = true
-    }
-
-    func waitForApplySuspension() async -> Int {
-        if let suspendedApplyGeneration {
-            return suspendedApplyGeneration
-        }
-        return await withCheckedContinuation { continuation in
-            applySuspensionWaiters.append(continuation)
-        }
-    }
-
-    func waitForDiscard(generation: Int) async {
-        if discardedGenerations.contains(generation) {
-            return
-        }
-        await withCheckedContinuation { continuation in
-            discardWaiters[generation, default: []].append(continuation)
-        }
-    }
-
-    func waitForApply(after generation: Int) async -> Int {
-        if let appliedGeneration = appliedGenerations.first(where: { $0 > generation }) {
-            return appliedGeneration
-        }
-        return await withCheckedContinuation { continuation in
-            applyWaiters.append((after: generation, continuation: continuation))
-        }
-    }
-
-    func suspendApplyIfNeeded(generation: Int) async {
-        guard shouldSuspendNextApply else {
-            return
-        }
-        shouldSuspendNextApply = false
-        await withCheckedContinuation { continuation in
-            suspendedApplyGeneration = generation
-            suspendedApplyContinuation = continuation
-            let waiters = applySuspensionWaiters
-            applySuspensionWaiters.removeAll(keepingCapacity: true)
-            for waiter in waiters {
-                waiter.resume(returning: generation)
-            }
-        }
-    }
-
-    func resumeSuspendedApply() {
-        guard let continuation = suspendedApplyContinuation else {
-            return
-        }
-        suspendedApplyContinuation = nil
-        suspendedApplyGeneration = nil
-        continuation.resume()
-    }
-
-    func recordDiscard(generation: Int) {
-        guard discardedGenerations.insert(generation).inserted else {
-            return
-        }
-        let waiters = discardWaiters.removeValue(forKey: generation) ?? []
-        for waiter in waiters {
-            waiter.resume()
-        }
-    }
-
-    func recordApply(generation: Int) {
-        appliedGenerations.append(generation)
-        var unresolvedWaiters: [(after: Int, continuation: CheckedContinuation<Int, Never>)] = []
-        for waiter in applyWaiters {
-            if generation > waiter.after {
-                waiter.continuation.resume(returning: generation)
-            } else {
-                unresolvedWaiters.append(waiter)
-            }
-        }
-        applyWaiters = unresolvedWaiters
-    }
-}
-#endif
-
-@MainActor
 @Observable
 package final class NetworkPanelModel {
     package typealias ResponseBodyFetchAction = @MainActor (NetworkRequest.ID) async -> Void
@@ -297,10 +44,8 @@ package final class NetworkPanelModel {
         }
     }
     package private(set) var effectiveResourceFilters: Set<NetworkRequest.Display.ResourceFilter> = []
-    package private(set) var displayRows: [NetworkRequest.Display.Projection] = []
     @ObservationIgnored private let responseBodyFetchCoordinator: NetworkResponseBodyFetchCoordinator
-    @ObservationIgnored private let displayRowsProjectionCoordinator: NetworkDisplayRowsProjectionCoordinator
-    @ObservationIgnored private var displayProjectionByID: [NetworkRequest.ID: NetworkRequest.Display.Projection] = [:]
+    @ObservationIgnored private let mediaPreviewClassifier: NetworkRequest.Display.MediaPreviewClassifier
 
     package init(
         network: NetworkSession,
@@ -311,17 +56,33 @@ package final class NetworkPanelModel {
     ) {
         self.network = network
         self.responseBodyFetchCoordinator = NetworkResponseBodyFetchCoordinator(action: responseBodyFetchAction)
-        self.displayRowsProjectionCoordinator = NetworkDisplayRowsProjectionCoordinator(
-            mediaPreviewClassifier: mediaPreviewClassifier
-        )
-    }
-
-    isolated deinit {
-        displayRowsProjectionCoordinator.cancel()
+        self.mediaPreviewClassifier = mediaPreviewClassifier
     }
 
     package var displayRequestIDs: [NetworkRequest.ID] {
-        displayRows.map(\.id)
+        let requestIDs = network.orderedRequestIDs
+        let query = normalizedSearchText
+        let resourceFilters = effectiveResourceFilters
+        guard query.isEmpty == false || resourceFilters.isEmpty == false else {
+            return Array(requestIDs.reversed())
+        }
+
+        var filteredIDs: [NetworkRequest.ID] = []
+        filteredIDs.reserveCapacity(requestIDs.count)
+        for requestID in requestIDs {
+            guard let request = network.request(for: requestID) else {
+                continue
+            }
+            if resourceFilters.isEmpty == false,
+               resourceFilters.contains(request.displayResourceFilter(mediaPreviewClassifier: mediaPreviewClassifier)) == false {
+                continue
+            }
+            guard request.matchesDisplaySearchText(query) else {
+                continue
+            }
+            filteredIDs.append(requestID)
+        }
+        return Array(filteredIDs.reversed())
     }
 
     package var displayRequests: [NetworkRequest] {
@@ -329,7 +90,18 @@ package final class NetworkPanelModel {
     }
 
     package var isEmpty: Bool {
-        network.requests.isEmpty
+        network.orderedRequestIDs.isEmpty
+    }
+
+    package var displayRowsInvalidationRevision: DisplayRowsInvalidationRevision {
+        let query = normalizedSearchText
+        let resourceFilters = effectiveResourceFilters
+        return DisplayRowsInvalidationRevision(
+            searchText: query,
+            resourceFilters: resourceFilters,
+            topologyRevision: network.requestTopologyRevision,
+            displayRevision: query.isEmpty && resourceFilters.isEmpty ? nil : network.requestDisplayRevision
+        )
     }
 
     package var selectedRequest: NetworkRequest? {
@@ -341,10 +113,6 @@ package final class NetworkPanelModel {
 
     package func request(for id: NetworkRequest.ID) -> NetworkRequest? {
         network.request(for: id)
-    }
-
-    package func displayProjection(for id: NetworkRequest.ID) -> NetworkRequest.Display.Projection? {
-        displayProjectionByID[id]
     }
 
     package func selectRequest(_ request: NetworkRequest?) {
@@ -382,72 +150,22 @@ package final class NetworkPanelModel {
     package func clearRequests() {
         selectedRequestID = nil
         network.reset()
-        displayRowsProjectionCoordinator.removeAll { [weak self] rows in
-            self?.applyDisplayRows(rows)
-        }
     }
 
     package func fetchResponseBodyIfNeeded(for request: NetworkRequest) {
         responseBodyFetchCoordinator.fetchIfNeeded(for: request)
     }
 
-    package func displayRowsProjectionInput() -> NetworkRequest.Display.RowsProjectionInput {
-        NetworkRequest.Display.RowsProjectionInput(
-            requestSnapshots: network.requests.map(NetworkRequest.Display.RequestSnapshot.init),
-            searchText: searchText,
-            resourceFilters: effectiveResourceFilters
-        )
-    }
-
-    package func scheduleDisplayRowsProjection(
-        input: NetworkRequest.Display.RowsProjectionInput? = nil
-    ) {
-        let input = input ?? displayRowsProjectionInput()
-        displayRowsProjectionCoordinator.schedule(input: input) { [weak self] rows in
-            self?.applyDisplayRows(rows)
-        }
-    }
-
-    @discardableResult
-    package func refreshDisplayRows() async -> [NetworkRequest.Display.Projection] {
-        let input = displayRowsProjectionInput()
-        await displayRowsProjectionCoordinator.refresh(input: input) { [weak self] rows in
-            self?.applyDisplayRows(rows)
-        }
-        return displayRows
-    }
-
-    @discardableResult
-    package func refreshDisplayRowsSynchronously() -> [NetworkRequest.Display.Projection] {
-        let input = displayRowsProjectionInput()
-        displayRowsProjectionCoordinator.refreshSynchronously(input: input) { [weak self] rows in
-            self?.applyDisplayRows(rows)
-        }
-        return displayRows
-    }
-
-    private func applyDisplayRows(_ rows: [NetworkRequest.Display.Projection]) {
-        displayRows = rows
-        displayProjectionByID = Dictionary(uniqueKeysWithValues: rows.map { ($0.id, $0) })
+    private var normalizedSearchText: String {
+        searchText.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
-#if DEBUG
 extension NetworkPanelModel {
-    package func suspendNextDisplayRowsProjectionApplyForTesting() {
-        displayRowsProjectionCoordinator.suspendNextApplyForTesting()
-    }
-
-    package func waitForDisplayRowsProjectionApplySuspensionForTesting() async -> Int {
-        await displayRowsProjectionCoordinator.waitForApplySuspensionForTesting()
-    }
-
-    package func waitForDisplayRowsProjectionDiscardForTesting(generation: Int) async {
-        await displayRowsProjectionCoordinator.waitForDiscardForTesting(generation: generation)
-    }
-
-    package func waitForDisplayRowsProjectionApplyForTesting(after generation: Int) async -> Int {
-        await displayRowsProjectionCoordinator.waitForApplyForTesting(after: generation)
+    package struct DisplayRowsInvalidationRevision: Equatable {
+        package var searchText: String
+        package var resourceFilters: Set<NetworkRequest.Display.ResourceFilter>
+        package var topologyRevision: Int
+        package var displayRevision: Int?
     }
 }
-#endif

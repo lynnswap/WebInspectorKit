@@ -447,15 +447,25 @@ private struct NetworkRequestStore {
 @Observable
 package final class NetworkSession {
     private var requestStore: NetworkRequestStore
+    package private(set) var requestTopologyRevision: Int
+    package private(set) var requestContentRevision: Int
+    package private(set) var requestDisplayRevision: Int
     @ObservationIgnored private var commandChannel: ProtocolCommandChannel?
     @ObservationIgnored private let protocolCommands: NetworkProtocolCommands
     @ObservationIgnored private var recordError: ((InspectorSession.Error?) -> Void)?
 
     package init() {
         requestStore = NetworkRequestStore()
+        requestTopologyRevision = 0
+        requestContentRevision = 0
+        requestDisplayRevision = 0
         commandChannel = nil
         protocolCommands = NetworkProtocolCommands()
         recordError = nil
+    }
+
+    package var orderedRequestIDs: [NetworkRequest.ID] {
+        requestStore.orderedRequestIDs
     }
 
     package var requests: [NetworkRequest] {
@@ -468,6 +478,7 @@ package final class NetworkSession {
 
     package func reset() {
         requestStore.removeAll()
+        recordRequestTopologyChange()
     }
 
     package func bindProtocolChannel(
@@ -571,6 +582,7 @@ package final class NetworkSession {
                 existing.backendResourceIdentifier = backendResourceIdentifier ?? existing.backendResourceIdentifier
             }
             requestStore.markActive(key)
+            recordRequestDisplayChange()
             return key
         }
 
@@ -590,6 +602,7 @@ package final class NetworkSession {
             )
         )
         requestStore.markActive(key)
+        recordRequestTopologyChange()
         return key
     }
 
@@ -616,6 +629,7 @@ package final class NetworkSession {
         request.ensureResponseBody()
         request.responseReceivedTimestamp = timestamp
         request.state = .responded
+        recordRequestDisplayChange()
     }
 
     package func applyDataReceived(
@@ -631,6 +645,7 @@ package final class NetworkSession {
         request.decodedDataLength += max(0, dataLength)
         request.encodedDataLength += max(0, encodedDataLength)
         request.lastDataReceivedTimestamp = timestamp
+        recordRequestContentChange()
     }
 
     package func applyLoadingFinished(
@@ -652,6 +667,7 @@ package final class NetworkSession {
         request.finishedOrFailedTimestamp = timestamp
         request.state = .finished
         requestStore.closeActive(.init(targetID: targetID, requestID: requestID))
+        recordRequestContentChange()
     }
 
     package func applyLoadingFailed(
@@ -667,6 +683,7 @@ package final class NetworkSession {
         request.finishedOrFailedTimestamp = timestamp
         request.state = .failed(errorText: errorText, canceled: canceled)
         requestStore.closeActive(.init(targetID: targetID, requestID: requestID))
+        recordRequestContentChange()
     }
 
     @discardableResult
@@ -681,6 +698,7 @@ package final class NetworkSession {
         resource: NetworkRequest.CachedResource.Payload
     ) -> NetworkRequest.ID {
         let key = NetworkRequest.ID(targetID: targetID, requestID: requestID)
+        let didExist = requestStore.request(for: key) != nil
         let networkRequest = requestStore.requestOrInsert(id: key) {
             NetworkRequest(
                 id: key,
@@ -715,6 +733,11 @@ package final class NetworkSession {
         networkRequest.encodedDataLength = max(0, resource.bodySize)
         networkRequest.finishedOrFailedTimestamp = timestamp
         networkRequest.state = .finished
+        if didExist {
+            recordRequestDisplayChange()
+        } else {
+            recordRequestTopologyChange()
+        }
         return key
     }
 
@@ -729,6 +752,7 @@ package final class NetworkSession {
             existing.request.url = url
             existing.resourceType = .webSocket
             existing.webSocketReadyState = .connecting
+            recordRequestDisplayChange()
             return key
         }
 
@@ -748,6 +772,7 @@ package final class NetworkSession {
         networkRequest.webSocketReadyState = .connecting
         requestStore.insert(networkRequest)
         requestStore.markActive(key)
+        recordRequestTopologyChange()
         return key
     }
 
@@ -768,6 +793,7 @@ package final class NetworkSession {
         networkRequest.requestSentWalltime = walltime
         networkRequest.webSocketReadyState = .connecting
         networkRequest.state = .pending
+        recordRequestContentChange()
     }
 
     package func applyWebSocketHandshakeResponseReceived(
@@ -791,6 +817,7 @@ package final class NetworkSession {
         networkRequest.responseReceivedTimestamp = timestamp
         networkRequest.webSocketReadyState = .open
         networkRequest.state = .responded
+        recordRequestDisplayChange()
     }
 
     package func applyWebSocketFrameReceived(
@@ -822,6 +849,7 @@ package final class NetworkSession {
         }
         request.webSocketFrames.append(.init(payload: nil, direction: .error(errorMessage), timestamp: timestamp))
         request.lastDataReceivedTimestamp = timestamp
+        recordRequestContentChange()
     }
 
     package func applyWebSocketClosed(
@@ -836,6 +864,7 @@ package final class NetworkSession {
         request.finishedOrFailedTimestamp = timestamp
         request.state = .finished
         requestStore.closeActive(.init(targetID: targetID, requestID: requestID))
+        recordRequestContentChange()
     }
 
     package func applyTargetDestroyed(_ targetID: ProtocolTarget.ID) {
@@ -880,6 +909,7 @@ package final class NetworkSession {
         request.webSocketFrames.append(.init(payload: response, direction: direction, timestamp: timestamp))
         request.decodedDataLength += max(0, response.payloadLength)
         request.lastDataReceivedTimestamp = timestamp
+        recordRequestContentChange()
     }
 
     private func requireCommandChannel() throws -> ProtocolCommandChannel {
@@ -888,5 +918,19 @@ package final class NetworkSession {
         }
         try commandChannel.requireAttached()
         return commandChannel
+    }
+
+    private func recordRequestTopologyChange() {
+        requestTopologyRevision &+= 1
+        recordRequestDisplayChange()
+    }
+
+    private func recordRequestDisplayChange() {
+        requestDisplayRevision &+= 1
+        recordRequestContentChange()
+    }
+
+    private func recordRequestContentChange() {
+        requestContentRevision &+= 1
     }
 }
