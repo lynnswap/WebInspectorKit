@@ -278,6 +278,15 @@ final class DOMSessionDocumentRequestController {
         handlesByTargetID[handle.targetID] === handle
     }
 
+    #if DEBUG
+    func recordCoalescedWaiter(for handle: DOMSessionDocumentRequestHandle) {
+        guard isActive(handle) else {
+            return
+        }
+        handle.recordCoalescedWaiter()
+    }
+    #endif
+
     func finish(_ handle: DOMSessionDocumentRequestHandle) {
         guard isActive(handle) else {
             return
@@ -303,6 +312,19 @@ final class DOMSessionDocumentRequestController {
             await handle.wait()
         }
     }
+
+    #if DEBUG
+    func waitUntilCoalescedWaiterCount(
+        targetID: ProtocolTarget.ID,
+        minimumCount: Int
+    ) async {
+        precondition(minimumCount > 0, "minimumCount must be positive")
+        guard let handle = activeHandle(for: targetID) else {
+            return
+        }
+        await handle.waitUntilCoalescedWaiterCount(minimumCount)
+    }
+    #endif
 
     private func activeHandle(matching targetID: ProtocolTarget.ID?) -> DOMSessionDocumentRequestHandle? {
         if let targetID {
@@ -649,9 +671,20 @@ final class DOMSessionDeleteUndoOperationQueue {
 
 @MainActor
 final class DOMSessionDocumentRequestHandle {
+    #if DEBUG
+    private struct CoalescedWaiterContinuation {
+        var minimumCount: Int
+        var continuation: CheckedContinuation<Void, Never>
+    }
+    #endif
+
     let targetID: ProtocolTarget.ID
     let targetKind: ProtocolTarget.Kind?
     var task: Task<Void, Error>?
+    #if DEBUG
+    private var coalescedWaiterCount = 0
+    private var coalescedWaiterContinuations: [CoalescedWaiterContinuation] = []
+    #endif
 
     init(targetID: ProtocolTarget.ID, targetKind: ProtocolTarget.Kind?) {
         self.targetID = targetID
@@ -666,4 +699,44 @@ final class DOMSessionDocumentRequestHandle {
         task?.cancel()
         task = nil
     }
+
+    #if DEBUG
+    func recordCoalescedWaiter() {
+        coalescedWaiterCount += 1
+        resumeCoalescedWaiterContinuationsIfNeeded()
+    }
+
+    func waitUntilCoalescedWaiterCount(_ minimumCount: Int) async {
+        guard coalescedWaiterCount < minimumCount else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            if coalescedWaiterCount >= minimumCount {
+                continuation.resume()
+            } else {
+                coalescedWaiterContinuations.append(
+                    CoalescedWaiterContinuation(
+                        minimumCount: minimumCount,
+                        continuation: continuation
+                    )
+                )
+            }
+        }
+    }
+
+    private func resumeCoalescedWaiterContinuationsIfNeeded() {
+        let readyContinuations = coalescedWaiterContinuations.filter {
+            coalescedWaiterCount >= $0.minimumCount
+        }
+        guard !readyContinuations.isEmpty else {
+            return
+        }
+        coalescedWaiterContinuations.removeAll {
+            coalescedWaiterCount >= $0.minimumCount
+        }
+        for readyContinuation in readyContinuations {
+            readyContinuation.continuation.resume()
+        }
+    }
+    #endif
 }

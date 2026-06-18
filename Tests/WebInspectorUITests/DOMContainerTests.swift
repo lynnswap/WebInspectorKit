@@ -1,6 +1,7 @@
 #if canImport(UIKit)
 import ObservationBridge
 import Testing
+import WebInspectorTestSupport
 import WebInspectorTransport
 import UIKit
 @testable import WebInspectorCore
@@ -955,9 +956,22 @@ struct DOMContainerTests {
     @Test
     func testBackendTargetMessageWaiterTimesOutWhenMethodIsMissing() async throws {
         let backend = RecordingTransportBackend()
+        let timeout = ManualResponseTimeout()
 
+        let waitTask = Task {
+            try await waitForTargetMessage(
+                backend,
+                method: "DOM.getDocument",
+                timeout: .milliseconds(20),
+                timeoutSleep: { duration in
+                    try await timeout.sleep(for: duration)
+                }
+            )
+        }
+        await timeout.waitUntilSuspended()
+        await timeout.fireNext()
         await #expect(throws: TransportSession.Error.replyTimeout(method: "DOM.getDocument", targetID: nil)) {
-            try await waitForTargetMessage(backend, method: "DOM.getDocument", timeout: .milliseconds(20))
+            try await waitTask.value
         }
     }
 
@@ -1302,7 +1316,10 @@ struct DOMContainerTests {
     private func waitForTargetMessage(
         _ backend: RecordingTransportBackend,
         method: String,
-        timeout: Duration = .seconds(5)
+        timeout: Duration = .seconds(5),
+        timeoutSleep: @escaping @Sendable (Duration) async throws -> Void = { duration in
+            try await Task.sleep(for: duration)
+        }
     ) async throws -> RecordedTargetMessage {
         try await withThrowingTaskGroup(of: RecordedTargetMessage.self) { group in
             defer {
@@ -1313,7 +1330,7 @@ struct DOMContainerTests {
                 try await backend.waitForTargetMessage(method: method)
             }
             group.addTask {
-                try await Task.sleep(for: timeout)
+                try await timeoutSleep(timeout)
                 throw TransportSession.Error.replyTimeout(method: method, targetID: nil)
             }
 

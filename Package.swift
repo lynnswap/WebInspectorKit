@@ -173,7 +173,8 @@ let package = Package(
             dependencies: [
                 "WebInspectorCore",
                 "WebInspectorTransport",
-                "WebInspectorUI"
+                "WebInspectorUI",
+                "WebInspectorTestSupport"
             ],
             path: "Tests/WebInspectorUITests",
             swiftSettings: strictSwiftSettings

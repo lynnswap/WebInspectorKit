@@ -706,7 +706,14 @@ func oldProvisionalTargetMessagesAreDispatchedAfterCommitTargetEvent() async thr
 @Test
 func retargetedPendingReplyStillTimesOutAfterCommit() async throws {
     let backend = FakeTransportBackend()
-    let session = TransportSession(backend: backend, responseTimeout: .milliseconds(20))
+    let responseTimeout = ManualResponseTimeout()
+    let session = TransportSession(
+        backend: backend,
+        responseTimeout: .milliseconds(20),
+        timeoutSleep: { duration in
+            try await responseTimeout.sleep(for: duration)
+        }
+    )
     await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-provisional","type":"frame","frameId":"ad-frame","isProvisional":true}}}"#)
 
     let sendTask = Task {
@@ -715,8 +722,10 @@ func retargetedPendingReplyStillTimesOutAfterCommit() async throws {
         )
     }
     _ = try await waitForTargetMessage(backend)
+    await responseTimeout.waitUntilSuspended()
 
     await session.receiveRootMessage(#"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"frame-provisional","newTargetId":"frame-committed"}}"#)
+    await responseTimeout.fireNext()
 
     await #expect(throws: TransportSession.Error.replyTimeout(method: "DOM.getDocument", targetID: .init("frame-provisional"))) {
         try await sendTask.value
@@ -1968,114 +1977,6 @@ private func waitForBackendValue<Value: Sendable>(
             throw TransportSession.Error.replyTimeout(method: "test wait", targetID: nil)
         }
         return value
-    }
-}
-
-private actor ManualResponseTimeout {
-    private var nextSleepID: UInt64 = 0
-    private var continuations: [UInt64: CheckedContinuation<Void, Error>] = [:]
-    private var nextSuspensionID: UInt64 = 0
-    private var suspensionContinuations: [UInt64: SuspensionContinuation] = [:]
-    private var handledTimeoutCount: Int = 0
-    private var handledTimeoutContinuation: CheckedContinuation<Void, Never>?
-
-    private struct SuspensionContinuation {
-        var minimumSleeps: Int
-        var continuation: CheckedContinuation<Void, Never>
-    }
-
-    func sleep(for _: Duration) async throws {
-        nextSleepID &+= 1
-        let sleepID = nextSleepID
-        try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation in
-                continuations[sleepID] = continuation
-                let suspensionContinuations = popReadySuspensionContinuations()
-                for suspensionContinuation in suspensionContinuations {
-                    suspensionContinuation.resume()
-                }
-            }
-        } onCancel: {
-            Task {
-                await self.cancel(sleepID)
-            }
-        }
-    }
-
-    func fireNext() {
-        guard let sleepID = continuations.keys.sorted().first,
-              let continuation = continuations.removeValue(forKey: sleepID) else {
-            return
-        }
-        continuation.resume()
-    }
-
-    func waitUntilSuspended(by minimumSleeps: Int = 1) async {
-        precondition(minimumSleeps > 0, "minimumSleeps must be positive")
-        guard continuations.count < minimumSleeps else {
-            return
-        }
-
-        nextSuspensionID &+= 1
-        let suspensionID = nextSuspensionID
-        await withTaskCancellationHandler {
-            await withCheckedContinuation { continuation in
-                if continuations.count >= minimumSleeps {
-                    continuation.resume()
-                } else {
-                    suspensionContinuations[suspensionID] = SuspensionContinuation(
-                        minimumSleeps: minimumSleeps,
-                        continuation: continuation
-                    )
-                }
-            }
-        } onCancel: {
-            Task {
-                await self.cancelSuspension(suspensionID)
-            }
-        }
-    }
-
-    func recordHandledTimeout() {
-        handledTimeoutCount += 1
-        handledTimeoutContinuation?.resume()
-        handledTimeoutContinuation = nil
-    }
-
-    func waitUntilHandledTimeout() async {
-        guard handledTimeoutCount == 0 else {
-            return
-        }
-        await withCheckedContinuation { continuation in
-            if handledTimeoutCount > 0 {
-                continuation.resume()
-            } else {
-                handledTimeoutContinuation = continuation
-            }
-        }
-    }
-
-    private func cancel(_ sleepID: UInt64) {
-        guard let continuation = continuations.removeValue(forKey: sleepID) else {
-            return
-        }
-        continuation.resume(throwing: CancellationError())
-    }
-
-    private func cancelSuspension(_ suspensionID: UInt64) {
-        guard let continuation = suspensionContinuations.removeValue(forKey: suspensionID)?.continuation else {
-            return
-        }
-        continuation.resume()
-    }
-
-    private func popReadySuspensionContinuations() -> [CheckedContinuation<Void, Never>] {
-        let readySuspensionIDs = suspensionContinuations.compactMap { suspensionID, suspensionContinuation in
-            continuations.count >= suspensionContinuation.minimumSleeps ? suspensionID : nil
-        }
-        return readySuspensionIDs.compactMap { suspensionID in
-            suspensionContinuations.removeValue(forKey: suspensionID)?.continuation
-        }
     }
 }
 
