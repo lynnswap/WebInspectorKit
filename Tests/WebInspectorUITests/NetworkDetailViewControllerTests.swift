@@ -287,38 +287,22 @@ struct NetworkDetailViewControllerTests {
     @Test
     func previewRequestWithoutBodyReplacesPreviousBodyWithUnavailablePlaceholder() async throws {
         let network = NetworkSession()
-        let targetID = ProtocolTarget.ID("page")
-        let bodyKey = network.applyRequestWillBeSent(
-            targetID: targetID,
-            requestID: NetworkRequest.ProtocolID("body"),
-            frameID: DOMFrame.ID("main"),
-            loaderID: "loader",
-            documentURL: "https://example.com",
-            request: NetworkRequest.Payload(
+        let bodyRequest = try #require(
+            applyRequestWithoutResponse(
+                to: network,
+                requestID: "body",
                 url: "https://example.com/form",
-                method: "POST",
-                headers: ["content-type": "application/x-www-form-urlencoded"],
+                requestHeaders: ["content-type": "application/x-www-form-urlencoded"],
                 postData: "name=Jane+Doe"
-            ),
-            resourceType: .xhr,
-            timestamp: 1
+            )
         )
-        let emptyKey = network.applyRequestWillBeSent(
-            targetID: targetID,
-            requestID: NetworkRequest.ProtocolID("empty"),
-            frameID: DOMFrame.ID("main"),
-            loaderID: "loader",
-            documentURL: "https://example.com",
-            request: NetworkRequest.Payload(
-                url: "https://example.com/no-body",
-                method: "GET",
-                headers: [:]
-            ),
-            resourceType: .xhr,
-            timestamp: 2
+        let emptyRequest = try #require(
+            applyRequestWithoutResponse(
+                to: network,
+                requestID: "empty",
+                url: "https://example.com/no-body"
+            )
         )
-        let bodyRequest = try #require(network.request(for: bodyKey))
-        let emptyRequest = try #require(network.request(for: emptyKey))
         let model = NetworkPanelModel(network: network)
         model.selectRequest(bodyRequest)
         let viewController = NetworkDetailViewController(model: model)
@@ -343,6 +327,41 @@ struct NetworkDetailViewControllerTests {
         }
         #expect(didReplaceBody)
         #expect(viewController.bodyViewControllerForTesting.syntaxViewForTesting.text.contains("Jane") == false)
+    }
+
+    @Test
+    func previewRequestWithoutBodyRendersPlaceholderWhenBodySurfaceResumes() async throws {
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequestWithoutResponse(
+                to: network,
+                requestID: "1",
+                url: "https://example.com/no-body"
+            )
+        )
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didRenderHeaders = await waitUntilRendered(in: viewController) {
+            viewController.currentModeForTesting == .headers
+                && viewController.previewViewForTesting.isHidden
+                && viewController.headersTextViewForTesting.renderedTextForTesting.contains("GET /no-body")
+        }
+        #expect(didRenderHeaders)
+
+        viewController.setModeForTesting(.preview)
+
+        let unavailableText = String(localized: "network.body.unavailable", bundle: .module)
+        let didRenderPlaceholder = await waitUntilRendered(in: viewController) {
+            viewController.currentModeForTesting == .preview
+                && viewController.previewViewForTesting.isHidden == false
+                && viewController.isPreviewRoleControlHiddenForTesting
+                && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == unavailableText
+        }
+        #expect(didRenderPlaceholder)
     }
 
     @Test
@@ -1931,6 +1950,31 @@ struct NetworkDetailViewControllerTests {
                 timestamp: 3
             )
         }
+        return network.request(for: key)
+    }
+
+    private func applyRequestWithoutResponse(
+        to network: NetworkSession,
+        requestID rawRequestID: String,
+        url: String,
+        requestHeaders: [String: String] = [:],
+        postData: String? = nil
+    ) -> NetworkRequest? {
+        let key = network.applyRequestWillBeSent(
+            targetID: ProtocolTarget.ID("page"),
+            requestID: NetworkRequest.ProtocolID(rawRequestID),
+            frameID: DOMFrame.ID("main"),
+            loaderID: "loader",
+            documentURL: "https://example.com",
+            request: NetworkRequest.Payload(
+                url: url,
+                method: postData == nil ? "GET" : "POST",
+                headers: requestHeaders,
+                postData: postData
+            ),
+            resourceType: .xhr,
+            timestamp: 1
+        )
         return network.request(for: key)
     }
 
