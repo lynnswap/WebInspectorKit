@@ -849,6 +849,56 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func mediaResponsePreviewReleasesPlayerAndTemporaryFileWhenSelectionClears() async throws {
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://media.example.com/download.php",
+                responseHeaders: ["content-type": "video/mp4"],
+                responseMimeType: "video/mp4"
+            )
+        )
+        request.applyResponseBody(
+            NetworkBody.Payload(
+                body: "not a real movie",
+                base64Encoded: false
+            )
+        )
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model)
+        let playerFactory = MoviePreviewPlayerFactorySpy()
+        viewController.bodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
+            playerFactory.makePlayer(for:)
+        )
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
+        await waitUntilMediaPreviewPrepared(in: viewController)
+
+        let didRenderMediaPreview = await waitUntilRendered(in: viewController) {
+            viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting?.pathExtension == "mp4"
+        }
+        #expect(didRenderMediaPreview)
+        let temporaryFileURL = try #require(viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting)
+        #expect(playerFactory.requestedURLs == [temporaryFileURL])
+        #expect(FileManager.default.fileExists(atPath: temporaryFileURL.path))
+
+        model.selectRequest(nil)
+
+        let didReleaseMediaPreview = await waitUntilRendered(in: viewController) {
+            viewController.contentUnavailableConfiguration != nil
+                && viewController.previewViewForTesting.isHidden
+                && viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting == nil
+                && FileManager.default.fileExists(atPath: temporaryFileURL.path) == false
+        }
+        #expect(didReleaseMediaPreview)
+        #expect(playerFactory.requestedURLs == [temporaryFileURL])
+    }
+
+    @Test
     func imageResponsePreviewUsesScrollViewAndFitsLargeImage() async throws {
         let imageSize = CGSize(width: 600, height: 1400)
         let network = NetworkSession()

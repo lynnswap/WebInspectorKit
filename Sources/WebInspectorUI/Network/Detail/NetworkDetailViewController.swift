@@ -389,10 +389,10 @@ package final class NetworkDetailViewController: UIViewController {
     }
 
     private func showEmptySelection() {
+        bodyViewController.display(body: nil)
         setBodyRenderingActive(false)
         previewContainerView.isHidden = true
         headersTextView.isHidden = true
-        bodyViewController.display(body: nil)
         headersTextView.clear()
         renderPreviewRoleControl(roles: [], selectedRole: nil)
         scrollEdgeController.contentScrollView = nil
