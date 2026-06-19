@@ -306,18 +306,18 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     func setRenderingActive(_ isActive: Bool) {
         guard isRenderingActive != isActive else {
             if isActive {
+                flushPendingSelectionInvalidationIfNeeded()
                 reconcileCurrentDOMInvalidationForActiveRendering()
                 flushPendingDOMInvalidationIfNeeded()
-                flushPendingSelectionInvalidationIfNeeded()
             }
             return
         }
 
         isRenderingActive = isActive
         if isActive {
+            flushPendingSelectionInvalidationIfNeeded()
             reconcileCurrentDOMInvalidationForActiveRendering()
             flushPendingDOMInvalidationIfNeeded()
-            flushPendingSelectionInvalidationIfNeeded()
         } else {
             suspendRenderingWork()
         }

@@ -710,6 +710,55 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func hiddenSelectionChangeClearsMultiSelectionBeforePendingDOMInvalidationFlush() async throws {
+        let session = makeDOMSession()
+        let view = await makeTreeView(session: session)
+        let documentID = try #require(session.currentPageRootNode?.id.documentID)
+        let visibleDivID = DOMNode.ID(documentID: documentID, nodeID: .init(7))
+        let inputID = DOMNode.ID(documentID: documentID, nodeID: .init(12))
+
+        view.primaryClickRowForTesting(containing: "<div id=\"start-of-content\"", modifiers: .command)
+        view.primaryClickRowForTesting(containing: "<input disabled>", modifiers: .command)
+        view.primaryClickRowForTesting(containing: "<article", modifiers: .command)
+        #expect(view.multiSelectedLineSnapshotsInDisplayOrderForTesting.map(\.text) == [
+            "      <div id=\"start-of-content\" data-testid=\"cellInnerDiv\"></div>",
+            "      <input disabled>",
+            "      <article>…</article>",
+        ])
+
+        let observedTreeRenderRevisions = await view.documentObservationDeliveryForTesting.values {
+            session.treeRenderInvalidation.revision
+        }
+        let observedSelectionRevisions = await view.selectionObservationDeliveryForTesting.values {
+            session.selectionRevision
+        }
+        defer {
+            observedTreeRenderRevisions.cancel()
+            observedSelectionRevisions.cancel()
+        }
+
+        view.setRenderingActive(false)
+        session.applyAttributeModified(visibleDivID, name: "data-visible", value: "while-hidden")
+        session.selectNode(inputID)
+        let hiddenTreeRevision = session.treeRevision
+        let hiddenSelectionRevision = session.selectionRevision
+        #expect(await observedTreeRenderRevisions.waitUntil { $0 >= hiddenTreeRevision } != nil)
+        #expect(await observedSelectionRevisions.waitUntil { $0 >= hiddenSelectionRevision } != nil)
+        await view.waitForRenderedRowsForTesting()
+
+        #expect(!view.renderedTextForTesting.contains("data-visible=\"while-hidden\""))
+        #expect(view.multiSelectedLineSnapshotsInDisplayOrderForTesting.count == 3)
+
+        view.setRenderingActive(true)
+        await view.waitForRenderedRowsForTesting()
+        view.layoutIfNeeded()
+
+        #expect(view.renderedTextForTesting.contains("data-visible=\"while-hidden\""))
+        #expect(view.multiSelectedLineSnapshotsInDisplayOrderForTesting.isEmpty)
+        #expect(view.selectedRowRectsForTesting().count == 1)
+    }
+
+    @Test
     func selectionRevealWaitsForInFlightRenderedRowsBuild() async throws {
         let session = makeDOMSession(root: selectionRevealRaceDocument())
         let view = await makeTreeView(session: session)
