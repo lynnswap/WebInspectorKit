@@ -407,10 +407,6 @@ func networkResponseBodyFetchAppliesResultToCoreRequest() async throws {
 
     #expect(await body.phase == .loaded)
     #expect(await body.textRepresentation == #"{"ok":true}"#)
-    let preparation = try #require(await body.prepareTextRepresentation())
-    await preparation.wait()
-    #expect(await body.textRepresentation?.contains("\n") == true)
-    #expect(await body.textRepresentation?.contains(#""ok""#) == true)
 }
 
 @Test

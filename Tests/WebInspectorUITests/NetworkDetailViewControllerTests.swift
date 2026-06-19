@@ -26,8 +26,8 @@ struct NetworkDetailViewControllerTests {
     func listShowsSimpleEmptyStateWithoutRequests() {
         let model = NetworkPanelModel(network: NetworkSession())
         let viewController = NetworkListViewController(model: model)
-
-        viewController.loadViewIfNeeded()
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
 
         #expect(viewController.collectionViewForTesting.isHidden)
         #expect(viewController.contentUnavailableConfiguration != nil)
@@ -42,8 +42,8 @@ struct NetworkDetailViewControllerTests {
     func detailShowsEmptyStateWithoutSelection() {
         let model = NetworkPanelModel(network: NetworkSession())
         let viewController = NetworkDetailViewController(model: model)
-
-        viewController.loadViewIfNeeded()
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
 
         #expect(viewController.previewViewForTesting.isHidden)
         #expect(viewController.headersTextViewForTesting.isHidden)
@@ -85,6 +85,32 @@ struct NetworkDetailViewControllerTests {
         viewController.loadViewIfNeeded()
 
         #expect(viewController.collectionViewForTesting.backgroundColor == .clear)
+    }
+
+    @Test
+    func listLoadDoesNotEvaluateDisplayRequestsUntilAppearing() async throws {
+        let network = NetworkSession()
+        _ = try #require(applyRequest(
+            to: network,
+            requestID: "1",
+            url: "https://example.com/api/data.json",
+            responseHeaders: ["content-type": "application/json"],
+            responseMimeType: "application/json"
+        ))
+        let model = NetworkPanelModel(network: network)
+        let viewController = NetworkListViewController(model: model)
+
+        viewController.loadViewIfNeeded()
+
+        #expect(viewController.displayRequestIDsEvaluationCountForTesting == 0)
+        #expect(viewController.displayedRequestIDsForTesting.isEmpty)
+
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        await viewController.flushPendingSnapshotUpdateForTesting()
+
+        #expect(viewController.displayedRequestIDsForTesting == model.displayRequestIDs)
+        #expect(viewController.displayRequestIDsEvaluationCountForTesting == 1)
     }
 
     @Test
@@ -256,6 +282,86 @@ struct NetworkDetailViewControllerTests {
             #expect(viewController.contentScrollView(for: .top) === syntaxView)
             #expect(viewController.contentScrollView(for: .bottom) === syntaxView)
         }
+    }
+
+    @Test
+    func previewRequestWithoutBodyReplacesPreviousBodyWithUnavailablePlaceholder() async throws {
+        let network = NetworkSession()
+        let bodyRequest = try #require(
+            applyRequestWithoutResponse(
+                to: network,
+                requestID: "body",
+                url: "https://example.com/form",
+                requestHeaders: ["content-type": "application/x-www-form-urlencoded"],
+                postData: "name=Jane+Doe"
+            )
+        )
+        let emptyRequest = try #require(
+            applyRequestWithoutResponse(
+                to: network,
+                requestID: "empty",
+                url: "https://example.com/no-body"
+            )
+        )
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(bodyRequest)
+        let viewController = NetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
+
+        let didRenderBody = await waitUntilRendered(in: viewController) {
+            viewController.currentModeForTesting == .preview
+                && viewController.currentPreviewRoleForTesting == .request
+                && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == "name=Jane Doe"
+        }
+        #expect(didRenderBody)
+
+        model.selectRequest(emptyRequest)
+
+        let unavailableText = String(localized: "network.body.unavailable", bundle: .module)
+        let didReplaceBody = await waitUntilRendered(in: viewController) {
+            viewController.previewViewForTesting.isHidden == false
+                && viewController.isPreviewRoleControlHiddenForTesting
+                && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == unavailableText
+        }
+        #expect(didReplaceBody)
+        #expect(viewController.bodyViewControllerForTesting.syntaxViewForTesting.text.contains("Jane") == false)
+    }
+
+    @Test
+    func previewRequestWithoutBodyRendersPlaceholderWhenBodySurfaceResumes() async throws {
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequestWithoutResponse(
+                to: network,
+                requestID: "1",
+                url: "https://example.com/no-body"
+            )
+        )
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didRenderHeaders = await waitUntilRendered(in: viewController) {
+            viewController.currentModeForTesting == .headers
+                && viewController.previewViewForTesting.isHidden
+                && viewController.headersTextViewForTesting.renderedTextForTesting.contains("GET /no-body")
+        }
+        #expect(didRenderHeaders)
+
+        viewController.setModeForTesting(.preview)
+
+        let unavailableText = String(localized: "network.body.unavailable", bundle: .module)
+        let didRenderPlaceholder = await waitUntilRendered(in: viewController) {
+            viewController.currentModeForTesting == .preview
+                && viewController.previewViewForTesting.isHidden == false
+                && viewController.isPreviewRoleControlHiddenForTesting
+                && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == unavailableText
+        }
+        #expect(didRenderPlaceholder)
     }
 
     @Test
@@ -452,6 +558,182 @@ struct NetworkDetailViewControllerTests {
             return viewController.bodyViewControllerForTesting.syntaxViewForTesting.text.contains(#""ok""#)
         }
         #expect(didRenderBody)
+    }
+
+    @Test
+    func hiddenDetailDoesNotFetchResponseBodyUntilAppearingAgain() async throws {
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://example.com/api/data.json",
+                responseHeaders: ["content-type": "application/json"],
+                responseMimeType: "application/json"
+            )
+        )
+        var fetchedIDs: [NetworkRequest.ID] = []
+        let model = NetworkPanelModel(network: network) { id in
+            fetchedIDs.append(id)
+            request.markResponseBodyFetching()
+        }
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.setModeForTesting(.headers)
+
+        let didRenderHeaders = await waitUntilRendered(in: viewController) {
+            viewController.currentModeForTesting == .headers
+                && viewController.headersTextViewForTesting.renderedTextForTesting.contains("content-type: application/json")
+        }
+        #expect(didRenderHeaders)
+        #expect(fetchedIDs.isEmpty)
+
+        viewController.beginAppearanceTransition(false, animated: false)
+        viewController.endAppearanceTransition()
+        viewController.setModeForTesting(.preview)
+        await Task.yield()
+        await Task.yield()
+
+        #expect(fetchedIDs.isEmpty)
+        #expect(viewController.headersTextViewForTesting.renderedTextForTesting.contains("content-type: application/json"))
+
+        viewController.beginAppearanceTransition(true, animated: false)
+        viewController.endAppearanceTransition()
+
+        let didFetchOnReturn = await waitUntilRendered(in: viewController) {
+            fetchedIDs == [request.id]
+                && viewController.currentModeForTesting == .preview
+                && viewController.currentPreviewRoleForTesting == .response
+        }
+        #expect(didFetchOnReturn)
+    }
+
+    @Test
+    func hiddenDetailKeepsDisplayedBodyAndReconcilesBodyOnReturn() async throws {
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://example.com/api/data.json",
+                responseHeaders: ["content-type": "application/json"],
+                responseMimeType: "application/json"
+            )
+        )
+        request.applyResponseBody(
+            NetworkBody.Payload(
+                body: #"{"visible":true}"#,
+                base64Encoded: false
+            )
+        )
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model, initialMode: .preview)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didRenderVisibleBody = await waitUntilRendered(in: viewController) {
+            viewController.bodyViewControllerForTesting.syntaxViewForTesting.text.contains(#""visible" : true"#)
+        }
+        #expect(didRenderVisibleBody)
+        let renderedBodyBeforeHide = viewController.bodyViewControllerForTesting.syntaxViewForTesting.text
+
+        viewController.beginAppearanceTransition(false, animated: false)
+        viewController.endAppearanceTransition()
+        request.applyResponseBody(
+            NetworkBody.Payload(
+                body: #"{"hidden":true}"#,
+                base64Encoded: false
+            )
+        )
+        await Task.yield()
+        await Task.yield()
+
+        #expect(viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == renderedBodyBeforeHide)
+
+        viewController.beginAppearanceTransition(true, animated: false)
+        viewController.endAppearanceTransition()
+
+        let didRenderHiddenBody = await waitUntilRendered(in: viewController) {
+            viewController.bodyViewControllerForTesting.syntaxViewForTesting.text.contains(#""hidden" : true"#)
+        }
+        #expect(didRenderHiddenBody)
+    }
+
+    @Test
+    func deeplyNestedJSONPreviewFallsBackToRawText() async throws {
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://example.com/api/deep.json",
+                responseHeaders: ["content-type": "application/json"],
+                responseMimeType: "application/json"
+            )
+        )
+        let bodyText = String(repeating: "[", count: 160) + "0" + String(repeating: "]", count: 160)
+        request.applyResponseBody(
+            NetworkBody.Payload(
+                body: bodyText,
+                base64Encoded: false
+            )
+        )
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model, initialMode: .preview)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didRenderRawBody = await waitUntilRendered(in: viewController) {
+            viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == bodyText
+        }
+        #expect(didRenderRawBody)
+
+        await viewController.bodyViewControllerForTesting.waitUntilTextPreviewPreparationFinishedForTesting()
+
+        #expect(viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == bodyText)
+    }
+
+    @Test
+    func jsonPreviewFormatsCRLFWhitespace() async throws {
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://example.com/api/data.json",
+                responseHeaders: ["content-type": "application/json"],
+                responseMimeType: "application/json"
+            )
+        )
+        let bodyText = "{\r\n\"a\":1,\r\n\"b\":[true]\r\n}"
+        request.applyResponseBody(
+            NetworkBody.Payload(
+                body: bodyText,
+                base64Encoded: false
+            )
+        )
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model, initialMode: .preview)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didRenderPrettyBody = await waitUntilRendered(in: viewController) {
+            viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == """
+            {
+              "a" : 1,
+              "b" : [
+                true
+              ]
+            }
+            """
+        }
+
+        #expect(didRenderPrettyBody)
     }
 
     @Test
@@ -661,6 +943,170 @@ struct NetworkDetailViewControllerTests {
                 && FileManager.default.fileExists(atPath: temporaryFileURL.path)
         }
         #expect(observedValues.latestValue == true)
+        #expect(playerFactory.requestedURLs == [temporaryFileURL])
+    }
+
+    @Test
+    func mediaResponsePreviewPausesPlayerButKeepsSurfaceWhenHidden() async throws {
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://media.example.com/download.php",
+                responseHeaders: ["content-type": "video/mp4"],
+                responseMimeType: "video/mp4"
+            )
+        )
+        request.applyResponseBody(
+            NetworkBody.Payload(
+                body: "not a real movie",
+                base64Encoded: false
+            )
+        )
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model)
+        let playerFactory = MoviePreviewPlayerFactorySpy()
+        viewController.bodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
+            playerFactory.makePlayer(for:)
+        )
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
+        await waitUntilMediaPreviewPrepared(in: viewController)
+
+        let didRenderMediaPreview = await waitUntilRendered(in: viewController) {
+            viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting?.pathExtension == "mp4"
+        }
+        #expect(didRenderMediaPreview)
+        let temporaryFileURL = try #require(viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting)
+        let player = try #require(playerFactory.players.first)
+        #expect(playerFactory.players.count == 1)
+        #expect(player.pauseCallCount == 0)
+        #expect(FileManager.default.fileExists(atPath: temporaryFileURL.path))
+
+        viewController.beginAppearanceTransition(false, animated: false)
+        viewController.endAppearanceTransition()
+
+        #expect(player.pauseCallCount == 1)
+        #expect(viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting == temporaryFileURL)
+        #expect(FileManager.default.fileExists(atPath: temporaryFileURL.path))
+
+        viewController.beginAppearanceTransition(true, animated: false)
+        viewController.endAppearanceTransition()
+        await waitUntilMediaPreviewPrepared(in: viewController)
+
+        #expect(playerFactory.players.count == 1)
+        #expect(viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting == temporaryFileURL)
+        #expect(player.pauseCallCount == 1)
+    }
+
+    @Test
+    func mediaResponsePreviewReleasesPlayerAndTemporaryFileWhenSelectionClears() async throws {
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://media.example.com/download.php",
+                responseHeaders: ["content-type": "video/mp4"],
+                responseMimeType: "video/mp4"
+            )
+        )
+        request.applyResponseBody(
+            NetworkBody.Payload(
+                body: "not a real movie",
+                base64Encoded: false
+            )
+        )
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model)
+        let playerFactory = MoviePreviewPlayerFactorySpy()
+        viewController.bodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
+            playerFactory.makePlayer(for:)
+        )
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
+        await waitUntilMediaPreviewPrepared(in: viewController)
+
+        let didRenderMediaPreview = await waitUntilRendered(in: viewController) {
+            viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting?.pathExtension == "mp4"
+        }
+        #expect(didRenderMediaPreview)
+        let temporaryFileURL = try #require(viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting)
+        #expect(playerFactory.requestedURLs == [temporaryFileURL])
+        #expect(FileManager.default.fileExists(atPath: temporaryFileURL.path))
+
+        model.selectRequest(nil)
+
+        let didReleaseMediaPreview = await waitUntilRendered(in: viewController) {
+            viewController.contentUnavailableConfiguration != nil
+                && viewController.previewViewForTesting.isHidden
+                && viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting == nil
+                && FileManager.default.fileExists(atPath: temporaryFileURL.path) == false
+        }
+        #expect(didReleaseMediaPreview)
+        #expect(playerFactory.requestedURLs == [temporaryFileURL])
+    }
+
+    @Test
+    func hiddenMediaResponsePreviewReleasesPlayerAndTemporaryFileWhenSelectionClearsBeforeReappearing() async throws {
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://media.example.com/download.php",
+                responseHeaders: ["content-type": "video/mp4"],
+                responseMimeType: "video/mp4"
+            )
+        )
+        request.applyResponseBody(
+            NetworkBody.Payload(
+                body: "not a real movie",
+                base64Encoded: false
+            )
+        )
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model)
+        let playerFactory = MoviePreviewPlayerFactorySpy()
+        viewController.bodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
+            playerFactory.makePlayer(for:)
+        )
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
+        await waitUntilMediaPreviewPrepared(in: viewController)
+
+        let didRenderMediaPreview = await waitUntilRendered(in: viewController) {
+            viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting?.pathExtension == "mp4"
+        }
+        #expect(didRenderMediaPreview)
+        let temporaryFileURL = try #require(viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting)
+        #expect(playerFactory.requestedURLs == [temporaryFileURL])
+        #expect(FileManager.default.fileExists(atPath: temporaryFileURL.path))
+
+        viewController.beginAppearanceTransition(false, animated: false)
+        viewController.endAppearanceTransition()
+        model.selectRequest(nil)
+
+        #expect(viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting == temporaryFileURL)
+        #expect(FileManager.default.fileExists(atPath: temporaryFileURL.path))
+
+        viewController.beginAppearanceTransition(true, animated: false)
+        viewController.endAppearanceTransition()
+
+        let didReleaseMediaPreview = await waitUntilRendered(in: viewController) {
+            viewController.contentUnavailableConfiguration != nil
+                && viewController.previewViewForTesting.isHidden
+                && viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting == nil
+                && FileManager.default.fileExists(atPath: temporaryFileURL.path) == false
+        }
+        #expect(didReleaseMediaPreview)
         #expect(playerFactory.requestedURLs == [temporaryFileURL])
     }
 
@@ -983,6 +1429,60 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func hiddenDetailKeepsHeadersAndRebindsSameSelectedRequestOnReturn() async throws {
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://example.com/api/data.json",
+                responseHeaders: ["x-request": "visible"],
+                responseMimeType: "application/json"
+            )
+        )
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.setModeForTesting(.headers)
+
+        let didRenderInitialHeaders = await waitUntilRendered(in: viewController) {
+            viewController.headersTextViewForTesting.renderedTextForTesting.contains("x-request: visible")
+        }
+        #expect(didRenderInitialHeaders)
+        let renderedHeadersBeforeHide = viewController.headersTextViewForTesting.renderedTextForTesting
+
+        viewController.beginAppearanceTransition(false, animated: false)
+        viewController.endAppearanceTransition()
+        network.applyResponseReceived(
+            targetID: request.id.targetID,
+            requestID: request.id.requestID,
+            resourceType: .script,
+            response: NetworkRequest.Response.Payload(
+                url: "https://example.com/api/data.json",
+                status: 200,
+                statusText: "OK",
+                headers: ["x-request": "hidden-update"],
+                mimeType: "application/json"
+            ),
+            timestamp: 4
+        )
+        await Task.yield()
+        await Task.yield()
+
+        #expect(viewController.headersTextViewForTesting.renderedTextForTesting == renderedHeadersBeforeHide)
+
+        viewController.beginAppearanceTransition(true, animated: false)
+        viewController.endAppearanceTransition()
+
+        let didRenderHiddenUpdate = await waitUntilRendered(in: viewController) {
+            viewController.headersTextViewForTesting.renderedTextForTesting.contains("x-request: hidden-update")
+        }
+        #expect(didRenderHiddenUpdate)
+    }
+
+    @Test
     func requestPreviewRoleDoesNotFetchResponseBodyAfterLoadingFinishes() async throws {
         let network = NetworkSession()
         let request = try #require(
@@ -1159,6 +1659,59 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func rebindingPreviewBodyCancelsOutgoingTextPreparation() async throws {
+        let network = NetworkSession()
+        let firstRequest = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://example.com/api/large.json",
+                responseHeaders: ["content-type": "application/json"],
+                responseMimeType: "application/json"
+            )
+        )
+        let secondRequest = try #require(
+            applyRequest(
+                to: network,
+                requestID: "2",
+                url: "https://example.com/api/current.json",
+                responseHeaders: ["content-type": "application/json"],
+                responseMimeType: "application/json"
+            )
+        )
+        let largeJSON = "[" + (0..<80_000).map { #"{"value":\#($0),"enabled":true}"# }.joined(separator: ",") + "]"
+        firstRequest.applyResponseBody(
+            NetworkBody.Payload(body: largeJSON, base64Encoded: false)
+        )
+        secondRequest.applyResponseBody(
+            NetworkBody.Payload(body: #"{"ok":true}"#, base64Encoded: false)
+        )
+        let firstBody = try #require(firstRequest.responseBody)
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(firstRequest)
+        let viewController = NetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
+
+        let firstBodyID = ObjectIdentifier(firstBody)
+        let didStartFirstPreparation = await waitUntilRendered(in: viewController) {
+            viewController.currentPreviewRoleForTesting == .response
+                && viewController.bodyViewControllerForTesting.activeTextPreviewPreparationBodyIDForTesting == firstBodyID
+        }
+        #expect(didStartFirstPreparation)
+
+        model.selectRequest(secondRequest)
+
+        let didRenderSecondRequest = await waitUntilRendered(in: viewController) {
+            viewController.bodyViewControllerForTesting.syntaxViewForTesting.text.contains(#""ok""#)
+                && viewController.bodyViewControllerForTesting.activeTextPreviewPreparationBodyIDForTesting != firstBodyID
+        }
+        #expect(didRenderSecondRequest)
+        #expect(viewController.bodyViewControllerForTesting.activeTextPreviewPreparationBodyIDForTesting != firstBodyID)
+    }
+
+    @Test
     func compactContainerPushesAndPopsDetailFromSelection() async throws {
         let network = NetworkSession()
         let request = try #require(applyRequest(to: network, requestID: "1", url: "https://example.com/app.js"))
@@ -1187,6 +1740,114 @@ struct NetworkDetailViewControllerTests {
             navigationController.viewControllers == [listViewController]
         }
         #expect(didPop)
+    }
+
+    @Test
+    func compactProgrammaticPopKeepsDetailSurfaceUntilTransitionCompletes() async throws {
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://example.com/api/data.txt",
+                responseHeaders: ["content-type": "text/plain"],
+                responseMimeType: "text/plain"
+            )
+        )
+        request.applyResponseBody(
+            NetworkBody.Payload(body: "visible detail body", base64Encoded: false)
+        )
+        let model = NetworkPanelModel(network: network)
+        let listViewController = NetworkListViewController(model: model)
+        let detailViewController = NetworkDetailViewController(model: model)
+        detailViewController.setModeForTesting(.preview)
+        let navigationController = NetworkCompactNavigationController(
+            model: model,
+            listViewController: listViewController,
+            detailViewController: detailViewController
+        )
+        let window = showInWindow(navigationController, makeVisible: true)
+        defer { window.isHidden = true }
+
+        model.selectRequest(request)
+        let didPush = await waitUntilNavigationStackSynced(in: navigationController) {
+            navigationController.viewControllers.last === detailViewController
+        }
+        #expect(didPush)
+        await waitForNavigationTransitionToFinish(in: navigationController)
+
+        let didRenderDetail = await waitUntilRendered(in: detailViewController) {
+            detailViewController.previewViewForTesting.isHidden == false
+                && detailViewController.bodyViewControllerForTesting.syntaxViewForTesting.text == "visible detail body"
+        }
+        #expect(didRenderDetail)
+
+        model.selectRequest(nil)
+        if navigationController.transitionCoordinator != nil {
+            #expect(detailViewController.previewViewForTesting.isHidden == false)
+            #expect(detailViewController.bodyViewControllerForTesting.syntaxViewForTesting.text == "visible detail body")
+        }
+
+        let didPop = await waitUntilNavigationStackSynced(in: navigationController) {
+            navigationController.viewControllers == [listViewController]
+        }
+        #expect(didPop)
+        await waitForNavigationTransitionToFinish(in: navigationController)
+        #expect(detailViewController.previewViewForTesting.isHidden)
+    }
+
+    @Test
+    func compactUserPopDiscardsDetailSurfaceWhenSelectionClearsBeforeTransitionCompletes() async throws {
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://example.com/api/data.txt",
+                responseHeaders: ["content-type": "text/plain"],
+                responseMimeType: "text/plain"
+            )
+        )
+        request.applyResponseBody(
+            NetworkBody.Payload(body: "visible detail body", base64Encoded: false)
+        )
+        let model = NetworkPanelModel(network: network)
+        let listViewController = NetworkListViewController(model: model)
+        let detailViewController = NetworkDetailViewController(model: model)
+        detailViewController.setModeForTesting(.preview)
+        let navigationController = NetworkCompactNavigationController(
+            model: model,
+            listViewController: listViewController,
+            detailViewController: detailViewController
+        )
+        let window = showInWindow(navigationController, makeVisible: true)
+        defer { window.isHidden = true }
+
+        model.selectRequest(request)
+        let didPush = await waitUntilNavigationStackSynced(in: navigationController) {
+            navigationController.viewControllers.last === detailViewController
+        }
+        #expect(didPush)
+        await waitForNavigationTransitionToFinish(in: navigationController)
+
+        let didRenderDetail = await waitUntilRendered(in: detailViewController) {
+            detailViewController.previewViewForTesting.isHidden == false
+                && detailViewController.bodyViewControllerForTesting.syntaxViewForTesting.text == "visible detail body"
+        }
+        #expect(didRenderDetail)
+
+        _ = navigationController.popViewController(animated: true)
+        if navigationController.transitionCoordinator != nil {
+            model.selectRequest(nil)
+            #expect(detailViewController.previewViewForTesting.isHidden == false)
+            #expect(detailViewController.bodyViewControllerForTesting.syntaxViewForTesting.text == "visible detail body")
+        }
+
+        let didPopAndDiscard = await waitUntilNavigationStackSynced(in: navigationController) {
+            navigationController.viewControllers == [listViewController]
+                && detailViewController.previewViewForTesting.isHidden
+        }
+        #expect(didPopAndDiscard)
     }
 
     @Test
@@ -1236,6 +1897,70 @@ struct NetworkDetailViewControllerTests {
             navigationController.viewControllers.last === detailViewController
         }
         #expect(didPushAgain)
+    }
+
+    @Test
+    func compactContainerBackNavigationReleasesDetailMediaPreviewResources() async throws {
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://media.example.com/download.php",
+                responseHeaders: ["content-type": "video/mp4"],
+                responseMimeType: "video/mp4"
+            )
+        )
+        request.applyResponseBody(
+            NetworkBody.Payload(
+                body: "not a real movie",
+                base64Encoded: false
+            )
+        )
+        let model = NetworkPanelModel(network: network)
+        let listViewController = NetworkListViewController(model: model)
+        let detailViewController = NetworkDetailViewController(model: model)
+        detailViewController.setModeForTesting(.preview)
+        let playerFactory = MoviePreviewPlayerFactorySpy()
+        detailViewController.bodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
+            playerFactory.makePlayer(for:)
+        )
+        let navigationController = NetworkCompactNavigationController(
+            model: model,
+            listViewController: listViewController,
+            detailViewController: detailViewController
+        )
+        let window = showInWindow(navigationController, makeVisible: true)
+        defer { window.isHidden = true }
+
+        model.selectRequest(request)
+        let didPush = await waitUntilNavigationStackSynced(in: navigationController) {
+            navigationController.viewControllers.last === detailViewController
+        }
+        #expect(didPush)
+        await waitForNavigationTransitionToFinish(in: navigationController)
+        await waitUntilMediaPreviewPrepared(in: detailViewController)
+
+        let didRenderMediaPreview = await waitUntilRendered(in: detailViewController) {
+            detailViewController.bodyViewControllerForTesting.mediaPlayerURLForTesting?.pathExtension == "mp4"
+        }
+        #expect(didRenderMediaPreview)
+        let temporaryFileURL = try #require(detailViewController.bodyViewControllerForTesting.mediaPlayerURLForTesting)
+        #expect(playerFactory.requestedURLs == [temporaryFileURL])
+        #expect(FileManager.default.fileExists(atPath: temporaryFileURL.path))
+
+        _ = withUIKitAnimationsDisabled {
+            navigationController.popViewController(animated: false)
+        }
+
+        let didReturnToListAndReleasePreview = await waitUntilNavigationStackSynced(in: navigationController) {
+            navigationController.viewControllers == [listViewController]
+                && model.selectedRequest == nil
+                && detailViewController.bodyViewControllerForTesting.mediaPlayerURLForTesting == nil
+                && FileManager.default.fileExists(atPath: temporaryFileURL.path) == false
+        }
+        #expect(didReturnToListAndReleasePreview)
+        #expect(playerFactory.requestedURLs == [temporaryFileURL])
     }
 
     @Test
@@ -1309,6 +2034,142 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func hiddenListDefersSnapshotEvaluationUntilAppearingAgain() async throws {
+        let network = NetworkSession()
+        _ = try #require(applyRequest(
+            to: network,
+            requestID: "1",
+            url: "https://media.example.com/clip.mp4",
+            responseHeaders: ["content-type": "video/mp4"],
+            responseMimeType: "video/mp4"
+        ))
+        let model = NetworkPanelModel(network: network)
+        let listViewController = NetworkListViewController(model: model)
+        let window = showInWindow(listViewController)
+        defer { window.isHidden = true }
+        await listViewController.flushPendingSnapshotUpdateForTesting()
+        #expect(listViewController.displayedRequestIDsForTesting.count == 1)
+
+        let evaluationCountBeforeHiddenUpdate = listViewController.displayRequestIDsEvaluationCountForTesting
+        let observation = try #require(listViewController.displayRowsObservationDeliveryForTesting)
+        let observedInvalidations = await observation.values {
+            model.displayRowsInvalidationRevision
+        }
+        defer {
+            observedInvalidations.cancel()
+        }
+
+        listViewController.beginAppearanceTransition(false, animated: false)
+        listViewController.endAppearanceTransition()
+        model.setSearchText("does-not-match")
+        let hiddenInvalidationRevision = model.displayRowsInvalidationRevision
+        #expect(await observedInvalidations.waitUntil { $0 == hiddenInvalidationRevision } != nil)
+        await listViewController.flushThrottledDisplayRowsReloadForTesting()
+
+        #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate)
+        #expect(listViewController.displayedRequestIDsForTesting.count == 1)
+
+        listViewController.beginAppearanceTransition(true, animated: false)
+        listViewController.endAppearanceTransition()
+        await listViewController.flushPendingSnapshotUpdateForTesting()
+
+        #expect(listViewController.displayedRequestIDsForTesting.isEmpty)
+        #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate + 1)
+    }
+
+    @Test
+    func hiddenListDefersQueuedSnapshotApplyUntilAppearingAgain() async throws {
+        let network = NetworkSession()
+        let request = try #require(applyRequest(
+            to: network,
+            requestID: "1",
+            url: "https://media.example.com/clip.mp4",
+            responseHeaders: ["content-type": "video/mp4"],
+            responseMimeType: "video/mp4"
+        ))
+        let model = NetworkPanelModel(network: network)
+        let listViewController = NetworkListViewController(model: model)
+        let window = showInWindow(listViewController)
+        defer { window.isHidden = true }
+        await listViewController.flushPendingSnapshotUpdateForTesting()
+        #expect(listViewController.displayedRequestIDsForTesting == [request.id])
+
+        let evaluationCountBeforeHiddenUpdate = listViewController.displayRequestIDsEvaluationCountForTesting
+        listViewController.beginSnapshotApplyForTesting(requestIDs: [request.id])
+        listViewController.queueSnapshotUpdateForTesting(requestIDs: [])
+        #expect(listViewController.hasPendingSnapshotUpdateForTesting)
+
+        listViewController.beginAppearanceTransition(false, animated: false)
+        listViewController.endAppearanceTransition()
+        #expect(listViewController.hasPendingSnapshotUpdateForTesting == false)
+
+        model.setSearchText("does-not-match")
+        listViewController.finishSnapshotApplyForTesting(requestIDs: [request.id])
+        await listViewController.flushPendingSnapshotUpdateForTesting()
+
+        #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate)
+        #expect(listViewController.displayedRequestIDsForTesting == [request.id])
+
+        listViewController.beginAppearanceTransition(true, animated: false)
+        listViewController.endAppearanceTransition()
+        await listViewController.flushPendingSnapshotUpdateForTesting()
+
+        #expect(listViewController.displayedRequestIDsForTesting.isEmpty)
+        #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate + 1)
+    }
+
+    @Test
+    func hiddenListSuspendsBoundCellRenderingUntilAppearingAgain() async throws {
+        let network = NetworkSession()
+        let request = try #require(applyRequest(
+            to: network,
+            requestID: "1",
+            url: "https://media.example.com/clip.mp4",
+            responseHeaders: ["content-type": "video/mp4"],
+            responseMimeType: "video/mp4"
+        ))
+        let model = NetworkPanelModel(network: network)
+        let listViewController = NetworkListViewController(model: model)
+        let window = showInWindow(listViewController)
+        defer { window.isHidden = true }
+        await listViewController.flushPendingSnapshotUpdateForTesting()
+        listViewController.collectionViewForTesting.layoutIfNeeded()
+
+        let indexPath = IndexPath(item: 0, section: 0)
+        let cell = try #require(listViewController.networkListCellForTesting(at: indexPath))
+        #expect(cell.fileTypeLabelForTesting == "mp4")
+        #expect(cell.hasActiveRequestObservationForTesting)
+
+        listViewController.beginAppearanceTransition(false, animated: false)
+        listViewController.endAppearanceTransition()
+        #expect(cell.hasActiveRequestObservationForTesting == false)
+
+        network.applyResponseReceived(
+            targetID: ProtocolTarget.ID("page"),
+            requestID: NetworkRequest.ProtocolID("1"),
+            resourceType: .script,
+            response: NetworkRequest.Response.Payload(
+                url: request.request.url,
+                status: 200,
+                statusText: "OK",
+                headers: ["content-type": "text/css"],
+                mimeType: "text/css"
+            ),
+            timestamp: 4
+        )
+        await Task.yield()
+        await Task.yield()
+
+        #expect(cell.fileTypeLabelForTesting == "mp4")
+
+        listViewController.beginAppearanceTransition(true, animated: false)
+        listViewController.endAppearanceTransition()
+
+        #expect(cell.hasActiveRequestObservationForTesting)
+        #expect(cell.fileTypeLabelForTesting == "css")
+    }
+
+    @Test
     func listControllerDeallocatesWhileDisplayRequestObservationIsActive() async throws {
         let model = NetworkPanelModel(network: NetworkSession())
         let deinitProbe = UITestDeinitProbe()
@@ -1378,6 +2239,31 @@ struct NetworkDetailViewControllerTests {
         return network.request(for: key)
     }
 
+    private func applyRequestWithoutResponse(
+        to network: NetworkSession,
+        requestID rawRequestID: String,
+        url: String,
+        requestHeaders: [String: String] = [:],
+        postData: String? = nil
+    ) -> NetworkRequest? {
+        let key = network.applyRequestWillBeSent(
+            targetID: ProtocolTarget.ID("page"),
+            requestID: NetworkRequest.ProtocolID(rawRequestID),
+            frameID: DOMFrame.ID("main"),
+            loaderID: "loader",
+            documentURL: "https://example.com",
+            request: NetworkRequest.Payload(
+                url: url,
+                method: postData == nil ? "GET" : "POST",
+                headers: requestHeaders,
+                postData: postData
+            ),
+            resourceType: .xhr,
+            timestamp: 1
+        )
+        return network.request(for: key)
+    }
+
     private func selectMode(
         _ mode: NetworkDetailViewController.Mode,
         on viewController: NetworkDetailViewController
@@ -1397,7 +2283,7 @@ struct NetworkDetailViewControllerTests {
 
     private func showInWindow(
         _ viewController: UIViewController,
-        makeVisible: Bool = false
+        makeVisible: Bool = true
     ) -> UIWindow {
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         window.rootViewController = viewController
@@ -1575,14 +2461,23 @@ struct NetworkDetailViewControllerTests {
     @MainActor
     private final class MoviePreviewPlayerFactorySpy {
         private(set) var requestedURLs: [URL] = []
+        private(set) var players: [StubMoviePreviewPlayer] = []
 
         func makePlayer(for url: URL) -> AVPlayer {
+            let player = StubMoviePreviewPlayer()
             requestedURLs.append(url)
-            return StubMoviePreviewPlayer()
+            players.append(player)
+            return player
         }
     }
 
-    private final class StubMoviePreviewPlayer: AVPlayer {}
+    private final class StubMoviePreviewPlayer: AVPlayer {
+        private(set) var pauseCallCount = 0
+
+        override func pause() {
+            pauseCallCount += 1
+        }
+    }
 }
 }
 #endif

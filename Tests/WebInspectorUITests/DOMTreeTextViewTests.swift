@@ -256,6 +256,7 @@ struct DOMTreeTextViewTests {
         )
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
+        view.setRenderingActive(true)
         await view.waitForRenderedRowsForTesting()
 
         view.primaryClickRowForTesting(containing: "<input disabled>")
@@ -279,6 +280,7 @@ struct DOMTreeTextViewTests {
         )
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
+        view.setRenderingActive(true)
         await view.waitForRenderedRowsForTesting()
 
         view.primaryClickRowForTesting(containing: "<input disabled>")
@@ -302,6 +304,7 @@ struct DOMTreeTextViewTests {
         )
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
+        view.setRenderingActive(true)
         await view.waitForRenderedRowsForTesting()
 
         view.primaryClickRowForTesting(containing: "<input disabled>")
@@ -313,6 +316,91 @@ struct DOMTreeTextViewTests {
 
         #expect(session.selectedNode?.localName == "input")
         #expect(restoreRecorder.recordCount == 1)
+    }
+
+    @Test
+    func hidingWithHoveredPageHighlightRestoresHighlightWhileRenderingInactive() async throws {
+        let session = makeDOMSession()
+        let highlightRecorder = NodeActionRecorder()
+        let restoreRecorder = VoidActionRecorder()
+        let view = DOMTreeTextView(
+            dom: session,
+            highlightNodeAction: { nodeID, owner in
+                highlightRecorder.record(nodeID, owner: owner)
+            },
+            restoreHighlightAction: {
+                restoreRecorder.record()
+            }
+        )
+        view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
+        view.layoutIfNeeded()
+        view.setRenderingActive(true)
+        await view.waitForRenderedRowsForTesting()
+
+        view.hoverRowForTesting(containing: "<article")
+        _ = await highlightRecorder.nextNodeID()
+
+        view.setRenderingActive(false)
+        await restoreRecorder.next()
+
+        #expect(highlightRecorder.recordedOwners == [.transient])
+        #expect(restoreRecorder.recordCount == 1)
+    }
+
+    @Test
+    func hidingWithQueuedHoverRestorePreservesHighlightRestoreTask() async throws {
+        let session = makeDOMSession()
+        let restoreRecorder = VoidActionRecorder()
+        let view = DOMTreeTextView(
+            dom: session,
+            highlightNodeAction: { _, _ in },
+            restoreHighlightAction: {
+                restoreRecorder.record()
+            }
+        )
+        view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
+        view.layoutIfNeeded()
+        view.setRenderingActive(true)
+        await view.waitForRenderedRowsForTesting()
+
+        view.primaryClickRowForTesting(containing: "<input disabled>")
+        view.hoverRowForTesting(containing: "<article")
+        view.endHoverForTesting()
+        view.setRenderingActive(false)
+        await restoreRecorder.next()
+
+        #expect(session.selectedNode?.localName == "input")
+        #expect(restoreRecorder.recordCount == 1)
+    }
+
+    @Test
+    func hidingWithQueuedSelectionHighlightRequeuesHighlightOnResume() async throws {
+        let session = makeDOMSession()
+        let highlightRecorder = NodeActionRecorder()
+        let view = DOMTreeTextView(
+            dom: session,
+            highlightNodeAction: { nodeID, owner in
+                highlightRecorder.record(nodeID, owner: owner)
+            }
+        )
+        view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
+        view.layoutIfNeeded()
+        view.setRenderingActive(true)
+        await view.waitForRenderedRowsForTesting()
+
+        view.primaryClickRowForTesting(containing: "<input disabled>")
+        view.setRenderingActive(false)
+        await Task.yield()
+        await Task.yield()
+
+        #expect(highlightRecorder.recordedNodeIDs.isEmpty)
+
+        view.setRenderingActive(true)
+        let highlightedNodeID = await highlightRecorder.nextNodeID()
+
+        #expect(session.selectedNode?.id == highlightedNodeID)
+        #expect(session.node(for: highlightedNodeID)?.localName == "input")
+        #expect(highlightRecorder.recordedOwners == [.selection])
     }
 
     @Test
@@ -331,6 +419,7 @@ struct DOMTreeTextViewTests {
         )
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
+        view.setRenderingActive(true)
         await view.waitForRenderedRowsForTesting()
 
         view.primaryClickRowForTesting(containing: "<input disabled>")
@@ -364,6 +453,7 @@ struct DOMTreeTextViewTests {
         )
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
+        view.setRenderingActive(true)
         await view.waitForRenderedRowsForTesting()
 
         view.primaryClickRowForTesting(containing: "<input disabled>")
@@ -515,6 +605,38 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func hiddenVisibleMutationDefersRenderingUntilRenderingResumes() async throws {
+        let session = makeDOMSession()
+        let view = await makeTreeView(session: session)
+        let documentID = try #require(session.currentPageRootNode?.id.documentID)
+        let visibleDivID = DOMNode.ID(documentID: documentID, nodeID: .init(7))
+        let observedTreeRenderRevisions = await view.documentObservationDeliveryForTesting.values {
+            session.treeRenderInvalidation.revision
+        }
+        defer {
+            observedTreeRenderRevisions.cancel()
+        }
+        let baselineText = view.renderedTextForTesting
+        view.resetPerformanceCountersForTesting()
+
+        view.setRenderingActive(false)
+        session.applyAttributeModified(visibleDivID, name: "data-visible", value: "deferred")
+        let hiddenRevision = session.treeRevision
+        #expect(await observedTreeRenderRevisions.waitUntil { $0 >= hiddenRevision } != nil)
+        await view.waitForRenderedRowsForTesting()
+
+        #expect(view.buildRenderedRowsCallCountForTesting == 0)
+        #expect(view.renderedTextForTesting == baselineText)
+        #expect(!view.renderedTextForTesting.contains("data-visible=\"deferred\""))
+
+        view.setRenderingActive(true)
+        await view.waitForRenderedRowsForTesting()
+
+        #expect(view.buildRenderedRowsCallCountForTesting == 1)
+        #expect(view.renderedTextForTesting.contains("data-visible=\"deferred\""))
+    }
+
+    @Test
     func inFlightExpansionMutationRebuildsAgainstNewSnapshot() async throws {
         let session = makeDOMSession()
         let view = await makeTreeView(session: session)
@@ -546,6 +668,31 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func hidingDuringInFlightRenderedRowsBuildCancelsStaleApply() async throws {
+        let session = makeDOMSession()
+        let view = await makeTreeView(session: session)
+
+        view.suspendNextRenderedRowsBuildForTesting()
+        view.toggleRowForTesting(containing: "<article")
+        await view.waitForRenderedRowsBuildSuspensionForTesting()
+
+        view.setRenderingActive(false)
+        await view.waitForRenderedRowsForTesting()
+
+        #expect(!view.renderedTextForTesting.contains("<span id=\"nested-child\"></span>"))
+
+        view.resumeRenderedRowsBuildForTesting()
+        await view.waitForRenderedRowsForTesting()
+
+        #expect(!view.renderedTextForTesting.contains("<span id=\"nested-child\"></span>"))
+
+        view.setRenderingActive(true)
+        await view.waitForRenderedRowsForTesting()
+
+        #expect(view.renderedTextForTesting.contains("<span id=\"nested-child\"></span>"))
+    }
+
+    @Test
     func selectionChangeUpdatesDecorationsWithoutRebuildingRenderedRows() async throws {
         let session = makeDOMSession()
         let view = await makeTreeView(session: session)
@@ -564,6 +711,153 @@ struct DOMTreeTextViewTests {
         let didRenderSelection = await selectedRowCounts.waitUntil { $0 == 1 } != nil
         #expect(didRenderSelection)
         #expect(view.buildRenderedRowsCallCountForTesting == 0)
+    }
+
+    @Test
+    func hiddenSelectionChangeDefersRevealUntilRenderingResumes() async throws {
+        let session = makeDOMSession(root: selectionRevealRaceDocument())
+        let view = await makeTreeView(session: session)
+        view.frame = CGRect(x: 0, y: 0, width: 360, height: 96)
+        view.layoutIfNeeded()
+        let initialSnapshot = session.snapshot()
+        let bodyID = try #require(
+            initialSnapshot.nodesByID.first { entry in
+                entry.value.localName == "body"
+            }?.key
+        )
+        let targetID = try #require(
+            initialSnapshot.nodesByID.first { entry in
+                entry.value.attributes.contains { attribute in
+                    attribute.name == "id" && attribute.value == "selected-target"
+                }
+            }?.key
+        )
+        session.applySetChildNodes(
+            parent: bodyID,
+            children: selectionRevealRaceBodyChildren(prefixCount: 80),
+            eventSequence: 10
+        )
+        await view.waitForRenderedRowsForTesting()
+        view.contentOffset = .zero
+        view.clearDrawnSelectedRowRectsForTesting()
+        let observedSelectionRevisions = await view.selectionObservationDeliveryForTesting.values {
+            session.selectionRevision
+        }
+        defer {
+            observedSelectionRevisions.cancel()
+        }
+
+        view.setRenderingActive(false)
+        session.selectNode(targetID)
+        let hiddenSelectionRevision = session.selectionRevision
+        #expect(await observedSelectionRevisions.waitUntil { $0 >= hiddenSelectionRevision } != nil)
+        await view.waitForRenderedRowsForTesting()
+
+        #expect(view.contentOffset.y == 0)
+        #expect(view.drawnSelectedRowRectsForTesting.isEmpty)
+
+        view.setRenderingActive(true)
+        await view.waitForRenderedRowsForTesting()
+        view.layoutIfNeeded()
+
+        let revealState = renderedSelectionRevealState(in: view, containing: "selected-target")
+        #expect(revealState.isSelectedRowRevealed)
+        #expect(view.drawnSelectedRowRectsForTesting.isEmpty == false)
+    }
+
+    @Test
+    func hiddenSelectionChangeClearsMultiSelectionBeforePendingDOMInvalidationFlush() async throws {
+        let session = makeDOMSession()
+        let view = await makeTreeView(session: session)
+        let documentID = try #require(session.currentPageRootNode?.id.documentID)
+        let visibleDivID = DOMNode.ID(documentID: documentID, nodeID: .init(7))
+        let inputID = DOMNode.ID(documentID: documentID, nodeID: .init(12))
+
+        view.primaryClickRowForTesting(containing: "<div id=\"start-of-content\"", modifiers: .command)
+        view.primaryClickRowForTesting(containing: "<input disabled>", modifiers: .command)
+        view.primaryClickRowForTesting(containing: "<article", modifiers: .command)
+        #expect(view.multiSelectedLineSnapshotsInDisplayOrderForTesting.map(\.text) == [
+            "      <div id=\"start-of-content\" data-testid=\"cellInnerDiv\"></div>",
+            "      <input disabled>",
+            "      <article>…</article>",
+        ])
+
+        let observedTreeRenderRevisions = await view.documentObservationDeliveryForTesting.values {
+            session.treeRenderInvalidation.revision
+        }
+        let observedSelectionRevisions = await view.selectionObservationDeliveryForTesting.values {
+            session.selectionRevision
+        }
+        defer {
+            observedTreeRenderRevisions.cancel()
+            observedSelectionRevisions.cancel()
+        }
+
+        view.setRenderingActive(false)
+        session.applyAttributeModified(visibleDivID, name: "data-visible", value: "while-hidden")
+        session.selectNode(inputID)
+        let hiddenTreeRevision = session.treeRevision
+        let hiddenSelectionRevision = session.selectionRevision
+        #expect(await observedTreeRenderRevisions.waitUntil { $0 >= hiddenTreeRevision } != nil)
+        #expect(await observedSelectionRevisions.waitUntil { $0 >= hiddenSelectionRevision } != nil)
+        await view.waitForRenderedRowsForTesting()
+
+        #expect(!view.renderedTextForTesting.contains("data-visible=\"while-hidden\""))
+        #expect(view.multiSelectedLineSnapshotsInDisplayOrderForTesting.count == 3)
+
+        view.setRenderingActive(true)
+        await view.waitForRenderedRowsForTesting()
+        view.layoutIfNeeded()
+
+        #expect(view.renderedTextForTesting.contains("data-visible=\"while-hidden\""))
+        #expect(view.multiSelectedLineSnapshotsInDisplayOrderForTesting.isEmpty)
+        #expect(view.selectedRowRectsForTesting().count == 1)
+    }
+
+    @Test
+    func hiddenSelectionChangeAwayAndBackStillClearsMultiSelectionOnResume() async throws {
+        let session = makeDOMSession()
+        let view = await makeTreeView(session: session)
+        let snapshot = session.snapshot()
+        let inputID = try #require(
+            snapshot.nodesByID.first { entry in
+                entry.value.localName == "input"
+            }?.key
+        )
+        let articleID = try #require(
+            snapshot.nodesByID.first { entry in
+                entry.value.localName == "article"
+            }?.key
+        )
+
+        view.primaryClickRowForTesting(containing: "<input disabled>")
+        await Task.yield()
+        view.primaryClickRowForTesting(containing: "<div id=\"start-of-content\"", modifiers: .command)
+        view.primaryClickRowForTesting(containing: "<article", modifiers: .command)
+        #expect(view.multiSelectedLineSnapshotsInDisplayOrderForTesting.count == 3)
+        #expect(session.selectedNode?.id == inputID)
+
+        let observedSelectionRevisions = await view.selectionObservationDeliveryForTesting.values {
+            session.selectionRevision
+        }
+        defer {
+            observedSelectionRevisions.cancel()
+        }
+
+        view.setRenderingActive(false)
+        session.selectNode(articleID)
+        session.selectNode(inputID)
+        let hiddenSelectionRevision = session.selectionRevision
+        #expect(await observedSelectionRevisions.waitUntil { $0 >= hiddenSelectionRevision } != nil)
+
+        #expect(view.multiSelectedLineSnapshotsInDisplayOrderForTesting.count == 3)
+
+        view.setRenderingActive(true)
+        await view.waitForRenderedRowsForTesting()
+        view.layoutIfNeeded()
+
+        #expect(view.multiSelectedLineSnapshotsInDisplayOrderForTesting.isEmpty)
+        #expect(view.selectedRowRectsForTesting().count == 1)
     }
 
     @Test
@@ -746,6 +1040,7 @@ struct DOMTreeTextViewTests {
         )
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
+        view.setRenderingActive(true)
         await view.waitForRenderedRowsForTesting()
 
         view.toggleRowForTesting(containing: "<article")
@@ -961,6 +1256,7 @@ private func makeTreeView(session: DOMSession) async -> DOMTreeTextView {
     let view = DOMTreeTextView(dom: session)
     view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
     view.layoutIfNeeded()
+    view.setRenderingActive(true)
     await view.waitForRenderedRowsForTesting()
     return view
 }

@@ -52,6 +52,8 @@ package final class NetworkDetailViewController: UIViewController {
     private var selectedRequestRenderObservation: PortableObservationTracking.Token?
     private let responseBodyFetchObservationBinding = NetworkResponseBodyFetchObservationBinding()
     private let scrollEdgeController = NetworkDetailScrollEdgeController()
+    private var isRenderingActive = false
+    private var isBodyRenderingActive = false
     private lazy var bodyViewController = NetworkBodyViewController(
         scrollEdgeSink: scrollEdgeController
     )
@@ -125,7 +127,16 @@ package final class NetworkDetailViewController: UIViewController {
         installContentViews()
         installModeTitleView()
         scrollEdgeController.install(previewRoleControlContainerView: previewRoleControlController.containerView)
-        startObservingModel()
+    }
+
+    override package func viewIsAppearing(_ animated: Bool) {
+        super.viewIsAppearing(animated)
+        resumeRendering()
+    }
+
+    override package func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        suspendRendering()
     }
 
     override package func contentScrollView(for edge: NSDirectionalRectEdge) -> UIScrollView? {
@@ -135,15 +146,71 @@ package final class NetworkDetailViewController: UIViewController {
         return super.contentScrollView(for: edge)
     }
 
+    package func discardDetailSurfaceAfterCompactRemoval() {
+        clearSelectedRequestPresentation(bodySurface: .none)
+    }
+
     private func startObservingModel() {
+        guard isRenderingActive else {
+            return
+        }
+        modelObservation?.cancel()
         let token = withPortableContinuousObservation { [weak self] _ in
             guard let self else { return }
-            bindSelectedRequest(model.selectedRequest)
+            bindSelectedRequest(
+                model.selectedRequest,
+                force: selectedRequestRenderObservation == nil
+            )
         }
         modelObservation = token
 #if DEBUG
         modelObservationDelivery = token
 #endif
+    }
+
+    private func resumeRendering() {
+        guard isRenderingActive == false else {
+            bindSelectedRequest(model.selectedRequest, force: selectedRequestRenderObservation == nil)
+            updateBodyRenderingActiveForCurrentSurface()
+            return
+        }
+        isRenderingActive = true
+        bindSelectedRequest(model.selectedRequest, force: true)
+        startObservingModel()
+        updateBodyRenderingActiveForCurrentSurface()
+    }
+
+    private func suspendRendering() {
+        guard isRenderingActive else {
+            return
+        }
+        isRenderingActive = false
+        modelObservation?.cancel()
+        modelObservation = nil
+        selectedRequestRenderObservation?.cancel()
+        selectedRequestRenderObservation = nil
+        unbindResponseBodyFetchObservation()
+        setBodyRenderingActive(false)
+#if DEBUG
+        modelObservationDelivery = nil
+        selectedRequestRenderObservationDelivery = nil
+#endif
+    }
+
+    private func setBodyRenderingActive(_ isActive: Bool) {
+        guard isBodyRenderingActive != isActive else {
+            return
+        }
+        isBodyRenderingActive = isActive
+        if isActive {
+            bodyViewController.resumeRendering()
+        } else {
+            bodyViewController.suspendKeepingSurface()
+        }
+    }
+
+    private func updateBodyRenderingActiveForCurrentSurface() {
+        setBodyRenderingActive(isRenderingActive && previewContainerView.isHidden == false)
     }
 
     private func applyBackgroundFromTraits() {
@@ -206,9 +273,17 @@ package final class NetworkDetailViewController: UIViewController {
         renderModeControl()
     }
 
-    private func bindSelectedRequest(_ request: NetworkRequest?) {
-        guard hasBoundSelectedRequest == false || observedRequest !== request else {
+    private func bindSelectedRequest(_ request: NetworkRequest?, force: Bool = false) {
+        guard isRenderingActive else {
+            return
+        }
+        guard force || hasBoundSelectedRequest == false || observedRequest !== request else {
             renderModeControl(selectedRequest: request)
+            return
+        }
+
+        guard let request else {
+            clearSelectedRequestPresentation(bodySurface: .none)
             return
         }
 
@@ -220,13 +295,6 @@ package final class NetworkDetailViewController: UIViewController {
 #if DEBUG
         selectedRequestRenderObservationDelivery = nil
 #endif
-
-        guard let request else {
-            title = nil
-            showEmptySelection()
-            renderModeControl(selectedRequest: nil)
-            return
-        }
 
         if contentUnavailableConfiguration != nil {
             contentUnavailableConfiguration = nil
@@ -242,6 +310,9 @@ package final class NetworkDetailViewController: UIViewController {
 #if DEBUG
         selectedRequestRenderObservationDelivery = nil
 #endif
+        guard isRenderingActive else {
+            return
+        }
         guard let observedRequest else {
             return
         }
@@ -249,6 +320,9 @@ package final class NetworkDetailViewController: UIViewController {
     }
 
     private func bindSelectedRequestRendering(_ request: NetworkRequest) {
+        guard isRenderingActive else {
+            return
+        }
         let token = withPortableContinuousObservation { [weak self, weak request] _ in
             guard let request,
                   self?.observedRequest === request else {
@@ -263,6 +337,9 @@ package final class NetworkDetailViewController: UIViewController {
     }
 
     private func renderSelectedRequest(_ request: NetworkRequest) {
+        guard isRenderingActive else {
+            return
+        }
         switch mode {
         case .preview:
             renderPreviewSurface(selectedRequest: request)
@@ -275,6 +352,7 @@ package final class NetworkDetailViewController: UIViewController {
         title = request.displayName
         showPreview()
         renderPreview(selectedRequest: request)
+        updateBodyRenderingActiveForCurrentSurface()
     }
 
     private func renderHeadersSurface(selectedRequest request: NetworkRequest) {
@@ -289,6 +367,9 @@ package final class NetworkDetailViewController: UIViewController {
             return
         }
         mode = nextMode
+        guard isRenderingActive else {
+            return
+        }
         renderModeControl()
         rebindSelectedRequestRendering()
     }
@@ -302,6 +383,9 @@ package final class NetworkDetailViewController: UIViewController {
             return
         }
         previewRole = nextRole
+        guard isRenderingActive else {
+            return
+        }
         rebindSelectedRequestRendering()
     }
 
@@ -310,10 +394,25 @@ package final class NetworkDetailViewController: UIViewController {
         modeControlController.render(mode: mode, isEnabled: request != nil)
     }
 
-    private func showEmptySelection() {
+    private func clearSelectedRequestPresentation(bodySurface: NetworkBodyViewController.Surface) {
+        hasBoundSelectedRequest = true
+        selectedRequestRenderObservation?.cancel()
+        selectedRequestRenderObservation = nil
+        unbindResponseBodyFetchObservation()
+        observedRequest = nil
+#if DEBUG
+        selectedRequestRenderObservationDelivery = nil
+#endif
+        title = nil
+        showEmptySelection(bodySurface: bodySurface)
+        renderModeControl(selectedRequest: nil)
+    }
+
+    private func showEmptySelection(bodySurface: NetworkBodyViewController.Surface) {
+        bodyViewController.setSurface(bodySurface)
+        setBodyRenderingActive(false)
         previewContainerView.isHidden = true
         headersTextView.isHidden = true
-        bodyViewController.display(body: nil)
         headersTextView.clear()
         renderPreviewRoleControl(roles: [], selectedRole: nil)
         scrollEdgeController.contentScrollView = nil
@@ -334,9 +433,10 @@ package final class NetworkDetailViewController: UIViewController {
     }
 
     private func showHeaders() {
+        setBodyRenderingActive(false)
         previewContainerView.isHidden = true
         scrollEdgeController.isPreviewRoleControlVisible = false
-        bodyViewController.releasePreviewResources()
+        bodyViewController.setSurface(.none)
         headersTextView.isHidden = false
         scrollEdgeController.contentScrollView = headersTextView.contentScrollView
     }
@@ -350,14 +450,11 @@ package final class NetworkDetailViewController: UIViewController {
         renderPreviewRoleControl(roles: roles, selectedRole: selectedRole)
 
         guard let role = selectedRole else {
-            bodyViewController.display(body: nil)
+            bodyViewController.setSurface(.unavailableBodyPlaceholder)
             unbindResponseBodyFetchObservation()
             return
         }
-        bodyViewController.display(
-            body: body(in: request, for: role),
-            metadata: previewMetadata(in: request, for: role)
-        )
+        bodyViewController.setSurface(bodySurface(in: request, for: role))
         bindResponseBodyFetchObservationIfNeeded(for: request, role: role)
     }
 
@@ -400,6 +497,10 @@ package final class NetworkDetailViewController: UIViewController {
         for request: NetworkRequest,
         role: NetworkBody.Role
     ) {
+        guard isRenderingActive else {
+            unbindResponseBodyFetchObservation()
+            return
+        }
         guard role == .response else {
             unbindResponseBodyFetchObservation()
             return
@@ -414,7 +515,8 @@ package final class NetworkDetailViewController: UIViewController {
     }
 
     private func fetchResponseBodyIfNeededForVisibleResponse(_ request: NetworkRequest) {
-        guard mode == .preview,
+        guard isRenderingActive,
+              mode == .preview,
               observedRequest === request,
               selectedPreviewRole(from: availablePreviewRoles(in: request)) == .response,
               request.canFetchResponseBody else {
@@ -430,6 +532,19 @@ package final class NetworkDetailViewController: UIViewController {
         case .response:
             request.responseBody
         }
+    }
+
+    private func bodySurface(
+        in request: NetworkRequest,
+        for role: NetworkBody.Role
+    ) -> NetworkBodyViewController.Surface {
+        guard let body = body(in: request, for: role) else {
+            return .unavailableBodyPlaceholder
+        }
+        return .body(
+            body,
+            metadata: previewMetadata(in: request, for: role)
+        )
     }
 
     private func previewMetadata(

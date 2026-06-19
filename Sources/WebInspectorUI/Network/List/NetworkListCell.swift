@@ -9,6 +9,7 @@ package final class NetworkListCell: UICollectionViewListCell {
     private let fileTypeLabel = UILabel()
     private var requestObservation: PortableObservationTracking.Token?
     private weak var observedRequest: NetworkRequest?
+    private var isRenderingActive = true
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -26,32 +27,62 @@ package final class NetworkListCell: UICollectionViewListCell {
 
     override package func prepareForReuse() {
         super.prepareForReuse()
-        cancelRequestObservation()
+        unbind()
     }
 
-    package func bind(request: NetworkRequest) {
-        guard observedRequest !== request else {
+    package func bind(request: NetworkRequest, renderingActive: Bool) {
+        if observedRequest !== request {
+            cancelRequestObservation()
+            observedRequest = request
+        }
+        setRenderingActive(renderingActive)
+    }
+
+    package func setRenderingActive(_ isActive: Bool) {
+        guard isRenderingActive != isActive else {
+            if isActive {
+                renderObservedRequest()
+                startRequestObservationIfNeeded()
+            }
             return
         }
-        cancelRequestObservation()
-        observedRequest = request
-        requestObservation = withPortableContinuousObservation { [weak self, weak request] _ in
-            guard let self,
-                  let request,
-                  self.observedRequest === request else {
-                return
-            }
-            render(
-                displayName: request.displayName,
-                statusSeverity: request.statusSeverity,
-                fileTypeLabel: request.fileTypeLabel
-            )
+
+        isRenderingActive = isActive
+        if isActive {
+            renderObservedRequest()
+            startRequestObservationIfNeeded()
+        } else {
+            cancelRequestObservation()
         }
     }
 
     package func unbind() {
         cancelRequestObservation()
+        observedRequest = nil
         render(displayName: "", statusSeverity: .neutral, fileTypeLabel: "")
+    }
+
+    private func startRequestObservationIfNeeded() {
+        guard requestObservation == nil,
+              let observedRequest else {
+            return
+        }
+        requestObservation = withPortableContinuousObservation { [weak self, weak observedRequest] _ in
+            guard let self,
+                  let observedRequest,
+                  self.isRenderingActive,
+                  self.observedRequest === observedRequest else {
+                return
+            }
+            render(request: observedRequest)
+        }
+    }
+
+    private func renderObservedRequest() {
+        guard let observedRequest else {
+            return
+        }
+        render(request: observedRequest)
     }
 
     private func configureStaticViews() {
@@ -94,6 +125,14 @@ package final class NetworkListCell: UICollectionViewListCell {
         renderAccessories(statusSeverity: statusSeverity, fileTypeLabel: fileTypeLabel)
     }
 
+    private func render(request: NetworkRequest) {
+        render(
+            displayName: request.displayName,
+            statusSeverity: request.statusSeverity,
+            fileTypeLabel: request.fileTypeLabel
+        )
+    }
+
     private func render(displayName: String) {
         var content = (contentConfiguration as? UIListContentConfiguration) ?? Self.makeContentConfiguration()
         guard content.text != displayName else {
@@ -119,7 +158,6 @@ package final class NetworkListCell: UICollectionViewListCell {
     private func cancelRequestObservation() {
         requestObservation?.cancel()
         requestObservation = nil
-        observedRequest = nil
     }
 
     private static func makeContentConfiguration() -> UIListContentConfiguration {
@@ -136,4 +174,20 @@ package final class NetworkListCell: UICollectionViewListCell {
         return content
     }
 }
+
+#if DEBUG
+extension NetworkListCell {
+    package var displayNameForTesting: String? {
+        (contentConfiguration as? UIListContentConfiguration)?.text
+    }
+
+    package var fileTypeLabelForTesting: String? {
+        fileTypeLabel.text
+    }
+
+    package var hasActiveRequestObservationForTesting: Bool {
+        requestObservation != nil
+    }
+}
+#endif
 #endif
