@@ -1585,6 +1585,70 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func compactContainerBackNavigationReleasesDetailMediaPreviewResources() async throws {
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://media.example.com/download.php",
+                responseHeaders: ["content-type": "video/mp4"],
+                responseMimeType: "video/mp4"
+            )
+        )
+        request.applyResponseBody(
+            NetworkBody.Payload(
+                body: "not a real movie",
+                base64Encoded: false
+            )
+        )
+        let model = NetworkPanelModel(network: network)
+        let listViewController = NetworkListViewController(model: model)
+        let detailViewController = NetworkDetailViewController(model: model)
+        detailViewController.setModeForTesting(.preview)
+        let playerFactory = MoviePreviewPlayerFactorySpy()
+        detailViewController.bodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
+            playerFactory.makePlayer(for:)
+        )
+        let navigationController = NetworkCompactNavigationController(
+            model: model,
+            listViewController: listViewController,
+            detailViewController: detailViewController
+        )
+        let window = showInWindow(navigationController, makeVisible: true)
+        defer { window.isHidden = true }
+
+        model.selectRequest(request)
+        let didPush = await waitUntilNavigationStackSynced(in: navigationController) {
+            navigationController.viewControllers.last === detailViewController
+        }
+        #expect(didPush)
+        await waitForNavigationTransitionToFinish(in: navigationController)
+        await waitUntilMediaPreviewPrepared(in: detailViewController)
+
+        let didRenderMediaPreview = await waitUntilRendered(in: detailViewController) {
+            detailViewController.bodyViewControllerForTesting.mediaPlayerURLForTesting?.pathExtension == "mp4"
+        }
+        #expect(didRenderMediaPreview)
+        let temporaryFileURL = try #require(detailViewController.bodyViewControllerForTesting.mediaPlayerURLForTesting)
+        #expect(playerFactory.requestedURLs == [temporaryFileURL])
+        #expect(FileManager.default.fileExists(atPath: temporaryFileURL.path))
+
+        _ = withUIKitAnimationsDisabled {
+            navigationController.popViewController(animated: false)
+        }
+
+        let didReturnToListAndReleasePreview = await waitUntilNavigationStackSynced(in: navigationController) {
+            navigationController.viewControllers == [listViewController]
+                && model.selectedRequest == nil
+                && detailViewController.bodyViewControllerForTesting.mediaPlayerURLForTesting == nil
+                && FileManager.default.fileExists(atPath: temporaryFileURL.path) == false
+        }
+        #expect(didReturnToListAndReleasePreview)
+        #expect(playerFactory.requestedURLs == [temporaryFileURL])
+    }
+
+    @Test
     func compactContainerPopsDetailWhenSelectedRequestDisappears() async throws {
         let network = NetworkSession()
         let request = try #require(applyRequest(to: network, requestID: "1", url: "https://example.com/app.js"))

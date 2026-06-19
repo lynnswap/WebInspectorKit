@@ -146,6 +146,10 @@ package final class NetworkDetailViewController: UIViewController {
         return super.contentScrollView(for: edge)
     }
 
+    package func clearSelectionPresentationAfterContainerDeselection() {
+        clearSelectedRequestPresentation()
+    }
+
     private func startObservingModel() {
         guard isRenderingActive else {
             return
@@ -274,6 +278,11 @@ package final class NetworkDetailViewController: UIViewController {
             return
         }
 
+        guard let request else {
+            clearSelectedRequestPresentation()
+            return
+        }
+
         hasBoundSelectedRequest = true
         selectedRequestRenderObservation?.cancel()
         selectedRequestRenderObservation = nil
@@ -282,13 +291,6 @@ package final class NetworkDetailViewController: UIViewController {
 #if DEBUG
         selectedRequestRenderObservationDelivery = nil
 #endif
-
-        guard let request else {
-            title = nil
-            showEmptySelection()
-            renderModeControl(selectedRequest: nil)
-            return
-        }
 
         if contentUnavailableConfiguration != nil {
             contentUnavailableConfiguration = nil
@@ -386,6 +388,20 @@ package final class NetworkDetailViewController: UIViewController {
     private func renderModeControl(selectedRequest request: NetworkRequest? = nil) {
         let request = request ?? observedRequest
         modeControlController.render(mode: mode, isEnabled: request != nil)
+    }
+
+    private func clearSelectedRequestPresentation() {
+        hasBoundSelectedRequest = true
+        selectedRequestRenderObservation?.cancel()
+        selectedRequestRenderObservation = nil
+        unbindResponseBodyFetchObservation()
+        observedRequest = nil
+#if DEBUG
+        selectedRequestRenderObservationDelivery = nil
+#endif
+        title = nil
+        showEmptySelection()
+        renderModeControl(selectedRequest: nil)
     }
 
     private func showEmptySelection() {
