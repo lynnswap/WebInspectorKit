@@ -5,14 +5,46 @@ import UIKit
 
 @MainActor
 package final class NetworkCompactNavigationController: UINavigationController, UINavigationControllerDelegate {
+    private enum StackTarget {
+        case list
+        case detail
+    }
+
+    private enum SelectionCommit {
+        case none
+        case clearIfStillSelected(NetworkRequest.ID)
+
+        @MainActor
+        func apply(to model: NetworkPanelModel) {
+            switch self {
+            case .none:
+                return
+            case .clearIfStillSelected(let requestID):
+                guard model.selectedRequestID == requestID else {
+                    return
+                }
+                model.selectRequest(nil)
+            }
+        }
+    }
+
+    private struct StackTransition {
+        var target: StackTarget
+        var removesDetail: Bool
+        var selectionCommit: SelectionCommit
+    }
+
+    private struct DeferredStackSync {
+        var target: StackTarget
+        var animated: Bool
+    }
+
     private let model: NetworkPanelModel
     private let listViewController: NetworkListViewController
     private let detailViewController: NetworkDetailViewController
     private var selectionObservation: PortableObservationTracking.Token?
-    private var isSyncingStack = false
-    private var isStackSyncScheduledAfterTransition = false
-    private var pendingStackSyncAnimates = false
-    private var pendingDetailSurfaceDiscardAfterProgrammaticPop = false
+    private var activeTransition: StackTransition?
+    private var deferredStackSync: DeferredStackSync?
 
     package init(
         model: NetworkPanelModel,
@@ -45,7 +77,7 @@ package final class NetworkCompactNavigationController: UINavigationController, 
 
     override package func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        syncStack(hasSelection: model.selectedRequest != nil, animated: false)
+        syncStack(to: desiredStackTarget(), animated: false)
         startObservingSelection()
     }
 
@@ -66,23 +98,31 @@ package final class NetworkCompactNavigationController: UINavigationController, 
 
     package func navigationController(
         _ navigationController: UINavigationController,
+        willShow viewController: UIViewController,
+        animated: Bool
+    ) {
+        guard viewController === listViewController,
+              activeTransition == nil,
+              transitionCoordinator?.viewController(forKey: .from) === detailViewController else {
+            return
+        }
+        activeTransition = StackTransition(
+            target: .list,
+            removesDetail: true,
+            selectionCommit: userPopSelectionCommit()
+        )
+    }
+
+    package func navigationController(
+        _ navigationController: UINavigationController,
         didShow viewController: UIViewController,
         animated: Bool
     ) {
-        guard viewController === listViewController else {
-            return
+        let shownTarget = stackTarget(for: viewController)
+        if finishActiveTransitionIfNeeded(shownTarget: shownTarget) == false {
+            finishUntrackedDetailRemovalIfNeeded(shownTarget: shownTarget)
         }
-        if pendingDetailSurfaceDiscardAfterProgrammaticPop {
-            pendingDetailSurfaceDiscardAfterProgrammaticPop = false
-            detailViewController.discardDetailSurfaceAfterCompactRemoval()
-            return
-        }
-        guard isSyncingStack == false,
-              model.selectedRequest != nil else {
-            return
-        }
-        model.selectRequest(nil)
-        detailViewController.discardDetailSurfaceAfterCompactRemoval()
+        performDeferredStackSyncIfNeeded()
     }
 
     private func startObservingSelection() {
@@ -90,7 +130,7 @@ package final class NetworkCompactNavigationController: UINavigationController, 
         selectionObservation = withPortableContinuousObservation { [weak self] event in
             guard let self else { return }
             syncStack(
-                hasSelection: model.selectedRequest != nil,
+                to: desiredStackTarget(),
                 animated: event.kind != .initial
             )
         }
@@ -101,80 +141,162 @@ package final class NetworkCompactNavigationController: UINavigationController, 
         selectionObservation = nil
     }
 
-    private func syncStack(hasSelection: Bool, animated: Bool) {
-        guard scheduleStackSyncAfterCurrentTransitionIfNeeded(animated: animated) == false else {
+    private func syncStack(to target: StackTarget, animated: Bool) {
+        guard scheduleStackSyncAfterCurrentTransitionIfNeeded(to: target, animated: animated) == false else {
             return
         }
 
-        guard hasSelection else {
+        guard currentStackTarget() != target else {
+            return
+        }
+
+        switch target {
+        case .list:
             popRequestDetailIfNeeded(animated: animated)
-            return
+        case .detail:
+            pushRequestDetailIfNeeded(animated: animated)
         }
+    }
 
-        isSyncingStack = true
-        defer {
-            isSyncingStack = false
-        }
-
+    private func pushRequestDetailIfNeeded(animated: Bool) {
         guard viewControllers.last !== detailViewController else {
             return
         }
         detailViewController.webInspectorDetachFromContainerForReuse()
         let shouldAnimate = animated && viewControllers.first === listViewController
+        activeTransition = StackTransition(
+            target: .detail,
+            removesDetail: false,
+            selectionCommit: .none
+        )
         if viewControllers.first === listViewController {
             setViewControllers([listViewController, detailViewController], animated: shouldAnimate)
         } else {
             setViewControllers([listViewController, detailViewController], animated: false)
         }
+        finishActiveTransitionIfNoCoordinator()
     }
 
     private func popRequestDetailIfNeeded(animated: Bool) {
-        isSyncingStack = true
-        defer {
-            isSyncingStack = false
-        }
-
         guard viewControllers.count != 1 || viewControllers.first !== listViewController else {
             return
         }
-        if viewControllers.contains(where: { $0 === detailViewController }) {
-            pendingDetailSurfaceDiscardAfterProgrammaticPop = true
-        }
+        activeTransition = StackTransition(
+            target: .list,
+            removesDetail: viewControllers.contains { $0 === detailViewController },
+            selectionCommit: .none
+        )
         setViewControllers([listViewController], animated: animated)
+        finishActiveTransitionIfNoCoordinator()
     }
 
-    private func scheduleStackSyncAfterCurrentTransitionIfNeeded(animated: Bool) -> Bool {
+    private func scheduleStackSyncAfterCurrentTransitionIfNeeded(to target: StackTarget, animated: Bool) -> Bool {
+        if let activeTransition {
+            if activeTransition.target != target {
+                mergeDeferredStackSync(to: target, animated: animated)
+            }
+            return true
+        }
         guard let transitionCoordinator else {
             return false
         }
 
-        pendingStackSyncAnimates = pendingStackSyncAnimates || animated
-        guard isStackSyncScheduledAfterTransition == false else {
+        let hadDeferredSync = deferredStackSync != nil
+        mergeDeferredStackSync(to: target, animated: animated)
+        guard hadDeferredSync == false else {
             return true
         }
 
-        isStackSyncScheduledAfterTransition = true
         let didSchedule = transitionCoordinator.animate(alongsideTransition: nil) { [weak self] _ in
-            self?.performPendingStackSyncAfterTransition()
+            self?.performDeferredStackSyncIfNeeded()
         }
         if didSchedule {
             return true
         }
 
-        isStackSyncScheduledAfterTransition = false
-        pendingStackSyncAnimates = false
+        deferredStackSync = nil
         return false
     }
 
-    private func performPendingStackSyncAfterTransition() {
-        guard isStackSyncScheduledAfterTransition else {
+    private func mergeDeferredStackSync(to target: StackTarget, animated: Bool) {
+        let shouldAnimate = (deferredStackSync?.animated ?? false) || animated
+        deferredStackSync = DeferredStackSync(target: target, animated: shouldAnimate)
+    }
+
+    private func performDeferredStackSyncIfNeeded() {
+        guard let deferredStackSync else {
             return
         }
+        self.deferredStackSync = nil
+        syncStack(to: deferredStackSync.target, animated: deferredStackSync.animated)
+    }
 
-        isStackSyncScheduledAfterTransition = false
-        let shouldAnimate = pendingStackSyncAnimates
-        pendingStackSyncAnimates = false
-        syncStack(hasSelection: model.selectedRequest != nil, animated: shouldAnimate)
+    private func finishActiveTransitionIfNoCoordinator() {
+        guard transitionCoordinator == nil else {
+            return
+        }
+        _ = finishActiveTransitionIfNeeded(shownTarget: currentStackTarget())
+    }
+
+    @discardableResult
+    private func finishActiveTransitionIfNeeded(shownTarget: StackTarget?) -> Bool {
+        guard let transition = activeTransition else {
+            return false
+        }
+        activeTransition = nil
+        guard shownTarget == transition.target else {
+            return true
+        }
+
+        commit(transition)
+        return true
+    }
+
+    private func finishUntrackedDetailRemovalIfNeeded(shownTarget: StackTarget?) {
+        guard shownTarget == .list,
+              model.selectedRequestID != nil else {
+            return
+        }
+        commit(
+            StackTransition(
+                target: .list,
+                removesDetail: true,
+                selectionCommit: userPopSelectionCommit()
+            )
+        )
+    }
+
+    private func commit(_ transition: StackTransition) {
+        transition.selectionCommit.apply(to: model)
+        guard transition.removesDetail else {
+            return
+        }
+        detailViewController.discardDetailSurfaceAfterCompactRemoval()
+    }
+
+    private func desiredStackTarget() -> StackTarget {
+        model.selectedRequest == nil ? .list : .detail
+    }
+
+    private func currentStackTarget() -> StackTarget {
+        stackTarget(for: viewControllers.last) ?? .list
+    }
+
+    private func stackTarget(for viewController: UIViewController?) -> StackTarget? {
+        if viewController === detailViewController {
+            return .detail
+        }
+        if viewController === listViewController {
+            return .list
+        }
+        return nil
+    }
+
+    private func userPopSelectionCommit() -> SelectionCommit {
+        guard let selectedRequestID = model.selectedRequestID else {
+            return .none
+        }
+        return .clearIfStillSelected(selectedRequestID)
     }
 
     private func applyBackgroundFromTraits() {

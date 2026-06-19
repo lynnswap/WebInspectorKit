@@ -1620,9 +1620,10 @@ struct NetworkDetailViewControllerTests {
         defer { window.isHidden = true }
         viewController.setModeForTesting(.preview)
 
+        let firstBodyID = ObjectIdentifier(firstBody)
         let didStartFirstPreparation = await waitUntilRendered(in: viewController) {
             viewController.currentPreviewRoleForTesting == .response
-                && firstBody.hasActiveTextRepresentationPreparationForTesting
+                && viewController.bodyViewControllerForTesting.activeTextPreviewPreparationBodyIDForTesting == firstBodyID
         }
         #expect(didStartFirstPreparation)
 
@@ -1630,10 +1631,10 @@ struct NetworkDetailViewControllerTests {
 
         let didRenderSecondRequest = await waitUntilRendered(in: viewController) {
             viewController.bodyViewControllerForTesting.syntaxViewForTesting.text.contains(#""ok""#)
-                && firstBody.hasActiveTextRepresentationPreparationForTesting == false
+                && viewController.bodyViewControllerForTesting.activeTextPreviewPreparationBodyIDForTesting != firstBodyID
         }
         #expect(didRenderSecondRequest)
-        #expect(firstBody.hasActiveTextRepresentationPreparationForTesting == false)
+        #expect(viewController.bodyViewControllerForTesting.activeTextPreviewPreparationBodyIDForTesting != firstBodyID)
     }
 
     @Test
@@ -1719,6 +1720,60 @@ struct NetworkDetailViewControllerTests {
         #expect(didPop)
         await waitForNavigationTransitionToFinish(in: navigationController)
         #expect(detailViewController.previewViewForTesting.isHidden)
+    }
+
+    @Test
+    func compactUserPopDiscardsDetailSurfaceWhenSelectionClearsBeforeTransitionCompletes() async throws {
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://example.com/api/data.txt",
+                responseHeaders: ["content-type": "text/plain"],
+                responseMimeType: "text/plain"
+            )
+        )
+        request.applyResponseBody(
+            NetworkBody.Payload(body: "visible detail body", base64Encoded: false)
+        )
+        let model = NetworkPanelModel(network: network)
+        let listViewController = NetworkListViewController(model: model)
+        let detailViewController = NetworkDetailViewController(model: model)
+        detailViewController.setModeForTesting(.preview)
+        let navigationController = NetworkCompactNavigationController(
+            model: model,
+            listViewController: listViewController,
+            detailViewController: detailViewController
+        )
+        let window = showInWindow(navigationController, makeVisible: true)
+        defer { window.isHidden = true }
+
+        model.selectRequest(request)
+        let didPush = await waitUntilNavigationStackSynced(in: navigationController) {
+            navigationController.viewControllers.last === detailViewController
+        }
+        #expect(didPush)
+        await waitForNavigationTransitionToFinish(in: navigationController)
+
+        let didRenderDetail = await waitUntilRendered(in: detailViewController) {
+            detailViewController.previewViewForTesting.isHidden == false
+                && detailViewController.bodyViewControllerForTesting.syntaxViewForTesting.text == "visible detail body"
+        }
+        #expect(didRenderDetail)
+
+        _ = navigationController.popViewController(animated: true)
+        if navigationController.transitionCoordinator != nil {
+            model.selectRequest(nil)
+            #expect(detailViewController.previewViewForTesting.isHidden == false)
+            #expect(detailViewController.bodyViewControllerForTesting.syntaxViewForTesting.text == "visible detail body")
+        }
+
+        let didPopAndDiscard = await waitUntilNavigationStackSynced(in: navigationController) {
+            navigationController.viewControllers == [listViewController]
+                && detailViewController.previewViewForTesting.isHidden
+        }
+        #expect(didPopAndDiscard)
     }
 
     @Test

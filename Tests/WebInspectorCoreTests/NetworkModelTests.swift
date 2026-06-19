@@ -205,13 +205,6 @@ func responseReceivedCreatesFetchableResponseBodyAndAppliesFetchedContent() asyn
     #expect(body.phase == .loaded)
     #expect(body.textRepresentation == #"{"name":"codex","value":42}"#)
     #expect(body.textRepresentationSyntaxKind == .json)
-
-    let preparation = try #require(body.prepareTextRepresentation())
-    await preparation.wait()
-
-    #expect(body.textRepresentation?.contains("\n") == true)
-    #expect(body.textRepresentation?.contains(#""name""#) == true)
-    #expect(body.textRepresentationSyntaxKind == .json)
 }
 
 @Test
@@ -237,7 +230,7 @@ func networkResponseBodyResultDecodesLargePlainAndBase64Payloads() async throws 
 
 @Test
 @MainActor
-func preparedResponseBodyTextInvalidatesWhenFetchedContentChanges() async throws {
+func responseBodyTextRefreshesWhenFetchedContentChanges() throws {
     let body = NetworkBody(
         role: .response,
         kind: .text,
@@ -246,11 +239,7 @@ func preparedResponseBodyTextInvalidatesWhenFetchedContentChanges() async throws
         phase: .loaded
     )
 
-    let firstPreparation = try #require(body.prepareTextRepresentation())
-    await firstPreparation.wait()
-
-    #expect(body.textRepresentation?.contains("\n") == true)
-    #expect(body.textRepresentation?.contains(#""first""#) == true)
+    #expect(body.textRepresentation == #"{"first":true}"#)
 
     body.apply(
         NetworkBody.Payload(
@@ -261,18 +250,11 @@ func preparedResponseBodyTextInvalidatesWhenFetchedContentChanges() async throws
 
     #expect(body.textRepresentation == #"{"second":true}"#)
     #expect(body.textRepresentation?.contains(#""first""#) == false)
-
-    let secondPreparation = try #require(body.prepareTextRepresentation())
-    await secondPreparation.wait()
-
-    #expect(body.textRepresentation?.contains("\n") == true)
-    #expect(body.textRepresentation?.contains(#""second""#) == true)
-    #expect(body.textRepresentation?.contains(#""first""#) == false)
 }
 
 @Test
 @MainActor
-func cancelingPreparedResponseBodyTextStopsWorkerAndAllowsReprepare() async throws {
+func largeJSONResponseBodyKeepsCoreTextRaw() {
     let jsonItems = (0..<50_000).map { index in
         #"{"value":\#(index),"enabled":true}"#
     }
@@ -284,25 +266,14 @@ func cancelingPreparedResponseBodyTextStopsWorkerAndAllowsReprepare() async thro
         sourceSyntaxKind: .json,
         phase: .loaded
     )
-    let originalText = body.textRepresentation
 
-    let preparation = try #require(body.prepareTextRepresentation())
-    body.cancelTextRepresentationPreparation()
-    await preparation.wait()
-
-    #expect(body.textRepresentation == originalText)
-
-    let secondPreparation = try #require(body.prepareTextRepresentation())
-    await secondPreparation.wait()
-
-    #expect(body.textRepresentation != originalText)
-    #expect(body.textRepresentation?.contains("\n") == true)
-    #expect(body.textRepresentation?.contains(#""value" : 49999"#) == true)
+    #expect(body.textRepresentation == json)
+    #expect(body.textRepresentationSyntaxKind == .json)
 }
 
 @Test
 @MainActor
-func invalidJSONLookingPlainTextKeepsPlainTextSyntax() async {
+func invalidJSONLookingPlainTextKeepsPlainTextSyntax() {
     let body = NetworkBody(
         role: .response,
         kind: .text,
@@ -313,18 +284,13 @@ func invalidJSONLookingPlainTextKeepsPlainTextSyntax() async {
 
     #expect(body.textRepresentation == "[INFO] started")
     #expect(body.textRepresentationSyntaxKind == .plainText)
-
-    if let preparation = body.prepareTextRepresentation() {
-        await preparation.wait()
-    }
-
     #expect(body.textRepresentation == "[INFO] started")
     #expect(body.textRepresentationSyntaxKind == .plainText)
 }
 
 @Test
 @MainActor
-func jsonNumbersWithNonASCIIDigitsStayPlainText() async throws {
+func jsonNumbersWithNonASCIIDigitsStayPlainText() {
     for text in [
         #"{"n":-١}"#,
         #"{"n":1²}"#,
@@ -338,9 +304,6 @@ func jsonNumbersWithNonASCIIDigitsStayPlainText() async throws {
             sourceSyntaxKind: .plainText,
             phase: .loaded
         )
-
-        let preparation = try #require(body.prepareTextRepresentation())
-        await preparation.wait()
 
         #expect(body.textRepresentation == text)
         #expect(body.textRepresentationSyntaxKind == .plainText)
