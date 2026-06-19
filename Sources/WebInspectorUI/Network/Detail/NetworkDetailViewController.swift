@@ -389,7 +389,7 @@ package final class NetworkDetailViewController: UIViewController {
     }
 
     private func showEmptySelection() {
-        bodyViewController.display(body: nil)
+        bodyViewController.releasePreviewResources()
         setBodyRenderingActive(false)
         previewContainerView.isHidden = true
         headersTextView.isHidden = true
