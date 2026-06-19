@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import ObservationBridge
 import WebInspectorKit
 
@@ -11,7 +12,7 @@ extension BrowserInspectorCoordinator {
     struct WindowContext {
         static let sceneActivityType = "lynnpd.webspector.web-inspector"
 
-        let browserStore: BrowserStore
+        let browserStore: BrowserWindowStore
         let inspectorSession: WebInspectorSession
     }
 }
@@ -40,6 +41,16 @@ extension BrowserInspectorCoordinator {
 #endif
 
 @MainActor
+@Observable
+final class BrowserInspectorPresentationState {
+    private(set) var isPresenting = false
+
+    func update(isPresenting: Bool) {
+        self.isPresenting = isPresenting
+    }
+}
+
+@MainActor
 final class BrowserInspectorCoordinator {
 #if canImport(UIKit)
     private final class InspectorSheetObserver: NSObject, UIAdaptivePresentationControllerDelegate {
@@ -58,7 +69,7 @@ final class BrowserInspectorCoordinator {
     private var sceneActivationRequester = BrowserInspectorCoordinator.SceneActivationRequester.live
     private var supportsMultipleScenesProvider: @MainActor () -> Bool = { UIApplication.shared.supportsMultipleScenes }
 
-    var onPresentationStateChange: (() -> Void)?
+    let presentationState = BrowserInspectorPresentationState()
 
     func presentSheet(
         from presenter: UIViewController,
@@ -84,18 +95,18 @@ final class BrowserInspectorCoordinator {
             if self.presentedSheetController === sheetController {
                 self.presentedSheetController = nil
                 self.cancelSheetUserInterfaceStyleObservation()
-                self.notifyPresentationStateChanged()
+                self.syncPresentationStateWithLifecycle()
             }
         }
         anchor.present(sheetController, animated: true)
         sheetController.presentationController?.delegate = sheetObserver
-        notifyPresentationStateChanged()
+        syncPresentationStateWithLifecycle()
         return true
     }
 
     func presentWindow(
         from presenter: UIViewController,
-        browserStore: BrowserStore,
+        browserStore: BrowserWindowStore,
         inspectorSession: WebInspectorSession
     ) -> Bool {
         guard isPresentingInspector(presenter: presenter) == false else {
@@ -121,10 +132,10 @@ final class BrowserInspectorCoordinator {
 
         sceneActivationRequester.activateScene(targetSceneSession, userActivity, requestingScene) { [weak self] _ in
             Self.inspectorWindowRegistry.clear()
-            self?.notifyPresentationStateChanged()
+            self?.syncPresentationStateWithLifecycle()
         }
 
-        notifyPresentationStateChanged()
+        syncPresentationStateWithLifecycle()
         return true
     }
 
@@ -138,15 +149,18 @@ final class BrowserInspectorCoordinator {
         }
 
         Self.inspectorWindowRegistry.clear()
-        notifyPresentationStateChanged()
+        syncPresentationStateWithLifecycle()
     }
 
     func isPresentingInspector(presenter: UIViewController? = nil) -> Bool {
         reconcilePresentationState(from: presenter)
-        if presentedSheetController != nil {
-            return true
-        }
-        return Self.inspectorWindowRegistry.presentationState
+        updatePresentationState()
+        return presentationState.isPresenting
+    }
+
+    func refreshPresentationState(presenter: UIViewController? = nil) {
+        reconcilePresentationState(from: presenter)
+        updatePresentationState()
     }
 
     func invalidate() {
@@ -291,8 +305,14 @@ final class BrowserInspectorCoordinator {
         return root
     }
 
-    private func notifyPresentationStateChanged() {
-        onPresentationStateChange?()
+    private func syncPresentationStateWithLifecycle() {
+        updatePresentationState()
+    }
+
+    private func updatePresentationState() {
+        presentationState.update(
+            isPresenting: presentedSheetController != nil || Self.inspectorWindowRegistry.presentationState
+        )
     }
 
     private func reconcilePresentationState(from presenter: UIViewController?) {
@@ -307,6 +327,7 @@ final class BrowserInspectorCoordinator {
         }
         self.presentedSheetController = nil
         cancelSheetUserInterfaceStyleObservation()
+        syncPresentationStateWithLifecycle()
     }
 
     private func isPresentedViewControllerInChain(

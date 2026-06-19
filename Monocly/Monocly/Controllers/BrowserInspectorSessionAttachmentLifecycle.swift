@@ -64,7 +64,7 @@ final class BrowserInspectorSessionAttachmentLifecycle {
         case failed
     }
 
-    private let store: BrowserStore
+    private let store: BrowserWindowStore
     private let inspectorSession: WebInspectorSession
     private let attachAction: AttachAction
     private let detachAction: DetachAction
@@ -74,7 +74,7 @@ final class BrowserInspectorSessionAttachmentLifecycle {
     var onAttachForTesting: ((WKWebView) -> Void)?
 
     init(
-        store: BrowserStore,
+        store: BrowserWindowStore,
         inspectorSession: WebInspectorSession,
         attachAction: @escaping AttachAction = { inspectorSession, webView in
             try await inspectorSession.attach(to: webView)

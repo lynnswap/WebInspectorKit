@@ -139,7 +139,7 @@ struct BrowserSessionRestoreTests {
     @Test
     func browserStoreCreatesFallbackTabWithoutSnapshot() throws {
         let fallbackURL = try #require(URL(string: "https://fallback.example/"))
-        let store = BrowserStore(
+        let store = BrowserWindowStore(
             restoring: nil,
             fallbackURL: fallbackURL,
             sessionStore: nil
@@ -182,7 +182,7 @@ struct BrowserSessionRestoreTests {
             tabStateDataByID: [:]
         )
 
-        let store = BrowserStore(
+        let store = BrowserWindowStore(
             restoring: restoredSession,
             fallbackURL: fallbackURL,
             sessionStore: nil
@@ -216,7 +216,7 @@ struct BrowserSessionRestoreTests {
             tabStateDataByID: [:]
         )
 
-        let store = BrowserStore(
+        let store = BrowserWindowStore(
             restoring: restoredSession,
             fallbackURL: try #require(URL(string: "https://fallback.example/")),
             sessionStore: nil
@@ -247,7 +247,7 @@ struct BrowserSessionRestoreTests {
             ),
             tabStateDataByID: [:]
         )
-        let store = BrowserStore(
+        let store = BrowserWindowStore(
             restoring: restoredSession,
             fallbackURL: fallbackURL,
             sessionStore: nil
@@ -280,7 +280,7 @@ struct BrowserSessionRestoreTests {
             ),
             tabStateDataByID: [tabID: restoredState]
         )
-        let store = BrowserStore(
+        let store = BrowserWindowStore(
             restoring: restoredSession,
             fallbackURL: try #require(URL(string: "https://fallback.example/")),
             sessionStore: nil
@@ -358,7 +358,7 @@ struct BrowserSessionRestoreTests {
                 ),
                 tabStateDataByID: [tabID: restoredState]
             )
-            let store = BrowserStore(
+            let store = BrowserWindowStore(
                 restoring: restoredSession,
                 fallbackURL: try #require(URL(string: "https://fallback.example/")),
                 sessionStore: sessionStore
@@ -396,7 +396,7 @@ struct BrowserSessionRestoreTests {
                 ),
                 tabStateDataByID: [tabID: restoredState]
             )
-            let store = BrowserStore(
+            let store = BrowserWindowStore(
                 restoring: restoredSession,
                 fallbackURL: try #require(URL(string: "https://fallback.example/")),
                 sessionStore: sessionStore
@@ -420,7 +420,7 @@ struct BrowserSessionRestoreTests {
 
     @Test
     func loadingProgressRemainsVisibleAtCompletedEstimatedProgressUntilNavigationSettles() throws {
-        let store = BrowserStore(
+        let store = BrowserWindowStore(
             url: try #require(URL(string: "about:blank")),
             automaticallyLoadsInitialRequest: false,
             sessionStore: nil
@@ -436,7 +436,7 @@ struct BrowserSessionRestoreTests {
 
     @Test
     func explicitNavigationShowsProgressImmediatelyFromCompletedPreviousProgress() throws {
-        let store = BrowserStore(
+        let store = BrowserWindowStore(
             url: try #require(URL(string: "about:blank")),
             automaticallyLoadsInitialRequest: false,
             sessionStore: nil
@@ -456,7 +456,7 @@ struct BrowserSessionRestoreTests {
 
     @Test
     func sameDocumentNavigationSettlesProgressStartedForHistoryNavigation() throws {
-        let store = BrowserStore(
+        let store = BrowserWindowStore(
             url: try #require(URL(string: "about:blank")),
             automaticallyLoadsInitialRequest: false,
             sessionStore: nil
@@ -501,7 +501,7 @@ struct BrowserSessionRestoreTests {
                 ),
                 tabStateDataByID: [backgroundID: backgroundState]
             )
-            let store = BrowserStore(
+            let store = BrowserWindowStore(
                 restoring: restoredSession,
                 fallbackURL: try #require(URL(string: "https://fallback.example/")),
                 sessionStore: sessionStore
@@ -516,11 +516,11 @@ struct BrowserSessionRestoreTests {
     }
 
     @Test
-    func browserStoreDebouncedAutosaveUsesInjectedScheduler() throws {
-        try withTemporarySessionStore { sessionStore, _ in
+    func browserStoreDebouncedAutosaveUsesInjectedScheduler() async throws {
+        try await withTemporarySessionStore { sessionStore, _ in
             let scheduler = ManualDelayScheduler()
             let navigatedURL = try #require(URL(string: "https://example.com/debounced-save"))
-            let store = BrowserStore(
+            let store = BrowserWindowStore(
                 url: try #require(URL(string: "about:blank")),
                 automaticallyLoadsInitialRequest: false,
                 sessionStore: sessionStore,
@@ -529,7 +529,7 @@ struct BrowserSessionRestoreTests {
 
             store.load(url: navigatedURL)
 
-            #expect(scheduler.hasScheduledDelay)
+            #expect(await waitUntil { scheduler.hasScheduledDelay })
             #expect(sessionStore.load() == nil)
 
             scheduler.fire()
@@ -541,11 +541,11 @@ struct BrowserSessionRestoreTests {
     }
 
     @Test
-    func browserStoreImmediateSaveCancelsPendingDebounce() throws {
-        try withTemporarySessionStore { sessionStore, _ in
+    func browserStoreImmediateSaveCancelsPendingDebounce() async throws {
+        try await withTemporarySessionStore { sessionStore, _ in
             let scheduler = ManualDelayScheduler()
             let navigatedURL = try #require(URL(string: "https://example.com/immediate-save"))
-            let store = BrowserStore(
+            let store = BrowserWindowStore(
                 url: try #require(URL(string: "about:blank")),
                 automaticallyLoadsInitialRequest: false,
                 sessionStore: sessionStore,
@@ -553,7 +553,7 @@ struct BrowserSessionRestoreTests {
             )
 
             store.load(url: navigatedURL)
-            #expect(scheduler.hasScheduledDelay)
+            #expect(await waitUntil { scheduler.hasScheduledDelay })
 
             store.preserveSession(immediate: true)
 
@@ -564,9 +564,34 @@ struct BrowserSessionRestoreTests {
     }
 
     @Test
+    func childTabSnapshotMutationSchedulesAutosaveWithoutWindowRevision() async throws {
+        try await withTemporarySessionStore { sessionStore, _ in
+            let scheduler = ManualDelayScheduler()
+            let store = BrowserWindowStore(
+                url: try #require(URL(string: "about:blank")),
+                automaticallyLoadsInitialRequest: false,
+                sessionStore: sessionStore,
+                saveDelayScheduler: scheduler
+            )
+            let tab = try #require(store.selectedTab)
+
+            await Task.yield()
+            tab.pageTitle = "Observed Title"
+            await Task.yield()
+
+            #expect(scheduler.hasScheduledDelay)
+
+            scheduler.fire()
+
+            let savedSession = try #require(sessionStore.load())
+            #expect(savedSession.snapshot.tabs.first?.title == "Observed Title")
+        }
+    }
+
+    @Test
     func restoredTitleSurvivesInitialEmptyOrNilWebViewTitleObservation() async throws {
         let tabID = UUID()
-        let store = BrowserStore(
+        let store = BrowserWindowStore(
             restoring: BrowserSessionStore.RestoredSession(
                 snapshot: BrowserSessionStore.Snapshot(
                     selectedTabID: tabID,
@@ -622,7 +647,7 @@ struct BrowserSessionRestoreTests {
             ),
             tabStateDataByID: [:]
         )
-        let store = BrowserStore(
+        let store = BrowserWindowStore(
             restoring: restoredSession,
             fallbackURL: try #require(URL(string: "about:blank")),
             sessionStore: nil
@@ -649,6 +674,111 @@ struct BrowserSessionRestoreTests {
         await selectedWebViewInstalled.wait(for: secondWebView)
         await rootViewController.waitForInspectorSessionTransitions()
         await inspectorSessionAttached.wait(for: secondWebView)
+    }
+
+    @Test
+    func pageObservationTokenUpdatesChromeFromSelectedTabMutation() async throws {
+        let initialURL = try #require(URL(string: "about:blank"))
+        let scheduler = ManualDelayScheduler()
+        let store = BrowserWindowStore(
+            url: initialURL,
+            automaticallyLoadsInitialRequest: false,
+            sessionStore: nil
+        )
+        let pageViewController = BrowserPageViewController(
+            store: store,
+            inspectorSession: WebInspectorSession(),
+            launchConfiguration: BrowserLaunchConfiguration(initialURL: initialURL),
+            progressHideScheduler: scheduler
+        )
+
+        pageViewController.loadViewIfNeeded()
+        let tab = try #require(store.selectedTab)
+        #expect(await waitUntil {
+            pageViewController.selectedTabObservationIsActiveForTesting
+        })
+
+        tab.pageTitle = "Native Title"
+        tab.canGoBack = true
+        tab.canGoForward = true
+        tab.isLoading = true
+        tab.estimatedProgress = 0.42
+        tab.underPageBackgroundColor = .systemPink
+
+        #expect(await waitUntil {
+            pageViewController.navigationItem.title == "Native Title"
+        })
+
+        #expect(pageViewController.navigationItem.title == "Native Title")
+        #expect(pageViewController.backButtonItemForTesting.isEnabled)
+        #expect(pageViewController.forwardButtonItemForTesting.isEnabled)
+        #expect(pageViewController.progressViewForTesting.isHidden == false)
+        #expect(abs(pageViewController.progressViewForTesting.progress - Float(0.42)) < 0.001)
+        #expect(pageViewController.view.backgroundColor == .systemPink)
+    }
+
+    @Test
+    func toolbarItemsAreNotRecreatedForSelectedTabRenderingChanges() async throws {
+        let initialURL = try #require(URL(string: "about:blank"))
+        let store = BrowserWindowStore(
+            url: initialURL,
+            automaticallyLoadsInitialRequest: false,
+            sessionStore: nil
+        )
+        let pageViewController = BrowserPageViewController(
+            store: store,
+            inspectorSession: WebInspectorSession(),
+            launchConfiguration: BrowserLaunchConfiguration(initialURL: initialURL),
+            progressHideScheduler: ManualDelayScheduler()
+        )
+
+        pageViewController.loadViewIfNeeded()
+        let tab = try #require(store.selectedTab)
+        let backButtonItem = pageViewController.backButtonItemForTesting
+        let forwardButtonItem = pageViewController.forwardButtonItemForTesting
+        let inspectorButtonItem = pageViewController.inspectorButtonItemForTesting
+
+        tab.pageTitle = "Updated Title"
+        tab.isLoading = true
+        tab.estimatedProgress = 0.75
+        await Task.yield()
+
+        #expect(pageViewController.backButtonItemForTesting === backButtonItem)
+        #expect(pageViewController.forwardButtonItemForTesting === forwardButtonItem)
+        #expect(pageViewController.inspectorButtonItemForTesting === inspectorButtonItem)
+        #expect(pageViewController.toolbarItems?.contains { $0 === backButtonItem } == true)
+        #expect(pageViewController.toolbarItems?.contains { $0 === forwardButtonItem } == true)
+        #expect(pageViewController.toolbarItems?.contains { $0 === inspectorButtonItem } == true)
+    }
+
+    @Test
+    func tabSwitchInstallsSelectedWebViewOnceAndPreservesTabIdentity() async throws {
+        let fixture = try makeAttachmentLifecycleFixture()
+        let pageViewController = BrowserPageViewController(
+            store: fixture.store,
+            inspectorSession: WebInspectorSession(),
+            launchConfiguration: BrowserLaunchConfiguration(initialURL: try #require(URL(string: "about:blank"))),
+            progressHideScheduler: ManualDelayScheduler()
+        )
+        var installedWebViewIDs: [ObjectIdentifier] = []
+        pageViewController.onSelectedWebViewInstalled = { webView in
+            installedWebViewIDs.append(ObjectIdentifier(webView))
+        }
+
+        pageViewController.loadViewIfNeeded()
+        await Task.yield()
+        fixture.store.selectTab(id: fixture.secondTabID)
+        await Task.yield()
+        fixture.store.selectTab(id: fixture.secondTabID)
+        await Task.yield()
+
+        #expect(installedWebViewIDs == [
+            ObjectIdentifier(fixture.firstWebView),
+            ObjectIdentifier(fixture.secondWebView)
+        ])
+        #expect(pageViewController.hostedWebViewForTesting === fixture.secondWebView)
+        #expect(fixture.store.tabs[0].webView === fixture.firstWebView)
+        #expect(fixture.store.tabs[1].webView === fixture.secondWebView)
     }
 
     @Test
@@ -831,6 +961,14 @@ struct BrowserSessionRestoreTests {
         }
     }
 
+    private func withTemporarySessionStore<T>(
+        _ body: (BrowserSessionStore, URL) async throws -> T
+    ) async throws -> T {
+        try await withTemporaryBrowserSessionDirectory { rootDirectoryURL in
+            try await body(BrowserSessionStore(rootDirectoryURL: rootDirectoryURL), rootDirectoryURL)
+        }
+    }
+
     private func withTemporaryBrowserSessionDirectory<T>(
         _ body: (URL) throws -> T
     ) throws -> T {
@@ -842,6 +980,17 @@ struct BrowserSessionRestoreTests {
         return try body(rootDirectoryURL)
     }
 
+    private func withTemporaryBrowserSessionDirectory<T>(
+        _ body: (URL) async throws -> T
+    ) async throws -> T {
+        let rootDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MonoclyBrowserSession-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: rootDirectoryURL)
+        }
+        return try await body(rootDirectoryURL)
+    }
+
     private func makeWindowScene() throws -> UIWindowScene {
         try #require(
             UIApplication.shared.connectedScenes
@@ -850,9 +999,23 @@ struct BrowserSessionRestoreTests {
         )
     }
 
+    private func waitUntil(
+        timeoutNanoseconds: UInt64 = 1_000_000_000,
+        condition: @escaping @MainActor () -> Bool
+    ) async -> Bool {
+        let deadline = ContinuousClock.now + .nanoseconds(Int(timeoutNanoseconds))
+        while ContinuousClock.now < deadline {
+            if condition() {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        return condition()
+    }
+
     private struct AttachmentLifecycleFixture {
         var secondTabID: UUID
-        var store: BrowserStore
+        var store: BrowserWindowStore
         var firstWebView: WKWebView
         var secondWebView: WKWebView
     }
@@ -884,7 +1047,7 @@ struct BrowserSessionRestoreTests {
             ),
             tabStateDataByID: [:]
         )
-        let store = BrowserStore(
+        let store = BrowserWindowStore(
             restoring: restoredSession,
             fallbackURL: try #require(URL(string: "about:blank")),
             sessionStore: nil

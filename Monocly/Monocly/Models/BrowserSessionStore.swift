@@ -1,7 +1,7 @@
 import Foundation
 
 extension BrowserSessionStore {
-    struct Snapshot: Codable, Equatable {
+    struct Snapshot: Codable, Equatable, Sendable {
         static let currentSchemaVersion = 1
 
         let schemaVersion: Int
@@ -21,7 +21,7 @@ extension BrowserSessionStore {
 }
 
 extension BrowserTabStore {
-    struct Snapshot: Codable, Equatable, Identifiable {
+    struct Snapshot: Codable, Equatable, Identifiable, Sendable {
         let id: UUID
         let url: URL
         let title: String?
@@ -36,7 +36,7 @@ extension BrowserTabStore {
 }
 
 extension BrowserSessionStore {
-    struct RestoredSession {
+    struct RestoredSession: Sendable {
         let snapshot: BrowserSessionStore.Snapshot
         let tabStateDataByID: [UUID: Data]
     }

@@ -4,25 +4,18 @@ import WebKit
 
 @MainActor
 @Observable
-final class BrowserStore {
-    private let fallbackURL: URL
-    private let sessionStore: BrowserSessionStore?
-    private let saveDebounceDuration: UInt64
-
+final class BrowserWindowStore {
     private(set) var tabs: [BrowserTabStore]
     var selectedTabID: UUID
-    private(set) var stateRevision = 0
 
-    @ObservationIgnored private var restorationComplete = false
-    @ObservationIgnored private let saveDelayScheduler: MainActorDelayScheduling
+    @ObservationIgnored private var persistenceCoordinator: BrowserSessionPersistenceCoordinator!
 
     var selectedTab: BrowserTabStore? {
-        _ = stateRevision
         return tabs.first { $0.id == selectedTabID } ?? tabs.first
     }
 
     var webView: WKWebView {
-        resolvedSelectedTab.webView
+        tabs.first { $0.id == selectedTabID }?.webView ?? tabs[0].webView
     }
 
     var canGoBack: Bool {
@@ -88,17 +81,17 @@ final class BrowserStore {
         saveDebounceDuration: UInt64 = 500_000_000,
         saveDelayScheduler: MainActorDelayScheduling = MainActorDelayScheduler()
     ) {
-        fallbackURL = url
-        self.sessionStore = sessionStore
-        self.saveDebounceDuration = saveDebounceDuration
-        self.saveDelayScheduler = saveDelayScheduler
-
         let tab = BrowserTabStore(url: url, automaticallyLoadsInitialRequest: automaticallyLoadsInitialRequest)
         tabs = [tab]
         selectedTabID = tab.id
 
-        configureTabCallbacks()
-        restorationComplete = true
+        persistenceCoordinator = BrowserSessionPersistenceCoordinator(
+            store: self,
+            sessionStore: sessionStore,
+            saveDebounceDuration: saveDebounceDuration,
+            saveDelayScheduler: saveDelayScheduler,
+            startsRestored: false
+        )
     }
 
     init(
@@ -108,11 +101,6 @@ final class BrowserStore {
         saveDebounceDuration: UInt64 = 500_000_000,
         saveDelayScheduler: MainActorDelayScheduling = MainActorDelayScheduler()
     ) {
-        self.fallbackURL = fallbackURL
-        self.sessionStore = sessionStore
-        self.saveDebounceDuration = saveDebounceDuration
-        self.saveDelayScheduler = saveDelayScheduler
-
         if let restoredSession,
            restoredSession.snapshot.tabs.isEmpty == false {
             let restoredTabs = restoredSession.snapshot.tabs.map { tabSnapshot in
@@ -136,11 +124,17 @@ final class BrowserStore {
             selectedTabID = tab.id
         }
 
-        configureTabCallbacks()
+        persistenceCoordinator = BrowserSessionPersistenceCoordinator(
+            store: self,
+            sessionStore: sessionStore,
+            saveDebounceDuration: saveDebounceDuration,
+            saveDelayScheduler: saveDelayScheduler,
+            startsRestored: true
+        )
     }
 
     isolated deinit {
-        saveDelayScheduler.cancel()
+        persistenceCoordinator.cancel()
     }
 
     func selectTab(id: UUID) {
@@ -149,7 +143,6 @@ final class BrowserStore {
         }
         selectedTabID = tab.id
         tab.markSelected()
-        noteStateChanged()
     }
 
     func goBack() {
@@ -177,81 +170,12 @@ final class BrowserStore {
     }
 
     func loadInitialRequestIfNeeded() {
-        resolvedSelectedTab.markSelected()
-        restorationComplete = true
+        selectedTab?.markSelected()
+        persistenceCoordinator.markRestorationComplete()
         preserveSession(immediate: false)
     }
 
     func preserveSession(immediate: Bool) {
-        guard restorationComplete else {
-            return
-        }
-        guard sessionStore != nil else {
-            return
-        }
-
-        saveDelayScheduler.cancel()
-
-        if immediate {
-            saveCurrentSession()
-            return
-        }
-
-        saveDelayScheduler.schedule(nanoseconds: saveDebounceDuration) { [weak self] in
-            self?.saveCurrentSession()
-        }
-    }
-
-    private var resolvedSelectedTab: BrowserTabStore {
-        if let selectedTab {
-            return selectedTab
-        }
-
-        let tab = BrowserTabStore(url: fallbackURL, automaticallyLoadsInitialRequest: false)
-        tabs = [tab]
-        selectedTabID = tab.id
-        configureTabCallbacks()
-        noteStateChanged()
-        return tab
-    }
-
-    private func configureTabCallbacks() {
-        for tab in tabs {
-            tab.onStateChanged = { [weak self] in
-                self?.noteStateChanged()
-            }
-        }
-    }
-
-    private func noteStateChanged() {
-        stateRevision += 1
-        preserveSession(immediate: false)
-    }
-
-    private func saveCurrentSession() {
-        guard let sessionStore else {
-            return
-        }
-        if tabs.isEmpty {
-            let tab = BrowserTabStore(url: fallbackURL, automaticallyLoadsInitialRequest: false)
-            tabs = [tab]
-            selectedTabID = tab.id
-            configureTabCallbacks()
-            stateRevision += 1
-        }
-
-        let selectedID = tabs.contains(where: { $0.id == selectedTabID }) ? selectedTabID : tabs[0].id
-        selectedTabID = selectedID
-
-        var tabStateDataByID: [UUID: Data] = [:]
-        let tabSnapshots = tabs.map { tab in
-            if let stateData = tab.interactionStateData {
-                tabStateDataByID[tab.id] = stateData
-            }
-            return tab.snapshot(stateFileName: BrowserTabStore.Snapshot.stateFileName(for: tab.id))
-        }
-
-        let snapshot = BrowserSessionStore.Snapshot(selectedTabID: selectedID, tabs: tabSnapshots)
-        try? sessionStore.save(snapshot: snapshot, tabStateDataByID: tabStateDataByID)
+        persistenceCoordinator.preserveSession(immediate: immediate)
     }
 }

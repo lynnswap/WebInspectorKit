@@ -731,7 +731,7 @@ private extension MonoclyLifecycleTests {
     func makeHostedRootViewController(context: TestContext) throws -> HostedRootFixture {
         let windowScene = try makeWindowScene()
         let launchConfiguration = BrowserLaunchConfiguration(initialURL: URL(string: "about:blank")!)
-        let store = BrowserStore(
+        let store = BrowserWindowStore(
             url: launchConfiguration.initialURL,
             automaticallyLoadsInitialRequest: false,
             sessionStore: nil

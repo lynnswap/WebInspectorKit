@@ -27,11 +27,15 @@ final class BrowserPageViewController: UIViewController {
         ]
     }
 
-    private let store: BrowserStore
+    private let store: BrowserWindowStore
     private let inspectorSession: WebInspectorSession
     private let launchConfiguration: BrowserLaunchConfiguration
     private let inspectorCoordinator = BrowserInspectorCoordinator()
     private var storeObservation: PortableObservationTracking.Token?
+    private var selectedTabObservation: PortableObservationTracking.Token?
+    private var inspectorPresentationObservation: PortableObservationTracking.Token?
+    private weak var observedTab: BrowserTabStore?
+    private var hasBoundSelectedTab = false
 
     private let progressView = UIProgressView(progressViewStyle: .bar)
 
@@ -67,11 +71,12 @@ final class BrowserPageViewController: UIViewController {
     private var progressHeightConstraint: NSLayoutConstraint?
     private let progressHideScheduler: MainActorDelayScheduling
     private var isProgressHideAnimationInFlight = false
+    private var isInspectorPresenting = false
     private var currentChromePlacement: ChromePlacement?
     var onSelectedWebViewInstalled: ((WKWebView) -> Void)?
 
     init(
-        store: BrowserStore,
+        store: BrowserWindowStore,
         inspectorSession: WebInspectorSession,
         launchConfiguration: BrowserLaunchConfiguration,
         progressHideScheduler: MainActorDelayScheduling = MainActorDelayScheduler()
@@ -81,9 +86,6 @@ final class BrowserPageViewController: UIViewController {
         self.launchConfiguration = launchConfiguration
         self.progressHideScheduler = progressHideScheduler
         super.init(nibName: nil, bundle: nil)
-        inspectorCoordinator.onPresentationStateChange = { [weak self] in
-            self?.refreshChromeControls()
-        }
     }
 
     @available(*, unavailable)
@@ -95,6 +97,8 @@ final class BrowserPageViewController: UIViewController {
         progressHideScheduler.cancel()
         viewportCoordinator?.invalidate()
         storeObservation?.cancel()
+        selectedTabObservation?.cancel()
+        inspectorPresentationObservation?.cancel()
         if let inspectorWindowObserverID {
             BrowserInspectorCoordinator.removeInspectorWindowObservation(inspectorWindowObserverID)
         }
@@ -108,8 +112,12 @@ final class BrowserPageViewController: UIViewController {
         configureChrome()
 
         startObservingStore()
+        startObservingInspectorPresentation()
         inspectorWindowObserverID = BrowserInspectorCoordinator.observeInspectorWindowPresentation { [weak self] _ in
-            self?.refreshChromeControls()
+            guard let self else {
+                return
+            }
+            inspectorCoordinator.refreshPresentationState(presenter: navigationController ?? self)
         }
 
         registerForTraitChanges([UITraitHorizontalSizeClass.self]) { (self: Self, _) in
@@ -138,8 +146,30 @@ final class BrowserPageViewController: UIViewController {
             guard let self else {
                 return
             }
-            renderState(from: store)
-            maybeAutoPresentInspectorIfNeeded()
+            scheduleSelectedTabBinding(store.selectedTab)
+        }
+    }
+
+    private func scheduleSelectedTabBinding(_ tab: BrowserTabStore?) {
+        let tabID = tab?.id
+        Task { @MainActor [weak self, tab] in
+            guard let self else {
+                return
+            }
+            guard self.store.selectedTab?.id == tabID else {
+                return
+            }
+            self.bindSelectedTab(tab)
+        }
+    }
+
+    private func startObservingInspectorPresentation() {
+        inspectorPresentationObservation?.cancel()
+        inspectorPresentationObservation = withPortableContinuousObservation { [weak self] _ in
+            guard let self else {
+                return
+            }
+            renderChromeControls(isInspectorPresenting: inspectorCoordinator.presentationState.isPresenting)
         }
     }
 
@@ -154,7 +184,7 @@ final class BrowserPageViewController: UIViewController {
     }
 
     private func configureViewHierarchy() {
-        view.backgroundColor = store.underPageBackgroundColor ?? .clear
+        view.backgroundColor = store.selectedTab?.underPageBackgroundColor ?? .clear
 
         progressView.translatesAutoresizingMaskIntoConstraints = false
         progressView.trackTintColor = .clear
@@ -177,7 +207,10 @@ final class BrowserPageViewController: UIViewController {
     }
 
     private func installSelectedWebViewIfNeeded() {
-        let webView = store.webView
+        installWebViewIfNeeded(store.webView)
+    }
+
+    private func installWebViewIfNeeded(_ webView: WKWebView) {
         guard hostedWebView !== webView else {
             return
         }
@@ -264,10 +297,19 @@ final class BrowserPageViewController: UIViewController {
     }
 
     private func refreshChromeControls() {
+        inspectorCoordinator.refreshPresentationState(presenter: navigationController ?? self)
+        renderChromeControls(isInspectorPresenting: inspectorCoordinator.presentationState.isPresenting)
+    }
+
+    private func renderChromeControls(isInspectorPresenting: Bool) {
+        self.isInspectorPresenting = isInspectorPresenting
         let placement = currentChromePlacement ?? resolvedChromePlacement()
         applyAccessibilityIdentifiers(for: placement)
         refreshInspectorButtonConfiguration(for: placement)
-        syncNavigationButtonStates(store: store)
+        syncNavigationButtonStates(
+            tab: observedTab ?? store.selectedTab,
+            isInspectorPresenting: isInspectorPresenting
+        )
     }
 
     private func applyAccessibilityIdentifiers(for placement: ChromePlacement) {
@@ -389,7 +431,8 @@ final class BrowserPageViewController: UIViewController {
     }
 
     private func makeInspectorMenu(for placement: ChromePlacement) -> UIMenu {
-        let isInspectorOpen = inspectorCoordinator.isPresentingInspector(presenter: navigationController ?? self)
+        inspectorCoordinator.refreshPresentationState(presenter: navigationController ?? self)
+        let isInspectorOpen = inspectorCoordinator.presentationState.isPresenting
         let disableMenuActions = placement == .compactToolbar ? false : isInspectorOpen
         let openAsSheetAttributes: UIMenuElement.Attributes = disableMenuActions ? [.disabled] : []
         let openInWindowAttributes: UIMenuElement.Attributes = disableMenuActions ? [.disabled] : []
@@ -456,32 +499,61 @@ final class BrowserPageViewController: UIViewController {
         traitCollection.horizontalSizeClass == .regular ? .regularNavigationBar : .compactToolbar
     }
 
-    private func syncNavigationButtonStates(store: BrowserStore? = nil) {
-        let store = store ?? self.store
-        let canGoBack = store.canGoBack
-        let canGoForward = store.canGoForward
-        let canOpenInspector = inspectorCoordinator.isPresentingInspector(presenter: navigationController ?? self) == false
+    private func syncNavigationButtonStates(
+        tab: BrowserTabStore?,
+        isInspectorPresenting: Bool
+    ) {
+        let canGoBack = tab?.canGoBack ?? false
+        let canGoForward = tab?.canGoForward ?? false
+        let canOpenInspector = isInspectorPresenting == false
 
         backButtonItem.isEnabled = canGoBack
         forwardButtonItem.isEnabled = canGoForward
         inspectorButtonItem.isEnabled = canOpenInspector
     }
 
-    private func renderState(from store: BrowserStore) {
+    private func bindSelectedTab(_ tab: BrowserTabStore?) {
+        if hasBoundSelectedTab, observedTab === tab {
+            return
+        }
+
+        hasBoundSelectedTab = true
+        selectedTabObservation?.cancel()
+        selectedTabObservation = nil
+        observedTab = tab
+
+        guard let tab else {
+            return
+        }
+
+        installWebViewIfNeeded(tab.webView)
+        renderSelectedTab(tab)
+        selectedTabObservation = withPortableContinuousObservation { [weak self, weak tab] _ in
+            guard let self, let tab, self.observedTab === tab else {
+                return
+            }
+            renderSelectedTab(tab)
+            maybeAutoPresentInspectorIfNeeded()
+        }
+    }
+
+    private func renderSelectedTab(_ tab: BrowserTabStore) {
         guard isViewLoaded else {
             return
         }
 
-        installSelectedWebViewIfNeeded()
-        navigationItem.title = store.displayTitle
-        syncNavigationButtonStates(store: store)
-
-        renderProgressIndicator(
-            isVisible: store.isShowingProgress,
-            progress: store.estimatedProgress
+        navigationItem.title = tab.displayTitle
+        syncNavigationButtonStates(
+            tab: tab,
+            isInspectorPresenting: isInspectorPresenting
         )
 
-        view.backgroundColor = store.underPageBackgroundColor ?? .clear
+        renderProgressIndicator(
+            isVisible: tab.isShowingProgress,
+            progress: tab.estimatedProgress
+        )
+
+        view.backgroundColor = tab.underPageBackgroundColor ?? .clear
     }
 
     private func renderProgressIndicator(isVisible: Bool, progress: Double) {
@@ -534,7 +606,8 @@ final class BrowserPageViewController: UIViewController {
         }
 
         progressHideScheduler.schedule(nanoseconds: ProgressIndicator.completionHoldDuration) { [weak self] in
-            guard let self, self.store.isShowingProgress == false else {
+            guard let self,
+                  self.observedTab?.isShowingProgress == false else {
                 return
             }
 
@@ -550,7 +623,7 @@ final class BrowserPageViewController: UIViewController {
                     return
                 }
                 self.isProgressHideAnimationInFlight = false
-                guard finished, self.store.isShowingProgress == false else {
+                guard finished, self.observedTab?.isShowingProgress == false else {
                     return
                 }
 
@@ -597,7 +670,7 @@ final class BrowserPageViewController: UIViewController {
         guard launchConfiguration.shouldAutoOpenInspector else {
             return
         }
-        guard store.didFinishNavigationCount > 0 else {
+        guard observedTab?.didFinishNavigationCount ?? 0 > 0 else {
             return
         }
 
@@ -627,4 +700,32 @@ final class BrowserPageViewController: UIViewController {
         inspectorCoordinator.isPresentingInspector(presenter: navigationController ?? self)
     }
 }
+
+#if DEBUG
+extension BrowserPageViewController {
+    var selectedTabObservationIsActiveForTesting: Bool {
+        selectedTabObservation != nil
+    }
+
+    var hostedWebViewForTesting: WKWebView? {
+        hostedWebView
+    }
+
+    var progressViewForTesting: UIProgressView {
+        progressView
+    }
+
+    var backButtonItemForTesting: UIBarButtonItem {
+        backButtonItem
+    }
+
+    var forwardButtonItemForTesting: UIBarButtonItem {
+        forwardButtonItem
+    }
+
+    var inspectorButtonItemForTesting: UIBarButtonItem {
+        inspectorButtonItem
+    }
+}
+#endif
 #endif

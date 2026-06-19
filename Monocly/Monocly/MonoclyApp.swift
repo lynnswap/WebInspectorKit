@@ -300,7 +300,7 @@ final class MonoclyMainSceneDelegate: NSObject, UIWindowSceneDelegate {
             let sessionStore = sessionStore ?? BrowserSessionStore(
                 sceneSessionPersistentIdentifier: windowScene.session.persistentIdentifier
             )
-            let store = BrowserStore(
+            let store = BrowserWindowStore(
                 restoring: sessionStore.load(),
                 fallbackURL: launchConfiguration.initialURL,
                 sessionStore: sessionStore
