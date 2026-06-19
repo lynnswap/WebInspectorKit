@@ -191,10 +191,8 @@ package final class NetworkCompactNavigationController: UINavigationController, 
     }
 
     private func scheduleStackSyncAfterCurrentTransitionIfNeeded(to target: StackTarget, animated: Bool) -> Bool {
-        if let activeTransition {
-            if activeTransition.target != target {
-                mergeDeferredStackSync(to: target, animated: animated)
-            }
+        if activeTransition != nil {
+            mergeDeferredStackSync(to: target, animated: animated)
             return true
         }
         guard let transitionCoordinator else {
