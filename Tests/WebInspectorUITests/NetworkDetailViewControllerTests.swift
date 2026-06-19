@@ -1585,6 +1585,58 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func rebindingPreviewBodyCancelsOutgoingTextPreparation() async throws {
+        let network = NetworkSession()
+        let firstRequest = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://example.com/api/large.json",
+                responseHeaders: ["content-type": "application/json"],
+                responseMimeType: "application/json"
+            )
+        )
+        let secondRequest = try #require(
+            applyRequest(
+                to: network,
+                requestID: "2",
+                url: "https://example.com/api/current.json",
+                responseHeaders: ["content-type": "application/json"],
+                responseMimeType: "application/json"
+            )
+        )
+        let largeJSON = "[" + (0..<80_000).map { #"{"value":\#($0),"enabled":true}"# }.joined(separator: ",") + "]"
+        firstRequest.applyResponseBody(
+            NetworkBody.Payload(body: largeJSON, base64Encoded: false)
+        )
+        secondRequest.applyResponseBody(
+            NetworkBody.Payload(body: #"{"ok":true}"#, base64Encoded: false)
+        )
+        let firstBody = try #require(firstRequest.responseBody)
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(firstRequest)
+        let viewController = NetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
+
+        let didStartFirstPreparation = await waitUntilRendered(in: viewController) {
+            viewController.currentPreviewRoleForTesting == .response
+                && firstBody.hasActiveTextRepresentationPreparationForTesting
+        }
+        #expect(didStartFirstPreparation)
+
+        model.selectRequest(secondRequest)
+
+        let didRenderSecondRequest = await waitUntilRendered(in: viewController) {
+            viewController.bodyViewControllerForTesting.syntaxViewForTesting.text.contains(#""ok""#)
+                && firstBody.hasActiveTextRepresentationPreparationForTesting == false
+        }
+        #expect(didRenderSecondRequest)
+        #expect(firstBody.hasActiveTextRepresentationPreparationForTesting == false)
+    }
+
+    @Test
     func compactContainerPushesAndPopsDetailFromSelection() async throws {
         let network = NetworkSession()
         let request = try #require(applyRequest(to: network, requestID: "1", url: "https://example.com/app.js"))
@@ -1613,6 +1665,60 @@ struct NetworkDetailViewControllerTests {
             navigationController.viewControllers == [listViewController]
         }
         #expect(didPop)
+    }
+
+    @Test
+    func compactProgrammaticPopKeepsDetailSurfaceUntilTransitionCompletes() async throws {
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://example.com/api/data.txt",
+                responseHeaders: ["content-type": "text/plain"],
+                responseMimeType: "text/plain"
+            )
+        )
+        request.applyResponseBody(
+            NetworkBody.Payload(body: "visible detail body", base64Encoded: false)
+        )
+        let model = NetworkPanelModel(network: network)
+        let listViewController = NetworkListViewController(model: model)
+        let detailViewController = NetworkDetailViewController(model: model)
+        detailViewController.setModeForTesting(.preview)
+        let navigationController = NetworkCompactNavigationController(
+            model: model,
+            listViewController: listViewController,
+            detailViewController: detailViewController
+        )
+        let window = showInWindow(navigationController, makeVisible: true)
+        defer { window.isHidden = true }
+
+        model.selectRequest(request)
+        let didPush = await waitUntilNavigationStackSynced(in: navigationController) {
+            navigationController.viewControllers.last === detailViewController
+        }
+        #expect(didPush)
+        await waitForNavigationTransitionToFinish(in: navigationController)
+
+        let didRenderDetail = await waitUntilRendered(in: detailViewController) {
+            detailViewController.previewViewForTesting.isHidden == false
+                && detailViewController.bodyViewControllerForTesting.syntaxViewForTesting.text == "visible detail body"
+        }
+        #expect(didRenderDetail)
+
+        model.selectRequest(nil)
+        if navigationController.transitionCoordinator != nil {
+            #expect(detailViewController.previewViewForTesting.isHidden == false)
+            #expect(detailViewController.bodyViewControllerForTesting.syntaxViewForTesting.text == "visible detail body")
+        }
+
+        let didPop = await waitUntilNavigationStackSynced(in: navigationController) {
+            navigationController.viewControllers == [listViewController]
+        }
+        #expect(didPop)
+        await waitForNavigationTransitionToFinish(in: navigationController)
+        #expect(detailViewController.previewViewForTesting.isHidden)
     }
 
     @Test

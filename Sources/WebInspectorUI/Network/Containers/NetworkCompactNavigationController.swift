@@ -12,6 +12,7 @@ package final class NetworkCompactNavigationController: UINavigationController, 
     private var isSyncingStack = false
     private var isStackSyncScheduledAfterTransition = false
     private var pendingStackSyncAnimates = false
+    private var pendingDetailSurfaceDiscardAfterProgrammaticPop = false
 
     package init(
         model: NetworkPanelModel,
@@ -68,8 +69,15 @@ package final class NetworkCompactNavigationController: UINavigationController, 
         didShow viewController: UIViewController,
         animated: Bool
     ) {
+        guard viewController === listViewController else {
+            return
+        }
+        if pendingDetailSurfaceDiscardAfterProgrammaticPop {
+            pendingDetailSurfaceDiscardAfterProgrammaticPop = false
+            detailViewController.discardDetailSurfaceAfterCompactRemoval()
+            return
+        }
         guard isSyncingStack == false,
-              viewController === listViewController,
               model.selectedRequest != nil else {
             return
         }
@@ -130,7 +138,7 @@ package final class NetworkCompactNavigationController: UINavigationController, 
             return
         }
         if viewControllers.contains(where: { $0 === detailViewController }) {
-            detailViewController.discardDetailSurfaceAfterCompactRemoval()
+            pendingDetailSurfaceDiscardAfterProgrammaticPop = true
         }
         setViewControllers([listViewController], animated: animated)
     }

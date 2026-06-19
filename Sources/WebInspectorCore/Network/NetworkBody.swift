@@ -121,6 +121,12 @@ extension NetworkBody {
             job?.preparation
         }
 
+#if DEBUG
+        var hasCurrentPreparation: Bool {
+            job != nil
+        }
+#endif
+
         func withInvalidationBatch(_ updates: () -> Void, invalidate: () -> Void) {
             isBatchingInvalidation = true
             updates()
@@ -320,6 +326,12 @@ package final class NetworkBody {
     package func cancelTextRepresentationPreparation() {
         textRepresentationPreparation.cancelPreparation()
     }
+
+#if DEBUG
+    package var hasActiveTextRepresentationPreparationForTesting: Bool {
+        textRepresentationPreparation.hasCurrentPreparation
+    }
+#endif
 
     package static func makeRequestBody(for request: NetworkRequest.Payload) -> NetworkBody? {
         guard let postData = request.postData else {

@@ -21,6 +21,38 @@ final class NetworkBodyViewController: UIViewController {
         case compactRemoval
     }
 
+    private struct SurfaceBinding {
+        enum Kind {
+            case none
+            case unavailableBodyPlaceholder
+            case body
+        }
+
+        var kind: Kind
+        weak var body: NetworkBody?
+        var metadata: NetworkBodyViewController.PreviewMetadata?
+
+        static let none = SurfaceBinding(kind: .none, body: nil, metadata: nil)
+        static let unavailableBodyPlaceholder = SurfaceBinding(kind: .unavailableBodyPlaceholder, body: nil, metadata: nil)
+
+        static func body(
+            _ body: NetworkBody,
+            metadata: NetworkBodyViewController.PreviewMetadata?
+        ) -> SurfaceBinding {
+            SurfaceBinding(kind: .body, body: body, metadata: metadata)
+        }
+
+        var hasRenderableSurface: Bool {
+            kind != .none
+        }
+
+        func isEquivalent(to other: SurfaceBinding) -> Bool {
+            kind == other.kind
+                && body === other.body
+                && metadata == other.metadata
+        }
+    }
+
     private let syntaxModel = SyntaxEditorModel(
         text: "",
         language: .json,
@@ -56,9 +88,7 @@ final class NetworkBodyViewController: UIViewController {
     }()
     private var bodyObservation: PortableObservationTracking.Token?
     private weak var scrollEdgeSink: (any NetworkBodyScrollEdgeSink)?
-    private weak var body: NetworkBody?
-    private var metadata: NetworkBodyViewController.PreviewMetadata?
-    private var hasDisplayedBody = false
+    private var surfaceBinding = SurfaceBinding.none
     private var isRenderingActive = false
     private var mediaPlayerViewController: AVPlayerViewController?
     private var mediaPlayerURL: URL?
@@ -122,58 +152,36 @@ final class NetworkBodyViewController: UIViewController {
     }
 
     func bindSurface(body: NetworkBody?, metadata: NetworkBodyViewController.PreviewMetadata?) {
-        guard hasDisplayedBody == false || self.body !== body else {
-            guard self.metadata != metadata else {
-                return
-            }
-            self.metadata = metadata
-            if isRenderingActive {
-                renderBody(body)
-            }
-            return
+        let nextBinding: SurfaceBinding
+        if let body {
+            nextBinding = .body(body, metadata: metadata)
+        } else {
+            nextBinding = .unavailableBodyPlaceholder
         }
-        hasDisplayedBody = true
-        self.body = body
-        self.metadata = metadata
-        startObserving(body: body)
-        if isRenderingActive {
-            renderBody(body)
-        }
+        setSurfaceBinding(nextBinding, discardsVisibleResources: false)
     }
 
     func discardSurface(reason: SurfaceDiscardReason) {
-        let shouldRenderUnavailableBodyPlaceholder = reason == .missingPreviewBody
-        hasDisplayedBody = shouldRenderUnavailableBodyPlaceholder
-        body = nil
-        metadata = nil
-        startObserving(body: nil)
-        mediaPreviewCoordinator.cancel()
         switch reason {
         case .missingPreviewBody:
-            if isRenderingActive {
-                renderBody(nil)
-            } else {
-                hideMediaPreview()
-                scrollEdgeSink?.contentScrollView = nil
-            }
+            setSurfaceBinding(.unavailableBodyPlaceholder, discardsVisibleResources: true)
         case .emptySelection, .headersMode, .compactRemoval:
-            hideMediaPreview()
-            scrollEdgeSink?.contentScrollView = nil
+            setSurfaceBinding(.none, discardsVisibleResources: true)
         }
     }
 
     func resumeRendering() {
         guard isRenderingActive == false else {
-            if hasDisplayedBody {
-                renderBody(body)
+            if surfaceBinding.hasRenderableSurface {
+                renderCurrentSurface()
             }
             return
         }
 
         isRenderingActive = true
-        startObserving(body: body)
-        if hasDisplayedBody {
-            renderBody(body)
+        startObserving(body: surfaceBinding.body)
+        if surfaceBinding.hasRenderableSurface {
+            renderCurrentSurface()
         }
     }
 
@@ -188,9 +196,38 @@ final class NetworkBodyViewController: UIViewController {
 #if DEBUG
         bodyObservationDelivery = nil
 #endif
-        body?.cancelTextRepresentationPreparation()
+        surfaceBinding.body?.cancelTextRepresentationPreparation()
         mediaPreviewCoordinator.suspendPreparation()
         pauseMediaPreviewPlayback()
+    }
+
+    private func setSurfaceBinding(
+        _ nextBinding: SurfaceBinding,
+        discardsVisibleResources: Bool
+    ) {
+        guard surfaceBinding.isEquivalent(to: nextBinding) == false else {
+            if isRenderingActive, nextBinding.hasRenderableSurface {
+                renderCurrentSurface()
+            }
+            return
+        }
+
+        let previousBody = surfaceBinding.body
+        let nextBody = nextBinding.body
+        if previousBody !== nextBody {
+            previousBody?.cancelTextRepresentationPreparation()
+        }
+
+        surfaceBinding = nextBinding
+        startObserving(body: nextBody)
+
+        if isRenderingActive, nextBinding.hasRenderableSurface {
+            renderCurrentSurface()
+        } else if discardsVisibleResources {
+            mediaPreviewCoordinator.cancel()
+            hideMediaPreview()
+            scrollEdgeSink?.contentScrollView = nil
+        }
     }
 
     private func configureSyntaxView() {
@@ -264,7 +301,7 @@ final class NetworkBodyViewController: UIViewController {
         let token = withPortableContinuousObservation { [weak self, weak body] _ in
             guard let self,
                   let body,
-                  body === self.body else {
+                  body === self.surfaceBinding.body else {
                 return
             }
             self.renderBody(body)
@@ -286,6 +323,17 @@ final class NetworkBodyViewController: UIViewController {
         }
     }
 #endif
+
+    private func renderCurrentSurface() {
+        switch surfaceBinding.kind {
+        case .none:
+            return
+        case .unavailableBodyPlaceholder:
+            renderBody(nil)
+        case .body:
+            renderBody(surfaceBinding.body)
+        }
+    }
 
     private func renderBody(_ body: NetworkBody?) {
         guard isRenderingActive else {
@@ -353,7 +401,7 @@ final class NetworkBodyViewController: UIViewController {
     }
 
     private func renderMediaPreviewIfPossible(for body: NetworkBody) -> Bool {
-        let action = mediaPreviewCoordinator.preparePreview(for: body, metadata: metadata) { [weak self] result in
+        let action = mediaPreviewCoordinator.preparePreview(for: body, metadata: surfaceBinding.metadata) { [weak self] result in
             self?.applyMediaPreviewResult(result)
         }
         switch action {
@@ -387,7 +435,7 @@ final class NetworkBodyViewController: UIViewController {
         case .ignore:
             return
         case .fallback:
-            renderBody(body)
+            renderCurrentSurface()
         case .showImage(let image):
             showImagePreview(image)
         case .showMovie(let fileURL):
