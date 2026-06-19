@@ -158,10 +158,15 @@ private struct NetworkTextPreviewInput: Equatable, Sendable {
     }
 
     private static func looksLikeJSON(_ text: String) -> Bool {
-        guard let firstNonWhitespace = text.first(where: { $0.isWhitespace == false }) else {
+        guard let firstNonWhitespace = text.unicodeScalars.first(where: { scalar in
+            scalar.value != 0x20
+                && scalar.value != 0x0A
+                && scalar.value != 0x0D
+                && scalar.value != 0x09
+        }) else {
             return false
         }
-        return firstNonWhitespace == "{" || firstNonWhitespace == "["
+        return firstNonWhitespace.value == 0x7B || firstNonWhitespace.value == 0x5B
     }
 }
 
@@ -186,24 +191,24 @@ private enum CancellableJSONPrettyPrinter {
     private struct Parser {
         private static let maximumNestingDepth = 128
 
-        private let text: String
-        private var index: String.Index
+        private let scalars: String.UnicodeScalarView
+        private var index: String.UnicodeScalarView.Index
         private var checkpointCounter = 0
 
         init(text: String) {
-            self.text = text
-            self.index = text.startIndex
+            self.scalars = text.unicodeScalars
+            self.index = scalars.startIndex
         }
 
         mutating func prettyPrintedJSON() throws -> String? {
             try skipWhitespace()
-            guard let first = currentCharacter,
-                  first == "{" || first == "[" else {
+            guard let first = currentScalar,
+                  first.value == 0x7B || first.value == 0x5B else {
                 return nil
             }
             let result = try parseValue(depth: 0)
             try skipWhitespace()
-            guard index == text.endIndex else {
+            guard index == scalars.endIndex else {
                 return nil
             }
             return result
@@ -214,26 +219,26 @@ private enum CancellableJSONPrettyPrinter {
                 return nil
             }
             try skipWhitespace()
-            guard let character = currentCharacter else {
+            guard let scalar = currentScalar else {
                 return nil
             }
-            switch character {
-            case "{":
+            switch scalar.value {
+            case 0x7B:
                 return try parseObject(depth: depth)
-            case "[":
+            case 0x5B:
                 return try parseArray(depth: depth)
-            case "\"":
+            case 0x22:
                 return try parseString()
-            case "t":
+            case 0x74:
                 return try consumeLiteral("true") ? "true" : nil
-            case "f":
+            case 0x66:
                 return try consumeLiteral("false") ? "false" : nil
-            case "n":
+            case 0x6E:
                 return try consumeLiteral("null") ? "null" : nil
-            case "-":
+            case 0x2D:
                 return try parseNumber()
             default:
-                if isASCIIDigit(character) {
+                if isASCIIDigit(scalar) {
                     return try parseNumber()
                 }
                 return nil
@@ -241,23 +246,23 @@ private enum CancellableJSONPrettyPrinter {
         }
 
         private mutating func parseObject(depth: Int) throws -> String? {
-            try consumeExpected("{")
+            try consumeExpected(0x7B)
             try skipWhitespace()
-            if try consumeIfPresent("}") {
+            if try consumeIfPresent(0x7D) {
                 return "{}"
             }
 
             var members: [String] = []
             while true {
                 try skipWhitespace()
-                guard currentCharacter == "\"" else {
+                guard currentScalar?.value == 0x22 else {
                     return nil
                 }
                 guard let key = try parseString() else {
                     return nil
                 }
                 try skipWhitespace()
-                guard try consumeIfPresent(":") else {
+                guard try consumeIfPresent(0x3A) else {
                     return nil
                 }
                 guard let value = try parseValue(depth: depth + 1) else {
@@ -265,10 +270,10 @@ private enum CancellableJSONPrettyPrinter {
                 }
                 members.append("\(indent(depth + 1))\(key) : \(value)")
                 try skipWhitespace()
-                if try consumeIfPresent("}") {
+                if try consumeIfPresent(0x7D) {
                     break
                 }
-                guard try consumeIfPresent(",") else {
+                guard try consumeIfPresent(0x2C) else {
                     return nil
                 }
             }
@@ -276,9 +281,9 @@ private enum CancellableJSONPrettyPrinter {
         }
 
         private mutating func parseArray(depth: Int) throws -> String? {
-            try consumeExpected("[")
+            try consumeExpected(0x5B)
             try skipWhitespace()
-            if try consumeIfPresent("]") {
+            if try consumeIfPresent(0x5D) {
                 return "[]"
             }
 
@@ -289,10 +294,10 @@ private enum CancellableJSONPrettyPrinter {
                 }
                 values.append("\(indent(depth + 1))\(value)")
                 try skipWhitespace()
-                if try consumeIfPresent("]") {
+                if try consumeIfPresent(0x5D) {
                     break
                 }
-                guard try consumeIfPresent(",") else {
+                guard try consumeIfPresent(0x2C) else {
                     return nil
                 }
             }
@@ -301,30 +306,30 @@ private enum CancellableJSONPrettyPrinter {
 
         private mutating func parseString() throws -> String? {
             let start = index
-            try consumeExpected("\"")
-            while let character = currentCharacter {
+            try consumeExpected(0x22)
+            while let scalar = currentScalar {
                 try checkpoint()
                 advance()
-                if character == "\"" {
-                    return String(text[start..<index])
+                if scalar.value == 0x22 {
+                    return String(scalars[start..<index])
                 }
-                if character == "\\" {
-                    guard let escaped = currentCharacter else {
+                if scalar.value == 0x5C {
+                    guard let escaped = currentScalar else {
                         return nil
                     }
                     advance()
-                    if escaped == "u" {
+                    if escaped.value == 0x75 {
                         for _ in 0..<4 {
-                            guard let scalar = currentCharacter,
+                            guard let scalar = currentScalar,
                                   isASCIIHexDigit(scalar) else {
                                 return nil
                             }
                             advance()
                         }
-                    } else if "\"\\/bfnrt".contains(escaped) == false {
+                    } else if isJSONEscapedCharacter(escaped) == false {
                         return nil
                     }
-                } else if character.unicodeScalars.contains(where: { $0.value < 0x20 }) {
+                } else if scalar.value < 0x20 {
                     return nil
                 }
             }
@@ -333,57 +338,57 @@ private enum CancellableJSONPrettyPrinter {
 
         private mutating func parseNumber() throws -> String? {
             let start = index
-            if try consumeIfPresent("-") == false {
+            if try consumeIfPresent(0x2D) == false {
                 try checkpoint()
             }
-            guard let firstDigit = currentCharacter,
+            guard let firstDigit = currentScalar,
                   isASCIIDigit(firstDigit) else {
                 return nil
             }
-            if firstDigit == "0" {
+            if firstDigit.value == 0x30 {
                 advance()
             } else {
-                while let character = currentCharacter,
-                      isASCIIDigit(character) {
+                while let scalar = currentScalar,
+                      isASCIIDigit(scalar) {
                     try checkpoint()
                     advance()
                 }
             }
-            if try consumeIfPresent(".") {
-                guard let digit = currentCharacter,
+            if try consumeIfPresent(0x2E) {
+                guard let digit = currentScalar,
                       isASCIIDigit(digit) else {
                     return nil
                 }
-                while let character = currentCharacter,
-                      isASCIIDigit(character) {
+                while let scalar = currentScalar,
+                      isASCIIDigit(scalar) {
                     try checkpoint()
                     advance()
                 }
             }
-            if let character = currentCharacter,
-               character == "e" || character == "E" {
+            if let scalar = currentScalar,
+               scalar.value == 0x65 || scalar.value == 0x45 {
                 advance()
-                if let sign = currentCharacter,
-                   sign == "+" || sign == "-" {
+                if let sign = currentScalar,
+                   sign.value == 0x2B || sign.value == 0x2D {
                     advance()
                 }
-                guard let digit = currentCharacter,
+                guard let digit = currentScalar,
                       isASCIIDigit(digit) else {
                     return nil
                 }
-                while let character = currentCharacter,
-                      isASCIIDigit(character) {
+                while let scalar = currentScalar,
+                      isASCIIDigit(scalar) {
                     try checkpoint()
                     advance()
                 }
             }
-            return String(text[start..<index])
+            return String(scalars[start..<index])
         }
 
         private mutating func consumeLiteral(_ literal: String) throws -> Bool {
-            for expected in literal {
+            for expected in literal.unicodeScalars {
                 try checkpoint()
-                guard currentCharacter == expected else {
+                guard currentScalar?.value == expected.value else {
                     return false
                 }
                 advance()
@@ -392,23 +397,26 @@ private enum CancellableJSONPrettyPrinter {
         }
 
         private mutating func skipWhitespace() throws {
-            while let character = currentCharacter,
-                  character == " " || character == "\n" || character == "\r" || character == "\t" {
+            while let scalar = currentScalar,
+                  scalar.value == 0x20
+                    || scalar.value == 0x0A
+                    || scalar.value == 0x0D
+                    || scalar.value == 0x09 {
                 try checkpoint()
                 advance()
             }
         }
 
-        private mutating func consumeExpected(_ expected: Character) throws {
-            guard currentCharacter == expected else {
+        private mutating func consumeExpected(_ expectedValue: UInt32) throws {
+            guard currentScalar?.value == expectedValue else {
                 return
             }
             try checkpoint()
             advance()
         }
 
-        private mutating func consumeIfPresent(_ expected: Character) throws -> Bool {
-            guard currentCharacter == expected else {
+        private mutating func consumeIfPresent(_ expectedValue: UInt32) throws -> Bool {
+            guard currentScalar?.value == expectedValue else {
                 return false
             }
             try checkpoint()
@@ -425,33 +433,34 @@ private enum CancellableJSONPrettyPrinter {
         }
 
         private mutating func advance() {
-            index = text.index(after: index)
+            index = scalars.index(after: index)
         }
 
-        private var currentCharacter: Character? {
-            index == text.endIndex ? nil : text[index]
+        private var currentScalar: Unicode.Scalar? {
+            index == scalars.endIndex ? nil : scalars[index]
         }
 
         private func indent(_ depth: Int) -> String {
             String(repeating: "  ", count: depth)
         }
 
-        private func isASCIIDigit(_ character: Character) -> Bool {
-            guard character.unicodeScalars.count == 1,
-                  let scalar = character.unicodeScalars.first else {
-                return false
-            }
+        private func isASCIIDigit(_ scalar: Unicode.Scalar) -> Bool {
             return (0x30...0x39).contains(scalar.value)
         }
 
-        private func isASCIIHexDigit(_ character: Character) -> Bool {
-            guard character.unicodeScalars.count == 1,
-                  let scalar = character.unicodeScalars.first else {
-                return false
-            }
+        private func isASCIIHexDigit(_ scalar: Unicode.Scalar) -> Bool {
             return (0x30...0x39).contains(scalar.value)
                 || (0x41...0x46).contains(scalar.value)
                 || (0x61...0x66).contains(scalar.value)
+        }
+
+        private func isJSONEscapedCharacter(_ scalar: Unicode.Scalar) -> Bool {
+            switch scalar.value {
+            case 0x22, 0x5C, 0x2F, 0x62, 0x66, 0x6E, 0x72, 0x74:
+                return true
+            default:
+                return false
+            }
         }
     }
 }

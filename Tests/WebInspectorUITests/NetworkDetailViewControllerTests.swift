@@ -698,6 +698,45 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func jsonPreviewFormatsCRLFWhitespace() async throws {
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://example.com/api/data.json",
+                responseHeaders: ["content-type": "application/json"],
+                responseMimeType: "application/json"
+            )
+        )
+        let bodyText = "{\r\n\"a\":1,\r\n\"b\":[true]\r\n}"
+        request.applyResponseBody(
+            NetworkBody.Payload(
+                body: bodyText,
+                base64Encoded: false
+            )
+        )
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model, initialMode: .preview)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didRenderPrettyBody = await waitUntilRendered(in: viewController) {
+            viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == """
+            {
+              "a" : 1,
+              "b" : [
+                true
+              ]
+            }
+            """
+        }
+
+        #expect(didRenderPrettyBody)
+    }
+
+    @Test
     func hlsResponsePreviewCoordinatorUsesOriginalPlaylistURL() throws {
         let playlistURL = "https://media.example.com/live/master.m3u8"
         let body = NetworkBody(
@@ -2077,6 +2116,57 @@ struct NetworkDetailViewControllerTests {
 
         #expect(listViewController.displayedRequestIDsForTesting.isEmpty)
         #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate + 1)
+    }
+
+    @Test
+    func hiddenListSuspendsBoundCellRenderingUntilAppearingAgain() async throws {
+        let network = NetworkSession()
+        let request = try #require(applyRequest(
+            to: network,
+            requestID: "1",
+            url: "https://media.example.com/clip.mp4",
+            responseHeaders: ["content-type": "video/mp4"],
+            responseMimeType: "video/mp4"
+        ))
+        let model = NetworkPanelModel(network: network)
+        let listViewController = NetworkListViewController(model: model)
+        let window = showInWindow(listViewController)
+        defer { window.isHidden = true }
+        await listViewController.flushPendingSnapshotUpdateForTesting()
+        listViewController.collectionViewForTesting.layoutIfNeeded()
+
+        let indexPath = IndexPath(item: 0, section: 0)
+        let cell = try #require(listViewController.networkListCellForTesting(at: indexPath))
+        #expect(cell.fileTypeLabelForTesting == "mp4")
+        #expect(cell.hasActiveRequestObservationForTesting)
+
+        listViewController.beginAppearanceTransition(false, animated: false)
+        listViewController.endAppearanceTransition()
+        #expect(cell.hasActiveRequestObservationForTesting == false)
+
+        network.applyResponseReceived(
+            targetID: ProtocolTarget.ID("page"),
+            requestID: NetworkRequest.ProtocolID("1"),
+            resourceType: .script,
+            response: NetworkRequest.Response.Payload(
+                url: request.request.url,
+                status: 200,
+                statusText: "OK",
+                headers: ["content-type": "text/css"],
+                mimeType: "text/css"
+            ),
+            timestamp: 4
+        )
+        await Task.yield()
+        await Task.yield()
+
+        #expect(cell.fileTypeLabelForTesting == "mp4")
+
+        listViewController.beginAppearanceTransition(true, animated: false)
+        listViewController.endAppearanceTransition()
+
+        #expect(cell.hasActiveRequestObservationForTesting)
+        #expect(cell.fileTypeLabelForTesting == "css")
     }
 
     @Test

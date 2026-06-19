@@ -220,6 +220,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
 
     private func resumeRendering() {
         snapshotCoordinator.resumeRendering()
+        setVisibleCellRenderingActive(true)
         renderSearchText(model.searchText)
         resourceFilterSelectionDidChange(effectiveResourceFilters: model.effectiveResourceFilters)
         renderSelectedRequestID(model.selectedRequestID)
@@ -233,6 +234,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         snapshotCoordinator.suspendRendering(hasPendingThrottledReload: hasPendingThrottledDisplayRowsReload)
         hasPendingThrottledDisplayRowsReload = false
         displayRowsReloadScheduler.cancel()
+        setVisibleCellRenderingActive(false)
     }
 
     private func scheduleThrottledDisplayRowsReload() {
@@ -386,7 +388,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
                 cell.unbind()
                 return
             }
-            cell.bind(request: request)
+            cell.bind(request: request, renderingActive: self?.snapshotCoordinator.isRenderingActive == true)
         }
         return UICollectionViewDiffableDataSource<SectionIdentifier, NetworkRequest.ID>(
             collectionView: collectionView
@@ -585,6 +587,15 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         }
     }
 
+    private func setVisibleCellRenderingActive(_ isActive: Bool) {
+        guard isViewLoaded else {
+            return
+        }
+        for cell in collectionView.visibleCells {
+            (cell as? NetworkListCell)?.setRenderingActive(isActive)
+        }
+    }
+
     override package func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         guard
             let requestID = dataSource.itemIdentifier(for: indexPath),
@@ -630,6 +641,10 @@ extension NetworkListViewController {
 
     package var displayedRequestIDsForTesting: [NetworkRequest.ID] {
         dataSource.snapshot().itemIdentifiers
+    }
+
+    package func networkListCellForTesting(at indexPath: IndexPath) -> NetworkListCell? {
+        collectionView.cellForItem(at: indexPath) as? NetworkListCell
     }
 
     package var hasPendingSnapshotUpdateForTesting: Bool {
