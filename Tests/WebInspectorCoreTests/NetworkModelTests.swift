@@ -324,6 +324,31 @@ func invalidJSONLookingPlainTextKeepsPlainTextSyntax() async {
 
 @Test
 @MainActor
+func jsonNumbersWithNonASCIIDigitsStayPlainText() async throws {
+    for text in [
+        #"{"n":-١}"#,
+        #"{"n":1²}"#,
+        #"{"n":1.٢}"#,
+        #"{"n":1e٢}"#,
+    ] {
+        let body = NetworkBody(
+            role: .response,
+            kind: .text,
+            full: text,
+            sourceSyntaxKind: .plainText,
+            phase: .loaded
+        )
+
+        let preparation = try #require(body.prepareTextRepresentation())
+        await preparation.wait()
+
+        #expect(body.textRepresentation == text)
+        #expect(body.textRepresentationSyntaxKind == .plainText)
+    }
+}
+
+@Test
+@MainActor
 func responseBodyFetchFailureIsTerminal() throws {
     let session = NetworkSession()
     let targetID = ProtocolTarget.ID("page")

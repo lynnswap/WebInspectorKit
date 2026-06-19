@@ -606,9 +606,12 @@ private enum CancellableJSONPrettyPrinter {
                 return try consumeLiteral("false") ? "false" : nil
             case "n":
                 return try consumeLiteral("null") ? "null" : nil
-            case "-", "0"..."9":
+            case "-":
                 return try parseNumber()
             default:
+                if isASCIIDigit(character) {
+                    return try parseNumber()
+                }
                 return nil
             }
         }
@@ -689,7 +692,7 @@ private enum CancellableJSONPrettyPrinter {
                     if escaped == "u" {
                         for _ in 0..<4 {
                             guard let scalar = currentCharacter,
-                                  scalar.isHexDigit else {
+                                  isASCIIHexDigit(scalar) else {
                                 return nil
                             }
                             advance()
@@ -710,25 +713,25 @@ private enum CancellableJSONPrettyPrinter {
                 try checkpoint()
             }
             guard let firstDigit = currentCharacter,
-                  firstDigit.isNumber else {
+                  isASCIIDigit(firstDigit) else {
                 return nil
             }
             if firstDigit == "0" {
                 advance()
             } else {
                 while let character = currentCharacter,
-                      character.isNumber {
+                      isASCIIDigit(character) {
                     try checkpoint()
                     advance()
                 }
             }
             if try consumeIfPresent(".") {
                 guard let digit = currentCharacter,
-                      digit.isNumber else {
+                      isASCIIDigit(digit) else {
                     return nil
                 }
                 while let character = currentCharacter,
-                      character.isNumber {
+                      isASCIIDigit(character) {
                     try checkpoint()
                     advance()
                 }
@@ -741,11 +744,11 @@ private enum CancellableJSONPrettyPrinter {
                     advance()
                 }
                 guard let digit = currentCharacter,
-                      digit.isNumber else {
+                      isASCIIDigit(digit) else {
                     return nil
                 }
                 while let character = currentCharacter,
-                      character.isNumber {
+                      isASCIIDigit(character) {
                     try checkpoint()
                     advance()
                 }
@@ -807,6 +810,24 @@ private enum CancellableJSONPrettyPrinter {
 
         private func indent(_ depth: Int) -> String {
             String(repeating: "  ", count: depth)
+        }
+
+        private func isASCIIDigit(_ character: Character) -> Bool {
+            guard character.unicodeScalars.count == 1,
+                  let scalar = character.unicodeScalars.first else {
+                return false
+            }
+            return (0x30...0x39).contains(scalar.value)
+        }
+
+        private func isASCIIHexDigit(_ character: Character) -> Bool {
+            guard character.unicodeScalars.count == 1,
+                  let scalar = character.unicodeScalars.first else {
+                return false
+            }
+            return (0x30...0x39).contains(scalar.value)
+                || (0x41...0x46).contains(scalar.value)
+                || (0x61...0x66).contains(scalar.value)
         }
     }
 }
