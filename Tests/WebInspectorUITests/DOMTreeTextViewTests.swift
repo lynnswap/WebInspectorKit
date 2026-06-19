@@ -319,6 +319,35 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func hidingWithHoveredPageHighlightRestoresHighlightWhileRenderingInactive() async throws {
+        let session = makeDOMSession()
+        let highlightRecorder = NodeActionRecorder()
+        let restoreRecorder = VoidActionRecorder()
+        let view = DOMTreeTextView(
+            dom: session,
+            highlightNodeAction: { nodeID, owner in
+                highlightRecorder.record(nodeID, owner: owner)
+            },
+            restoreHighlightAction: {
+                restoreRecorder.record()
+            }
+        )
+        view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
+        view.layoutIfNeeded()
+        view.setRenderingActive(true)
+        await view.waitForRenderedRowsForTesting()
+
+        view.hoverRowForTesting(containing: "<article")
+        _ = await highlightRecorder.nextNodeID()
+
+        view.setRenderingActive(false)
+        await restoreRecorder.next()
+
+        #expect(highlightRecorder.recordedOwners == [.transient])
+        #expect(restoreRecorder.recordCount == 1)
+    }
+
+    @Test
     func hoverHighlightCancelsPendingRestoreHighlight() async throws {
         let session = makeDOMSession()
         let highlightRecorder = NodeActionRecorder()

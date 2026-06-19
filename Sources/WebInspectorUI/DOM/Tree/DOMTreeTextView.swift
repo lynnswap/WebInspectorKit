@@ -545,6 +545,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
 
     private func suspendRenderingWork() {
         let hadCurrentRenderedRowsBuild = renderedRowsBuildCoordinator.hasCurrentBuild
+        let needsHoveredPageHighlightRestore = hoveredNodeID != nil
         domTreeRenderInvalidationTask?.cancel()
         domTreeRenderInvalidationTask = nil
         renderedRowsBuildCoordinator.cancel()
@@ -552,8 +553,12 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
             pendingDOMTreeRenderInvalidation = pendingDOMTreeRenderInvalidation?.merging(with: dom.treeRenderInvalidation) ?? dom.treeRenderInvalidation
             pendingDOMTreeRenderInvalidationRequiresRoute = true
         }
-        pageHighlightTask?.cancel()
-        pageHighlightTask = nil
+        if needsHoveredPageHighlightRestore {
+            clearHoveredRowAndRestoreSelectionHighlight()
+        } else {
+            pageHighlightTask?.cancel()
+            pageHighlightTask = nil
+        }
     }
 
     private func reconcileCurrentDOMInvalidationForActiveRendering() {
@@ -1173,9 +1178,6 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     private func clearHoveredRowAndRestoreSelectionHighlight() {
         pageHighlightTask?.cancel()
         clearHoveredRow()
-        guard isRenderingActive else {
-            return
-        }
         pageHighlightTask = Task { @MainActor [weak self, restoreHighlightAction] in
             await Task.yield()
             guard !Task.isCancelled,
