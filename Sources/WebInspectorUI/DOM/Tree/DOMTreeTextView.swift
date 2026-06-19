@@ -1038,6 +1038,11 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     private func select(_ nodeID: DOMNode.ID) {
         multiSelection.notePrimarySelection(nodeID)
         dom.selectNode(nodeID)
+        if isRenderingActive {
+            handleSelectedNodeChange(selectionRevision: dom.selectionRevision)
+        } else {
+            selectionReconciliationState.recordSelectionObservation(revision: dom.selectionRevision)
+        }
         queuePageSelectionHighlight(for: nodeID)
     }
 
@@ -2472,6 +2477,14 @@ extension DOMTreeTextView {
 
     var selectionObservationDeliveryForTesting: PortableObservationTracking.Token {
         selectionObservation!
+    }
+
+    func routeCurrentSelectionInvalidationForTesting() {
+        routeSelectionInvalidation(from: dom, selectionRevision: dom.selectionRevision)
+    }
+
+    func waitForPageHighlightTaskForTesting() async {
+        await pageHighlightTask?.value
     }
 
     var rowCountForTesting: Int {
