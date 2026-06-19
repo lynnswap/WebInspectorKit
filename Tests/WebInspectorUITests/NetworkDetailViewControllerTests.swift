@@ -663,6 +663,41 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func deeplyNestedJSONPreviewFallsBackToRawText() async throws {
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://example.com/api/deep.json",
+                responseHeaders: ["content-type": "application/json"],
+                responseMimeType: "application/json"
+            )
+        )
+        let bodyText = String(repeating: "[", count: 160) + "0" + String(repeating: "]", count: 160)
+        request.applyResponseBody(
+            NetworkBody.Payload(
+                body: bodyText,
+                base64Encoded: false
+            )
+        )
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model, initialMode: .preview)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didRenderRawBody = await waitUntilRendered(in: viewController) {
+            viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == bodyText
+        }
+        #expect(didRenderRawBody)
+
+        await viewController.bodyViewControllerForTesting.waitUntilTextPreviewPreparationFinishedForTesting()
+
+        #expect(viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == bodyText)
+    }
+
+    @Test
     func hlsResponsePreviewCoordinatorUsesOriginalPlaylistURL() throws {
         let playlistURL = "https://media.example.com/live/master.m3u8"
         let body = NetworkBody(

@@ -184,6 +184,8 @@ private enum CancellableJSONPrettyPrinter {
     }
 
     private struct Parser {
+        private static let maximumNestingDepth = 128
+
         private let text: String
         private var index: String.Index
         private var checkpointCounter = 0
@@ -208,6 +210,9 @@ private enum CancellableJSONPrettyPrinter {
         }
 
         private mutating func parseValue(depth: Int) throws -> String? {
+            guard depth <= Self.maximumNestingDepth else {
+                return nil
+            }
             try skipWhitespace()
             guard let character = currentCharacter else {
                 return nil
