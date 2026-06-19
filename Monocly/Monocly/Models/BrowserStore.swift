@@ -314,6 +314,13 @@ extension BrowserTabStore {
         static let sameDocumentNavigationSelector = NSSelectorFromString(
             deobfuscate([":", "Navigation", "Document", "Same", "did", ":", "navigation", ":", "webView", "_"])
         )
+        // _shouldOpenAppLinks
+        static let shouldOpenAppLinksSelector = NSSelectorFromString(
+            deobfuscate(["Links", "App", "Open", "should", "_"])
+        )
+        // _WKNavigationActionPolicyAllowWithoutTryingAppLink
+        static let allowWithoutTryingAppLinkNavigationActionPolicy =
+            WKNavigationActionPolicy(rawValue: WKNavigationActionPolicy.allow.rawValue + 2) ?? .allow
         static let maximumHistoryMenuItemCount = 20
     }
 }
@@ -349,6 +356,7 @@ extension BrowserTabStore {
     @ObservationIgnored private(set) var initialRequestLoadCount = 0
     @ObservationIgnored private var isHoldingRestoredTitle: Bool
     @ObservationIgnored private var restoredInteractionState: Data?
+    @ObservationIgnored private var isRestoringInteractionStateNavigation = false
     @ObservationIgnored private var canSaveWebViewInteractionState = true
     @ObservationIgnored var onStateChanged: (() -> Void)?
     @ObservationIgnored private var titleObservationAppliedCount = 0
@@ -484,6 +492,7 @@ extension BrowserTabStore {
 
     func load(url: URL) {
         restoredInteractionState = nil
+        isRestoringInteractionStateNavigation = false
         markWebViewInteractionStatePendingNavigation()
         isHoldingRestoredTitle = false
         pageTitle = nil
@@ -510,8 +519,12 @@ extension BrowserTabStore {
 
         hasLoadedInitialRequest = true
         if let restoredInteractionState {
+            isRestoringInteractionStateNavigation = true
             webView.interactionState = restoredInteractionState
             self.restoredInteractionState = nil
+            if webView.isLoading == false {
+                isRestoringInteractionStateNavigation = false
+            }
             canSaveWebViewInteractionState = true
         } else {
             initialRequestLoadCount += 1
@@ -668,6 +681,39 @@ extension BrowserTabStore {
         markWebViewInteractionStateSynchronized()
     }
 
+    private func clearRestoredInteractionStateNavigationIfNeeded() {
+        isRestoringInteractionStateNavigation = false
+    }
+
+    static func restoredInteractionStateNavigationPolicy(
+        isRestoringInteractionStateNavigation: Bool,
+        targetFrameIsMainFrame: Bool?,
+        url: URL?,
+        shouldOpenAppLinks: Bool
+    ) -> WKNavigationActionPolicy? {
+        guard isRestoringInteractionStateNavigation,
+              targetFrameIsMainFrame == true,
+              shouldOpenAppLinks,
+              let scheme = url?.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" else {
+            return nil
+        }
+
+        return BrowserTabStore.SPI.allowWithoutTryingAppLinkNavigationActionPolicy
+    }
+
+    private static func shouldOpenAppLinks(from navigationAction: WKNavigationAction) -> Bool {
+        guard navigationAction.responds(to: BrowserTabStore.SPI.shouldOpenAppLinksSelector),
+              let method = class_getInstanceMethod(WKNavigationAction.self, BrowserTabStore.SPI.shouldOpenAppLinksSelector) else {
+            return false
+        }
+
+        typealias ShouldOpenAppLinksIMP = @convention(c) (AnyObject, Selector) -> Bool
+        let implementation = method_getImplementation(method)
+        let function = unsafeBitCast(implementation, to: ShouldOpenAppLinksIMP.self)
+        return function(navigationAction, BrowserTabStore.SPI.shouldOpenAppLinksSelector)
+    }
+
     private func isBenignNavigationCancellation(_ error: any Error) -> Bool {
         let nsError = error as NSError
         return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
@@ -816,6 +862,14 @@ extension BrowserTabStore {
 
 extension BrowserTabStore: WKNavigationDelegate {
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
+        if let restoredInteractionPolicy = Self.restoredInteractionStateNavigationPolicy(
+            isRestoringInteractionStateNavigation: isRestoringInteractionStateNavigation,
+            targetFrameIsMainFrame: navigationAction.targetFrame?.isMainFrame,
+            url: navigationAction.request.url,
+            shouldOpenAppLinks: Self.shouldOpenAppLinks(from: navigationAction)
+        ) {
+            return restoredInteractionPolicy
+        }
 #if canImport(AppKit)
         if navigationAction.navigationType == .linkActivated,
            navigationAction.modifierFlags.contains(.command),
@@ -841,6 +895,7 @@ extension BrowserTabStore: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        clearRestoredInteractionStateNavigationIfNeeded()
         didCommitNavigationCount += 1
         syncNavigationState(from: webView, clearsNavigationError: true)
     }
@@ -855,6 +910,7 @@ extension BrowserTabStore: WKNavigationDelegate {
 #if canImport(UIKit)
             endRefreshingIfNeeded()
 #endif
+            clearRestoredInteractionStateNavigationIfNeeded()
             syncNavigationState(from: webView)
             markWebViewInteractionStateSynchronizedIfNavigationSettled()
             return
@@ -863,6 +919,7 @@ extension BrowserTabStore: WKNavigationDelegate {
 #if canImport(UIKit)
         endRefreshingIfNeeded()
 #endif
+        clearRestoredInteractionStateNavigationIfNeeded()
         syncNavigationState(from: webView)
         markWebViewInteractionStateSynchronizedIfNavigationSettled()
     }
@@ -873,6 +930,7 @@ extension BrowserTabStore: WKNavigationDelegate {
 #if canImport(UIKit)
             endRefreshingIfNeeded()
 #endif
+            clearRestoredInteractionStateNavigationIfNeeded()
             syncNavigationState(from: webView)
             markWebViewInteractionStateSynchronizedIfNavigationSettled()
             return
@@ -881,6 +939,7 @@ extension BrowserTabStore: WKNavigationDelegate {
 #if canImport(UIKit)
         endRefreshingIfNeeded()
 #endif
+        clearRestoredInteractionStateNavigationIfNeeded()
         syncNavigationState(from: webView)
         markWebViewInteractionStateSynchronizedIfNavigationSettled()
     }
@@ -892,6 +951,7 @@ extension BrowserTabStore: WKNavigationDelegate {
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         logger.debug("\(#function) web content process terminated")
         isLoading = false
+        clearRestoredInteractionStateNavigationIfNeeded()
         markWebViewInteractionStatePendingNavigation()
         webContentTerminationCount += 1
         lastWebContentTerminationDate = Date()
@@ -901,6 +961,7 @@ extension BrowserTabStore: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        clearRestoredInteractionStateNavigationIfNeeded()
         didFinishNavigationCount += 1
         markWebViewInteractionStateSynchronized()
         if webView.title == nil {

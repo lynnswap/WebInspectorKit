@@ -294,6 +294,49 @@ struct BrowserSessionRestoreTests {
     }
 
     @Test
+    func restoredInteractionStateNavigationPolicySuppressesAppLinksOnlyDuringHTTPMainFrameRestore() throws {
+        let appLinkURL = try #require(URL(string: "https://app-link.test/search?q=monocly"))
+        let policy = BrowserTabStore.restoredInteractionStateNavigationPolicy(
+            isRestoringInteractionStateNavigation: true,
+            targetFrameIsMainFrame: true,
+            url: appLinkURL,
+            shouldOpenAppLinks: true
+        )
+
+        #expect(policy?.rawValue == WKNavigationActionPolicy.allow.rawValue + 2)
+        #expect(BrowserTabStore.restoredInteractionStateNavigationPolicy(
+            isRestoringInteractionStateNavigation: false,
+            targetFrameIsMainFrame: true,
+            url: appLinkURL,
+            shouldOpenAppLinks: true
+        ) == nil)
+        #expect(BrowserTabStore.restoredInteractionStateNavigationPolicy(
+            isRestoringInteractionStateNavigation: true,
+            targetFrameIsMainFrame: false,
+            url: appLinkURL,
+            shouldOpenAppLinks: true
+        ) == nil)
+        #expect(BrowserTabStore.restoredInteractionStateNavigationPolicy(
+            isRestoringInteractionStateNavigation: true,
+            targetFrameIsMainFrame: nil,
+            url: appLinkURL,
+            shouldOpenAppLinks: true
+        ) == nil)
+        #expect(BrowserTabStore.restoredInteractionStateNavigationPolicy(
+            isRestoringInteractionStateNavigation: true,
+            targetFrameIsMainFrame: true,
+            url: appLinkURL,
+            shouldOpenAppLinks: false
+        ) == nil)
+        #expect(BrowserTabStore.restoredInteractionStateNavigationPolicy(
+            isRestoringInteractionStateNavigation: true,
+            targetFrameIsMainFrame: true,
+            url: try #require(URL(string: "google://search?q=monocly")),
+            shouldOpenAppLinks: true
+        ) == nil)
+    }
+
+    @Test
     func explicitNavigationDoesNotSaveStaleRestoredInteractionStateForNewURL() throws {
         try withTemporarySessionStore { sessionStore, _ in
             let tabID = UUID()
