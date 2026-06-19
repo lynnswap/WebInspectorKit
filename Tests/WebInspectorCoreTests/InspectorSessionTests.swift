@@ -732,6 +732,21 @@ func selectedElementStyleHydrationSelectionChangeStartsReplacementRefresh() asyn
         after: secondSentCount,
         protocolNodeID: .init(2)
     )
+    let secondReplyKeys = [
+        TransportSession.ReplyKey(
+            targetID: secondMessages.matched.targetIdentifier,
+            commandID: try messageID(secondMessages.matched.message)
+        ),
+        TransportSession.ReplyKey(
+            targetID: secondMessages.inline.targetIdentifier,
+            commandID: try messageID(secondMessages.inline.message)
+        ),
+        TransportSession.ReplyKey(
+            targetID: secondMessages.computed.targetIdentifier,
+            commandID: try messageID(secondMessages.computed.message)
+        ),
+    ].sorted()
+    #expect(await transport.snapshot().pendingTargetReplyKeys == secondReplyKeys)
     #expect(try messageParameters(secondMessages.matched.message)["nodeId"] as? Int == 2)
     #expect(session.attachment.dom.elementStyles.selectedNodeStyles?.id.nodeID == htmlID)
     #expect(session.attachment.dom.elementStyles.selectedPhase == .loading)

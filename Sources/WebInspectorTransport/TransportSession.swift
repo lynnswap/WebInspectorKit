@@ -66,6 +66,7 @@ package actor TransportSession {
     }
 
     package func send(_ command: ProtocolCommand) async throws -> ProtocolCommand.Result {
+        try Task.checkCancellation()
         guard !closed else {
             throw TransportSession.Error.transportClosed
         }
@@ -192,15 +193,16 @@ package actor TransportSession {
             hasBufferedProvisionalResponse: false
         ), commandID: commandID)
         do {
+            try Task.checkCancellation()
             let message = try TransportMessageParser.makeCommandString(
                 id: commandID,
                 method: command.method,
                 parametersData: command.parametersData
             )
             try await backend.sendJSONString(message)
+            try Task.checkCancellation()
         } catch {
-            _ = replyStore.removeRootReply(commandID: commandID)
-            await promise.fulfill(.failure(error))
+            await failPendingReply(.root(commandID), error: error)
             throw error
         }
         return try await awaitReply(
@@ -227,6 +229,7 @@ package actor TransportSession {
             hasBufferedProvisionalResponse: false
         ), key: key, rootWrapperID: outerCommandID)
         do {
+            try Task.checkCancellation()
             let message = try TransportMessageParser.makeCommandString(
                 id: innerCommandID,
                 method: command.method,
@@ -238,9 +241,9 @@ package actor TransportSession {
                 message: message
             )
             try await backend.sendJSONString(wrapperMessage)
+            try Task.checkCancellation()
         } catch {
-            _ = replyStore.removeTargetReply(for: key)
-            await promise.fulfill(.failure(error))
+            await failPendingReply(.target(key), error: error)
             throw error
         }
         return try await awaitReply(
@@ -292,6 +295,9 @@ package actor TransportSession {
         method: String,
         targetID: ProtocolTarget.ID?
     ) async throws -> ProtocolCommand.Result {
+        if Task.isCancelled {
+            await failPendingReply(key, error: CancellationError())
+        }
         let timeoutTask: Task<Void, Never>? = responseTimeout.map { responseTimeout in
             let timeoutSleep = self.timeoutSleep
             let responseTimeoutDidFire = self.responseTimeoutDidFire
