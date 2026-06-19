@@ -165,6 +165,7 @@ final class NetworkBodyViewController: UIViewController {
 #endif
             body?.cancelTextRepresentationPreparation()
             mediaPreviewCoordinator.suspendPreparation()
+            pauseMediaPreviewPlayback()
         }
     }
 
@@ -447,6 +448,10 @@ final class NetworkBodyViewController: UIViewController {
         previewRenderState.showSyntax()
     }
 
+    private func pauseMediaPreviewPlayback() {
+        mediaPlayerViewController?.player?.pause()
+    }
+
     private func hideImagePreview() {
         imageScrollView.isHidden = true
         imageView.image = nil
@@ -532,6 +537,7 @@ final class NetworkBodyViewController: UIViewController {
         guard let mediaPlayerViewController else {
             return
         }
+        pauseMediaPreviewPlayback()
         mediaPlayerViewController.willMove(toParent: nil)
         mediaPlayerViewController.view.removeFromSuperview()
         mediaPlayerViewController.removeFromParent()
