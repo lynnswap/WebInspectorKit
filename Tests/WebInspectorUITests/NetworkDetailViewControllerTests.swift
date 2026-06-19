@@ -285,6 +285,67 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func previewRequestWithoutBodyReplacesPreviousBodyWithUnavailablePlaceholder() async throws {
+        let network = NetworkSession()
+        let targetID = ProtocolTarget.ID("page")
+        let bodyKey = network.applyRequestWillBeSent(
+            targetID: targetID,
+            requestID: NetworkRequest.ProtocolID("body"),
+            frameID: DOMFrame.ID("main"),
+            loaderID: "loader",
+            documentURL: "https://example.com",
+            request: NetworkRequest.Payload(
+                url: "https://example.com/form",
+                method: "POST",
+                headers: ["content-type": "application/x-www-form-urlencoded"],
+                postData: "name=Jane+Doe"
+            ),
+            resourceType: .xhr,
+            timestamp: 1
+        )
+        let emptyKey = network.applyRequestWillBeSent(
+            targetID: targetID,
+            requestID: NetworkRequest.ProtocolID("empty"),
+            frameID: DOMFrame.ID("main"),
+            loaderID: "loader",
+            documentURL: "https://example.com",
+            request: NetworkRequest.Payload(
+                url: "https://example.com/no-body",
+                method: "GET",
+                headers: [:]
+            ),
+            resourceType: .xhr,
+            timestamp: 2
+        )
+        let bodyRequest = try #require(network.request(for: bodyKey))
+        let emptyRequest = try #require(network.request(for: emptyKey))
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(bodyRequest)
+        let viewController = NetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
+
+        let didRenderBody = await waitUntilRendered(in: viewController) {
+            viewController.currentModeForTesting == .preview
+                && viewController.currentPreviewRoleForTesting == .request
+                && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == "name=Jane Doe"
+        }
+        #expect(didRenderBody)
+
+        model.selectRequest(emptyRequest)
+
+        let unavailableText = String(localized: "network.body.unavailable", bundle: .module)
+        let didReplaceBody = await waitUntilRendered(in: viewController) {
+            viewController.previewViewForTesting.isHidden == false
+                && viewController.isPreviewRoleControlHiddenForTesting
+                && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == unavailableText
+        }
+        #expect(didReplaceBody)
+        #expect(viewController.bodyViewControllerForTesting.syntaxViewForTesting.text.contains("Jane") == false)
+    }
+
+    @Test
     func detailUpdatesResponseHeadersAfterSelection() async throws {
         let network = NetworkSession()
         let targetID = ProtocolTarget.ID("page")

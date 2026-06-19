@@ -147,8 +147,13 @@ final class NetworkBodyViewController: UIViewController {
         metadata = nil
         startObserving(body: nil)
         mediaPreviewCoordinator.cancel()
-        hideMediaPreview()
-        scrollEdgeSink?.contentScrollView = nil
+        switch reason {
+        case .missingPreviewBody:
+            renderUnavailableBodyPlaceholder()
+        case .emptySelection, .headersMode, .compactRemoval:
+            hideMediaPreview()
+            scrollEdgeSink?.contentScrollView = nil
+        }
     }
 
     func resumeRendering() {
@@ -404,6 +409,19 @@ final class NetworkBodyViewController: UIViewController {
         applyScrollEdgeObservedBackgrounds()
         scrollEdgeSink?.contentScrollView = syntaxView
         previewRenderState.showSyntax()
+    }
+
+    private func renderUnavailableBodyPlaceholder() {
+        guard isRenderingActive else {
+            hideMediaPreview()
+            scrollEdgeSink?.contentScrollView = nil
+            return
+        }
+        hideMediaPreview()
+        applyBodyDisplay(
+            text: String(localized: "network.body.unavailable", bundle: .module),
+            syntaxKind: .plainText
+        )
     }
 
     private func showImagePreview(_ image: UIImage) {
