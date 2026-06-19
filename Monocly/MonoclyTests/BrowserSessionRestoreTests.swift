@@ -294,6 +294,43 @@ struct BrowserSessionRestoreTests {
     }
 
     @Test
+    func restoredInteractionStateNavigationPolicySuppressesAppLinksOnlyDuringHTTPMainFrameRestore() throws {
+        let appLinkURL = try #require(URL(string: "https://www.google.com/search?q=monocly"))
+        let policy = BrowserTabStore.restoredInteractionStateNavigationPolicy(
+            isRestoringInteractionStateNavigation: true,
+            isMainFrame: true,
+            url: appLinkURL,
+            shouldOpenAppLinks: true
+        )
+
+        #expect(policy?.rawValue == WKNavigationActionPolicy.allow.rawValue + 2)
+        #expect(BrowserTabStore.restoredInteractionStateNavigationPolicy(
+            isRestoringInteractionStateNavigation: false,
+            isMainFrame: true,
+            url: appLinkURL,
+            shouldOpenAppLinks: true
+        ) == nil)
+        #expect(BrowserTabStore.restoredInteractionStateNavigationPolicy(
+            isRestoringInteractionStateNavigation: true,
+            isMainFrame: false,
+            url: appLinkURL,
+            shouldOpenAppLinks: true
+        ) == nil)
+        #expect(BrowserTabStore.restoredInteractionStateNavigationPolicy(
+            isRestoringInteractionStateNavigation: true,
+            isMainFrame: true,
+            url: appLinkURL,
+            shouldOpenAppLinks: false
+        ) == nil)
+        #expect(BrowserTabStore.restoredInteractionStateNavigationPolicy(
+            isRestoringInteractionStateNavigation: true,
+            isMainFrame: true,
+            url: try #require(URL(string: "google://search?q=monocly")),
+            shouldOpenAppLinks: true
+        ) == nil)
+    }
+
+    @Test
     func explicitNavigationDoesNotSaveStaleRestoredInteractionStateForNewURL() throws {
         try withTemporarySessionStore { sessionStore, _ in
             let tabID = UUID()
