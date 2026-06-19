@@ -71,6 +71,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     private let renderedRowsBuildCoordinator: DOMTreeTextView.RenderedRowsBuildCoordinator
     private var hoveredNodeID: DOMNode.ID?
     private var pageHighlightTask: Task<Void, Never>?
+    private var isPageHighlightRestoreTaskQueued = false
     private var requestedChildNodeIDs: Set<DOMNode.ID> = []
     private let findDecorationState = DOMTreeTextView.FindDecorationState()
     private var hoverRowRects: [CGRect] = []
@@ -555,9 +556,8 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         }
         if needsHoveredPageHighlightRestore {
             clearHoveredRowAndRestoreSelectionHighlight()
-        } else {
-            pageHighlightTask?.cancel()
-            pageHighlightTask = nil
+        } else if isPageHighlightRestoreTaskQueued == false {
+            cancelPageHighlightTask()
         }
     }
 
@@ -1148,7 +1148,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         guard isRenderingActive else {
             return
         }
-        pageHighlightTask?.cancel()
+        cancelPageHighlightTask()
         pageHighlightTask = Task { @MainActor [weak self, highlightNodeAction] in
             await Task.yield()
             guard !Task.isCancelled,
@@ -1176,18 +1176,29 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func clearHoveredRowAndRestoreSelectionHighlight() {
-        pageHighlightTask?.cancel()
+        cancelPageHighlightTask()
         clearHoveredRow()
+        isPageHighlightRestoreTaskQueued = true
         pageHighlightTask = Task { @MainActor [weak self, restoreHighlightAction] in
             await Task.yield()
             guard !Task.isCancelled,
-                  let self,
-                  self.hoveredNodeID == nil,
+                  let self else {
+                return
+            }
+            guard self.hoveredNodeID == nil,
                   !self.dom.isSelectingElement else {
+                self.isPageHighlightRestoreTaskQueued = false
                 return
             }
             await restoreHighlightAction?()
+            self.isPageHighlightRestoreTaskQueued = false
         }
+    }
+
+    private func cancelPageHighlightTask() {
+        pageHighlightTask?.cancel()
+        pageHighlightTask = nil
+        isPageHighlightRestoreTaskQueued = false
     }
 
     private func presentDOMMenu(for nodes: [DOMNode], at location: CGPoint) {

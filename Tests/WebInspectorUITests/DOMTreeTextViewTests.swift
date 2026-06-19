@@ -348,6 +348,32 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func hidingWithQueuedHoverRestorePreservesHighlightRestoreTask() async throws {
+        let session = makeDOMSession()
+        let restoreRecorder = VoidActionRecorder()
+        let view = DOMTreeTextView(
+            dom: session,
+            highlightNodeAction: { _, _ in },
+            restoreHighlightAction: {
+                restoreRecorder.record()
+            }
+        )
+        view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
+        view.layoutIfNeeded()
+        view.setRenderingActive(true)
+        await view.waitForRenderedRowsForTesting()
+
+        view.primaryClickRowForTesting(containing: "<input disabled>")
+        view.hoverRowForTesting(containing: "<article")
+        view.endHoverForTesting()
+        view.setRenderingActive(false)
+        await restoreRecorder.next()
+
+        #expect(session.selectedNode?.localName == "input")
+        #expect(restoreRecorder.recordCount == 1)
+    }
+
+    @Test
     func hoverHighlightCancelsPendingRestoreHighlight() async throws {
         let session = makeDOMSession()
         let highlightRecorder = NodeActionRecorder()
