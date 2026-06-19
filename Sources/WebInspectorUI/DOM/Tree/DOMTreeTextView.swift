@@ -86,6 +86,8 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     private var domTreeRenderInvalidationTask: Task<Void, Never>?
     private var lastObservedTreeContent: DOMTreeTextView.ObservedContent?
     private var lastRoutedSelectedNodeID: DOMNode.ID?
+    private var isRenderingActive = false
+    private var hasPendingSelectionInvalidation = false
     private let selectionRevealState = DOMTreeTextView.SelectionRevealState()
     private var resolvedTextAttributesCache: DOMTreeTextView.ResolvedTextAttributes?
     private var disclosureSymbolImageCache: [DisclosureSymbolImageCacheKey: UIImage] = [:]
@@ -298,6 +300,26 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         } else {
             clearMultiSelection(keepingLast: row.nodeID)
             select(row.nodeID)
+        }
+    }
+
+    func setRenderingActive(_ isActive: Bool) {
+        guard isRenderingActive != isActive else {
+            if isActive {
+                reconcileCurrentDOMInvalidationForActiveRendering()
+                flushPendingDOMInvalidationIfNeeded()
+                flushPendingSelectionInvalidationIfNeeded()
+            }
+            return
+        }
+
+        isRenderingActive = isActive
+        if isActive {
+            reconcileCurrentDOMInvalidationForActiveRendering()
+            flushPendingDOMInvalidationIfNeeded()
+            flushPendingSelectionInvalidationIfNeeded()
+        } else {
+            suspendRenderingWork()
         }
     }
 
@@ -521,6 +543,38 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         }
     }
 
+    private func suspendRenderingWork() {
+        let hadCurrentRenderedRowsBuild = renderedRowsBuildCoordinator.hasCurrentBuild
+        domTreeRenderInvalidationTask?.cancel()
+        domTreeRenderInvalidationTask = nil
+        renderedRowsBuildCoordinator.cancel()
+        if hadCurrentRenderedRowsBuild {
+            pendingDOMTreeRenderInvalidation = pendingDOMTreeRenderInvalidation?.merging(with: dom.treeRenderInvalidation) ?? dom.treeRenderInvalidation
+            pendingDOMTreeRenderInvalidationRequiresRoute = true
+        }
+        pageHighlightTask?.cancel()
+        pageHighlightTask = nil
+    }
+
+    private func reconcileCurrentDOMInvalidationForActiveRendering() {
+        guard isRenderingActive else {
+            return
+        }
+
+        let latestInvalidation = dom.treeRenderInvalidation
+        let treeRevision = latestInvalidation.revision
+        let previousRoutedTreeRevision = lastRoutedTreeRevision
+        guard previousRoutedTreeRevision != treeRevision else {
+            return
+        }
+
+        lastRoutedTreeRevision = treeRevision
+        let invalidation = previousRoutedTreeRevision.map {
+            dom.treeRenderInvalidation(since: $0)
+        } ?? latestInvalidation
+        scheduleDOMInvalidation(invalidation, isInitial: previousRoutedTreeRevision == nil)
+    }
+
     private func scheduleDOMInvalidation(
         _ invalidation: DOMTreeRenderInvalidation,
         isInitial: Bool
@@ -535,7 +589,15 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
                     renderedRowsBuildCoordinator.currentBuildRenders(nodeID: nodeID)
                 }
             )
-        guard domTreeRenderInvalidationTask == nil else {
+        guard isRenderingActive else {
+            return
+        }
+        schedulePendingDOMInvalidationFlush()
+    }
+
+    private func schedulePendingDOMInvalidationFlush() {
+        guard isRenderingActive,
+              domTreeRenderInvalidationTask == nil else {
             return
         }
         domTreeRenderInvalidationTask = Task { @MainActor [weak self] in
@@ -543,22 +605,31 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
             guard let self else {
                 return
             }
-            let pendingInvalidation = pendingDOMTreeRenderInvalidation
-            let pendingIsInitial = pendingDOMTreeRenderInvalidationIsInitial
-            let pendingRequiresRoute = pendingDOMTreeRenderInvalidationRequiresRoute
-            pendingDOMTreeRenderInvalidation = nil
-            pendingDOMTreeRenderInvalidationIsInitial = false
-            pendingDOMTreeRenderInvalidationRequiresRoute = false
             domTreeRenderInvalidationTask = nil
-            guard let pendingInvalidation else {
-                return
-            }
-            routeDOMInvalidation(
-                pendingInvalidation,
-                isInitial: pendingIsInitial,
-                forceRoute: pendingRequiresRoute
-            )
+            flushPendingDOMInvalidationIfNeeded()
         }
+    }
+
+    private func flushPendingDOMInvalidationIfNeeded() {
+        guard isRenderingActive else {
+            return
+        }
+        domTreeRenderInvalidationTask?.cancel()
+        domTreeRenderInvalidationTask = nil
+        let pendingInvalidation = pendingDOMTreeRenderInvalidation
+        let pendingIsInitial = pendingDOMTreeRenderInvalidationIsInitial
+        let pendingRequiresRoute = pendingDOMTreeRenderInvalidationRequiresRoute
+        pendingDOMTreeRenderInvalidation = nil
+        pendingDOMTreeRenderInvalidationIsInitial = false
+        pendingDOMTreeRenderInvalidationRequiresRoute = false
+        guard let pendingInvalidation else {
+            return
+        }
+        routeDOMInvalidation(
+            pendingInvalidation,
+            isInitial: pendingIsInitial,
+            forceRoute: pendingRequiresRoute
+        )
     }
 
     private func routeDOMInvalidation(
@@ -566,6 +637,12 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         isInitial: Bool,
         forceRoute: Bool = false
     ) {
+        guard isRenderingActive else {
+            pendingDOMTreeRenderInvalidation = pendingDOMTreeRenderInvalidation?.merging(with: invalidation) ?? invalidation
+            pendingDOMTreeRenderInvalidationIsInitial = pendingDOMTreeRenderInvalidationIsInitial || isInitial
+            pendingDOMTreeRenderInvalidationRequiresRoute = pendingDOMTreeRenderInvalidationRequiresRoute || forceRoute
+            return
+        }
         guard forceRoute || shouldRouteDOMInvalidation(invalidation, isInitial: isInitial) else {
             return
         }
@@ -630,12 +707,25 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func routeSelectionInvalidation(from dom: DOMSession) {
+        guard isRenderingActive else {
+            hasPendingSelectionInvalidation = true
+            return
+        }
+
         let nextSelectedNodeID = dom.selectedNodeID
         guard lastRoutedSelectedNodeID != nextSelectedNodeID else {
             revealPendingSelectedNodeIfPossible()
             return
         }
         handleSelectedNodeChange()
+    }
+
+    private func flushPendingSelectionInvalidationIfNeeded() {
+        guard isRenderingActive else {
+            return
+        }
+        hasPendingSelectionInvalidation = false
+        routeSelectionInvalidation(from: dom)
     }
 
     private func handleSelectedNodeChange() {
@@ -662,6 +752,11 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         resetFragments: Bool,
         countsCall: Bool = true
     ) {
+        guard isRenderingActive else {
+            pendingDOMTreeRenderInvalidation = pendingDOMTreeRenderInvalidation?.merging(with: dom.treeRenderInvalidation) ?? dom.treeRenderInvalidation
+            pendingDOMTreeRenderInvalidationRequiresRoute = true
+            return
+        }
 #if DEBUG
         if countsCall {
             performanceCounters.reloadTreeCallCount += 1
@@ -691,11 +786,17 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         previousText: String,
         shouldApply: (@MainActor (DOMTreeTextView.RenderedRowsBuildResult) -> Bool)? = nil
     ) {
+        guard isRenderingActive else {
+            return
+        }
         renderedRowsBuildCoordinator.startBuild(
             previousRowCapacity: rows.count,
             previousTextCapacity: renderedText.count,
             isCurrentBuild: { [weak self] request in
                 guard let self else {
+                    return false
+                }
+                guard isRenderingActive else {
                     return false
                 }
                 let currentInvalidation = dom.treeRenderInvalidation(since: request.treeRevision)
@@ -713,6 +814,9 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
             shouldApply: shouldApply,
             apply: { [weak self] buildResult in
                 guard let self else {
+                    return
+                }
+                guard isRenderingActive else {
                     return
                 }
                 applyRenderedRowsBuildResult(
@@ -852,7 +956,8 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func requestChildrenForOpenRowsIfNeeded() {
-        guard dom.currentPageRootNode != nil else {
+        guard isRenderingActive,
+              dom.currentPageRootNode != nil else {
             return
         }
         for row in rows where row.hasDisclosure && row.isOpen {
@@ -864,7 +969,8 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func requestChildrenIfNeeded(for node: DOMNode) {
-        guard dom.hasUnloadedRegularChildren(node),
+        guard isRenderingActive,
+              dom.hasUnloadedRegularChildren(node),
               requestedChildNodeIDs.insert(node.id).inserted
         else {
             return
@@ -1034,6 +1140,9 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func highlightPageNode(_ nodeID: DOMNode.ID, reason: PageHighlightReason) {
+        guard isRenderingActive else {
+            return
+        }
         pageHighlightTask?.cancel()
         pageHighlightTask = Task { @MainActor [weak self, highlightNodeAction] in
             await Task.yield()
@@ -1064,6 +1173,9 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     private func clearHoveredRowAndRestoreSelectionHighlight() {
         pageHighlightTask?.cancel()
         clearHoveredRow()
+        guard isRenderingActive else {
+            return
+        }
         pageHighlightTask = Task { @MainActor [weak self, restoreHighlightAction] in
             await Task.yield()
             guard !Task.isCancelled,
@@ -1929,7 +2041,8 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func revealPendingSelectedNodeIfPossible() {
-        guard let selectedNodeID = selectionRevealState.pendingSelectedNodeID,
+        guard isRenderingActive,
+              let selectedNodeID = selectionRevealState.pendingSelectedNodeID,
               !dom.hasPendingSelectionRequest,
               !renderedRowsBuildCoordinator.hasCurrentBuild,
               let row = renderedRows.row(for: selectedNodeID),
@@ -1949,7 +2062,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         )
         scrollRectToVisible(
             targetRect.insetBy(dx: 0, dy: -rowRect.height * 2),
-            animated: window != nil
+            animated: isRenderingActive
         )
         selectionRevealState.consumePendingSelection()
     }

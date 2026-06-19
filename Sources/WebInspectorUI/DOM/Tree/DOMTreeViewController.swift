@@ -8,6 +8,7 @@ package final class DOMTreeViewController: UIViewController {
     private let treeView: DOMTreeTextView
     private weak var inspection: AttachedInspection?
     private var domRootObservation: PortableObservationTracking.Token?
+    private var isRenderingLifecycleActive = false
 
     package var domTreeUndoManager: UndoManager? {
         treeView.undoManager
@@ -87,7 +88,15 @@ package final class DOMTreeViewController: UIViewController {
 
     override package func viewIsAppearing(_ animated: Bool) {
         super.viewIsAppearing(animated)
+        isRenderingLifecycleActive = true
+        treeView.setRenderingActive(true)
         ensureDOMDocumentLoadedIfNeeded()
+    }
+
+    override package func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        isRenderingLifecycleActive = false
+        treeView.setRenderingActive(false)
     }
 
     private func startObservingDOMRoot(inspection: AttachedInspection) {
@@ -123,7 +132,7 @@ package final class DOMTreeViewController: UIViewController {
         guard let inspection else {
             return
         }
-        guard viewIfLoaded?.window != nil,
+        guard isRenderingLifecycleActive,
               !hasRoot,
               canReloadDocument else {
             return

@@ -266,6 +266,10 @@ package final class NetworkBody {
         return NetworkBody.TextPreparation(task: task)
     }
 
+    package func cancelTextRepresentationPreparation() {
+        textRepresentationPreparation.cancelPreparation()
+    }
+
     package static func makeRequestBody(for request: NetworkRequest.Payload) -> NetworkBody? {
         guard let postData = request.postData else {
             return nil

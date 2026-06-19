@@ -52,6 +52,7 @@ final class NetworkBodyViewController: UIViewController {
     private weak var body: NetworkBody?
     private var metadata: NetworkBodyViewController.PreviewMetadata?
     private var hasDisplayedBody = false
+    private var isRenderingActive = false
     private var mediaPlayerViewController: AVPlayerViewController?
     private var mediaPlayerURL: URL?
     private var moviePreviewPlayerFactory: MoviePreviewPlayerFactory
@@ -119,14 +120,18 @@ final class NetworkBodyViewController: UIViewController {
                 return
             }
             self.metadata = metadata
-            renderBody(body)
+            if isRenderingActive {
+                renderBody(body)
+            }
             return
         }
         hasDisplayedBody = true
         self.body = body
         self.metadata = metadata
         startObserving(body: body)
-        renderBody(body)
+        if isRenderingActive {
+            renderBody(body)
+        }
     }
 
     func releasePreviewResources() {
@@ -136,6 +141,31 @@ final class NetworkBodyViewController: UIViewController {
         startObserving(body: nil)
         hideMediaPreview()
         scrollEdgeSink?.contentScrollView = nil
+    }
+
+    func setRenderingActive(_ isActive: Bool) {
+        guard isRenderingActive != isActive else {
+            if isActive, hasDisplayedBody {
+                renderBody(body)
+            }
+            return
+        }
+
+        isRenderingActive = isActive
+        if isActive {
+            startObserving(body: body)
+            if hasDisplayedBody {
+                renderBody(body)
+            }
+        } else {
+            bodyObservation?.cancel()
+            bodyObservation = nil
+#if DEBUG
+            bodyObservationDelivery = nil
+#endif
+            body?.cancelTextRepresentationPreparation()
+            mediaPreviewCoordinator.suspendPreparation()
+        }
     }
 
     private func configureSyntaxView() {
@@ -202,7 +232,8 @@ final class NetworkBodyViewController: UIViewController {
 #if DEBUG
         bodyObservationDelivery = nil
 #endif
-        guard let body else {
+        guard isRenderingActive,
+              let body else {
             return
         }
         let token = withPortableContinuousObservation { [weak self, weak body] _ in
@@ -232,6 +263,9 @@ final class NetworkBodyViewController: UIViewController {
 #endif
 
     private func renderBody(_ body: NetworkBody?) {
+        guard isRenderingActive else {
+            return
+        }
         let displayText: String
         let syntaxKind: NetworkBody.SyntaxKind
         guard let body else {
@@ -321,6 +355,9 @@ final class NetworkBodyViewController: UIViewController {
     private func applyMediaPreviewResult(
         _ result: NetworkMediaPreviewResultAction
     ) {
+        guard isRenderingActive else {
+            return
+        }
         switch result {
         case .ignore:
             return

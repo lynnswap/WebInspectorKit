@@ -26,8 +26,8 @@ struct NetworkDetailViewControllerTests {
     func listShowsSimpleEmptyStateWithoutRequests() {
         let model = NetworkPanelModel(network: NetworkSession())
         let viewController = NetworkListViewController(model: model)
-
-        viewController.loadViewIfNeeded()
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
 
         #expect(viewController.collectionViewForTesting.isHidden)
         #expect(viewController.contentUnavailableConfiguration != nil)
@@ -42,8 +42,8 @@ struct NetworkDetailViewControllerTests {
     func detailShowsEmptyStateWithoutSelection() {
         let model = NetworkPanelModel(network: NetworkSession())
         let viewController = NetworkDetailViewController(model: model)
-
-        viewController.loadViewIfNeeded()
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
 
         #expect(viewController.previewViewForTesting.isHidden)
         #expect(viewController.headersTextViewForTesting.isHidden)
@@ -85,6 +85,32 @@ struct NetworkDetailViewControllerTests {
         viewController.loadViewIfNeeded()
 
         #expect(viewController.collectionViewForTesting.backgroundColor == .clear)
+    }
+
+    @Test
+    func listLoadDoesNotEvaluateDisplayRequestsUntilAppearing() async throws {
+        let network = NetworkSession()
+        _ = try #require(applyRequest(
+            to: network,
+            requestID: "1",
+            url: "https://example.com/api/data.json",
+            responseHeaders: ["content-type": "application/json"],
+            responseMimeType: "application/json"
+        ))
+        let model = NetworkPanelModel(network: network)
+        let viewController = NetworkListViewController(model: model)
+
+        viewController.loadViewIfNeeded()
+
+        #expect(viewController.displayRequestIDsEvaluationCountForTesting == 0)
+        #expect(viewController.displayedRequestIDsForTesting.isEmpty)
+
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        await viewController.flushPendingSnapshotUpdateForTesting()
+
+        #expect(viewController.displayedRequestIDsForTesting == model.displayRequestIDs)
+        #expect(viewController.displayRequestIDsEvaluationCountForTesting == 1)
     }
 
     @Test
@@ -452,6 +478,108 @@ struct NetworkDetailViewControllerTests {
             return viewController.bodyViewControllerForTesting.syntaxViewForTesting.text.contains(#""ok""#)
         }
         #expect(didRenderBody)
+    }
+
+    @Test
+    func hiddenDetailDoesNotFetchResponseBodyUntilAppearingAgain() async throws {
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://example.com/api/data.json",
+                responseHeaders: ["content-type": "application/json"],
+                responseMimeType: "application/json"
+            )
+        )
+        var fetchedIDs: [NetworkRequest.ID] = []
+        let model = NetworkPanelModel(network: network) { id in
+            fetchedIDs.append(id)
+            request.markResponseBodyFetching()
+        }
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.setModeForTesting(.headers)
+
+        let didRenderHeaders = await waitUntilRendered(in: viewController) {
+            viewController.currentModeForTesting == .headers
+                && viewController.headersTextViewForTesting.renderedTextForTesting.contains("content-type: application/json")
+        }
+        #expect(didRenderHeaders)
+        #expect(fetchedIDs.isEmpty)
+
+        viewController.beginAppearanceTransition(false, animated: false)
+        viewController.endAppearanceTransition()
+        viewController.setModeForTesting(.preview)
+        await Task.yield()
+        await Task.yield()
+
+        #expect(fetchedIDs.isEmpty)
+        #expect(viewController.headersTextViewForTesting.renderedTextForTesting.contains("content-type: application/json"))
+
+        viewController.beginAppearanceTransition(true, animated: false)
+        viewController.endAppearanceTransition()
+
+        let didFetchOnReturn = await waitUntilRendered(in: viewController) {
+            fetchedIDs == [request.id]
+                && viewController.currentModeForTesting == .preview
+                && viewController.currentPreviewRoleForTesting == .response
+        }
+        #expect(didFetchOnReturn)
+    }
+
+    @Test
+    func hiddenDetailKeepsDisplayedBodyAndReconcilesBodyOnReturn() async throws {
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://example.com/api/data.json",
+                responseHeaders: ["content-type": "application/json"],
+                responseMimeType: "application/json"
+            )
+        )
+        request.applyResponseBody(
+            NetworkBody.Payload(
+                body: #"{"visible":true}"#,
+                base64Encoded: false
+            )
+        )
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model, initialMode: .preview)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didRenderVisibleBody = await waitUntilRendered(in: viewController) {
+            viewController.bodyViewControllerForTesting.syntaxViewForTesting.text.contains(#""visible" : true"#)
+        }
+        #expect(didRenderVisibleBody)
+        let renderedBodyBeforeHide = viewController.bodyViewControllerForTesting.syntaxViewForTesting.text
+
+        viewController.beginAppearanceTransition(false, animated: false)
+        viewController.endAppearanceTransition()
+        request.applyResponseBody(
+            NetworkBody.Payload(
+                body: #"{"hidden":true}"#,
+                base64Encoded: false
+            )
+        )
+        await Task.yield()
+        await Task.yield()
+
+        #expect(viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == renderedBodyBeforeHide)
+
+        viewController.beginAppearanceTransition(true, animated: false)
+        viewController.endAppearanceTransition()
+
+        let didRenderHiddenBody = await waitUntilRendered(in: viewController) {
+            viewController.bodyViewControllerForTesting.syntaxViewForTesting.text.contains(#""hidden" : true"#)
+        }
+        #expect(didRenderHiddenBody)
     }
 
     @Test
@@ -983,6 +1111,60 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func hiddenDetailKeepsHeadersAndRebindsSameSelectedRequestOnReturn() async throws {
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "1",
+                url: "https://example.com/api/data.json",
+                responseHeaders: ["x-request": "visible"],
+                responseMimeType: "application/json"
+            )
+        )
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(request)
+        let viewController = NetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.setModeForTesting(.headers)
+
+        let didRenderInitialHeaders = await waitUntilRendered(in: viewController) {
+            viewController.headersTextViewForTesting.renderedTextForTesting.contains("x-request: visible")
+        }
+        #expect(didRenderInitialHeaders)
+        let renderedHeadersBeforeHide = viewController.headersTextViewForTesting.renderedTextForTesting
+
+        viewController.beginAppearanceTransition(false, animated: false)
+        viewController.endAppearanceTransition()
+        network.applyResponseReceived(
+            targetID: request.id.targetID,
+            requestID: request.id.requestID,
+            resourceType: .script,
+            response: NetworkRequest.Response.Payload(
+                url: "https://example.com/api/data.json",
+                status: 200,
+                statusText: "OK",
+                headers: ["x-request": "hidden-update"],
+                mimeType: "application/json"
+            ),
+            timestamp: 4
+        )
+        await Task.yield()
+        await Task.yield()
+
+        #expect(viewController.headersTextViewForTesting.renderedTextForTesting == renderedHeadersBeforeHide)
+
+        viewController.beginAppearanceTransition(true, animated: false)
+        viewController.endAppearanceTransition()
+
+        let didRenderHiddenUpdate = await waitUntilRendered(in: viewController) {
+            viewController.headersTextViewForTesting.renderedTextForTesting.contains("x-request: hidden-update")
+        }
+        #expect(didRenderHiddenUpdate)
+    }
+
+    @Test
     func requestPreviewRoleDoesNotFetchResponseBodyAfterLoadingFinishes() async throws {
         let network = NetworkSession()
         let request = try #require(
@@ -1309,6 +1491,50 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func hiddenListDefersSnapshotEvaluationUntilAppearingAgain() async throws {
+        let network = NetworkSession()
+        _ = try #require(applyRequest(
+            to: network,
+            requestID: "1",
+            url: "https://media.example.com/clip.mp4",
+            responseHeaders: ["content-type": "video/mp4"],
+            responseMimeType: "video/mp4"
+        ))
+        let model = NetworkPanelModel(network: network)
+        let listViewController = NetworkListViewController(model: model)
+        let window = showInWindow(listViewController)
+        defer { window.isHidden = true }
+        await listViewController.flushPendingSnapshotUpdateForTesting()
+        #expect(listViewController.displayedRequestIDsForTesting.count == 1)
+
+        let evaluationCountBeforeHiddenUpdate = listViewController.displayRequestIDsEvaluationCountForTesting
+        let observation = try #require(listViewController.displayRowsObservationDeliveryForTesting)
+        let observedInvalidations = await observation.values {
+            model.displayRowsInvalidationRevision
+        }
+        defer {
+            observedInvalidations.cancel()
+        }
+
+        listViewController.beginAppearanceTransition(false, animated: false)
+        listViewController.endAppearanceTransition()
+        model.setSearchText("does-not-match")
+        let hiddenInvalidationRevision = model.displayRowsInvalidationRevision
+        #expect(await observedInvalidations.waitUntil { $0 == hiddenInvalidationRevision } != nil)
+        await listViewController.flushThrottledDisplayRowsReloadForTesting()
+
+        #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate)
+        #expect(listViewController.displayedRequestIDsForTesting.count == 1)
+
+        listViewController.beginAppearanceTransition(true, animated: false)
+        listViewController.endAppearanceTransition()
+        await listViewController.flushPendingSnapshotUpdateForTesting()
+
+        #expect(listViewController.displayedRequestIDsForTesting.isEmpty)
+        #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate + 1)
+    }
+
+    @Test
     func listControllerDeallocatesWhileDisplayRequestObservationIsActive() async throws {
         let model = NetworkPanelModel(network: NetworkSession())
         let deinitProbe = UITestDeinitProbe()
@@ -1397,7 +1623,7 @@ struct NetworkDetailViewControllerTests {
 
     private func showInWindow(
         _ viewController: UIViewController,
-        makeVisible: Bool = false
+        makeVisible: Bool = true
     ) -> UIWindow {
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         window.rootViewController = viewController

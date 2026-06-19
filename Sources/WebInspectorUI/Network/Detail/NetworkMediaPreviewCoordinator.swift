@@ -68,6 +68,10 @@ final class NetworkMediaPreviewCoordinator {
         removeCachedTemporaryFile()
     }
 
+    func suspendPreparation() {
+        cancelPending()
+    }
+
 #if DEBUG
     func waitUntilPreparationFinishedForTesting() async {
         while let task {

@@ -33,7 +33,8 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     private let displayRowsReloadScheduler = MainActorDelayScheduler()
     private var hasPendingThrottledDisplayRowsReload = false
 
-    private var needsSnapshotReloadOnNextAppearance = false
+    private var isRenderingActive = false
+    private var needsSnapshotReloadOnNextAppearance = true
     private var pendingSnapshotUpdate: PendingSnapshotUpdate?
     private var snapshotState = NetworkListViewController.SnapshotState()
     private var isApplyingSearchPresentation = false
@@ -107,7 +108,6 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         applyBackgroundFromTraits()
 
         configureNavigationItem()
-        reloadDataFromModel()
     }
 
     override package func viewWillAppear(_ animated: Bool) {
@@ -118,7 +118,12 @@ package final class NetworkListViewController: UICollectionViewController, UISea
 
     override package func viewIsAppearing(_ animated: Bool) {
         super.viewIsAppearing(animated)
-        flushPendingSnapshotUpdateIfNeeded()
+        resumeRendering()
+    }
+
+    override package func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        suspendRendering()
     }
 
     override package func willMove(toParent parent: UIViewController?) {
@@ -149,7 +154,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         displayRowsObservation = withPortableContinuousObservation { [weak self] event in
             guard let self else { return }
             _ = model.displayRowsInvalidationRevision
-            guard isViewLoaded else {
+            guard isRenderingActive else {
                 needsSnapshotReloadOnNextAppearance = true
                 return
             }
@@ -163,23 +168,53 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         searchTextObservation?.cancel()
         searchTextObservation = withPortableContinuousObservation { [weak self] _ in
             guard let self else { return }
-            renderSearchText(model.searchText)
+            let searchText = model.searchText
+            guard isRenderingActive else { return }
+            renderSearchText(searchText)
         }
 
         resourceFilterObservation?.cancel()
         resourceFilterObservation = withPortableContinuousObservation { [weak self] _ in
             guard let self else { return }
-            resourceFilterSelectionDidChange(effectiveResourceFilters: model.effectiveResourceFilters)
+            let effectiveResourceFilters = model.effectiveResourceFilters
+            guard isRenderingActive else { return }
+            resourceFilterSelectionDidChange(effectiveResourceFilters: effectiveResourceFilters)
         }
 
         selectedRequestObservation?.cancel()
         selectedRequestObservation = withPortableContinuousObservation { [weak self] _ in
             guard let self else { return }
-            renderSelectedRequestID(model.selectedRequestID)
+            let selectedRequestID = model.selectedRequestID
+            guard isRenderingActive else { return }
+            renderSelectedRequestID(selectedRequestID)
         }
     }
 
+    private func resumeRendering() {
+        isRenderingActive = true
+        renderSearchText(model.searchText)
+        resourceFilterSelectionDidChange(effectiveResourceFilters: model.effectiveResourceFilters)
+        renderSelectedRequestID(model.selectedRequestID)
+        flushPendingSnapshotUpdateIfNeeded()
+    }
+
+    private func suspendRendering() {
+        guard isRenderingActive else {
+            return
+        }
+        isRenderingActive = false
+        if hasPendingThrottledDisplayRowsReload {
+            needsSnapshotReloadOnNextAppearance = true
+        }
+        hasPendingThrottledDisplayRowsReload = false
+        displayRowsReloadScheduler.cancel()
+    }
+
     private func scheduleThrottledDisplayRowsReload() {
+        guard isRenderingActive else {
+            needsSnapshotReloadOnNextAppearance = true
+            return
+        }
         hasPendingThrottledDisplayRowsReload = true
         guard displayRowsReloadScheduler.hasScheduledDelay == false else {
             return
@@ -192,6 +227,11 @@ package final class NetworkListViewController: UICollectionViewController, UISea
 
     private func flushThrottledDisplayRowsReload() {
         guard hasPendingThrottledDisplayRowsReload else {
+            return
+        }
+        guard isRenderingActive else {
+            hasPendingThrottledDisplayRowsReload = false
+            needsSnapshotReloadOnNextAppearance = true
             return
         }
         hasPendingThrottledDisplayRowsReload = false
@@ -349,7 +389,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private var isCollectionViewVisible: Bool {
-        isViewLoaded && view.window != nil
+        isRenderingActive && isViewLoaded
     }
 
     private func requestSnapshotUpdate(requestIDs: [NetworkRequest.ID]) {
@@ -385,6 +425,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         }
         needsSnapshotReloadOnNextAppearance = false
         let requestIDs = displayRequestIDsFromModel()
+        renderEmptyState(isEmpty: requestIDs.isEmpty)
         enqueueSnapshotUpdate(
             rows: NetworkListViewController.SnapshotRows(requestIDs: requestIDs),
             mode: .reloadData
@@ -447,6 +488,10 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private func reloadDataFromModel() {
+        guard isRenderingActive else {
+            needsSnapshotReloadOnNextAppearance = true
+            return
+        }
         let requestIDs = displayRequestIDsFromModel()
         requestSnapshotUpdate(requestIDs: requestIDs)
         renderEmptyState(isEmpty: requestIDs.isEmpty)
