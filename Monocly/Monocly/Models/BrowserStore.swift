@@ -687,12 +687,12 @@ extension BrowserTabStore {
 
     static func restoredInteractionStateNavigationPolicy(
         isRestoringInteractionStateNavigation: Bool,
-        isMainFrame: Bool,
+        targetFrameIsMainFrame: Bool?,
         url: URL?,
         shouldOpenAppLinks: Bool
     ) -> WKNavigationActionPolicy? {
         guard isRestoringInteractionStateNavigation,
-              isMainFrame,
+              targetFrameIsMainFrame == true,
               shouldOpenAppLinks,
               let scheme = url?.scheme?.lowercased(),
               scheme == "http" || scheme == "https" else {
@@ -864,7 +864,7 @@ extension BrowserTabStore: WKNavigationDelegate {
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
         if let restoredInteractionPolicy = Self.restoredInteractionStateNavigationPolicy(
             isRestoringInteractionStateNavigation: isRestoringInteractionStateNavigation,
-            isMainFrame: navigationAction.targetFrame?.isMainFrame != false,
+            targetFrameIsMainFrame: navigationAction.targetFrame?.isMainFrame,
             url: navigationAction.request.url,
             shouldOpenAppLinks: Self.shouldOpenAppLinks(from: navigationAction)
         ) {

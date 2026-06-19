@@ -295,10 +295,10 @@ struct BrowserSessionRestoreTests {
 
     @Test
     func restoredInteractionStateNavigationPolicySuppressesAppLinksOnlyDuringHTTPMainFrameRestore() throws {
-        let appLinkURL = try #require(URL(string: "https://www.google.com/search?q=monocly"))
+        let appLinkURL = try #require(URL(string: "https://app-link.test/search?q=monocly"))
         let policy = BrowserTabStore.restoredInteractionStateNavigationPolicy(
             isRestoringInteractionStateNavigation: true,
-            isMainFrame: true,
+            targetFrameIsMainFrame: true,
             url: appLinkURL,
             shouldOpenAppLinks: true
         )
@@ -306,25 +306,31 @@ struct BrowserSessionRestoreTests {
         #expect(policy?.rawValue == WKNavigationActionPolicy.allow.rawValue + 2)
         #expect(BrowserTabStore.restoredInteractionStateNavigationPolicy(
             isRestoringInteractionStateNavigation: false,
-            isMainFrame: true,
+            targetFrameIsMainFrame: true,
             url: appLinkURL,
             shouldOpenAppLinks: true
         ) == nil)
         #expect(BrowserTabStore.restoredInteractionStateNavigationPolicy(
             isRestoringInteractionStateNavigation: true,
-            isMainFrame: false,
+            targetFrameIsMainFrame: false,
             url: appLinkURL,
             shouldOpenAppLinks: true
         ) == nil)
         #expect(BrowserTabStore.restoredInteractionStateNavigationPolicy(
             isRestoringInteractionStateNavigation: true,
-            isMainFrame: true,
+            targetFrameIsMainFrame: nil,
+            url: appLinkURL,
+            shouldOpenAppLinks: true
+        ) == nil)
+        #expect(BrowserTabStore.restoredInteractionStateNavigationPolicy(
+            isRestoringInteractionStateNavigation: true,
+            targetFrameIsMainFrame: true,
             url: appLinkURL,
             shouldOpenAppLinks: false
         ) == nil)
         #expect(BrowserTabStore.restoredInteractionStateNavigationPolicy(
             isRestoringInteractionStateNavigation: true,
-            isMainFrame: true,
+            targetFrameIsMainFrame: true,
             url: try #require(URL(string: "google://search?q=monocly")),
             shouldOpenAppLinks: true
         ) == nil)
