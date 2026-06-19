@@ -5,7 +5,7 @@ import WebInspectorKit
 
 @MainActor
 final class BrowserRootViewController: UINavigationController {
-    let store: BrowserStore
+    let store: BrowserWindowStore
     let inspectorSession: WebInspectorSession
     let launchConfiguration: BrowserLaunchConfiguration
     private let inspectorSessionAttachmentLifecycle: BrowserInspectorSessionAttachmentLifecycle
@@ -21,11 +21,11 @@ final class BrowserRootViewController: UINavigationController {
     }
 
     init(
-        store: BrowserStore? = nil,
+        store: BrowserWindowStore? = nil,
         inspectorSession: WebInspectorSession? = nil,
         launchConfiguration: BrowserLaunchConfiguration
     ) {
-        let resolvedStore = store ?? BrowserStore(
+        let resolvedStore = store ?? BrowserWindowStore(
             url: launchConfiguration.initialURL,
             automaticallyLoadsInitialRequest: false
         )

@@ -1,18 +1,12 @@
 import Foundation
 import Observation
-
-#if canImport(UIKit)
 import UIKit
-#elseif canImport(AppKit)
-import AppKit
-#endif
 
 @MainActor
 @Observable
 final class MonoclyWindowContextStore {
     static let shared = MonoclyWindowContextStore()
 
-#if canImport(UIKit)
     private final class ConnectedWindowSceneRegistry {
         private final class WeakSceneBox {
             weak var scene: UIWindowScene?
@@ -83,14 +77,10 @@ final class MonoclyWindowContextStore {
     private(set) var currentWindow: UIWindow?
 
     @ObservationIgnored private let sceneRegistry = ConnectedWindowSceneRegistry()
-#elseif canImport(AppKit)
-    private(set) var currentWindow: NSWindow?
-#endif
 
     private init() {}
 }
 
-#if canImport(UIKit)
 extension MonoclyWindowContextStore {
     func registerConnectedScene(_ scene: UIWindowScene) {
         sceneRegistry.registerConnected(scene)
@@ -161,47 +151,3 @@ extension MonoclyWindowContextStore {
             ?? scene.windows.first
     }
 }
-
-#elseif canImport(AppKit)
-extension MonoclyWindowContextStore {
-    func noteCurrentWindow(_ window: NSWindow?) {
-        currentWindow = window ?? fallbackWindow(excluding: nil)
-    }
-
-    func handleClosingWindow(_ window: NSWindow) {
-        if currentWindow === window {
-            currentWindow = fallbackWindow(excluding: window)
-        }
-
-        Task { @MainActor [weak self] in
-            self?.refreshCurrentWindow(excluding: window)
-        }
-    }
-
-    func refreshCurrentWindow(excluding window: NSWindow? = nil) {
-        currentWindow = fallbackWindow(excluding: window)
-    }
-
-    func resetForTesting() {
-        currentWindow = nil
-    }
-
-    func setCurrentWindowForTesting(_ window: NSWindow?) {
-        currentWindow = window
-    }
-
-    func refreshCurrentWindowForTesting(keyWindow: NSWindow?, mainWindow: NSWindow?) {
-        currentWindow = keyWindow ?? mainWindow
-    }
-
-    private func fallbackWindow(excluding window: NSWindow?) -> NSWindow? {
-        if let keyWindow = NSApp.keyWindow, keyWindow !== window {
-            return keyWindow
-        }
-        if let mainWindow = NSApp.mainWindow, mainWindow !== window {
-            return mainWindow
-        }
-        return nil
-    }
-}
-#endif
