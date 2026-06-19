@@ -1,6 +1,5 @@
 #if canImport(UIKit)
 import AVFoundation
-import Dispatch
 import ObservationBridge
 import Synchronization
 import Testing
@@ -593,8 +592,6 @@ struct NetworkDetailViewControllerTests {
         viewController.beginAppearanceTransition(false, animated: false)
         viewController.endAppearanceTransition()
         viewController.setModeForTesting(.preview)
-        await Task.yield()
-        await Task.yield()
 
         #expect(fetchedIDs.isEmpty)
         #expect(viewController.headersTextViewForTesting.renderedTextForTesting.contains("content-type: application/json"))
@@ -648,8 +645,6 @@ struct NetworkDetailViewControllerTests {
                 base64Encoded: false
             )
         )
-        await Task.yield()
-        await Task.yield()
 
         #expect(viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == renderedBodyBeforeHide)
 
@@ -925,7 +920,6 @@ struct NetworkDetailViewControllerTests {
         #expect(didRenderMediaPreview)
         let temporaryFileURL = try #require(viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting)
         let playerIdentity = try #require(viewController.bodyViewControllerForTesting.mediaPlayerIdentityForTesting)
-        let delivery = try #require(viewController.selectedRequestRenderObservationDeliveryForTesting)
         #expect(playerFactory.requestedURLs == [temporaryFileURL])
 
         network.applyDataReceived(
@@ -936,13 +930,10 @@ struct NetworkDetailViewControllerTests {
             timestamp: 4
         )
 
-        let observedValues = await delivery.values {
-            request.encodedDataLength == 64
-                && viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting == temporaryFileURL
-                && viewController.bodyViewControllerForTesting.mediaPlayerIdentityForTesting == playerIdentity
-                && FileManager.default.fileExists(atPath: temporaryFileURL.path)
-        }
-        #expect(observedValues.latestValue == true)
+        #expect(request.encodedDataLength == 64)
+        #expect(viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting == temporaryFileURL)
+        #expect(viewController.bodyViewControllerForTesting.mediaPlayerIdentityForTesting == playerIdentity)
+        #expect(FileManager.default.fileExists(atPath: temporaryFileURL.path))
         #expect(playerFactory.requestedURLs == [temporaryFileURL])
     }
 
@@ -1410,7 +1401,6 @@ struct NetworkDetailViewControllerTests {
         let selectedRange = NSRange(location: 2, length: 4)
         viewController.headersTextViewForTesting.selectedRangeForTesting = selectedRange
         let assignmentCount = viewController.headersTextViewForTesting.attributedTextAssignmentCountForTesting
-        let delivery = try #require(viewController.selectedRequestRenderObservationDeliveryForTesting)
 
         network.applyDataReceived(
             targetID: request.id.targetID,
@@ -1420,12 +1410,9 @@ struct NetworkDetailViewControllerTests {
             timestamp: 4
         )
 
-        let observedValues = await delivery.values {
-            request.encodedDataLength == 64
-                && viewController.headersTextViewForTesting.attributedTextAssignmentCountForTesting == assignmentCount
-                && viewController.headersTextViewForTesting.selectedRangeForTesting == selectedRange
-        }
-        #expect(observedValues.latestValue == true)
+        #expect(request.encodedDataLength == 64)
+        #expect(viewController.headersTextViewForTesting.attributedTextAssignmentCountForTesting == assignmentCount)
+        #expect(viewController.headersTextViewForTesting.selectedRangeForTesting == selectedRange)
     }
 
     @Test
@@ -1468,8 +1455,6 @@ struct NetworkDetailViewControllerTests {
             ),
             timestamp: 4
         )
-        await Task.yield()
-        await Task.yield()
 
         #expect(viewController.headersTextViewForTesting.renderedTextForTesting == renderedHeadersBeforeHide)
 
@@ -2157,8 +2142,6 @@ struct NetworkDetailViewControllerTests {
             ),
             timestamp: 4
         )
-        await Task.yield()
-        await Task.yield()
 
         #expect(cell.fileTypeLabelForTesting == "mp4")
 
@@ -2414,50 +2397,6 @@ struct NetworkDetailViewControllerTests {
         return bundle.localizedString(forKey: key, value: nil, table: nil)
     }
 
-    private final class BlockingMediaPreviewClassifier: @unchecked Sendable {
-        private struct State: Sendable {
-            var shouldBlockNextCall = true
-            var isBlocked = false
-        }
-
-        private let state = Mutex(State())
-        private let unblockSemaphore = DispatchSemaphore(value: 0)
-
-        func classify(
-            mimeType: String?,
-            url: String?
-        ) -> NetworkRequest.Display.MediaPreviewClassification {
-            let shouldBlock = state.withLock { state in
-                guard state.shouldBlockNextCall else {
-                    return false
-                }
-                state.shouldBlockNextCall = false
-                return true
-            }
-            if shouldBlock {
-                state.withLock { state in
-                    state.isBlocked = true
-                }
-                unblockSemaphore.wait()
-            }
-            return NetworkRequest.Display.MediaPreviewSupport.classification(mimeType: mimeType, url: url)
-        }
-
-        func waitUntilBlocked() async -> Bool {
-            for _ in 0..<100 {
-                if state.withLock({ $0.isBlocked }) {
-                    return true
-                }
-                try? await Task.sleep(for: .milliseconds(10))
-            }
-            return false
-        }
-
-        func unblock() {
-            unblockSemaphore.signal()
-        }
-    }
-
     @MainActor
     private final class MoviePreviewPlayerFactorySpy {
         private(set) var requestedURLs: [URL] = []
@@ -2470,14 +2409,18 @@ struct NetworkDetailViewControllerTests {
             return player
         }
     }
-
-    private final class StubMoviePreviewPlayer: AVPlayer {
-        private(set) var pauseCallCount = 0
-
-        override func pause() {
-            pauseCallCount += 1
-        }
-    }
 }
+}
+
+private final class StubMoviePreviewPlayer: AVPlayer {
+    private let pauseCounter = Mutex(0)
+
+    var pauseCallCount: Int {
+        pauseCounter.withLock { $0 }
+    }
+
+    override func pause() {
+        pauseCounter.withLock { $0 += 1 }
+    }
 }
 #endif

@@ -312,7 +312,7 @@ struct DOMTreeTextViewTests {
         view.endHoverForTesting()
         view.endHoverForTesting()
         await restoreRecorder.next()
-        await Task.yield()
+        await view.waitForPageHighlightTaskForTesting()
 
         #expect(session.selectedNode?.localName == "input")
         #expect(restoreRecorder.recordCount == 1)
@@ -390,8 +390,7 @@ struct DOMTreeTextViewTests {
 
         view.primaryClickRowForTesting(containing: "<input disabled>")
         view.setRenderingActive(false)
-        await Task.yield()
-        await Task.yield()
+        await view.waitForPageHighlightTaskForTesting()
 
         #expect(highlightRecorder.recordedNodeIDs.isEmpty)
 
@@ -459,8 +458,7 @@ struct DOMTreeTextViewTests {
         view.primaryClickRowForTesting(containing: "<input disabled>")
         view.hoverRowForTesting(containing: "<article")
         view.endHoverForTesting()
-        await Task.yield()
-        await Task.yield()
+        await view.waitForPageHighlightTaskForTesting()
 
         #expect(session.selectedNode?.localName == "input")
         #expect(highlightRecorder.recordedNodeIDs.isEmpty)
@@ -831,11 +829,12 @@ struct DOMTreeTextViewTests {
         )
 
         view.primaryClickRowForTesting(containing: "<input disabled>")
-        await Task.yield()
         view.primaryClickRowForTesting(containing: "<div id=\"start-of-content\"", modifiers: .command)
         view.primaryClickRowForTesting(containing: "<article", modifiers: .command)
         #expect(view.multiSelectedLineSnapshotsInDisplayOrderForTesting.count == 3)
         #expect(session.selectedNode?.id == inputID)
+        view.routeCurrentSelectionInvalidationForTesting()
+        #expect(view.multiSelectedLineSnapshotsInDisplayOrderForTesting.count == 3)
 
         let observedSelectionRevisions = await view.selectionObservationDeliveryForTesting.values {
             session.selectionRevision
@@ -889,7 +888,7 @@ struct DOMTreeTextViewTests {
         await view.waitForRenderedRowsBuildSuspensionForTesting()
 
         session.selectNode(targetID)
-        await Task.yield()
+        view.routeCurrentSelectionInvalidationForTesting()
 
         view.resumeRenderedRowsBuildForTesting()
         await view.waitForRenderedRowsForTesting()
@@ -938,7 +937,7 @@ struct DOMTreeTextViewTests {
         await view.waitForRenderedRowsBuildSuspensionForTesting()
 
         session.selectNode(oldSelectedNodeID)
-        await Task.yield()
+        view.routeCurrentSelectionInvalidationForTesting()
 
         let command = session.beginInspectSelectionRequest(
             targetID: protocolTargetID,
@@ -1214,14 +1213,40 @@ private final class CancellableVoidActionRecorder {
     private(set) var cancellationCount = 0
     private var startContinuation: CheckedContinuation<Void, Never>?
     private var cancellationContinuation: CheckedContinuation<Void, Never>?
+    private var runContinuation: CheckedContinuation<Void, Never>?
+    private var didRecordCancellation = false
 
     func run() async {
         startedCount += 1
         startContinuation?.resume()
         startContinuation = nil
-        while !Task.isCancelled {
-            await Task.yield()
+        if Task.isCancelled {
+            recordCancellation()
+            return
         }
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                if didRecordCancellation {
+                    continuation.resume()
+                } else {
+                    runContinuation = continuation
+                }
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.recordCancellation()
+            }
+        }
+    }
+
+    private func recordCancellation() {
+        guard !didRecordCancellation else {
+            return
+        }
+        didRecordCancellation = true
+        let continuation = runContinuation
+        runContinuation = nil
+        continuation?.resume()
         cancellationCount += 1
         cancellationContinuation?.resume()
         cancellationContinuation = nil
