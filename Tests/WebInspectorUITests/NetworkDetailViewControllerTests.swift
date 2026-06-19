@@ -1535,6 +1535,47 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func hiddenListDefersQueuedSnapshotApplyUntilAppearingAgain() async throws {
+        let network = NetworkSession()
+        let request = try #require(applyRequest(
+            to: network,
+            requestID: "1",
+            url: "https://media.example.com/clip.mp4",
+            responseHeaders: ["content-type": "video/mp4"],
+            responseMimeType: "video/mp4"
+        ))
+        let model = NetworkPanelModel(network: network)
+        let listViewController = NetworkListViewController(model: model)
+        let window = showInWindow(listViewController)
+        defer { window.isHidden = true }
+        await listViewController.flushPendingSnapshotUpdateForTesting()
+        #expect(listViewController.displayedRequestIDsForTesting == [request.id])
+
+        let evaluationCountBeforeHiddenUpdate = listViewController.displayRequestIDsEvaluationCountForTesting
+        listViewController.beginSnapshotApplyForTesting(requestIDs: [request.id])
+        listViewController.queueSnapshotUpdateForTesting(requestIDs: [])
+        #expect(listViewController.hasPendingSnapshotUpdateForTesting)
+
+        listViewController.beginAppearanceTransition(false, animated: false)
+        listViewController.endAppearanceTransition()
+        #expect(listViewController.hasPendingSnapshotUpdateForTesting == false)
+
+        model.setSearchText("does-not-match")
+        listViewController.finishSnapshotApplyForTesting(requestIDs: [request.id])
+        await listViewController.flushPendingSnapshotUpdateForTesting()
+
+        #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate)
+        #expect(listViewController.displayedRequestIDsForTesting == [request.id])
+
+        listViewController.beginAppearanceTransition(true, animated: false)
+        listViewController.endAppearanceTransition()
+        await listViewController.flushPendingSnapshotUpdateForTesting()
+
+        #expect(listViewController.displayedRequestIDsForTesting.isEmpty)
+        #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate + 1)
+    }
+
+    @Test
     func listControllerDeallocatesWhileDisplayRequestObservationIsActive() async throws {
         let model = NetworkPanelModel(network: NetworkSession())
         let deinitProbe = UITestDeinitProbe()

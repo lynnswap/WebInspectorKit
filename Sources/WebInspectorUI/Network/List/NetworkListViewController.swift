@@ -203,10 +203,11 @@ package final class NetworkListViewController: UICollectionViewController, UISea
             return
         }
         isRenderingActive = false
-        if hasPendingThrottledDisplayRowsReload {
+        if hasPendingThrottledDisplayRowsReload || pendingSnapshotUpdate != nil {
             needsSnapshotReloadOnNextAppearance = true
         }
         hasPendingThrottledDisplayRowsReload = false
+        pendingSnapshotUpdate = nil
         displayRowsReloadScheduler.cancel()
     }
 
@@ -456,6 +457,13 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private func applyPendingSnapshotUpdateIfNeeded() {
+        guard isRenderingActive else {
+            if pendingSnapshotUpdate != nil {
+                pendingSnapshotUpdate = nil
+                needsSnapshotReloadOnNextAppearance = true
+            }
+            return
+        }
         guard !snapshotState.isApplying, let update = pendingSnapshotUpdate else {
             return
         }
@@ -479,12 +487,21 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     private func snapshotUpdateDidFinish(
         appliedRows: NetworkListViewController.SnapshotRows
     ) {
+#if DEBUG
+        defer {
+            resumeSnapshotUpdateCompletionWaitersForTesting()
+        }
+#endif
         snapshotState.finishApplying(appliedRows)
+        guard isRenderingActive else {
+            if pendingSnapshotUpdate != nil {
+                pendingSnapshotUpdate = nil
+                needsSnapshotReloadOnNextAppearance = true
+            }
+            return
+        }
         renderSelectedRequestID(model.selectedRequestID)
         applyPendingSnapshotUpdateIfNeeded()
-#if DEBUG
-        resumeSnapshotUpdateCompletionWaitersForTesting()
-#endif
     }
 
     private func reloadDataFromModel() {
@@ -587,6 +604,26 @@ extension NetworkListViewController {
 
     package var displayedRequestIDsForTesting: [NetworkRequest.ID] {
         dataSource.snapshot().itemIdentifiers
+    }
+
+    package var hasPendingSnapshotUpdateForTesting: Bool {
+        pendingSnapshotUpdate != nil
+    }
+
+    package func beginSnapshotApplyForTesting(requestIDs: [NetworkRequest.ID]) {
+        snapshotState.beginApplying(
+            NetworkListViewController.SnapshotRows(requestIDs: requestIDs)
+        )
+    }
+
+    package func queueSnapshotUpdateForTesting(requestIDs: [NetworkRequest.ID]) {
+        requestSnapshotUpdate(requestIDs: requestIDs)
+    }
+
+    package func finishSnapshotApplyForTesting(requestIDs: [NetworkRequest.ID]) {
+        snapshotUpdateDidFinish(
+            appliedRows: NetworkListViewController.SnapshotRows(requestIDs: requestIDs)
+        )
     }
 
     package func flushPendingSnapshotUpdateForTesting() async {
