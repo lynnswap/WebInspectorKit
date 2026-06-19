@@ -74,7 +74,7 @@ package final class NetworkCompactNavigationController: UINavigationController, 
             return
         }
         model.selectRequest(nil)
-        detailViewController.clearSelectionPresentationAfterContainerDeselection()
+        detailViewController.discardDetailSurfaceAfterCompactRemoval()
     }
 
     private func startObservingSelection() {
@@ -130,7 +130,7 @@ package final class NetworkCompactNavigationController: UINavigationController, 
             return
         }
         if viewControllers.contains(where: { $0 === detailViewController }) {
-            detailViewController.clearSelectionPresentationAfterContainerDeselection()
+            detailViewController.discardDetailSurfaceAfterCompactRemoval()
         }
         setViewControllers([listViewController], animated: animated)
     }

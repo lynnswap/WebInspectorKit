@@ -75,9 +75,41 @@ extension NetworkBody {
 
 extension NetworkBody {
     @MainActor
+    fileprivate final class TextRepresentationPreparationJob {
+        let id: Int
+        let generation: Int
+        private let worker: Task<NetworkBody.PreparedTextRepresentation.Result?, Error>
+        private let completion: Task<Void, Never>
+
+        init(
+            id: Int,
+            generation: Int,
+            worker: Task<NetworkBody.PreparedTextRepresentation.Result?, Error>,
+            completion: Task<Void, Never>
+        ) {
+            self.id = id
+            self.generation = generation
+            self.worker = worker
+            self.completion = completion
+        }
+
+        var preparation: NetworkBody.TextPreparation {
+            NetworkBody.TextPreparation(task: completion)
+        }
+
+        func cancel() {
+            worker.cancel()
+            completion.cancel()
+        }
+    }
+}
+
+extension NetworkBody {
+    @MainActor
     fileprivate final class TextRepresentationPreparationState {        private(set) var generation = 0
         private var preparedGeneration: Int?
-        private var task: Task<Void, Never>?
+        private var job: NetworkBody.TextRepresentationPreparationJob?
+        private var nextJobID = 0
         private var isBatchingInvalidation = false
         private var needsInvalidation = false
 
@@ -86,7 +118,7 @@ extension NetworkBody {
         }
 
         var currentPreparation: NetworkBody.TextPreparation? {
-            task.map(NetworkBody.TextPreparation.init(task:))
+            job?.preparation
         }
 
         func withInvalidationBatch(_ updates: () -> Void, invalidate: () -> Void) {
@@ -116,25 +148,30 @@ extension NetworkBody {
             preparedGeneration = generation
         }
 
-        func startPreparation(_ task: Task<Void, Never>) {
-            self.task = task
+        func makeJobID() -> Int {
+            nextJobID += 1
+            return nextJobID
         }
 
-        func isCurrent(generation: Int) -> Bool {
-            generation == self.generation
+        func startPreparation(_ job: NetworkBody.TextRepresentationPreparationJob) {
+            self.job = job
         }
 
-        func finishPreparation(generation: Int) {
-            guard generation == self.generation else {
+        func isCurrent(generation: Int, jobID: Int) -> Bool {
+            generation == self.generation && job?.id == jobID
+        }
+
+        func finishPreparation(generation: Int, jobID: Int) {
+            guard isCurrent(generation: generation, jobID: jobID) else {
                 return
             }
             preparedGeneration = generation
-            task = nil
+            job = nil
         }
 
         func cancelPreparation() {
-            task?.cancel()
-            task = nil
+            job?.cancel()
+            job = nil
         }
     }
 }
@@ -248,22 +285,36 @@ package final class NetworkBody {
         }
 
         let generation = textRepresentationPreparation.generation
+        let jobID = textRepresentationPreparation.makeJobID()
         let worker = Task.detached(priority: .utility) {
-            NetworkBody.PreparedTextRepresentation.make(from: input)
+            try NetworkBody.PreparedTextRepresentation.make(from: input)
         }
-        let task = Task { @MainActor [weak self, worker] in
-            let result = await withTaskCancellationHandler {
-                await worker.value
-            } onCancel: {
-                worker.cancel()
+        let completion = Task { @MainActor [weak self, worker] in
+            let result: NetworkBody.PreparedTextRepresentation.Result?
+            do {
+                result = try await withTaskCancellationHandler {
+                    try await worker.value
+                } onCancel: {
+                    worker.cancel()
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                return
             }
             guard Task.isCancelled == false else {
                 return
             }
-            self?.applyPreparedTextRepresentation(result, generation: generation)
+            self?.applyPreparedTextRepresentation(result, generation: generation, jobID: jobID)
         }
-        textRepresentationPreparation.startPreparation(task)
-        return NetworkBody.TextPreparation(task: task)
+        let job = NetworkBody.TextRepresentationPreparationJob(
+            id: jobID,
+            generation: generation,
+            worker: worker,
+            completion: completion
+        )
+        textRepresentationPreparation.startPreparation(job)
+        return job.preparation
     }
 
     package func cancelTextRepresentationPreparation() {
@@ -409,9 +460,10 @@ package final class NetworkBody {
 
     private func applyPreparedTextRepresentation(
         _ result: NetworkBody.PreparedTextRepresentation.Result?,
-        generation: Int
+        generation: Int,
+        jobID: Int
     ) {
-        guard textRepresentationPreparation.isCurrent(generation: generation) else {
+        guard textRepresentationPreparation.isCurrent(generation: generation, jobID: jobID) else {
             return
         }
         if let result {
@@ -422,7 +474,7 @@ package final class NetworkBody {
                 textRepresentationSyntaxKind = result.syntaxKind
             }
         }
-        textRepresentationPreparation.finishPreparation(generation: generation)
+        textRepresentationPreparation.finishPreparation(generation: generation, jobID: jobID)
     }
 
     private func decodedContentText() -> String? {
@@ -487,7 +539,8 @@ package final class NetworkBody {
 }
 
 extension NetworkBody {
-    fileprivate enum PreparedTextRepresentation {        struct Input: Sendable {
+    fileprivate enum PreparedTextRepresentation {
+        struct Input: Sendable {
             let text: String
         }
 
@@ -496,30 +549,264 @@ extension NetworkBody {
             let syntaxKind: NetworkBody.SyntaxKind
         }
 
-        static func make(from input: Input) -> Result? {
-            guard let prettyJSON = prettyPrintedJSON(from: input.text) else {
+        static func make(from input: Input) throws -> Result? {
+            guard let prettyJSON = try CancellableJSONPrettyPrinter.prettyPrintedJSON(from: input.text) else {
                 return nil
             }
             return Result(text: prettyJSON, syntaxKind: .json)
         }
+    }
+}
 
-        private static func prettyPrintedJSON(from text: String) -> String? {
-            guard let data = text.data(using: .utf8) else {
+private enum CancellableJSONPrettyPrinter {
+    static func prettyPrintedJSON(from text: String) throws -> String? {
+        var parser = Parser(text: text)
+        return try parser.prettyPrintedJSON()
+    }
+
+    private struct Parser {
+        private let text: String
+        private var index: String.Index
+        private var checkpointCounter = 0
+
+        init(text: String) {
+            self.text = text
+            self.index = text.startIndex
+        }
+
+        mutating func prettyPrintedJSON() throws -> String? {
+            try skipWhitespace()
+            guard let first = currentCharacter,
+                  first == "{" || first == "[" else {
                 return nil
             }
-            guard let object = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) else {
+            let result = try parseValue(depth: 0)
+            try skipWhitespace()
+            guard index == text.endIndex else {
                 return nil
             }
-            guard JSONSerialization.isValidJSONObject(object) else {
+            return result
+        }
+
+        private mutating func parseValue(depth: Int) throws -> String? {
+            try skipWhitespace()
+            guard let character = currentCharacter else {
                 return nil
             }
-            guard
-                let prettyData = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted]),
-                let pretty = String(data: prettyData, encoding: .utf8)
-            else {
+            switch character {
+            case "{":
+                return try parseObject(depth: depth)
+            case "[":
+                return try parseArray(depth: depth)
+            case "\"":
+                return try parseString()
+            case "t":
+                return try consumeLiteral("true") ? "true" : nil
+            case "f":
+                return try consumeLiteral("false") ? "false" : nil
+            case "n":
+                return try consumeLiteral("null") ? "null" : nil
+            case "-", "0"..."9":
+                return try parseNumber()
+            default:
                 return nil
             }
-            return pretty
+        }
+
+        private mutating func parseObject(depth: Int) throws -> String? {
+            try consumeExpected("{")
+            try skipWhitespace()
+            if try consumeIfPresent("}") {
+                return "{}"
+            }
+
+            var members: [String] = []
+            while true {
+                try skipWhitespace()
+                guard currentCharacter == "\"" else {
+                    return nil
+                }
+                guard let key = try parseString() else {
+                    return nil
+                }
+                try skipWhitespace()
+                guard try consumeIfPresent(":") else {
+                    return nil
+                }
+                guard let value = try parseValue(depth: depth + 1) else {
+                    return nil
+                }
+                members.append("\(indent(depth + 1))\(key) : \(value)")
+                try skipWhitespace()
+                if try consumeIfPresent("}") {
+                    break
+                }
+                guard try consumeIfPresent(",") else {
+                    return nil
+                }
+            }
+            return "{\n" + members.joined(separator: ",\n") + "\n" + indent(depth) + "}"
+        }
+
+        private mutating func parseArray(depth: Int) throws -> String? {
+            try consumeExpected("[")
+            try skipWhitespace()
+            if try consumeIfPresent("]") {
+                return "[]"
+            }
+
+            var values: [String] = []
+            while true {
+                guard let value = try parseValue(depth: depth + 1) else {
+                    return nil
+                }
+                values.append("\(indent(depth + 1))\(value)")
+                try skipWhitespace()
+                if try consumeIfPresent("]") {
+                    break
+                }
+                guard try consumeIfPresent(",") else {
+                    return nil
+                }
+            }
+            return "[\n" + values.joined(separator: ",\n") + "\n" + indent(depth) + "]"
+        }
+
+        private mutating func parseString() throws -> String? {
+            let start = index
+            try consumeExpected("\"")
+            while let character = currentCharacter {
+                try checkpoint()
+                advance()
+                if character == "\"" {
+                    return String(text[start..<index])
+                }
+                if character == "\\" {
+                    guard let escaped = currentCharacter else {
+                        return nil
+                    }
+                    advance()
+                    if escaped == "u" {
+                        for _ in 0..<4 {
+                            guard let scalar = currentCharacter,
+                                  scalar.isHexDigit else {
+                                return nil
+                            }
+                            advance()
+                        }
+                    } else if "\"\\/bfnrt".contains(escaped) == false {
+                        return nil
+                    }
+                } else if character.unicodeScalars.contains(where: { $0.value < 0x20 }) {
+                    return nil
+                }
+            }
+            return nil
+        }
+
+        private mutating func parseNumber() throws -> String? {
+            let start = index
+            if try consumeIfPresent("-") == false {
+                try checkpoint()
+            }
+            guard let firstDigit = currentCharacter,
+                  firstDigit.isNumber else {
+                return nil
+            }
+            if firstDigit == "0" {
+                advance()
+            } else {
+                while let character = currentCharacter,
+                      character.isNumber {
+                    try checkpoint()
+                    advance()
+                }
+            }
+            if try consumeIfPresent(".") {
+                guard let digit = currentCharacter,
+                      digit.isNumber else {
+                    return nil
+                }
+                while let character = currentCharacter,
+                      character.isNumber {
+                    try checkpoint()
+                    advance()
+                }
+            }
+            if let character = currentCharacter,
+               character == "e" || character == "E" {
+                advance()
+                if let sign = currentCharacter,
+                   sign == "+" || sign == "-" {
+                    advance()
+                }
+                guard let digit = currentCharacter,
+                      digit.isNumber else {
+                    return nil
+                }
+                while let character = currentCharacter,
+                      character.isNumber {
+                    try checkpoint()
+                    advance()
+                }
+            }
+            return String(text[start..<index])
+        }
+
+        private mutating func consumeLiteral(_ literal: String) throws -> Bool {
+            for expected in literal {
+                try checkpoint()
+                guard currentCharacter == expected else {
+                    return false
+                }
+                advance()
+            }
+            return true
+        }
+
+        private mutating func skipWhitespace() throws {
+            while let character = currentCharacter,
+                  character == " " || character == "\n" || character == "\r" || character == "\t" {
+                try checkpoint()
+                advance()
+            }
+        }
+
+        private mutating func consumeExpected(_ expected: Character) throws {
+            guard currentCharacter == expected else {
+                return
+            }
+            try checkpoint()
+            advance()
+        }
+
+        private mutating func consumeIfPresent(_ expected: Character) throws -> Bool {
+            guard currentCharacter == expected else {
+                return false
+            }
+            try checkpoint()
+            advance()
+            return true
+        }
+
+        private mutating func checkpoint() throws {
+            checkpointCounter += 1
+            if checkpointCounter >= 128 {
+                checkpointCounter = 0
+                try Task.checkCancellation()
+            }
+        }
+
+        private mutating func advance() {
+            index = text.index(after: index)
+        }
+
+        private var currentCharacter: Character? {
+            index == text.endIndex ? nil : text[index]
+        }
+
+        private func indent(_ depth: Int) -> String {
+            String(repeating: "  ", count: depth)
         }
     }
 }

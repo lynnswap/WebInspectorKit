@@ -14,6 +14,13 @@ extension NetworkBodyViewController {
 final class NetworkBodyViewController: UIViewController {
     typealias MoviePreviewPlayerFactory = @MainActor (URL) -> AVPlayer
 
+    enum SurfaceDiscardReason {
+        case emptySelection
+        case headersMode
+        case missingPreviewBody
+        case compactRemoval
+    }
+
     private let syntaxModel = SyntaxEditorModel(
         text: "",
         language: .json,
@@ -110,11 +117,11 @@ final class NetworkBodyViewController: UIViewController {
         mediaPreviewCoordinator.cancel()
     }
 
-    func display(body: NetworkBody?) {
-        display(body: body, metadata: nil)
+    func bindSurface(body: NetworkBody?) {
+        bindSurface(body: body, metadata: nil)
     }
 
-    func display(body: NetworkBody?, metadata: NetworkBodyViewController.PreviewMetadata?) {
+    func bindSurface(body: NetworkBody?, metadata: NetworkBodyViewController.PreviewMetadata?) {
         guard hasDisplayedBody == false || self.body !== body else {
             guard self.metadata != metadata else {
                 return
@@ -134,39 +141,45 @@ final class NetworkBodyViewController: UIViewController {
         }
     }
 
-    func releasePreviewResources() {
+    func discardSurface(reason: SurfaceDiscardReason) {
         hasDisplayedBody = false
         body = nil
         metadata = nil
         startObserving(body: nil)
+        mediaPreviewCoordinator.cancel()
         hideMediaPreview()
         scrollEdgeSink?.contentScrollView = nil
     }
 
-    func setRenderingActive(_ isActive: Bool) {
-        guard isRenderingActive != isActive else {
-            if isActive, hasDisplayedBody {
+    func resumeRendering() {
+        guard isRenderingActive == false else {
+            if hasDisplayedBody {
                 renderBody(body)
             }
             return
         }
 
-        isRenderingActive = isActive
-        if isActive {
-            startObserving(body: body)
-            if hasDisplayedBody {
-                renderBody(body)
-            }
-        } else {
-            bodyObservation?.cancel()
-            bodyObservation = nil
-#if DEBUG
-            bodyObservationDelivery = nil
-#endif
-            body?.cancelTextRepresentationPreparation()
-            mediaPreviewCoordinator.suspendPreparation()
-            pauseMediaPreviewPlayback()
+        isRenderingActive = true
+        startObserving(body: body)
+        if hasDisplayedBody {
+            renderBody(body)
         }
+    }
+
+    func suspendKeepingSurface() {
+        guard isRenderingActive else {
+            return
+        }
+
+        isRenderingActive = false
+        bodyObservation?.cancel()
+        bodyObservation = nil
+#if DEBUG
+        bodyObservationDelivery = nil
+#endif
+        body?.cancelTextRepresentationPreparation()
+        mediaPreviewCoordinator.suspendPreparation()
+        pauseMediaPreviewPlayback()
     }
 
     private func configureSyntaxView() {

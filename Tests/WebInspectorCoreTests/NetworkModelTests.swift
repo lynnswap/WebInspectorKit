@@ -272,6 +272,36 @@ func preparedResponseBodyTextInvalidatesWhenFetchedContentChanges() async throws
 
 @Test
 @MainActor
+func cancelingPreparedResponseBodyTextStopsWorkerAndAllowsReprepare() async throws {
+    let jsonItems = (0..<50_000).map { index in
+        #"{"value":\#(index),"enabled":true}"#
+    }
+    let json = "[" + jsonItems.joined(separator: ",") + "]"
+    let body = NetworkBody(
+        role: .response,
+        kind: .text,
+        full: json,
+        sourceSyntaxKind: .json,
+        phase: .loaded
+    )
+    let originalText = body.textRepresentation
+
+    let preparation = try #require(body.prepareTextRepresentation())
+    body.cancelTextRepresentationPreparation()
+    await preparation.wait()
+
+    #expect(body.textRepresentation == originalText)
+
+    let secondPreparation = try #require(body.prepareTextRepresentation())
+    await secondPreparation.wait()
+
+    #expect(body.textRepresentation != originalText)
+    #expect(body.textRepresentation?.contains("\n") == true)
+    #expect(body.textRepresentation?.contains(#""value" : 49999"#) == true)
+}
+
+@Test
+@MainActor
 func invalidJSONLookingPlainTextKeepsPlainTextSyntax() async {
     let body = NetworkBody(
         role: .response,

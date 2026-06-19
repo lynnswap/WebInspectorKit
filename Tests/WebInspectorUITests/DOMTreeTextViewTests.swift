@@ -374,6 +374,36 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func hidingWithQueuedSelectionHighlightRequeuesHighlightOnResume() async throws {
+        let session = makeDOMSession()
+        let highlightRecorder = NodeActionRecorder()
+        let view = DOMTreeTextView(
+            dom: session,
+            highlightNodeAction: { nodeID, owner in
+                highlightRecorder.record(nodeID, owner: owner)
+            }
+        )
+        view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
+        view.layoutIfNeeded()
+        view.setRenderingActive(true)
+        await view.waitForRenderedRowsForTesting()
+
+        view.primaryClickRowForTesting(containing: "<input disabled>")
+        view.setRenderingActive(false)
+        await Task.yield()
+        await Task.yield()
+
+        #expect(highlightRecorder.recordedNodeIDs.isEmpty)
+
+        view.setRenderingActive(true)
+        let highlightedNodeID = await highlightRecorder.nextNodeID()
+
+        #expect(session.selectedNode?.id == highlightedNodeID)
+        #expect(session.node(for: highlightedNodeID)?.localName == "input")
+        #expect(highlightRecorder.recordedOwners == [.selection])
+    }
+
+    @Test
     func hoverHighlightCancelsPendingRestoreHighlight() async throws {
         let session = makeDOMSession()
         let highlightRecorder = NodeActionRecorder()
@@ -780,6 +810,52 @@ struct DOMTreeTextViewTests {
         view.layoutIfNeeded()
 
         #expect(view.renderedTextForTesting.contains("data-visible=\"while-hidden\""))
+        #expect(view.multiSelectedLineSnapshotsInDisplayOrderForTesting.isEmpty)
+        #expect(view.selectedRowRectsForTesting().count == 1)
+    }
+
+    @Test
+    func hiddenSelectionChangeAwayAndBackStillClearsMultiSelectionOnResume() async throws {
+        let session = makeDOMSession()
+        let view = await makeTreeView(session: session)
+        let snapshot = session.snapshot()
+        let inputID = try #require(
+            snapshot.nodesByID.first { entry in
+                entry.value.localName == "input"
+            }?.key
+        )
+        let articleID = try #require(
+            snapshot.nodesByID.first { entry in
+                entry.value.localName == "article"
+            }?.key
+        )
+
+        view.primaryClickRowForTesting(containing: "<input disabled>")
+        await Task.yield()
+        view.primaryClickRowForTesting(containing: "<div id=\"start-of-content\"", modifiers: .command)
+        view.primaryClickRowForTesting(containing: "<article", modifiers: .command)
+        #expect(view.multiSelectedLineSnapshotsInDisplayOrderForTesting.count == 3)
+        #expect(session.selectedNode?.id == inputID)
+
+        let observedSelectionRevisions = await view.selectionObservationDeliveryForTesting.values {
+            session.selectionRevision
+        }
+        defer {
+            observedSelectionRevisions.cancel()
+        }
+
+        view.setRenderingActive(false)
+        session.selectNode(articleID)
+        session.selectNode(inputID)
+        let hiddenSelectionRevision = session.selectionRevision
+        #expect(await observedSelectionRevisions.waitUntil { $0 >= hiddenSelectionRevision } != nil)
+
+        #expect(view.multiSelectedLineSnapshotsInDisplayOrderForTesting.count == 3)
+
+        view.setRenderingActive(true)
+        await view.waitForRenderedRowsForTesting()
+        view.layoutIfNeeded()
+
         #expect(view.multiSelectedLineSnapshotsInDisplayOrderForTesting.isEmpty)
         #expect(view.selectedRowRectsForTesting().count == 1)
     }
