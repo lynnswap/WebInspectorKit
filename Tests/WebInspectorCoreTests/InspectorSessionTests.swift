@@ -967,10 +967,6 @@ func selectedElementStyleRefreshEnablesCSSAgentOnlyAfterBackendRequiresIt() asyn
     }
     let firstMessages = try await waitForCSSRefreshMessages(backend, after: sentCount)
     #expect(await targetMessageMethods(backend).dropFirst(sentCount).contains("CSS.enable") == false)
-    let cssEnableTask = Task {
-        try await waitForTargetMessage(backend, method: "CSS.enable", after: sentCount)
-    }
-    await backend.waitUntilTargetMessageWaiterRegistered(method: "CSS.enable", after: sentCount)
     await receiveTargetErrorReply(
         transport,
         targetID: firstMessages.matched.targetIdentifier,
@@ -978,7 +974,7 @@ func selectedElementStyleRefreshEnablesCSSAgentOnlyAfterBackendRequiresIt() asyn
         message: "CSS agent is not enabled"
     )
 
-    let cssEnable = try await cssEnableTask.value
+    let cssEnable = try await backend.waitForTargetMessage(method: "CSS.enable", after: sentCount)
     let retrySentCount = await backend.sentTargetMessages().count
     await receiveTargetReply(
         transport,
