@@ -290,6 +290,37 @@ func cancellationFailsPendingReplyImmediately() async throws {
 }
 
 @Test
+func targetCommandCancellationFailsPendingReplyWithoutTimeout() async throws {
+    let backend = FakeTransportBackend()
+    let session = TransportSession(backend: backend, responseTimeout: nil)
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#)
+
+    let sendTask = Task {
+        try await session.send(
+            ProtocolCommand(domain: .css, method: "CSS.getMatchedStylesForNode", routing: .target(.init("page-main")))
+        )
+    }
+    let sent = try await waitForTargetMessage(backend)
+    let innerID = try messageID(sent.message)
+    #expect(await session.snapshot().pendingTargetReplyKeys == [
+        TransportSession.ReplyKey(targetID: .init("page-main"), commandID: innerID),
+    ])
+
+    sendTask.cancel()
+
+    do {
+        _ = try await waitForBackendValue(timeout: testWaitTimeout) {
+            try await sendTask.value
+        }
+        Issue.record("Expected cancellation")
+    } catch is CancellationError {
+    } catch {
+        Issue.record("Expected CancellationError, got \(error)")
+    }
+    #expect(await session.snapshot().pendingTargetReplyKeys.isEmpty)
+}
+
+@Test
 func fakeBackendTargetMessageWaiterUsesAfterAndOrdinal() async throws {
     let backend = FakeTransportBackend()
 

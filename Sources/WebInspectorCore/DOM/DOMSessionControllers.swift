@@ -719,7 +719,6 @@ final class DOMSessionDocumentRequestHandle {
 
     func cancel() {
         task?.cancel()
-        task = nil
     }
 
     #if DEBUG
