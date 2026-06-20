@@ -792,6 +792,24 @@ package final class DOMSession {
         targetGraph.targetKind(for: targetID)
     }
 
+    package func frameTargetNeedsDocumentRequest(_ targetID: ProtocolTarget.ID) -> Bool {
+        targetGraph.targetMatches(targetID, kind: .frame, requiring: .dom)
+            && currentDocumentID(for: targetID) == nil
+    }
+
+    package func frameTargetIDsNeedingDocumentRequest() -> [ProtocolTarget.ID] {
+        targetGraph.targetIDs(kind: .frame, requiring: .dom)
+            .filter { currentDocumentID(for: $0) == nil }
+    }
+
+    package func targetProtocolSnapshot() -> TargetProtocolEventSnapshot {
+        TargetProtocolEventSnapshot(
+            currentPageTargetID: currentPageTargetID,
+            mainFrameID: mainFrameID,
+            targetsByID: targetGraph.targetSnapshots(currentDocumentID: currentDocumentID(for:))
+        )
+    }
+
     package func getDocumentIntent(targetID: ProtocolTarget.ID) -> DOMCommand.Intent? {
         guard targetCapabilities(for: targetID).contains(.dom) else {
             return nil

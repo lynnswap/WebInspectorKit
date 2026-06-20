@@ -160,21 +160,7 @@ package struct TargetProtocolEventDispatcher {
     }
 }
 
-extension DOMSession.Snapshot {
-    package var targetProtocolEventSnapshot: TargetProtocolEventSnapshot {
-        TargetProtocolEventSnapshot(
-            currentPageTargetID: currentPageTargetID,
-            mainFrameID: mainFrameID,
-            targetsByID: targetsByID
-        )
-    }
-}
-
 extension DOMSession: TargetProtocolEventHandler {
-    package func targetProtocolSnapshot() -> TargetProtocolEventSnapshot {
-        snapshot().targetProtocolEventSnapshot
-    }
-
     package func targetProtocolDidCreate(_ record: ProtocolTarget.Record, makeCurrentMainPage: Bool) {
         applyTargetCreated(record, makeCurrentMainPage: makeCurrentMainPage)
     }
@@ -193,7 +179,7 @@ extension DOMSession: TargetProtocolEventHandler {
             applyTargetCommitted(targetID: resolution.newTargetID)
         }
 
-        let snapshot = snapshot()
+        let snapshot = targetProtocolSnapshot()
         if snapshotBeforeCommit.currentPageTargetID == nil,
            let target = snapshot.targetsByID[resolution.newTargetID],
            target.kind == .page,

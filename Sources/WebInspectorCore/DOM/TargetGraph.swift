@@ -45,6 +45,31 @@ package final class TargetGraph {
         targetsByID[targetID]?.capabilities ?? []
     }
 
+    package func targetMatches(
+        _ targetID: ProtocolTarget.ID,
+        kind: ProtocolTarget.Kind,
+        requiring capabilities: ProtocolTarget.Capabilities
+    ) -> Bool {
+        guard let target = targetsByID[targetID],
+              target.kind == kind else {
+            return false
+        }
+        return target.capabilities.isSuperset(of: capabilities)
+    }
+
+    package func targetIDs(
+        kind: ProtocolTarget.Kind,
+        requiring capabilities: ProtocolTarget.Capabilities
+    ) -> [ProtocolTarget.ID] {
+        targetsByID.values.compactMap { target in
+            guard target.kind == kind,
+                  target.capabilities.isSuperset(of: capabilities) else {
+                return nil
+            }
+            return target.id
+        }
+    }
+
     package func targetFrameID(for targetID: ProtocolTarget.ID) -> DOMFrame.ID? {
         targetsByID[targetID]?.frameID
     }

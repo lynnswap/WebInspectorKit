@@ -1384,6 +1384,106 @@ func childNodeInsertedUsesWebKitPreviousSiblingSemantics() async throws {
 #if DEBUG
 @Test
 @MainActor
+func targetProtocolEventsDoNotBuildFullDOMSnapshots() throws {
+    let session = DOMSession()
+
+    _ = try session.applyTargetProtocolEvent(
+        ProtocolEvent(
+            sequence: 1,
+            domain: .target,
+            method: "Target.targetCreated",
+            targetID: .init("page-old"),
+            paramsData: Data(#"{"targetInfo":{"targetId":"page-old","type":"page","frameId":"main-frame","isProvisional":false}}"#.utf8)
+        )
+    )
+    _ = session.replaceDocumentRoot(
+        document(
+            nodeID: 1,
+            children: [
+                DOMNode.Payload(
+                    nodeID: .init(2),
+                    nodeType: .element,
+                    nodeName: "BODY",
+                    localName: "body",
+                    regularChildren: .loaded((3..<80).map {
+                        DOMNode.Payload(
+                            nodeID: .init($0),
+                            nodeType: .element,
+                            nodeName: "DIV",
+                            localName: "div"
+                        )
+                    })
+                ),
+            ]
+        ),
+        targetID: .init("page-old")
+    )
+
+    let baselineSnapshotBuildCount = session.snapshotBuildCountForTesting
+
+    _ = try session.applyTargetProtocolEvent(
+        ProtocolEvent(
+            sequence: 2,
+            domain: .target,
+            method: "Target.targetCreated",
+            targetID: .init("page-new"),
+            paramsData: Data(#"{"targetInfo":{"targetId":"page-new","type":"page","isProvisional":true}}"#.utf8)
+        )
+    )
+    _ = try session.applyTargetProtocolEvent(
+        ProtocolEvent(
+            sequence: 3,
+            domain: .target,
+            method: "Target.didCommitProvisionalTarget",
+            targetID: .init("page-new"),
+            paramsData: Data(#"{"oldTargetId":"page-old","newTargetId":"page-new"}"#.utf8)
+        )
+    )
+
+    #expect(session.snapshotBuildCountForTesting == baselineSnapshotBuildCount)
+    #expect(session.currentPageTargetID == ProtocolTarget.ID("page-new"))
+    #expect(session.targetProtocolSnapshot().targetsByID[ProtocolTarget.ID("page-new")]?.isProvisional == false)
+}
+
+@Test
+@MainActor
+func frameTargetDocumentRequestEligibilityDoesNotBuildFullDOMSnapshots() {
+    let session = DOMSession()
+    let frameTargetID = ProtocolTarget.ID("frame-target")
+    let workerTargetID = ProtocolTarget.ID("worker-target")
+
+    session.applyTargetCreated(
+        .init(
+            id: frameTargetID,
+            kind: .frame,
+            frameID: .init("child-frame"),
+            parentFrameID: .init("main-frame"),
+            capabilities: .dom
+        )
+    )
+    session.applyTargetCreated(
+        .init(id: workerTargetID, kind: .worker, capabilities: .dom)
+    )
+
+    let baselineSnapshotBuildCount = session.snapshotBuildCountForTesting
+
+    #expect(session.frameTargetNeedsDocumentRequest(frameTargetID))
+    #expect(!session.frameTargetNeedsDocumentRequest(workerTargetID))
+    #expect(Set(session.frameTargetIDsNeedingDocumentRequest()) == Set([frameTargetID]))
+    #expect(session.snapshotBuildCountForTesting == baselineSnapshotBuildCount)
+
+    _ = session.replaceDocumentRoot(
+        document(nodeID: 1),
+        targetID: frameTargetID
+    )
+
+    #expect(!session.frameTargetNeedsDocumentRequest(frameTargetID))
+    #expect(session.frameTargetIDsNeedingDocumentRequest().isEmpty)
+    #expect(session.snapshotBuildCountForTesting == baselineSnapshotBuildCount)
+}
+
+@Test
+@MainActor
 func domProtocolMutationEventsResolveRawNodeIDsWithoutBuildingSnapshots() throws {
     let pageTargetID = ProtocolTarget.ID("page-main")
     let session = DOMSession()
