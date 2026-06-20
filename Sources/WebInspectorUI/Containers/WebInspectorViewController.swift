@@ -25,6 +25,18 @@ private final class WebInspectorRootPresentationLifecycleCoordinator {
     #endif
 }
 
+private final class WebInspectorPresentationHostWindowObserverView: UIView {
+    var onDetachedFromWindow: (() -> Void)?
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        guard window == nil else {
+            return
+        }
+        onDetachedFromWindow?()
+    }
+}
+
 @MainActor
 public final class WebInspectorViewController: UIViewController {
     private enum HostKind {
@@ -36,6 +48,17 @@ public final class WebInspectorViewController: UIViewController {
     public var automaticallyDetachesOnDismiss = true
     private var drawsBackgroundStorage = true
     private let presentationLifecycleCoordinator = WebInspectorRootPresentationLifecycleCoordinator()
+    private lazy var presentationHostWindowObserver: WebInspectorPresentationHostWindowObserverView = {
+        let view = WebInspectorPresentationHostWindowObserverView(frame: .zero)
+        view.isHidden = true
+        view.isUserInteractionEnabled = false
+        view.onDetachedFromWindow = { [weak self] in
+            self?.presentationHostWindowDidDetach()
+        }
+        return view
+    }()
+    private weak var observedPresentationHostView: UIView?
+    private var suppressPresentationHostWindowObserver = false
 
     @available(iOS 26.0, *)
     public var drawsBackground: Bool {
@@ -83,6 +106,7 @@ public final class WebInspectorViewController: UIViewController {
     public override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         presentationLifecycleCoordinator.beginPresentation()
+        installPresentationHostWindowObserverIfNeeded()
     }
 
     public override func viewDidDisappear(_ animated: Bool) {
@@ -157,6 +181,27 @@ public final class WebInspectorViewController: UIViewController {
                 await session.retireRootPresentation(detach: automaticallyDetachesOnDismiss)
             }
         }
+    }
+
+    private func installPresentationHostWindowObserverIfNeeded() {
+        guard let hostView = navigationController?.view,
+              observedPresentationHostView !== hostView else {
+            return
+        }
+
+        suppressPresentationHostWindowObserver = true
+        presentationHostWindowObserver.removeFromSuperview()
+        suppressPresentationHostWindowObserver = false
+
+        observedPresentationHostView = hostView
+        hostView.addSubview(presentationHostWindowObserver)
+    }
+
+    private func presentationHostWindowDidDetach() {
+        guard suppressPresentationHostWindowObserver == false else {
+            return
+        }
+        finishRootPresentationLifecycle()
     }
 
     private func handleHorizontalSizeClassChange() {

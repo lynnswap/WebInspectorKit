@@ -263,6 +263,38 @@ struct ParentContainerTests {
     }
 
     @Test
+    func hiddenNavigationControllerRemovalFinishesRootPresentationLifecycle() async throws {
+        let detachRecorder = DetachRecorder()
+        let session = makeSessionWithNoOpAttachment(detachAction: { _ in
+            detachRecorder.record()
+        })
+        _ = WebInspectorTab.ContentFactory.makeViewController(
+            for: .dom,
+            session: session,
+            hostLayout: .compact
+        )
+        let viewController = WebInspectorViewController(session: session)
+        let navigationController = UINavigationController(rootViewController: viewController)
+        let window = showInWindow(navigationController)
+        defer { window.isHidden = true }
+
+        #expect(navigationController.view.window === window)
+        #expect(session.interface.contentCacheCountForTesting > 0)
+
+        let coveringViewController = UIViewController()
+        navigationController.pushViewController(coveringViewController, animated: false)
+        #expect(await waitUntil { navigationController.topViewController === coveringViewController })
+        #expect(detachRecorder.count == 0)
+        #expect(session.interface.contentCacheCountForTesting > 0)
+
+        window.rootViewController = UIViewController()
+        window.layoutIfNeeded()
+        #expect(navigationController.view.window == nil)
+        #expect(await waitUntil { detachRecorder.count == 1 })
+        #expect(session.interface.contentCacheCountForTesting == 0)
+    }
+
+    @Test
     func viewControllerDoesNotReplaceExternalPresentationControllerDelegate() async throws {
         let presenter = UIViewController()
         let viewController = WebInspectorViewController(session: makeSessionWithNoOpAttachment())
