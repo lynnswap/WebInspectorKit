@@ -93,6 +93,12 @@ extension WebInspectorTab {
             }
             viewControllerByKey.removeAll()
         }
+
+        #if DEBUG
+        package var countForTesting: Int {
+            viewControllerByKey.count
+        }
+        #endif
     }
 }
 

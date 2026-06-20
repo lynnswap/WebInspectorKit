@@ -189,6 +189,12 @@ package final class InterfaceModel {
         contentCache.removeAll()
     }
 
+    #if DEBUG
+    package var contentCacheCountForTesting: Int {
+        contentCache.countForTesting
+    }
+    #endif
+
     package var selectedTab: WebInspectorTab? {
         guard let selectedItemID else {
             return nil

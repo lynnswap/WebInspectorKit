@@ -49,6 +49,30 @@ extension DOMSession {
         cancelCSSActionRequests()
     }
 
+    package func retireBackendInteractionForTeardown() async {
+        cancelDocumentRequests()
+        cancelCSSActionRequests()
+
+        let pickerTargetID = elementPicker.targetID
+        let inspectModeTargetID = isSelectingElement ? pickerTargetID ?? currentPageTargetID : nil
+        if let inspectModeTargetID,
+           targetSupportsTeardownBackendInteraction(inspectModeTargetID),
+           let intent = setInspectModeEnabledIntent(targetID: inspectModeTargetID, enabled: false) {
+            await performTeardownCommand(intent)
+        }
+
+        for targetID in teardownHighlightHideTargetIDs(preferredTargetID: pickerTargetID) {
+            guard let intent = hideHighlightIntent(targetID: targetID) else {
+                continue
+            }
+            await performTeardownCommand(intent)
+        }
+
+        highlightController.clearAll()
+        clearElementPickerState(invalidatePendingSelection: true)
+        clearDeleteUndoHistory()
+    }
+
     package func waitUntilDocumentRequestsIdle(targetID: ProtocolTarget.ID? = nil) async {
         await documentRequests.waitUntilIdle(targetID: targetID)
     }
@@ -106,6 +130,8 @@ extension DOMSession {
         requiresActiveConnection: Bool,
         highlightOwner: DOMPageHighlightOwner? = nil
     ) async throws -> ProtocolCommand.Result {
+        let commandChannel = try requireCommandChannel(requiresActiveConnection: requiresActiveConnection)
+        let command = try protocolCommands.command(for: intent)
         if case let .highlightNode(target) = intent {
             highlightController.markHighlightMayBeVisible(
                 targetID: target.commandTargetID,
@@ -120,7 +146,7 @@ extension DOMSession {
         }
         let result: ProtocolCommand.Result
         do {
-            result = try await send(intent, requiresActiveConnection: requiresActiveConnection)
+            result = try await send(command, using: commandChannel)
         } catch {
             if let missingTargetID = missingTargetID(from: error) {
                 clearHighlightOwnershipIfMissingTarget(missingTargetID, for: intent)
@@ -182,6 +208,90 @@ extension DOMSession {
         }
     }
 
+    private func targetSupportsTeardownBackendInteraction(_ targetID: ProtocolTarget.ID) -> Bool {
+        guard containsTarget(targetID),
+              targetKind(for: targetID) != .frame else {
+            return false
+        }
+        return true
+    }
+
+    private func teardownHighlightHideTargetIDs(preferredTargetID: ProtocolTarget.ID?) -> [ProtocolTarget.ID] {
+        var targetIDs: [ProtocolTarget.ID] = []
+        func append(_ targetID: ProtocolTarget.ID?) {
+            guard let targetID,
+                  targetSupportsTeardownBackendInteraction(targetID),
+                  !targetIDs.contains(targetID) else {
+                return
+            }
+            targetIDs.append(targetID)
+        }
+
+        append(preferredTargetID)
+        for highlight in highlightController.possibleVisibleHighlights(
+            preferredFirst: preferredTargetID,
+            fallbackTargetID: nil,
+            preserving: nil
+        ) {
+            append(highlight.targetID)
+        }
+        append(currentPageTargetID)
+        return targetIDs
+    }
+
+    private func performTeardownCommand(_ intent: DOMCommand.Intent) async {
+        do {
+            try await perform(intent, requiresActiveConnection: false)
+        } catch {
+            InspectorRuntimeLog.warning(
+                "dom.teardownCleanup.failed method=\(teardownCommandMethodName(for: intent)) target=\(teardownCommandTargetDescription(for: intent)) error=\(error)"
+            )
+        }
+    }
+
+    private func teardownCommandMethodName(for intent: DOMCommand.Intent) -> String {
+        switch intent {
+        case .getDocument:
+            "DOM.getDocument"
+        case .requestChildNodes:
+            "DOM.requestChildNodes"
+        case .requestNode:
+            "DOM.requestNode"
+        case .highlightNode:
+            "DOM.highlightNode"
+        case .hideHighlight:
+            "DOM.hideHighlight"
+        case .setInspectModeEnabled:
+            "DOM.setInspectModeEnabled"
+        case .getOuterHTML:
+            "DOM.getOuterHTML"
+        case .removeNode:
+            "DOM.removeNode"
+        case .undo:
+            "DOM.undo"
+        case .redo:
+            "DOM.redo"
+        }
+    }
+
+    private func teardownCommandTargetDescription(for intent: DOMCommand.Intent) -> String {
+        let targetID: ProtocolTarget.ID? = switch intent {
+        case let .getDocument(targetID),
+             let .requestChildNodes(targetID, _, _),
+             let .requestNode(_, targetID, _),
+             let .hideHighlight(targetID),
+             let .setInspectModeEnabled(targetID, _),
+             let .undo(targetID),
+             let .redo(targetID):
+            targetID
+        case let .highlightNode(target),
+             let .getOuterHTML(target),
+             let .removeNode(target):
+            target.commandTargetID
+        }
+        return targetID?.rawValue ?? "nil"
+    }
+
     @discardableResult
     private func send(
         _ intent: DOMCommand.Intent,
@@ -189,7 +299,15 @@ extension DOMSession {
     ) async throws -> ProtocolCommand.Result {
         let commandChannel = try requireCommandChannel(requiresActiveConnection: requiresActiveConnection)
         let command = try protocolCommands.command(for: intent)
-        return try await commandChannel.send(command)
+        return try await send(command, using: commandChannel)
+    }
+
+    @discardableResult
+    private func send(
+        _ command: ProtocolCommand,
+        using commandChannel: ProtocolCommandChannel
+    ) async throws -> ProtocolCommand.Result {
+        try await commandChannel.send(command)
     }
 
     @discardableResult

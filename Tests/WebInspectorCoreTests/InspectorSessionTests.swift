@@ -6659,6 +6659,190 @@ func detachCancelsPumpsAndClearsModelState() async throws {
 }
 
 @Test
+func detachHidesVisibleDOMHighlightBeforeTransportDetach() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    let htmlID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(2))
+
+    let countBeforeHighlight = await backend.sentTargetMessages().count
+    let highlightTask = Task {
+        await session.attachment.dom.highlightNode(for: htmlID)
+    }
+    let highlight = try await waitForTargetMessage(backend, method: "DOM.highlightNode", after: countBeforeHighlight)
+    await receiveTargetReply(
+        transport,
+        targetID: highlight.targetIdentifier,
+        messageID: try messageID(highlight.message),
+        result: "{}"
+    )
+    await highlightTask.value
+
+    let countBeforeDetach = await backend.sentTargetMessages().count
+    let detachTask = Task {
+        await session.detach()
+    }
+    let hideHighlight = try await waitForTargetMessage(backend, method: "DOM.hideHighlight", after: countBeforeDetach)
+    #expect(hideHighlight.targetIdentifier == ProtocolTarget.ID.pageMain)
+    #expect(await backend.isDetached() == false)
+
+    await receiveTargetReply(
+        transport,
+        targetID: hideHighlight.targetIdentifier,
+        messageID: try messageID(hideHighlight.message),
+        result: "{}"
+    )
+    await detachTask.value
+
+    let methodsAfterDetachStart = await backend.sentTargetMessages().dropFirst(countBeforeDetach).compactMap { try? messageMethod($0.message) }
+    #expect(methodsAfterDetachStart == ["DOM.hideHighlight"])
+    #expect(await backend.isDetached())
+    #expect(await session.attachment.dom.snapshot().currentPageTargetID == nil)
+    #expect(await session.lastError == nil)
+}
+
+@Test
+func detachDisablesActiveElementPickerAndHidesHighlightBeforeTransportDetach() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    try await beginPicker(session: session, transport: transport, backend: backend)
+
+    let countBeforeDetach = await backend.sentTargetMessages().count
+    let detachTask = Task {
+        await session.detach()
+    }
+    let disableInspectMode = try await waitForTargetMessage(
+        backend,
+        method: "DOM.setInspectModeEnabled",
+        after: countBeforeDetach
+    )
+    #expect(disableInspectMode.targetIdentifier == ProtocolTarget.ID.pageMain)
+    #expect(try boolParameter("enabled", in: disableInspectMode.message) == false)
+    #expect(await backend.isDetached() == false)
+
+    let countBeforeDisableReply = await backend.sentTargetMessages().count
+    await receiveTargetReply(
+        transport,
+        targetID: disableInspectMode.targetIdentifier,
+        messageID: try messageID(disableInspectMode.message),
+        result: "{}"
+    )
+    let hideHighlight = try await waitForTargetMessage(
+        backend,
+        method: "DOM.hideHighlight",
+        after: countBeforeDisableReply
+    )
+    #expect(hideHighlight.targetIdentifier == ProtocolTarget.ID.pageMain)
+    #expect(await backend.isDetached() == false)
+
+    await receiveTargetReply(
+        transport,
+        targetID: hideHighlight.targetIdentifier,
+        messageID: try messageID(hideHighlight.message),
+        result: "{}"
+    )
+    await detachTask.value
+
+    let methodsAfterDetachStart = await backend.sentTargetMessages().dropFirst(countBeforeDetach).compactMap { try? messageMethod($0.message) }
+    #expect(methodsAfterDetachStart == ["DOM.setInspectModeEnabled", "DOM.hideHighlight"])
+    #expect(await backend.isDetached())
+    #expect(await session.attachment.dom.snapshot().currentPageTargetID == nil)
+    #expect(await session.lastError == nil)
+}
+
+@Test
+func detachDoesNotRestoreSelectedHighlightAfterRetiringElementPicker() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    let htmlID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(2))
+    await session.attachment.dom.selectNode(htmlID)
+    try await beginPicker(session: session, transport: transport, backend: backend)
+
+    let countBeforeDetach = await backend.sentTargetMessages().count
+    let detachTask = Task {
+        await session.detach()
+    }
+    let disableInspectMode = try await waitForTargetMessage(
+        backend,
+        method: "DOM.setInspectModeEnabled",
+        after: countBeforeDetach
+    )
+    let countBeforeDisableReply = await backend.sentTargetMessages().count
+    await receiveTargetReply(
+        transport,
+        targetID: disableInspectMode.targetIdentifier,
+        messageID: try messageID(disableInspectMode.message),
+        result: "{}"
+    )
+    let hideHighlight = try await waitForTargetMessage(
+        backend,
+        method: "DOM.hideHighlight",
+        after: countBeforeDisableReply
+    )
+    await receiveTargetReply(
+        transport,
+        targetID: hideHighlight.targetIdentifier,
+        messageID: try messageID(hideHighlight.message),
+        result: "{}"
+    )
+    await detachTask.value
+
+    let methodsAfterDetachStart = await backend.sentTargetMessages().dropFirst(countBeforeDetach).compactMap { try? messageMethod($0.message) }
+    #expect(methodsAfterDetachStart == ["DOM.setInspectModeEnabled", "DOM.hideHighlight"])
+    #expect(methodsAfterDetachStart.contains("DOM.highlightNode") == false)
+    #expect(await session.attachment.dom.snapshot().selection.selectedNodeID == nil)
+}
+
+@Test
+func detachCompletesAndResetsModelsWhenTeardownCleanupTimesOut() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(
+        backend: backend,
+        responseTimeout: .milliseconds(20)
+    )
+    let session = await InspectorSession(
+        configuration: .init(
+            responseTimeout: .milliseconds(20),
+            bootstrapTimeout: testBootstrapTimeout
+        )
+    )
+    try await connect(session, transport: transport, backend: backend)
+    let htmlID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(2))
+
+    let countBeforeHighlight = await backend.sentTargetMessages().count
+    let highlightTask = Task {
+        await session.attachment.dom.highlightNode(for: htmlID)
+    }
+    let highlight = try await waitForTargetMessage(backend, method: "DOM.highlightNode", after: countBeforeHighlight)
+    await receiveTargetReply(
+        transport,
+        targetID: highlight.targetIdentifier,
+        messageID: try messageID(highlight.message),
+        result: "{}"
+    )
+    await highlightTask.value
+
+    let countBeforeDetach = await backend.sentTargetMessages().count
+    let detachTask = Task {
+        await session.detach()
+    }
+    let hideHighlight = try await waitForTargetMessage(backend, method: "DOM.hideHighlight", after: countBeforeDetach)
+    #expect(hideHighlight.targetIdentifier == ProtocolTarget.ID.pageMain)
+    await detachTask.value
+
+    #expect(await backend.isDetached())
+    #expect(await session.hasActiveConnection == false)
+    #expect(await session.attachment.dom.snapshot().currentPageTargetID == nil)
+    #expect(await session.attachment.network.snapshot().orderedRequestIDs.isEmpty)
+    #expect(await session.lastError == nil)
+}
+
+@Test
 func detachDuringConnectKeepsSessionDetached() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)

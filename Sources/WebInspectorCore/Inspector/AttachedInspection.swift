@@ -275,6 +275,7 @@ private enum InspectorConnectionPhase {
     case idle
     case pending(InspectorConnection)
     case active(InspectorConnection)
+    case retiring(InspectorConnection)
 
     var activeConnection: InspectorConnection? {
         guard case let .active(connection) = self else {
@@ -290,22 +291,27 @@ private enum InspectorConnectionPhase {
         return connection
     }
 
-    var connectionsForDetach: [InspectorConnection] {
+    var connectionForDetachStart: InspectorConnection? {
         switch self {
-        case .idle:
-            []
+        case .idle, .retiring:
+            nil
         case let .pending(connection), let .active(connection):
-            [connection]
+            connection
         }
-    }
-
-    var hasAnyConnection: Bool {
-        connectionsForDetach.isEmpty == false
     }
 
     func isCurrent(_ candidate: InspectorConnection) -> Bool {
         switch self {
         case .idle:
+            false
+        case let .pending(connection), let .active(connection), let .retiring(connection):
+            connection === candidate
+        }
+    }
+
+    func isConnectLifecycleCurrent(_ candidate: InspectorConnection) -> Bool {
+        switch self {
+        case .idle, .retiring:
             false
         case let .pending(connection), let .active(connection):
             connection === candidate
@@ -377,6 +383,8 @@ package final class InspectorSession {
     @ObservationIgnored private let configuration: InspectorSession.Configuration
     @ObservationIgnored private var connectionPhase: InspectorConnectionPhase
     @ObservationIgnored private var protocolEventDispatchers: ProtocolDomainEventDispatcherRegistry
+    @ObservationIgnored private var isDetaching: Bool
+    @ObservationIgnored private var detachWaiters: [CheckedContinuation<Void, Never>]
 
     private var connection: InspectorConnection? {
         connectionPhase.activeConnection
@@ -416,6 +424,8 @@ package final class InspectorSession {
         protocolEventDispatchers = ProtocolDomainEventDispatcherRegistry()
         lastError = nil
         connectionPhase = .idle
+        isDetaching = false
+        detachWaiters = []
         configureProtocolEventDispatchers()
     }
 
@@ -439,6 +449,8 @@ package final class InspectorSession {
         protocolEventDispatchers = ProtocolDomainEventDispatcherRegistry()
         lastError = nil
         connectionPhase = .idle
+        isDetaching = false
+        detachWaiters = []
         configureProtocolEventDispatchers()
     }
 
@@ -462,6 +474,8 @@ package final class InspectorSession {
         protocolEventDispatchers = ProtocolDomainEventDispatcherRegistry()
         lastError = nil
         connectionPhase = .idle
+        isDetaching = false
+        detachWaiters = []
         configureProtocolEventDispatchers()
     }
 
@@ -560,7 +574,7 @@ package final class InspectorSession {
             startRuntimeConsoleEnableForAttachedTargets()
             lastError = nil
         } catch {
-            guard connectionPhase.isCurrent(nextConnection) else {
+            guard connectionPhase.isConnectLifecycleCurrent(nextConnection) else {
                 throw error
             }
             nextConnection.receiver?.close()
@@ -581,27 +595,78 @@ package final class InspectorSession {
     }
 
     package func detach() async {
-        guard connectionPhase.hasAnyConnection else {
+        if isDetaching {
+            await waitUntilDetachCompletes()
+            return
+        }
+        guard let previousConnection = connectionPhase.connectionForDetachStart else {
             return
         }
 
-        let previousConnections = connectionPhase.connectionsForDetach
-        connectionPhase = .idle
-        dom.recordCommandAvailabilityMutation()
-        unbindProtocolChannel()
-
-        for previousConnection in previousConnections {
-            cancelRuntimeConsoleEnableTasks(previousConnection)
-            previousConnection.receiver?.close()
-            stopPumps(previousConnection)
-            await previousConnection.transport.detach()
-            restoreInspectabilityIfNeeded(for: previousConnection)
+        isDetaching = true
+        defer {
+            isDetaching = false
+            resumeDetachWaiters()
         }
+
+        await AttachmentTeardownCoordinator(connection: previousConnection).detach(session: self)
+    }
+
+    private struct AttachmentTeardownCoordinator {
+        var connection: InspectorConnection
+
+        func detach(session: InspectorSession) async {
+            await session.performAttachmentTeardown(connection: connection)
+        }
+    }
+
+    private func performAttachmentTeardown(connection previousConnection: InspectorConnection) async {
+        connectionPhase = .retiring(previousConnection)
+        dom.recordCommandAvailabilityMutation()
+
+        cancelRuntimeConsoleEnableTasks(previousConnection)
+        await dom.retireBackendInteractionForTeardown()
+
+        unbindProtocolChannel()
+        previousConnection.receiver?.close()
+        stopPumps(previousConnection)
+        await previousConnection.transport.detach()
+        restoreInspectabilityIfNeeded(for: previousConnection)
+
+        if connectionPhase.isCurrent(previousConnection) {
+            connectionPhase = .idle
+            dom.recordCommandAvailabilityMutation()
+        }
+        resetAttachmentModels()
+        lastError = nil
+    }
+
+    private func waitUntilDetachCompletes() async {
+        guard isDetaching else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            if isDetaching {
+                detachWaiters.append(continuation)
+            } else {
+                continuation.resume()
+            }
+        }
+    }
+
+    private func resumeDetachWaiters() {
+        let waiters = detachWaiters
+        detachWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+
+    private func resetAttachmentModels() {
         dom.reset()
         network.reset()
         runtime.reset()
         console.reset()
-        lastError = nil
     }
 
     package var hasInspectablePageWebView: Bool {
@@ -957,7 +1022,7 @@ package final class InspectorSession {
     }
 
     private func ensureCurrentConnection(_ candidate: InspectorConnection) throws {
-        guard isCurrentConnection(candidate) else {
+        guard connectionPhase.isConnectLifecycleCurrent(candidate) else {
             throw TransportSession.Error.transportClosed
         }
     }
