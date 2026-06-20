@@ -109,6 +109,11 @@ public final class WebInspectorViewController: UIViewController {
         installPresentationHostWindowObserverIfNeeded()
     }
 
+    public override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        installPresentationHostWindowObserverIfNeeded()
+    }
+
     public override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
         guard isTerminalRootDisappearance,
@@ -184,7 +189,8 @@ public final class WebInspectorViewController: UIViewController {
     }
 
     private func installPresentationHostWindowObserverIfNeeded() {
-        guard let hostView = navigationController?.view,
+        guard let hostView = navigationController?.view ?? viewIfLoaded,
+              hostView.window != nil,
               observedPresentationHostView !== hostView else {
             return
         }

@@ -6748,6 +6748,81 @@ func presentationEndCleanupHidesVisibleDOMHighlightWithoutDetachingTransport() a
 }
 
 @Test
+func presentationEndCleanupDoesNotClearNewHighlightStartedDuringCleanup() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    let htmlID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(2))
+
+    let countBeforeInitialHighlight = await backend.sentTargetMessages().count
+    let initialHighlightTask = Task {
+        await session.attachment.dom.highlightNode(for: htmlID)
+    }
+    let initialHighlight = try await waitForTargetMessage(
+        backend,
+        method: "DOM.highlightNode",
+        after: countBeforeInitialHighlight
+    )
+    await receiveTargetReply(
+        transport,
+        targetID: initialHighlight.targetIdentifier,
+        messageID: try messageID(initialHighlight.message),
+        result: "{}"
+    )
+    await initialHighlightTask.value
+
+    let initialGeneration = try #require(
+        await session.attachment.dom.highlightController.possibleVisibleGeneration(targetID: .pageMain)
+    )
+    let countBeforeCleanup = await backend.sentTargetMessages().count
+    let cleanupTask = Task {
+        await session.retireBackendInteractionForPresentationEnd()
+    }
+    let cleanupHide = try await waitForTargetMessage(
+        backend,
+        method: "DOM.hideHighlight",
+        after: countBeforeCleanup
+    )
+    #expect(cleanupHide.targetIdentifier == ProtocolTarget.ID.pageMain)
+
+    let countBeforeNewHighlight = await backend.sentTargetMessages().count
+    let newHighlightTask = Task {
+        await session.attachment.dom.highlightNode(for: htmlID)
+    }
+    let newHighlight = try await waitForTargetMessage(
+        backend,
+        method: "DOM.highlightNode",
+        after: countBeforeNewHighlight
+    )
+    await receiveTargetReply(
+        transport,
+        targetID: newHighlight.targetIdentifier,
+        messageID: try messageID(newHighlight.message),
+        result: "{}"
+    )
+    await newHighlightTask.value
+
+    let newGeneration = try #require(
+        await session.attachment.dom.highlightController.possibleVisibleGeneration(targetID: .pageMain)
+    )
+    #expect(newGeneration != initialGeneration)
+
+    await receiveTargetReply(
+        transport,
+        targetID: cleanupHide.targetIdentifier,
+        messageID: try messageID(cleanupHide.message),
+        result: "{}"
+    )
+    await cleanupTask.value
+
+    #expect(await session.attachment.dom.highlightController.possibleVisibleGeneration(targetID: .pageMain) == newGeneration)
+    #expect(await backend.isDetached() == false)
+    #expect(await session.hasActiveConnection)
+    #expect(await session.lastError == nil)
+}
+
+@Test
 func presentationEndCleanupHidesVisibleFrameDOMHighlightWithoutDetachingTransport() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)

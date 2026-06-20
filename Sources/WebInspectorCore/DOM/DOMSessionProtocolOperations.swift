@@ -6,6 +6,11 @@ private enum DOMBackendInteractionRetirementScope {
     case attachmentTeardown
 }
 
+private enum DOMHideHighlightGenerationPolicy {
+    case current
+    case captured(UInt64?)
+}
+
 private enum DOMInspectRoute {
     case remoteObject(targetID: ProtocolTarget.ID, objectID: String)
     case protocolNode(targetID: ProtocolTarget.ID, nodeID: DOMNode.ProtocolID)
@@ -66,8 +71,10 @@ extension DOMSession {
     }
 
     private func retireBackendInteraction(scope: DOMBackendInteractionRetirementScope) async {
-        let pickerTargetID = elementPicker.targetID
+        let pickerSession = elementPicker.currentSession
+        let pickerTargetID = pickerSession?.targetID
         let inspectModeTargetID = isSelectingElement ? pickerTargetID ?? currentPageTargetID : nil
+        let highlightHides = backendInteractionRetirementHighlightHides(preferredTargetID: pickerTargetID)
         let requiresActiveConnection = scope == .presentationEnd
         if let inspectModeTargetID,
            targetSupportsTeardownBackendInteraction(inspectModeTargetID),
@@ -79,19 +86,27 @@ extension DOMSession {
             )
         }
 
-        for targetID in backendInteractionRetirementHighlightHideTargetIDs(preferredTargetID: pickerTargetID) {
-            guard let intent = hideHighlightIntent(targetID: targetID) else {
+        for highlight in highlightHides {
+            guard shouldSendBackendInteractionRetirementHide(
+                highlight,
+                capturedPickerSession: pickerSession
+            ),
+                let intent = hideHighlightIntent(targetID: highlight.targetID) else {
                 continue
             }
             await performBackendInteractionRetirementCommand(
                 intent,
                 requiresActiveConnection: requiresActiveConnection,
-                scope: scope
+                scope: scope,
+                hideGenerationPolicy: .captured(highlight.generation)
             )
         }
 
-        highlightController.clearAll()
-        clearElementPickerState(invalidatePendingSelection: true)
+        clearRetiredBackendInteractionState(
+            scope: scope,
+            pickerSession: pickerSession,
+            highlights: highlightHides
+        )
     }
 
     package func waitUntilDocumentRequestsIdle(targetID: ProtocolTarget.ID? = nil) async {
@@ -149,7 +164,8 @@ extension DOMSession {
     private func perform(
         _ intent: DOMCommand.Intent,
         requiresActiveConnection: Bool,
-        highlightOwner: DOMPageHighlightOwner? = nil
+        highlightOwner: DOMPageHighlightOwner? = nil,
+        hideGenerationPolicy: DOMHideHighlightGenerationPolicy = .current
     ) async throws -> ProtocolCommand.Result {
         let commandChannel = try requireCommandChannel(requiresActiveConnection: requiresActiveConnection)
         let command = try protocolCommands.command(for: intent)
@@ -161,7 +177,12 @@ extension DOMSession {
             )
         }
         let hideGeneration: UInt64? = if case let .hideHighlight(targetID) = intent {
-            highlightController.possibleVisibleGeneration(targetID: targetID)
+            switch hideGenerationPolicy {
+            case .current:
+                highlightController.possibleVisibleGeneration(targetID: targetID)
+            case let .captured(generation):
+                generation
+            }
         } else {
             nil
         }
@@ -241,15 +262,17 @@ extension DOMSession {
         containsTarget(targetID)
     }
 
-    private func backendInteractionRetirementHighlightHideTargetIDs(preferredTargetID: ProtocolTarget.ID?) -> [ProtocolTarget.ID] {
-        var targetIDs: [ProtocolTarget.ID] = []
+    private func backendInteractionRetirementHighlightHides(
+        preferredTargetID: ProtocolTarget.ID?
+    ) -> [DOMSessionHighlightController.PossibleVisibleHighlight] {
+        var highlights: [DOMSessionHighlightController.PossibleVisibleHighlight] = []
         func append(_ targetID: ProtocolTarget.ID?) {
             guard let targetID,
                   targetSupportsBackendInteractionHighlightHide(targetID),
-                  !targetIDs.contains(targetID) else {
+                  !highlights.contains(where: { $0.targetID == targetID }) else {
                 return
             }
-            targetIDs.append(targetID)
+            highlights.append(highlightController.possibleVisibleHighlight(targetID: targetID))
         }
 
         append(preferredTargetID)
@@ -261,16 +284,63 @@ extension DOMSession {
             append(highlight.targetID)
         }
         append(currentPageTargetID)
-        return targetIDs
+        return highlights
+    }
+
+    private func shouldSendBackendInteractionRetirementHide(
+        _ highlight: DOMSessionHighlightController.PossibleVisibleHighlight,
+        capturedPickerSession: DOMSessionElementPickerController.Session?
+    ) -> Bool {
+        if let generation = highlight.generation {
+            return highlightController.isPossibleVisibleHighlight(
+                targetID: highlight.targetID,
+                generation: generation,
+                nodeID: highlight.nodeID,
+                owner: highlight.owner
+            )
+        }
+
+        if let currentPickerSession = elementPicker.currentSession {
+            return capturedPickerSession === currentPickerSession
+        }
+
+        return highlightController.possibleVisibleGeneration(targetID: highlight.targetID) == nil
+    }
+
+    private func clearRetiredBackendInteractionState(
+        scope: DOMBackendInteractionRetirementScope,
+        pickerSession: DOMSessionElementPickerController.Session?,
+        highlights: [DOMSessionHighlightController.PossibleVisibleHighlight]
+    ) {
+        switch scope {
+        case .attachmentTeardown:
+            highlightController.clearAll()
+            clearElementPickerState(invalidatePendingSelection: true)
+        case .presentationEnd:
+            for highlight in highlights {
+                highlightController.clearHighlight(
+                    targetID: highlight.targetID,
+                    matchingGeneration: highlight.generation
+                )
+            }
+            if let pickerSession {
+                clearElementPickerState(ifCurrent: pickerSession, invalidatePendingSelection: true)
+            }
+        }
     }
 
     private func performBackendInteractionRetirementCommand(
         _ intent: DOMCommand.Intent,
         requiresActiveConnection: Bool,
-        scope: DOMBackendInteractionRetirementScope
+        scope: DOMBackendInteractionRetirementScope,
+        hideGenerationPolicy: DOMHideHighlightGenerationPolicy = .current
     ) async {
         do {
-            try await perform(intent, requiresActiveConnection: requiresActiveConnection)
+            try await perform(
+                intent,
+                requiresActiveConnection: requiresActiveConnection,
+                hideGenerationPolicy: hideGenerationPolicy
+            )
         } catch {
             InspectorRuntimeLog.warning(
                 "dom.backendInteractionRetirement.failed scope=\(scopeLogName(scope)) method=\(teardownCommandMethodName(for: intent)) target=\(teardownCommandTargetDescription(for: intent)) error=\(error)"
@@ -1428,6 +1498,19 @@ extension DOMSession {
 
     private func clearElementPickerState(invalidatePendingSelection: Bool = false) {
         elementPicker.clear()
+        syncElementPickerSelectionState()
+        if invalidatePendingSelection {
+            selectNode(selectedNodeID)
+        }
+    }
+
+    private func clearElementPickerState(
+        ifCurrent session: DOMSessionElementPickerController.Session,
+        invalidatePendingSelection: Bool = false
+    ) {
+        guard elementPicker.clear(ifCurrent: session) else {
+            return
+        }
         syncElementPickerSelectionState()
         if invalidatePendingSelection {
             selectNode(selectedNodeID)

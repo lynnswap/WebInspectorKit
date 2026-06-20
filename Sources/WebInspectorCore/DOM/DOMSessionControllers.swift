@@ -87,6 +87,15 @@ final class DOMSessionHighlightController {
             .first
     }
 
+    func possibleVisibleHighlight(targetID: ProtocolTarget.ID) -> PossibleVisibleHighlight {
+        PossibleVisibleHighlight(
+            targetID: targetID,
+            generation: possibleVisibleGeneration(targetID: targetID),
+            nodeID: possibleVisibleNodeID(targetID: targetID),
+            owner: possibleVisibleOwner(targetID: targetID)
+        )
+    }
+
     func isPossibleVisibleHighlight(
         targetID: ProtocolTarget.ID,
         generation: UInt64,
@@ -174,6 +183,10 @@ final class DOMSessionElementPickerController {
         phase.session?.targetID
     }
 
+    var currentSession: Session? {
+        phase.session
+    }
+
     var isSelecting: Bool {
         phase.session != nil
     }
@@ -235,6 +248,15 @@ final class DOMSessionElementPickerController {
         phase = .idle
         resumeIdleWaitersIfNeeded()
         return targetID
+    }
+
+    @discardableResult
+    func clear(ifCurrent session: Session) -> Bool {
+        guard phase.session === session else {
+            return false
+        }
+        clear()
+        return true
     }
 
     func waitUntilIdle() async {

@@ -295,6 +295,32 @@ struct ParentContainerTests {
     }
 
     @Test
+    func directWindowRootRemovalFinishesRootPresentationLifecycle() async throws {
+        let detachRecorder = DetachRecorder()
+        let session = makeSessionWithNoOpAttachment(detachAction: { _ in
+            detachRecorder.record()
+        })
+        _ = WebInspectorTab.ContentFactory.makeViewController(
+            for: .dom,
+            session: session,
+            hostLayout: .compact
+        )
+        let viewController = WebInspectorViewController(session: session)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        #expect(viewController.view.window === window)
+        #expect(session.interface.contentCacheCountForTesting > 0)
+
+        window.rootViewController = UIViewController()
+        window.layoutIfNeeded()
+
+        #expect(viewController.view.window == nil)
+        #expect(await waitUntil { detachRecorder.count == 1 })
+        #expect(session.interface.contentCacheCountForTesting == 0)
+    }
+
+    @Test
     func viewControllerDoesNotReplaceExternalPresentationControllerDelegate() async throws {
         let presenter = UIViewController()
         let viewController = WebInspectorViewController(session: makeSessionWithNoOpAttachment())
