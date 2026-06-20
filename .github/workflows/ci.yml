@@ -37,7 +37,7 @@ jobs:
             ios_major: '26'
             test_scheme: WebInspectorKitTests
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
+    timeout-minutes: 10
     env:
       XCODE_MAJOR: ${{ matrix.xcode_major }}
       IOS_MAJOR: ${{ matrix.ios_major }}
