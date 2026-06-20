@@ -1077,6 +1077,25 @@ func rowDeltasSinceNilReturnsRootResetAndCurrentRevisionReturnsEmptyBatch() thro
 
 @Test
 @MainActor
+func rowDeltasPreserveRootResetIDWhenMergedWithLaterContentDeltas() throws {
+    let pageTargetID = ProtocolTarget.ID("page-main")
+    let session = DOMSession()
+
+    session.applyTargetCreated(.init(id: pageTargetID, kind: .page), makeCurrentMainPage: true)
+    _ = session.replaceDocumentRoot(document(nodeID: 1), targetID: pageTargetID)
+    let routedRevision = session.treeRevision
+
+    let rootID = session.replaceDocumentRoot(pageDocumentWithoutIframe(), targetID: pageTargetID)
+    let bodyID = try #require(session.snapshot().currentNodeIDByKey[.init(targetID: pageTargetID, nodeID: .init(4))])
+    session.applyAttributeModified(bodyID, name: "data-state", value: "ready")
+
+    let batch = session.rowDeltas(since: routedRevision)
+    #expect(batch.revision == session.treeRevision)
+    #expect(batch.deltas == [.rootReset(rootNodeID: rootID)])
+}
+
+@Test
+@MainActor
 func rowDeltasTrackCharacterDataAndChildCountAsContentDeltas() throws {
     let pageTargetID = ProtocolTarget.ID("page-main")
     let session = DOMSession()
