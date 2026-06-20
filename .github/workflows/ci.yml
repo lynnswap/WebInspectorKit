@@ -81,10 +81,53 @@ jobs:
           puts "Resolved Xcode: #{selected}"
           RUBY
 
+      - name: Check Swift tools compatibility
+        run: |
+          ruby <<'RUBY'
+          required = File.read("Package.swift")[/swift-tools-version:\s*(\d+(?:\.\d+)*)/, 1]
+          abort("Package.swift does not declare swift-tools-version") unless required
+
+          output = `swift package --version 2>&1`
+          abort(output) unless $?.success?
+
+          installed = output[/Swift Package Manager - Swift\s+(\d+(?:\.\d+)*)/, 1]
+          abort("Unable to parse SwiftPM version from: #{output}") unless installed
+
+          def version_components(version)
+            version.split(".").map(&:to_i)
+          end
+
+          def version_lt?(lhs, rhs)
+            lhs_components = version_components(lhs)
+            rhs_components = version_components(rhs)
+            length = [lhs_components.length, rhs_components.length].max
+            lhs_components.fill(0, lhs_components.length...length)
+            rhs_components.fill(0, rhs_components.length...length)
+            (lhs_components <=> rhs_components) == -1
+          end
+
+          unsupported = version_lt?(installed, required)
+          File.open(ENV.fetch("GITHUB_ENV"), "a") do |env|
+            env.puts "SKIP_IOS_TESTS=#{unsupported}"
+          end
+
+          if unsupported
+            puts output
+            puts "::warning::Skipping #{ENV.fetch("TEST_SCHEME")} because SwiftPM #{installed} cannot resolve swift-tools-version #{required}."
+          else
+            puts "SwiftPM #{installed} satisfies swift-tools-version #{required}."
+          end
+          RUBY
+
       - name: Resolve iOS simulator destination
         run: |
           ruby <<'RUBY'
           require "json"
+
+          if ENV["SKIP_IOS_TESTS"] == "true"
+            puts "Skipping simulator resolution: Swift tools version is unsupported."
+            exit 0
+          end
 
           ios_major = ENV.fetch("IOS_MAJOR")
           xcode_major = ENV.fetch("XCODE_MAJOR")
@@ -150,6 +193,11 @@ jobs:
       - name: Run iOS tests
         run: |
           set -o pipefail
+
+          if [ "${SKIP_IOS_TESTS:-false}" = "true" ]; then
+            echo "Skipping ${TEST_SCHEME}: selected Xcode cannot resolve this Swift tools version."
+            exit 0
+          fi
 
           xcodebuild test \
             -workspace WebInspectorKit.xcworkspace \
