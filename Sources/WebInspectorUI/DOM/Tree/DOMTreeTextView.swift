@@ -318,6 +318,10 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
             return
         }
         let location = recognizer.location(in: textContentView)
+        handlePrimaryClick(at: location, modifiers: recognizer.modifierFlags)
+    }
+
+    private func handlePrimaryClick(at location: CGPoint, modifiers: UIKeyModifierFlags = []) {
         guard let row = row(at: location) else {
             return
         }
@@ -327,9 +331,9 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         clearTextSelection()
         if disclosureHit {
             toggle(row: row)
-        } else if recognizer.modifierFlags.contains(.shift) {
+        } else if modifiers.contains(.shift) {
             extendMultiSelection(to: row)
-        } else if recognizer.modifierFlags.contains(.command) || recognizer.modifierFlags.contains(.control) {
+        } else if modifiers.contains(.command) || modifiers.contains(.control) {
             toggleMultiSelection(row: row)
         } else {
             clearMultiSelection(keepingLast: row.nodeID)
@@ -1128,21 +1132,25 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func row(at location: CGPoint) -> DOMTreeRowRenderPlan? {
-        guard location.y >= 0,
-              let textRange = lineFragmentTextRange(at: location),
-              let textOffset = textOffset(for: textRange.location)
-        else {
+        guard location.y >= 0 else {
             return nil
         }
-        return row(containingTextOffset: textOffset)
+        layoutManager.ensureLayout(for: visibleTextRect(horizontalPadding: 0))
+        if let layoutFragment = layoutManager.textLayoutFragment(for: location),
+           layoutFragment.layoutFragmentFrame.minY <= location.y,
+           location.y < layoutFragment.layoutFragmentFrame.maxY,
+           let row = textDocument.row(for: layoutFragment) {
+            return row
+        }
+        return modelRow(at: location)
     }
 
-    private func lineFragmentTextRange(at location: CGPoint) -> NSTextRange? {
-        layoutManager.ensureLayout(for: visibleTextRect(horizontalPadding: 0))
-        return layoutManager.lineFragmentRange(
-            for: location,
-            inContainerAt: textContentStorage.documentRange.location
-        )
+    private func modelRow(at location: CGPoint) -> DOMTreeRowRenderPlan? {
+        let index = Int(floor(location.y / rowHeight))
+        guard rows.indices.contains(index) else {
+            return nil
+        }
+        return rows[index]
     }
 
     private func textOffset(for location: any NSTextLocation) -> Int? {
@@ -1831,10 +1839,28 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func isDisclosureHit(at point: CGPoint, in row: DOMTreeRowRenderPlan) -> Bool {
-        guard let hitRect = disclosureHitRect(for: row) else {
+        guard let hitRect = disclosureHitRect(at: point, in: row) else {
             return false
         }
         return hitRect.contains(point)
+    }
+
+    private func disclosureHitRect(at point: CGPoint, in row: DOMTreeRowRenderPlan) -> CGRect? {
+        guard row.hasDisclosure else {
+            return nil
+        }
+        layoutManager.ensureLayout(for: visibleTextRect(horizontalPadding: 0))
+        guard let layoutFragment = layoutManager.textLayoutFragment(for: point),
+              textDocument.row(for: layoutFragment)?.identity == row.identity else {
+            return disclosureHitRect(for: row)
+        }
+        let modelHeadRect = modelRowHeadRect(for: row)
+        return CGRect(
+            x: modelHeadRect.minX,
+            y: layoutFragment.layoutFragmentFrame.minY,
+            width: modelHeadRect.width,
+            height: layoutFragment.layoutFragmentFrame.height
+        )
     }
 
     private func disclosureHitRect(for row: DOMTreeRowRenderPlan) -> CGRect? {
@@ -1904,27 +1930,6 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
                 }
                 rects.append(localRect)
             }
-        }
-        return rects
-    }
-
-    private func localRowRects(in layoutFragmentFrame: CGRect, contentRects: [CGRect]) -> [CGRect] {
-        guard !contentRects.isEmpty else {
-            return []
-        }
-
-        var rects: [CGRect] = []
-        let fragmentLocalBounds = CGRect(origin: .zero, size: layoutFragmentFrame.size)
-        for rowRect in contentRects {
-            let localRect = rowRect.offsetBy(dx: -layoutFragmentFrame.minX, dy: -layoutFragmentFrame.minY)
-            guard localRect.intersects(fragmentLocalBounds) else {
-                continue
-            }
-            let clippedRect = localRect.intersection(fragmentLocalBounds)
-            guard !clippedRect.isNull, clippedRect.width > 0, clippedRect.height > 0 else {
-                continue
-            }
-            rects.append(clippedRect)
         }
         return rects
     }
@@ -2003,9 +2008,10 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         for fragmentView: DOMTreeTextLayoutFragmentView,
         surfaceFrame: CGRect
     ) {
-        let hoverRects = localRowRects(in: surfaceFrame, contentRects: hoverRowRects)
-        let selectedRects = localRowRects(in: surfaceFrame, contentRects: selectedRowRects)
-        let multiSelectedRects = localRowRects(in: surfaceFrame, contentRects: multiSelectedRowRects)
+        let fragmentRow = textDocument.row(for: fragmentView.layoutFragment)
+        let hoverRects = localRowBackgroundRects(for: fragmentRow, in: surfaceFrame, matching: hoveredNodeID)
+        let selectedRects = localRowBackgroundRects(for: fragmentRow, in: surfaceFrame, matching: dom.selectedNodeID)
+        let multiSelectedRects = localMultiSelectedRowBackgroundRects(for: fragmentRow, in: surfaceFrame)
         let hoverColor = hoverRects.isEmpty
             ? nil
             : DOMTreeTextView.HighlightTheme.webInspector.hoverRowBackground.resolvedColor(with: traitCollection).cgColor
@@ -2026,6 +2032,31 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         if changed {
             fragmentView.setNeedsDisplay()
         }
+    }
+
+    private func localRowBackgroundRects(
+        for row: DOMTreeRowRenderPlan?,
+        in surfaceFrame: CGRect,
+        matching nodeID: DOMNode.ID?
+    ) -> [CGRect] {
+        guard let row,
+              !row.isClosingTag,
+              row.nodeID == nodeID else {
+            return []
+        }
+        return [CGRect(origin: .zero, size: surfaceFrame.size)]
+    }
+
+    private func localMultiSelectedRowBackgroundRects(
+        for row: DOMTreeRowRenderPlan?,
+        in surfaceFrame: CGRect
+    ) -> [CGRect] {
+        guard let row,
+              !row.isClosingTag,
+              multiSelection.contains(row.nodeID) else {
+            return []
+        }
+        return [CGRect(origin: .zero, size: surfaceFrame.size)]
     }
 
     private func setNeedsDisplayForTextRanges(_ ranges: [NSRange]) {
@@ -2378,6 +2409,12 @@ extension DOMTreeTextView {
         let tokenTexts: [String]
     }
 
+    struct RowFragmentSnapshot {
+        let text: String
+        let rowIndex: Int
+        let frame: CGRect
+    }
+
     struct DisclosureAttachmentSnapshot {
         let text: String
         let hasAttachment: Bool
@@ -2429,6 +2466,26 @@ extension DOMTreeTextView {
 
     var rowSnapshotsForTesting: [RowSnapshot] {
         rows.map { rowSnapshot(for: $0) }
+    }
+
+    var rowFragmentSnapshotsForTesting: [RowFragmentSnapshot] {
+        layoutManager.ensureLayout(for: visibleTextRect(horizontalPadding: 0))
+        var snapshots: [RowFragmentSnapshot] = []
+        layoutManager.enumerateTextLayoutFragments(
+            from: textContentStorage.documentRange.location,
+            options: []
+        ) { [textDocument] fragment in
+            guard let row = textDocument.row(for: fragment) else {
+                return true
+            }
+            snapshots.append(RowFragmentSnapshot(
+                text: row.text,
+                rowIndex: row.rowIndex,
+                frame: fragment.layoutFragmentFrame
+            ))
+            return true
+        }
+        return snapshots
     }
 
     var multiSelectedRowSnapshotsInDisplayOrderForTesting: [RowSnapshot] {
@@ -2617,6 +2674,30 @@ extension DOMTreeTextView {
         }
     }
 
+    func primaryClickContentPointForTesting(_ point: CGPoint, modifiers: UIKeyModifierFlags = []) {
+        handlePrimaryClick(at: point, modifiers: modifiers)
+    }
+
+    func disclosureHitPointForTesting(containing text: String) -> CGPoint? {
+        guard let row = rows.first(where: { $0.text.contains(text) }),
+              let modelHitRect = disclosureHitRect(for: row) else {
+            return nil
+        }
+        layoutManager.ensureLayout(for: visibleTextRect(horizontalPadding: 0))
+        var hitPoint: CGPoint?
+        layoutManager.enumerateTextLayoutFragments(
+            from: textContentStorage.documentRange.location,
+            options: []
+        ) { [textDocument] fragment in
+            guard textDocument.row(for: fragment)?.identity == row.identity else {
+                return true
+            }
+            hitPoint = CGPoint(x: modelHitRect.midX, y: fragment.layoutFragmentFrame.midY)
+            return false
+        }
+        return hitPoint
+    }
+
     func hoverRowForTesting(containing text: String) {
         guard let row = rows.first(where: { $0.text.contains(text) }) else {
             return
@@ -2710,6 +2791,14 @@ extension DOMTreeTextView {
 
     func hitTestedLineTextForTesting(atContentPoint point: CGPoint) -> String? {
         row(at: point)?.text
+    }
+
+    func disclosureHitTestedLineTextForTesting(atContentPoint point: CGPoint) -> String? {
+        guard let row = row(at: point),
+              isDisclosureHit(at: point, in: row) else {
+            return nil
+        }
+        return row.text
     }
 
     static func tokenColorForTesting(kind: String, style: UIUserInterfaceStyle) -> UIColor? {

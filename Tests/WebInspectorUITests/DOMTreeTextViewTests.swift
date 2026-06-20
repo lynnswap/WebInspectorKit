@@ -319,6 +319,34 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func hitTestingVisibleRowCentersReturnsTheMatchingRow() async throws {
+        let view = await makeTreeView()
+        view.layoutIfNeeded()
+        let visibleFragments = view.rowFragmentSnapshotsForTesting.prefix(16)
+
+        for fragment in visibleFragments {
+            let point = CGPoint(
+                x: max(4, fragment.frame.minX + 4),
+                y: fragment.frame.midY
+            )
+            #expect(view.hitTestedLineTextForTesting(atContentPoint: point) == fragment.text)
+        }
+    }
+
+    @Test
+    func primaryClickingDisclosurePointTogglesRowExpansion() async throws {
+        let view = await makeTreeView()
+        view.layoutIfNeeded()
+        let point = try #require(view.disclosureHitPointForTesting(containing: "<article"))
+
+        #expect(view.disclosureHitTestedLineTextForTesting(atContentPoint: point)?.contains("<article") == true)
+        view.primaryClickContentPointForTesting(point)
+        await view.waitForRowDocumentForTesting()
+
+        #expect(view.documentTextForTesting.contains("<span id=\"nested-child\"></span>"))
+    }
+
+    @Test
     func primaryClickingRowHighlightsSelectedPageNode() async throws {
         let session = makeDOMSession()
         let recorder = NodeActionRecorder()
