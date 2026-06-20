@@ -7,11 +7,11 @@ import WebKit
 
 let logger = Logger(
     subsystem: "Monocly",
-    category: "BrowserTabStore"
+    category: "BrowserTab"
 )
 
 @MainActor
-@Observable final class BrowserTabStore: NSObject {
+@Observable final class BrowserTab: NSObject {
     let id: UUID
     let webView: WKWebView
     private let initialURL: URL
@@ -198,14 +198,13 @@ let logger = Logger(
         loadInitialRequestIfNeeded()
     }
 
-    func snapshot(stateFileName: String) -> BrowserTabStore.Snapshot {
-        BrowserTabStore.Snapshot(
+    func snapshot() -> BrowserSession.TabSnapshot {
+        BrowserSession.TabSnapshot(
             id: id,
             url: persistedURL,
             title: pageTitle,
             createdAt: createdAt,
-            lastUsedAt: lastUsedAt,
-            stateFileName: stateFileName
+            lastUsedAt: lastUsedAt
         )
     }
 

@@ -4,20 +4,27 @@ import WebInspectorKit
 struct BrowserLaunchConfiguration {
     let initialURL: URL
     let shouldAutoOpenInspector: Bool
+    let sessionPersistenceMode: BrowserSession.PersistenceMode
 
     init(
         initialURL: URL,
-        shouldAutoOpenInspector: Bool = false
+        shouldAutoOpenInspector: Bool = false,
+        sessionPersistenceMode: BrowserSession.PersistenceMode = .persistent
     ) {
         self.initialURL = initialURL
         self.shouldAutoOpenInspector = shouldAutoOpenInspector
+        self.sessionPersistenceMode = sessionPersistenceMode
     }
 
     static func current(processInfo: ProcessInfo = .processInfo) -> BrowserLaunchConfiguration {
-        let environment = processInfo.environment
+        current(environment: processInfo.environment)
+    }
+
+    static func current(environment: [String: String]) -> BrowserLaunchConfiguration {
         return BrowserLaunchConfiguration(
             initialURL: resolveInitialURL(from: environment),
-            shouldAutoOpenInspector: environment["WEBSPECTOR_AUTO_OPEN_INSPECTOR"] == "1"
+            shouldAutoOpenInspector: environment["WEBSPECTOR_AUTO_OPEN_INSPECTOR"] == "1",
+            sessionPersistenceMode: resolveSessionPersistenceMode(from: environment)
         )
     }
 
@@ -36,5 +43,19 @@ struct BrowserLaunchConfiguration {
         }
 
         return URL(string: "https://www.google.com")!
+    }
+
+    private static func resolveSessionPersistenceMode(
+        from environment: [String: String]
+    ) -> BrowserSession.PersistenceMode {
+        if environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1" {
+            return .ephemeral
+        }
+
+        if environment["XCTestConfigurationFilePath"] != nil {
+            return .ephemeral
+        }
+
+        return .persistent
     }
 }

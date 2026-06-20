@@ -5,7 +5,7 @@ import WebInspectorKit
 
 @MainActor
 final class BrowserRootViewController: UINavigationController {
-    let store: BrowserWindowStore
+    let browserWindow: BrowserWindow
     let inspectorSession: WebInspectorSession
     let launchConfiguration: BrowserLaunchConfiguration
     private let inspectorSessionAttachmentLifecycle: BrowserInspectorSessionAttachmentLifecycle
@@ -21,26 +21,29 @@ final class BrowserRootViewController: UINavigationController {
     }
 
     init(
-        store: BrowserWindowStore? = nil,
+        browserWindow: BrowserWindow? = nil,
         inspectorSession: WebInspectorSession? = nil,
         launchConfiguration: BrowserLaunchConfiguration
     ) {
-        let resolvedStore = store ?? BrowserWindowStore(
-            url: launchConfiguration.initialURL,
-            automaticallyLoadsInitialRequest: false
+        let resolvedBrowserWindow = browserWindow ?? BrowserWindow(
+            initialState: .fresh(
+                url: launchConfiguration.initialURL,
+                automaticallyLoadsInitialRequest: false
+            ),
+            sessionPersistence: .ephemeral
         )
         let resolvedInspectorSession = inspectorSession ?? WebInspectorSession()
 
-        self.store = resolvedStore
+        self.browserWindow = resolvedBrowserWindow
         self.inspectorSession = resolvedInspectorSession
         self.launchConfiguration = launchConfiguration
         self.inspectorSessionAttachmentLifecycle = BrowserInspectorSessionAttachmentLifecycle(
-            store: resolvedStore,
+            browserWindow: resolvedBrowserWindow,
             inspectorSession: resolvedInspectorSession
         )
 
         let pageViewController = BrowserPageViewController(
-            store: resolvedStore,
+            browserWindow: resolvedBrowserWindow,
             inspectorSession: resolvedInspectorSession,
             launchConfiguration: launchConfiguration
         )

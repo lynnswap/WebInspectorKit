@@ -64,7 +64,7 @@ final class BrowserInspectorSessionAttachmentLifecycle {
         case failed
     }
 
-    private let store: BrowserWindowStore
+    private let browserWindow: BrowserWindow
     private let inspectorSession: WebInspectorSession
     private let attachAction: AttachAction
     private let detachAction: DetachAction
@@ -74,7 +74,7 @@ final class BrowserInspectorSessionAttachmentLifecycle {
     var onAttachForTesting: ((WKWebView) -> Void)?
 
     init(
-        store: BrowserWindowStore,
+        browserWindow: BrowserWindow,
         inspectorSession: WebInspectorSession,
         attachAction: @escaping AttachAction = { inspectorSession, webView in
             try await inspectorSession.attach(to: webView)
@@ -83,7 +83,7 @@ final class BrowserInspectorSessionAttachmentLifecycle {
             await inspectorSession.detach()
         }
     ) {
-        self.store = store
+        self.browserWindow = browserWindow
         self.inspectorSession = inspectorSession
         self.attachAction = attachAction
         self.detachAction = detachAction
@@ -151,7 +151,7 @@ final class BrowserInspectorSessionAttachmentLifecycle {
     }
 
     private func requestAttach() {
-        let webView = store.webView
+        let webView = browserWindow.webView
         switch phase {
         case .detached:
             phase = .attaching(webView, pending: nil)
@@ -263,7 +263,7 @@ final class BrowserInspectorSessionAttachmentLifecycle {
             attachedWebView = nil
             switch pending {
             case .attached:
-                phase = .attaching(store.webView, pending: nil)
+                phase = .attaching(browserWindow.webView, pending: nil)
             case .detached, nil:
                 phase = .detached
             }
@@ -285,14 +285,14 @@ final class BrowserInspectorSessionAttachmentLifecycle {
         attachedWebView = nil
         switch pending {
         case .attached:
-            phase = .attaching(store.webView, pending: nil)
+            phase = .attaching(browserWindow.webView, pending: nil)
         case .detached, nil:
             phase = .detached
         }
     }
 
     private func requestAttachAfterCurrentEffect(completedWebView: WKWebView) {
-        let latestWebView = store.webView
+        let latestWebView = browserWindow.webView
         if latestWebView === completedWebView {
             phase = .attached
         } else {

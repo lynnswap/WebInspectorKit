@@ -3,7 +3,7 @@ import ObjectiveC
 import OSLog
 import WebKit
 
-extension BrowserTabStore: WKNavigationDelegate {
+extension BrowserTab: WKNavigationDelegate {
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
         if let restoredInteractionPolicy = Self.restoredInteractionStateNavigationPolicy(
             isRestoringInteractionStateNavigation: isRestoringInteractionStateNavigation,
@@ -95,7 +95,7 @@ extension BrowserTabStore: WKNavigationDelegate {
     }
 }
 
-extension BrowserTabStore {
+extension BrowserTab {
     private enum NavigationSPI {
         private static func deobfuscate(_ reverseTokens: [String]) -> String {
             reverseTokens.reversed().joined()

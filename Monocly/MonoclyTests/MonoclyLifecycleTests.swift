@@ -187,7 +187,7 @@ struct MonoclyLifecycleTests {
 
             let didPresent = coordinator.presentWindow(
                 from: fixture.rootViewController,
-                browserStore: fixture.rootViewController.store,
+                browserWindow: fixture.rootViewController.browserWindow,
                 inspectorSession: fixture.rootViewController.inspectorSession
             )
             #expect(didPresent == false)
@@ -262,7 +262,7 @@ struct MonoclyLifecycleTests {
             sceneDelegate.connect(
                 windowScene: windowScene,
                 launchConfiguration: launchConfiguration,
-                sessionStore: makeTemporarySessionStore(context: context)
+                sessionPersistence: .persistent(storage: makeTemporarySessionStore(context: context))
             )
 
             let hostWindow = try #require(sceneDelegate.window)
@@ -294,7 +294,7 @@ struct MonoclyLifecycleTests {
             sceneDelegate.connect(
                 windowScene: windowScene,
                 launchConfiguration: launchConfiguration,
-                sessionStore: makeTemporarySessionStore(context: context)
+                sessionPersistence: .persistent(storage: makeTemporarySessionStore(context: context))
             )
 
             let hostWindow = try #require(sceneDelegate.window)
@@ -328,7 +328,7 @@ struct MonoclyLifecycleTests {
             mainSceneDelegate.connect(
                 windowScene: windowScene,
                 launchConfiguration: launchConfiguration,
-                sessionStore: makeTemporarySessionStore(context: context)
+                sessionPersistence: .persistent(storage: makeTemporarySessionStore(context: context))
             )
 
             let mainWindow = try #require(mainSceneDelegate.window)
@@ -337,7 +337,7 @@ struct MonoclyLifecycleTests {
 
             #expect(coordinator.presentWindow(
                 from: rootViewController,
-                browserStore: rootViewController.store,
+                browserWindow: rootViewController.browserWindow,
                 inspectorSession: rootViewController.inspectorSession
             ))
 
@@ -379,7 +379,7 @@ struct MonoclyLifecycleTests {
             mainSceneDelegate.connect(
                 windowScene: windowScene,
                 launchConfiguration: launchConfiguration,
-                sessionStore: makeTemporarySessionStore(context: context)
+                sessionPersistence: .persistent(storage: makeTemporarySessionStore(context: context))
             )
 
             let firstWindow = try #require(mainSceneDelegate.window)
@@ -388,7 +388,7 @@ struct MonoclyLifecycleTests {
 
             #expect(coordinator.presentWindow(
                 from: firstRootViewController,
-                browserStore: firstRootViewController.store,
+                browserWindow: firstRootViewController.browserWindow,
                 inspectorSession: firstRootViewController.inspectorSession
             ))
 
@@ -399,7 +399,7 @@ struct MonoclyLifecycleTests {
             mainSceneDelegate.connect(
                 windowScene: windowScene,
                 launchConfiguration: launchConfiguration,
-                sessionStore: makeTemporarySessionStore(context: context)
+                sessionPersistence: .persistent(storage: makeTemporarySessionStore(context: context))
             )
 
             let reconnectedWindow = try #require(mainSceneDelegate.window)
@@ -426,7 +426,7 @@ struct MonoclyLifecycleTests {
 
             #expect(coordinator.presentWindow(
                 from: fixture.rootViewController,
-                browserStore: fixture.rootViewController.store,
+                browserWindow: fixture.rootViewController.browserWindow,
                 inspectorSession: fixture.rootViewController.inspectorSession
             ))
             #expect(coordinator.hasInspectorWindowForTesting)
@@ -482,7 +482,7 @@ struct MonoclyLifecycleTests {
 
             #expect(coordinator.presentWindow(
                 from: fixture.rootViewController,
-                browserStore: fixture.rootViewController.store,
+                browserWindow: fixture.rootViewController.browserWindow,
                 inspectorSession: fixture.rootViewController.inspectorSession
             ))
 
@@ -493,7 +493,7 @@ struct MonoclyLifecycleTests {
 
             #expect(coordinator.presentWindow(
                 from: fixture.rootViewController,
-                browserStore: fixture.rootViewController.store,
+                browserWindow: fixture.rootViewController.browserWindow,
                 inspectorSession: fixture.rootViewController.inspectorSession
             ))
             #expect(coordinator.hasInspectorWindowForTesting)
@@ -528,7 +528,7 @@ struct MonoclyLifecycleTests {
 
             #expect(coordinator.presentWindow(
                 from: fixture.rootViewController,
-                browserStore: fixture.rootViewController.store,
+                browserWindow: fixture.rootViewController.browserWindow,
                 inspectorSession: fixture.rootViewController.inspectorSession
             ))
             #expect(coordinator.hasInspectorWindowForTesting == false)
@@ -560,7 +560,7 @@ struct MonoclyLifecycleTests {
             #expect(observedStates == [false])
             #expect(coordinator.presentWindow(
                 from: fixture.rootViewController,
-                browserStore: fixture.rootViewController.store,
+                browserWindow: fixture.rootViewController.browserWindow,
                 inspectorSession: fixture.rootViewController.inspectorSession
             ))
             #expect(observedStates == [false, true])
@@ -571,7 +571,7 @@ struct MonoclyLifecycleTests {
             BrowserInspectorCoordinator.removeInspectorWindowObservation(observerID)
             #expect(coordinator.presentWindow(
                 from: fixture.rootViewController,
-                browserStore: fixture.rootViewController.store,
+                browserWindow: fixture.rootViewController.browserWindow,
                 inspectorSession: fixture.rootViewController.inspectorSession
             ))
             #expect(observedStates == [false, true, false])
@@ -594,7 +594,7 @@ struct MonoclyLifecycleTests {
 
             #expect(coordinator.presentWindow(
                 from: fixture.rootViewController,
-                browserStore: fixture.rootViewController.store,
+                browserWindow: fixture.rootViewController.browserWindow,
                 inspectorSession: fixture.rootViewController.inspectorSession
             ))
             BrowserInspectorCoordinator.setInspectorWindowReleaseHandler(
@@ -659,7 +659,7 @@ struct MonoclyLifecycleTests {
 
             #expect(coordinator.presentWindow(
                 from: fixture.rootViewController,
-                browserStore: fixture.rootViewController.store,
+                browserWindow: fixture.rootViewController.browserWindow,
                 inspectorSession: fixture.rootViewController.inspectorSession
             ))
 
@@ -722,25 +722,27 @@ private extension MonoclyLifecycleTests {
         return try await body(context)
     }
 
-    func makeTemporarySessionStore(context: TestContext) -> BrowserSessionStore {
+    func makeTemporarySessionStore(context: TestContext) -> BrowserSession.FileStorage {
         let rootDirectoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("MonoclyBrowserSession-\(UUID().uuidString)", isDirectory: true)
         context.addCleanup {
             try? FileManager.default.removeItem(at: rootDirectoryURL)
         }
-        return BrowserSessionStore(rootDirectoryURL: rootDirectoryURL)
+        return BrowserSession.FileStorage(rootDirectoryURL: rootDirectoryURL)
     }
 
     func makeHostedRootViewController(context: TestContext) throws -> HostedRootFixture {
         let windowScene = try makeWindowScene()
         let launchConfiguration = BrowserLaunchConfiguration(initialURL: URL(string: "about:blank")!)
-        let store = BrowserWindowStore(
-            url: launchConfiguration.initialURL,
-            automaticallyLoadsInitialRequest: false,
-            sessionStore: nil
+        let store = BrowserWindow(
+            initialState: .fresh(
+                url: launchConfiguration.initialURL,
+                automaticallyLoadsInitialRequest: false
+            ),
+            sessionPersistence: .ephemeral
         )
         let rootViewController = BrowserRootViewController(
-            store: store,
+            browserWindow: store,
             launchConfiguration: launchConfiguration
         )
         let window = UIWindow(windowScene: windowScene)

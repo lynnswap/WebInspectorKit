@@ -27,14 +27,14 @@ final class BrowserPageViewController: UIViewController {
         ]
     }
 
-    private let store: BrowserWindowStore
+    private let browserWindow: BrowserWindow
     private let inspectorSession: WebInspectorSession
     private let launchConfiguration: BrowserLaunchConfiguration
     private let inspectorCoordinator = BrowserInspectorCoordinator()
-    private var storeObservation: PortableObservationTracking.Token?
+    private var browserWindowObservation: PortableObservationTracking.Token?
     private var selectedTabObservation: PortableObservationTracking.Token?
     private var inspectorPresentationObservation: PortableObservationTracking.Token?
-    private weak var observedTab: BrowserTabStore?
+    private weak var observedTab: BrowserTab?
     private var hasBoundSelectedTab = false
 
     private let progressView = UIProgressView(progressViewStyle: .bar)
@@ -58,10 +58,10 @@ final class BrowserPageViewController: UIViewController {
         action: nil
     )
     private lazy var backNavigationAction = UIAction { [weak self] _ in
-        self?.store.goBack()
+        self?.browserWindow.goBack()
     }
     private lazy var forwardNavigationAction = UIAction { [weak self] _ in
-        self?.store.goForward()
+        self?.browserWindow.goForward()
     }
     private var hostedWebView: WKWebView?
     private var hostedWebViewConstraints: [NSLayoutConstraint] = []
@@ -76,12 +76,12 @@ final class BrowserPageViewController: UIViewController {
     var onSelectedWebViewInstalled: ((WKWebView) -> Void)?
 
     init(
-        store: BrowserWindowStore,
+        browserWindow: BrowserWindow,
         inspectorSession: WebInspectorSession,
         launchConfiguration: BrowserLaunchConfiguration,
         progressHideScheduler: MainActorDelayScheduling = MainActorDelayScheduler()
     ) {
-        self.store = store
+        self.browserWindow = browserWindow
         self.inspectorSession = inspectorSession
         self.launchConfiguration = launchConfiguration
         self.progressHideScheduler = progressHideScheduler
@@ -96,7 +96,7 @@ final class BrowserPageViewController: UIViewController {
     isolated deinit {
         progressHideScheduler.cancel()
         viewportCoordinator?.invalidate()
-        storeObservation?.cancel()
+        browserWindowObservation?.cancel()
         selectedTabObservation?.cancel()
         inspectorPresentationObservation?.cancel()
         if let inspectorWindowObserverID {
@@ -111,7 +111,7 @@ final class BrowserPageViewController: UIViewController {
         installSelectedWebViewIfNeeded()
         configureChrome()
 
-        startObservingStore()
+        startObservingBrowserWindow()
         startObservingInspectorPresentation()
         inspectorWindowObserverID = BrowserInspectorCoordinator.observeInspectorWindowPresentation { [weak self] _ in
             guard let self else {
@@ -136,27 +136,27 @@ final class BrowserPageViewController: UIViewController {
         viewportCoordinator?.webViewHierarchyDidChange()
         viewportCoordinator?.hostViewDidAppear()
         refreshChromeControls()
-        store.loadInitialRequestIfNeeded()
+        browserWindow.loadInitialRequestIfNeeded()
         maybeAutoPresentInspectorIfNeeded()
     }
 
-    private func startObservingStore() {
-        storeObservation?.cancel()
-        storeObservation = withPortableContinuousObservation { [weak self] _ in
+    private func startObservingBrowserWindow() {
+        browserWindowObservation?.cancel()
+        browserWindowObservation = withPortableContinuousObservation { [weak self] _ in
             guard let self else {
                 return
             }
-            scheduleSelectedTabBinding(store.selectedTab)
+            scheduleSelectedTabBinding(browserWindow.selectedTab)
         }
     }
 
-    private func scheduleSelectedTabBinding(_ tab: BrowserTabStore?) {
+    private func scheduleSelectedTabBinding(_ tab: BrowserTab?) {
         let tabID = tab?.id
         Task { @MainActor [weak self, tab] in
             guard let self else {
                 return
             }
-            guard self.store.selectedTab?.id == tabID else {
+            guard self.browserWindow.selectedTab?.id == tabID else {
                 return
             }
             self.bindSelectedTab(tab)
@@ -184,7 +184,7 @@ final class BrowserPageViewController: UIViewController {
     }
 
     private func configureViewHierarchy() {
-        view.backgroundColor = store.selectedTab?.underPageBackgroundColor ?? .clear
+        view.backgroundColor = browserWindow.selectedTab?.underPageBackgroundColor ?? .clear
 
         progressView.translatesAutoresizingMaskIntoConstraints = false
         progressView.trackTintColor = .clear
@@ -207,7 +207,7 @@ final class BrowserPageViewController: UIViewController {
     }
 
     private func installSelectedWebViewIfNeeded() {
-        installWebViewIfNeeded(store.webView)
+        installWebViewIfNeeded(browserWindow.webView)
     }
 
     private func installWebViewIfNeeded(_ webView: WKWebView) {
@@ -284,7 +284,7 @@ final class BrowserPageViewController: UIViewController {
 
     private func configureNavigationHistoryButtonItem(
         _ item: UIBarButtonItem,
-        direction: BrowserTabStore.HistoryDirection,
+        direction: BrowserTab.HistoryDirection,
         action: UIAction
     ) {
         item.target = nil
@@ -307,7 +307,7 @@ final class BrowserPageViewController: UIViewController {
         applyAccessibilityIdentifiers(for: placement)
         refreshInspectorButtonConfiguration(for: placement)
         syncNavigationButtonStates(
-            tab: observedTab ?? store.selectedTab,
+            tab: observedTab ?? browserWindow.selectedTab,
             isInspectorPresenting: isInspectorPresenting
         )
     }
@@ -324,7 +324,7 @@ final class BrowserPageViewController: UIViewController {
         inspectorButtonItem.accessibilityIdentifier = "Monocly.openInspectorButton.\(suffix)"
     }
 
-    private func makeDeferredHistoryMenu(direction: BrowserTabStore.HistoryDirection) -> UIMenu {
+    private func makeDeferredHistoryMenu(direction: BrowserTab.HistoryDirection) -> UIMenu {
         UIMenu(
             title: "",
             children: [
@@ -340,7 +340,7 @@ final class BrowserPageViewController: UIViewController {
         )
     }
 
-    private func makeHistoryMenu(direction: BrowserTabStore.HistoryDirection, placement: ChromePlacement) -> UIMenu {
+    private func makeHistoryMenu(direction: BrowserTab.HistoryDirection, placement: ChromePlacement) -> UIMenu {
         let historyItems = displayedHistoryMenuItems(direction: direction, placement: placement)
 
         let actions = historyItems.map { historyItem in
@@ -348,25 +348,25 @@ final class BrowserPageViewController: UIViewController {
                 title: historyItem.title,
                 subtitle: historyItem.subtitle
             ) { [weak self] _ in
-                self?.store.go(to: historyItem.backForwardListItem)
+                self?.browserWindow.go(to: historyItem.backForwardListItem)
             }
         }
         return UIMenu(title: "", children: actions)
     }
 
-    private func historyMenuItems(direction: BrowserTabStore.HistoryDirection) -> [BrowserTabStore.HistoryMenuItem] {
+    private func historyMenuItems(direction: BrowserTab.HistoryDirection) -> [BrowserTab.HistoryMenuItem] {
         switch direction {
         case .back:
-            store.backHistoryItems()
+            browserWindow.backHistoryItems()
         case .forward:
-            store.forwardHistoryItems()
+            browserWindow.forwardHistoryItems()
         }
     }
 
     private func displayedHistoryMenuItems(
-        direction: BrowserTabStore.HistoryDirection,
+        direction: BrowserTab.HistoryDirection,
         placement: ChromePlacement
-    ) -> [BrowserTabStore.HistoryMenuItem] {
+    ) -> [BrowserTab.HistoryMenuItem] {
         let historyItems = historyMenuItems(direction: direction)
         return switch placement {
         case .compactToolbar:
@@ -500,7 +500,7 @@ final class BrowserPageViewController: UIViewController {
     }
 
     private func syncNavigationButtonStates(
-        tab: BrowserTabStore?,
+        tab: BrowserTab?,
         isInspectorPresenting: Bool
     ) {
         let canGoBack = tab?.canGoBack ?? false
@@ -512,7 +512,7 @@ final class BrowserPageViewController: UIViewController {
         inspectorButtonItem.isEnabled = canOpenInspector
     }
 
-    private func bindSelectedTab(_ tab: BrowserTabStore?) {
+    private func bindSelectedTab(_ tab: BrowserTab?) {
         if hasBoundSelectedTab, observedTab === tab {
             return
         }
@@ -537,7 +537,7 @@ final class BrowserPageViewController: UIViewController {
         }
     }
 
-    private func renderSelectedTab(_ tab: BrowserTabStore) {
+    private func renderSelectedTab(_ tab: BrowserTab) {
         guard isViewLoaded else {
             return
         }
@@ -691,7 +691,7 @@ final class BrowserPageViewController: UIViewController {
 
         return inspectorCoordinator.presentWindow(
             from: navigationController ?? self,
-            browserStore: store,
+            browserWindow: browserWindow,
             inspectorSession: inspectorSession
         )
     }

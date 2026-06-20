@@ -6,7 +6,7 @@ import WebInspectorKit
 final class BrowserInspectorWindowHostingController: UIViewController {
     private struct AppliedInspectorContext: Equatable {
         let inspectorSessionID: ObjectIdentifier
-        let browserStoreID: ObjectIdentifier
+        let browserWindowID: ObjectIdentifier
     }
 
     private var inspectorContainer: WebInspectorViewController?
@@ -40,7 +40,7 @@ final class BrowserInspectorWindowHostingController: UIViewController {
 
         let appliedContext = AppliedInspectorContext(
             inspectorSessionID: ObjectIdentifier(inspectorContext.inspectorSession),
-            browserStoreID: ObjectIdentifier(inspectorContext.browserStore)
+            browserWindowID: ObjectIdentifier(inspectorContext.browserWindow)
         )
 
         if lastAppliedContext == appliedContext {
