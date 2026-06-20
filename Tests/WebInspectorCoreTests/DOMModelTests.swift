@@ -1055,6 +1055,169 @@ func domTreeChangesSinceRevisionMergesRecordedMutationSets() async throws {
     #expect(mergedInvalidation.parentNodeIDs == [bodyID, articleID])
 }
 
+@Test
+@MainActor
+func rowDeltasSinceNilReturnsRootResetAndCurrentRevisionReturnsEmptyBatch() throws {
+    let pageTargetID = ProtocolTarget.ID("page-main")
+    let session = DOMSession()
+
+    session.applyTargetCreated(.init(id: pageTargetID, kind: .page), makeCurrentMainPage: true)
+    let rootID = session.replaceDocumentRoot(pageDocumentWithoutIframe(), targetID: pageTargetID)
+
+    let initialBatch = session.rowDeltas(since: nil)
+    #expect(initialBatch.revision == session.treeRevision)
+    #expect(initialBatch.deltas == [.rootReset(rootNodeID: rootID)])
+    #expect(initialBatch.requiresRootReset)
+
+    let upToDateBatch = session.rowDeltas(since: session.treeRevision)
+    #expect(upToDateBatch.revision == session.treeRevision)
+    #expect(upToDateBatch.deltas.isEmpty)
+    #expect(!upToDateBatch.requiresRootReset)
+}
+
+@Test
+@MainActor
+func rowDeltasTrackCharacterDataAndChildCountAsContentDeltas() throws {
+    let pageTargetID = ProtocolTarget.ID("page-main")
+    let session = DOMSession()
+
+    session.applyTargetCreated(.init(id: pageTargetID, kind: .page), makeCurrentMainPage: true)
+    _ = session.replaceDocumentRoot(
+        document(
+            nodeID: 1,
+            children: [
+                .element(
+                    nodeID: 2,
+                    name: "body",
+                    children: [
+                        DOMNode.Payload(
+                            nodeID: .init(3),
+                            nodeType: .text,
+                            nodeName: "#text",
+                            nodeValue: "before"
+                        ),
+                        DOMNode.Payload(
+                            nodeID: .init(4),
+                            nodeType: .element,
+                            nodeName: "section",
+                            localName: "section",
+                            regularChildren: .unrequested(count: 1)
+                        ),
+                    ]
+                ),
+            ]
+        ),
+        targetID: pageTargetID
+    )
+    let routedRevision = session.treeRevision
+    let textID = try #require(session.currentNodeID(targetID: pageTargetID, rawNodeID: .init(3)))
+    let sectionID = try #require(session.currentNodeID(targetID: pageTargetID, rawNodeID: .init(4)))
+
+    try session.protocolCommands.applyDOMEvent(
+        domProtocolEvent(
+            "DOM.characterDataModified",
+            targetID: pageTargetID,
+            sequence: 1,
+            params: #"{"nodeId":3,"characterData":"after"}"#
+        ),
+        to: session
+    )
+    session.applyChildNodeCountUpdated(sectionID, count: 2)
+
+    let snapshot = session.snapshot()
+    let batch = session.rowDeltas(since: routedRevision)
+    #expect(snapshot.nodesByID[textID]?.nodeValue == "after")
+    #expect(batch.deltas.contains(.rowContentChanged(nodeID: textID, reasons: [.characterData])))
+    #expect(batch.deltas.contains(.childCountChanged(nodeID: sectionID, oldCount: 1, newCount: 2)))
+    #expect(batch.deltas.contains(.rowContentChanged(nodeID: sectionID, reasons: [.disclosure])))
+    #expect(!batch.requiresRootReset)
+}
+
+@Test
+@MainActor
+func rowDeltasTrackParentScopedTopologyMutationsAndRemovedSubtrees() throws {
+    let pageTargetID = ProtocolTarget.ID("page-main")
+    let session = DOMSession()
+
+    session.applyTargetCreated(.init(id: pageTargetID, kind: .page), makeCurrentMainPage: true)
+    _ = session.replaceDocumentRoot(pageDocumentWithoutIframe(), targetID: pageTargetID)
+    let bodyID = try #require(session.snapshot().currentNodeIDByKey[.init(targetID: pageTargetID, nodeID: .init(4))])
+
+    let setRevision = session.treeRevision
+    session.applySetChildNodes(
+        parent: bodyID,
+        children: [
+            .element(
+                nodeID: 5,
+                name: "div",
+                children: [
+                    .element(nodeID: 6, name: "span"),
+                ]
+            ),
+            .element(nodeID: 7, name: "aside"),
+        ]
+    )
+    var snapshot = session.snapshot()
+    let divID = try #require(snapshot.currentNodeIDByKey[.init(targetID: pageTargetID, nodeID: .init(5))])
+    let spanID = try #require(snapshot.currentNodeIDByKey[.init(targetID: pageTargetID, nodeID: .init(6))])
+    let asideID = try #require(snapshot.currentNodeIDByKey[.init(targetID: pageTargetID, nodeID: .init(7))])
+    let setBatch = session.rowDeltas(since: setRevision)
+    #expect(setBatch.deltas.contains(.childrenReplaced(
+        parentID: bodyID,
+        oldVisibleChildIDs: [],
+        newVisibleChildIDs: [divID, asideID]
+    )))
+    #expect(setBatch.deltas.contains(.rowContentChanged(nodeID: bodyID, reasons: [.disclosure])))
+
+    let insertRevision = session.treeRevision
+    let strongID = try #require(session.applyChildInserted(
+        parent: bodyID,
+        previousSibling: divID,
+        child: .element(nodeID: 8, name: "strong")
+    ))
+    let insertBatch = session.rowDeltas(since: insertRevision)
+    #expect(insertBatch.deltas.contains(.childInserted(
+        parentID: bodyID,
+        childID: strongID,
+        previousSiblingID: divID
+    )))
+    #expect(insertBatch.deltas.contains(.rowContentChanged(nodeID: bodyID, reasons: [.disclosure])))
+
+    let removeRevision = session.treeRevision
+    session.applyNodeRemoved(divID)
+    snapshot = session.snapshot()
+    let removeBatch = session.rowDeltas(since: removeRevision)
+    #expect(snapshot.nodesByID[divID] == nil)
+    #expect(snapshot.nodesByID[spanID] == nil)
+    #expect(removeBatch.deltas.contains(.childRemoved(
+        parentID: bodyID,
+        nodeID: divID,
+        removedSubtreeIDs: [divID, spanID]
+    )))
+    #expect(removeBatch.deltas.contains(.rowContentChanged(nodeID: bodyID, reasons: [.disclosure])))
+}
+
+@Test
+@MainActor
+func rowDeltasReturnRootResetWhenRevisionHistoryHasGap() throws {
+    let pageTargetID = ProtocolTarget.ID("page-main")
+    let session = DOMSession()
+
+    session.applyTargetCreated(.init(id: pageTargetID, kind: .page), makeCurrentMainPage: true)
+    let rootID = session.replaceDocumentRoot(pageDocumentWithoutIframe(), targetID: pageTargetID)
+    let routedRevision = session.treeRevision
+    let bodyID = try #require(session.snapshot().currentNodeIDByKey[.init(targetID: pageTargetID, nodeID: .init(4))])
+
+    for index in 0..<513 {
+        session.applyAttributeModified(bodyID, name: "data-\(index)", value: "\(index)")
+    }
+
+    let batch = session.rowDeltas(since: routedRevision)
+    #expect(batch.revision == session.treeRevision)
+    #expect(batch.deltas == [.rootReset(rootNodeID: rootID)])
+    #expect(batch.requiresRootReset)
+}
+
 @Test("Regression: detached root cannot overwrite connected page document nodes")
 func detachedRootCannotOverwriteConnectedPageDocumentNodes() async throws {
     let pageTargetID = ProtocolTarget.ID("page-main")

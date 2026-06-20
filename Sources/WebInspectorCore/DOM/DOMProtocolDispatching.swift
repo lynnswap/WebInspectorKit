@@ -181,6 +181,12 @@ package struct DOMProtocolCommands {
                 return
             }
             session.applyNodeRemoved(nodeID)
+        case "DOM.characterDataModified":
+            let params = try TransportMessageParser.decode(CharacterDataModifiedParams.self, from: event.paramsData)
+            guard let nodeID = session.currentNodeID(targetID: targetID, rawNodeID: params.nodeId) else {
+                return
+            }
+            session.applyCharacterDataModified(nodeID, value: params.characterData)
         case "DOM.childNodeCountUpdated":
             let params = try TransportMessageParser.decode(ChildNodeCountUpdatedParams.self, from: event.paramsData)
             guard let nodeID = session.currentNodeID(targetID: targetID, rawNodeID: params.nodeId) else {
@@ -340,7 +346,13 @@ private struct ChildNodeInsertedParams: Decodable {
 }
 
 private struct ChildNodeRemovedParams: Decodable {
+    var parentNodeId: DOMNode.ProtocolID?
     var nodeId: DOMNode.ProtocolID
+}
+
+private struct CharacterDataModifiedParams: Decodable {
+    var nodeId: DOMNode.ProtocolID
+    var characterData: String
 }
 
 private struct ChildNodeCountUpdatedParams: Decodable {

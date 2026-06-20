@@ -39,9 +39,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     private let menuModel: DOMTreeMenuModel
     private var documentObservation: PortableObservationTracking.Token?
     private var selectionObservation: PortableObservationTracking.Token?
-    private let textContentStorage = NSTextContentStorage()
-    private let layoutManager = NSTextLayoutManager()
-    private let textContainer = NSTextContainer()
+    private let textDocument = DOMTreeTextDocument()
     private let textContentView = DOMTreeTextContentView()
     private lazy var viewportLayoutDelegate = DOMTreeTextViewportLayoutDelegate(textView: self)
     private lazy var viewportLayoutCoordinator = DOMTreeTextView.ViewportLayoutCoordinator(textContentView: textContentView)
@@ -57,18 +55,15 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         rootView: DOMTreeMenuView(model: menuModel)
     )
 
-    private var renderedRows = DOMTreeTextView.RenderedRows()
-    private var rows: [DOMTreeTextView.Line] {
-        get {
-            renderedRows.rows
-        }
-        set {
-            renderedRows.replaceRows(newValue)
-        }
+    private var rows: [DOMTreeRowRenderPlan] {
+        textDocument.rowIndex.rows
     }
-    private var renderedText = ""
+
+    private var rowIndex: DOMTreeRowIndex {
+        textDocument.rowIndex
+    }
     private let expansionState: DOMTreeTextView.ExpansionState
-    private let renderedRowsBuildCoordinator: DOMTreeTextView.RenderedRowsBuildCoordinator
+    private let rowRenderBuildCoordinator: DOMTreeTextView.RowRenderBuildCoordinator
     private var hoveredNodeID: DOMNode.ID?
     private var pageHighlightTask: Task<Void, Never>?
     private var pageHighlightIntent: PageHighlightIntent?
@@ -104,20 +99,29 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     weak var inputDelegate: UITextInputDelegate?
 #if DEBUG
     private let performanceCounters = DOMTreeTextView.PerformanceCounters()
-    private var renderedRowsAppliedTreeRevisionForTestingStorage: UInt64 = 0
-    private var renderedRowsAppliedTreeRevisionWaitersForTesting: [UInt64: RenderedRowsAppliedTreeRevisionWaiter] = [:]
-    private var nextRenderedRowsAppliedTreeRevisionWaiterIDForTesting: UInt64 = 0
+    private var rowDocumentAppliedTreeRevisionForTestingStorage: UInt64 = 0
+    private var rowDocumentAppliedTreeRevisionWaitersForTesting: [UInt64: RowDocumentAppliedTreeRevisionWaiter] = [:]
+    private var nextRowDocumentAppliedTreeRevisionWaiterIDForTesting: UInt64 = 0
 #endif
 
-    private var textStorage: NSTextStorage {
-        guard let storage = textContentStorage.textStorage else {
-            fatalError("DOMTreeTextView requires NSTextContentStorage-backed NSTextStorage")
-        }
-        return storage
+    private var textContentStorage: NSTextContentStorage {
+        textDocument.textContentStorage
     }
 
-    var renderedTextForFind: String {
-        renderedText
+    private var layoutManager: NSTextLayoutManager {
+        textDocument.layoutManager
+    }
+
+    private var textContainer: NSTextContainer {
+        textDocument.textContainer
+    }
+
+    var documentTextForFind: String {
+        textDocument.string
+    }
+
+    private var documentText: String {
+        textDocument.string
     }
 
     private var rowHeight: CGFloat {
@@ -168,7 +172,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
 #if DEBUG
-    private struct RenderedRowsAppliedTreeRevisionWaiter {
+    private struct RowDocumentAppliedTreeRevisionWaiter {
         var minimumRevision: UInt64
         var continuation: CheckedContinuation<Bool, Never>
         var timeoutTask: Task<Void, Never>
@@ -189,8 +193,8 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         self.restoreHighlightAction = restoreHighlightAction
         let expansionState = DOMTreeTextView.ExpansionState()
         self.expansionState = expansionState
-        self.renderedRowsBuildCoordinator = DOMTreeTextView.RenderedRowsBuildCoordinator(
-            builder: DOMTreeTextView.RenderedRowsBuilder(dom: dom, expansionState: expansionState)
+        self.rowRenderBuildCoordinator = DOMTreeTextView.RowRenderBuildCoordinator(
+            builder: DOMTreeTextView.RowRenderBuilder(dom: dom, expansionState: expansionState)
         )
         self.menuModel = DOMTreeMenuModel(
             dom: dom,
@@ -211,11 +215,11 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     isolated deinit {
         pageHighlightTask?.cancel()
         domTreeRenderInvalidationTask?.cancel()
-        renderedRowsBuildCoordinator.cancel()
+        rowRenderBuildCoordinator.cancel()
         documentObservation?.cancel()
         selectionObservation?.cancel()
 #if DEBUG
-        cancelRenderedRowsAppliedTreeRevisionWaitersForTesting()
+        cancelRowDocumentAppliedTreeRevisionWaitersForTesting()
 #endif
     }
 
@@ -241,7 +245,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
             ),
             UIKeyCommand(
                 title: String(localized: "dom.tree.select_all", bundle: .module),
-                action: #selector(selectAllRenderedRows),
+                action: #selector(selectAllRowRender),
                 input: "a",
                 modifierFlags: .command,
                 discoverabilityTitle: String(localized: "dom.tree.select_all", bundle: .module)
@@ -379,7 +383,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         extendMultiSelectionByKeyboard(delta: 1)
     }
 
-    @objc private func selectAllRenderedRows() {
+    @objc private func selectAllRowRender() {
         guard !rows.isEmpty else {
             clearMultiSelection(keepingLast: nil)
             return
@@ -456,7 +460,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     func clampedTextRange(_ range: NSRange) -> NSRange {
-        let length = (renderedText as NSString).length
+        let length = (documentText as NSString).length
         let lower = min(max(0, range.location), length)
         let upper = min(max(lower, range.location + range.length), length)
         return NSRange(location: lower, length: upper - lower)
@@ -508,20 +512,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         showsHorizontalScrollIndicator = true
         keyboardDismissMode = .onDrag
 
-        textContainer.lineFragmentPadding = 0
-        textContainer.lineBreakMode = .byClipping
-        layoutManager.textContainer = textContainer
-        layoutManager.renderingAttributesValidator = { [weak self] textLayoutManager, textLayoutFragment in
-            MainActor.assumeIsolated {
-                self?.validateTokenRenderingAttributes(
-                    in: textLayoutFragment,
-                    using: textLayoutManager
-                )
-            }
-        }
         layoutManager.textViewportLayoutController.delegate = viewportLayoutDelegate
-        textContentStorage.addTextLayoutManager(layoutManager)
-        textContentStorage.primaryTextLayoutManager = layoutManager
 
         addSubview(textContentView)
     }
@@ -574,12 +565,12 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func suspendRenderingWork() {
-        let hadCurrentRenderedRowsBuild = renderedRowsBuildCoordinator.hasCurrentBuild
+        let hadCurrentRowRenderBuild = rowRenderBuildCoordinator.hasCurrentBuild
         let needsHoveredPageHighlightRestore = hoveredNodeID != nil
         domTreeRenderInvalidationTask?.cancel()
         domTreeRenderInvalidationTask = nil
-        renderedRowsBuildCoordinator.cancel()
-        if hadCurrentRenderedRowsBuild {
+        rowRenderBuildCoordinator.cancel()
+        if hadCurrentRowRenderBuild {
             pendingDOMTreeRenderInvalidation = pendingDOMTreeRenderInvalidation?.merging(with: dom.treeRenderInvalidation) ?? dom.treeRenderInvalidation
             pendingDOMTreeRenderInvalidationRequiresRoute = true
         }
@@ -621,7 +612,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         pendingDOMTreeRenderInvalidationRequiresRoute = pendingDOMTreeRenderInvalidationRequiresRoute
             || forceRoute
             || shouldRouteDOMInvalidation(invalidation, isInitial: isInitial)
-            || renderedRowsBuildCoordinator.currentBuildMayRender(invalidation)
+            || rowRenderBuildCoordinator.currentBuildMayRender(invalidation)
         guard isRenderingActive else {
             return
         }
@@ -680,14 +671,14 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
             return
         }
 #if DEBUG
-        performanceCounters.buildRenderedRowsCallCount += 1
+        performanceCounters.buildRowRenderPlanCallCount += 1
 #endif
         let didResetLocalDocumentState = resetLocalDocumentStateIfNeeded(rootID: dom.currentDOMTreeRenderRootNodeID)
         prepareSelectionForRendering()
-        startRenderedRowsBuild(
+        startRowRenderBuild(
             resetFragments: isInitial || invalidation.requiresFragmentReset || didResetLocalDocumentState,
             previousRows: rows,
-            previousText: renderedText,
+            previousText: documentText,
             shouldApply: { [weak self] result in
                 guard let self else {
                     return false
@@ -708,7 +699,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         guard !isInitial, !invalidation.requiresFragmentReset else {
             return true
         }
-        let visibleNodeIDs = visibleNodeIDs ?? renderedRows.visibleNodeIDs
+        let visibleNodeIDs = visibleNodeIDs ?? rowIndex.visibleNodeIDs
 
         switch invalidation.kind {
         case .root:
@@ -778,10 +769,10 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
             performanceCounters.reloadTreeCallCount += 1
         }
 #endif
-        startRenderedRowsReload(resetFragments: resetFragments, countsCall: false)
+        startRowDocumentReload(resetFragments: resetFragments, countsCall: false)
     }
 
-    private func startRenderedRowsReload(
+    private func startRowDocumentReload(
         resetFragments: Bool,
         countsCall: Bool = true
     ) {
@@ -797,34 +788,34 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
 #endif
         let didResetLocalDocumentState = resetLocalDocumentStateIfNeeded()
         let previousRows = rows
-        let previousText = renderedText
+        let previousText = documentText
         let shouldResetFragments = resetFragments || didResetLocalDocumentState
         if shouldResetFragments {
-            renderedRowsBuildCoordinator.removeCachedMarkup(keepingCapacity: true)
+            rowRenderBuildCoordinator.removeCachedMarkup(keepingCapacity: true)
         }
         prepareSelectionForRendering()
 #if DEBUG
-        performanceCounters.buildRenderedRowsCallCount += 1
+        performanceCounters.buildRowRenderPlanCallCount += 1
 #endif
-        startRenderedRowsBuild(
+        startRowRenderBuild(
             resetFragments: shouldResetFragments,
             previousRows: previousRows,
             previousText: previousText
         )
     }
 
-    private func startRenderedRowsBuild(
+    private func startRowRenderBuild(
         resetFragments: Bool,
-        previousRows: [DOMTreeTextView.Line],
+        previousRows: [DOMTreeRowRenderPlan],
         previousText: String,
-        shouldApply: (@MainActor (DOMTreeTextView.RenderedRowsBuildResult) -> Bool)? = nil
+        shouldApply: (@MainActor (DOMTreeTextView.RowRenderBuildResult) -> Bool)? = nil
     ) {
         guard isRenderingActive else {
             return
         }
-        renderedRowsBuildCoordinator.startBuild(
+        rowRenderBuildCoordinator.startBuild(
             previousRowCapacity: rows.count,
-            previousTextCapacity: renderedText.count,
+            previousTextCapacity: documentText.count,
             isCurrentBuild: { [weak self] request, result in
                 guard let self else {
                     return false
@@ -855,7 +846,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
                 guard isRenderingActive else {
                     return
                 }
-                applyRenderedRowsBuildResult(
+                applyRowRenderBuildResult(
                     buildResult,
                     resetFragments: resetFragments,
                     previousRows: previousRows,
@@ -869,33 +860,33 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         )
     }
 
-    private func applyRenderedRowsBuildResult(
-        _ buildResult: DOMTreeTextView.RenderedRowsBuildResult,
+    private func applyRowRenderBuildResult(
+        _ buildResult: DOMTreeTextView.RowRenderBuildResult,
         resetFragments: Bool,
-        previousRows: [DOMTreeTextView.Line],
+        previousRows: [DOMTreeRowRenderPlan],
         previousText: String
     ) {
-        rows = buildResult.rows
         lastObservedTreeContent = buildResult.observedContent
-        renderedRowsBuildCoordinator.pruneCachedMarkup(keeping: renderedRows.visibleNodeIDs)
+        let nextRows = buildResult.rows
+        let nextText = buildResult.text
+        if resetFragments {
+            resetTextFragmentViews()
+            replaceRowDocument(rows: nextRows)
+        } else {
+            updateRowDocumentIncrementally(
+                previousRows: previousRows,
+                previousText: previousText,
+                nextRows: nextRows,
+                nextText: nextText
+            )
+        }
+        rowRenderBuildCoordinator.pruneCachedMarkup(keeping: rowIndex.visibleNodeIDs)
         reconcileMultiSelectionAfterReload()
-        renderedText = buildResult.text
         clampTextSelectionAfterTextChange()
         maxLineDisplayColumnCount = buildResult.maxLineDisplayColumnCount
         updateMeasuredTextWidth()
         pruneChildRequestState()
         requestChildrenForOpenRowsIfNeeded()
-        if resetFragments {
-            resetTextFragmentViews()
-            rebuildTextStorage()
-        } else {
-            updateTextStorageIncrementally(
-                previousRows: previousRows,
-                previousText: previousText,
-                nextRows: rows,
-                nextText: renderedText
-            )
-        }
 
         clearFindDecorations()
         findCoordinator.invalidateResultsAfterTextChange()
@@ -903,7 +894,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         updateContentDecorations()
         setNeedsLayout()
 #if DEBUG
-        recordRenderedRowsAppliedTreeRevisionForTesting(dom.treeRevision)
+        recordRowDocumentAppliedTreeRevisionForTesting(dom.treeRevision)
 #endif
     }
 
@@ -1023,7 +1014,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         }
     }
 
-    private func toggle(row: DOMTreeTextView.Line) {
+    private func toggle(row: DOMTreeRowRenderPlan) {
         expansionState.setIsOpen(!row.isOpen, for: row.nodeID)
         reloadTree(resetFragments: false)
     }
@@ -1039,19 +1030,19 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         queuePageSelectionHighlight(for: nodeID)
     }
 
-    private func toggleMultiSelection(row: DOMTreeTextView.Line) {
+    private func toggleMultiSelection(row: DOMTreeRowRenderPlan) {
         multiSelection.toggle(
             row: row,
-            renderedRows: renderedRows,
+            rowIndex: rowIndex,
             selectedNodeID: dom.selectedNodeID
         )
         updateContentDecorations()
     }
 
-    private func extendMultiSelection(to row: DOMTreeTextView.Line) {
+    private func extendMultiSelection(to row: DOMTreeRowRenderPlan) {
         if multiSelection.extend(
             to: row,
-            renderedRows: renderedRows,
+            rowIndex: rowIndex,
             selectedNodeID: dom.selectedNodeID
         ) {
             updateContentDecorations()
@@ -1068,7 +1059,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
             fallbackNodeID: rows.first?.nodeID
         )
         guard let focusedNodeID,
-              let focusedIndex = renderedRows.rowIndex(for: focusedNodeID)
+              let focusedIndex = rowIndex.rowIndex(for: focusedNodeID)
         else {
             return
         }
@@ -1088,14 +1079,14 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func reconcileMultiSelectionAfterReload() {
-        multiSelection.reconcileAfterReload(visibleNodeIDs: renderedRows.visibleNodeIDs)
+        multiSelection.reconcileAfterReload(visibleNodeIDs: rowIndex.visibleNodeIDs)
     }
 
     private func multiSelectedNodesInDisplayOrder() -> [DOMNode] {
-        multiSelection.selectedNodeIDsInDisplayOrder(renderedRows: renderedRows).compactMap { dom.node(for: $0) }
+        multiSelection.selectedNodeIDsInDisplayOrder(rowIndex: rowIndex).compactMap { dom.node(for: $0) }
     }
 
-    private func scrollRowToVisible(_ row: DOMTreeTextView.Line) {
+    private func scrollRowToVisible(_ row: DOMTreeRowRenderPlan) {
         let rowRect = modelContentRowRect(for: row)
         let headRect = modelRowHeadRect(for: row)
         let targetRect = CGRect(
@@ -1107,7 +1098,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         scrollRectToVisible(targetRect.insetBy(dx: 0, dy: -rowRect.height), animated: true)
     }
 
-    private func modelContentRowRect(for row: DOMTreeTextView.Line) -> CGRect {
+    private func modelContentRowRect(for row: DOMTreeRowRenderPlan) -> CGRect {
         // DOM tree rows are fixed-height; reveal must not depend on TextKit fragment rects while layout catches up.
         CGRect(
             x: 0,
@@ -1117,7 +1108,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         )
     }
 
-    private func modelRowHeadRect(for row: DOMTreeTextView.Line) -> CGRect {
+    private func modelRowHeadRect(for row: DOMTreeRowRenderPlan) -> CGRect {
         let column: Int
         let widthInColumns: Int
         if row.hasDisclosure {
@@ -1136,7 +1127,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         )
     }
 
-    private func row(at location: CGPoint) -> DOMTreeTextView.Line? {
+    private func row(at location: CGPoint) -> DOMTreeRowRenderPlan? {
         guard location.y >= 0,
               let textRange = lineFragmentTextRange(at: location),
               let textOffset = textOffset(for: textRange.location)
@@ -1173,7 +1164,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         updateContentDecorations()
     }
 
-    private func hover(row: DOMTreeTextView.Line) {
+    private func hover(row: DOMTreeRowRenderPlan) {
         if hoveredNodeID != row.nodeID {
             hoveredNodeID = row.nodeID
             updateContentDecorations()
@@ -1315,7 +1306,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         return makeDOMMenu(for: nodes, selectedText: selectedText)
     }
 
-    private func rowsIntersectingTextRange(_ range: NSRange) -> [DOMTreeTextView.Line] {
+    private func rowsIntersectingTextRange(_ range: NSRange) -> [DOMTreeRowRenderPlan] {
         let range = clampedTextRange(range)
         guard range.length > 0 else {
             return []
@@ -1326,21 +1317,21 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         var upperIndex = rows.count
         while lowerIndex < upperIndex {
             let middleIndex = (lowerIndex + upperIndex) / 2
-            if NSMaxRange(rows[middleIndex].textRange) <= lowerBound {
+            if NSMaxRange(rows[middleIndex].documentRange) <= lowerBound {
                 lowerIndex = middleIndex + 1
             } else {
                 upperIndex = middleIndex
             }
         }
 
-        var result: [DOMTreeTextView.Line] = []
+        var result: [DOMTreeRowRenderPlan] = []
         var index = lowerIndex
         while rows.indices.contains(index) {
             let row = rows[index]
-            guard row.textRange.location < upperBound else {
+            guard row.documentRange.location < upperBound else {
                 break
             }
-            if lowerBound < NSMaxRange(row.textRange) {
+            if lowerBound < NSMaxRange(row.documentRange) {
                 result.append(row)
             }
             index += 1
@@ -1348,7 +1339,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         return result
     }
 
-    private func uniqueNodesInDisplayOrder(for rows: [DOMTreeTextView.Line]) -> [DOMNode] {
+    private func uniqueNodesInDisplayOrder(for rows: [DOMTreeRowRenderPlan]) -> [DOMNode] {
         var seenNodeIDs: Set<DOMNode.ID> = []
         return rows.compactMap { row in
             guard seenNodeIDs.insert(row.nodeID).inserted else {
@@ -1373,7 +1364,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func localMarkupText(for nodeID: DOMNode.ID) -> String? {
-        renderedRows.row(for: nodeID)?.text
+        rowIndex.row(for: nodeID)?.text
     }
 
     private func uniqueNodeIDsInDisplayOrder(for nodes: [DOMNode]) -> [DOMNode.ID] {
@@ -1406,140 +1397,37 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         return resolved
     }
 
-    private func validateTokenRenderingAttributes(
-        in textLayoutFragment: NSTextLayoutFragment,
-        using textLayoutManager: NSTextLayoutManager
-    ) {
-        let fragmentRange = textRange(for: textLayoutFragment)
-        guard fragmentRange.length > 0 else {
-            return
-        }
-
-        let resolvedAttributes = resolvedTextAttributes()
-        let fallbackColor = resolvedAttributes.tokenColors[.fallback]
-            ?? DOMTreeTextView.HighlightTheme.webInspector.textSecondary.resolvedColor(with: traitCollection)
-        let disclosureColor = DOMTreeTextView.HighlightTheme.webInspector.disclosure.resolvedColor(with: traitCollection)
-        for row in rowsIntersectingTextRange(fragmentRange) {
-            addRenderingAttribute(
-                .foregroundColor,
-                value: fallbackColor,
-                range: NSIntersectionRange(row.textRange, fragmentRange),
-                using: textLayoutManager
-            )
-            if row.hasDisclosure {
-                addRenderingAttribute(
-                    .foregroundColor,
-                    value: disclosureColor,
-                    range: NSIntersectionRange(disclosureAttachmentRange(for: row), fragmentRange),
-                    using: textLayoutManager
-                )
-            }
-            for token in row.tokens {
-                let tokenRange = NSRange(
-                    location: row.textRange.location + token.range.location,
-                    length: token.range.length
-                )
-                let color = resolvedAttributes.tokenColors[token.kind] ?? fallbackColor
-                addRenderingAttribute(
-                    .foregroundColor,
-                    value: color,
-                    range: NSIntersectionRange(tokenRange, fragmentRange),
-                    using: textLayoutManager
-                )
-            }
-        }
-    }
-
-    private func addRenderingAttribute(
-        _ attributeName: NSAttributedString.Key,
-        value: Any,
-        range: NSRange,
-        using textLayoutManager: NSTextLayoutManager
-    ) {
-        guard range.length > 0,
-              let textRange = textRange(for: range)
-        else {
-            return
-        }
-        textLayoutManager.addRenderingAttribute(attributeName, value: value, for: textRange)
-    }
-
-    private func invalidateTokenRenderingAttributes(for ranges: [NSRange]) {
-        guard !ranges.isEmpty else {
-            setNeedsDisplayForVisibleTextFragments()
-            return
-        }
-
-        var invalidatedRanges: [NSRange] = []
-        invalidatedRanges.reserveCapacity(ranges.count)
-        for range in ranges {
-            let clampedRange = clampedTextRange(range)
-            guard clampedRange.length > 0,
-                  let textRange = textRange(for: clampedRange)
-            else {
-                continue
-            }
-            layoutManager.invalidateRenderingAttributes(for: textRange)
-            invalidatedRanges.append(clampedRange)
-        }
-
-        guard !invalidatedRanges.isEmpty else {
-            setNeedsDisplayForVisibleTextFragments()
-            return
-        }
-
-        var didInvalidateFragment = false
-        for case let fragmentView as DOMTreeTextLayoutFragmentView in textContentView.subviews {
-            let fragmentRange = textRange(for: fragmentView.layoutFragment)
-            guard !Self.ranges(invalidatedRanges, intersecting: fragmentRange).isEmpty else {
-                continue
-            }
-            validateTokenRenderingAttributes(in: fragmentView.layoutFragment, using: layoutManager)
-            fragmentView.setNeedsDisplay()
-            didInvalidateFragment = true
-        }
-        if !didInvalidateFragment {
-            setNeedsDisplayForVisibleTextFragments()
-        }
-    }
-
     private func reapplyTextAttributes() {
-        let fullRange = NSRange(location: 0, length: textStorage.length)
-        guard fullRange.length > 0 else {
-            return
-        }
-        textStorage.addAttributes(baseTextAttributes(), range: fullRange)
-        applyDisclosureAttachments(to: textStorage, rows: rows)
-        invalidateTokenRenderingAttributes(for: [fullRange])
+        replaceRowDocument(rows: rows)
+        setNeedsDisplayForVisibleTextFragments()
     }
 
-    private func rebuildTextStorage() {
-        let attributedText = NSMutableAttributedString(
-            string: renderedText.isEmpty ? "\n" : renderedText,
-            attributes: baseTextAttributes()
-        )
-        applyDisclosureAttachments(to: attributedText, rows: rows)
+    private func replaceRowDocument(rows: [DOMTreeRowRenderPlan]) {
 #if DEBUG
-        performanceCounters.rebuildTextStorageCallCount += 1
+        performanceCounters.replaceRowDocumentCallCount += 1
 #endif
-        textContentStorage.performEditingTransaction {
-            textStorage.setAttributedString(attributedText)
-        }
+        textDocument.replaceDocument(
+            with: attributedDocumentText(for: rows),
+            rows: rows
+        )
         invalidateTextLayout()
-        invalidateTokenRenderingAttributes(for: rows.map(\.textRange))
     }
 
-    private func updateTextStorageIncrementally(
-        previousRows: [DOMTreeTextView.Line],
+    private func updateRowDocumentIncrementally(
+        previousRows: [DOMTreeRowRenderPlan],
         previousText: String,
-        nextRows: [DOMTreeTextView.Line],
+        nextRows: [DOMTreeRowRenderPlan],
         nextText: String
     ) {
         guard !previousText.isEmpty, !nextText.isEmpty else {
-            rebuildTextStorage()
+            replaceRowDocument(rows: nextRows)
             return
         }
         guard let diff = rowDiff(previousRows: previousRows, nextRows: nextRows) else {
+            textDocument.replaceDocument(
+                with: attributedDocumentText(for: nextRows),
+                rows: nextRows
+            )
             return
         }
 
@@ -1549,26 +1437,23 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
             nextRows: nextRows,
             diff: diff
         )
-        textContentStorage.performEditingTransaction {
-            textStorage.replaceCharacters(in: edit.range, with: edit.replacement)
-        }
+        let replacement = attributedReplacementText(nextRows: nextRows, diff: diff)
+        textDocument.replaceCharacters(in: edit.range, with: replacement, rows: nextRows)
 #if DEBUG
-        performanceCounters.incrementalTextStorageEditCallCount += 1
+        performanceCounters.incrementalRowDocumentEditCallCount += 1
 #endif
 
-        let editedLength = max(edit.range.length, (edit.replacement as NSString).length)
+        let editedLength = max(edit.range.length, replacement.length)
         invalidateTextLayout(for: NSRange(location: edit.range.location, length: editedLength))
         let changedRows = Array(nextRows[diff.nextStart..<diff.nextEnd])
-        applyTextAttributes(to: changedRows)
-        invalidateTokenRenderingAttributes(for: changedRows.map(\.textRange))
-        if edit.range.length > 0 || !edit.replacement.isEmpty {
-            setNeedsDisplayForTextRanges(changedRows.map(\.textRange))
+        if edit.range.length > 0 || replacement.length > 0 {
+            setNeedsDisplayForTextRanges(changedRows.map(\.documentRange))
         }
     }
 
     private func rowDiff(
-        previousRows: [DOMTreeTextView.Line],
-        nextRows: [DOMTreeTextView.Line]
+        previousRows: [DOMTreeRowRenderPlan],
+        nextRows: [DOMTreeRowRenderPlan]
     ) -> DOMTreeTextView.RowDiff? {
         var prefix = 0
         while prefix < previousRows.count,
@@ -1598,9 +1483,9 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func textEdit(
-        previousRows: [DOMTreeTextView.Line],
+        previousRows: [DOMTreeRowRenderPlan],
         previousText: String,
-        nextRows: [DOMTreeTextView.Line],
+        nextRows: [DOMTreeRowRenderPlan],
         diff: DOMTreeTextView.RowDiff
     ) -> (range: NSRange, replacement: String) {
         let previousLength = (previousText as NSString).length
@@ -1611,15 +1496,15 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
             if diff.previousEnd == previousRows.count {
                 length = previousLength
             } else {
-                length = previousRows[diff.previousEnd].textRange.location
+                length = previousRows[diff.previousEnd].documentRange.location
             }
         } else {
             let previousRow = previousRows[diff.previousStart - 1]
-            location = previousRow.textRange.location + previousRow.textRange.length
+            location = previousRow.documentRange.location + previousRow.documentRange.length
             if diff.previousEnd == previousRows.count {
                 length = previousLength - location
             } else {
-                length = previousRows[diff.previousEnd].textRange.location - location
+                length = previousRows[diff.previousEnd].documentRange.location - location
             }
         }
 
@@ -1635,30 +1520,80 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         return (NSRange(location: location, length: length), replacement)
     }
 
-    private func applyTextAttributes(to rows: [DOMTreeTextView.Line]) {
+    private func attributedDocumentText(for rows: [DOMTreeRowRenderPlan]) -> NSAttributedString {
         guard !rows.isEmpty else {
-            return
+            return NSAttributedString(string: "\n", attributes: baseTextAttributes())
         }
-        for row in rows {
-            guard row.textRange.location + row.textRange.length <= textStorage.length else {
-                continue
+        let attributedText = NSMutableAttributedString()
+        for (index, row) in rows.enumerated() {
+            if index > 0 {
+                attributedText.append(NSAttributedString(string: "\n", attributes: baseTextAttributes()))
             }
-            textStorage.addAttributes(baseTextAttributes(), range: row.textRange)
+            attributedText.append(attributedRowText(for: row))
         }
-        applyDisclosureAttachments(to: textStorage, rows: rows)
+        return attributedText
     }
 
-    private func applyDisclosureAttachments(to attributedText: NSMutableAttributedString, rows: [DOMTreeTextView.Line]) {
-        for row in rows where row.hasDisclosure {
-            let range = disclosureAttachmentRange(for: row)
-            guard NSMaxRange(range) <= attributedText.length else {
+    private func attributedReplacementText(
+        nextRows: [DOMTreeRowRenderPlan],
+        diff: DOMTreeTextView.RowDiff
+    ) -> NSAttributedString {
+        let replacementRows = Array(nextRows[diff.nextStart..<diff.nextEnd])
+        let attributedText = NSMutableAttributedString()
+        if diff.nextStart > 0, !replacementRows.isEmpty {
+            attributedText.append(NSAttributedString(string: "\n", attributes: baseTextAttributes()))
+        }
+        for (index, row) in replacementRows.enumerated() {
+            if index > 0 {
+                attributedText.append(NSAttributedString(string: "\n", attributes: baseTextAttributes()))
+            }
+            attributedText.append(attributedRowText(for: row))
+        }
+        if diff.nextEnd < nextRows.count, !replacementRows.isEmpty {
+            attributedText.append(NSAttributedString(string: "\n", attributes: baseTextAttributes()))
+        } else if replacementRows.isEmpty, diff.nextStart > 0, diff.nextEnd < nextRows.count {
+            attributedText.append(NSAttributedString(string: "\n", attributes: baseTextAttributes()))
+        }
+        return attributedText
+    }
+
+    private func attributedRowText(for row: DOMTreeRowRenderPlan) -> NSAttributedString {
+        let resolvedAttributes = resolvedTextAttributes()
+        let fallbackColor = resolvedAttributes.tokenColors[.fallback]
+            ?? DOMTreeTextView.HighlightTheme.webInspector.textSecondary.resolvedColor(with: traitCollection)
+        var attributes = resolvedAttributes.base
+        attributes[.foregroundColor] = fallbackColor
+        attributes[DOMTreeTextDocument.rowIdentityAttribute] = row.identity
+
+        let attributedRow = NSMutableAttributedString(string: row.text, attributes: attributes)
+        for token in row.tokens {
+            guard token.range.length > 0,
+                  NSMaxRange(token.range) <= attributedRow.length else {
                 continue
             }
-            attributedText.replaceCharacters(
-                in: range,
-                with: disclosureAttachmentString(isOpen: row.isOpen)
+            attributedRow.addAttribute(
+                .foregroundColor,
+                value: resolvedAttributes.tokenColors[token.kind] ?? fallbackColor,
+                range: token.range
             )
         }
+        if row.hasDisclosure {
+            let localDisclosureRange = NSRange(
+                location: row.depth * DOMTreeTextView.IndentMetrics.indentSpacesPerDepth,
+                length: 1
+            )
+            guard NSMaxRange(localDisclosureRange) <= attributedRow.length else {
+                return attributedRow
+            }
+            let attachment = disclosureAttachmentString(isOpen: row.isOpen)
+            attributedRow.replaceCharacters(in: localDisclosureRange, with: attachment)
+            attributedRow.addAttribute(
+                DOMTreeTextDocument.rowIdentityAttribute,
+                value: row.identity,
+                range: NSRange(location: localDisclosureRange.location, length: attachment.length)
+            )
+        }
+        return attributedRow
     }
 
     private func disclosureAttachmentString(isOpen: Bool) -> NSAttributedString {
@@ -1849,11 +1784,11 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         guard let selectedNodeID = dom.selectedNodeID else {
             return false
         }
-        return !renderedRows.contains(nodeID: selectedNodeID)
+        return !rowIndex.contains(nodeID: selectedNodeID)
     }
 
     private func multiSelectionContentRowRects() -> [CGRect] {
-        multiSelection.selectedRowsInDisplayOrder(renderedRows: renderedRows).flatMap(contentRowRects(for:))
+        multiSelection.selectedRowsInDisplayOrder(rowIndex: rowIndex).flatMap(contentRowRects(for:))
     }
 
     private func hoverContentRowRects() -> [CGRect] {
@@ -1864,24 +1799,24 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func rowRects(for nodeID: DOMNode.ID) -> [CGRect] {
-        guard let row = renderedRows.row(for: nodeID) else {
+        guard let row = rowIndex.row(for: nodeID) else {
             return []
         }
         return contentRowRects(for: row)
     }
 
-    private func contentRowRects(for row: DOMTreeTextView.Line) -> [CGRect] {
+    private func contentRowRects(for row: DOMTreeRowRenderPlan) -> [CGRect] {
         [modelContentRowRect(for: row)]
     }
 
-    private func rowHeadRect(for row: DOMTreeTextView.Line) -> CGRect? {
+    private func rowHeadRect(for row: DOMTreeRowRenderPlan) -> CGRect? {
         if row.hasDisclosure {
             return disclosureHitRect(for: row)
         }
         return markupStartRect(for: row) ?? contentRowRects(for: row).first
     }
 
-    private func markupStartRect(for row: DOMTreeTextView.Line) -> CGRect? {
+    private func markupStartRect(for row: DOMTreeRowRenderPlan) -> CGRect? {
         let markupLength = min(1, row.markupRange.length)
         guard markupLength > 0 else {
             return nil
@@ -1895,27 +1830,27 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         )
     }
 
-    private func isDisclosureHit(at point: CGPoint, in row: DOMTreeTextView.Line) -> Bool {
+    private func isDisclosureHit(at point: CGPoint, in row: DOMTreeRowRenderPlan) -> Bool {
         guard let hitRect = disclosureHitRect(for: row) else {
             return false
         }
         return hitRect.contains(point)
     }
 
-    private func disclosureHitRect(for row: DOMTreeTextView.Line) -> CGRect? {
+    private func disclosureHitRect(for row: DOMTreeRowRenderPlan) -> CGRect? {
         guard row.hasDisclosure else {
             return nil
         }
         return modelRowHeadRect(for: row)
     }
 
-    private func disclosureAttachmentRange(for row: DOMTreeTextView.Line) -> NSRange {
-        NSRange(location: row.textRange.location + row.depth * DOMTreeTextView.IndentMetrics.indentSpacesPerDepth, length: 1)
+    private func disclosureAttachmentRange(for row: DOMTreeRowRenderPlan) -> NSRange {
+        NSRange(location: row.documentRange.location + row.depth * DOMTreeTextView.IndentMetrics.indentSpacesPerDepth, length: 1)
     }
 
-    private func disclosureSlotRange(for row: DOMTreeTextView.Line) -> NSRange {
+    private func disclosureSlotRange(for row: DOMTreeRowRenderPlan) -> NSRange {
         NSRange(
-            location: row.textRange.location + row.depth * DOMTreeTextView.IndentMetrics.indentSpacesPerDepth,
+            location: row.documentRange.location + row.depth * DOMTreeTextView.IndentMetrics.indentSpacesPerDepth,
             length: DOMTreeTextView.IndentMetrics.disclosureSlotSpaces
         )
     }
@@ -2137,8 +2072,8 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         guard isRenderingActive,
               let selectedNodeID = selectionRevealState.pendingSelectedNodeID,
               !dom.hasPendingSelectionRequest,
-              !renderedRowsBuildCoordinator.hasCurrentBuild,
-              let row = renderedRows.row(for: selectedNodeID),
+              !rowRenderBuildCoordinator.hasCurrentBuild,
+              let row = rowIndex.row(for: selectedNodeID),
               bounds.width > 0,
               bounds.height > 0
         else {
@@ -2163,7 +2098,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
 
 extension DOMTreeTextView {
     var hasText: Bool {
-        !renderedText.isEmpty
+        !documentText.isEmpty
     }
 
     func insertText(_ text: String) {}
@@ -2189,7 +2124,7 @@ extension DOMTreeTextView {
     }
 
     var endOfDocument: UITextPosition {
-        DOMTreeTextPosition(offset: renderedTextUTF16Length)
+        DOMTreeTextPosition(offset: documentTextUTF16Length)
     }
 
     var tokenizer: UITextInputTokenizer {
@@ -2205,7 +2140,7 @@ extension DOMTreeTextView {
         guard range.length > 0 else {
             return ""
         }
-        return (renderedText as NSString).substring(with: range)
+        return (documentText as NSString).substring(with: range)
     }
 
     func replace(_ range: UITextRange, withText text: String) {}
@@ -2275,7 +2210,7 @@ extension DOMTreeTextView {
         case .left, .up:
             range = NSRange(location: max(0, offset - 1), length: min(1, offset))
         case .right, .down:
-            range = NSRange(location: offset, length: offset < renderedTextUTF16Length ? 1 : 0)
+            range = NSRange(location: offset, length: offset < documentTextUTF16Length ? 1 : 0)
         @unknown default:
             range = NSRange(location: offset, length: 0)
         }
@@ -2356,13 +2291,13 @@ extension DOMTreeTextView {
         let offset = textOffset(at: point)
         return DOMTreeTextRange(
             range: clampedTextRange(
-                NSRange(location: offset, length: offset < renderedTextUTF16Length ? 1 : 0)
+                NSRange(location: offset, length: offset < documentTextUTF16Length ? 1 : 0)
             )
         )
     }
 
-    private var renderedTextUTF16Length: Int {
-        (renderedText as NSString).length
+    private var documentTextUTF16Length: Int {
+        (documentText as NSString).length
     }
 
     private func setSelectedTextRange(_ range: UITextRange?) {
@@ -2401,7 +2336,7 @@ extension DOMTreeTextView {
     }
 
     private func clampedTextOffset(_ offset: Int) -> Int {
-        min(max(0, offset), renderedTextUTF16Length)
+        min(max(0, offset), documentTextUTF16Length)
     }
 
     private func textOffset(at point: CGPoint) -> Int {
@@ -2410,30 +2345,30 @@ extension DOMTreeTextView {
             if contentPoint.y < 0 {
                 return 0
             }
-            return renderedTextUTF16Length
+            return documentTextUTF16Length
         }
         let column = min(
             max(0, Int(round(contentPoint.x / Self.characterWidth))),
-            row.textRange.length
+            row.documentRange.length
         )
-        return clampedTextOffset(row.textRange.location + column)
+        return clampedTextOffset(row.documentRange.location + column)
     }
 
-    private func row(containingTextOffset offset: Int) -> DOMTreeTextView.Line? {
+    private func row(containingTextOffset offset: Int) -> DOMTreeRowRenderPlan? {
         let offset = clampedTextOffset(offset)
         return rows.first { row in
-            offset >= row.textRange.location && offset <= NSMaxRange(row.textRange)
+            offset >= row.documentRange.location && offset <= NSMaxRange(row.documentRange)
         }
     }
 }
 
 #if DEBUG
 extension DOMTreeTextView {
-    struct LineSnapshot {
+    struct RowSnapshot {
         let text: String
         let depth: Int
         let rowIndex: Int
-        let textRange: NSRange
+        let documentRange: NSRange
         let markupRange: NSRange
         let markupStartX: CGFloat
         let hasDisclosure: Bool
@@ -2453,22 +2388,16 @@ extension DOMTreeTextView {
         let isOpen: Bool
     }
 
-    var renderedTextForTesting: String {
-        renderedText
+    var documentTextForTesting: String {
+        documentText
     }
 
-    var textStorageBaseForegroundColorForTesting: UIColor? {
+    var rowDocumentBaseForegroundColorForTesting: UIColor? {
         baseTextAttributes()[.foregroundColor] as? UIColor
     }
 
-    func textStorageForegroundColorForTesting(containing text: String) -> UIColor? {
-        let range = (textStorage.string as NSString).range(of: text)
-        guard range.location != NSNotFound,
-              range.location < textStorage.length
-        else {
-            return nil
-        }
-        return unsafe textStorage.attribute(.foregroundColor, at: range.location, effectiveRange: nil) as? UIColor
+    func rowDocumentForegroundColorForTesting(containing text: String) -> UIColor? {
+        textDocument.foregroundColor(containing: text)
     }
 
     func tokenForegroundColorForTesting(kind: String) -> UIColor? {
@@ -2498,32 +2427,32 @@ extension DOMTreeTextView {
         rows.count
     }
 
-    var renderedLineSnapshotsForTesting: [LineSnapshot] {
-        rows.map { lineSnapshot(for: $0) }
+    var rowSnapshotsForTesting: [RowSnapshot] {
+        rows.map { rowSnapshot(for: $0) }
     }
 
-    var multiSelectedLineSnapshotsInDisplayOrderForTesting: [LineSnapshot] {
-        multiSelection.selectedRowsInDisplayOrder(renderedRows: renderedRows).map { lineSnapshot(for: $0) }
+    var multiSelectedRowSnapshotsInDisplayOrderForTesting: [RowSnapshot] {
+        multiSelection.selectedRowsInDisplayOrder(rowIndex: rowIndex).map { rowSnapshot(for: $0) }
     }
 
     func removeRowIndexForTesting(containing text: String) {
         guard let row = rows.first(where: { $0.text.contains(text) }) else {
             return
         }
-        renderedRows.removeRowIndex(for: row.nodeID)
+        textDocument.removeRowIndexForTesting(nodeID: row.nodeID)
     }
 
     func localMarkupTextByNodeIDForTesting(_ nodeIDs: [DOMNode.ID]) -> [DOMNode.ID: String] {
         localMarkupTextByNodeID(for: nodeIDs)
     }
 
-    private func lineSnapshot(for row: DOMTreeTextView.Line) -> LineSnapshot {
+    private func rowSnapshot(for row: DOMTreeRowRenderPlan) -> RowSnapshot {
         let line = row.text as NSString
-        return LineSnapshot(
+        return RowSnapshot(
             text: row.text,
             depth: row.depth,
             rowIndex: row.rowIndex,
-            textRange: row.textRange,
+            documentRange: row.documentRange,
             markupRange: row.markupRange,
             markupStartX: markupStartRect(for: row)?.minX ?? 0,
             hasDisclosure: row.hasDisclosure,
@@ -2543,11 +2472,7 @@ extension DOMTreeTextView {
                 return nil
             }
             let attachmentRange = disclosureAttachmentRange(for: row)
-            let hasAttachment = unsafe textStorage.attribute(
-                .attachment,
-                at: attachmentRange.location,
-                effectiveRange: nil
-            ) is NSTextAttachment
+            let hasAttachment = textDocument.hasAttachment(at: attachmentRange.location)
             return DisclosureAttachmentSnapshot(
                 text: row.text,
                 hasAttachment: hasAttachment,
@@ -2564,16 +2489,16 @@ extension DOMTreeTextView {
         performanceCounters.reloadTreeCallCount
     }
 
-    var buildRenderedRowsCallCountForTesting: Int {
-        performanceCounters.buildRenderedRowsCallCount
+    var buildRowRenderPlanCallCountForTesting: Int {
+        performanceCounters.buildRowRenderPlanCallCount
     }
 
-    var rebuildTextStorageCallCountForTesting: Int {
-        performanceCounters.rebuildTextStorageCallCount
+    var replaceRowDocumentCallCountForTesting: Int {
+        performanceCounters.replaceRowDocumentCallCount
     }
 
-    var incrementalTextStorageEditCallCountForTesting: Int {
-        performanceCounters.incrementalTextStorageEditCallCount
+    var incrementalRowDocumentEditCallCountForTesting: Int {
+        performanceCounters.incrementalRowDocumentEditCallCount
     }
 
     var resetTextFragmentViewsCallCountForTesting: Int {
@@ -2589,36 +2514,36 @@ extension DOMTreeTextView {
     }
 
     var cachedMarkupKeysForTesting: Set<DOMTreeTextView.MarkupCacheKey> {
-        renderedRowsBuildCoordinator.cachedMarkupKeysForTesting()
+        rowRenderBuildCoordinator.cachedMarkupKeysForTesting()
     }
 
-    var renderedRowsAppliedTreeRevisionForTesting: UInt64 {
-        renderedRowsAppliedTreeRevisionForTestingStorage
+    var rowDocumentAppliedTreeRevisionForTesting: UInt64 {
+        rowDocumentAppliedTreeRevisionForTestingStorage
     }
 
     func resetPerformanceCountersForTesting() {
         performanceCounters.reset()
     }
 
-    func waitForRenderedRowsAppliedTreeRevisionForTesting(
+    func waitForRowDocumentAppliedTreeRevisionForTesting(
         _ minimumRevision: UInt64,
         timeout: Duration = .seconds(1)
     ) async -> Bool {
-        if renderedRowsAppliedTreeRevisionForTestingStorage >= minimumRevision {
+        if rowDocumentAppliedTreeRevisionForTestingStorage >= minimumRevision {
             return true
         }
 
         return await withCheckedContinuation { continuation in
-            let waiterID = nextRenderedRowsAppliedTreeRevisionWaiterIDForTesting
-            nextRenderedRowsAppliedTreeRevisionWaiterIDForTesting &+= 1
+            let waiterID = nextRowDocumentAppliedTreeRevisionWaiterIDForTesting
+            nextRowDocumentAppliedTreeRevisionWaiterIDForTesting &+= 1
             let timeoutTask = Task { @MainActor [weak self] in
                 try? await Task.sleep(for: timeout)
-                self?.resolveRenderedRowsAppliedTreeRevisionWaiterForTesting(
+                self?.resolveRowDocumentAppliedTreeRevisionWaiterForTesting(
                     id: waiterID,
                     result: false
                 )
             }
-            renderedRowsAppliedTreeRevisionWaitersForTesting[waiterID] = RenderedRowsAppliedTreeRevisionWaiter(
+            rowDocumentAppliedTreeRevisionWaitersForTesting[waiterID] = RowDocumentAppliedTreeRevisionWaiter(
                 minimumRevision: minimumRevision,
                 continuation: continuation,
                 timeoutTask: timeoutTask
@@ -2626,31 +2551,31 @@ extension DOMTreeTextView {
         }
     }
 
-    private func recordRenderedRowsAppliedTreeRevisionForTesting(_ revision: UInt64) {
-        renderedRowsAppliedTreeRevisionForTestingStorage = revision
-        let completedWaiterIDs = renderedRowsAppliedTreeRevisionWaitersForTesting.compactMap { id, waiter in
+    private func recordRowDocumentAppliedTreeRevisionForTesting(_ revision: UInt64) {
+        rowDocumentAppliedTreeRevisionForTestingStorage = revision
+        let completedWaiterIDs = rowDocumentAppliedTreeRevisionWaitersForTesting.compactMap { id, waiter in
             waiter.minimumRevision <= revision ? id : nil
         }
         for waiterID in completedWaiterIDs {
-            resolveRenderedRowsAppliedTreeRevisionWaiterForTesting(id: waiterID, result: true)
+            resolveRowDocumentAppliedTreeRevisionWaiterForTesting(id: waiterID, result: true)
         }
     }
 
-    private func resolveRenderedRowsAppliedTreeRevisionWaiterForTesting(
+    private func resolveRowDocumentAppliedTreeRevisionWaiterForTesting(
         id: UInt64,
         result: Bool
     ) {
-        guard let waiter = renderedRowsAppliedTreeRevisionWaitersForTesting.removeValue(forKey: id) else {
+        guard let waiter = rowDocumentAppliedTreeRevisionWaitersForTesting.removeValue(forKey: id) else {
             return
         }
         waiter.timeoutTask.cancel()
         waiter.continuation.resume(returning: result)
     }
 
-    private func cancelRenderedRowsAppliedTreeRevisionWaitersForTesting() {
-        let waiterIDs = Array(renderedRowsAppliedTreeRevisionWaitersForTesting.keys)
+    private func cancelRowDocumentAppliedTreeRevisionWaitersForTesting() {
+        let waiterIDs = Array(rowDocumentAppliedTreeRevisionWaitersForTesting.keys)
         for waiterID in waiterIDs {
-            resolveRenderedRowsAppliedTreeRevisionWaiterForTesting(id: waiterID, result: false)
+            resolveRowDocumentAppliedTreeRevisionWaiterForTesting(id: waiterID, result: false)
         }
     }
 
@@ -2705,10 +2630,10 @@ extension DOMTreeTextView {
 
     func decorateFindTextForTesting(query: String) {
         clearFindDecorations()
-        for range in DOMTreeTextView.FindCoordinator.searchRanges(in: renderedText, queryString: query) {
+        for range in DOMTreeTextView.FindCoordinator.searchRanges(in: documentText, queryString: query) {
             decorateFindTextRange(range, style: .found)
         }
-        if let firstRange = DOMTreeTextView.FindCoordinator.searchRanges(in: renderedText, queryString: query).first {
+        if let firstRange = DOMTreeTextView.FindCoordinator.searchRanges(in: documentText, queryString: query).first {
             decorateFindTextRange(firstRange, style: .highlighted)
         }
     }
@@ -2719,32 +2644,32 @@ extension DOMTreeTextView {
 
     func synchronizeDocumentForTesting() async {
         reloadTree(resetFragments: true)
-        await waitForRenderedRowsForTesting()
+        await waitForRowDocumentForTesting()
     }
 
-    func waitForRenderedRowsForTesting() async {
+    func waitForRowDocumentForTesting() async {
         while true {
             if let domTreeRenderInvalidationTask {
                 await domTreeRenderInvalidationTask.value
                 continue
             }
-            await renderedRowsBuildCoordinator.waitForCurrentBuild()
+            await rowRenderBuildCoordinator.waitForCurrentBuild()
             if domTreeRenderInvalidationTask == nil {
                 return
             }
         }
     }
 
-    func suspendNextRenderedRowsBuildForTesting() {
-        renderedRowsBuildCoordinator.suspendNextBuildForTesting()
+    func suspendNextRowRenderBuildForTesting() {
+        rowRenderBuildCoordinator.suspendNextBuildForTesting()
     }
 
-    func waitForRenderedRowsBuildSuspensionForTesting() async {
-        await renderedRowsBuildCoordinator.waitForBuildSuspensionForTesting()
+    func waitForRowRenderBuildSuspensionForTesting() async {
+        await rowRenderBuildCoordinator.waitForBuildSuspensionForTesting()
     }
 
-    func resumeRenderedRowsBuildForTesting() {
-        renderedRowsBuildCoordinator.resumeSuspendedBuildForTesting()
+    func resumeRowRenderBuildForTesting() {
+        rowRenderBuildCoordinator.resumeSuspendedBuildForTesting()
     }
 
     func selectedRowRectsForTesting() -> [CGRect] {
@@ -2780,7 +2705,7 @@ extension DOMTreeTextView {
         guard let row = rows.first(where: { $0.text.contains(text) }) else {
             return []
         }
-        return textSegmentRects(for: row.textRange, type: .highlight)
+        return textSegmentRects(for: row.documentRange, type: .highlight)
     }
 
     func hitTestedLineTextForTesting(atContentPoint point: CGPoint) -> String? {

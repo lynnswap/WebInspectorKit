@@ -125,6 +125,72 @@ package struct DOMTreeProjection: Equatable, Sendable {
 }
 
 package extension DOMTree {
+    struct RowDeltaBatch: Equatable, Sendable {
+        package var startRevision: UInt64
+        package var revision: UInt64
+        package var deltas: [RowDelta]
+
+        package init(
+            startRevision: UInt64,
+            revision: UInt64,
+            deltas: [RowDelta]
+        ) {
+            self.startRevision = startRevision
+            self.revision = revision
+            self.deltas = deltas
+        }
+
+        package var requiresRootReset: Bool {
+            deltas.contains { delta in
+                if case .rootReset = delta {
+                    return true
+                }
+                return false
+            }
+        }
+
+        package func merging(with newer: DOMTree.RowDeltaBatch) -> DOMTree.RowDeltaBatch {
+            if requiresRootReset || newer.requiresRootReset {
+                return DOMTree.RowDeltaBatch(
+                    startRevision: min(startRevision, newer.startRevision),
+                    revision: newer.revision,
+                    deltas: [.rootReset(rootNodeID: newer.rootResetNodeID)]
+                )
+            }
+            return DOMTree.RowDeltaBatch(
+                startRevision: min(startRevision, newer.startRevision),
+                revision: newer.revision,
+                deltas: deltas + newer.deltas
+            )
+        }
+
+        private var rootResetNodeID: DOMNode.ID? {
+            for delta in deltas.reversed() {
+                if case let .rootReset(rootNodeID) = delta {
+                    return rootNodeID
+                }
+            }
+            return nil
+        }
+    }
+
+    enum RowDelta: Equatable, Sendable {
+        case rootReset(rootNodeID: DOMNode.ID?)
+        case childrenReplaced(parentID: DOMNode.ID, oldVisibleChildIDs: [DOMNode.ID], newVisibleChildIDs: [DOMNode.ID])
+        case childInserted(parentID: DOMNode.ID, childID: DOMNode.ID, previousSiblingID: DOMNode.ID?)
+        case childRemoved(parentID: DOMNode.ID?, nodeID: DOMNode.ID, removedSubtreeIDs: Set<DOMNode.ID>)
+        case childCountChanged(nodeID: DOMNode.ID, oldCount: Int, newCount: Int)
+        case rowContentChanged(nodeID: DOMNode.ID, reasons: Set<RowContentReason>)
+    }
+
+    enum RowContentReason: Hashable, Sendable {
+        case attribute(name: String)
+        case characterData
+        case nodeMetadata
+        case disclosure
+        case projection
+    }
+
     struct ChangeSet: Equatable, Sendable {
         package enum Kind: Equatable, Sendable {
             case root

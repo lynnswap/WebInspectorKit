@@ -975,8 +975,8 @@ struct DOMContainerTests {
         await dom.waitUntilDocumentRequestsIdle(targetID: documentRequest.targetIdentifier)
 
         #expect(await renderedDocumentState.waitUntilValue(true))
-        await treeTextView.waitForRenderedRowsForTesting()
-        #expect(treeTextView.renderedTextForTesting.contains("<html"))
+        await treeTextView.waitForRowDocumentForTesting()
+        #expect(treeTextView.documentTextForTesting.contains("<html"))
         #expect(await backend.sentTargetMessages().count == 1)
     }
 

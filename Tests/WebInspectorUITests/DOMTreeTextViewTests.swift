@@ -12,7 +12,7 @@ struct DOMTreeTextViewTests {
     @Test
     func rendersDOMMarkupFromDOMSession() async throws {
         let view = await makeTreeView()
-        let text = view.renderedTextForTesting
+        let text = view.documentTextForTesting
 
         #expect(!text.contains("#document"))
         #expect(text.contains("<!DOCTYPE html>"))
@@ -27,19 +27,19 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
-    func renderedRowsBuildDoesNotSnapshotDOMSession() async throws {
+    func rowRenderBuildDoesNotSnapshotDOMSession() async throws {
         let session = makeDOMSession()
-        let baselineSnapshotBuildCount = session.snapshotBuildCountForTesting
+        let baserowSnapshotBuildCount = session.snapshotBuildCountForTesting
 
         let view = await makeTreeView(session: session)
-        #expect(view.renderedTextForTesting.contains("<html lang=\"en\">"))
-        #expect(session.snapshotBuildCountForTesting == baselineSnapshotBuildCount)
+        #expect(view.documentTextForTesting.contains("<html lang=\"en\">"))
+        #expect(session.snapshotBuildCountForTesting == baserowSnapshotBuildCount)
 
         view.toggleRowForTesting(containing: "<article")
-        await view.waitForRenderedRowsForTesting()
+        await view.waitForRowDocumentForTesting()
 
-        #expect(view.renderedTextForTesting.contains("<span id=\"nested-child\"></span>"))
-        #expect(session.snapshotBuildCountForTesting == baselineSnapshotBuildCount)
+        #expect(view.documentTextForTesting.contains("<span id=\"nested-child\"></span>"))
+        #expect(session.snapshotBuildCountForTesting == baserowSnapshotBuildCount)
     }
 
     @Test
@@ -55,27 +55,27 @@ struct DOMTreeTextViewTests {
         defer {
             observedTreeRenderRevisions.cancel()
         }
-        let baselineSnapshotBuildCount = session.snapshotBuildCountForTesting
-        let baselineAppliedTreeRevision = view.renderedRowsAppliedTreeRevisionForTesting
-        let baselineBuildCount = view.buildRenderedRowsCallCountForTesting
+        let baserowSnapshotBuildCount = session.snapshotBuildCountForTesting
+        let baselineAppliedTreeRevision = view.rowDocumentAppliedTreeRevisionForTesting
+        let baselineBuildCount = view.buildRowRenderPlanCallCountForTesting
 
-        #expect(view.renderedTextForTesting.contains("<article>…</article>"))
-        #expect(!view.renderedTextForTesting.contains("data-state=\"ready\""))
+        #expect(view.documentTextForTesting.contains("<article>…</article>"))
+        #expect(!view.documentTextForTesting.contains("data-state=\"ready\""))
 
         session.applyAttributeModified(nestedChildID, name: "data-state", value: "ready")
         let expectedTreeRevision = session.treeRevision
         let didObserveTreeRevision = await observedTreeRenderRevisions.waitUntil {
             $0 >= expectedTreeRevision
         } != nil
-        await view.waitForRenderedRowsForTesting()
+        await view.waitForRowDocumentForTesting()
 
         #expect(didObserveTreeRevision)
-        #expect(view.buildRenderedRowsCallCountForTesting == baselineBuildCount)
-        #expect(DOMTreeTextView.RenderedRowsBuilder.lastCollectedNodeIDsForTesting.contains(articleID))
-        #expect(!DOMTreeTextView.RenderedRowsBuilder.lastCollectedNodeIDsForTesting.contains(nestedChildID))
-        #expect(session.snapshotBuildCountForTesting == baselineSnapshotBuildCount)
-        #expect(view.renderedRowsAppliedTreeRevisionForTesting == baselineAppliedTreeRevision)
-        #expect(!view.renderedTextForTesting.contains("data-state=\"ready\""))
+        #expect(view.buildRowRenderPlanCallCountForTesting == baselineBuildCount)
+        #expect(DOMTreeTextView.RowRenderBuilder.lastCollectedNodeIDsForTesting.contains(articleID))
+        #expect(!DOMTreeTextView.RowRenderBuilder.lastCollectedNodeIDsForTesting.contains(nestedChildID))
+        #expect(session.snapshotBuildCountForTesting == baserowSnapshotBuildCount)
+        #expect(view.rowDocumentAppliedTreeRevisionForTesting == baselineAppliedTreeRevision)
+        #expect(!view.documentTextForTesting.contains("data-state=\"ready\""))
     }
 
     @Test
@@ -86,9 +86,9 @@ struct DOMTreeTextViewTests {
         let visibleDivID = DOMNode.ID(documentID: documentID, nodeID: .init(7))
         let nestedChildID = DOMNode.ID(documentID: documentID, nodeID: .init(9))
 
-        #expect(view.renderedTextForTesting.contains("<div id=\"start-of-content\" data-testid=\"cellInnerDiv\"></div>"))
-        #expect(view.renderedTextForTesting.contains("<article>…</article>"))
-        #expect(!view.renderedTextForTesting.contains("data-hidden=\"ready\""))
+        #expect(view.documentTextForTesting.contains("<div id=\"start-of-content\" data-testid=\"cellInnerDiv\"></div>"))
+        #expect(view.documentTextForTesting.contains("<article>…</article>"))
+        #expect(!view.documentTextForTesting.contains("data-hidden=\"ready\""))
 
         let didRenderVisibleAttribute = await waitForRenderedDocumentTreeUpdate(
             in: view,
@@ -98,13 +98,13 @@ struct DOMTreeTextViewTests {
                 session.applyAttributeModified(nestedChildID, name: "data-hidden", value: "ready")
             },
             until: {
-                view.renderedTextForTesting.contains("data-visible=\"ready\"")
+                view.documentTextForTesting.contains("data-visible=\"ready\"")
             }
         )
 
         #expect(didRenderVisibleAttribute)
-        #expect(view.renderedTextForTesting.contains("data-visible=\"ready\""))
-        #expect(!view.renderedTextForTesting.contains("data-hidden=\"ready\""))
+        #expect(view.documentTextForTesting.contains("data-visible=\"ready\""))
+        #expect(!view.documentTextForTesting.contains("data-hidden=\"ready\""))
     }
 
     @Test
@@ -120,7 +120,7 @@ struct DOMTreeTextViewTests {
         let view = await makeTreeView(session: session)
         let rootID = try #require(session.currentPageRootNode?.id)
 
-        #expect(view.renderedTextForTesting.isEmpty)
+        #expect(view.documentTextForTesting.isEmpty)
 
         let didRenderDocumentElement = await waitForRenderedDocumentTreeUpdate(
             in: view,
@@ -140,29 +140,103 @@ struct DOMTreeTextViewTests {
                 )
             },
             until: {
-                view.renderedTextForTesting.contains("<html")
+                view.documentTextForTesting.contains("<html")
             }
         )
 
         #expect(didRenderDocumentElement)
-        #expect(view.renderedTextForTesting.contains("<html"))
+        #expect(view.documentTextForTesting.contains("<html"))
     }
 
     @Test
-    func textStorageKeepsTokenForegroundAsBaseAttributes() async throws {
+    func rowDocumentStoresTokenForegroundAttributes() async throws {
         let view = await makeTreeView()
 
-        let baseForeground = try #require(view.textStorageBaseForegroundColorForTesting)
-        let tagNameStorageForeground = try #require(view.textStorageForegroundColorForTesting(containing: "input"))
-        let attributeNameStorageForeground = try #require(view.textStorageForegroundColorForTesting(containing: "disabled"))
+        let baseForeground = try #require(view.rowDocumentBaseForegroundColorForTesting)
+        let tagNameStorageForeground = try #require(view.rowDocumentForegroundColorForTesting(containing: "input"))
+        let attributeNameStorageForeground = try #require(view.rowDocumentForegroundColorForTesting(containing: "disabled"))
         let tagNameTokenForeground = try #require(view.tokenForegroundColorForTesting(kind: "tagName"))
         let attributeNameTokenForeground = try #require(view.tokenForegroundColorForTesting(kind: "attributeName"))
 
-        #expect(colorsEqual(tagNameStorageForeground, baseForeground))
-        #expect(colorsEqual(attributeNameStorageForeground, baseForeground))
-        #expect(!colorsEqual(tagNameStorageForeground, tagNameTokenForeground))
-        #expect(!colorsEqual(attributeNameStorageForeground, attributeNameTokenForeground))
+        #expect(!colorsEqual(tagNameStorageForeground, baseForeground))
+        #expect(!colorsEqual(attributeNameStorageForeground, baseForeground))
+        #expect(colorsEqual(tagNameStorageForeground, tagNameTokenForeground))
+        #expect(colorsEqual(attributeNameStorageForeground, attributeNameTokenForeground))
         #expect(view.disclosureAttachmentSnapshotsForTesting.contains { $0.hasAttachment })
+    }
+
+    @Test
+    func textDocumentVendsRowParagraphsWithStableIdentity() throws {
+        let document = DOMTreeTextDocument()
+        let rows = makeRowDocumentRows(["alpha", "beta"])
+        document.replaceDocument(with: attributedRowDocument(rows: rows), rows: rows)
+
+        let firstParagraph = try #require(document.textContentStorage(
+            document.textContentStorage,
+            textParagraphWith: rows[0].documentRange
+        ) as? DOMTreeRowParagraph)
+        let secondParagraph = try #require(document.textContentStorage(
+            document.textContentStorage,
+            textParagraphWith: rows[1].documentRange
+        ) as? DOMTreeRowParagraph)
+
+        #expect(firstParagraph.identity == rows[0].identity)
+        #expect(secondParagraph.identity == rows[1].identity)
+    }
+
+    @Test
+    func textDocumentLayoutFragmentsExposeRowIdentity() throws {
+        let document = DOMTreeTextDocument()
+        let rows = makeRowDocumentRows(["alpha", "beta"])
+        document.replaceDocument(with: attributedRowDocument(rows: rows), rows: rows)
+        document.textContainer.size = CGSize(width: 1_000, height: 1_000)
+
+        let fullRange = try #require(document.textRange(for: NSRange(location: 0, length: document.utf16Length)))
+        document.layoutManager.ensureLayout(for: fullRange)
+        var fragments: [NSTextLayoutFragment] = []
+        document.layoutManager.enumerateTextLayoutFragments(
+            from: fullRange.location,
+            options: []
+        ) { fragment in
+            fragments.append(fragment)
+            return true
+        }
+
+        let firstFragment = try #require(fragments.first)
+        #expect(document.rowIdentity(for: firstFragment) == rows[0].identity)
+        #expect(document.row(for: firstFragment) == rows[0])
+    }
+
+    @Test
+    func textDocumentSingleRowReplacementPreservesSurroundingRowIdentities() throws {
+        let document = DOMTreeTextDocument()
+        let initialRows = makeRowDocumentRows(["first", "middle", "third"])
+        document.replaceDocument(with: attributedRowDocument(rows: initialRows), rows: initialRows)
+
+        let nextRows = makeRowDocumentRows(["first", "second", "third"])
+        document.replaceCharacters(
+            in: initialRows[1].documentRange,
+            with: attributedRowDocument(rows: [nextRows[1]]),
+            rows: nextRows
+        )
+
+        let firstParagraph = try #require(document.textContentStorage(
+            document.textContentStorage,
+            textParagraphWith: nextRows[0].documentRange
+        ) as? DOMTreeRowParagraph)
+        let middleParagraph = try #require(document.textContentStorage(
+            document.textContentStorage,
+            textParagraphWith: nextRows[1].documentRange
+        ) as? DOMTreeRowParagraph)
+        let lastParagraph = try #require(document.textContentStorage(
+            document.textContentStorage,
+            textParagraphWith: nextRows[2].documentRange
+        ) as? DOMTreeRowParagraph)
+
+        #expect(document.string == "first\nsecond\nthird")
+        #expect(firstParagraph.identity == nextRows[0].identity)
+        #expect(middleParagraph.identity == nextRows[1].identity)
+        #expect(lastParagraph.identity == nextRows[2].identity)
     }
 
     @Test
@@ -257,7 +331,7 @@ struct DOMTreeTextViewTests {
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
         view.setRenderingActive(true)
-        await view.waitForRenderedRowsForTesting()
+        await view.waitForRowDocumentForTesting()
 
         view.primaryClickRowForTesting(containing: "<input disabled>")
         let highlightedNodeID = await recorder.nextNodeID()
@@ -281,7 +355,7 @@ struct DOMTreeTextViewTests {
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
         view.setRenderingActive(true)
-        await view.waitForRenderedRowsForTesting()
+        await view.waitForRowDocumentForTesting()
 
         view.primaryClickRowForTesting(containing: "<input disabled>")
         view.hoverRowForTesting(containing: "<article")
@@ -305,7 +379,7 @@ struct DOMTreeTextViewTests {
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
         view.setRenderingActive(true)
-        await view.waitForRenderedRowsForTesting()
+        await view.waitForRowDocumentForTesting()
 
         view.primaryClickRowForTesting(containing: "<input disabled>")
         view.hoverRowForTesting(containing: "<article")
@@ -335,7 +409,7 @@ struct DOMTreeTextViewTests {
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
         view.setRenderingActive(true)
-        await view.waitForRenderedRowsForTesting()
+        await view.waitForRowDocumentForTesting()
 
         view.hoverRowForTesting(containing: "<article")
         _ = await highlightRecorder.nextNodeID()
@@ -361,7 +435,7 @@ struct DOMTreeTextViewTests {
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
         view.setRenderingActive(true)
-        await view.waitForRenderedRowsForTesting()
+        await view.waitForRowDocumentForTesting()
 
         view.primaryClickRowForTesting(containing: "<input disabled>")
         view.hoverRowForTesting(containing: "<article")
@@ -386,7 +460,7 @@ struct DOMTreeTextViewTests {
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
         view.setRenderingActive(true)
-        await view.waitForRenderedRowsForTesting()
+        await view.waitForRowDocumentForTesting()
 
         view.primaryClickRowForTesting(containing: "<input disabled>")
         view.setRenderingActive(false)
@@ -419,7 +493,7 @@ struct DOMTreeTextViewTests {
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
         view.setRenderingActive(true)
-        await view.waitForRenderedRowsForTesting()
+        await view.waitForRowDocumentForTesting()
 
         view.primaryClickRowForTesting(containing: "<input disabled>")
         view.hoverRowForTesting(containing: "<article")
@@ -453,7 +527,7 @@ struct DOMTreeTextViewTests {
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
         view.setRenderingActive(true)
-        await view.waitForRenderedRowsForTesting()
+        await view.waitForRowDocumentForTesting()
 
         view.primaryClickRowForTesting(containing: "<input disabled>")
         view.hoverRowForTesting(containing: "<article")
@@ -470,9 +544,9 @@ struct DOMTreeTextViewTests {
         let view = await makeTreeView()
 
         view.toggleRowForTesting(containing: "<article")
-        await view.waitForRenderedRowsForTesting()
+        await view.waitForRowDocumentForTesting()
 
-        let text = view.renderedTextForTesting
+        let text = view.documentTextForTesting
         #expect(text.contains("<article>"))
         #expect(text.contains("<span id=\"nested-child\"></span>"))
         #expect(text.contains("</article>"))
@@ -485,7 +559,7 @@ struct DOMTreeTextViewTests {
         let view = await makeTreeView(session: session)
 
         view.toggleRowForTesting(containing: "<article")
-        await view.waitForRenderedRowsForTesting()
+        await view.waitForRowDocumentForTesting()
 
         let articleID = try #require(
             session.snapshot().nodesByID.first { entry in
@@ -495,7 +569,7 @@ struct DOMTreeTextViewTests {
 
         let markupByNodeID = view.localMarkupTextByNodeIDForTesting([articleID])
         #expect(markupByNodeID[articleID] == "      <article>")
-        #expect(view.renderedTextForTesting.contains("</article>"))
+        #expect(view.documentTextForTesting.contains("</article>"))
 
         view.removeRowIndexForTesting(containing: "<article>")
         #expect(view.localMarkupTextByNodeIDForTesting([articleID]).isEmpty)
@@ -507,7 +581,7 @@ struct DOMTreeTextViewTests {
         let view = await makeTreeView(session: session)
 
         view.toggleRowForTesting(containing: "<article")
-        await view.waitForRenderedRowsForTesting()
+        await view.waitForRowDocumentForTesting()
 
         let articleID = try #require(
             session.snapshot().nodesByID.first { entry in
@@ -528,7 +602,7 @@ struct DOMTreeTextViewTests {
         view.primaryClickRowForTesting(containing: "<div id=\"start-of-content\"", modifiers: .command)
         view.primaryClickRowForTesting(containing: "<input disabled>", modifiers: .command)
 
-        let selectedRows = view.multiSelectedLineSnapshotsInDisplayOrderForTesting
+        let selectedRows = view.multiSelectedRowSnapshotsInDisplayOrderForTesting
         #expect(selectedRows.map(\.text) == [
             "      <div id=\"start-of-content\" data-testid=\"cellInnerDiv\"></div>",
             "      <input disabled>",
@@ -543,8 +617,8 @@ struct DOMTreeTextViewTests {
         let view = await makeTreeView(session: session)
 
         view.toggleRowForTesting(containing: "<article")
-        await view.waitForRenderedRowsForTesting()
-        #expect(view.renderedTextForTesting.contains("<span id=\"nested-child\"></span>"))
+        await view.waitForRowDocumentForTesting()
+        #expect(view.documentTextForTesting.contains("<span id=\"nested-child\"></span>"))
 
         let nestedChildID = try #require(
             session.snapshot().nodesByID.first { entry in
@@ -561,11 +635,11 @@ struct DOMTreeTextViewTests {
                 session.applyAttributeModified(nestedChildID, name: "data-state", value: "ready")
             },
             until: {
-                view.renderedTextForTesting.contains("<span id=\"nested-child\" data-state=\"ready\"></span>")
+                view.documentTextForTesting.contains("<span id=\"nested-child\" data-state=\"ready\"></span>")
             }
         )
         #expect(didRenderAttribute)
-        #expect(view.renderedTextForTesting.contains("<span id=\"nested-child\" data-state=\"ready\"></span>"))
+        #expect(view.documentTextForTesting.contains("<span id=\"nested-child\" data-state=\"ready\"></span>"))
     }
 
     @Test
@@ -574,7 +648,7 @@ struct DOMTreeTextViewTests {
         let view = await makeTreeView(session: session)
 
         view.toggleRowForTesting(containing: "<article")
-        await view.waitForRenderedRowsForTesting()
+        await view.waitForRowDocumentForTesting()
         view.resetPerformanceCountersForTesting()
 
         let nestedChildID = try #require(
@@ -592,13 +666,13 @@ struct DOMTreeTextViewTests {
                 session.applyAttributeModified(nestedChildID, name: "data-state", value: "ready")
             },
             until: {
-                view.renderedTextForTesting.contains("<span id=\"nested-child\" data-state=\"ready\"></span>")
+                view.documentTextForTesting.contains("<span id=\"nested-child\" data-state=\"ready\"></span>")
             }
         )
 
         #expect(didRenderAttribute)
-        #expect(view.incrementalTextStorageEditCallCountForTesting == 1)
-        #expect(view.rebuildTextStorageCallCountForTesting == 0)
+        #expect(view.incrementalRowDocumentEditCallCountForTesting == 1)
+        #expect(view.replaceRowDocumentCallCountForTesting == 0)
         #expect(view.resetTextFragmentViewsCallCountForTesting == 0)
         #expect(view.rowSpanDisplayInvalidationCallCountForTesting == 1)
         #expect(view.textSegmentRectsCallCountForTesting == 0)
@@ -616,24 +690,24 @@ struct DOMTreeTextViewTests {
         defer {
             observedTreeRenderRevisions.cancel()
         }
-        let baselineText = view.renderedTextForTesting
+        let baselineText = view.documentTextForTesting
         view.resetPerformanceCountersForTesting()
 
         view.setRenderingActive(false)
         session.applyAttributeModified(visibleDivID, name: "data-visible", value: "deferred")
         let hiddenRevision = session.treeRevision
         #expect(await observedTreeRenderRevisions.waitUntil { $0 >= hiddenRevision } != nil)
-        await view.waitForRenderedRowsForTesting()
+        await view.waitForRowDocumentForTesting()
 
-        #expect(view.buildRenderedRowsCallCountForTesting == 0)
-        #expect(view.renderedTextForTesting == baselineText)
-        #expect(!view.renderedTextForTesting.contains("data-visible=\"deferred\""))
+        #expect(view.buildRowRenderPlanCallCountForTesting == 0)
+        #expect(view.documentTextForTesting == baselineText)
+        #expect(!view.documentTextForTesting.contains("data-visible=\"deferred\""))
 
         view.setRenderingActive(true)
-        await view.waitForRenderedRowsForTesting()
+        await view.waitForRowDocumentForTesting()
 
-        #expect(view.buildRenderedRowsCallCountForTesting == 1)
-        #expect(view.renderedTextForTesting.contains("data-visible=\"deferred\""))
+        #expect(view.buildRowRenderPlanCallCountForTesting == 1)
+        #expect(view.documentTextForTesting.contains("data-visible=\"deferred\""))
     }
 
     @Test
@@ -648,9 +722,9 @@ struct DOMTreeTextViewTests {
             }?.key
         )
 
-        view.suspendNextRenderedRowsBuildForTesting()
+        view.suspendNextRowRenderBuildForTesting()
         view.toggleRowForTesting(containing: "<article")
-        await view.waitForRenderedRowsBuildSuspensionForTesting()
+        await view.waitForRowRenderBuildSuspensionForTesting()
 
         let didRenderAttribute = await waitForRenderedDocumentTreeUpdate(
             in: view,
@@ -659,41 +733,41 @@ struct DOMTreeTextViewTests {
                 session.applyAttributeModified(nestedChildID, name: "data-state", value: "ready")
             },
             until: {
-                view.renderedTextForTesting.contains("<span id=\"nested-child\" data-state=\"ready\"></span>")
+                view.documentTextForTesting.contains("<span id=\"nested-child\" data-state=\"ready\"></span>")
             }
         )
 
         #expect(didRenderAttribute)
-        #expect(view.renderedTextForTesting.contains("<span id=\"nested-child\" data-state=\"ready\"></span>"))
+        #expect(view.documentTextForTesting.contains("<span id=\"nested-child\" data-state=\"ready\"></span>"))
     }
 
     @Test
-    func hidingDuringInFlightRenderedRowsBuildCancelsStaleApply() async throws {
+    func hidingDuringInFlightRowRenderBuildCancelsStaleApply() async throws {
         let session = makeDOMSession()
         let view = await makeTreeView(session: session)
 
-        view.suspendNextRenderedRowsBuildForTesting()
+        view.suspendNextRowRenderBuildForTesting()
         view.toggleRowForTesting(containing: "<article")
-        await view.waitForRenderedRowsBuildSuspensionForTesting()
+        await view.waitForRowRenderBuildSuspensionForTesting()
 
         view.setRenderingActive(false)
-        await view.waitForRenderedRowsForTesting()
+        await view.waitForRowDocumentForTesting()
 
-        #expect(!view.renderedTextForTesting.contains("<span id=\"nested-child\"></span>"))
+        #expect(!view.documentTextForTesting.contains("<span id=\"nested-child\"></span>"))
 
-        view.resumeRenderedRowsBuildForTesting()
-        await view.waitForRenderedRowsForTesting()
+        view.resumeRowRenderBuildForTesting()
+        await view.waitForRowDocumentForTesting()
 
-        #expect(!view.renderedTextForTesting.contains("<span id=\"nested-child\"></span>"))
+        #expect(!view.documentTextForTesting.contains("<span id=\"nested-child\"></span>"))
 
         view.setRenderingActive(true)
-        await view.waitForRenderedRowsForTesting()
+        await view.waitForRowDocumentForTesting()
 
-        #expect(view.renderedTextForTesting.contains("<span id=\"nested-child\"></span>"))
+        #expect(view.documentTextForTesting.contains("<span id=\"nested-child\"></span>"))
     }
 
     @Test
-    func selectionChangeUpdatesDecorationsWithoutRebuildingRenderedRows() async throws {
+    func selectionChangeUpdatesDecorationsWithoutRebuildingRowRender() async throws {
         let session = makeDOMSession()
         let view = await makeTreeView(session: session)
         let selectedRowCounts = await view.selectionObservationDeliveryForTesting.values {
@@ -710,7 +784,7 @@ struct DOMTreeTextViewTests {
 
         let didRenderSelection = await selectedRowCounts.waitUntil { $0 == 1 } != nil
         #expect(didRenderSelection)
-        #expect(view.buildRenderedRowsCallCountForTesting == 0)
+        #expect(view.buildRowRenderPlanCallCountForTesting == 0)
     }
 
     @Test
@@ -737,7 +811,7 @@ struct DOMTreeTextViewTests {
             children: selectionRevealRaceBodyChildren(prefixCount: 80),
             eventSequence: 10
         )
-        await view.waitForRenderedRowsForTesting()
+        await view.waitForRowDocumentForTesting()
         view.contentOffset = .zero
         view.clearDrawnSelectedRowRectsForTesting()
         let observedSelectionRevisions = await view.selectionObservationDeliveryForTesting.values {
@@ -751,13 +825,13 @@ struct DOMTreeTextViewTests {
         session.selectNode(targetID)
         let hiddenSelectionRevision = session.selectionRevision
         #expect(await observedSelectionRevisions.waitUntil { $0 >= hiddenSelectionRevision } != nil)
-        await view.waitForRenderedRowsForTesting()
+        await view.waitForRowDocumentForTesting()
 
         #expect(view.contentOffset.y == 0)
         #expect(view.drawnSelectedRowRectsForTesting.isEmpty)
 
         view.setRenderingActive(true)
-        await view.waitForRenderedRowsForTesting()
+        await view.waitForRowDocumentForTesting()
         view.layoutIfNeeded()
 
         let revealState = renderedSelectionRevealState(in: view, containing: "selected-target")
@@ -776,7 +850,7 @@ struct DOMTreeTextViewTests {
         view.primaryClickRowForTesting(containing: "<div id=\"start-of-content\"", modifiers: .command)
         view.primaryClickRowForTesting(containing: "<input disabled>", modifiers: .command)
         view.primaryClickRowForTesting(containing: "<article", modifiers: .command)
-        #expect(view.multiSelectedLineSnapshotsInDisplayOrderForTesting.map(\.text) == [
+        #expect(view.multiSelectedRowSnapshotsInDisplayOrderForTesting.map(\.text) == [
             "      <div id=\"start-of-content\" data-testid=\"cellInnerDiv\"></div>",
             "      <input disabled>",
             "      <article>…</article>",
@@ -800,17 +874,17 @@ struct DOMTreeTextViewTests {
         let hiddenSelectionRevision = session.selectionRevision
         #expect(await observedTreeRenderRevisions.waitUntil { $0 >= hiddenTreeRevision } != nil)
         #expect(await observedSelectionRevisions.waitUntil { $0 >= hiddenSelectionRevision } != nil)
-        await view.waitForRenderedRowsForTesting()
+        await view.waitForRowDocumentForTesting()
 
-        #expect(!view.renderedTextForTesting.contains("data-visible=\"while-hidden\""))
-        #expect(view.multiSelectedLineSnapshotsInDisplayOrderForTesting.count == 3)
+        #expect(!view.documentTextForTesting.contains("data-visible=\"while-hidden\""))
+        #expect(view.multiSelectedRowSnapshotsInDisplayOrderForTesting.count == 3)
 
         view.setRenderingActive(true)
-        await view.waitForRenderedRowsForTesting()
+        await view.waitForRowDocumentForTesting()
         view.layoutIfNeeded()
 
-        #expect(view.renderedTextForTesting.contains("data-visible=\"while-hidden\""))
-        #expect(view.multiSelectedLineSnapshotsInDisplayOrderForTesting.isEmpty)
+        #expect(view.documentTextForTesting.contains("data-visible=\"while-hidden\""))
+        #expect(view.multiSelectedRowSnapshotsInDisplayOrderForTesting.isEmpty)
         #expect(view.selectedRowRectsForTesting().count == 1)
     }
 
@@ -833,10 +907,10 @@ struct DOMTreeTextViewTests {
         view.primaryClickRowForTesting(containing: "<input disabled>")
         view.primaryClickRowForTesting(containing: "<div id=\"start-of-content\"", modifiers: .command)
         view.primaryClickRowForTesting(containing: "<article", modifiers: .command)
-        #expect(view.multiSelectedLineSnapshotsInDisplayOrderForTesting.count == 3)
+        #expect(view.multiSelectedRowSnapshotsInDisplayOrderForTesting.count == 3)
         #expect(session.selectedNode?.id == inputID)
         view.routeCurrentSelectionInvalidationForTesting()
-        #expect(view.multiSelectedLineSnapshotsInDisplayOrderForTesting.count == 3)
+        #expect(view.multiSelectedRowSnapshotsInDisplayOrderForTesting.count == 3)
 
         let observedSelectionRevisions = await view.selectionObservationDeliveryForTesting.values {
             session.selectionRevision
@@ -851,18 +925,18 @@ struct DOMTreeTextViewTests {
         let hiddenSelectionRevision = session.selectionRevision
         #expect(await observedSelectionRevisions.waitUntil { $0 >= hiddenSelectionRevision } != nil)
 
-        #expect(view.multiSelectedLineSnapshotsInDisplayOrderForTesting.count == 3)
+        #expect(view.multiSelectedRowSnapshotsInDisplayOrderForTesting.count == 3)
 
         view.setRenderingActive(true)
-        await view.waitForRenderedRowsForTesting()
+        await view.waitForRowDocumentForTesting()
         view.layoutIfNeeded()
 
-        #expect(view.multiSelectedLineSnapshotsInDisplayOrderForTesting.isEmpty)
+        #expect(view.multiSelectedRowSnapshotsInDisplayOrderForTesting.isEmpty)
         #expect(view.selectedRowRectsForTesting().count == 1)
     }
 
     @Test
-    func selectionRevealWaitsForInFlightRenderedRowsBuild() async throws {
+    func selectionRevealWaitsForInFlightRowRenderBuild() async throws {
         let session = makeDOMSession(root: selectionRevealRaceDocument())
         let view = await makeTreeView(session: session)
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 96)
@@ -882,21 +956,21 @@ struct DOMTreeTextViewTests {
             }?.key
         )
 
-        view.suspendNextRenderedRowsBuildForTesting()
+        view.suspendNextRowRenderBuildForTesting()
         session.applySetChildNodes(
             parent: bodyID,
             children: selectionRevealRaceBodyChildren(prefixCount: 80)
         )
-        await view.waitForRenderedRowsBuildSuspensionForTesting()
+        await view.waitForRowRenderBuildSuspensionForTesting()
 
         session.selectNode(targetID)
         view.routeCurrentSelectionInvalidationForTesting()
 
-        view.resumeRenderedRowsBuildForTesting()
-        await view.waitForRenderedRowsForTesting()
+        view.resumeRowRenderBuildForTesting()
+        await view.waitForRowDocumentForTesting()
 
         let selectedLine = try #require(
-            view.renderedLineSnapshotsForTesting.first { snapshot in
+            view.rowSnapshotsForTesting.first { snapshot in
                 snapshot.text.contains("id=\"selected-target\"")
             }
         )
@@ -931,12 +1005,12 @@ struct DOMTreeTextViewTests {
             }?.key
         )
 
-        view.suspendNextRenderedRowsBuildForTesting()
+        view.suspendNextRowRenderBuildForTesting()
         session.applySetChildNodes(
             parent: bodyID,
             children: selectionRevealRaceBodyChildren(prefixCount: 80)
         )
-        await view.waitForRenderedRowsBuildSuspensionForTesting()
+        await view.waitForRowRenderBuildSuspensionForTesting()
 
         session.selectNode(oldSelectedNodeID)
         view.routeCurrentSelectionInvalidationForTesting()
@@ -952,8 +1026,8 @@ struct DOMTreeTextViewTests {
         }
         selectionRequestID = id
 
-        view.resumeRenderedRowsBuildForTesting()
-        await view.waitForRenderedRowsForTesting()
+        view.resumeRowRenderBuildForTesting()
+        await view.waitForRowDocumentForTesting()
 
         #expect(session.hasPendingSelectionRequest)
         #expect(view.contentOffset.y < view.bounds.height)
@@ -997,8 +1071,8 @@ struct DOMTreeTextViewTests {
         let view = await makeTreeView(session: session)
 
         view.toggleRowForTesting(containing: "<article")
-        await view.waitForRenderedRowsForTesting()
-        #expect(view.renderedTextForTesting.contains("<span id=\"nested-child\"></span>"))
+        await view.waitForRowDocumentForTesting()
+        #expect(view.documentTextForTesting.contains("<span id=\"nested-child\"></span>"))
 
         let targetID = ProtocolTarget.ID("page-main")
         let didRenderResetDocument = await waitForRenderedDocumentTreeUpdate(
@@ -1017,15 +1091,15 @@ struct DOMTreeTextViewTests {
                 _ = session.replaceDocumentRoot(documentNode(), targetID: targetID)
             },
             until: {
-                let text = view.renderedTextForTesting
+                let text = view.documentTextForTesting
                 return text.contains("<article>…</article>")
                     && !text.contains("<span id=\"nested-child\"></span>")
             }
         )
         #expect(didRenderResetDocument)
 
-        #expect(view.renderedTextForTesting.contains("<article>…</article>"))
-        #expect(!view.renderedTextForTesting.contains("<span id=\"nested-child\"></span>"))
+        #expect(view.documentTextForTesting.contains("<article>…</article>"))
+        #expect(!view.documentTextForTesting.contains("<span id=\"nested-child\"></span>"))
     }
 
     @Test
@@ -1042,7 +1116,7 @@ struct DOMTreeTextViewTests {
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
         view.setRenderingActive(true)
-        await view.waitForRenderedRowsForTesting()
+        await view.waitForRowDocumentForTesting()
 
         view.toggleRowForTesting(containing: "<article")
         let requestedNodeID = await recorder.next()
@@ -1060,8 +1134,8 @@ struct DOMTreeTextViewTests {
         let projection = fixture.session.treeProjection(rootTargetID: fixture.pageTargetID)
         #expect(fixture.session.snapshot().nodesByID[fixture.frameRootID]?.parentID == nil)
         #expect(projection.ancestorNodeIDs(of: fixture.selectedNodeID).contains(fixture.frameRootID))
-        #expect(view.renderedTextForTesting.contains("#document"))
-        #expect(view.renderedTextForTesting.contains("<img id=\"ad-node\">"))
+        #expect(view.documentTextForTesting.contains("#document"))
+        #expect(view.documentTextForTesting.contains("<img id=\"ad-node\">"))
         #expect(view.selectedRowRectsForTesting().count == 1)
     }
 
@@ -1073,7 +1147,7 @@ struct DOMTreeTextViewTests {
         let sampleRenderedState: @MainActor @Sendable () -> RenderedDOMTreeState = {
             view.layoutIfNeeded()
             return RenderedDOMTreeState(
-                text: view.renderedTextForTesting,
+                text: view.documentTextForTesting,
                 selectedRowCount: view.selectedRowRectsForTesting().count
             )
         }
@@ -1284,7 +1358,7 @@ private func makeTreeView(session: DOMSession) async -> DOMTreeTextView {
     view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
     view.layoutIfNeeded()
     view.setRenderingActive(true)
-    await view.waitForRenderedRowsForTesting()
+    await view.waitForRowDocumentForTesting()
     return view
 }
 
@@ -1298,7 +1372,7 @@ private func waitForRenderedDocumentTreeUpdate(
 ) async -> Bool {
     update()
     let expectedTreeRevision = session.treeRevision
-    let didApplyTreeRevision = await view.waitForRenderedRowsAppliedTreeRevisionForTesting(
+    let didApplyTreeRevision = await view.waitForRowDocumentAppliedTreeRevisionForTesting(
         expectedTreeRevision,
         timeout: timeout
     )
@@ -1336,7 +1410,7 @@ private func waitForSelectionObservationRender(
         }
     }
 
-    await view.waitForRenderedRowsForTesting()
+    await view.waitForRowDocumentForTesting()
     view.layoutIfNeeded()
     return condition()
 }
@@ -1373,7 +1447,7 @@ private func renderedSelectionRevealState(
     containing selectedText: String
 ) -> RenderedSelectionRevealState {
     view.layoutIfNeeded()
-    let selectedLine = view.renderedLineSnapshotsForTesting.first { snapshot in
+    let selectedLine = view.rowSnapshotsForTesting.first { snapshot in
         snapshot.text.contains(selectedText)
     }
     return RenderedSelectionRevealState(
@@ -1669,5 +1743,50 @@ private func articleNode() -> DOMNode.Payload {
             ),
         ])
     )
+}
+
+private func makeRowDocumentRows(_ texts: [String]) -> [DOMTreeRowRenderPlan] {
+    let documentID = DOMDocument.ID(
+        targetID: ProtocolTarget.ID("row-document-test"),
+        localDocumentLifetimeID: .init(1)
+    )
+    var utf16Location = 0
+    return texts.enumerated().map { index, text in
+        let utf16Length = (text as NSString).length
+        defer {
+            utf16Location += utf16Length + (index + 1 < texts.count ? 1 : 0)
+        }
+        return DOMTreeRowRenderPlan(
+            identity: DOMTreeRowIdentity(
+                nodeID: DOMNode.ID(documentID: documentID, nodeID: .init(index + 1)),
+                kind: .opening
+            ),
+            depth: 0,
+            rowIndex: index,
+            text: text,
+            documentRange: NSRange(location: utf16Location, length: utf16Length),
+            markupRange: NSRange(location: 0, length: utf16Length),
+            tokens: [],
+            displayColumnCount: utf16Length,
+            hasDisclosure: false,
+            isOpen: false
+        )
+    }
+}
+
+private func attributedRowDocument(rows: [DOMTreeRowRenderPlan]) -> NSAttributedString {
+    let attributedString = NSMutableAttributedString()
+    for (index, row) in rows.enumerated() {
+        if index > 0 {
+            attributedString.append(NSAttributedString(string: "\n"))
+        }
+        attributedString.append(NSAttributedString(
+            string: row.text,
+            attributes: [
+                DOMTreeTextDocument.rowIdentityAttribute: row.identity,
+            ]
+        ))
+    }
+    return attributedString
 }
 #endif

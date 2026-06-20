@@ -4,18 +4,18 @@ import WebInspectorCore
 
 extension DOMTreeTextView {
     @MainActor
-    final class RenderedRowsBuildCoordinator {
+    final class RowRenderBuildCoordinator {
         typealias IsCurrentBuild = @MainActor (
-            DOMTreeTextView.RenderedRowsBuildRequest,
-            DOMTreeTextView.RenderedRowsBuildResult
+            DOMTreeTextView.RowRenderBuildRequest,
+            DOMTreeTextView.RowRenderBuildResult
         ) -> Bool
-        typealias ShouldApplyBuild = @MainActor (DOMTreeTextView.RenderedRowsBuildResult) -> Bool
-        typealias ApplyBuild = @MainActor (DOMTreeTextView.RenderedRowsBuildResult) -> Void
+        typealias ShouldApplyBuild = @MainActor (DOMTreeTextView.RowRenderBuildResult) -> Bool
+        typealias ApplyBuild = @MainActor (DOMTreeTextView.RowRenderBuildResult) -> Void
         typealias FinishBuild = @MainActor () -> Void
 
-        private let builder: DOMTreeTextView.RenderedRowsBuilder
+        private let builder: DOMTreeTextView.RowRenderBuilder
         private var task: Task<Void, Never>?
-        private var currentRequest: DOMTreeTextView.RenderedRowsBuildRequest?
+        private var currentRequest: DOMTreeTextView.RowRenderBuildRequest?
         private var generation: UInt64 = 0
 #if DEBUG
         private var shouldSuspendNextBuildForTesting = false
@@ -23,7 +23,7 @@ extension DOMTreeTextView {
         private var buildSuspensionWaitersForTesting: [CheckedContinuation<Void, Never>] = []
 #endif
 
-        init(builder: DOMTreeTextView.RenderedRowsBuilder) {
+        init(builder: DOMTreeTextView.RowRenderBuilder) {
             self.builder = builder
         }
 
@@ -101,7 +101,7 @@ extension DOMTreeTextView {
                 guard !Task.isCancelled else {
                     return
                 }
-                let buildResult: DOMTreeTextView.RenderedRowsBuildResult
+                let buildResult: DOMTreeTextView.RowRenderBuildResult
                 do {
                     buildResult = try await builder.build(request)
                 } catch is CancellationError {
@@ -172,7 +172,7 @@ extension DOMTreeTextView {
 
 extension DOMTreeTextView {
     @MainActor
-    final class RenderedRowsBuilder {
+    final class RowRenderBuilder {
         private let dom: DOMSession
         private let expansionState: DOMTreeTextView.ExpansionState
         private var markupCache: [DOMTreeTextView.MarkupCacheKey: DOMTreeTextView.CachedMarkup] = [:]
@@ -193,9 +193,9 @@ extension DOMTreeTextView {
         func makeBuildRequest(
             previousRowCapacity: Int,
             previousTextCapacity: Int
-        ) -> DOMTreeTextView.RenderedRowsBuildRequest {
+        ) -> DOMTreeTextView.RowRenderBuildRequest {
             let expansionSnapshot = expansionState.snapshot
-            return DOMTreeTextView.RenderedRowsBuildRequest(
+            return DOMTreeTextView.RowRenderBuildRequest(
                 snapshot: dom.domTreeRenderSnapshot(),
                 expansionState: expansionSnapshot,
                 previousRowCapacity: previousRowCapacity,
@@ -205,11 +205,11 @@ extension DOMTreeTextView {
         }
 
         func build(
-            _ request: DOMTreeTextView.RenderedRowsBuildRequest
-        ) async throws -> DOMTreeTextView.RenderedRowsBuildResult {
+            _ request: DOMTreeTextView.RowRenderBuildRequest
+        ) async throws -> DOMTreeTextView.RowRenderBuildResult {
             let task = Task.detached(priority: .userInitiated) {
                 try Task.checkCancellation()
-                return try await DOMTreeTextView.RenderedRowsWorker(request: request).build()
+                return try await DOMTreeTextView.RowRenderWorker(request: request).build()
             }
             return try await withTaskCancellationHandler {
                 try await task.value
@@ -218,7 +218,7 @@ extension DOMTreeTextView {
             }
         }
 
-        func acceptCompletedBuild(_ result: DOMTreeTextView.RenderedRowsBuildResult) {
+        func acceptCompletedBuild(_ result: DOMTreeTextView.RowRenderBuildResult) {
             markupCache = result.markupCache
 #if DEBUG
             Self.lastCollectedNodeIDsForTesting = result.collectedNodeIDsForTesting
@@ -236,7 +236,7 @@ extension DOMTreeTextView {
 }
 
 extension DOMTreeTextView {
-    struct RenderedRowsBuildNode: Sendable {
+    struct RowRenderNode: Sendable {
         let id: DOMNode.ID
         let nodeType: DOMNode.Kind
         let nodeName: String
@@ -272,15 +272,15 @@ extension DOMTreeTextView {
         }
     }
 
-    struct RenderedRowsBuildRow: Sendable {
-        let node: DOMTreeTextView.RenderedRowsBuildNode
+    struct RowRenderInput: Sendable {
+        let node: DOMTreeTextView.RowRenderNode
         let depth: Int
         let hasDisclosure: Bool
         let isOpen: Bool
         let isClosingTag: Bool
     }
 
-    struct RenderedRowsBuildRequest: Sendable {
+    struct RowRenderBuildRequest: Sendable {
         let snapshot: DOMTreeRenderSnapshot
         let expansionState: [DOMNode.ID: Bool]
         let previousRowCapacity: Int
@@ -367,8 +367,8 @@ extension DOMTreeTextView {
         }
     }
 
-    struct RenderedRowsBuildResult: Sendable {
-        let rows: [DOMTreeTextView.Line]
+    struct RowRenderBuildResult: Sendable {
+        let rows: [DOMTreeRowRenderPlan]
         let text: String
         let maxLineDisplayColumnCount: Int
         let renderedNodeIDs: Set<DOMNode.ID>
@@ -388,26 +388,26 @@ extension DOMTreeTextView {
 }
 
 extension DOMTreeTextView {
-    struct RenderedRowsWorker: Sendable {
-        private let request: DOMTreeTextView.RenderedRowsBuildRequest
+    struct RowRenderWorker: Sendable {
+        private let request: DOMTreeTextView.RowRenderBuildRequest
         private var renderedLinePrefixCache: [Int: String] = [:]
         private var markupCache: [DOMTreeTextView.MarkupCacheKey: DOMTreeTextView.CachedMarkup]
 
-        init(request: DOMTreeTextView.RenderedRowsBuildRequest) {
+        init(request: DOMTreeTextView.RowRenderBuildRequest) {
             self.request = request
             self.markupCache = request.markupCache
         }
 
-        func build() async throws -> DOMTreeTextView.RenderedRowsBuildResult {
+        func build() async throws -> DOMTreeTextView.RowRenderBuildResult {
             var worker = self
             return try await worker.buildRows()
         }
 
-        private mutating func buildRows() async throws -> DOMTreeTextView.RenderedRowsBuildResult {
+        private mutating func buildRows() async throws -> DOMTreeTextView.RowRenderBuildResult {
             try Task.checkCancellation()
 
             let buildRows = try await collectVisibleRows()
-            var nextRows: [DOMTreeTextView.Line] = []
+            var nextRows: [DOMTreeRowRenderPlan] = []
             nextRows.reserveCapacity(request.previousRowCapacity)
             var nextText = ""
             nextText.reserveCapacity(request.previousTextCapacity)
@@ -415,8 +415,8 @@ extension DOMTreeTextView {
             var maxLineDisplayColumnCount = 0
 
             func appendLine(
-                _ rowInput: DOMTreeTextView.RenderedRowsBuildRow
-            ) async throws -> DOMTreeTextView.Line {
+                _ rowInput: DOMTreeTextView.RowRenderInput
+            ) async throws -> DOMTreeRowRenderPlan {
                 try Task.checkCancellation()
                 let rowIndex = nextRows.count
                 if rowIndex > 0 && rowIndex.isMultiple(of: 128) {
@@ -435,7 +435,7 @@ extension DOMTreeTextView {
                     nextText.append("\n")
                 }
                 nextText.append(row.text)
-                utf16Location += row.textRange.length + 1
+                utf16Location += row.documentRange.length + 1
                 return row
             }
 
@@ -444,7 +444,7 @@ extension DOMTreeTextView {
             }
 
 #if DEBUG
-            return DOMTreeTextView.RenderedRowsBuildResult(
+            return DOMTreeTextView.RowRenderBuildResult(
                 rows: nextRows,
                 text: nextText,
                 maxLineDisplayColumnCount: maxLineDisplayColumnCount,
@@ -453,7 +453,7 @@ extension DOMTreeTextView {
                 collectedNodeIDsForTesting: buildRows.renderedNodeIDs
             )
 #else
-            return DOMTreeTextView.RenderedRowsBuildResult(
+            return DOMTreeTextView.RowRenderBuildResult(
                 rows: nextRows,
                 text: nextText,
                 maxLineDisplayColumnCount: maxLineDisplayColumnCount,
@@ -464,10 +464,10 @@ extension DOMTreeTextView {
         }
 
         private func collectVisibleRows() async throws -> (
-            rows: [DOMTreeTextView.RenderedRowsBuildRow],
+            rows: [DOMTreeTextView.RowRenderInput],
             renderedNodeIDs: [DOMNode.ID]
         ) {
-            var rows: [DOMTreeTextView.RenderedRowsBuildRow] = []
+            var rows: [DOMTreeTextView.RowRenderInput] = []
             rows.reserveCapacity(request.previousRowCapacity)
             var visitedNodeIDs = Set<DOMNode.ID>()
             var renderedNodeIDs: [DOMNode.ID] = []
@@ -479,14 +479,14 @@ extension DOMTreeTextView {
                     return
                 }
                 let visibleChildren = request.snapshot.visibleChildrenProjection(of: nodeID)
-                let renderNode = DOMTreeTextView.RenderedRowsBuildNode(
+                let renderNode = DOMTreeTextView.RowRenderNode(
                     node: node,
                     isTemplateContent: request.snapshot.isTemplateContent(nodeID)
                 )
                 let hasDisclosure = visibleChildren.hasRenderableChildren
                 let isOpen = request.isNodeOpen(nodeID: renderNode.id, displayName: renderNode.displayName)
                 rows.append(
-                    DOMTreeTextView.RenderedRowsBuildRow(
+                    DOMTreeTextView.RowRenderInput(
                         node: renderNode,
                         depth: depth,
                         hasDisclosure: hasDisclosure,
@@ -506,7 +506,7 @@ extension DOMTreeTextView {
                     return
                 }
                 rows.append(
-                    DOMTreeTextView.RenderedRowsBuildRow(
+                    DOMTreeTextView.RowRenderInput(
                         node: renderNode,
                         depth: depth,
                         hasDisclosure: false,
@@ -526,10 +526,10 @@ extension DOMTreeTextView {
         }
 
         private mutating func renderedRow(
-            for rowInput: DOMTreeTextView.RenderedRowsBuildRow,
+            for rowInput: DOMTreeTextView.RowRenderInput,
             rowIndex: Int,
             utf16Location: Int
-        ) -> DOMTreeTextView.Line {
+        ) -> DOMTreeRowRenderPlan {
             let markup = cachedMarkup(
                 for: rowInput.node,
                 hasDisclosure: rowInput.hasDisclosure,
@@ -551,23 +551,25 @@ extension DOMTreeTextView {
                 )
             }
 
-            return DOMTreeTextView.Line(
-                nodeID: rowInput.node.id,
+            return DOMTreeRowRenderPlan(
+                identity: DOMTreeRowIdentity(
+                    nodeID: rowInput.node.id,
+                    kind: rowInput.isClosingTag ? .closingTag : .opening
+                ),
                 depth: rowInput.depth,
                 rowIndex: rowIndex,
                 text: line,
-                textRange: NSRange(location: utf16Location, length: lineLength),
+                documentRange: NSRange(location: utf16Location, length: lineLength),
                 markupRange: NSRange(location: prefixLength, length: markup.utf16Length),
                 tokens: tokens,
                 displayColumnCount: prefixLength + markup.displayColumnCount,
                 hasDisclosure: rowInput.hasDisclosure,
-                isOpen: rowInput.isOpen,
-                isClosingTag: rowInput.isClosingTag
+                isOpen: rowInput.isOpen
             )
         }
 
         private mutating func cachedMarkup(
-            for node: DOMTreeTextView.RenderedRowsBuildNode,
+            for node: DOMTreeTextView.RowRenderNode,
             hasDisclosure: Bool,
             isOpen: Bool,
             isClosingTag: Bool
