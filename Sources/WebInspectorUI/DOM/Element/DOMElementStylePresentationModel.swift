@@ -21,6 +21,15 @@ package struct DOMElementStylePresentationSection {
 }
 
 @MainActor
+package struct DOMElementStylePresentationRender {
+    package var snapshot: NSDiffableDataSourceSnapshot<
+        CSSStyle.Section.ID,
+        DOMElementStylePresentationItemIdentifier
+    >
+    package var reconfiguredItemIdentifiers: [DOMElementStylePresentationItemIdentifier]
+}
+
+@MainActor
 package enum DOMElementStyleDiffableSnapshotBuilder {
     package static func visibleSections(
         sections: [CSSStyle.Section],
@@ -92,19 +101,39 @@ package enum DOMElementStyleDiffableSnapshotBuilder {
 @Observable
 package final class DOMElementStylePresentationState {
     package enum RenderResult {
-        case loaded(
-            NSDiffableDataSourceSnapshot<
-                CSSStyle.Section.ID,
-                DOMElementStylePresentationItemIdentifier
-            >
-        )
+        case loaded(DOMElementStylePresentationRender)
         case pending
         case unavailable
+    }
+
+    private struct ItemFingerprint: Equatable {
+        var propertyObjectID: ObjectIdentifier
+        var propertyID: CSSProperty.ID?
+        var name: String
+        var value: String
+        var priority: String
+        var text: String?
+        var status: CSSProperty.Status
+        var isEditable: Bool
+        var isModifiedByInspector: Bool
+
+        init(property: CSSProperty) {
+            propertyObjectID = ObjectIdentifier(property)
+            propertyID = property.id
+            name = property.name
+            value = property.value
+            priority = property.priority
+            text = property.text
+            status = property.status
+            isEditable = property.isEditable
+            isModifiedByInspector = property.isModifiedByInspector
+        }
     }
 
     @ObservationIgnored private var expandedUnusedVariableSectionIDs = Set<CSSStyle.Section.ID>()
     @ObservationIgnored private var displayedNodeStyles: CSSNodeStyles?
     @ObservationIgnored private var visibleSections: [DOMElementStylePresentationSection] = []
+    @ObservationIgnored private var displayedItemFingerprints: [DOMElementStylePresentationItemIdentifier: ItemFingerprint] = [:]
 
     package init() {}
 
@@ -117,7 +146,7 @@ package final class DOMElementStylePresentationState {
         case .loaded:
             displayedNodeStyles = nodeStyles
             rebuildVisibleSections()
-            return .loaded(diffableSnapshot())
+            return .loaded(renderSnapshot())
         case .loading, .needsRefresh:
             return renderPending()
         case .unavailable, .failed:
@@ -130,7 +159,7 @@ package final class DOMElementStylePresentationState {
         case .loaded:
             if displayedNodeStyles != nil {
                 rebuildVisibleSections()
-                return .loaded(diffableSnapshot())
+                return .loaded(renderSnapshot())
             }
             return renderUnavailable()
         case .loading, .needsRefresh:
@@ -142,10 +171,7 @@ package final class DOMElementStylePresentationState {
 
     package func showHiddenUnusedVariables(
         in sectionID: CSSStyle.Section.ID
-    ) -> NSDiffableDataSourceSnapshot<
-        CSSStyle.Section.ID,
-        DOMElementStylePresentationItemIdentifier
-    >? {
+    ) -> DOMElementStylePresentationRender? {
         guard let displayedNodeStyles else {
             return nil
         }
@@ -156,7 +182,7 @@ package final class DOMElementStylePresentationState {
         }
         expandedUnusedVariableSectionIDs.insert(sectionID)
         rebuildVisibleSections()
-        return diffableSnapshot()
+        return renderSnapshot()
     }
 
     package func section(for sectionID: CSSStyle.Section.ID) -> CSSStyle.Section? {
@@ -190,6 +216,7 @@ package final class DOMElementStylePresentationState {
         expandedUnusedVariableSectionIDs.removeAll()
         displayedNodeStyles = nil
         visibleSections = []
+        displayedItemFingerprints.removeAll()
         return .unavailable
     }
 
@@ -213,6 +240,42 @@ package final class DOMElementStylePresentationState {
         DOMElementStyleDiffableSnapshotBuilder.makeSnapshot(
             visibleSections: visibleSections
         )
+    }
+
+    private func renderSnapshot() -> DOMElementStylePresentationRender {
+        let snapshot = diffableSnapshot()
+        let fingerprints = visibleItemFingerprints()
+        let reconfiguredItemIdentifiers = snapshot.itemIdentifiers.filter { item in
+            guard let fingerprint = fingerprints[item] else {
+                return false
+            }
+            return displayedItemFingerprints[item] != fingerprint
+        }
+        displayedItemFingerprints = fingerprints
+        return DOMElementStylePresentationRender(
+            snapshot: snapshot,
+            reconfiguredItemIdentifiers: reconfiguredItemIdentifiers
+        )
+    }
+
+    private func visibleItemFingerprints() -> [DOMElementStylePresentationItemIdentifier: ItemFingerprint] {
+        guard let displayedNodeStyles else {
+            return [:]
+        }
+        let sectionsByID = Dictionary(uniqueKeysWithValues: displayedNodeStyles.sections.map { ($0.id, $0) })
+        var fingerprints: [DOMElementStylePresentationItemIdentifier: ItemFingerprint] = [:]
+        for visibleSection in visibleSections {
+            guard let section = sectionsByID[visibleSection.id] else {
+                continue
+            }
+            for item in visibleSection.items {
+                guard let property = property(for: item, in: section) else {
+                    continue
+                }
+                fingerprints[item] = ItemFingerprint(property: property)
+            }
+        }
+        return fingerprints
     }
 }
 #endif

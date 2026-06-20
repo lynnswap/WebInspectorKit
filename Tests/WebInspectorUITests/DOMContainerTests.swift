@@ -179,6 +179,34 @@ struct DOMContainerTests {
     }
 
     @Test
+    func elementViewControllerCompletesCleanStyleRenderWithoutApplyingSnapshot() async throws {
+        let dom = makeDOMSession(capabilities: .pageDefault)
+        let body = try #require(firstElement(named: "body", in: dom))
+        dom.selectNode(body.id)
+
+        let css = dom.elementStyles
+        try applyBodyStyles(to: css, in: dom)
+
+        let viewController = makeElementViewController(dom: dom)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didRenderRows = await waitUntilRendered(in: viewController) {
+            viewController.collectionView.numberOfSections == 1
+                && viewController.collectionView.numberOfItems(inSection: 0) == 3
+        }
+        #expect(didRenderRows)
+
+        let applyCount = viewController.styleSnapshotApplyCountForTesting
+        let generation = viewController.styleRenderGenerationForTesting
+
+        viewController.renderCurrentStylesForTesting()
+
+        #expect(await viewController.waitForStyleRenderForTesting(after: generation))
+        #expect(viewController.styleSnapshotApplyCountForTesting == applyCount)
+    }
+
+    @Test
     func elementViewControllerUpdatesVisibleSectionHeaderDuringSameNodeStyleRefresh() async throws {
         let dom = makeDOMSession(capabilities: .pageDefault)
         let body = try #require(firstElement(named: "body", in: dom))
