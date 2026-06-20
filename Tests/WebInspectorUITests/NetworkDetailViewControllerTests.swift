@@ -124,6 +124,11 @@ struct NetworkDetailViewControllerTests {
 
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
+
+        #expect(viewController.displayRequestIDsEvaluationCountForTesting == 0)
+        #expect(viewController.displayedRequestIDsForTesting.isEmpty)
+        #expect(viewController.hasScheduledDisplayRowsReloadForTesting)
+
         await viewController.flushPendingSnapshotUpdateForTesting()
 
         #expect(viewController.displayedRequestIDsForTesting == model.displayRequestIDs)
@@ -2074,8 +2079,12 @@ struct NetworkDetailViewControllerTests {
 
         listViewController.beginAppearanceTransition(true, animated: false)
         listViewController.endAppearanceTransition()
-        await listViewController.flushPendingSnapshotUpdateForTesting()
 
+        #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate)
+        #expect(listViewController.displayedRequestIDsForTesting.count == 1)
+        #expect(listViewController.hasScheduledDisplayRowsReloadForTesting)
+
+        await listViewController.flushThrottledDisplayRowsReloadForTesting()
         #expect(listViewController.displayedRequestIDsForTesting.isEmpty)
         #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate + 1)
     }
@@ -2115,10 +2124,87 @@ struct NetworkDetailViewControllerTests {
 
         listViewController.beginAppearanceTransition(true, animated: false)
         listViewController.endAppearanceTransition()
-        await listViewController.flushPendingSnapshotUpdateForTesting()
 
+        #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate)
+        #expect(listViewController.displayedRequestIDsForTesting == [request.id])
+        #expect(listViewController.hasScheduledDisplayRowsReloadForTesting)
+
+        await listViewController.flushThrottledDisplayRowsReloadForTesting()
         #expect(listViewController.displayedRequestIDsForTesting.isEmpty)
         #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate + 1)
+    }
+
+    @Test
+    func hiddenFilteredListSkipsSnapshotApplyWhenDeferredRowsMatchCurrentSnapshot() async throws {
+        let network = NetworkSession()
+        let request = try #require(applyRequest(
+            to: network,
+            requestID: "1",
+            url: "https://media.example.com/clip.mp4",
+            responseHeaders: ["content-type": "video/mp4"],
+            responseMimeType: "video/mp4"
+        ))
+        let model = NetworkPanelModel(network: network)
+        model.setResourceFilter(.media, enabled: true)
+        let listViewController = NetworkListViewController(model: model)
+        let window = showInWindow(listViewController)
+        defer { window.isHidden = true }
+        await listViewController.flushPendingSnapshotUpdateForTesting()
+        #expect(listViewController.displayedRequestIDsForTesting == [request.id])
+        listViewController.collectionViewForTesting.layoutIfNeeded()
+
+        let indexPath = IndexPath(item: 0, section: 0)
+        let cell = try #require(listViewController.networkListCellForTesting(at: indexPath))
+        #expect(cell.fileTypeLabelForTesting == "mp4")
+
+        let evaluationCountBeforeHiddenUpdate = listViewController.displayRequestIDsEvaluationCountForTesting
+        let snapshotApplyCountBeforeHiddenUpdate = listViewController.snapshotApplyCountForTesting
+        let observation = try #require(listViewController.displayRowsObservationDeliveryForTesting)
+        let observedInvalidations = await observation.values {
+            model.displayRowsInvalidationRevision
+        }
+        defer {
+            observedInvalidations.cancel()
+        }
+
+        listViewController.beginAppearanceTransition(false, animated: false)
+        listViewController.endAppearanceTransition()
+        network.applyResponseReceived(
+            targetID: request.id.targetID,
+            requestID: request.id.requestID,
+            resourceType: .script,
+            response: NetworkRequest.Response.Payload(
+                url: request.request.url,
+                status: 200,
+                statusText: "OK",
+                headers: ["content-type": "image/png"],
+                mimeType: "image/png"
+            ),
+            timestamp: 4
+        )
+        let hiddenInvalidationRevision = model.displayRowsInvalidationRevision
+        #expect(await observedInvalidations.waitUntil { $0 == hiddenInvalidationRevision } != nil)
+        await listViewController.flushThrottledDisplayRowsReloadForTesting()
+
+        #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate)
+        #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCountBeforeHiddenUpdate)
+        #expect(listViewController.displayedRequestIDsForTesting == [request.id])
+        #expect(cell.fileTypeLabelForTesting == "mp4")
+
+        listViewController.beginAppearanceTransition(true, animated: false)
+        listViewController.endAppearanceTransition()
+
+        #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate)
+        #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCountBeforeHiddenUpdate)
+        #expect(listViewController.displayedRequestIDsForTesting == [request.id])
+        #expect(listViewController.hasScheduledDisplayRowsReloadForTesting)
+        #expect(cell.fileTypeLabelForTesting == "png")
+
+        await listViewController.flushThrottledDisplayRowsReloadForTesting()
+
+        #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate + 1)
+        #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCountBeforeHiddenUpdate)
+        #expect(listViewController.displayedRequestIDsForTesting == [request.id])
     }
 
     @Test
@@ -2142,6 +2228,7 @@ struct NetworkDetailViewControllerTests {
         let cell = try #require(listViewController.networkListCellForTesting(at: indexPath))
         #expect(cell.fileTypeLabelForTesting == "mp4")
         #expect(cell.hasActiveRequestObservationForTesting)
+        let snapshotApplyCountBeforeHiddenContentUpdate = listViewController.snapshotApplyCountForTesting
 
         listViewController.beginAppearanceTransition(false, animated: false)
         listViewController.endAppearanceTransition()
@@ -2168,6 +2255,8 @@ struct NetworkDetailViewControllerTests {
 
         #expect(cell.hasActiveRequestObservationForTesting)
         #expect(cell.fileTypeLabelForTesting == "css")
+        #expect(listViewController.hasScheduledDisplayRowsReloadForTesting == false)
+        #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCountBeforeHiddenContentUpdate)
     }
 
     @Test

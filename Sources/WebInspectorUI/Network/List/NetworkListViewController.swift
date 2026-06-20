@@ -12,14 +12,8 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         case main
     }
 
-    private enum SnapshotApplyMode {
-        case apply
-        case reloadData
-    }
-
     private struct PendingSnapshotUpdate {
         var rows: NetworkListViewController.SnapshotRows
-        var mode: SnapshotApplyMode
     }
 
     private struct SnapshotCoordinator {
@@ -44,12 +38,8 @@ package final class NetworkListViewController: UICollectionViewController, UISea
             needsReloadOnNextAppearance = true
         }
 
-        mutating func consumeReloadOnNextAppearanceIfNeeded() -> Bool {
-            guard isRenderingActive, needsReloadOnNextAppearance else {
-                return false
-            }
-            needsReloadOnNextAppearance = false
-            return true
+        var needsReloadForActiveRendering: Bool {
+            isRenderingActive && needsReloadOnNextAppearance
         }
     }
 
@@ -71,6 +61,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     private var deinitHandlerForTesting: (@MainActor () -> Void)?
     private var snapshotUpdateCompletionWaitersForTesting: [CheckedContinuation<Void, Never>] = []
     private var displayRequestIDsEvaluationCountStorageForTesting = 0
+    private var snapshotApplyCountStorageForTesting = 0
     private var filterMenuBuildCountStorageForTesting = 0
 #endif
     private lazy var filterHostingMenu = UIHostingMenu(
@@ -225,7 +216,10 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         renderSearchText(model.searchText)
         resourceFilterSelectionDidChange(effectiveResourceFilters: model.effectiveResourceFilters)
         renderSelectedRequestID(model.selectedRequestID)
-        flushPendingSnapshotUpdateIfNeeded()
+        renderInitialEmptyStateIfNeeded()
+        if snapshotCoordinator.needsReloadForActiveRendering {
+            scheduleThrottledDisplayRowsReload()
+        }
     }
 
     private func suspendRendering() {
@@ -436,6 +430,11 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     private func requestSnapshotUpdate(
         rows: NetworkListViewController.SnapshotRows
     ) {
+        guard isCollectionViewVisible else {
+            snapshotCoordinator.markNeedsReloadOnNextAppearance()
+            return
+        }
+        snapshotCoordinator.needsReloadOnNextAppearance = false
         if let applyingRows = snapshotCoordinator.state.applyingRows {
             if applyingRows.requestIDs == rows.requestIDs {
                 snapshotCoordinator.pendingUpdate = nil
@@ -445,51 +444,21 @@ package final class NetworkListViewController: UICollectionViewController, UISea
             snapshotCoordinator.pendingUpdate = nil
             return
         }
-        guard isCollectionViewVisible else {
-            snapshotCoordinator.markNeedsReloadOnNextAppearance()
-            return
-        }
-        snapshotCoordinator.needsReloadOnNextAppearance = false
-        enqueueSnapshotUpdate(
-            rows: rows,
-            mode: .apply
-        )
-    }
-
-    private func flushPendingSnapshotUpdateIfNeeded() {
-        guard isCollectionViewVisible,
-              snapshotCoordinator.consumeReloadOnNextAppearanceIfNeeded() else {
-            return
-        }
-        let requestIDs = displayRequestIDsFromModel()
-        renderEmptyState(isEmpty: requestIDs.isEmpty)
-        enqueueSnapshotUpdate(
-            rows: NetworkListViewController.SnapshotRows(requestIDs: requestIDs),
-            mode: .reloadData
-        )
+        enqueueSnapshotUpdate(rows: rows)
     }
 
     private func enqueueSnapshotUpdate(
-        rows: NetworkListViewController.SnapshotRows,
-        mode: SnapshotApplyMode
+        rows: NetworkListViewController.SnapshotRows
     ) {
         if let pendingSnapshotUpdate = snapshotCoordinator.pendingUpdate,
            pendingSnapshotUpdate.rows.requestIDs == rows.requestIDs {
-            snapshotCoordinator.pendingUpdate = PendingSnapshotUpdate(
-                rows: rows,
-                mode: pendingSnapshotUpdate.mode == .reloadData || mode == .reloadData ? .reloadData : .apply
-            )
             return
         }
         guard snapshotCoordinator.state.isApplying
-            || dataSource.snapshot().itemIdentifiers != rows.requestIDs
-            || mode == .reloadData else {
+            || dataSource.snapshot().itemIdentifiers != rows.requestIDs else {
             return
         }
-        snapshotCoordinator.pendingUpdate = PendingSnapshotUpdate(
-            rows: rows,
-            mode: mode
-        )
+        snapshotCoordinator.pendingUpdate = PendingSnapshotUpdate(rows: rows)
         applyPendingSnapshotUpdateIfNeeded()
     }
 
@@ -514,12 +483,10 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         let completion: () -> Void = { [weak self] in
             self?.snapshotUpdateDidFinish(appliedRows: update.rows)
         }
-        switch update.mode {
-        case .apply:
-            dataSource.apply(snapshot, animatingDifferences: false, completion: completion)
-        case .reloadData:
-            dataSource.applySnapshotUsingReloadData(snapshot, completion: completion)
-        }
+#if DEBUG
+        snapshotApplyCountStorageForTesting += 1
+#endif
+        dataSource.apply(snapshot, animatingDifferences: false, completion: completion)
     }
 
     private func snapshotUpdateDidFinish(
@@ -550,6 +517,14 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         let requestIDs = displayRequestIDsFromModel()
         requestSnapshotUpdate(requestIDs: requestIDs)
         renderEmptyState(isEmpty: requestIDs.isEmpty)
+    }
+
+    private func renderInitialEmptyStateIfNeeded() {
+        guard dataSource.snapshot().itemIdentifiers.isEmpty,
+              model.isEmpty else {
+            return
+        }
+        renderEmptyState(isEmpty: true)
     }
 
     private func displayRequestIDsFromModel() -> [NetworkRequest.ID] {
@@ -649,6 +624,14 @@ extension NetworkListViewController {
         displayRequestIDsEvaluationCountStorageForTesting
     }
 
+    package var snapshotApplyCountForTesting: Int {
+        snapshotApplyCountStorageForTesting
+    }
+
+    package var hasScheduledDisplayRowsReloadForTesting: Bool {
+        hasPendingThrottledDisplayRowsReload || displayRowsReloadScheduler.hasScheduledDelay
+    }
+
     package var filterMenuBuildCountForTesting: Int {
         filterMenuBuildCountStorageForTesting
     }
@@ -682,11 +665,19 @@ extension NetworkListViewController {
     }
 
     package func flushPendingSnapshotUpdateForTesting() async {
-        flushPendingSnapshotUpdateIfNeeded()
+        if snapshotCoordinator.needsReloadForActiveRendering {
+            scheduleThrottledDisplayRowsReload()
+        }
+        displayRowsReloadScheduler.cancel()
+        flushThrottledDisplayRowsReload()
+        applyPendingSnapshotUpdateIfNeeded()
         await waitForSnapshotUpdateCompletionForTesting()
     }
 
     package func flushThrottledDisplayRowsReloadForTesting() async {
+        if snapshotCoordinator.needsReloadForActiveRendering {
+            scheduleThrottledDisplayRowsReload()
+        }
         displayRowsReloadScheduler.cancel()
         flushThrottledDisplayRowsReload()
         await waitForSnapshotUpdateCompletionForTesting()
