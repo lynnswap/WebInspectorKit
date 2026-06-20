@@ -36,12 +36,14 @@ jobs:
             xcode_major: '26'
             ios_major: '26'
             test_scheme: WebInspectorKitTests
+            simulator_device: iPhone 17 Pro
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 10
     env:
       XCODE_MAJOR: ${{ matrix.xcode_major }}
       IOS_MAJOR: ${{ matrix.ios_major }}
       TEST_SCHEME: ${{ matrix.test_scheme }}
+      SIMULATOR_DEVICE: ${{ matrix.simulator_device }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -79,12 +81,35 @@ jobs:
           puts "Resolved Xcode: #{selected}"
           RUBY
 
-      - name: Resolve latest iOS simulator
+      - name: Resolve iOS simulator destination
         run: |
           ruby <<'RUBY'
           require "json"
 
           ios_major = ENV.fetch("IOS_MAJOR")
+          xcode_major = ENV.fetch("XCODE_MAJOR")
+          simulator_device = ENV.fetch("SIMULATOR_DEVICE", "")
+
+          def write_destination(destination:, version:)
+            File.open(ENV.fetch("GITHUB_ENV"), "a") do |env|
+              env.puts "DESTINATION=#{destination}"
+              env.puts "RESOLVED_IOS_VERSION=#{version}"
+            end
+          end
+
+          if ios_major == xcode_major && !simulator_device.empty?
+            sdk_version = `xcodebuild -version -sdk iphonesimulator SDKVersion`.strip
+            abort("Unable to resolve iPhoneSimulator SDK version") unless $?.success? && !sdk_version.empty?
+            abort("Resolved iPhoneSimulator SDK #{sdk_version}, expected iOS #{ios_major}.x") unless sdk_version.split(".").first == ios_major
+
+            write_destination(
+              destination: "platform=iOS Simulator,name=#{simulator_device},OS=#{sdk_version}",
+              version: sdk_version
+            )
+            puts "Resolved simulator destination from iOS SDK: #{simulator_device} iOS #{sdk_version}"
+            exit 0
+          end
+
           devices = JSON.parse(`xcrun simctl list devices available --json`).fetch("devices")
           matches = []
 
@@ -110,10 +135,7 @@ jobs:
           end
 
           _, version, device_name, udid = matches.max_by { |components, _, _, _| components }
-          File.open(ENV.fetch("GITHUB_ENV"), "a") do |env|
-            env.puts "DESTINATION=platform=iOS Simulator,id=#{udid}"
-            env.puts "RESOLVED_IOS_VERSION=#{version}"
-          end
+          write_destination(destination: "platform=iOS Simulator,id=#{udid}", version: version)
           puts "Resolved simulator: #{device_name} iOS #{version} (#{udid})"
           RUBY
 
@@ -125,36 +147,9 @@ jobs:
           echo "Resolved iOS: ${RESOLVED_IOS_VERSION}"
           echo "Test scheme: ${TEST_SCHEME}"
 
-      - name: Check SwiftPM tools compatibility
-        run: |
-          set +e
-          swift package resolve > /tmp/swift-package-resolve.log 2>&1
-          resolve_status=$?
-          set -e
-
-          if [ "${resolve_status}" -eq 0 ]; then
-            echo "SKIP_IOS_TESTS=false" >> "${GITHUB_ENV}"
-            exit 0
-          fi
-
-          if grep -E "using Swift tools version|installed version" /tmp/swift-package-resolve.log >/dev/null; then
-            cat /tmp/swift-package-resolve.log
-            echo "::warning::Skipping ${TEST_SCHEME} because the selected Xcode cannot resolve this Swift tools version."
-            echo "SKIP_IOS_TESTS=true" >> "${GITHUB_ENV}"
-            exit 0
-          fi
-
-          cat /tmp/swift-package-resolve.log
-          exit "${resolve_status}"
-
       - name: Run iOS tests
         run: |
           set -o pipefail
-
-          if [ "${SKIP_IOS_TESTS:-false}" = "true" ]; then
-            echo "Skipping ${TEST_SCHEME}: selected Xcode cannot resolve this Swift tools version."
-            exit 0
-          fi
 
           xcodebuild test \
             -workspace WebInspectorKit.xcworkspace \
