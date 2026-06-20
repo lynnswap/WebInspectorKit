@@ -79,7 +79,7 @@ extension DOMSession {
             )
         }
 
-        for targetID in teardownHighlightHideTargetIDs(preferredTargetID: pickerTargetID) {
+        for targetID in backendInteractionRetirementHighlightHideTargetIDs(preferredTargetID: pickerTargetID) {
             guard let intent = hideHighlightIntent(targetID: targetID) else {
                 continue
             }
@@ -237,11 +237,15 @@ extension DOMSession {
         return true
     }
 
-    private func teardownHighlightHideTargetIDs(preferredTargetID: ProtocolTarget.ID?) -> [ProtocolTarget.ID] {
+    private func targetSupportsBackendInteractionHighlightHide(_ targetID: ProtocolTarget.ID) -> Bool {
+        containsTarget(targetID)
+    }
+
+    private func backendInteractionRetirementHighlightHideTargetIDs(preferredTargetID: ProtocolTarget.ID?) -> [ProtocolTarget.ID] {
         var targetIDs: [ProtocolTarget.ID] = []
         func append(_ targetID: ProtocolTarget.ID?) {
             guard let targetID,
-                  targetSupportsTeardownBackendInteraction(targetID),
+                  targetSupportsBackendInteractionHighlightHide(targetID),
                   !targetIDs.contains(targetID) else {
                 return
             }

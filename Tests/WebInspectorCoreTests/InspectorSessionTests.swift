@@ -6748,6 +6748,83 @@ func presentationEndCleanupHidesVisibleDOMHighlightWithoutDetachingTransport() a
 }
 
 @Test
+func presentationEndCleanupHidesVisibleFrameDOMHighlightWithoutDetachingTransport() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    await receiveAndApplyRootMessage(
+        transport,
+        message: #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-ad","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","isProvisional":false}}}"#,
+        in: session
+    )
+    _ = await session.attachment.dom.replaceDocumentRoot(
+        WebInspectorCore.DOMNode.Payload(
+            nodeID: .init(101),
+            nodeType: .document,
+            nodeName: "#document",
+            regularChildren: .loaded([
+                WebInspectorCore.DOMNode.Payload(nodeID: .init(102), nodeType: .element, nodeName: "HTML", localName: "html"),
+            ])
+        ),
+        targetID: .frameAd
+    )
+    let frameHTMLID = try #require(await session.attachment.dom.snapshot().currentNodeIDByKey[.init(targetID: .frameAd, nodeID: .init(102))])
+
+    let countBeforeHighlight = await backend.sentTargetMessages().count
+    let highlightTask = Task {
+        await session.attachment.dom.highlightNode(for: frameHTMLID)
+    }
+    let highlight = try await waitForTargetMessage(backend, method: "DOM.highlightNode", after: countBeforeHighlight)
+    #expect(highlight.targetIdentifier == ProtocolTarget.ID.frameAd)
+    await receiveTargetReply(
+        transport,
+        targetID: highlight.targetIdentifier,
+        messageID: try messageID(highlight.message),
+        result: "{}"
+    )
+    await highlightTask.value
+
+    let countBeforeCleanup = await backend.sentTargetMessages().count
+    let cleanupTask = Task {
+        await session.retireBackendInteractionForPresentationEnd()
+    }
+    let hideHighlight = try await waitForTargetMessage(backend, method: "DOM.hideHighlight", after: countBeforeCleanup)
+    #expect(hideHighlight.targetIdentifier == ProtocolTarget.ID.frameAd)
+    #expect(await backend.isDetached() == false)
+
+    await receiveTargetReply(
+        transport,
+        targetID: hideHighlight.targetIdentifier,
+        messageID: try messageID(hideHighlight.message),
+        result: "{}"
+    )
+    let fallbackHideHighlight = try await waitForTargetMessage(
+        backend,
+        method: "DOM.hideHighlight",
+        ordinal: 1,
+        after: countBeforeCleanup
+    )
+    #expect(fallbackHideHighlight.targetIdentifier == ProtocolTarget.ID.pageMain)
+    await receiveTargetReply(
+        transport,
+        targetID: fallbackHideHighlight.targetIdentifier,
+        messageID: try messageID(fallbackHideHighlight.message),
+        result: "{}"
+    )
+    await cleanupTask.value
+
+    let cleanupMessages = await backend.sentTargetMessages().dropFirst(countBeforeCleanup)
+    let methodsAfterCleanupStart = cleanupMessages.compactMap { try? messageMethod($0.message) }
+    #expect(methodsAfterCleanupStart == ["DOM.hideHighlight", "DOM.hideHighlight"])
+    #expect(cleanupMessages.map(\.targetIdentifier) == [ProtocolTarget.ID.frameAd, ProtocolTarget.ID.pageMain])
+    #expect(await backend.isDetached() == false)
+    #expect(await session.hasActiveConnection)
+    #expect(await session.attachment.dom.snapshot().currentPageTargetID == ProtocolTarget.ID.pageMain)
+    #expect(await session.lastError == nil)
+}
+
+@Test
 func detachDisablesActiveElementPickerAndHidesHighlightBeforeTransportDetach() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
