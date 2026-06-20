@@ -272,7 +272,7 @@ final class MonoclyMainSceneDelegate: NSObject, UIWindowSceneDelegate {
         guard let windowScene = scene as? UIWindowScene else {
             return
         }
-        rootViewController?.store.preserveSession(immediate: true)
+        rootViewController?.browserWindow.preserveSession(immediate: true)
         MonoclyWindowContextStore.shared.sceneWillResignActive(windowScene)
     }
 
@@ -286,7 +286,7 @@ final class MonoclyMainSceneDelegate: NSObject, UIWindowSceneDelegate {
     func connect(
         windowScene: UIWindowScene,
         launchConfiguration: BrowserLaunchConfiguration = .current(),
-        sessionStore: BrowserSessionStore? = nil
+        sessionPersistence: BrowserSession.Persistence? = nil
     ) {
         let rootViewController: BrowserRootViewController
         if let preservedRoot = preservedRootViewController {
@@ -297,16 +297,19 @@ final class MonoclyMainSceneDelegate: NSObject, UIWindowSceneDelegate {
             )
             preservedRootViewController = nil
         } else {
-            let sessionStore = sessionStore ?? BrowserSessionStore(
+            let sessionPersistence = sessionPersistence ?? BrowserSession.Persistence.resolved(
+                mode: launchConfiguration.sessionPersistenceMode,
                 sceneSessionPersistentIdentifier: windowScene.session.persistentIdentifier
             )
-            let store = BrowserWindowStore(
-                restoring: sessionStore.load(),
-                fallbackURL: launchConfiguration.initialURL,
-                sessionStore: sessionStore
+            let browserWindow = BrowserWindow(
+                initialState: .restored(
+                    sessionPersistence.restoredState(),
+                    fallbackURL: launchConfiguration.initialURL
+                ),
+                sessionPersistence: sessionPersistence
             )
             rootViewController = BrowserRootViewController(
-                store: store,
+                browserWindow: browserWindow,
                 launchConfiguration: launchConfiguration
             )
         }
@@ -326,7 +329,7 @@ final class MonoclyMainSceneDelegate: NSObject, UIWindowSceneDelegate {
 
     func disconnect(windowScene: UIWindowScene) {
         if let rootViewController {
-            rootViewController.store.preserveSession(immediate: true)
+            rootViewController.browserWindow.preserveSession(immediate: true)
             if BrowserInspectorCoordinator.hasInspectorWindow(for: rootViewController.inspectorSession) {
                 preservedRootViewController = rootViewController
                 rootViewController.prepareForSceneDisconnectionPreservingInspectorSession()

@@ -2,7 +2,7 @@ import Foundation
 import ObjectiveC
 import WebKit
 
-extension BrowserTabStore {
+extension BrowserTab {
     enum HistoryDirection {
         case back
         case forward
@@ -12,19 +12,19 @@ extension BrowserTabStore {
         let backForwardListItem: WKBackForwardListItem
         let title: String
         let subtitle: String
-        let direction: BrowserTabStore.HistoryDirection
+        let direction: BrowserTab.HistoryDirection
     }
 
-    func backHistoryItems(limit: Int = 20) -> [BrowserTabStore.HistoryMenuItem] {
+    func backHistoryItems(limit: Int = 20) -> [BrowserTab.HistoryMenuItem] {
         historyItems(direction: .back, limit: limit)
     }
 
-    func forwardHistoryItems(limit: Int = 20) -> [BrowserTabStore.HistoryMenuItem] {
+    func forwardHistoryItems(limit: Int = 20) -> [BrowserTab.HistoryMenuItem] {
         historyItems(direction: .forward, limit: limit)
     }
 }
 
-private extension BrowserTabStore {
+private extension BrowserTab {
     enum HistorySPI {
         private static func deobfuscate(_ reverseTokens: [String]) -> String {
             reverseTokens.reversed().joined()
@@ -48,9 +48,9 @@ private extension BrowserTabStore {
         static let maximumHistoryMenuItemCount = 20
     }
 
-    func historyItems(direction: BrowserTabStore.HistoryDirection, limit: Int) -> [BrowserTabStore.HistoryMenuItem] {
+    func historyItems(direction: BrowserTab.HistoryDirection, limit: Int) -> [BrowserTab.HistoryMenuItem] {
         spiHistoryItems(direction: direction, limit: limit).map { item in
-            BrowserTabStore.HistoryMenuItem(
+            BrowserTab.HistoryMenuItem(
                 backForwardListItem: item,
                 title: historyTitle(for: item),
                 subtitle: item.url.absoluteString,
@@ -69,7 +69,7 @@ private extension BrowserTabStore {
         return item.url.absoluteString
     }
 
-    func spiHistoryItems(direction: BrowserTabStore.HistoryDirection, limit: Int) -> [WKBackForwardListItem] {
+    func spiHistoryItems(direction: BrowserTab.HistoryDirection, limit: Int) -> [WKBackForwardListItem] {
         let clampedLimit = max(0, min(limit, HistorySPI.maximumHistoryMenuItemCount))
         guard clampedLimit > 0 else {
             return []
@@ -107,7 +107,7 @@ private extension BrowserTabStore {
     }
 }
 
-extension BrowserTabStore {
+extension BrowserTab {
     func spiGoToHistoryItem(_ item: WKBackForwardListItem) -> Bool {
         guard let browsingContextController = spiBrowsingContextController(),
               browsingContextController.responds(to: HistorySPI.goToBackForwardListItemSelector) else {
@@ -166,7 +166,7 @@ extension BrowserTabStore {
         notePersistenceChanged()
     }
 
-    @objc(browserTabStoreHandleWebView:navigation:navigationType:)
+    @objc(browserTabHandleWebView:navigation:navigationType:)
     func handleSameDocumentNavigationBridge(_ webView: WKWebView!, navigation: WKNavigation!, navigationType: Int64) {
         syncNavigationState(from: webView)
         markWebViewInteractionStateSynchronizedIfNavigationSettled()

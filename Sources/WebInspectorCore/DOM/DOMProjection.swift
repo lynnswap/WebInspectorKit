@@ -1,5 +1,7 @@
 import WebInspectorTransport
 
+package enum DOMTree {}
+
 package struct DOMTreeRow: Equatable, Sendable {
     package var nodeID: DOMNode.ID
     package var depth: Int
@@ -122,51 +124,155 @@ package struct DOMTreeProjection: Equatable, Sendable {
     }
 }
 
-package struct DOMTreeRenderInvalidation: Equatable, Sendable {
-    package enum Kind: Equatable, Sendable {
-        case root
-        case structure
-        case content
-    }
+package extension DOMTree {
+    struct RowDeltaBatch: Equatable, Sendable {
+        package var startRevision: UInt64
+        package var revision: UInt64
+        package var deltas: [RowDelta]
 
-    package var revision: UInt64
-    package var kind: Kind
-    package var affectedNodeID: DOMNode.ID?
-    package var parentNodeID: DOMNode.ID?
-
-    package init(
-        revision: UInt64,
-        kind: Kind,
-        affectedNodeID: DOMNode.ID? = nil,
-        parentNodeID: DOMNode.ID? = nil
-    ) {
-        self.revision = revision
-        self.kind = kind
-        self.affectedNodeID = affectedNodeID
-        self.parentNodeID = parentNodeID
-    }
-
-    package var requiresFragmentReset: Bool {
-        kind == .root
-    }
-
-    package func merging(with newer: DOMTreeRenderInvalidation) -> DOMTreeRenderInvalidation {
-        let mergedKind: Kind
-        if kind == .root || newer.kind == .root {
-            mergedKind = .root
-        } else if kind == .structure || newer.kind == .structure {
-            mergedKind = .structure
-        } else {
-            mergedKind = .content
+        package init(
+            startRevision: UInt64,
+            revision: UInt64,
+            deltas: [RowDelta]
+        ) {
+            self.startRevision = startRevision
+            self.revision = revision
+            self.deltas = deltas
         }
-        return DOMTreeRenderInvalidation(
-            revision: newer.revision,
-            kind: mergedKind,
-            affectedNodeID: affectedNodeID == newer.affectedNodeID ? affectedNodeID : nil,
-            parentNodeID: parentNodeID == newer.parentNodeID ? parentNodeID : nil
-        )
+
+        package var requiresRootReset: Bool {
+            deltas.contains { delta in
+                if case .rootReset = delta {
+                    return true
+                }
+                return false
+            }
+        }
+
+        package func merging(with newer: DOMTree.RowDeltaBatch) -> DOMTree.RowDeltaBatch {
+            if requiresRootReset || newer.requiresRootReset {
+                return DOMTree.RowDeltaBatch(
+                    startRevision: min(startRevision, newer.startRevision),
+                    revision: newer.revision,
+                    deltas: [.rootReset(rootNodeID: newer.requiresRootReset ? newer.rootResetNodeID : rootResetNodeID)]
+                )
+            }
+            return DOMTree.RowDeltaBatch(
+                startRevision: min(startRevision, newer.startRevision),
+                revision: newer.revision,
+                deltas: deltas + newer.deltas
+            )
+        }
+
+        private var rootResetNodeID: DOMNode.ID? {
+            for delta in deltas.reversed() {
+                if case let .rootReset(rootNodeID) = delta {
+                    return rootNodeID
+                }
+            }
+            return nil
+        }
+    }
+
+    enum RowDelta: Equatable, Sendable {
+        case rootReset(rootNodeID: DOMNode.ID?)
+        case childrenReplaced(parentID: DOMNode.ID, oldVisibleChildIDs: [DOMNode.ID], newVisibleChildIDs: [DOMNode.ID])
+        case childInserted(parentID: DOMNode.ID, childID: DOMNode.ID, previousSiblingID: DOMNode.ID?)
+        case childRemoved(parentID: DOMNode.ID?, nodeID: DOMNode.ID, removedSubtreeIDs: Set<DOMNode.ID>)
+        case childCountChanged(nodeID: DOMNode.ID, oldCount: Int, newCount: Int)
+        case rowContentChanged(nodeID: DOMNode.ID, reasons: Set<RowContentReason>)
+    }
+
+    enum RowContentReason: Hashable, Sendable {
+        case attribute(name: String)
+        case characterData
+        case nodeMetadata
+        case disclosure
+        case projection
+    }
+
+    struct ChangeSet: Equatable, Sendable {
+        package enum Kind: Equatable, Sendable {
+            case root
+            case structure
+            case content
+        }
+
+        package var revision: UInt64
+        package var startRevision: UInt64
+        package var kind: Kind
+        package var affectedNodeIDs: Set<DOMNode.ID>
+        package var parentNodeIDs: Set<DOMNode.ID>
+
+        package init(
+            revision: UInt64,
+            startRevision: UInt64? = nil,
+            kind: Kind,
+            affectedNodeIDs: Set<DOMNode.ID> = [],
+            parentNodeIDs: Set<DOMNode.ID> = []
+        ) {
+            self.revision = revision
+            self.startRevision = startRevision ?? revision
+            self.kind = kind
+            self.affectedNodeIDs = affectedNodeIDs
+            self.parentNodeIDs = parentNodeIDs
+        }
+
+        package init(
+            revision: UInt64,
+            kind: Kind,
+            affectedNodeID: DOMNode.ID? = nil,
+            parentNodeID: DOMNode.ID? = nil
+        ) {
+            self.init(
+                revision: revision,
+                kind: kind,
+                affectedNodeIDs: affectedNodeID.map { [$0] } ?? [],
+                parentNodeIDs: parentNodeID.map { [$0] } ?? []
+            )
+        }
+
+        package var affectedNodeID: DOMNode.ID? {
+            affectedNodeIDs.count == 1 ? affectedNodeIDs.first : nil
+        }
+
+        package var parentNodeID: DOMNode.ID? {
+            parentNodeIDs.count == 1 ? parentNodeIDs.first : nil
+        }
+
+        package var requiresFragmentReset: Bool {
+            kind == .root
+        }
+
+        package var hasScopedNodes: Bool {
+            !affectedNodeIDs.isEmpty || !parentNodeIDs.isEmpty
+        }
+
+        package func intersects(nodeIDs: Set<DOMNode.ID>) -> Bool {
+            !affectedNodeIDs.isDisjoint(with: nodeIDs) || !parentNodeIDs.isDisjoint(with: nodeIDs)
+        }
+
+        package func merging(with newer: DOMTree.ChangeSet) -> DOMTree.ChangeSet {
+            let mergedKind: Kind
+            if kind == .root || newer.kind == .root {
+                mergedKind = .root
+            } else if kind == .structure || newer.kind == .structure {
+                mergedKind = .structure
+            } else {
+                mergedKind = .content
+            }
+            return DOMTree.ChangeSet(
+                revision: newer.revision,
+                startRevision: min(startRevision, newer.startRevision),
+                kind: mergedKind,
+                affectedNodeIDs: affectedNodeIDs.union(newer.affectedNodeIDs),
+                parentNodeIDs: parentNodeIDs.union(newer.parentNodeIDs)
+            )
+        }
     }
 }
+
+package typealias DOMTreeRenderInvalidation = DOMTree.ChangeSet
 
 package struct DOMVisibleChildrenProjection: Equatable, Sendable {
     package var children: [DOMNode.ID]

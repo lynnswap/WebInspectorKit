@@ -1132,20 +1132,14 @@ extension DOMSession {
     }
 
     package func startDocumentRequestsForAttachedFrameTargets() {
-        for target in snapshot().targetsByID.values
-        where target.kind == .frame
-            && target.capabilities.contains(.dom)
-            && target.currentDocumentID == nil {
-            startDocumentRequest(targetID: target.id, reason: "attachedFrameTarget")
+        for targetID in frameTargetIDsNeedingDocumentRequest() {
+            startDocumentRequest(targetID: targetID, reason: "attachedFrameTarget")
         }
     }
 
     package func startFrameTargetDocumentRequestIfNeeded(targetID: ProtocolTarget.ID, reason: String) {
         guard commandChannel != nil,
-              let target = snapshot().targetsByID[targetID],
-              target.kind == .frame,
-              target.capabilities.contains(.dom),
-              target.currentDocumentID == nil else {
+              frameTargetNeedsDocumentRequest(targetID) else {
             return
         }
         startDocumentRequest(targetID: targetID, reason: reason)

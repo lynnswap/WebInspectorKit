@@ -2,7 +2,7 @@ import OSLog
 import UIKit
 import WebKit
 
-extension BrowserTabStore: WKUIDelegate {
+extension BrowserTab: WKUIDelegate {
     func webView(
         _ webView: WKWebView,
         createWebViewWith configuration: WKWebViewConfiguration,

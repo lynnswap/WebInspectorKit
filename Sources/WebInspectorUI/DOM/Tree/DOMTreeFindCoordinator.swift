@@ -84,7 +84,7 @@ extension DOMTreeTextView {
             activeResultAggregator = resultAggregator
             let search = DOMTreeTextView.FindSearchRequest(
                 identifier: searchIdentifier,
-                source: textView.renderedTextForFind,
+                source: textView.documentTextForFind,
                 queryString: queryString,
                 compareOptions: sanitizedCompareOptions(options.stringCompareOptions),
                 wordMatchMethod: options.wordMatchMethod,
@@ -248,7 +248,7 @@ extension DOMTreeTextView {
     #if DEBUG
         func decorateStaleFoundTextForTesting(queryString: String) {
             guard let textView,
-                  let range = Self.searchRanges(in: textView.renderedTextForFind, queryString: queryString).first
+                  let range = Self.searchRanges(in: textView.documentTextForFind, queryString: queryString).first
             else {
                 return
             }

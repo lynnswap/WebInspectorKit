@@ -4,13 +4,18 @@ import WebKit
 
 @MainActor
 @Observable
-final class BrowserWindowStore {
-    private(set) var tabs: [BrowserTabStore]
+final class BrowserWindow {
+    enum InitialState {
+        case fresh(url: URL, automaticallyLoadsInitialRequest: Bool = true)
+        case restored(BrowserSession.RestoredState?, fallbackURL: URL)
+    }
+
+    private(set) var tabs: [BrowserTab]
     var selectedTabID: UUID
 
-    @ObservationIgnored private var persistenceCoordinator: BrowserSessionPersistenceCoordinator!
+    @ObservationIgnored private var persistenceCoordinator: BrowserSession.PersistenceCoordinator!
 
-    var selectedTab: BrowserTabStore? {
+    var selectedTab: BrowserTab? {
         return tabs.first { $0.id == selectedTabID } ?? tabs.first
     }
 
@@ -75,61 +80,51 @@ final class BrowserWindowStore {
     }
 
     init(
-        url: URL,
-        automaticallyLoadsInitialRequest: Bool = true,
-        sessionStore: BrowserSessionStore? = BrowserSessionStore(),
+        initialState: BrowserWindow.InitialState,
+        sessionPersistence: BrowserSession.Persistence = .persistent(storage: BrowserSession.FileStorage()),
         saveDebounceDuration: UInt64 = 500_000_000,
         saveDelayScheduler: MainActorDelayScheduling = MainActorDelayScheduler()
     ) {
-        let tab = BrowserTabStore(url: url, automaticallyLoadsInitialRequest: automaticallyLoadsInitialRequest)
-        tabs = [tab]
-        selectedTabID = tab.id
-
-        persistenceCoordinator = BrowserSessionPersistenceCoordinator(
-            store: self,
-            sessionStore: sessionStore,
-            saveDebounceDuration: saveDebounceDuration,
-            saveDelayScheduler: saveDelayScheduler,
-            startsRestored: false
-        )
-    }
-
-    init(
-        restoring restoredSession: BrowserSessionStore.RestoredSession?,
-        fallbackURL: URL,
-        sessionStore: BrowserSessionStore? = BrowserSessionStore(),
-        saveDebounceDuration: UInt64 = 500_000_000,
-        saveDelayScheduler: MainActorDelayScheduling = MainActorDelayScheduler()
-    ) {
-        if let restoredSession,
-           restoredSession.snapshot.tabs.isEmpty == false {
-            let restoredTabs = restoredSession.snapshot.tabs.map { tabSnapshot in
-                BrowserTabStore(
-                    id: tabSnapshot.id,
-                    url: tabSnapshot.url,
-                    title: tabSnapshot.title,
-                    createdAt: tabSnapshot.createdAt,
-                    lastUsedAt: tabSnapshot.lastUsedAt,
-                    restoredInteractionState: restoredSession.tabStateDataByID[tabSnapshot.id],
-                    automaticallyLoadsInitialRequest: false
-                )
-            }
-            tabs = restoredTabs
-            selectedTabID = restoredTabs.contains(where: { $0.id == restoredSession.snapshot.selectedTabID })
-                ? restoredSession.snapshot.selectedTabID
-                : restoredTabs[0].id
-        } else {
-            let tab = BrowserTabStore(url: fallbackURL, automaticallyLoadsInitialRequest: false)
+        let startsRestored: Bool
+        switch initialState {
+        case .fresh(let url, let automaticallyLoadsInitialRequest):
+            let tab = BrowserTab(url: url, automaticallyLoadsInitialRequest: automaticallyLoadsInitialRequest)
             tabs = [tab]
             selectedTabID = tab.id
+            startsRestored = false
+
+        case .restored(let restoredState, let fallbackURL):
+            if let restoredState,
+               restoredState.snapshot.tabs.isEmpty == false {
+                let restoredTabs = restoredState.snapshot.tabs.map { tabSnapshot in
+                    BrowserTab(
+                        id: tabSnapshot.id,
+                        url: tabSnapshot.url,
+                        title: tabSnapshot.title,
+                        createdAt: tabSnapshot.createdAt,
+                        lastUsedAt: tabSnapshot.lastUsedAt,
+                        restoredInteractionState: restoredState.tabStateDataByID[tabSnapshot.id],
+                        automaticallyLoadsInitialRequest: false
+                    )
+                }
+                tabs = restoredTabs
+                selectedTabID = restoredTabs.contains(where: { $0.id == restoredState.snapshot.selectedTabID })
+                    ? restoredState.snapshot.selectedTabID
+                    : restoredTabs[0].id
+            } else {
+                let tab = BrowserTab(url: fallbackURL, automaticallyLoadsInitialRequest: false)
+                tabs = [tab]
+                selectedTabID = tab.id
+            }
+            startsRestored = true
         }
 
-        persistenceCoordinator = BrowserSessionPersistenceCoordinator(
-            store: self,
-            sessionStore: sessionStore,
+        persistenceCoordinator = BrowserSession.PersistenceCoordinator(
+            browserWindow: self,
+            sessionPersistence: sessionPersistence,
             saveDebounceDuration: saveDebounceDuration,
             saveDelayScheduler: saveDelayScheduler,
-            startsRestored: true
+            startsRestored: startsRestored
         )
     }
 
@@ -161,11 +156,11 @@ final class BrowserWindowStore {
         selectedTab?.load(url: url)
     }
 
-    func backHistoryItems(limit: Int = 20) -> [BrowserTabStore.HistoryMenuItem] {
+    func backHistoryItems(limit: Int = 20) -> [BrowserTab.HistoryMenuItem] {
         selectedTab?.backHistoryItems(limit: limit) ?? []
     }
 
-    func forwardHistoryItems(limit: Int = 20) -> [BrowserTabStore.HistoryMenuItem] {
+    func forwardHistoryItems(limit: Int = 20) -> [BrowserTab.HistoryMenuItem] {
         selectedTab?.forwardHistoryItems(limit: limit) ?? []
     }
 

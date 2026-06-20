@@ -2,7 +2,7 @@ import UIKit
 import WebKit
 import OSLog
 
-extension BrowserTabStore {
+extension BrowserTab {
     @MainActor
     func presentJavaScriptAlert(message: String, webView: WKWebView) async {
         guard let presenter = findPresenter(for: webView) else {

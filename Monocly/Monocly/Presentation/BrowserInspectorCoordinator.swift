@@ -12,7 +12,7 @@ extension BrowserInspectorCoordinator {
     struct WindowContext {
         static let sceneActivityType = "lynnpd.webspector.web-inspector"
 
-        let browserStore: BrowserWindowStore
+        let browserWindow: BrowserWindow
         let inspectorSession: WebInspectorSession
     }
 }
@@ -107,7 +107,7 @@ final class BrowserInspectorCoordinator {
 
     func presentWindow(
         from presenter: UIViewController,
-        browserStore: BrowserWindowStore,
+        browserWindow: BrowserWindow,
         inspectorSession: WebInspectorSession
     ) -> Bool {
         guard isPresentingInspector(presenter: presenter) == false else {
@@ -119,7 +119,7 @@ final class BrowserInspectorCoordinator {
 
         Self.inspectorWindowRegistry.setContext(
             BrowserInspectorCoordinator.WindowContext(
-                browserStore: browserStore,
+                browserWindow: browserWindow,
                 inspectorSession: inspectorSession
             )
         )

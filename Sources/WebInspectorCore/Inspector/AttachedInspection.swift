@@ -193,7 +193,7 @@ private final class InspectorTarget {
 private final class InspectorTargetRegistry {
     private var targetsByID: [ProtocolTarget.ID: InspectorTarget] = [:]
 
-    func sync(from snapshot: DOMSession.Snapshot) {
+    func sync(from snapshot: TargetProtocolEventSnapshot) {
         let currentTargetIDs = Set(snapshot.targetsByID.keys)
         for removedTargetID in Array(targetsByID.keys) where currentTargetIDs.contains(removedTargetID) == false {
             removeTarget(removedTargetID)
@@ -816,7 +816,7 @@ package final class InspectorSession {
         }
         if event.method == "Target.didCommitProvisionalTarget",
            let targetCommit = result.targetCommit {
-            if let committedTarget = dom.snapshot().targetsByID[targetCommit.newTargetID] {
+            if let committedTarget = dom.targetProtocolSnapshot().targetsByID[targetCommit.newTargetID] {
                 runtime.applyTargetCreated(committedTarget.record)
             }
             if let oldTargetID = targetCommit.consumedOldTargetID {
@@ -832,7 +832,7 @@ package final class InspectorSession {
     }
 
     private func startRuntimeConsoleEnableForAttachedTargets() {
-        for target in dom.snapshot().targetsByID.values where target.isProvisional == false {
+        for target in dom.targetProtocolSnapshot().targetsByID.values where target.isProvisional == false {
             startRuntimeConsoleEnableIfNeeded(targetID: target.id, reason: "attachedTarget")
         }
     }
@@ -980,7 +980,7 @@ package final class InspectorSession {
     }
 
     private func syncTargets(for connection: InspectorConnection) {
-        connection.targets.sync(from: dom.snapshot())
+        connection.targets.sync(from: dom.targetProtocolSnapshot())
     }
 
     private func bindProtocolChannel(for connection: InspectorConnection) {

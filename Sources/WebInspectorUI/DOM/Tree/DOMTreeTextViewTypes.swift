@@ -48,15 +48,15 @@ extension DOMTreeTextView {
         var isOpen: Bool
         var isClosingTag: Bool
 
-        init(_ line: DOMTreeTextView.Line) {
-            nodeID = line.nodeID
-            depth = line.depth
-            text = line.text
-            tokens = line.tokens
-            displayColumnCount = line.displayColumnCount
-            hasDisclosure = line.hasDisclosure
-            isOpen = line.isOpen
-            isClosingTag = line.isClosingTag
+        init(_ row: DOMTreeRowRenderPlan) {
+            nodeID = row.nodeID
+            depth = row.depth
+            text = row.text
+            tokens = row.tokens
+            displayColumnCount = row.displayColumnCount
+            hasDisclosure = row.hasDisclosure
+            isOpen = row.isOpen
+            isClosingTag = row.isClosingTag
         }
     }
 }
@@ -67,91 +67,10 @@ extension DOMTreeTextView {
         var text: String
         var maxLineDisplayColumnCount: Int
 
-        init(_ buildResult: (rows: [DOMTreeTextView.Line], text: String, maxLineDisplayColumnCount: Int)) {
+        init(_ buildResult: (rows: [DOMTreeRowRenderPlan], text: String, maxLineDisplayColumnCount: Int)) {
             lines = buildResult.rows.map(DOMTreeTextView.ObservedLine.init)
             text = buildResult.text
             maxLineDisplayColumnCount = buildResult.maxLineDisplayColumnCount
-        }
-    }
-}
-
-extension DOMTreeTextView {
-    @MainActor
-    struct RenderedRows {
-        private(set) var rows: [DOMTreeTextView.Line]
-        private(set) var visibleNodeIDs: Set<DOMNode.ID>
-        private var rowIndexByNodeID: [DOMNode.ID: Int]
-
-        init(rows: [DOMTreeTextView.Line] = []) {
-            self.rows = rows
-            visibleNodeIDs = []
-            rowIndexByNodeID = [:]
-            rebuildIndex()
-        }
-
-        mutating func replaceRows(_ rows: [DOMTreeTextView.Line]) {
-            self.rows = rows
-            rebuildIndex()
-        }
-
-        func rowIndex(for nodeID: DOMNode.ID) -> Int? {
-            rowIndexByNodeID[nodeID]
-        }
-
-        func contains(nodeID: DOMNode.ID) -> Bool {
-            rowIndexByNodeID[nodeID] != nil
-        }
-
-        func row(for nodeID: DOMNode.ID) -> DOMTreeTextView.Line? {
-            guard let rowIndex = rowIndexByNodeID[nodeID],
-                  rows.indices.contains(rowIndex) else {
-                return nil
-            }
-            return rows[rowIndex]
-        }
-
-        func rowsInDisplayOrder(for nodeIDs: Set<DOMNode.ID>) -> [DOMTreeTextView.Line] {
-            var rowIndexes = IndexSet()
-            for nodeID in nodeIDs {
-                guard let rowIndex = rowIndexByNodeID[nodeID],
-                      rows.indices.contains(rowIndex) else {
-                    continue
-                }
-                rowIndexes.insert(rowIndex)
-            }
-            return rowIndexes.map { rows[$0] }
-        }
-
-        func rowsBetween(_ firstNodeID: DOMNode.ID, _ secondNodeID: DOMNode.ID) -> ArraySlice<DOMTreeTextView.Line> {
-            guard let firstIndex = rowIndexByNodeID[firstNodeID],
-                  let secondIndex = rowIndexByNodeID[secondNodeID]
-            else {
-                return []
-            }
-            let lowerBound = min(firstIndex, secondIndex)
-            let upperBound = max(firstIndex, secondIndex)
-            return rows[lowerBound...upperBound]
-        }
-
-    #if DEBUG
-        mutating func removeRowIndex(for nodeID: DOMNode.ID) {
-            rowIndexByNodeID.removeValue(forKey: nodeID)
-        }
-    #endif
-
-        private mutating func rebuildIndex() {
-            var nextRowIndexByNodeID: [DOMNode.ID: Int] = [:]
-            nextRowIndexByNodeID.reserveCapacity(rows.count)
-            var nextVisibleNodeIDs = Set<DOMNode.ID>()
-            nextVisibleNodeIDs.reserveCapacity(rows.count)
-            for row in rows {
-                if !row.isClosingTag, nextRowIndexByNodeID[row.nodeID] == nil {
-                    nextRowIndexByNodeID[row.nodeID] = row.rowIndex
-                }
-                nextVisibleNodeIDs.insert(row.nodeID)
-            }
-            rowIndexByNodeID = nextRowIndexByNodeID
-            visibleNodeIDs = nextVisibleNodeIDs
         }
     }
 }
@@ -198,7 +117,7 @@ extension DOMTreeTextView {
             clear(keepingLast: nil)
         }
 
-        mutating func selectAll(rows: [DOMTreeTextView.Line]) {
+        mutating func selectAll(rows: [DOMTreeRowRenderPlan]) {
             guard !rows.isEmpty else {
                 clear(keepingLast: nil)
                 return
@@ -210,15 +129,15 @@ extension DOMTreeTextView {
         }
 
         mutating func toggle(
-            row: DOMTreeTextView.Line,
-            renderedRows: DOMTreeTextView.RenderedRows,
+            row: DOMTreeRowRenderPlan,
+            rowIndex: DOMTreeRowIndex,
             selectedNodeID: DOMNode.ID?
         ) {
             var nextSelectedNodeIDs = selectedNodeIDs
             if nextSelectedNodeIDs.isEmpty {
-                if let lastNodeID, renderedRows.contains(nodeID: lastNodeID) {
+                if let lastNodeID, rowIndex.contains(nodeID: lastNodeID) {
                     nextSelectedNodeIDs.insert(lastNodeID)
-                } else if let selectedNodeID, renderedRows.contains(nodeID: selectedNodeID) {
+                } else if let selectedNodeID, rowIndex.contains(nodeID: selectedNodeID) {
                     nextSelectedNodeIDs.insert(selectedNodeID)
                 }
             }
@@ -239,17 +158,17 @@ extension DOMTreeTextView {
         }
 
         mutating func extend(
-            to row: DOMTreeTextView.Line,
-            renderedRows: DOMTreeTextView.RenderedRows,
+            to row: DOMTreeRowRenderPlan,
+            rowIndex: DOMTreeRowIndex,
             selectedNodeID: DOMNode.ID?
         ) -> Bool {
             guard let anchorNodeID = anchorNodeID(
-                renderedRows: renderedRows,
+                rowIndex: rowIndex,
                 selectedNodeID: selectedNodeID
             ) else {
                 return false
             }
-            let rangeRows = renderedRows.rowsBetween(anchorNodeID, row.nodeID)
+            let rangeRows = rowIndex.rowsBetween(anchorNodeID, row.nodeID)
             let rangeNodeIDs = Set(rangeRows.map(\.nodeID))
             guard !rangeNodeIDs.isEmpty else {
                 return false
@@ -258,7 +177,7 @@ extension DOMTreeTextView {
             var nextSelectedNodeIDs = selectedNodeIDs
             if nextSelectedNodeIDs.isEmpty,
                let selectedNodeID,
-               renderedRows.contains(nodeID: selectedNodeID) {
+               rowIndex.contains(nodeID: selectedNodeID) {
                 nextSelectedNodeIDs.insert(selectedNodeID)
             }
             nextSelectedNodeIDs.subtract(shiftRangeNodeIDs)
@@ -325,31 +244,31 @@ extension DOMTreeTextView {
             return false
         }
 
-        func selectedRowsInDisplayOrder(renderedRows: DOMTreeTextView.RenderedRows) -> [DOMTreeTextView.Line] {
-            renderedRows.rowsInDisplayOrder(for: selectedNodeIDs)
+        func selectedRowsInDisplayOrder(rowIndex: DOMTreeRowIndex) -> [DOMTreeRowRenderPlan] {
+            rowIndex.rowsInDisplayOrder(for: selectedNodeIDs)
         }
 
-        func selectedNodeIDsInDisplayOrder(renderedRows: DOMTreeTextView.RenderedRows) -> [DOMNode.ID] {
-            selectedRowsInDisplayOrder(renderedRows: renderedRows).map(\.nodeID)
+        func selectedNodeIDsInDisplayOrder(rowIndex: DOMTreeRowIndex) -> [DOMNode.ID] {
+            selectedRowsInDisplayOrder(rowIndex: rowIndex).map(\.nodeID)
         }
 
         private func anchorNodeID(
-            renderedRows: DOMTreeTextView.RenderedRows,
+            rowIndex: DOMTreeRowIndex,
             selectedNodeID: DOMNode.ID?
         ) -> DOMNode.ID? {
             if let shiftAnchorNodeID,
-               renderedRows.contains(nodeID: shiftAnchorNodeID) {
+               rowIndex.contains(nodeID: shiftAnchorNodeID) {
                 return shiftAnchorNodeID
             }
             if let lastNodeID,
-               renderedRows.contains(nodeID: lastNodeID) {
+               rowIndex.contains(nodeID: lastNodeID) {
                 return lastNodeID
             }
             if let selectedNodeID,
-               renderedRows.contains(nodeID: selectedNodeID) {
+               rowIndex.contains(nodeID: selectedNodeID) {
                 return selectedNodeID
             }
-            return renderedRows.rows.first?.nodeID
+            return rowIndex.rows.first?.nodeID
         }
 
         private func hasStateForClearing(keepingLast nodeID: DOMNode.ID) -> Bool {
@@ -357,33 +276,6 @@ extension DOMTreeTextView {
                 || lastNodeID != nodeID
                 || shiftAnchorNodeID != nil
                 || !shiftRangeNodeIDs.isEmpty
-        }
-    }
-}
-
-extension DOMTreeTextView {
-    struct Line: Sendable {
-        let nodeID: DOMNode.ID
-        let depth: Int
-        let rowIndex: Int
-        let text: String
-        let textRange: NSRange
-        let markupRange: NSRange
-        let tokens: [DOMTreeTextView.Token]
-        let displayColumnCount: Int
-        let hasDisclosure: Bool
-        let isOpen: Bool
-        let isClosingTag: Bool
-
-        func hasSameRenderedContent(as other: DOMTreeTextView.Line) -> Bool {
-            nodeID == other.nodeID
-                && depth == other.depth
-                && text == other.text
-                && tokens == other.tokens
-                && displayColumnCount == other.displayColumnCount
-                && hasDisclosure == other.hasDisclosure
-                && isOpen == other.isOpen
-                && isClosingTag == other.isClosingTag
         }
     }
 }
