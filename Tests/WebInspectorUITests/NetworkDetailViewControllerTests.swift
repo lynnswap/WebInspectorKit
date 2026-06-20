@@ -87,6 +87,24 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func listLoadDefersFilterMenuBuildUntilPresentation() throws {
+        let model = NetworkPanelModel(network: NetworkSession())
+        model.setResourceFilter(.media, enabled: true)
+        let viewController = NetworkListViewController(model: model)
+
+        viewController.loadViewIfNeeded()
+
+        let filterItem = viewController.filterItemForTesting
+        #expect(filterItem.accessibilityIdentifier == "WebInspector.Network.FilterButton")
+        #expect(filterItem.isSelected)
+        #expect(viewController.filterMenuBuildCountForTesting == 0)
+        let menu = try #require(filterItem.menu)
+        #expect(menu.children.count == 1)
+        let child = try #require(menu.children.first)
+        #expect(child is UIDeferredMenuElement)
+    }
+
+    @Test
     func listLoadDoesNotEvaluateDisplayRequestsUntilAppearing() async throws {
         let network = NetworkSession()
         _ = try #require(applyRequest(
