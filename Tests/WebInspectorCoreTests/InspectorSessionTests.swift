@@ -687,6 +687,7 @@ func selectedElementStyleHydrationCancellationResetsLoadingForFutureRefresh() as
     session.attachment.dom.setSelectedNodeStyleHydrationActive(false)
     #expect(session.attachment.dom.elementStyles.selectedPhase == .needsRefresh)
     await session.attachment.dom.waitUntilSelectedStyleRefreshIdle()
+    #expect(await pendingTargetReplyKeys(transport).isEmpty)
 
     let secondSentCount = await backend.sentTargetMessages().count
     session.attachment.dom.setSelectedNodeStyleHydrationActive(true)
@@ -6650,9 +6651,11 @@ func detachCancelsPumpsAndClearsModelState() async throws {
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
 
+    let sentCountBeforeDetach = await backend.sentTargetMessages().count
     await session.detach()
 
     #expect(await backend.isDetached())
+    #expect(await backend.sentTargetMessages().count == sentCountBeforeDetach)
     #expect(await session.hasActiveConnection == false)
     #expect(await session.attachment.dom.snapshot().currentPageTargetID == nil)
     #expect(await session.attachment.network.snapshot().orderedRequestIDs.isEmpty)
@@ -7772,7 +7775,7 @@ private struct CSSRefreshMessages: Sendable {
 private func waitForCSSRefreshMessages(
     _ backend: FakeTransportBackend,
     after count: Int,
-    protocolNodeID: DOMNode.ProtocolID? = nil
+    protocolNodeID: WebInspectorCore.DOMNode.ProtocolID? = nil
 ) async throws -> CSSRefreshMessages {
     try await withThrowingTaskGroup(of: CSSRefreshMessages.self) { group in
         defer {
@@ -7801,7 +7804,7 @@ private func waitForCSSRefreshMessages(
 private func waitForCSSRefreshMessageBatch(
     _ backend: FakeTransportBackend,
     after count: Int,
-    protocolNodeID: DOMNode.ProtocolID?
+    protocolNodeID: WebInspectorCore.DOMNode.ProtocolID?
 ) async throws -> CSSRefreshMessages {
     var observedTargetMessageCount = 0
     while true {
@@ -7826,7 +7829,7 @@ private func waitForCSSRefreshMessageBatch(
 
 private func cssRefreshMessages(
     in messages: [SentTargetMessage],
-    protocolNodeID: DOMNode.ProtocolID?
+    protocolNodeID: WebInspectorCore.DOMNode.ProtocolID?
 ) throws -> CSSRefreshMessages? {
     guard let matched = try cssRefreshMessage(
         in: messages,
@@ -7850,7 +7853,7 @@ private func cssRefreshMessages(
 private func cssRefreshMessage(
     in messages: [SentTargetMessage],
     method: String,
-    protocolNodeID: DOMNode.ProtocolID?
+    protocolNodeID: WebInspectorCore.DOMNode.ProtocolID?
 ) throws -> SentTargetMessage? {
     try messages.first { message in
         guard try messageMethod(message.message) == method else {
