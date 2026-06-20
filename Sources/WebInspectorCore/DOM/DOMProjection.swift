@@ -154,7 +154,7 @@ package extension DOMTree {
                 return DOMTree.RowDeltaBatch(
                     startRevision: min(startRevision, newer.startRevision),
                     revision: newer.revision,
-                    deltas: [.rootReset(rootNodeID: newer.rootResetNodeID ?? rootResetNodeID)]
+                    deltas: [.rootReset(rootNodeID: newer.requiresRootReset ? newer.rootResetNodeID : rootResetNodeID)]
                 )
             }
             return DOMTree.RowDeltaBatch(
