@@ -1,6 +1,16 @@
 import Foundation
 import WebInspectorTransport
 
+private enum DOMBackendInteractionRetirementScope {
+    case presentationEnd
+    case attachmentTeardown
+}
+
+private enum DOMHideHighlightGenerationPolicy {
+    case current
+    case captured(UInt64?)
+}
+
 private enum DOMInspectRoute {
     case remoteObject(targetID: ProtocolTarget.ID, objectID: String)
     case protocolNode(targetID: ProtocolTarget.ID, nodeID: DOMNode.ProtocolID)
@@ -47,6 +57,56 @@ extension DOMSession {
         clearDeleteUndoHistory()
         cancelDocumentRequests()
         cancelCSSActionRequests()
+    }
+
+    package func retireBackendInteractionForPresentationEnd() async {
+        await retireBackendInteraction(scope: .presentationEnd)
+    }
+
+    package func retireBackendInteractionForTeardown() async {
+        cancelDocumentRequests()
+        cancelCSSActionRequests()
+        await retireBackendInteraction(scope: .attachmentTeardown)
+        clearDeleteUndoHistory()
+    }
+
+    private func retireBackendInteraction(scope: DOMBackendInteractionRetirementScope) async {
+        let pickerSession = elementPicker.currentSession
+        let pickerTargetID = pickerSession?.targetID
+        let inspectModeTargetID = isSelectingElement ? pickerTargetID ?? currentPageTargetID : nil
+        let highlightHides = backendInteractionRetirementHighlightHides(preferredTargetID: pickerTargetID)
+        let requiresActiveConnection = scope == .presentationEnd
+        if let inspectModeTargetID,
+           targetSupportsTeardownBackendInteraction(inspectModeTargetID),
+           let intent = setInspectModeEnabledIntent(targetID: inspectModeTargetID, enabled: false) {
+            await performBackendInteractionRetirementCommand(
+                intent,
+                requiresActiveConnection: requiresActiveConnection,
+                scope: scope
+            )
+        }
+
+        for highlight in highlightHides {
+            guard shouldSendBackendInteractionRetirementHide(
+                highlight,
+                capturedPickerSession: pickerSession
+            ),
+                let intent = hideHighlightIntent(targetID: highlight.targetID) else {
+                continue
+            }
+            await performBackendInteractionRetirementCommand(
+                intent,
+                requiresActiveConnection: requiresActiveConnection,
+                scope: scope,
+                hideGenerationPolicy: .captured(highlight.generation)
+            )
+        }
+
+        clearRetiredBackendInteractionState(
+            scope: scope,
+            pickerSession: pickerSession,
+            highlights: highlightHides
+        )
     }
 
     package func waitUntilDocumentRequestsIdle(targetID: ProtocolTarget.ID? = nil) async {
@@ -104,8 +164,11 @@ extension DOMSession {
     private func perform(
         _ intent: DOMCommand.Intent,
         requiresActiveConnection: Bool,
-        highlightOwner: DOMPageHighlightOwner? = nil
+        highlightOwner: DOMPageHighlightOwner? = nil,
+        hideGenerationPolicy: DOMHideHighlightGenerationPolicy = .current
     ) async throws -> ProtocolCommand.Result {
+        let commandChannel = try requireCommandChannel(requiresActiveConnection: requiresActiveConnection)
+        let command = try protocolCommands.command(for: intent)
         if case let .highlightNode(target) = intent {
             highlightController.markHighlightMayBeVisible(
                 targetID: target.commandTargetID,
@@ -114,13 +177,18 @@ extension DOMSession {
             )
         }
         let hideGeneration: UInt64? = if case let .hideHighlight(targetID) = intent {
-            highlightController.possibleVisibleGeneration(targetID: targetID)
+            switch hideGenerationPolicy {
+            case .current:
+                highlightController.possibleVisibleGeneration(targetID: targetID)
+            case let .captured(generation):
+                generation
+            }
         } else {
             nil
         }
         let result: ProtocolCommand.Result
         do {
-            result = try await send(intent, requiresActiveConnection: requiresActiveConnection)
+            result = try await send(command, using: commandChannel)
         } catch {
             if let missingTargetID = missingTargetID(from: error) {
                 clearHighlightOwnershipIfMissingTarget(missingTargetID, for: intent)
@@ -182,6 +250,156 @@ extension DOMSession {
         }
     }
 
+    private func targetSupportsTeardownBackendInteraction(_ targetID: ProtocolTarget.ID) -> Bool {
+        guard containsTarget(targetID),
+              targetKind(for: targetID) != .frame else {
+            return false
+        }
+        return true
+    }
+
+    private func targetSupportsBackendInteractionHighlightHide(_ targetID: ProtocolTarget.ID) -> Bool {
+        containsTarget(targetID)
+    }
+
+    private func backendInteractionRetirementHighlightHides(
+        preferredTargetID: ProtocolTarget.ID?
+    ) -> [DOMSessionHighlightController.PossibleVisibleHighlight] {
+        var highlights: [DOMSessionHighlightController.PossibleVisibleHighlight] = []
+        func append(_ targetID: ProtocolTarget.ID?) {
+            guard let targetID,
+                  targetSupportsBackendInteractionHighlightHide(targetID),
+                  !highlights.contains(where: { $0.targetID == targetID }) else {
+                return
+            }
+            highlights.append(highlightController.possibleVisibleHighlight(targetID: targetID))
+        }
+
+        append(preferredTargetID)
+        for highlight in highlightController.possibleVisibleHighlights(
+            preferredFirst: preferredTargetID,
+            fallbackTargetID: nil,
+            preserving: nil
+        ) {
+            append(highlight.targetID)
+        }
+        append(currentPageTargetID)
+        return highlights
+    }
+
+    private func shouldSendBackendInteractionRetirementHide(
+        _ highlight: DOMSessionHighlightController.PossibleVisibleHighlight,
+        capturedPickerSession: DOMSessionElementPickerController.Session?
+    ) -> Bool {
+        if let generation = highlight.generation {
+            return highlightController.isPossibleVisibleHighlight(
+                targetID: highlight.targetID,
+                generation: generation,
+                nodeID: highlight.nodeID,
+                owner: highlight.owner
+            )
+        }
+
+        if let currentPickerSession = elementPicker.currentSession {
+            return capturedPickerSession === currentPickerSession
+        }
+
+        return highlightController.possibleVisibleGeneration(targetID: highlight.targetID) == nil
+    }
+
+    private func clearRetiredBackendInteractionState(
+        scope: DOMBackendInteractionRetirementScope,
+        pickerSession: DOMSessionElementPickerController.Session?,
+        highlights: [DOMSessionHighlightController.PossibleVisibleHighlight]
+    ) {
+        switch scope {
+        case .attachmentTeardown:
+            highlightController.clearAll()
+            clearElementPickerState(invalidatePendingSelection: true)
+        case .presentationEnd:
+            for highlight in highlights {
+                highlightController.clearHighlight(
+                    targetID: highlight.targetID,
+                    matchingGeneration: highlight.generation
+                )
+            }
+            if let pickerSession {
+                clearElementPickerState(ifCurrent: pickerSession, invalidatePendingSelection: true)
+            }
+        }
+    }
+
+    private func performBackendInteractionRetirementCommand(
+        _ intent: DOMCommand.Intent,
+        requiresActiveConnection: Bool,
+        scope: DOMBackendInteractionRetirementScope,
+        hideGenerationPolicy: DOMHideHighlightGenerationPolicy = .current
+    ) async {
+        do {
+            try await perform(
+                intent,
+                requiresActiveConnection: requiresActiveConnection,
+                hideGenerationPolicy: hideGenerationPolicy
+            )
+        } catch {
+            InspectorRuntimeLog.warning(
+                "dom.backendInteractionRetirement.failed scope=\(scopeLogName(scope)) method=\(teardownCommandMethodName(for: intent)) target=\(teardownCommandTargetDescription(for: intent)) error=\(error)"
+            )
+        }
+    }
+
+    private func scopeLogName(_ scope: DOMBackendInteractionRetirementScope) -> String {
+        switch scope {
+        case .presentationEnd:
+            "presentationEnd"
+        case .attachmentTeardown:
+            "attachmentTeardown"
+        }
+    }
+
+    private func teardownCommandMethodName(for intent: DOMCommand.Intent) -> String {
+        switch intent {
+        case .getDocument:
+            "DOM.getDocument"
+        case .requestChildNodes:
+            "DOM.requestChildNodes"
+        case .requestNode:
+            "DOM.requestNode"
+        case .highlightNode:
+            "DOM.highlightNode"
+        case .hideHighlight:
+            "DOM.hideHighlight"
+        case .setInspectModeEnabled:
+            "DOM.setInspectModeEnabled"
+        case .getOuterHTML:
+            "DOM.getOuterHTML"
+        case .removeNode:
+            "DOM.removeNode"
+        case .undo:
+            "DOM.undo"
+        case .redo:
+            "DOM.redo"
+        }
+    }
+
+    private func teardownCommandTargetDescription(for intent: DOMCommand.Intent) -> String {
+        let targetID: ProtocolTarget.ID? = switch intent {
+        case let .getDocument(targetID),
+             let .requestChildNodes(targetID, _, _),
+             let .requestNode(_, targetID, _),
+             let .hideHighlight(targetID),
+             let .setInspectModeEnabled(targetID, _),
+             let .undo(targetID),
+             let .redo(targetID):
+            targetID
+        case let .highlightNode(target),
+             let .getOuterHTML(target),
+             let .removeNode(target):
+            target.commandTargetID
+        }
+        return targetID?.rawValue ?? "nil"
+    }
+
     @discardableResult
     private func send(
         _ intent: DOMCommand.Intent,
@@ -189,7 +407,15 @@ extension DOMSession {
     ) async throws -> ProtocolCommand.Result {
         let commandChannel = try requireCommandChannel(requiresActiveConnection: requiresActiveConnection)
         let command = try protocolCommands.command(for: intent)
-        return try await commandChannel.send(command)
+        return try await send(command, using: commandChannel)
+    }
+
+    @discardableResult
+    private func send(
+        _ command: ProtocolCommand,
+        using commandChannel: ProtocolCommandChannel
+    ) async throws -> ProtocolCommand.Result {
+        try await commandChannel.send(command)
     }
 
     @discardableResult
@@ -1272,6 +1498,19 @@ extension DOMSession {
 
     private func clearElementPickerState(invalidatePendingSelection: Bool = false) {
         elementPicker.clear()
+        syncElementPickerSelectionState()
+        if invalidatePendingSelection {
+            selectNode(selectedNodeID)
+        }
+    }
+
+    private func clearElementPickerState(
+        ifCurrent session: DOMSessionElementPickerController.Session,
+        invalidatePendingSelection: Bool = false
+    ) {
+        guard elementPicker.clear(ifCurrent: session) else {
+            return
+        }
         syncElementPickerSelectionState()
         if invalidatePendingSelection {
             selectNode(selectedNodeID)

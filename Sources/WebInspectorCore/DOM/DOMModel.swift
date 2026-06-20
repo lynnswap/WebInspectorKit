@@ -162,6 +162,14 @@ package final class DOMSession {
     }
 
     package func reset() {
+        documentRequests.cancelAll()
+        if let cancelledToken = styleHydration.cancelRefresh() {
+            elementStyles.cancelRefresh(cancelledToken)
+        }
+        styleHydration.cancelPropertyUpdates()
+        highlightController.clearAll()
+        elementPicker.clear()
+        deleteUndoController.clear(undoTarget: self)
         currentPage.clear()
         targetGraph.reset()
         documentStore.reset()

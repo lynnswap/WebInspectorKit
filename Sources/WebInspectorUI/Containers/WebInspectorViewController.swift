@@ -3,6 +3,41 @@ import UIKit
 import WebKit
 
 @MainActor
+private final class WebInspectorRootPresentationLifecycleCoordinator {
+    private var didFinishCurrentPresentation = false
+
+    func beginPresentation() {
+        didFinishCurrentPresentation = false
+    }
+
+    func finishIfNeeded(_ finish: () -> Void) {
+        guard didFinishCurrentPresentation == false else {
+            return
+        }
+        didFinishCurrentPresentation = true
+        finish()
+    }
+
+    #if DEBUG
+    var hasFinishedCurrentPresentationForTesting: Bool {
+        didFinishCurrentPresentation
+    }
+    #endif
+}
+
+private final class WebInspectorPresentationHostWindowObserverView: UIView {
+    var onDetachedFromWindow: (() -> Void)?
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        guard window == nil else {
+            return
+        }
+        onDetachedFromWindow?()
+    }
+}
+
+@MainActor
 public final class WebInspectorViewController: UIViewController {
     private enum HostKind {
         case compact
@@ -10,7 +45,20 @@ public final class WebInspectorViewController: UIViewController {
     }
 
     public let session: WebInspectorSession
+    public var automaticallyDetachesOnDismiss = true
     private var drawsBackgroundStorage = true
+    private let presentationLifecycleCoordinator = WebInspectorRootPresentationLifecycleCoordinator()
+    private lazy var presentationHostWindowObserver: WebInspectorPresentationHostWindowObserverView = {
+        let view = WebInspectorPresentationHostWindowObserverView(frame: .zero)
+        view.isHidden = true
+        view.isUserInteractionEnabled = false
+        view.onDetachedFromWindow = { [weak self] in
+            self?.presentationHostWindowDidDetach()
+        }
+        return view
+    }()
+    private weak var observedPresentationHostView: UIView?
+    private var suppressPresentationHostWindowObserver = false
 
     @available(iOS 26.0, *)
     public var drawsBackground: Bool {
@@ -55,6 +103,55 @@ public final class WebInspectorViewController: UIViewController {
         }
     }
 
+    public override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        presentationLifecycleCoordinator.beginPresentation()
+        installPresentationHostWindowObserverIfNeeded()
+    }
+
+    public override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        installPresentationHostWindowObserverIfNeeded()
+    }
+
+    public override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        guard isTerminalRootDisappearance,
+              transitionCoordinator?.isCancelled != true else {
+            return
+        }
+        finishRootPresentationLifecycle()
+    }
+
+    public override func dismiss(animated flag: Bool, completion: (() -> Void)? = nil) {
+        let wasPresentedAsRoot = isRootPresentationActive
+        super.dismiss(animated: flag) { [weak self] in
+            guard let self else {
+                completion?()
+                return
+            }
+            if wasPresentedAsRoot,
+               self.viewIfLoaded?.window == nil {
+                self.finishRootPresentationLifecycle()
+            }
+            completion?()
+        }
+        if wasPresentedAsRoot,
+           flag == false {
+            finishRootPresentationLifecycle()
+        }
+    }
+
+    public override func didMove(toParent parent: UIViewController?) {
+        super.didMove(toParent: parent)
+        guard parent == nil,
+              isViewLoaded,
+              view.window == nil else {
+            return
+        }
+        finishRootPresentationLifecycle()
+    }
+
     public func attach(to webView: WKWebView) async throws {
         try await session.attach(to: webView)
     }
@@ -65,6 +162,52 @@ public final class WebInspectorViewController: UIViewController {
 
     private var effectiveHostKind: HostKind {
         (horizontalSizeClassOverrideForTesting ?? traitCollection.horizontalSizeClass) == .compact ? .compact : .regular
+    }
+
+    private var isTerminalRootDisappearance: Bool {
+        isBeingDismissed
+            || isMovingFromParent
+            || navigationController?.isBeingDismissed == true
+            || navigationController?.isMovingFromParent == true
+            || parent?.isBeingDismissed == true
+            || parent?.isMovingFromParent == true
+    }
+
+    private var isRootPresentationActive: Bool {
+        presentingViewController != nil
+            || presentationController?.presentedViewController === self
+            || navigationController?.presentingViewController != nil
+            || navigationController?.presentationController?.presentedViewController === navigationController
+    }
+
+    private func finishRootPresentationLifecycle() {
+        presentationLifecycleCoordinator.finishIfNeeded { [session, automaticallyDetachesOnDismiss] in
+            Task { @MainActor [session] in
+                await session.retireRootPresentation(detach: automaticallyDetachesOnDismiss)
+            }
+        }
+    }
+
+    private func installPresentationHostWindowObserverIfNeeded() {
+        guard let hostView = navigationController?.view ?? viewIfLoaded,
+              hostView.window != nil,
+              observedPresentationHostView !== hostView else {
+            return
+        }
+
+        suppressPresentationHostWindowObserver = true
+        presentationHostWindowObserver.removeFromSuperview()
+        suppressPresentationHostWindowObserver = false
+
+        observedPresentationHostView = hostView
+        hostView.addSubview(presentationHostWindowObserver)
+    }
+
+    private func presentationHostWindowDidDetach() {
+        guard suppressPresentationHostWindowObserver == false else {
+            return
+        }
+        finishRootPresentationLifecycle()
     }
 
     private func handleHorizontalSizeClassChange() {
@@ -131,6 +274,19 @@ public final class WebInspectorViewController: UIViewController {
     package var activeHostViewControllerForTesting: UIViewController? {
         activeHost
     }
+
+    #if DEBUG
+    package func finishRootPresentationLifecycleForTesting(cancelled: Bool = false) {
+        guard cancelled == false else {
+            return
+        }
+        finishRootPresentationLifecycle()
+    }
+
+    package var hasFinishedRootPresentationLifecycleForTesting: Bool {
+        presentationLifecycleCoordinator.hasFinishedCurrentPresentationForTesting
+    }
+    #endif
 }
 
 #endif

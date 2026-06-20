@@ -217,6 +217,202 @@ struct ParentContainerTests {
     }
 
     @Test
+    func programmaticDismissAutomaticallyDetachesOnce() async throws {
+        let detachRecorder = DetachRecorder()
+        let session = makeSessionWithNoOpAttachment(detachAction: { _ in
+            detachRecorder.record()
+        })
+        let presenter = UIViewController()
+        let viewController = WebInspectorViewController(session: session)
+        let window = showInWindow(presenter)
+        defer { window.isHidden = true }
+
+        presenter.present(viewController, animated: false)
+        #expect(await waitUntil { presenter.presentedViewController === viewController })
+
+        viewController.dismiss(animated: false)
+        #expect(await waitUntil { detachRecorder.count == 1 })
+
+        viewController.finishRootPresentationLifecycleForTesting()
+        _ = await waitUntil { detachRecorder.count == 1 }
+        #expect(detachRecorder.count == 1)
+    }
+
+    @Test
+    func rootPresentationFallbacksDetachOnlyOnce() async throws {
+        let detachRecorder = DetachRecorder()
+        let session = makeSessionWithNoOpAttachment(detachAction: { _ in
+            detachRecorder.record()
+        })
+        _ = WebInspectorTab.ContentFactory.makeViewController(
+            for: .dom,
+            session: session,
+            hostLayout: .compact
+        )
+        let viewController = WebInspectorViewController(session: session)
+        viewController.loadViewIfNeeded()
+        #expect(session.interface.contentCacheCountForTesting > 0)
+
+        viewController.finishRootPresentationLifecycleForTesting()
+        #expect(await waitUntil { detachRecorder.count == 1 })
+        viewController.finishRootPresentationLifecycleForTesting()
+        _ = await waitUntil { detachRecorder.count == 1 }
+
+        #expect(detachRecorder.count == 1)
+        #expect(session.interface.contentCacheCountForTesting == 0)
+    }
+
+    @Test
+    func hiddenNavigationControllerRemovalFinishesRootPresentationLifecycle() async throws {
+        let detachRecorder = DetachRecorder()
+        let session = makeSessionWithNoOpAttachment(detachAction: { _ in
+            detachRecorder.record()
+        })
+        _ = WebInspectorTab.ContentFactory.makeViewController(
+            for: .dom,
+            session: session,
+            hostLayout: .compact
+        )
+        let viewController = WebInspectorViewController(session: session)
+        let navigationController = UINavigationController(rootViewController: viewController)
+        let window = showInWindow(navigationController)
+        defer { window.isHidden = true }
+
+        #expect(navigationController.view.window === window)
+        #expect(session.interface.contentCacheCountForTesting > 0)
+
+        let coveringViewController = UIViewController()
+        navigationController.pushViewController(coveringViewController, animated: false)
+        #expect(await waitUntil { navigationController.topViewController === coveringViewController })
+        #expect(detachRecorder.count == 0)
+        #expect(session.interface.contentCacheCountForTesting > 0)
+
+        window.rootViewController = UIViewController()
+        window.layoutIfNeeded()
+        #expect(navigationController.view.window == nil)
+        #expect(await waitUntil { detachRecorder.count == 1 })
+        #expect(session.interface.contentCacheCountForTesting == 0)
+    }
+
+    @Test
+    func directWindowRootRemovalFinishesRootPresentationLifecycle() async throws {
+        let detachRecorder = DetachRecorder()
+        let session = makeSessionWithNoOpAttachment(detachAction: { _ in
+            detachRecorder.record()
+        })
+        _ = WebInspectorTab.ContentFactory.makeViewController(
+            for: .dom,
+            session: session,
+            hostLayout: .compact
+        )
+        let viewController = WebInspectorViewController(session: session)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        #expect(viewController.view.window === window)
+        #expect(session.interface.contentCacheCountForTesting > 0)
+
+        window.rootViewController = UIViewController()
+        window.layoutIfNeeded()
+
+        #expect(viewController.view.window == nil)
+        #expect(await waitUntil { detachRecorder.count == 1 })
+        #expect(session.interface.contentCacheCountForTesting == 0)
+    }
+
+    @Test
+    func viewControllerDoesNotReplaceExternalPresentationControllerDelegate() async throws {
+        let presenter = UIViewController()
+        let viewController = WebInspectorViewController(session: makeSessionWithNoOpAttachment())
+        let window = showInWindow(presenter)
+        defer { window.isHidden = true }
+
+        presenter.present(viewController, animated: false)
+        #expect(await waitUntil { presenter.presentedViewController === viewController })
+        let presentationController = try #require(viewController.presentationController)
+        let externalDelegate = PresentationDelegateRecorder()
+        presentationController.delegate = externalDelegate
+
+        viewController.beginAppearanceTransition(true, animated: false)
+        viewController.endAppearanceTransition()
+
+        #expect(presentationController.delegate === externalDelegate)
+    }
+
+    @Test
+    func interactiveDismissCancelDoesNotDetachOrDropContentCache() async throws {
+        let detachRecorder = DetachRecorder()
+        let session = makeSessionWithNoOpAttachment(detachAction: { _ in
+            detachRecorder.record()
+        })
+        _ = WebInspectorTab.ContentFactory.makeViewController(
+            for: .network,
+            session: session,
+            hostLayout: .compact
+        )
+        let viewController = WebInspectorViewController(session: session)
+        viewController.loadViewIfNeeded()
+        let cacheCountBeforeCancel = session.interface.contentCacheCountForTesting
+
+        viewController.finishRootPresentationLifecycleForTesting(cancelled: true)
+        await Task.yield()
+
+        #expect(detachRecorder.count == 0)
+        #expect(viewController.hasFinishedRootPresentationLifecycleForTesting == false)
+        #expect(session.interface.contentCacheCountForTesting == cacheCountBeforeCancel)
+    }
+
+    @Test
+    func hostReplacementAndCompactTabSwitchDoNotDetachRootSession() async throws {
+        let detachRecorder = DetachRecorder()
+        let session = makeSessionWithNoOpAttachment(detachAction: { _ in
+            detachRecorder.record()
+        })
+        let viewController = WebInspectorViewController(session: session)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        viewController.horizontalSizeClassOverrideForTesting = .compact
+        let compactHost = try #require(viewController.activeHostViewControllerForTesting as? CompactTabBarController)
+        compactHost.loadViewIfNeeded()
+        session.interface.selectItem(withID: WebInspectorTab.DisplayItem.domElementID)
+        await Task.yield()
+        viewController.horizontalSizeClassOverrideForTesting = .regular
+        await Task.yield()
+
+        #expect(detachRecorder.count == 0)
+        #expect(viewController.hasFinishedRootPresentationLifecycleForTesting == false)
+    }
+
+    @Test
+    func rootDismissDropsContentCacheWithoutAutomaticDetach() async throws {
+        let detachRecorder = DetachRecorder()
+        let session = makeSessionWithNoOpAttachment(detachAction: { _ in
+            detachRecorder.record()
+        })
+        _ = WebInspectorTab.ContentFactory.makeViewController(
+            for: .dom,
+            session: session,
+            hostLayout: .compact
+        )
+        _ = WebInspectorTab.ContentFactory.makeViewController(
+            for: .network,
+            session: session,
+            hostLayout: .regular
+        )
+        let viewController = WebInspectorViewController(session: session)
+        viewController.automaticallyDetachesOnDismiss = false
+        viewController.loadViewIfNeeded()
+        #expect(session.interface.contentCacheCountForTesting > 0)
+
+        viewController.finishRootPresentationLifecycleForTesting()
+        await Task.yield()
+
+        #expect(detachRecorder.count == 0)
+        #expect(session.interface.contentCacheCountForTesting == 0)
+    }
+
+    @Test
     func topLevelContainerPropagatesBackgroundDrawingTraitToHosts() throws {
         guard #available(iOS 26.0, *) else {
             return
@@ -472,6 +668,29 @@ struct ParentContainerTests {
             attachAction: attachAction,
             detachAction: detachAction
         )
+    }
+
+    private final class DetachRecorder {
+        private(set) var count = 0
+
+        func record() {
+            count += 1
+        }
+    }
+
+    private final class PresentationDelegateRecorder: NSObject, UIAdaptivePresentationControllerDelegate {}
+
+    private func waitUntil(
+        timeoutAttempts: Int = 50,
+        predicate: @MainActor () -> Bool
+    ) async -> Bool {
+        for _ in 0..<timeoutAttempts {
+            if predicate() {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return predicate()
     }
 
     private struct PageUserInterfaceStyleObservation {

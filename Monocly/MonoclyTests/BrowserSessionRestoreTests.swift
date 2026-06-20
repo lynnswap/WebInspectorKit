@@ -752,6 +752,53 @@ struct BrowserSessionRestoreTests {
     }
 
     @Test
+    func inspectorSheetDismissReenablesExistingToolbarButtonWithoutTraitRefresh() async throws {
+        let initialURL = try #require(URL(string: "about:blank"))
+        let store = BrowserWindowStore(
+            url: initialURL,
+            automaticallyLoadsInitialRequest: false,
+            sessionStore: nil
+        )
+        let pageViewController = BrowserPageViewController(
+            store: store,
+            inspectorSession: WebInspectorSession(),
+            launchConfiguration: BrowserLaunchConfiguration(initialURL: initialURL),
+            progressHideScheduler: ManualDelayScheduler()
+        )
+        let navigationController = UINavigationController(rootViewController: pageViewController)
+        let window = UIWindow(windowScene: try makeWindowScene())
+        window.rootViewController = navigationController
+        window.makeKeyAndVisible()
+        defer {
+            navigationController.dismiss(animated: false)
+            window.isHidden = true
+        }
+        pageViewController.loadViewIfNeeded()
+        window.layoutIfNeeded()
+        #expect(await waitUntil {
+            pageViewController.inspectorPresentationObservationIsActiveForTesting
+        })
+        let inspectorButtonItem = pageViewController.inspectorButtonItemForTesting
+        #expect(inspectorButtonItem.isEnabled)
+
+        #expect(pageViewController.openInspectorAsSheetForTesting())
+        let sheetController = try #require(pageViewController.presentedInspectorSheetForTesting)
+        #expect(sheetController.automaticallyDetachesOnDismiss == false)
+        #expect(await waitUntil {
+            inspectorButtonItem.isEnabled == false
+        })
+
+        let presentationController = try #require(sheetController.presentationController)
+        presentationController.delegate?.presentationControllerDidDismiss?(presentationController)
+
+        #expect(await waitUntil {
+            pageViewController.presentedInspectorSheetForTesting == nil
+                && inspectorButtonItem.isEnabled
+        })
+        #expect(pageViewController.inspectorButtonItemForTesting === inspectorButtonItem)
+    }
+
+    @Test
     func tabSwitchInstallsSelectedWebViewOnceAndPreservesTabIdentity() async throws {
         let fixture = try makeAttachmentLifecycleFixture()
         let pageViewController = BrowserPageViewController(

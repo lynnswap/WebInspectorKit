@@ -726,6 +726,18 @@ extension BrowserPageViewController {
     var inspectorButtonItemForTesting: UIBarButtonItem {
         inspectorButtonItem
     }
+
+    var inspectorPresentationObservationIsActiveForTesting: Bool {
+        inspectorPresentationObservation != nil
+    }
+
+    var presentedInspectorSheetForTesting: WebInspectorViewController? {
+        inspectorCoordinator.presentedSheetControllerForTesting as? WebInspectorViewController
+    }
+
+    func openInspectorAsSheetForTesting() -> Bool {
+        openInspectorAsSheet()
+    }
 }
 #endif
 #endif
