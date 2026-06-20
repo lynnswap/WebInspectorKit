@@ -74,7 +74,15 @@ extension DOMSession {
         let pickerSession = elementPicker.currentSession
         let pickerTargetID = pickerSession?.targetID
         let inspectModeTargetID = isSelectingElement ? pickerTargetID ?? currentPageTargetID : nil
-        let highlightHides = backendInteractionRetirementHighlightHides(preferredTargetID: pickerTargetID)
+        let fallbackHighlightTargetID: ProtocolTarget.ID? = if pickerSession != nil || highlightController.hasPossibleVisibleHighlight {
+            currentPageTargetID
+        } else {
+            nil
+        }
+        let highlightHides = backendInteractionRetirementHighlightHides(
+            preferredTargetID: pickerTargetID,
+            fallbackTargetID: fallbackHighlightTargetID
+        )
         let requiresActiveConnection = scope == .presentationEnd
         if let inspectModeTargetID,
            targetSupportsTeardownBackendInteraction(inspectModeTargetID),
@@ -263,7 +271,8 @@ extension DOMSession {
     }
 
     private func backendInteractionRetirementHighlightHides(
-        preferredTargetID: ProtocolTarget.ID?
+        preferredTargetID: ProtocolTarget.ID?,
+        fallbackTargetID: ProtocolTarget.ID?
     ) -> [DOMSessionHighlightController.PossibleVisibleHighlight] {
         var highlights: [DOMSessionHighlightController.PossibleVisibleHighlight] = []
         func append(_ targetID: ProtocolTarget.ID?) {
@@ -283,7 +292,7 @@ extension DOMSession {
         ) {
             append(highlight.targetID)
         }
-        append(currentPageTargetID)
+        append(fallbackTargetID)
         return highlights
     }
 
@@ -1311,6 +1320,7 @@ extension DOMSession {
                 return
             }
             defer {
+                handle.task = nil
                 documentRequests.finish(handle)
             }
             do {
@@ -1353,6 +1363,11 @@ extension DOMSession {
         invalidateDocument(targetID: targetID)
         if targetKind == .frame {
             startDocumentRequest(targetID: targetID, force: true, reason: "frameDocumentUpdated")
+            return
+        }
+
+        if activeRequest != nil {
+            startDocumentRequest(targetID: targetID, force: true, reason: "documentUpdated")
             return
         }
 
