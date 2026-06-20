@@ -14,19 +14,23 @@ extension CSSStyle {
         init(style: CSSStyle.Payload) {
             self.init(
                 properties: style.cssProperties.map(RewriteProperty.init),
-                cssText: style.cssText
+                cssText: style.cssText,
+                styleRange: style.range
             )
         }
 
         init(style: CSSStyle) {
             self.init(
                 properties: style.cssProperties.map(RewriteProperty.init),
-                cssText: style.cssText
+                cssText: style.cssText,
+                styleRange: style.range
             )
         }
 
-        private init(properties: [RewriteProperty], cssText: String?) {
-            self.styleTextIndex = cssText.flatMap(StyleTextIndex.init(cssText:))
+        private init(properties: [RewriteProperty], cssText: String?, styleRange: CSSStyle.SourceRange?) {
+            self.styleTextIndex = cssText.flatMap {
+                StyleTextIndex(cssText: $0, styleRange: styleRange, properties: properties)
+            }
             self.properties = properties
             self.previousPropertyTextOccurrences = Self.previousPropertyTextOccurrences(for: properties)
             self.canSerializeStyleText = properties.allSatisfy(\.canSerializeStyleText)
@@ -139,16 +143,32 @@ extension CSSStyle {
     }
 
     private struct StyleTextIndex {
+        private enum SourceRangeResolutionMode {
+            case localFirst
+            case stylesheetRelativeFirst
+        }
+
         private let nsText: NSString
         private let lineStartOffsets: [Int]
+        private let styleRange: CSSStyle.SourceRange?
+        private let sourceRangeResolutionMode: SourceRangeResolutionMode
         private var declarationRangesByText: [String: [NSRange]] = [:]
 
-        init?(cssText: String) {
+        init?(cssText: String, styleRange: CSSStyle.SourceRange?, properties: [RewriteProperty]) {
             guard !cssText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 return nil
             }
-            self.nsText = cssText as NSString
-            self.lineStartOffsets = CSSStyle.TextRewriter.lineStartUTF16Offsets(in: cssText)
+            let nsText = cssText as NSString
+            let lineStartOffsets = CSSStyle.TextRewriter.lineStartUTF16Offsets(in: cssText)
+            self.nsText = nsText
+            self.lineStartOffsets = lineStartOffsets
+            self.styleRange = styleRange
+            self.sourceRangeResolutionMode = Self.sourceRangeResolutionMode(
+                properties: properties,
+                styleRange: styleRange,
+                nsText: nsText,
+                lineStartOffsets: lineStartOffsets
+            )
         }
 
         mutating func authoredDeclarationRange(
@@ -156,10 +176,27 @@ extension CSSStyle {
             sourceRange: CSSStyle.SourceRange?,
             previousOccurrence: Int
         ) -> NSRange? {
-            if let range = sourceRange.flatMap(nsRange(sourceRange:)),
-               NSMaxRange(range) <= nsText.length,
-               nsText.substring(with: range).trimmingCharacters(in: .whitespacesAndNewlines) == propertyText {
-                return range
+            if let sourceRange {
+                let relativeSourceRange = styleRelativeSourceRange(sourceRange)
+                switch sourceRangeResolutionMode {
+                case .localFirst:
+                    if let range = authoredDeclarationRange(for: propertyText, sourceRange: sourceRange) {
+                        return range
+                    }
+                    if let relativeSourceRange,
+                       let range = authoredDeclarationRange(for: propertyText, sourceRange: relativeSourceRange) {
+                        return range
+                    }
+                case .stylesheetRelativeFirst:
+                    if let relativeSourceRange,
+                       let range = authoredDeclarationRange(for: propertyText, sourceRange: relativeSourceRange) {
+                        return range
+                    }
+                    if relativeSourceRange == nil,
+                       let range = authoredDeclarationRange(for: propertyText, sourceRange: sourceRange) {
+                        return range
+                    }
+                }
             }
 
             let ranges = declarationRanges(for: propertyText)
@@ -176,7 +213,48 @@ extension CSSStyle {
             nsText.replacingCharacters(in: range, with: replacementText)
         }
 
+        private func authoredDeclarationRange(
+            for propertyText: String,
+            sourceRange: CSSStyle.SourceRange
+        ) -> NSRange? {
+            Self.authoredDeclarationRange(
+                for: propertyText,
+                sourceRange: sourceRange,
+                nsText: nsText,
+                lineStartOffsets: lineStartOffsets
+            )
+        }
+
+        private static func authoredDeclarationRange(
+            for propertyText: String,
+            sourceRange: CSSStyle.SourceRange,
+            nsText: NSString,
+            lineStartOffsets: [Int]
+        ) -> NSRange? {
+            guard let range = nsRange(
+                sourceRange: sourceRange,
+                lineStartOffsets: lineStartOffsets,
+                textLength: nsText.length
+            ),
+                  nsText.substring(with: range).trimmingCharacters(in: .whitespacesAndNewlines) == propertyText else {
+                return nil
+            }
+            return range
+        }
+
         private func nsRange(sourceRange: CSSStyle.SourceRange) -> NSRange? {
+            Self.nsRange(
+                sourceRange: sourceRange,
+                lineStartOffsets: lineStartOffsets,
+                textLength: nsText.length
+            )
+        }
+
+        private static func nsRange(
+            sourceRange: CSSStyle.SourceRange,
+            lineStartOffsets: [Int],
+            textLength: Int
+        ) -> NSRange? {
             guard sourceRange.startLine >= 0,
                   sourceRange.endLine >= sourceRange.startLine,
                   sourceRange.startColumn >= 0,
@@ -191,10 +269,117 @@ extension CSSStyle {
             let startOffset = lineStartOffsets[sourceRange.startLine] + sourceRange.startColumn
             let endOffset = lineStartOffsets[sourceRange.endLine] + sourceRange.endColumn
             guard endOffset >= startOffset,
-                  endOffset <= nsText.length else {
+                  endOffset <= textLength else {
                 return nil
             }
             return NSRange(location: startOffset, length: endOffset - startOffset)
+        }
+
+        private func styleRelativeSourceRange(_ sourceRange: CSSStyle.SourceRange) -> CSSStyle.SourceRange? {
+            guard let styleRange else {
+                return nil
+            }
+            return Self.styleRelativeSourceRange(sourceRange, styleRange: styleRange)
+        }
+
+        private static func styleRelativeSourceRange(
+            _ sourceRange: CSSStyle.SourceRange,
+            styleRange: CSSStyle.SourceRange
+        ) -> CSSStyle.SourceRange? {
+            guard
+                  styleRange.startLine >= 0,
+                  styleRange.endLine >= styleRange.startLine,
+                  styleRange.startColumn >= 0,
+                  styleRange.endColumn >= 0,
+                  sourceRange.startLine >= 0,
+                  sourceRange.endLine >= sourceRange.startLine,
+                  sourceRange.startColumn >= 0,
+                  sourceRange.endColumn >= 0,
+                  isStylesheetSourceRange(sourceRange, containedIn: styleRange) else {
+                return nil
+            }
+
+            let startLine = sourceRange.startLine - styleRange.startLine
+            let endLine = sourceRange.endLine - styleRange.startLine
+            var startColumn = sourceRange.startColumn
+            var endColumn = sourceRange.endColumn
+            if startLine == 0 {
+                startColumn -= styleRange.startColumn
+            }
+            if endLine == 0 {
+                endColumn -= styleRange.startColumn
+            }
+
+            guard startLine >= 0,
+                  endLine >= startLine,
+                  startColumn >= 0,
+                  endColumn >= 0 else {
+                return nil
+            }
+
+            return CSSStyle.SourceRange(
+                startLine: startLine,
+                startColumn: startColumn,
+                endLine: endLine,
+                endColumn: endColumn
+            )
+        }
+
+        private static func isStylesheetSourceRange(
+            _ sourceRange: CSSStyle.SourceRange,
+            containedIn styleRange: CSSStyle.SourceRange
+        ) -> Bool {
+            let startsAfterStyleStart = sourceRange.startLine > styleRange.startLine
+                || (sourceRange.startLine == styleRange.startLine
+                    && sourceRange.startColumn >= styleRange.startColumn)
+            let endsBeforeStyleEnd = sourceRange.endLine < styleRange.endLine
+                || (sourceRange.endLine == styleRange.endLine
+                    && sourceRange.endColumn <= styleRange.endColumn)
+            return startsAfterStyleStart && endsBeforeStyleEnd
+        }
+
+        private static func sourceRangeResolutionMode(
+            properties: [RewriteProperty],
+            styleRange: CSSStyle.SourceRange?,
+            nsText: NSString,
+            lineStartOffsets: [Int]
+        ) -> SourceRangeResolutionMode {
+            guard let styleRange else {
+                return .localFirst
+            }
+
+            var localMatches = 0
+            var stylesheetRelativeMatches = 0
+            for property in properties {
+                guard let propertyText = property.trimmedText,
+                      !propertyText.isEmpty,
+                      let sourceRange = property.sourceRange else {
+                    continue
+                }
+
+                if authoredDeclarationRange(
+                    for: propertyText,
+                    sourceRange: sourceRange,
+                    nsText: nsText,
+                    lineStartOffsets: lineStartOffsets
+                ) != nil {
+                    localMatches += 1
+                }
+
+                guard let relativeRange = styleRelativeSourceRange(sourceRange, styleRange: styleRange) else {
+                    continue
+                }
+                if authoredDeclarationRange(
+                    for: propertyText,
+                    sourceRange: relativeRange,
+                    nsText: nsText,
+                    lineStartOffsets: lineStartOffsets
+                ) != nil {
+                    stylesheetRelativeMatches += 1
+                }
+            }
+
+            return stylesheetRelativeMatches > localMatches ? .stylesheetRelativeFirst : .localFirst
         }
 
         private mutating func declarationRanges(for propertyText: String) -> [NSRange] {

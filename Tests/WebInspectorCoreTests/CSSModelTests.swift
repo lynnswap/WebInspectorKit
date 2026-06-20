@@ -791,8 +791,250 @@ func cssStyleRewriteContextReusesStyleTextScansDuringNormalization() throws {
     #expect(rangedSnapshot.lineStartUTF16OffsetScans == 1)
     #expect(rangedSnapshot.declarationRangeScans == 0)
 
-    let duplicateStyle = CSSStyle.Payload(
+    let localRangeWithStyleRangeStyle = CSSStyle.Payload(
         id: CSSStyle.ID(styleSheetID: .init("sheet"), ordinal: 1),
+        cssProperties: [
+            CSSProperty.Payload(
+                name: "color",
+                value: "red",
+                text: "color: red;",
+                status: .active,
+                range: CSSStyle.SourceRange(startLine: 0, startColumn: 0, endLine: 0, endColumn: 11)
+            ),
+        ],
+        cssText: "color: red;",
+        range: CSSStyle.SourceRange(startLine: 5, startColumn: 6, endLine: 5, endColumn: 17)
+    )
+
+    let (localRangeWithStyleRangeNormalizedStyle, localRangeWithStyleRangeSnapshot) = CSSStyle.TextRewriter.withInstrumentationCounters {
+        CSSStyle.SectionBuilder.normalizedStyle(
+            localRangeWithStyleRangeStyle,
+            isEditable: true,
+            ruleOrigin: .author
+        )
+    }
+    #expect(localRangeWithStyleRangeNormalizedStyle.cssProperties.map(\.isEditable) == [true])
+    #expect(localRangeWithStyleRangeSnapshot.lineStartUTF16OffsetScans == 1)
+    #expect(localRangeWithStyleRangeSnapshot.declarationRangeScans == 0)
+
+    let localDuplicateRangeWithStyleRangeStyle = CSSStyle.Payload(
+        id: CSSStyle.ID(styleSheetID: .init("sheet"), ordinal: 2),
+        cssProperties: [
+            CSSProperty.Payload(
+                name: "color",
+                value: "red",
+                text: "color: red;",
+                status: .active,
+                range: CSSStyle.SourceRange(startLine: 0, startColumn: 0, endLine: 0, endColumn: 11)
+            ),
+            CSSProperty.Payload(
+                name: "color",
+                value: "red",
+                text: "color: red;",
+                status: .active,
+                range: CSSStyle.SourceRange(startLine: 1, startColumn: 0, endLine: 1, endColumn: 11)
+            ),
+            CSSProperty.Payload(
+                name: "color",
+                value: "red",
+                text: "color: red;",
+                status: .active,
+                range: CSSStyle.SourceRange(startLine: 2, startColumn: 0, endLine: 2, endColumn: 11)
+            ),
+        ],
+        cssText: """
+        color: red;
+        color: red;
+        color: red;
+        """,
+        range: CSSStyle.SourceRange(startLine: 1, startColumn: 0, endLine: 4, endColumn: 0)
+    )
+
+    let (localDuplicateRangeWithStyleRangeNormalizedStyle, localDuplicateRangeWithStyleRangeSnapshot) = CSSStyle.TextRewriter.withInstrumentationCounters {
+        CSSStyle.SectionBuilder.normalizedStyle(
+            localDuplicateRangeWithStyleRangeStyle,
+            isEditable: true,
+            ruleOrigin: .author
+        )
+    }
+    #expect(localDuplicateRangeWithStyleRangeNormalizedStyle.cssProperties.map(\.isEditable) == [true, true, true])
+    #expect(localDuplicateRangeWithStyleRangeSnapshot.lineStartUTF16OffsetScans == 1)
+    #expect(localDuplicateRangeWithStyleRangeSnapshot.declarationRangeScans == 0)
+
+    let (localDuplicateRangeWithStyleRangeRewrittenText, localDuplicateRangeWithStyleRangeRewriteSnapshot) = CSSStyle.TextRewriter.withInstrumentationCounters {
+        CSSStyle.TextRewriter.rewrittenStyleText(
+            style: localDuplicateRangeWithStyleRangeNormalizedStyle,
+            propertyIndex: 2,
+            enabled: false
+        )
+    }
+    #expect(localDuplicateRangeWithStyleRangeRewrittenText == """
+    color: red;
+    color: red;
+    /* color: red; */
+    """)
+    #expect(localDuplicateRangeWithStyleRangeRewriteSnapshot.lineStartUTF16OffsetScans == 1)
+    #expect(localDuplicateRangeWithStyleRangeRewriteSnapshot.declarationRangeScans == 0)
+
+    let stylesheetRelativeStyle = CSSStyle.Payload(
+        id: CSSStyle.ID(styleSheetID: .init("sheet"), ordinal: 3),
+        cssProperties: [
+            CSSProperty.Payload(
+                name: "margin",
+                value: "0",
+                text: "margin: 0;",
+                status: .active,
+                range: CSSStyle.SourceRange(startLine: 6, startColumn: 2, endLine: 6, endColumn: 12)
+            ),
+            CSSProperty.Payload(
+                name: "color",
+                value: "red",
+                text: "color: red;",
+                status: .active,
+                range: CSSStyle.SourceRange(startLine: 7, startColumn: 2, endLine: 7, endColumn: 13)
+            ),
+        ],
+        cssText: """
+
+          margin: 0;
+          color: red;
+        """,
+        range: CSSStyle.SourceRange(startLine: 5, startColumn: 6, endLine: 8, endColumn: 0)
+    )
+
+    let (stylesheetRelativeNormalizedStyle, stylesheetRelativeSnapshot) = CSSStyle.TextRewriter.withInstrumentationCounters {
+        CSSStyle.SectionBuilder.normalizedStyle(
+            stylesheetRelativeStyle,
+            isEditable: true,
+            ruleOrigin: .author
+        )
+    }
+    #expect(stylesheetRelativeNormalizedStyle.cssProperties.map(\.isEditable) == [true, true])
+    #expect(stylesheetRelativeSnapshot.lineStartUTF16OffsetScans == 1)
+    #expect(stylesheetRelativeSnapshot.declarationRangeScans == 0)
+
+    let sameLineStyle = CSSStyle.Payload(
+        id: CSSStyle.ID(styleSheetID: .init("sheet"), ordinal: 4),
+        cssProperties: [
+            CSSProperty.Payload(
+                name: "color",
+                value: "red",
+                text: "color: red;",
+                status: .active,
+                range: CSSStyle.SourceRange(startLine: 20, startColumn: 7, endLine: 20, endColumn: 18)
+            ),
+            CSSProperty.Payload(
+                name: "background",
+                value: "blue",
+                text: "background: blue;",
+                status: .active,
+                range: CSSStyle.SourceRange(startLine: 20, startColumn: 19, endLine: 20, endColumn: 36)
+            ),
+        ],
+        cssText: "color: red; background: blue;",
+        range: CSSStyle.SourceRange(startLine: 20, startColumn: 7, endLine: 20, endColumn: 36)
+    )
+
+    let (sameLineNormalizedStyle, sameLineSnapshot) = CSSStyle.TextRewriter.withInstrumentationCounters {
+        CSSStyle.SectionBuilder.normalizedStyle(
+            sameLineStyle,
+            isEditable: true,
+            ruleOrigin: .author
+        )
+    }
+    #expect(sameLineNormalizedStyle.cssProperties.map(\.isEditable) == [true, true])
+    #expect(sameLineSnapshot.lineStartUTF16OffsetScans == 1)
+    #expect(sameLineSnapshot.declarationRangeScans == 0)
+
+    let (sameLineRewrittenText, sameLineRewriteSnapshot) = CSSStyle.TextRewriter.withInstrumentationCounters {
+        CSSStyle.TextRewriter.rewrittenStyleText(
+            style: sameLineNormalizedStyle,
+            propertyIndex: 1,
+            enabled: false
+        )
+    }
+    #expect(sameLineRewrittenText == "color: red; /* background: blue; */")
+    #expect(sameLineRewriteSnapshot.lineStartUTF16OffsetScans == 1)
+    #expect(sameLineRewriteSnapshot.declarationRangeScans == 0)
+
+    let duplicateStylesheetRelativeStyle = CSSStyle.Payload(
+        id: CSSStyle.ID(styleSheetID: .init("sheet"), ordinal: 5),
+        cssProperties: [
+            CSSProperty.Payload(
+                name: "color",
+                value: "red",
+                text: "color: red;",
+                status: .active,
+                range: CSSStyle.SourceRange(startLine: 1, startColumn: 0, endLine: 1, endColumn: 11)
+            ),
+            CSSProperty.Payload(
+                name: "color",
+                value: "red",
+                text: "color: red;",
+                status: .active,
+                range: CSSStyle.SourceRange(startLine: 2, startColumn: 0, endLine: 2, endColumn: 11)
+            ),
+        ],
+        cssText: """
+        color: red;
+        color: red;
+        """,
+        range: CSSStyle.SourceRange(startLine: 1, startColumn: 0, endLine: 3, endColumn: 0)
+    )
+
+    let (duplicateStylesheetRelativeNormalizedStyle, duplicateStylesheetRelativeSnapshot) = CSSStyle.TextRewriter.withInstrumentationCounters {
+        CSSStyle.SectionBuilder.normalizedStyle(
+            duplicateStylesheetRelativeStyle,
+            isEditable: true,
+            ruleOrigin: .author
+        )
+    }
+    #expect(duplicateStylesheetRelativeNormalizedStyle.cssProperties.map(\.isEditable) == [true, true])
+    #expect(duplicateStylesheetRelativeSnapshot.lineStartUTF16OffsetScans == 1)
+    #expect(duplicateStylesheetRelativeSnapshot.declarationRangeScans == 0)
+
+    let (duplicateStylesheetRelativeRewrittenText, duplicateStylesheetRelativeRewriteSnapshot) = CSSStyle.TextRewriter.withInstrumentationCounters {
+        CSSStyle.TextRewriter.rewrittenStyleText(
+            style: duplicateStylesheetRelativeNormalizedStyle,
+            propertyIndex: 0,
+            enabled: false
+        )
+    }
+    #expect(duplicateStylesheetRelativeRewrittenText == """
+    /* color: red; */
+    color: red;
+    """)
+    #expect(duplicateStylesheetRelativeRewriteSnapshot.lineStartUTF16OffsetScans == 1)
+    #expect(duplicateStylesheetRelativeRewriteSnapshot.declarationRangeScans == 0)
+
+    let mismatchedRangeStyle = CSSStyle.Payload(
+        id: CSSStyle.ID(styleSheetID: .init("sheet"), ordinal: 6),
+        cssProperties: [
+            CSSProperty.Payload(
+                name: "color",
+                value: "red",
+                text: "color: red;",
+                status: .active,
+                range: CSSStyle.SourceRange(startLine: 20, startColumn: 7, endLine: 20, endColumn: 18)
+            ),
+        ],
+        cssText: "background: blue; color: red;",
+        range: CSSStyle.SourceRange(startLine: 20, startColumn: 7, endLine: 20, endColumn: 36)
+    )
+
+    let (mismatchedRangeNormalizedStyle, mismatchedRangeSnapshot) = CSSStyle.TextRewriter.withInstrumentationCounters {
+        CSSStyle.SectionBuilder.normalizedStyle(
+            mismatchedRangeStyle,
+            isEditable: true,
+            ruleOrigin: .author
+        )
+    }
+    #expect(mismatchedRangeNormalizedStyle.cssProperties.map(\.isEditable) == [true])
+    #expect(mismatchedRangeSnapshot.lineStartUTF16OffsetScans == 1)
+    #expect(mismatchedRangeSnapshot.declarationRangeScans == 1)
+
+    let duplicateStyle = CSSStyle.Payload(
+        id: CSSStyle.ID(styleSheetID: .init("sheet"), ordinal: 7),
         cssProperties: [
             CSSProperty.Payload(
                 name: "color",
