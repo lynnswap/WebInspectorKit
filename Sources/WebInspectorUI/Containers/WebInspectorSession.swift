@@ -62,6 +62,15 @@ public final class WebInspectorSession {
         await detachAction(inspector)
     }
 
+    package func retireRootPresentation(detach: Bool) async {
+        interface.removeContentCache()
+        guard detach else {
+            await inspector.retireBackendInteractionForPresentationEnd()
+            return
+        }
+        await self.detach()
+    }
+
     private func startPageUserInterfaceStyleObservation(for webView: WKWebView) {
         let observer = WebInspectorPageUserInterfaceStyleObserver(webView: webView) { [weak self] style in
             self?.setPageUserInterfaceStyle(style)

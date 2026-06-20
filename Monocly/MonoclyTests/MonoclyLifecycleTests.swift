@@ -215,6 +215,7 @@ struct MonoclyLifecycleTests {
                 coordinator.presentedSheetControllerForTesting as? WebInspectorViewController
             )
             #expect(didPresent)
+            #expect(sheetController.automaticallyDetachesOnDismiss == false)
             if #available(iOS 26.0, *) {
                 #expect(sheetController.drawsBackground == false)
             }

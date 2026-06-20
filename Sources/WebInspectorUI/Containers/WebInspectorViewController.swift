@@ -26,7 +26,7 @@ private final class WebInspectorRootPresentationLifecycleCoordinator {
 }
 
 @MainActor
-public final class WebInspectorViewController: UIViewController, UIAdaptivePresentationControllerDelegate {
+public final class WebInspectorViewController: UIViewController {
     private enum HostKind {
         case compact
         case regular
@@ -68,7 +68,6 @@ public final class WebInspectorViewController: UIViewController, UIAdaptivePrese
 
     public override func viewDidLoad() {
         super.viewDidLoad()
-        installPresentationLifecycleDelegateIfAvailable()
         applyBackgroundFromTraits()
         rebuildLayout(forceHostReplacement: true)
         registerForTraitChanges([UITraitHorizontalSizeClass.self]) { (self: Self, _) in
@@ -84,7 +83,6 @@ public final class WebInspectorViewController: UIViewController, UIAdaptivePrese
     public override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         presentationLifecycleCoordinator.beginPresentation()
-        installPresentationLifecycleDelegateIfAvailable()
     }
 
     public override func viewDidDisappear(_ animated: Bool) {
@@ -125,10 +123,6 @@ public final class WebInspectorViewController: UIViewController, UIAdaptivePrese
         finishRootPresentationLifecycle()
     }
 
-    public func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
-        finishRootPresentationLifecycle()
-    }
-
     public func attach(to webView: WKWebView) async throws {
         try await session.attach(to: webView)
     }
@@ -157,18 +151,10 @@ public final class WebInspectorViewController: UIViewController, UIAdaptivePrese
             || navigationController?.presentationController?.presentedViewController === navigationController
     }
 
-    private func installPresentationLifecycleDelegateIfAvailable() {
-        presentationController?.delegate = self
-    }
-
     private func finishRootPresentationLifecycle() {
         presentationLifecycleCoordinator.finishIfNeeded { [session, automaticallyDetachesOnDismiss] in
-            session.interface.removeContentCache()
-            guard automaticallyDetachesOnDismiss else {
-                return
-            }
             Task { @MainActor [session] in
-                await session.detach()
+                await session.retireRootPresentation(detach: automaticallyDetachesOnDismiss)
             }
         }
     }

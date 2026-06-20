@@ -6703,6 +6703,51 @@ func detachHidesVisibleDOMHighlightBeforeTransportDetach() async throws {
 }
 
 @Test
+func presentationEndCleanupHidesVisibleDOMHighlightWithoutDetachingTransport() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    let htmlID = try await waitForCurrentNode(in: session, targetID: .pageMain, protocolNodeID: .init(2))
+
+    let countBeforeHighlight = await backend.sentTargetMessages().count
+    let highlightTask = Task {
+        await session.attachment.dom.highlightNode(for: htmlID)
+    }
+    let highlight = try await waitForTargetMessage(backend, method: "DOM.highlightNode", after: countBeforeHighlight)
+    await receiveTargetReply(
+        transport,
+        targetID: highlight.targetIdentifier,
+        messageID: try messageID(highlight.message),
+        result: "{}"
+    )
+    await highlightTask.value
+
+    let countBeforeCleanup = await backend.sentTargetMessages().count
+    let cleanupTask = Task {
+        await session.retireBackendInteractionForPresentationEnd()
+    }
+    let hideHighlight = try await waitForTargetMessage(backend, method: "DOM.hideHighlight", after: countBeforeCleanup)
+    #expect(hideHighlight.targetIdentifier == ProtocolTarget.ID.pageMain)
+    #expect(await backend.isDetached() == false)
+
+    await receiveTargetReply(
+        transport,
+        targetID: hideHighlight.targetIdentifier,
+        messageID: try messageID(hideHighlight.message),
+        result: "{}"
+    )
+    await cleanupTask.value
+
+    let methodsAfterCleanupStart = await backend.sentTargetMessages().dropFirst(countBeforeCleanup).compactMap { try? messageMethod($0.message) }
+    #expect(methodsAfterCleanupStart == ["DOM.hideHighlight"])
+    #expect(await backend.isDetached() == false)
+    #expect(await session.hasActiveConnection)
+    #expect(await session.attachment.dom.snapshot().currentPageTargetID == ProtocolTarget.ID.pageMain)
+    #expect(await session.lastError == nil)
+}
+
+@Test
 func detachDisablesActiveElementPickerAndHidesHighlightBeforeTransportDetach() async throws {
     let backend = FakeTransportBackend()
     let transport = testTransport(backend)
@@ -6750,6 +6795,58 @@ func detachDisablesActiveElementPickerAndHidesHighlightBeforeTransportDetach() a
     #expect(methodsAfterDetachStart == ["DOM.setInspectModeEnabled", "DOM.hideHighlight"])
     #expect(await backend.isDetached())
     #expect(await session.attachment.dom.snapshot().currentPageTargetID == nil)
+    #expect(await session.lastError == nil)
+}
+
+@Test
+func presentationEndCleanupDisablesActiveElementPickerAndHidesHighlightWithoutDetachingTransport() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = await InspectorSession(configuration: .test)
+    try await connect(session, transport: transport, backend: backend)
+    try await beginPicker(session: session, transport: transport, backend: backend)
+
+    let countBeforeCleanup = await backend.sentTargetMessages().count
+    let cleanupTask = Task {
+        await session.retireBackendInteractionForPresentationEnd()
+    }
+    let disableInspectMode = try await waitForTargetMessage(
+        backend,
+        method: "DOM.setInspectModeEnabled",
+        after: countBeforeCleanup
+    )
+    #expect(disableInspectMode.targetIdentifier == ProtocolTarget.ID.pageMain)
+    #expect(try boolParameter("enabled", in: disableInspectMode.message) == false)
+    #expect(await backend.isDetached() == false)
+
+    let countBeforeDisableReply = await backend.sentTargetMessages().count
+    await receiveTargetReply(
+        transport,
+        targetID: disableInspectMode.targetIdentifier,
+        messageID: try messageID(disableInspectMode.message),
+        result: "{}"
+    )
+    let hideHighlight = try await waitForTargetMessage(
+        backend,
+        method: "DOM.hideHighlight",
+        after: countBeforeDisableReply
+    )
+    #expect(hideHighlight.targetIdentifier == ProtocolTarget.ID.pageMain)
+    #expect(await backend.isDetached() == false)
+
+    await receiveTargetReply(
+        transport,
+        targetID: hideHighlight.targetIdentifier,
+        messageID: try messageID(hideHighlight.message),
+        result: "{}"
+    )
+    await cleanupTask.value
+
+    let methodsAfterCleanupStart = await backend.sentTargetMessages().dropFirst(countBeforeCleanup).compactMap { try? messageMethod($0.message) }
+    #expect(methodsAfterCleanupStart == ["DOM.setInspectModeEnabled", "DOM.hideHighlight"])
+    #expect(await backend.isDetached() == false)
+    #expect(await session.hasActiveConnection)
+    #expect(await session.attachment.dom.snapshot().currentPageTargetID == ProtocolTarget.ID.pageMain)
     #expect(await session.lastError == nil)
 }
 

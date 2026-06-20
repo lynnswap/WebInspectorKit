@@ -239,7 +239,7 @@ struct ParentContainerTests {
     }
 
     @Test
-    func rootPresentationDelegateAndDisappearFallbackDetachOnlyOnce() async throws {
+    func rootPresentationFallbacksDetachOnlyOnce() async throws {
         let detachRecorder = DetachRecorder()
         let session = makeSessionWithNoOpAttachment(detachAction: { _ in
             detachRecorder.record()
@@ -260,6 +260,25 @@ struct ParentContainerTests {
 
         #expect(detachRecorder.count == 1)
         #expect(session.interface.contentCacheCountForTesting == 0)
+    }
+
+    @Test
+    func viewControllerDoesNotReplaceExternalPresentationControllerDelegate() async throws {
+        let presenter = UIViewController()
+        let viewController = WebInspectorViewController(session: makeSessionWithNoOpAttachment())
+        let window = showInWindow(presenter)
+        defer { window.isHidden = true }
+
+        presenter.present(viewController, animated: false)
+        #expect(await waitUntil { presenter.presentedViewController === viewController })
+        let presentationController = try #require(viewController.presentationController)
+        let externalDelegate = PresentationDelegateRecorder()
+        presentationController.delegate = externalDelegate
+
+        viewController.beginAppearanceTransition(true, animated: false)
+        viewController.endAppearanceTransition()
+
+        #expect(presentationController.delegate === externalDelegate)
     }
 
     @Test
@@ -600,6 +619,8 @@ struct ParentContainerTests {
             count += 1
         }
     }
+
+    private final class PresentationDelegateRecorder: NSObject, UIAdaptivePresentationControllerDelegate {}
 
     private func waitUntil(
         timeoutAttempts: Int = 50,

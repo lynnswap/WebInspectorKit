@@ -1,6 +1,11 @@
 import Foundation
 import WebInspectorTransport
 
+private enum DOMBackendInteractionRetirementScope {
+    case presentationEnd
+    case attachmentTeardown
+}
+
 private enum DOMInspectRoute {
     case remoteObject(targetID: ProtocolTarget.ID, objectID: String)
     case protocolNode(targetID: ProtocolTarget.ID, nodeID: DOMNode.ProtocolID)
@@ -49,28 +54,44 @@ extension DOMSession {
         cancelCSSActionRequests()
     }
 
+    package func retireBackendInteractionForPresentationEnd() async {
+        await retireBackendInteraction(scope: .presentationEnd)
+    }
+
     package func retireBackendInteractionForTeardown() async {
         cancelDocumentRequests()
         cancelCSSActionRequests()
+        await retireBackendInteraction(scope: .attachmentTeardown)
+        clearDeleteUndoHistory()
+    }
 
+    private func retireBackendInteraction(scope: DOMBackendInteractionRetirementScope) async {
         let pickerTargetID = elementPicker.targetID
         let inspectModeTargetID = isSelectingElement ? pickerTargetID ?? currentPageTargetID : nil
+        let requiresActiveConnection = scope == .presentationEnd
         if let inspectModeTargetID,
            targetSupportsTeardownBackendInteraction(inspectModeTargetID),
            let intent = setInspectModeEnabledIntent(targetID: inspectModeTargetID, enabled: false) {
-            await performTeardownCommand(intent)
+            await performBackendInteractionRetirementCommand(
+                intent,
+                requiresActiveConnection: requiresActiveConnection,
+                scope: scope
+            )
         }
 
         for targetID in teardownHighlightHideTargetIDs(preferredTargetID: pickerTargetID) {
             guard let intent = hideHighlightIntent(targetID: targetID) else {
                 continue
             }
-            await performTeardownCommand(intent)
+            await performBackendInteractionRetirementCommand(
+                intent,
+                requiresActiveConnection: requiresActiveConnection,
+                scope: scope
+            )
         }
 
         highlightController.clearAll()
         clearElementPickerState(invalidatePendingSelection: true)
-        clearDeleteUndoHistory()
     }
 
     package func waitUntilDocumentRequestsIdle(targetID: ProtocolTarget.ID? = nil) async {
@@ -239,13 +260,26 @@ extension DOMSession {
         return targetIDs
     }
 
-    private func performTeardownCommand(_ intent: DOMCommand.Intent) async {
+    private func performBackendInteractionRetirementCommand(
+        _ intent: DOMCommand.Intent,
+        requiresActiveConnection: Bool,
+        scope: DOMBackendInteractionRetirementScope
+    ) async {
         do {
-            try await perform(intent, requiresActiveConnection: false)
+            try await perform(intent, requiresActiveConnection: requiresActiveConnection)
         } catch {
             InspectorRuntimeLog.warning(
-                "dom.teardownCleanup.failed method=\(teardownCommandMethodName(for: intent)) target=\(teardownCommandTargetDescription(for: intent)) error=\(error)"
+                "dom.backendInteractionRetirement.failed scope=\(scopeLogName(scope)) method=\(teardownCommandMethodName(for: intent)) target=\(teardownCommandTargetDescription(for: intent)) error=\(error)"
             )
+        }
+    }
+
+    private func scopeLogName(_ scope: DOMBackendInteractionRetirementScope) -> String {
+        switch scope {
+        case .presentationEnd:
+            "presentationEnd"
+        case .attachmentTeardown:
+            "attachmentTeardown"
         }
     }
 

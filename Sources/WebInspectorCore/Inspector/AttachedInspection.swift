@@ -612,6 +612,13 @@ package final class InspectorSession {
         await AttachmentTeardownCoordinator(connection: previousConnection).detach(session: self)
     }
 
+    package func retireBackendInteractionForPresentationEnd() async {
+        guard hasActiveConnection else {
+            return
+        }
+        await dom.retireBackendInteractionForPresentationEnd()
+    }
+
     private struct AttachmentTeardownCoordinator {
         var connection: InspectorConnection
 
