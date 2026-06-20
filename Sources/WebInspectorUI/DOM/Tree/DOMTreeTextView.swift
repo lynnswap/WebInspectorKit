@@ -563,7 +563,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
             }
             let invalidation = event.kind == .initial
                 ? latestInvalidation
-                : dom.treeRenderInvalidation(since: previousRoutedTreeRevision)
+                : dom.changes(since: previousRoutedTreeRevision)
             scheduleDOMInvalidation(invalidation, isInitial: event.kind == .initial)
         }
         selectionObservation = withPortableContinuousObservation { [weak self] _ in
@@ -606,25 +606,22 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
 
         lastRoutedTreeRevision = treeRevision
         let invalidation = previousRoutedTreeRevision.map {
-            dom.treeRenderInvalidation(since: $0)
+            dom.changes(since: $0)
         } ?? latestInvalidation
         scheduleDOMInvalidation(invalidation, isInitial: previousRoutedTreeRevision == nil)
     }
 
     private func scheduleDOMInvalidation(
         _ invalidation: DOMTreeRenderInvalidation,
-        isInitial: Bool
+        isInitial: Bool,
+        forceRoute: Bool = false
     ) {
         pendingDOMTreeRenderInvalidation = pendingDOMTreeRenderInvalidation?.merging(with: invalidation) ?? invalidation
         pendingDOMTreeRenderInvalidationIsInitial = pendingDOMTreeRenderInvalidationIsInitial || isInitial
         pendingDOMTreeRenderInvalidationRequiresRoute = pendingDOMTreeRenderInvalidationRequiresRoute
-            || shouldRouteDOMInvalidation(
-                invalidation,
-                isInitial: isInitial,
-                includesNode: { [renderedRowsBuildCoordinator] nodeID in
-                    renderedRowsBuildCoordinator.currentBuildRenders(nodeID: nodeID)
-                }
-            )
+            || forceRoute
+            || shouldRouteDOMInvalidation(invalidation, isInitial: isInitial)
+            || renderedRowsBuildCoordinator.currentBuildMayRender(invalidation)
         guard isRenderingActive else {
             return
         }
@@ -706,39 +703,32 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     private func shouldRouteDOMInvalidation(
         _ invalidation: DOMTreeRenderInvalidation,
         isInitial: Bool,
-        includesNode: ((DOMNode.ID) -> Bool)? = nil
+        visibleNodeIDs: Set<DOMNode.ID>? = nil
     ) -> Bool {
         guard !isInitial, !invalidation.requiresFragmentReset else {
             return true
         }
-
-        func isVisible(_ nodeID: DOMNode.ID) -> Bool {
-            renderedRows.contains(nodeID: nodeID) || includesNode?(nodeID) == true
-        }
+        let visibleNodeIDs = visibleNodeIDs ?? renderedRows.visibleNodeIDs
 
         switch invalidation.kind {
         case .root:
             return true
         case .content:
-            guard let affectedNodeID = invalidation.affectedNodeID else {
+            guard !invalidation.affectedNodeIDs.isEmpty else {
                 return true
             }
-            return isVisible(affectedNodeID)
+            return !invalidation.affectedNodeIDs.isDisjoint(with: visibleNodeIDs)
         case .structure:
             let renderRootNodeID = dom.currentDOMTreeRenderRootNodeID
-            if invalidation.affectedNodeID == renderRootNodeID
-                || invalidation.parentNodeID == renderRootNodeID {
+            if let renderRootNodeID,
+               invalidation.affectedNodeIDs.contains(renderRootNodeID)
+                || invalidation.parentNodeIDs.contains(renderRootNodeID) {
                 return true
             }
-            if let affectedNodeID = invalidation.affectedNodeID,
-               isVisible(affectedNodeID) {
+            if invalidation.intersects(nodeIDs: visibleNodeIDs) {
                 return true
             }
-            if let parentNodeID = invalidation.parentNodeID,
-               isVisible(parentNodeID) {
-                return true
-            }
-            return invalidation.affectedNodeID == nil && invalidation.parentNodeID == nil
+            return !invalidation.hasScopedNodes
         }
     }
 
@@ -835,22 +825,25 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         renderedRowsBuildCoordinator.startBuild(
             previousRowCapacity: rows.count,
             previousTextCapacity: renderedText.count,
-            isCurrentBuild: { [weak self] request in
+            isCurrentBuild: { [weak self] request, result in
                 guard let self else {
                     return false
                 }
                 guard isRenderingActive else {
                     return false
                 }
-                let currentInvalidation = dom.treeRenderInvalidation(since: request.treeRevision)
-                let isCurrentTreeRevision = currentInvalidation.revision == request.treeRevision
-                    || !shouldRouteDOMInvalidation(
+                let currentInvalidation = dom.changes(since: request.treeRevision)
+                let buildResultNeedsCurrentInvalidation = currentInvalidation.revision != request.treeRevision
+                    && shouldRouteDOMInvalidation(
                         currentInvalidation,
                         isInitial: false,
-                        includesNode: { nodeID in
-                            request.rendersNode(nodeID)
-                        }
+                        visibleNodeIDs: result.renderedNodeIDs
                     )
+                if buildResultNeedsCurrentInvalidation {
+                    scheduleDOMInvalidation(currentInvalidation, isInitial: false, forceRoute: true)
+                }
+                let isCurrentTreeRevision = currentInvalidation.revision == request.treeRevision
+                    || !buildResultNeedsCurrentInvalidation
                 return isCurrentTreeRevision
                     && expansionState.snapshot == request.expansionState
             },
@@ -1329,9 +1322,30 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         }
         let lowerBound = range.location
         let upperBound = NSMaxRange(range)
-        return rows.filter { row in
-            lowerBound < NSMaxRange(row.textRange) && upperBound > row.textRange.location
+        var lowerIndex = 0
+        var upperIndex = rows.count
+        while lowerIndex < upperIndex {
+            let middleIndex = (lowerIndex + upperIndex) / 2
+            if NSMaxRange(rows[middleIndex].textRange) <= lowerBound {
+                lowerIndex = middleIndex + 1
+            } else {
+                upperIndex = middleIndex
+            }
         }
+
+        var result: [DOMTreeTextView.Line] = []
+        var index = lowerIndex
+        while rows.indices.contains(index) {
+            let row = rows[index]
+            guard row.textRange.location < upperBound else {
+                break
+            }
+            if lowerBound < NSMaxRange(row.textRange) {
+                result.append(row)
+            }
+            index += 1
+        }
+        return result
     }
 
     private func uniqueNodesInDisplayOrder(for rows: [DOMTreeTextView.Line]) -> [DOMNode] {
@@ -1857,14 +1871,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func contentRowRects(for row: DOMTreeTextView.Line) -> [CGRect] {
-        textSegmentRects(for: row.textRange, type: .highlight).map { textRect in
-            CGRect(
-                x: 0,
-                y: textRect.minY,
-                width: max(textContentView.bounds.width, contentSize.width - Self.textInsets.left - Self.textInsets.right),
-                height: textRect.height
-            )
-        }
+        [modelContentRowRect(for: row)]
     }
 
     private func rowHeadRect(for row: DOMTreeTextView.Line) -> CGRect? {
@@ -1875,15 +1882,17 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func markupStartRect(for row: DOMTreeTextView.Line) -> CGRect? {
-        let markupStart = row.textRange.location + row.markupRange.location
         let markupLength = min(1, row.markupRange.length)
         guard markupLength > 0 else {
             return nil
         }
-        return unionRect(textSegmentRects(
-            for: NSRange(location: markupStart, length: markupLength),
-            type: .standard
-        ))
+        let column = row.markupRange.location
+        return CGRect(
+            x: CGFloat(column) * Self.characterWidth,
+            y: CGFloat(row.rowIndex) * rowHeight,
+            width: Self.characterWidth,
+            height: rowHeight
+        )
     }
 
     private func isDisclosureHit(at point: CGPoint, in row: DOMTreeTextView.Line) -> Bool {
@@ -1897,18 +1906,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         guard row.hasDisclosure else {
             return nil
         }
-        guard let slotRect = unionRect(textSegmentRects(for: disclosureSlotRange(for: row), type: .standard)) else {
-            return nil
-        }
-        guard let rowRect = contentRowRects(for: row).first else {
-            return slotRect
-        }
-        return CGRect(
-            x: slotRect.minX,
-            y: rowRect.minY,
-            width: max(slotRect.width, Self.characterWidth),
-            height: rowRect.height
-        )
+        return modelRowHeadRect(for: row)
     }
 
     private func disclosureAttachmentRange(for row: DOMTreeTextView.Line) -> NSRange {
@@ -1935,6 +1933,10 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         type: NSTextLayoutManager.SegmentType,
         options: NSTextLayoutManager.SegmentOptions = [.rangeNotRequired]
     ) -> [CGRect] {
+        #if DEBUG
+        performanceCounters.textSegmentRectsCallCount += 1
+        #endif
+
         guard let textRange = textRange(for: range) else {
             return []
         }
@@ -2096,11 +2098,16 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
             return
         }
 
+        #if DEBUG
+        performanceCounters.rowSpanDisplayInvalidationCallCount += 1
+        #endif
+
         var invalidatedRect = CGRect.null
         for range in ranges {
-            let rects = textSegmentRects(for: range, type: .standard)
-            for rect in rects {
-                invalidatedRect = invalidatedRect.union(rect)
+            for row in rowsIntersectingTextRange(range) {
+                for rect in contentRowRects(for: row) {
+                    invalidatedRect = invalidatedRect.union(rect)
+                }
             }
         }
 
@@ -2571,6 +2578,14 @@ extension DOMTreeTextView {
 
     var resetTextFragmentViewsCallCountForTesting: Int {
         performanceCounters.resetTextFragmentViewsCallCount
+    }
+
+    var rowSpanDisplayInvalidationCallCountForTesting: Int {
+        performanceCounters.rowSpanDisplayInvalidationCallCount
+    }
+
+    var textSegmentRectsCallCountForTesting: Int {
+        performanceCounters.textSegmentRectsCallCount
     }
 
     var cachedMarkupKeysForTesting: Set<DOMTreeTextView.MarkupCacheKey> {

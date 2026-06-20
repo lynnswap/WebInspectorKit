@@ -134,7 +134,7 @@ package final class DOMSession {
         }
     }
 
-    package func treeRenderInvalidation(since routedRevision: UInt64?) -> DOMTreeRenderInvalidation {
+    package func changes(since routedRevision: UInt64?) -> DOMTree.ChangeSet {
         guard let routedRevision,
               routedRevision < treeRevision else {
             return treeRenderInvalidation
@@ -151,6 +151,10 @@ package final class DOMSession {
             mergedInvalidation = mergedInvalidation.merging(with: invalidation)
         }
         return mergedInvalidation
+    }
+
+    package func treeRenderInvalidation(since routedRevision: UInt64?) -> DOMTreeRenderInvalidation {
+        changes(since: routedRevision)
     }
 
     private func recordSelectionMutation() {
@@ -335,20 +339,20 @@ package final class DOMSession {
         removeDocuments(for: targetID)
 
         let documentID = documentStore.nextDocumentID(for: targetID)
-        var nodeIndex = DOMDocument.NodeIndex()
+        let nodeStore = DOMDocument.NodeStore()
         let rootNodeID = buildSubtree(
             root,
             documentID: documentID,
             parentID: nil,
-            nodeIndex: &nodeIndex
+            nodeStore: nodeStore
         )
         let document = DOMDocument(
             id: documentID,
             targetID: targetID,
             lifecycle: .loaded,
             rootNodeID: rootNodeID,
-            nodesByID: nodeIndex.nodesByID,
-            currentNodeIDByProtocolNodeID: nodeIndex.currentNodeIDByProtocolNodeID
+            nodesByID: nodeStore.nodesByID,
+            currentNodeIDByProtocolNodeID: nodeStore.currentNodeIDByProtocolNodeID
         )
         targetState.currentDocument = document
 
@@ -1060,54 +1064,58 @@ package final class DOMSession {
         _ payload: DOMNode.Payload,
         documentID: DOMDocument.ID,
         parentID: DOMNode.ID?,
-        nodeIndex: inout DOMDocument.NodeIndex
+        nodeStore: DOMDocument.NodeStore
     ) -> DOMNode.ID {
         let nodeID = DOMNode.ID(documentID: documentID, nodeID: payload.nodeID)
         let node: DOMNode
-        if let existingNode = nodeIndex.node(for: nodeID) {
+        if let existingNode = nodeStore.node(for: nodeID) {
             node = existingNode
             node.update(from: payload, parentID: parentID)
         } else {
             node = DOMNode(id: nodeID, payload: payload, parentID: parentID)
         }
-        nodeIndex.store(node, rawNodeID: payload.nodeID)
+        nodeStore.store(node, rawNodeID: payload.nodeID)
 
-        switch payload.regularChildren {
-        case let .unrequested(count):
-            node.regularChildren = .unrequested(count: count)
-        case let .loaded(children):
-            node.regularChildren = .loaded(
-                children.map {
-                    buildSubtree(
-                        $0,
-                        documentID: documentID,
-                        parentID: nodeID,
-                        nodeIndex: &nodeIndex
-                    )
-                }
-            )
-        }
+        node.updateDOMTreeRenderSnapshotBatch {
+            switch payload.regularChildren {
+            case let .unrequested(count):
+                node.regularChildren = .unrequested(count: count)
+            case let .loaded(children):
+                node.regularChildren = .loaded(
+                    children.map {
+                        buildSubtree(
+                            $0,
+                            documentID: documentID,
+                            parentID: nodeID,
+                            nodeStore: nodeStore
+                        )
+                    }
+                )
+            }
 
-        node.contentDocumentID = payload.contentDocument.first.map {
-            buildSubtree($0, documentID: documentID, parentID: nodeID, nodeIndex: &nodeIndex)
-        }
-        node.shadowRootIDs = payload.shadowRoots.map {
-            buildSubtree($0, documentID: documentID, parentID: nodeID, nodeIndex: &nodeIndex)
-        }
-        node.templateContentID = payload.templateContent.first.map {
-            buildSubtree($0, documentID: documentID, parentID: nodeID, nodeIndex: &nodeIndex)
-        }
-        node.beforePseudoElementID = payload.beforePseudoElement.first.map {
-            buildSubtree($0, documentID: documentID, parentID: nodeID, nodeIndex: &nodeIndex)
-        }
-        node.otherPseudoElementIDs = payload.otherPseudoElements.map {
-            buildSubtree($0, documentID: documentID, parentID: nodeID, nodeIndex: &nodeIndex)
-        }
-        node.afterPseudoElementID = payload.afterPseudoElement.first.map {
-            buildSubtree($0, documentID: documentID, parentID: nodeID, nodeIndex: &nodeIndex)
-        }
+            node.contentDocumentID = payload.contentDocument.first.map {
+                buildSubtree($0, documentID: documentID, parentID: nodeID, nodeStore: nodeStore)
+            }
+            node.shadowRootIDs = payload.shadowRoots.map {
+                buildSubtree($0, documentID: documentID, parentID: nodeID, nodeStore: nodeStore)
+            }
+            node.templateContentID = payload.templateContent.first.map {
+                buildSubtree($0, documentID: documentID, parentID: nodeID, nodeStore: nodeStore)
+            }
+            node.beforePseudoElementID = payload.beforePseudoElement.first.map {
+                buildSubtree($0, documentID: documentID, parentID: nodeID, nodeStore: nodeStore)
+            }
+            node.otherPseudoElementIDs = payload.otherPseudoElements.map {
+                buildSubtree($0, documentID: documentID, parentID: nodeID, nodeStore: nodeStore)
+            }
+            node.afterPseudoElementID = payload.afterPseudoElement.first.map {
+                buildSubtree($0, documentID: documentID, parentID: nodeID, nodeStore: nodeStore)
+            }
 
-        relinkProtocolEffectiveChildren(of: node, nodesByID: nodeIndex.nodesByID)
+            relinkProtocolEffectiveChildren(of: node) { childID in
+                nodeStore.node(for: childID)
+            }
+        }
         return nodeID
     }
 
@@ -1122,19 +1130,13 @@ package final class DOMSession {
             removeNodeSubtree(existingNodeID, detachFromParent: true)
         }
         pruneOmittedOwnedChildren(fromExistingSubtreeMatching: payload, in: document)
-        let oldNodeIDs = Set(document.nodesByID.keys)
-        let oldCurrentNodeIDByProtocolNodeID = document.currentNodeIDByProtocolNodeID
-        var nodeIndex = document.nodeIndexSnapshot
+        let nodeStore = document.nodeStoreForMutation
         let nodeID = buildSubtree(
             payload,
             documentID: document.id,
             parentID: parentID,
-            nodeIndex: &nodeIndex
+            nodeStore: nodeStore
         )
-        if Set(nodeIndex.nodesByID.keys) != oldNodeIDs
-            || nodeIndex.currentNodeIDByProtocolNodeID != oldCurrentNodeIDByProtocolNodeID {
-            document.replaceNodeIndex(nodeIndex)
-        }
         return nodeID
     }
 
@@ -1505,26 +1507,25 @@ package final class DOMSession {
     }
 
     private func relinkProtocolEffectiveChildren(of parent: DOMNode) {
-        let children = parent.protocolEffectiveChildren
-        for (index, childID) in children.enumerated() {
-            guard let child = node(for: childID) else {
-                continue
-            }
-            child.parentID = parent.id
-            child.previousSiblingID = index > 0 ? children[index - 1] : nil
-            child.nextSiblingID = index + 1 < children.count ? children[index + 1] : nil
+        relinkProtocolEffectiveChildren(of: parent) { [weak self] childID in
+            self?.node(for: childID)
         }
     }
 
-    private func relinkProtocolEffectiveChildren(of parent: DOMNode, nodesByID: [DOMNode.ID: DOMNode]) {
+    private func relinkProtocolEffectiveChildren(
+        of parent: DOMNode,
+        nodeProvider: (DOMNode.ID) -> DOMNode?
+    ) {
         let children = parent.protocolEffectiveChildren
         for (index, childID) in children.enumerated() {
-            guard let child = nodesByID[childID] else {
+            guard let child = nodeProvider(childID) else {
                 continue
             }
-            child.parentID = parent.id
-            child.previousSiblingID = index > 0 ? children[index - 1] : nil
-            child.nextSiblingID = index + 1 < children.count ? children[index + 1] : nil
+            child.setProtocolRelationship(
+                parentID: parent.id,
+                previousSiblingID: index > 0 ? children[index - 1] : nil,
+                nextSiblingID: index + 1 < children.count ? children[index + 1] : nil
+            )
         }
     }
 

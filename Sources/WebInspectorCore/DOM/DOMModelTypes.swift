@@ -112,7 +112,7 @@ package struct DOMCurrentPage: Equatable, Sendable {
 
 package extension DOMDocument {
     @MainActor
-    struct NodeIndex {
+    final class NodeStore {
         private var nodesByIdentifier: [DOMNode.ID: DOMNode]
         private var currentNodeIDByRawNodeID: [DOMNode.ProtocolID: DOMNode.ID]
 
@@ -140,18 +140,20 @@ package extension DOMDocument {
             currentNodeIDByRawNodeID[rawNodeID]
         }
 
-        package mutating func store(_ node: DOMNode, rawNodeID: DOMNode.ProtocolID) {
+        package func store(_ node: DOMNode, rawNodeID: DOMNode.ProtocolID) {
             nodesByIdentifier[node.id] = node
             currentNodeIDByRawNodeID[rawNodeID] = node.id
         }
 
-        package mutating func removeNode(_ nodeID: DOMNode.ID, ifCurrentFor rawNodeID: DOMNode.ProtocolID) {
+        package func removeNode(_ nodeID: DOMNode.ID, ifCurrentFor rawNodeID: DOMNode.ProtocolID) {
             if currentNodeIDByRawNodeID[rawNodeID] == nodeID {
                 currentNodeIDByRawNodeID.removeValue(forKey: rawNodeID)
             }
             nodesByIdentifier.removeValue(forKey: nodeID)
         }
     }
+
+    typealias NodeIndex = NodeStore
 }
 
 @MainActor
@@ -162,7 +164,7 @@ package final class DOMDocument: Identifiable {
     package let localDocumentLifetimeID: DOMDocument.LifetimeID
     package var lifecycle: DOMDocument.Lifecycle
     package let rootNodeID: DOMNode.ID
-    private var nodeIndex: DOMDocument.NodeIndex
+    private var nodeStore: DOMDocument.NodeStore
     package var transactions: [DOMTransaction.ID: DOMTransaction]
     package var nextTransactionRawID: UInt64
 
@@ -179,7 +181,7 @@ package final class DOMDocument: Identifiable {
         self.localDocumentLifetimeID = id.localDocumentLifetimeID
         self.lifecycle = lifecycle
         self.rootNodeID = rootNodeID
-        nodeIndex = DOMDocument.NodeIndex(
+        nodeStore = DOMDocument.NodeStore(
             nodesByID: nodesByID,
             currentNodeIDByProtocolNodeID: currentNodeIDByProtocolNodeID
         )
@@ -188,27 +190,27 @@ package final class DOMDocument: Identifiable {
     }
 
     package var nodesByID: [DOMNode.ID: DOMNode] {
-        nodeIndex.nodesByID
+        nodeStore.nodesByID
     }
 
     package var currentNodeIDByProtocolNodeID: [DOMNode.ProtocolID: DOMNode.ID] {
-        nodeIndex.currentNodeIDByProtocolNodeID
+        nodeStore.currentNodeIDByProtocolNodeID
+    }
+
+    package var nodeStoreForMutation: DOMDocument.NodeStore {
+        nodeStore
     }
 
     package var nodeIndexSnapshot: DOMDocument.NodeIndex {
-        nodeIndex
-    }
-
-    package func replaceNodeIndex(_ newIndex: DOMDocument.NodeIndex) {
-        nodeIndex = newIndex
+        nodeStore
     }
 
     package func node(for nodeID: DOMNode.ID) -> DOMNode? {
-        nodeIndex.node(for: nodeID)
+        nodeStore.node(for: nodeID)
     }
 
     package func currentNodeID(for rawNodeID: DOMNode.ProtocolID) -> DOMNode.ID? {
-        nodeIndex.currentNodeID(for: rawNodeID)
+        nodeStore.currentNodeID(for: rawNodeID)
     }
 
     package func containsConnectedNode(_ nodeID: DOMNode.ID) -> Bool {
@@ -223,13 +225,13 @@ package final class DOMDocument: Identifiable {
             if candidateID == rootNodeID {
                 return true
             }
-            currentNodeID = nodeIndex.node(for: candidateID)?.parentID
+            currentNodeID = nodeStore.node(for: candidateID)?.parentID
         }
         return false
     }
 
     package func removeNode(_ nodeID: DOMNode.ID, ifCurrentFor rawNodeID: DOMNode.ProtocolID) {
-        nodeIndex.removeNode(nodeID, ifCurrentFor: rawNodeID)
+        nodeStore.removeNode(nodeID, ifCurrentFor: rawNodeID)
     }
 
     package func nextTransactionID() -> DOMTransaction.ID {
@@ -417,6 +419,8 @@ package final class DOMNode: Identifiable {
         didSet { refreshDOMTreeRenderSnapshot() }
     }
     @ObservationIgnored package private(set) var domTreeRenderSnapshot: DOMTreeRenderNodeSnapshot
+    @ObservationIgnored private var renderSnapshotBatchDepth = 0
+    @ObservationIgnored private var needsRenderSnapshotRefresh = false
 
     package init(id: ID, payload: DOMNode.Payload, parentID: ID?) {
         self.id = id
@@ -463,20 +467,53 @@ package final class DOMNode: Identifiable {
     }
 
     package func update(from payload: DOMNode.Payload, parentID: ID?) {
-        nodeType = payload.nodeType
-        nodeName = payload.nodeName
-        localName = payload.localName
-        nodeValue = payload.nodeValue
-        ownerFrameID = payload.ownerFrameID
-        documentURL = payload.documentURL
-        baseURL = payload.baseURL
-        attributes = payload.attributes
-        self.parentID = parentID
-        pseudoType = payload.pseudoType
-        shadowRootType = payload.shadowRootType
+        updateDOMTreeRenderSnapshotBatch {
+            nodeType = payload.nodeType
+            nodeName = payload.nodeName
+            localName = payload.localName
+            nodeValue = payload.nodeValue
+            ownerFrameID = payload.ownerFrameID
+            documentURL = payload.documentURL
+            baseURL = payload.baseURL
+            attributes = payload.attributes
+            self.parentID = parentID
+            pseudoType = payload.pseudoType
+            shadowRootType = payload.shadowRootType
+        }
+    }
+
+    package func setProtocolRelationship(
+        parentID: ID?,
+        previousSiblingID: ID?,
+        nextSiblingID: ID?
+    ) {
+        updateDOMTreeRenderSnapshotBatch {
+            self.parentID = parentID
+            self.previousSiblingID = previousSiblingID
+            self.nextSiblingID = nextSiblingID
+        }
+    }
+
+    package func updateDOMTreeRenderSnapshotBatch(_ update: () -> Void) {
+        renderSnapshotBatchDepth += 1
+        update()
+        renderSnapshotBatchDepth -= 1
+        guard renderSnapshotBatchDepth == 0, needsRenderSnapshotRefresh else {
+            return
+        }
+        needsRenderSnapshotRefresh = false
+        refreshDOMTreeRenderSnapshotNow()
     }
 
     private func refreshDOMTreeRenderSnapshot() {
+        guard renderSnapshotBatchDepth == 0 else {
+            needsRenderSnapshotRefresh = true
+            return
+        }
+        refreshDOMTreeRenderSnapshotNow()
+    }
+
+    private func refreshDOMTreeRenderSnapshotNow() {
         domTreeRenderSnapshot = DOMTreeRenderNodeSnapshot(
             id: id,
             protocolNodeID: protocolNodeID,

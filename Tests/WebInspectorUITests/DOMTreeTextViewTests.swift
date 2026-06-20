@@ -600,6 +600,8 @@ struct DOMTreeTextViewTests {
         #expect(view.incrementalTextStorageEditCallCountForTesting == 1)
         #expect(view.rebuildTextStorageCallCountForTesting == 0)
         #expect(view.resetTextFragmentViewsCallCountForTesting == 0)
+        #expect(view.rowSpanDisplayInvalidationCallCountForTesting == 1)
+        #expect(view.textSegmentRectsCallCountForTesting == 0)
     }
 
     @Test

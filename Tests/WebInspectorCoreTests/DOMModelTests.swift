@@ -949,6 +949,8 @@ func domTreeRenderInvalidationRecordsContentAndStructureMutations() async throws
     #expect(invalidation.kind == .content)
     #expect(invalidation.affectedNodeID == spanID)
     #expect(invalidation.parentNodeID == bodyID)
+    #expect(invalidation.affectedNodeIDs == [spanID])
+    #expect(invalidation.parentNodeIDs == [bodyID])
 
     let insertedID = try #require(await session.applyChildInserted(
         parent: bodyID,
@@ -959,10 +961,12 @@ func domTreeRenderInvalidationRecordsContentAndStructureMutations() async throws
     #expect(invalidation.kind == .structure)
     #expect(invalidation.affectedNodeID == insertedID)
     #expect(invalidation.parentNodeID == bodyID)
+    #expect(invalidation.affectedNodeIDs == [insertedID])
+    #expect(invalidation.parentNodeIDs == [bodyID])
 }
 
 @Test
-func domTreeRenderInvalidationMergesConservatively() {
+func domTreeRenderInvalidationMergesAffectedNodeSets() {
     let documentID = DOMDocument.ID(
         targetID: ProtocolTarget.ID("page-main"),
         localDocumentLifetimeID: .init(1)
@@ -986,8 +990,9 @@ func domTreeRenderInvalidationMergesConservatively() {
     let mergedContent = first.merging(with: second)
     #expect(mergedContent.revision == 2)
     #expect(mergedContent.kind == .content)
-    #expect(mergedContent.affectedNodeID == nil)
+    #expect(mergedContent.affectedNodeIDs == [firstNodeID, secondNodeID])
     #expect(mergedContent.parentNodeID == parentID)
+    #expect(mergedContent.parentNodeIDs == [parentID])
 
     let mergedStructure = first.merging(
         with: DOMTreeRenderInvalidation(
@@ -999,12 +1004,13 @@ func domTreeRenderInvalidationMergesConservatively() {
     )
     #expect(mergedStructure.revision == 3)
     #expect(mergedStructure.kind == .structure)
-    #expect(mergedStructure.affectedNodeID == nil)
+    #expect(mergedStructure.affectedNodeIDs == [firstNodeID, secondNodeID])
     #expect(mergedStructure.parentNodeID == parentID)
+    #expect(mergedStructure.parentNodeIDs == [parentID])
 }
 
 @Test
-func domTreeRenderInvalidationSinceRevisionMergesRecordedMutations() async throws {
+func domTreeChangesSinceRevisionMergesRecordedMutationSets() async throws {
     let pageTargetID = ProtocolTarget.ID("page-main")
     let session = await DOMSession()
 
@@ -1032,19 +1038,21 @@ func domTreeRenderInvalidationSinceRevisionMergesRecordedMutations() async throw
         targetID: pageTargetID
     )
     let routedRevision = await session.treeRevision
+    let bodyID = try #require(await session.currentNodeID(targetID: pageTargetID, rawNodeID: .init(2)))
     let divID = try #require(await session.currentNodeID(targetID: pageTargetID, rawNodeID: .init(3)))
+    let articleID = try #require(await session.currentNodeID(targetID: pageTargetID, rawNodeID: .init(4)))
     let spanID = try #require(await session.currentNodeID(targetID: pageTargetID, rawNodeID: .init(5)))
 
     await session.applyAttributeModified(divID, name: "data-visible", value: "ready")
     await session.applyAttributeModified(spanID, name: "data-hidden", value: "ready")
 
     let latestInvalidation = await session.treeRenderInvalidation
-    let mergedInvalidation = await session.treeRenderInvalidation(since: routedRevision)
+    let mergedInvalidation = await session.changes(since: routedRevision)
     #expect(latestInvalidation.affectedNodeID == spanID)
     #expect(mergedInvalidation.revision == latestInvalidation.revision)
     #expect(mergedInvalidation.kind == .content)
-    #expect(mergedInvalidation.affectedNodeID == nil)
-    #expect(mergedInvalidation.parentNodeID == nil)
+    #expect(mergedInvalidation.affectedNodeIDs == [divID, spanID])
+    #expect(mergedInvalidation.parentNodeIDs == [bodyID, articleID])
 }
 
 @Test("Regression: detached root cannot overwrite connected page document nodes")
