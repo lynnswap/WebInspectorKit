@@ -19,6 +19,7 @@ package final class DOMElementViewController: UICollectionViewController {
 
     package var disablesSnapshotAnimationsForTesting = false
     package private(set) var lastSnapshotAnimatedForTesting = false
+    package private(set) var styleSnapshotApplyCountForTesting = 0
     private var styleRenderGeneration = 0
     private var nextStyleRenderWaiterID: UInt64 = 0
     private var styleRenderWaiters: [UInt64: StyleRenderWaiter] = [:]
@@ -227,8 +228,8 @@ package final class DOMElementViewController: UICollectionViewController {
 
     private func render(_ result: DOMElementStylePresentationState.RenderResult) {
         switch result {
-        case let .loaded(snapshot):
-            renderStyles(snapshot)
+        case let .loaded(render):
+            renderStyles(render)
         case .pending:
             renderPendingStyles()
         case .unavailable:
@@ -259,15 +260,15 @@ package final class DOMElementViewController: UICollectionViewController {
     }
 
     private func renderStyles(
-        _ snapshot: NSDiffableDataSourceSnapshot<
-            CSSStyle.Section.ID,
-            DOMElementStylePresentationItemIdentifier
-        >
+        _ render: DOMElementStylePresentationRender
     ) {
         if contentUnavailableConfiguration != nil {
             contentUnavailableConfiguration = nil
         }
-        applySnapshot(snapshot)
+        applySnapshot(
+            render.snapshot,
+            reconfiguredItemIdentifiers: render.reconfiguredItemIdentifiers
+        )
     }
 
     private func applyEmptySnapshot() {
@@ -275,6 +276,9 @@ package final class DOMElementViewController: UICollectionViewController {
             CSSStyle.Section.ID,
             DOMElementStylePresentationItemIdentifier
         >()
+#if DEBUG
+        styleSnapshotApplyCountForTesting += 1
+#endif
         dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
 #if DEBUG
             self?.finishStyleRenderForTesting()
@@ -287,6 +291,7 @@ package final class DOMElementViewController: UICollectionViewController {
             CSSStyle.Section.ID,
             DOMElementStylePresentationItemIdentifier
         >,
+        reconfiguredItemIdentifiers: [DOMElementStylePresentationItemIdentifier] = [],
         animatingDifferences: Bool = false
     ) {
         let currentSnapshot = dataSource.snapshot()
@@ -295,8 +300,20 @@ package final class DOMElementViewController: UICollectionViewController {
 #endif
         guard currentSnapshot.sectionIdentifiers != snapshot.sectionIdentifiers
             || currentSnapshot.itemIdentifiers != snapshot.itemIdentifiers else {
+            let reconfiguredItemIdentifiers = reconfiguredItemIdentifiers.filter { item in
+                snapshot.indexOfItem(item) != nil
+            }
+            guard !reconfiguredItemIdentifiers.isEmpty else {
+#if DEBUG
+                finishStyleRenderForTesting()
+#endif
+                return
+            }
             var reconfiguredSnapshot = snapshot
-            reconfiguredSnapshot.reconfigureItems(snapshot.itemIdentifiers)
+            reconfiguredSnapshot.reconfigureItems(reconfiguredItemIdentifiers)
+#if DEBUG
+            styleSnapshotApplyCountForTesting += 1
+#endif
             dataSource.apply(reconfiguredSnapshot, animatingDifferences: false) { [weak self] in
 #if DEBUG
                 self?.finishStyleRenderForTesting()
@@ -308,6 +325,9 @@ package final class DOMElementViewController: UICollectionViewController {
         let shouldAnimateSnapshot = animatingDifferences && !disablesSnapshotAnimationsForTesting
 #else
         let shouldAnimateSnapshot = animatingDifferences
+#endif
+#if DEBUG
+        styleSnapshotApplyCountForTesting += 1
 #endif
         dataSource.apply(snapshot, animatingDifferences: shouldAnimateSnapshot) { [weak self] in
 #if DEBUG
@@ -328,10 +348,14 @@ package final class DOMElementViewController: UICollectionViewController {
     }
 
     private func showHiddenUnusedVariables(in sectionID: CSSStyle.Section.ID) {
-        guard let snapshot = stylePresentationState.showHiddenUnusedVariables(in: sectionID) else {
+        guard let render = stylePresentationState.showHiddenUnusedVariables(in: sectionID) else {
             return
         }
-        applySnapshot(snapshot, animatingDifferences: true)
+        applySnapshot(
+            render.snapshot,
+            reconfiguredItemIdentifiers: render.reconfiguredItemIdentifiers,
+            animatingDifferences: true
+        )
     }
 
     private func toggleAction() -> DOMElementStylePropertyView.ToggleAction? {
@@ -372,6 +396,15 @@ package final class DOMElementViewController: UICollectionViewController {
             if styleRenderGeneration > generation {
                 resolveStyleRenderWaiterForTesting(id: waiterID, result: true)
             }
+        }
+    }
+
+    package func renderCurrentStylesForTesting() {
+        let elementStyles = inspection.dom.elementStyles
+        if let selectedNodeStyles = elementStyles.selectedNodeStyles {
+            render(selectedNodeStyles)
+        } else {
+            render(elementStyles.selectedPhase)
         }
     }
 
