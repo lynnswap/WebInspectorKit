@@ -71,6 +71,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     private var deinitHandlerForTesting: (@MainActor () -> Void)?
     private var snapshotUpdateCompletionWaitersForTesting: [CheckedContinuation<Void, Never>] = []
     private var displayRequestIDsEvaluationCountStorageForTesting = 0
+    private var filterMenuBuildCountStorageForTesting = 0
 #endif
     private lazy var filterHostingMenu = UIHostingMenu(
         rootView: NetworkListFilterMenuView(model: model)
@@ -81,7 +82,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     private lazy var filterItem: UIBarButtonItem = {
         let item = UIBarButtonItem(
             image: UIImage(systemName: "line.3.horizontal.decrease"),
-            menu: makeFilterMenu()
+            menu: UIMenu(children: [makeFilterMenuElement()])
         )
         item.accessibilityIdentifier = "WebInspector.Network.FilterButton"
         item.isSelected = model.effectiveResourceFilters.isEmpty == false
@@ -368,8 +369,17 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         renderFilterItem(effectiveResourceFilters: effectiveResourceFilters)
     }
 
+    private func makeFilterMenuElement() -> UIDeferredMenuElement {
+        UIDeferredMenuElement.uncached { [weak self] completion in
+            completion((self?.makeFilterMenu() ?? UIMenu()).children)
+        }
+    }
+
     private func makeFilterMenu() -> UIMenu {
-        (try? filterHostingMenu.menu()) ?? UIMenu()
+#if DEBUG
+        filterMenuBuildCountStorageForTesting += 1
+#endif
+        return (try? filterHostingMenu.menu()) ?? UIMenu()
     }
 
     private func makeOverflowMenuElement() -> UIDeferredMenuElement {
@@ -637,6 +647,10 @@ extension NetworkListViewController {
 
     package var displayRequestIDsEvaluationCountForTesting: Int {
         displayRequestIDsEvaluationCountStorageForTesting
+    }
+
+    package var filterMenuBuildCountForTesting: Int {
+        filterMenuBuildCountStorageForTesting
     }
 
     package var displayedRequestIDsForTesting: [NetworkRequest.ID] {
