@@ -173,6 +173,19 @@ struct NativeInspectorRequiredSymbol: Sendable {
         unsafe matches(cStringVariants: cStringVariants, checkingRawNameNeedle: true)
     }
 
+    @inline(__always)
+    @unsafe func mayMatch(symbolNameC: UnsafePointer<CChar>) -> Bool {
+        if unsafe NativeInspectorSymbolName.isLikelySwiftMangledName(symbolNameC) {
+            return true
+        }
+        for query in queries {
+            if unsafe query.mayMatch(symbolNameC: symbolNameC) {
+                return true
+            }
+        }
+        return false
+    }
+
     @unsafe func matches(
         cStringVariants: NativeInspectorSymbolName.CStringVariants,
         checkingRawNameNeedle: Bool
@@ -238,11 +251,19 @@ struct NativeInspectorSymbolQuery: Sendable {
         guard let rawNameNeedle else {
             return true
         }
-        return rawSymbolName.contains(rawNameNeedle.string)
+        return unsafe NativeInspectorSymbolName.string(rawSymbolName, containsRawNameNeedle: rawNameNeedle)
     }
 
     @unsafe func matches(cStringVariants: NativeInspectorSymbolName.CStringVariants) -> Bool {
         unsafe matches(cStringVariants: cStringVariants, checkingRawNameNeedle: true)
+    }
+
+    @inline(__always)
+    @unsafe func mayMatch(symbolNameC: UnsafePointer<CChar>) -> Bool {
+        guard let rawNameNeedle else {
+            return true
+        }
+        return unsafe NativeInspectorSymbolName.cString(symbolNameC, containsRawNameNeedle: rawNameNeedle)
     }
 
     @unsafe func matches(

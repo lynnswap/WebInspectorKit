@@ -52,13 +52,26 @@ extension NativeInspectorSymbolResolverCore {
 
         let imageBaseAddress = unsafe UInt64(UInt(bitPattern: image.ptr))
         var buckets = Array(repeating: NativeInspectorResolvedSymbolBucket(), count: targets.count)
+        var candidateTargetIndices = [Int]()
+        candidateTargetIndices.reserveCapacity(targets.count)
 
         for symbol in image.symbols where buckets.contains(where: { !$0.isAmbiguous }) {
-            let variants = unsafe NativeInspectorSymbolName.variants(for: symbol.nameC)
+            candidateTargetIndices.removeAll(keepingCapacity: true)
+            for targetIndex in targets.indices where !buckets[targetIndex].isAmbiguous {
+                if unsafe targets[targetIndex].symbol.mayMatch(symbolNameC: symbol.nameC) {
+                    candidateTargetIndices.append(targetIndex)
+                }
+            }
+            guard !candidateTargetIndices.isEmpty else {
+                continue
+            }
 
-            for targetIndex in targets.indices {
-                guard !buckets[targetIndex].isAmbiguous,
-                      unsafe targets[targetIndex].symbol.matches(cStringVariants: variants) else {
+            let symbolVariants = unsafe NativeInspectorSymbolName.variants(for: symbol.nameC)
+            for targetIndex in candidateTargetIndices {
+                guard unsafe targets[targetIndex].symbol.matches(
+                    cStringVariants: symbolVariants,
+                    checkingRawNameNeedle: false
+                ) else {
                     continue
                 }
                 appendLoadedImageSymbolAddress(

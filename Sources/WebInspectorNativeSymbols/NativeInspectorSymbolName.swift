@@ -73,11 +73,11 @@ enum NativeInspectorSymbolName {
         @inline(__always)
         func containsRawNameNeedle(_ needle: RawNameNeedle) -> Bool {
             for directSearchName in directSearchNames {
-                if directSearchName.contains(needle.string) {
+                if unsafe NativeInspectorSymbolName.string(directSearchName, containsRawNameNeedle: needle) {
                     return true
                 }
             }
-            return rawName.contains(needle.string)
+            return unsafe NativeInspectorSymbolName.string(rawName, containsRawNameNeedle: needle)
         }
     }
 
@@ -287,7 +287,7 @@ enum NativeInspectorSymbolName {
         return false
     }
 
-    @unsafe private static func isLikelySwiftMangledName(_ symbolNameC: UnsafePointer<CChar>) -> Bool {
+    @unsafe static func isLikelySwiftMangledName(_ symbolNameC: UnsafePointer<CChar>) -> Bool {
         let bytes = unsafe UnsafeRawPointer(symbolNameC).assumingMemoryBound(to: UInt8.self)
         switch unsafe bytes.pointee {
         case 36:
@@ -364,32 +364,32 @@ enum NativeInspectorSymbolName {
     }
 
     @inline(__always)
+    @unsafe
+    static func string(_ haystack: String, containsRawNameNeedle needle: RawNameNeedle) -> Bool {
+        unsafe haystack.withCString { haystackC in
+            unsafe cString(haystackC, contains: needle.cString)
+        }
+    }
+
+    @inline(__always)
+    @unsafe
+    static func cString(_ haystack: UnsafePointer<CChar>, containsRawNameNeedle needle: RawNameNeedle) -> Bool {
+        unsafe cString(haystack, contains: needle.cString)
+    }
+
+    @inline(__always)
+    @unsafe
     private static func cString(_ haystack: UnsafePointer<CChar>, contains needle: [CChar]) -> Bool {
-        let matchLength = needle.count - 1
-        guard matchLength > 0 else {
+        guard needle.count > 1 else {
             return true
         }
 
-        let firstByte = needle[0]
-        var cursor = unsafe haystack
-
-        while unsafe cursor.pointee != 0 {
-            if unsafe cursor.pointee == firstByte {
-                var needleIndex = 1
-                while needleIndex < matchLength {
-                    let haystackByte = unsafe cursor.advanced(by: needleIndex).pointee
-                    if haystackByte == 0 || haystackByte != needle[needleIndex] {
-                        break
-                    }
-                    needleIndex += 1
-                }
-                if needleIndex == matchLength {
-                    return true
-                }
+        return unsafe needle.withUnsafeBufferPointer { needleBuffer in
+            guard let needleBaseAddress = needleBuffer.baseAddress else {
+                return false
             }
-            unsafe cursor = cursor.advanced(by: 1)
+            return unsafe strstr(haystack, needleBaseAddress) != nil
         }
-        return false
     }
 }
 #endif
