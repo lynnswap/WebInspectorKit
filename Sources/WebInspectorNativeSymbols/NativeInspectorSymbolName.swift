@@ -47,6 +47,27 @@ enum NativeInspectorSymbolName {
         }
     }
 
+    @unsafe struct CStringVariants {
+        let rawName: UnsafePointer<CChar>
+        let shouldSearchRawNameDirectly: Bool
+        let directSearchNameUTF8s: [[UInt8]]
+
+        @unsafe func contains(_ namePart: Part) -> Bool {
+            if unsafe shouldSearchRawNameDirectly,
+               unsafe NativeInspectorSymbolName.cString(rawName, contains: namePart.sourceNameUTF8) {
+                return true
+            }
+            if unsafe directSearchNameUTF8s.contains(where: { directSearchNameUTF8 in
+                NativeInspectorSymbolName.bytes(directSearchNameUTF8, contain: namePart.sourceNameUTF8)
+            }) {
+                return true
+            }
+            return namePart.itaniumEncodedNamePartUTF8s.contains { encodedNamePartUTF8 in
+                unsafe NativeInspectorSymbolName.cString(rawName, contains: encodedNamePartUTF8)
+            }
+        }
+    }
+
     static func variants(for symbolName: String) -> Variants {
         let rawNameUTF8 = Array(symbolName.utf8)
         var directSearchNameUTF8s = isLikelyMangledName(symbolName) ? [] : [rawNameUTF8]
@@ -61,27 +82,64 @@ enum NativeInspectorSymbolName {
         )
     }
 
+    @unsafe static func variants(for symbolNameC: UnsafePointer<CChar>) -> CStringVariants {
+        var directSearchNameUTF8s = [[UInt8]]()
+        let isMangled = unsafe isLikelyMangledName(symbolNameC)
+        if unsafe isLikelySwiftMangledName(symbolNameC),
+           let swiftDemangledNameUTF8 = unsafe swiftDemangledNameUTF8(symbolNameC) {
+            directSearchNameUTF8s.append(swiftDemangledNameUTF8)
+        }
+        return unsafe CStringVariants(
+            rawName: symbolNameC,
+            shouldSearchRawNameDirectly: !isMangled,
+            directSearchNameUTF8s: directSearchNameUTF8s
+        )
+    }
+
     @unsafe private static func swiftDemangledName(_ symbolName: String) -> String? {
         guard !symbolName.isEmpty else {
             return symbolName
         }
 
-        return unsafe symbolName.utf8CString.withUnsafeBufferPointer { symbolNameUTF8 in
-            let demangledName = unsafe _nativeInspectorSwiftDemangle(
-                mangledName: symbolNameUTF8.baseAddress,
-                mangledNameLength: UInt(symbolNameUTF8.count - 1),
-                outputBuffer: nil,
-                outputBufferSize: nil,
-                flags: 0
-            )
-            guard unsafe demangledName != nil else {
-                return nil
-            }
-            defer {
-                unsafe free(demangledName)
-            }
-            return unsafe String(cString: demangledName!)
+        guard let symbolNameC = unsafe strdup(symbolName) else {
+            return nil
         }
+        defer {
+            unsafe free(symbolNameC)
+        }
+
+        guard let demangledNameUTF8 = unsafe swiftDemangledNameUTF8(symbolNameC) else {
+            return nil
+        }
+        return String(decoding: demangledNameUTF8, as: UTF8.self)
+    }
+
+    @unsafe private static func swiftDemangledNameUTF8(_ symbolNameC: UnsafePointer<CChar>) -> [UInt8]? {
+        let symbolNameLength = unsafe strlen(symbolNameC)
+        guard symbolNameLength > 0 else {
+            return []
+        }
+
+        let demangledName = unsafe _nativeInspectorSwiftDemangle(
+            mangledName: symbolNameC,
+            mangledNameLength: UInt(symbolNameLength),
+            outputBuffer: nil,
+            outputBufferSize: nil,
+            flags: 0
+        )
+        guard unsafe demangledName != nil else {
+            return nil
+        }
+        defer {
+            unsafe free(demangledName)
+        }
+
+        let demangledNameLength = unsafe strlen(demangledName!)
+        let demangledNameBytes = unsafe UnsafeBufferPointer(
+            start: UnsafeRawPointer(demangledName!).assumingMemoryBound(to: UInt8.self),
+            count: demangledNameLength
+        )
+        return unsafe Array(demangledNameBytes)
     }
 
     static func itaniumEncodedNamePartAlternatives(for namePart: String) -> [String] {
@@ -110,6 +168,18 @@ enum NativeInspectorSymbolName {
         return trimmedLeadingUnderscores.hasPrefix("Z")
     }
 
+    @unsafe private static func isLikelyMangledName(_ symbolNameC: UnsafePointer<CChar>) -> Bool {
+        if unsafe isLikelySwiftMangledName(symbolNameC) {
+            return true
+        }
+
+        var cursor = unsafe UnsafeRawPointer(symbolNameC).assumingMemoryBound(to: UInt8.self)
+        while unsafe cursor.pointee == 95 {
+            unsafe cursor = cursor.advanced(by: 1)
+        }
+        return unsafe cursor.pointee == 90
+    }
+
     private static func isLikelySwiftMangledName(_ symbolName: String) -> Bool {
         if symbolName.hasPrefix("$s")
             || symbolName.hasPrefix("_$s")
@@ -118,6 +188,21 @@ enum NativeInspectorSymbolName {
             return true
         }
         return false
+    }
+
+    @unsafe private static func isLikelySwiftMangledName(_ symbolNameC: UnsafePointer<CChar>) -> Bool {
+        let bytes = unsafe UnsafeRawPointer(symbolNameC).assumingMemoryBound(to: UInt8.self)
+        switch unsafe bytes.pointee {
+        case 36:
+            let next = unsafe bytes.advanced(by: 1).pointee
+            return next == 115 || next == 83
+        case 95:
+            let dollar = unsafe bytes.advanced(by: 1).pointee
+            let marker = unsafe bytes.advanced(by: 2).pointee
+            return dollar == 36 && (marker == 115 || marker == 83)
+        default:
+            return false
+        }
     }
 
     private static func itaniumEncodedScopedNameAlternatives(for namePart: String) -> [String] {
@@ -176,6 +261,34 @@ enum NativeInspectorSymbolName {
                 }
             }
             haystackIndex += 1
+        }
+        return false
+    }
+
+    private static func cString(_ haystack: UnsafePointer<CChar>, contains needle: [UInt8]) -> Bool {
+        guard !needle.isEmpty else {
+            return true
+        }
+
+        let haystackStart = unsafe UnsafeRawPointer(haystack).assumingMemoryBound(to: UInt8.self)
+        let firstByte = needle[0]
+        var cursor = unsafe haystackStart
+
+        while unsafe cursor.pointee != 0 {
+            if unsafe cursor.pointee == firstByte {
+                var needleIndex = 1
+                while needleIndex < needle.count {
+                    let haystackByte = unsafe cursor.advanced(by: needleIndex).pointee
+                    if haystackByte == 0 || haystackByte != needle[needleIndex] {
+                        break
+                    }
+                    needleIndex += 1
+                }
+                if needleIndex == needle.count {
+                    return true
+                }
+            }
+            unsafe cursor = cursor.advanced(by: 1)
         }
         return false
     }

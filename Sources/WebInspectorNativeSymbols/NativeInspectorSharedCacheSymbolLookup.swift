@@ -197,7 +197,7 @@ extension NativeInspectorSymbolResolverCore {
         )
     }
 
-    static func resolveSharedCacheSymbol(
+    @unsafe static func resolveSharedCacheSymbol(
         matching requiredSymbol: NativeInspectorRequiredSymbol,
         symbols: MachOImage.Symbols64,
         symbolRange: Range<Int>,
@@ -205,31 +205,17 @@ extension NativeInspectorSymbolResolverCore {
         textRange: Range<UInt64>,
         slide: UInt64
     ) -> ResolvedNativeInspectorAddress {
-        var candidates = Set<UInt64>()
-        var outsideTextAddress: UInt64?
-
-        for symbolIndex in symbolRange {
-            let symbol = symbols[symbolIndex]
-            guard requiredSymbol.matches(symbolName: symbol.name) else {
-                continue
-            }
-            appendSharedCacheSymbolAddress(
-                offset: symbol.offset,
-                textVMAddress: textVMAddress,
-                textRange: textRange,
-                slide: slide,
-                candidates: &candidates,
-                outsideTextAddress: &outsideTextAddress
-            )
-            if candidates.count > 1 {
-                return .ambiguous
-            }
-        }
-
-        return resolvedAddress(from: candidates, outsideTextAddress: outsideTextAddress)
+        unsafe resolveSharedCacheSymbols(
+            matching: [NativeInspectorSymbolMatchTarget(role: requiredSymbol.role, symbol: requiredSymbol)],
+            symbols: symbols,
+            symbolRange: symbolRange,
+            textVMAddress: textVMAddress,
+            textRange: textRange,
+            slide: slide
+        )[requiredSymbol.role] ?? .missing
     }
 
-    static func resolveSharedCacheSymbols(
+    @unsafe static func resolveSharedCacheSymbols(
         matching targets: [NativeInspectorSymbolMatchTarget],
         symbols: MachOImage.Symbols64,
         symbolRange: Range<Int>,
@@ -237,19 +223,24 @@ extension NativeInspectorSymbolResolverCore {
         textRange: Range<UInt64>,
         slide: UInt64
     ) -> [NativeInspectorSymbolRole: ResolvedNativeInspectorAddress] {
-        resolveSharedCacheSymbols(
+        unsafe resolveSharedCacheSymbols(
             matching: targets,
             symbolRange: symbolRange,
             textVMAddress: textVMAddress,
             textRange: textRange,
             slide: slide
         ) { symbolIndex in
-            let symbol = symbols[symbolIndex]
-            return (symbol.name, symbol.offset)
+            guard symbolIndex >= 0, symbolIndex < symbols.count else {
+                return nil
+            }
+            let symbol = unsafe symbols.symbols.advanced(by: symbolIndex).pointee
+            let nameC = unsafe symbols.stringBase.advanced(by: numericCast(symbol.n_un.n_strx))
+            let offset = symbols.addressStart + numericCast(symbol.n_value)
+            return unsafe (nameC, offset)
         }
     }
 
-    static func resolveSharedCacheSymbol(
+    @unsafe static func resolveSharedCacheSymbol(
         matching requiredSymbol: NativeInspectorRequiredSymbol,
         symbols: MachOFile.Symbols64,
         symbolRange: Range<Int>,
@@ -257,31 +248,17 @@ extension NativeInspectorSymbolResolverCore {
         textRange: Range<UInt64>,
         slide: UInt64
     ) -> ResolvedNativeInspectorAddress {
-        var candidates = Set<UInt64>()
-        var outsideTextAddress: UInt64?
-
-        for symbolIndex in symbolRange {
-            let symbol = symbols[symbolIndex]
-            guard requiredSymbol.matches(symbolName: symbol.name) else {
-                continue
-            }
-            appendSharedCacheSymbolAddress(
-                offset: symbol.offset,
-                textVMAddress: textVMAddress,
-                textRange: textRange,
-                slide: slide,
-                candidates: &candidates,
-                outsideTextAddress: &outsideTextAddress
-            )
-            if candidates.count > 1 {
-                return .ambiguous
-            }
-        }
-
-        return resolvedAddress(from: candidates, outsideTextAddress: outsideTextAddress)
+        unsafe resolveSharedCacheSymbols(
+            matching: [NativeInspectorSymbolMatchTarget(role: requiredSymbol.role, symbol: requiredSymbol)],
+            symbols: symbols,
+            symbolRange: symbolRange,
+            textVMAddress: textVMAddress,
+            textRange: textRange,
+            slide: slide
+        )[requiredSymbol.role] ?? .missing
     }
 
-    static func resolveSharedCacheSymbols(
+    @unsafe static func resolveSharedCacheSymbols(
         matching targets: [NativeInspectorSymbolMatchTarget],
         symbols: MachOFile.Symbols64,
         symbolRange: Range<Int>,
@@ -289,30 +266,100 @@ extension NativeInspectorSymbolResolverCore {
         textRange: Range<UInt64>,
         slide: UInt64
     ) -> [NativeInspectorSymbolRole: ResolvedNativeInspectorAddress] {
-        resolveSharedCacheSymbols(
+        resolveSharedCacheSymbolsByName(
             matching: targets,
+            symbols: symbols,
             symbolRange: symbolRange,
             textVMAddress: textVMAddress,
             textRange: textRange,
             slide: slide
-        ) { symbolIndex in
-            let symbol = symbols[symbolIndex]
-            return (symbol.name, symbol.offset)
-        }
+        )
     }
 
-    private static func resolveSharedCacheSymbols(
+    @unsafe private static func resolveSharedCacheSymbols(
         matching targets: [NativeInspectorSymbolMatchTarget],
         symbolRange: Range<Int>,
         textVMAddress: UInt64,
         textRange: Range<UInt64>,
         slide: UInt64,
-        symbolAt symbolAtIndex: (Int) -> (name: String, offset: Int)
+        symbolAt symbolAtIndex: (Int) -> (nameC: UnsafePointer<CChar>, offset: Int)?
     ) -> [NativeInspectorSymbolRole: ResolvedNativeInspectorAddress] {
         var buckets = Array(repeating: NativeInspectorResolvedSymbolBucket(), count: targets.count)
 
         for symbolIndex in symbolRange where buckets.contains(where: { !$0.isAmbiguous }) {
-            let symbol = symbolAtIndex(symbolIndex)
+            guard let symbol = unsafe symbolAtIndex(symbolIndex) else {
+                continue
+            }
+            let symbolOffset = unsafe symbol.offset
+            guard case let .text(address) = sharedCacheSymbolAddress(
+                offset: symbolOffset,
+                textVMAddress: textVMAddress,
+                textRange: textRange,
+                slide: slide
+            ) else {
+                continue
+            }
+
+            let variants = unsafe NativeInspectorSymbolName.variants(for: symbol.nameC)
+
+            for targetIndex in targets.indices {
+                guard !buckets[targetIndex].isAmbiguous,
+                      unsafe targets[targetIndex].symbol.matches(cStringVariants: variants) else {
+                    continue
+                }
+                var bucket = buckets[targetIndex]
+                bucket.candidates.insert(address)
+                buckets[targetIndex] = bucket
+            }
+        }
+
+        for symbolIndex in symbolRange where buckets.contains(where: \.needsOutsideTextScan) {
+            guard let symbol = unsafe symbolAtIndex(symbolIndex) else {
+                continue
+            }
+            let symbolOffset = unsafe symbol.offset
+            guard case let .outsideText(address) = sharedCacheSymbolAddress(
+                offset: symbolOffset,
+                textVMAddress: textVMAddress,
+                textRange: textRange,
+                slide: slide
+            ) else {
+                continue
+            }
+
+            let variants = unsafe NativeInspectorSymbolName.variants(for: symbol.nameC)
+
+            for targetIndex in targets.indices {
+                guard buckets[targetIndex].needsOutsideTextScan,
+                      unsafe targets[targetIndex].symbol.matches(cStringVariants: variants) else {
+                    continue
+                }
+                var bucket = buckets[targetIndex]
+                bucket.outsideTextAddress = address
+                buckets[targetIndex] = bucket
+            }
+        }
+
+        var resolvedSymbols = [NativeInspectorSymbolRole: ResolvedNativeInspectorAddress]()
+        resolvedSymbols.reserveCapacity(targets.count)
+        for targetIndex in targets.indices {
+            resolvedSymbols[targets[targetIndex].role] = buckets[targetIndex].resolvedAddress
+        }
+        return resolvedSymbols
+    }
+
+    private static func resolveSharedCacheSymbolsByName(
+        matching targets: [NativeInspectorSymbolMatchTarget],
+        symbols: MachOFile.Symbols64,
+        symbolRange: Range<Int>,
+        textVMAddress: UInt64,
+        textRange: Range<UInt64>,
+        slide: UInt64
+    ) -> [NativeInspectorSymbolRole: ResolvedNativeInspectorAddress] {
+        var buckets = Array(repeating: NativeInspectorResolvedSymbolBucket(), count: targets.count)
+
+        for symbolIndex in symbolRange where buckets.contains(where: { !$0.isAmbiguous }) {
+            let symbol = symbols[symbolIndex]
             guard case let .text(address) = sharedCacheSymbolAddress(
                 offset: symbol.offset,
                 textVMAddress: textVMAddress,
@@ -336,7 +383,7 @@ extension NativeInspectorSymbolResolverCore {
         }
 
         for symbolIndex in symbolRange where buckets.contains(where: \.needsOutsideTextScan) {
-            let symbol = symbolAtIndex(symbolIndex)
+            let symbol = symbols[symbolIndex]
             guard case let .outsideText(address) = sharedCacheSymbolAddress(
                 offset: symbol.offset,
                 textVMAddress: textVMAddress,

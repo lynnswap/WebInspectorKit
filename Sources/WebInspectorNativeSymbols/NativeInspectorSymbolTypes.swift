@@ -133,6 +133,10 @@ struct NativeInspectorRequiredSymbol: Sendable {
     func matches(variants: NativeInspectorSymbolName.Variants) -> Bool {
         return queries.contains { $0.matches(variants: variants) }
     }
+
+    @unsafe func matches(cStringVariants: NativeInspectorSymbolName.CStringVariants) -> Bool {
+        return queries.contains { unsafe $0.matches(cStringVariants: cStringVariants) }
+    }
 }
 
 struct NativeInspectorSymbolQuery: Sendable {
@@ -154,6 +158,11 @@ struct NativeInspectorSymbolQuery: Sendable {
     func matches(variants: NativeInspectorSymbolName.Variants) -> Bool {
         requiredNameParts.allSatisfy { variants.contains($0) }
             && !forbiddenNameParts.contains { variants.contains($0) }
+    }
+
+    @unsafe func matches(cStringVariants: NativeInspectorSymbolName.CStringVariants) -> Bool {
+        requiredNameParts.allSatisfy { unsafe cStringVariants.contains($0) }
+            && !forbiddenNameParts.contains { unsafe cStringVariants.contains($0) }
     }
 }
 

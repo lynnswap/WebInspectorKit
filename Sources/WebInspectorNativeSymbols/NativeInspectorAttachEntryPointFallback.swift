@@ -153,7 +153,11 @@ extension NativeInspectorSymbolResolverCore {
         let imageBaseAddress = unsafe UInt64(UInt(bitPattern: image.ptr))
         var addresses = Set<UInt64>()
 
-        for symbol in image.symbols where requiredSymbol.matches(symbolName: symbol.name) {
+        for symbol in image.symbols {
+            let variants = unsafe NativeInspectorSymbolName.variants(for: symbol.nameC)
+            guard unsafe requiredSymbol.matches(cStringVariants: variants) else {
+                continue
+            }
             appendCallTargetAddress(
                 offset: symbol.offset,
                 imageBaseAddress: imageBaseAddress,

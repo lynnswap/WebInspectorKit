@@ -38,7 +38,11 @@ extension NativeInspectorSymbolResolverCore {
         var candidates = Set<UInt64>()
         var outsideTextAddress: UInt64?
 
-        for symbol in image.symbols where requiredSymbol.matches(symbolName: symbol.name) {
+        for symbol in image.symbols {
+            let variants = unsafe NativeInspectorSymbolName.variants(for: symbol.nameC)
+            guard unsafe requiredSymbol.matches(cStringVariants: variants) else {
+                continue
+            }
             appendLoadedImageSymbolAddress(
                 offset: symbol.offset,
                 imageBaseAddress: imageBaseAddress,

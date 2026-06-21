@@ -356,7 +356,7 @@ extension NativeInspectorSymbolResolverCore {
         javaScriptCoreSymbolRange: Range<Int>,
         symbols: NativeInspectorSymbols
     ) -> NativeInspectorResolvedSymbolSet {
-        let webKitResults = resolveSharedCacheSymbols(
+        let webKitResults = unsafe resolveSharedCacheSymbols(
             matching: [
                 NativeInspectorSymbolMatchTarget(role: .connectFrontend, symbol: symbols.connectFrontend),
                 NativeInspectorSymbolMatchTarget(role: .disconnectFrontend, symbol: symbols.disconnectFrontend),
@@ -378,7 +378,7 @@ extension NativeInspectorSymbolResolverCore {
                 NativeInspectorSymbolMatchTarget(role: .backendDispatcherDispatch, symbol: symbols.backendDispatcherDispatch)
             )
         }
-        let javaScriptCoreResults = resolveSharedCacheSymbols(
+        let javaScriptCoreResults = unsafe resolveSharedCacheSymbols(
             matching: javaScriptCoreTargets,
             symbols: javaScriptCoreSymbols,
             symbolRange: javaScriptCoreSymbolRange,
@@ -408,7 +408,7 @@ extension NativeInspectorSymbolResolverCore {
         javaScriptCoreSymbolRange: Range<Int>,
         symbols: NativeInspectorSymbols
     ) -> NativeInspectorResolvedSymbolSet {
-        let webKitResults = resolveSharedCacheSymbols(
+        let webKitResults = unsafe resolveSharedCacheSymbols(
             matching: [
                 NativeInspectorSymbolMatchTarget(role: .connectFrontend, symbol: symbols.connectFrontend),
                 NativeInspectorSymbolMatchTarget(role: .disconnectFrontend, symbol: symbols.disconnectFrontend),
@@ -430,7 +430,7 @@ extension NativeInspectorSymbolResolverCore {
                 NativeInspectorSymbolMatchTarget(role: .backendDispatcherDispatch, symbol: symbols.backendDispatcherDispatch)
             )
         }
-        let javaScriptCoreResults = resolveSharedCacheSymbols(
+        let javaScriptCoreResults = unsafe resolveSharedCacheSymbols(
             matching: javaScriptCoreTargets,
             symbols: javaScriptCoreSymbols,
             symbolRange: javaScriptCoreSymbolRange,
