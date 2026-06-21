@@ -67,21 +67,28 @@ final class NetworkPreviewRoleControlController {
     ) -> Bool {
         self.selectedRole = selectedRole
         self.isVisible = isVisible
-        if self.roles != roles {
-            self.roles = roles
-            segmentedControl.removeAllSegments()
-            for (index, role) in roles.enumerated() {
-                segmentedControl.insertSegment(
-                    withTitle: Self.title(for: role),
-                    at: index,
-                    animated: false
-                )
-            }
-        }
-        containerView.isHidden = isVisible == false
-        segmentedControl.selectedSegmentIndex = selectedRole.flatMap(roles.firstIndex(of:))
+        let selectedSegmentIndex = selectedRole.flatMap(roles.firstIndex(of:))
             ?? UISegmentedControl.noSegment
-        segmentedControl.accessibilityLabel = selectedRole.map(Self.title(for:))
+
+        UIView.performWithoutAnimation {
+            if self.roles != roles {
+                self.roles = roles
+                segmentedControl.selectedSegmentIndex = UISegmentedControl.noSegment
+                segmentedControl.removeAllSegments()
+                for (index, role) in roles.enumerated() {
+                    segmentedControl.insertSegment(
+                        withTitle: Self.title(for: role),
+                        at: index,
+                        animated: false
+                    )
+                }
+            }
+            containerView.isHidden = isVisible == false
+            segmentedControl.selectedSegmentIndex = selectedSegmentIndex
+            segmentedControl.accessibilityLabel = selectedRole.map(Self.title(for:))
+            segmentedControl.layoutIfNeeded()
+            containerView.layoutIfNeeded()
+        }
         return isVisible
     }
 

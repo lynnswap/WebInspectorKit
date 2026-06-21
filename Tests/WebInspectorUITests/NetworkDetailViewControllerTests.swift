@@ -352,6 +352,52 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func responseOnlyPreviewRoleExpandsToBothWithoutChangingLogicalSelection() async throws {
+        let network = NetworkSession()
+        let responseOnlyRequest = try #require(
+            applyRequest(
+                to: network,
+                requestID: "response-only",
+                url: "https://example.com/response.json",
+                responseHeaders: ["content-type": "application/json"],
+                responseMimeType: "application/json"
+            )
+        )
+        let requestAndResponse = try #require(
+            applyRequest(
+                to: network,
+                requestID: "both",
+                url: "https://example.com/both.json",
+                requestHeaders: ["content-type": "application/x-www-form-urlencoded"],
+                postData: "name=Jane+Doe",
+                responseHeaders: ["content-type": "application/json"],
+                responseMimeType: "application/json"
+            )
+        )
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(responseOnlyRequest)
+        let viewController = NetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
+
+        let didRenderResponseOnly = await waitUntilRendered(in: viewController) {
+            viewController.currentModeForTesting == .preview
+                && viewController.currentPreviewRoleForTesting == .response
+                && viewController.isPreviewRoleControlHiddenForTesting
+        }
+        #expect(didRenderResponseOnly)
+
+        model.selectRequest(requestAndResponse)
+
+        let didRenderBoth = await waitUntilRendered(in: viewController) {
+            viewController.currentPreviewRoleForTesting == .response
+                && viewController.isPreviewRoleControlHiddenForTesting == false
+        }
+        #expect(didRenderBoth)
+    }
+
+    @Test
     func previewRequestWithoutBodyRendersPlaceholderWhenBodySurfaceResumes() async throws {
         let network = NetworkSession()
         let request = try #require(
