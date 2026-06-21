@@ -543,8 +543,11 @@ struct DOMContainerTests {
         #expect(collapsedDeclarations.contains("--palette-primary: #111;"))
         #expect(collapsedDeclarations.contains("--unused-a: red;") == false)
         #expect(collapsedDeclarations.contains("--unused-b: blue;") == false)
+        #expect(revealCell.isRevealButtonEnabledForTesting)
 
+        let applyModesBeforeReveal = viewController.styleSnapshotApplyModesForTesting
         revealCell.tapRevealForTesting()
+        #expect(revealCell.isRevealButtonEnabledForTesting == false)
 
         let didRevealUnusedVariables = await waitUntilRendered(in: viewController) {
             let declarations = stylePropertyViews(in: viewController).map(\.declarationTextForTesting)
@@ -555,7 +558,10 @@ struct DOMContainerTests {
         }
 
         #expect(didRevealUnusedVariables)
-        #expect(viewController.lastSnapshotApplyModeForTesting == .diff(animated: true))
+        let revealApplyModes = Array(
+            viewController.styleSnapshotApplyModesForTesting.dropFirst(applyModesBeforeReveal.count)
+        )
+        #expect(revealApplyModes == [.diff(animated: true)])
     }
 
     @Test

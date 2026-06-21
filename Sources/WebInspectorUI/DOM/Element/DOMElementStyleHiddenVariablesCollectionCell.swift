@@ -49,6 +49,8 @@ package final class DOMElementStyleHiddenVariablesCollectionCell: UICollectionVi
     }
 
     @objc private func revealButtonPressed() {
+        // The reveal diff removes this pressed cell; disable first so UIKit does not keep it focusable.
+        revealButton.isEnabled = false
         onReveal?()
     }
 
@@ -67,6 +69,10 @@ package final class DOMElementStyleHiddenVariablesCollectionCell: UICollectionVi
 
 #if DEBUG
 extension DOMElementStyleHiddenVariablesCollectionCell {
+    package var isRevealButtonEnabledForTesting: Bool {
+        revealButton.isEnabled
+    }
+
     package func tapRevealForTesting() {
         revealButtonPressed()
     }
