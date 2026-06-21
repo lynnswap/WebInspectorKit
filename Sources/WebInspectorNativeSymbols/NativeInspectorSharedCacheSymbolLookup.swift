@@ -384,16 +384,14 @@ extension NativeInspectorSymbolResolverCore {
                 continue
             }
 
-            unsafe symbol.name.withCString { symbolNameC in
-                let variants = unsafe NativeInspectorSymbolName.variants(for: symbolNameC)
+            let variants = NativeInspectorSymbolName.variants(for: symbol.name)
 
-                for targetIndex in targets.indices {
-                    guard !buckets[targetIndex].isAmbiguous,
-                          unsafe targets[targetIndex].symbol.matches(cStringVariants: variants) else {
-                        continue
-                    }
-                    buckets[targetIndex].insertCandidate(address)
+            for targetIndex in targets.indices {
+                guard !buckets[targetIndex].isAmbiguous,
+                      targets[targetIndex].symbol.matches(variants: variants) else {
+                    continue
                 }
+                buckets[targetIndex].insertCandidate(address)
             }
         }
 
@@ -408,16 +406,14 @@ extension NativeInspectorSymbolResolverCore {
                 continue
             }
 
-            unsafe symbol.name.withCString { symbolNameC in
-                let variants = unsafe NativeInspectorSymbolName.variants(for: symbolNameC)
+            let variants = NativeInspectorSymbolName.variants(for: symbol.name)
 
-                for targetIndex in targets.indices {
-                    guard buckets[targetIndex].needsOutsideTextScan,
-                          unsafe targets[targetIndex].symbol.matches(cStringVariants: variants) else {
-                        continue
-                    }
-                    buckets[targetIndex].outsideTextAddress = address
+            for targetIndex in targets.indices {
+                guard buckets[targetIndex].needsOutsideTextScan,
+                      targets[targetIndex].symbol.matches(variants: variants) else {
+                    continue
                 }
+                buckets[targetIndex].outsideTextAddress = address
             }
         }
 

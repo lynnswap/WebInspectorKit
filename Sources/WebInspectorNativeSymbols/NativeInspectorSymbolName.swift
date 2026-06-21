@@ -16,7 +16,7 @@ enum NativeInspectorSymbolName {
         let sourceName: String
         let sourceNameUTF8: [UInt8]
         let sourceNameCString: [CChar]
-        let itaniumEncodedNamePartUTF8s: [[UInt8]]
+        let itaniumEncodedNamePartStrings: [String]
         let itaniumEncodedNamePartCStrings: [[CChar]]
 
         init(sourceName: String) {
@@ -25,7 +25,7 @@ enum NativeInspectorSymbolName {
             self.sourceNameCString = Array(sourceName.utf8CString)
             let itaniumEncodedNamePartAlternatives = NativeInspectorSymbolName
                 .itaniumEncodedNamePartAlternatives(for: sourceName)
-            self.itaniumEncodedNamePartUTF8s = itaniumEncodedNamePartAlternatives.map { Array($0.utf8) }
+            self.itaniumEncodedNamePartStrings = itaniumEncodedNamePartAlternatives
             self.itaniumEncodedNamePartCStrings = itaniumEncodedNamePartAlternatives.map { Array($0.utf8CString) }
         }
     }
@@ -38,17 +38,17 @@ enum NativeInspectorSymbolName {
     private static let char8TName = decodedString([0xC4, 0xCF, 0xC6, 0xD5, 0x9F, 0xF8, 0xD3])
 
     struct Variants {
-        let rawNameUTF8: [UInt8]
-        let directSearchNameUTF8s: [[UInt8]]
+        let rawName: String
+        let directSearchNames: [String]
 
         func contains(_ namePart: Part) -> Bool {
-            for directSearchNameUTF8 in directSearchNameUTF8s {
-                if NativeInspectorSymbolName.bytes(directSearchNameUTF8, contain: namePart.sourceNameUTF8) {
+            for directSearchName in directSearchNames {
+                if directSearchName.contains(namePart.sourceName) {
                     return true
                 }
             }
-            for encodedNamePartUTF8 in namePart.itaniumEncodedNamePartUTF8s {
-                if NativeInspectorSymbolName.bytes(rawNameUTF8, contain: encodedNamePartUTF8) {
+            for encodedNamePart in namePart.itaniumEncodedNamePartStrings {
+                if rawName.contains(encodedNamePart) {
                     return true
                 }
             }
@@ -81,16 +81,15 @@ enum NativeInspectorSymbolName {
     }
 
     static func variants(for symbolName: String) -> Variants {
-        let rawNameUTF8 = Array(symbolName.utf8)
-        var directSearchNameUTF8s = isLikelyMangledName(symbolName) ? [] : [rawNameUTF8]
+        var directSearchNames = isLikelyMangledName(symbolName) ? [] : [symbolName]
         if isLikelySwiftMangledName(symbolName),
            let swiftDemangledName = unsafe swiftDemangledName(symbolName),
            swiftDemangledName != symbolName {
-            directSearchNameUTF8s.append(Array(swiftDemangledName.utf8))
+            directSearchNames.append(swiftDemangledName)
         }
         return Variants(
-            rawNameUTF8: rawNameUTF8,
-            directSearchNameUTF8s: directSearchNameUTF8s
+            rawName: symbolName,
+            directSearchNames: directSearchNames
         )
     }
 
@@ -277,17 +276,32 @@ enum NativeInspectorSymbolName {
         return false
     }
 
-    @unsafe private static func cString(_ haystack: UnsafePointer<CChar>, contains needle: [CChar]) -> Bool {
-        guard needle.count > 1 else {
+    private static func cString(_ haystack: UnsafePointer<CChar>, contains needle: [CChar]) -> Bool {
+        let matchLength = needle.count - 1
+        guard matchLength > 0 else {
             return true
         }
 
-        return unsafe needle.withUnsafeBufferPointer { needleBuffer in
-            guard let needleBaseAddress = needleBuffer.baseAddress else {
-                return true
+        let firstByte = needle[0]
+        var cursor = unsafe haystack
+
+        while unsafe cursor.pointee != 0 {
+            if unsafe cursor.pointee == firstByte {
+                var needleIndex = 1
+                while needleIndex < matchLength {
+                    let haystackByte = unsafe cursor.advanced(by: needleIndex).pointee
+                    if haystackByte == 0 || haystackByte != needle[needleIndex] {
+                        break
+                    }
+                    needleIndex += 1
+                }
+                if needleIndex == matchLength {
+                    return true
+                }
             }
-            return unsafe strstr(haystack, needleBaseAddress) != nil
+            unsafe cursor = cursor.advanced(by: 1)
         }
+        return false
     }
 }
 #endif
