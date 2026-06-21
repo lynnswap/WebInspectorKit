@@ -1,7 +1,6 @@
 #if canImport(UIKit)
 import WebInspectorCore
-import Observation
-import SwiftUI
+import ObservationBridge
 import UIKit
 
 package enum DOMElementStyleSectionHeaderText {
@@ -79,14 +78,14 @@ package enum DOMElementStyleSectionHeaderText {
 
 @MainActor
 final class DOMElementStyleSectionHeaderView: UICollectionViewListCell {
-    private let model = DOMElementStyleSectionHeaderModel()
+    private var sectionObservation: PortableObservationTracking.Token?
+    private weak var section: CSSStyle.Section?
+    private var renderedTitle = ""
+    private var renderedOriginText: String?
+    private var renderedAccessibilityOriginText: String?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        let model = model
-        contentConfiguration = UIHostingConfiguration {
-            DOMElementStyleSectionHeaderContent(model: model)
-        }
     }
 
     @available(*, unavailable)
@@ -99,34 +98,44 @@ final class DOMElementStyleSectionHeaderView: UICollectionViewListCell {
         bind(nil)
     }
 
+    isolated deinit {
+        sectionObservation?.cancel()
+    }
+
     func bind(_ section: CSSStyle.Section?) {
-        model.section = section
-    }
-}
+        guard let section else {
+            sectionObservation?.cancel()
+            sectionObservation = nil
+            self.section = nil
+            render(nil)
+            return
+        }
 
-@MainActor
-@Observable
-private final class DOMElementStyleSectionHeaderModel {
-    var section: CSSStyle.Section?
-}
-
-private struct DOMElementStyleSectionHeaderContent: View {
-    var model: DOMElementStyleSectionHeaderModel
-
-    private var title: String {
-        model.section?.title ?? ""
-    }
-
-    private var originText: String? {
-        model.section?.rule.flatMap(DOMElementStyleSectionHeaderText.displayOriginText(for:))
-    }
-
-    private var accessibilityOriginText: String? {
-        model.section?.rule.flatMap(DOMElementStyleSectionHeaderText.accessibilityOriginText(for:))
+        if self.section === section {
+            return
+        }
+        self.section = section
+        sectionObservation?.cancel()
+        sectionObservation = withPortableContinuousObservation { [weak self, weak section] _ in
+            guard let self else {
+                return
+            }
+            self.render(section)
+        }
     }
 
-    private var accessibilityLabel: String {
-        [title, accessibilityOriginText]
+    private func render(_ section: CSSStyle.Section?) {
+        renderedTitle = section?.title ?? ""
+        renderedOriginText = section?.rule.flatMap(DOMElementStyleSectionHeaderText.displayOriginText(for:))
+        renderedAccessibilityOriginText = section?.rule.flatMap(DOMElementStyleSectionHeaderText.accessibilityOriginText(for:))
+
+        var content = defaultContentConfiguration()
+        content.text = renderedTitle
+        content.secondaryText = renderedOriginText
+        content.secondaryTextProperties.color = .secondaryLabel
+        contentConfiguration = content
+
+        let accessibilityLabel = [renderedTitle, renderedAccessibilityOriginText]
             .compactMap { text in
                 guard let text, !text.isEmpty else {
                     return nil
@@ -134,43 +143,19 @@ private struct DOMElementStyleSectionHeaderContent: View {
                 return text
             }
             .joined(separator: ", ")
-    }
-
-    var body: some View {
-        LabeledContent {
-            if let originText {
-                Text(originText)
-                    .truncationMode(.tail)
-                    .multilineTextAlignment(.trailing)
-            }
-        } label: {
-            Text(title)
-        }
-        .textScale(.secondary)
-        .lineLimit(1)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(accessibilityLabel)
+        isAccessibilityElement = accessibilityLabel.isEmpty == false
+        self.accessibilityLabel = accessibilityLabel.isEmpty ? nil : accessibilityLabel
     }
 }
 
 #if DEBUG
 extension DOMElementStyleSectionHeaderView {
     package var titleTextForTesting: String {
-        model.titleTextForTesting
+        renderedTitle
     }
 
     package var originTextForTesting: String? {
-        model.originTextForTesting
-    }
-}
-
-private extension DOMElementStyleSectionHeaderModel {
-    var titleTextForTesting: String {
-        section?.title ?? ""
-    }
-
-    var originTextForTesting: String? {
-        section?.rule.flatMap(DOMElementStyleSectionHeaderText.displayOriginText(for:))
+        renderedOriginText
     }
 }
 #endif

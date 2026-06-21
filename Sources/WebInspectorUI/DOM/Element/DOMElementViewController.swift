@@ -8,8 +8,8 @@ package final class DOMElementViewController: UICollectionViewController {
     private let inspection: AttachedInspection
     private var elementStylesObservation: PortableObservationTracking.Token?
     private var selectedNodeStyleObservation: PortableObservationTracking.Token?
-    private var observedNodeStylesID: ObjectIdentifier?
-    private let stylePresentationState = DOMElementStylePresentationState()
+    private var selectedNodeStylesObjectID: ObjectIdentifier?
+    private let styleSnapshotCoordinator = DOMElementStyleSnapshotCoordinator()
 
 #if DEBUG
     private struct StyleRenderWaiter {
@@ -18,7 +18,7 @@ package final class DOMElementViewController: UICollectionViewController {
     }
 
     package var disablesSnapshotAnimationsForTesting = false
-    package private(set) var lastSnapshotAnimatedForTesting = false
+    package private(set) var lastSnapshotApplyModeForTesting: DOMElementStyleSnapshotCoordinator.ApplyMode = .none
     package private(set) var styleSnapshotApplyCountForTesting = 0
     private var styleRenderGeneration = 0
     private var nextStyleRenderWaiterID: UInt64 = 0
@@ -48,6 +48,7 @@ package final class DOMElementViewController: UICollectionViewController {
 
     override package func viewDidLoad() {
         super.viewDidLoad()
+        _ = dataSource
         applyBackgroundFromTraits()
         collectionView.alwaysBounceVertical = true
         collectionView.keyboardDismissMode = .onDrag
@@ -194,168 +195,119 @@ package final class DOMElementViewController: UICollectionViewController {
 
     private func bindSelectedNodeStyles(_ nodeStyles: CSSNodeStyles?, unavailableState: CSSNodeStyles.Phase) {
         guard let nodeStyles else {
-            observedNodeStylesID = nil
-            selectedNodeStyleObservation?.cancel()
-            selectedNodeStyleObservation = nil
-            render(unavailableState)
+            unbindSelectedNodeStyles()
+            applySnapshotUpdate(styleSnapshotCoordinator.updateUnavailablePhase(unavailableState))
             return
         }
 
-        let nodeStylesID = ObjectIdentifier(nodeStyles)
-        guard observedNodeStylesID != nodeStylesID else {
+        let nodeStylesObjectID = ObjectIdentifier(nodeStyles)
+        guard selectedNodeStylesObjectID != nodeStylesObjectID else {
             return
         }
-        observedNodeStylesID = nodeStylesID
         selectedNodeStyleObservation?.cancel()
-        let token = withPortableContinuousObservation { [weak self, weak nodeStyles, nodeStylesID] _ in
+        selectedNodeStylesObjectID = nodeStylesObjectID
+        styleSnapshotCoordinator.bindSelectedNodeStyles(nodeStyles)
+        let token = withPortableContinuousObservation { [weak self, weak nodeStyles, nodeStylesObjectID] _ in
             guard let self,
                   let nodeStyles,
-                  self.observedNodeStylesID == nodeStylesID else {
+                  self.selectedNodeStylesObjectID == nodeStylesObjectID else {
                 return
             }
-            self.render(nodeStyles)
+            self.applySnapshotUpdate(
+                self.styleSnapshotCoordinator.updateSelectedNodeStyles(nodeStyles)
+            )
         }
         selectedNodeStyleObservation = token
     }
 
-    private func render(_ nodeStyles: CSSNodeStyles) {
-        render(stylePresentationState.render(nodeStyles))
+    private func unbindSelectedNodeStyles() {
+        selectedNodeStylesObjectID = nil
+        selectedNodeStyleObservation?.cancel()
+        selectedNodeStyleObservation = nil
     }
 
-    private func render(_ state: CSSNodeStyles.Phase) {
-        render(stylePresentationState.render(state))
-    }
-
-    private func render(_ result: DOMElementStylePresentationState.RenderResult) {
-        switch result {
-        case let .loaded(render):
-            renderStyles(render)
-        case .pending:
-            renderPendingStyles()
-        case .unavailable:
-            renderUnavailableStyles()
-        }
-    }
-
-    private func renderUnavailableStyles() {
-        if let configuration = contentUnavailableConfiguration as? UIContentUnavailableConfiguration,
-           configuration.text == String(localized: "dom.element.styles.empty.title", bundle: .module) {
-            applyEmptySnapshot()
-            return
-        }
-        var configuration = UIContentUnavailableConfiguration.empty()
-        configuration.text = String(localized: "dom.element.styles.empty.title", bundle: .module)
-        configuration.textProperties.color = .secondaryLabel
-        contentUnavailableConfiguration = configuration
-        applyEmptySnapshot()
-    }
-
-    private func renderPendingStyles() {
-        if contentUnavailableConfiguration != nil {
-            contentUnavailableConfiguration = nil
-        }
+    private func applySnapshotUpdate(_ update: DOMElementStyleSnapshotCoordinator.SnapshotUpdate) {
+        applyPlaceholder(update.placeholderMode)
+        switch update.applyMode {
+        case .none:
 #if DEBUG
-        finishStyleRenderForTesting()
+            finishStyleRenderForTesting()
 #endif
-    }
-
-    private func renderStyles(
-        _ render: DOMElementStylePresentationRender
-    ) {
-        if contentUnavailableConfiguration != nil {
-            contentUnavailableConfiguration = nil
-        }
-        applySnapshot(
-            render.snapshot,
-            reconfiguredItemIdentifiers: render.reconfiguredItemIdentifiers
-        )
-    }
-
-    private func applyEmptySnapshot() {
-        let snapshot = NSDiffableDataSourceSnapshot<
-            CSSStyle.Section.ID,
-            DOMElementStylePresentationItemIdentifier
-        >()
+        case let .diff(animated):
+            guard let snapshot = update.snapshot else {
 #if DEBUG
-        styleSnapshotApplyCountForTesting += 1
-#endif
-        dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
-#if DEBUG
-            self?.finishStyleRenderForTesting()
-#endif
-        }
-    }
-
-    private func applySnapshot(
-        _ snapshot: NSDiffableDataSourceSnapshot<
-            CSSStyle.Section.ID,
-            DOMElementStylePresentationItemIdentifier
-        >,
-        reconfiguredItemIdentifiers: [DOMElementStylePresentationItemIdentifier] = [],
-        animatingDifferences: Bool = false
-    ) {
-        let currentSnapshot = dataSource.snapshot()
-#if DEBUG
-        lastSnapshotAnimatedForTesting = animatingDifferences
-#endif
-        guard currentSnapshot.sectionIdentifiers != snapshot.sectionIdentifiers
-            || currentSnapshot.itemIdentifiers != snapshot.itemIdentifiers else {
-            let reconfiguredItemIdentifiers = reconfiguredItemIdentifiers.filter { item in
-                snapshot.indexOfItem(item) != nil
-            }
-            guard !reconfiguredItemIdentifiers.isEmpty else {
-#if DEBUG
+                lastSnapshotApplyModeForTesting = .none
                 finishStyleRenderForTesting()
 #endif
                 return
             }
-            var reconfiguredSnapshot = snapshot
-            reconfiguredSnapshot.reconfigureItems(reconfiguredItemIdentifiers)
 #if DEBUG
+            lastSnapshotApplyModeForTesting = .diff(animated: animated)
+            let shouldAnimateSnapshot = animated && !disablesSnapshotAnimationsForTesting
             styleSnapshotApplyCountForTesting += 1
+#else
+            let shouldAnimateSnapshot = animated
 #endif
-            dataSource.apply(reconfiguredSnapshot, animatingDifferences: false) { [weak self] in
+            dataSource.apply(snapshot, animatingDifferences: shouldAnimateSnapshot) { [weak self] in
 #if DEBUG
                 self?.finishStyleRenderForTesting()
 #endif
             }
-            return
+        case .reloadData:
+            guard let snapshot = update.snapshot else {
+#if DEBUG
+                lastSnapshotApplyModeForTesting = .none
+                finishStyleRenderForTesting()
+#endif
+                return
+            }
+#if DEBUG
+            lastSnapshotApplyModeForTesting = .reloadData
+            styleSnapshotApplyCountForTesting += 1
+#endif
+            dataSource.applySnapshotUsingReloadData(snapshot) { [weak self] in
+#if DEBUG
+                self?.finishStyleRenderForTesting()
+#endif
+            }
         }
-#if DEBUG
-        let shouldAnimateSnapshot = animatingDifferences && !disablesSnapshotAnimationsForTesting
-#else
-        let shouldAnimateSnapshot = animatingDifferences
-#endif
-#if DEBUG
-        styleSnapshotApplyCountForTesting += 1
-#endif
-        dataSource.apply(snapshot, animatingDifferences: shouldAnimateSnapshot) { [weak self] in
-#if DEBUG
-            self?.finishStyleRenderForTesting()
-#endif
+    }
+
+    private func applyPlaceholder(_ placeholderMode: DOMElementStyleSnapshotCoordinator.PlaceholderMode) {
+        switch placeholderMode {
+        case .none:
+            if contentUnavailableConfiguration != nil {
+                contentUnavailableConfiguration = nil
+            }
+        case .unavailable:
+            let title = String(localized: "dom.element.styles.empty.title", bundle: .module)
+            if let configuration = contentUnavailableConfiguration as? UIContentUnavailableConfiguration,
+               configuration.text == title {
+                return
+            }
+            var configuration = UIContentUnavailableConfiguration.empty()
+            configuration.text = title
+            configuration.textProperties.color = .secondaryLabel
+            contentUnavailableConfiguration = configuration
         }
     }
 
     private func section(for sectionID: CSSStyle.Section.ID) -> CSSStyle.Section? {
-        stylePresentationState.section(for: sectionID)
+        styleSnapshotCoordinator.section(for: sectionID)
     }
 
     private func property(
         for item: DOMElementStylePresentationItemIdentifier,
         in section: CSSStyle.Section
     ) -> CSSProperty? {
-        stylePresentationState.property(for: item, in: section)
+        styleSnapshotCoordinator.property(for: item, in: section)
     }
 
     private func showHiddenUnusedVariables(in sectionID: CSSStyle.Section.ID) {
-        guard let render = stylePresentationState.showHiddenUnusedVariables(in: sectionID) else {
+        guard let update = styleSnapshotCoordinator.revealHiddenUnusedVariables(in: sectionID) else {
             return
         }
-        applySnapshot(
-            render.snapshot,
-            reconfiguredItemIdentifiers: render.reconfiguredItemIdentifiers,
-            animatingDifferences: true
-        )
+        applySnapshotUpdate(update)
     }
 
     private func toggleAction() -> DOMElementStylePropertyView.ToggleAction? {
@@ -402,9 +354,9 @@ package final class DOMElementViewController: UICollectionViewController {
     package func renderCurrentStylesForTesting() {
         let elementStyles = inspection.dom.elementStyles
         if let selectedNodeStyles = elementStyles.selectedNodeStyles {
-            render(selectedNodeStyles)
+            applySnapshotUpdate(styleSnapshotCoordinator.updateSelectedNodeStyles(selectedNodeStyles))
         } else {
-            render(elementStyles.selectedPhase)
+            applySnapshotUpdate(styleSnapshotCoordinator.updateUnavailablePhase(elementStyles.selectedPhase))
         }
     }
 

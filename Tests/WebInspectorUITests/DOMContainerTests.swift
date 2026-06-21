@@ -152,6 +152,7 @@ struct DOMContainerTests {
 
         #expect(didRenderRows)
         let cellIDsBeforeUpdate = visibleCellIDs(in: viewController)
+        let applyCountBeforeUpdate = viewController.styleSnapshotApplyCountForTesting
 
         let identity = try dom.selectedCSSNodeStylesID().get()
         let refreshToken = css.beginRefresh(id: identity)
@@ -176,6 +177,7 @@ struct DOMContainerTests {
         #expect(didUpdateVisibleRow)
         #expect(viewController.collectionView.isHidden == false)
         #expect(visibleCellIDs(in: viewController) == cellIDsBeforeUpdate)
+        #expect(viewController.styleSnapshotApplyCountForTesting == applyCountBeforeUpdate)
     }
 
     @Test
@@ -253,6 +255,82 @@ struct DOMContainerTests {
     }
 
     @Test
+    func elementViewControllerRequestsAnimatedDifferencesForSameSelectionStructuralStyleChange() async throws {
+        let dom = makeDOMSession(capabilities: .pageDefault)
+        let body = try #require(firstElement(named: "body", in: dom))
+        dom.selectNode(body.id)
+
+        let css = dom.elementStyles
+        try applyBodyStyles(to: css, in: dom)
+
+        let viewController = makeElementViewController(dom: dom)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didRenderBodyRows = await waitUntilRendered(in: viewController) {
+            viewController.collectionView.numberOfSections == 1
+                && stylePropertyViews(in: viewController)
+                    .map(\.declarationTextForTesting)
+                    .contains("margin: 0;")
+        }
+        #expect(didRenderBodyRows)
+
+        try applyInheritedVariableStyles(to: css, in: dom)
+
+        let didRenderUpdatedSections = await waitUntilRendered(in: viewController) {
+            viewController.collectionView.numberOfSections == 2
+                && stylePropertyViews(in: viewController)
+                    .map(\.declarationTextForTesting)
+                    .contains("color: var(--foreground);")
+        }
+
+        #expect(didRenderUpdatedSections)
+        #expect(viewController.lastSnapshotApplyModeForTesting == .diff(animated: true))
+    }
+
+    @Test
+    func elementViewControllerDoesNotRequestAnimatedDifferencesWhenSwitchingToCachedSelectionStyles() async throws {
+        let dom = makeDOMSession(capabilities: .pageDefault)
+        let input = try #require(firstElement(named: "input", in: dom))
+        dom.selectNode(input.id)
+
+        let css = dom.elementStyles
+        try applyBodyStyles(
+            to: css,
+            in: dom,
+            selector: "input",
+            marginValue: "8px",
+            marginText: "margin: 8px;"
+        )
+
+        let body = try #require(firstElement(named: "body", in: dom))
+        dom.selectNode(body.id)
+        try applyBodyStyles(to: css, in: dom)
+
+        let viewController = makeElementViewController(dom: dom)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didRenderBodyRows = await waitUntilRendered(in: viewController) {
+            stylePropertyViews(in: viewController)
+                .map(\.declarationTextForTesting)
+                .contains("margin: 0;")
+        }
+        #expect(didRenderBodyRows)
+
+        dom.selectNode(input.id)
+
+        let didRenderInputRows = await waitUntilRendered(in: viewController) {
+            stylePropertyViews(in: viewController)
+                .map(\.declarationTextForTesting)
+                .contains("margin: 8px;")
+        }
+
+        #expect(didRenderInputRows)
+        #expect(viewController.lastSnapshotApplyModeForTesting == .reloadData)
+    }
+
+    @Test
     func elementViewControllerKeepsCurrentRowsWhileNewSelectionStylesAreHydrating() async throws {
         let dom = makeDOMSession(capabilities: .pageDefault)
         let body = try #require(firstElement(named: "body", in: dom))
@@ -311,6 +389,7 @@ struct DOMContainerTests {
 
         #expect(didRenderInputRows)
         #expect(viewController.collectionView.isHidden == false)
+        #expect(viewController.lastSnapshotApplyModeForTesting == .reloadData)
     }
 
     @Test
@@ -476,7 +555,7 @@ struct DOMContainerTests {
         }
 
         #expect(didRevealUnusedVariables)
-        #expect(viewController.lastSnapshotAnimatedForTesting)
+        #expect(viewController.lastSnapshotApplyModeForTesting == .diff(animated: true))
     }
 
     @Test

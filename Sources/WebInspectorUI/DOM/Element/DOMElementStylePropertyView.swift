@@ -1,13 +1,11 @@
 #if canImport(UIKit)
 import WebInspectorCore
-import ObservationBridge
 import UIKit
 
 @MainActor
 package final class DOMElementStylePropertyView: UIView {
     package typealias ToggleAction = @MainActor (CSSProperty.ID, Bool) -> Bool
 
-    private var propertyObservation: PortableObservationTracking.Token?
     private let declarationTextView = UITextView()
     private let toggleSwitch = UISwitch()
     private var property: CSSProperty?
@@ -23,27 +21,23 @@ package final class DOMElementStylePropertyView: UIView {
         nil
     }
 
-    isolated deinit {
-        propertyObservation?.cancel()
+    package func bind(
+        property: CSSProperty,
+        onToggle: ToggleAction? = nil
+    ) {
+        render(property: property, onToggle: onToggle)
     }
 
-    package func bind(
+    package func render(
         property: CSSProperty,
         onToggle: ToggleAction? = nil
     ) {
         self.property = property
         toggleAction = onToggle
-
-        propertyObservation?.cancel()
-        propertyObservation = withPortableContinuousObservation { [weak self, weak property] _ in
-            guard let property else { return }
-            self?.renderAll(from: property)
-        }
+        renderAll(from: property)
     }
 
     package func clear() {
-        propertyObservation?.cancel()
-        propertyObservation = nil
         property = nil
         toggleAction = nil
         declarationTextView.attributedText = nil
