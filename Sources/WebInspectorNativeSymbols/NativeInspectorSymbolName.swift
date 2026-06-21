@@ -12,10 +12,23 @@ private func _nativeInspectorSwiftDemangle(
 ) -> UnsafeMutablePointer<CChar>?
 
 enum NativeInspectorSymbolName {
+    struct RawNameNeedle: Sendable {
+        let string: String
+        let utf8: [UInt8]
+        let cString: [CChar]
+
+        init(_ string: String) {
+            self.string = string
+            self.utf8 = Array(string.utf8)
+            self.cString = Array(string.utf8CString)
+        }
+    }
+
     struct Part: Sendable {
         let sourceName: String
         let sourceNameUTF8: [UInt8]
         let sourceNameCString: [CChar]
+        let rawNameNeedle: RawNameNeedle?
         let itaniumEncodedNamePartStrings: [String]
         let itaniumEncodedNamePartCStrings: [[CChar]]
 
@@ -23,6 +36,7 @@ enum NativeInspectorSymbolName {
             self.sourceName = sourceName
             self.sourceNameUTF8 = Array(sourceName.utf8)
             self.sourceNameCString = Array(sourceName.utf8CString)
+            self.rawNameNeedle = NativeInspectorSymbolName.rawNameNeedle(for: sourceName)
             let itaniumEncodedNamePartAlternatives = NativeInspectorSymbolName
                 .itaniumEncodedNamePartAlternatives(for: sourceName)
             self.itaniumEncodedNamePartStrings = itaniumEncodedNamePartAlternatives
@@ -41,6 +55,7 @@ enum NativeInspectorSymbolName {
         let rawName: String
         let directSearchNames: [String]
 
+        @inline(__always)
         func contains(_ namePart: Part) -> Bool {
             for directSearchName in directSearchNames {
                 if directSearchName.contains(namePart.sourceName) {
@@ -54,6 +69,16 @@ enum NativeInspectorSymbolName {
             }
             return false
         }
+
+        @inline(__always)
+        func containsRawNameNeedle(_ needle: RawNameNeedle) -> Bool {
+            for directSearchName in directSearchNames {
+                if directSearchName.contains(needle.string) {
+                    return true
+                }
+            }
+            return rawName.contains(needle.string)
+        }
     }
 
     @unsafe struct CStringVariants {
@@ -61,6 +86,7 @@ enum NativeInspectorSymbolName {
         let shouldSearchRawNameDirectly: Bool
         let directSearchNameUTF8s: [[UInt8]]
 
+        @inline(__always)
         @unsafe func contains(_ namePart: Part) -> Bool {
             if unsafe shouldSearchRawNameDirectly,
                unsafe NativeInspectorSymbolName.cString(rawName, contains: namePart.sourceNameCString) {
@@ -73,6 +99,19 @@ enum NativeInspectorSymbolName {
             }
             for encodedNamePartCString in namePart.itaniumEncodedNamePartCStrings {
                 if unsafe NativeInspectorSymbolName.cString(rawName, contains: encodedNamePartCString) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        @inline(__always)
+        @unsafe func containsRawNameNeedle(_ needle: RawNameNeedle) -> Bool {
+            if unsafe NativeInspectorSymbolName.cString(rawName, contains: needle.cString) {
+                return true
+            }
+            for directSearchNameUTF8 in unsafe directSearchNameUTF8s {
+                if NativeInspectorSymbolName.bytes(directSearchNameUTF8, contain: needle.utf8) {
                     return true
                 }
             }
@@ -170,13 +209,37 @@ enum NativeInspectorSymbolName {
             + itaniumEncodedTypeAlternatives(for: namePart)
     }
 
+    static func rawNameNeedle(for namePart: String) -> RawNameNeedle? {
+        let component: String
+        if let operatorRange = namePart.range(of: "::operator ") {
+            component = String(namePart[operatorRange.upperBound...])
+        } else {
+            component = namePart
+                .split(separator: "::")
+                .last
+                .map(String.init) ?? namePart
+        }
+
+        let trimmedComponent = component.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedComponent.isEmpty,
+              trimmedComponent != char8TName else {
+            return nil
+        }
+        return RawNameNeedle(trimmedComponent)
+    }
+
+    @inline(__always)
     private static func isLikelyMangledName(_ symbolName: String) -> Bool {
         if isLikelySwiftMangledName(symbolName) {
             return true
         }
 
-        let trimmedLeadingUnderscores = symbolName.drop { $0 == "_" }
-        return trimmedLeadingUnderscores.hasPrefix("Z")
+        let bytes = symbolName.utf8
+        var cursor = bytes.startIndex
+        while cursor != bytes.endIndex, bytes[cursor] == 95 {
+            bytes.formIndex(after: &cursor)
+        }
+        return cursor != bytes.endIndex && bytes[cursor] == 90
     }
 
     @unsafe private static func isLikelyMangledName(_ symbolNameC: UnsafePointer<CChar>) -> Bool {
@@ -191,13 +254,36 @@ enum NativeInspectorSymbolName {
         return unsafe cursor.pointee == 90
     }
 
-    private static func isLikelySwiftMangledName(_ symbolName: String) -> Bool {
-        if symbolName.hasPrefix("$s")
-            || symbolName.hasPrefix("_$s")
-            || symbolName.hasPrefix("$S")
-            || symbolName.hasPrefix("_$S") {
-            return true
+    @inline(__always)
+    static func isLikelySwiftMangledName(_ symbolName: String) -> Bool {
+        let bytes = symbolName.utf8
+        guard let first = bytes.first else {
+            return false
         }
+
+        if first == 36 {
+            let markerIndex = bytes.index(after: bytes.startIndex)
+            guard markerIndex != bytes.endIndex else {
+                return false
+            }
+            let marker = bytes[markerIndex]
+            return marker == 115 || marker == 83
+        }
+
+        if first == 95 {
+            let dollarIndex = bytes.index(after: bytes.startIndex)
+            guard dollarIndex != bytes.endIndex,
+                  bytes[dollarIndex] == 36 else {
+                return false
+            }
+            let markerIndex = bytes.index(after: dollarIndex)
+            guard markerIndex != bytes.endIndex else {
+                return false
+            }
+            let marker = bytes[markerIndex]
+            return marker == 115 || marker == 83
+        }
+
         return false
     }
 
@@ -246,6 +332,7 @@ enum NativeInspectorSymbolName {
         return ["\(namePart.utf8.count)\(namePart)"]
     }
 
+    @inline(__always)
     private static func bytes(_ haystack: [UInt8], contain needle: [UInt8]) -> Bool {
         guard !needle.isEmpty else {
             return true
@@ -276,6 +363,7 @@ enum NativeInspectorSymbolName {
         return false
     }
 
+    @inline(__always)
     private static func cString(_ haystack: UnsafePointer<CChar>, contains needle: [CChar]) -> Bool {
         let matchLength = needle.count - 1
         guard matchLength > 0 else {

@@ -70,15 +70,31 @@ extension NativeInspectorSymbolResolverCore {
             }
         }
 
-        for symbol in image.exportedSymbols where buckets.contains(where: { !$0.isAmbiguous }) {
+        for symbol in image.exportedSymbols where buckets.contains(where: \.needsTextCandidateScan) {
             guard let offset = symbol.offset else {
                 continue
             }
-            let variants = NativeInspectorSymbolName.variants(for: symbol.name)
+            var variants: NativeInspectorSymbolName.Variants?
 
             for targetIndex in targets.indices {
-                guard !buckets[targetIndex].isAmbiguous,
-                      targets[targetIndex].symbol.matches(variants: variants) else {
+                guard buckets[targetIndex].needsTextCandidateScan,
+                      targets[targetIndex].symbol.mayMatch(rawSymbolName: symbol.name) else {
+                    continue
+                }
+
+                let symbolVariants: NativeInspectorSymbolName.Variants
+                if let variants {
+                    symbolVariants = variants
+                } else {
+                    let resolvedVariants = NativeInspectorSymbolName.variants(for: symbol.name)
+                    variants = resolvedVariants
+                    symbolVariants = resolvedVariants
+                }
+
+                guard targets[targetIndex].symbol.matches(
+                    variants: symbolVariants,
+                    checkingRawNameNeedle: false
+                ) else {
                     continue
                 }
                 appendLoadedImageSymbolAddress(

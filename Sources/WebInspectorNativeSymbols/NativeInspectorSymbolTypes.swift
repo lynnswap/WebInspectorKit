@@ -138,8 +138,31 @@ struct NativeInspectorRequiredSymbol: Sendable {
     }
 
     func matches(variants: NativeInspectorSymbolName.Variants) -> Bool {
+        matches(variants: variants, checkingRawNameNeedle: true)
+    }
+
+    func matches(
+        variants: NativeInspectorSymbolName.Variants,
+        checkingRawNameNeedle: Bool
+    ) -> Bool {
         for query in queries {
-            if query.matches(variants: variants) {
+            if query.matches(
+                variants: variants,
+                checkingRawNameNeedle: checkingRawNameNeedle
+            ) {
+                return true
+            }
+        }
+        return false
+    }
+
+    @inline(__always)
+    func mayMatch(rawSymbolName: String) -> Bool {
+        if NativeInspectorSymbolName.isLikelySwiftMangledName(rawSymbolName) {
+            return true
+        }
+        for query in queries {
+            if query.mayMatch(rawSymbolName: rawSymbolName) {
                 return true
             }
         }
@@ -147,8 +170,18 @@ struct NativeInspectorRequiredSymbol: Sendable {
     }
 
     @unsafe func matches(cStringVariants: NativeInspectorSymbolName.CStringVariants) -> Bool {
+        unsafe matches(cStringVariants: cStringVariants, checkingRawNameNeedle: true)
+    }
+
+    @unsafe func matches(
+        cStringVariants: NativeInspectorSymbolName.CStringVariants,
+        checkingRawNameNeedle: Bool
+    ) -> Bool {
         for query in queries {
-            if unsafe query.matches(cStringVariants: cStringVariants) {
+            if unsafe query.matches(
+                cStringVariants: cStringVariants,
+                checkingRawNameNeedle: checkingRawNameNeedle
+            ) {
                 return true
             }
         }
@@ -159,6 +192,7 @@ struct NativeInspectorRequiredSymbol: Sendable {
 struct NativeInspectorSymbolQuery: Sendable {
     private let requiredNameParts: [NativeInspectorSymbolName.Part]
     private let forbiddenNameParts: [NativeInspectorSymbolName.Part]
+    private let rawNameNeedle: NativeInspectorSymbolName.RawNameNeedle?
 
     init(
         requiredNameParts: [String],
@@ -166,6 +200,7 @@ struct NativeInspectorSymbolQuery: Sendable {
     ) {
         self.requiredNameParts = requiredNameParts.map(NativeInspectorSymbolName.Part.init(sourceName:))
         self.forbiddenNameParts = forbiddenNameParts.map(NativeInspectorSymbolName.Part.init(sourceName:))
+        self.rawNameNeedle = self.requiredNameParts.lazy.compactMap(\.rawNameNeedle).first
     }
 
     func matches(symbolName: String) -> Bool {
@@ -173,6 +208,18 @@ struct NativeInspectorSymbolQuery: Sendable {
     }
 
     func matches(variants: NativeInspectorSymbolName.Variants) -> Bool {
+        matches(variants: variants, checkingRawNameNeedle: true)
+    }
+
+    func matches(
+        variants: NativeInspectorSymbolName.Variants,
+        checkingRawNameNeedle: Bool
+    ) -> Bool {
+        if checkingRawNameNeedle,
+           let rawNameNeedle,
+           !variants.containsRawNameNeedle(rawNameNeedle) {
+            return false
+        }
         for requiredNamePart in requiredNameParts {
             guard variants.contains(requiredNamePart) else {
                 return false
@@ -186,7 +233,27 @@ struct NativeInspectorSymbolQuery: Sendable {
         return true
     }
 
+    @inline(__always)
+    func mayMatch(rawSymbolName: String) -> Bool {
+        guard let rawNameNeedle else {
+            return true
+        }
+        return rawSymbolName.contains(rawNameNeedle.string)
+    }
+
     @unsafe func matches(cStringVariants: NativeInspectorSymbolName.CStringVariants) -> Bool {
+        unsafe matches(cStringVariants: cStringVariants, checkingRawNameNeedle: true)
+    }
+
+    @unsafe func matches(
+        cStringVariants: NativeInspectorSymbolName.CStringVariants,
+        checkingRawNameNeedle: Bool
+    ) -> Bool {
+        if checkingRawNameNeedle,
+           let rawNameNeedle,
+           unsafe !cStringVariants.containsRawNameNeedle(rawNameNeedle) {
+            return false
+        }
         for requiredNamePart in requiredNameParts {
             guard unsafe cStringVariants.contains(requiredNamePart) else {
                 return false

@@ -34,6 +34,10 @@ struct NativeInspectorResolvedSymbolBucket {
         candidate == nil && outsideTextAddress == nil
     }
 
+    var needsTextCandidateScan: Bool {
+        candidate == nil && !hasMultipleCandidates
+    }
+
     mutating func insertCandidate(_ address: UInt64) {
         guard let candidate else {
             self.candidate = address
@@ -384,11 +388,27 @@ extension NativeInspectorSymbolResolverCore {
                 continue
             }
 
-            let variants = NativeInspectorSymbolName.variants(for: symbol.name)
+            var variants: NativeInspectorSymbolName.Variants?
 
             for targetIndex in targets.indices {
                 guard !buckets[targetIndex].isAmbiguous,
-                      targets[targetIndex].symbol.matches(variants: variants) else {
+                      targets[targetIndex].symbol.mayMatch(rawSymbolName: symbol.name) else {
+                    continue
+                }
+
+                let symbolVariants: NativeInspectorSymbolName.Variants
+                if let variants {
+                    symbolVariants = variants
+                } else {
+                    let resolvedVariants = NativeInspectorSymbolName.variants(for: symbol.name)
+                    variants = resolvedVariants
+                    symbolVariants = resolvedVariants
+                }
+
+                guard targets[targetIndex].symbol.matches(
+                    variants: symbolVariants,
+                    checkingRawNameNeedle: false
+                ) else {
                     continue
                 }
                 buckets[targetIndex].insertCandidate(address)
@@ -406,11 +426,27 @@ extension NativeInspectorSymbolResolverCore {
                 continue
             }
 
-            let variants = NativeInspectorSymbolName.variants(for: symbol.name)
+            var variants: NativeInspectorSymbolName.Variants?
 
             for targetIndex in targets.indices {
                 guard buckets[targetIndex].needsOutsideTextScan,
-                      targets[targetIndex].symbol.matches(variants: variants) else {
+                      targets[targetIndex].symbol.mayMatch(rawSymbolName: symbol.name) else {
+                    continue
+                }
+
+                let symbolVariants: NativeInspectorSymbolName.Variants
+                if let variants {
+                    symbolVariants = variants
+                } else {
+                    let resolvedVariants = NativeInspectorSymbolName.variants(for: symbol.name)
+                    variants = resolvedVariants
+                    symbolVariants = resolvedVariants
+                }
+
+                guard targets[targetIndex].symbol.matches(
+                    variants: symbolVariants,
+                    checkingRawNameNeedle: false
+                ) else {
                     continue
                 }
                 buckets[targetIndex].outsideTextAddress = address
