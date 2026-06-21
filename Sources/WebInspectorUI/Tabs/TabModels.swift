@@ -113,8 +113,11 @@ extension WebInspectorTab {
             for hostLayout: WebInspectorTab.HostLayout,
             tabs: [WebInspectorTab]
         ) -> [WebInspectorTab.DisplayItem] {
-            tabs.flatMap { tab in
-                catalog.controller(for: tab).displayItems(for: hostLayout)
+            tabs.flatMap { tab -> [WebInspectorTab.DisplayItem] in
+                guard let controller = catalog.controller(for: tab) else {
+                    return [.tab(tab.id)]
+                }
+                return controller.displayItems(for: hostLayout)
             }
         }
 
@@ -147,7 +150,13 @@ extension WebInspectorTab {
                 guard let tab = tabs.first(where: { $0.id == tabID }) else {
                     return nil
                 }
-                return catalog.controller(for: tab).descriptor(for: displayItem)
+                guard let controller = catalog.controller(for: tab) else {
+                    return WebInspectorTab.DisplayDescriptor(
+                        title: tab.title,
+                        image: tab.image
+                    )
+                }
+                return controller.descriptor(for: displayItem)
             case .domElement:
                 return catalog.controller(for: WebInspectorTab.BuiltIn.dom).descriptor(for: displayItem)
             }

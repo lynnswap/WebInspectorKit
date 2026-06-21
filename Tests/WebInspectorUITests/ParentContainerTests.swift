@@ -205,6 +205,130 @@ struct ParentContainerTests {
     }
 
     @Test
+    func customTabUsesPublicDescriptorAndCachedViewControllerFactory() throws {
+        let customViewController = UIViewController()
+        var factoryCallCount = 0
+        var factorySession: WebInspectorSession?
+        let customTab = WebInspectorTab(
+            id: "webinspector_custom_console",
+            title: "Console",
+            systemImage: "terminal"
+        ) { session in
+            factoryCallCount += 1
+            factorySession = session
+            return customViewController
+        }
+        let session = WebInspectorSession(tabs: [.dom, customTab, .network])
+        let projection = WebInspectorTab.DisplayProjection()
+
+        #expect(
+            projection.displayItems(for: .compact, tabs: session.interface.tabs).map(\.id)
+                == [
+                    WebInspectorTab.dom.id,
+                    WebInspectorTab.DisplayItem.domElementID,
+                    customTab.id,
+                    WebInspectorTab.network.id,
+                ]
+        )
+        #expect(
+            projection.displayItems(for: .regular, tabs: session.interface.tabs).map(\.id)
+                == [
+                    WebInspectorTab.dom.id,
+                    customTab.id,
+                    WebInspectorTab.network.id,
+                ]
+        )
+        #expect(
+            projection.descriptor(
+                for: .tab(customTab.id),
+                tabs: session.interface.tabs
+            )?.title == "Console"
+        )
+
+        let compactContent = WebInspectorTab.ContentFactory.makeViewController(
+            for: .tab(customTab.id),
+            session: session,
+            hostLayout: .compact,
+            tabs: session.interface.tabs
+        )
+        let regularContent = WebInspectorTab.ContentFactory.makeViewController(
+            for: .tab(customTab.id),
+            session: session,
+            hostLayout: .regular,
+            tabs: session.interface.tabs
+        )
+        regularContent.loadViewIfNeeded()
+        #expect(regularContent !== customViewController)
+        #expect(customViewController.parent === regularContent)
+
+        let reparentedContent = WebInspectorTab.ContentFactory.makeViewController(
+            for: .tab(customTab.id),
+            session: session,
+            hostLayout: .compact,
+            tabs: session.interface.tabs
+        )
+
+        #expect(compactContent === customViewController)
+        #expect(reparentedContent === customViewController)
+        #expect(reparentedContent.parent == nil)
+        #expect(factorySession === session)
+        #expect(factoryCallCount == 1)
+    }
+
+    @Test
+    func regularCustomTabWrapsNavigationControllerContent() throws {
+        let customRootViewController = UIViewController()
+        let customNavigationController = UINavigationController(rootViewController: customRootViewController)
+        let customTab = WebInspectorTab(
+            id: "webinspector_custom_navigation",
+            title: "Custom",
+            image: nil
+        ) { _ in
+            customNavigationController
+        }
+        let session = WebInspectorSession(tabs: [customTab])
+        let host = RegularTabContentViewController(session: session)
+
+        host.loadViewIfNeeded()
+
+        let installedRoot = try #require(host.viewControllers.first)
+        installedRoot.loadViewIfNeeded()
+        #expect(installedRoot !== customNavigationController)
+        #expect(installedRoot is UINavigationController == false)
+        #expect(customNavigationController.parent === installedRoot)
+    }
+
+    @Test
+    func compactAndRegularHostsDisplayCustomTabs() throws {
+        let customTab = WebInspectorTab(
+            id: "webinspector_custom_console",
+            title: "Console",
+            systemImage: "terminal"
+        ) { _ in
+            UIViewController()
+        }
+        let session = WebInspectorSession(tabs: [.dom, customTab])
+
+        let compactHost = CompactTabBarController(session: session)
+        #expect(
+            compactHost.displayedTabIdentifiersForTesting
+                == [
+                    WebInspectorTab.dom.id,
+                    WebInspectorTab.DisplayItem.domElementID,
+                    customTab.id,
+                ]
+        )
+
+        let regularHost = RegularTabContentViewController(session: session)
+        regularHost.loadViewIfNeeded()
+        let segmentedControl = regularHost.segmentedControlForTesting
+
+        #expect(segmentedControl.numberOfSegments == 2)
+        #expect(segmentedControl.titleForSegment(at: 0) == "DOM")
+        #expect(segmentedControl.titleForSegment(at: 1) == "Console")
+    }
+
+    @Test
     func topLevelContainerSwitchesBetweenCompactAndRegularHosts() throws {
         let viewController = WebInspectorViewController()
         viewController.loadViewIfNeeded()
