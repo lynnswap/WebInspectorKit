@@ -14,11 +14,15 @@ private func _nativeInspectorSwiftDemangle(
 enum NativeInspectorSymbolName {
     struct Part: Sendable {
         let sourceName: String
-        let itaniumEncodedNameParts: [String]
+        let sourceNameUTF8: [UInt8]
+        let itaniumEncodedNamePartUTF8s: [[UInt8]]
 
         init(sourceName: String) {
             self.sourceName = sourceName
-            self.itaniumEncodedNameParts = NativeInspectorSymbolName.itaniumEncodedNamePartAlternatives(for: sourceName)
+            self.sourceNameUTF8 = Array(sourceName.utf8)
+            self.itaniumEncodedNamePartUTF8s = NativeInspectorSymbolName
+                .itaniumEncodedNamePartAlternatives(for: sourceName)
+                .map { Array($0.utf8) }
         }
     }
 
@@ -30,26 +34,30 @@ enum NativeInspectorSymbolName {
     private static let char8TName = decodedString([0xC4, 0xCF, 0xC6, 0xD5, 0x9F, 0xF8, 0xD3])
 
     struct Variants {
-        let rawName: String
-        let directSearchNames: [String]
+        let rawNameUTF8: [UInt8]
+        let directSearchNameUTF8s: [[UInt8]]
 
         func contains(_ namePart: Part) -> Bool {
-            directSearchNames.contains { $0.contains(namePart.sourceName) }
-                || namePart.itaniumEncodedNameParts.contains { encodedNamePart in
-                    rawName.contains(encodedNamePart)
+            directSearchNameUTF8s.contains { directSearchNameUTF8 in
+                NativeInspectorSymbolName.bytes(directSearchNameUTF8, contain: namePart.sourceNameUTF8)
+            }
+                || namePart.itaniumEncodedNamePartUTF8s.contains { encodedNamePartUTF8 in
+                    NativeInspectorSymbolName.bytes(rawNameUTF8, contain: encodedNamePartUTF8)
                 }
         }
     }
 
     static func variants(for symbolName: String) -> Variants {
-        var directSearchNames = isLikelyMangledName(symbolName) ? [] : [symbolName]
-        if let swiftDemangledName = unsafe swiftDemangledName(symbolName),
+        let rawNameUTF8 = Array(symbolName.utf8)
+        var directSearchNameUTF8s = isLikelyMangledName(symbolName) ? [] : [rawNameUTF8]
+        if isLikelySwiftMangledName(symbolName),
+           let swiftDemangledName = unsafe swiftDemangledName(symbolName),
            swiftDemangledName != symbolName {
-            directSearchNames.append(swiftDemangledName)
+            directSearchNameUTF8s.append(Array(swiftDemangledName.utf8))
         }
         return Variants(
-            rawName: symbolName,
-            directSearchNames: directSearchNames
+            rawNameUTF8: rawNameUTF8,
+            directSearchNameUTF8s: directSearchNameUTF8s
         )
     }
 
@@ -94,15 +102,22 @@ enum NativeInspectorSymbolName {
     }
 
     private static func isLikelyMangledName(_ symbolName: String) -> Bool {
+        if isLikelySwiftMangledName(symbolName) {
+            return true
+        }
+
+        let trimmedLeadingUnderscores = symbolName.drop { $0 == "_" }
+        return trimmedLeadingUnderscores.hasPrefix("Z")
+    }
+
+    private static func isLikelySwiftMangledName(_ symbolName: String) -> Bool {
         if symbolName.hasPrefix("$s")
             || symbolName.hasPrefix("_$s")
             || symbolName.hasPrefix("$S")
             || symbolName.hasPrefix("_$S") {
             return true
         }
-
-        let trimmedLeadingUnderscores = symbolName.drop { $0 == "_" }
-        return trimmedLeadingUnderscores.hasPrefix("Z")
+        return false
     }
 
     private static func itaniumEncodedScopedNameAlternatives(for namePart: String) -> [String] {
@@ -133,6 +148,36 @@ enum NativeInspectorSymbolName {
             return []
         }
         return ["\(namePart.utf8.count)\(namePart)"]
+    }
+
+    private static func bytes(_ haystack: [UInt8], contain needle: [UInt8]) -> Bool {
+        guard !needle.isEmpty else {
+            return true
+        }
+        guard needle.count <= haystack.count else {
+            return false
+        }
+        if needle.count == 1 {
+            return haystack.contains(needle[0])
+        }
+
+        let firstByte = needle[0]
+        let lastStartIndex = haystack.count - needle.count
+        var haystackIndex = 0
+        while haystackIndex <= lastStartIndex {
+            if haystack[haystackIndex] == firstByte {
+                var needleIndex = 1
+                while needleIndex < needle.count,
+                      haystack[haystackIndex + needleIndex] == needle[needleIndex] {
+                    needleIndex += 1
+                }
+                if needleIndex == needle.count {
+                    return true
+                }
+            }
+            haystackIndex += 1
+        }
+        return false
     }
 }
 #endif

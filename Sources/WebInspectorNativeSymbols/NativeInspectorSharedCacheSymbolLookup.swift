@@ -22,6 +22,16 @@ private struct NativeInspectorResolvedSymbolBucket {
             outsideTextAddress: outsideTextAddress
         )
     }
+
+    var needsOutsideTextScan: Bool {
+        candidates.isEmpty && outsideTextAddress == nil
+    }
+}
+
+private enum NativeInspectorSharedCacheSymbolAddress {
+    case text(UInt64)
+    case outsideText(UInt64)
+    case invalid
 }
 
 extension NativeInspectorSymbolResolverCore {
@@ -303,6 +313,15 @@ extension NativeInspectorSymbolResolverCore {
 
         for symbolIndex in symbolRange where buckets.contains(where: { !$0.isAmbiguous }) {
             let symbol = symbolAtIndex(symbolIndex)
+            guard case let .text(address) = sharedCacheSymbolAddress(
+                offset: symbol.offset,
+                textVMAddress: textVMAddress,
+                textRange: textRange,
+                slide: slide
+            ) else {
+                continue
+            }
+
             let variants = NativeInspectorSymbolName.variants(for: symbol.name)
 
             for targetIndex in targets.indices {
@@ -311,14 +330,31 @@ extension NativeInspectorSymbolResolverCore {
                     continue
                 }
                 var bucket = buckets[targetIndex]
-                appendSharedCacheSymbolAddress(
-                    offset: symbol.offset,
-                    textVMAddress: textVMAddress,
-                    textRange: textRange,
-                    slide: slide,
-                    candidates: &bucket.candidates,
-                    outsideTextAddress: &bucket.outsideTextAddress
-                )
+                bucket.candidates.insert(address)
+                buckets[targetIndex] = bucket
+            }
+        }
+
+        for symbolIndex in symbolRange where buckets.contains(where: \.needsOutsideTextScan) {
+            let symbol = symbolAtIndex(symbolIndex)
+            guard case let .outsideText(address) = sharedCacheSymbolAddress(
+                offset: symbol.offset,
+                textVMAddress: textVMAddress,
+                textRange: textRange,
+                slide: slide
+            ) else {
+                continue
+            }
+
+            let variants = NativeInspectorSymbolName.variants(for: symbol.name)
+
+            for targetIndex in targets.indices {
+                guard buckets[targetIndex].needsOutsideTextScan,
+                      targets[targetIndex].symbol.matches(variants: variants) else {
+                    continue
+                }
+                var bucket = buckets[targetIndex]
+                bucket.outsideTextAddress = address
                 buckets[targetIndex] = bucket
             }
         }
@@ -329,6 +365,30 @@ extension NativeInspectorSymbolResolverCore {
             resolvedSymbols[targets[targetIndex].role] = buckets[targetIndex].resolvedAddress
         }
         return resolvedSymbols
+    }
+
+    private static func sharedCacheSymbolAddress(
+        offset: Int,
+        textVMAddress: UInt64,
+        textRange: Range<UInt64>,
+        slide: UInt64
+    ) -> NativeInspectorSharedCacheSymbolAddress {
+        guard offset >= 0 else {
+            return .invalid
+        }
+
+        let unslidAddress = UInt64(offset)
+        let actualAddress = slide + unslidAddress
+        guard unslidAddress >= textVMAddress else {
+            return .outsideText(actualAddress)
+        }
+
+        let offsetWithinText = unslidAddress - textVMAddress
+        let resolvedAddress = textRange.lowerBound + offsetWithinText
+        guard textRange.contains(resolvedAddress), resolvedAddress == actualAddress else {
+            return .outsideText(actualAddress)
+        }
+        return .text(actualAddress)
     }
 
     private static func appendSharedCacheSymbolAddress(

@@ -41,31 +41,21 @@ extension NativeInspectorSymbolResolverCore {
                 fallback: resolveLoadedImageSymbol(matching: symbols.backendDispatcherDispatch, in: javaScriptCoreImage, text: javaScriptCoreText)
             )
         )
-        let loadedImageResultsWithFallback = unsafe resolveConnectDisconnectFallbackIfNeeded(
-            loadedImageResults,
-            image: image,
-            text: text,
-            webCoreImage: webCoreImage,
-            webCoreText: webCoreText,
-            javaScriptCoreImage: javaScriptCoreImage,
-            javaScriptCoreText: javaScriptCoreText,
-            symbols: symbols
-        )
         let loadedImageResolution = successfulResolutionIfComplete(
-            loadedImageResultsWithFallback.symbols,
+            loadedImageResults,
             phase: .loadedImage,
-            source: loadedImageResultsWithFallback.usedFallback ? "loaded-image+text-scan" : "loaded-image",
+            source: "loaded-image",
             webKitHeaderAddress: loadedImage.headerAddress,
             javaScriptCoreHeaderAddress: loadedJavaScriptCoreImage.headerAddress,
-            usedConnectDisconnectFallback: loadedImageResultsWithFallback.usedFallback
+            usedConnectDisconnectFallback: false
         )
             ?? finalizeResolution(
-                loadedImageResultsWithFallback.symbols,
+                loadedImageResults,
                 phase: .loadedImage,
-                source: loadedImageResultsWithFallback.usedFallback ? "loaded-image+text-scan" : "loaded-image",
+                source: "loaded-image",
                 webKitHeaderAddress: loadedImage.headerAddress,
                 javaScriptCoreHeaderAddress: loadedJavaScriptCoreImage.headerAddress,
-                usedConnectDisconnectFallback: loadedImageResultsWithFallback.usedFallback,
+                usedConnectDisconnectFallback: false,
                 shouldLogFailure: false
             )
             ?? failure(.runtimeFunctionSymbolMissing, shouldLog: false)
@@ -75,7 +65,18 @@ extension NativeInspectorSymbolResolverCore {
         }
 
         guard allowSharedCacheFallback else {
-            return loadedImageResolution
+            return unsafe resolveLoadedImageTextScanFallback(
+                loadedImageResults,
+                image: image,
+                text: text,
+                webCoreImage: webCoreImage,
+                webCoreText: webCoreText,
+                javaScriptCoreImage: javaScriptCoreImage,
+                javaScriptCoreText: javaScriptCoreText,
+                loadedImage: loadedImage,
+                loadedJavaScriptCoreImage: loadedJavaScriptCoreImage,
+                symbols: symbols
+            )
         }
 
         #if DEBUG
@@ -92,16 +93,79 @@ extension NativeInspectorSymbolResolverCore {
             javaScriptCorePathSuffixes: javaScriptCorePathSuffixes,
             loadedWebCoreImage: loadedWebCoreImage,
             webCorePathSuffixes: webCorePathSuffixes,
-            loadedImageSymbols: loadedImageResultsWithFallback.symbols,
+            loadedImageSymbols: loadedImageResults,
+            symbols: symbols
+        )
+        if sharedCacheResolution.failureReason == nil {
+            return sharedCacheResolution
+        }
+        let loadedImageTextScanResolution = unsafe resolveLoadedImageTextScanFallback(
+            loadedImageResults,
+            image: image,
+            text: text,
+            webCoreImage: webCoreImage,
+            webCoreText: webCoreText,
+            javaScriptCoreImage: javaScriptCoreImage,
+            javaScriptCoreText: javaScriptCoreText,
+            loadedImage: loadedImage,
+            loadedJavaScriptCoreImage: loadedJavaScriptCoreImage,
             symbols: symbols
         )
         let mergedLookupResult = mergedResolution(
-            preferred: loadedImageResolution,
-            fallback: sharedCacheResolution
+            preferred: sharedCacheResolution,
+            fallback: loadedImageTextScanResolution
         )
         return mergedLookupResult
     }
 
+    @unsafe private static func resolveLoadedImageTextScanFallback(
+        _ resolvedSymbols: NativeInspectorResolvedSymbolSet,
+        image: MachOImage,
+        text: SegmentCommand64,
+        webCoreImage: MachOImage?,
+        webCoreText: SegmentCommand64?,
+        javaScriptCoreImage: MachOImage,
+        javaScriptCoreText: SegmentCommand64,
+        loadedImage: LoadedNativeInspectorImage,
+        loadedJavaScriptCoreImage: LoadedNativeInspectorImage,
+        symbols: NativeInspectorSymbols
+    ) -> NativeInspectorSymbolLookupResult {
+        let fallbackResults = unsafe resolveConnectDisconnectFallbackIfNeeded(
+            resolvedSymbols,
+            image: image,
+            text: text,
+            webCoreImage: webCoreImage,
+            webCoreText: webCoreText,
+            javaScriptCoreImage: javaScriptCoreImage,
+            javaScriptCoreText: javaScriptCoreText,
+            symbols: symbols
+        )
+        let source = fallbackResults.usedFallback ? "loaded-image+text-scan" : "loaded-image"
+        return successfulResolutionIfComplete(
+            fallbackResults.symbols,
+            phase: .loadedImage,
+            source: source,
+            webKitHeaderAddress: loadedImage.headerAddress,
+            javaScriptCoreHeaderAddress: loadedJavaScriptCoreImage.headerAddress,
+            usedConnectDisconnectFallback: fallbackResults.usedFallback
+        )
+            ?? finalizeResolution(
+                fallbackResults.symbols,
+                phase: .loadedImage,
+                source: source,
+                webKitHeaderAddress: loadedImage.headerAddress,
+                javaScriptCoreHeaderAddress: loadedJavaScriptCoreImage.headerAddress,
+                usedConnectDisconnectFallback: fallbackResults.usedFallback,
+                shouldLogFailure: false
+            )
+            ?? failure(
+                .runtimeFunctionSymbolMissing,
+                phase: .loadedImage,
+                source: source,
+                usedConnectDisconnectFallback: fallbackResults.usedFallback,
+                shouldLog: false
+            )
+    }
 
     static func preferredResolvedAddress(
         _ primary: ResolvedNativeInspectorAddress,

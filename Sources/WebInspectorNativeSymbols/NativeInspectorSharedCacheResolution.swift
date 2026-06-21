@@ -368,13 +368,18 @@ extension NativeInspectorSymbolResolverCore {
             textRange: webKit.textRange,
             slide: webKit.slide
         )
+        var javaScriptCoreTargets = [
+            NativeInspectorSymbolMatchTarget(role: .stringFromUTF8, symbol: symbols.stringFromUTF8),
+            NativeInspectorSymbolMatchTarget(role: .stringImplToNSString, symbol: symbols.stringImplToNSString),
+            NativeInspectorSymbolMatchTarget(role: .destroyStringImpl, symbol: symbols.destroyStringImpl),
+        ]
+        if case .missing = webKitResults[.backendDispatcherDispatch] ?? .missing {
+            javaScriptCoreTargets.append(
+                NativeInspectorSymbolMatchTarget(role: .backendDispatcherDispatch, symbol: symbols.backendDispatcherDispatch)
+            )
+        }
         let javaScriptCoreResults = resolveSharedCacheSymbols(
-            matching: [
-                NativeInspectorSymbolMatchTarget(role: .stringFromUTF8, symbol: symbols.stringFromUTF8),
-                NativeInspectorSymbolMatchTarget(role: .stringImplToNSString, symbol: symbols.stringImplToNSString),
-                NativeInspectorSymbolMatchTarget(role: .destroyStringImpl, symbol: symbols.destroyStringImpl),
-                NativeInspectorSymbolMatchTarget(role: .backendDispatcherDispatch, symbol: symbols.backendDispatcherDispatch),
-            ],
+            matching: javaScriptCoreTargets,
             symbols: javaScriptCoreSymbols,
             symbolRange: javaScriptCoreSymbolRange,
             textVMAddress: UInt64(javaScriptCore.text.virtualMemoryAddress),
@@ -415,13 +420,18 @@ extension NativeInspectorSymbolResolverCore {
             textRange: webKit.textRange,
             slide: webKit.slide
         )
+        var javaScriptCoreTargets = [
+            NativeInspectorSymbolMatchTarget(role: .stringFromUTF8, symbol: symbols.stringFromUTF8),
+            NativeInspectorSymbolMatchTarget(role: .stringImplToNSString, symbol: symbols.stringImplToNSString),
+            NativeInspectorSymbolMatchTarget(role: .destroyStringImpl, symbol: symbols.destroyStringImpl),
+        ]
+        if case .missing = webKitResults[.backendDispatcherDispatch] ?? .missing {
+            javaScriptCoreTargets.append(
+                NativeInspectorSymbolMatchTarget(role: .backendDispatcherDispatch, symbol: symbols.backendDispatcherDispatch)
+            )
+        }
         let javaScriptCoreResults = resolveSharedCacheSymbols(
-            matching: [
-                NativeInspectorSymbolMatchTarget(role: .stringFromUTF8, symbol: symbols.stringFromUTF8),
-                NativeInspectorSymbolMatchTarget(role: .stringImplToNSString, symbol: symbols.stringImplToNSString),
-                NativeInspectorSymbolMatchTarget(role: .destroyStringImpl, symbol: symbols.destroyStringImpl),
-                NativeInspectorSymbolMatchTarget(role: .backendDispatcherDispatch, symbol: symbols.backendDispatcherDispatch),
-            ],
+            matching: javaScriptCoreTargets,
             symbols: javaScriptCoreSymbols,
             symbolRange: javaScriptCoreSymbolRange,
             textVMAddress: UInt64(javaScriptCore.text.virtualMemoryAddress),
