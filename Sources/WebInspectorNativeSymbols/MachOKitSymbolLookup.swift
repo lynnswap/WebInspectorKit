@@ -47,12 +47,5 @@ import MachOKit
         }
         return unsafe MachOImage.image(for: pointer)
     }
-
-    static func exportedRuntimeSymbolAddress(named symbolName: String) -> UInt64? {
-        guard let symbol = unsafe dlsym(UnsafeMutableRawPointer(bitPattern: -2), symbolName) else {
-            return nil
-        }
-        return UInt64(UInt(bitPattern: symbol))
-    }
 }
 #endif

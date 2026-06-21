@@ -7053,9 +7053,13 @@ func detachDoesNotRestoreSelectedHighlightAfterRetiringElementPicker() async thr
 @Test
 func detachCompletesAndResetsModelsWhenTeardownCleanupTimesOut() async throws {
     let backend = FakeTransportBackend()
+    let responseTimeout = ManualResponseTimeout()
     let transport = TransportSession(
         backend: backend,
-        responseTimeout: .milliseconds(20)
+        responseTimeout: .milliseconds(20),
+        timeoutSleep: { duration in
+            try await responseTimeout.sleep(for: duration)
+        }
     )
     let session = await InspectorSession(
         configuration: .init(
@@ -7085,6 +7089,8 @@ func detachCompletesAndResetsModelsWhenTeardownCleanupTimesOut() async throws {
     }
     let hideHighlight = try await waitForTargetMessage(backend, method: "DOM.hideHighlight", after: countBeforeDetach)
     #expect(hideHighlight.targetIdentifier == ProtocolTarget.ID.pageMain)
+    await responseTimeout.waitUntilSuspended()
+    await responseTimeout.fireNext()
     await detachTask.value
 
     #expect(await backend.isDetached())

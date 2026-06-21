@@ -16,10 +16,12 @@ extension NativeInspectorSymbolResolverCore {
             ("backendDispatcherDispatch", resolvedSymbols.backendDispatcherDispatch),
         ]
         return symbolResults.compactMap { name, result in
-            if case .missing = result {
+            switch result {
+            case .missing, .ambiguous:
                 return name
+            default:
+                return nil
             }
-            return nil
         }
     }
 
@@ -38,6 +40,8 @@ extension NativeInspectorSymbolResolverCore {
             return unsafe String(format: "outsideText(0x%llx)", address)
         case .missing:
             return "missing"
+        case .ambiguous:
+            return "ambiguous"
         }
     }
 

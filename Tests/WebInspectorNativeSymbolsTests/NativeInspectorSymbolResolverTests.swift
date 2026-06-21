@@ -40,9 +40,18 @@ struct NativeInspectorSymbolResolverTests {
     @Test
     func resolveForTestingReportsOnlyMissingSymbolState() throws {
         let fixture = try nativeSymbolFixture()
+        let symbols = NativeInspectorSymbolResolverCore.currentSymbolQueries()
+            .replacing(
+                stringFromUTF8: requiredSymbol(
+                    role: .stringFromUTF8,
+                    ownerImage: .javaScriptCore,
+                    requiredNameParts: ["definitelyMissingFromUTF8Foo"],
+                    resolutionPolicy: .requiredTextSymbol
+                )
+            )
         let resolution = try NativeInspectorSymbolResolver.resolveUsingFixture(
             fixture,
-            stringFromUTF8Symbol: obfuscated(["Ev", "27definitelyMissingFromUTF8Foo", "6String", "3WTF", "__ZN"])
+            symbols: symbols
         )
         let failureReason = resolution.failureReason
 
@@ -70,22 +79,54 @@ struct NativeInspectorSymbolResolverTests {
     }
 
     @Test
-    func resolveForTestingUsesAlternateConnectDisconnectCandidates() throws {
+    func resolveForTestingRejectsAmbiguousSemanticMatches() throws {
         let fixture = try nativeSymbolFixture()
-        let primaryConnect = try #require(NativeInspectorSymbolResolver.connectSymbolsForTesting().first)
-        let primaryDisconnect = try #require(NativeInspectorSymbolResolver.disconnectSymbolsForTesting().first)
+        let symbols = NativeInspectorSymbolResolverCore.currentSymbolQueries()
+            .replacing(
+                stringFromUTF8: requiredSymbol(
+                    role: .stringFromUTF8,
+                    ownerImage: .javaScriptCore,
+                    requiredNameParts: ["WTF::String", "span", "char8_t"],
+                    resolutionPolicy: .requiredTextSymbol
+                )
+            )
 
         let resolution = try NativeInspectorSymbolResolver.resolveUsingFixture(
             fixture,
-            connectSymbol: obfuscated(["Ev", "26DefinitelyWrongConnectName", "7Missing", "__ZN"]),
-            disconnectSymbol: obfuscated(["Ev", "29DefinitelyWrongDisconnectName", "7Missing", "__ZN"]),
-            alternateConnectSymbols: [primaryConnect],
-            alternateDisconnectSymbols: [primaryDisconnect]
+            symbols: symbols
         )
 
+        #expect(!resolution.isSupported)
+        #expect(resolution.addresses == .zero)
+        #expect(resolution.failureKind == NativeInspectorSymbolFailure.ambiguousSymbolMatch.message)
+        #expect(resolution.failureReason?.contains("symbol lookup ambiguous") == true)
+        #expect(resolution.missingFunctions.contains("stringFromUTF8"))
+    }
+
+    @Test
+    func fixtureResolutionSelectsUsableStringFromUTF8EntryPoint() throws {
+        let fixture = try nativeSymbolFixture()
+        let resolution = try NativeInspectorSymbolResolver.resolveUsingFixture(fixture)
+
         #expect(resolution.isSupported)
-        #expect(resolution.connectFrontendAddress != 0)
-        #expect(resolution.disconnectFrontendAddress != 0)
+        #expect(resolution.stringFromUTF8Address == UInt64(WebInspectorNativeSymbolFixtureWTFStringFromUTF8Address()))
+    }
+
+    @Test
+    func cStringSwiftMangledNameDetectionRejectsShortNames() {
+        for symbolName in ["", "_", "_$", "$"] {
+            let isLikelySwiftMangled = unsafe symbolName.withCString { symbolNameC in
+                unsafe NativeInspectorSymbolName.isLikelySwiftMangledName(symbolNameC)
+            }
+
+            #expect(!isLikelySwiftMangled)
+        }
+
+        let isLikelySwiftMangled = unsafe "_$s".withCString { symbolNameC in
+            unsafe NativeInspectorSymbolName.isLikelySwiftMangledName(symbolNameC)
+        }
+
+        #expect(isLikelySwiftMangled)
     }
 
     @Test
@@ -285,9 +326,18 @@ struct NativeInspectorSymbolResolverTests {
     @Test
     func diagnosticsDoNotExposeDecodedMangledSymbols() throws {
         let fixture = try nativeSymbolFixture()
+        let symbols = NativeInspectorSymbolResolverCore.currentSymbolQueries()
+            .replacing(
+                stringFromUTF8: requiredSymbol(
+                    role: .stringFromUTF8,
+                    ownerImage: .javaScriptCore,
+                    requiredNameParts: ["definitelyMissingFromUTF8Foo"],
+                    resolutionPolicy: .requiredTextSymbol
+                )
+            )
         let resolution = try NativeInspectorSymbolResolver.resolveUsingFixture(
             fixture,
-            stringFromUTF8Symbol: obfuscated(["Ev", "27definitelyMissingFromUTF8Foo", "6String", "3WTF", "__ZN"])
+            symbols: symbols
         )
         let diagnostics = [
             resolution.failureReason,
@@ -375,33 +425,56 @@ private extension NativeInspectorSymbolResolver {
     static func resolveUsingFixture(
         _ fixture: NativeSymbolFixture,
         allowSharedCacheFallback: Bool = false,
-        connectSymbol: ObfuscatedSymbolName? = nil,
-        disconnectSymbol: ObfuscatedSymbolName? = nil,
-        alternateConnectSymbols: [ObfuscatedSymbolName] = [],
-        alternateDisconnectSymbols: [ObfuscatedSymbolName] = [],
-        stringFromUTF8Symbol: ObfuscatedSymbolName? = nil,
-        stringImplToNSStringSymbol: ObfuscatedSymbolName? = nil,
-        destroyStringImplSymbol: ObfuscatedSymbolName? = nil,
-        backendDispatcherDispatchSymbol: ObfuscatedSymbolName? = nil
+        symbols: NativeInspectorSymbols = NativeInspectorSymbolResolverCore.currentSymbolQueries()
     ) throws -> NativeInspectorSymbolResolution {
-        let primaryConnect = try #require(connectSymbol ?? connectSymbolsForTesting().first)
-        let primaryDisconnect = try #require(disconnectSymbol ?? disconnectSymbolsForTesting().first)
-
         return resolveForTesting(
             imagePathSuffixes: fixture.pathSuffixes,
             javaScriptCorePathSuffixes: fixture.pathSuffixes,
             webCorePathSuffixes: fixture.pathSuffixes,
             allowSharedCacheFallback: allowSharedCacheFallback,
-            connectSymbol: primaryConnect,
-            disconnectSymbol: primaryDisconnect,
-            alternateConnectSymbols: alternateConnectSymbols,
-            alternateDisconnectSymbols: alternateDisconnectSymbols,
-            stringFromUTF8Symbol: stringFromUTF8Symbol,
-            stringImplToNSStringSymbol: stringImplToNSStringSymbol,
-            destroyStringImplSymbol: destroyStringImplSymbol,
-            backendDispatcherDispatchSymbol: backendDispatcherDispatchSymbol
+            symbols: symbols
         )
     }
+}
+
+private extension NativeInspectorSymbols {
+    func replacing(
+        connectFrontend: NativeInspectorRequiredSymbol? = nil,
+        disconnectFrontend: NativeInspectorRequiredSymbol? = nil,
+        inspectorControllerConnectTargets: NativeInspectorRequiredSymbol? = nil,
+        inspectorControllerDisconnectTargets: NativeInspectorRequiredSymbol? = nil,
+        stringFromUTF8: NativeInspectorRequiredSymbol? = nil,
+        stringImplToNSString: NativeInspectorRequiredSymbol? = nil,
+        destroyStringImpl: NativeInspectorRequiredSymbol? = nil,
+        backendDispatcherDispatch: NativeInspectorRequiredSymbol? = nil
+    ) -> NativeInspectorSymbols {
+        NativeInspectorSymbols(
+            connectFrontend: connectFrontend ?? self.connectFrontend,
+            disconnectFrontend: disconnectFrontend ?? self.disconnectFrontend,
+            inspectorControllerConnectTargets: inspectorControllerConnectTargets ?? self.inspectorControllerConnectTargets,
+            inspectorControllerDisconnectTargets: inspectorControllerDisconnectTargets ?? self.inspectorControllerDisconnectTargets,
+            stringFromUTF8: stringFromUTF8 ?? self.stringFromUTF8,
+            stringImplToNSString: stringImplToNSString ?? self.stringImplToNSString,
+            destroyStringImpl: destroyStringImpl ?? self.destroyStringImpl,
+            backendDispatcherDispatch: backendDispatcherDispatch ?? self.backendDispatcherDispatch
+        )
+    }
+}
+
+private func requiredSymbol(
+    role: NativeInspectorSymbolRole,
+    ownerImage: NativeInspectorSymbolOwnerImage,
+    requiredNameParts: [String],
+    resolutionPolicy: NativeInspectorSymbolResolutionPolicy
+) -> NativeInspectorRequiredSymbol {
+    NativeInspectorRequiredSymbol(
+        role: role,
+        ownerImage: ownerImage,
+        queries: [
+            NativeInspectorSymbolQuery(requiredNameParts: requiredNameParts)
+        ],
+        resolutionPolicy: resolutionPolicy
+    )
 }
 
 @MainActor
@@ -410,18 +483,6 @@ private func withWebKitLoaded<T>(_ body: () throws -> T) rethrows -> T {
     return try withExtendedLifetime(webView) {
         try body()
     }
-}
-
-private func obfuscated(_ reverseTokens: [String]) -> ObfuscatedSymbolName {
-    obfuscated(reverseTokens.reversed().joined())
-}
-
-private func obfuscated(_ string: String) -> ObfuscatedSymbolName {
-    let key: UInt8 = 0xB3
-    return ObfuscatedSymbolName(
-        key: key,
-        encodedBytes: string.utf8.map { $0 ^ key }
-    )
 }
 
 #if arch(arm64) || arch(arm64e)

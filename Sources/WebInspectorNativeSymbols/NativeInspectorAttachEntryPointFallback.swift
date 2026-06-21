@@ -16,7 +16,7 @@ extension NativeInspectorSymbolResolverCore {
     ) -> NativeInspectorAttachEntryPointFallbackResult {
         let connectNeedsFallback: Bool
         switch resolvedSymbols.connectFrontend {
-        case .missing, .outsideText:
+        case .missing, .outsideText, .ambiguous:
             connectNeedsFallback = true
         case .found:
             connectNeedsFallback = false
@@ -24,7 +24,7 @@ extension NativeInspectorSymbolResolverCore {
 
         let disconnectNeedsFallback: Bool
         switch resolvedSymbols.disconnectFrontend {
-        case .missing, .outsideText:
+        case .missing, .outsideText, .ambiguous:
             disconnectNeedsFallback = true
         case .found:
             disconnectNeedsFallback = false
@@ -38,21 +38,21 @@ extension NativeInspectorSymbolResolverCore {
         }
 
         let webCoreConnectTargets = unsafe resolvedCallTargetAddresses(
-            symbolNames: symbols.inspectorControllerConnectTargets.decodedCandidates(),
+            matching: symbols.inspectorControllerConnectTargets,
             in: webCoreImage,
             text: webCoreText
         )
         let webCoreDisconnectTargets = unsafe resolvedCallTargetAddresses(
-            symbolNames: symbols.inspectorControllerDisconnectTargets.decodedCandidates(),
+            matching: symbols.inspectorControllerDisconnectTargets,
             in: webCoreImage,
             text: webCoreText
         )
         let webKitBoundConnectTargets = unsafe boundCallTargetAddresses(
-            symbolNames: symbols.inspectorControllerConnectTargets.decodedCandidates(),
+            matching: symbols.inspectorControllerConnectTargets,
             in: image
         )
         let webKitBoundDisconnectTargets = unsafe boundCallTargetAddresses(
-            symbolNames: symbols.inspectorControllerDisconnectTargets.decodedCandidates(),
+            matching: symbols.inspectorControllerDisconnectTargets,
             in: image
         )
 
@@ -143,39 +143,70 @@ extension NativeInspectorSymbolResolverCore {
     }
 
     @unsafe static func resolvedCallTargetAddresses(
-        symbolNames: [String],
+        matching requiredSymbol: NativeInspectorRequiredSymbol,
         in image: MachOImage?,
         text: SegmentCommand64?
     ) -> Set<UInt64> {
         guard let image, let text else {
             return []
         }
+        let imageBaseAddress = unsafe UInt64(UInt(bitPattern: image.ptr))
         var addresses = Set<UInt64>()
-        for symbolName in symbolNames {
-            let resolved = resolveLoadedImageSymbol(
-                named: symbolName,
-                in: image,
-                text: text
-            )
-            if case let .found(address) = resolved {
-                addresses.insert(address)
+
+        for symbol in image.symbols {
+            let variants = unsafe NativeInspectorSymbolName.variants(for: symbol.nameC)
+            guard unsafe requiredSymbol.matches(cStringVariants: variants) else {
+                continue
             }
+            appendCallTargetAddress(
+                offset: symbol.offset,
+                imageBaseAddress: imageBaseAddress,
+                text: text,
+                addresses: &addresses
+            )
+        }
+
+        for symbol in image.exportedSymbols where requiredSymbol.matches(symbolName: symbol.name) {
+            guard let offset = symbol.offset else {
+                continue
+            }
+            appendCallTargetAddress(
+                offset: offset,
+                imageBaseAddress: imageBaseAddress,
+                text: text,
+                addresses: &addresses
+            )
         }
         return addresses
     }
 
+    private static func appendCallTargetAddress(
+        offset: Int,
+        imageBaseAddress: UInt64,
+        text: SegmentCommand64,
+        addresses: inout Set<UInt64>
+    ) {
+        guard offset >= 0 else {
+            return
+        }
+        let unsignedOffset = UInt64(offset)
+        guard unsignedOffset < UInt64(text.virtualMemorySize) else {
+            return
+        }
+        addresses.insert(imageBaseAddress + unsignedOffset)
+    }
+
     @unsafe static func boundCallTargetAddresses(
-        symbolNames: [String],
+        matching requiredSymbol: NativeInspectorRequiredSymbol,
         in image: MachOImage
     ) -> Set<UInt64> {
-        let nameSet = Set(symbolNames)
         var addresses = Set<UInt64>()
-        for bindingSymbol in image.bindingSymbols where nameSet.contains(bindingSymbol.symbolName) {
+        for bindingSymbol in image.bindingSymbols where requiredSymbol.matches(symbolName: bindingSymbol.symbolName) {
             if let address = bindingSymbol.address(in: image) {
                 addresses.insert(UInt64(address))
             }
         }
-        for bindingSymbol in image.lazyBindingSymbols where nameSet.contains(bindingSymbol.symbolName) {
+        for bindingSymbol in image.lazyBindingSymbols where requiredSymbol.matches(symbolName: bindingSymbol.symbolName) {
             if let address = bindingSymbol.address(in: image) {
                 addresses.insert(UInt64(address))
             }
@@ -196,7 +227,7 @@ extension NativeInspectorSymbolResolverCore {
                     }
                     let symbolPosition = symbols.index(symbols.startIndex, offsetBy: symbolIndex)
                     let symbol = symbols[symbolPosition]
-                    guard nameSet.contains(symbol.name) else {
+                    guard requiredSymbol.matches(symbolName: symbol.name) else {
                         continue
                     }
                     let address = section.address + stride * elementIndex

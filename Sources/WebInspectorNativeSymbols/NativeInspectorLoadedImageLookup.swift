@@ -30,63 +30,122 @@ extension NativeInspectorSymbolResolverCore {
     }
 
     static func resolveLoadedImageSymbol(
-        named symbolName: String,
+        matching requiredSymbol: NativeInspectorRequiredSymbol,
         in image: MachOImage,
         text: SegmentCommand64
     ) -> ResolvedNativeInspectorAddress {
-        guard let symbol = image.symbol(named: symbolName, mangled: true, inSection: 0, isGlobalOnly: false) else {
-            return unsafe resolveLoadedImageExportedSymbol(
-                named: symbolName,
-                in: image,
-                text: text
-            )
-        }
-        guard symbol.offset >= 0 else {
-            return .missing
-        }
-
-        let offset = UInt64(symbol.offset)
-        let address = unsafe UInt64(UInt(bitPattern: image.ptr)) + offset
-        guard offset < UInt64(text.virtualMemorySize) else {
-            return .outsideText(address)
-        }
-
-        return .found(address)
+        resolveLoadedImageSymbols(
+            matching: [NativeInspectorSymbolMatchTarget(role: requiredSymbol.role, symbol: requiredSymbol)],
+            in: image,
+            text: text
+        )[requiredSymbol.role] ?? .missing
     }
 
-    @unsafe static func resolveLoadedImageExportedSymbol(
-        named symbolName: String,
+    static func resolveLoadedImageSymbols(
+        matching targets: [NativeInspectorSymbolMatchTarget],
         in image: MachOImage,
         text: SegmentCommand64
-    ) -> ResolvedNativeInspectorAddress {
-        let exportTrie = image.exportTrie
-        if let exportedSymbol = exportTrie?.search(by: symbolName),
-           let offset = exportedSymbol.offset,
-           offset >= 0 {
-            let unsignedOffset = UInt64(offset)
-            let address = unsafe UInt64(UInt(bitPattern: image.ptr)) + unsignedOffset
-            guard unsignedOffset < UInt64(text.virtualMemorySize) else {
-                return .outsideText(address)
+    ) -> [NativeInspectorSymbolRole: ResolvedNativeInspectorAddress] {
+        guard !targets.isEmpty else {
+            return [:]
+        }
+
+        let imageBaseAddress = unsafe UInt64(UInt(bitPattern: image.ptr))
+        var buckets = Array(repeating: NativeInspectorResolvedSymbolBucket(), count: targets.count)
+        var candidateTargetIndices = [Int]()
+        candidateTargetIndices.reserveCapacity(targets.count)
+
+        for symbol in image.symbols where buckets.contains(where: { !$0.isAmbiguous }) {
+            candidateTargetIndices.removeAll(keepingCapacity: true)
+            for targetIndex in targets.indices where !buckets[targetIndex].isAmbiguous {
+                if unsafe targets[targetIndex].symbol.mayMatch(symbolNameC: symbol.nameC) {
+                    candidateTargetIndices.append(targetIndex)
+                }
             }
-            return .found(address)
+            guard !candidateTargetIndices.isEmpty else {
+                continue
+            }
+
+            let symbolVariants = unsafe NativeInspectorSymbolName.variants(for: symbol.nameC)
+            for targetIndex in candidateTargetIndices {
+                guard unsafe targets[targetIndex].symbol.matches(
+                    cStringVariants: symbolVariants,
+                    checkingRawNameNeedle: false
+                ) else {
+                    continue
+                }
+                appendLoadedImageSymbolAddress(
+                    offset: symbol.offset,
+                    imageBaseAddress: imageBaseAddress,
+                    text: text,
+                    bucket: &buckets[targetIndex]
+                )
+            }
         }
 
-        guard let address = unsafe MachOKitSymbolLookup.exportedRuntimeSymbolAddress(named: symbolName) else {
-            return .missing
+        for symbol in image.exportedSymbols where buckets.contains(where: \.needsTextCandidateScan) {
+            guard let offset = symbol.offset else {
+                continue
+            }
+            var variants: NativeInspectorSymbolName.Variants?
+
+            for targetIndex in targets.indices {
+                guard buckets[targetIndex].needsTextCandidateScan,
+                      targets[targetIndex].symbol.mayMatch(rawSymbolName: symbol.name) else {
+                    continue
+                }
+
+                let symbolVariants: NativeInspectorSymbolName.Variants
+                if let variants {
+                    symbolVariants = variants
+                } else {
+                    let resolvedVariants = NativeInspectorSymbolName.variants(for: symbol.name)
+                    variants = resolvedVariants
+                    symbolVariants = resolvedVariants
+                }
+
+                guard targets[targetIndex].symbol.matches(
+                    variants: symbolVariants,
+                    checkingRawNameNeedle: false
+                ) else {
+                    continue
+                }
+                appendLoadedImageSymbolAddress(
+                    offset: offset,
+                    imageBaseAddress: imageBaseAddress,
+                    text: text,
+                    bucket: &buckets[targetIndex]
+                )
+            }
         }
 
-        let expectedHeaderAddress = unsafe UInt(bitPattern: image.ptr)
-        guard resolvedAddress(address, belongsToAnyOf: [expectedHeaderAddress]) else {
-            return .missing
+        var resolvedSymbols = [NativeInspectorSymbolRole: ResolvedNativeInspectorAddress]()
+        resolvedSymbols.reserveCapacity(targets.count)
+        for targetIndex in targets.indices {
+            resolvedSymbols[targets[targetIndex].role] = buckets[targetIndex].resolvedAddress
+        }
+        return resolvedSymbols
+    }
+
+    private static func appendLoadedImageSymbolAddress(
+        offset: Int,
+        imageBaseAddress: UInt64,
+        text: SegmentCommand64,
+        bucket: inout NativeInspectorResolvedSymbolBucket
+    ) {
+        guard offset >= 0 else {
+            return
         }
 
-        let imageBaseAddress = UInt64(expectedHeaderAddress)
-        let textStart = imageBaseAddress
-        let textEnd = textStart + UInt64(text.virtualMemorySize)
-        guard address >= textStart, address < textEnd else {
-            return .outsideText(address)
+        let unsignedOffset = UInt64(offset)
+        let address = imageBaseAddress + unsignedOffset
+        guard unsignedOffset < UInt64(text.virtualMemorySize) else {
+            if bucket.outsideTextAddress == nil {
+                bucket.outsideTextAddress = address
+            }
+            return
         }
-        return .found(address)
+        bucket.insertCandidate(address)
     }
 
     static func resolvedAddress(

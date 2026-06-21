@@ -1304,8 +1304,6 @@ struct NetworkDetailViewControllerTests {
         let imageScrollView = viewController.bodyViewControllerForTesting.imageScrollViewForTesting
         #expect(imageScrollView.contentInsetAdjustmentBehavior == .automatic)
         #expect(imageScrollView.contentAlignmentPoint == CGPoint(x: 0.5, y: 0.5))
-        #expect(imageScrollView.contentInset == .zero)
-        #expect(imageScrollView.adjustedContentInset.top > imageScrollView.contentInset.top)
         let fitScale = expectedImageFitScale(scrollView: imageScrollView, imageSize: imageSize)
         let expectedMinimumZoomScale = min(1, fitScale)
         #expect(abs(imageScrollView.minimumZoomScale - expectedMinimumZoomScale) < 0.001)

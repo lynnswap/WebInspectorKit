@@ -78,6 +78,7 @@ extension NativeInspectorSymbolResolverCore {
             javaScriptCore: context.javaScriptCore,
             symbols64: context.localSymbols,
             entries: context.localSymbolEntries,
+            loadedImageSymbols: loadedImageSymbols,
             symbols: symbols
         ) {
             let resolution = unsafe finalizedSharedCacheResolution(
@@ -106,6 +107,7 @@ extension NativeInspectorSymbolResolverCore {
                 webKit: context.webKit,
                 javaScriptCore: context.javaScriptCore,
                 fileBackedContexts: fileBackedContexts,
+                loadedImageSymbols: loadedImageSymbols,
                 symbols: symbols
             ) {
                 let resolution = unsafe finalizedSharedCacheResolution(
@@ -188,6 +190,7 @@ extension NativeInspectorSymbolResolverCore {
             javaScriptCore: context.javaScriptCore,
             symbols64: context.localSymbols,
             entries: context.localSymbolEntries,
+            loadedImageSymbols: loadedImageSymbols,
             symbols: symbols
         ) {
             let resolution = finalizedFileSharedCacheResolution(
@@ -212,6 +215,7 @@ extension NativeInspectorSymbolResolverCore {
                 webKit: context.webKit,
                 javaScriptCore: context.javaScriptCore,
                 fileBackedContexts: fileBackedContexts,
+                loadedImageSymbols: loadedImageSymbols,
                 symbols: symbols
             ) {
                 let resolution = finalizedFileSharedCacheResolution(
@@ -268,6 +272,7 @@ extension NativeInspectorSymbolResolverCore {
         javaScriptCore: NativeInspectorSharedCacheImageContext<MachOImage>,
         symbols64: MachOImage.Symbols64?,
         entries: [any DyldCacheLocalSymbolsEntryProtocol],
+        loadedImageSymbols: NativeInspectorResolvedSymbolSet,
         symbols: NativeInspectorSymbols
     ) -> NativeInspectorResolvedSymbolSet? {
         guard let symbols64,
@@ -282,6 +287,7 @@ extension NativeInspectorSymbolResolverCore {
             webKitSymbolRange: webKitRange,
             javaScriptCoreSymbols: symbols64,
             javaScriptCoreSymbolRange: javaScriptCoreRange,
+            loadedImageSymbols: loadedImageSymbols,
             symbols: symbols
         )
     }
@@ -291,6 +297,7 @@ extension NativeInspectorSymbolResolverCore {
         javaScriptCore: NativeInspectorSharedCacheImageContext<MachOFile>,
         symbols64: MachOFile.Symbols64?,
         entries: [any DyldCacheLocalSymbolsEntryProtocol],
+        loadedImageSymbols: NativeInspectorResolvedSymbolSet,
         symbols: NativeInspectorSymbols
     ) -> NativeInspectorResolvedSymbolSet? {
         guard let symbols64,
@@ -305,6 +312,7 @@ extension NativeInspectorSymbolResolverCore {
             webKitSymbolRange: webKitRange,
             javaScriptCoreSymbols: symbols64,
             javaScriptCoreSymbolRange: javaScriptCoreRange,
+            loadedImageSymbols: loadedImageSymbols,
             symbols: symbols
         )
     }
@@ -313,6 +321,7 @@ extension NativeInspectorSymbolResolverCore {
         webKit: NativeInspectorSharedCacheImageContext<MachOImage>,
         javaScriptCore: NativeInspectorSharedCacheImageContext<MachOImage>,
         fileBackedContexts: [NativeInspectorFileBackedLocalSymbolContext],
+        loadedImageSymbols: NativeInspectorResolvedSymbolSet,
         symbols: NativeInspectorSymbols
     ) throws -> NativeInspectorResolvedSymbolSet? {
         let webKitSymbols = try fileBackedLocalSymbols(in: fileBackedContexts, dylibOffset: webKit.dylibOffset)
@@ -324,6 +333,7 @@ extension NativeInspectorSymbolResolverCore {
             webKitSymbolRange: webKitSymbols.symbolRange,
             javaScriptCoreSymbols: javaScriptCoreSymbols.symbols,
             javaScriptCoreSymbolRange: javaScriptCoreSymbols.symbolRange,
+            loadedImageSymbols: loadedImageSymbols,
             symbols: symbols
         )
     }
@@ -332,6 +342,7 @@ extension NativeInspectorSymbolResolverCore {
         webKit: NativeInspectorSharedCacheImageContext<MachOFile>,
         javaScriptCore: NativeInspectorSharedCacheImageContext<MachOFile>,
         fileBackedContexts: [NativeInspectorFileBackedLocalSymbolContext],
+        loadedImageSymbols: NativeInspectorResolvedSymbolSet,
         symbols: NativeInspectorSymbols
     ) throws -> NativeInspectorResolvedSymbolSet? {
         let webKitSymbols = try fileBackedLocalSymbols(in: fileBackedContexts, dylibOffset: webKit.dylibOffset)
@@ -343,6 +354,7 @@ extension NativeInspectorSymbolResolverCore {
             webKitSymbolRange: webKitSymbols.symbolRange,
             javaScriptCoreSymbols: javaScriptCoreSymbols.symbols,
             javaScriptCoreSymbolRange: javaScriptCoreSymbols.symbolRange,
+            loadedImageSymbols: loadedImageSymbols,
             symbols: symbols
         )
     }
@@ -354,66 +366,56 @@ extension NativeInspectorSymbolResolverCore {
         webKitSymbolRange: Range<Int>,
         javaScriptCoreSymbols: MachOImage.Symbols64,
         javaScriptCoreSymbolRange: Range<Int>,
+        loadedImageSymbols: NativeInspectorResolvedSymbolSet,
         symbols: NativeInspectorSymbols
     ) -> NativeInspectorResolvedSymbolSet {
-        NativeInspectorResolvedSymbolSet(
-            connectFrontend: resolveSharedCacheSymbol(
-                namedAnyOf: symbols.connectFrontend.decodedCandidates(),
-                symbols: webKitSymbols,
-                symbolRange: webKitSymbolRange,
-                textVMAddress: UInt64(webKit.text.virtualMemoryAddress),
-                textRange: webKit.textRange,
-                slide: webKit.slide
-            ),
-            disconnectFrontend: resolveSharedCacheSymbol(
-                namedAnyOf: symbols.disconnectFrontend.decodedCandidates(),
-                symbols: webKitSymbols,
-                symbolRange: webKitSymbolRange,
-                textVMAddress: UInt64(webKit.text.virtualMemoryAddress),
-                textRange: webKit.textRange,
-                slide: webKit.slide
-            ),
-            stringFromUTF8: resolveSharedCacheSymbol(
-                namedAnyOf: symbols.stringFromUTF8.decodedCandidates(),
-                symbols: javaScriptCoreSymbols,
-                symbolRange: javaScriptCoreSymbolRange,
-                textVMAddress: UInt64(javaScriptCore.text.virtualMemoryAddress),
-                textRange: javaScriptCore.textRange,
-                slide: javaScriptCore.slide
-            ),
-            stringImplToNSString: resolveSharedCacheSymbol(
-                namedAnyOf: symbols.stringImplToNSString.decodedCandidates(),
-                symbols: javaScriptCoreSymbols,
-                symbolRange: javaScriptCoreSymbolRange,
-                textVMAddress: UInt64(javaScriptCore.text.virtualMemoryAddress),
-                textRange: javaScriptCore.textRange,
-                slide: javaScriptCore.slide
-            ),
-            destroyStringImpl: resolveSharedCacheSymbol(
-                namedAnyOf: symbols.destroyStringImpl.decodedCandidates(),
-                symbols: javaScriptCoreSymbols,
-                symbolRange: javaScriptCoreSymbolRange,
-                textVMAddress: UInt64(javaScriptCore.text.virtualMemoryAddress),
-                textRange: javaScriptCore.textRange,
-                slide: javaScriptCore.slide
-            ),
+        let webKitTargets = sharedCacheTargets(
+            loadedImageSymbols: loadedImageSymbols,
+            [
+                NativeInspectorSymbolMatchTarget(role: .connectFrontend, symbol: symbols.connectFrontend),
+                NativeInspectorSymbolMatchTarget(role: .disconnectFrontend, symbol: symbols.disconnectFrontend),
+                NativeInspectorSymbolMatchTarget(role: .backendDispatcherDispatch, symbol: symbols.backendDispatcherDispatch),
+            ]
+        )
+        let webKitResults = webKitTargets.isEmpty ? [:] : unsafe resolveSharedCacheSymbols(
+            matching: webKitTargets,
+            symbols: webKitSymbols,
+            symbolRange: webKitSymbolRange,
+            textVMAddress: UInt64(webKit.text.virtualMemoryAddress),
+            textRange: webKit.textRange,
+            slide: webKit.slide
+        )
+        var javaScriptCoreTargets = sharedCacheTargets(
+            loadedImageSymbols: loadedImageSymbols,
+            [
+                NativeInspectorSymbolMatchTarget(role: .stringFromUTF8, symbol: symbols.stringFromUTF8),
+                NativeInspectorSymbolMatchTarget(role: .stringImplToNSString, symbol: symbols.stringImplToNSString),
+                NativeInspectorSymbolMatchTarget(role: .destroyStringImpl, symbol: symbols.destroyStringImpl),
+            ]
+        )
+        if !loadedImageSymbols.address(for: .backendDispatcherDispatch).isFound,
+           case .missing = webKitResults[.backendDispatcherDispatch] ?? .missing {
+            javaScriptCoreTargets.append(
+                NativeInspectorSymbolMatchTarget(role: .backendDispatcherDispatch, symbol: symbols.backendDispatcherDispatch)
+            )
+        }
+        let javaScriptCoreResults = javaScriptCoreTargets.isEmpty ? [:] : unsafe resolveSharedCacheSymbols(
+            matching: javaScriptCoreTargets,
+            symbols: javaScriptCoreSymbols,
+            symbolRange: javaScriptCoreSymbolRange,
+            textVMAddress: UInt64(javaScriptCore.text.virtualMemoryAddress),
+            textRange: javaScriptCore.textRange,
+            slide: javaScriptCore.slide
+        )
+        return NativeInspectorResolvedSymbolSet(
+            connectFrontend: webKitResults[.connectFrontend] ?? .missing,
+            disconnectFrontend: webKitResults[.disconnectFrontend] ?? .missing,
+            stringFromUTF8: javaScriptCoreResults[.stringFromUTF8] ?? .missing,
+            stringImplToNSString: javaScriptCoreResults[.stringImplToNSString] ?? .missing,
+            destroyStringImpl: javaScriptCoreResults[.destroyStringImpl] ?? .missing,
             backendDispatcherDispatch: preferredResolvedAddress(
-                resolveSharedCacheSymbol(
-                    namedAnyOf: symbols.backendDispatcherDispatch.decodedCandidates(),
-                    symbols: webKitSymbols,
-                    symbolRange: webKitSymbolRange,
-                    textVMAddress: UInt64(webKit.text.virtualMemoryAddress),
-                    textRange: webKit.textRange,
-                    slide: webKit.slide
-                ),
-                fallback: resolveSharedCacheSymbol(
-                    namedAnyOf: symbols.backendDispatcherDispatch.decodedCandidates(),
-                    symbols: javaScriptCoreSymbols,
-                    symbolRange: javaScriptCoreSymbolRange,
-                    textVMAddress: UInt64(javaScriptCore.text.virtualMemoryAddress),
-                    textRange: javaScriptCore.textRange,
-                    slide: javaScriptCore.slide
-                )
+                webKitResults[.backendDispatcherDispatch] ?? .missing,
+                fallback: javaScriptCoreResults[.backendDispatcherDispatch] ?? .missing
             )
         )
     }
@@ -425,68 +427,82 @@ extension NativeInspectorSymbolResolverCore {
         webKitSymbolRange: Range<Int>,
         javaScriptCoreSymbols: MachOFile.Symbols64,
         javaScriptCoreSymbolRange: Range<Int>,
+        loadedImageSymbols: NativeInspectorResolvedSymbolSet,
         symbols: NativeInspectorSymbols
     ) -> NativeInspectorResolvedSymbolSet {
-        NativeInspectorResolvedSymbolSet(
-            connectFrontend: resolveSharedCacheSymbol(
-                namedAnyOf: symbols.connectFrontend.decodedCandidates(),
-                symbols: webKitSymbols,
-                symbolRange: webKitSymbolRange,
-                textVMAddress: UInt64(webKit.text.virtualMemoryAddress),
-                textRange: webKit.textRange,
-                slide: webKit.slide
-            ),
-            disconnectFrontend: resolveSharedCacheSymbol(
-                namedAnyOf: symbols.disconnectFrontend.decodedCandidates(),
-                symbols: webKitSymbols,
-                symbolRange: webKitSymbolRange,
-                textVMAddress: UInt64(webKit.text.virtualMemoryAddress),
-                textRange: webKit.textRange,
-                slide: webKit.slide
-            ),
-            stringFromUTF8: resolveSharedCacheSymbol(
-                namedAnyOf: symbols.stringFromUTF8.decodedCandidates(),
-                symbols: javaScriptCoreSymbols,
-                symbolRange: javaScriptCoreSymbolRange,
-                textVMAddress: UInt64(javaScriptCore.text.virtualMemoryAddress),
-                textRange: javaScriptCore.textRange,
-                slide: javaScriptCore.slide
-            ),
-            stringImplToNSString: resolveSharedCacheSymbol(
-                namedAnyOf: symbols.stringImplToNSString.decodedCandidates(),
-                symbols: javaScriptCoreSymbols,
-                symbolRange: javaScriptCoreSymbolRange,
-                textVMAddress: UInt64(javaScriptCore.text.virtualMemoryAddress),
-                textRange: javaScriptCore.textRange,
-                slide: javaScriptCore.slide
-            ),
-            destroyStringImpl: resolveSharedCacheSymbol(
-                namedAnyOf: symbols.destroyStringImpl.decodedCandidates(),
-                symbols: javaScriptCoreSymbols,
-                symbolRange: javaScriptCoreSymbolRange,
-                textVMAddress: UInt64(javaScriptCore.text.virtualMemoryAddress),
-                textRange: javaScriptCore.textRange,
-                slide: javaScriptCore.slide
-            ),
+        let webKitTargets = sharedCacheTargets(
+            loadedImageSymbols: loadedImageSymbols,
+            [
+                NativeInspectorSymbolMatchTarget(role: .connectFrontend, symbol: symbols.connectFrontend),
+                NativeInspectorSymbolMatchTarget(role: .disconnectFrontend, symbol: symbols.disconnectFrontend),
+                NativeInspectorSymbolMatchTarget(role: .backendDispatcherDispatch, symbol: symbols.backendDispatcherDispatch),
+            ]
+        )
+        let webKitResults = webKitTargets.isEmpty ? [:] : unsafe resolveSharedCacheSymbols(
+            matching: webKitTargets,
+            symbols: webKitSymbols,
+            symbolRange: webKitSymbolRange,
+            textVMAddress: UInt64(webKit.text.virtualMemoryAddress),
+            textRange: webKit.textRange,
+            slide: webKit.slide
+        )
+        var javaScriptCoreTargets = sharedCacheTargets(
+            loadedImageSymbols: loadedImageSymbols,
+            [
+                NativeInspectorSymbolMatchTarget(role: .stringFromUTF8, symbol: symbols.stringFromUTF8),
+                NativeInspectorSymbolMatchTarget(role: .stringImplToNSString, symbol: symbols.stringImplToNSString),
+                NativeInspectorSymbolMatchTarget(role: .destroyStringImpl, symbol: symbols.destroyStringImpl),
+            ]
+        )
+        if !loadedImageSymbols.address(for: .backendDispatcherDispatch).isFound,
+           case .missing = webKitResults[.backendDispatcherDispatch] ?? .missing {
+            javaScriptCoreTargets.append(
+                NativeInspectorSymbolMatchTarget(role: .backendDispatcherDispatch, symbol: symbols.backendDispatcherDispatch)
+            )
+        }
+        let javaScriptCoreResults = javaScriptCoreTargets.isEmpty ? [:] : unsafe resolveSharedCacheSymbols(
+            matching: javaScriptCoreTargets,
+            symbols: javaScriptCoreSymbols,
+            symbolRange: javaScriptCoreSymbolRange,
+            textVMAddress: UInt64(javaScriptCore.text.virtualMemoryAddress),
+            textRange: javaScriptCore.textRange,
+            slide: javaScriptCore.slide
+        )
+        return NativeInspectorResolvedSymbolSet(
+            connectFrontend: webKitResults[.connectFrontend] ?? .missing,
+            disconnectFrontend: webKitResults[.disconnectFrontend] ?? .missing,
+            stringFromUTF8: javaScriptCoreResults[.stringFromUTF8] ?? .missing,
+            stringImplToNSString: javaScriptCoreResults[.stringImplToNSString] ?? .missing,
+            destroyStringImpl: javaScriptCoreResults[.destroyStringImpl] ?? .missing,
             backendDispatcherDispatch: preferredResolvedAddress(
-                resolveSharedCacheSymbol(
-                    namedAnyOf: symbols.backendDispatcherDispatch.decodedCandidates(),
-                    symbols: webKitSymbols,
-                    symbolRange: webKitSymbolRange,
-                    textVMAddress: UInt64(webKit.text.virtualMemoryAddress),
-                    textRange: webKit.textRange,
-                    slide: webKit.slide
-                ),
-                fallback: resolveSharedCacheSymbol(
-                    namedAnyOf: symbols.backendDispatcherDispatch.decodedCandidates(),
-                    symbols: javaScriptCoreSymbols,
-                    symbolRange: javaScriptCoreSymbolRange,
-                    textVMAddress: UInt64(javaScriptCore.text.virtualMemoryAddress),
-                    textRange: javaScriptCore.textRange,
-                    slide: javaScriptCore.slide
-                )
+                webKitResults[.backendDispatcherDispatch] ?? .missing,
+                fallback: javaScriptCoreResults[.backendDispatcherDispatch] ?? .missing
             )
         )
+    }
+
+    private static func sharedCacheTargets(
+        loadedImageSymbols: NativeInspectorResolvedSymbolSet,
+        _ targets: [NativeInspectorSymbolMatchTarget]
+    ) -> [NativeInspectorSymbolMatchTarget] {
+        targets.filter { target in
+            guard usesLoadedImageRuntimeFallback(for: target.role) else {
+                return true
+            }
+            return !loadedImageSymbols.address(for: target.role).isFound
+        }
+    }
+
+    private static func usesLoadedImageRuntimeFallback(for role: NativeInspectorSymbolRole) -> Bool {
+        switch role {
+        case .stringFromUTF8, .stringImplToNSString, .destroyStringImpl, .backendDispatcherDispatch:
+            return true
+        case .connectFrontend,
+             .disconnectFrontend,
+             .inspectorControllerConnectTarget,
+             .inspectorControllerDisconnectTarget:
+            return false
+        }
     }
 
     @unsafe private static func finalizedSharedCacheResolution(
