@@ -417,7 +417,7 @@ extension DOMTreeTextView {
             nodeAttribute: .domTreeDynamic(light: 0x8A2EC3, dark: 0xEC9EFF),
             nodeValue: .domTreeDynamic(light: 0xB35C00, dark: 0xFFD479),
             tagPunctuation: .domTreeDynamic(light: 0x0F6BDC, dark: 0x32D4FF),
-            disclosure: .systemGray,
+            disclosure: .placeholderText,
             selectedRowBackground: .domTreeDynamic(light: 0x0A84FF, dark: 0x0A84FF, lightAlpha: 0.18, darkAlpha: 0.35),
             hoverRowBackground: .domTreeDynamic(light: 0x000000, dark: 0xFFFFFF, lightAlpha: 0.04, darkAlpha: 0.05),
             findBackground: .domTreeDynamic(light: 0xFFC947, dark: 0xFFDB73, lightAlpha: 0.42, darkAlpha: 0.35),
