@@ -49,6 +49,12 @@ flowchart TD
 Responsibilities stay intentionally narrow:
 
 - `WebInspectorNativeBridge`: attach, send raw JSON, receive raw JSON, detach.
+- `WebInspectorNativeSymbols`: resolve private WebKit attach bootstrap
+  addresses. Its MachOKit/dyld shared cache fallback chain is
+  loaded image symbols, loaded dyld shared cache local symbols,
+  file-backed `.symbols` local symbols, and host `FullDyldCache` as the final
+  fallback. It owns redacted fallback diagnostics and does not expose mangled
+  symbol names or framework paths to callers.
 - `WebInspectorTransport`: parse protocol envelopes, unwrap target messages,
   route commands, manage replies, track protocol targets, and preserve
   execution-context owner/source target identity.
@@ -175,5 +181,8 @@ UIKit controllers do not own transport/backend objects directly.
 - Do not keep two long-term UI implementation targets.
 - Do not let UI parse raw protocol messages.
 - Do not let the native bridge understand target routing.
+- Do not move MachOKit or dyld shared cache resolution out of
+  `WebInspectorNativeSymbols`; transport and bridge code should only receive
+  resolved native symbol addresses.
 - Do not store iframe documents as regular DOM children.
 - Do not make redirect hops separate top-level network requests.

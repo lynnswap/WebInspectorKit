@@ -56,7 +56,7 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/p-x9/MachOKit.git",
-            exact: "0.50.0"
+            exact: "0.51.0"
         )
     ],
     targets: [

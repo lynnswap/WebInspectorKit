@@ -103,6 +103,74 @@ struct NativeInspectorSymbolResolverTests {
     }
 
     @Test
+    func sharedCacheSymbolFileURLsDeduplicateActiveSymbolsPath() {
+        let activeSymbolsPath = "/System/Library/dyld/dyld_shared_cache_arm64e.symbols"
+        let paths = NativeInspectorSymbolResolver.sharedCacheSymbolFileURLsForTesting(
+            activeSharedCachePath: activeSymbolsPath
+        ).map(\.standardizedFileURL.path)
+
+        #expect(paths.first == activeSymbolsPath)
+        #expect(paths.filter { $0 == activeSymbolsPath }.count == 1)
+    }
+
+    @Test
+    func sharedCacheSymbolFileURLSortsPreferredArchitecturesFirst() {
+        #expect(NativeInspectorSymbolResolverCore.sharedCacheSortKey(for: "dyld_shared_cache_arm64e.symbols") == 0)
+        #expect(NativeInspectorSymbolResolverCore.sharedCacheSortKey(for: "dyld_shared_cache_arm64.symbols") == 1)
+        #expect(NativeInspectorSymbolResolverCore.sharedCacheSortKey(for: "dyld_shared_cache_x86_64.symbols") == 2)
+    }
+
+    @Test
+    func sharedCacheSourceDescriptionsReportFallbackPartsInOrder() {
+        #expect(
+            NativeInspectorSymbolResolverCore.sharedCacheSourceDescription(
+                base: "full-cache",
+                usedConnectDisconnectFallback: false,
+                usedRuntimeFallback: false
+            ) == "full-cache"
+        )
+        #expect(
+            NativeInspectorSymbolResolverCore.sharedCacheSourceDescription(
+                base: "full-cache-file",
+                usedConnectDisconnectFallback: true,
+                usedRuntimeFallback: true
+            ) == "full-cache-file+text-scan+loaded-image-runtime"
+        )
+    }
+
+    @Test
+    func sharedCacheFallbackMergePrefersLaterSuccessfulFullCacheResult() {
+        let sharedCacheFailure = NativeInspectorSymbolLookupResult(
+            functionAddresses: .zero,
+            failureReason: "local symbol lookup unavailable: phase=shared-cache source=shared-cache",
+            failureKind: .localSymbolsUnavailable,
+            phase: .sharedCache,
+            missingFunctions: [],
+            source: "shared-cache",
+            usedConnectDisconnectFallback: false
+        )
+        let fullCacheSuccess = NativeInspectorSymbolLookupResult(
+            functionAddresses: completeNativeInspectorSymbolAddresses,
+            failureReason: nil,
+            failureKind: nil,
+            phase: .fullCache,
+            missingFunctions: [],
+            source: "full-cache",
+            usedConnectDisconnectFallback: false
+        )
+
+        let merged = NativeInspectorSymbolResolverCore.mergedResolution(
+            preferred: sharedCacheFailure,
+            fallback: fullCacheSuccess
+        )
+
+        #expect(merged.failureReason == nil)
+        #expect(merged.phase == .fullCache)
+        #expect(merged.source == "full-cache")
+        #expect(merged.functionAddresses == completeNativeInspectorSymbolAddresses)
+    }
+
+    @Test
     func imagePathSuffixesMatchExpectedFrameworkLocations() {
         let suffixes = NativeInspectorSymbolResolver.imagePathSuffixesForTesting()
 
@@ -236,7 +304,42 @@ struct NativeInspectorSymbolResolverTests {
         #expect(!diagnostics.contains("definitelyMissingFromUTF8Foo"))
     }
 
+    @Test
+    func fullCacheFallbackDiagnosticsRemainRedacted() {
+        let source = NativeInspectorSymbolResolverCore.sharedCacheSourceDescription(
+            base: "full-cache-file",
+            usedConnectDisconnectFallback: true,
+            usedRuntimeFallback: true
+        )
+        let reason = NativeInspectorSymbolResolverCore.formattedFailureReason(
+            kind: .runtimeFunctionSymbolMissing,
+            detail: nil,
+            phase: .fullCacheFile,
+            source: source,
+            missingFunctions: ["connectFrontend", "stringFromUTF8"],
+            usedConnectDisconnectFallback: true
+        )
+
+        #expect(reason.contains("phase=full-cache-file"))
+        #expect(reason.contains("source=full-cache-file+text-scan+loaded-image-runtime"))
+        #expect(reason.contains("missing=connectFrontend,stringFromUTF8"))
+        #expect(reason.contains("textScanFallback=true"))
+        #expect(!reason.contains("__ZN"))
+        #expect(!reason.contains("_ZN"))
+        #expect(!reason.contains("WTF"))
+        #expect(!reason.contains("/System/"))
+    }
+
 }
+
+private let completeNativeInspectorSymbolAddresses = NativeInspectorSymbolAddresses(
+    connectFrontendAddress: 0x1_0000,
+    disconnectFrontendAddress: 0x1_0100,
+    stringFromUTF8Address: 0x2_0000,
+    stringImplToNSStringAddress: 0x2_0100,
+    destroyStringImplAddress: 0x2_0200,
+    backendDispatcherDispatchAddress: 0x1_0200
+)
 
 private struct NativeSymbolFixture {
     let pathSuffixes: [String]

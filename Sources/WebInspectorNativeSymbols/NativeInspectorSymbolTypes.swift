@@ -50,6 +50,8 @@ enum NativeInspectorSymbolResolutionPhase {
     case loadedImage
     case sharedCache
     case sharedCacheFile
+    case fullCache
+    case fullCacheFile
 
     var message: String {
         switch self {
@@ -59,6 +61,10 @@ enum NativeInspectorSymbolResolutionPhase {
             return "shared-cache"
         case .sharedCacheFile:
             return "shared-cache-file"
+        case .fullCache:
+            return "full-cache"
+        case .fullCacheFile:
+            return "full-cache-file"
         }
     }
 }

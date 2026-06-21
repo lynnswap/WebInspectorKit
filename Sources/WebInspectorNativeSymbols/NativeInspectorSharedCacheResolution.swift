@@ -4,298 +4,599 @@ import MachO
 import MachOKit
 
 extension NativeInspectorSymbolResolverCore {
-    static func resolveUsingSharedCache(
+    @unsafe static func resolveUsingSharedCache(
         loadedImage: LoadedNativeInspectorImage,
         imagePathSuffixes: [String],
         loadedJavaScriptCoreImage: LoadedNativeInspectorImage,
         javaScriptCorePathSuffixes: [String],
+        loadedWebCoreImage: LoadedNativeInspectorImage?,
         webCorePathSuffixes: [String] = webCoreImagePathSuffixes,
         loadedImageSymbols: NativeInspectorResolvedSymbolSet,
         symbols: NativeInspectorSymbols
     ) -> NativeInspectorSymbolLookupResult {
-        guard let cache = unsafe MachOKitSymbolLookup.currentSharedCache else {
-            return failure(.sharedCacheUnavailable)
+        let loadedCacheResolution = unsafe resolveUsingLoadedSharedCache(
+            loadedImage: loadedImage,
+            imagePathSuffixes: imagePathSuffixes,
+            loadedJavaScriptCoreImage: loadedJavaScriptCoreImage,
+            javaScriptCorePathSuffixes: javaScriptCorePathSuffixes,
+            loadedWebCoreImage: loadedWebCoreImage,
+            webCorePathSuffixes: webCorePathSuffixes,
+            loadedImageSymbols: loadedImageSymbols,
+            symbols: symbols
+        )
+        if loadedCacheResolution.failureReason == nil {
+            return loadedCacheResolution
         }
 
-        guard let webKitImage = cache.machOImages().first(where: { imagePathMatches($0.path, suffixes: imagePathSuffixes) }) else {
-            return failure(.inspectorImageMissing)
-        }
-        guard let javaScriptCoreImage = cache.machOImages().first(where: { imagePathMatches($0.path, suffixes: javaScriptCorePathSuffixes) }) else {
-            return failure(.supportImageMissing)
-        }
-        let webCoreImage = cache.machOImages().first(where: { imagePathMatches($0.path, suffixes: webCorePathSuffixes) })
-        guard webKitImage.is64Bit, let text = textSegment(in: webKitImage) else {
-            return failure(.inspectorImageMissing)
-        }
-        guard javaScriptCoreImage.is64Bit, let javaScriptCoreText = textSegment(in: javaScriptCoreImage) else {
-            return failure(.supportImageMissing)
-        }
-        let webCoreText = webCoreImage.flatMap { $0.is64Bit ? textSegment(in: $0) : nil }
-        guard let slide = cache.slide, slide >= 0 else {
-            return failure(.sharedCacheUnavailable)
+        #if DEBUG
+        logResolutionAttemptIncomplete(
+            loadedCacheResolution,
+            nextAttempt: "full-cache"
+        )
+        #endif
+
+        let fullCacheResolution = unsafe resolveUsingFullSharedCache(
+            loadedImage: loadedImage,
+            imagePathSuffixes: imagePathSuffixes,
+            loadedJavaScriptCoreImage: loadedJavaScriptCoreImage,
+            javaScriptCorePathSuffixes: javaScriptCorePathSuffixes,
+            loadedWebCoreImage: loadedWebCoreImage,
+            webCorePathSuffixes: webCorePathSuffixes,
+            loadedImageSymbols: loadedImageSymbols,
+            symbols: symbols
+        )
+        return mergedResolution(
+            preferred: loadedCacheResolution,
+            fallback: fullCacheResolution
+        )
+    }
+
+    @unsafe private static func resolveUsingLoadedSharedCache(
+        loadedImage: LoadedNativeInspectorImage,
+        imagePathSuffixes: [String],
+        loadedJavaScriptCoreImage: LoadedNativeInspectorImage,
+        javaScriptCorePathSuffixes: [String],
+        loadedWebCoreImage: LoadedNativeInspectorImage?,
+        webCorePathSuffixes: [String],
+        loadedImageSymbols: NativeInspectorResolvedSymbolSet,
+        symbols: NativeInspectorSymbols
+    ) -> NativeInspectorSymbolLookupResult {
+        guard let context = unsafe loadedSharedCacheContext(
+            loadedImage: loadedImage,
+            imagePathSuffixes: imagePathSuffixes,
+            loadedJavaScriptCoreImage: loadedJavaScriptCoreImage,
+            javaScriptCorePathSuffixes: javaScriptCorePathSuffixes,
+            loadedWebCoreImage: loadedWebCoreImage,
+            webCorePathSuffixes: webCorePathSuffixes
+        ) else {
+            return failure(.sharedCacheUnavailable, shouldLog: false)
         }
 
-        let textStart = UInt64(loadedImage.headerAddress)
-        let textRange = textStart ..< textStart + UInt64(text.virtualMemorySize)
-        let dylibOffset = UInt64(text.virtualMemoryAddress) - cache.mainCacheHeader.sharedRegionStart
-        let javaScriptCoreTextStart = UInt64(loadedJavaScriptCoreImage.headerAddress)
-        let javaScriptCoreTextRange = javaScriptCoreTextStart ..< javaScriptCoreTextStart + UInt64(javaScriptCoreText.virtualMemorySize)
-        let javaScriptCoreDylibOffset = UInt64(javaScriptCoreText.virtualMemoryAddress) - cache.mainCacheHeader.sharedRegionStart
         var lastResolvedSymbols: NativeInspectorResolvedSymbolSet?
-
-        if let localSymbolsInfo = cache.localSymbolsInfo {
-            if let entry = localSymbolsInfo.entries(in: cache).first(where: { UInt64($0.dylibOffset) == dylibOffset }),
-               let javaScriptCoreEntry = localSymbolsInfo.entries(in: cache).first(where: { UInt64($0.dylibOffset) == javaScriptCoreDylibOffset }),
-               let symbols64 = localSymbolsInfo.symbols64(in: cache) {
-                let lowerBound = entry.nlistStartIndex
-                let upperBound = lowerBound + entry.nlistCount
-                let javaScriptCoreLowerBound = javaScriptCoreEntry.nlistStartIndex
-                let javaScriptCoreUpperBound = javaScriptCoreLowerBound + javaScriptCoreEntry.nlistCount
-                if lowerBound >= 0,
-                   upperBound >= lowerBound,
-                   upperBound <= symbols64.count,
-                   javaScriptCoreLowerBound >= 0,
-                   javaScriptCoreUpperBound >= javaScriptCoreLowerBound,
-                   javaScriptCoreUpperBound <= symbols64.count {
-                    let resolvedSymbols = NativeInspectorResolvedSymbolSet(
-                        connectFrontend: resolveSharedCacheSymbol(
-                            namedAnyOf: symbols.connectFrontend.decodedCandidates(),
-                            symbols: symbols64,
-                            symbolRange: lowerBound ..< upperBound,
-                            textVMAddress: UInt64(text.virtualMemoryAddress),
-                            textRange: textRange,
-                            slide: UInt64(slide)
-                        ),
-                        disconnectFrontend: resolveSharedCacheSymbol(
-                            namedAnyOf: symbols.disconnectFrontend.decodedCandidates(),
-                            symbols: symbols64,
-                            symbolRange: lowerBound ..< upperBound,
-                            textVMAddress: UInt64(text.virtualMemoryAddress),
-                            textRange: textRange,
-                            slide: UInt64(slide)
-                        ),
-                        stringFromUTF8: resolveSharedCacheSymbol(
-                            namedAnyOf: symbols.stringFromUTF8.decodedCandidates(),
-                            symbols: symbols64,
-                            symbolRange: javaScriptCoreLowerBound ..< javaScriptCoreUpperBound,
-                            textVMAddress: UInt64(javaScriptCoreText.virtualMemoryAddress),
-                            textRange: javaScriptCoreTextRange,
-                            slide: UInt64(slide)
-                        ),
-                        stringImplToNSString: resolveSharedCacheSymbol(
-                            namedAnyOf: symbols.stringImplToNSString.decodedCandidates(),
-                            symbols: symbols64,
-                            symbolRange: javaScriptCoreLowerBound ..< javaScriptCoreUpperBound,
-                            textVMAddress: UInt64(javaScriptCoreText.virtualMemoryAddress),
-                            textRange: javaScriptCoreTextRange,
-                            slide: UInt64(slide)
-                        ),
-                        destroyStringImpl: resolveSharedCacheSymbol(
-                            namedAnyOf: symbols.destroyStringImpl.decodedCandidates(),
-                            symbols: symbols64,
-                            symbolRange: javaScriptCoreLowerBound ..< javaScriptCoreUpperBound,
-                            textVMAddress: UInt64(javaScriptCoreText.virtualMemoryAddress),
-                            textRange: javaScriptCoreTextRange,
-                            slide: UInt64(slide)
-                        ),
-                        backendDispatcherDispatch: preferredResolvedAddress(
-                            resolveSharedCacheSymbol(
-                                namedAnyOf: symbols.backendDispatcherDispatch.decodedCandidates(),
-                                symbols: symbols64,
-                                symbolRange: lowerBound ..< upperBound,
-                                textVMAddress: UInt64(text.virtualMemoryAddress),
-                                textRange: textRange,
-                                slide: UInt64(slide)
-                            ),
-                            fallback: resolveSharedCacheSymbol(
-                                namedAnyOf: symbols.backendDispatcherDispatch.decodedCandidates(),
-                                symbols: symbols64,
-                                symbolRange: javaScriptCoreLowerBound ..< javaScriptCoreUpperBound,
-                                textVMAddress: UInt64(javaScriptCoreText.virtualMemoryAddress),
-                                textRange: javaScriptCoreTextRange,
-                                slide: UInt64(slide)
-                            )
-                        )
-                    )
-                    let resolvedSymbolsWithFallback = unsafe resolveConnectDisconnectFallbackIfNeeded(
-                        resolvedSymbols,
-                        image: webKitImage,
-                        text: text,
-                        webCoreImage: webCoreImage,
-                        webCoreText: webCoreText,
-                        javaScriptCoreImage: javaScriptCoreImage,
-                        javaScriptCoreText: javaScriptCoreText,
-                        symbols: symbols
-                    )
-                    let usedRuntimeFallback = usesLoadedImageRuntimeFallback(
-                        resolvedSymbols: resolvedSymbolsWithFallback.symbols,
-                        loadedImageSymbols: loadedImageSymbols
-                    )
-                    let resolvedSymbolsWithRuntimeFallback = applyingLoadedImageRuntimeFallback(
-                        to: resolvedSymbolsWithFallback.symbols,
-                        loadedImageSymbols: loadedImageSymbols
-                    )
-                    lastResolvedSymbols = resolvedSymbolsWithRuntimeFallback
-                    if let resolution = successfulResolutionIfComplete(
-                            resolvedSymbolsWithRuntimeFallback,
-                            phase: .sharedCache,
-                            source: sharedCacheSourceDescription(
-                                base: "shared-cache",
-                                usedConnectDisconnectFallback: resolvedSymbolsWithFallback.usedFallback,
-                                usedRuntimeFallback: usedRuntimeFallback
-                            ),
-                            webKitHeaderAddress: loadedImage.headerAddress,
-                            javaScriptCoreHeaderAddress: loadedJavaScriptCoreImage.headerAddress,
-                            usedConnectDisconnectFallback: resolvedSymbolsWithFallback.usedFallback
-                        ) {
-                        return resolution
-                    }
-                }
+        if let resolvedSymbols = resolveLocalSymbols(
+            webKit: context.webKit,
+            javaScriptCore: context.javaScriptCore,
+            symbols64: context.localSymbols,
+            entries: context.localSymbolEntries,
+            symbols: symbols
+        ) {
+            let resolution = unsafe finalizedSharedCacheResolution(
+                resolvedSymbols,
+                phase: .sharedCache,
+                sourceBase: "shared-cache",
+                loadedImage: loadedImage,
+                loadedJavaScriptCoreImage: loadedJavaScriptCoreImage,
+                loadedImageSymbols: loadedImageSymbols,
+                runtimeWebKit: context.webKit,
+                runtimeJavaScriptCore: context.javaScriptCore,
+                runtimeWebCore: context.webCore,
+                symbols: symbols
+            )
+            lastResolvedSymbols = resolution.resolvedSymbols
+            if let lookupResult = resolution.lookupResult {
+                return lookupResult
             }
         }
 
         do {
-            let fileBackedSymbols = try fileBackedLocalSymbols(
-                mainCacheHeader: cache.mainCacheHeader,
-                dylibOffset: dylibOffset
+            let fileBackedContexts = try fileBackedLocalSymbolContexts(
+                mainCacheHeader: context.cache.mainCacheHeader
             )
-            let javaScriptCoreFileBackedSymbols = try fileBackedLocalSymbols(
-                mainCacheHeader: cache.mainCacheHeader,
-                dylibOffset: javaScriptCoreDylibOffset
-            )
-            let resolvedSymbols = NativeInspectorResolvedSymbolSet(
-                connectFrontend: resolveSharedCacheSymbol(
-                    namedAnyOf: symbols.connectFrontend.decodedCandidates(),
-                    symbols: fileBackedSymbols.symbols,
-                    symbolRange: fileBackedSymbols.symbolRange,
-                    textVMAddress: UInt64(text.virtualMemoryAddress),
-                    textRange: textRange,
-                    slide: UInt64(slide)
-                ),
-                disconnectFrontend: resolveSharedCacheSymbol(
-                    namedAnyOf: symbols.disconnectFrontend.decodedCandidates(),
-                    symbols: fileBackedSymbols.symbols,
-                    symbolRange: fileBackedSymbols.symbolRange,
-                    textVMAddress: UInt64(text.virtualMemoryAddress),
-                    textRange: textRange,
-                    slide: UInt64(slide)
-                ),
-                stringFromUTF8: resolveSharedCacheSymbol(
-                    namedAnyOf: symbols.stringFromUTF8.decodedCandidates(),
-                    symbols: javaScriptCoreFileBackedSymbols.symbols,
-                    symbolRange: javaScriptCoreFileBackedSymbols.symbolRange,
-                    textVMAddress: UInt64(javaScriptCoreText.virtualMemoryAddress),
-                    textRange: javaScriptCoreTextRange,
-                    slide: UInt64(slide)
-                ),
-                stringImplToNSString: resolveSharedCacheSymbol(
-                    namedAnyOf: symbols.stringImplToNSString.decodedCandidates(),
-                    symbols: javaScriptCoreFileBackedSymbols.symbols,
-                    symbolRange: javaScriptCoreFileBackedSymbols.symbolRange,
-                    textVMAddress: UInt64(javaScriptCoreText.virtualMemoryAddress),
-                    textRange: javaScriptCoreTextRange,
-                    slide: UInt64(slide)
-                ),
-                destroyStringImpl: resolveSharedCacheSymbol(
-                    namedAnyOf: symbols.destroyStringImpl.decodedCandidates(),
-                    symbols: javaScriptCoreFileBackedSymbols.symbols,
-                    symbolRange: javaScriptCoreFileBackedSymbols.symbolRange,
-                    textVMAddress: UInt64(javaScriptCoreText.virtualMemoryAddress),
-                    textRange: javaScriptCoreTextRange,
-                    slide: UInt64(slide)
-                ),
-                backendDispatcherDispatch: preferredResolvedAddress(
-                    resolveSharedCacheSymbol(
-                        namedAnyOf: symbols.backendDispatcherDispatch.decodedCandidates(),
-                        symbols: fileBackedSymbols.symbols,
-                        symbolRange: fileBackedSymbols.symbolRange,
-                        textVMAddress: UInt64(text.virtualMemoryAddress),
-                        textRange: textRange,
-                        slide: UInt64(slide)
-                    ),
-                    fallback: resolveSharedCacheSymbol(
-                        namedAnyOf: symbols.backendDispatcherDispatch.decodedCandidates(),
-                        symbols: javaScriptCoreFileBackedSymbols.symbols,
-                        symbolRange: javaScriptCoreFileBackedSymbols.symbolRange,
-                        textVMAddress: UInt64(javaScriptCoreText.virtualMemoryAddress),
-                        textRange: javaScriptCoreTextRange,
-                        slide: UInt64(slide)
-                    )
-                )
-            )
-            let resolvedSymbolsWithFallback = unsafe resolveConnectDisconnectFallbackIfNeeded(
-                resolvedSymbols,
-                image: webKitImage,
-                text: text,
-                webCoreImage: webCoreImage,
-                webCoreText: webCoreText,
-                javaScriptCoreImage: javaScriptCoreImage,
-                javaScriptCoreText: javaScriptCoreText,
+            if let resolvedSymbols = try resolveFileBackedSymbols(
+                webKit: context.webKit,
+                javaScriptCore: context.javaScriptCore,
+                fileBackedContexts: fileBackedContexts,
                 symbols: symbols
-            )
-            let usedRuntimeFallback = usesLoadedImageRuntimeFallback(
-                resolvedSymbols: resolvedSymbolsWithFallback.symbols,
-                loadedImageSymbols: loadedImageSymbols
-            )
-            let resolvedSymbolsWithRuntimeFallback = applyingLoadedImageRuntimeFallback(
-                to: resolvedSymbolsWithFallback.symbols,
-                loadedImageSymbols: loadedImageSymbols
-            )
-            lastResolvedSymbols = resolvedSymbolsWithRuntimeFallback
-            if let resolution = successfulResolutionIfComplete(
-                    resolvedSymbolsWithRuntimeFallback,
+            ) {
+                let resolution = unsafe finalizedSharedCacheResolution(
+                    resolvedSymbols,
                     phase: .sharedCacheFile,
-                    source: sharedCacheSourceDescription(
-                        base: "shared-cache-file",
-                        usedConnectDisconnectFallback: resolvedSymbolsWithFallback.usedFallback,
-                        usedRuntimeFallback: usedRuntimeFallback
-                    ),
-                    webKitHeaderAddress: loadedImage.headerAddress,
-                    javaScriptCoreHeaderAddress: loadedJavaScriptCoreImage.headerAddress,
-                    usedConnectDisconnectFallback: resolvedSymbolsWithFallback.usedFallback
-                ) {
-                return resolution
+                    sourceBase: "shared-cache-file",
+                    loadedImage: loadedImage,
+                    loadedJavaScriptCoreImage: loadedJavaScriptCoreImage,
+                    loadedImageSymbols: loadedImageSymbols,
+                    runtimeWebKit: context.webKit,
+                    runtimeJavaScriptCore: context.javaScriptCore,
+                    runtimeWebCore: context.webCore,
+                    symbols: symbols
+                )
+                lastResolvedSymbols = resolution.resolvedSymbols
+                if let lookupResult = resolution.lookupResult {
+                    return lookupResult
+                }
             }
         } catch let lookupFailure as NativeInspectorSymbolLookupFailure {
-            if let lastResolvedSymbols {
-                return finalizeResolution(
-                    lastResolvedSymbols,
-                    phase: nil,
-                    source: "shared-cache-file",
-                    webKitHeaderAddress: loadedImage.headerAddress,
-                    javaScriptCoreHeaderAddress: loadedJavaScriptCoreImage.headerAddress,
-                    usedConnectDisconnectFallback: false
-                )
-                    ?? failure(lookupFailure.kind, detail: lookupFailure.detail)
-            }
-            return failure(lookupFailure.kind, detail: lookupFailure.detail)
+            return fallbackResolution(
+                lastResolvedSymbols,
+                phase: .sharedCacheFile,
+                source: "shared-cache-file",
+                loadedImage: loadedImage,
+                loadedJavaScriptCoreImage: loadedJavaScriptCoreImage,
+                fallbackFailure: lookupFailure
+            )
         } catch {
-            if let lastResolvedSymbols {
-                return finalizeResolution(
-                    lastResolvedSymbols,
-                    phase: nil,
-                    source: "shared-cache-file",
-                    webKitHeaderAddress: loadedImage.headerAddress,
-                    javaScriptCoreHeaderAddress: loadedJavaScriptCoreImage.headerAddress,
-                    usedConnectDisconnectFallback: false
+            return fallbackResolution(
+                lastResolvedSymbols,
+                phase: .sharedCacheFile,
+                source: "shared-cache-file",
+                loadedImage: loadedImage,
+                loadedJavaScriptCoreImage: loadedJavaScriptCoreImage,
+                fallbackFailure: NativeInspectorSymbolLookupFailure(
+                    kind: .localSymbolsUnavailable,
+                    detail: nil
                 )
-                    ?? failure(.localSymbolsUnavailable)
-            }
-            return failure(.localSymbolsUnavailable)
+            )
         }
 
-        if let lastResolvedSymbols {
-            return finalizeResolution(
+        return fallbackResolution(
+            lastResolvedSymbols,
+            phase: .sharedCache,
+            source: "shared-cache",
+            loadedImage: loadedImage,
+            loadedJavaScriptCoreImage: loadedJavaScriptCoreImage,
+            fallbackFailure: NativeInspectorSymbolLookupFailure(
+                kind: .runtimeFunctionSymbolMissing,
+                detail: nil
+            )
+        )
+    }
+
+    @unsafe private static func resolveUsingFullSharedCache(
+        loadedImage: LoadedNativeInspectorImage,
+        imagePathSuffixes: [String],
+        loadedJavaScriptCoreImage: LoadedNativeInspectorImage,
+        javaScriptCorePathSuffixes: [String],
+        loadedWebCoreImage: LoadedNativeInspectorImage?,
+        webCorePathSuffixes: [String],
+        loadedImageSymbols: NativeInspectorResolvedSymbolSet,
+        symbols: NativeInspectorSymbols
+    ) -> NativeInspectorSymbolLookupResult {
+        guard let context = unsafe fullSharedCacheContext(
+            loadedImage: loadedImage,
+            imagePathSuffixes: imagePathSuffixes,
+            loadedJavaScriptCoreImage: loadedJavaScriptCoreImage,
+            javaScriptCorePathSuffixes: javaScriptCorePathSuffixes,
+            loadedWebCoreImage: loadedWebCoreImage,
+            webCorePathSuffixes: webCorePathSuffixes
+        ) else {
+            return failure(.sharedCacheUnavailable, shouldLog: false)
+        }
+
+        var lastResolvedSymbols: NativeInspectorResolvedSymbolSet?
+        if let resolvedSymbols = resolveLocalSymbols(
+            webKit: context.webKit,
+            javaScriptCore: context.javaScriptCore,
+            symbols64: context.localSymbols,
+            entries: context.localSymbolEntries,
+            symbols: symbols
+        ) {
+            let resolution = finalizedFileSharedCacheResolution(
+                resolvedSymbols,
+                phase: .fullCache,
+                sourceBase: "full-cache",
+                loadedImage: loadedImage,
+                loadedJavaScriptCoreImage: loadedJavaScriptCoreImage,
+                loadedImageSymbols: loadedImageSymbols
+            )
+            lastResolvedSymbols = resolution.resolvedSymbols
+            if let lookupResult = resolution.lookupResult {
+                return lookupResult
+            }
+        }
+
+        do {
+            let fileBackedContexts = try fileBackedLocalSymbolContexts(
+                mainCacheHeader: context.cache.mainCacheHeader
+            )
+            if let resolvedSymbols = try resolveFileBackedSymbols(
+                webKit: context.webKit,
+                javaScriptCore: context.javaScriptCore,
+                fileBackedContexts: fileBackedContexts,
+                symbols: symbols
+            ) {
+                let resolution = finalizedFileSharedCacheResolution(
+                    resolvedSymbols,
+                    phase: .fullCacheFile,
+                    sourceBase: "full-cache-file",
+                    loadedImage: loadedImage,
+                    loadedJavaScriptCoreImage: loadedJavaScriptCoreImage,
+                    loadedImageSymbols: loadedImageSymbols
+                )
+                lastResolvedSymbols = resolution.resolvedSymbols
+                if let lookupResult = resolution.lookupResult {
+                    return lookupResult
+                }
+            }
+        } catch let lookupFailure as NativeInspectorSymbolLookupFailure {
+            return fallbackResolution(
                 lastResolvedSymbols,
-                phase: nil,
-                source: "shared-cache",
+                phase: .fullCacheFile,
+                source: "full-cache-file",
+                loadedImage: loadedImage,
+                loadedJavaScriptCoreImage: loadedJavaScriptCoreImage,
+                fallbackFailure: lookupFailure
+            )
+        } catch {
+            return fallbackResolution(
+                lastResolvedSymbols,
+                phase: .fullCacheFile,
+                source: "full-cache-file",
+                loadedImage: loadedImage,
+                loadedJavaScriptCoreImage: loadedJavaScriptCoreImage,
+                fallbackFailure: NativeInspectorSymbolLookupFailure(
+                    kind: .localSymbolsUnavailable,
+                    detail: nil
+                )
+            )
+        }
+
+        return fallbackResolution(
+            lastResolvedSymbols,
+            phase: .fullCache,
+            source: "full-cache",
+            loadedImage: loadedImage,
+            loadedJavaScriptCoreImage: loadedJavaScriptCoreImage,
+            fallbackFailure: NativeInspectorSymbolLookupFailure(
+                kind: .runtimeFunctionSymbolMissing,
+                detail: nil
+            )
+        )
+    }
+
+    private static func resolveLocalSymbols(
+        webKit: NativeInspectorSharedCacheImageContext<MachOImage>,
+        javaScriptCore: NativeInspectorSharedCacheImageContext<MachOImage>,
+        symbols64: MachOImage.Symbols64?,
+        entries: [any DyldCacheLocalSymbolsEntryProtocol],
+        symbols: NativeInspectorSymbols
+    ) -> NativeInspectorResolvedSymbolSet? {
+        guard let symbols64,
+              let webKitRange = localSymbolRange(for: webKit.dylibOffset, entries: entries, symbolCount: symbols64.count),
+              let javaScriptCoreRange = localSymbolRange(for: javaScriptCore.dylibOffset, entries: entries, symbolCount: symbols64.count) else {
+            return nil
+        }
+        return resolveSymbols(
+            webKit: webKit,
+            javaScriptCore: javaScriptCore,
+            webKitSymbols: symbols64,
+            webKitSymbolRange: webKitRange,
+            javaScriptCoreSymbols: symbols64,
+            javaScriptCoreSymbolRange: javaScriptCoreRange,
+            symbols: symbols
+        )
+    }
+
+    private static func resolveLocalSymbols(
+        webKit: NativeInspectorSharedCacheImageContext<MachOFile>,
+        javaScriptCore: NativeInspectorSharedCacheImageContext<MachOFile>,
+        symbols64: MachOFile.Symbols64?,
+        entries: [any DyldCacheLocalSymbolsEntryProtocol],
+        symbols: NativeInspectorSymbols
+    ) -> NativeInspectorResolvedSymbolSet? {
+        guard let symbols64,
+              let webKitRange = localSymbolRange(for: webKit.dylibOffset, entries: entries, symbolCount: symbols64.count),
+              let javaScriptCoreRange = localSymbolRange(for: javaScriptCore.dylibOffset, entries: entries, symbolCount: symbols64.count) else {
+            return nil
+        }
+        return resolveSymbols(
+            webKit: webKit,
+            javaScriptCore: javaScriptCore,
+            webKitSymbols: symbols64,
+            webKitSymbolRange: webKitRange,
+            javaScriptCoreSymbols: symbols64,
+            javaScriptCoreSymbolRange: javaScriptCoreRange,
+            symbols: symbols
+        )
+    }
+
+    private static func resolveFileBackedSymbols(
+        webKit: NativeInspectorSharedCacheImageContext<MachOImage>,
+        javaScriptCore: NativeInspectorSharedCacheImageContext<MachOImage>,
+        fileBackedContexts: [NativeInspectorFileBackedLocalSymbolContext],
+        symbols: NativeInspectorSymbols
+    ) throws -> NativeInspectorResolvedSymbolSet? {
+        let webKitSymbols = try fileBackedLocalSymbols(in: fileBackedContexts, dylibOffset: webKit.dylibOffset)
+        let javaScriptCoreSymbols = try fileBackedLocalSymbols(in: fileBackedContexts, dylibOffset: javaScriptCore.dylibOffset)
+        return resolveSymbols(
+            webKit: webKit,
+            javaScriptCore: javaScriptCore,
+            webKitSymbols: webKitSymbols.symbols,
+            webKitSymbolRange: webKitSymbols.symbolRange,
+            javaScriptCoreSymbols: javaScriptCoreSymbols.symbols,
+            javaScriptCoreSymbolRange: javaScriptCoreSymbols.symbolRange,
+            symbols: symbols
+        )
+    }
+
+    private static func resolveFileBackedSymbols(
+        webKit: NativeInspectorSharedCacheImageContext<MachOFile>,
+        javaScriptCore: NativeInspectorSharedCacheImageContext<MachOFile>,
+        fileBackedContexts: [NativeInspectorFileBackedLocalSymbolContext],
+        symbols: NativeInspectorSymbols
+    ) throws -> NativeInspectorResolvedSymbolSet? {
+        let webKitSymbols = try fileBackedLocalSymbols(in: fileBackedContexts, dylibOffset: webKit.dylibOffset)
+        let javaScriptCoreSymbols = try fileBackedLocalSymbols(in: fileBackedContexts, dylibOffset: javaScriptCore.dylibOffset)
+        return resolveSymbols(
+            webKit: webKit,
+            javaScriptCore: javaScriptCore,
+            webKitSymbols: webKitSymbols.symbols,
+            webKitSymbolRange: webKitSymbols.symbolRange,
+            javaScriptCoreSymbols: javaScriptCoreSymbols.symbols,
+            javaScriptCoreSymbolRange: javaScriptCoreSymbols.symbolRange,
+            symbols: symbols
+        )
+    }
+
+    private static func resolveSymbols(
+        webKit: NativeInspectorSharedCacheImageContext<MachOImage>,
+        javaScriptCore: NativeInspectorSharedCacheImageContext<MachOImage>,
+        webKitSymbols: MachOImage.Symbols64,
+        webKitSymbolRange: Range<Int>,
+        javaScriptCoreSymbols: MachOImage.Symbols64,
+        javaScriptCoreSymbolRange: Range<Int>,
+        symbols: NativeInspectorSymbols
+    ) -> NativeInspectorResolvedSymbolSet {
+        NativeInspectorResolvedSymbolSet(
+            connectFrontend: resolveSharedCacheSymbol(
+                namedAnyOf: symbols.connectFrontend.decodedCandidates(),
+                symbols: webKitSymbols,
+                symbolRange: webKitSymbolRange,
+                textVMAddress: UInt64(webKit.text.virtualMemoryAddress),
+                textRange: webKit.textRange,
+                slide: webKit.slide
+            ),
+            disconnectFrontend: resolveSharedCacheSymbol(
+                namedAnyOf: symbols.disconnectFrontend.decodedCandidates(),
+                symbols: webKitSymbols,
+                symbolRange: webKitSymbolRange,
+                textVMAddress: UInt64(webKit.text.virtualMemoryAddress),
+                textRange: webKit.textRange,
+                slide: webKit.slide
+            ),
+            stringFromUTF8: resolveSharedCacheSymbol(
+                namedAnyOf: symbols.stringFromUTF8.decodedCandidates(),
+                symbols: javaScriptCoreSymbols,
+                symbolRange: javaScriptCoreSymbolRange,
+                textVMAddress: UInt64(javaScriptCore.text.virtualMemoryAddress),
+                textRange: javaScriptCore.textRange,
+                slide: javaScriptCore.slide
+            ),
+            stringImplToNSString: resolveSharedCacheSymbol(
+                namedAnyOf: symbols.stringImplToNSString.decodedCandidates(),
+                symbols: javaScriptCoreSymbols,
+                symbolRange: javaScriptCoreSymbolRange,
+                textVMAddress: UInt64(javaScriptCore.text.virtualMemoryAddress),
+                textRange: javaScriptCore.textRange,
+                slide: javaScriptCore.slide
+            ),
+            destroyStringImpl: resolveSharedCacheSymbol(
+                namedAnyOf: symbols.destroyStringImpl.decodedCandidates(),
+                symbols: javaScriptCoreSymbols,
+                symbolRange: javaScriptCoreSymbolRange,
+                textVMAddress: UInt64(javaScriptCore.text.virtualMemoryAddress),
+                textRange: javaScriptCore.textRange,
+                slide: javaScriptCore.slide
+            ),
+            backendDispatcherDispatch: preferredResolvedAddress(
+                resolveSharedCacheSymbol(
+                    namedAnyOf: symbols.backendDispatcherDispatch.decodedCandidates(),
+                    symbols: webKitSymbols,
+                    symbolRange: webKitSymbolRange,
+                    textVMAddress: UInt64(webKit.text.virtualMemoryAddress),
+                    textRange: webKit.textRange,
+                    slide: webKit.slide
+                ),
+                fallback: resolveSharedCacheSymbol(
+                    namedAnyOf: symbols.backendDispatcherDispatch.decodedCandidates(),
+                    symbols: javaScriptCoreSymbols,
+                    symbolRange: javaScriptCoreSymbolRange,
+                    textVMAddress: UInt64(javaScriptCore.text.virtualMemoryAddress),
+                    textRange: javaScriptCore.textRange,
+                    slide: javaScriptCore.slide
+                )
+            )
+        )
+    }
+
+    private static func resolveSymbols<Image>(
+        webKit: NativeInspectorSharedCacheImageContext<Image>,
+        javaScriptCore: NativeInspectorSharedCacheImageContext<Image>,
+        webKitSymbols: MachOFile.Symbols64,
+        webKitSymbolRange: Range<Int>,
+        javaScriptCoreSymbols: MachOFile.Symbols64,
+        javaScriptCoreSymbolRange: Range<Int>,
+        symbols: NativeInspectorSymbols
+    ) -> NativeInspectorResolvedSymbolSet {
+        NativeInspectorResolvedSymbolSet(
+            connectFrontend: resolveSharedCacheSymbol(
+                namedAnyOf: symbols.connectFrontend.decodedCandidates(),
+                symbols: webKitSymbols,
+                symbolRange: webKitSymbolRange,
+                textVMAddress: UInt64(webKit.text.virtualMemoryAddress),
+                textRange: webKit.textRange,
+                slide: webKit.slide
+            ),
+            disconnectFrontend: resolveSharedCacheSymbol(
+                namedAnyOf: symbols.disconnectFrontend.decodedCandidates(),
+                symbols: webKitSymbols,
+                symbolRange: webKitSymbolRange,
+                textVMAddress: UInt64(webKit.text.virtualMemoryAddress),
+                textRange: webKit.textRange,
+                slide: webKit.slide
+            ),
+            stringFromUTF8: resolveSharedCacheSymbol(
+                namedAnyOf: symbols.stringFromUTF8.decodedCandidates(),
+                symbols: javaScriptCoreSymbols,
+                symbolRange: javaScriptCoreSymbolRange,
+                textVMAddress: UInt64(javaScriptCore.text.virtualMemoryAddress),
+                textRange: javaScriptCore.textRange,
+                slide: javaScriptCore.slide
+            ),
+            stringImplToNSString: resolveSharedCacheSymbol(
+                namedAnyOf: symbols.stringImplToNSString.decodedCandidates(),
+                symbols: javaScriptCoreSymbols,
+                symbolRange: javaScriptCoreSymbolRange,
+                textVMAddress: UInt64(javaScriptCore.text.virtualMemoryAddress),
+                textRange: javaScriptCore.textRange,
+                slide: javaScriptCore.slide
+            ),
+            destroyStringImpl: resolveSharedCacheSymbol(
+                namedAnyOf: symbols.destroyStringImpl.decodedCandidates(),
+                symbols: javaScriptCoreSymbols,
+                symbolRange: javaScriptCoreSymbolRange,
+                textVMAddress: UInt64(javaScriptCore.text.virtualMemoryAddress),
+                textRange: javaScriptCore.textRange,
+                slide: javaScriptCore.slide
+            ),
+            backendDispatcherDispatch: preferredResolvedAddress(
+                resolveSharedCacheSymbol(
+                    namedAnyOf: symbols.backendDispatcherDispatch.decodedCandidates(),
+                    symbols: webKitSymbols,
+                    symbolRange: webKitSymbolRange,
+                    textVMAddress: UInt64(webKit.text.virtualMemoryAddress),
+                    textRange: webKit.textRange,
+                    slide: webKit.slide
+                ),
+                fallback: resolveSharedCacheSymbol(
+                    namedAnyOf: symbols.backendDispatcherDispatch.decodedCandidates(),
+                    symbols: javaScriptCoreSymbols,
+                    symbolRange: javaScriptCoreSymbolRange,
+                    textVMAddress: UInt64(javaScriptCore.text.virtualMemoryAddress),
+                    textRange: javaScriptCore.textRange,
+                    slide: javaScriptCore.slide
+                )
+            )
+        )
+    }
+
+    @unsafe private static func finalizedSharedCacheResolution(
+        _ resolvedSymbols: NativeInspectorResolvedSymbolSet,
+        phase: NativeInspectorSymbolResolutionPhase,
+        sourceBase: String,
+        loadedImage: LoadedNativeInspectorImage,
+        loadedJavaScriptCoreImage: LoadedNativeInspectorImage,
+        loadedImageSymbols: NativeInspectorResolvedSymbolSet,
+        runtimeWebKit: NativeInspectorSharedCacheImageContext<MachOImage>,
+        runtimeJavaScriptCore: NativeInspectorSharedCacheImageContext<MachOImage>,
+        runtimeWebCore: NativeInspectorSharedCacheImageContext<MachOImage>?,
+        symbols: NativeInspectorSymbols
+    ) -> (lookupResult: NativeInspectorSymbolLookupResult?, resolvedSymbols: NativeInspectorResolvedSymbolSet) {
+        let resolvedSymbolsWithFallback = unsafe resolveConnectDisconnectFallbackIfNeeded(
+            resolvedSymbols,
+            image: runtimeWebKit.image,
+            text: runtimeWebKit.text,
+            webCoreImage: runtimeWebCore?.image,
+            webCoreText: runtimeWebCore?.text,
+            javaScriptCoreImage: runtimeJavaScriptCore.image,
+            javaScriptCoreText: runtimeJavaScriptCore.text,
+            symbols: symbols
+        )
+        let usedRuntimeFallback = usesLoadedImageRuntimeFallback(
+            resolvedSymbols: resolvedSymbolsWithFallback.symbols,
+            loadedImageSymbols: loadedImageSymbols
+        )
+        let resolvedSymbolsWithRuntimeFallback = applyingLoadedImageRuntimeFallback(
+            to: resolvedSymbolsWithFallback.symbols,
+            loadedImageSymbols: loadedImageSymbols
+        )
+        let lookupResult = successfulResolutionIfComplete(
+            resolvedSymbolsWithRuntimeFallback,
+            phase: phase,
+            source: sharedCacheSourceDescription(
+                base: sourceBase,
+                usedConnectDisconnectFallback: resolvedSymbolsWithFallback.usedFallback,
+                usedRuntimeFallback: usedRuntimeFallback
+            ),
+            webKitHeaderAddress: loadedImage.headerAddress,
+            javaScriptCoreHeaderAddress: loadedJavaScriptCoreImage.headerAddress,
+            usedConnectDisconnectFallback: resolvedSymbolsWithFallback.usedFallback
+        )
+        return (lookupResult, resolvedSymbolsWithRuntimeFallback)
+    }
+
+    private static func finalizedFileSharedCacheResolution(
+        _ resolvedSymbols: NativeInspectorResolvedSymbolSet,
+        phase: NativeInspectorSymbolResolutionPhase,
+        sourceBase: String,
+        loadedImage: LoadedNativeInspectorImage,
+        loadedJavaScriptCoreImage: LoadedNativeInspectorImage,
+        loadedImageSymbols: NativeInspectorResolvedSymbolSet
+    ) -> (lookupResult: NativeInspectorSymbolLookupResult?, resolvedSymbols: NativeInspectorResolvedSymbolSet) {
+        let usedRuntimeFallback = usesLoadedImageRuntimeFallback(
+            resolvedSymbols: resolvedSymbols,
+            loadedImageSymbols: loadedImageSymbols
+        )
+        let resolvedSymbolsWithRuntimeFallback = applyingLoadedImageRuntimeFallback(
+            to: resolvedSymbols,
+            loadedImageSymbols: loadedImageSymbols
+        )
+        let lookupResult = successfulResolutionIfComplete(
+            resolvedSymbolsWithRuntimeFallback,
+            phase: phase,
+            source: sharedCacheSourceDescription(
+                base: sourceBase,
+                usedConnectDisconnectFallback: false,
+                usedRuntimeFallback: usedRuntimeFallback
+            ),
+            webKitHeaderAddress: loadedImage.headerAddress,
+            javaScriptCoreHeaderAddress: loadedJavaScriptCoreImage.headerAddress,
+            usedConnectDisconnectFallback: false
+        )
+        return (lookupResult, resolvedSymbolsWithRuntimeFallback)
+    }
+
+    private static func fallbackResolution(
+        _ resolvedSymbols: NativeInspectorResolvedSymbolSet?,
+        phase: NativeInspectorSymbolResolutionPhase?,
+        source: String,
+        loadedImage: LoadedNativeInspectorImage,
+        loadedJavaScriptCoreImage: LoadedNativeInspectorImage,
+        fallbackFailure: NativeInspectorSymbolLookupFailure
+    ) -> NativeInspectorSymbolLookupResult {
+        if let resolvedSymbols {
+            return finalizeResolution(
+                resolvedSymbols,
+                phase: phase,
+                source: source,
                 webKitHeaderAddress: loadedImage.headerAddress,
                 javaScriptCoreHeaderAddress: loadedJavaScriptCoreImage.headerAddress,
                 usedConnectDisconnectFallback: false
             )
-                ?? failure(.runtimeFunctionSymbolMissing)
+                ?? failure(
+                    fallbackFailure.kind,
+                    detail: fallbackFailure.detail,
+                    phase: phase,
+                    source: source,
+                    shouldLog: false
+                )
         }
-        return failure(.runtimeFunctionSymbolMissing)
+        return failure(
+            fallbackFailure.kind,
+            detail: fallbackFailure.detail,
+            phase: phase,
+            source: source,
+            shouldLog: false
+        )
     }
 }
 #endif

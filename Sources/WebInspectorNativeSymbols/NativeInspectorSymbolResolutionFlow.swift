@@ -85,11 +85,12 @@ extension NativeInspectorSymbolResolverCore {
         )
         #endif
 
-        let sharedCacheResolution = resolveUsingSharedCache(
+        let sharedCacheResolution = unsafe resolveUsingSharedCache(
             loadedImage: loadedImage,
             imagePathSuffixes: imagePathSuffixes,
             loadedJavaScriptCoreImage: loadedJavaScriptCoreImage,
             javaScriptCorePathSuffixes: javaScriptCorePathSuffixes,
+            loadedWebCoreImage: loadedWebCoreImage,
             webCorePathSuffixes: webCorePathSuffixes,
             loadedImageSymbols: loadedImageResultsWithFallback.symbols,
             symbols: symbols
@@ -104,10 +105,13 @@ extension NativeInspectorSymbolResolverCore {
             loadedWebKitImage: image,
             loadedWebKitText: text,
             loadedWebKitHeaderAddress: loadedImage.headerAddress,
+            loadedJavaScriptCoreImage: loadedJavaScriptCoreImage,
             loadedWebCoreImage: webCoreImage,
             loadedWebCoreText: webCoreText,
             loadedWebCoreHeaderAddress: loadedWebCoreImage?.headerAddress,
-            imagePathSuffixes: imagePathSuffixes
+            imagePathSuffixes: imagePathSuffixes,
+            javaScriptCorePathSuffixes: javaScriptCorePathSuffixes,
+            webCorePathSuffixes: webCorePathSuffixes
         )
         #endif
         return mergedLookupResult
