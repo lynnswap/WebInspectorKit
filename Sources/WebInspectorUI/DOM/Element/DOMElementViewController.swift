@@ -19,6 +19,7 @@ package final class DOMElementViewController: UICollectionViewController {
 
     package var disablesSnapshotAnimationsForTesting = false
     package private(set) var lastSnapshotApplyModeForTesting: DOMElementStyleSnapshotCoordinator.ApplyMode = .none
+    package private(set) var styleSnapshotApplyModesForTesting: [DOMElementStyleSnapshotCoordinator.ApplyMode] = []
     package private(set) var styleSnapshotApplyCountForTesting = 0
     private var styleRenderGeneration = 0
     private var nextStyleRenderWaiterID: UInt64 = 0
@@ -242,7 +243,9 @@ package final class DOMElementViewController: UICollectionViewController {
                 return
             }
 #if DEBUG
-            lastSnapshotApplyModeForTesting = .diff(animated: animated)
+            let applyMode = DOMElementStyleSnapshotCoordinator.ApplyMode.diff(animated: animated)
+            lastSnapshotApplyModeForTesting = applyMode
+            styleSnapshotApplyModesForTesting.append(applyMode)
             let shouldAnimateSnapshot = animated && !disablesSnapshotAnimationsForTesting
             styleSnapshotApplyCountForTesting += 1
 #else
@@ -262,7 +265,9 @@ package final class DOMElementViewController: UICollectionViewController {
                 return
             }
 #if DEBUG
-            lastSnapshotApplyModeForTesting = .reloadData
+            let applyMode = DOMElementStyleSnapshotCoordinator.ApplyMode.reloadData
+            lastSnapshotApplyModeForTesting = applyMode
+            styleSnapshotApplyModesForTesting.append(applyMode)
             styleSnapshotApplyCountForTesting += 1
 #endif
             dataSource.applySnapshotUsingReloadData(snapshot) { [weak self] in
