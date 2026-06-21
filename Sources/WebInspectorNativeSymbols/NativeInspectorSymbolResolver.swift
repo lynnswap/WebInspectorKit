@@ -11,14 +11,7 @@ package enum NativeInspectorSymbolResolver {
         javaScriptCorePathSuffixes: [String] = NativeInspectorSymbolResolverCore.javaScriptCoreImagePathSuffixes,
         webCorePathSuffixes: [String] = NativeInspectorSymbolResolverCore.webCoreImagePathSuffixes,
         allowSharedCacheFallback: Bool = true,
-        connectSymbol: ObfuscatedSymbolName = NativeInspectorSymbolResolverCore.connectFrontendSymbol,
-        disconnectSymbol: ObfuscatedSymbolName = NativeInspectorSymbolResolverCore.disconnectFrontendSymbol,
-        alternateConnectSymbols: [ObfuscatedSymbolName] = [],
-        alternateDisconnectSymbols: [ObfuscatedSymbolName] = [],
-        stringFromUTF8Symbol: ObfuscatedSymbolName? = nil,
-        stringImplToNSStringSymbol: ObfuscatedSymbolName? = nil,
-        destroyStringImplSymbol: ObfuscatedSymbolName? = nil,
-        backendDispatcherDispatchSymbol: ObfuscatedSymbolName? = nil
+        symbols: NativeInspectorSymbols = NativeInspectorSymbolResolverCore.currentSymbolQueries()
     ) -> NativeInspectorSymbolResolution {
         makeAttachResolution(
             from: NativeInspectorSymbolResolverCore.resolveForTesting(
@@ -26,14 +19,7 @@ package enum NativeInspectorSymbolResolver {
                 javaScriptCorePathSuffixes: javaScriptCorePathSuffixes,
                 webCorePathSuffixes: webCorePathSuffixes,
                 allowSharedCacheFallback: allowSharedCacheFallback,
-                connectSymbol: connectSymbol,
-                disconnectSymbol: disconnectSymbol,
-                alternateConnectSymbols: alternateConnectSymbols,
-                alternateDisconnectSymbols: alternateDisconnectSymbols,
-                stringFromUTF8Symbol: stringFromUTF8Symbol,
-                stringImplToNSStringSymbol: stringImplToNSStringSymbol,
-                destroyStringImplSymbol: destroyStringImplSymbol,
-                backendDispatcherDispatchSymbol: backendDispatcherDispatchSymbol
+                symbols: symbols
             )
         )
     }
@@ -79,14 +65,6 @@ package enum NativeInspectorSymbolResolver {
             javaScriptCore: NativeInspectorSymbolResolverCore.javaScriptCoreImagePathSuffixes,
             webCore: NativeInspectorSymbolResolverCore.webCoreImagePathSuffixes
         )
-    }
-
-    static func connectSymbolsForTesting() -> [ObfuscatedSymbolName] {
-        [NativeInspectorSymbolResolverCore.connectFrontendSymbol]
-    }
-
-    static func disconnectSymbolsForTesting() -> [ObfuscatedSymbolName] {
-        [NativeInspectorSymbolResolverCore.disconnectFrontendSymbol]
     }
 
     @unsafe static func uniqueFunctionStartContainingCallTargetsForTesting(
@@ -139,15 +117,7 @@ package enum NativeInspectorSymbolResolver {
         imagePathSuffixes: [String] = [],
         javaScriptCorePathSuffixes: [String] = [],
         webCorePathSuffixes: [String] = [],
-        allowSharedCacheFallback: Bool = true,
-        connectSymbol: String = "",
-        disconnectSymbol: String = "",
-        alternateConnectSymbols: [String] = [],
-        alternateDisconnectSymbols: [String] = [],
-        stringFromUTF8Symbol: String? = nil,
-        stringImplToNSStringSymbol: String? = nil,
-        destroyStringImplSymbol: String? = nil,
-        backendDispatcherDispatchSymbol: String? = nil
+        allowSharedCacheFallback: Bool = true
     ) -> NativeInspectorSymbolResolution {
         return resolveCurrent()
     }

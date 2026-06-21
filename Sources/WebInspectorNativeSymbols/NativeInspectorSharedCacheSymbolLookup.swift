@@ -167,71 +167,93 @@ extension NativeInspectorSymbolResolverCore {
     }
 
     static func resolveSharedCacheSymbol(
-        named symbolName: String,
+        matching requiredSymbol: NativeInspectorRequiredSymbol,
         symbols: MachOImage.Symbols64,
         symbolRange: Range<Int>,
         textVMAddress: UInt64,
         textRange: Range<UInt64>,
         slide: UInt64
     ) -> ResolvedNativeInspectorAddress {
+        var candidates = Set<UInt64>()
+        var outsideTextAddress: UInt64?
+
         for symbolIndex in symbolRange {
             let symbol = symbols[symbolIndex]
-            guard symbol.name == symbolName else {
+            guard requiredSymbol.matches(symbolName: symbol.name) else {
                 continue
             }
-            guard symbol.offset >= 0 else {
-                return .missing
-            }
-
-            let unslidAddress = UInt64(symbol.offset)
-            let actualAddress = slide + unslidAddress
-            guard unslidAddress >= textVMAddress else {
-                return .outsideText(actualAddress)
-            }
-
-            let offsetWithinText = unslidAddress - textVMAddress
-            let resolvedAddress = textRange.lowerBound + offsetWithinText
-            guard textRange.contains(resolvedAddress), resolvedAddress == actualAddress else {
-                return .outsideText(actualAddress)
-            }
-            return .found(actualAddress)
+            appendSharedCacheSymbolAddress(
+                offset: symbol.offset,
+                textVMAddress: textVMAddress,
+                textRange: textRange,
+                slide: slide,
+                candidates: &candidates,
+                outsideTextAddress: &outsideTextAddress
+            )
         }
 
-        return .missing
+        return resolvedAddress(from: candidates, outsideTextAddress: outsideTextAddress)
     }
 
     static func resolveSharedCacheSymbol(
-        named symbolName: String,
+        matching requiredSymbol: NativeInspectorRequiredSymbol,
         symbols: MachOFile.Symbols64,
         symbolRange: Range<Int>,
         textVMAddress: UInt64,
         textRange: Range<UInt64>,
         slide: UInt64
     ) -> ResolvedNativeInspectorAddress {
+        var candidates = Set<UInt64>()
+        var outsideTextAddress: UInt64?
+
         for symbolIndex in symbolRange {
             let symbol = symbols[symbolIndex]
-            guard symbol.name == symbolName else {
+            guard requiredSymbol.matches(symbolName: symbol.name) else {
                 continue
             }
-            guard symbol.offset >= 0 else {
-                return .missing
-            }
-
-            let unslidAddress = UInt64(symbol.offset)
-            let actualAddress = slide + unslidAddress
-            guard unslidAddress >= textVMAddress else {
-                return .outsideText(actualAddress)
-            }
-
-            let offsetWithinText = unslidAddress - textVMAddress
-            let resolvedAddress = textRange.lowerBound + offsetWithinText
-            guard textRange.contains(resolvedAddress), resolvedAddress == actualAddress else {
-                return .outsideText(actualAddress)
-            }
-            return .found(actualAddress)
+            appendSharedCacheSymbolAddress(
+                offset: symbol.offset,
+                textVMAddress: textVMAddress,
+                textRange: textRange,
+                slide: slide,
+                candidates: &candidates,
+                outsideTextAddress: &outsideTextAddress
+            )
         }
 
-        return .missing
+        return resolvedAddress(from: candidates, outsideTextAddress: outsideTextAddress)
+    }
+
+    private static func appendSharedCacheSymbolAddress(
+        offset: Int,
+        textVMAddress: UInt64,
+        textRange: Range<UInt64>,
+        slide: UInt64,
+        candidates: inout Set<UInt64>,
+        outsideTextAddress: inout UInt64?
+    ) {
+        guard offset >= 0 else {
+            return
+        }
+
+        let unslidAddress = UInt64(offset)
+        let actualAddress = slide + unslidAddress
+        guard unslidAddress >= textVMAddress else {
+            if outsideTextAddress == nil {
+                outsideTextAddress = actualAddress
+            }
+            return
+        }
+
+        let offsetWithinText = unslidAddress - textVMAddress
+        let resolvedAddress = textRange.lowerBound + offsetWithinText
+        guard textRange.contains(resolvedAddress), resolvedAddress == actualAddress else {
+            if outsideTextAddress == nil {
+                outsideTextAddress = actualAddress
+            }
+            return
+        }
+        candidates.insert(actualAddress)
     }
 }
 #endif

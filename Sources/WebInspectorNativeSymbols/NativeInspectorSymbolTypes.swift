@@ -2,15 +2,6 @@
 import MachO
 import MachOKit
 
-struct ObfuscatedSymbolName: Sendable {
-    let key: UInt8
-    let encodedBytes: [UInt8]
-
-    func decodedString() -> String {
-        String(decoding: encodedBytes.map { $0 ^ key }, as: UTF8.self)
-    }
-}
-
 enum NativeInspectorSymbolFailure {
     case sharedCacheUnavailable
     case localSymbolsUnavailable
@@ -21,6 +12,7 @@ enum NativeInspectorSymbolFailure {
     case runtimeFunctionSymbolMissing
     case resolvedAddressOutsideText
     case resolvedAddressImageMismatch
+    case ambiguousSymbolMatch
 
     var message: String {
         switch self {
@@ -42,6 +34,8 @@ enum NativeInspectorSymbolFailure {
             return "resolved address invalid"
         case .resolvedAddressImageMismatch:
             return "resolved address image mismatch"
+        case .ambiguousSymbolMatch:
+            return "symbol lookup ambiguous"
         }
     }
 }
@@ -91,6 +85,7 @@ enum ResolvedNativeInspectorAddress {
     case found(UInt64)
     case missing
     case outsideText(UInt64)
+    case ambiguous
 }
 
 struct NativeInspectorSymbolLookupResult: Sendable {
@@ -128,11 +123,30 @@ enum NativeInspectorSymbolResolutionPolicy: Sendable {
 struct NativeInspectorRequiredSymbol: Sendable {
     let role: NativeInspectorSymbolRole
     let ownerImage: NativeInspectorSymbolOwnerImage
-    let candidates: [ObfuscatedSymbolName]
+    let queries: [NativeInspectorSymbolQuery]
     let resolutionPolicy: NativeInspectorSymbolResolutionPolicy
 
-    func decodedCandidates() -> [String] {
-        candidates.map { $0.decodedString() }
+    func matches(symbolName: String) -> Bool {
+        queries.contains { $0.matches(symbolName: symbolName) }
+    }
+}
+
+struct NativeInspectorSymbolQuery: Sendable {
+    let requiredNameParts: [String]
+    let forbiddenNameParts: [String]
+
+    init(
+        requiredNameParts: [String],
+        forbiddenNameParts: [String] = []
+    ) {
+        self.requiredNameParts = requiredNameParts
+        self.forbiddenNameParts = forbiddenNameParts
+    }
+
+    func matches(symbolName: String) -> Bool {
+        let variants = NativeInspectorSymbolName.variants(for: symbolName)
+        return requiredNameParts.allSatisfy { variants.contains($0) }
+            && !forbiddenNameParts.contains { variants.contains($0) }
     }
 }
 

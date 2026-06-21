@@ -163,6 +163,22 @@ extension NativeInspectorSymbolResolverCore {
             }
         }
 
+        if allResults.contains(where: {
+            if case .ambiguous = $0 {
+                return true
+            }
+            return false
+        }) {
+            return failure(
+                .ambiguousSymbolMatch,
+                phase: phase,
+                source: source,
+                missingFunctions: unsafe missingFunctionNames(in: resolvedSymbols),
+                usedConnectDisconnectFallback: usedConnectDisconnectFallback,
+                shouldLog: shouldLogFailure
+            )
+        }
+
         let attachHeaders = expectedHeaderAddressesForAttachEntryPoints(
             webKitHeaderAddress: webKitHeaderAddress,
             javaScriptCoreHeaderAddress: javaScriptCoreHeaderAddress

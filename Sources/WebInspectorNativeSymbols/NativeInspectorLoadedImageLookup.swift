@@ -30,63 +30,60 @@ extension NativeInspectorSymbolResolverCore {
     }
 
     static func resolveLoadedImageSymbol(
-        named symbolName: String,
+        matching requiredSymbol: NativeInspectorRequiredSymbol,
         in image: MachOImage,
         text: SegmentCommand64
     ) -> ResolvedNativeInspectorAddress {
-        guard let symbol = image.symbol(named: symbolName, mangled: true, inSection: 0, isGlobalOnly: false) else {
-            return unsafe resolveLoadedImageExportedSymbol(
-                named: symbolName,
-                in: image,
-                text: text
+        let imageBaseAddress = unsafe UInt64(UInt(bitPattern: image.ptr))
+        var candidates = Set<UInt64>()
+        var outsideTextAddress: UInt64?
+
+        for symbol in image.symbols where requiredSymbol.matches(symbolName: symbol.name) {
+            appendLoadedImageSymbolAddress(
+                offset: symbol.offset,
+                imageBaseAddress: imageBaseAddress,
+                text: text,
+                candidates: &candidates,
+                outsideTextAddress: &outsideTextAddress
             )
         }
-        guard symbol.offset >= 0 else {
-            return .missing
+
+        for symbol in image.exportedSymbols where requiredSymbol.matches(symbolName: symbol.name) {
+            guard let offset = symbol.offset else {
+                continue
+            }
+            appendLoadedImageSymbolAddress(
+                offset: offset,
+                imageBaseAddress: imageBaseAddress,
+                text: text,
+                candidates: &candidates,
+                outsideTextAddress: &outsideTextAddress
+            )
         }
 
-        let offset = UInt64(symbol.offset)
-        let address = unsafe UInt64(UInt(bitPattern: image.ptr)) + offset
-        guard offset < UInt64(text.virtualMemorySize) else {
-            return .outsideText(address)
-        }
-
-        return .found(address)
+        return resolvedAddress(from: candidates, outsideTextAddress: outsideTextAddress)
     }
 
-    @unsafe static func resolveLoadedImageExportedSymbol(
-        named symbolName: String,
-        in image: MachOImage,
-        text: SegmentCommand64
-    ) -> ResolvedNativeInspectorAddress {
-        let exportTrie = image.exportTrie
-        if let exportedSymbol = exportTrie?.search(by: symbolName),
-           let offset = exportedSymbol.offset,
-           offset >= 0 {
-            let unsignedOffset = UInt64(offset)
-            let address = unsafe UInt64(UInt(bitPattern: image.ptr)) + unsignedOffset
-            guard unsignedOffset < UInt64(text.virtualMemorySize) else {
-                return .outsideText(address)
+    private static func appendLoadedImageSymbolAddress(
+        offset: Int,
+        imageBaseAddress: UInt64,
+        text: SegmentCommand64,
+        candidates: inout Set<UInt64>,
+        outsideTextAddress: inout UInt64?
+    ) {
+        guard offset >= 0 else {
+            return
+        }
+
+        let unsignedOffset = UInt64(offset)
+        let address = imageBaseAddress + unsignedOffset
+        guard unsignedOffset < UInt64(text.virtualMemorySize) else {
+            if outsideTextAddress == nil {
+                outsideTextAddress = address
             }
-            return .found(address)
+            return
         }
-
-        guard let address = unsafe MachOKitSymbolLookup.exportedRuntimeSymbolAddress(named: symbolName) else {
-            return .missing
-        }
-
-        let expectedHeaderAddress = unsafe UInt(bitPattern: image.ptr)
-        guard resolvedAddress(address, belongsToAnyOf: [expectedHeaderAddress]) else {
-            return .missing
-        }
-
-        let imageBaseAddress = UInt64(expectedHeaderAddress)
-        let textStart = imageBaseAddress
-        let textEnd = textStart + UInt64(text.virtualMemorySize)
-        guard address >= textStart, address < textEnd else {
-            return .outsideText(address)
-        }
-        return .found(address)
+        candidates.insert(address)
     }
 
     static func resolvedAddress(

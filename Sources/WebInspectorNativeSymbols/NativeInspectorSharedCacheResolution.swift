@@ -358,7 +358,7 @@ extension NativeInspectorSymbolResolverCore {
     ) -> NativeInspectorResolvedSymbolSet {
         NativeInspectorResolvedSymbolSet(
             connectFrontend: resolveSharedCacheSymbol(
-                namedAnyOf: symbols.connectFrontend.decodedCandidates(),
+                matching: symbols.connectFrontend,
                 symbols: webKitSymbols,
                 symbolRange: webKitSymbolRange,
                 textVMAddress: UInt64(webKit.text.virtualMemoryAddress),
@@ -366,7 +366,7 @@ extension NativeInspectorSymbolResolverCore {
                 slide: webKit.slide
             ),
             disconnectFrontend: resolveSharedCacheSymbol(
-                namedAnyOf: symbols.disconnectFrontend.decodedCandidates(),
+                matching: symbols.disconnectFrontend,
                 symbols: webKitSymbols,
                 symbolRange: webKitSymbolRange,
                 textVMAddress: UInt64(webKit.text.virtualMemoryAddress),
@@ -374,7 +374,7 @@ extension NativeInspectorSymbolResolverCore {
                 slide: webKit.slide
             ),
             stringFromUTF8: resolveSharedCacheSymbol(
-                namedAnyOf: symbols.stringFromUTF8.decodedCandidates(),
+                matching: symbols.stringFromUTF8,
                 symbols: javaScriptCoreSymbols,
                 symbolRange: javaScriptCoreSymbolRange,
                 textVMAddress: UInt64(javaScriptCore.text.virtualMemoryAddress),
@@ -382,7 +382,7 @@ extension NativeInspectorSymbolResolverCore {
                 slide: javaScriptCore.slide
             ),
             stringImplToNSString: resolveSharedCacheSymbol(
-                namedAnyOf: symbols.stringImplToNSString.decodedCandidates(),
+                matching: symbols.stringImplToNSString,
                 symbols: javaScriptCoreSymbols,
                 symbolRange: javaScriptCoreSymbolRange,
                 textVMAddress: UInt64(javaScriptCore.text.virtualMemoryAddress),
@@ -390,7 +390,7 @@ extension NativeInspectorSymbolResolverCore {
                 slide: javaScriptCore.slide
             ),
             destroyStringImpl: resolveSharedCacheSymbol(
-                namedAnyOf: symbols.destroyStringImpl.decodedCandidates(),
+                matching: symbols.destroyStringImpl,
                 symbols: javaScriptCoreSymbols,
                 symbolRange: javaScriptCoreSymbolRange,
                 textVMAddress: UInt64(javaScriptCore.text.virtualMemoryAddress),
@@ -399,7 +399,7 @@ extension NativeInspectorSymbolResolverCore {
             ),
             backendDispatcherDispatch: preferredResolvedAddress(
                 resolveSharedCacheSymbol(
-                    namedAnyOf: symbols.backendDispatcherDispatch.decodedCandidates(),
+                    matching: symbols.backendDispatcherDispatch,
                     symbols: webKitSymbols,
                     symbolRange: webKitSymbolRange,
                     textVMAddress: UInt64(webKit.text.virtualMemoryAddress),
@@ -407,7 +407,7 @@ extension NativeInspectorSymbolResolverCore {
                     slide: webKit.slide
                 ),
                 fallback: resolveSharedCacheSymbol(
-                    namedAnyOf: symbols.backendDispatcherDispatch.decodedCandidates(),
+                    matching: symbols.backendDispatcherDispatch,
                     symbols: javaScriptCoreSymbols,
                     symbolRange: javaScriptCoreSymbolRange,
                     textVMAddress: UInt64(javaScriptCore.text.virtualMemoryAddress),
@@ -429,7 +429,7 @@ extension NativeInspectorSymbolResolverCore {
     ) -> NativeInspectorResolvedSymbolSet {
         NativeInspectorResolvedSymbolSet(
             connectFrontend: resolveSharedCacheSymbol(
-                namedAnyOf: symbols.connectFrontend.decodedCandidates(),
+                matching: symbols.connectFrontend,
                 symbols: webKitSymbols,
                 symbolRange: webKitSymbolRange,
                 textVMAddress: UInt64(webKit.text.virtualMemoryAddress),
@@ -437,7 +437,7 @@ extension NativeInspectorSymbolResolverCore {
                 slide: webKit.slide
             ),
             disconnectFrontend: resolveSharedCacheSymbol(
-                namedAnyOf: symbols.disconnectFrontend.decodedCandidates(),
+                matching: symbols.disconnectFrontend,
                 symbols: webKitSymbols,
                 symbolRange: webKitSymbolRange,
                 textVMAddress: UInt64(webKit.text.virtualMemoryAddress),
@@ -445,7 +445,7 @@ extension NativeInspectorSymbolResolverCore {
                 slide: webKit.slide
             ),
             stringFromUTF8: resolveSharedCacheSymbol(
-                namedAnyOf: symbols.stringFromUTF8.decodedCandidates(),
+                matching: symbols.stringFromUTF8,
                 symbols: javaScriptCoreSymbols,
                 symbolRange: javaScriptCoreSymbolRange,
                 textVMAddress: UInt64(javaScriptCore.text.virtualMemoryAddress),
@@ -453,7 +453,7 @@ extension NativeInspectorSymbolResolverCore {
                 slide: javaScriptCore.slide
             ),
             stringImplToNSString: resolveSharedCacheSymbol(
-                namedAnyOf: symbols.stringImplToNSString.decodedCandidates(),
+                matching: symbols.stringImplToNSString,
                 symbols: javaScriptCoreSymbols,
                 symbolRange: javaScriptCoreSymbolRange,
                 textVMAddress: UInt64(javaScriptCore.text.virtualMemoryAddress),
@@ -461,7 +461,7 @@ extension NativeInspectorSymbolResolverCore {
                 slide: javaScriptCore.slide
             ),
             destroyStringImpl: resolveSharedCacheSymbol(
-                namedAnyOf: symbols.destroyStringImpl.decodedCandidates(),
+                matching: symbols.destroyStringImpl,
                 symbols: javaScriptCoreSymbols,
                 symbolRange: javaScriptCoreSymbolRange,
                 textVMAddress: UInt64(javaScriptCore.text.virtualMemoryAddress),
@@ -470,7 +470,7 @@ extension NativeInspectorSymbolResolverCore {
             ),
             backendDispatcherDispatch: preferredResolvedAddress(
                 resolveSharedCacheSymbol(
-                    namedAnyOf: symbols.backendDispatcherDispatch.decodedCandidates(),
+                    matching: symbols.backendDispatcherDispatch,
                     symbols: webKitSymbols,
                     symbolRange: webKitSymbolRange,
                     textVMAddress: UInt64(webKit.text.virtualMemoryAddress),
@@ -478,7 +478,7 @@ extension NativeInspectorSymbolResolverCore {
                     slide: webKit.slide
                 ),
                 fallback: resolveSharedCacheSymbol(
-                    namedAnyOf: symbols.backendDispatcherDispatch.decodedCandidates(),
+                    matching: symbols.backendDispatcherDispatch,
                     symbols: javaScriptCoreSymbols,
                     symbolRange: javaScriptCoreSymbolRange,
                     textVMAddress: UInt64(javaScriptCore.text.virtualMemoryAddress),

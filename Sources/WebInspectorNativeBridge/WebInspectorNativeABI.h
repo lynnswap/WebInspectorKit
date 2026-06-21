@@ -26,7 +26,7 @@ private:
     StringImpl *m_impl { nullptr };
 };
 
-static_assert(sizeof(String) == sizeof(void *), "WTF::String ABI changed");
+static_assert(sizeof(String) == sizeof(void *), "native string ABI changed");
 
 } // namespace WTF
 
