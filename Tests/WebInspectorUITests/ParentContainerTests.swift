@@ -226,7 +226,7 @@ struct ParentContainerTests {
                 == [
                     WebInspectorTab.dom.id,
                     WebInspectorTab.DisplayItem.domElementID,
-                    customTab.id,
+                    WebInspectorTab.DisplayItem.customTabID(customTab.id),
                     WebInspectorTab.network.id,
                 ]
         )
@@ -234,25 +234,25 @@ struct ParentContainerTests {
             projection.displayItems(for: .regular, tabs: session.interface.tabs).map(\.id)
                 == [
                     WebInspectorTab.dom.id,
-                    customTab.id,
+                    WebInspectorTab.DisplayItem.customTabID(customTab.id),
                     WebInspectorTab.network.id,
                 ]
         )
         #expect(
             projection.descriptor(
-                for: .tab(customTab.id),
+                for: .customTab(customTab.id),
                 tabs: session.interface.tabs
             )?.title == "Console"
         )
 
         let compactContent = WebInspectorTab.ContentFactory.makeViewController(
-            for: .tab(customTab.id),
+            for: .customTab(customTab.id),
             session: session,
             hostLayout: .compact,
             tabs: session.interface.tabs
         )
         let regularContent = WebInspectorTab.ContentFactory.makeViewController(
-            for: .tab(customTab.id),
+            for: .customTab(customTab.id),
             session: session,
             hostLayout: .regular,
             tabs: session.interface.tabs
@@ -262,7 +262,7 @@ struct ParentContainerTests {
         #expect(customViewController.parent === regularContent)
 
         let reparentedContent = WebInspectorTab.ContentFactory.makeViewController(
-            for: .tab(customTab.id),
+            for: .customTab(customTab.id),
             session: session,
             hostLayout: .compact,
             tabs: session.interface.tabs
@@ -273,6 +273,45 @@ struct ParentContainerTests {
         #expect(reparentedContent.parent == nil)
         #expect(factorySession === session)
         #expect(factoryCallCount == 1)
+    }
+
+    @Test
+    func customTabDisplayItemDoesNotCollideWithInternalDOMElementIdentifier() throws {
+        let customViewController = UIViewController()
+        let customTab = WebInspectorTab(
+            id: WebInspectorTab.DisplayItem.domElementID,
+            title: "Custom Element",
+            image: nil
+        ) { _ in
+            customViewController
+        }
+        let session = WebInspectorSession(tabs: [.dom, customTab])
+        let projection = WebInspectorTab.DisplayProjection()
+        let compactDisplayItems = projection.displayItems(for: .compact, tabs: session.interface.tabs)
+        let displayItemIDs = compactDisplayItems.map(\.id)
+        let customDisplayID = WebInspectorTab.DisplayItem.customTabID(customTab.id)
+
+        #expect(
+            displayItemIDs == [
+                WebInspectorTab.dom.id,
+                WebInspectorTab.DisplayItem.domElementID,
+                customDisplayID,
+            ]
+        )
+        #expect(Set(displayItemIDs).count == displayItemIDs.count)
+
+        session.interface.selectItem(withID: customDisplayID)
+
+        #expect(session.interface.resolvedSelection(for: .compact) == .customTab(customTab.id))
+        #expect(session.interface.selectedTab == customTab)
+
+        let customContent = WebInspectorTab.ContentFactory.makeViewController(
+            for: .customTab(customTab.id),
+            session: session,
+            hostLayout: .compact,
+            tabs: session.interface.tabs
+        )
+        #expect(customContent === customViewController)
     }
 
     @Test
@@ -315,7 +354,7 @@ struct ParentContainerTests {
                 == [
                     WebInspectorTab.dom.id,
                     WebInspectorTab.DisplayItem.domElementID,
-                    customTab.id,
+                    WebInspectorTab.DisplayItem.customTabID(customTab.id),
                 ]
         )
 

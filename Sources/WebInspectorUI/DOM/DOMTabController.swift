@@ -32,6 +32,8 @@ package struct DOMTabController: WebInspectorTab.BuiltInController {
         switch displayItem {
         case let .tab(tabID):
             tabID == self.tabID ? descriptor : nil
+        case .customTab:
+            nil
         case let .domElement(parent):
             parent == tabID ? elementDescriptor : nil
         }
@@ -46,6 +48,8 @@ package struct DOMTabController: WebInspectorTab.BuiltInController {
             [contentKey(ContentID.tree)]
         case (.compact, .domElement):
             [contentKey(ContentID.element)]
+        case (_, .customTab):
+            []
         case (.regular, _):
             [
                 contentKey(ContentID.tree),
@@ -70,6 +74,8 @@ package struct DOMTabController: WebInspectorTab.BuiltInController {
                 rootViewController: cachedElementViewController(session: session),
                 inspector: session.inspector
             )
+        case (_, .customTab):
+            UIViewController()
         case (.regular, _):
             RegularSplitRootViewController(
                 contentViewController: DOMSplitViewController(

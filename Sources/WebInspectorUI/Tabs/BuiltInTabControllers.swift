@@ -112,8 +112,15 @@ extension WebInspectorTab {
                 )
             }
 
-            guard case let .tab(tabID) = displayItem,
-                  let tab = tabs.first(where: { $0.id == tabID }) else {
+            let tabID: WebInspectorTab.ID
+            switch displayItem {
+            case let .tab(id), let .customTab(id):
+                tabID = id
+            case .domElement:
+                return UIViewController()
+            }
+
+            guard let tab = tabs.first(where: { $0.id == tabID }) else {
                 return UIViewController()
             }
 
@@ -153,8 +160,15 @@ extension WebInspectorTab {
                 )
             }
 
-            guard case let .tab(tabID) = displayItem,
-                  let tab = tabs.first(where: { $0.id == tabID }) else {
+            let tabID: WebInspectorTab.ID
+            switch displayItem {
+            case let .tab(id), let .customTab(id):
+                tabID = id
+            case .domElement:
+                return []
+            }
+
+            guard let tab = tabs.first(where: { $0.id == tabID }) else {
                 return []
             }
 
